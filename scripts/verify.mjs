@@ -32,10 +32,16 @@ async function filesUnder(directory, extension) {
 
 async function checkSyntax() {
   console.log('verify: syntax');
-  const files = (await Promise.all(
-    ['api', 'cron', 'public'].map((directory) => filesUnder(directory, '.js'))
+  const serverFiles = (await Promise.all(
+    ['api', 'cron'].map((directory) => filesUnder(directory, '.js'))
   )).flat();
-  for (const file of files) run(process.execPath, ['--check', file]);
+  for (const file of serverFiles) run(process.execPath, ['--check', file]);
+
+  for (const file of await filesUnder('public', '.js')) {
+    run(process.execPath, ['--input-type=module', '--check'], {
+      input: await readFile(file, 'utf8')
+    });
+  }
 
   const bash = spawnSync('bash', ['--version'], { encoding: 'utf8' });
   if (bash.status === 0) run('bash', ['-n', 'deploy.sh']);
