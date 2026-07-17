@@ -1,0 +1,107 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Base de Conhecimento — Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<div class="portal-wrapper">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
+        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+        <i data-lucide="chevrons-left"></i>
+      </button>
+    </div>
+    <ul class="sidebar-nav">
+      <li><a href="./dashboard.html" title="Dashboard"><i data-lucide="home"></i><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" class="active" title="Base de Conhecimento"><i data-lucide="book-open"></i><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Lembretes"><i data-lucide="bell"></i><span>Lembretes</span></a></li>
+      <li><a href="./academy.html" title="Academy"><i data-lucide="graduation-cap"></i><span>Academy</span></a></li>
+      <li><a href="./benefits.html" title="Benefícios"><i data-lucide="gift"></i><span>Benefícios</span></a></li>
+      <li><a href="./ombudsman.html" title="Ouvidoria"><i data-lucide="message-square"></i><span>Ouvidoria</span></a></li>
+      <li><a href="./profile.html" title="Meu Perfil"><i data-lucide="user"></i><span>Meu Perfil</span></a></li>
+      <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+        <i data-lucide="log-out"></i><span>Sair</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <header class="topbar">
+      <span class="topbar-title">Base de Conhecimento</span>
+      <div style="display:flex; gap:12px; align-items:center">
+        <div class="search-bar">
+          <span>🔍</span>
+          <input type="text" id="search" placeholder="Buscar...">
+        </div>
+        <button id="btn-new" class="btn btn-primary" style="display:none">+ Novo</button>
+        <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
+      </div>
+    </header>
+    <main class="page-body">
+
+      <!-- Category filter -->
+      <div id="categories" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:24px"></div>
+
+      <!-- Articles list -->
+      <div id="articles-list" class="card-grid">
+        <p class="empty-state">Carregando...</p>
+      </div>
+
+      <!-- Article view -->
+      <div id="article-view" class="card" style="display:none; max-width:720px">
+        <button id="btn-back" class="btn btn-ghost btn-sm" style="margin-bottom:16px">← Voltar</button>
+        <div id="article-admin-bar" style="margin-bottom:16px; display:none; gap:8px"></div>
+        <h2 id="article-title" style="font-size:20px; font-weight:700; margin-bottom:8px"></h2>
+        <span id="article-category" class="badge badge-gold" style="margin-bottom:16px; display:inline-flex"></span>
+        <div id="article-content" style="font-size:14px; line-height:1.7; color:var(--text); white-space:pre-wrap"></div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Modal: criar/editar artigo -->
+<div id="modal-article" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-article-title">Novo Artigo</span>
+      <button class="modal-close" id="modal-article-close">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Título</label>
+      <input class="form-input" id="f-title" type="text" placeholder="Título do artigo">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Categoria</label>
+      <input class="form-input" id="f-category" type="text" placeholder="ex: RH, Financeiro, Operações">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Conteúdo</label>
+      <textarea class="form-textarea" id="f-content" rows="8" placeholder="Conteúdo em texto simples"></textarea>
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end">
+      <button class="btn btn-ghost" id="modal-article-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="modal-article-save">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script>lucide.createIcons();</script>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./js/knowledge.js"></script>
+</body>
+</html>

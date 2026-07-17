@@ -1,0 +1,14 @@
+{
+  "name": "ownerinc-portal",
+  "private": true,
+  "scripts": {
+    "bootstrap": "npm --prefix api ci && npm --prefix cron ci",
+    "doctor": "node scripts/doctor.mjs",
+    "lint": "node scripts/verify.mjs syntax",
+    "test": "node --test tests/unit/*.test.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "engines": {
+    "node": "18"
+  }
+}

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meu Perfil — Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <style>
+    .avatar-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+    .avatar-circle {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      background: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 34px;
+      font-weight: 700;
+      color: #fff;
+      overflow: hidden;
+      border: 3px solid var(--border);
+      flex-shrink: 0;
+      cursor: pointer;
+      position: relative;
+    }
+    .avatar-circle img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .avatar-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 150ms;
+      color: #fff;
+    }
+    .avatar-circle:hover .avatar-overlay { opacity: 1; }
+    .avatar-hint {
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-align: center;
+    }
+    .avatar-uploading {
+      font-size: 12px;
+      color: var(--primary);
+      font-weight: 500;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 14px;
+    }
+    .section-divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 24px 0;
+    }
+  </style>
+</head>
+<body>
+<div class="portal-wrapper">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
+        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+        <i data-lucide="chevrons-left"></i>
+      </button>
+    </div>
+    <ul class="sidebar-nav">
+      <li><a href="./dashboard.html" title="Dashboard"><i data-lucide="home"></i><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" title="Base de Conhecimento"><i data-lucide="book-open"></i><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Lembretes"><i data-lucide="bell"></i><span>Lembretes</span></a></li>
+      <li><a href="./academy.html" title="Academy"><i data-lucide="graduation-cap"></i><span>Academy</span></a></li>
+      <li><a href="./benefits.html" title="Benefícios"><i data-lucide="gift"></i><span>Benefícios</span></a></li>
+      <li><a href="./ombudsman.html" title="Ouvidoria"><i data-lucide="message-square"></i><span>Ouvidoria</span></a></li>
+      <li><a href="./profile.html" class="active" title="Meu Perfil"><i data-lucide="user"></i><span>Meu Perfil</span></a></li>
+      <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+        <i data-lucide="log-out"></i><span>Sair</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <header class="topbar">
+      <span class="topbar-title">Meu Perfil</span>
+      <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
+    </header>
+    <main class="page-body">
+
+      <div class="card" style="max-width:560px">
+
+        <!-- Avatar com upload -->
+        <div class="avatar-wrap">
+          <div class="avatar-circle" id="avatar-circle" title="Clique para trocar a foto">
+            <img id="avatar-img" style="display:none" alt="Foto de perfil">
+            <span id="avatar-initials"></span>
+            <div class="avatar-overlay"><i data-lucide="camera"></i></div>
+          </div>
+          <input type="file" id="photo-input" accept="image/*" style="display:none">
+          <span class="avatar-hint" id="avatar-hint">Clique na foto para atualizar</span>
+        </div>
+
+        <!-- Dados pessoais -->
+        <p class="section-label">Dados pessoais</p>
+
+        <div class="form-group">
+          <label class="form-label">Nome completo *</label>
+          <input class="form-input" id="p-name" type="text" placeholder="Seu nome completo">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Bio / Cargo</label>
+          <input class="form-input" id="p-bio" type="text" placeholder="Ex: Gerente Comercial · Ownerinc">
+        </div>
+        <div class="form-group">
+          <label class="form-label">WhatsApp</label>
+          <input class="form-input" id="p-phone" type="tel" placeholder="5561999999999">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Perfil do LinkedIn</label>
+          <input class="form-input" id="p-linkedin" type="url" placeholder="https://linkedin.com/in/seu-perfil">
+        </div>
+
+        <button class="btn btn-primary" id="btn-save"
+          style="width:100%; justify-content:center; padding:12px; margin-top:4px">
+          Salvar perfil
+        </button>
+
+        <hr class="section-divider">
+
+        <!-- Segurança -->
+        <p class="section-label">Segurança</p>
+        <p id="profile-email" style="font-size:13px; font-weight:500; color:var(--text); margin-bottom:6px"></p>
+        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px; line-height:1.6">
+          Para alterar sua senha, enviaremos um link de redefinição para o e-mail acima.
+        </p>
+        <button class="btn btn-ghost" id="btn-reset-pw" style="font-size:13px">
+          Enviar link de redefinição de senha
+        </button>
+        <p id="pw-feedback" style="font-size:12px; margin-top:8px; min-height:18px"></p>
+
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script>lucide.createIcons();</script>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./js/profile.js"></script>
+</body>
+</html>

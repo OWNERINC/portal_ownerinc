@@ -1,0 +1,17 @@
+# Credenciais — nunca commitar
+.env
+*.local
+
+# Dependências — instaladas no build do Docker
+api/node_modules/
+cron/node_modules/
+
+# Cache Firebase (projeto legado)
+.firebase/
+
+# Dados locais e gerados
+uploads/
+*.log
+
+# Projeto separado, fora do escopo deste repositório
+ownerinc-novo-agente/

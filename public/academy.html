@@ -1,0 +1,57 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Academy — Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<div class="portal-wrapper">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
+        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+        <i data-lucide="chevrons-left"></i>
+      </button>
+    </div>
+    <ul class="sidebar-nav">
+      <li><a href="./dashboard.html" title="Dashboard"><i data-lucide="home"></i><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" title="Base de Conhecimento"><i data-lucide="book-open"></i><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Lembretes"><i data-lucide="bell"></i><span>Lembretes</span></a></li>
+      <li><a href="./academy.html" class="active" title="Academy"><i data-lucide="graduation-cap"></i><span>Academy</span></a></li>
+      <li><a href="./benefits.html" title="Benefícios"><i data-lucide="gift"></i><span>Benefícios</span></a></li>
+      <li><a href="./ombudsman.html" title="Ouvidoria"><i data-lucide="message-square"></i><span>Ouvidoria</span></a></li>
+      <li><a href="./profile.html" title="Meu Perfil"><i data-lucide="user"></i><span>Meu Perfil</span></a></li>
+      <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+        <i data-lucide="log-out"></i><span>Sair</span>
+      </button>
+    </div>
+  </aside>
+  <div class="main-content">
+    <header class="topbar">
+      <span class="topbar-title">Academy</span>
+      <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
+    </header>
+    <main class="page-body">
+      <div id="academy-content">
+        <p class="empty-state">Carregando cursos...</p>
+      </div>
+    </main>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+<script>lucide.createIcons();</script>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./js/academy.js"></script>
+</body>
+</html>

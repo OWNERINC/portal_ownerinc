@@ -1,0 +1,11 @@
+[project]
+name = "ownerinc-portal"
+root = "."
+
+[workflow]
+instructions = ["AGENTS.md", "README.md", "docs/product/brief.md", "docs/product/scope.md", "docs/architecture/overview.md", "docs/session/README.md"]
+verify_script = "npm run verify"
+
+[guardrails]
+require_review_for_security = true
+prefer_small_changes = true

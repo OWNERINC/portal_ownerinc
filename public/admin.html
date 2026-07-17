@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <style>
+    .admin-tabs {
+      display: flex;
+      gap: 2px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .admin-tab {
+      padding: 9px 18px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      font-family: var(--font-sans);
+      margin-bottom: -1px;
+      transition: color 150ms, border-color 150ms;
+    }
+    .admin-tab.active { color: var(--espresso); border-bottom-color: var(--primary); }
+    .admin-tab:hover { color: var(--espresso); }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .section-header h1 { font-size: 18px; font-weight: 600; color: var(--espresso); }
+    .permission-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; color: var(--text); }
+    .permission-row input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--primary); }
+    .permissions-block { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin-top: 4px; background: #fafafa; }
+  </style>
+</head>
+<body>
+<div class="portal-wrapper">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
+        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+        <i data-lucide="chevrons-left"></i>
+      </button>
+    </div>
+    <ul class="sidebar-nav">
+      <li><a href="./dashboard.html" title="Dashboard"><i data-lucide="home"></i><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" title="Base de Conhecimento"><i data-lucide="book-open"></i><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Lembretes"><i data-lucide="bell"></i><span>Lembretes</span></a></li>
+      <li><a href="./academy.html" title="Academy"><i data-lucide="graduation-cap"></i><span>Academy</span></a></li>
+      <li><a href="./benefits.html" title="Benefícios"><i data-lucide="gift"></i><span>Benefícios</span></a></li>
+      <li><a href="./ombudsman.html" title="Ouvidoria"><i data-lucide="message-square"></i><span>Ouvidoria</span></a></li>
+      <li><a href="./profile.html" title="Meu Perfil"><i data-lucide="user"></i><span>Meu Perfil</span></a></li>
+      <li><a href="./admin.html" class="active" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+        <i data-lucide="log-out"></i><span>Sair</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <header class="topbar">
+      <span class="topbar-title">Painel Admin</span>
+      <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
+    </header>
+    <main class="page-body">
+
+      <div class="admin-tabs" id="admin-tabs"></div>
+
+      <!-- Usuários -->
+      <div id="section-users" class="admin-section" style="display:none">
+        <div class="section-header">
+          <h1>Usuários</h1>
+          <button id="btn-new-user" class="btn btn-primary">+ Novo Usuário</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th>Nome</th><th>E-mail</th><th>Role</th><th>Contrato</th><th>Dia NF</th><th>Ações</th></tr>
+            </thead>
+            <tbody id="users-tbody">
+              <tr><td colspan="6" class="empty-state">Carregando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Academy -->
+      <div id="section-academy" class="admin-section" style="display:none">
+        <div class="section-header">
+          <h1>Academy</h1>
+          <button id="btn-new-course" class="btn btn-primary">+ Novo Curso</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th>Título</th><th>Categoria</th><th>Status</th><th>Ações</th></tr>
+            </thead>
+            <tbody id="academy-tbody">
+              <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Benefícios -->
+      <div id="section-benefits" class="admin-section" style="display:none">
+        <div class="section-header">
+          <h1>Benefícios</h1>
+          <button id="btn-new-benefit" class="btn btn-primary">+ Novo Benefício</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th>Empresa</th><th>Categoria</th><th>Descrição</th><th>Status</th><th>Ações</th></tr>
+            </thead>
+            <tbody id="benefits-tbody">
+              <tr><td colspan="5" class="empty-state">Carregando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Ouvidoria -->
+      <div id="section-ombudsman" class="admin-section" style="display:none">
+        <div class="section-header">
+          <h1>Ouvidoria</h1>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th>Categoria</th><th>Mensagem</th><th>Data</th></tr>
+            </thead>
+            <tbody id="ombudsman-tbody">
+              <tr><td colspan="3" class="empty-state">Carregando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Modal: Usuário -->
+<div id="modal-user" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-user-title">Novo Usuário</span>
+      <button class="modal-close" id="modal-user-close">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Nome</label>
+      <input class="form-input" id="u-name" type="text" placeholder="Nome completo">
+    </div>
+    <div class="form-group">
+      <label class="form-label">E-mail</label>
+      <input class="form-input" id="u-email" type="email" placeholder="email@ownerinc.com.br">
+    </div>
+    <div class="form-group" id="password-group">
+      <label class="form-label">Senha inicial</label>
+      <input class="form-input" id="u-password" type="password" placeholder="Mínimo 6 caracteres">
+      <span style="font-size:11px; color:var(--text-secondary)">Só exibido na criação.</span>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Role</label>
+      <select class="form-select" id="u-role">
+        <option value="viewer">Viewer</option>
+        <option value="admin">Admin</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Tipo de contrato</label>
+      <select class="form-select" id="u-contract">
+        <option value="clt">CLT</option>
+        <option value="pj">PJ</option>
+      </select>
+    </div>
+    <div class="form-group" id="pj-day-group" style="display:none">
+      <label class="form-label">Dia do mês para emitir nota (1–31)</label>
+      <input class="form-input" id="u-pjday" type="number" min="1" max="31">
+    </div>
+    <div class="form-group">
+      <label class="form-label">WhatsApp (para notificações futuras)</label>
+      <input class="form-input" id="u-phone" type="tel" placeholder="5561999999999">
+    </div>
+
+    <!-- Permissões — visível apenas quando role=admin e eu sou superAdmin -->
+    <div id="permissions-group" style="display:none">
+      <label class="form-label" style="margin-bottom:6px; display:block">Permissões</label>
+      <div class="permissions-block">
+        <div class="permission-row">
+          <input type="checkbox" id="p-super">
+          <label for="p-super"><strong>Super Admin</strong> — acesso total + configurar outros admins</label>
+        </div>
+        <div style="height:1px; background:var(--border); margin:8px 0"></div>
+        <div class="permission-row">
+          <input type="checkbox" id="p-users">
+          <label for="p-users">Gerenciar Usuários (criar, editar, mudar PJ/CLT)</label>
+        </div>
+        <div class="permission-row">
+          <input type="checkbox" id="p-reminders">
+          <label for="p-reminders">Gerenciar Lembretes</label>
+        </div>
+        <div class="permission-row">
+          <input type="checkbox" id="p-academy">
+          <label for="p-academy">Gerenciar Academy</label>
+        </div>
+        <div class="permission-row">
+          <input type="checkbox" id="p-benefits">
+          <label for="p-benefits">Gerenciar Benefícios</label>
+        </div>
+        <div class="permission-row">
+          <input type="checkbox" id="p-ombudsman">
+          <label for="p-ombudsman">Ver Ouvidoria</label>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
+      <button class="btn btn-ghost" id="modal-user-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="modal-user-save">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Curso -->
+<div id="modal-course" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-course-title">Novo Curso</span>
+      <button class="modal-close" id="modal-course-close">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Título</label>
+      <input class="form-input" id="c-title" type="text" placeholder="Nome do curso">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Categoria</label>
+      <input class="form-input" id="c-category" type="text" placeholder="Ex: Onboarding, Vendas, Produto">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Descrição</label>
+      <input class="form-input" id="c-desc" type="text" placeholder="Breve descrição do curso">
+    </div>
+    <div class="form-group">
+      <label class="form-label">URL (link externo)</label>
+      <input class="form-input" id="c-url" type="url" placeholder="https://...">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Ordem (para exibição)</label>
+      <input class="form-input" id="c-order" type="number" min="1" value="1">
+    </div>
+    <div class="form-group" style="flex-direction:row; align-items:center; gap:8px">
+      <input type="checkbox" id="c-active" checked>
+      <label class="form-label" for="c-active" style="margin:0">Ativo</label>
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
+      <button class="btn btn-ghost" id="modal-course-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="modal-course-save">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Benefício -->
+<div id="modal-benefit" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-benefit-title">Novo Benefício</span>
+      <button class="modal-close" id="modal-benefit-close">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Empresa parceira</label>
+      <input class="form-input" id="b-company" type="text" placeholder="Nome da empresa">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Categoria</label>
+      <input class="form-input" id="b-category" type="text" placeholder="Ex: Alimentação, Saúde, Lazer">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Descrição do benefício</label>
+      <input class="form-input" id="b-desc" type="text" placeholder="Ex: 15% de desconto em toda a loja">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Como usar</label>
+      <input class="form-input" id="b-instructions" type="text" placeholder="Ex: Apresente o crachá Ownerinc na entrada">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Ordem (para exibição)</label>
+      <input class="form-input" id="b-order" type="number" min="1" value="1">
+    </div>
+    <div class="form-group" style="flex-direction:row; align-items:center; gap:8px">
+      <input type="checkbox" id="b-active" checked>
+      <label class="form-label" for="b-active" style="margin:0">Ativo</label>
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
+      <button class="btn btn-ghost" id="modal-benefit-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="modal-benefit-save">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script>lucide.createIcons();</script>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./js/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+    }
+
+    /* ── Split layout ─────────────────────────────────── */
+    .login-split {
+      display: flex;
+      width: 100%;
+      min-height: 100vh;
+    }
+
+    /* ── Painel esquerdo (marca / foto) ────────────────── */
+    .brand-panel {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 52px 60px;
+
+      /*
+       * ── FOTO DE FUNDO ───────────────────────────────
+       * Para adicionar uma foto, troque o background abaixo:
+       *   background-image: url('./assets/foto-gramado.jpg');
+       *   background-size: cover;
+       *   background-position: center;
+       * O overlay escuro já está aplicado via .brand-overlay
+       * ─────────────────────────────────────────────── */
+      background: #0F0F0F;
+    }
+
+    /* overlay com gradiente dourado — fica sobre a foto */
+    .brand-overlay {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(160deg, rgba(196,162,86,0.18) 0%, transparent 45%),
+        radial-gradient(ellipse at 85% 15%, rgba(196,162,86,0.10) 0%, transparent 55%),
+        radial-gradient(ellipse at 15% 85%, rgba(196,162,86,0.07) 0%, transparent 55%);
+      z-index: 0;
+    }
+
+    /* anéis decorativos */
+    .brand-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 1px solid rgba(196,162,86,0.12);
+      z-index: 0;
+    }
+    .brand-ring-1 { width: 440px; height: 440px; bottom: -140px; left: -140px; }
+    .brand-ring-2 { width: 280px; height: 280px; top: -90px; right: -90px; }
+    .brand-ring-3 { width: 160px; height: 160px; bottom: 120px; right: 40px;
+                    border-color: rgba(196,162,86,0.07); }
+
+    .brand-content, .brand-footer { position: relative; z-index: 1; }
+
+    .brand-logo { height: 30px; width: auto; margin-bottom: 72px; opacity: 0.95; }
+
+    .brand-headline {
+      font-size: 36px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.18;
+      letter-spacing: -0.6px;
+      margin-bottom: 18px;
+    }
+
+    .brand-subtitle {
+      font-size: 14px;
+      color: rgba(255,255,255,0.50);
+      line-height: 1.7;
+      max-width: 340px;
+      margin-bottom: 52px;
+    }
+
+    .feature-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .feature-list li {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 13.5px;
+      color: rgba(255,255,255,0.72);
+    }
+
+    .feat-icon {
+      width: 34px; height: 34px;
+      border-radius: 9px;
+      background: rgba(196,162,86,0.13);
+      border: 1px solid rgba(196,162,86,0.22);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      color: #C4A256;
+    }
+    .feat-icon svg { width: 15px; height: 15px; }
+
+    .brand-footer {
+      border-top: 1px solid rgba(255,255,255,0.07);
+      padding-top: 22px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-tagline {
+      font-size: 11px;
+      color: rgba(255,255,255,0.28);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .brand-dot {
+      width: 3px; height: 3px;
+      border-radius: 50%;
+      background: rgba(196,162,86,0.4);
+      flex-shrink: 0;
+    }
+
+    /* ── Painel direito (formulário) ───────────────────── */
+    .form-panel {
+      width: 460px;
+      flex-shrink: 0;
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 52px;
+    }
+
+    .login-box { width: 100%; }
+
+    .login-logo { margin-bottom: 32px; }
+    .login-logo img { height: 32px; width: auto; }
+    .login-logo span {
+      display: block;
+      font-size: 11px;
+      color: var(--text-secondary);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-top: 10px;
+    }
+    .divider {
+      width: 36px; height: 2px;
+      background: var(--primary);
+      margin: 10px 0 0;
+      border-radius: 2px;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+    .form-label { font-size: 13px; font-weight: 500; color: var(--text); }
+    .form-input {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      font-family: var(--font-sans);
+      outline: none;
+      transition: border-color 150ms;
+    }
+    .form-input:focus { border-color: var(--primary); }
+
+    .btn-login {
+      width: 100%;
+      padding: 12px;
+      background: var(--espresso);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: background 150ms;
+    }
+    .btn-login:hover { background: #2d1a0e; }
+    .btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .error-msg {
+      font-size: 12px;
+      color: var(--danger);
+      margin-top: 8px;
+      min-height: 18px;
+    }
+
+    .support-link {
+      display: block;
+      text-align: center;
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-decoration: none;
+    }
+    .support-link:hover { color: var(--primary); }
+
+    .social-buttons { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+    .btn-social {
+      width: 100%; padding: 11px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 14px; font-weight: 500; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      transition: background 150ms, box-shadow 150ms;
+      font-family: var(--font-sans);
+    }
+    .btn-google { background: #fff; border: 1px solid var(--border); color: #3c4043; }
+    .btn-google:hover { background: #f8f8f8; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+    .btn-social:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .divider-or {
+      display: flex; align-items: center; gap: 12px;
+      margin: 4px 0 16px; color: var(--text-secondary); font-size: 12px;
+    }
+    .divider-or::before, .divider-or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    .forgot-link {
+      display: block; text-align: left; margin-top: 6px;
+      font-size: 12px; color: var(--text-secondary); text-decoration: none; cursor: pointer;
+      background: none; border: none; padding: 0; font-family: var(--font-sans);
+    }
+    .forgot-link:hover { color: var(--primary); }
+
+    .reset-section { display: none; }
+    .reset-section.active { display: block; }
+    .login-form-wrap.hidden { display: none; }
+
+    .success-msg {
+      font-size: 13px; color: var(--text); background: #f0faf4;
+      border: 1px solid #b7e4c7; border-radius: var(--radius-sm);
+      padding: 12px 14px; margin-top: 8px; line-height: 1.5;
+    }
+
+    .back-link {
+      display: block; text-align: center; margin-top: 16px;
+      font-size: 12px; color: var(--text-secondary); cursor: pointer;
+      background: none; border: none; padding: 0; font-family: var(--font-sans);
+    }
+    .back-link:hover { color: var(--primary); }
+
+    .signup-link {
+      display: block; width: 100%; text-align: center; margin-top: 12px;
+      padding: 11px 16px;
+      font-size: 14px; font-weight: 500; color: var(--espresso);
+      background: none; border: 1px solid #d1d5db;
+      border-radius: var(--radius-sm); cursor: pointer;
+      font-family: var(--font-sans); transition: border-color 150ms, color 150ms;
+    }
+    .signup-link:hover { border-color: var(--primary); color: var(--primary); }
+
+    .signup-section { display: none; }
+    .signup-section.active { display: block; }
+    .signup-title {
+      font-size: 15px; font-weight: 700; color: var(--espresso);
+      margin-bottom: 20px;
+    }
+
+    .password-wrap { position: relative; }
+    .password-wrap .form-input { padding-right: 40px; width: 100%; }
+    .toggle-pw {
+      position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; cursor: pointer;
+      color: var(--text-secondary); padding: 4px;
+      display: flex; align-items: center; line-height: 1;
+    }
+    .toggle-pw:hover { color: var(--espresso); }
+    .toggle-pw svg { width: 16px; height: 16px; }
+
+    /* ── Responsivo: oculta painel da marca em mobile ── */
+    @media (max-width: 768px) {
+      .brand-panel { display: none; }
+      .form-panel { width: 100%; padding: 40px 28px; }
+    }
+  </style>
+</head>
+<body>
+<div class="login-split">
+
+  <!-- ── Painel esquerdo: marca ─────────────────────────── -->
+  <div class="brand-panel">
+    <div class="brand-overlay"></div>
+    <div class="brand-ring brand-ring-1"></div>
+    <div class="brand-ring brand-ring-2"></div>
+    <div class="brand-ring brand-ring-3"></div>
+
+    <div class="brand-content">
+      <img src="./assets/logo-branco.svg" alt="Ownerinc" class="brand-logo">
+      <h1 class="brand-headline">Tudo que a<br>equipe precisa,<br>em um só lugar.</h1>
+      <p class="brand-subtitle">Hub central de conhecimento, treinamentos, benefícios e comunicação da equipe Own Time Home Club.</p>
+      <ul class="feature-list">
+        <li>
+          <div class="feat-icon"><i data-lucide="book-open"></i></div>
+          Base de Conhecimento e Processos
+        </li>
+        <li>
+          <div class="feat-icon"><i data-lucide="graduation-cap"></i></div>
+          Ownerinc Academy
+        </li>
+        <li>
+          <div class="feat-icon"><i data-lucide="gift"></i></div>
+          Clube de Vantagens
+        </li>
+        <li>
+          <div class="feat-icon"><i data-lucide="bell"></i></div>
+          Lembretes e Datas Importantes
+        </li>
+        <li>
+          <div class="feat-icon"><i data-lucide="message-square"></i></div>
+          Canal de Ouvidoria
+        </li>
+      </ul>
+    </div>
+
+    <div class="brand-footer">
+      <span class="brand-tagline">Own Time Home Club</span>
+      <div class="brand-dot"></div>
+      <span class="brand-tagline">Gramado · Serra Gaúcha</span>
+    </div>
+  </div>
+
+  <!-- ── Painel direito: formulário ────────────────────── -->
+  <div class="form-panel">
+    <div class="login-box">
+
+      <div class="login-logo">
+        <img src="./assets/logo-preto.svg" alt="Ownerinc">
+        <div class="divider"></div>
+        <span>Portal Interno</span>
+      </div>
+
+      <div class="login-form-wrap">
+        <div class="social-buttons">
+          <button class="btn-social btn-google" id="btn-google" type="button">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            Continuar com Google
+          </button>
+        </div>
+        <div class="divider-or">ou</div>
+        <form id="login-form" autocomplete="on">
+          <div class="form-group">
+            <label class="form-label" for="email">E-mail</label>
+            <input class="form-input" type="email" id="email" name="email" autocomplete="email" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="password">Senha</label>
+            <div class="password-wrap">
+              <input class="form-input" type="password" id="password" name="password" autocomplete="current-password" required>
+              <button type="button" class="toggle-pw" id="toggle-pw" tabindex="-1" title="Mostrar/ocultar senha">
+                <i data-lucide="eye"></i>
+              </button>
+            </div>
+            <button class="forgot-link" type="button" id="forgot-link">Esqueci minha senha</button>
+          </div>
+          <p class="error-msg" id="error-msg" aria-live="polite"></p>
+          <button class="btn-login" type="submit" id="submit-btn">Entrar no portal</button>
+        </form>
+        <button class="signup-link" type="button" id="signup-link">Criar conta</button>
+      </div><!-- /.login-form-wrap -->
+
+      <div class="reset-section" id="reset-section">
+        <div class="form-group">
+          <label class="form-label" for="reset-email">Seu e-mail cadastrado</label>
+          <input class="form-input" type="email" id="reset-email" autocomplete="email" placeholder="nome@exemplo.com">
+        </div>
+        <p class="error-msg" id="reset-error" aria-live="polite"></p>
+        <div id="reset-success" class="success-msg" style="display:none"></div>
+        <button class="btn-login" type="button" id="reset-btn">Enviar link de redefinição</button>
+        <button class="back-link" type="button" id="back-link">← Voltar ao login</button>
+      </div>
+
+      <div class="signup-section" id="signup-section">
+        <p class="signup-title">Criar conta</p>
+        <div class="form-group">
+          <label class="form-label" for="signup-name">Nome completo</label>
+          <input class="form-input" type="text" id="signup-name" autocomplete="name" placeholder="Seu nome">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="signup-email">E-mail</label>
+          <input class="form-input" type="email" id="signup-email" autocomplete="email" placeholder="nome@exemplo.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="signup-password">Senha</label>
+          <div class="password-wrap">
+            <input class="form-input" type="password" id="signup-password" autocomplete="new-password" placeholder="Mínimo 6 caracteres">
+            <button type="button" class="toggle-pw" id="toggle-signup-pw" tabindex="-1" title="Mostrar/ocultar senha">
+              <i data-lucide="eye"></i>
+            </button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="signup-confirm">Confirmar senha</label>
+          <div class="password-wrap">
+            <input class="form-input" type="password" id="signup-confirm" autocomplete="new-password" placeholder="Repita a senha">
+            <button type="button" class="toggle-pw" id="toggle-signup-confirm" tabindex="-1" title="Mostrar/ocultar senha">
+              <i data-lucide="eye"></i>
+            </button>
+          </div>
+        </div>
+        <p class="error-msg" id="signup-error" aria-live="polite"></p>
+        <button class="btn-login" type="button" id="signup-btn">Criar conta</button>
+        <button class="back-link" type="button" id="back-from-signup">← Voltar ao login</button>
+      </div>
+
+      <a class="support-link" href="mailto:suporte@ownerinc.com.br">Preciso de suporte</a>
+    </div><!-- /.login-box -->
+  </div><!-- /.form-panel -->
+
+</div><!-- /.login-split -->
+
+<script>lucide.createIcons();</script>
+<script>
+  function makeToggle(btnId, inputId) {
+    document.getElementById(btnId).addEventListener('click', () => {
+      const input = document.getElementById(inputId);
+      const btn   = document.getElementById(btnId);
+      const show  = input.type === 'password';
+      input.type  = show ? 'text' : 'password';
+      btn.querySelector('[data-lucide]').setAttribute('data-lucide', show ? 'eye-off' : 'eye');
+      lucide.createIcons();
+    });
+  }
+  makeToggle('toggle-pw',             'password');
+  makeToggle('toggle-signup-pw',      'signup-password');
+  makeToggle('toggle-signup-confirm', 'signup-confirm');
+</script>
+<script type="module">
+  import { auth } from './js/firebase-config.js';
+  import {
+    signInWithEmailAndPassword,
+    signInWithPopup,
+    GoogleAuthProvider,
+    sendPasswordResetEmail,
+    createUserWithEmailAndPassword,
+    updateProfile,
+    onAuthStateChanged
+  } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+
+  onAuthStateChanged(auth, user => {
+    if (user) window.location.href = './dashboard.html';
+  });
+
+  const errorMsg = document.getElementById('error-msg');
+
+  function setAllDisabled(disabled) {
+    document.getElementById('submit-btn').disabled = disabled;
+    document.getElementById('btn-google').disabled = disabled;
+  }
+
+  function handleAuthError(err) {
+    const messages = {
+      'auth/invalid-credential': 'E-mail ou senha incorretos.',
+      'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos.',
+      'auth/user-disabled': 'Conta desativada. Contate o suporte.',
+      'auth/popup-closed-by-user': '',
+      'auth/cancelled-popup-request': '',
+      'auth/account-exists-with-different-credential': 'Já existe uma conta com este e-mail. Use outro método de login.'
+    };
+    errorMsg.textContent = messages[err.code] ?? 'Erro ao fazer login. Tente novamente.';
+    setAllDisabled(false);
+  }
+
+  document.getElementById('login-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('submit-btn');
+    setAllDisabled(true);
+    btn.textContent = 'Entrando...';
+    errorMsg.textContent = '';
+    try {
+      await signInWithEmailAndPassword(
+        auth,
+        document.getElementById('email').value.trim(),
+        document.getElementById('password').value
+      );
+    } catch (err) {
+      handleAuthError(err);
+      btn.textContent = 'Entrar no portal';
+    }
+  });
+
+  const loginWrap = document.querySelector('.login-form-wrap');
+  const resetSection = document.getElementById('reset-section');
+
+  document.getElementById('forgot-link').addEventListener('click', () => {
+    loginWrap.classList.add('hidden');
+    resetSection.classList.add('active');
+    document.getElementById('reset-email').focus();
+  });
+
+  document.getElementById('back-link').addEventListener('click', () => {
+    resetSection.classList.remove('active');
+    loginWrap.classList.remove('hidden');
+    document.getElementById('reset-error').textContent = '';
+    document.getElementById('reset-success').style.display = 'none';
+    document.getElementById('reset-email').value = '';
+    document.getElementById('reset-btn').disabled = false;
+    document.getElementById('reset-btn').textContent = 'Enviar link de redefinição';
+  });
+
+  document.getElementById('reset-btn').addEventListener('click', async () => {
+    const email = document.getElementById('reset-email').value.trim();
+    const resetError = document.getElementById('reset-error');
+    const resetSuccess = document.getElementById('reset-success');
+    const resetBtn = document.getElementById('reset-btn');
+
+    resetError.textContent = '';
+    resetSuccess.style.display = 'none';
+
+    if (!email) { resetError.textContent = 'Informe seu e-mail.'; return; }
+
+    resetBtn.disabled = true;
+    resetBtn.textContent = 'Enviando...';
+    try {
+      await sendPasswordResetEmail(auth, email);
+      resetSuccess.textContent = `Link enviado para ${email}. Verifique sua caixa de entrada (e a pasta de spam).`;
+      resetSuccess.style.display = 'block';
+      resetBtn.textContent = 'Link enviado';
+    } catch (err) {
+      const msgs = {
+        'auth/user-not-found': 'Nenhuma conta encontrada com este e-mail.',
+        'auth/invalid-email': 'E-mail inválido.',
+        'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos.'
+      };
+      resetError.textContent = msgs[err.code] || 'Erro ao enviar. Tente novamente.';
+      resetBtn.disabled = false;
+      resetBtn.textContent = 'Enviar link de redefinição';
+    }
+  });
+
+  const signupSection = document.getElementById('signup-section');
+
+  document.getElementById('signup-link').addEventListener('click', () => {
+    loginWrap.classList.add('hidden');
+    signupSection.classList.add('active');
+    document.getElementById('signup-name').focus();
+  });
+
+  document.getElementById('back-from-signup').addEventListener('click', () => {
+    signupSection.classList.remove('active');
+    loginWrap.classList.remove('hidden');
+    document.getElementById('signup-error').textContent = '';
+    ['signup-name', 'signup-email', 'signup-password', 'signup-confirm'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+  });
+
+  document.getElementById('signup-btn').addEventListener('click', async () => {
+    const name     = document.getElementById('signup-name').value.trim();
+    const email    = document.getElementById('signup-email').value.trim();
+    const password = document.getElementById('signup-password').value;
+    const confirm  = document.getElementById('signup-confirm').value;
+    const signupError = document.getElementById('signup-error');
+    const signupBtn   = document.getElementById('signup-btn');
+
+    signupError.textContent = '';
+
+    if (!name)               { signupError.textContent = 'Informe seu nome.'; return; }
+    if (!email)              { signupError.textContent = 'Informe seu e-mail.'; return; }
+    if (password.length < 6) { signupError.textContent = 'A senha deve ter pelo menos 6 caracteres.'; return; }
+    if (password !== confirm) { signupError.textContent = 'As senhas não coincidem.'; return; }
+
+    signupBtn.disabled = true;
+    signupBtn.textContent = 'Criando conta...';
+
+    try {
+      const credential = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(credential.user, { displayName: name });
+    } catch (err) {
+      const msgs = {
+        'auth/email-already-in-use': 'Este e-mail já está cadastrado.',
+        'auth/invalid-email':        'E-mail inválido.',
+        'auth/weak-password':        'Senha muito fraca. Use pelo menos 6 caracteres.',
+        'auth/too-many-requests':    'Muitas tentativas. Aguarde alguns minutos.'
+      };
+      signupError.textContent = msgs[err.code] || 'Erro ao criar conta. Tente novamente.';
+      signupBtn.disabled = false;
+      signupBtn.textContent = 'Criar conta';
+    }
+  });
+
+  document.getElementById('btn-google').addEventListener('click', async () => {
+    setAllDisabled(true);
+    errorMsg.textContent = '';
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch (err) {
+      handleAuthError(err);
+    }
+  });
+</script>
+</body>
+</html>
