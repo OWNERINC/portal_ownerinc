@@ -1,63 +1,77 @@
 const express = require('express');
-const router = express.Router();
 const pool = require('../db');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, can } = require('../middleware/auth');
+const {
+  forbidden, invalid, parseListQuery, text, uuid, validBody, withAudit,
+} = require('../route-utils');
 
-// GET /api/knowledge — todos, ordenado por updated_at
-router.get('/', authMiddleware, async (req, res) => {
+const router = express.Router();
+const schema = { title: text(200, true), category: text(100), content: text(50000) };
+
+router.get('/', authMiddleware, async (req, res, next) => {
+  const page = parseListQuery(req.query);
+  if (!page) return invalid(req, res);
   try {
-    const { rows } = await pool.query(
-      'SELECT * FROM knowledge_base ORDER BY updated_at DESC'
-    );
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const [{ rows: [{ count }] }, { rows }] = await Promise.all([
+      pool.query('SELECT COUNT(*)::integer AS count FROM knowledge_base'),
+      pool.query('SELECT * FROM knowledge_base ORDER BY updated_at DESC LIMIT $1 OFFSET $2', [page.limit, page.offset]),
+    ]);
+    res.set('X-Total-Count', String(count)).json(rows);
+  } catch (error) {
+    next(error);
   }
 });
 
-// POST /api/knowledge — cria artigo (admin)
-router.post('/', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sem permissão.' });
+router.post('/', authMiddleware, async (req, res, next) => {
+  if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
+  if (!validBody(req.body, schema, ['title'])) return invalid(req, res);
   try {
-    const { title, category, content } = req.body;
-    if (!title) return res.status(400).json({ error: 'Título é obrigatório.' });
-    const { rows } = await pool.query(
-      `INSERT INTO knowledge_base (title, category, content, created_by)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [title, category || '', content || '', req.user.uid]
-    );
-    res.json(rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const { title, category = '', content = '' } = req.body;
+    const row = await withAudit(pool, req, 'knowledge.create', 'knowledge', async (db) => {
+      const { rows } = await db.query(
+        `INSERT INTO knowledge_base (title, category, content, created_by)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [title.trim(), category, content, req.user.uid]
+      );
+      return rows[0];
+    }, { targetId: (result) => result.id });
+    res.status(201).json(row);
+  } catch (error) {
+    next(error);
   }
 });
 
-// PUT /api/knowledge/:id — atualiza artigo (admin)
-router.put('/:id', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sem permissão.' });
+router.put('/:id', authMiddleware, async (req, res, next) => {
+  if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
+  if (!uuid(req.params.id) || !validBody(req.body, schema, ['title', 'category', 'content'])) return invalid(req, res);
   try {
-    const { title, category, content } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE knowledge_base
-       SET title=$2, category=$3, content=$4, updated_at=NOW()
-       WHERE id=$1 RETURNING *`,
-      [req.params.id, title, category || '', content || '']
-    );
-    if (rows.length === 0) return res.status(404).json({ error: 'Artigo não encontrado.' });
-    res.json(rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const row = await withAudit(pool, req, 'knowledge.update', 'knowledge', async (db) => {
+      const { rows } = await db.query(
+        `UPDATE knowledge_base SET title=$2, category=$3, content=$4, updated_at=NOW()
+         WHERE id=$1 RETURNING *`,
+        [req.params.id, req.body.title.trim(), req.body.category, req.body.content]
+      );
+      return rows[0];
+    }, { targetId: req.params.id });
+    if (!row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
+    res.json(row);
+  } catch (error) {
+    next(error);
   }
 });
 
-// DELETE /api/knowledge/:id (admin)
-router.delete('/:id', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sem permissão.' });
+router.delete('/:id', authMiddleware, async (req, res, next) => {
+  if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
+  if (!uuid(req.params.id)) return invalid(req, res);
   try {
-    await pool.query('DELETE FROM knowledge_base WHERE id=$1', [req.params.id]);
+    const row = await withAudit(pool, req, 'knowledge.delete', 'knowledge', async (db) => {
+      const { rows } = await db.query('DELETE FROM knowledge_base WHERE id=$1 RETURNING id', [req.params.id]);
+      return rows[0];
+    }, { targetId: req.params.id });
+    if (!row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    next(error);
   }
 });
 

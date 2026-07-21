@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
+  <title>Minha Jornada — Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+<div class="portal-wrapper">
+  <aside class="sidebar" aria-label="Navegação principal">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true"><i data-lucide="chevrons-left"></i></button>
+    </div>
+    <ul class="sidebar-nav">
+      <li><a href="./dashboard.html" title="Dashboard"><i data-lucide="home"></i><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" title="Base de Conhecimento"><i data-lucide="book-open"></i><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Lembretes"><i data-lucide="bell"></i><span>Lembretes</span></a></li>
+      <li><a href="./academy.html" title="Academy"><i data-lucide="graduation-cap"></i><span>Academy</span></a></li>
+      <li><a href="./benefits.html" title="Benefícios"><i data-lucide="gift"></i><span>Benefícios</span></a></li>
+      <li><a href="./ombudsman.html" title="Ouvidoria"><i data-lucide="message-square"></i><span>Ouvidoria</span></a></li>
+      <li><a href="./profile.html" title="Meu Perfil"><i data-lucide="user"></i><span>Meu Perfil</span></a></li>
+      <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
+    </ul>
+    <div class="sidebar-footer"><button class="sidebar-logout" type="button" aria-label="Sair"><i data-lucide="log-out"></i><span>Sair</span></button></div>
+  </aside>
+
+  <div class="main-content">
+    <header class="topbar">
+      <span class="topbar-title">Minha Jornada</span>
+      <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
+    </header>
+    <main class="page-body" id="main-content" tabindex="-1">
+      <div class="page-header">
+        <h1>Ponto e Frequência</h1>
+        <p>Dados fornecidos pela Sólides. Consulte a origem para operações oficiais.</p>
+      </div>
+
+      <div class="card-grid" aria-live="polite">
+        <article class="card"><div class="card-title">Hoje</div><p class="card-copy" id="today-summary">Carregando…</p></article>
+        <article class="card"><div class="card-title">Banco de horas</div><p class="card-copy" id="hours-balance">Carregando…</p></article>
+        <article class="card"><div class="card-title">Escala atual</div><p class="card-copy" id="schedule-summary">Carregando…</p></article>
+      </div>
+
+      <section class="content-section" aria-labelledby="schedule-heading">
+        <div class="page-header"><h2 id="schedule-heading">Jornada semanal</h2><p id="data-freshness" role="status"></p></div>
+        <div id="schedule-days" class="card-grid"><p class="empty-state">Carregando escala…</p></div>
+      </section>
+
+      <section class="content-section" aria-labelledby="adjustments-heading">
+        <div class="page-header"><h2 id="adjustments-heading">Férias e ajustes</h2><p>Ocorrências do ano atual registradas na Sólides.</p></div>
+        <div id="adjustments-list" class="card-grid" aria-live="polite"><p class="empty-state">Carregando ajustes…</p></div>
+      </section>
+
+      <section class="content-section" aria-labelledby="history-heading">
+        <div class="page-header"><h2 id="history-heading">Histórico</h2><p>Consulte um período de até 31 dias.</p></div>
+        <form id="history-filter" class="filter-bar">
+          <div class="form-group"><label class="form-label" for="history-from">De</label><input class="form-input" id="history-from" name="from" type="date" required></div>
+          <div class="form-group"><label class="form-label" for="history-to">Até</label><input class="form-input" id="history-to" name="to" type="date" required></div>
+          <button class="btn btn-primary" type="submit">Consultar</button>
+        </form>
+        <div id="punch-history" class="table-wrapper" aria-live="polite"><p class="empty-state">Carregando histórico…</p></div>
+        <button class="btn btn-ghost" id="history-more" type="button" hidden style="margin-top:12px">Carregar mais</button>
+      </section>
+
+      <p><a href="https://app.solides.com.br" target="_blank" rel="noopener noreferrer">Abrir a Sólides em uma nova aba →</a></p>
+    </main>
+  </div>
+</div>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./js/solides.js"></script>
+</body>
+</html>

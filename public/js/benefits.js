@@ -1,46 +1,40 @@
 import { requireAuth, renderUserInTopbar, fetchAPI } from './auth.js';
+import { clear, element, showState } from './ui.js';
 
 const user = await requireAuth();
-if (!user) throw new Error('not authenticated');
-
+if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
 if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 
 const container = document.getElementById('benefits-content');
-
-try {
-  const items = await fetchAPI('/api/benefits?active=true');
-
-  if (items.length === 0) {
-    container.innerHTML = '<p class="empty-state">Nenhum benefício disponível no momento.</p>';
-  } else {
-    const byCategory = {};
-    items.forEach(b => {
-      const cat = b.category || 'Geral';
-      if (!byCategory[cat]) byCategory[cat] = [];
-      byCategory[cat].push(b);
+async function loadBenefits() {
+  showState(container, 'Carregando benefícios…');
+  try {
+    const benefits = (await fetchAPI('/api/benefits?active=true')).filter(item => item.active !== false);
+    if (!benefits.length) return showState(container, 'Nenhum benefício disponível no momento.');
+    const categories = benefits.reduce((map, benefit) => {
+      const category = benefit.category || 'Geral';
+      map.set(category, [...(map.get(category) || []), benefit]);
+      return map;
+    }, new Map());
+    clear(container);
+    categories.forEach((items, category) => {
+      const section = element('section', { className: 'content-section' }, [element('h2', { text: category })]);
+      const grid = element('div', { className: 'card-grid' });
+      items.forEach(benefit => {
+        const card = element('article', { className: 'card' }, [
+          element('div', { className: 'card-title', text: `🎁 ${benefit.company}` }),
+          element('p', { className: 'benefit-description', text: benefit.description || '' }),
+        ]);
+        if (benefit.instructions) card.append(element('p', { className: 'info-panel', text: `Como usar: ${benefit.instructions}` }));
+        grid.append(card);
+      });
+      section.append(grid);
+      container.append(section);
     });
-
-    container.innerHTML = Object.entries(byCategory).map(([cat, benefits]) => `
-      <div class="page-header" style="margin-bottom:16px">
-        <h1>${cat}</h1>
-      </div>
-      <div class="card-grid" style="margin-bottom:32px">
-        ${benefits.map(b => `
-          <div class="card">
-            <div class="card-title">🎁 ${b.company}</div>
-            <p style="font-size:14px; color:var(--espresso); margin-top:6px; font-weight:500">${b.description || ''}</p>
-            ${b.instructions ? `
-              <div style="margin-top:10px; padding:8px 10px; background:var(--bg); border-radius:var(--radius-sm); font-size:12px; color:var(--text-secondary)">
-                ℹ️ ${b.instructions}
-              </div>
-            ` : ''}
-          </div>
-        `).join('')}
-      </div>
-    `).join('');
+  } catch {
+    showState(container, 'Não foi possível carregar os benefícios. Verifique sua conexão.', loadBenefits);
   }
-
-} catch {
-  container.innerHTML = '<p class="empty-state">Erro ao carregar benefícios.</p>';
 }
+
+loadBenefits();

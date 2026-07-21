@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Portal Ownerinc | Deck Executivo de Implementação</title>
+  <style>
+    :root {
+      --ink: #111111;
+      --black: #0f0f0f;
+      --paper: #f4f2ed;
+      --white: #ffffff;
+      --gold: #c4a256;
+      --gold-dark: #8a6818;
+      --muted: #686761;
+      --line-dark: rgba(255, 255, 255, 0.16);
+      --line-light: rgba(17, 17, 17, 0.16);
+      --success: #2c7a4b;
+      --partial: #b67813;
+      --absent: #a43a35;
+      --sans: "Aptos", "Gill Sans", "Century Gothic", sans-serif;
+      --display: "Aptos Display", "Gill Sans", "Century Gothic", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { background: #292929; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #292929;
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.35;
+    }
+
+    .deck {
+      display: grid;
+      gap: 24px;
+      justify-items: center;
+      padding: 24px;
+    }
+
+    .slide {
+      position: relative;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      width: min(100%, 1280px);
+      aspect-ratio: 16 / 9;
+      min-height: 680px;
+      overflow: hidden;
+      padding: 48px 56px 36px;
+      background: var(--paper);
+      isolation: isolate;
+    }
+
+    .slide.dark {
+      color: var(--white);
+      background: var(--black);
+    }
+
+    .slide.gold {
+      color: var(--ink);
+      background: var(--gold);
+    }
+
+    .slide::after {
+      position: absolute;
+      right: -96px;
+      bottom: -96px;
+      width: 280px;
+      height: 280px;
+      border: 1px solid var(--line-light);
+      border-radius: 50%;
+      content: "";
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    .slide.dark::after { border-color: var(--line-dark); }
+    .slide.gold::after { border-color: rgba(17, 17, 17, 0.2); }
+
+    .slide-header,
+    .slide-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .slide-header {
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--line-light);
+    }
+
+    .dark .slide-header { border-color: var(--line-dark); }
+
+    .slide-footer {
+      padding-top: 16px;
+      border-top: 1px solid var(--line-light);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .dark .slide-footer {
+      color: rgba(255, 255, 255, 0.52);
+      border-color: var(--line-dark);
+    }
+
+    .gold .slide-footer { color: rgba(17, 17, 17, 0.65); }
+
+    .logo {
+      width: 110px;
+      height: 53px;
+      object-fit: contain;
+      object-position: left center;
+    }
+
+    .logo-on-light { filter: invert(1); }
+
+    .section-name,
+    .page-number,
+    .meta {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .section-name { color: var(--gold-dark); }
+    .dark .section-name { color: var(--gold); }
+
+    .slide-body {
+      min-height: 0;
+      padding: 32px 0 28px;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1, h2, h3 {
+      font-family: var(--display);
+      font-weight: 650;
+      line-height: 0.98;
+      letter-spacing: -0.04em;
+    }
+
+    h1 { max-width: 880px; margin-bottom: 28px; font-size: clamp(64px, 8vw, 104px); }
+    h2 { max-width: 880px; margin-bottom: 28px; font-size: clamp(44px, 5vw, 66px); }
+    h3 { margin-bottom: 10px; font-size: 24px; line-height: 1.08; }
+
+    .lead {
+      max-width: 760px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 22px;
+      line-height: 1.42;
+    }
+
+    .dark .lead { color: rgba(255, 255, 255, 0.68); }
+
+    .cover {
+      grid-template-rows: 1fr auto;
+      background:
+        linear-gradient(90deg, transparent 49.9%, rgba(255, 255, 255, 0.09) 50%, transparent 50.1%),
+        var(--black);
+    }
+
+    .cover .slide-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(250px, 0.45fr);
+      align-items: end;
+      gap: 48px;
+      padding-top: 0;
+    }
+
+    .cover h1 { margin-bottom: 24px; }
+
+    .cover-mark {
+      align-self: stretch;
+      display: grid;
+      align-content: space-between;
+      justify-items: end;
+      padding-top: 8px;
+    }
+
+    .cover-mark .logo { width: 150px; height: 72px; }
+
+    .cover-index {
+      color: var(--gold);
+      font-family: var(--display);
+      font-size: 112px;
+      font-weight: 600;
+      line-height: 0.8;
+      letter-spacing: -0.08em;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1.25fr repeat(3, 0.75fr);
+      min-height: 360px;
+      border-top: 1px solid var(--line-light);
+      border-left: 1px solid var(--line-light);
+    }
+
+    .summary-cell {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 26px;
+      border-right: 1px solid var(--line-light);
+      border-bottom: 1px solid var(--line-light);
+    }
+
+    .summary-cell.featured { background: var(--ink); color: var(--white); }
+    .summary-cell .number { font-family: var(--display); font-size: 68px; line-height: 1; letter-spacing: -0.06em; }
+    .summary-cell .label { max-width: 170px; color: var(--muted); font-size: 15px; }
+    .summary-cell.featured .label { color: rgba(255, 255, 255, 0.65); }
+
+    .status-key {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 4px 8px;
+      border-left: 4px solid currentColor;
+      background: rgba(17, 17, 17, 0.06);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .dark .status { background: rgba(255, 255, 255, 0.08); }
+    .operational { color: var(--success); }
+    .partial { color: var(--partial); }
+    .absent { color: var(--absent); }
+    .dark .operational { color: #72c894; }
+    .dark .partial { color: #e4b45b; }
+    .dark .absent { color: #e27d75; }
+
+    .domain-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid var(--line-dark);
+      border-left: 1px solid var(--line-dark);
+    }
+
+    .domain-card {
+      min-height: 172px;
+      padding: 22px;
+      border-right: 1px solid var(--line-dark);
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .domain-card .index {
+      display: block;
+      margin-bottom: 22px;
+      color: var(--gold);
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .domain-card h3 { font-size: 21px; }
+    .domain-card p { margin: 0; color: rgba(255, 255, 255, 0.58); font-size: 13px; }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 56px;
+      height: 100%;
+    }
+
+    .split-copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .feature-list {
+      display: grid;
+      align-content: start;
+      border-top: 1px solid var(--line-light);
+    }
+
+    .dark .feature-list { border-color: var(--line-dark); }
+
+    .feature-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: start;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line-light);
+    }
+
+    .dark .feature-row { border-color: var(--line-dark); }
+    .feature-row strong { display: block; margin-bottom: 3px; font-size: 15px; }
+    .feature-row p { max-width: 520px; margin: 0; color: var(--muted); font-size: 12px; }
+    .dark .feature-row p { color: rgba(255, 255, 255, 0.55); }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 40px 1fr 40px 1fr;
+      align-items: center;
+      margin-top: 32px;
+    }
+
+    .architecture-node {
+      min-height: 210px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 24px;
+      border: 1px solid var(--line-dark);
+    }
+
+    .architecture-node.accent { color: var(--ink); background: var(--gold); border-color: var(--gold); }
+    .architecture-node h3 { font-size: 28px; }
+    .architecture-node p { margin: 0; color: rgba(255, 255, 255, 0.58); font-size: 13px; }
+    .architecture-node.accent p { color: rgba(17, 17, 17, 0.65); }
+    .arrow { color: var(--gold); text-align: center; font-size: 24px; }
+
+    .matrix {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 13px;
+    }
+
+    .matrix th,
+    .matrix td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line-light);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    .matrix th {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .matrix th:first-child,
+    .matrix td:first-child { width: 29%; }
+
+    .matrix td:not(:first-child) { color: var(--muted); }
+
+    .risk-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1px;
+      background: rgba(17, 17, 17, 0.18);
+      border: 1px solid rgba(17, 17, 17, 0.18);
+    }
+
+    .risk {
+      min-height: 145px;
+      padding: 22px 24px;
+      background: var(--gold);
+    }
+
+    .risk .rank {
+      float: right;
+      color: rgba(17, 17, 17, 0.35);
+      font-family: var(--display);
+      font-size: 42px;
+      line-height: 0.9;
+    }
+
+    .risk h3 { max-width: 360px; font-size: 23px; }
+    .risk p { max-width: 430px; margin: 0; color: rgba(17, 17, 17, 0.66); font-size: 13px; }
+
+    .closing {
+      display: grid;
+      grid-template-columns: 1.45fr 0.55fr;
+      gap: 48px;
+      align-items: end;
+      height: 100%;
+    }
+
+    .closing .statement {
+      max-width: 870px;
+      font-family: var(--display);
+      font-size: clamp(44px, 5.2vw, 70px);
+      font-weight: 650;
+      line-height: 1.02;
+      letter-spacing: -0.045em;
+    }
+
+    .closing aside {
+      padding-left: 24px;
+      border-left: 2px solid var(--gold);
+      color: rgba(255, 255, 255, 0.62);
+      font-size: 14px;
+    }
+
+    .closing aside strong { display: block; margin-bottom: 8px; color: var(--white); }
+
+    @media (max-width: 820px) {
+      .deck { display: block; padding: 0; }
+      .slide { width: 100%; min-height: 100dvh; aspect-ratio: auto; padding: 32px 24px 24px; }
+      .slide + .slide { border-top: 10px solid #292929; }
+      .cover .slide-body,
+      .split,
+      .closing { grid-template-columns: 1fr; }
+      .cover-mark { align-content: start; justify-items: start; }
+      .cover-index { display: none; }
+      .summary-grid,
+      .domain-grid { grid-template-columns: 1fr 1fr; }
+      .architecture { grid-template-columns: 1fr; gap: 12px; }
+      .architecture-node { min-height: 150px; }
+      .arrow { transform: rotate(90deg); }
+      .risk-grid { grid-template-columns: 1fr; }
+      .matrix { font-size: 11px; }
+      .matrix th, .matrix td { padding: 9px 6px; }
+    }
+
+    @media print {
+      @page { size: 13.333in 7.5in; margin: 0; }
+
+      html, body { background: var(--white); }
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .deck { display: block; padding: 0; }
+      .slide {
+        width: 13.333in;
+        height: 7.5in;
+        min-height: 0;
+        aspect-ratio: auto;
+        padding: 42px 48px 30px;
+        break-after: page;
+        page-break-after: always;
+      }
+      .slide + .slide { border-top: 0; }
+      .slide:last-child { break-after: auto; page-break-after: auto; }
+      .slide-body { padding: 24px 0 18px; }
+      h1 { font-size: 96px; }
+      h2 { margin-bottom: 20px; font-size: 52px; }
+      .lead { font-size: 18px; }
+      .cover .slide-body { grid-template-columns: minmax(0, 1.55fr) minmax(250px, 0.45fr); }
+      .cover-mark { align-content: space-between; justify-items: end; }
+      .cover-index { display: block; }
+      .summary-grid { grid-template-columns: 1.25fr repeat(3, 0.75fr); min-height: 290px; }
+      .summary-cell { padding: 22px; }
+      .summary-cell .number { font-size: 58px; }
+      .status-key { margin-top: 12px; }
+      .domain-grid { grid-template-columns: repeat(4, 1fr); }
+      .domain-card { min-height: 148px; padding: 18px; }
+      .domain-card .index { margin-bottom: 14px; }
+      .split { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 40px; }
+      .feature-row { padding: 10px 0; }
+      .feature-row strong { font-size: 14px; }
+      .feature-row p { font-size: 11px; }
+      .architecture { grid-template-columns: 1fr 40px 1fr 40px 1fr; gap: 0; margin-top: 24px; }
+      .architecture-node { min-height: 180px; }
+      .arrow { transform: none; }
+      .risk-grid { grid-template-columns: repeat(2, 1fr); }
+      .risk { min-height: 130px; padding: 18px 22px; }
+      .risk h3 { font-size: 20px; }
+      .risk p { font-size: 11px; }
+      .closing { grid-template-columns: 1.45fr 0.55fr; }
+      .closing .statement { font-size: 58px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide dark cover" aria-labelledby="cover-title">
+      <div class="slide-body">
+        <div>
+          <p class="section-name">Portal Ownerinc / Implementação atual</p>
+          <h1 id="cover-title">Visão executiva do produto</h1>
+          <p class="lead">Capacidades entregues, controles operacionais e lacunas observadas diretamente no código.</p>
+        </div>
+        <div class="cover-mark">
+          <img class="logo" src="../../public/assets/logo-branco.svg" alt="Ownerinc">
+          <span class="cover-index" aria-hidden="true">01</span>
+        </div>
+      </div>
+      <footer class="slide-footer">
+        <span>20 JUL 2026</span>
+        <span>Fonte: README + inventário funcional + código</span>
+      </footer>
+    </section>
+
+    <section class="slide" aria-labelledby="summary-title">
+      <header class="slide-header">
+        <span class="section-name">Resumo executivo</span>
+        <span class="page-number">02 / 12</span>
+      </header>
+      <div class="slide-body">
+        <h2 id="summary-title">Um portal interno com núcleo operacional completo.</h2>
+        <div class="summary-grid">
+          <article class="summary-cell featured">
+            <span class="number">8</span>
+            <div>
+              <strong>domínios de produto</strong>
+              <p class="label">Da identidade à ouvidoria, com gestão administrativa central.</p>
+            </div>
+          </article>
+          <article class="summary-cell">
+            <span class="number">6</span>
+            <p class="label">permissões administrativas granulares</p>
+          </article>
+          <article class="summary-cell">
+            <span class="number">5</span>
+            <p class="label">estados duráveis de entrega de notificação</p>
+          </article>
+          <article class="summary-cell">
+            <span class="number">32</span>
+            <p class="label">checks automatizados aprovados localmente</p>
+          </article>
+        </div>
+        <div class="status-key" aria-label="Legenda de status">
+          <span class="status operational">Operacional</span>
+          <span class="status partial">Parcial</span>
+          <span class="status absent">Não implementada</span>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Ownerinc Portal</span><span>Estado observado em código e simulação local</span></footer>
+    </section>
+
+    <section class="slide dark" aria-labelledby="map-title">
+      <header class="slide-header">
+        <span class="section-name">Mapa funcional</span>
+        <span class="page-number">03 / 12</span>
+      </header>
+      <div class="slide-body">
+        <h2 id="map-title">Oito domínios conectados por identidade e governança.</h2>
+        <div class="domain-grid">
+          <article class="domain-card"><span class="index">01</span><h3>Identidade</h3><p>Login, sessão, admissão fechada e recuperação.</p></article>
+          <article class="domain-card"><span class="index">02</span><h3>Dashboard</h3><p>Contexto PJ/CLT, lembretes e atalhos.</p></article>
+          <article class="domain-card"><span class="index">03</span><h3>Perfil</h3><p>Dados pessoais, foto e exportação.</p></article>
+          <article class="domain-card"><span class="index">04</span><h3>Conhecimento</h3><p>Artigos, busca, filtros e gestão editorial simples.</p></article>
+          <article class="domain-card"><span class="index">05</span><h3>Academy</h3><p>Catálogo de cursos e links externos.</p></article>
+          <article class="domain-card"><span class="index">06</span><h3>Benefícios</h3><p>Catálogo informativo segmentado por categoria.</p></article>
+          <article class="domain-card"><span class="index">07</span><h3>Lembretes</h3><p>Agenda mensal, audiência e entrega por email.</p></article>
+          <article class="domain-card"><span class="index">08</span><h3>Ouvidoria</h3><p>Envio minimizado e tratamento restrito.</p></article>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Ownerinc Portal</span><span>Administração, auditoria e segurança atravessam todos os domínios</span></footer>
+    </section>
+
+    <section class="slide" aria-labelledby="identity-title">
+      <header class="slide-header">
+        <span class="section-name">Identidade + perfil</span>
+        <span class="page-number">04 / 12</span>
+      </header>
+      <div class="slide-body split">
+        <div class="split-copy">
+          <div>
+            <h2 id="identity-title">Entrada controlada. Autonomia no perfil.</h2>
+            <p class="lead">O Firebase prova a identidade; PostgreSQL decide admissão, papel e acesso.</p>
+          </div>
+          <span class="status operational">Núcleo operacional</span>
+        </div>
+        <div class="feature-list">
+          <div class="feature-row"><div><strong>Login e sessão</strong><p>Email/senha, token não revogado e email verificado.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Admissão fechada</strong><p>Sem cadastro público; criação administrativa via Firebase Admin.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Desativação segura</strong><p>Revoga tokens, bloqueia a conta e protege o último super-admin.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Perfil e foto</strong><p>Edição, WebP normalizado, substituição e remoção.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Direitos do titular</strong><p>Exportação JSON e apagamento administrativo controlado.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Privacidade da foto</strong><p>UUID imprevisível, porém arquivo publicamente acessível.</p></div><span class="status partial">Parcial</span></div>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Evidência principal</span><span>api/middleware/auth.js · api/routes/users.js · api/routes/upload.js</span></footer>
+    </section>
+
+    <section class="slide" aria-labelledby="content-title">
+      <header class="slide-header">
+        <span class="section-name">Conteúdo + catálogos</span>
+        <span class="page-number">05 / 12</span>
+      </header>
+      <div class="slide-body split">
+        <div class="split-copy">
+          <div>
+            <h2 id="content-title">Informação interna com gestão distribuída.</h2>
+            <p class="lead">Cada catálogo possui permissão própria, validação server-side e auditoria de mutações.</p>
+          </div>
+          <div class="status-key"><span class="status operational">CRUDs operacionais</span><span class="status partial">Leitura limitada a 50</span></div>
+        </div>
+        <div class="feature-list">
+          <div class="feature-row"><div><strong>Base de conhecimento</strong><p>Busca, categoria, deep link e CRUD de texto simples.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Academy</strong><p>Catálogo ativo, categorias, ordem e links HTTP(S).</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Benefícios</strong><p>Descrição, instruções, categoria, ordem e ativação.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Visões comuns</strong><p>Knowledge, Academy e Benefícios não avançam além da primeira página.</p></div><span class="status partial">Parcial</span></div>
+          <div class="feature-row"><div><strong>LMS e certificados</strong><p>Academy é catálogo; não acompanha progresso ou conclusão.</p></div><span class="status absent">Fora do escopo</span></div>
+          <div class="feature-row"><div><strong>Cupons e resgate</strong><p>Benefícios permanecem informativos.</p></div><span class="status absent">Ausente</span></div>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Evidência principal</span><span>api/routes/knowledge.js · academy.js · benefits.js</span></footer>
+    </section>
+
+    <section class="slide dark" aria-labelledby="reminders-title">
+      <header class="slide-header">
+        <span class="section-name">Lembretes + notificações</span>
+        <span class="page-number">06 / 12</span>
+      </header>
+      <div class="slide-body split">
+        <div class="split-copy">
+          <div>
+            <h2 id="reminders-title">Entrega rastreável, não apenas um cron.</h2>
+            <p class="lead">Cada tentativa recebe identidade, estado e resultado antes de chegar ao provedor.</p>
+          </div>
+          <div class="status-key"><span class="status operational">Email operacional</span><span class="status absent">WhatsApp ausente</span></div>
+        </div>
+        <div class="feature-list">
+          <div class="feature-row"><div><strong>Audiência</strong><p>Todos, PJ, CLT e UIDs específicos filtrados no servidor.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Agenda mensal</strong><p>Brasília, meses curtos e catch-up máximo de sete dias.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Ledger durável</strong><p>Pending, sending, sent, failed e skipped com chave idempotente.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>SendGrid</strong><p>Isolamento por destinatário e retry em falhas transitórias.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Histórico e saúde</strong><p>API completa; UI reduzida e sem alertas externos.</p></div><span class="status partial">Parcial</span></div>
+          <div class="feature-row"><div><strong>WhatsApp e preferências</strong><p>Stub desativado; sem opt-in/opt-out por usuário.</p></div><span class="status absent">Ausente</span></div>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Evidência principal</span><span>cron/checkReminders.js · cron/scheduling.js · api/routes/reminders.js</span></footer>
+    </section>
+
+    <section class="slide" aria-labelledby="governance-title">
+      <header class="slide-header">
+        <span class="section-name">Ouvidoria + administração</span>
+        <span class="page-number">07 / 12</span>
+      </header>
+      <div class="slide-body split">
+        <div class="split-copy">
+          <div>
+            <h2 id="governance-title">Acesso mínimo com ações rastreáveis.</h2>
+            <p class="lead">A interface orienta; a API aplica as regras e registra ações privilegiadas.</p>
+          </div>
+          <span class="status operational">6 permissões granulares</span>
+        </div>
+        <div class="feature-list">
+          <div class="feature-row"><div><strong>Ouvidoria minimizada</strong><p>Mensagem sem UID/email persistido e leitura auditada.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Tratamento</strong><p>Status, responsável, notas e retenção após resolução.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Gestão de usuários</strong><p>Criação, edição, paginação, desativação e reativação.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Permissões</strong><p>Usuários, lembretes, knowledge, academy, benefícios e ouvidoria.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Anti-escalada</strong><p>Somente super-admin altera privilégios e contas superiores.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Visões operacionais</strong><p>Filtros existem na API, mas algumas telas exibem apenas recortes.</p></div><span class="status partial">Parcial</span></div>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Evidência principal</span><span>api/routes/ombudsman.js · users.js · middleware/policy.js</span></footer>
+    </section>
+
+    <section class="slide dark" aria-labelledby="architecture-title">
+      <header class="slide-header">
+        <span class="section-name">Arquitetura</span>
+        <span class="page-number">08 / 12</span>
+      </header>
+      <div class="slide-body">
+        <h2 id="architecture-title">Poucas peças, responsabilidades claras.</h2>
+        <div class="architecture" aria-label="Fluxo da arquitetura do Portal">
+          <article class="architecture-node">
+            <span class="meta">Experiência</span>
+            <h3>Frontend estático</h3>
+            <p>HTML, CSS e JavaScript. Firebase Auth no navegador.</p>
+          </article>
+          <div class="arrow" aria-hidden="true">→</div>
+          <article class="architecture-node accent">
+            <span class="meta">Borda + aplicação</span>
+            <h3>Nginx + Express</h3>
+            <p>Publicação, CSP, rate limits, autenticação e políticas.</p>
+          </article>
+          <div class="arrow" aria-hidden="true">→</div>
+          <article class="architecture-node">
+            <span class="meta">Dados + automação</span>
+            <h3>PostgreSQL + cron</h3>
+            <p>Persistência, auditoria, retenção e notificações.</p>
+          </article>
+        </div>
+        <div class="status-key"><span class="status operational">Docker Compose</span><span class="status operational">Roles separadas</span><span class="status operational">Migrations 001–006</span></div>
+      </div>
+      <footer class="slide-footer"><span>Integrações externas</span><span>Firebase Auth · SendGrid · proxy TLS da VPS</span></footer>
+    </section>
+
+    <section class="slide" aria-labelledby="controls-title">
+      <header class="slide-header">
+        <span class="section-name">Controles transversais</span>
+        <span class="page-number">09 / 12</span>
+      </header>
+      <div class="slide-body">
+        <h2 id="controls-title">Segurança, privacidade e acesso fazem parte do fluxo.</h2>
+        <table class="matrix">
+          <thead><tr><th>Controle</th><th>Implementação</th><th>Estado</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Autorização</strong></td><td>Token, conta local, role e permissão em todas as rotas</td><td><span class="status operational">Operacional</span></td></tr>
+            <tr><td><strong>Integridade</strong></td><td>Allowlist, limites, URLs seguras e constraints PostgreSQL</td><td><span class="status operational">Operacional</span></td></tr>
+            <tr><td><strong>Segurança HTTP</strong></td><td>CSP, CORS, HSTS, rate limit, request ID e erros genéricos</td><td><span class="status operational">Operacional</span></td></tr>
+            <tr><td><strong>LGPD técnica</strong></td><td>Correção, exportação, bloqueio, erasure e retenção</td><td><span class="status operational">Operacional</span></td></tr>
+            <tr><td><strong>Acessibilidade</strong></td><td>Teclado, foco, landmarks, dialogs e movimento reduzido</td><td><span class="status partial">Validar em AT</span></td></tr>
+            <tr><td><strong>Menor privilégio</strong></td><td>Roles distintas para migration, API e worker</td><td><span class="status operational">Operacional</span></td></tr>
+            <tr><td><strong>Validação jurídica</strong></td><td>Política técnica existe; bases legais ainda requerem aprovação</td><td><span class="status partial">Pendente</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <footer class="slide-footer"><span>Princípio</span><span>Interface não substitui autorização server-side</span></footer>
+    </section>
+
+    <section class="slide" aria-labelledby="operations-title">
+      <header class="slide-header">
+        <span class="section-name">Operação</span>
+        <span class="page-number">10 / 12</span>
+      </header>
+      <div class="slide-body split">
+        <div class="split-copy">
+          <div>
+            <h2 id="operations-title">Pronto para operar localmente. Produção exige a borda externa.</h2>
+            <p class="lead">Build, migrations e recuperação estão versionados junto da aplicação.</p>
+          </div>
+          <span class="status operational">Stack local validada</span>
+        </div>
+        <div class="feature-list">
+          <div class="feature-row"><div><strong>Desenvolvimento local</strong><p>Compose com Auth Emulator, banco, API, cron e Nginx.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>CI e supply chain</strong><p>Testes, audit, SBOM, Trivy e imagens por commit.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Deploy e rollback</strong><p>Archive limpo, imagens por digest e release anterior.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Backup e restore</strong><p>Banco/uploads, checksum, restore transacional e confirmação.</p></div><span class="status operational">Operacional</span></div>
+          <div class="feature-row"><div><strong>Smoke</strong><p>Valida página e readiness, sem testar login ou domínios.</p></div><span class="status partial">Parcial</span></div>
+          <div class="feature-row"><div><strong>Borda de produção</strong><p>TLS, alertas e backup off-host dependem da VPS/operação.</p></div><span class="status partial">Externo</span></div>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Verificação local</span><span>32/32 testes · smoke aprovado · migrations reais executadas</span></footer>
+    </section>
+
+    <section class="slide gold" aria-labelledby="gaps-title">
+      <header class="slide-header">
+        <span class="section-name" style="color:#111">Lacunas prioritárias</span>
+        <span class="page-number">11 / 12</span>
+      </header>
+      <div class="slide-body">
+        <h2 id="gaps-title">Quatro limites concentram o risco residual.</h2>
+        <div class="risk-grid">
+          <article class="risk"><span class="rank">01</span><h3>Visões comuns sem paginação completa</h3><p>Knowledge, Academy, Benefícios e dashboard podem omitir dados após os primeiros 50 registros.</p></article>
+          <article class="risk"><span class="rank">02</span><h3>Operação sem alerta externo</h3><p>Heartbeat e logs existem, mas não há alerta proativo, rotação central ou métrica externa.</p></article>
+          <article class="risk"><span class="rank">03</span><h3>Validações fora do código</h3><p>TLS/VPS, SendGrid real, acessibilidade assistiva e validação jurídica permanecem ambientais.</p></article>
+          <article class="risk"><span class="rank">04</span><h3>Canais e recursos condicionais</h3><p>WhatsApp, NF PJ, LMS, cupons, preferências e conclusão de lembretes não estão implementados.</p></article>
+        </div>
+      </div>
+      <footer class="slide-footer"><span>Diretriz</span><span>Adicionar funcionalidades condicionais somente com demanda e operação definidas</span></footer>
+    </section>
+
+    <section class="slide dark" aria-labelledby="closing-title">
+      <header class="slide-header">
+        <img class="logo" src="../../public/assets/logo-branco.svg" alt="Ownerinc">
+        <span class="page-number">12 / 12</span>
+      </header>
+      <div class="slide-body closing">
+        <div>
+          <p class="section-name">Conclusão executiva</p>
+          <h2 id="closing-title" class="statement">O Portal já sustenta sua operação interna principal. O próximo salto é operacional, não arquitetural.</h2>
+        </div>
+        <aside>
+          <strong>Próxima decisão</strong>
+          Validar ambiente real, acessibilidade assistiva e operação externa antes de ampliar o escopo funcional.
+        </aside>
+      </div>
+      <footer class="slide-footer"><span>Documento-fonte</span><span>docs/product/feature-inventory.md</span></footer>
+    </section>
+  </main>
+</body>
+</html>

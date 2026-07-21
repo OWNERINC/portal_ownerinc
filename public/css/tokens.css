@@ -11,10 +11,12 @@
   --primary-hover: #B08D3E;
   --espresso: #111111;
   --text: #111111;
-  --text-secondary: #6B7280;
+  --text-secondary: #596170;
   --border: rgba(0,0,0,0.08);
   --danger: #DC2626;
-  --success: #16A34A;
+  --success: #15803D;
+  --focus: #8A6818;
+  color-scheme: light;
 
   /* Tipografia */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;

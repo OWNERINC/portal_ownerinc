@@ -3,22 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
   <title>Dashboard — Portal Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
 
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
       <a href="./dashboard.html" class="sidebar-brand">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
-        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
       </a>
-      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <i data-lucide="chevrons-left"></i>
       </button>
     </div>
@@ -33,7 +35,7 @@
       <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
     </ul>
     <div class="sidebar-footer">
-      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+      <button class="sidebar-logout" type="button" aria-label="Sair">
         <i data-lucide="log-out"></i><span>Sair</span>
       </button>
     </div>
@@ -44,7 +46,11 @@
       <span class="topbar-title">Dashboard</span>
       <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
     </header>
-    <main class="page-body">
+    <main class="page-body" id="main-content" tabindex="-1">
+
+      <div class="page-header">
+        <h1>Visão Geral</h1>
+      </div>
 
       <!-- Card NF para PJ -->
       <div id="pj-card" class="card" style="display:none; border-left:4px solid var(--primary); margin-bottom:24px;">
@@ -56,33 +62,40 @@
       <div id="solides-card" class="card" style="display:none; border-left:4px solid var(--primary); margin-bottom:24px;">
         <div class="card-title">⏱ Sólides — Ponto e Frequência</div>
         <p id="solides-status" style="font-size:14px; color:var(--text-secondary)"></p>
-        <a id="solides-link" href="https://app.solides.com.br" target="_blank"
-           style="font-size:13px; color:var(--primary); margin-top:8px; display:inline-block">
+         <a id="solides-link" href="https://app.solides.com.br" target="_blank" rel="noopener noreferrer"
+           style="font-size:13px; color:var(--focus); margin-top:8px; display:inline-block">
           Abrir Sólides →
         </a>
       </div>
 
       <!-- Lembretes próximos 7 dias -->
       <div class="page-header">
-        <h1>Próximos Lembretes</h1>
+         <h2>Próximos Lembretes</h2>
         <p>Lembretes com vencimento nos próximos 7 dias</p>
       </div>
-      <div id="reminders-list" class="card-grid">
-        <p class="empty-state">Carregando...</p>
+      <div id="reminders-list" class="card-grid" aria-live="polite">
+        <p class="empty-state">Carregando…</p>
       </div>
 
       <!-- Acesso Rápido -->
       <div class="page-header" style="margin-top:40px">
-        <h1>Acesso Rápido</h1>
+         <h2>Acesso Rápido</h2>
       </div>
       <div id="quick-links" class="card-grid"></div>
+
+      <section class="content-section" aria-labelledby="academy-heading">
+        <div class="page-header section-heading-row">
+          <h2 id="academy-heading">Academy</h2>
+          <a href="./academy.html">Ver todos →</a>
+        </div>
+        <div id="academy-preview" aria-live="polite"><p class="empty-state">Carregando cursos…</p></div>
+      </section>
 
     </main>
   </div>
 </div>
 
-<div id="toast" class="toast hidden"></div>
-<script>lucide.createIcons();</script>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>
 <script type="module" src="./js/dashboard.js"></script>
 </body>

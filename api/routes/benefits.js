@@ -1,71 +1,85 @@
 const express = require('express');
-const router = express.Router();
 const pool = require('../db');
 const { authMiddleware, can } = require('../middleware/auth');
+const {
+  boolean, forbidden, integer, invalid, mayViewAll, parseListQuery, text, uuid,
+  validBody, withAudit,
+} = require('../route-utils');
 
-// GET /api/benefits — lista benefícios (?active=true)
-router.get('/', authMiddleware, async (req, res) => {
+const router = express.Router();
+const schema = {
+  company: text(200, true), category: text(100), description: text(5000),
+  instructions: text(10000), order: integer(-100000, 100000), active: boolean,
+};
+const listQuery = { all: (value) => ['true', 'false'].includes(value), active: (value) => value === 'true' };
+
+router.get('/', authMiddleware, async (req, res, next) => {
+  const page = parseListQuery(req.query, listQuery);
+  if (!page) return invalid(req, res);
+  if (req.query.all === 'true' && !can(req.user, 'manageBenefits')) return forbidden(req, res);
+  const where = mayViewAll(req.user, 'manageBenefits', req.query.all) ? '' : 'WHERE active = TRUE';
   try {
-    const params = [];
-    const conditions = [];
-    if (req.query.active === 'true') {
-      params.push(true);
-      conditions.push(`active = $${params.length}`);
-    }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const { rows } = await pool.query(
-      `SELECT * FROM benefits ${where} ORDER BY "order"`,
-      params
-    );
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const [{ rows: [{ count }] }, { rows }] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::integer AS count FROM benefits ${where}`),
+      pool.query(`SELECT * FROM benefits ${where} ORDER BY "order", id LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
+    ]);
+    res.set('X-Total-Count', String(count)).json(rows);
+  } catch (error) {
+    next(error);
   }
 });
 
-// POST /api/benefits (manageBenefits)
-router.post('/', authMiddleware, async (req, res) => {
-  if (!can(req.user, 'manageBenefits')) return res.status(403).json({ error: 'Sem permissão.' });
+router.post('/', authMiddleware, async (req, res, next) => {
+  if (!can(req.user, 'manageBenefits')) return forbidden(req, res);
+  if (!validBody(req.body, schema, ['company'])) return invalid(req, res);
   try {
-    const { company, category, description, instructions, order, active } = req.body;
-    if (!company) return res.status(400).json({ error: 'Nome da empresa é obrigatório.' });
-    const { rows } = await pool.query(
-      `INSERT INTO benefits (company, category, description, instructions, "order", active)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [company, category || '', description || '', instructions || '', order || 0, active !== false]
-    );
-    res.json(rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const { company, category = '', description = '', instructions = '', order = 0, active = true } = req.body;
+    const row = await withAudit(pool, req, 'benefit.create', 'benefit', async (db) => {
+      const { rows } = await db.query(
+        `INSERT INTO benefits (company, category, description, instructions, "order", active)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [company.trim(), category, description, instructions, order, active]
+      );
+      return rows[0];
+    }, { targetId: (result) => result.id });
+    res.status(201).json(row);
+  } catch (error) {
+    next(error);
   }
 });
 
-// PUT /api/benefits/:id (manageBenefits)
-router.put('/:id', authMiddleware, async (req, res) => {
-  if (!can(req.user, 'manageBenefits')) return res.status(403).json({ error: 'Sem permissão.' });
+router.put('/:id', authMiddleware, async (req, res, next) => {
+  if (!can(req.user, 'manageBenefits')) return forbidden(req, res);
+  if (!uuid(req.params.id) || !validBody(req.body, schema, Object.keys(schema))) return invalid(req, res);
   try {
-    const { company, category, description, instructions, order, active } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE benefits
-       SET company=$2, category=$3, description=$4, instructions=$5, "order"=$6, active=$7
-       WHERE id=$1 RETURNING *`,
-      [req.params.id, company, category || '', description || '', instructions || '', order || 0, !!active]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: 'Benefício não encontrado.' });
-    res.json(rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const row = await withAudit(pool, req, 'benefit.update', 'benefit', async (db) => {
+      const { company, category, description, instructions, order, active } = req.body;
+      const { rows } = await db.query(
+        `UPDATE benefits SET company=$2, category=$3, description=$4, instructions=$5, "order"=$6, active=$7
+         WHERE id=$1 RETURNING *`,
+        [req.params.id, company.trim(), category, description, instructions, order, active]
+      );
+      return rows[0];
+    }, { targetId: req.params.id });
+    if (!row) return res.status(404).json({ error: 'Benefit not found.', requestId: req.id });
+    res.json(row);
+  } catch (error) {
+    next(error);
   }
 });
 
-// DELETE /api/benefits/:id (manageBenefits)
-router.delete('/:id', authMiddleware, async (req, res) => {
-  if (!can(req.user, 'manageBenefits')) return res.status(403).json({ error: 'Sem permissão.' });
+router.delete('/:id', authMiddleware, async (req, res, next) => {
+  if (!can(req.user, 'manageBenefits')) return forbidden(req, res);
+  if (!uuid(req.params.id)) return invalid(req, res);
   try {
-    await pool.query('DELETE FROM benefits WHERE id=$1', [req.params.id]);
+    const row = await withAudit(pool, req, 'benefit.delete', 'benefit', async (db) => {
+      const { rows } = await db.query('DELETE FROM benefits WHERE id=$1 RETURNING id', [req.params.id]);
+      return rows[0];
+    }, { targetId: req.params.id });
+    if (!row) return res.status(404).json({ error: 'Benefit not found.', requestId: req.id });
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    next(error);
   }
 });
 

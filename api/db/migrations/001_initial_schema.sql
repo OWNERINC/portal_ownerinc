@@ -1,0 +1,68 @@
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE TABLE IF NOT EXISTS users (
+  uid TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  bio TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  linkedin_url TEXT NOT NULL DEFAULT '',
+  photo_url TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'viewer',
+  contract_type TEXT NOT NULL DEFAULT 'clt',
+  is_pj BOOLEAN NOT NULL DEFAULT FALSE,
+  pj_due_day INTEGER,
+  permissions JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_base (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  created_by TEXT REFERENCES users(uid) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS reminders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  trigger_day INTEGER NOT NULL CHECK (trigger_day BETWEEN 1 AND 31),
+  target_users JSONB NOT NULL DEFAULT '"all"',
+  channel TEXT NOT NULL DEFAULT 'email',
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by TEXT REFERENCES users(uid) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS academy (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL, "order" INTEGER NOT NULL DEFAULT 0,
+  active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS benefits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+  instructions TEXT NOT NULL DEFAULT '', "order" INTEGER NOT NULL DEFAULT 0,
+  active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS ombudsman (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), category TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS notifications_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+  user_uid TEXT REFERENCES users(uid) ON DELETE CASCADE,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  channel TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'sent'
+);

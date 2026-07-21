@@ -3,21 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
   <title>Academy — Portal Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
       <a href="./dashboard.html" class="sidebar-brand">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
-        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
       </a>
-      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <i data-lucide="chevrons-left"></i>
       </button>
     </div>
@@ -32,7 +34,7 @@
       <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
     </ul>
     <div class="sidebar-footer">
-      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+      <button class="sidebar-logout" type="button" aria-label="Sair">
         <i data-lucide="log-out"></i><span>Sair</span>
       </button>
     </div>
@@ -42,15 +44,15 @@
       <span class="topbar-title">Academy</span>
       <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
     </header>
-    <main class="page-body">
-      <div id="academy-content">
-        <p class="empty-state">Carregando cursos...</p>
+    <main class="page-body" id="main-content" tabindex="-1">
+      <div class="page-header"><h1>Academy</h1><p>Cursos e treinamentos disponíveis para a equipe</p></div>
+      <div id="academy-content" aria-live="polite">
+        <p class="empty-state">Carregando cursos…</p>
       </div>
     </main>
   </div>
 </div>
-<div id="toast" class="toast hidden"></div>
-<script>lucide.createIcons();</script>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>
 <script type="module" src="./js/academy.js"></script>
 </body>

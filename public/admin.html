@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
   <title>Admin — Portal Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
   <style>
     .admin-tabs {
       display: flex;
@@ -32,21 +33,22 @@
     .admin-tab.active { color: var(--espresso); border-bottom-color: var(--primary); }
     .admin-tab:hover { color: var(--espresso); }
     .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-    .section-header h1 { font-size: 18px; font-weight: 600; color: var(--espresso); }
+    .section-header h2 { font-size: 18px; font-weight: 600; color: var(--espresso); }
     .permission-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; color: var(--text); }
     .permission-row input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--primary); }
     .permissions-block { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin-top: 4px; background: #fafafa; }
   </style>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
       <a href="./dashboard.html" class="sidebar-brand">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
-        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
       </a>
-      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <i data-lucide="chevrons-left"></i>
       </button>
     </div>
@@ -61,7 +63,7 @@
       <li><a href="./admin.html" class="active" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
     </ul>
     <div class="sidebar-footer">
-      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+      <button class="sidebar-logout" type="button" aria-label="Sair">
         <i data-lucide="log-out"></i><span>Sair</span>
       </button>
     </div>
@@ -72,245 +74,351 @@
       <span class="topbar-title">Painel Admin</span>
       <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
     </header>
-    <main class="page-body">
+    <main class="page-body" id="main-content" tabindex="-1">
 
-      <div class="admin-tabs" id="admin-tabs"></div>
+      <div class="page-header"><h1>Painel Administrativo</h1></div>
+
+      <div class="admin-tabs" id="admin-tabs" role="tablist" aria-label="Áreas administrativas"></div>
 
       <!-- Usuários -->
-      <div id="section-users" class="admin-section" style="display:none">
+      <section id="section-users" class="admin-section" role="tabpanel" aria-labelledby="tab-users" hidden>
         <div class="section-header">
-          <h1>Usuários</h1>
-          <button id="btn-new-user" class="btn btn-primary">+ Novo Usuário</button>
+          <h2>Usuários</h2>
+          <button id="btn-new-user" class="btn btn-primary" type="button">Novo usuário</button>
         </div>
         <div class="table-wrapper">
           <table>
+            <caption>Usuários autorizados no Portal</caption>
             <thead>
-              <tr><th>Nome</th><th>E-mail</th><th>Role</th><th>Contrato</th><th>Dia NF</th><th>Ações</th></tr>
+              <tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col">Perfil</th><th scope="col">Contrato</th><th scope="col">Dia NF</th><th scope="col">Status</th><th scope="col">Ações</th></tr>
             </thead>
             <tbody id="users-tbody">
-              <tr><td colspan="6" class="empty-state">Carregando...</td></tr>
+              <tr><td colspan="7" class="empty-state">Carregando…</td></tr>
             </tbody>
           </table>
         </div>
-      </div>
+        <div id="users-pagination" class="pagination" aria-label="Paginação de usuários"></div>
+        <div id="audit-panel" class="admin-subsection" hidden>
+          <div class="section-header"><h3>Atividade administrativa recente</h3></div>
+          <div class="table-wrapper">
+            <table>
+              <caption>10 eventos administrativos mais recentes</caption>
+              <thead><tr><th scope="col">Data</th><th scope="col">Ator</th><th scope="col">Ação</th><th scope="col">Alvo</th></tr></thead>
+              <tbody id="audit-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
       <!-- Academy -->
-      <div id="section-academy" class="admin-section" style="display:none">
+      <section id="section-academy" class="admin-section" role="tabpanel" aria-labelledby="tab-academy" hidden>
         <div class="section-header">
-          <h1>Academy</h1>
-          <button id="btn-new-course" class="btn btn-primary">+ Novo Curso</button>
+          <h2>Academy</h2>
+          <button id="btn-new-course" class="btn btn-primary" type="button">Novo curso</button>
         </div>
         <div class="table-wrapper">
           <table>
+            <caption>Cursos cadastrados</caption>
             <thead>
-              <tr><th>Título</th><th>Categoria</th><th>Status</th><th>Ações</th></tr>
+              <tr><th scope="col">Título</th><th scope="col">Categoria</th><th scope="col">Status</th><th scope="col">Ações</th></tr>
             </thead>
             <tbody id="academy-tbody">
-              <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+              <tr><td colspan="4" class="empty-state">Carregando…</td></tr>
             </tbody>
           </table>
         </div>
-      </div>
+        <div id="academy-pagination" class="pagination" aria-label="Paginação de cursos"></div>
+      </section>
 
       <!-- Benefícios -->
-      <div id="section-benefits" class="admin-section" style="display:none">
+      <section id="section-benefits" class="admin-section" role="tabpanel" aria-labelledby="tab-benefits" hidden>
         <div class="section-header">
-          <h1>Benefícios</h1>
-          <button id="btn-new-benefit" class="btn btn-primary">+ Novo Benefício</button>
+          <h2>Benefícios</h2>
+          <button id="btn-new-benefit" class="btn btn-primary" type="button">Novo benefício</button>
         </div>
         <div class="table-wrapper">
           <table>
+            <caption>Benefícios cadastrados</caption>
             <thead>
-              <tr><th>Empresa</th><th>Categoria</th><th>Descrição</th><th>Status</th><th>Ações</th></tr>
+              <tr><th scope="col">Empresa</th><th scope="col">Categoria</th><th scope="col">Descrição</th><th scope="col">Status</th><th scope="col">Ações</th></tr>
             </thead>
             <tbody id="benefits-tbody">
-              <tr><td colspan="5" class="empty-state">Carregando...</td></tr>
+              <tr><td colspan="5" class="empty-state">Carregando…</td></tr>
             </tbody>
           </table>
         </div>
-      </div>
+        <div id="benefits-pagination" class="pagination" aria-label="Paginação de benefícios"></div>
+      </section>
 
       <!-- Ouvidoria -->
-      <div id="section-ombudsman" class="admin-section" style="display:none">
+      <section id="section-ombudsman" class="admin-section" role="tabpanel" aria-labelledby="tab-ombudsman" hidden>
         <div class="section-header">
-          <h1>Ouvidoria</h1>
+          <h2>Ouvidoria</h2>
         </div>
         <div class="table-wrapper">
           <table>
+            <caption>Mensagens recebidas pela ouvidoria</caption>
             <thead>
-              <tr><th>Categoria</th><th>Mensagem</th><th>Data</th></tr>
+              <tr><th scope="col">Categoria</th><th scope="col">Mensagem</th><th scope="col">Status</th><th scope="col">Responsável</th><th scope="col">Data</th><th scope="col">Ações</th></tr>
             </thead>
             <tbody id="ombudsman-tbody">
-              <tr><td colspan="3" class="empty-state">Carregando...</td></tr>
+              <tr><td colspan="6" class="empty-state">Carregando…</td></tr>
             </tbody>
           </table>
         </div>
-      </div>
+        <div id="ombudsman-pagination" class="pagination" aria-label="Paginação da ouvidoria"></div>
+      </section>
+
+      <!-- Sólides — a tab só é criada após feature discovery autorizada -->
+      <section id="section-solides" class="admin-section" role="tabpanel" aria-labelledby="tab-solides" hidden>
+        <div class="section-header">
+          <h2>Integração Sólides</h2>
+          <div style="display:flex; gap:8px; align-items:center">
+            <span class="badge badge-gold" id="solides-stage">Interna</span>
+            <button class="btn btn-ghost" id="solides-probe" type="button">Testar conexão</button>
+          </div>
+        </div>
+        <div id="solides-admin-status" class="card-grid" aria-live="polite"></div>
+        <div id="solides-probe-result" class="card-grid" aria-live="polite" style="margin-top:16px"></div>
+        <form id="solides-link-form" class="card" style="margin:24px 0">
+          <div class="card-title">Vincular colaborador</div>
+          <div class="filter-bar">
+            <div class="form-group">
+              <label class="form-label" for="solides-user">Usuário do Portal</label>
+              <select class="form-select" id="solides-user" required></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="solides-employee-id">Employee ID</label>
+              <input class="form-input" id="solides-employee-id" inputmode="numeric" pattern="[1-9][0-9]{0,18}" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="solides-external-id">External ID (opcional)</label>
+              <input class="form-input" id="solides-external-id" maxlength="200">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="solides-link-status">Estado</label>
+              <select class="form-select" id="solides-link-status">
+                <option value="pending">Pendente</option>
+                <option value="verified">Verificado</option>
+                <option value="disabled">Desativado</option>
+                <option value="conflict">Conflito</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" id="solides-link-save" type="submit">Salvar vínculo</button>
+          </div>
+        </form>
+        <div class="table-wrapper">
+          <table>
+            <caption>Vínculos entre usuários do Portal e colaboradores Sólides</caption>
+            <thead><tr><th scope="col">Usuário</th><th scope="col">Employee ID</th><th scope="col">External ID</th><th scope="col">Estado</th><th scope="col">Ações</th></tr></thead>
+            <tbody id="solides-links-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="solides-pagination" class="pagination" aria-label="Paginação dos vínculos Sólides"></div>
+      </section>
 
     </main>
   </div>
 </div>
 
 <!-- Modal: Usuário -->
-<div id="modal-user" class="modal-backdrop hidden">
-  <div class="modal">
+<div id="modal-user" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-user-title">
+  <form class="modal" id="user-form">
     <div class="modal-header">
       <span class="modal-title" id="modal-user-title">Novo Usuário</span>
-      <button class="modal-close" id="modal-user-close">×</button>
+      <button class="modal-close" id="modal-user-close" type="button" aria-label="Fechar">×</button>
     </div>
     <div class="form-group">
-      <label class="form-label">Nome</label>
-      <input class="form-input" id="u-name" type="text" placeholder="Nome completo">
+      <label class="form-label" for="u-name">Nome</label>
+      <input class="form-input" id="u-name" name="name" type="text" required autocomplete="name" placeholder="Nome completo…">
     </div>
     <div class="form-group">
-      <label class="form-label">E-mail</label>
-      <input class="form-input" id="u-email" type="email" placeholder="email@ownerinc.com.br">
+      <label class="form-label" for="u-email">E-mail</label>
+      <input class="form-input" id="u-email" name="email" type="email" required autocomplete="email" spellcheck="false" placeholder="nome@ownerinc.com.br…">
     </div>
     <div class="form-group" id="password-group">
-      <label class="form-label">Senha inicial</label>
-      <input class="form-input" id="u-password" type="password" placeholder="Mínimo 6 caracteres">
+      <label class="form-label" for="u-password">Senha inicial</label>
+      <input class="form-input" id="u-password" name="password" type="password" minlength="6" required autocomplete="new-password" placeholder="Mínimo 6 caracteres…">
       <span style="font-size:11px; color:var(--text-secondary)">Só exibido na criação.</span>
     </div>
     <div class="form-group">
-      <label class="form-label">Role</label>
-      <select class="form-select" id="u-role">
-        <option value="viewer">Viewer</option>
-        <option value="admin">Admin</option>
+      <label class="form-label" for="u-role">Perfil</label>
+      <select class="form-select" id="u-role" name="role">
+        <option value="viewer">Leitor</option>
+        <option value="admin">Administrador</option>
       </select>
     </div>
     <div class="form-group">
-      <label class="form-label">Tipo de contrato</label>
-      <select class="form-select" id="u-contract">
+      <label class="form-label" for="u-contract">Tipo de contrato</label>
+      <select class="form-select" id="u-contract" name="contract_type">
         <option value="clt">CLT</option>
         <option value="pj">PJ</option>
       </select>
     </div>
-    <div class="form-group" id="pj-day-group" style="display:none">
-      <label class="form-label">Dia do mês para emitir nota (1–31)</label>
-      <input class="form-input" id="u-pjday" type="number" min="1" max="31">
+    <div class="form-group" id="pj-day-group" hidden>
+      <label class="form-label" for="u-pjday">Dia do mês para emitir nota (1–31)</label>
+      <input class="form-input" id="u-pjday" name="pj_due_day" type="number" min="1" max="31" inputmode="numeric">
     </div>
     <div class="form-group">
-      <label class="form-label">WhatsApp (para notificações futuras)</label>
-      <input class="form-input" id="u-phone" type="tel" placeholder="5561999999999">
+      <label class="form-label" for="u-phone">WhatsApp</label>
+      <input class="form-input" id="u-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[+0-9 ()-]{8,20}" placeholder="Ex.: +55 61 99999-9999…">
     </div>
 
     <!-- Permissões — visível apenas quando role=admin e eu sou superAdmin -->
-    <div id="permissions-group" style="display:none">
-      <label class="form-label" style="margin-bottom:6px; display:block">Permissões</label>
+    <fieldset id="permissions-group" hidden>
+      <legend class="form-label" style="margin-bottom:6px">Permissões</legend>
       <div class="permissions-block">
         <div class="permission-row">
-          <input type="checkbox" id="p-super">
+          <input type="checkbox" id="p-super" name="superAdmin">
           <label for="p-super"><strong>Super Admin</strong> — acesso total + configurar outros admins</label>
         </div>
         <div style="height:1px; background:var(--border); margin:8px 0"></div>
         <div class="permission-row">
-          <input type="checkbox" id="p-users">
+          <input type="checkbox" id="p-users" name="manageUsers">
           <label for="p-users">Gerenciar Usuários (criar, editar, mudar PJ/CLT)</label>
         </div>
         <div class="permission-row">
-          <input type="checkbox" id="p-reminders">
+          <input type="checkbox" id="p-knowledge" name="manageKnowledge">
+          <label for="p-knowledge">Gerenciar Base de Conhecimento</label>
+        </div>
+        <div class="permission-row">
+          <input type="checkbox" id="p-reminders" name="manageReminders">
           <label for="p-reminders">Gerenciar Lembretes</label>
         </div>
         <div class="permission-row">
-          <input type="checkbox" id="p-academy">
+          <input type="checkbox" id="p-academy" name="manageAcademy">
           <label for="p-academy">Gerenciar Academy</label>
         </div>
         <div class="permission-row">
-          <input type="checkbox" id="p-benefits">
+          <input type="checkbox" id="p-benefits" name="manageBenefits">
           <label for="p-benefits">Gerenciar Benefícios</label>
         </div>
         <div class="permission-row">
-          <input type="checkbox" id="p-ombudsman">
+          <input type="checkbox" id="p-ombudsman" name="viewOmbudsman">
           <label for="p-ombudsman">Ver Ouvidoria</label>
         </div>
+        <div class="permission-row">
+          <input type="checkbox" id="p-solides" name="manageSolides">
+          <label for="p-solides">Gerenciar integração Sólides</label>
+        </div>
       </div>
-    </div>
+    </fieldset>
 
     <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
-      <button class="btn btn-ghost" id="modal-user-cancel">Cancelar</button>
-      <button class="btn btn-primary" id="modal-user-save">Salvar</button>
+      <button class="btn btn-ghost" type="button" id="modal-user-cancel">Cancelar</button>
+      <button class="btn btn-primary" type="submit" id="modal-user-save">Salvar</button>
     </div>
-  </div>
+  </form>
 </div>
 
 <!-- Modal: Curso -->
-<div id="modal-course" class="modal-backdrop hidden">
-  <div class="modal">
+<div id="modal-course" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-course-title">
+  <form class="modal" id="course-form" autocomplete="off">
     <div class="modal-header">
       <span class="modal-title" id="modal-course-title">Novo Curso</span>
-      <button class="modal-close" id="modal-course-close">×</button>
+      <button class="modal-close" id="modal-course-close" type="button" aria-label="Fechar">×</button>
     </div>
     <div class="form-group">
-      <label class="form-label">Título</label>
-      <input class="form-input" id="c-title" type="text" placeholder="Nome do curso">
+      <label class="form-label" for="c-title">Título</label>
+      <input class="form-input" id="c-title" name="title" type="text" required placeholder="Nome do curso…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Categoria</label>
-      <input class="form-input" id="c-category" type="text" placeholder="Ex: Onboarding, Vendas, Produto">
+      <label class="form-label" for="c-category">Categoria</label>
+      <input class="form-input" id="c-category" name="category" type="text" placeholder="Ex.: Onboarding, Vendas, Produto…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Descrição</label>
-      <input class="form-input" id="c-desc" type="text" placeholder="Breve descrição do curso">
+      <label class="form-label" for="c-desc">Descrição</label>
+      <input class="form-input" id="c-desc" name="description" type="text" placeholder="Breve descrição do curso…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">URL (link externo)</label>
-      <input class="form-input" id="c-url" type="url" placeholder="https://...">
+      <label class="form-label" for="c-url">URL (link externo)</label>
+      <input class="form-input" id="c-url" name="url" type="url" required autocomplete="url" placeholder="https://exemplo.com/curso…">
     </div>
     <div class="form-group">
-      <label class="form-label">Ordem (para exibição)</label>
-      <input class="form-input" id="c-order" type="number" min="1" value="1">
+      <label class="form-label" for="c-order">Ordem (para exibição)</label>
+      <input class="form-input" id="c-order" name="order" type="number" min="1" value="1" inputmode="numeric">
     </div>
     <div class="form-group" style="flex-direction:row; align-items:center; gap:8px">
-      <input type="checkbox" id="c-active" checked>
+      <input type="checkbox" id="c-active" name="active" checked>
       <label class="form-label" for="c-active" style="margin:0">Ativo</label>
     </div>
     <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
-      <button class="btn btn-ghost" id="modal-course-cancel">Cancelar</button>
-      <button class="btn btn-primary" id="modal-course-save">Salvar</button>
+      <button class="btn btn-ghost" type="button" id="modal-course-cancel">Cancelar</button>
+      <button class="btn btn-primary" type="submit" id="modal-course-save">Salvar</button>
     </div>
-  </div>
+  </form>
 </div>
 
 <!-- Modal: Benefício -->
-<div id="modal-benefit" class="modal-backdrop hidden">
-  <div class="modal">
+<div id="modal-benefit" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-benefit-title">
+  <form class="modal" id="benefit-form" autocomplete="off">
     <div class="modal-header">
       <span class="modal-title" id="modal-benefit-title">Novo Benefício</span>
-      <button class="modal-close" id="modal-benefit-close">×</button>
+      <button class="modal-close" id="modal-benefit-close" type="button" aria-label="Fechar">×</button>
     </div>
     <div class="form-group">
-      <label class="form-label">Empresa parceira</label>
-      <input class="form-input" id="b-company" type="text" placeholder="Nome da empresa">
+      <label class="form-label" for="b-company">Empresa parceira</label>
+      <input class="form-input" id="b-company" name="company" type="text" required placeholder="Nome da empresa…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Categoria</label>
-      <input class="form-input" id="b-category" type="text" placeholder="Ex: Alimentação, Saúde, Lazer">
+      <label class="form-label" for="b-category">Categoria</label>
+      <input class="form-input" id="b-category" name="category" type="text" placeholder="Ex.: Alimentação, Saúde, Lazer…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Descrição do benefício</label>
-      <input class="form-input" id="b-desc" type="text" placeholder="Ex: 15% de desconto em toda a loja">
+      <label class="form-label" for="b-desc">Descrição do benefício</label>
+      <input class="form-input" id="b-desc" name="description" type="text" placeholder="Ex.: 15% de desconto em toda a loja…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Como usar</label>
-      <input class="form-input" id="b-instructions" type="text" placeholder="Ex: Apresente o crachá Ownerinc na entrada">
+      <label class="form-label" for="b-instructions">Como usar</label>
+      <input class="form-input" id="b-instructions" name="instructions" type="text" placeholder="Ex.: Apresente o crachá Ownerinc na entrada…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Ordem (para exibição)</label>
-      <input class="form-input" id="b-order" type="number" min="1" value="1">
+      <label class="form-label" for="b-order">Ordem (para exibição)</label>
+      <input class="form-input" id="b-order" name="order" type="number" min="1" value="1" inputmode="numeric">
     </div>
     <div class="form-group" style="flex-direction:row; align-items:center; gap:8px">
-      <input type="checkbox" id="b-active" checked>
+      <input type="checkbox" id="b-active" name="active" checked>
       <label class="form-label" for="b-active" style="margin:0">Ativo</label>
     </div>
     <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
-      <button class="btn btn-ghost" id="modal-benefit-cancel">Cancelar</button>
-      <button class="btn btn-primary" id="modal-benefit-save">Salvar</button>
+      <button class="btn btn-ghost" type="button" id="modal-benefit-cancel">Cancelar</button>
+      <button class="btn btn-primary" type="submit" id="modal-benefit-save">Salvar</button>
     </div>
-  </div>
+  </form>
 </div>
 
-<div id="toast" class="toast hidden"></div>
-<script>lucide.createIcons();</script>
+<!-- Modal: fluxo da ouvidoria -->
+<div id="modal-ombudsman" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-ombudsman-title">
+  <form class="modal" id="ombudsman-form">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-ombudsman-title">Atualizar mensagem</span>
+      <button class="modal-close" id="modal-ombudsman-close" type="button" aria-label="Fechar">×</button>
+    </div>
+    <p id="o-message" class="break-text"></p>
+    <div class="form-group">
+      <label class="form-label" for="o-status">Status</label>
+      <select class="form-select" id="o-status" name="status">
+        <option value="new">Nova</option>
+        <option value="in_review">Em análise</option>
+        <option value="resolved">Resolvida</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="o-assigned">UID do responsável</label>
+      <input class="form-input" id="o-assigned" name="assigned_to" type="text" maxlength="128" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="o-notes">Notas internas</label>
+      <textarea class="form-input" id="o-notes" name="internal_notes" maxlength="10000" rows="5"></textarea>
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
+      <button class="btn btn-ghost" type="button" id="modal-ombudsman-cancel">Cancelar</button>
+      <button class="btn btn-primary" type="submit" id="modal-ombudsman-save">Salvar</button>
+    </div>
+  </form>
+</div>
+
+<div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>
 <script type="module" src="./js/admin.js"></script>
 </body>

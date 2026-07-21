@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
   <title>Meu Perfil — Portal Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
   <style>
     .avatar-wrap {
       display: flex;
@@ -26,7 +27,7 @@
       justify-content: center;
       font-size: 34px;
       font-weight: 700;
-      color: #fff;
+      color: var(--espresso);
       overflow: hidden;
       border: 3px solid var(--border);
       flex-shrink: 0;
@@ -59,7 +60,7 @@
     }
     .avatar-uploading {
       font-size: 12px;
-      color: var(--primary);
+      color: var(--focus);
       font-weight: 500;
     }
     .section-label {
@@ -78,14 +79,15 @@
   </style>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
       <a href="./dashboard.html" class="sidebar-brand">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
-        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
       </a>
-      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <i data-lucide="chevrons-left"></i>
       </button>
     </div>
@@ -100,7 +102,7 @@
       <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
     </ul>
     <div class="sidebar-footer">
-      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+      <button class="sidebar-logout" type="button" aria-label="Sair">
         <i data-lucide="log-out"></i><span>Sair</span>
       </button>
     </div>
@@ -111,45 +113,50 @@
       <span class="topbar-title">Meu Perfil</span>
       <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
     </header>
-    <main class="page-body">
+    <main class="page-body" id="main-content" tabindex="-1">
+
+      <div class="page-header"><h1>Meu Perfil</h1></div>
 
       <div class="card" style="max-width:560px">
 
         <!-- Avatar com upload -->
         <div class="avatar-wrap">
-          <div class="avatar-circle" id="avatar-circle" title="Clique para trocar a foto">
-            <img id="avatar-img" style="display:none" alt="Foto de perfil">
+          <button class="avatar-circle" id="avatar-circle" type="button" aria-label="Alterar foto de perfil">
+            <img id="avatar-img" style="display:none" alt="Foto de perfil" width="88" height="88">
             <span id="avatar-initials"></span>
             <div class="avatar-overlay"><i data-lucide="camera"></i></div>
-          </div>
-          <input type="file" id="photo-input" accept="image/*" style="display:none">
+          </button>
+          <input type="file" id="photo-input" name="photo" accept="image/jpeg,image/png,image/webp" style="display:none">
           <span class="avatar-hint" id="avatar-hint">Clique na foto para atualizar</span>
+          <button class="btn btn-ghost btn-sm" id="remove-photo" type="button" hidden>Remover foto</button>
         </div>
 
         <!-- Dados pessoais -->
         <p class="section-label">Dados pessoais</p>
+        <form id="profile-form">
 
         <div class="form-group">
-          <label class="form-label">Nome completo *</label>
-          <input class="form-input" id="p-name" type="text" placeholder="Seu nome completo">
+          <label class="form-label" for="p-name">Nome completo *</label>
+          <input class="form-input" id="p-name" name="name" type="text" required autocomplete="name" placeholder="Seu nome completo…">
         </div>
         <div class="form-group">
-          <label class="form-label">Bio / Cargo</label>
-          <input class="form-input" id="p-bio" type="text" placeholder="Ex: Gerente Comercial · Ownerinc">
+          <label class="form-label" for="p-bio">Bio / Cargo</label>
+          <input class="form-input" id="p-bio" name="bio" type="text" autocomplete="organization-title" placeholder="Ex.: Gerente Comercial · Ownerinc…">
         </div>
         <div class="form-group">
-          <label class="form-label">WhatsApp</label>
-          <input class="form-input" id="p-phone" type="tel" placeholder="5561999999999">
+          <label class="form-label" for="p-phone">WhatsApp</label>
+          <input class="form-input" id="p-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[+0-9 ()-]{8,20}" placeholder="Ex.: +55 61 99999-9999…">
         </div>
         <div class="form-group">
-          <label class="form-label">Perfil do LinkedIn</label>
-          <input class="form-input" id="p-linkedin" type="url" placeholder="https://linkedin.com/in/seu-perfil">
+          <label class="form-label" for="p-linkedin">Perfil do LinkedIn</label>
+          <input class="form-input" id="p-linkedin" name="linkedin_url" type="url" autocomplete="url" pattern="https://(www\.)?linkedin\.com/.*" placeholder="https://linkedin.com/in/seu-perfil…">
         </div>
 
         <button class="btn btn-primary" id="btn-save"
           style="width:100%; justify-content:center; padding:12px; margin-top:4px">
           Salvar perfil
         </button>
+        </form>
 
         <hr class="section-divider">
 
@@ -162,7 +169,14 @@
         <button class="btn btn-ghost" id="btn-reset-pw" style="font-size:13px">
           Enviar link de redefinição de senha
         </button>
-        <p id="pw-feedback" style="font-size:12px; margin-top:8px; min-height:18px"></p>
+        <p id="pw-feedback" role="status" aria-live="polite" style="font-size:12px; margin-top:8px; min-height:18px"></p>
+
+        <hr class="section-divider">
+        <p class="section-label">Seus dados</p>
+        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px; line-height:1.6">
+          Baixe uma cópia do seu perfil e do histórico de notificações associado à sua conta.
+        </p>
+        <button class="btn btn-ghost" id="btn-export-data" type="button">Baixar meus dados</button>
 
       </div>
 
@@ -170,8 +184,7 @@
   </div>
 </div>
 
-<div id="toast" class="toast hidden"></div>
-<script>lucide.createIcons();</script>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>
 <script type="module" src="./js/profile.js"></script>
 </body>

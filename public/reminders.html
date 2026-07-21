@@ -3,21 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
   <title>Lembretes — Portal Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <script src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js"></script>
+  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
       <a href="./dashboard.html" class="sidebar-brand">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full">
-        <img src="./assets/icon-branco.svg" alt="Ownerinc" class="logo-icon" style="display:none">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
       </a>
-      <button class="sidebar-toggle" id="sidebar-toggle" title="Recolher menu">
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <i data-lucide="chevrons-left"></i>
       </button>
     </div>
@@ -32,7 +34,7 @@
       <li id="admin-link" style="display:none"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
     </ul>
     <div class="sidebar-footer">
-      <button class="sidebar-logout" onclick="import('./js/auth.js').then(m=>m.logout())" title="Sair">
+      <button class="sidebar-logout" type="button" aria-label="Sair">
         <i data-lucide="log-out"></i><span>Sair</span>
       </button>
     </div>
@@ -41,74 +43,92 @@
     <header class="topbar">
       <span class="topbar-title">Lembretes</span>
       <div style="display:flex; gap:12px; align-items:center">
-        <button id="btn-new-reminder" class="btn btn-primary" style="display:none">+ Novo</button>
+        <button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Novo lembrete</button>
         <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
       </div>
     </header>
-    <main class="page-body">
+    <main class="page-body" id="main-content" tabindex="-1">
+      <div class="page-header"><h1>Lembretes</h1></div>
       <div class="table-wrapper">
         <table>
+          <caption>Lembretes e seus destinatários</caption>
           <thead>
             <tr>
-              <th>Título</th><th>Dia do mês</th><th>Destinatários</th>
-              <th>Canal</th><th>Status</th><th id="th-actions"></th>
+              <th scope="col">Título</th><th scope="col">Dia do mês</th><th scope="col">Destinatários</th>
+              <th scope="col">Canal</th><th scope="col">Status</th><th scope="col" id="th-actions"></th>
             </tr>
           </thead>
           <tbody id="reminders-tbody">
-            <tr><td colspan="6" class="empty-state">Carregando...</td></tr>
+             <tr><td colspan="6" class="empty-state">Carregando…</td></tr>
           </tbody>
         </table>
       </div>
+      <div id="reminders-pagination" class="pagination" aria-label="Paginação"></div>
+      <section id="delivery-manager" hidden style="margin-top:32px">
+        <div class="section-header">
+          <div>
+            <p class="section-label">Operação</p>
+            <h2>Entregas recentes</h2>
+          </div>
+          <p id="cron-health" class="badge badge-gray" role="status">Verificando cron…</p>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <caption>Histórico compacto das últimas entregas</caption>
+            <thead><tr><th scope="col">Data</th><th scope="col">Usuário</th><th scope="col">Canal</th><th scope="col">Status</th><th scope="col">Tentativas</th></tr></thead>
+            <tbody id="deliveries-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
 </div>
 
 <!-- Modal lembrete -->
-<div id="modal-reminder" class="modal-backdrop hidden">
-  <div class="modal">
+<div id="modal-reminder" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-reminder-title">
+  <form class="modal" id="reminder-form" autocomplete="off">
     <div class="modal-header">
       <span class="modal-title" id="modal-reminder-title">Novo Lembrete</span>
-      <button class="modal-close" id="modal-reminder-close">×</button>
+      <button class="modal-close" id="modal-reminder-close" type="button" aria-label="Fechar">×</button>
     </div>
     <div class="form-group">
-      <label class="form-label">Título</label>
-      <input class="form-input" id="r-title" type="text" placeholder="Ex: Emissão de Nota Fiscal PJ">
+      <label class="form-label" for="r-title">Título</label>
+      <input class="form-input" id="r-title" name="title" type="text" required placeholder="Ex.: Emissão de nota fiscal PJ…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Descrição</label>
-      <input class="form-input" id="r-desc" type="text" placeholder="Detalhe do lembrete">
+      <label class="form-label" for="r-desc">Descrição</label>
+      <input class="form-input" id="r-desc" name="description" type="text" placeholder="Detalhe do lembrete…" autocomplete="off">
     </div>
     <div class="form-group">
-      <label class="form-label">Dia do mês (1–31)</label>
-      <input class="form-input" id="r-day" type="number" min="1" max="31">
+      <label class="form-label" for="r-day">Dia do mês (1–31)</label>
+      <input class="form-input" id="r-day" name="trigger_day" type="number" min="1" max="31" required inputmode="numeric">
     </div>
     <div class="form-group">
-      <label class="form-label">Destinatários</label>
-      <select class="form-select" id="r-target">
+      <label class="form-label" for="r-target">Destinatários</label>
+      <select class="form-select" id="r-target" name="target_users">
         <option value="all">Todos</option>
         <option value="pj">Apenas PJ</option>
         <option value="clt">Apenas CLT</option>
       </select>
     </div>
     <div class="form-group">
-      <label class="form-label">Canal</label>
-      <select class="form-select" id="r-channel">
+      <label class="form-label" for="r-channel">Canal</label>
+      <select class="form-select" id="r-channel" name="channel">
         <option value="email">E-mail</option>
       </select>
     </div>
     <div class="form-group" style="flex-direction:row; align-items:center; gap:8px">
-      <input type="checkbox" id="r-active" checked>
+      <input type="checkbox" id="r-active" name="active" checked>
       <label class="form-label" for="r-active" style="margin:0">Ativo</label>
     </div>
     <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px">
-      <button class="btn btn-ghost" id="modal-reminder-cancel">Cancelar</button>
-      <button class="btn btn-primary" id="modal-reminder-save">Salvar</button>
+      <button class="btn btn-ghost" type="button" id="modal-reminder-cancel">Cancelar</button>
+      <button class="btn btn-primary" type="submit" id="modal-reminder-save">Salvar</button>
     </div>
-  </div>
+  </form>
 </div>
 
-<div id="toast" class="toast hidden"></div>
-<script>lucide.createIcons();</script>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>
 <script type="module" src="./js/reminders.js"></script>
 </body>

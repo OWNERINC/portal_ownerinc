@@ -1,42 +1,44 @@
 import { requireAuth, renderUserInTopbar, fetchAPI } from './auth.js';
+import { clear, element, safeHttpUrl, showState } from './ui.js';
 
 const user = await requireAuth();
-if (!user) throw new Error('not authenticated');
-
+if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
 if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 
 const container = document.getElementById('academy-content');
-
-try {
-  const courses = await fetchAPI('/api/academy?active=true');
-
-  if (courses.length === 0) {
-    container.innerHTML = '<p class="empty-state">Nenhum curso disponível no momento.</p>';
-  } else {
-    const byCategory = {};
-    courses.forEach(c => {
-      const cat = c.category || 'Geral';
-      if (!byCategory[cat]) byCategory[cat] = [];
-      byCategory[cat].push(c);
+async function loadCourses() {
+  showState(container, 'Carregando cursos…');
+  try {
+    const courses = (await fetchAPI('/api/academy?active=true')).filter(course => course.active !== false);
+    if (!courses.length) return showState(container, 'Nenhum curso disponível no momento.');
+    const categories = Map.groupBy ? Map.groupBy(courses, course => course.category || 'Geral') : courses.reduce((map, course) => {
+      const category = course.category || 'Geral';
+      map.set(category, [...(map.get(category) || []), course]);
+      return map;
+    }, new Map());
+    clear(container);
+    categories.forEach((items, category) => {
+      const section = element('section', { className: 'content-section' });
+      section.append(element('h2', { text: category }));
+      const grid = element('div', { className: 'card-grid' });
+      items.forEach(course => {
+        const href = safeHttpUrl(course.url);
+        const card = element(href ? 'a' : 'article', href ? {
+          className: 'card link-card', href, target: '_blank', rel: 'noopener noreferrer',
+        } : { className: 'card' }, [
+          element('div', { className: 'card-title', text: `🎓 ${course.title}` }),
+          element('p', { className: 'card-copy', text: course.description || '' }),
+          element('span', { className: 'card-link-label', text: href ? 'Acessar curso →' : 'Link indisponível' }),
+        ]);
+        grid.append(card);
+      });
+      section.append(grid);
+      container.append(section);
     });
-
-    container.innerHTML = Object.entries(byCategory).map(([cat, items]) => `
-      <div class="page-header" style="margin-bottom:16px">
-        <h1>${cat}</h1>
-      </div>
-      <div class="card-grid" style="margin-bottom:32px">
-        ${items.map(c => `
-          <a href="${c.url}" target="_blank" rel="noopener" class="card" style="text-decoration:none; cursor:pointer">
-            <div class="card-title">🎓 ${c.title}</div>
-            <p style="font-size:13px; color:var(--text-secondary); margin-top:4px">${c.description || ''}</p>
-            <span style="font-size:12px; color:var(--primary); margin-top:12px; display:inline-block">Acessar curso →</span>
-          </a>
-        `).join('')}
-      </div>
-    `).join('');
+  } catch {
+    showState(container, 'Não foi possível carregar os cursos. Verifique sua conexão.', loadCourses);
   }
-
-} catch {
-  container.innerHTML = '<p class="empty-state">Erro ao carregar cursos.</p>';
 }
+
+loadCourses();

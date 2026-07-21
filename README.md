@@ -8,6 +8,7 @@ benefícios, lembretes e ouvidoria.
 - `public/`: aplicação web estática e integração com Firebase Auth.
 - `api/`: API Express, autorização e persistência PostgreSQL.
 - `cron/`: processamento diário de lembretes e notificações.
+- `firebase-emulator/`: imagem do Auth Emulator usada apenas no perfil local.
 - `nginx/`: publicação do frontend e proxy de `/api` e `/uploads`.
 - `docs/`: decisões de produto, arquitetura e operação.
 - `scripts/`: verificações locais reproduzíveis.
@@ -19,9 +20,10 @@ O Portal e o Ownerinc Brain são produtos e repositórios separados.
 ## Desenvolvimento local
 
 1. Copie os valores necessários de `.env.example` para `.env`.
-2. Execute `docker compose up --build`.
-3. Acesse `http://localhost`.
-4. Encerre com `docker compose down`.
+2. Execute `docker compose --profile local up -d --build`.
+3. Crie o primeiro administrador conforme o guia de desenvolvimento local.
+4. Acesse `http://localhost:8080`.
+5. Encerre com `docker compose --profile local down`.
 
 Consulte [`docs/operations/local-development.md`](docs/operations/local-development.md)
 para executar serviços individualmente.
@@ -41,7 +43,15 @@ Compose quando Docker estiver disponível e possíveis segredos versionados.
 
 - [Brief do produto](docs/product/brief.md)
 - [Escopo](docs/product/scope.md)
+- [Inventário da implementação funcional](docs/product/feature-inventory.md)
+- [Deck executivo da implementação](docs/decks/portal-ownerinc-implementacao.html)
+- [Roadmap](docs/product/roadmap.md)
+- [Roadmap da integração Sólides](docs/product/solides-roadmap.md)
+- [Privacidade e retenção](docs/product/privacy-retention.md)
 - [Arquitetura](docs/architecture/overview.md)
+- [Auditoria da plataforma](docs/reviews/2026-07-20-platform-audit.md)
+- [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)
+- [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)
 - [Fluxo de dados](docs/architecture/data-flow.md)
 - [Deploy](docs/operations/deployment.md)
 - [Handoff](docs/session/README.md)

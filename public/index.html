@@ -1,13 +1,15 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="UTF-8"><title>Portal Ownerinc</title></head>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
+  <title>Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+</head>
 <body>
-<script type="module">
-  import { auth } from './js/firebase-config.js';
-  import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-  onAuthStateChanged(auth, user => {
-    window.location.href = user ? './dashboard.html' : './login.html';
-  });
-</script>
+  <main aria-live="polite"><p>Verificando acesso…</p></main>
+  <noscript><p>Ative o JavaScript para acessar o Portal Ownerinc.</p></noscript>
+  <script src="./js/index.js"></script>
 </body>
 </html>

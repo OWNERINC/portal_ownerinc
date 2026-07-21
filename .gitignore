@@ -12,6 +12,7 @@ cron/node_modules/
 # Dados locais e gerados
 uploads/
 *.log
+*.spdx.json
 
 # Projeto separado, fora do escopo deste repositório
 ownerinc-novo-agente/

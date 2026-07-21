@@ -1,445 +1,618 @@
-import { requireAuth, renderUserInTopbar, showToast, can, fetchAPI } from './auth.js';
-import { auth } from './firebase-config.js';
-import { createUserWithEmailAndPassword }
-  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { requireAuth, renderUserInTopbar, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
+import { clear, closeDialog, element, openDialog, safeHttpUrl } from './ui.js';
 
 const me = await requireAuth(true);
-if (!me) throw new Error('not admin');
+if (!me) throw new Error('Administrator access required');
 renderUserInTopbar(me);
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
+let solidesAdminStatus = null;
+if (can(me, 'manageSolides')) {
+  try { solidesAdminStatus = await fetchAPI('/api/solides/admin/status'); } catch (error) {
+    if (error.status !== 404) console.warn('Sólides admin discovery failed');
+  }
+}
 
 const TABS = [
-  { id: 'users',     label: 'Usuários',   perm: 'manageUsers'   },
-  { id: 'academy',   label: 'Academy',    perm: 'manageAcademy' },
-  { id: 'benefits',  label: 'Benefícios', perm: 'manageBenefits' },
-  { id: 'ombudsman', label: 'Ouvidoria',  perm: 'viewOmbudsman' },
+  ['users', 'Usuários', 'manageUsers'],
+  ['academy', 'Academy', 'manageAcademy'],
+  ['benefits', 'Benefícios', 'manageBenefits'],
+  ['ombudsman', 'Ouvidoria', 'viewOmbudsman'],
 ];
+if (solidesAdminStatus) TABS.push(['solides', 'Sólides', 'manageSolides']);
+const pages = {};
+let users = [];
+let courses = [];
+let benefits = [];
+let ombudsman = [];
+let editingUserId = null;
+let editingCourseId = null;
+let editingBenefitId = null;
+let editingOmbudsmanId = null;
+let solidesLinks = [];
 
-let activeTab = null;
+function tableState(tbodyId, columns, message, retry) {
+  const cell = element('td', { colspan: String(columns), className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
+  if (retry) cell.append(document.createElement('br'), element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
+  clear(document.getElementById(tbodyId)).append(element('tr', {}, cell));
+}
+
+function cell(text, className) {
+  const td = element('td', { className: 'break-text' });
+  td.append(className ? element('span', { className, text: String(text) }) : document.createTextNode(String(text)));
+  return td;
+}
+
+function actions(...buttons) {
+  return element('td', { className: 'table-actions' }, buttons);
+}
+
+function paginate(key, items, paginationId, renderRows) {
+  const total = Math.max(1, Math.ceil(items.length / 50));
+  pages[key] = Math.min(pages[key] || 0, total - 1);
+  renderRows(items.slice(pages[key] * 50, pages[key] * 50 + 50));
+  const node = clear(document.getElementById(paginationId));
+  if (items.length <= 50) return;
+  node.append(
+    element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', ...(pages[key] === 0 ? { disabled: '' } : {}), on: { click: () => { pages[key] -= 1; paginate(key, items, paginationId, renderRows); } } }),
+    element('span', { text: `Página ${pages[key] + 1} de ${total}` }),
+    element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', ...(pages[key] === total - 1 ? { disabled: '' } : {}), on: { click: () => { pages[key] += 1; paginate(key, items, paginationId, renderRows); } } }),
+  );
+}
+
+function serverPagination(key, total, paginationId, load) {
+  const pageCount = Math.max(1, Math.ceil(total / 50));
+  const node = clear(document.getElementById(paginationId));
+  if (pageCount === 1) return;
+  node.append(
+    element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', ...(pages[key] === 0 ? { disabled: '' } : {}), on: { click: () => { pages[key] -= 1; load(); } } }),
+    element('span', { text: `Página ${pages[key] + 1} de ${pageCount}` }),
+    element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', ...(pages[key] >= pageCount - 1 ? { disabled: '' } : {}), on: { click: () => { pages[key] += 1; load(); } } }),
+  );
+}
 
 function buildTabs() {
-  const container = document.getElementById('admin-tabs');
-  const visible = TABS.filter(t => can(me, t.perm));
-  if (visible.length === 0) {
-    container.innerHTML = '<p style="color:var(--text-secondary);font-size:13px">Nenhuma permissão de admin configurada. Peça ao Super Admin para atribuir permissões à sua conta.</p>';
+  const tabs = TABS.filter(([, , permission]) => can(me, permission));
+  const container = clear(document.getElementById('admin-tabs'));
+  if (!tabs.length) {
+    container.append(element('p', { className: 'empty-state', text: 'Nenhuma permissão administrativa configurada.' }));
     return;
   }
-  container.innerHTML = visible.map(t =>
-    `<button class="admin-tab" data-tab="${t.id}">${t.label}</button>`
-  ).join('');
-  container.querySelectorAll('.admin-tab').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  tabs.forEach(([id, label]) => container.append(element('button', {
+    className: 'admin-tab', id: `tab-${id}`, role: 'tab', type: 'button', text: label,
+    'aria-controls': `section-${id}`, 'aria-selected': 'false', tabindex: '-1',
+    on: { click: () => switchTab(id, true) },
+  })));
+  container.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const buttons = [...container.querySelectorAll('[role="tab"]')];
+    const current = buttons.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next].click();
+    buttons[next].focus();
   });
-  switchTab(visible[0].id);
+  const requested = new URLSearchParams(location.search).get('tab');
+  switchTab(tabs.some(([id]) => id === requested) ? requested : tabs[0][0]);
 }
 
-function switchTab(tabId) {
-  activeTab = tabId;
-  document.querySelectorAll('.admin-tab').forEach(b =>
-    b.classList.toggle('active', b.dataset.tab === tabId)
-  );
-  document.querySelectorAll('.admin-section').forEach(s =>
-    s.style.display = s.id === `section-${tabId}` ? '' : 'none'
-  );
-  if (tabId === 'users')     loadUsers();
-  if (tabId === 'academy')   loadCourses();
-  if (tabId === 'benefits')  loadBenefits();
-  if (tabId === 'ombudsman') loadOmbudsman();
+function switchTab(id, push = false) {
+  document.querySelectorAll('[role="tab"]').forEach(tab => {
+    const active = tab.id === `tab-${id}`;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll('.admin-section').forEach(section => { section.hidden = section.id !== `section-${id}`; });
+  const url = new URL(location.href);
+  url.searchParams.set('tab', id);
+  history[push ? 'pushState' : 'replaceState']({}, '', url);
+  if (id === 'users') {
+    loadUsers();
+    if (can(me, 'superAdmin')) loadAudit();
+  }
+  if (id === 'academy') loadCourses();
+  if (id === 'benefits') loadBenefits();
+  if (id === 'ombudsman') loadOmbudsman();
+  if (id === 'solides') loadSolides();
 }
 
-// ── Users ─────────────────────────────────────────────────────────────────────
+function renderSolidesStatus() {
+  document.getElementById('solides-stage').textContent = solidesAdminStatus.stage;
+  const container = clear(document.getElementById('solides-admin-status'));
+  for (const [title, value] of [
+    ['Vínculos', solidesAdminStatus.links.total],
+    ['Verificados', solidesAdminStatus.links.verified],
+    ['Conflitos', solidesAdminStatus.links.conflicts],
+    ['Piloto', `${solidesAdminStatus.pilotUsers} usuários`],
+  ]) container.append(element('article', { className: 'card' }, [
+    element('div', { className: 'card-title', text: title }), element('p', { className: 'card-copy', text: String(value) }),
+  ]));
+}
 
-let users = [];
-let editingUserId = null;
+async function loadSolidesUsers() {
+  const select = document.getElementById('solides-user');
+  if (select.options.length) return;
+  let offset = 0;
+  let total = 1;
+  while (offset < total) {
+    const result = await fetchAPIPage(`/api/solides/admin/users?limit=100&offset=${offset}`);
+    total = result.total ?? result.data.length;
+    result.data.forEach(user => {
+      const option = document.createElement('option');
+      option.value = user.uid;
+      option.textContent = `${user.name || user.email} — ${user.email}`;
+      select.append(option);
+    });
+    if (!result.data.length) break;
+    offset += result.data.length;
+  }
+}
+
+async function loadSolides() {
+  tableState('solides-links-tbody', 5, 'Carregando vínculos…');
+  try {
+    pages.solides ||= 0;
+    const [linksResult, , refreshedStatus] = await Promise.all([
+      fetchAPIPage(`/api/solides/admin/links?limit=50&offset=${pages.solides * 50}`), loadSolidesUsers(),
+      fetchAPI('/api/solides/admin/status'),
+    ]);
+    solidesAdminStatus = refreshedStatus;
+    solidesLinks = linksResult.data;
+    renderSolidesStatus();
+    if (!solidesLinks.length) {
+      clear(document.getElementById('solides-pagination'));
+      return tableState('solides-links-tbody', 5, 'Nenhum vínculo cadastrado.');
+    }
+    const tbody = clear(document.getElementById('solides-links-tbody'));
+    solidesLinks.forEach(link => tbody.append(element('tr', {}, [
+      cell(link.name || link.email), cell(link.employee_id), cell(link.external_id || '—'), cell(link.status),
+      actions(
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editSolidesLink(link) } }),
+        element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Remover', on: { click: () => deleteSolidesLink(link.user_uid) } }),
+      ),
+    ])));
+    serverPagination('solides', linksResult.total || 0, 'solides-pagination', loadSolides);
+  } catch {
+    tableState('solides-links-tbody', 5, 'Não foi possível carregar os vínculos.', loadSolides);
+  }
+}
+
+function editSolidesLink(link) {
+  document.getElementById('solides-user').value = link.user_uid;
+  document.getElementById('solides-employee-id').value = link.employee_id;
+  document.getElementById('solides-external-id').value = link.external_id || '';
+  document.getElementById('solides-link-status').value = link.status;
+  document.getElementById('solides-employee-id').focus();
+}
+
+async function deleteSolidesLink(uid) {
+  if (!confirm('Remover este vínculo com a Sólides?')) return;
+  try {
+    await fetchAPI(`/api/solides/admin/links/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+    showToast('Vínculo removido.');
+    await loadSolides();
+  } catch (error) { showToast(`Não foi possível remover: ${error.message}`); }
+}
+
+async function runSolidesProbe() {
+  const button = document.getElementById('solides-probe');
+  const output = clear(document.getElementById('solides-probe-result'));
+  button.disabled = true;
+  button.textContent = 'Testando…';
+  try {
+    const userUid = document.getElementById('solides-user').value || undefined;
+    const report = await fetchAPI('/api/solides/admin/probe', {
+      method: 'POST', body: JSON.stringify(userUid ? { userUid } : {}),
+    });
+    report.checks.forEach(check => output.append(element('article', { className: 'card' }, [
+      element('div', { className: 'card-heading' }, [
+        element('div', { className: 'card-title', text: check.name }),
+        element('span', { className: `badge ${check.ok ? 'badge-green' : 'badge-red'}`, text: check.ok ? 'OK' : String(check.status || check.error || 'Falha') }),
+      ]),
+      element('p', { className: 'card-copy', text: `${check.durationMs} ms · ${check.shape?.kind || 'sem resposta'}` }),
+    ])));
+  } catch (error) {
+    output.append(element('p', { className: 'empty-state', role: 'alert', text: `Não foi possível executar o teste: ${error.message}` }));
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Testar conexão';
+  }
+}
 
 async function loadUsers() {
-  users = await fetchAPI('/api/users');
-  renderUsersTable();
-}
-
-function contractBadge(u) {
-  const type = u.contract_type || (u.is_pj ? 'pj' : 'clt');
-  return type === 'pj'
-    ? '<span class="badge badge-gold">PJ</span>'
-    : '<span class="badge badge-gray">CLT</span>';
-}
-
-function renderUsersTable() {
-  const tbody = document.getElementById('users-tbody');
-  if (users.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Nenhum usuário.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = users.map(u => `
-    <tr>
-      <td>${u.name || '—'}</td>
-      <td>${u.email}</td>
-      <td><span class="badge ${u.role === 'admin' ? 'badge-gold' : 'badge-gray'}">${u.role}</span></td>
-      <td>${contractBadge(u)}</td>
-      <td>${(u.contract_type === 'pj' || u.is_pj) ? (u.pj_due_day || '—') : '—'}</td>
-      <td style="display:flex; gap:6px">
-        <button class="btn btn-ghost btn-sm" onclick="window.__editUser('${u.uid}')">Editar</button>
-        <button class="btn btn-danger btn-sm" onclick="window.__deleteUser('${u.uid}')">Remover</button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-document.getElementById('u-contract').addEventListener('change', e => {
-  document.getElementById('pj-day-group').style.display = e.target.value === 'pj' ? '' : 'none';
-});
-
-document.getElementById('u-role').addEventListener('change', e => {
-  const isAdmin = e.target.value === 'admin';
-  document.getElementById('permissions-group').style.display =
-    (isAdmin && can(me, 'superAdmin')) ? '' : 'none';
-});
-
-document.getElementById('p-super').addEventListener('change', e => {
-  const checked = e.target.checked;
-  ['p-users','p-reminders','p-academy','p-benefits','p-ombudsman'].forEach(id => {
-    const el = document.getElementById(id);
-    el.checked = checked;
-    el.disabled = checked;
-  });
-});
-
-document.getElementById('btn-new-user').addEventListener('click', () => {
-  editingUserId = null;
-  document.getElementById('modal-user-title').textContent = 'Novo Usuário';
-  ['u-name','u-email','u-password','u-phone','u-pjday'].forEach(id =>
-    document.getElementById(id).value = ''
-  );
-  document.getElementById('u-role').value = 'viewer';
-  document.getElementById('u-contract').value = 'clt';
-  document.getElementById('pj-day-group').style.display = 'none';
-  document.getElementById('password-group').style.display = '';
-  document.getElementById('permissions-group').style.display = 'none';
-  resetPermissionCheckboxes();
-  document.getElementById('modal-user').classList.remove('hidden');
-});
-
-window.__editUser = uid => {
-  const u = users.find(x => x.uid === uid);
-  editingUserId = uid;
-  document.getElementById('modal-user-title').textContent = 'Editar Usuário';
-  document.getElementById('u-name').value  = u.name || '';
-  document.getElementById('u-email').value = u.email;
-  document.getElementById('u-role').value  = u.role;
-
-  const contract = u.contract_type || (u.is_pj ? 'pj' : 'clt');
-  document.getElementById('u-contract').value = contract;
-  document.getElementById('pj-day-group').style.display = contract === 'pj' ? '' : 'none';
-  document.getElementById('u-pjday').value = u.pj_due_day || '';
-  document.getElementById('u-phone').value = u.phone || '';
-  document.getElementById('password-group').style.display = 'none';
-
-  const showPerms = u.role === 'admin' && can(me, 'superAdmin');
-  document.getElementById('permissions-group').style.display = showPerms ? '' : 'none';
-  if (showPerms) {
-    const p = u.permissions || {};
-    document.getElementById('p-super').checked       = !!p.superAdmin;
-    document.getElementById('p-users').checked       = !!p.manageUsers;
-    document.getElementById('p-reminders').checked   = !!p.manageReminders;
-    document.getElementById('p-academy').checked     = !!p.manageAcademy;
-    document.getElementById('p-benefits').checked    = !!p.manageBenefits;
-    document.getElementById('p-ombudsman').checked   = !!p.viewOmbudsman;
-    if (p.superAdmin) {
-      ['p-users','p-reminders','p-academy','p-benefits','p-ombudsman'].forEach(id =>
-        document.getElementById(id).disabled = true
-      );
-    }
-  }
-  document.getElementById('modal-user').classList.remove('hidden');
-};
-
-function resetPermissionCheckboxes() {
-  ['p-super','p-users','p-reminders','p-academy','p-benefits','p-ombudsman'].forEach(id => {
-    const el = document.getElementById(id);
-    el.checked = false;
-    el.disabled = false;
-  });
-}
-
-window.__deleteUser = async uid => {
-  if (!confirm('Remover este usuário? O acesso será perdido.')) return;
+  tableState('users-tbody', 7, 'Carregando usuários…');
   try {
-    await fetchAPI(`/api/users/${uid}`, { method: 'DELETE' });
-    showToast('Usuário removido com sucesso.');
-    await loadUsers();
-  } catch (err) {
-    showToast('Erro ao remover: ' + err.message);
+    pages.users ||= 0;
+    const result = await fetchAPIPage(`/api/users?limit=50&offset=${pages.users * 50}`);
+    users = result.data;
+    if (!users.length) return tableState('users-tbody', 7, 'Nenhum usuário cadastrado.');
+    const tbody = clear(document.getElementById('users-tbody'));
+    users.forEach(user => {
+        const isPJ = user.contract_type === 'pj' || user.is_pj;
+        const disabled = user.permissions?.accountDisabled === true;
+        tbody.append(element('tr', {}, [
+          cell(user.name || '—'), cell(user.email || '—'),
+          cell(user.role === 'admin' ? 'Administrador' : 'Leitor', `badge ${user.role === 'admin' ? 'badge-gold' : 'badge-gray'}`),
+          cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), cell(isPJ ? user.pj_due_day || '—' : '—'),
+          cell(disabled ? 'Desativado' : 'Ativo', `badge ${disabled ? 'badge-gray' : 'badge-green'}`),
+          actions(
+            element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editUser(user) } }),
+            element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', on: { click: () => disabled ? reactivateUser(user.uid) : deleteUser(user.uid) } }),
+            ...(disabled && can(me, 'superAdmin') && !user.email.endsWith('@invalid.local')
+              ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', on: { click: () => eraseUserData(user.uid) } })]
+              : []),
+          ),
+        ]));
+    });
+    serverPagination('users', result.total || users.length, 'users-pagination', loadUsers);
+  } catch {
+    tableState('users-tbody', 7, 'Não foi possível carregar os usuários.', loadUsers);
   }
-};
-
-document.getElementById('modal-user-save').addEventListener('click', async () => {
-  const name     = document.getElementById('u-name').value.trim();
-  const email    = document.getElementById('u-email').value.trim();
-  const password = document.getElementById('u-password').value;
-  const role     = document.getElementById('u-role').value;
-  const contract = document.getElementById('u-contract').value;
-  const is_pj    = contract === 'pj';
-  const pj_due_day = is_pj ? parseInt(document.getElementById('u-pjday').value) || null : null;
-  const phone    = document.getElementById('u-phone').value.trim();
-
-  if (!name || !email) { showToast('Nome e e-mail são obrigatórios.'); return; }
-
-  const permissions = {};
-  if (role === 'admin' && can(me, 'superAdmin')) {
-    permissions.superAdmin      = document.getElementById('p-super').checked;
-    permissions.manageUsers     = document.getElementById('p-users').checked || document.getElementById('p-super').checked;
-    permissions.manageReminders = document.getElementById('p-reminders').checked || document.getElementById('p-super').checked;
-    permissions.manageAcademy   = document.getElementById('p-academy').checked || document.getElementById('p-super').checked;
-    permissions.manageBenefits  = document.getElementById('p-benefits').checked || document.getElementById('p-super').checked;
-    permissions.viewOmbudsman   = document.getElementById('p-ombudsman').checked || document.getElementById('p-super').checked;
-  }
-
-  try {
-    if (editingUserId) {
-      await fetchAPI(`/api/users/${editingUserId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ name, role, contract_type: contract, is_pj, pj_due_day, phone, permissions }),
-      });
-      showToast('Usuário atualizado.');
-    } else {
-      if (!password || password.length < 6) { showToast('Senha mínima de 6 caracteres.'); return; }
-      // Cria no Firebase Auth, depois salva no PostgreSQL via API
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
-      await fetchAPI('/api/users', {
-        method: 'POST',
-        body: JSON.stringify({
-          uid: cred.user.uid, name, email, role,
-          contract_type: contract, is_pj, pj_due_day, phone,
-          permissions: role === 'admin' ? permissions : {},
-        }),
-      });
-      showToast('Usuário criado com sucesso.');
-    }
-    document.getElementById('modal-user').classList.add('hidden');
-    await loadUsers();
-  } catch (err) {
-    const msgs = {
-      'auth/email-already-in-use': 'Este e-mail já está cadastrado.',
-      'auth/invalid-email': 'E-mail inválido.',
-      'auth/weak-password': 'Senha muito fraca.',
-    };
-    showToast(msgs[err.code] || 'Erro ao salvar: ' + err.message);
-  }
-});
-
-['modal-user-close','modal-user-cancel'].forEach(id =>
-  document.getElementById(id).addEventListener('click', () =>
-    document.getElementById('modal-user').classList.add('hidden')
-  )
-);
-
-// ── Academy ───────────────────────────────────────────────────────────────────
-
-let courses = [];
-let editingCourseId = null;
-
-async function loadCourses() {
-  courses = await fetchAPI('/api/academy');
-  renderCoursesTable();
 }
 
-function renderCoursesTable() {
-  const tbody = document.getElementById('academy-tbody');
-  if (courses.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Nenhum curso cadastrado.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = courses.map(c => `
-    <tr>
-      <td><strong>${c.title}</strong><br><span style="font-size:12px;color:var(--text-secondary)">${c.description || ''}</span></td>
-      <td><span class="badge badge-gray">${c.category || '—'}</span></td>
-      <td><span class="badge ${c.active ? 'badge-green' : 'badge-gray'}">${c.active ? 'Ativo' : 'Inativo'}</span></td>
-      <td style="display:flex; gap:6px">
-        <button class="btn btn-ghost btn-sm" onclick="window.__editCourse('${c.id}')">Editar</button>
-        <button class="btn btn-danger btn-sm" onclick="window.__deleteCourse('${c.id}')">Excluir</button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-document.getElementById('btn-new-course').addEventListener('click', () => {
-  editingCourseId = null;
-  document.getElementById('modal-course-title').textContent = 'Novo Curso';
-  ['c-title','c-category','c-desc','c-url'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('c-order').value = courses.length + 1;
-  document.getElementById('c-active').checked = true;
-  document.getElementById('modal-course').classList.remove('hidden');
-});
-
-window.__editCourse = id => {
-  const c = courses.find(x => x.id === id);
-  editingCourseId = id;
-  document.getElementById('modal-course-title').textContent = 'Editar Curso';
-  document.getElementById('c-title').value    = c.title || '';
-  document.getElementById('c-category').value = c.category || '';
-  document.getElementById('c-desc').value     = c.description || '';
-  document.getElementById('c-url').value      = c.url || '';
-  document.getElementById('c-order').value    = c.order || 1;
-  document.getElementById('c-active').checked = !!c.active;
-  document.getElementById('modal-course').classList.remove('hidden');
-};
-
-window.__deleteCourse = async id => {
-  if (!confirm('Excluir este curso?')) return;
-  await fetchAPI(`/api/academy/${id}`, { method: 'DELETE' });
-  showToast('Curso excluído.');
-  await loadCourses();
-};
-
-document.getElementById('modal-course-save').addEventListener('click', async () => {
-  const title       = document.getElementById('c-title').value.trim();
-  const category    = document.getElementById('c-category').value.trim();
-  const description = document.getElementById('c-desc').value.trim();
-  const url         = document.getElementById('c-url').value.trim();
-  const order       = parseInt(document.getElementById('c-order').value) || 1;
-  const active      = document.getElementById('c-active').checked;
-
-  if (!title || !url) { showToast('Título e URL são obrigatórios.'); return; }
-
-  const data = { title, category, description, url, order, active };
+async function loadAudit() {
+  const panel = document.getElementById('audit-panel');
+  const tbody = document.getElementById('audit-tbody');
+  panel.hidden = false;
   try {
-    if (editingCourseId) {
-      await fetchAPI(`/api/academy/${editingCourseId}`, { method: 'PUT', body: JSON.stringify(data) });
-      showToast('Curso atualizado.');
-    } else {
-      await fetchAPI('/api/academy', { method: 'POST', body: JSON.stringify(data) });
-      showToast('Curso criado.');
-    }
-    document.getElementById('modal-course').classList.add('hidden');
-    await loadCourses();
-  } catch (err) {
-    showToast('Erro: ' + err.message);
-  }
-});
-
-['modal-course-close','modal-course-cancel'].forEach(id =>
-  document.getElementById(id).addEventListener('click', () =>
-    document.getElementById('modal-course').classList.add('hidden')
-  )
-);
-
-// ── Benefits ──────────────────────────────────────────────────────────────────
-
-let benefits = [];
-let editingBenefitId = null;
-
-async function loadBenefits() {
-  benefits = await fetchAPI('/api/benefits');
-  renderBenefitsTable();
-}
-
-function renderBenefitsTable() {
-  const tbody = document.getElementById('benefits-tbody');
-  if (benefits.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhum benefício cadastrado.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = benefits.map(b => `
-    <tr>
-      <td><strong>${b.company}</strong></td>
-      <td><span class="badge badge-gray">${b.category || '—'}</span></td>
-      <td>${b.description || '—'}</td>
-      <td><span class="badge ${b.active ? 'badge-green' : 'badge-gray'}">${b.active ? 'Ativo' : 'Inativo'}</span></td>
-      <td style="display:flex; gap:6px">
-        <button class="btn btn-ghost btn-sm" onclick="window.__editBenefit('${b.id}')">Editar</button>
-        <button class="btn btn-danger btn-sm" onclick="window.__deleteBenefit('${b.id}')">Excluir</button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-document.getElementById('btn-new-benefit').addEventListener('click', () => {
-  editingBenefitId = null;
-  document.getElementById('modal-benefit-title').textContent = 'Novo Benefício';
-  ['b-company','b-category','b-desc','b-instructions'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('b-order').value = benefits.length + 1;
-  document.getElementById('b-active').checked = true;
-  document.getElementById('modal-benefit').classList.remove('hidden');
-});
-
-window.__editBenefit = id => {
-  const b = benefits.find(x => x.id === id);
-  editingBenefitId = id;
-  document.getElementById('modal-benefit-title').textContent = 'Editar Benefício';
-  document.getElementById('b-company').value      = b.company || '';
-  document.getElementById('b-category').value     = b.category || '';
-  document.getElementById('b-desc').value         = b.description || '';
-  document.getElementById('b-instructions').value = b.instructions || '';
-  document.getElementById('b-order').value        = b.order || 1;
-  document.getElementById('b-active').checked     = !!b.active;
-  document.getElementById('modal-benefit').classList.remove('hidden');
-};
-
-window.__deleteBenefit = async id => {
-  if (!confirm('Excluir este benefício?')) return;
-  await fetchAPI(`/api/benefits/${id}`, { method: 'DELETE' });
-  showToast('Benefício excluído.');
-  await loadBenefits();
-};
-
-document.getElementById('modal-benefit-save').addEventListener('click', async () => {
-  const company      = document.getElementById('b-company').value.trim();
-  const category     = document.getElementById('b-category').value.trim();
-  const description  = document.getElementById('b-desc').value.trim();
-  const instructions = document.getElementById('b-instructions').value.trim();
-  const order        = parseInt(document.getElementById('b-order').value) || 1;
-  const active       = document.getElementById('b-active').checked;
-
-  if (!company) { showToast('Nome da empresa é obrigatório.'); return; }
-
-  const data = { company, category, description, instructions, order, active };
-  try {
-    if (editingBenefitId) {
-      await fetchAPI(`/api/benefits/${editingBenefitId}`, { method: 'PUT', body: JSON.stringify(data) });
-      showToast('Benefício atualizado.');
-    } else {
-      await fetchAPI('/api/benefits', { method: 'POST', body: JSON.stringify(data) });
-      showToast('Benefício criado.');
-    }
-    document.getElementById('modal-benefit').classList.add('hidden');
-    await loadBenefits();
-  } catch (err) {
-    showToast('Erro: ' + err.message);
-  }
-});
-
-['modal-benefit-close','modal-benefit-cancel'].forEach(id =>
-  document.getElementById(id).addEventListener('click', () =>
-    document.getElementById('modal-benefit').classList.add('hidden')
-  )
-);
-
-// ── Ombudsman ─────────────────────────────────────────────────────────────────
-
-async function loadOmbudsman() {
-  const tbody = document.getElementById('ombudsman-tbody');
-  try {
-    const messages = await fetchAPI('/api/ombudsman');
-    if (messages.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" class="empty-state">Nenhuma mensagem recebida.</td></tr>';
+    const events = await fetchAPI('/api/users/audit?limit=10&offset=0');
+    clear(tbody);
+    if (!events.length) {
+      tbody.append(element('tr', {}, element('td', { colspan: '4', className: 'empty-state', text: 'Nenhum evento administrativo registrado.' })));
       return;
     }
-    const labels = { sugestao: 'Sugestão', reclamacao: 'Reclamação', denuncia: 'Denúncia' };
-    tbody.innerHTML = messages.map(m => {
-      const date = m.created_at ? new Date(m.created_at).toLocaleDateString('pt-BR') : '—';
-      const cat  = labels[m.category] || m.category;
-      return `<tr>
-        <td><span class="badge badge-gray">${cat}</span></td>
-        <td style="white-space:pre-wrap; max-width:400px">${m.message || ''}</td>
-        <td style="white-space:nowrap">${date}</td>
-      </tr>`;
-    }).join('');
+    const format = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    events.forEach(event => tbody.append(element('tr', {}, [
+      cell(format.format(new Date(event.created_at))),
+      cell(event.actor_uid || 'Sistema'),
+      cell(event.action || '—'),
+      cell([event.target_type, event.target_id].filter(Boolean).join(': ') || '—'),
+    ])));
   } catch {
-    tbody.innerHTML = '<tr><td colspan="3" class="empty-state">Sem permissão para acessar a ouvidoria.</td></tr>';
+    const state = element('td', { colspan: '4', className: 'empty-state', role: 'alert', text: 'Não foi possível carregar a auditoria. ' });
+    state.append(element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: loadAudit } }));
+    clear(tbody).append(element('tr', {}, state));
   }
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+function resetPermissions() {
+  ['p-super', 'p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-ombudsman', 'p-solides'].forEach(id => {
+    const input = document.getElementById(id);
+    input.checked = false;
+    input.disabled = false;
+  });
+}
 
+function setUserFields(user = {}) {
+  document.getElementById('u-name').value = user.name || '';
+  document.getElementById('u-email').value = user.email || '';
+  document.getElementById('u-password').value = '';
+  document.getElementById('u-role').value = user.role || 'viewer';
+  const contract = user.contract_type || (user.is_pj ? 'pj' : 'clt');
+  document.getElementById('u-contract').value = contract;
+  document.getElementById('u-pjday').value = user.pj_due_day || '';
+  document.getElementById('u-phone').value = user.phone || '';
+  document.getElementById('pj-day-group').hidden = contract !== 'pj';
+  document.getElementById('u-pjday').required = contract === 'pj';
+  document.getElementById('password-group').hidden = !!editingUserId;
+  document.getElementById('u-password').required = !editingUserId;
+  document.getElementById('u-email').readOnly = !!editingUserId;
+  const mayEditPrivileges = can(me, 'superAdmin') && user.uid !== me.uid;
+  document.getElementById('u-role').disabled = !mayEditPrivileges;
+  resetPermissions();
+  const permissions = user.permissions || {};
+  const permissionMap = { 'p-super': 'superAdmin', 'p-users': 'manageUsers', 'p-knowledge': 'manageKnowledge', 'p-reminders': 'manageReminders', 'p-academy': 'manageAcademy', 'p-benefits': 'manageBenefits', 'p-ombudsman': 'viewOmbudsman', 'p-solides': 'manageSolides' };
+  Object.entries(permissionMap).forEach(([id, permission]) => { document.getElementById(id).checked = !!permissions[permission]; });
+  document.getElementById('permissions-group').hidden = !(document.getElementById('u-role').value === 'admin' && mayEditPrivileges);
+}
+
+function newUser() {
+  editingUserId = null;
+  document.getElementById('user-form').reset();
+  document.getElementById('modal-user-title').textContent = 'Novo Usuário';
+  setUserFields();
+  openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
+}
+
+function editUser(user) {
+  editingUserId = user.uid;
+  document.getElementById('modal-user-title').textContent = 'Editar Usuário';
+  setUserFields(user);
+  openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
+}
+
+async function deleteUser(uid) {
+  if (!confirm('Desativar este usuário? O acesso será revogado.')) return;
+  try {
+    await fetchAPI(`/api/users/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+    showToast('Usuário desativado.');
+    await loadUsers();
+  } catch (error) {
+    showToast(`Não foi possível desativar: ${error.message}`);
+  }
+}
+
+async function reactivateUser(uid) {
+  try {
+    await fetchAPI(`/api/users/${encodeURIComponent(uid)}/reactivate`, { method: 'PUT' });
+    showToast('Usuário reativado.');
+    await loadUsers();
+  } catch (error) {
+    showToast(`Não foi possível reativar: ${error.message}`);
+  }
+}
+
+async function eraseUserData(uid) {
+  if (!confirm('Apagar permanentemente nome, contato, foto e identidade Firebase deste usuário? O histórico operacional será preservado de forma pseudonimizada.')) return;
+  try {
+    await fetchAPI(`/api/users/${encodeURIComponent(uid)}/personal-data`, { method: 'DELETE' });
+    showToast('Dados pessoais anonimizados.');
+    await loadUsers();
+  } catch (error) {
+    showToast(`Não foi possível anonimizar: ${error.message}`);
+  }
+}
+
+document.getElementById('user-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
+  const contract = document.getElementById('u-contract').value;
+  const role = document.getElementById('u-role').value;
+  const data = {
+    name: document.getElementById('u-name').value.trim(),
+    contract_type: contract, is_pj: contract === 'pj',
+    pj_due_day: contract === 'pj' ? Number(document.getElementById('u-pjday').value) || null : null,
+    phone: document.getElementById('u-phone').value.trim(),
+  };
+  if (!editingUserId) {
+    data.email = document.getElementById('u-email').value.trim();
+    data.password = document.getElementById('u-password').value;
+  }
+  if (can(me, 'superAdmin') && editingUserId !== me.uid) {
+    data.role = role;
+    data.permissions = role === 'admin' ? {
+      superAdmin: document.getElementById('p-super').checked,
+      manageUsers: document.getElementById('p-users').checked,
+      manageReminders: document.getElementById('p-reminders').checked,
+      manageAcademy: document.getElementById('p-academy').checked,
+      manageBenefits: document.getElementById('p-benefits').checked,
+      viewOmbudsman: document.getElementById('p-ombudsman').checked,
+      manageSolides: document.getElementById('p-solides').checked,
+    } : {};
+    if (document.getElementById('p-knowledge').checked) data.permissions.manageKnowledge = true;
+  }
+  const save = document.getElementById('modal-user-save');
+  save.disabled = true;
+  save.textContent = 'Salvando…';
+  try {
+    await fetchAPI(editingUserId ? `/api/users/${encodeURIComponent(editingUserId)}` : '/api/users', {
+      method: editingUserId ? 'PUT' : 'POST', body: JSON.stringify(data),
+    });
+    closeDialog(document.getElementById('modal-user'), true);
+    showToast(editingUserId ? 'Usuário atualizado.' : 'Usuário criado sem alterar sua sessão.');
+    await loadUsers();
+  } catch (error) {
+    showToast(error.status === 409 ? 'Este e-mail já está cadastrado.' : `Não foi possível salvar: ${error.message}`);
+  } finally {
+    save.disabled = false;
+    save.textContent = 'Salvar';
+  }
+});
+
+async function loadCourses() {
+  tableState('academy-tbody', 4, 'Carregando cursos…');
+  try {
+    pages.academy ||= 0;
+    const result = await fetchAPIPage(`/api/academy?all=true&limit=50&offset=${pages.academy * 50}`);
+    courses = result.data;
+    if (!courses.length) return tableState('academy-tbody', 4, 'Nenhum curso cadastrado.');
+    {
+      const tbody = clear(document.getElementById('academy-tbody'));
+      courses.forEach(course => tbody.append(element('tr', {}, [
+        cell(course.title || '—'), cell(course.category || '—', 'badge badge-gray'),
+        cell(course.active ? 'Ativo' : 'Inativo', `badge ${course.active ? 'badge-green' : 'badge-gray'}`),
+        actions(
+          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editCourse(course) } }),
+          element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', on: { click: () => deleteCourse(course.id) } }),
+        ),
+      ])));
+    }
+    serverPagination('academy', result.total ?? courses.length, 'academy-pagination', loadCourses);
+  } catch {
+    tableState('academy-tbody', 4, 'Não foi possível carregar os cursos.', loadCourses);
+  }
+}
+
+function courseDialog(course) {
+  editingCourseId = course?.id || null;
+  document.getElementById('modal-course-title').textContent = course ? 'Editar Curso' : 'Novo Curso';
+  document.getElementById('c-title').value = course?.title || '';
+  document.getElementById('c-category').value = course?.category || '';
+  document.getElementById('c-desc').value = course?.description || '';
+  document.getElementById('c-url').value = course?.url || '';
+  document.getElementById('c-order').value = course?.order || courses.length + 1;
+  document.getElementById('c-active').checked = course ? !!course.active : true;
+  openDialog(document.getElementById('modal-course'), document.getElementById('c-title'));
+}
+
+function editCourse(course) { courseDialog(course); }
+async function deleteCourse(id) {
+  if (!confirm('Excluir este curso?')) return;
+  try { await fetchAPI(`/api/academy/${encodeURIComponent(id)}`, { method: 'DELETE' }); showToast('Curso excluído.'); await loadCourses(); }
+  catch (error) { showToast(`Não foi possível excluir: ${error.message}`); }
+}
+
+document.getElementById('course-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const urlInput = document.getElementById('c-url');
+  urlInput.setCustomValidity(safeHttpUrl(urlInput.value.trim()) ? '' : 'Use uma URL http:// ou https:// válida.');
+  if (!event.currentTarget.reportValidity()) return;
+  const data = { title: document.getElementById('c-title').value.trim(), category: document.getElementById('c-category').value.trim(), description: document.getElementById('c-desc').value.trim(), url: safeHttpUrl(urlInput.value.trim()), order: Number(document.getElementById('c-order').value) || 1, active: document.getElementById('c-active').checked };
+  const save = document.getElementById('modal-course-save');
+  save.disabled = true;
+  save.textContent = 'Salvando…';
+  try {
+    await fetchAPI(editingCourseId ? `/api/academy/${encodeURIComponent(editingCourseId)}` : '/api/academy', { method: editingCourseId ? 'PUT' : 'POST', body: JSON.stringify(data) });
+    closeDialog(document.getElementById('modal-course'), true); showToast(editingCourseId ? 'Curso atualizado.' : 'Curso criado.'); await loadCourses();
+  } catch (error) { showToast(`Não foi possível salvar: ${error.message}`); }
+  finally { save.disabled = false; save.textContent = 'Salvar'; }
+});
+
+async function loadBenefits() {
+  tableState('benefits-tbody', 5, 'Carregando benefícios…');
+  try {
+    pages.benefits ||= 0;
+    const result = await fetchAPIPage(`/api/benefits?all=true&limit=50&offset=${pages.benefits * 50}`);
+    benefits = result.data;
+    if (!benefits.length) return tableState('benefits-tbody', 5, 'Nenhum benefício cadastrado.');
+    {
+      const tbody = clear(document.getElementById('benefits-tbody'));
+      benefits.forEach(benefit => tbody.append(element('tr', {}, [
+        cell(benefit.company || '—'), cell(benefit.category || '—', 'badge badge-gray'), cell(benefit.description || '—'),
+        cell(benefit.active ? 'Ativo' : 'Inativo', `badge ${benefit.active ? 'badge-green' : 'badge-gray'}`),
+        actions(
+          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => benefitDialog(benefit) } }),
+          element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', on: { click: () => deleteBenefit(benefit.id) } }),
+        ),
+      ])));
+    }
+    serverPagination('benefits', result.total ?? benefits.length, 'benefits-pagination', loadBenefits);
+  } catch {
+    tableState('benefits-tbody', 5, 'Não foi possível carregar os benefícios.', loadBenefits);
+  }
+}
+
+function benefitDialog(benefit) {
+  editingBenefitId = benefit?.id || null;
+  document.getElementById('modal-benefit-title').textContent = benefit ? 'Editar Benefício' : 'Novo Benefício';
+  document.getElementById('b-company').value = benefit?.company || '';
+  document.getElementById('b-category').value = benefit?.category || '';
+  document.getElementById('b-desc').value = benefit?.description || '';
+  document.getElementById('b-instructions').value = benefit?.instructions || '';
+  document.getElementById('b-order').value = benefit?.order || benefits.length + 1;
+  document.getElementById('b-active').checked = benefit ? !!benefit.active : true;
+  openDialog(document.getElementById('modal-benefit'), document.getElementById('b-company'));
+}
+
+async function deleteBenefit(id) {
+  if (!confirm('Excluir este benefício?')) return;
+  try { await fetchAPI(`/api/benefits/${encodeURIComponent(id)}`, { method: 'DELETE' }); showToast('Benefício excluído.'); await loadBenefits(); }
+  catch (error) { showToast(`Não foi possível excluir: ${error.message}`); }
+}
+
+document.getElementById('benefit-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
+  const data = { company: document.getElementById('b-company').value.trim(), category: document.getElementById('b-category').value.trim(), description: document.getElementById('b-desc').value.trim(), instructions: document.getElementById('b-instructions').value.trim(), order: Number(document.getElementById('b-order').value) || 1, active: document.getElementById('b-active').checked };
+  const save = document.getElementById('modal-benefit-save');
+  save.disabled = true;
+  save.textContent = 'Salvando…';
+  try {
+    await fetchAPI(editingBenefitId ? `/api/benefits/${encodeURIComponent(editingBenefitId)}` : '/api/benefits', { method: editingBenefitId ? 'PUT' : 'POST', body: JSON.stringify(data) });
+    closeDialog(document.getElementById('modal-benefit'), true); showToast(editingBenefitId ? 'Benefício atualizado.' : 'Benefício criado.'); await loadBenefits();
+  } catch (error) { showToast(`Não foi possível salvar: ${error.message}`); }
+  finally { save.disabled = false; save.textContent = 'Salvar'; }
+});
+
+async function loadOmbudsman() {
+  tableState('ombudsman-tbody', 6, 'Carregando mensagens…');
+  try {
+    pages.ombudsman ||= 0;
+    const result = await fetchAPIPage(`/api/ombudsman?limit=50&offset=${pages.ombudsman * 50}`);
+    ombudsman = result.data;
+    if (!ombudsman.length) return tableState('ombudsman-tbody', 6, 'Nenhuma mensagem recebida.');
+    const labels = { sugestao: 'Sugestão', reclamacao: 'Reclamação', denuncia: 'Denúncia' };
+    const statuses = { new: 'Nova', in_review: 'Em análise', resolved: 'Resolvida' };
+    const tbody = clear(document.getElementById('ombudsman-tbody'));
+    ombudsman.forEach(message => {
+        const date = new Date(message.created_at);
+        tbody.append(element('tr', {}, [
+          cell(labels[message.category] || message.category || '—', 'badge badge-gray'), cell(message.message || '—'),
+          cell(statuses[message.status] || message.status || '—', `badge ${message.status === 'resolved' ? 'badge-green' : 'badge-gray'}`),
+          cell(message.assigned_to || 'Não atribuído'),
+          cell(message.created_at && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat('pt-BR').format(date) : '—'),
+          actions(element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Atualizar', on: { click: () => editOmbudsman(message) } })),
+        ]));
+    });
+    serverPagination('ombudsman', result.total ?? ombudsman.length, 'ombudsman-pagination', loadOmbudsman);
+  } catch (error) {
+    tableState('ombudsman-tbody', 6, error.status === 403 ? 'Você não tem permissão para acessar a ouvidoria.' : 'Não foi possível carregar as mensagens.', loadOmbudsman);
+  }
+}
+
+function editOmbudsman(message) {
+  editingOmbudsmanId = message.id;
+  document.getElementById('o-message').textContent = message.message || '';
+  document.getElementById('o-status').value = message.status || 'new';
+  document.getElementById('o-assigned').value = message.assigned_to || '';
+  document.getElementById('o-notes').value = message.internal_notes || '';
+  openDialog(document.getElementById('modal-ombudsman'), document.getElementById('o-status'));
+}
+
+document.getElementById('ombudsman-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const assigned = document.getElementById('o-assigned').value.trim();
+  const save = document.getElementById('modal-ombudsman-save');
+  save.disabled = true;
+  try {
+    await fetchAPI(`/api/ombudsman/${encodeURIComponent(editingOmbudsmanId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: document.getElementById('o-status').value, assigned_to: assigned || null, internal_notes: document.getElementById('o-notes').value.trim() }),
+    });
+    closeDialog(document.getElementById('modal-ombudsman'), true);
+    showToast('Fluxo da ouvidoria atualizado.');
+    await loadOmbudsman();
+  } catch (error) {
+    showToast(`Não foi possível atualizar: ${error.message}`);
+  } finally {
+    save.disabled = false;
+  }
+});
+
+document.getElementById('u-contract').addEventListener('change', event => {
+  const isPJ = event.target.value === 'pj';
+  document.getElementById('pj-day-group').hidden = !isPJ;
+  document.getElementById('u-pjday').required = isPJ;
+});
+document.getElementById('u-role').addEventListener('change', event => { document.getElementById('permissions-group').hidden = !(event.target.value === 'admin' && can(me, 'superAdmin')); });
+document.getElementById('p-super').addEventListener('change', event => {
+  ['p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-ombudsman', 'p-solides'].forEach(id => { document.getElementById(id).checked = event.target.checked; document.getElementById(id).disabled = event.target.checked; });
+});
+document.getElementById('solides-link-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
+  const externalId = document.getElementById('solides-external-id').value.trim();
+  const save = document.getElementById('solides-link-save');
+  save.disabled = true;
+  try {
+    await fetchAPI(`/api/solides/admin/links/${encodeURIComponent(document.getElementById('solides-user').value)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        employeeId: document.getElementById('solides-employee-id').value,
+        externalId: externalId || null,
+        employerScope: 'default',
+        status: document.getElementById('solides-link-status').value,
+        matchedBy: externalId ? 'external_id' : 'manual',
+      }),
+    });
+    showToast('Vínculo Sólides salvo.');
+    event.currentTarget.reset();
+    await loadSolides();
+  } catch (error) { showToast(`Não foi possível salvar: ${error.message}`); }
+  finally { save.disabled = false; }
+});
+document.getElementById('solides-probe').addEventListener('click', runSolidesProbe);
+document.getElementById('btn-new-user').addEventListener('click', newUser);
+document.getElementById('btn-new-course').addEventListener('click', () => courseDialog());
+document.getElementById('btn-new-benefit').addEventListener('click', () => benefitDialog());
+[['user', 'modal-user'], ['course', 'modal-course'], ['benefit', 'modal-benefit']].forEach(([name, modalId]) => {
+  document.getElementById(`${modalId}-close`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
+  document.getElementById(`${modalId}-cancel`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
+});
+document.getElementById('modal-ombudsman-close').addEventListener('click', () => closeDialog(document.getElementById('modal-ombudsman')));
+document.getElementById('modal-ombudsman-cancel').addEventListener('click', () => closeDialog(document.getElementById('modal-ombudsman')));
+window.addEventListener('popstate', () => {
+  const requested = new URLSearchParams(location.search).get('tab');
+  if (document.getElementById(`tab-${requested}`)) switchTab(requested);
+});
 buildTabs();

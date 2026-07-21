@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_DB: portal_test
+          POSTGRES_USER: portal_admin
+          POSTGRES_PASSWORD: integration-test-admin-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U portal_admin -d portal_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+           api/package-lock.json
+           cron/package-lock.json
+      - run: npm run bootstrap
+      - run: npm run verify
+      - name: Test migrations against PostgreSQL
+        env:
+          MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
+          PORTAL_API_DB_PASSWORD: integration-test-api-password
+          PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
+        run: npm run test:migrations
+      - name: Build production images
+        run: |
+          docker build --tag ownerinc-portal-api:${GITHUB_SHA} api
+          docker build --tag ownerinc-portal-cron:${GITHUB_SHA} cron
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          image-ref: ownerinc-portal-api:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+      - name: Scan cron image
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          image-ref: ownerinc-portal-cron:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+      - name: Reject high or critical production dependency vulnerabilities
+        run: npm run security
+      - name: Generate SPDX SBOMs
+        run: npm run sbom
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-spdx
+          path: '*.spdx.json'
+      - name: Authenticate to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+        run: |
+          docker tag ownerinc-portal-api:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
+          docker tag ownerinc-portal-cron:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
+          docker push ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
+          docker push ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
+          docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA} > image-digests.txt
+          docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA} >> image-digests.txt
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: image-digests
+          path: image-digests.txt

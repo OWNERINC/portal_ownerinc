@@ -31,6 +31,9 @@ async function filesUnder(directory, extension) {
 }
 
 async function checkSyntax() {
+  if (Number(process.versions.node.split('.')[0]) !== 24) {
+    throw new Error(`Node 24 is required; running ${process.version}`);
+  }
   console.log('verify: syntax');
   const serverFiles = (await Promise.all(
     ['api', 'cron'].map((directory) => filesUnder(directory, '.js'))
@@ -44,7 +47,10 @@ async function checkSyntax() {
   }
 
   const bash = spawnSync('bash', ['--version'], { encoding: 'utf8' });
-  if (bash.status === 0) run('bash', ['-n', 'deploy.sh']);
+  if (bash.status === 0) {
+    run('bash', ['-n', 'deploy.sh']);
+    for (const file of await filesUnder('scripts', '.sh')) run('bash', ['-n', file]);
+  }
 }
 
 async function checkTests() {
@@ -63,7 +69,11 @@ async function checkSecrets() {
 
   for (const file of output.split('\0').filter(Boolean)) {
     if (excluded.has(file) || !textExtensions.has(path.extname(file))) continue;
-    if (secret.test(await readFile(file, 'utf8'))) {
+    const contents = await readFile(file, 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') return '';
+      throw error;
+    });
+    if (secret.test(contents)) {
       throw new Error(`possible secret found in ${file}`);
     }
   }
@@ -76,9 +86,7 @@ function checkCompose() {
     return;
   }
   console.log('verify: compose');
-  run('docker', ['compose', 'config', '--quiet'], {
-    env: { ...process.env, ENV_FILE: '.env.example' }
-  });
+  run('docker', ['compose', '--env-file', '.env.example', 'config', '--quiet']);
 }
 
 const mode = process.argv[2] || 'all';

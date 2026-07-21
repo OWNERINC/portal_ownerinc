@@ -1,53 +1,135 @@
+name: ${COMPOSE_PROJECT_NAME:-ownerinc-portal}
+
 services:
+  firebase-auth:
+    profiles: ["local"]
+    build:
+      context: .
+      dockerfile: firebase-emulator/Dockerfile
+    ports:
+      - "127.0.0.1:9099:9099"
+      - "127.0.0.1:4000:4000"
+    restart: unless-stopped
+
   postgres:
-    image: postgres:16-alpine
-    env_file: ${ENV_FILE:-.env}
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-portal}
-      POSTGRES_USER: ${POSTGRES_USER:-portal}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-portal_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./api/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-portal}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-portal_admin} -d ${POSTGRES_DB:-portal}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  api:
-    build:
-      context: ./api
-      dockerfile: Dockerfile
-    env_file: ${ENV_FILE:-.env}
-    volumes:
-      - uploads_data:/app/uploads
+  migrate:
+    image: ${API_IMAGE:-local/ownerinc-portal-api:latest}
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set MIGRATION_DATABASE_URL}
+      PORTAL_API_DB_PASSWORD: ${PORTAL_API_DB_PASSWORD:?Set PORTAL_API_DB_PASSWORD}
+      PORTAL_CRON_DB_PASSWORD: ${PORTAL_CRON_DB_PASSWORD:?Set PORTAL_CRON_DB_PASSWORD}
+      RUN_MIGRATIONS: "true"
+    command: ["true"]
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  bootstrap-admin:
+    profiles: ["tools"]
+    image: ${API_IMAGE:-local/ownerinc-portal-api:latest}
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${API_DATABASE_URL:?Set API_DATABASE_URL}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set MIGRATION_DATABASE_URL}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?Set FIREBASE_PROJECT_ID}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:-}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY:-}
+      FIREBASE_AUTH_EMULATOR_HOST: ${FIREBASE_AUTH_EMULATOR_HOST:-}
+    command: ["true"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    image: ${API_IMAGE:-local/ownerinc-portal-api:latest}
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      DATABASE_URL: ${API_DATABASE_URL:?Set API_DATABASE_URL}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?Set FIREBASE_PROJECT_ID}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:-}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY:-}
+      FIREBASE_AUTH_EMULATOR_HOST: ${FIREBASE_AUTH_EMULATOR_HOST:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      SOLIDES_RELEASE_STAGE: ${SOLIDES_RELEASE_STAGE:-off}
+      SOLIDES_TOKEN: ${SOLIDES_TOKEN:-}
+      SOLIDES_EMPLOYER_BASE_URL: ${SOLIDES_EMPLOYER_BASE_URL:-}
+      SOLIDES_PUNCH_BASE_URL: ${SOLIDES_PUNCH_BASE_URL:-}
+      SOLIDES_REPORT_BASE_URL: ${SOLIDES_REPORT_BASE_URL:-}
+      SOLIDES_REQUEST_TIMEOUT_MS: ${SOLIDES_REQUEST_TIMEOUT_MS:-12000}
+      SOLIDES_PILOT_UIDS: ${SOLIDES_PILOT_UIDS:-}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+    healthcheck:
+      # /api/health remains process liveness; service dependencies use database readiness.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/ready | grep -q '\"status\":\"ready\"'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
   nginx:
-    image: nginx:alpine
+    image: nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
     ports:
-      - "80:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-80}:80"
     volumes:
       - ./public:/usr/share/nginx/html:ro
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
   cron:
+    image: ${CRON_IMAGE:-local/ownerinc-portal-cron:latest}
     build:
       context: ./cron
       dockerfile: Dockerfile
-    env_file: ${ENV_FILE:-.env}
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${CRON_DATABASE_URL:?Set CRON_DATABASE_URL}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:?Set SENDGRID_API_KEY}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL:?Set SENDGRID_FROM_EMAIL}
+      TZ: ${TZ:-America/Sao_Paulo}
+      NOTIFICATION_RETENTION_DAYS: ${NOTIFICATION_RETENTION_DAYS:-730}
+      OMBUDSMAN_RETENTION_DAYS: ${OMBUDSMAN_RETENTION_DAYS:-730}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-1825}
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "health.js"]
+      interval: 15m
+      timeout: 10s
+      retries: 2
+      start_period: 2m
 
 volumes:
   postgres_data:

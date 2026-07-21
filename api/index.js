@@ -1,11 +1,21 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const pool = require('./db');
+const {
+  allowedOrigins, configureTrustProxy, cors, errorHandler, rateLimit, requestContext, safeResponses, validateEnvironment,
+} = require('./middleware/security');
+
+validateEnvironment(process.env);
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+configureTrustProxy(app);
+app.disable('x-powered-by');
+app.use(requestContext);
+app.use(safeResponses);
+app.use(cors(allowedOrigins(process.env)));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+app.use(express.json({ limit: '100kb' }));
 
 // Serve arquivos de upload (fotos de perfil)
 app.use('/uploads', express.static('/app/uploads'));
@@ -18,9 +28,25 @@ app.use('/api/academy',   require('./routes/academy'));
 app.use('/api/benefits',  require('./routes/benefits'));
 app.use('/api/ombudsman', require('./routes/ombudsman'));
 app.use('/api/upload',    require('./routes/upload'));
+app.use('/api/solides',   require('./routes/solides'));
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/api/ready', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ready' });
+  } catch (error) {
+    console.error(JSON.stringify({ service: 'api', event: 'readiness_failed', error: error.message }));
+    res.status(503).json({ status: 'unavailable' });
+  }
+});
+
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`[api] Servidor rodando na porta ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(JSON.stringify({ service: 'api', event: 'started', port: Number(PORT) })));
+}
+
+module.exports = app;

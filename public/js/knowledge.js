@@ -1,153 +1,173 @@
-import { requireAuth, renderUserInTopbar, showToast, fetchAPI } from './auth.js';
+import { requireAuth, renderUserInTopbar, showToast, can, fetchAPI } from './auth.js';
+import { clear, closeDialog, element, openDialog, showState } from './ui.js';
 
 const user = await requireAuth();
-if (!user) throw new Error('not authenticated');
+if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
+const canManage = can(user, 'manageKnowledge');
 if (user.role === 'admin') {
   document.getElementById('admin-link').style.display = '';
+}
+if (canManage) {
   document.getElementById('btn-new').style.display = '';
 }
 
+const searchInput = document.getElementById('search');
+const categoriesNode = document.getElementById('categories');
+const listNode = document.getElementById('articles-list');
+const articleView = document.getElementById('article-view');
+const modal = document.getElementById('modal-article');
+const form = document.getElementById('article-form');
 let articles = [];
-let activeCategory = 'all';
 let editingId = null;
 
-async function loadArticles() {
-  articles = await fetchAPI('/api/knowledge');
-  renderCategories();
-  renderList();
+function params() {
+  return new URLSearchParams(location.search);
+}
+
+function updateUrl(changes, push = false) {
+  const url = new URL(location.href);
+  Object.entries(changes).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
+  history[push ? 'pushState' : 'replaceState']({}, '', url);
 }
 
 function renderCategories() {
-  const cats = ['all', ...new Set(articles.map(a => a.category).filter(Boolean))];
-  document.getElementById('categories').innerHTML = cats.map(c => `
-    <button class="badge ${c === activeCategory ? 'badge-gold' : 'badge-gray'}"
-      style="cursor:pointer; border:none; padding:6px 14px; font-size:12px"
-      onclick="window.__setCategory('${c}')">
-      ${c === 'all' ? 'Todos' : c}
-    </button>
-  `).join('');
-}
-
-window.__setCategory = cat => {
-  activeCategory = cat;
-  renderCategories();
-  renderList();
-};
-
-function renderList() {
-  const search = document.getElementById('search').value.toLowerCase();
-  const filtered = articles.filter(a => {
-    const matchCat = activeCategory === 'all' || a.category === activeCategory;
-    const matchSearch = !search || a.title?.toLowerCase().includes(search) || a.content?.toLowerCase().includes(search);
-    return matchCat && matchSearch;
+  const active = params().get('category') || 'all';
+  const categories = ['all', ...new Set(articles.map(article => article.category).filter(Boolean))];
+  clear(categoriesNode);
+  categories.forEach(category => {
+    categoriesNode.append(element('button', {
+      className: `badge category-filter ${category === active ? 'badge-gold' : 'badge-gray'}`,
+      type: 'button',
+      text: category === 'all' ? 'Todos' : category,
+      'aria-pressed': String(category === active),
+      on: { click: () => { updateUrl({ category: category === 'all' ? '' : category }, true); render(); } },
+    }));
   });
-
-  const container = document.getElementById('articles-list');
-  if (filtered.length === 0) {
-    container.innerHTML = '<p class="empty-state">Nenhum artigo encontrado.</p>';
-    return;
-  }
-  container.innerHTML = filtered.map(a => `
-    <div class="card" style="cursor:pointer" onclick="window.__openArticle('${a.id}')">
-      <div class="card-title">${a.title}</div>
-      <span class="badge badge-gold" style="margin-bottom:8px">${a.category || 'Geral'}</span>
-      <p style="font-size:13px; color:var(--text-secondary); overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical">
-        ${a.content?.substring(0, 120) || ''}
-      </p>
-    </div>
-  `).join('');
 }
 
-window.__openArticle = id => {
-  const a = articles.find(x => x.id === id);
-  if (!a) return;
-  document.getElementById('articles-list').style.display = 'none';
-  document.getElementById('categories').style.display = 'none';
-  const view = document.getElementById('article-view');
-  view.style.display = '';
-  document.getElementById('article-title').textContent = a.title;
-  document.getElementById('article-category').textContent = a.category || 'Geral';
-  document.getElementById('article-content').textContent = a.content;
-
-  const adminBar = document.getElementById('article-admin-bar');
-  if (user.role === 'admin') {
-    adminBar.style.display = 'flex';
-    adminBar.innerHTML = `
-      <button class="btn btn-ghost btn-sm" onclick="window.__editArticle('${a.id}')">Editar</button>
-      <button class="btn btn-danger btn-sm" onclick="window.__deleteArticle('${a.id}')">Excluir</button>
-    `;
-  } else {
-    adminBar.style.display = 'none';
+function openArticle(id, push = true) {
+  const article = articles.find(item => String(item.id) === String(id));
+  if (!article) {
+    updateUrl({ article: '' });
+    showToast('O artigo solicitado não foi encontrado.');
+    return render();
   }
-};
+  if (push) updateUrl({ article: article.id }, true);
+  listNode.hidden = true;
+  categoriesNode.hidden = true;
+  articleView.hidden = false;
+  document.getElementById('article-title').textContent = article.title;
+  document.getElementById('article-category').textContent = article.category || 'Geral';
+  document.getElementById('article-content').textContent = article.content || '';
+  const adminBar = clear(document.getElementById('article-admin-bar'));
+  adminBar.hidden = !canManage;
+  if (canManage) {
+    adminBar.append(
+      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editArticle(article) } }),
+      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', on: { click: () => deleteArticle(article.id) } }),
+    );
+  }
+  document.getElementById('article-title').focus();
+}
 
-document.getElementById('btn-back').addEventListener('click', () => {
-  document.getElementById('article-view').style.display = 'none';
-  document.getElementById('articles-list').style.display = '';
-  document.getElementById('categories').style.display = 'flex';
-});
+function render() {
+  renderCategories();
+  const query = (params().get('q') || '').toLocaleLowerCase('pt-BR');
+  const category = params().get('category') || 'all';
+  searchInput.value = params().get('q') || '';
+  const filtered = articles.filter(article => {
+    const matchesCategory = category === 'all' || article.category === category;
+    const haystack = `${article.title || ''} ${article.content || ''}`.toLocaleLowerCase('pt-BR');
+    return matchesCategory && (!query || haystack.includes(query));
+  });
+  articleView.hidden = true;
+  listNode.hidden = false;
+  categoriesNode.hidden = false;
+  if (!filtered.length) showState(listNode, 'Nenhum artigo encontrado. Ajuste a busca ou a categoria.');
+  else {
+    clear(listNode);
+    filtered.forEach(article => {
+      const button = element('button', { className: 'card article-card', type: 'button', on: { click: () => openArticle(article.id) } }, [
+        element('span', { className: 'card-title', text: article.title }),
+        element('span', { className: 'badge badge-gold', text: article.category || 'Geral' }),
+        element('span', { className: 'article-excerpt', text: (article.content || '').slice(0, 120) }),
+      ]);
+      listNode.append(button);
+    });
+  }
+  const articleId = params().get('article');
+  if (articleId) openArticle(articleId, false);
+}
 
-document.getElementById('btn-new').addEventListener('click', () => {
-  editingId = null;
-  document.getElementById('modal-article-title').textContent = 'Novo Artigo';
-  document.getElementById('f-title').value = '';
-  document.getElementById('f-category').value = '';
-  document.getElementById('f-content').value = '';
-  document.getElementById('modal-article').classList.remove('hidden');
-});
-
-window.__editArticle = id => {
-  const a = articles.find(x => x.id === id);
-  editingId = id;
-  document.getElementById('modal-article-title').textContent = 'Editar Artigo';
-  document.getElementById('f-title').value = a.title;
-  document.getElementById('f-category').value = a.category;
-  document.getElementById('f-content').value = a.content;
-  document.getElementById('modal-article').classList.remove('hidden');
-};
-
-window.__deleteArticle = async id => {
-  if (!confirm('Excluir este artigo?')) return;
-  await fetchAPI(`/api/knowledge/${id}`, { method: 'DELETE' });
-  showToast('Artigo excluído.');
-  document.getElementById('article-view').style.display = 'none';
-  document.getElementById('articles-list').style.display = '';
-  document.getElementById('categories').style.display = 'flex';
-  await loadArticles();
-};
-
-document.getElementById('modal-article-save').addEventListener('click', async () => {
-  const title    = document.getElementById('f-title').value.trim();
-  const category = document.getElementById('f-category').value.trim();
-  const content  = document.getElementById('f-content').value.trim();
-  if (!title || !content) { showToast('Título e conteúdo são obrigatórios.'); return; }
-
+async function loadArticles() {
+  showState(listNode, 'Carregando artigos…');
   try {
-    if (editingId) {
-      await fetchAPI(`/api/knowledge/${editingId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ title, category, content }),
-      });
-    } else {
-      await fetchAPI('/api/knowledge', {
-        method: 'POST',
-        body: JSON.stringify({ title, category, content }),
-      });
-    }
-    document.getElementById('modal-article').classList.add('hidden');
+    articles = await fetchAPI('/api/knowledge');
+    render();
+  } catch {
+    showState(listNode, 'Não foi possível carregar os artigos. Verifique sua conexão.', loadArticles);
+  }
+}
+
+function newArticle() {
+  editingId = null;
+  form.reset();
+  document.getElementById('modal-article-title').textContent = 'Novo Artigo';
+  openDialog(modal, document.getElementById('f-title'));
+}
+
+function editArticle(article) {
+  editingId = article.id;
+  document.getElementById('modal-article-title').textContent = 'Editar Artigo';
+  document.getElementById('f-title').value = article.title || '';
+  document.getElementById('f-category').value = article.category || '';
+  document.getElementById('f-content').value = article.content || '';
+  openDialog(modal, document.getElementById('f-title'));
+}
+
+async function deleteArticle(id) {
+  if (!confirm('Excluir este artigo?')) return;
+  try {
+    await fetchAPI(`/api/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    updateUrl({ article: '' });
+    showToast('Artigo excluído.');
+    await loadArticles();
+  } catch (error) {
+    showToast(`Não foi possível excluir: ${error.message}`);
+  }
+}
+
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!form.reportValidity()) return;
+  const data = {
+    title: document.getElementById('f-title').value.trim(),
+    category: document.getElementById('f-category').value.trim(),
+    content: document.getElementById('f-content').value.trim(),
+  };
+  const save = document.getElementById('modal-article-save');
+  save.disabled = true;
+  save.textContent = 'Salvando…';
+  try {
+    await fetchAPI(editingId ? `/api/knowledge/${encodeURIComponent(editingId)}` : '/api/knowledge', {
+      method: editingId ? 'PUT' : 'POST', body: JSON.stringify(data),
+    });
+    closeDialog(modal, true);
     showToast(editingId ? 'Artigo atualizado.' : 'Artigo criado.');
     await loadArticles();
-  } catch (err) {
-    showToast('Erro: ' + err.message);
+  } catch (error) {
+    showToast(`Não foi possível salvar: ${error.message}`);
+  } finally {
+    save.disabled = false;
+    save.textContent = 'Salvar';
   }
 });
 
-['modal-article-close', 'modal-article-cancel'].forEach(id =>
-  document.getElementById(id).addEventListener('click', () =>
-    document.getElementById('modal-article').classList.add('hidden')
-  )
-);
-
-document.getElementById('search').addEventListener('input', renderList);
+document.getElementById('btn-back').addEventListener('click', () => { updateUrl({ article: '' }, true); render(); });
+document.getElementById('btn-new').addEventListener('click', newArticle);
+document.getElementById('modal-article-close').addEventListener('click', () => closeDialog(modal));
+document.getElementById('modal-article-cancel').addEventListener('click', () => closeDialog(modal));
+searchInput.addEventListener('input', () => { updateUrl({ q: searchInput.value.trim() }); render(); });
+window.addEventListener('popstate', render);
 loadArticles();

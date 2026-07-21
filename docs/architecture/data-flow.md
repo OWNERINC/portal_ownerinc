@@ -22,3 +22,17 @@
 2. A API grava o arquivo no volume `uploads_data`.
 3. A URL relativa é armazenada no perfil.
 4. O Nginx encaminha `/uploads/` para a API.
+
+## Sólides DP/Ponto
+
+1. O dashboard consulta `/api/solides/me/status`; a rota responde 404 quando o
+   estágio ou o UID não permitem descobrir a integração.
+2. A API resolve o UID autenticado em `solides_employee_links`; o navegador
+   nunca informa o `employeeId` consultado.
+3. A API chama somente hosts HTTPS configurados para Employer e Punch com o
+   token Basic mantido no servidor.
+4. As respostas são normalizadas por allowlist antes de chegar ao frontend;
+   CPF, PIS, PIN, fotos, localização e payloads brutos são descartados.
+5. A página Minha Jornada apresenta dados read-only e mantém link de
+   contingência para a aplicação oficial.
+6. O estágio padrão `off` não exige token e mantém todas as ferramentas ocultas.

@@ -2,20 +2,66 @@
 
 ## Pré-requisitos
 
-- VPS com Docker e plugin Docker Compose.
-- DNS e proxy configurados para publicar somente o Nginx.
-- `.env` criado diretamente na VPS com permissões restritas.
-- Backup válido do volume PostgreSQL e dos uploads.
+- VPS Linux com Docker, plugin Docker Compose, `curl`, `gzip`, `git`, SSH e espaço persistente para backups.
+- Proxy TLS publicando o Nginx em `127.0.0.1:${HTTP_PORT:-80}`. Para outro desenho, configure `BIND_ADDRESS` explicitamente.
+- `/opt/ownerinc-portal/shared/.env` criado diretamente na VPS com modo `0600`.
+- Login da VPS no GHCR com permissão somente de leitura dos packages privados.
+- Node.js 24 para verificações locais e CI. Os serviços executam em containers.
 
-## Processo
+## Configuração
 
-O `deploy.sh` usa `rsync` e SSH, mas contém valores de exemplo. Ajuste
-`VPS_USER`, `VPS_HOST` e `VPS_PATH` somente como parte de uma tarefa explícita
-de deploy. Antes de executar, rode `npm run verify` e valide o destino.
+O Compose entrega a cada serviço somente suas variáveis necessárias. Use `.env.example` como referência, mas nunca envie o `.env` ao Git. Senhas usadas dentro das URLs PostgreSQL devem estar em formato URL-encoded. `CORS_ORIGINS` só deve listar origens adicionais deliberadas; o acesso normal é pelo mesmo domínio do Nginx.
 
-Após o deploy, confirme:
+O banco usa três credenciais distintas:
 
-- `GET /api/health` retorna `{"status":"ok"}`.
-- Login e carregamento do perfil funcionam.
-- PostgreSQL e API não estão publicados diretamente.
-- Logs não contêm chaves ou dados pessoais desnecessários.
+- `MIGRATION_DATABASE_URL`: usuário administrador definido por `POSTGRES_USER`, usado somente pelo container one-shot `migrate`.
+- `API_DATABASE_URL`: role fixa `portal_api`, sem DDL, usada pela API em execução.
+- `CRON_DATABASE_URL`: role fixa `portal_cron`, limitada a leitura de `users`/`reminders` e leitura/escrita de `notifications_log`/`cron_status`.
+
+Defina também `PORTAL_API_DB_PASSWORD` e `PORTAL_CRON_DB_PASSWORD` com pelo menos 16 caracteres. O serviço `migrate` cria ou rotaciona essas duas roles, executa migrations sob advisory lock e reaplica os grants antes da API iniciar. As credenciais administrativas não entram no container de API em execução. Para reaplicar roles e grants manualmente, execute `docker compose run --rm migrate node db/provision.js`.
+
+Defina `IMAGE_REGISTRY=ghcr.io/gabrielgarciaberwads-source`. O CI publica API e cron com a tag do commit. A VPS resolve a tag para digest, grava os dois digests em `.image-env` e inicia o Compose com referências `@sha256`, impedindo alteração posterior da tag.
+
+Configure localmente `VPS_USER`, `VPS_HOST` e, se necessário, `VPS_PATH` e `SSH_PORT`. O `deploy.sh` recusa alterações rastreadas não commitadas e publica apenas um `git archive` do `HEAD`; `ownerinc-novo-agente/` é excluído explicitamente.
+
+## Fluxo de release
+
+1. Execute `npm run verify` e `npm run security`.
+2. Execute `bash deploy.sh` somente após revisar host e revisão.
+3. O servidor cria `releases/<commit>-<timestamp>`, resolve as imagens publicadas pelo CI e registra seus digests.
+4. Antes de trocar uma release existente, `scripts/backup.sh` interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
+5. O serviço one-shot `migrate` aplica schema/grants; o Compose espera a prontidão da API e executa smoke tests em `/` e `/api/ready`.
+6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Dados não sofrem rollback automático.
+
+`GET /api/health` é somente liveness. `GET /api/ready` executa `SELECT 1`, retorna `503` genérico quando o banco não responde e é usado por Compose, cron e smoke.
+
+## Primeiro super-admin
+
+Depois que as migrações terminarem, obtenha o UID, email e nome de uma conta já existente no Firebase Auth e execute uma única vez:
+
+```sh
+docker compose --profile tools run --rm bootstrap-admin node db/bootstrap-admin.js 'FIREBASE_UID' 'admin@empresa.com' 'Nome Completo'
+```
+
+O comando confirma no Firebase que UID/email existem, estão ativos e com email verificado; depois usa `MIGRATION_DATABASE_URL`, serializa execuções concorrentes, cria ou promove o usuário e registra a ação. Ele recusa sem alterações se já houver qualquer `superAdmin` ativo.
+
+## Backup manual
+
+Com o Compose ativo na raiz da release:
+
+```sh
+BACKUP_DIR=/opt/ownerinc-portal/shared/backups RETENTION_DAYS=14 bash scripts/backup.sh "$PWD"
+```
+
+Cada diretório UTC contém `postgres.dump`, `uploads.tar.gz` e hashes SHA-256. Copie backups periodicamente para outro host e teste restaurações fora de produção.
+
+Meta operacional inicial: backup diário e antes de release, RPO máximo de 24 horas e RTO de 4 horas. Agende `scripts/backup.sh` no host, monitore falhas e execute uma restauração trimestral em ambiente descartável.
+
+## Validação
+
+- `docker compose ps` mostra PostgreSQL e API saudáveis.
+- `GET /api/health` retorna `{"status":"ok"}` e `GET /api/ready` retorna `{"status":"ready"}` pelo domínio publicado.
+- PostgreSQL e API não possuem portas publicadas; Nginx fica em loopback por padrão.
+- Login, perfil e upload funcionam, e logs não expõem chaves ou dados pessoais.
+
+O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sintaxe/Compose, constrói e escaneia as imagens com Trivy, rejeita vulnerabilidades `high` ou `critical`, publica SBOMs SPDX e envia imagens imutáveis ao GHCR em pushes na `main`.

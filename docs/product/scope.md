@@ -21,6 +21,7 @@
 
 ## Próxima etapa
 
-Antes do primeiro deploy, consolidar testes de autorização, endurecer os
-limites de upload e CORS, validar o fluxo de criação de administradores e
-executar uma revisão LGPD dos dados armazenados.
+Antes de ampliar funcionalidades, concluir o Gate 0 do
+[`roadmap.md`](roadmap.md): fechar admissão, corrigir autorização e criação de
+usuários, remover stored XSS, endurecer upload e borda HTTP e cobrir as rotas
+sensíveis com testes de autorização.
