@@ -20,7 +20,7 @@ O banco usa três credenciais distintas:
 
 Defina também `PORTAL_API_DB_PASSWORD` e `PORTAL_CRON_DB_PASSWORD` com pelo menos 16 caracteres. O serviço `migrate` cria ou rotaciona essas duas roles, executa migrations sob advisory lock e reaplica os grants antes da API iniciar. As credenciais administrativas não entram no container de API em execução. Para reaplicar roles e grants manualmente, execute `docker compose run --rm migrate node db/provision.js`.
 
-Defina `IMAGE_REGISTRY=ghcr.io/gabrielgarciaberwads-source`. O CI publica API e cron com a tag do commit. A VPS resolve a tag para digest, grava os dois digests em `.image-env` e inicia o Compose com referências `@sha256`, impedindo alteração posterior da tag.
+Defina `IMAGE_REGISTRY=ghcr.io/ownerinc`. O CI publica API e cron com a tag do commit. A VPS resolve a tag para digest, grava os dois digests em `.image-env` e inicia o Compose com referências `@sha256`, impedindo alteração posterior da tag.
 
 Configure localmente `VPS_USER`, `VPS_HOST` e, se necessário, `VPS_PATH` e `SSH_PORT`. O `deploy.sh` recusa alterações rastreadas não commitadas e publica apenas um `git archive` do `HEAD`; `ownerinc-novo-agente/` é excluído explicitamente.
 

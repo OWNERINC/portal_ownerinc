@@ -88,9 +88,12 @@ test('deployment uses a committed archive, backup, smoke gate, and rollback', as
 });
 
 test('CI builds and publishes commit-addressed production images', async () => {
-  const workflow = await read('.github/workflows/ci.yml');
+  const [workflow, apiPackage] = await Promise.all([
+    read('.github/workflows/ci.yml'), read('api/package.json'),
+  ]);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /ownerinc-portal-api:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /docker push \$\{REGISTRY\}\/ownerinc-portal-api:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /Test migrations against PostgreSQL/);
+  assert.match(apiPackage, /"sharp": "\^0\.35\.3"/);
 });
