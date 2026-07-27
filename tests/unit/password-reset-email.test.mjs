@@ -22,6 +22,19 @@ test('SMTP password reset transport requires TLS and keeps credentials out of th
   assert.doesNotMatch(JSON.stringify(message), /secret/);
 });
 
+test('password reset always identifies the sender as Portal Interno Ownerinc', () => {
+  const message = passwordResetMessage({
+    to: 'user@example.com',
+    link: 'https://example.com/reset',
+    env: { ...env, MAILER_SENDER_EMAIL: 'Ownerinc Chatwoot <convites@example.com>' },
+  });
+
+  assert.deepEqual(message.from, {
+    name: 'Portal Interno Ownerinc',
+    address: 'convites@example.com',
+  });
+});
+
 test('public reset flow uses the Portal API and avoids account enumeration copy', async () => {
   const login = await readFile('public/js/login.js', 'utf8');
   const route = await readFile('api/routes/auth.js', 'utf8');

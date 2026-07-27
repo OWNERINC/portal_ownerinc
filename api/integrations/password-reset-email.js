@@ -1,5 +1,13 @@
 const nodemailer = require('nodemailer');
 
+function portalSender(rawSender) {
+  const value = String(rawSender || '').trim();
+  const bracketedAddress = value.match(/<([^<>]+)>/);
+  const address = (bracketedAddress ? bracketedAddress[1] : value).trim();
+
+  return { name: 'Portal Interno Ownerinc', address };
+}
+
 function smtpOptions(env = process.env) {
   const port = Number(env.SMTP_PORT);
   return {
@@ -15,7 +23,7 @@ function smtpOptions(env = process.env) {
 function passwordResetMessage({ to, link, env = process.env }) {
   const safeLink = String(link).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   return {
-    from: env.MAILER_SENDER_EMAIL,
+    from: portalSender(env.MAILER_SENDER_EMAIL),
     to,
     subject: 'Defina sua senha — Portal Interno Ownerinc',
     text: `Seu acesso ao Portal Interno Ownerinc está pronto. Defina sua senha: ${link}\n\nDepois, entre em https://portal.ownerinc.com.br/login.html`,
