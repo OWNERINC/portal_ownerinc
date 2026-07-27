@@ -95,5 +95,12 @@ test('CI builds and publishes commit-addressed production images', async () => {
   assert.match(workflow, /ownerinc-portal-api:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /docker push \$\{REGISTRY\}\/ownerinc-portal-api:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /Test migrations against PostgreSQL/);
+  const actionReferences = [...workflow.matchAll(/^\s*[-]?\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
+  assert.ok(actionReferences.length > 0);
+  assert.equal(
+    actionReferences.filter((reference) => !/@[0-9a-f]{40}$/.test(reference)).length,
+    0,
+    'every GitHub Action must be pinned to an immutable commit SHA',
+  );
   assert.match(apiPackage, /"sharp": "\^0\.35\.3"/);
 });
