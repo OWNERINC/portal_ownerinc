@@ -39,7 +39,7 @@ jobs:
       - run: npm run verify
       - name: Test migrations against PostgreSQL
         env:
-          MIGRATION_DATAASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
+          MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
           PORTAL_API_DB_PASSWORD: integration-test-api-password
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
         run: npm run test:migrations
