@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-27
+
+- Aponta o frontend, o exemplo de runtime e o emulador local para o projeto
+  Firebase institucional `ownerinc-portal-interno-prod`.
+
 ## Unreleased
 
 - Estrutura local com Docker Compose, Firebase Auth Emulator e migrations reais.

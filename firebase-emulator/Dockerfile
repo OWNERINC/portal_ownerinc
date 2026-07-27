@@ -5,4 +5,4 @@ COPY firebase.json .firebaserc ./
 RUN sed -i 's/127\.0\.0\.1/0.0.0.0/g' firebase.json
 EXPOSE 4000 4400 9099
 HEALTHCHECK --interval=5s --timeout=3s --retries=20 CMD wget -qO- http://127.0.0.1:4400/emulators >/dev/null || exit 1
-CMD ["firebase", "emulators:start", "--only", "auth", "--project", "portal-ownerinc"]
+CMD ["firebase", "emulators:start", "--only", "auth", "--project", "ownerinc-portal-interno-prod"]
