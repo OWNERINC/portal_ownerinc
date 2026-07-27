@@ -1,7 +1,5 @@
 import { requireAuth, renderUserInTopbar, showToast, fetchAPI, updateAuthDisplayName } from './auth.js';
 import { auth } from './firebase-config.js';
-import { sendPasswordResetEmail }
-  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { protectForm } from './ui.js';
 
 const user = await requireAuth();
@@ -147,7 +145,12 @@ document.getElementById('btn-reset-pw').addEventListener('click', async () => {
   btn.disabled = true;
   btn.textContent = 'Enviando…';
   try {
-    await sendPasswordResetEmail(auth, user.email);
+    const response = await fetch('/api/auth/password-reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: user.email }),
+    });
+    if (!response.ok) throw new Error('delivery-failed');
     feedback.style.color = 'var(--success)';
     feedback.textContent = `Link enviado para ${user.email}. Verifique sua caixa de entrada.`;
     btn.textContent = 'Link enviado';

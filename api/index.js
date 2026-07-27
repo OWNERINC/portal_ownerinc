@@ -21,6 +21,7 @@ app.use(express.json({ limit: '100kb' }));
 app.use('/uploads', express.static('/app/uploads'));
 
 // Rotas
+app.use('/api/auth',      require('./routes/auth'));
 app.use('/api/users',     require('./routes/users'));
 app.use('/api/knowledge', require('./routes/knowledge'));
 app.use('/api/reminders', require('./routes/reminders'));

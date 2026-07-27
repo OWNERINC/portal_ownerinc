@@ -18,6 +18,10 @@ test('every API resource route requires authentication', async () => {
     const routes = source.matchAll(/router\.(?:get|post|put|delete)\(([^\n]+)/g);
 
     for (const route of routes) {
+      if (file === 'auth.js' && route[1].includes("'/password-reset'")) {
+        assert.match(route[1], /resetLimit/, 'password reset must remain rate limited');
+        continue;
+      }
       assert.match(route[1], /authMiddleware/, `${file}: unauthenticated route`);
     }
   }

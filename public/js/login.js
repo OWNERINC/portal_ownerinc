@@ -1,6 +1,6 @@
 import { auth } from './firebase-config.js';
 import {
-  signInWithEmailAndPassword, sendPasswordResetEmail, signOut,
+  signInWithEmailAndPassword, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 const errorMsg = document.getElementById('error-msg');
@@ -110,17 +110,19 @@ resetSection.addEventListener('submit', async event => {
   resetBtn.disabled = true;
   resetBtn.textContent = 'Enviando…';
   try {
-    await sendPasswordResetEmail(auth, email);
-    resetSuccess.textContent = `Link enviado para ${email}. Verifique sua caixa de entrada (e a pasta de spam).`;
+    const response = await fetch('/api/auth/password-reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    if (!response.ok) throw new Error(response.status === 429 ? 'too-many-requests' : 'delivery-failed');
+    resetSuccess.textContent = `Se a conta estiver ativa, o link será enviado para ${email}. Verifique também a pasta de spam.`;
     resetSuccess.style.display = 'block';
-    resetBtn.textContent = 'Link enviado';
+    resetBtn.textContent = 'Solicitação recebida';
   } catch (err) {
-    const messages = {
-      'auth/user-not-found': 'Nenhuma conta encontrada com este e-mail.',
-      'auth/invalid-email': 'E-mail inválido.',
-      'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos.',
-    };
-    resetError.textContent = messages[err.code] || 'Erro ao enviar. Tente novamente.';
+    resetError.textContent = err.message === 'too-many-requests'
+      ? 'Muitas tentativas. Aguarde alguns minutos.'
+      : 'Não foi possível enviar agora. Tente novamente.';
     resetBtn.disabled = false;
     resetBtn.textContent = 'Enviar link de redefinição';
   }
