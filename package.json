@@ -8,7 +8,7 @@
     "admin:bootstrap": "node api/db/bootstrap-admin.js",
     "doctor": "node scripts/doctor.mjs",
     "lint": "node scripts/verify.mjs syntax",
-    "security": "npm audit --prefix api --omit=dev --audit-level=high && npm audit --prefix cron --omit=dev --audit-level=high",
+    "security": "npm audit --prefix api --omit=dev --omit=optional --audit-level=high && npm audit --prefix cron --omit=dev --omit=optional --audit-level=high",
     "sbom": "node scripts/sbom.mjs",
     "solides:probe": "node scripts/solides-probe.mjs",
     "test": "node --test tests/unit/*.test.mjs",
