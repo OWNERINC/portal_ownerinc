@@ -4,8 +4,8 @@
 
 - Aponta o frontend, o exemplo de runtime e o emulador local para o projeto
   Firebase institucional `ownerinc-portal-interno-prod`.
-- Remove dependências opcionais não utilizadas da imagem da API para manter o
-  runtime de produção sem vulnerabilidades conhecidas no `npm audit`.
+- Remove dependências opcionais não utilizadas da imagem da API, preservando
+  somente os binários musl exigidos pelo Sharp no runtime de produção.
 
 ## Unreleased
 
