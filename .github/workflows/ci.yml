@@ -79,7 +79,7 @@ jobs:
       - name: Publish immutable images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
-          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          REGISTRY: ghcr.io/ownerinc
         run: |
           docker tag ownerinc-portal-api:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
           docker tag ownerinc-portal-cron:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
