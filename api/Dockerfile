@@ -6,7 +6,11 @@ RUN npm ci --omit=dev --omit=optional \
       @img/sharp-linuxmusl-x64@0.35.3 \
       @img/sharp-libvips-linuxmusl-x64@1.3.2
 COPY --chown=node:node . .
-RUN mkdir -p /app/uploads && chown node:node /app/uploads && chmod +x /app/db/docker-entrypoint.sh
+RUN apk upgrade --no-cache \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+ && mkdir -p /app/uploads \
+ && chown node:node /app/uploads \
+ && chmod +x /app/db/docker-entrypoint.sh
 USER node
 ENTRYPOINT ["/app/db/docker-entrypoint.sh"]
 CMD ["node", "index.js"]
