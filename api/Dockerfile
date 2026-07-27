@@ -2,7 +2,7 @@ FROM node:24.12.0-alpine3.23@sha256:c921b97d4b74f51744057454b306b418cf693865e73b
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --omit=optional \
- && npm install --no-save --ignore-scripts \
+ && npm install --no-save --ignore-scripts --omit=dev \
       @img/sharp-linuxmusl-x64@0.35.3 \
       @img/sharp-libvips-linuxmusl-x64@1.3.2
 COPY --chown=node:node . .
