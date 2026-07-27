@@ -39,7 +39,7 @@ jobs:
       - run: npm run verify
       - name: Test migrations against PostgreSQL
         env:
-          MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
+          MIGRATION_DATAASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
           PORTAL_API_DB_PASSWORD: integration-test-api-password
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
         run: npm run test:migrations
@@ -48,14 +48,14 @@ jobs:
           docker build --tag ownerinc-portal-api:${GITHUB_SHA} api
           docker build --tag ownerinc-portal-cron:${GITHUB_SHA} cron
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ownerinc-portal-api:${{ github.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
       - name: Scan cron image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ownerinc-portal-cron:${{ github.sha }}
           severity: HIGH,CRITICAL
