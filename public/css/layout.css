@@ -315,14 +315,13 @@ body.sidebar-ready .main-content { transition: margin-left var(--sidebar-transit
   .topbar > div { flex-wrap: wrap; }
   .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }
   .topbar .search-bar { flex: 1 1 140px; width: auto; min-width: 0; }
-  .topbar-user { min-width: 0; }
+  .topbar-user { display: none; }
   #topbar-user-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; display: inline-block; }
   .page-body { padding: 20px 16px max(20px, env(safe-area-inset-bottom)); min-width: 0; }
 }
 
 @media (max-width: 420px) {
   .topbar { justify-content: flex-start; }
-  .topbar > div .topbar-user { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
