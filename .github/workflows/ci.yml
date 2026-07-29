@@ -92,3 +92,53 @@ jobs:
         with:
           name: image-digests
           path: image-digests.txt
+
+  deploy-production:
+    name: Deploy production
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: portal-ownerinc-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Package the exact validated commit
+        run: >-
+          git archive --format=tar.gz
+          --add-virtual-file=".ci-commit:${GITHUB_SHA}"
+          --output=portal-release.tar.gz
+          "${GITHUB_SHA}"
+      - name: Configure restricted production SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PORTAL_VPS_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PORTAL_VPS_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/portal_ownerinc_ci"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/portal_ownerinc_ci" "$HOME/.ssh/known_hosts"
+      - name: Deploy with backup, migration, smoke and rollback
+        env:
+          VPS_HOST: ${{ secrets.PORTAL_VPS_HOST }}
+          VPS_PORT: ${{ secrets.PORTAL_VPS_PORT }}
+          VPS_USER: ${{ secrets.PORTAL_VPS_USER }}
+        run: |
+          [[ "$VPS_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
+          [[ "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          test "$VPS_USER" != root
+          ssh -i "$HOME/.ssh/portal_ownerinc_ci" \
+            -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" "$GITHUB_SHA" < portal-release.tar.gz
+      - name: Verify public production
+        run: |
+          test "$(curl -sS -o /dev/null -w '%{http_code}' https://portal.ownerinc.com.br/)" = 200
+          test "$(curl -sS -o /dev/null -w '%{http_code}' https://portal.ownerinc.com.br/login.html)" = 200
+          test "$(curl -sS -o /dev/null -w '%{http_code}' https://portal.ownerinc.com.br/api/ready)" = 200
