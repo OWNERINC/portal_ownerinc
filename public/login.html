@@ -250,8 +250,18 @@
 
     /* ── Responsivo: oculta painel da marca em mobile ── */
     @media (max-width: 768px) {
-      .brand-panel { display: none; }
-      .form-panel { width: 100%; padding: max(40px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); }
+      .login-split { flex-direction: column; }
+      .brand-panel {
+        display: flex;
+        flex: none;
+        min-height: 198px;
+        padding: max(28px, env(safe-area-inset-top)) 24px 26px;
+        justify-content: flex-start;
+      }
+      .brand-logo { height: 26px; margin-bottom: 28px; }
+      .brand-headline { font-size: 25px; line-height: 1.12; margin-bottom: 0; }
+      .brand-subtitle, .feature-list, .brand-footer { display: none; }
+      .form-panel { width: 100%; padding: 32px max(24px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); align-items: flex-start; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }

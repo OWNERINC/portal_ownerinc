@@ -6,6 +6,59 @@ if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
 if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 
+const spotlight = document.getElementById('home-spotlight');
+const spotlightItems = [
+  { eyebrow: 'Ownerinc', title: 'Seu portal interno', copy: 'Acesse conteúdos, benefícios e recursos para sua jornada.' },
+  { eyebrow: 'Dica rápida', title: 'Mantenha seu perfil atualizado', copy: 'Revise seus dados para facilitar a comunicação interna.', href: './profile.html', action: 'Abrir perfil' },
+];
+let spotlightIndex = 0;
+let spotlightTimer = null;
+
+function renderSpotlight() {
+  if (!spotlight || !spotlightItems.length) return;
+  const current = spotlightItems[spotlightIndex];
+  const dots = spotlightItems.map((_, index) => element('button', {
+    className: `home-spotlight-dot${index === spotlightIndex ? ' active' : ''}`,
+    type: 'button',
+    'aria-label': `Mostrar destaque ${index + 1}`,
+    'aria-current': index === spotlightIndex ? 'true' : 'false',
+    on: { click: () => { spotlightIndex = index; renderSpotlight(); restartSpotlight(); } },
+  }));
+  const action = current.href ? element('a', { className: 'card-link-label', href: current.href, text: current.action }) : null;
+  clear(spotlight).append(element('article', { className: 'card home-spotlight-card' }, [
+    element('div', {}, [
+      element('div', { className: 'home-spotlight-eyebrow', text: current.eyebrow }),
+      element('h2', { className: 'home-spotlight-title', text: current.title }),
+      element('p', { className: 'home-spotlight-copy', text: current.copy }),
+    ]),
+    element('div', { className: 'home-spotlight-footer' }, [
+      element('div', { className: 'home-spotlight-dots' }, dots),
+      element('div', { className: 'home-spotlight-controls' }, [
+        element('button', { className: 'btn btn-ghost home-spotlight-control', type: 'button', 'aria-label': 'Destaque anterior', text: '‹', on: { click: () => { spotlightIndex = (spotlightIndex - 1 + spotlightItems.length) % spotlightItems.length; renderSpotlight(); restartSpotlight(); } } }),
+        element('button', { className: 'btn btn-ghost home-spotlight-control', type: 'button', 'aria-label': 'Próximo destaque', text: '›', on: { click: () => { spotlightIndex = (spotlightIndex + 1) % spotlightItems.length; renderSpotlight(); restartSpotlight(); } } }),
+      ]),
+      ...(action ? [action] : []),
+    ]),
+  ]));
+}
+
+function stopSpotlight() { if (spotlightTimer) { clearInterval(spotlightTimer); spotlightTimer = null; } }
+function restartSpotlight() {
+  stopSpotlight();
+  if (spotlightItems.length > 1 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    spotlightTimer = setInterval(() => { spotlightIndex = (spotlightIndex + 1) % spotlightItems.length; renderSpotlight(); }, 7000);
+  }
+}
+
+renderSpotlight();
+if (spotlight) {
+  spotlight.addEventListener('pointerenter', stopSpotlight);
+  spotlight.addEventListener('pointerleave', restartSpotlight);
+  spotlight.addEventListener('focusin', stopSpotlight);
+  spotlight.addEventListener('focusout', event => { if (!spotlight.contains(event.relatedTarget)) restartSpotlight(); });
+  document.addEventListener('visibilitychange', () => document.hidden ? stopSpotlight() : restartSpotlight());
+}
+
 const today = new Date();
 const isPJ = user.contract_type === 'pj' || user.is_pj;
 let solidesIntegration = null;
@@ -74,6 +127,16 @@ async function loadReminders() {
       .filter(item => item.occurrence && item.occurrence.days <= 7)
       .sort((a, b) => a.occurrence.days - b.occurrence.days);
     if (!upcoming.length) return showState(remindersContainer, 'Nenhum lembrete destinado a você nos próximos 7 dias.');
+    const next = upcoming[0];
+    spotlightItems.push({
+      eyebrow: 'Próximo lembrete',
+      title: next.reminder.title,
+      copy: next.occurrence.days === 0 ? 'Vence hoje.' : `Vence em ${next.occurrence.days} ${next.occurrence.days === 1 ? 'dia' : 'dias'}.`,
+      href: './reminders.html',
+      action: 'Ver lembretes',
+    });
+    renderSpotlight();
+    restartSpotlight();
     clear(remindersContainer);
     upcoming.forEach(({ reminder, occurrence }) => {
       const heading = element('div', { className: 'card-title', text: reminder.title });
@@ -116,6 +179,15 @@ async function loadAcademy() {
   try {
     const courses = (await fetchAPI('/api/academy?active=true&limit=3')).filter(course => course.active !== false).slice(0, 3);
     if (!courses.length) return showState(academySection, 'Nenhum curso disponível no momento.');
+    spotlightItems.push({
+      eyebrow: 'Academy',
+      title: courses[0].title,
+      copy: courses[0].description || courses[0].category || 'Confira os cursos disponíveis para você.',
+      href: './academy.html',
+      action: 'Ver Academy',
+    });
+    renderSpotlight();
+    restartSpotlight();
     const grid = element('div', { className: 'card-grid' });
     courses.forEach(course => {
       const href = safeHttpUrl(course.url);
