@@ -10,6 +10,7 @@
 
   // Restaurar estado salvo antes de qualquer render
   applyCollapsed(!!localStorage.getItem(KEY));
+  document.body.classList.add('sidebar-ready');
 
   // Botão de toggle
   var toggle = document.getElementById('sidebar-toggle');

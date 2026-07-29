@@ -35,8 +35,9 @@ button, a, input, select, textarea { touch-action: manipulation; }
   top: 0; left: 0; bottom: 0;
   z-index: 100;
   overflow: hidden;
-  transition: width var(--sidebar-transition);
+  transition: none;
 }
+body.sidebar-ready .sidebar { transition: width var(--sidebar-transition); }
 
 /* Header com logo + toggle */
 .sidebar-header {
@@ -225,8 +226,9 @@ body.sidebar-collapsed .sidebar-brand { cursor: pointer; justify-content: center
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  transition: margin-left var(--sidebar-transition);
+  transition: none;
 }
+body.sidebar-ready .main-content { transition: margin-left var(--sidebar-transition); }
 
 .topbar {
   height: var(--topbar-height);
@@ -274,8 +276,9 @@ body.sidebar-collapsed .sidebar-brand { cursor: pointer; justify-content: center
     width: min(84vw, 280px);
     padding-left: env(safe-area-inset-left);
     transform: translateX(-105%);
-    transition: transform var(--sidebar-transition);
+    transition: none;
   }
+  body.sidebar-ready .sidebar { transition: transform var(--sidebar-transition); }
   body.sidebar-open .sidebar { transform: translateX(0); }
   body.sidebar-open { overflow: hidden; }
   body.sidebar-collapsed .sidebar { width: min(84vw, 280px); }
