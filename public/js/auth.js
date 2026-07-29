@@ -75,10 +75,8 @@ export async function requireAuth(requireAdmin = false) {
     main.append(status);
     return null;
   }
-  if (user.role === 'admin') {
-    const adminLink = document.getElementById('admin-link');
-    if (adminLink) adminLink.style.display = '';
-  }
+  const adminLink = document.getElementById('admin-link');
+  if (adminLink) adminLink.style.visibility = user.role === 'admin' ? 'visible' : 'hidden';
   if (requireAdmin && user.role !== 'admin') {
     window.location.replace('./dashboard.html');
     return null;
