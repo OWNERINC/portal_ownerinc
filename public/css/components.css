@@ -202,5 +202,6 @@ fieldset { border: 0; min-width: 0; }
   .table-wrapper table { min-width: 680px; }
   .section-header { align-items: flex-start !important; gap: 12px; flex-direction: column; }
   .section-header .btn { width: 100%; }
+  .pagination { justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
   .toast { left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); }
 }

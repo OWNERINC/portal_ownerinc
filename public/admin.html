@@ -37,6 +37,10 @@
     .permission-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; color: var(--text); }
     .permission-row input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--primary); }
     .permissions-block { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin-top: 4px; background: #fafafa; }
+    @media (max-width: 640px) {
+      .admin-tabs { flex-wrap: nowrap; overflow-x: auto; margin-inline: -16px; padding-inline: 16px; scrollbar-width: thin; }
+      .admin-tab { flex: 0 0 auto; }
+    }
   </style>
 </head>
 <body>
@@ -173,7 +177,7 @@
       <section id="section-solides" class="admin-section" role="tabpanel" aria-labelledby="tab-solides" hidden>
         <div class="section-header">
           <h2>Integração Sólides</h2>
-          <div style="display:flex; gap:8px; align-items:center">
+        <div class="topbar-actions">
             <span class="badge badge-gold" id="solides-stage">Interna</span>
             <button class="btn btn-ghost" id="solides-probe" type="button">Testar conexão</button>
           </div>
