@@ -5,7 +5,6 @@ const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
 const canManage = can(user, 'manageReminders');
-if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 if (canManage) {
   document.getElementById('btn-new-reminder').style.display = '';
   document.getElementById('th-actions').textContent = 'Ações';

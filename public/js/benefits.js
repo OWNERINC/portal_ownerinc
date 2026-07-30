@@ -4,7 +4,6 @@ import { clear, element, showState } from './ui.js';
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
-if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 
 const container = document.getElementById('benefits-content');
 async function loadBenefits() {

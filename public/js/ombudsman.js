@@ -5,7 +5,6 @@ const user = await requireAuth();
 if (!user) throw new Error('not authenticated');
 
 renderUserInTopbar(user);
-if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 
 const submitBtn = document.getElementById('o-submit');
 const errorEl   = document.getElementById('o-error');

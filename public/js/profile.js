@@ -6,7 +6,6 @@ const user = await requireAuth();
 if (!user) throw new Error('not authenticated');
 
 renderUserInTopbar(user);
-if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 
 // ── Avatar ────────────────────────────────────────────────────────────────────
 

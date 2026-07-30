@@ -5,9 +5,6 @@ const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
 const canManage = can(user, 'manageKnowledge');
-if (user.role === 'admin') {
-  document.getElementById('admin-link').style.display = '';
-}
 if (canManage) {
   document.getElementById('btn-new').style.display = '';
 }

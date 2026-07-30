@@ -4,7 +4,6 @@ import { clear, element, safeHttpUrl, showState } from './ui.js';
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 renderUserInTopbar(user);
-if (user.role === 'admin') document.getElementById('admin-link').style.display = '';
 
 const spotlight = document.getElementById('home-spotlight');
 const spotlightItems = [
