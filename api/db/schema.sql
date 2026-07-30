@@ -7,6 +7,18 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS job_titles (
+  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT        NOT NULL,
+  active     BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT job_titles_name_check CHECK (char_length(btrim(name)) BETWEEN 1 AND 120),
+  CONSTRAINT job_titles_name_unique UNIQUE (name)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS job_titles_name_lower_unique ON job_titles (lower(name));
+
 CREATE TABLE IF NOT EXISTS users (
   uid            TEXT        PRIMARY KEY,
   email          TEXT        NOT NULL,
@@ -19,6 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
   contract_type  TEXT        NOT NULL DEFAULT 'clt' CHECK (contract_type IN ('clt', 'pj')),
   is_pj          BOOLEAN     NOT NULL DEFAULT FALSE,
   pj_due_day     INTEGER     CHECK (pj_due_day BETWEEN 1 AND 31),
+  job_title_id   UUID        REFERENCES job_titles(id) ON DELETE RESTRICT,
   permissions    JSONB       NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(permissions) = 'object'),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT users_contract_consistency CHECK ((contract_type = 'pj') = is_pj),
@@ -193,5 +206,6 @@ INSERT INTO schema_migrations (version) VALUES
   ('005_notification_claim_state'),
   ('006_user_erasure'),
   ('007_solides_employee_links'),
-  ('008_solides_link_hardening')
+  ('008_solides_link_hardening'),
+  ('009_job_titles')
 ON CONFLICT (version) DO NOTHING;

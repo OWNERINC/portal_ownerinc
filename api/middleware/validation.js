@@ -17,11 +17,12 @@ function validateProfile(body) {
 
 function validateUser(body, { creating = false } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  const allowed = new Set(['name', 'role', 'contract_type', 'is_pj', 'pj_due_day', 'phone', 'permissions']);
+  const allowed = new Set(['name', 'role', 'contract_type', 'is_pj', 'pj_due_day', 'job_title_id', 'phone', 'permissions']);
   if (creating) allowed.add('email').add('password');
   if (Object.keys(body).some((key) => !allowed.has(key))) return false;
   if (creating && (!isEmail(body.email) || typeof body.password !== 'string' || body.password.length < 6)) return false;
   if (creating && (typeof body.name !== 'string' || !body.name.trim())) return false;
+  if (creating && !isUuid(body.job_title_id)) return false;
   if (hasOwn(body, 'name') && (typeof body.name !== 'string' || body.name.trim().length > 120)) return false;
   if (hasOwn(body, 'role') && !['viewer', 'admin'].includes(body.role)) return false;
   if (hasOwn(body, 'contract_type') && !['clt', 'pj'].includes(body.contract_type)) return false;
@@ -31,6 +32,7 @@ function validateUser(body, { creating = false } = {}) {
   if (hasOwn(body, 'phone') && (typeof body.phone !== 'string' || body.phone.length > 40)) return false;
   if (hasOwn(body, 'pj_due_day') && body.pj_due_day !== null
       && (!Number.isInteger(body.pj_due_day) || body.pj_due_day < 1 || body.pj_due_day > 31)) return false;
+  if (hasOwn(body, 'job_title_id') && body.job_title_id !== null && !isUuid(body.job_title_id)) return false;
   if (hasOwn(body, 'permissions') && !validPermissions(body.permissions)) return false;
   return true;
 }
@@ -43,6 +45,11 @@ function validPermissions(value) {
 
 function isEmail(value) {
   return typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function isUuid(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function isHttpUrl(value) {

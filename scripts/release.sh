@@ -53,6 +53,7 @@ rollback() {
 trap rollback ERR INT TERM
 
 docker compose --project-directory "$release" up -d --remove-orphans
+docker compose --project-directory "$release" run --rm --no-deps -e RUN_MIGRATIONS=false migrate node db/verify-migrations.js
 published=$(docker compose --project-directory "$release" port nginx 80 | tail -n 1)
 BASE_URL="http://$published" bash "$release/scripts/smoke.sh"
 trap - ERR INT TERM

@@ -41,13 +41,17 @@ test('permission normalization accepts only known true booleans', () => {
 });
 
 test('user and profile validation rejects unsafe privilege, URL, photo, and date shapes', () => {
-  assert.equal(validateUser({ name: 'User', email: 'user@example.com', password: 'secret1' }, { creating: true }), true);
+  assert.equal(validateUser({ name: 'User', email: 'user@example.com', password: 'secret1', job_title_id: 'e7fa4cd2-70f5-4d75-a77f-b17b5caedfa9' }, { creating: true }), true);
+  assert.equal(validateUser({ name: 'User', email: 'user@example.com', password: 'secret1' }, { creating: true }), false);
   assert.equal(validateUser({ name: 'User', email: 'bad', password: 'secret1' }, { creating: true }), false);
   assert.equal(validateUser({ role: 'owner' }), false);
   assert.equal(validateUser({ pj_due_day: 32 }), false);
   assert.equal(validateUser({ permissions: { superAdmin: 'true' } }), false);
   assert.equal(validateUser({ permissions: { manageKnowledge: true } }), true);
   assert.equal(validateUser({ permissions: { manageSolides: true } }), true);
+  assert.equal(validateUser({ job_title_id: 'e7fa4cd2-70f5-4d75-a77f-b17b5caedfa9' }), true);
+  assert.equal(validateUser({ job_title_id: 'not-a-uuid' }), false);
+  assert.equal(validateProfile({ job_title_id: 'e7fa4cd2-70f5-4d75-a77f-b17b5caedfa9' }), false);
   assert.equal(validateProfile({ photo_url: '/uploads/anything.svg' }), false);
   assert.equal(validateProfile({ linkedin_url: 'javascript:alert(1)' }), false);
   assert.equal(isHttpUrl('https://www.linkedin.com/in/user'), true);

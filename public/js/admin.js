@@ -14,6 +14,7 @@ if (can(me, 'manageSolides')) {
 
 const TABS = [
   ['users', 'Usuários', 'manageUsers'],
+  ['job-titles', 'Cargos', 'manageUsers'],
   ['academy', 'Academy', 'manageAcademy'],
   ['benefits', 'Benefícios', 'manageBenefits'],
   ['ombudsman', 'Ouvidoria', 'viewOmbudsman'],
@@ -29,6 +30,8 @@ let editingCourseId = null;
 let editingBenefitId = null;
 let editingOmbudsmanId = null;
 let solidesLinks = [];
+let jobTitles = [];
+let editingJobTitleId = null;
 
 function tableState(tbodyId, columns, message, retry) {
   const cell = element('td', { colspan: String(columns), className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
@@ -68,6 +71,68 @@ function serverPagination(key, total, paginationId, load) {
     element('span', { text: `Página ${pages[key] + 1} de ${pageCount}` }),
     element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', ...(pages[key] >= pageCount - 1 ? { disabled: '' } : {}), on: { click: () => { pages[key] += 1; load(); } } }),
   );
+}
+
+function renderJobTitleOptions(selectedId = '') {
+  const select = document.getElementById('u-job-title');
+  if (!select) return;
+  clear(select).append(element('option', { value: '', text: 'Sem cargo definido' }));
+  jobTitles.filter(title => title.active || title.id === selectedId).forEach(title => select.append(
+    element('option', { value: title.id, text: title.active ? title.name : `${title.name} (inativo)` })
+  ));
+  select.value = selectedId || '';
+}
+
+function showJobTitleEditor(title = null) {
+  editingJobTitleId = title?.id || null;
+  document.getElementById('job-title-name').value = title?.name || '';
+  document.getElementById('job-title-active').checked = title ? !!title.active : true;
+  document.getElementById('job-title-editor').hidden = false;
+  document.getElementById('job-title-name').focus();
+}
+
+function hideJobTitleEditor() {
+  editingJobTitleId = null;
+  document.getElementById('job-title-editor').hidden = true;
+}
+
+function renderJobTitles() {
+  const tbody = clear(document.getElementById('job-titles-tbody'));
+  if (!jobTitles.length) return tableState('job-titles-tbody', 4, 'Nenhum cargo cadastrado.');
+  jobTitles.forEach(title => tbody.append(element('tr', {}, [
+    cell(title.name),
+    cell(title.user_count || 0),
+    cell(title.active ? 'Ativo' : 'Inativo', `badge ${title.active ? 'badge-green' : 'badge-gray'}`),
+    actions(
+      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => showJobTitleEditor(title) } }),
+      element('button', { className: title.active ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm', type: 'button', text: title.active ? 'Desativar' : 'Ativar', on: { click: () => toggleJobTitle(title) } }),
+    ),
+  ])));
+}
+
+async function loadJobTitles() {
+  tableState('job-titles-tbody', 4, 'Carregando cargos…');
+  try {
+    const result = await fetchAPIPage('/api/job-titles?all=true&limit=100&offset=0');
+    jobTitles = result.data;
+    renderJobTitles();
+    renderJobTitleOptions(document.getElementById('u-job-title')?.value || '');
+  } catch {
+    tableState('job-titles-tbody', 4, 'Não foi possível carregar os cargos.', loadJobTitles);
+  }
+}
+
+async function toggleJobTitle(title) {
+  if (title.active && !confirm(`Desativar o cargo "${title.name}"? Usuários atuais manterão o cargo.`)) return;
+  try {
+    await fetchAPI(`/api/job-titles/${encodeURIComponent(title.id)}`, {
+      method: 'PUT', body: JSON.stringify({ name: title.name, active: !title.active }),
+    });
+    showToast(title.active ? 'Cargo desativado.' : 'Cargo ativado.');
+    await loadJobTitles();
+  } catch (error) {
+    showToast(`Não foi possível atualizar o cargo: ${error.message}`);
+  }
 }
 
 function buildTabs() {
@@ -110,6 +175,7 @@ function switchTab(id, push = false) {
     loadUsers();
     if (can(me, 'superAdmin')) loadAudit();
   }
+  if (id === 'job-titles') loadJobTitles();
   if (id === 'academy') loadCourses();
   if (id === 'benefits') loadBenefits();
   if (id === 'ombudsman') loadOmbudsman();
@@ -220,12 +286,12 @@ async function runSolidesProbe() {
 }
 
 async function loadUsers() {
-  tableState('users-tbody', 7, 'Carregando usuários…');
+  tableState('users-tbody', 8, 'Carregando usuários…');
   try {
     pages.users ||= 0;
     const result = await fetchAPIPage(`/api/users?limit=50&offset=${pages.users * 50}`);
     users = result.data;
-    if (!users.length) return tableState('users-tbody', 7, 'Nenhum usuário cadastrado.');
+    if (!users.length) return tableState('users-tbody', 8, 'Nenhum usuário cadastrado.');
     const tbody = clear(document.getElementById('users-tbody'));
     users.forEach(user => {
         const isPJ = user.contract_type === 'pj' || user.is_pj;
@@ -233,7 +299,7 @@ async function loadUsers() {
         tbody.append(element('tr', {}, [
           cell(user.name || '—'), cell(user.email || '—'),
           cell(user.role === 'admin' ? 'Administrador' : 'Leitor', `badge ${user.role === 'admin' ? 'badge-gold' : 'badge-gray'}`),
-          cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), cell(isPJ ? user.pj_due_day || '—' : '—'),
+          cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), cell(user.job_title || '—'), cell(isPJ ? user.pj_due_day || '—' : '—'),
           cell(disabled ? 'Desativado' : 'Ativo', `badge ${disabled ? 'badge-gray' : 'badge-green'}`),
           actions(
             element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editUser(user) } }),
@@ -246,7 +312,7 @@ async function loadUsers() {
     });
     serverPagination('users', result.total || users.length, 'users-pagination', loadUsers);
   } catch {
-    tableState('users-tbody', 7, 'Não foi possível carregar os usuários.', loadUsers);
+    tableState('users-tbody', 8, 'Não foi possível carregar os usuários.', loadUsers);
   }
 }
 
@@ -286,6 +352,7 @@ function resetPermissions() {
 function setUserFields(user = {}) {
   document.getElementById('u-name').value = user.name || '';
   document.getElementById('u-email').value = user.email || '';
+  renderJobTitleOptions(user.job_title_id || '');
   document.getElementById('u-password').value = '';
   document.getElementById('u-role').value = user.role || 'viewer';
   const contract = user.contract_type || (user.is_pj ? 'pj' : 'clt');
@@ -297,6 +364,7 @@ function setUserFields(user = {}) {
   document.getElementById('password-group').hidden = !!editingUserId;
   document.getElementById('u-password').required = !editingUserId;
   document.getElementById('u-email').readOnly = !!editingUserId;
+  document.getElementById('u-job-title').required = !editingUserId;
   const mayEditPrivileges = can(me, 'superAdmin') && user.uid !== me.uid;
   document.getElementById('u-role').disabled = !mayEditPrivileges;
   resetPermissions();
@@ -362,6 +430,7 @@ document.getElementById('user-form').addEventListener('submit', async event => {
     name: document.getElementById('u-name').value.trim(),
     contract_type: contract, is_pj: contract === 'pj',
     pj_due_day: contract === 'pj' ? Number(document.getElementById('u-pjday').value) || null : null,
+    job_title_id: document.getElementById('u-job-title').value || null,
     phone: document.getElementById('u-phone').value.trim(),
   };
   if (!editingUserId) {
@@ -603,6 +672,31 @@ document.getElementById('solides-link-form').addEventListener('submit', async ev
 });
 document.getElementById('solides-probe').addEventListener('click', runSolidesProbe);
 document.getElementById('btn-new-user').addEventListener('click', newUser);
+document.getElementById('btn-new-job-title').addEventListener('click', () => showJobTitleEditor());
+document.getElementById('job-title-cancel').addEventListener('click', hideJobTitleEditor);
+document.getElementById('job-title-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
+  const save = event.currentTarget.querySelector('button[type="submit"]');
+  const editing = Boolean(editingJobTitleId);
+  save.disabled = true;
+  try {
+    await fetchAPI(editingJobTitleId ? `/api/job-titles/${encodeURIComponent(editingJobTitleId)}` : '/api/job-titles', {
+      method: editingJobTitleId ? 'PUT' : 'POST',
+      body: JSON.stringify({
+        name: document.getElementById('job-title-name').value.trim(),
+        active: document.getElementById('job-title-active').checked,
+      }),
+    });
+    hideJobTitleEditor();
+    showToast(editing ? 'Cargo atualizado.' : 'Cargo criado.');
+    await loadJobTitles();
+  } catch (error) {
+    showToast(error.status === 409 ? 'Esse cargo já existe.' : `Não foi possível salvar o cargo: ${error.message}`);
+  } finally {
+    save.disabled = false;
+  }
+});
 document.getElementById('btn-new-course').addEventListener('click', () => courseDialog());
 document.getElementById('btn-new-benefit').addEventListener('click', () => benefitDialog());
 [['user', 'modal-user'], ['course', 'modal-course'], ['benefit', 'modal-benefit']].forEach(([name, modalId]) => {
@@ -615,4 +709,5 @@ window.addEventListener('popstate', () => {
   const requested = new URLSearchParams(location.search).get('tab');
   if (document.getElementById(`tab-${requested}`)) switchTab(requested);
 });
+if (can(me, 'manageUsers')) await loadJobTitles();
 buildTabs();

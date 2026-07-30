@@ -94,10 +94,10 @@
           <table>
             <caption>Usuários autorizados no Portal</caption>
             <thead>
-              <tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col">Perfil</th><th scope="col">Contrato</th><th scope="col">Dia NF</th><th scope="col">Status</th><th scope="col">Ações</th></tr>
+              <tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col">Perfil</th><th scope="col">Contrato</th><th scope="col">Cargo</th><th scope="col">Dia NF</th><th scope="col">Status</th><th scope="col">Ações</th></tr>
             </thead>
             <tbody id="users-tbody">
-              <tr><td colspan="7" class="empty-state">Carregando…</td></tr>
+              <tr><td colspan="8" class="empty-state">Carregando…</td></tr>
             </tbody>
           </table>
         </div>
@@ -111,6 +111,37 @@
               <tbody id="audit-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- Cargos -->
+      <section id="section-job-titles" class="admin-section" role="tabpanel" aria-labelledby="tab-job-titles" hidden>
+        <div class="section-header">
+          <h2>Cargos</h2>
+          <button id="btn-new-job-title" class="btn btn-primary" type="button">Adicionar cargo</button>
+        </div>
+        <div id="job-title-editor" class="card" hidden style="margin-bottom:20px">
+          <form id="job-title-form">
+            <div class="form-group">
+              <label class="form-label" for="job-title-name">Nome do cargo</label>
+              <input class="form-input" id="job-title-name" name="name" type="text" maxlength="120" required placeholder="Ex.: Analista de RH…" autocomplete="off">
+            </div>
+            <div class="form-group" style="flex-direction:row; align-items:center; gap:8px">
+              <input type="checkbox" id="job-title-active" name="active" checked>
+              <label class="form-label" for="job-title-active" style="margin:0">Cargo ativo para novos usuários</label>
+            </div>
+            <div style="display:flex; gap:8px; justify-content:flex-end">
+              <button class="btn btn-ghost" id="job-title-cancel" type="button">Cancelar</button>
+              <button class="btn btn-primary" type="submit">Salvar cargo</button>
+            </div>
+          </form>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <caption>Cargos disponíveis para os usuários</caption>
+            <thead><tr><th scope="col">Cargo</th><th scope="col">Usuários</th><th scope="col">Status</th><th scope="col">Ações</th></tr></thead>
+            <tbody id="job-titles-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
+          </table>
         </div>
       </section>
 
@@ -239,6 +270,12 @@
     <div class="form-group">
       <label class="form-label" for="u-email">E-mail</label>
       <input class="form-input" id="u-email" name="email" type="email" required autocomplete="email" spellcheck="false" placeholder="nome@ownerinc.com.br…">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="u-job-title">Cargo</label>
+      <select class="form-select" id="u-job-title" name="job_title_id">
+        <option value="">Sem cargo definido</option>
+      </select>
     </div>
     <div class="form-group" id="password-group">
       <label class="form-label" for="u-password">Senha inicial</label>

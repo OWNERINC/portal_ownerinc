@@ -34,7 +34,11 @@ async function authMiddleware(req, res, next) {
   }
 
   try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
+    const { rows } = await pool.query(
+      `SELECT u.*, jt.name AS job_title
+       FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
+       WHERE u.uid = $1`, [decoded.uid]
+    );
     if (!rows[0] || rows[0].permissions?.accountDisabled === true) {
       return res.status(403).json({ error: 'Account is not active.', requestId: req.id });
     }

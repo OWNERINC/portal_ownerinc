@@ -95,6 +95,11 @@ document.getElementById('p-name').value     = user.name        || '';
 document.getElementById('p-bio').value      = user.bio         || '';
 document.getElementById('p-phone').value    = user.phone       || '';
 document.getElementById('p-linkedin').value = user.linkedin_url || '';
+const jobTitle = document.getElementById('profile-job-title');
+if (user.job_title) {
+  jobTitle.textContent = `Cargo: ${user.job_title}`;
+  jobTitle.hidden = false;
+}
 document.getElementById('profile-email').textContent = user.email;
 
 renderAvatar(user.photo_url, user.name);

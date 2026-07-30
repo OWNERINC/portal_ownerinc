@@ -44,6 +44,7 @@ fluxo correspondente no Portal.
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Visualizar e editar perfil | Operacional | Nome, bio, telefone e LinkedIn persistidos no PostgreSQL; email é somente leitura. `public/js/profile.js`, `api/routes/users.js` |
+| Visualizar cargo profissional | Operacional | Cargo atribuído pela administração é exibido no perfil; usuários comuns não podem alterá-lo. `public/js/profile.js`, `api/middleware/auth.js` |
 | Validação de dados | Operacional | Allowlist, limites de tamanho e URL HTTP(S); telefone possui limite, mas não valida formato regional. `api/middleware/validation.js`, `api/db/schema.sql` |
 | Sincronizar nome com Firebase | Operacional | Salva o banco e tenta atualizar o display name; falha externa é informada sem desfazer os dados persistidos. `public/js/profile.js` |
 | Upload de foto | Operacional | Aceita JPEG, PNG e WebP até 3 MB, valida assinatura, decodifica, redimensiona, remove metadados e normaliza para WebP. `api/routes/upload.js`, `api/middleware/validation.js` |
@@ -113,6 +114,7 @@ fluxo correspondente no Portal.
 | Gate do painel | Operacional | Interface exibe abas permitidas; toda autorização real é repetida na API. `public/js/auth.js`, `public/js/admin.js`, `api/middleware/policy.js` |
 | Permissões granulares | Operacional | `manageUsers`, `manageReminders`, `manageAcademy`, `manageBenefits`, `manageKnowledge` e `viewOmbudsman`; somente super-admin atribui privilégios. `api/middleware/policy.js`, `api/routes/users.js` |
 | Gestão de usuários | Operacional | Listagem paginada, criação, edição, desativação e reativação para `manageUsers`, com restrições de hierarquia. `api/routes/users.js`, `public/js/admin.js` |
+| Gestão de cargos | Operacional | Superfície administrativa para cadastrar, editar, ativar e desativar cargos; cargos desativados permanecem associados ao histórico dos usuários. `api/routes/job-titles.js`, `public/js/admin.js`, `api/db/migrations/009_job_titles.sql` |
 | Apagamento de dados pessoais | Operacional | Super-admin remove identidade Firebase, perfil, foto e referências estáveis após desativação. `api/routes/users.js` |
 | Auditoria administrativa | Parcial | API registra e pagina ator, ação, alvo, request ID e horário; interface mostra apenas os dez eventos mais recentes. `api/route-utils.js`, `api/routes/users.js`, `public/js/admin.js` |
 

@@ -46,7 +46,9 @@ router.get('/me/export', authMiddleware, async (req, res, next) => {
     client = await pool.connect();
     await client.query('BEGIN');
     const [profile, notifications, auditEvents] = await Promise.all([
-      client.query('SELECT * FROM users WHERE uid = $1', [req.user.uid]),
+      client.query(`SELECT u.*, jt.name AS job_title
+        FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
+        WHERE u.uid = $1`, [req.user.uid]),
       client.query(`SELECT reminder_id, scheduled_date, channel, status, sent_at, finished_at
         FROM notifications_log WHERE user_uid = $1 ORDER BY scheduled_date DESC`, [req.user.uid]),
       client.query(`SELECT action, target_type, target_id, request_id, details, created_at
@@ -111,8 +113,10 @@ router.get('/', authMiddleware, async (req, res, next) => {
     client = await pool.connect();
     await client.query('BEGIN');
     const [{ rows }, count] = await Promise.all([
-      client.query(`SELECT uid, email, name, phone, role, contract_type, is_pj, pj_due_day, permissions, created_at
-        FROM users ORDER BY name, uid LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
+      client.query(`SELECT u.uid, u.email, u.name, u.phone, u.role, u.contract_type, u.is_pj, u.pj_due_day,
+          u.job_title_id, jt.name AS job_title, u.permissions, u.created_at
+        FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
+        ORDER BY u.name, u.uid LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
       client.query('SELECT COUNT(*)::integer AS total FROM users'),
     ]);
     await audit(client, req, 'user.list', null, { limit: page.limit, offset: page.offset, resultCount: rows.length });
@@ -137,7 +141,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
   let firebaseUser;
   let client;
   try {
-    const { email, password, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, phone = '' } = req.body;
+    const { email, password, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, job_title_id = null, phone = '' } = req.body;
     const role = req.body.role || 'viewer';
     const permissions = role === 'admin' ? normalizePermissions(req.body.permissions) : {};
 
@@ -146,10 +150,18 @@ router.post('/', authMiddleware, async (req, res, next) => {
     });
     client = await pool.connect();
     await client.query('BEGIN');
+    if (job_title_id) {
+      const { rowCount } = await client.query('SELECT 1 FROM job_titles WHERE id = $1 AND active = TRUE', [job_title_id]);
+      if (!rowCount) {
+        const error = new Error('Invalid job title');
+        error.code = 'INVALID_JOB_TITLE';
+        throw error;
+      }
+    }
     const { rows } = await client.query(
-      `INSERT INTO users (uid, email, name, role, contract_type, is_pj, pj_due_day, phone, permissions)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [firebaseUser.uid, email, name, role, contract_type, !!is_pj, pj_due_day, phone, JSON.stringify(permissions)]
+      `INSERT INTO users (uid, email, name, role, contract_type, is_pj, pj_due_day, job_title_id, phone, permissions)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [firebaseUser.uid, email, name, role, contract_type, !!is_pj, pj_due_day, job_title_id, phone, JSON.stringify(permissions)]
     );
     await firebaseAuth.updateUser(firebaseUser.uid, { disabled: false });
     await audit(client, req, 'user.create', firebaseUser.uid, { role, contractType: contract_type });
@@ -164,6 +176,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
         console.error(`[api] request=${req.id} Firebase compensation failed`, cleanupError);
       }
     }
+    if (err.code === 'INVALID_JOB_TITLE') return invalid(req, res);
     if (err.code === 'auth/email-already-exists') {
       return res.status(409).json({ error: 'Account already exists.', requestId: req.id });
     }
@@ -255,15 +268,26 @@ router.put('/:uid', authMiddleware, async (req, res, next) => {
     }
 
     const { name, contract_type, is_pj, pj_due_day, phone } = req.body;
+    const jobTitleId = hasOwn(req.body, 'job_title_id') ? req.body.job_title_id : target.job_title_id;
+    if (jobTitleId) {
+      const { rowCount } = await client.query(
+        'SELECT 1 FROM job_titles WHERE id = $1 AND (active = TRUE OR id = $2)',
+        [jobTitleId, target.job_title_id]
+      );
+      if (!rowCount) {
+        await client.query('ROLLBACK');
+        return invalid(req, res);
+      }
+    }
     const result = await client.query(
       `UPDATE users SET
         name = COALESCE($2, name), role = $3,
         contract_type = COALESCE($4, contract_type),
         is_pj = COALESCE($5, is_pj), pj_due_day = $6,
-        phone = COALESCE($7, phone), permissions = $8
+        job_title_id = $7, phone = COALESCE($8, phone), permissions = $9
        WHERE uid = $1 RETURNING *`,
       [req.params.uid, name, role, contract_type, is_pj, hasOwn(req.body, 'pj_due_day') ? pj_due_day : target.pj_due_day,
-        phone, JSON.stringify(permissions)]
+        jobTitleId, phone, JSON.stringify(permissions)]
     );
     await audit(client, req, 'user.update', req.params.uid, { fields: Object.keys(req.body).sort() });
     await client.query('COMMIT');

@@ -75,6 +75,8 @@ test('deployment uses a committed archive, backup, smoke gate, and rollback', as
   assert.match(deploy, /git archive[\s\S]*exclude\)ownerinc-novo-agente/);
   assert.match(release, /scripts\/backup\.sh/);
   assert.match(release, /scripts\/smoke\.sh/);
+  assert.match(release, /db\/verify-migrations\.js/);
+  assert.match(release, /RUN_MIGRATIONS=false/);
   assert.match(release, /docker pull "\$api_tag"[\s\S]*docker pull "\$cron_tag"/);
   assert.match(release, /RepoDigests[\s\S]*@sha256/);
   assert.doesNotMatch(release, /docker compose[^\n]*\sbuild(?:\s|$)/);

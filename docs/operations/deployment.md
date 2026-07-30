@@ -30,7 +30,7 @@ Configure localmente `VPS_USER`, `VPS_HOST` e, se necessário, `VPS_PATH` e `SSH
 2. Execute `bash deploy.sh` somente após revisar host e revisão.
 3. O servidor cria `releases/<commit>-<timestamp>`, resolve as imagens publicadas pelo CI e registra seus digests.
 4. Antes de trocar uma release existente, `scripts/backup.sh` interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
-5. O serviço one-shot `migrate` aplica schema/grants; o Compose espera a prontidão da API e executa smoke tests em `/` e `/api/ready`.
+5. O serviço one-shot `migrate` aplica schema/grants; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `009_job_titles`, antes dos smoke tests.
 6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Dados não sofrem rollback automático.
 
 `GET /api/health` é somente liveness. `GET /api/ready` executa `SELECT 1`, retorna `503` genérico quando o banco não responde e é usado por Compose, cron e smoke.

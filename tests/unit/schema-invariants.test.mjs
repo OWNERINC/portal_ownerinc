@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -65,4 +65,17 @@ test('domain constraints are present on fresh installs and upgrades', async () =
   assert.match(sources, /users_contract_consistency/);
   assert.match(sources, /users_email_unique/);
   assert.match(sources, /ON DELETE SET NULL/);
+});
+
+test('job titles are managed independently and remain assigned when deactivated', async () => {
+  const [schema, migration] = await Promise.all([
+    readFile('api/db/schema.sql', 'utf8'), readFile('api/db/migrations/009_job_titles.sql', 'utf8'),
+  ]);
+  for (const source of [schema, migration]) {
+    assert.match(source, /CREATE TABLE IF NOT EXISTS job_titles/);
+    assert.match(source, /job_titles_name_lower_unique/);
+    assert.match(source, /job_title_id\s+UUID\s+REFERENCES job_titles\(id\) ON DELETE RESTRICT/);
+    assert.match(source, /active\s+BOOLEAN\s+NOT NULL DEFAULT TRUE/);
+  }
+  assert.match(migration, /INSERT INTO job_titles/);
 });

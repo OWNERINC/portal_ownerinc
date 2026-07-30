@@ -35,11 +35,11 @@ test('pagination is capped and all-content visibility requires the matching mana
 });
 
 test('scoped routes delegate failures and privileged changes to the audit helper', async () => {
-  for (const name of ['knowledge', 'reminders', 'academy', 'benefits', 'ombudsman']) {
+  for (const name of ['knowledge', 'reminders', 'academy', 'benefits', 'ombudsman', 'job-titles']) {
     const source = await readFile(`api/routes/${name}.js`, 'utf8');
     assert.match(source, /next\(error\)/, `${name} must use generic error handling`);
   }
-  for (const name of ['knowledge', 'reminders', 'academy', 'benefits']) {
+  for (const name of ['knowledge', 'reminders', 'academy', 'benefits', 'job-titles']) {
     const source = await readFile(`api/routes/${name}.js`, 'utf8');
     assert.match(source, /withAudit/, `${name} must audit privileged mutations`);
     assert.match(source, /X-Total-Count/, `${name} must expose pagination totals`);
@@ -56,4 +56,9 @@ test('privileged user listing is strict, paginated, counted, and audited', async
   assert.match(users, /X-Total-Count/);
   assert.match(users, /user\.list/);
   for (const action of ['create', 'update', 'disable', 'reactivate']) assert.match(users, new RegExp(`user\\.${action}`));
+  const jobTitles = await readFile('api/routes/job-titles.js', 'utf8');
+  assert.match(jobTitles, /manageUsers/);
+  assert.match(jobTitles, /job_title\.create/);
+  assert.match(jobTitles, /job_title\.update/);
+  assert.match(jobTitles, /active = TRUE/);
 });
