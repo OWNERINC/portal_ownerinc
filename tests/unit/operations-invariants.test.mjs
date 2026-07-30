@@ -106,3 +106,27 @@ test('CI builds and publishes commit-addressed production images', async () => {
   );
   assert.match(apiPackage, /"sharp": "\^0\.35\.3"/);
 });
+
+test('green main commits deploy through a restricted serialized production gate', async () => {
+  const [workflow, hostDeploy, productionCompose] = await Promise.all([
+    read('.github/workflows/ci.yml'), read('ops/deploy-from-ci.sh'),
+    read('ops/compose.production.yaml'),
+  ]);
+  assert.match(workflow, /deploy-production:[\s\S]*needs: validate/);
+  assert.match(workflow, /group: portal-ownerinc-production[\s\S]*cancel-in-progress: false/);
+  assert.match(workflow, /--add-virtual-file="\.ci-commit:\$\{GITHUB_SHA\}"/);
+  assert.match(workflow, /PORTAL_VPS_SSH_KEY/);
+  assert.match(workflow, /StrictHostKeyChecking=yes/);
+  assert.match(workflow, /test "\$VPS_USER" != root/);
+  assert.match(hostDeploy, /SSH_ORIGINAL_COMMAND/);
+  assert.match(hostDeploy, /flock -n/);
+  assert.match(hostDeploy, /archive commit does not match requested commit/);
+  assert.match(hostDeploy, /pg_dump --format=custom/);
+  assert.match(hostDeploy, /pg_restore --clean --if-exists --no-owner --single-transaction/);
+  assert.match(hostDeploy, /compose_for "\$release" run --rm migrate/);
+  assert.match(hostDeploy, /Production readiness did not recover/);
+  assert.match(hostDeploy, /restoring the previous production release/);
+  assert.match(hostDeploy, /find "\$staging" -type d -exec chmod 0755/);
+  assert.match(hostDeploy, /find "\$staging" -type f -exec chmod 0644/);
+  assert.match(productionCompose, /postgres:[\s\S]*volumes: !override[\s\S]*postgres_data/);
+});

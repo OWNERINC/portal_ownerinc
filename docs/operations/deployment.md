@@ -65,3 +65,24 @@ Meta operacional inicial: backup diário e antes de release, RPO máximo de 24 h
 - Login, perfil e upload funcionam, e logs não expõem chaves ou dados pessoais.
 
 O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sintaxe/Compose, constrói e escaneia as imagens com Trivy, rejeita vulnerabilidades `high` ou `critical`, publica SBOMs SPDX e envia imagens imutáveis ao GHCR em pushes na `main`.
+
+## Deploy automático da `main`
+
+Depois que o job `validate` termina verde em um push para `main`, o job
+`deploy-production` empacota exatamente o commit validado e o envia à VPS por
+uma chave SSH exclusiva. Essa chave usa `restrict` e `command=` no
+`authorized_keys`: não abre shell, não encaminha portas e só pode executar o
+receptor de release do Portal Interno.
+
+O receptor serializa deploys com `flock`, confere SHA e conteúdo do archive,
+resolve API e cron por digest imutável no GHCR e cria backup verificado de
+PostgreSQL e uploads antes de interromper a release anterior. Em seguida aplica
+migrations, sobe a nova release e valida HTTPS, readiness, conteúdo montado e
+digest da API. Falha em qualquer gate restaura o banco quando necessário e
+reativa a release anterior. O arquivo `current-release` só muda depois de todos
+os gates aprovados.
+
+Os secrets exigidos no GitHub são `PORTAL_VPS_HOST`, `PORTAL_VPS_PORT`,
+`PORTAL_VPS_USER`, `PORTAL_VPS_SSH_KEY` e `PORTAL_VPS_KNOWN_HOSTS`. Nenhum
+segredo de runtime, Firebase, SMTP ou banco é enviado ao GitHub: eles continuam
+somente no arquivo protegido da VPS.

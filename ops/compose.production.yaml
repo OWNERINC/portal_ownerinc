@@ -1,0 +1,72 @@
+services:
+  postgres:
+    cpus: 0.75
+    mem_limit: 768m
+    security_opt: ["no-new-privileges:true"]
+    volumes: !override
+      - postgres_data:/var/lib/postgresql/data
+    networks: [backend]
+    logging: &bounded_logs
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+
+  migrate:
+    cpus: 0.50
+    mem_limit: 512m
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    networks: [backend]
+    logging: *bounded_logs
+
+  bootstrap-admin:
+    cpus: 0.50
+    mem_limit: 512m
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    networks: [backend, egress]
+    logging: *bounded_logs
+
+  api:
+    cpus: 0.75
+    mem_limit: 768m
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    networks: [backend, egress]
+    logging: *bounded_logs
+
+  nginx:
+    container_name: portal-ownerinc-web
+    cpus: 0.25
+    mem_limit: 128m
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    ports: !reset []
+    expose: ["80"]
+    tmpfs:
+      - /var/cache/nginx:size=16m,mode=0755
+      - /var/run:size=1m,mode=0755
+      - /tmp:size=16m,mode=1777
+    networks: [backend, ownerinc_proxy]
+    logging: *bounded_logs
+
+  cron:
+    profiles: ["notifications"]
+    cpus: 0.50
+    mem_limit: 512m
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    networks: [backend, egress]
+    logging: *bounded_logs
+
+networks:
+  backend:
+    name: ownerinc-portal-backend
+    internal: true
+  egress:
+    name: ownerinc-portal-egress
+  ownerinc_proxy:
+    external: true
