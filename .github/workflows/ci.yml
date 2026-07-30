@@ -131,12 +131,23 @@ jobs:
           [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
           [[ "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
           test "$VPS_USER" != root
-          ssh -i "$HOME/.ssh/portal_ownerinc_ci" \
-            -p "$VPS_PORT" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            "$VPS_USER@$VPS_HOST" "$GITHUB_SHA" < portal-release.tar.gz
+          for attempt in 1 2 3; do
+            if ssh -i "$HOME/.ssh/portal_ownerinc_ci" \
+              -p "$VPS_PORT" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=15 \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              "$VPS_USER@$VPS_HOST" "$GITHUB_SHA" < portal-release.tar.gz; then
+              exit 0
+            else
+              status=$?
+            fi
+            if (( status != 255 || attempt == 3 )); then
+              exit "$status"
+            fi
+            sleep $((attempt * 10))
+          done
       - name: Verify public production
         run: |
           test "$(curl -sS -o /dev/null -w '%{http_code}' https://portal.ownerinc.com.br/)" = 200
