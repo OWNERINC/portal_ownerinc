@@ -28,6 +28,30 @@ test('frontend avoids unsafe HTML sinks and honors focus and reduced motion', as
   assert.match(css, /@media[^{}]*max-width:\s*768px/);
 });
 
+test('admin navigation restores the last verified role before paint and revalidates it', async () => {
+  const navigationPages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'ombudsman', 'profile', 'solides'];
+  const [auth, shell, layout, ...htmlPages] = await Promise.all([
+    readFile('public/js/auth.js', 'utf8'),
+    readFile('public/js/auth-shell.js', 'utf8').catch(() => ''),
+    readFile('public/css/layout.css', 'utf8'),
+    ...navigationPages.map((page) => readFile(`public/${page}.html`, 'utf8')),
+  ]);
+
+  assert.match(shell, /sessionStorage\.getItem\('ownerinc-verified-role'\)/);
+  assert.match(shell, /document\.documentElement\.dataset\.portalRole/);
+  assert.match(layout, /\.admin-link\s*\{[^}]*visibility:\s*hidden/);
+  assert.match(layout, /html\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*visibility:\s*visible/);
+  assert.match(auth, /sessionStorage\.setItem\('ownerinc-verified-role', user\.role\)/);
+  assert.match(auth, /sessionStorage\.removeItem\('ownerinc-verified-role'\)/);
+
+  for (const [index, html] of htmlPages.entries()) {
+    const page = navigationPages[index];
+    assert.match(html, /<script src="\.\/js\/auth-shell\.js"><\/script>[\s\S]*<\/head>/, `${page}: auth shell must run before body paint`);
+    assert.match(html, /<li id="admin-link" class="admin-link">/, `${page}: missing stable admin navigation class`);
+    assert.doesNotMatch(html, /id="admin-link"[^>]*style=/, `${page}: inline visibility bypasses the stable auth shell`);
+  }
+});
+
 test('login keeps a visible page heading and pins its third-party icon script', async () => {
   const login = await readFile('public/login.html', 'utf8');
   assert.equal((login.match(/<h1(?:\s|>)/g) || []).length, 1);

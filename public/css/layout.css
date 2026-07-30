@@ -39,6 +39,9 @@ button, a, input, select, textarea { touch-action: manipulation; }
 }
 body.sidebar-ready .sidebar { transition: width var(--sidebar-transition); }
 
+.admin-link { visibility: hidden; }
+html[data-portal-role="admin"] .admin-link { visibility: visible; }
+
 /* Header com logo + toggle */
 .sidebar-header {
   display: flex;

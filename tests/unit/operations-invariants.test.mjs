@@ -122,6 +122,9 @@ test('green main commits deploy through a restricted serialized production gate'
   assert.match(workflow, /--add-virtual-file="\.ci-commit:\$\{GITHUB_SHA\}"/);
   assert.match(workflow, /PORTAL_VPS_SSH_KEY/);
   assert.match(workflow, /StrictHostKeyChecking=yes/);
+  assert.match(workflow, /for attempt in 1 2 3/);
+  assert.match(workflow, /ConnectTimeout=15/);
+  assert.match(workflow, /sleep \$\(\(attempt \* 10\)\)/);
   assert.match(workflow, /test "\$VPS_USER" != root/);
   assert.match(hostDeploy, /SSH_ORIGINAL_COMMAND/);
   assert.match(hostDeploy, /flock -n/);

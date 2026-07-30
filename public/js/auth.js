@@ -2,6 +2,24 @@ import { auth } from './firebase-config.js';
 import { signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
+function applyVerifiedRole(user) {
+  document.documentElement.dataset.portalRole = user.role;
+  try {
+    sessionStorage.setItem('ownerinc-verified-role', user.role);
+  } catch (_) {
+    // Authorization remains enforced by the API when storage is unavailable.
+  }
+}
+
+function clearVerifiedRole() {
+  delete document.documentElement.dataset.portalRole;
+  try {
+    sessionStorage.removeItem('ownerinc-verified-role');
+  } catch (_) {
+    // Nothing else is required when storage is unavailable.
+  }
+}
+
 async function requestAPI(path, options = {}) {
   await auth.authStateReady();
   if (!auth.currentUser) throw new APIError('Sessão encerrada.', 401);
@@ -47,6 +65,7 @@ export async function getCurrentUserDoc() {
 export async function requireAuth(requireAdmin = false) {
   await auth.authStateReady();
   if (!auth.currentUser) {
+    clearVerifiedRole();
     window.location.replace('./login.html');
     return null;
   }
@@ -55,6 +74,7 @@ export async function requireAuth(requireAdmin = false) {
     user = await getCurrentUserDoc();
   } catch (error) {
     if (error.status === 401 || error.status === 403) {
+      clearVerifiedRole();
       await signOut(auth).catch(() => {});
       window.location.replace(`./login.html?reason=${error.status === 403 ? 'access' : 'session'}`);
       return null;
@@ -75,8 +95,7 @@ export async function requireAuth(requireAdmin = false) {
     main.append(status);
     return null;
   }
-  const adminLink = document.getElementById('admin-link');
-  if (adminLink) adminLink.style.visibility = user.role === 'admin' ? 'visible' : 'hidden';
+  applyVerifiedRole(user);
   if (requireAdmin && user.role !== 'admin') {
     window.location.replace('./dashboard.html');
     return null;
@@ -90,6 +109,7 @@ export function renderUserInTopbar(user) {
 }
 
 export async function logout() {
+  clearVerifiedRole();
   await signOut(auth);
   window.location.href = './login.html';
 }
