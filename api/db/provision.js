@@ -46,6 +46,7 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT ON notifications_log TO portal_api;
     GRANT SELECT ON cron_status TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON solides_employee_links TO portal_api;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON job_titles TO portal_api;
     GRANT SELECT, INSERT, UPDATE ON audit_log TO portal_api;
     GRANT SELECT ON users, reminders TO portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON notifications_log TO portal_cron;

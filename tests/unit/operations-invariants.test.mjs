@@ -42,6 +42,11 @@ test('Sólides credentials stay in the API and release defaults to off', async (
   assert.doesNotMatch(frontend, /SOLIDES_TOKEN|Authorization:\s*`Basic/);
 });
 
+test('runtime API role can read and manage job titles', async () => {
+  const provision = await read('api/db/provision.js');
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON job_titles TO portal_api/);
+});
+
 test('Sólides upstream traffic has per-user read and probe budgets', async () => {
   const routes = await readFile('api/routes/solides.js', 'utf8');
   assert.match(routes, /employeeRequestLimit = rateLimit\(\{ windowMs: 5 \* 60 \* 1000, max: 60, key: \(req\) => req\.user\.uid \}\)/);

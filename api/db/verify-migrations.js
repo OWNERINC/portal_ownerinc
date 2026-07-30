@@ -21,8 +21,11 @@ async function verifyMigrations() {
       throw new Error(`Unexpected migration ledger: ${appliedVersions.join(',')}`);
     }
     const result = await pool.query(`SELECT to_regclass('public.job_titles') AS job_titles,
-      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'job_title_id') AS user_job_title_column`);
-    if (result.rows[0].job_titles !== 'job_titles' || result.rows[0].user_job_title_column !== true) {
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'job_title_id') AS user_job_title_column,
+      has_table_privilege('portal_api', 'public.job_titles', 'SELECT,INSERT,UPDATE,DELETE') AS api_job_title_privileges`);
+    if (result.rows[0].job_titles !== 'job_titles'
+      || result.rows[0].user_job_title_column !== true
+      || result.rows[0].api_job_title_privileges !== true) {
       throw new Error('Job title schema is incomplete');
     }
     console.log('migration verification: 009_job_titles ok');
