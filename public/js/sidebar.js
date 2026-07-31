@@ -26,6 +26,7 @@
     var mainContent = document.querySelector('.main-content');
     var mobileMedia = window.matchMedia('(max-width: 768px)');
     sidebar.id = 'portal-navigation';
+    if (toggle) toggle.setAttribute('aria-controls', sidebar.id);
     var mobileToggle = document.createElement('button');
     mobileToggle.className = 'mobile-menu-toggle';
     mobileToggle.type = 'button';

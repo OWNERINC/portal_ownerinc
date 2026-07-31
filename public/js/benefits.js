@@ -1,9 +1,8 @@
-import { requireAuth, renderUserInTopbar, fetchAPI } from './auth.js';
+import { requireAuth, fetchAPI } from './auth.js';
 import { clear, element, showState } from './ui.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
-renderUserInTopbar(user);
 
 const container = document.getElementById('benefits-content');
 async function loadBenefits() {

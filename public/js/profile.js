@@ -1,11 +1,10 @@
-import { requireAuth, renderUserInTopbar, showToast, fetchAPI, updateAuthDisplayName } from './auth.js';
+import { requireAuth, showToast, fetchAPI, updateAuthDisplayName } from './auth.js';
 import { auth } from './firebase-config.js';
 import { protectForm } from './ui.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('not authenticated');
 
-renderUserInTopbar(user);
 
 // ── Avatar ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +32,13 @@ function renderAvatar(photoURL, name) {
 
 const photoInput = document.getElementById('photo-input');
 const avatarHint = document.getElementById('avatar-hint');
+const photoFeedback = document.getElementById('photo-feedback');
+const profileFeedback = document.getElementById('profile-feedback');
+
+function setFeedback(target, message, tone = '') {
+  target.textContent = message;
+  target.style.color = tone ? `var(--${tone})` : '';
+}
 
 document.getElementById('avatar-circle').addEventListener('click', () => photoInput.click());
 document.getElementById('avatar-img').addEventListener('error', () => renderAvatar('', document.getElementById('p-name').value));
@@ -42,12 +48,14 @@ photoInput.addEventListener('change', async () => {
   if (!file) return;
 
   if (file.size > 3 * 1024 * 1024) {
-    showToast('Foto muito grande. Máximo 3 MB.');
+    setFeedback(photoFeedback, 'Foto muito grande. O limite é 3 MB.', 'danger');
+    document.getElementById('avatar-circle').focus();
     return;
   }
 
   avatarHint.textContent = 'Enviando…';
   avatarHint.className   = 'avatar-uploading';
+  setFeedback(photoFeedback, 'Enviando foto…');
 
   try {
     await auth.authStateReady();
@@ -65,9 +73,9 @@ photoInput.addEventListener('change', async () => {
     const { url } = await res.json();
 
     renderAvatar(url, document.getElementById('p-name').value);
-    showToast('Foto atualizada.');
+    setFeedback(photoFeedback, 'Foto atualizada.', 'success');
   } catch (err) {
-    showToast('Não foi possível enviar a foto: ' + err.message);
+    setFeedback(photoFeedback, 'Não foi possível enviar a foto. Verifique o arquivo e tente novamente.', 'danger');
   } finally {
     avatarHint.textContent = 'Clique na foto para atualizar';
     avatarHint.className   = 'avatar-hint';
@@ -77,12 +85,13 @@ photoInput.addEventListener('change', async () => {
 
 document.getElementById('remove-photo').addEventListener('click', async event => {
   event.currentTarget.disabled = true;
+  setFeedback(photoFeedback, 'Removendo foto…');
   try {
     await fetchAPI('/api/upload/photo', { method: 'DELETE' });
     renderAvatar('', document.getElementById('p-name').value);
-    showToast('Foto removida.');
+    setFeedback(photoFeedback, 'Foto removida.', 'success');
   } catch (err) {
-    showToast(`Não foi possível remover a foto: ${err.message}`);
+    setFeedback(photoFeedback, 'Não foi possível remover a foto. Tente novamente.', 'danger');
   } finally {
     event.currentTarget.disabled = false;
   }
@@ -117,6 +126,7 @@ document.getElementById('profile-form').addEventListener('submit', async event =
 
   btn.disabled    = true;
   btn.textContent = 'Salvando…';
+  setFeedback(profileFeedback, 'Salvando…');
 
   try {
     await fetchAPI('/api/users/me', {
@@ -127,13 +137,12 @@ document.getElementById('profile-form').addEventListener('submit', async event =
     try {
       await updateAuthDisplayName(name);
     } catch {
-      showToast('Perfil salvo. O nome da sessão será atualizado no próximo acesso.');
+      setFeedback(profileFeedback, 'Perfil salvo. O nome de acesso será sincronizado no próximo login.', 'danger');
       return;
     }
-    document.getElementById('topbar-user-name').textContent = name;
-    showToast('Perfil atualizado com sucesso.');
+    setFeedback(profileFeedback, 'Perfil atualizado com sucesso.', 'success');
   } catch (err) {
-    showToast('Não foi possível salvar: ' + err.message);
+    setFeedback(profileFeedback, 'Não foi possível salvar o perfil. Tente novamente.', 'danger');
   } finally {
     btn.disabled    = false;
     btn.textContent = 'Salvar perfil';
@@ -148,6 +157,8 @@ document.getElementById('btn-reset-pw').addEventListener('click', async () => {
 
   btn.disabled = true;
   btn.textContent = 'Enviando…';
+  feedback.textContent = 'Enviando link…';
+  feedback.style.color = '';
   try {
     const response = await fetch('/api/auth/password-reset', {
       method: 'POST',
@@ -160,7 +171,7 @@ document.getElementById('btn-reset-pw').addEventListener('click', async () => {
     btn.textContent = 'Link enviado';
   } catch {
     feedback.style.color = 'var(--danger)';
-    feedback.textContent = 'Erro ao enviar. Tente novamente.';
+    feedback.textContent = 'Não foi possível enviar o link. Tente novamente.';
     btn.disabled = false;
     btn.textContent = 'Enviar link de redefinição de senha';
   }

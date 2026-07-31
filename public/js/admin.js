@@ -1,9 +1,8 @@
-import { requireAuth, renderUserInTopbar, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
+import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, closeDialog, element, openDialog, safeHttpUrl } from './ui.js';
 
 const me = await requireAuth(true);
 if (!me) throw new Error('Administrator access required');
-renderUserInTopbar(me);
 
 let solidesAdminStatus = null;
 if (can(me, 'manageSolides')) {
@@ -34,6 +33,7 @@ let jobTitles = [];
 let editingJobTitleId = null;
 
 function tableState(tbodyId, columns, message, retry) {
+  clear(document.getElementById(tbodyId.replace(/-tbody$/, '-pagination')));
   const cell = element('td', { colspan: String(columns), className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
   if (retry) cell.append(document.createElement('br'), element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
   clear(document.getElementById(tbodyId)).append(element('tr', {}, cell));
@@ -104,8 +104,8 @@ function renderJobTitles() {
     cell(title.user_count || 0),
     cell(title.active ? 'Ativo' : 'Inativo', `badge ${title.active ? 'badge-green' : 'badge-gray'}`),
     actions(
-      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => showJobTitleEditor(title) } }),
-      element('button', { className: title.active ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm', type: 'button', text: title.active ? 'Desativar' : 'Ativar', on: { click: () => toggleJobTitle(title) } }),
+      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar cargo: ${title.name}`, on: { click: () => showJobTitleEditor(title) } }),
+      element('button', { className: title.active ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm', type: 'button', text: title.active ? 'Desativar' : 'Ativar', 'aria-label': `${title.active ? 'Desativar' : 'Ativar'} cargo: ${title.name}`, on: { click: () => toggleJobTitle(title) } }),
     ),
   ])));
 }
@@ -233,8 +233,8 @@ async function loadSolides() {
     solidesLinks.forEach(link => tbody.append(element('tr', {}, [
       cell(link.name || link.email), cell(link.employee_id), cell(link.external_id || '—'), cell(link.status),
       actions(
-        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editSolidesLink(link) } }),
-        element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Remover', on: { click: () => deleteSolidesLink(link.user_uid) } }),
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar vínculo: ${link.name || link.email}`, on: { click: () => editSolidesLink(link) } }),
+        element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Remover', 'aria-label': `Remover vínculo: ${link.name || link.email}`, on: { click: () => deleteSolidesLink(link.user_uid) } }),
       ),
     ])));
     serverPagination('solides', linksResult.total || 0, 'solides-pagination', loadSolides);
@@ -302,10 +302,10 @@ async function loadUsers() {
           cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), cell(user.job_title || '—'), cell(isPJ ? user.pj_due_day || '—' : '—'),
           cell(disabled ? 'Desativado' : 'Ativo', `badge ${disabled ? 'badge-gray' : 'badge-green'}`),
           actions(
-            element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editUser(user) } }),
-            element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', on: { click: () => disabled ? reactivateUser(user.uid) : deleteUser(user.uid) } }),
+            element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar usuário: ${user.name || user.email}`, on: { click: () => editUser(user) } }),
+            element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', 'aria-label': `${disabled ? 'Reativar' : 'Desativar'} usuário: ${user.name || user.email}`, on: { click: () => disabled ? reactivateUser(user.uid) : deleteUser(user.uid) } }),
             ...(disabled && can(me, 'superAdmin') && !user.email.endsWith('@invalid.local')
-              ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', on: { click: () => eraseUserData(user.uid) } })]
+               ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', 'aria-label': `Anonimizar usuário: ${user.name || user.email}`, on: { click: () => eraseUserData(user.uid) } })]
               : []),
           ),
         ]));
@@ -353,7 +353,6 @@ function setUserFields(user = {}) {
   document.getElementById('u-name').value = user.name || '';
   document.getElementById('u-email').value = user.email || '';
   renderJobTitleOptions(user.job_title_id || '');
-  document.getElementById('u-password').value = '';
   document.getElementById('u-role').value = user.role || 'viewer';
   const contract = user.contract_type || (user.is_pj ? 'pj' : 'clt');
   document.getElementById('u-contract').value = contract;
@@ -361,9 +360,10 @@ function setUserFields(user = {}) {
   document.getElementById('u-phone').value = user.phone || '';
   document.getElementById('pj-day-group').hidden = contract !== 'pj';
   document.getElementById('u-pjday').required = contract === 'pj';
-  document.getElementById('password-group').hidden = !!editingUserId;
-  document.getElementById('u-password').required = !editingUserId;
   document.getElementById('u-email').readOnly = !!editingUserId;
+  document.getElementById('user-form-help').hidden = !!editingUserId;
+  document.getElementById('modal-user-save').textContent = editingUserId ? 'Salvar' : 'Enviar convite';
+  document.getElementById('user-form-feedback').textContent = '';
   document.getElementById('u-job-title').required = !editingUserId;
   const mayEditPrivileges = can(me, 'superAdmin') && user.uid !== me.uid;
   document.getElementById('u-role').disabled = !mayEditPrivileges;
@@ -377,14 +377,14 @@ function setUserFields(user = {}) {
 function newUser() {
   editingUserId = null;
   document.getElementById('user-form').reset();
-  document.getElementById('modal-user-title').textContent = 'Novo Usuário';
+  document.getElementById('modal-user-title').textContent = 'Convidar usuário';
   setUserFields();
   openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
 }
 
 function editUser(user) {
   editingUserId = user.uid;
-  document.getElementById('modal-user-title').textContent = 'Editar Usuário';
+  document.getElementById('modal-user-title').textContent = 'Editar usuário';
   setUserFields(user);
   openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
 }
@@ -435,7 +435,6 @@ document.getElementById('user-form').addEventListener('submit', async event => {
   };
   if (!editingUserId) {
     data.email = document.getElementById('u-email').value.trim();
-    data.password = document.getElementById('u-password').value;
   }
   if (can(me, 'superAdmin') && editingUserId !== me.uid) {
     data.role = role;
@@ -451,20 +450,29 @@ document.getElementById('user-form').addEventListener('submit', async event => {
     if (document.getElementById('p-knowledge').checked) data.permissions.manageKnowledge = true;
   }
   const save = document.getElementById('modal-user-save');
+  const feedback = document.getElementById('user-form-feedback');
+  const isInvite = !editingUserId;
   save.disabled = true;
-  save.textContent = 'Salvando…';
+  save.textContent = isInvite ? 'Enviando convite…' : 'Salvando…';
+  feedback.textContent = '';
+  feedback.style.color = '';
   try {
     await fetchAPI(editingUserId ? `/api/users/${encodeURIComponent(editingUserId)}` : '/api/users', {
       method: editingUserId ? 'PUT' : 'POST', body: JSON.stringify(data),
     });
     closeDialog(document.getElementById('modal-user'), true);
-    showToast(editingUserId ? 'Usuário atualizado.' : 'Usuário criado sem alterar sua sessão.');
+    showToast(isInvite ? `Convite enviado para ${data.email}.` : 'Usuário atualizado.');
     await loadUsers();
   } catch (error) {
-    showToast(error.status === 409 ? 'Este e-mail já está cadastrado.' : `Não foi possível salvar: ${error.message}`);
+    feedback.style.color = 'var(--danger)';
+    feedback.textContent = error.status === 409
+      ? 'Este e-mail já está cadastrado. Verifique a lista de usuários antes de tentar novamente.'
+      : isInvite
+        ? 'Não foi possível enviar o convite. Nenhuma conta foi criada; tente novamente.'
+        : `Não foi possível salvar: ${error.message}`;
   } finally {
     save.disabled = false;
-    save.textContent = 'Salvar';
+    save.textContent = isInvite ? 'Enviar convite' : 'Salvar';
   }
 });
 
@@ -481,8 +489,8 @@ async function loadCourses() {
         cell(course.title || '—'), cell(course.category || '—', 'badge badge-gray'),
         cell(course.active ? 'Ativo' : 'Inativo', `badge ${course.active ? 'badge-green' : 'badge-gray'}`),
         actions(
-          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editCourse(course) } }),
-          element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', on: { click: () => deleteCourse(course.id) } }),
+          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar curso: ${course.title}`, on: { click: () => editCourse(course) } }),
+          element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir curso: ${course.title}`, on: { click: () => deleteCourse(course.id) } }),
         ),
       ])));
     }
@@ -540,8 +548,8 @@ async function loadBenefits() {
         cell(benefit.company || '—'), cell(benefit.category || '—', 'badge badge-gray'), cell(benefit.description || '—'),
         cell(benefit.active ? 'Ativo' : 'Inativo', `badge ${benefit.active ? 'badge-green' : 'badge-gray'}`),
         actions(
-          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => benefitDialog(benefit) } }),
-          element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', on: { click: () => deleteBenefit(benefit.id) } }),
+          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar benefício: ${benefit.company}`, on: { click: () => benefitDialog(benefit) } }),
+          element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir benefício: ${benefit.company}`, on: { click: () => deleteBenefit(benefit.id) } }),
         ),
       ])));
     }
@@ -600,7 +608,7 @@ async function loadOmbudsman() {
           cell(statuses[message.status] || message.status || '—', `badge ${message.status === 'resolved' ? 'badge-green' : 'badge-gray'}`),
           cell(message.assigned_to || 'Não atribuído'),
           cell(message.created_at && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat('pt-BR').format(date) : '—'),
-          actions(element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Atualizar', on: { click: () => editOmbudsman(message) } })),
+          actions(element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Atualizar', 'aria-label': 'Atualizar mensagem de ouvidoria', on: { click: () => editOmbudsman(message) } })),
         ]));
     });
     serverPagination('ombudsman', result.total ?? ombudsman.length, 'ombudsman-pagination', loadOmbudsman);

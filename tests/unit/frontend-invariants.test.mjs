@@ -26,6 +26,8 @@ test('frontend avoids unsafe HTML sinks and honors focus and reduced motion', as
   assert.match(css, /:focus-visible/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /@media[^{}]*max-width:\s*768px/);
+  assert.match(css, /\.filter-bar\s*\{/);
+  assert.match(scripts.at(-1), /querySelectorAll\('\.table-wrapper'\)/);
 });
 
 test('admin navigation restores the last verified role before paint and revalidates it', async () => {
@@ -39,8 +41,8 @@ test('admin navigation restores the last verified role before paint and revalida
 
   assert.match(shell, /sessionStorage\.getItem\('ownerinc-verified-role'\)/);
   assert.match(shell, /document\.documentElement\.dataset\.portalRole/);
-  assert.match(layout, /\.admin-link\s*\{[^}]*visibility:\s*hidden/);
-  assert.match(layout, /html\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*visibility:\s*visible/);
+  assert.match(layout, /\.admin-link\s*\{[^}]*display:\s*none/);
+  assert.match(layout, /html\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
   assert.match(auth, /sessionStorage\.setItem\('ownerinc-verified-role', user\.role\)/);
   assert.match(auth, /sessionStorage\.removeItem\('ownerinc-verified-role'\)/);
 
@@ -50,6 +52,16 @@ test('admin navigation restores the last verified role before paint and revalida
     assert.match(html, /<li id="admin-link" class="admin-link">/, `${page}: missing stable admin navigation class`);
     assert.doesNotMatch(html, /id="admin-link"[^>]*style=/, `${page}: inline visibility bypasses the stable auth shell`);
   }
+});
+
+test('authenticated shell has no personalized greeting and admin invites do not ask for a password', async () => {
+  const html = await Promise.all(pages.map((page) => readFile(`public/${page}.html`, 'utf8')));
+  const scripts = await readFile('public/js/auth.js', 'utf8');
+  assert.doesNotMatch(html.join('\n'), /Olá,|Ola,|topbar-user-name/);
+  assert.doesNotMatch(scripts, /renderUserInTopbar|topbar-user-name/);
+  const admin = html[pages.indexOf('admin')];
+  assert.match(admin, /Convidar usuário/);
+  assert.doesNotMatch(admin, /id="u-password"|Senha inicial/);
 });
 
 test('login keeps a visible page heading and pins its third-party icon script', async () => {

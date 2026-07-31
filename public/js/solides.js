@@ -1,16 +1,18 @@
-import { APIError, fetchAPI, fetchAPIPage, requireAuth, renderUserInTopbar } from './auth.js';
+import { APIError, fetchAPI, fetchAPIPage, requireAuth } from './auth.js';
 import { clear, element, showState } from './ui.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
-renderUserInTopbar(user);
 
 try {
   const status = await fetchAPI('/api/solides/me/status');
   if (!status.linked) window.location.replace('./dashboard.html');
 } catch (error) {
   if (error instanceof APIError && error.status === 404) window.location.replace('./dashboard.html');
-  else throw error;
+  else {
+    showState(document.getElementById('main-content'), 'Não foi possível carregar sua jornada. Tente novamente.', () => window.location.reload());
+    throw error;
+  }
 }
 
 const now = new Date();
@@ -102,6 +104,7 @@ async function loadAdjustments() {
 }
 
 const historyMore = document.getElementById('history-more');
+const historyError = document.getElementById('history-error');
 const historyPageSize = 50;
 let historyEntries = [];
 let historyOffset = 0;
@@ -133,10 +136,13 @@ async function loadHistory(reset = true) {
     historyEntries = [];
     historyOffset = 0;
     historyMore.hidden = true;
+    historyError.hidden = true;
+    historyError.textContent = '';
     showState(container, 'Carregando histórico…');
   } else {
     historyMore.disabled = true;
     historyMore.textContent = 'Carregando…';
+    historyError.hidden = true;
   }
   try {
     const { data, total } = await fetchAPIPage(`/api/solides/me/punches?from=${encodeURIComponent(fromInput.value)}&to=${encodeURIComponent(toInput.value)}&limit=${historyPageSize}&offset=${historyOffset}`);
@@ -146,9 +152,13 @@ async function loadHistory(reset = true) {
     historyMore.hidden = total === null ? data.entries.length < historyPageSize : historyEntries.length >= total;
   } catch {
     if (reset) showState(container, 'Não foi possível carregar o histórico.', () => loadHistory(true));
+    else {
+      historyError.textContent = 'Não foi possível carregar mais registros.';
+      historyError.hidden = false;
+    }
   } finally {
     historyMore.disabled = false;
-    historyMore.textContent = 'Carregar mais';
+    historyMore.textContent = historyError.hidden ? 'Carregar mais' : 'Tentar novamente';
   }
 }
 

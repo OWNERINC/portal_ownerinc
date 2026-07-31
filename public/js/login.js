@@ -79,6 +79,8 @@ document.getElementById('login-form').addEventListener('submit', async event => 
 
 document.getElementById('forgot-link').addEventListener('click', () => {
   document.getElementById('login-title').textContent = 'Redefinir senha';
+  document.getElementById('login-title').setAttribute('tabindex', '-1');
+  document.getElementById('login-title').focus();
   loginWrap.classList.add('hidden');
   resetSection.classList.add('active');
   document.getElementById('reset-email').focus();
@@ -86,6 +88,7 @@ document.getElementById('forgot-link').addEventListener('click', () => {
 
 document.getElementById('back-link').addEventListener('click', () => {
   document.getElementById('login-title').textContent = 'Entrar no Portal';
+  document.getElementById('login-title').focus();
   resetSection.classList.remove('active');
   loginWrap.classList.remove('hidden');
   document.getElementById('reset-error').textContent = '';

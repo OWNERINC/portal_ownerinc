@@ -18,9 +18,9 @@ function validateProfile(body) {
 function validateUser(body, { creating = false } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const allowed = new Set(['name', 'role', 'contract_type', 'is_pj', 'pj_due_day', 'job_title_id', 'phone', 'permissions']);
-  if (creating) allowed.add('email').add('password');
+  if (creating) allowed.add('email');
   if (Object.keys(body).some((key) => !allowed.has(key))) return false;
-  if (creating && (!isEmail(body.email) || typeof body.password !== 'string' || body.password.length < 6)) return false;
+  if (creating && !isEmail(body.email)) return false;
   if (creating && (typeof body.name !== 'string' || !body.name.trim())) return false;
   if (creating && !isUuid(body.job_title_id)) return false;
   if (hasOwn(body, 'name') && (typeof body.name !== 'string' || body.name.trim().length > 120)) return false;

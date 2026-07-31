@@ -1,9 +1,8 @@
-import { requireAuth, renderUserInTopbar, showToast, can, fetchAPI } from './auth.js';
+import { requireAuth, showToast, can, fetchAPI } from './auth.js';
 import { clear, closeDialog, element, openDialog, showState } from './ui.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
-renderUserInTopbar(user);
 const canManage = can(user, 'manageKnowledge');
 if (canManage) {
   document.getElementById('btn-new').style.display = '';
@@ -61,8 +60,8 @@ function openArticle(id, push = true) {
   adminBar.hidden = !canManage;
   if (canManage) {
     adminBar.append(
-      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editArticle(article) } }),
-      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', on: { click: () => deleteArticle(article.id) } }),
+      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar artigo: ${article.title}`, on: { click: () => editArticle(article) } }),
+      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir artigo: ${article.title}`, on: { click: () => deleteArticle(article.id) } }),
     );
   }
   document.getElementById('article-title').focus();

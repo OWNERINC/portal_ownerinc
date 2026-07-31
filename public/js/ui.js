@@ -72,10 +72,23 @@ export function closeDialog(backdrop, force = false) {
   inertSiblings = [];
   initialValues.delete(backdrop);
   activeDialog = null;
-  restoreFocus?.focus();
+  if (restoreFocus?.isConnected) restoreFocus.focus();
+  else {
+    const fallback = backdrop.closest('section, main')?.querySelector('h1, h2, h3, [role="heading"]');
+    fallback?.setAttribute('tabindex', '-1');
+    fallback?.focus();
+  }
   restoreFocus = null;
   return true;
 }
+
+document.querySelectorAll('.table-wrapper').forEach(wrapper => {
+  if (wrapper.hasAttribute('role')) return;
+  const caption = wrapper.querySelector('caption');
+  wrapper.setAttribute('role', 'region');
+  wrapper.tabIndex = 0;
+  wrapper.setAttribute('aria-label', caption?.textContent?.trim() || 'Tabela com rolagem horizontal');
+});
 
 export function protectForm(form) {
   const markClean = () => guardedForms.set(form, serializeForm(form));

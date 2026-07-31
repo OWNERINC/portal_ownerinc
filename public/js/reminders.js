@@ -1,9 +1,8 @@
-import { requireAuth, renderUserInTopbar, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
+import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, closeDialog, element, openDialog } from './ui.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
-renderUserInTopbar(user);
 const canManage = can(user, 'manageReminders');
 if (canManage) {
   document.getElementById('btn-new-reminder').style.display = '';
@@ -20,6 +19,7 @@ let page = 0;
 let totalReminders = 0;
 
 function tableState(message, retry) {
+  clear(document.getElementById('reminders-pagination'));
   const cell = element('td', { colspan: '6', className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
   if (retry) {
     cell.append(document.createElement('br'), element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
@@ -54,8 +54,8 @@ function renderTable() {
     addCell(row, reminder.active ? 'Ativo' : 'Inativo', `badge ${reminder.active ? 'badge-green' : 'badge-gray'}`);
     const actions = element('td', { className: 'table-actions' });
     if (canManage) actions.append(
-      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', on: { click: () => editReminder(reminder) } }),
-      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', on: { click: () => deleteReminder(reminder.id) } }),
+      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar lembrete: ${reminder.title}`, on: { click: () => editReminder(reminder) } }),
+      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir lembrete: ${reminder.title}`, on: { click: () => deleteReminder(reminder.id) } }),
     );
     row.append(actions);
     tbody.append(row);

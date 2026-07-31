@@ -280,27 +280,27 @@
 
     <div class="brand-content">
       <img src="./assets/logo-branco.svg" alt="Ownerinc" class="brand-logo" width="150" height="30">
-      <h2 class="brand-headline">Tudo que a<br>equipe precisa,<br>em um só lugar.</h2>
+      <p class="brand-headline">Tudo que a<br>equipe precisa,<br>em um só lugar.</p>
       <p class="brand-subtitle">Hub central de conhecimento, treinamentos, benefícios e comunicação da equipe.</p>
       <ul class="feature-list">
         <li>
-          <div class="feat-icon"><i data-lucide="book-open"></i></div>
+          <div class="feat-icon" aria-hidden="true"><i data-lucide="book-open"></i></div>
           Base de Conhecimento e Processos
         </li>
         <li>
-          <div class="feat-icon"><i data-lucide="graduation-cap"></i></div>
+          <div class="feat-icon" aria-hidden="true"><i data-lucide="graduation-cap"></i></div>
           Ownerinc Academy
         </li>
         <li>
-          <div class="feat-icon"><i data-lucide="gift"></i></div>
+          <div class="feat-icon" aria-hidden="true"><i data-lucide="gift"></i></div>
           Clube de Vantagens
         </li>
         <li>
-          <div class="feat-icon"><i data-lucide="bell"></i></div>
+          <div class="feat-icon" aria-hidden="true"><i data-lucide="bell"></i></div>
           Lembretes e Datas Importantes
         </li>
         <li>
-          <div class="feat-icon"><i data-lucide="message-square"></i></div>
+          <div class="feat-icon" aria-hidden="true"><i data-lucide="message-square"></i></div>
           Canal de Ouvidoria
         </li>
       </ul>
@@ -350,7 +350,7 @@
            <input class="form-input" type="email" id="reset-email" name="reset-email" autocomplete="email" spellcheck="false" required placeholder="nome@exemplo.com…">
         </div>
         <p class="error-msg" id="reset-error" aria-live="polite"></p>
-        <div id="reset-success" class="success-msg" style="display:none"></div>
+        <div id="reset-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="reset-btn">Enviar link de redefinição</button>
         <button class="back-link" type="button" id="back-link">← Voltar ao login</button>
       </form>

@@ -72,7 +72,14 @@
       letter-spacing: 0.1em;
       margin-bottom: 14px;
     }
-    .profile-job-title { margin: -6px 0 14px; color: var(--text-secondary); font-size: 13px; }
+    .profile-card { max-width: 560px; }
+    .profile-job-title { margin: -6px 0 18px; color: var(--text-secondary); font-size: 13px; }
+    .profile-section-title { margin: 0 0 14px; }
+    .profile-feedback, .photo-feedback { min-height: 18px; font-size: 12px; }
+    .profile-feedback { margin-top: 10px; }
+    .photo-feedback { margin: 0; }
+    .profile-email { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; overflow-wrap: anywhere; }
+    .profile-copy { font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.6; }
     .section-divider {
       border: none;
       border-top: 1px solid var(--border);
@@ -113,28 +120,28 @@
   <div class="main-content">
     <header class="topbar">
       <span class="topbar-title">Meu Perfil</span>
-      <span class="topbar-user">Olá, <strong id="topbar-user-name"></strong></span>
     </header>
     <main class="page-body" id="main-content" tabindex="-1">
 
       <div class="page-header"><h1>Meu Perfil</h1></div>
 
-      <div class="card" style="max-width:560px">
+      <div class="card profile-card">
 
         <!-- Avatar com upload -->
         <div class="avatar-wrap">
           <button class="avatar-circle" id="avatar-circle" type="button" aria-label="Alterar foto de perfil">
             <img id="avatar-img" style="display:none" alt="Foto de perfil" width="88" height="88">
             <span id="avatar-initials"></span>
-            <div class="avatar-overlay"><i data-lucide="camera"></i></div>
+            <div class="avatar-overlay" aria-hidden="true"><i data-lucide="camera"></i></div>
           </button>
           <input type="file" id="photo-input" name="photo" accept="image/jpeg,image/png,image/webp" style="display:none">
           <span class="avatar-hint" id="avatar-hint">Clique na foto para atualizar</span>
+          <p class="photo-feedback" id="photo-feedback" role="status" aria-live="polite"></p>
           <button class="btn btn-ghost btn-sm" id="remove-photo" type="button" hidden>Remover foto</button>
         </div>
 
         <!-- Dados pessoais -->
-        <p class="section-label">Dados pessoais</p>
+        <h2 class="section-label profile-section-title">Dados pessoais</h2>
         <p id="profile-job-title" class="profile-job-title" hidden></p>
         <form id="profile-form">
 
@@ -155,28 +162,28 @@
           <input class="form-input" id="p-linkedin" name="linkedin_url" type="url" autocomplete="url" pattern="https://(www\.)?linkedin\.com/.*" placeholder="https://linkedin.com/in/seu-perfil…">
         </div>
 
-        <button class="btn btn-primary" id="btn-save"
-          style="width:100%; justify-content:center; padding:12px; margin-top:4px">
+        <button class="btn btn-primary profile-save" id="btn-save" type="submit">
           Salvar perfil
         </button>
+        <p id="profile-feedback" class="profile-feedback" role="status" aria-live="polite"></p>
         </form>
 
         <hr class="section-divider">
 
         <!-- Segurança -->
-        <p class="section-label">Segurança</p>
-        <p id="profile-email" style="font-size:13px; font-weight:500; color:var(--text); margin-bottom:6px"></p>
-        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px; line-height:1.6">
+        <h2 class="section-label profile-section-title">Segurança</h2>
+        <p id="profile-email" class="profile-email"></p>
+        <p class="profile-copy">
           Para alterar sua senha, enviaremos um link de redefinição para o e-mail acima.
         </p>
-        <button class="btn btn-ghost" id="btn-reset-pw" style="font-size:13px">
+        <button class="btn btn-ghost" id="btn-reset-pw" type="button">
           Enviar link de redefinição de senha
         </button>
-        <p id="pw-feedback" role="status" aria-live="polite" style="font-size:12px; margin-top:8px; min-height:18px"></p>
+        <p id="pw-feedback" class="profile-feedback" role="status" aria-live="polite"></p>
 
         <hr class="section-divider">
-        <p class="section-label">Seus dados</p>
-        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px; line-height:1.6">
+        <h2 class="section-label profile-section-title">Seus dados</h2>
+        <p class="profile-copy">
           Baixe uma cópia do seu perfil e do histórico de notificações associado à sua conta.
         </p>
         <button class="btn btn-ghost" id="btn-export-data" type="button">Baixar meus dados</button>

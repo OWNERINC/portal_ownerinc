@@ -24,6 +24,7 @@ fluxo correspondente no Portal.
 | Recuperação de senha | Operacional | Envio de email pelo Firebase a partir do login ou perfil. `public/js/login.js`, `public/js/profile.js` |
 | Admissão fechada | Operacional | Não há cadastro público nem autoprovisionamento; o UID precisa existir no banco. `api/middleware/auth.js`, `api/routes/users.js` |
 | Criação administrativa de usuário | Operacional | Firebase Admin cria a identidade sem trocar a sessão do administrador e compensa falha de persistência. Exige `manageUsers`; role e permissões exigem super-admin. `api/routes/users.js` |
+| Convite administrativo por e-mail | Operacional | Administrador provisiona a conta sem senha inicial; o Portal gera link seguro do Firebase para definição de senha e envia o convite pelo SMTP existente. Falhas de envio desfazem a identidade e o registro. `api/routes/users.js`, `api/integrations/password-reset-email.js`, `public/js/admin.js` |
 | Primeiro super-admin | Operacional | Ferramenta one-shot valida identidade, email verificado e ausência de outro super-admin ativo. `api/db/bootstrap-admin.js` |
 | Administrador local | Operacional | Em desenvolvimento, cria identidade no Auth Emulator e o primeiro super-admin no banco. `api/db/create-local-admin.js`, `firebase-emulator/Dockerfile` |
 | Desativação e reativação | Operacional | Desabilita Firebase, revoga tokens e bloqueia localmente; protege a própria conta, superiores e o último super-admin. `api/routes/users.js` |

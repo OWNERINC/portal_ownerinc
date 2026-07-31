@@ -103,11 +103,6 @@ export async function requireAuth(requireAdmin = false) {
   return user;
 }
 
-export function renderUserInTopbar(user) {
-  const el = document.getElementById('topbar-user-name');
-  if (el) el.textContent = user.name || user.email;
-}
-
 export async function logout() {
   clearVerifiedRole();
   await signOut(auth);

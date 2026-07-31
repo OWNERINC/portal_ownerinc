@@ -55,6 +55,8 @@ test('privileged user listing is strict, paginated, counted, and audited', async
   assert.match(users, /LIMIT \$1 OFFSET \$2/);
   assert.match(users, /X-Total-Count/);
   assert.match(users, /user\.list/);
+  assert.match(users, /sendInvitation/);
+  assert.doesNotMatch(users, /req\.body\.password/);
   for (const action of ['create', 'update', 'disable', 'reactivate']) assert.match(users, new RegExp(`user\\.${action}`));
   const jobTitles = await readFile('api/routes/job-titles.js', 'utf8');
   assert.match(jobTitles, /manageUsers/);

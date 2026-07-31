@@ -11,6 +11,7 @@ const {
 } = require('../middleware/policy');
 const { hasOwn, validateProfile, validateUser } = require('../middleware/validation');
 const { parseListQuery } = require('../route-utils');
+const { sendInvitation } = require('../integrations/password-reset-email');
 
 const forbidden = (req, res) => res.status(403).json({ error: 'Permission denied.', requestId: req.id });
 const invalid = (req, res) => res.status(400).json({ error: 'Invalid request.', requestId: req.id });
@@ -141,12 +142,16 @@ router.post('/', authMiddleware, async (req, res, next) => {
   let firebaseUser;
   let client;
   try {
-    const { email, password, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, job_title_id = null, phone = '' } = req.body;
+    const { email, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, job_title_id = null, phone = '' } = req.body;
     const role = req.body.role || 'viewer';
     const permissions = role === 'admin' ? normalizePermissions(req.body.permissions) : {};
 
     firebaseUser = await firebaseAuth.createUser({
-      email, password, displayName: name || undefined, emailVerified: true, disabled: true,
+      email,
+      password: crypto.randomBytes(32).toString('base64url'),
+      displayName: name || undefined,
+      emailVerified: true,
+      disabled: true,
     });
     client = await pool.connect();
     await client.query('BEGIN');
@@ -163,6 +168,10 @@ router.post('/', authMiddleware, async (req, res, next) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [firebaseUser.uid, email, name, role, contract_type, !!is_pj, pj_due_day, job_title_id, phone, JSON.stringify(permissions)]
     );
+    const link = await firebaseAuth.generatePasswordResetLink(email, {
+      url: 'https://portal.ownerinc.com.br/login.html',
+    });
+    await sendInvitation({ to: email, name, link });
     await firebaseAuth.updateUser(firebaseUser.uid, { disabled: false });
     await audit(client, req, 'user.create', firebaseUser.uid, { role, contractType: contract_type });
     await client.query('COMMIT');
