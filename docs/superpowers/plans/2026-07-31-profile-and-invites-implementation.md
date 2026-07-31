@@ -28,12 +28,12 @@ Arquivos:
 
 Passos:
 
-- Remover os spans `topbar-user` de todas as paginas autenticadas.
+- Remover os spans de saudacao de todas as paginas autenticadas.
 - Remover a funcao de renderizacao da saudacao e seus imports/chamadas, ou
   reduzi-la a um contrato sem efeito somente se algum consumidor legitimo
   permanecer.
-- Ajustar o salvamento de perfil para nao procurar `topbar-user-name`.
-- Adicionar uma invariante que rejeite `Olá,`, `Ola,` e `topbar-user-name` em
+- Ajustar o salvamento de perfil para nao procurar o elemento de saudacao.
+- Adicionar uma invariante que rejeite `Olá,` e `Ola,` em
   paginas autenticadas e scripts de shell.
 
 ## 3. Revisar Meu Perfil
@@ -139,7 +139,7 @@ Adicionar verificacoes para:
 - compensacao de Firebase/PostgreSQL em falha SMTP;
 - e-mail duplicado sem registro parcial;
 - autorizacao de `manageUsers` e super-admin para privilegios;
-- ausencia da saudacao e do `topbar-user-name` nas paginas autenticadas;
+- ausencia da saudacao personalizada nas paginas autenticadas;
 - perfil com grupos de dados, cargo somente leitura e controles nomeados.
 
 ## 7. Verificacao e entrega

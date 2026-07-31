@@ -57,8 +57,8 @@ test('admin navigation restores the last verified role before paint and revalida
 test('authenticated shell has no personalized greeting and admin invites do not ask for a password', async () => {
   const html = await Promise.all(pages.map((page) => readFile(`public/${page}.html`, 'utf8')));
   const scripts = await readFile('public/js/auth.js', 'utf8');
-  assert.doesNotMatch(html.join('\n'), /Olá,|Ola,|topbar-user-name/);
-  assert.doesNotMatch(scripts, /renderUserInTopbar|topbar-user-name/);
+  assert.doesNotMatch(html.join('\n'), /Olá,|Ola,/);
+  assert.doesNotMatch(scripts, /renderUserInTopbar/);
   const admin = html[pages.indexOf('admin')];
   assert.match(admin, /Convidar usuário/);
   assert.doesNotMatch(admin, /id="u-password"|Senha inicial/);

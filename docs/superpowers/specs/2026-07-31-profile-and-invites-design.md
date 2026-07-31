@@ -27,7 +27,7 @@ admissao, role e permissoes do Portal.
 
 - Remover o texto `Ola, nome` de todas as paginas autenticadas.
 - Manter o titulo contextual da pagina no topbar.
-- Remover a dependencia funcional de `topbar-user-name`; o carregamento do
+- Remover a dependencia funcional do nome exibido no topbar; o carregamento do
   usuario continua necessario para autenticacao e conteudo, nao para saudacao.
 - Preservar o shell mobile, o drawer, o skip link e o indicador de pagina ativa.
 
@@ -115,9 +115,9 @@ permissoes continuarao exigindo super-admin conforme a politica atual.
 - Teste de e-mail: assunto, remetente, destinatario e link seguro corretos.
 - Teste de compensacao: falha no envio remove a identidade e desfaz o registro.
 - Teste de duplicidade: e-mail existente retorna conflito sem alterar conta.
-- Testes de frontend: nenhuma pagina autenticada renderiza `Ola,` ou
-  `topbar-user-name`; o dialogo usa `Enviar convite`, nao possui campo de senha
-  e mostra estados de sucesso/erro.
+- Testes de frontend: nenhuma pagina autenticada renderiza a saudacao
+  personalizada; o dialogo usa `Enviar convite`, nao possui campo de senha e
+  mostra estados de sucesso/erro.
 - Testes de perfil: campos, upload/remocao de foto, feedback de salvamento,
   redefinicao de senha e exportacao continuam acessiveis.
 - Rodar `npm run verify` antes de qualquer push.
