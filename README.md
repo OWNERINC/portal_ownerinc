@@ -39,6 +39,24 @@ npm run verify
 O comando valida sintaxe JavaScript, testes, scripts shell, configuração do
 Compose quando Docker estiver disponível e possíveis segredos versionados.
 
+## Contratos de UI e prevenção de quebras
+
+Os scripts das páginas podem atender seções com estruturas diferentes. Um
+helper compartilhado não deve assumir que todo container opcional existe no
+HTML.
+
+- Antes de chamar `clear`, `replaceChildren`, `focus`, `hidden` ou alterar
+  atributos de um elemento encontrado por ID, valide se o elemento existe.
+- Se uma tabela não possui paginação, o loader deve limpar o container de
+  paginação somente quando ele estiver presente; não crie IDs derivados sem
+  adicionar o elemento correspondente à página.
+- Estados de carregamento, vazio e erro devem funcionar mesmo quando uma
+  seção opcional foi omitida. A ausência de uma seção não pode interromper a
+  montagem das demais abas ou cards.
+- Toda correção desse tipo deve incluir uma invariante ou teste de regressão
+  que cubra a página sem o elemento opcional.
+- Antes de commit, execute `npm run verify` e confirme também `git diff --check`.
+
 ## Documentação
 
 - [Brief do produto](docs/product/brief.md)

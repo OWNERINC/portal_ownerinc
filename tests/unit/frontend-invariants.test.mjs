@@ -64,6 +64,12 @@ test('authenticated shell has no personalized greeting and admin invites do not 
   assert.doesNotMatch(admin, /id="u-password"|Senha inicial/);
 });
 
+test('admin table states tolerate sections without pagination containers', async () => {
+  const admin = await readFile('public/js/admin.js', 'utf8');
+  assert.match(admin, /const pagination = document\.getElementById\(tbodyId\.replace\(\/-tbody\$\/, '-pagination'\)\);/);
+  assert.match(admin, /if \(pagination\) clear\(pagination\);/);
+});
+
 test('login keeps a visible page heading and pins its third-party icon script', async () => {
   const login = await readFile('public/login.html', 'utf8');
   assert.equal((login.match(/<h1(?:\s|>)/g) || []).length, 1);

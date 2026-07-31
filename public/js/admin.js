@@ -33,7 +33,8 @@ let jobTitles = [];
 let editingJobTitleId = null;
 
 function tableState(tbodyId, columns, message, retry) {
-  clear(document.getElementById(tbodyId.replace(/-tbody$/, '-pagination')));
+  const pagination = document.getElementById(tbodyId.replace(/-tbody$/, '-pagination'));
+  if (pagination) clear(pagination);
   const cell = element('td', { colspan: String(columns), className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
   if (retry) cell.append(document.createElement('br'), element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
   clear(document.getElementById(tbodyId)).append(element('tr', {}, cell));
