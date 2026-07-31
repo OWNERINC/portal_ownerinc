@@ -36,8 +36,16 @@ const photoFeedback = document.getElementById('photo-feedback');
 const profileFeedback = document.getElementById('profile-feedback');
 
 function setFeedback(target, message, tone = '') {
+  if (!target) return;
   target.textContent = message;
   target.style.color = tone ? `var(--${tone})` : '';
+}
+
+async function responseError(response, fallback) {
+  const body = await response.json().catch(() => ({}));
+  const error = body.error || fallback;
+  const requestId = body.requestId ? ` (referência ${body.requestId})` : '';
+  return new Error(`${error}${requestId}`);
 }
 
 document.getElementById('avatar-circle').addEventListener('click', () => photoInput.click());
@@ -69,13 +77,13 @@ photoInput.addEventListener('change', async () => {
       headers: { 'Authorization': `Bearer ${token}` },
       body: formData,
     });
-    if (!res.ok) throw new Error('O servidor recusou o arquivo. Use JPEG, PNG ou WebP de até 3 MB.');
+    if (!res.ok) throw await responseError(res, 'O servidor recusou o arquivo. Use JPEG, PNG ou WebP de até 3 MB.');
     const { url } = await res.json();
 
     renderAvatar(url, document.getElementById('p-name').value);
     setFeedback(photoFeedback, 'Foto atualizada.', 'success');
   } catch (err) {
-    setFeedback(photoFeedback, 'Não foi possível enviar a foto. Verifique o arquivo e tente novamente.', 'danger');
+    setFeedback(photoFeedback, `Não foi possível enviar a foto: ${err.message}`, 'danger');
   } finally {
     avatarHint.textContent = 'Clique na foto para atualizar';
     avatarHint.className   = 'avatar-hint';
@@ -91,7 +99,7 @@ document.getElementById('remove-photo').addEventListener('click', async event =>
     renderAvatar('', document.getElementById('p-name').value);
     setFeedback(photoFeedback, 'Foto removida.', 'success');
   } catch (err) {
-    setFeedback(photoFeedback, 'Não foi possível remover a foto. Tente novamente.', 'danger');
+    setFeedback(photoFeedback, `Não foi possível remover a foto: ${err.message}`, 'danger');
   } finally {
     event.currentTarget.disabled = false;
   }
@@ -117,7 +125,12 @@ const markProfileClean = protectForm(document.getElementById('profile-form'));
 
 document.getElementById('profile-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (!event.currentTarget.reportValidity()) return;
+  if (!event.currentTarget.reportValidity()) {
+    const invalid = event.currentTarget.querySelector(':invalid');
+    setFeedback(profileFeedback, invalid?.validationMessage || 'Revise os campos destacados.', 'danger');
+    invalid?.focus();
+    return;
+  }
   const btn         = document.getElementById('btn-save');
   const name        = document.getElementById('p-name').value.trim();
   const bio         = document.getElementById('p-bio').value.trim();
@@ -142,7 +155,7 @@ document.getElementById('profile-form').addEventListener('submit', async event =
     }
     setFeedback(profileFeedback, 'Perfil atualizado com sucesso.', 'success');
   } catch (err) {
-    setFeedback(profileFeedback, 'Não foi possível salvar o perfil. Tente novamente.', 'danger');
+    setFeedback(profileFeedback, `Não foi possível salvar o perfil: ${err.message}`, 'danger');
   } finally {
     btn.disabled    = false;
     btn.textContent = 'Salvar perfil';

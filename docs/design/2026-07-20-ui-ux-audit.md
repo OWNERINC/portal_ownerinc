@@ -138,8 +138,9 @@ visual amplo.
   `public/dashboard.html:18-19`, `public/profile.html:121`.
 - Tabelas renderizam coleções completas; adicionar paginação server-side quando
   ultrapassarem 50 itens: `public/js/admin.js:74-86,253-263,343-354,429-437`.
-- Assets estáveis recebem cache immutable por 7 dias:
-  `nginx/nginx.conf:25-28`.
+- Assets visuais estáveis recebem cache de 7 dias; CSS e JavaScript devem
+  revalidar para que deploys não deixem HTML e scripts incompatíveis:
+  `nginx/nginx.conf`.
 
 ## Avaliação por Página
 

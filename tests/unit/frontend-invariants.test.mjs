@@ -70,6 +70,13 @@ test('admin table states tolerate sections without pagination containers', async
   assert.match(admin, /if \(pagination\) clear\(pagination\);/);
 });
 
+test('profile exposes safe API errors instead of hiding upload and save failures', async () => {
+  const profile = await readFile('public/js/profile.js', 'utf8');
+  assert.match(profile, /async function responseError\(response, fallback\)/);
+  assert.match(profile, /responseError\(res, 'O servidor recusou o arquivo/);
+  assert.match(profile, /Não foi possível salvar o perfil: \$\{err\.message\}/);
+});
+
 test('login keeps a visible page heading and pins its third-party icon script', async () => {
   const login = await readFile('public/login.html', 'utf8');
   assert.equal((login.match(/<h1(?:\s|>)/g) || []).length, 1);

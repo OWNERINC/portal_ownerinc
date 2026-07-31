@@ -70,6 +70,8 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /https:\/\/unpkg\.com/);
   assert.match(nginx, /https:\/\/www\.gstatic\.com/);
   assert.match(nginx, /font-src 'self'/);
+  assert.match(nginx, /location ~\* \\\.\(css\|js\)\$ \{[\s\S]*expires -1;[\s\S]*Cache-Control "no-cache"/);
+  assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
 });
 
 test('deployment uses a committed archive, backup, smoke gate, and rollback', async () => {
