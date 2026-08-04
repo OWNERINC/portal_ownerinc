@@ -40,6 +40,15 @@ fluxo correspondente no Portal.
 | Links rápidos | Operacional | Atalhos internos e link externo para Sólides conforme o contrato. `public/js/dashboard.js` |
 | Destaques da Academy | Operacional | Exibe até três cursos com estados de carregamento, vazio, erro e nova tentativa. `public/js/dashboard.js` |
 
+## AutoCard
+
+| Funcionalidade | Estado | Implementação e evidência |
+| --- | --- | --- |
+| Acesso por cargo DHO | Operacional | O módulo só libera os cargos exatos Analista, Assistente, Coordenador e Gerente de DHO; a API bloqueia acesso direto para os demais usuários. `api/middleware/policy.js`, `api/routes/autocard.js`, `public/autocard/guard.js` |
+| Criação e exportação de cards | Operacional | Templates, variações visuais, biblioteca de assets, upload e exportação PNG migrados para o Portal. `public/autocard/` |
+| Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para todos os usuários autorizados do DHO, com busca, edição, duplicação e exclusão auditadas. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js` |
+| Renomeação RH para DHO | Operacional | Migration 010 reassocia usuários e renomeia cargos antigos sem quebrar a referência de usuários. `api/db/migrations/010_autocard.sql` |
+
 ## Perfil Pessoal
 
 | Funcionalidade | Estado | Implementação e evidência |

@@ -31,6 +31,16 @@ app.use('/api/benefits',  require('./routes/benefits'));
 app.use('/api/ombudsman', require('./routes/ombudsman'));
 app.use('/api/upload',    require('./routes/upload'));
 app.use('/api/solides',   require('./routes/solides'));
+// AutoCard is mounted at its namespaced path and at its legacy asset paths so
+// the migrated browser bundle can keep its existing /api/cards and /api/media URLs.
+const autocardRoutes = require('./routes/autocard');
+app.use('/api/autocard', autocardRoutes);
+app.use('/api', (req, res, next) => {
+  if (req.path === '/cards' || req.path.startsWith('/cards/') || req.path === '/media' || req.path.startsWith('/media/')) {
+    return autocardRoutes(req, res, next);
+  }
+  return next();
+});
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));

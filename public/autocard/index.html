@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoCard Ownerinc</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Ir para o conteúdo principal</a>
+  <header class="topbar">
+    <div class="brand"><img src="/assets/ownerinc-icon-white.webp" alt="Ownerinc"><span>Ownerinc · AutoCard DHO</span></div>
+    <button class="quiet-button" id="helpButton" type="button">Como usar</button>
+    <nav aria-label="Navegação do AutoCard"><button class="tab active" data-tab="create">Criar card</button><button class="tab" data-tab="saved">Histórico</button></nav>
+  </header>
+
+  <main id="main">
+    <section id="createView">
+      <div id="templateGallery" class="gallery"></div>
+      <div id="editorView" class="editor hidden">
+        <section class="panel editor-panel">
+          <button id="backButton" class="back-button" type="button">← Trocar modelo</button>
+          <div class="section-heading"><div><span class="eyebrow" id="templateGroup"></span><h1 id="templateTitle"></h1></div><span class="badge" id="templateBadge"></span></div>
+          <div id="fields"></div>
+          <div class="editor-actions">
+            <button id="iconButton" class="secondary-button" type="button"><span id="iconPreview"></span> Escolher ícone</button>
+            <button id="illustrationButton" class="secondary-button hidden" type="button">Escolher ilustração</button>
+            <label id="imageButton" class="secondary-button hidden">Adicionar imagem<input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp"></label>
+          </div>
+          <div id="mediaSizeControl" class="control hidden"><span>Tamanho da mídia</span><div class="segmented"><button data-size="small">Pequena</button><button data-size="medium" class="active">Média</button><button data-size="large">Grande</button></div></div>
+          <div class="control"><span>Variação visual</span><div class="segmented variant-segmented"><button data-mode="light">Editorial claro</button><button data-mode="dark">Noir</button><button data-mode="beige">Paper beige</button></div></div>
+          <div class="editor-actions bottom"><button id="saveButton" class="secondary-button" type="button">Salvar</button><button id="exportButton" class="primary-button" type="button">Exportar PNG</button></div>
+        </section>
+        <section class="preview-area"><div class="canvas-frame"><div id="cardCanvas"></div></div><p>Formato de exportação: 1080 × 1080 px</p></section>
+      </div>
+    </section>
+
+    <section id="savedView" class="panel saved-view hidden"><div class="section-heading"><div><span class="eyebrow">Biblioteca compartilhada</span><h1>Histórico de cards</h1></div><input id="savedSearch" aria-label="Buscar cards por nome" type="search" placeholder="Buscar por nome..."></div><div id="savedFilters" class="filters"></div><div id="savedList" class="saved-list"></div><p id="savedEmpty" class="empty">Nenhum card salvo ainda.</p></section>
+  </main>
+
+  <dialog id="assetDialog" aria-labelledby="assetTitle"><form method="dialog"><div class="dialog-heading"><h2 id="assetTitle">Biblioteca</h2><button value="cancel" aria-label="Fechar biblioteca" class="close-button">×</button></div><input id="assetSearch" aria-label="Buscar na biblioteca" type="search" placeholder="Buscar..."><div id="assetGrid" class="asset-grid"></div></form></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="./entry.js"></script>
+</body>
+</html>

@@ -41,6 +41,8 @@ body.sidebar-ready .sidebar { transition: width var(--sidebar-transition); }
 
 .admin-link { display: none; }
 html[data-portal-role="admin"] .admin-link { display: list-item; }
+.autocard-link { display: none; }
+html[data-autocard-access="true"] .autocard-link { display: list-item; }
 
 /* Header com logo + toggle */
 .sidebar-header {

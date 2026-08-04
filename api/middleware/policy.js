@@ -8,6 +8,13 @@ const PERMISSIONS = new Set([
   'manageSolides',
 ]);
 
+const AUTOCARD_JOB_TITLES = new Set([
+  'analista de dho',
+  'assistente de dho',
+  'coordenador de dho',
+  'gerente de dho',
+]);
+
 function isSuperAdmin(user) {
   return user?.role === 'admin' && user?.permissions?.superAdmin === true;
 }
@@ -15,6 +22,11 @@ function isSuperAdmin(user) {
 function can(user, permission) {
   return user?.role === 'admin'
     && (isSuperAdmin(user) || (PERMISSIONS.has(permission) && user?.permissions?.[permission] === true));
+}
+
+function canUseAutoCard(user) {
+  const title = String(user?.job_title || '').trim().toLocaleLowerCase('pt-BR');
+  return AUTOCARD_JOB_TITLES.has(title);
 }
 
 function maySetPrivileges(actor, targetUid) {
@@ -41,6 +53,6 @@ function normalizePermissions(value = {}) {
 }
 
 module.exports = {
-  PERMISSIONS, can, isSuperAdmin, mayChangeAccountStatus, maySetPrivileges,
+  AUTOCARD_JOB_TITLES, PERMISSIONS, can, canUseAutoCard, isSuperAdmin, mayChangeAccountStatus, maySetPrivileges,
   normalizePermissions, removesLastActiveSuperAdmin,
 };

@@ -11,6 +11,12 @@ function applyVerifiedRole(user) {
   }
 }
 
+function applyAutoCardNavigation(user) {
+  const allowedTitles = new Set(['analista de dho', 'assistente de dho', 'coordenador de dho', 'gerente de dho']);
+  const title = String(user?.job_title || '').trim().toLocaleLowerCase('pt-BR');
+  document.documentElement.dataset.autocardAccess = String(allowedTitles.has(title));
+}
+
 function clearVerifiedRole() {
   delete document.documentElement.dataset.portalRole;
   try {
@@ -96,6 +102,7 @@ export async function requireAuth(requireAdmin = false) {
     return null;
   }
   applyVerifiedRole(user);
+  applyAutoCardNavigation(user);
   if (requireAdmin && user.role !== 'admin') {
     window.location.replace('./dashboard.html');
     return null;
