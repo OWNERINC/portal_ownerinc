@@ -209,7 +209,7 @@ router.post('/media', async (req, res, next) => {
       const { rows } = await client.query(
         `INSERT INTO autocard_media (id, storage_key, content_type, byte_size, created_by)
          VALUES ($1, $2, 'image/webp', $3, $4)
-         RETURNING id, '/api/media/' || id AS url, byte_size AS "byteSize", content_type AS "contentType"`,
+          RETURNING id, '/api/autocard/media/' || id AS url, byte_size AS "byteSize", content_type AS "contentType"`,
         [id, storageKey, normalized.length, req.user.uid],
       );
       return rows[0];

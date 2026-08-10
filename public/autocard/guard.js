@@ -7,13 +7,14 @@ export async function requireAutoCard() {
     const access = await fetchAPI('/api/autocard/access');
     if (access.allowed) return true;
   } catch {}
-  const main = Object.assign(document.createElement('main'), { className: 'empty-state', tabIndex: -1 });
-  main.append(
+  const main = document.getElementById('main-content') || document.querySelector('main') || document.body;
+  const message = Object.assign(document.createElement('section'), { className: 'empty-state', tabIndex: -1 });
+  message.append(
     Object.assign(document.createElement('h1'), { textContent: 'Acesso restrito' }),
     Object.assign(document.createElement('p'), { textContent: 'O AutoCard está disponível somente para cargos do DHO.' }),
-    Object.assign(document.createElement('a'), { className: 'secondary-button', href: '/dashboard.html', textContent: 'Voltar ao Portal' }),
+    Object.assign(document.createElement('a'), { className: 'secondary-button', href: '../dashboard.html', textContent: 'Voltar ao Portal' }),
   );
-  document.body.replaceChildren(main);
+  main.replaceChildren(message);
   main.focus();
   return false;
 }

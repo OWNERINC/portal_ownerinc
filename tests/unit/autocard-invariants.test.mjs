@@ -48,5 +48,16 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(guard, /\/api\/autocard\/access/);
   assert.match(guard, /Acesso restrito/);
   assert.match(html, /\.\/entry\.js/);
+  assert.match(html, /class="portal-wrapper"/);
+  assert.match(html, /class="sidebar"/);
+  assert.match(html, /class="page-body"[^>]+id="main-content"/);
+  assert.match(html, /href="\.\/" class="active"/);
+  assert.match(html, /id="templateGallery"/);
+  const portalTopbar = html.match(/<header class="topbar">[\s\S]*?<\/header>/)?.[0] || '';
+  assert.doesNotMatch(portalTopbar, /AutoCard DHO/);
+  assert.match(guard, /getElementById\('main-content'\)/);
+  assert.match(guard, /main\.replaceChildren\(message\)/);
+  assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/cards/);
+  assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/media/);
   assert.match(dashboard, /class="autocard-link"/);
 });

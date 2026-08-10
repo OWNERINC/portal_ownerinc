@@ -17,3 +17,16 @@ main{width:100%;max-width:none;min-height:calc(100dvh - 112px)}#createView,#save
 .card-media{display:block;min-width:0;min-height:0;width:100%;height:var(--media-height);object-fit:cover;object-position:center center;max-width:100%;max-height:100%}.birthday-photo img,.employee-photo img{display:block;width:100%;height:100%;object-fit:cover;object-position:center center;max-width:100%;max-height:100%}
 .variant-segmented button{font-size:10px;line-height:1.15;padding:8px 5px}.template-tile:hover,.asset-grid button:hover{border-color:#b4a28e}button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline-color:#b4a28e}:root{--gold:#b4a28e}
 @media(max-width:500px){.employee-layout{grid-template-columns:50% 50%}}
+
+/* Portal shell integration. Keep the editor's visual language inside the shared page body. */
+body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font-sans)}
+.autocard-page .autocard-content{width:100%;min-width:0;font-family:Novelin,Arial,sans-serif;color:var(--ink)}
+.autocard-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px;padding:18px 22px;background:var(--ink);color:#fff;border-radius:0 18px 18px 18px}
+.autocard-toolbar>div:first-child{margin-right:auto}
+.autocard-toolbar p{margin:4px 0 0;color:#c9c0b4;font-size:13px}
+.autocard-toolbar nav{display:flex;gap:4px;align-self:flex-end}
+.autocard-toolbar .tab{border-radius:8px 8px 0 0}
+.portal-wrapper .topbar{height:var(--topbar-height);background:var(--surface);border-bottom:1px solid var(--border);padding:0 var(--space-8);position:sticky;top:0;z-index:50;box-shadow:none}
+.autocard-page .gallery{min-height:0}
+.autocard-page .editor,.autocard-page .preview-area{min-width:0}
+@media(max-width:768px){.autocard-page .page-body{padding:20px 16px max(20px,env(safe-area-inset-bottom))}.autocard-toolbar{padding:16px}.autocard-toolbar>div:first-child{flex-basis:100%}.autocard-toolbar nav{width:100%;align-self:stretch}.autocard-toolbar .tab{flex:1}.autocard-page .gallery{padding:20px}}
