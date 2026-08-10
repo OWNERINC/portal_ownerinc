@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -54,6 +54,15 @@ test('notification schema enforces one durable occurrence per channel', async ()
   assert.match(schema, /CREATE TABLE IF NOT EXISTS cron_status/);
   assert.match(schema, /CREATE TABLE IF NOT EXISTS audit_log/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS notifications_log_occurrence_key/);
+});
+
+test('cron schema stores deduplicated operational alert state', async () => {
+  const schema = await readFile('api/db/schema.sql', 'utf8');
+  const migration = await readFile('api/db/migrations/011_cron_alert_state.sql', 'utf8');
+  assert.match(schema, /alert_signature/);
+  assert.match(schema, /alert_sent_at/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS alert_signature/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS alert_sent_at/);
 });
 
 test('domain constraints are present on fresh installs and upgrades', async () => {

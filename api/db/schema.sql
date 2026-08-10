@@ -193,7 +193,9 @@ CREATE TABLE IF NOT EXISTS cron_status (
   sent_count          INTEGER     NOT NULL DEFAULT 0 CHECK (sent_count >= 0),
   failed_count        INTEGER     NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
   skipped_count       INTEGER     NOT NULL DEFAULT 0 CHECK (skipped_count >= 0),
-  last_error          TEXT CHECK (last_error IS NULL OR char_length(last_error) <= 1000)
+  last_error          TEXT CHECK (last_error IS NULL OR char_length(last_error) <= 1000),
+  alert_signature     TEXT CHECK (alert_signature IS NULL OR char_length(alert_signature) <= 200),
+  alert_sent_at       TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS solides_employee_links (

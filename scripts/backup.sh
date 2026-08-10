@@ -39,4 +39,13 @@ docker compose --project-directory "$root" run --rm --no-deps -T --entrypoint ta
 if [[ ${LEAVE_STOPPED:-false} != true ]]; then restore_services; fi
 trap - ERR INT TERM
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+$RETENTION_DAYS" -exec rm -rf -- {} +
+remote_status=0
+if [[ ${BACKUP_UPLOAD_S3:-false} == true ]]; then
+  if ! "$root/scripts/backup-s3.sh" "$destination"; then
+    echo "Local backup preserved; S3 upload failed: $destination" >&2
+    remote_status=3
+  fi
+fi
+trap - ERR INT TERM
+if ((remote_status)); then exit "$remote_status"; fi
 printf 'Backup created: %s\n' "$destination"

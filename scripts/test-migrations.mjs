@@ -22,8 +22,9 @@ try {
     '006_user_erasure',
     '007_solides_employee_links',
     '008_solides_link_hardening',
-     '009_job_titles',
-     '010_autocard',
+      '009_job_titles',
+      '010_autocard',
+      '011_cron_alert_state',
   ]);
   const tables = await pool.query(`SELECT to_regclass('public.audit_log') AS audit,
     to_regclass('public.cron_status') AS cron, to_regclass('public.notifications_log') AS notifications,

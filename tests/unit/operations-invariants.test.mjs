@@ -75,8 +75,8 @@ test('nginx protects the edge without shadowing uploads', async () => {
 });
 
 test('deployment uses a committed archive, backup, smoke gate, and rollback', async () => {
-  const [deploy, release, restore, backup] = await Promise.all([
-    read('deploy.sh'), read('scripts/release.sh'), read('scripts/restore.sh'), read('scripts/backup.sh'),
+  const [deploy, release, restore, backup, backupS3, alert] = await Promise.all([
+    read('deploy.sh'), read('scripts/release.sh'), read('scripts/restore.sh'), read('scripts/backup.sh'), read('scripts/backup-s3.sh').catch(() => ''), read('cron/sendOperationalAlert.js'),
   ]);
   assert.match(deploy, /git diff --quiet --exit-code HEAD/);
   assert.match(deploy, /git archive[\s\S]*exclude\)ownerinc-novo-agente/);
@@ -94,6 +94,21 @@ test('deployment uses a committed archive, backup, smoke gate, and rollback', as
   assert.match(restore, /pg_restore --single-transaction/);
   assert.match(restore, /services remain stopped/);
   assert.match(backup, /stop "\$\{stopped\[@\]\}"[\s\S]*pg_dump[\s\S]*uploads[\s\S]*restore_services/);
+  assert.match(backupS3, /BACKUP_DIR/);
+  assert.match(backupS3, /s3 cp --recursive/);
+  assert.match(alert, /sendOperationalAlert/);
+});
+
+test('cron health deduplicates SMTP alerts and sends recovery notifications', async () => {
+  const [health, compose, example, packageJson] = await Promise.all([
+    read('cron/health.js'), read('docker-compose.yml'), read('.env.example'), read('cron/package.json'),
+  ]);
+  assert.match(health, /alert_signature/);
+  assert.match(health, /worker recuperado/);
+  assert.match(health, /worker atrasado/);
+  assert.match(compose, /OPERATIONAL_ALERT_EMAIL: \$\{OPERATIONAL_ALERT_EMAIL:-\}/);
+  assert.match(example, /OPERATIONAL_ALERT_EMAIL=/);
+  assert.match(packageJson, /"nodemailer"/);
 });
 
 test('CI builds and publishes commit-addressed production images', async () => {
