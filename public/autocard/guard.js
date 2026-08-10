@@ -12,7 +12,7 @@ export async function requireAutoCard() {
   message.append(
     Object.assign(document.createElement('h1'), { textContent: 'Acesso restrito' }),
     Object.assign(document.createElement('p'), { textContent: 'O AutoCard está disponível somente para cargos do DHO.' }),
-    Object.assign(document.createElement('a'), { className: 'secondary-button', href: '../dashboard.html', textContent: 'Voltar ao Portal' }),
+    Object.assign(document.createElement('a'), { className: 'secondary-button', href: './dashboard.html', textContent: 'Voltar ao Portal' }),
   );
   main.replaceChildren(message);
   main.focus();
