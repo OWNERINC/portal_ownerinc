@@ -37,9 +37,10 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
 });
 
 test('AutoCard UI is guarded before loading the editor', async () => {
-  const [entry, guard, html, dashboard] = await Promise.all([
+  const [entry, guard, html, legacy, dashboard] = await Promise.all([
     readFile('public/autocard/entry.js', 'utf8'),
     readFile('public/autocard/guard.js', 'utf8'),
+    readFile('public/autocard.html', 'utf8'),
     readFile('public/autocard/index.html', 'utf8'),
     readFile('public/dashboard.html', 'utf8'),
   ]);
@@ -47,14 +48,17 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(entry, /import\('\.\/app\.js'\)/);
   assert.match(guard, /\/api\/autocard\/access/);
   assert.match(guard, /Acesso restrito/);
-  assert.match(html, /\.\/entry\.js/);
   assert.match(html, /class="portal-wrapper"/);
   assert.match(html, /class="sidebar"/);
+  assert.match(html, /class="topbar"/);
   assert.match(html, /class="page-body"[^>]+id="main-content"/);
-  assert.match(html, /href="\.\/" class="active"/);
+  assert.match(html, /href="\.\/autocard\.html" class="active"/);
+  assert.match(html, /src="\.\/autocard\/entry\.js"/);
   assert.match(html, /id="templateGallery"/);
   const portalTopbar = html.match(/<header class="topbar">[\s\S]*?<\/header>/)?.[0] || '';
   assert.doesNotMatch(portalTopbar, /AutoCard DHO/);
+  assert.match(legacy, /url=\.\.\/autocard\.html/);
+  assert.match(legacy, /href="\.\.\/autocard\.html"/);
   assert.match(guard, /getElementById\('main-content'\)/);
   assert.match(guard, /main\.replaceChildren\(message\)/);
   assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/cards/);

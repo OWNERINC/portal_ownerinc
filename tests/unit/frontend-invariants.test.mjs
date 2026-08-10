@@ -145,8 +145,9 @@ test('admin exposes paginated audit and Ombudsman filters', async () => {
 });
 
 test('AutoCard shell preserves accessible navigation and reduced motion', async () => {
-  const [html, css] = await Promise.all([
-    readFile('public/autocard/index.html', 'utf8'),
+  const [html, dashboard, css] = await Promise.all([
+    readFile('public/autocard.html', 'utf8'),
+    readFile('public/dashboard.html', 'utf8'),
     readFile('public/autocard/styles.css', 'utf8'),
   ]);
   assert.match(html, /href="#main-content"/);
@@ -154,5 +155,7 @@ test('AutoCard shell preserves accessible navigation and reduced motion', async 
   assert.match(html, /aria-current="page"/);
   assert.match(html, /aria-label="Navegação do AutoCard"/);
   assert.match(html, /type="button"/);
+  assert.match(dashboard, /href="\.\/autocard\.html"/);
+  assert.doesNotMatch(dashboard, /href="\.\/autocard\/"/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
 });
