@@ -70,6 +70,9 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /https:\/\/unpkg\.com/);
   assert.match(nginx, /https:\/\/www\.gstatic\.com/);
   assert.match(nginx, /font-src 'self'/);
+  assert.match(nginx, /resolver 127\.0\.0\.11 valid=30s/);
+  assert.match(nginx, /set \$api_upstream http:\/\/api:3000/);
+  assert.match(nginx, /proxy_pass \$api_upstream/);
   assert.match(nginx, /location ~\* \\\.\(css\|js\)\$ \{[\s\S]*expires -1;[\s\S]*Cache-Control "no-cache"/);
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
 });

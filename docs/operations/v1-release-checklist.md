@@ -124,10 +124,14 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [x] `npm audit --omit=dev` do cron passou sem vulnerabilidades após atualizar
   o transporte SMTP.
 - [x] `git diff --check` passou.
-- [ ] Migration integration test executado em PostgreSQL local; pendente porque
-  o Docker Desktop não está acessível neste ambiente.
-- [ ] Smoke test Docker executado; pendente pelo mesmo bloqueio do daemon.
-- [ ] Restore local executado; pendente pelo mesmo bloqueio do daemon.
+- [x] Migration integration test executado em PostgreSQL local; ledger até
+  `011_cron_alert_state` e segunda execução passaram.
+- [x] Smoke Docker equivalente executado dentro da rede Compose: health,
+  readiness, Portal e `/autocard/` retornaram HTTP 200.
+- [x] Dump PostgreSQL restaurado em banco descartável e `autocard_cards`,
+  `cron_status` e `alert_signature` foram verificados.
+- [ ] Restore dos uploads executado separadamente; o restore PostgreSQL foi
+  validado, mas a execução integral de `scripts/restore.sh` requer Bash local.
 - [x] Invariantes estáticas cobrem AutoCard, paginação, dashboard, lembretes,
   filtros administrativos, alertas, backup S3 e acessibilidade.
 - [ ] Teste físico com NVDA/VoiceOver executado; requer dispositivo/ambiente
