@@ -117,3 +117,16 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Responsável operacional aprovou backup, alertas e restore.
 - [ ] Responsável por LGPD aprovou retenção e tratamento de dados.
 - [ ] Produção só foi declarada pronta após todas as validações externas.
+
+## Local Verification Record
+
+- [x] `npm run verify` passou com 72 testes.
+- [x] `git diff --check` passou.
+- [ ] Migration integration test executado em PostgreSQL local; pendente porque
+  o Docker Desktop não está acessível neste ambiente.
+- [ ] Smoke test Docker executado; pendente pelo mesmo bloqueio do daemon.
+- [ ] Restore local executado; pendente pelo mesmo bloqueio do daemon.
+- [x] Invariantes estáticas cobrem AutoCard, paginação, dashboard, lembretes,
+  filtros administrativos, alertas, backup S3 e acessibilidade.
+- [ ] Teste físico com NVDA/VoiceOver executado; requer dispositivo/ambiente
+  externo.
