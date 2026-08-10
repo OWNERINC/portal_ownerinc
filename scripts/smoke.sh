@@ -5,8 +5,11 @@ base_url=${BASE_URL:-http://127.0.0.1:${HTTP_PORT:-80}}
 attempts=${SMOKE_ATTEMPTS:-30}
 
 for ((attempt = 1; attempt <= attempts; attempt++)); do
-  health=$(curl --fail --silent --show-error --max-time 5 "$base_url/api/ready" 2>/dev/null || true)
-  if [[ $health == *'"status":"ready"'* ]] && curl --fail --silent --show-error --max-time 5 --output /dev/null "$base_url/"; then
+  liveness=$(curl --fail --silent --show-error --max-time 5 "$base_url/api/health" 2>/dev/null || true)
+  readiness=$(curl --fail --silent --show-error --max-time 5 "$base_url/api/ready" 2>/dev/null || true)
+  if [[ $liveness == *'"status":"ok"'* ]] && [[ $readiness == *'"status":"ready"'* ]] \
+    && curl --fail --silent --show-error --max-time 5 --output /dev/null "$base_url/" \
+    && curl --fail --silent --show-error --max-time 5 --output /dev/null "$base_url/autocard/"; then
     printf '{"check":"smoke","status":"ok","attempt":%d}\n' "$attempt"
     exit 0
   fi

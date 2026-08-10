@@ -97,6 +97,10 @@ test('deployment uses a committed archive, backup, smoke gate, and rollback', as
   assert.match(backupS3, /BACKUP_DIR/);
   assert.match(backupS3, /s3 cp --recursive/);
   assert.match(alert, /sendOperationalAlert/);
+  const smoke = await read('scripts/smoke.sh');
+  assert.match(smoke, /api\/health/);
+  assert.match(smoke, /api\/ready/);
+  assert.match(smoke, /autocard\//);
 });
 
 test('cron health deduplicates SMTP alerts and sends recovery notifications', async () => {
