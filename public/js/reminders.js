@@ -17,6 +17,9 @@ let reminders = [];
 let editingId = null;
 let page = 0;
 let totalReminders = 0;
+let deliveriesPage = 0;
+let deliveriesTotal = 0;
+const DELIVERY_PAGE_SIZE = 20;
 
 function tableState(message, retry) {
   clear(document.getElementById('reminders-pagination'));
@@ -89,10 +92,20 @@ async function loadDeliveryManager() {
   if (!canManage) return;
   const deliveriesBody = document.getElementById('deliveries-tbody');
   try {
-    const [{ data: deliveries }, cron] = await Promise.all([
-      fetchAPIPage('/api/reminders/deliveries?limit=10&offset=0'),
+    const params = new URLSearchParams({ limit: String(DELIVERY_PAGE_SIZE), offset: String(deliveriesPage * DELIVERY_PAGE_SIZE) });
+    const filters = {
+      status: document.getElementById('delivery-status').value,
+      channel: document.getElementById('delivery-channel').value,
+      user_uid: document.getElementById('delivery-user').value.trim(),
+      scheduled_from: document.getElementById('delivery-from').value,
+      scheduled_to: document.getElementById('delivery-to').value,
+    };
+    Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+    const [{ data: deliveries, total }, cron] = await Promise.all([
+      fetchAPIPage(`/api/reminders/deliveries?${params}`),
       fetchAPI('/api/reminders/cron-status'),
     ]);
+    deliveriesTotal = total ?? deliveries.length;
     clear(deliveriesBody);
     if (!deliveries.length) {
       deliveriesBody.append(element('tr', {}, element('td', { colspan: '5', className: 'empty-state', text: 'Nenhuma entrega registrada.' })));
@@ -107,6 +120,15 @@ async function loadDeliveryManager() {
           element('td', { text: String(delivery.attempt_count || 0) }),
         ]));
       });
+    }
+    const deliveryPagination = clear(document.getElementById('deliveries-pagination'));
+    const pageCount = Math.max(1, Math.ceil(deliveriesTotal / DELIVERY_PAGE_SIZE));
+    if (pageCount > 1) {
+      deliveryPagination.append(
+        element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', ...(deliveriesPage === 0 ? { disabled: '' } : {}), on: { click: () => { deliveriesPage -= 1; loadDeliveryManager(); } } }),
+        element('span', { text: `Página ${deliveriesPage + 1} de ${pageCount}` }),
+        element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', ...(deliveriesPage >= pageCount - 1 ? { disabled: '' } : {}), on: { click: () => { deliveriesPage += 1; loadDeliveryManager(); } } }),
+      );
     }
     const health = document.getElementById('cron-health');
     if (!cron) {
@@ -132,6 +154,8 @@ function newReminder() {
   editingId = null;
   form.reset();
   document.getElementById('r-target').value = 'all';
+  document.getElementById('r-uids').value = '';
+  syncTargetFields();
   document.getElementById('r-channel').value = 'email';
   document.getElementById('r-active').checked = true;
   document.getElementById('modal-reminder-title').textContent = 'Novo Lembrete';
@@ -144,10 +168,29 @@ function editReminder(reminder) {
   document.getElementById('r-title').value = reminder.title || '';
   document.getElementById('r-desc').value = reminder.description || '';
   document.getElementById('r-day').value = reminder.trigger_day;
-  document.getElementById('r-target').value = typeof reminder.target_users === 'string' ? reminder.target_users : 'all';
+  const target = typeof reminder.target_users === 'string' ? reminder.target_users : 'uids';
+  document.getElementById('r-target').value = target;
+  document.getElementById('r-uids').value = Array.isArray(reminder.target_users) ? reminder.target_users.join('\n') : '';
+  syncTargetFields();
   document.getElementById('r-channel').value = reminder.channel || 'email';
   document.getElementById('r-active').checked = !!reminder.active;
   openDialog(modal, document.getElementById('r-title'));
+}
+
+function syncTargetFields() {
+  const isIndividual = document.getElementById('r-target').value === 'uids';
+  document.getElementById('individual-target-group').hidden = !isIndividual;
+  document.getElementById('r-uids').required = isIndividual;
+}
+
+function readTargetUsers() {
+  const target = document.getElementById('r-target').value;
+  if (target !== 'uids') return target;
+  const values = document.getElementById('r-uids').value.split(/\s+/).map(value => value.trim()).filter(Boolean);
+  if (!values.length || values.length > 500 || new Set(values).size !== values.length || values.some(value => value.length > 128)) {
+    throw new Error('Informe UIDs válidos, únicos e um por linha.');
+  }
+  return values;
 }
 
 async function deleteReminder(id) {
@@ -164,11 +207,13 @@ async function deleteReminder(id) {
 form.addEventListener('submit', async event => {
   event.preventDefault();
   if (!form.reportValidity()) return;
-  const data = {
+    let targetUsers;
+    try { targetUsers = readTargetUsers(); } catch (error) { showToast(error.message); return; }
+    const data = {
     title: document.getElementById('r-title').value.trim(),
     description: document.getElementById('r-desc').value.trim(),
     trigger_day: Number(document.getElementById('r-day').value),
-    target_users: document.getElementById('r-target').value,
+      target_users: targetUsers,
     channel: document.getElementById('r-channel').value,
     active: document.getElementById('r-active').checked,
   };
@@ -193,5 +238,13 @@ form.addEventListener('submit', async event => {
 document.getElementById('btn-new-reminder').addEventListener('click', newReminder);
 document.getElementById('modal-reminder-close').addEventListener('click', () => closeDialog(modal));
 document.getElementById('modal-reminder-cancel').addEventListener('click', () => closeDialog(modal));
+document.getElementById('r-target').addEventListener('change', syncTargetFields);
+document.getElementById('delivery-filters').addEventListener('submit', event => { event.preventDefault(); deliveriesPage = 0; loadDeliveryManager(); });
+document.getElementById('delivery-clear').addEventListener('click', () => {
+  document.getElementById('delivery-filters').reset();
+  deliveriesPage = 0;
+  loadDeliveryManager();
+});
+syncTargetFields();
 loadReminders(true);
 loadDeliveryManager();

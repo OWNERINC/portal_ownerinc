@@ -80,6 +80,21 @@
             <tbody id="deliveries-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
           </table>
         </div>
+        <form id="delivery-filters" class="filter-bar" autocomplete="off">
+          <label for="delivery-status">Status</label>
+          <select id="delivery-status" class="form-select"><option value="">Todos</option><option value="sent">Enviado</option><option value="failed">Falhou</option><option value="skipped">Ignorado</option><option value="pending">Pendente</option><option value="sending">Enviando</option></select>
+          <label for="delivery-channel">Canal</label>
+          <select id="delivery-channel" class="form-select"><option value="">Todos</option><option value="email">E-mail</option><option value="whatsapp">WhatsApp</option></select>
+          <label for="delivery-user">UID</label>
+          <input id="delivery-user" class="form-input" type="search" maxlength="128" placeholder="UID do usuário">
+          <label for="delivery-from">De</label>
+          <input id="delivery-from" class="form-input" type="date">
+          <label for="delivery-to">Até</label>
+          <input id="delivery-to" class="form-input" type="date">
+          <button class="btn btn-primary" type="submit">Filtrar</button>
+          <button id="delivery-clear" class="btn btn-ghost" type="button">Limpar</button>
+        </form>
+        <div id="deliveries-pagination" class="pagination" aria-label="Paginação do histórico de entregas"></div>
       </section>
     </main>
   </div>
@@ -94,7 +109,7 @@
     </div>
     <div class="form-group">
       <label class="form-label" for="r-title">Título</label>
-      <input class="form-input" id="r-title" name="title" type="text" required placeholder="Ex.: Emissão de nota fiscal PJ…" autocomplete="off">
+      <input class="form-input" id="r-title" name="title" type="text" required placeholder="Ex.: Revisar política interna…" autocomplete="off">
     </div>
     <div class="form-group">
       <label class="form-label" for="r-desc">Descrição</label>
@@ -110,7 +125,13 @@
         <option value="all">Todos</option>
         <option value="pj">Apenas PJ</option>
         <option value="clt">Apenas CLT</option>
+        <option value="uids">Usuários específicos</option>
       </select>
+    </div>
+    <div class="form-group" id="individual-target-group" hidden>
+      <label class="form-label" for="r-uids">UIDs dos usuários</label>
+      <textarea class="form-textarea" id="r-uids" rows="4" placeholder="Um UID por linha" autocomplete="off"></textarea>
+      <small class="form-help">Informe um UID por linha. O Portal valida os valores antes de salvar.</small>
     </div>
     <div class="form-group">
       <label class="form-label" for="r-channel">Canal</label>

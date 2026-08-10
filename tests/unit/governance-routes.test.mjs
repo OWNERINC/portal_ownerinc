@@ -21,6 +21,7 @@ test('strict payload validation rejects unknown, missing, oversized, and malform
   assert.equal(httpUrl('https://ownerinc.com'), true);
   assert.equal(uuid('e7fa4cd2-70f5-4d75-a77f-b17b5caedfa9'), true);
   assert.equal(targetUsers(['uid-1', 'uid-2']), true);
+  assert.equal(targetUsers(['uid-1', 'uid-1']), false);
   assert.equal(targetUsers([1]), false);
 });
 

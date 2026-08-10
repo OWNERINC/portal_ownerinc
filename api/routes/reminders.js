@@ -17,6 +17,27 @@ const date = (value) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(value)
     && !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 };
+const brasiliaDate = () => {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  return new Date(Date.UTC(
+    Number(parts.find(part => part.type === 'year').value),
+    Number(parts.find(part => part.type === 'month').value) - 1,
+    Number(parts.find(part => part.type === 'day').value),
+  ));
+};
+const nextOccurrence = (triggerDay, start = brasiliaDate()) => {
+  for (let offset = 0; offset < 2; offset += 1) {
+    const month = start.getUTCMonth() + offset;
+    const year = start.getUTCFullYear() + Math.floor(month / 12);
+    const normalizedMonth = month % 12;
+    const lastDay = new Date(Date.UTC(year, normalizedMonth + 1, 0)).getUTCDate();
+    const occurrence = new Date(Date.UTC(year, normalizedMonth, Math.min(Number(triggerDay), lastDay)));
+    if (occurrence >= start) return occurrence;
+  }
+  return null;
+};
 
 router.get('/deliveries', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageReminders')) return forbidden(req, res);
@@ -60,6 +81,29 @@ router.get('/cron-status', authMiddleware, async (req, res, next) => {
   try {
     const { rows } = await pool.query('SELECT * FROM cron_status WHERE name = $1', ['reminders']);
     res.json(rows[0] || null);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/upcoming', authMiddleware, async (req, res, next) => {
+  if (req.query.days !== '7' || Object.keys(req.query).length !== 1) return invalid(req, res);
+  const audience = req.user.contract_type === 'pj' || req.user.is_pj ? 'pj' : 'clt';
+  const where = `WHERE active = TRUE AND (
+    target_users = '"all"'::jsonb
+    OR target_users = to_jsonb($1::text)
+    OR target_users ? $2
+  )`;
+  try {
+    const { rows } = await pool.query(`SELECT * FROM reminders ${where} ORDER BY trigger_day, id`, [audience, req.user.uid]);
+    const start = brasiliaDate();
+    const end = new Date(start.getTime() + 7 * 86400000);
+    const upcoming = rows
+      .map(reminder => ({ ...reminder, next_occurrence: nextOccurrence(reminder.trigger_day, start) }))
+      .filter(reminder => reminder.next_occurrence && reminder.next_occurrence <= end)
+      .sort((left, right) => left.next_occurrence - right.next_occurrence || String(left.id).localeCompare(String(right.id)))
+      .map(reminder => ({ ...reminder, next_occurrence: reminder.next_occurrence.toISOString().slice(0, 10) }));
+    res.json(upcoming);
   } catch (error) {
     next(error);
   }

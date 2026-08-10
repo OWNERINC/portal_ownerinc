@@ -114,3 +114,18 @@ test('public content pages expose server pagination and category filters', async
   assert.match(benefits, /benefits-filters/);
   assert.match(pagination, /function renderPagination/);
 });
+
+test('V1 dashboard removes unavailable integrations and reminders use scoped upcoming data', async () => {
+  const [html, script, reminders] = await Promise.all([
+    readFile('public/dashboard.html', 'utf8'),
+    readFile('public/js/dashboard.js', 'utf8'),
+    readFile('public/js/reminders.js', 'utf8'),
+  ]);
+  assert.doesNotMatch(html, /pj-card|Nota Fiscal/);
+  assert.doesNotMatch(html, /solides-card/);
+  assert.match(script, /\/api\/reminders\/upcoming\?days=7/);
+  assert.doesNotMatch(script, /pj-card|solides-card|app\.solides\.com\.br/);
+  assert.match(reminders, /individual-target-group/);
+  assert.match(reminders, /delivery-filters/);
+  assert.match(reminders, /deliveries-pagination/);
+});

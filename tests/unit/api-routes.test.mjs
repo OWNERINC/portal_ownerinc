@@ -78,6 +78,16 @@ test('ordinary reminder reads are always active and audience scoped', async () =
   assert.deepEqual(calls[0].params, ['clt', 'viewer-1']);
 });
 
+test('upcoming reminders are scoped and require the fixed seven-day contract', async () => {
+  assert.equal((await request(app).get('/api/reminders/upcoming')).status, 400);
+  calls.length = 0;
+  const response = await request(app).get('/api/reminders/upcoming?days=7');
+  assert.equal(response.status, 200);
+  assert.match(calls[0].sql, /active = TRUE/);
+  assert.match(calls[0].sql, /target_users/);
+  assert.deepEqual(calls[0].params, ['clt', 'viewer-1']);
+});
+
 test('only reminder managers can request inactive and all-audience records', async () => {
   assert.equal((await request(app).get('/api/reminders?all=true')).status, 403);
   const response = await request(app).get('/api/reminders?all=true').set('x-test-admin', 'true');
