@@ -121,6 +121,8 @@ responsável e evidência; não marque uma validação externa usando apenas
 ## Local Verification Record
 
 - [x] `npm run verify` passou com 72 testes.
+- [x] `npm audit --omit=dev` do cron passou sem vulnerabilidades após atualizar
+  o transporte SMTP.
 - [x] `git diff --check` passou.
 - [ ] Migration integration test executado em PostgreSQL local; pendente porque
   o Docker Desktop não está acessível neste ambiente.
