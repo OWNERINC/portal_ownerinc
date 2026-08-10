@@ -30,3 +30,4 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
 .autocard-page .gallery{min-height:0}
 .autocard-page .editor,.autocard-page .preview-area{min-width:0}
 @media(max-width:768px){.autocard-page .page-body{padding:20px 16px max(20px,env(safe-area-inset-bottom))}.autocard-toolbar{padding:16px}.autocard-toolbar>div:first-child{flex-basis:100%}.autocard-toolbar nav{width:100%;align-self:stretch}.autocard-toolbar .tab{flex:1}.autocard-page .gallery{padding:20px}}
+@media(prefers-reduced-motion:reduce){.autocard-page *,.autocard-page *::before,.autocard-page *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}.autocard-page .template-tile:hover{transform:none}}
