@@ -6,6 +6,8 @@ benefícios, lembretes e ouvidoria.
 ## Arquitetura
 
 - `public/`: aplicação web estática e integração com Firebase Auth.
+- `public/autocard.html`: página canônica do AutoCard dentro do shell do Portal;
+  `/autocard/` permanece como redirect compatível para bookmarks antigos.
 - `api/`: API Express, autorização e persistência PostgreSQL.
 - `cron/`: processamento diário de lembretes e notificações.
 - `firebase-emulator/`: imagem do Auth Emulator usada apenas no perfil local.
@@ -72,4 +74,5 @@ HTML.
 - [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)
 - [Fluxo de dados](docs/architecture/data-flow.md)
 - [Deploy](docs/operations/deployment.md)
+- [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Handoff](docs/session/README.md)
