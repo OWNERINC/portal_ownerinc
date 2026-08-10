@@ -7,16 +7,57 @@ const {
 
 const router = express.Router();
 const schema = { title: text(200, true), category: text(100), content: text(50000) };
+const listQuery = {
+  q: value => value.length <= 120,
+  category: value => value.length <= 100,
+};
+
+router.get('/categories', authMiddleware, async (req, res, next) => {
+  if (Object.keys(req.query).length) return invalid(req, res);
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT btrim(category) AS category
+       FROM knowledge_base
+       WHERE btrim(category) <> ''
+       ORDER BY category`,
+    );
+    res.json(rows.map(({ category }) => category));
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/', authMiddleware, async (req, res, next) => {
-  const page = parseListQuery(req.query);
+  const page = parseListQuery(req.query, listQuery);
   if (!page) return invalid(req, res);
+  const values = [];
+  const conditions = [];
+  if (req.query.q) {
+    values.push(`%${req.query.q.replace(/[\\%_]/g, '\\$&')}%`);
+    conditions.push(`(title ILIKE $${values.length} ESCAPE '\\' OR content ILIKE $${values.length} ESCAPE '\\')`);
+  }
+  if (req.query.category) {
+    values.push(req.query.category);
+    conditions.push(`category = $${values.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   try {
     const [{ rows: [{ count }] }, { rows }] = await Promise.all([
-      pool.query('SELECT COUNT(*)::integer AS count FROM knowledge_base'),
-      pool.query('SELECT * FROM knowledge_base ORDER BY updated_at DESC LIMIT $1 OFFSET $2', [page.limit, page.offset]),
+      pool.query(`SELECT COUNT(*)::integer AS count FROM knowledge_base ${where}`, values),
+      pool.query(`SELECT * FROM knowledge_base ${where} ORDER BY updated_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`, [...values, page.limit, page.offset]),
     ]);
     res.set('X-Total-Count', String(count)).json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id', authMiddleware, async (req, res, next) => {
+  if (!uuid(req.params.id)) return invalid(req, res);
+  try {
+    const { rows } = await pool.query('SELECT * FROM knowledge_base WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
+    res.json(rows[0]);
   } catch (error) {
     next(error);
   }

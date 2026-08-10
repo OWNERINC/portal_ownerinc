@@ -98,3 +98,19 @@ test('Sólides administration loads every eligible CLT page', async () => {
   assert.match(script, /while \(offset < total\)/);
   assert.match(script, /solides\/admin\/users\?limit=100&offset=\$\{offset\}/);
 });
+
+test('public content pages expose server pagination and category filters', async () => {
+  const [knowledge, academy, benefits, pagination] = await Promise.all([
+    readFile('public/js/knowledge.js', 'utf8'),
+    readFile('public/js/academy.js', 'utf8'),
+    readFile('public/js/benefits.js', 'utf8'),
+    readFile('public/js/pagination.js', 'utf8'),
+  ]);
+  assert.match(knowledge, /fetchAPIPage\(`\/api\/knowledge\?\$\{search\}`\)/);
+  assert.match(knowledge, /renderPagination\(document\.getElementById\('articles-pagination'/);
+  assert.match(academy, /fetchAPIPage\(`\/api\/academy\?\$\{request\}`\)/);
+  assert.match(academy, /academy-filters/);
+  assert.match(benefits, /fetchAPIPage\(`\/api\/benefits\?\$\{request\}`\)/);
+  assert.match(benefits, /benefits-filters/);
+  assert.match(pagination, /function renderPagination/);
+});

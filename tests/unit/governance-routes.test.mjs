@@ -64,3 +64,19 @@ test('privileged user listing is strict, paginated, counted, and audited', async
   assert.match(jobTitles, /job_title\.update/);
   assert.match(jobTitles, /active = TRUE/);
 });
+
+test('public content routes provide server-side filters and category metadata', async () => {
+  const [knowledge, academy, benefits] = await Promise.all([
+    readFile('api/routes/knowledge.js', 'utf8'),
+    readFile('api/routes/academy.js', 'utf8'),
+    readFile('api/routes/benefits.js', 'utf8'),
+  ]);
+  assert.match(knowledge, /router\.get\('\/categories'/);
+  assert.match(knowledge, /ILIKE/);
+  assert.match(knowledge, /category = \$\$\{values\.length\}/);
+  assert.match(knowledge, /router\.get\('\/:id'/);
+  assert.match(academy, /router\.get\('\/categories'/);
+  assert.match(academy, /category = \$1/);
+  assert.match(benefits, /router\.get\('\/categories'/);
+  assert.match(benefits, /category = \$1/);
+});

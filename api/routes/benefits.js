@@ -13,15 +13,37 @@ const schema = {
 };
 const listQuery = { all: (value) => ['true', 'false'].includes(value), active: (value) => value === 'true' };
 
+router.get('/categories', authMiddleware, async (req, res, next) => {
+  const all = req.query.all;
+  if (all !== undefined && !['true', 'false'].includes(all)) return invalid(req, res);
+  if (all === 'true' && !can(req.user, 'manageBenefits')) return forbidden(req, res);
+  const where = mayViewAll(req.user, 'manageBenefits', all) ? '' : 'WHERE active = TRUE';
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT btrim(category) AS category
+       FROM benefits ${where} ${where ? 'AND' : 'WHERE'} btrim(category) <> ''
+       ORDER BY category`,
+    );
+    res.json(rows.map(({ category }) => category));
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/', authMiddleware, async (req, res, next) => {
-  const page = parseListQuery(req.query, listQuery);
+  const page = parseListQuery(req.query, { ...listQuery, category: value => value.length <= 100 });
   if (!page) return invalid(req, res);
   if (req.query.all === 'true' && !can(req.user, 'manageBenefits')) return forbidden(req, res);
-  const where = mayViewAll(req.user, 'manageBenefits', req.query.all) ? '' : 'WHERE active = TRUE';
+  const conditions = [];
+  if (!mayViewAll(req.user, 'manageBenefits', req.query.all)) conditions.push('active = TRUE');
+  if (req.query.active === 'true') conditions.push('active = TRUE');
+  if (req.query.category) conditions.push('category = $1');
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const filterValues = req.query.category ? [req.query.category] : [];
   try {
     const [{ rows: [{ count }] }, { rows }] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::integer AS count FROM benefits ${where}`),
-      pool.query(`SELECT * FROM benefits ${where} ORDER BY "order", id LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
+      pool.query(`SELECT COUNT(*)::integer AS count FROM benefits ${where}`, filterValues),
+      pool.query(`SELECT * FROM benefits ${where} ORDER BY "order", id LIMIT $${filterValues.length + 1} OFFSET $${filterValues.length + 2}`, [...filterValues, page.limit, page.offset]),
     ]);
     res.set('X-Total-Count', String(count)).json(rows);
   } catch (error) {
