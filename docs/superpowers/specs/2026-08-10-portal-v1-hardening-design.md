@@ -19,7 +19,8 @@ dark mode remain out of scope.
   and Docker Compose architecture.
 - Do not introduce a frontend framework or replace the duplicated Portal shell
   with a runtime-generated SPA shell.
-- Keep `/autocard/` as the canonical AutoCard URL.
+- Keep `public/autocard.html` as the canonical AutoCard page; `/autocard/`
+  redirects to it for compatibility.
 - Render AutoCard inside the Portal shell with the shared sidebar, topbar,
   skip link, `main.page-body`, logout behavior, and mobile drawer.
 - Keep AutoCard server authorization restricted to the exact normalized DHO job
@@ -42,11 +43,12 @@ dark mode remain out of scope.
 
 ### AutoCard shell integration
 
-`public/autocard/index.html` becomes a normal authenticated Portal page. Its
-own application content remains inside `main.page-body`, while the AutoCard
-topbar and page-level body shell are removed. The existing editor scripts keep
-their element IDs and behavior to minimize regression risk. Relative API calls
-continue to use the Portal's same-origin `/api` namespace.
+`public/autocard.html` is the canonical authenticated Portal page. The legacy
+`/autocard/` entry redirects to `../autocard.html`. Its AutoCard application
+content remains inside `main.page-body` alongside the shared Portal shell. The
+existing editor scripts keep their element IDs and behavior to minimize
+regression risk. Relative API calls continue to use the Portal's same-origin
+`/api` namespace.
 
 The sidebar item remains present for all authenticated pages but is hidden by
 the existing exact-title navigation guard for users without DHO access. The

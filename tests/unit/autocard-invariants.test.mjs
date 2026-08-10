@@ -37,12 +37,13 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
 });
 
 test('AutoCard UI is guarded before loading the editor', async () => {
-  const [entry, guard, html, legacy, dashboard] = await Promise.all([
+  const [entry, guard, html, legacy, dashboard, sidebar] = await Promise.all([
     readFile('public/autocard/entry.js', 'utf8'),
     readFile('public/autocard/guard.js', 'utf8'),
     readFile('public/autocard.html', 'utf8'),
     readFile('public/autocard/index.html', 'utf8'),
     readFile('public/dashboard.html', 'utf8'),
+    readFile('public/js/sidebar.js', 'utf8'),
   ]);
   assert.match(entry, /await requireAutoCard\(\)/);
   assert.match(entry, /import\('\.\/app\.js'\)/);
@@ -54,13 +55,31 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(html, /class="page-body"[^>]+id="main-content"/);
   assert.match(html, /href="\.\/autocard\.html" class="active"/);
   assert.match(html, /src="\.\/autocard\/entry\.js"/);
+  for (const path of [
+    /<script src="\.\/js\/auth-shell\.js"><\/script>/,
+    /<link rel="stylesheet" href="\.\/css\/tokens\.css">/,
+    /<link rel="stylesheet" href="\.\/autocard\/styles\.css">/,
+    /<link rel="stylesheet" href="\.\/css\/layout\.css">/,
+    /<link rel="stylesheet" href="\.\/css\/components\.css">/,
+    /<img src="\.\/assets\/logo-branco\.svg"/,
+    /<img src="\.\/assets\/icon-branco\.svg"/,
+    /<script src="\.\/js\/sidebar\.js"><\/script>/,
+    /<script type="module" src="\.\/autocard\/entry\.js"><\/script>/,
+  ]) assert.match(html, path);
+  assert.match(html, /class="sidebar-toggle" id="sidebar-toggle"/);
+  assert.match(html, /class="sidebar-logout"/);
+  assert.match(sidebar, /mobileToggle\.className = 'mobile-menu-toggle'/);
+  assert.match(sidebar, /querySelectorAll\('\.sidebar-logout'\)/);
+  assert.match(sidebar, /import\('\.\/auth\.js'\)/);
   assert.match(html, /id="templateGallery"/);
   const portalTopbar = html.match(/<header class="topbar">[\s\S]*?<\/header>/)?.[0] || '';
   assert.doesNotMatch(portalTopbar, /AutoCard DHO/);
   assert.match(legacy, /url=\.\.\/autocard\.html/);
   assert.match(legacy, /href="\.\.\/autocard\.html"/);
+  assert.doesNotMatch(legacy, /<script\b/);
   assert.match(guard, /getElementById\('main-content'\)/);
   assert.match(guard, /main\.replaceChildren\(message\)/);
+  assert.match(guard, /href: '\.\/dashboard\.html'/);
   assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/cards/);
   assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/media/);
   assert.match(dashboard, /class="autocard-link"/);

@@ -28,7 +28,7 @@
 - Consumes the current `public/autocard.html`, `public/autocard/index.html`, and Portal page markup.
 - Produces assertions for the canonical root-level page, root-level sidebar links, and legacy redirect.
 
-- [ ] **Step 1: Replace the nested-page assumptions with canonical-route assertions**
+- [x] **Step 1: Replace the nested-page assumptions with canonical-route assertions**
 
 Update the AutoCard UI invariant to read `public/autocard.html` as the shell page. Assert that it contains:
 
@@ -50,7 +50,7 @@ assert.match(legacy, /href="\.\.\/autocard\.html"/);
 
 Keep the existing assertions for the guard and API usage.
 
-- [ ] **Step 2: Add navigation assertions for root-level AutoCard links**
+- [x] **Step 2: Add navigation assertions for root-level AutoCard links**
 
 In the frontend invariant, read `public/dashboard.html` and assert that its AutoCard link targets the sibling page:
 
@@ -61,7 +61,7 @@ assert.doesNotMatch(dashboard, /href="\.\/autocard\/"/);
 
 Keep the reduced-motion assertion against `public/autocard/styles.css`.
 
-- [ ] **Step 3: Run the focused tests and confirm they fail**
+- [x] **Step 3: Run the focused tests and confirm they fail**
 
 Run:
 
@@ -91,7 +91,7 @@ Expected result: FAIL because the current canonical file is only a meta-refresh 
 - Consumes `public/autocard/entry.js`, `public/autocard/styles.css`, and the existing shared shell files.
 - Produces `autocard.html` as the canonical page and `autocard/index.html` as a compatibility redirect.
 
-- [ ] **Step 1: Replace the root stub with the AutoCard shell**
+- [x] **Step 1: Replace the root stub with the AutoCard shell**
 
 Replace `public/autocard.html` with the existing shell structure from the nested page, using root-level paths:
 
@@ -118,7 +118,7 @@ Use root-level shared asset paths and load the implementation from:
 
 The page must retain `#main-content`, `class="page-body"`, the skip link, sidebar toggle, topbar, and logout button.
 
-- [ ] **Step 2: Convert the old nested entry into a compatibility redirect**
+- [x] **Step 2: Convert the old nested entry into a compatibility redirect**
 
 Replace `public/autocard/index.html` with a minimal accessible redirect:
 
@@ -135,12 +135,11 @@ Replace `public/autocard/index.html` with a minimal accessible redirect:
 <body>
   <p>Redirecionando para o AutoCard do Portal…</p>
   <p><a href="../autocard.html">Abrir AutoCard</a></p>
-  <script>window.location.replace('../autocard.html');</script>
 </body>
 </html>
 ```
 
-- [ ] **Step 3: Update every Portal sidebar link**
+- [x] **Step 3: Update every Portal sidebar link**
 
 Change each exact occurrence of:
 
@@ -156,7 +155,7 @@ href="./autocard.html"
 
 Do not change the nested implementation imports or `/api/autocard/...` URLs.
 
-- [ ] **Step 4: Normalize the access-denied return link**
+- [x] **Step 4: Normalize the access-denied return link**
 
 In `public/autocard/guard.js`, change the return link to the root-level dashboard:
 
@@ -166,7 +165,7 @@ href: './dashboard.html'
 
 This matches the canonical document depth and the redirects used by `auth.js`.
 
-- [ ] **Step 5: Run the focused tests and confirm they pass**
+- [x] **Step 5: Run the focused tests and confirm they pass**
 
 Run:
 
@@ -181,7 +180,7 @@ Expected result: all focused tests pass.
 **Files:**
 - No additional source files.
 
-- [ ] **Step 1: Confirm no nested navigation links remain**
+- [x] **Step 1: Confirm no nested navigation links remain**
 
 Run:
 
@@ -191,7 +190,7 @@ rg 'href="\./autocard/"' public
 
 Expected result: no matches.
 
-- [ ] **Step 2: Run the full verification**
+- [x] **Step 2: Run the full verification**
 
 Run:
 
@@ -202,7 +201,7 @@ git diff --check
 
 Expected result: verification passes, including all unit tests, syntax checks, security checks, and Compose checks.
 
-- [ ] **Step 3: Inspect the final change set**
+- [x] **Step 3: Inspect the final change set**
 
 Run:
 
@@ -214,7 +213,7 @@ git diff -- public/autocard.html public/autocard/index.html public/autocard/guar
 
 Confirm the diff contains only the route/shell fix and its invariants.
 
-- [ ] **Step 4: Commit the implementation**
+- [x] **Step 4: Commit the implementation**
 
 ```sh
 git add public/autocard.html public/autocard/index.html public/autocard/guard.js public/dashboard.html public/knowledge.html public/reminders.html public/academy.html public/benefits.html public/ombudsman.html public/profile.html public/admin.html public/solides.html tests/unit/autocard-invariants.test.mjs tests/unit/frontend-invariants.test.mjs

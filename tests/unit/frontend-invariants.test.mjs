@@ -145,10 +145,10 @@ test('admin exposes paginated audit and Ombudsman filters', async () => {
 });
 
 test('AutoCard shell preserves accessible navigation and reduced motion', async () => {
-  const [html, dashboard, css] = await Promise.all([
+  const [html, css, ...portalPages] = await Promise.all([
     readFile('public/autocard.html', 'utf8'),
-    readFile('public/dashboard.html', 'utf8'),
     readFile('public/autocard/styles.css', 'utf8'),
+    ...pages.map((page) => readFile(`public/${page}.html`, 'utf8')),
   ]);
   assert.match(html, /href="#main-content"/);
   assert.match(html, /aria-label="Navegação principal"/);
@@ -156,7 +156,10 @@ test('AutoCard shell preserves accessible navigation and reduced motion', async 
   assert.match(html, /aria-label="Navegação do AutoCard"/);
   assert.match(html, /type="button"/);
   assert.match(html, /<script defer src="https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/html2canvas\/1\.4\.1\/html2canvas\.min\.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu\+Wgds8Gp\/gU33kqBtgNS4tSPHuGibyoeqMV\/TJlSKda6FXzoEyYGjTe\+vXA==" crossorigin="anonymous"><\/script>/);
-  assert.match(dashboard, /href="\.\/autocard\.html"/);
-  assert.doesNotMatch(dashboard, /href="\.\/autocard\/"/);
+  for (const [index, pageHtml] of portalPages.entries()) {
+    const page = pages[index];
+    assert.match(pageHtml, /<li class="autocard-link"><a href="\.\/autocard\.html"/, `${page}: missing canonical AutoCard link`);
+    assert.doesNotMatch(pageHtml, /href="\.\/autocard\/"/, `${page}: retains legacy AutoCard link`);
+  }
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
 });
