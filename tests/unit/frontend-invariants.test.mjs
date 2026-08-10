@@ -155,6 +155,7 @@ test('AutoCard shell preserves accessible navigation and reduced motion', async 
   assert.match(html, /aria-current="page"/);
   assert.match(html, /aria-label="Navegação do AutoCard"/);
   assert.match(html, /type="button"/);
+  assert.match(html, /<script defer src="https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/html2canvas\/1\.4\.1\/html2canvas\.min\.js" integrity="sha512-BNaRQnYJiPSqHHDb58B0yaPfCu\+Wgds8Gp\/gU33kqBtgNS4tSPHuGibyoeqMV\/TJlSKda6FXzoEyYGjTe\+vXA=="/);
   assert.match(dashboard, /href="\.\/autocard\.html"/);
   assert.doesNotMatch(dashboard, /href="\.\/autocard\/"/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
