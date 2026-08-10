@@ -107,11 +107,12 @@
           <div class="section-header"><h3>Atividade administrativa recente</h3></div>
           <div class="table-wrapper">
             <table>
-              <caption>10 eventos administrativos mais recentes</caption>
+               <caption>Eventos administrativos</caption>
               <thead><tr><th scope="col">Data</th><th scope="col">Ator</th><th scope="col">Ação</th><th scope="col">Alvo</th></tr></thead>
               <tbody id="audit-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
             </table>
           </div>
+          <div id="audit-pagination" class="pagination" aria-label="Paginação da auditoria"></div>
         </div>
       </section>
 
@@ -191,6 +192,14 @@
         <div class="section-header">
           <h2>Ouvidoria</h2>
         </div>
+        <form id="ombudsman-filters" class="filter-bar" autocomplete="off">
+          <label for="ombudsman-status">Status</label>
+          <select id="ombudsman-status" class="form-select"><option value="">Todos</option><option value="new">Nova</option><option value="in_review">Em análise</option><option value="resolved">Resolvida</option></select>
+          <label for="ombudsman-assigned">Responsável</label>
+          <input id="ombudsman-assigned" class="form-input" type="search" maxlength="128" placeholder="UID do responsável">
+          <button class="btn btn-primary" type="submit">Filtrar</button>
+          <button id="ombudsman-clear" class="btn btn-ghost" type="button">Limpar</button>
+        </form>
         <div class="table-wrapper">
           <table>
             <caption>Mensagens recebidas pela ouvidoria</caption>

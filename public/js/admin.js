@@ -31,6 +31,7 @@ let editingOmbudsmanId = null;
 let solidesLinks = [];
 let jobTitles = [];
 let editingJobTitleId = null;
+const AUDIT_PAGE_SIZE = 50;
 
 function tableState(tbodyId, columns, message, retry) {
   const pagination = document.getElementById(tbodyId.replace(/-tbody$/, '-pagination'));
@@ -322,9 +323,12 @@ async function loadAudit() {
   const tbody = document.getElementById('audit-tbody');
   panel.hidden = false;
   try {
-    const events = await fetchAPI('/api/users/audit?limit=10&offset=0');
+    pages.audit ||= 0;
+    const result = await fetchAPIPage(`/api/users/audit?limit=${AUDIT_PAGE_SIZE}&offset=${pages.audit * AUDIT_PAGE_SIZE}`);
+    const events = result.data;
     clear(tbody);
     if (!events.length) {
+      clear(document.getElementById('audit-pagination'));
       tbody.append(element('tr', {}, element('td', { colspan: '4', className: 'empty-state', text: 'Nenhum evento administrativo registrado.' })));
       return;
     }
@@ -335,6 +339,7 @@ async function loadAudit() {
       cell(event.action || '—'),
       cell([event.target_type, event.target_id].filter(Boolean).join(': ') || '—'),
     ])));
+    serverPagination('audit', result.total ?? events.length, 'audit-pagination', loadAudit);
   } catch {
     const state = element('td', { colspan: '4', className: 'empty-state', role: 'alert', text: 'Não foi possível carregar a auditoria. ' });
     state.append(element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: loadAudit } }));
@@ -596,7 +601,12 @@ async function loadOmbudsman() {
   tableState('ombudsman-tbody', 6, 'Carregando mensagens…');
   try {
     pages.ombudsman ||= 0;
-    const result = await fetchAPIPage(`/api/ombudsman?limit=50&offset=${pages.ombudsman * 50}`);
+    const query = new URLSearchParams({ limit: '50', offset: String(pages.ombudsman * 50) });
+    const status = document.getElementById('ombudsman-status').value;
+    const assigned = document.getElementById('ombudsman-assigned').value.trim();
+    if (status) query.set('status', status);
+    if (assigned) query.set('assigned_to', assigned);
+    const result = await fetchAPIPage(`/api/ombudsman?${query}`);
     ombudsman = result.data;
     if (!ombudsman.length) return tableState('ombudsman-tbody', 6, 'Nenhuma mensagem recebida.');
     const labels = { sugestao: 'Sugestão', reclamacao: 'Reclamação', denuncia: 'Denúncia' };
@@ -714,6 +724,16 @@ document.getElementById('btn-new-benefit').addEventListener('click', () => benef
 });
 document.getElementById('modal-ombudsman-close').addEventListener('click', () => closeDialog(document.getElementById('modal-ombudsman')));
 document.getElementById('modal-ombudsman-cancel').addEventListener('click', () => closeDialog(document.getElementById('modal-ombudsman')));
+document.getElementById('ombudsman-filters').addEventListener('submit', event => {
+  event.preventDefault();
+  pages.ombudsman = 0;
+  loadOmbudsman();
+});
+document.getElementById('ombudsman-clear').addEventListener('click', () => {
+  document.getElementById('ombudsman-filters').reset();
+  pages.ombudsman = 0;
+  loadOmbudsman();
+});
 window.addEventListener('popstate', () => {
   const requested = new URLSearchParams(location.search).get('tab');
   if (document.getElementById(`tab-${requested}`)) switchTab(requested);

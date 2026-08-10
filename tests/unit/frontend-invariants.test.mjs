@@ -129,3 +129,17 @@ test('V1 dashboard removes unavailable integrations and reminders use scoped upc
   assert.match(reminders, /delivery-filters/);
   assert.match(reminders, /deliveries-pagination/);
 });
+
+test('admin exposes paginated audit and Ombudsman filters', async () => {
+  const [html, script] = await Promise.all([
+    readFile('public/admin.html', 'utf8'),
+    readFile('public/js/admin.js', 'utf8'),
+  ]);
+  assert.match(html, /id="audit-pagination"/);
+  assert.match(html, /id="ombudsman-filters"/);
+  assert.match(html, /id="ombudsman-status"/);
+  assert.match(script, /fetchAPIPage\(`\/api\/users\/audit\?limit=\$\{AUDIT_PAGE_SIZE\}/);
+  assert.match(script, /serverPagination\('audit'/);
+  assert.match(script, /ombudsman-status/);
+  assert.match(script, /ombudsman-assigned/);
+});
