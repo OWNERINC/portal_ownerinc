@@ -35,9 +35,9 @@ fluxo correspondente no Portal.
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Saudação personalizada | Operacional | Exibe nome ou email do perfil autenticado. `public/js/dashboard.js` |
-| Conteúdo por contrato PJ/CLT | Parcial | Mostra cards e links diferentes por contrato. O prazo PJ é calculado, mas não existe envio ou conclusão de nota fiscal; o fluxo CLT é informativo. `public/js/dashboard.js` |
-| Próximos lembretes | Parcial | Calcula ocorrências nos próximos sete dias e respeita a audiência retornada pela API, mas consulta apenas a primeira página de registros. `public/js/dashboard.js`, `api/routes/reminders.js` |
-| Links rápidos | Operacional | Atalhos internos e link externo para Sólides conforme o contrato. `public/js/dashboard.js` |
+| Conteúdo por contrato PJ/CLT | Parcial | Mostra links diferentes por contrato; a indicação de nota fiscal PJ foi removida até existir um fluxo real. Sólides permanece desligada na V1. `public/js/dashboard.js` |
+| Próximos lembretes | Operacional | Endpoint autenticado calcula no servidor as ocorrências dos próximos sete dias com regra de fim do mês e audiência individual; o dashboard não depende de uma primeira página arbitrária. `public/js/dashboard.js`, `api/routes/reminders.js` |
+| Links rápidos | Operacional | Atalhos internos conforme o contrato; Sólides permanece desligada na V1. `public/js/dashboard.js` |
 | Destaques da Academy | Operacional | Exibe até três cursos com estados de carregamento, vazio, erro e nova tentativa. `public/js/dashboard.js` |
 
 ## AutoCard
@@ -46,7 +46,7 @@ fluxo correspondente no Portal.
 | --- | --- | --- |
 | Acesso por cargo DHO | Operacional | O módulo só libera os cargos exatos Analista, Assistente, Coordenador e Gerente de DHO; a API bloqueia acesso direto para os demais usuários. `api/middleware/policy.js`, `api/routes/autocard.js`, `public/autocard/guard.js` |
 | Criação e exportação de cards | Operacional | Templates, variações visuais, biblioteca de assets, upload e exportação PNG migrados para o Portal. `public/autocard/` |
-| Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para todos os usuários autorizados do DHO, com busca, edição, duplicação e exclusão auditadas. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js` |
+| Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para todos os usuários autorizados do DHO, com busca, edição, duplicação e exclusão auditadas dentro do shell padrão do Portal. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js`, `public/autocard/index.html` |
 | Renomeação RH para DHO | Operacional | Migration 010 reassocia usuários e renomeia cargos antigos sem quebrar a referência de usuários. `api/db/migrations/010_autocard.sql` |
 
 ## Perfil Pessoal
@@ -66,9 +66,9 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Listar e ler artigos | Parcial | Possui loading, vazio, erro e retry, mas carrega apenas a primeira página de até 50 artigos. `public/js/knowledge.js`, `api/routes/knowledge.js` |
-| Busca por título e conteúdo | Operacional | Busca client-side sobre os artigos carregados e persiste `q` na URL. `public/js/knowledge.js` |
-| Filtro por categoria | Operacional | Filtra os dados carregados e persiste `category` na URL. `public/js/knowledge.js` |
+| Listar e ler artigos | Operacional | Possui loading, vazio, erro, retry, paginação server-side e leitura por ID para links diretos fora da página atual. `public/js/knowledge.js`, `api/routes/knowledge.js` |
+| Busca por título e conteúdo | Operacional | Busca server-side em título e conteúdo e persiste `q`, categoria e offset na URL. `public/js/knowledge.js`, `api/routes/knowledge.js` |
+| Filtro por categoria | Operacional | Lista categorias no servidor e aplica o filtro na consulta paginada. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Link direto para artigo | Operacional | `article` na URL e histórico Back/Forward selecionam o detalhe. `public/js/knowledge.js` |
 | CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. Conteúdo é renderizado como texto. `api/routes/knowledge.js`, `public/js/knowledge.js` |
 | Draft, revisão, anexos e rich text | Não implementada | O modelo atual armazena texto simples e categoria. |
@@ -77,7 +77,7 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Catálogo ativo por categoria | Parcial | Usuários comuns recebem apenas itens ativos agrupados por categoria, limitados à primeira página de 50. `api/routes/academy.js`, `public/js/academy.js` |
+| Catálogo ativo por categoria | Operacional | Usuários comuns recebem somente itens ativos, com categorias server-side, paginação e filtros restauráveis pela URL. `api/routes/academy.js`, `public/js/academy.js` |
 | Links externos | Operacional | Apenas HTTP(S), com `noopener noreferrer`; URL inválida não é oferecida como link. `api/route-utils.js`, `public/js/academy.js` |
 | CRUD, ordenação e ativação | Operacional | Administração paginada, validada e auditada para `manageAcademy`. `api/routes/academy.js`, `public/js/admin.js` |
 | Matrícula, progresso e certificado | Fora do escopo | Academy é um catálogo, não um LMS. |
@@ -86,7 +86,7 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Catálogo ativo por categoria | Parcial | Exibe descrição e instruções dos itens ativos, limitado à primeira página de 50. `api/routes/benefits.js`, `public/js/benefits.js` |
+| Catálogo ativo por categoria | Operacional | Exibe descrição e instruções dos itens ativos com categorias server-side, paginação e filtros restauráveis pela URL. `api/routes/benefits.js`, `public/js/benefits.js` |
 | CRUD, ordenação e ativação | Operacional | Administração paginada, validada e auditada para `manageBenefits`. `api/routes/benefits.js`, `public/js/admin.js` |
 | Cupom, validade, elegibilidade e resgate | Não implementada | Não há campos, persistência ou fluxo de utilização. |
 
@@ -96,12 +96,12 @@ fluxo correspondente no Portal.
 | --- | --- | --- |
 | Listagem segmentada | Operacional | Filtra ativos e audiência `all`, `pj`, `clt` ou UID no servidor; página possui paginação. `api/routes/reminders.js`, `public/js/reminders.js` |
 | CRUD de lembretes | Operacional | Validação, auditoria, ativação e canais para `manageReminders`. `api/routes/reminders.js`, `public/js/reminders.js` |
-| Público individual | Parcial | API e cron aceitam UIDs, mas o formulário oferece apenas Todos/PJ/CLT e não preserva essa audiência na edição. `api/route-utils.js`, `cron/scheduling.js`, `public/js/reminders.js` |
+| Público individual | Operacional | Formulário permite informar UIDs explícitos, preserva a audiência na edição e rejeita valores vazios, duplicados ou acima do limite. `api/route-utils.js`, `cron/scheduling.js`, `public/js/reminders.js` |
 | Agendamento mensal | Operacional | Worker roda no fuso de Brasília; dias 29 a 31 usam o último dia de meses curtos e o catch-up é limitado a sete dias. `cron/index.js`, `cron/scheduling.js` |
 | Envio por email | Operacional | SendGrid com registro prévio, isolamento por destinatário e até três tentativas para 429/5xx. Depende de credenciais externas válidas. `cron/checkReminders.js`, `cron/sendEmail.js` |
 | Ledger e idempotência | Operacional | Uma ocorrência por lembrete, usuário, data e canal, com estados `pending`, `sending`, `sent`, `failed` e `skipped`. `api/db/schema.sql`, `cron/checkReminders.js` |
-| Histórico de entregas | Parcial | API possui filtros e paginação; interface mostra somente as dez entregas mais recentes. `api/routes/reminders.js`, `public/js/reminders.js` |
-| Saúde do worker | Parcial | Heartbeat, último resultado e healthcheck são expostos na interface, sem alerta externo proativo. `cron/health.js`, `api/routes/reminders.js` |
+| Histórico de entregas | Operacional | Interface expõe filtros por status, canal, usuário e data, com paginação server-side. `api/routes/reminders.js`, `public/js/reminders.js` |
+| Saúde do worker | Parcial | Heartbeat e healthcheck possuem estado de alerta deduplicado e envio SMTP configurável; falta homologação com caixa operacional real. `cron/health.js`, `cron/sendOperationalAlert.js`, `api/db/migrations/011_cron_alert_state.sql` |
 | WhatsApp | Não implementada | Canal permanece desativado e é registrado como `skipped`; não existe envio real. `cron/sendWhatsApp.js`, `cron/checkReminders.js` |
 | Lido, concluído e preferências | Não implementada | Não há estado por usuário nem opt-in/opt-out por canal. |
 
@@ -113,7 +113,7 @@ fluxo correspondente no Portal.
 | Minimização da identidade | Operacional | UID e email não são gravados na mensagem, sem promessa de anonimato técnico absoluto diante de logs e infraestrutura. `api/routes/ombudsman.js`, `api/db/schema.sql` |
 | Leitura restrita e auditada | Operacional | Exige `viewOmbudsman`; toda listagem autorizada gera auditoria. `api/routes/ombudsman.js`, `public/js/admin.js` |
 | Tratamento da mensagem | Operacional | Status nova/em análise/resolvida, responsável e notas internas. `api/routes/ombudsman.js`, `public/js/admin.js` |
-| Filtros operacionais | Parcial | API filtra status e responsável; a interface apenas pagina. `api/routes/ombudsman.js`, `public/js/admin.js` |
+| Filtros operacionais | Operacional | Interface filtra status e responsável e mantém paginação server-side. `api/routes/ombudsman.js`, `public/js/admin.js` |
 | Retenção | Operacional | Worker exclui mensagens resolvidas após o período configurado, padrão de 730 dias. `cron/retention.js` |
 
 ## Administração e Permissões
@@ -126,7 +126,7 @@ fluxo correspondente no Portal.
 | Gestão de usuários | Operacional | Listagem paginada, criação, edição, desativação e reativação para `manageUsers`, com restrições de hierarquia. `api/routes/users.js`, `public/js/admin.js` |
 | Gestão de cargos | Operacional | Superfície administrativa para cadastrar, editar, ativar e desativar cargos; cargos desativados permanecem associados ao histórico dos usuários. `api/routes/job-titles.js`, `public/js/admin.js`, `api/db/migrations/009_job_titles.sql` |
 | Apagamento de dados pessoais | Operacional | Super-admin remove identidade Firebase, perfil, foto e referências estáveis após desativação. `api/routes/users.js` |
-| Auditoria administrativa | Parcial | API registra e pagina ator, ação, alvo, request ID e horário; interface mostra apenas os dez eventos mais recentes. `api/route-utils.js`, `api/routes/users.js`, `public/js/admin.js` |
+| Auditoria administrativa | Operacional | API e interface registram, paginam e exibem ator, ação, alvo, request ID e horário para super-admin. `api/route-utils.js`, `api/routes/users.js`, `public/js/admin.js` |
 
 ## Navegação, UX e Acessibilidade
 
@@ -162,14 +162,14 @@ fluxo correspondente no Portal.
 | --- | --- | --- |
 | Stack Docker Compose | Operacional | PostgreSQL, migrations, API, Nginx, cron e Auth Emulator opcional no perfil local. `docker-compose.yml`, `firebase-emulator/Dockerfile` |
 | Persistência | Operacional | Volumes nomeados para PostgreSQL e uploads. `docker-compose.yml` |
-| Migrations | Operacional | SQL numerado, ledger, advisory lock e transação; schema fresco acompanha as migrations 001-006. `api/db/migrate.js`, `api/db/migrations/`, `api/db/schema.sql` |
+| Migrations | Operacional | SQL numerado, ledger, advisory lock e transação; schema fresco acompanha as migrations até `011_cron_alert_state`. `api/db/migrate.js`, `api/db/migrations/`, `api/db/schema.sql` |
 | Liveness e readiness | Operacional | `/api/health` verifica processo e `/api/ready` consulta o banco. `api/index.js` |
 | CI e segurança de dependências | Operacional | Sintaxe, testes, migrations reais, audit, SBOM, Trivy, builds e publicação no GHCR. `.github/workflows/ci.yml`, `scripts/verify.mjs` |
 | Deploy imutável | Operacional | Publica archive de commit limpo, resolve imagens por digest e mantém release anterior para rollback. `deploy.sh`, `scripts/release.sh` |
 | Smoke test | Parcial | Verifica frontend e readiness, sem autenticação ou fluxos de domínio. `scripts/smoke.sh` |
 | Backup e restore | Operacional | Snapshot consistente de banco/uploads com checksum; restore confirmado, transacional e com backup prévio. `scripts/backup.sh`, `scripts/restore.sh` |
-| Backup diário externo e cifrado | Não implementada | O repositório documenta a necessidade, mas agendamento, cópia off-host e criptografia dependem da operação externa. |
-| Observabilidade | Parcial | Request IDs, logs, heartbeat e contadores existem; não há métricas externas, alerta proativo ou rotação de logs configurada. `api/middleware/security.js`, `cron/health.js` |
+| Backup diário externo e cifrado | Parcial | Existe transferência configurável para S3-compatible com checksum e preservação do backup local; agendamento, credenciais, lifecycle e criptografia efetiva dependem da operação externa. `scripts/backup-s3.sh`, `scripts/backup.sh`, `docs/operations/deployment.md` |
+| Observabilidade | Parcial | Request IDs, logs, heartbeat, contadores e alertas SMTP deduplicados existem; métricas externas e rotação de logs ainda dependem da operação. `api/middleware/security.js`, `cron/health.js`, `cron/sendOperationalAlert.js` |
 | HTTPS | Parcial | O Nginx interno serve HTTP; TLS deve ser terminado por proxy externo na VPS. `nginx/nginx.conf`, `docs/operations/deployment.md` |
 
 ## Integração Sólides

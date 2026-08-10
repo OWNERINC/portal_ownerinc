@@ -18,6 +18,12 @@ O banco usa três credenciais distintas:
 - `API_DATABASE_URL`: role fixa `portal_api`, sem DDL, usada pela API em execução.
 - `CRON_DATABASE_URL`: role fixa `portal_cron`, limitada a leitura de `users`/`reminders` e leitura/escrita de `notifications_log`/`cron_status`.
 
+Para alertas operacionais por SMTP, defina `OPERATIONAL_ALERT_EMAIL` e repita
+as variáveis SMTP no ambiente do cron. Sem esse destinatário, o worker mantém
+healthchecks e logs, mas não tenta enviar alertas. O estado de alerta é
+deduplicado em `cron_status` e uma recuperação envia somente uma notificação de
+retorno ao normal.
+
 Defina também `PORTAL_API_DB_PASSWORD` e `PORTAL_CRON_DB_PASSWORD` com pelo menos 16 caracteres. O serviço `migrate` cria ou rotaciona essas duas roles, executa migrations sob advisory lock e reaplica os grants antes da API iniciar. As credenciais administrativas não entram no container de API em execução. Para reaplicar roles e grants manualmente, execute `docker compose run --rm migrate node db/provision.js`.
 
 Defina `IMAGE_REGISTRY=ghcr.io/ownerinc`. O CI publica API e cron com a tag do commit. A VPS resolve a tag para digest, grava os dois digests em `.image-env` e inicia o Compose com referências `@sha256`, impedindo alteração posterior da tag.
@@ -30,7 +36,7 @@ Configure localmente `VPS_USER`, `VPS_HOST` e, se necessário, `VPS_PATH` e `SSH
 2. Execute `bash deploy.sh` somente após revisar host e revisão.
 3. O servidor cria `releases/<commit>-<timestamp>`, resolve as imagens publicadas pelo CI e registra seus digests.
 4. Antes de trocar uma release existente, `scripts/backup.sh` interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
-5. O serviço one-shot `migrate` aplica schema/grants; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `009_job_titles`, antes dos smoke tests.
+5. O serviço one-shot `migrate` aplica schema/grants; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `011_cron_alert_state`, antes dos smoke tests.
 6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Dados não sofrem rollback automático.
 
 `GET /api/health` é somente liveness. `GET /api/ready` executa `SELECT 1`, retorna `503` genérico quando o banco não responde e é usado por Compose, cron e smoke.
@@ -55,7 +61,21 @@ BACKUP_DIR=/opt/ownerinc-portal/shared/backups RETENTION_DAYS=14 bash scripts/ba
 
 Cada diretório UTC contém `postgres.dump`, `uploads.tar.gz` e hashes SHA-256. Copie backups periodicamente para outro host e teste restaurações fora de produção.
 
-Meta operacional inicial: backup diário e antes de release, RPO máximo de 24 horas e RTO de 4 horas. Agende `scripts/backup.sh` no host, monitore falhas e execute uma restauração trimestral em ambiente descartável.
+Para enviar a cópia verificada a um bucket S3-compatible, configure `S3_BUCKET`,
+`S3_PREFIX`, `AWS_ENDPOINT_URL` quando necessário e execute com
+`BACKUP_UPLOAD_S3=true`. O host precisa ter o AWS CLI configurado por role ou
+credencial protegida:
+
+```sh
+BACKUP_DIR=/opt/ownerinc-portal/shared/backups \
+BACKUP_UPLOAD_S3=true S3_BUCKET=ownerinc-portal-backups \
+bash scripts/backup.sh "$PWD"
+```
+
+O script preserva o artefato local quando a transferência externa falha. Meta
+operacional inicial: backup diário e antes de release, RPO máximo de 24 horas e
+RTO de 4 horas. Agende `scripts/backup.sh` no host, monitore falhas e execute
+uma restauração trimestral em ambiente descartável.
 
 ## Validação
 

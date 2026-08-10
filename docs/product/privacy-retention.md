@@ -39,6 +39,20 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Exclusão de lembrete não apaga seu histórico; o vínculo passa a nulo.
 - Exclusão de dados pessoais remove o UID dos registros históricos por FK.
 
+## AutoCard
+
+- Finalidade: permitir que cargos autorizados do DHO criem e mantenham cards
+  internos com identidade visual Ownerinc.
+- Acesso: somente os cargos exatos de Analista, Assistente, Coordenador e
+  Gerente de DHO; a autorização é repetida na API e não depende de role de
+  administrador.
+- Histórico: cards e mídias são compartilhados entre usuários autorizados do
+  DHO e alterações são registradas na auditoria administrativa.
+- Mídias: imagens são normalizadas para WebP, possuem limite de tamanho e ficam
+  vinculadas ao card; arquivos sem referência são removidos quando aplicável.
+- Retenção: o histórico segue a política de dados internos e deve ser mantido
+  ou excluído conforme decisão do responsável por DHO e validação jurídica.
+
 ## Auditoria
 
 - Retenção: 5 anos para ações privilegiadas e acessos à ouvidoria, aplicada
@@ -68,6 +82,9 @@ substitui orientação jurídica nem o registro formal das bases legais.
   para outro host conforme a política de infraestrutura.
 - Uma exclusão pode persistir temporariamente em backups até o fim da retenção;
   restaurações devem reaplicar exclusões registradas após o ponto restaurado.
+- Backups externos S3-compatible devem usar credenciais protegidas, checksum do
+  artefato local e retenção definida pela infraestrutura; uma falha de upload
+  não invalida o backup local verificado.
 
 ## Direitos do Titular
 
