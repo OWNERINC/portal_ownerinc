@@ -9,6 +9,12 @@
 
 ## Unreleased
 
+- AutoCard agora usa `public/autocard.html` como rota canônica dentro do shell
+  compartilhado do Portal; `/autocard/` permanece como redirect compatível.
+- Exportação PNG do AutoCard teve o SRI do `html2canvas` corrigido e a rota foi
+  validada em produção com aceitação manual autenticada.
+- CI/deploy e smoke live foram concluídos no commit `fd45dc1`; o README e o
+  checklist V1 registram o estado final e os riscos remanescentes.
 - Estrutura local com Docker Compose, Firebase Auth Emulator e migrations reais.
 - API, cron e frontend preparados para deploy por imagens imutáveis no GHCR.
 - Verificações de segurança, governança, retenção, backup, restore, smoke e rollback.
@@ -20,9 +26,10 @@
 - Namespace de runtime normalizado para `ghcr.io/ownerinc` na interface de
   configuração e na documentação de deploy.
 
-### Ainda não é release de produção
+### Homologações externas ainda pendentes
 
-- Validar Firebase e SendGrid reais.
-- Executar backup, restore, smoke e rollback na VPS.
-- Configurar domínio, proxy TLS e secrets na VPS.
+- Validar desativação de usuário e expiração de sessão no Firebase real.
+- Homologar lembretes SendGrid, histórico, retry e alertas SMTP do cron.
+- Executar restore integral de uploads, transferência S3 e rollback real na VPS.
+- Reunir evidências de TLS, firewall, rotação de logs e aprovação LGPD.
 - Concluir Gate 0 externo da Sólides antes de qualquer promoção de estágio.

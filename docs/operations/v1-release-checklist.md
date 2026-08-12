@@ -18,11 +18,13 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 ## Firebase
 
-- [ ] Login real com email verificado funciona.
-- [ ] Convite administrativo cria identidade e envia link de definição de senha.
-- [ ] Recuperação de senha funciona.
+- [x] Login real com email verificado funciona no projeto
+  `ownerinc-portal-interno-prod`.
+- [x] Convite administrativo cria identidade e envia link de definição de senha.
+- [x] Recuperação de senha funciona.
 - [ ] Usuário desativado perde acesso mesmo com token anterior.
-- [ ] Logout e expiração de sessão retornam ao login sem loop.
+- [x] Logout retorna ao login sem loop.
+- [ ] Expiração de sessão retorna ao login sem loop.
 
 ## PostgreSQL and Migrations
 
@@ -41,8 +43,9 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Gerente de DHO acessa o AutoCard.
 - [ ] Usuário sem cargo DHO recebe acesso negado pela API.
 - [ ] Admin sem cargo DHO continua sem acesso.
-- [ ] O AutoCard aparece dentro do `page-body` com sidebar e topbar do Portal.
-- [ ] Criação, histórico, edição, duplicação, exclusão, upload e exportação funcionam.
+- [x] O AutoCard aparece dentro do `page-body` com sidebar e topbar do Portal.
+- [x] Criação, histórico, edição, duplicação, exclusão, upload e exportação funcionam
+  na aceitação manual autenticada.
 
 ## Content and Pagination
 
@@ -87,15 +90,15 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 ## Smoke Tests
 
-- [ ] `/api/health` retorna liveness.
-- [ ] `/api/ready` confirma PostgreSQL.
-- [ ] Login e logout passam.
+- [x] `/api/health` retorna liveness.
+- [x] `/api/ready` confirma PostgreSQL.
+- [x] Login e logout passam.
 - [ ] Dashboard passa sem CTA de nota fiscal inexistente.
 - [ ] Perfil e upload passam.
 - [ ] Base de Conhecimento, Academy e Benefícios passam.
 - [ ] Lembretes e histórico de entregas passam.
 - [ ] Admin e Ouvidoria passam.
-- [ ] AutoCard passa para cargo DHO.
+- [x] AutoCard passa para cargo DHO.
 - [ ] Sólides permanece desligada.
 
 ## Monitoring and Alerts
@@ -134,5 +137,36 @@ responsável e evidência; não marque uma validação externa usando apenas
   validado, mas a execução integral de `scripts/restore.sh` requer Bash local.
 - [x] Invariantes estáticas cobrem AutoCard, paginação, dashboard, lembretes,
   filtros administrativos, alertas, backup S3 e acessibilidade.
+- [x] Rota canônica `/autocard.html` e redirect legado `/autocard/` foram
+  verificados no domínio live após o deploy do commit `fd45dc1`.
+- [x] Aceitação manual autenticada do AutoCard foi concluída: shell, criação,
+  histórico, edição, duplicação, exclusão, upload e exportação.
 - [ ] Teste físico com NVDA/VoiceOver executado; requer dispositivo/ambiente
   externo.
+
+## Final Status
+
+- Código publicado e branch `main` sincronizado com `origin/main` no commit
+  `fd45dc1`.
+- CI/deploy concluído com sucesso no workflow
+  `31436331884`.
+- O projeto Firebase oficial permanece `ownerinc-portal-interno-prod`.
+- A produção não deve ser declarada plenamente pronta enquanto os itens
+  externos pendentes abaixo não tiverem responsável e evidência registrados.
+
+## Remaining Risks and Pending Evidence
+
+- **Firebase:** ainda falta comprovar em produção a perda de acesso de usuário
+  desativado com token anterior e o comportamento de expiração de sessão.
+- **Email/cron:** convite e recuperação foram homologados; ainda falta validar
+  lembrete SendGrid end-to-end, histórico de entrega, retry e alertas SMTP
+  deduplicados/recuperados.
+- **Backup/restore:** o restore PostgreSQL descartável foi validado, mas o
+  restore integral de uploads requer execução Linux/Bash e o upload S3 real
+  ainda depende do bucket operacional.
+- **Infraestrutura:** TLS, firewall, rotação de logs, retenção operacional e
+  rollback real da VPS precisam de evidência do operador.
+- **Acessibilidade física:** faltam NVDA/VoiceOver e teste manual com zoom de
+  400% em ambiente suportado.
+- **Documentação jurídica:** a política de retenção e os textos LGPD ainda
+  precisam de aprovação formal.
