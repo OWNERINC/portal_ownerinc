@@ -2,11 +2,187 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const { canUseAutoCard } = require('../../api/middleware/policy');
 
 const dho = (name) => ({ role: 'viewer', job_title: name, permissions: {} });
+
+function createAutoCardElement(id) {
+  return {
+    id,
+    classList: {
+      add() {},
+      remove() {},
+      toggle() {},
+    },
+    dataset: {},
+    innerHTML: '',
+    textContent: '',
+    value: '',
+    style: { setProperty() {} },
+    onclick: null,
+    onchange: null,
+    oninput: null,
+    dispatchEvent(event) {
+      if (event.type === 'input') this.oninput?.(event);
+    },
+    querySelector(selector) {
+      if (selector !== '.card-media') return null;
+      const source = this.innerHTML.match(/<img class="card-media" src="([^"]+)"/);
+      return source ? { src: source[1] } : null;
+    },
+    showModal() {},
+    close() {},
+  };
+}
+
+async function createAutoCardLifecycleHarness() {
+  const [app, employee] = await Promise.all([
+    readFile('public/autocard/app.js', 'utf8'),
+    readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
+  ]);
+  const elements = new Map();
+  const listeners = new Map();
+  const observers = [];
+  const requests = [];
+  const createdUrls = [];
+  const revokedUrls = [];
+  const document = {
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, createAutoCardElement(id));
+      return elements.get(id);
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const window = {
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    lucide: null,
+  };
+  const URL = {
+    createObjectURL() {
+      const url = `blob:asset-${createdUrls.length + 1}`;
+      createdUrls.push(url);
+      return url;
+    },
+    revokeObjectURL(url) {
+      revokedUrls.push(url);
+    },
+  };
+  class MutationObserver {
+    constructor(callback) {
+      this.callback = callback;
+      observers.push(this);
+    }
+
+    observe() {}
+  }
+  class Event {
+    constructor(type) {
+      this.type = type;
+    }
+  }
+  const fetchAPIAsset = (path) => new Promise((resolve, reject) => {
+    requests.push({ path, resolve, reject });
+  });
+  const drain = () => new Promise(resolve => setImmediate(resolve));
+  const context = vm.createContext({
+    Event,
+    MutationObserver,
+    URL,
+    clearTimeout,
+    console,
+    document,
+    fetchAPI: async () => ({}),
+    fetchAPIAsset,
+    setTimeout(callback) {
+      callback();
+      return 0;
+    },
+    window,
+  });
+  const appSource = app.replace(/^import[^\n]+\n/, '');
+  vm.runInContext(`${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, selectTemplate, renderCard };`, context);
+  return {
+    cardCanvas: elements.get('cardCanvas'),
+    createdUrls,
+    dispatch(type) {
+      listeners.get(type)?.();
+    },
+    flushMutations() {
+      observers.forEach(observer => observer.callback());
+    },
+    async reject(index, error) {
+      requests[index].reject(error);
+      await drain();
+    },
+    requests,
+    async resolve(index) {
+      const url = URL.createObjectURL({});
+      requests[index].resolve(url);
+      await drain();
+      return url;
+    },
+    revokedUrls,
+    state: () => context.__autocardTest.current(),
+    selectTemplate: (key, card) => context.__autocardTest.selectTemplate(key, card),
+    toast: () => elements.get('toast'),
+  };
+}
+
+test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants safe', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+
+  harness.selectTemplate('aniversariante', { mediaId: 'old-media' });
+  harness.selectTemplate('aniversariante', { mediaId: 'new-media' });
+  assert.equal(harness.requests.map(request => request.path).join(','), '/api/autocard/media/old-media,/api/autocard/media/new-media');
+  assert.match(harness.cardCanvas.innerHTML, /birthday-photo/);
+  assert.match(harness.cardCanvas.innerHTML, /data-lucide="cake"/);
+  assert.doesNotMatch(harness.cardCanvas.innerHTML, /birthday-photo"><img|undefined|\/api\/autocard\/media/);
+
+  const staleUrl = await harness.resolve(0);
+  assert.deepEqual(harness.revokedUrls, [staleUrl]);
+  assert.equal(harness.state().mediaUrl, null);
+
+  const currentUrl = await harness.resolve(1);
+  assert.equal(harness.state().mediaUrl, currentUrl);
+  assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${currentUrl}"`));
+
+  harness.dispatch('pagehide');
+  assert.equal(harness.state().mediaUrl, null);
+  assert.deepEqual(harness.revokedUrls, [staleUrl, currentUrl]);
+
+  harness.selectTemplate('aniversariante', { mediaId: 'hidden-media' });
+  harness.dispatch('pagehide');
+  const hiddenUrl = await harness.resolve(2);
+  assert.equal(harness.state().mediaUrl, null);
+  assert.deepEqual(harness.revokedUrls, [staleUrl, currentUrl, hiddenUrl]);
+
+  harness.selectTemplate('evento', { mediaId: 'failed-media' });
+  await harness.reject(3, new Error('asset unavailable'));
+  assert.equal(harness.state().mediaUrl, null);
+  assert.match(harness.cardCanvas.innerHTML, /card-placeholder/);
+  assert.doesNotMatch(harness.cardCanvas.innerHTML, /undefined|\/api\/autocard\/media/);
+  assert.match(harness.toast().textContent, /Não foi possível carregar a imagem: asset unavailable/);
+
+  harness.selectTemplate('novo_funcionario', { mediaId: 'employee-media' });
+  harness.flushMutations();
+  assert.doesNotMatch(harness.cardCanvas.innerHTML, /<img[^>]+src="undefined"|\/api\/autocard\/media/);
+  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><i data-lucide="user-plus"/);
+
+  const employeeUrl = await harness.resolve(4);
+  harness.flushMutations();
+  assert.match(harness.cardCanvas.innerHTML, new RegExp(`employee-photo"><img src="${employeeUrl}"`));
+  assert.doesNotMatch(harness.cardCanvas.innerHTML, /undefined|\/api\/autocard\/media/);
+});
 
 test('AutoCard access uses the exact DHO job title allowlist', () => {
   for (const title of ['Analista de DHO', 'Assistente de DHO', 'Coordenador de DHO', 'Gerente de DHO']) {
