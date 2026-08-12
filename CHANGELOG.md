@@ -9,6 +9,9 @@
 
 ## Unreleased
 
+- Mídias privadas do AutoCard agora carregam por URLs `blob:` autenticadas; o
+  histórico e as variantes usam o mesmo fluxo sem emitir URLs protegidas
+  quebradas durante o carregamento.
 - AutoCard agora usa `public/autocard.html` como rota canônica dentro do shell
   compartilhado do Portal; `/autocard/` permanece como redirect compatível.
 - Exportação PNG do AutoCard teve o SRI do `html2canvas` corrigido e a rota foi
