@@ -84,6 +84,7 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(guard, /href: '\.\/dashboard\.html'/);
   assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/cards/);
   const app = await readFile('public/autocard/app.js', 'utf8');
+  assert.match(app, /import \{ fetchAPI \} from '\.\.\/js\/auth\.js'/);
   assert.match(app, /\/api\/autocard\/media/);
   assert.match(app, /file\.size>3\*1024\*1024/);
   assert.match(dashboard, /class="autocard-link"/);

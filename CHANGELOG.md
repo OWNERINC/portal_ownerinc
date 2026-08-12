@@ -17,6 +17,8 @@
   checklist V1 registram o estado final e os riscos remanescentes.
 - Corrigido o limite do Nginx para mídias do AutoCard: a borda aceita até 4 MB
   para que a API aplique corretamente o limite de 3 MB e normalize a imagem.
+- Corrigidas as chamadas do AutoCard para usar o token Firebase compartilhado;
+  upload, histórico e salvamento deixam de retornar `Authentication required`.
 - Estrutura local com Docker Compose, Firebase Auth Emulator e migrations reais.
 - API, cron e frontend preparados para deploy por imagens imutáveis no GHCR.
 - Verificações de segurança, governança, retenção, backup, restore, smoke e rollback.

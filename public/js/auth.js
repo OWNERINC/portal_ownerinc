@@ -30,13 +30,14 @@ async function requestAPI(path, options = {}) {
   await auth.authStateReady();
   if (!auth.currentUser) throw new APIError('Sessão encerrada.', 401);
   const token = await auth.currentUser.getIdToken();
+  const headers = {
+    ...(typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+    'Authorization': `Bearer ${token}`,
+    ...(options.headers || {}),
+  };
   const res = await fetch(path, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      ...(options.headers || {}),
-    },
+    headers,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
