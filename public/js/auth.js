@@ -26,7 +26,7 @@ function clearVerifiedRole() {
   }
 }
 
-async function requestAPI(path, options = {}) {
+async function authenticatedFetch(path, options = {}) {
   await auth.authStateReady();
   if (!auth.currentUser) throw new APIError('Sessão encerrada.', 401);
   const token = await auth.currentUser.getIdToken();
@@ -35,10 +35,14 @@ async function requestAPI(path, options = {}) {
     'Authorization': `Bearer ${token}`,
     ...(options.headers || {}),
   };
-  const res = await fetch(path, {
+  return fetch(path, {
     ...options,
     headers,
   });
+}
+
+async function requestAPI(path, options = {}) {
+  const res = await authenticatedFetch(path, options);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new APIError(body.error || `A solicitação falhou (${res.status}).`, res.status);
@@ -46,6 +50,17 @@ async function requestAPI(path, options = {}) {
   const data = res.status === 204 ? null : await res.json();
   const totalHeader = res.headers.get('X-Total-Count');
   return { data, total: totalHeader === null ? null : Number(totalHeader) };
+}
+
+export async function fetchAPIAsset(path, options = {}) {
+  const response = await authenticatedFetch(path, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const requestId = body.requestId ? ` (referência ${body.requestId})` : '';
+    throw new APIError(`${body.error || `A solicitação falhou (${response.status}).`}${requestId}`, response.status);
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
 }
 
 export async function fetchAPI(path, options = {}) {

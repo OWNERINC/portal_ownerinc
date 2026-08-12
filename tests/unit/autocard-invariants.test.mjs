@@ -19,14 +19,19 @@ test('AutoCard access uses the exact DHO job title allowlist', () => {
 });
 
 test('AutoCard API is protected and uses shared PostgreSQL storage', async () => {
-  const [route, migration, schema, index, nginx] = await Promise.all([
+  const [auth, route, migration, schema, index, nginx] = await Promise.all([
+    readFile('public/js/auth.js', 'utf8'),
     readFile('api/routes/autocard.js', 'utf8'),
     readFile('api/db/migrations/010_autocard.sql', 'utf8'),
     readFile('api/db/schema.sql', 'utf8'),
     readFile('api/index.js', 'utf8'),
     readFile('nginx/nginx.conf', 'utf8'),
   ]);
+  assert.match(auth, /export async function fetchAPIAsset\(/);
+  assert.match(auth, /await response\.blob\(\)/);
+  assert.match(auth, /URL\.createObjectURL\(blob\)/);
   assert.match(route, /router\.use\(authMiddleware, requireAutoCard\)/);
+  assert.match(route, /router\.get\('\/media\/:id'/);
   assert.match(route, /autocard_cards/);
   assert.match(route, /autocard_media/);
   assert.match(route, /withAudit/);
