@@ -65,6 +65,7 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location \^~ \/uploads\//);
   assert.match(nginx, /client_max_body_size 100k;/);
   assert.match(nginx, /location \^~ \/api\/upload\/[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
+  assert.match(nginx, /location \^~ \/api\/autocard\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
   assert.match(nginx, /limit_req_zone[\s\S]*map \$http_sec_fetch_site/);
   assert.match(nginx, /https:\/\/unpkg\.com/);

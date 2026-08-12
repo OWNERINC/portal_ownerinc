@@ -19,11 +19,12 @@ test('AutoCard access uses the exact DHO job title allowlist', () => {
 });
 
 test('AutoCard API is protected and uses shared PostgreSQL storage', async () => {
-  const [route, migration, schema, index] = await Promise.all([
+  const [route, migration, schema, index, nginx] = await Promise.all([
     readFile('api/routes/autocard.js', 'utf8'),
     readFile('api/db/migrations/010_autocard.sql', 'utf8'),
     readFile('api/db/schema.sql', 'utf8'),
     readFile('api/index.js', 'utf8'),
+    readFile('nginx/nginx.conf', 'utf8'),
   ]);
   assert.match(route, /router\.use\(authMiddleware, requireAutoCard\)/);
   assert.match(route, /autocard_cards/);
@@ -34,6 +35,7 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
   assert.match(migration, /CREATE TABLE IF NOT EXISTS autocard_media/);
   assert.match(schema, /010_autocard/);
   assert.match(index, /app\.use\('\/api\/autocard', autocardRoutes\)/);
+  assert.match(nginx, /location \^~ \/api\/autocard\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
 });
 
 test('AutoCard UI is guarded before loading the editor', async () => {
@@ -81,6 +83,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(guard, /main\.replaceChildren\(message\)/);
   assert.match(guard, /href: '\.\/dashboard\.html'/);
   assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/cards/);
-  assert.match(await readFile('public/autocard/app.js', 'utf8'), /\/api\/autocard\/media/);
+  const app = await readFile('public/autocard/app.js', 'utf8');
+  assert.match(app, /\/api\/autocard\/media/);
+  assert.match(app, /file\.size>3\*1024\*1024/);
   assert.match(dashboard, /class="autocard-link"/);
 });
