@@ -138,6 +138,50 @@ async function createAutoCardLifecycleHarness() {
   };
 }
 
+async function createAutoCardCropHarness() {
+  const source = await readFile('public/autocard/crop.js', 'utf8');
+  const context = vm.createContext({});
+  const cropSource = source.replace(/^export /gm, '');
+  vm.runInContext(`${cropSource}\nglobalThis.__autocardCropTest = { DEFAULT_MEDIA_CROP, normalizeMediaCrop, cropStyle, dragMediaCrop };`, context);
+  const crop = context.__autocardCropTest;
+  return {
+    DEFAULT_MEDIA_CROP: JSON.parse(JSON.stringify(crop.DEFAULT_MEDIA_CROP)),
+    normalizeMediaCrop: value => JSON.parse(JSON.stringify(crop.normalizeMediaCrop(value))),
+    cropStyle: crop.cropStyle,
+    dragMediaCrop: (value, metrics) => JSON.parse(JSON.stringify(crop.dragMediaCrop(value, metrics))),
+  };
+}
+
+test('AutoCard crop utility normalizes, styles, and drags media safely', async () => {
+  const { DEFAULT_MEDIA_CROP, normalizeMediaCrop, cropStyle, dragMediaCrop } = await createAutoCardCropHarness();
+
+  assert.deepEqual(DEFAULT_MEDIA_CROP, { x: 0.5, y: 0.5, zoom: 1 });
+  assert.deepEqual(normalizeMediaCrop(), { x: 0.5, y: 0.5, zoom: 1 });
+  assert.deepEqual(normalizeMediaCrop({ x: 2, y: -1, zoom: 8 }), { x: 1, y: 0, zoom: 3 });
+  assert.deepEqual(normalizeMediaCrop({ x: 'bad' }), { x: 0.5, y: 0.5, zoom: 1 });
+  assert.equal(cropStyle({ x: 0.25, y: 0.75, zoom: 2 }), '--crop-x:25%;--crop-y:75%;--crop-zoom:2');
+
+  const moved = dragMediaCrop({ x: 0.5, y: 0.5, zoom: 2 }, {
+    dx: 100,
+    dy: 0,
+    frameWidth: 200,
+    frameHeight: 200,
+    imageWidth: 1000,
+    imageHeight: 500,
+  });
+  assert.ok(moved.x < 0.5);
+  assert.equal(moved.y, 0.5);
+
+  assert.deepEqual(dragMediaCrop({ x: 0.25, y: 0.75, zoom: 1 }, {
+    dx: 100,
+    dy: -100,
+    frameWidth: 200,
+    frameHeight: 200,
+    imageWidth: 200,
+    imageHeight: 200,
+  }), { x: 0.25, y: 0.75, zoom: 1 });
+});
+
 test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants safe', async () => {
   const harness = await createAutoCardLifecycleHarness();
 
