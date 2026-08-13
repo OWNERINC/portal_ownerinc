@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -63,6 +63,24 @@ test('cron schema stores deduplicated operational alert state', async () => {
   assert.match(schema, /alert_sent_at/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS alert_signature/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS alert_sent_at/);
+});
+
+test('AutoCard crop schema is safe for fresh installs and upgrades', async () => {
+  const [schema, migration] = await Promise.all([
+    readFile('api/db/schema.sql', 'utf8'), readFile('api/db/migrations/012_autocard_media_crop.sql', 'utf8'),
+  ]);
+  for (const source of [schema, migration]) {
+    assert.match(source, /media_crop\s+JSONB/);
+    assert.match(source, /\{"x":0\.5,"y":0\.5,"zoom":1\}/);
+    assert.match(source, /jsonb_typeof\(media_crop\) = 'object'/);
+    assert.match(source, /jsonb_typeof\(media_crop->'x'\) = 'number'/);
+    assert.match(source, /jsonb_typeof\(media_crop->'y'\) = 'number'/);
+    assert.match(source, /jsonb_typeof\(media_crop->'zoom'\) = 'number'/);
+  }
+  assert.match(migration, /SET media_crop = '\{"x":0\.5,"y":0\.5,"zoom":1\}'::jsonb\s+WHERE media_crop IS NULL/);
+  assert.match(migration, /ALTER COLUMN media_crop SET DEFAULT/);
+  assert.match(migration, /ALTER COLUMN media_crop SET NOT NULL/);
+  assert.match(schema, /'012_autocard_media_crop'/);
 });
 
 test('domain constraints are present on fresh installs and upgrades', async () => {

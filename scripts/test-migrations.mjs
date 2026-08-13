@@ -25,6 +25,7 @@ try {
       '009_job_titles',
       '010_autocard',
       '011_cron_alert_state',
+      '012_autocard_media_crop',
   ]);
   const tables = await pool.query(`SELECT to_regclass('public.audit_log') AS audit,
     to_regclass('public.cron_status') AS cron, to_regclass('public.notifications_log') AS notifications,

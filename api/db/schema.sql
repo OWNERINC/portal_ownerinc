@@ -61,12 +61,19 @@ CREATE TABLE IF NOT EXISTS autocard_cards (
   variant      TEXT        NOT NULL DEFAULT 'editorial' CHECK (variant IN ('editorial', 'noir', 'beige')),
   media_size   TEXT        NOT NULL DEFAULT 'medium' CHECK (media_size IN ('small', 'medium', 'large')),
   media_id     UUID        REFERENCES autocard_media(id) ON DELETE SET NULL,
+  media_crop   JSONB       NOT NULL DEFAULT '{"x":0.5,"y":0.5,"zoom":1}'::jsonb,
   created_by   TEXT        REFERENCES users(uid) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT autocard_cards_name_check CHECK (char_length(btrim(name)) BETWEEN 1 AND 120),
   CONSTRAINT autocard_cards_icon_check CHECK (icon IS NULL OR char_length(icon) BETWEEN 1 AND 80),
-  CONSTRAINT autocard_cards_illustration_check CHECK (illustration IS NULL OR char_length(illustration) BETWEEN 1 AND 80)
+  CONSTRAINT autocard_cards_illustration_check CHECK (illustration IS NULL OR char_length(illustration) BETWEEN 1 AND 80),
+  CONSTRAINT autocard_cards_media_crop_check CHECK (
+    jsonb_typeof(media_crop) = 'object'
+    AND jsonb_typeof(media_crop->'x') = 'number'
+    AND jsonb_typeof(media_crop->'y') = 'number'
+    AND jsonb_typeof(media_crop->'zoom') = 'number'
+  )
 );
 
 CREATE INDEX IF NOT EXISTS autocard_cards_updated_idx ON autocard_cards (updated_at DESC);
@@ -242,5 +249,7 @@ INSERT INTO schema_migrations (version) VALUES
   ('007_solides_employee_links'),
   ('008_solides_link_hardening'),
   ('009_job_titles'),
-  ('010_autocard')
+  ('010_autocard'),
+  ('011_cron_alert_state'),
+  ('012_autocard_media_crop')
 ON CONFLICT (version) DO NOTHING;

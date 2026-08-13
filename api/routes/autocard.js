@@ -15,6 +15,17 @@ const modes = new Set(['light', 'dark', 'beige']);
 const variants = new Set(['editorial', 'noir', 'beige']);
 const mediaSizes = new Set(['small', 'medium', 'large']);
 const maxMediaBytes = 3 * 1024 * 1024;
+const defaultMediaCrop = { x: 0.5, y: 0.5, zoom: 1 };
+const maxMediaCropZoom = 3;
+
+function parseMediaCrop(value) {
+  if (value == null) return { ...defaultMediaCrop };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { x, y, zoom } = value;
+  if (![x, y, zoom].every(Number.isFinite)) return null;
+  if (x < 0 || x > 1 || y < 0 || y > 1 || zoom < 1 || zoom > maxMediaCropZoom) return null;
+  return { x, y, zoom };
+}
 
 function requireAutoCard(req, res, next) {
   return canUseAutoCard(req.user) ? next() : forbidden(req, res);
@@ -49,6 +60,8 @@ function parseCard(body) {
   if (body.illustration != null && (typeof body.illustration !== 'string' || body.illustration.length > 80)) return null;
   if (!modes.has(body.mode || 'light') || !variants.has(body.variant || 'editorial') || !mediaSizes.has(body.mediaSize || 'medium')) return null;
   if (body.mediaId != null && !uuid(body.mediaId)) return null;
+  const mediaCrop = parseMediaCrop(body.mediaCrop);
+  if (!mediaCrop) return null;
   return {
     name: body.name.trim(),
     template: body.template,
@@ -59,6 +72,7 @@ function parseCard(body) {
     variant: body.variant || 'editorial',
     mediaSize: body.mediaSize || 'medium',
     mediaId: body.mediaId || null,
+    mediaCrop,
   };
 }
 
@@ -104,7 +118,7 @@ router.get('/cards', async (req, res, next) => {
     if (template) { values.push(template); filters.push(`template = $${values.length}`); }
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const [cards, count] = await Promise.all([
-      pool.query(`SELECT id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+      pool.query(`SELECT id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
         FROM autocard_cards ${where} ORDER BY updated_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`, [...values, page.limit, page.offset]),
       pool.query(`SELECT COUNT(*)::integer AS total FROM autocard_cards ${where}`, values),
     ]);
@@ -120,10 +134,10 @@ router.post('/cards', async (req, res, next) => {
     const result = await withAudit(pool, req, 'autocard.card.create', 'autocard_card', async (client) => {
       if (!await mediaExists(client, card.mediaId)) return null;
       const { rows } = await client.query(
-        `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, created_by)
-         VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
-        [card.name, card.template, JSON.stringify(card.values), card.icon, card.illustration, card.mode, card.variant, card.mediaSize, card.mediaId, req.user.uid],
+         `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, created_by)
+          VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+          RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
+         [card.name, card.template, JSON.stringify(card.values), card.icon, card.illustration, card.mode, card.variant, card.mediaSize, card.mediaId, JSON.stringify(card.mediaCrop), req.user.uid],
       );
       return rows[0];
     }, { targetId: result => result?.id });
@@ -136,7 +150,7 @@ router.get('/cards/:id', async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+      `SELECT id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM autocard_cards WHERE id = $1`, [req.params.id],
     );
     return rows[0] ? res.json(rows[0]) : res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
@@ -151,10 +165,10 @@ router.put('/cards/:id', async (req, res, next) => {
     const result = await withAudit(pool, req, 'autocard.card.update', 'autocard_card', async (client) => {
       if (!await mediaExists(client, card.mediaId)) return null;
       const { rows } = await client.query(
-      `UPDATE autocard_cards SET name = $2, template = $3, "values" = $4::jsonb, icon = $5, illustration = $6, mode = $7, variant = $8, media_size = $9, media_id = $10, updated_at = NOW()
-         WHERE id = $1
-         RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
-        [req.params.id, card.name, card.template, JSON.stringify(card.values), card.icon, card.illustration, card.mode, card.variant, card.mediaSize, card.mediaId],
+       `UPDATE autocard_cards SET name = $2, template = $3, "values" = $4::jsonb, icon = $5, illustration = $6, mode = $7, variant = $8, media_size = $9, media_id = $10, media_crop = $11::jsonb, updated_at = NOW()
+          WHERE id = $1
+          RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
+         [req.params.id, card.name, card.template, JSON.stringify(card.values), card.icon, card.illustration, card.mode, card.variant, card.mediaSize, card.mediaId, JSON.stringify(card.mediaCrop)],
       );
       return rows[0] || null;
     }, { targetId: result => result?.id });
@@ -168,10 +182,10 @@ router.post('/cards/:id/duplicate', async (req, res, next) => {
   try {
     const result = await withAudit(pool, req, 'autocard.card.duplicate', 'autocard_card', async (client) => {
       const { rows } = await client.query(
-        `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, created_by)
-         SELECT name || ' v2', template, "values", icon, illustration, mode, variant, media_size, media_id, $2
-         FROM autocard_cards WHERE id = $1
-         RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
+         `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, created_by)
+          SELECT name || ' v2', template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, $2
+          FROM autocard_cards WHERE id = $1
+          RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
         [req.params.id, req.user.uid],
       );
       return rows[0] || null;

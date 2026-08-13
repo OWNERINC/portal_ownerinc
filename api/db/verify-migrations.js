@@ -12,6 +12,7 @@ const expectedVersions = [
   '009_job_titles',
   '010_autocard',
   '011_cron_alert_state',
+  '012_autocard_media_crop',
 ];
 
 async function verifyMigrations() {
@@ -38,7 +39,7 @@ async function verifyMigrations() {
       || result.rows[0].api_autocard_media_privileges !== true) {
       throw new Error('Job title or AutoCard schema is incomplete');
     }
-     console.log('migration verification: 011_cron_alert_state ok');
+    console.log('migration verification: 012_autocard_media_crop ok');
   } finally {
     await pool.end();
   }

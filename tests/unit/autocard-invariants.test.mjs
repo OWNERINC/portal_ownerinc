@@ -195,10 +195,11 @@ test('AutoCard access uses the exact DHO job title allowlist', () => {
 });
 
 test('AutoCard API is protected and uses shared PostgreSQL storage', async () => {
-  const [auth, route, migration, schema, index, nginx] = await Promise.all([
+  const [auth, route, migration, cropMigration, schema, index, nginx] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('api/routes/autocard.js', 'utf8'),
     readFile('api/db/migrations/010_autocard.sql', 'utf8'),
+    readFile('api/db/migrations/012_autocard_media_crop.sql', 'utf8'),
     readFile('api/db/schema.sql', 'utf8'),
     readFile('api/index.js', 'utf8'),
     readFile('nginx/nginx.conf', 'utf8'),
@@ -211,9 +212,21 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
   assert.match(route, /autocard_cards/);
   assert.match(route, /autocard_media/);
   assert.match(route, /withAudit/);
+  assert.match(route, /mediaCrop/);
+  assert.match(route, /media_crop AS "mediaCrop"/);
+  assert.match(route, /body\.mediaCrop/);
+  assert.match(route, /media_crop = \$11::jsonb/);
+  assert.match(route, /SELECT name \|\| ' v2',[\s\S]*media_crop/);
   assert.match(migration, /Analista de RH.*Analista de DHO/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS autocard_cards/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS autocard_media/);
+  assert.match(cropMigration, /ADD COLUMN IF NOT EXISTS media_crop/);
+  assert.match(cropMigration, /SET media_crop = '\{"x":0\.5,"y":0\.5,"zoom":1\}'::jsonb/);
+  assert.match(cropMigration, /ALTER COLUMN media_crop SET DEFAULT/);
+  assert.match(cropMigration, /ALTER COLUMN media_crop SET NOT NULL/);
+  assert.match(cropMigration, /autocard_cards_media_crop_check/);
+  assert.match(schema, /media_crop\s+JSONB/);
+  assert.match(schema, /autocard_cards_media_crop_check/);
   assert.match(schema, /010_autocard/);
   assert.match(index, /app\.use\('\/api\/autocard', autocardRoutes\)/);
   assert.match(nginx, /location \^~ \/api\/autocard\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
