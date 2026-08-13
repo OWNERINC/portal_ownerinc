@@ -39,6 +39,7 @@ function createAutoCardElement(id) {
     naturalWidth: id === 'cropImage' ? 1000 : 0,
     naturalHeight: id === 'cropImage' ? 500 : 0,
     complete: id === 'cropImage',
+    parentElement: null,
     open: false,
     focused: false,
     pointerId: null,
@@ -202,6 +203,11 @@ async function createAutoCardLifecycleHarness() {
       input.value = String(zoom);
       input.dispatchEvent({ type: 'input' });
     },
+    setCropImageSize(width, height) {
+      const image = elements.get('cropImage');
+      image.naturalWidth = width;
+      image.naturalHeight = height;
+    },
     applyCrop() {
       elements.get('cropApply').onclick();
     },
@@ -221,24 +227,38 @@ async function createAutoCardCropHarness() {
   const source = await readFile('public/autocard/crop.js', 'utf8');
   const context = vm.createContext({});
   const cropSource = source.replace(/^export /gm, '');
-  vm.runInContext(`${cropSource}\nglobalThis.__autocardCropTest = { DEFAULT_MEDIA_CROP, normalizeMediaCrop, cropStyle, dragMediaCrop };`, context);
+  vm.runInContext(`${cropSource}\nglobalThis.__autocardCropTest = { DEFAULT_MEDIA_CROP, normalizeMediaCrop, cropStyle, cropLayout, cropRenderStyle, dragMediaCrop };`, context);
   const crop = context.__autocardCropTest;
   return {
     DEFAULT_MEDIA_CROP: JSON.parse(JSON.stringify(crop.DEFAULT_MEDIA_CROP)),
     normalizeMediaCrop: value => JSON.parse(JSON.stringify(crop.normalizeMediaCrop(value))),
     cropStyle: crop.cropStyle,
+    cropLayout: (value, metrics) => JSON.parse(JSON.stringify(crop.cropLayout(value, metrics))),
+    cropRenderStyle: crop.cropRenderStyle,
     dragMediaCrop: (value, metrics) => JSON.parse(JSON.stringify(crop.dragMediaCrop(value, metrics))),
   };
 }
 
 test('AutoCard crop utility normalizes, styles, and drags media safely', async () => {
-  const { DEFAULT_MEDIA_CROP, normalizeMediaCrop, cropStyle, dragMediaCrop } = await createAutoCardCropHarness();
+  const { DEFAULT_MEDIA_CROP, normalizeMediaCrop, cropStyle, cropLayout, cropRenderStyle, dragMediaCrop } = await createAutoCardCropHarness();
 
   assert.deepEqual(DEFAULT_MEDIA_CROP, { x: 0.5, y: 0.5, zoom: 1 });
   assert.deepEqual(normalizeMediaCrop(), { x: 0.5, y: 0.5, zoom: 1 });
   assert.deepEqual(normalizeMediaCrop({ x: 2, y: -1, zoom: 8 }), { x: 1, y: 0, zoom: 3 });
   assert.deepEqual(normalizeMediaCrop({ x: 'bad' }), { x: 0.5, y: 0.5, zoom: 1 });
   assert.equal(cropStyle({ x: 0.25, y: 0.75, zoom: 2 }), '--crop-x:25%;--crop-y:75%;--crop-zoom:2');
+
+  const squareMetrics = { frameWidth: 200, frameHeight: 200, imageWidth: 1000, imageHeight: 1000 };
+  assert.notEqual(
+    cropRenderStyle({ x: 0, y: 0.5, zoom: 2 }, squareMetrics),
+    cropRenderStyle({ x: 1, y: 0.5, zoom: 2 }, squareMetrics),
+  );
+  const portraitMetrics = { frameWidth: 180, frameHeight: 320, imageWidth: 800, imageHeight: 1200 };
+  assert.notEqual(
+    cropRenderStyle({ x: 0.5, y: 0, zoom: 2 }, portraitMetrics),
+    cropRenderStyle({ x: 0.5, y: 1, zoom: 2 }, portraitMetrics),
+  );
+  assert.match(cropRenderStyle({ x: 0.5, y: 0, zoom: 2 }, portraitMetrics), /transform:translate\(/);
 
   const moved = dragMediaCrop({ x: 0.5, y: 0.5, zoom: 2 }, {
     dx: 100,
@@ -298,7 +318,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /undefined|\/api\/autocard\/media/);
   assert.match(harness.toast().textContent, /Não foi possível carregar a imagem: asset unavailable/);
 
-  harness.selectTemplate('novo_funcionario', { mediaId: 'employee-media' });
+  harness.selectTemplate('novo_funcionario', { mediaId: 'employee-media', mediaCrop: { x: 0.2, y: 0.8, zoom: 2 } });
   harness.flushMutations();
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /<img[^>]+src="undefined"|\/api\/autocard\/media/);
   assert.match(harness.cardCanvas.innerHTML, /employee-photo"><i data-lucide="user-plus"/);
@@ -306,6 +326,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   const employeeUrl = await harness.resolve(4);
   harness.flushMutations();
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`employee-photo"><img src="${employeeUrl}"`));
+  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><img src="[^"]+" style="--crop-x:20%;--crop-y:80%;--crop-zoom:2"/);
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /undefined|\/api\/autocard\/media/);
 });
 
@@ -336,6 +357,18 @@ test('AutoCard crop editor keeps drafts isolated until apply and restores focus'
   harness.resetCrop();
   harness.applyCrop();
   assert.deepEqual(JSON.parse(JSON.stringify(harness.state().mediaCrop)), { x: 0.5, y: 0.5, zoom: 1 });
+});
+
+test('AutoCard crop editor ignores movement until the preview image is ready', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+
+  harness.selectTemplate('aniversariante', { mediaId: 'photo' });
+  await harness.resolve(0);
+  harness.openCrop();
+  const before = harness.draft();
+  harness.setCropImageSize(0, 0);
+  harness.dragCrop(80, 40);
+  assert.deepEqual(harness.draft(), before);
 });
 
 test('AutoCard access uses the exact DHO job title allowlist', () => {
@@ -387,13 +420,14 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
 });
 
 test('AutoCard UI is guarded before loading the editor', async () => {
-  const [entry, guard, html, legacy, dashboard, sidebar] = await Promise.all([
+  const [entry, guard, html, legacy, dashboard, sidebar, crop] = await Promise.all([
     readFile('public/autocard/entry.js', 'utf8'),
     readFile('public/autocard/guard.js', 'utf8'),
     readFile('public/autocard.html', 'utf8'),
     readFile('public/autocard/index.html', 'utf8'),
     readFile('public/dashboard.html', 'utf8'),
     readFile('public/js/sidebar.js', 'utf8'),
+    readFile('public/autocard/crop.js', 'utf8'),
   ]);
   assert.match(entry, /await requireAutoCard\(\)/);
   assert.match(entry, /import\('\.\/app\.js'\)/);
@@ -442,6 +476,11 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /cropButton'\)\?\.classList\.remove\('hidden'\)/);
   assert.match(app, /if\(openCrop\)openCropEditor\(\)/);
   assert.match(app, /style="\$\{cropStyle\(current\.mediaCrop\)\}"/);
+  assert.match(app, /cropRenderStyle/);
+  assert.match(app, /card-media-frame/);
+  assert.match(app, /employee-photo img/);
+  assert.match(app, /window\.__autocardApplyMediaCropStyle=applyMediaCropStyle/);
+  assert.match(app, /function onCropPointerDown\(event\)\{const \{frameWidth,frameHeight,imageWidth,imageHeight\}=cropMetrics\(\)/);
   assert.match(app, /mediaCrop:current\.mediaCrop/);
   assert.match(app, /image\.onload=\(\)=>\{cleanup\(\)/);
   assert.match(app, /image\.onerror=\(\)=>\{cleanup\(\)/);
@@ -456,11 +495,14 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /addEventListener\('pagehide'/);
   assert.match(app, /current\.mediaUrl\s*\?/);
   assert.match(app, /birthday-photo">\$\{current\.mediaUrl\?/);
+  assert.match(app, /birthday-photo[\s\S]*cropStyle\(current\.mediaCrop\)/);
+  assert.match(crop, /transform:translate\(\$\{layout\.translateX\}px/);
   assert.doesNotMatch(app, /current\.mediaId\?`<img src="\$\{current\.mediaUrl\}/);
   assert.doesNotMatch(app, /current\.mediaUrl=data\.url/);
   assert.match(vacancy, /const photoElement = cardCanvas\.querySelector\('\.card-media'\)/);
   assert.match(vacancy, /const photoStyle = photoElement\?\.getAttribute\('style'\) \|\| ''/);
   assert.match(vacancy, /style="\$\{photoStyle\}"/);
+  assert.match(vacancy, /__autocardApplyMediaCropStyle/);
   assert.doesNotMatch(vacancy, /\/api\/autocard\/media|mediaId|mediaUrl/);
   assert.match(app, /\/api\/autocard\/media/);
   assert.match(app, /file\.size>3\*1024\*1024/);

@@ -32,6 +32,7 @@ function renderVacancy() {
       <div class="card-footer" style="border-color:${theme.muted};color:${theme.subtext}"><span>Faça parte da Ownerinc</span><img src="${dark ? '/assets/ownerinc-completa-white.webp' : '/assets/ownerinc-completa-black.webp'}" alt="Ownerinc" style="filter:none"></div>
     </div>
   </div>`;
+  window.__autocardApplyMediaCropStyle?.();
   window.lucide?.createIcons?.();
   rendering = false;
   setTimeout(() => { ignoreMutation = false; }, 0);
@@ -62,6 +63,7 @@ function renderEmployee() {
       </div>
     </div>
   </div>`;
+  window.__autocardApplyMediaCropStyle?.();
   window.lucide?.createIcons?.();
   rendering = false;
   setTimeout(() => { ignoreMutation = false; }, 0);

@@ -22,16 +22,39 @@ export function cropStyle(value) {
   return `--crop-x:${crop.x * 100}%;--crop-y:${crop.y * 100}%;--crop-zoom:${crop.zoom}`;
 }
 
+export function cropLayout(value, metrics) {
+  const crop = normalizeMediaCrop(value);
+  const { frameWidth, frameHeight, imageWidth, imageHeight } = metrics || {};
+  if (![frameWidth, frameHeight, imageWidth, imageHeight].every(value => Number.isFinite(value) && value > 0)) return null;
+  const scale = Math.max(frameWidth / imageWidth, frameHeight / imageHeight) * crop.zoom;
+  const renderedWidth = imageWidth * scale;
+  const renderedHeight = imageHeight * scale;
+  const overflowX = Math.max(0, renderedWidth - frameWidth);
+  const overflowY = Math.max(0, renderedHeight - frameHeight);
+  return {
+    renderedWidth,
+    renderedHeight,
+    overflowX,
+    overflowY,
+    translateX: -overflowX * crop.x,
+    translateY: -overflowY * crop.y,
+  };
+}
+
+export function cropRenderStyle(value, metrics) {
+  const crop = normalizeMediaCrop(value);
+  const layout = cropLayout(crop, metrics);
+  if (!layout) return null;
+  return `${cropStyle(crop)};width:${layout.renderedWidth}px;height:${layout.renderedHeight}px;max-width:none;max-height:none;transform:translate(${layout.translateX}px,${layout.translateY}px);transform-origin:top left`;
+}
+
 export function dragMediaCrop(value, metrics) {
   const crop = normalizeMediaCrop(value);
-  const imageRatio = metrics.imageWidth / metrics.imageHeight;
-  const fittedWidth = Math.max(metrics.frameWidth, metrics.frameHeight * imageRatio) * crop.zoom;
-  const fittedHeight = Math.max(metrics.frameHeight, metrics.frameWidth / imageRatio) * crop.zoom;
-  const overflowX = Math.max(0, fittedWidth - metrics.frameWidth);
-  const overflowY = Math.max(0, fittedHeight - metrics.frameHeight);
+  const layout = cropLayout(crop, metrics);
+  if (!layout) return crop;
   return {
     ...crop,
-    x: overflowX ? clamp(crop.x - metrics.dx / overflowX, 0, 1) : crop.x,
-    y: overflowY ? clamp(crop.y - metrics.dy / overflowY, 0, 1) : crop.y,
+    x: layout.overflowX ? clamp(crop.x - metrics.dx / layout.overflowX, 0, 1) : crop.x,
+    y: layout.overflowY ? clamp(crop.y - metrics.dy / layout.overflowY, 0, 1) : crop.y,
   };
 }

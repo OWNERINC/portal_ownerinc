@@ -60,6 +60,7 @@ function applyVariant() {
       setImportant(photo, 'flex-basis', `${dimensions[size]}px`);
     }
   }
+  window.__autocardApplyMediaCropStyle?.();
   applying = false;
 }
 
