@@ -45,11 +45,13 @@ function renderEmployee() {
   const theme = dark
     ? { bg: '#171716', text: '#fff', subtext: '#d6bd8b', accent: '#c9a86a', muted: '#302e28' }
     : { bg: '#f6f1e9', text: '#171716', subtext: '#746653', accent: '#b99a61', muted: '#e8e0d4' };
-  const photo = cardCanvas.querySelector('.card-media')?.src;
+  const photoElement = cardCanvas.querySelector('.card-media');
+  const photo = photoElement?.src;
+  const photoStyle = photoElement?.getAttribute('style') || '';
   const iconMarkup = document.getElementById('iconPreview')?.innerHTML || '';
   cardCanvas.innerHTML = `<div class="card-shell employee-card" style="background:${theme.bg};color:${theme.text}">
     <div class="employee-layout">
-      <div class="employee-photo">${photo ? `<img src="${photo}" alt="Foto de ${escapeValue(value('titulo'))}">` : iconMarkup}</div>
+      <div class="employee-photo">${photo ? `<img src="${photo}" style="${photoStyle}" alt="Foto de ${escapeValue(value('titulo'))}">` : iconMarkup}</div>
       <div class="employee-copy">
         <div class="card-kicker" style="color:${theme.subtext}">${iconMarkup} NOVO FUNCIONÁRIO</div>
         <h2>${escapeValue(value('titulo')) || 'Nome do colaborador'}</h2>

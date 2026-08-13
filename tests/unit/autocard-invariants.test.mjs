@@ -10,31 +10,76 @@ const { canUseAutoCard } = require('../../api/middleware/policy');
 const dho = (name) => ({ role: 'viewer', job_title: name, permissions: {} });
 
 function createAutoCardElement(id) {
+  const listeners = new Map();
+  const classes = new Set();
   return {
     id,
     classList: {
-      add() {},
-      remove() {},
-      toggle() {},
+      add(...names) { names.forEach(name => classes.add(name)); },
+      remove(...names) { names.forEach(name => classes.delete(name)); },
+      toggle(name, force) {
+        const next = force === undefined ? !classes.has(name) : force;
+        if (next) classes.add(name); else classes.delete(name);
+        return next;
+      },
+      contains(name) { return classes.has(name); },
     },
     dataset: {},
     innerHTML: '',
     textContent: '',
     value: '',
-    style: { setProperty() {} },
+    style: {
+      values: {},
+      setProperty(name, value) { this.values[name] = value; },
+      getPropertyValue(name) { return this.values[name] || ''; },
+    },
+    attributes: {},
+    clientWidth: id === 'cropFrame' ? 200 : 0,
+    clientHeight: id === 'cropFrame' ? 200 : 0,
+    naturalWidth: id === 'cropImage' ? 1000 : 0,
+    naturalHeight: id === 'cropImage' ? 500 : 0,
+    complete: id === 'cropImage',
+    open: false,
+    focused: false,
+    pointerId: null,
     onclick: null,
     onchange: null,
     oninput: null,
     dispatchEvent(event) {
       if (event.type === 'input') this.oninput?.(event);
+      listeners.get(event.type)?.forEach(handler => handler({ ...event, currentTarget: this }));
+    },
+    addEventListener(type, handler) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    setPointerCapture(pointerId) {
+      this.pointerId = pointerId;
+    },
+    releasePointerCapture(pointerId) {
+      if (this.pointerId === pointerId) this.pointerId = null;
+    },
+    focus() {
+      this.focused = true;
+      this.ownerDocument.activeElement = this;
+    },
+    getAttribute(name) {
+      if (name !== 'style') return this.attributes[name] || null;
+      const source = this.innerHTML.match(/<img class="card-media" src="[^"]+" style="([^"]*)"/);
+      return this.attributes.style || source?.[1] || null;
+    },
+    showModal() {
+      this.open = true;
+    },
+    close() {
+      this.open = false;
+      listeners.get('close')?.forEach(handler => handler({ type: 'close', currentTarget: this }));
     },
     querySelector(selector) {
       if (selector !== '.card-media') return null;
-      const source = this.innerHTML.match(/<img class="card-media" src="([^"]+)"/);
-      return source ? { src: source[1] } : null;
+      const source = this.innerHTML.match(/<img class="card-media" src="([^"]+)"(?: style="([^"]*)")?/);
+      return source ? { src: source[1], getAttribute: name => name === 'style' ? source[2] || null : null } : null;
     },
-    showModal() {},
-    close() {},
   };
 }
 
@@ -50,8 +95,13 @@ async function createAutoCardLifecycleHarness() {
   const createdUrls = [];
   const revokedUrls = [];
   const document = {
+    activeElement: null,
     getElementById(id) {
-      if (!elements.has(id)) elements.set(id, createAutoCardElement(id));
+      if (!elements.has(id)) {
+        const element = createAutoCardElement(id);
+        element.ownerDocument = document;
+        elements.set(id, element);
+      }
       return elements.get(id);
     },
     querySelector() {
@@ -109,8 +159,9 @@ async function createAutoCardLifecycleHarness() {
     },
     window,
   });
-  const appSource = app.replace(/^import[^\n]+\n/, '');
-  vm.runInContext(`${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, selectTemplate, renderCard };`, context);
+  const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
+  const appSource = app.replace(/^import[^\n]+\n/gm, '');
+  vm.runInContext(`${cropSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard };`, context);
   return {
     cardCanvas: elements.get('cardCanvas'),
     createdUrls,
@@ -134,6 +185,34 @@ async function createAutoCardLifecycleHarness() {
     revokedUrls,
     state: () => context.__autocardTest.current(),
     selectTemplate: (key, card) => context.__autocardTest.selectTemplate(key, card),
+    isHidden: id => elements.get(id).classList.contains('hidden'),
+    openCrop() {
+      const button = elements.get('cropButton');
+      button.focus();
+      button.onclick();
+    },
+    dragCrop(dx, dy) {
+      const frame = elements.get('cropFrame');
+      frame.dispatchEvent({ type: 'pointerdown', pointerId: 1, clientX: 0, clientY: 0 });
+      frame.dispatchEvent({ type: 'pointermove', pointerId: 1, clientX: dx, clientY: dy });
+      frame.dispatchEvent({ type: 'pointerup', pointerId: 1, clientX: dx, clientY: dy });
+    },
+    setZoom(zoom) {
+      const input = elements.get('cropZoom');
+      input.value = String(zoom);
+      input.dispatchEvent({ type: 'input' });
+    },
+    applyCrop() {
+      elements.get('cropApply').onclick();
+    },
+    cancelCrop() {
+      elements.get('cropCancel').onclick();
+    },
+    resetCrop() {
+      elements.get('cropReset').onclick();
+    },
+    draft: () => JSON.parse(JSON.stringify(context.__autocardTest.cropDraft())),
+    focusedId: () => document.activeElement?.id || null,
     toast: () => elements.get('toast'),
   };
 }
@@ -199,6 +278,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   const currentUrl = await harness.resolve(1);
   assert.equal(harness.state().mediaUrl, currentUrl);
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${currentUrl}"`));
+  assert.equal(harness.isHidden('cropButton'), false);
 
   harness.dispatch('pagehide');
   assert.equal(harness.state().mediaUrl, null);
@@ -213,6 +293,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   harness.selectTemplate('evento', { mediaId: 'failed-media' });
   await harness.reject(3, new Error('asset unavailable'));
   assert.equal(harness.state().mediaUrl, null);
+  assert.equal(harness.isHidden('cropButton'), true);
   assert.match(harness.cardCanvas.innerHTML, /card-placeholder/);
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /undefined|\/api\/autocard\/media/);
   assert.match(harness.toast().textContent, /Não foi possível carregar a imagem: asset unavailable/);
@@ -226,6 +307,35 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   harness.flushMutations();
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`employee-photo"><img src="${employeeUrl}"`));
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /undefined|\/api\/autocard\/media/);
+});
+
+test('AutoCard crop editor keeps drafts isolated until apply and restores focus', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+
+  harness.selectTemplate('aniversariante', { mediaId: 'photo', mediaCrop: { x: 0.2, y: 0.8, zoom: 2 } });
+  assert.equal(harness.state().mediaCrop.x, 0.2);
+  await harness.resolve(0);
+  harness.openCrop();
+  harness.dragCrop(40, 0);
+  harness.setZoom(2.5);
+  harness.applyCrop();
+  assert.equal(harness.state().mediaCrop.zoom, 2.5);
+  assert.notEqual(harness.state().mediaCrop.x, 0.2);
+  assert.equal(harness.focusedId(), 'cropButton');
+
+  const confirmed = { ...harness.state().mediaCrop };
+  harness.openCrop();
+  harness.setZoom(1.4);
+  assert.equal(harness.draft().zoom, 1.4);
+  assert.equal(harness.state().mediaCrop.zoom, 2.5);
+  harness.cancelCrop();
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.state().mediaCrop)), confirmed);
+
+  harness.openCrop();
+  harness.setZoom(2.4);
+  harness.resetCrop();
+  harness.applyCrop();
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.state().mediaCrop)), { x: 0.5, y: 0.5, zoom: 1 });
 });
 
 test('AutoCard access uses the exact DHO job title allowlist', () => {
@@ -326,6 +436,21 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /import \{ fetchAPI, fetchAPIAsset \} from '\.\.\/js\/auth\.js'/);
   assert.match(app, /fetchAPIAsset\(`/);
   assert.match(app, /mediaUrl: null/);
+  assert.match(app, /mediaCrop:\s*\{\.\.\.DEFAULT_MEDIA_CROP\}/);
+  assert.match(app, /mediaCrop:normalizeMediaCrop\(card\?\.mediaCrop\)/);
+  assert.match(app, /function loadMedia\(mediaId,version,openCrop=false\)/);
+  assert.match(app, /cropButton'\)\?\.classList\.remove\('hidden'\)/);
+  assert.match(app, /if\(openCrop\)openCropEditor\(\)/);
+  assert.match(app, /style="\$\{cropStyle\(current\.mediaCrop\)\}"/);
+  assert.match(app, /mediaCrop:current\.mediaCrop/);
+  assert.match(app, /image\.onload=\(\)=>\{cleanup\(\)/);
+  assert.match(app, /image\.onerror=\(\)=>\{cleanup\(\)/);
+  assert.match(app, /await img\.decode\(\)/);
+  assert.match(app, /button\.disabled=true/);
+  assert.match(app, /button\.disabled=false/);
+  assert.match(app, /Não foi possível exportar o card/);
+  assert.match(app, /duplicate[\s\S]*catch\(\(\)=>toast\('Não foi possível duplicar o card\.'/);
+  assert.match(app, /method:'DELETE'[\s\S]*catch\(\(\)=>toast\('Não foi possível excluir o card\.'/);
   assert.match(app, /URL\.revokeObjectURL/);
   assert.match(app, /startsWith\('blob:'\)/);
   assert.match(app, /addEventListener\('pagehide'/);
@@ -333,7 +458,9 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /birthday-photo">\$\{current\.mediaUrl\?/);
   assert.doesNotMatch(app, /current\.mediaId\?`<img src="\$\{current\.mediaUrl\}/);
   assert.doesNotMatch(app, /current\.mediaUrl=data\.url/);
-  assert.match(vacancy, /querySelector\('\.card-media'\)\?\.src/);
+  assert.match(vacancy, /const photoElement = cardCanvas\.querySelector\('\.card-media'\)/);
+  assert.match(vacancy, /const photoStyle = photoElement\?\.getAttribute\('style'\) \|\| ''/);
+  assert.match(vacancy, /style="\$\{photoStyle\}"/);
   assert.doesNotMatch(vacancy, /\/api\/autocard\/media|mediaId|mediaUrl/);
   assert.match(app, /\/api\/autocard\/media/);
   assert.match(app, /file\.size>3\*1024\*1024/);
