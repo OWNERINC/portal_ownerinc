@@ -31,3 +31,20 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
 .autocard-page .editor,.autocard-page .preview-area{min-width:0}
 @media(max-width:768px){.autocard-page .page-body{padding:20px 16px max(20px,env(safe-area-inset-bottom))}.autocard-toolbar{padding:16px}.autocard-toolbar>div:first-child{flex-basis:100%}.autocard-toolbar nav{width:100%;align-self:stretch}.autocard-toolbar .tab{flex:1}.autocard-page .gallery{padding:20px}}
 @media(prefers-reduced-motion:reduce){.autocard-page *,.autocard-page *::before,.autocard-page *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}.autocard-page .template-tile:hover{transform:none}}
+
+/* Crop editor */
+#cropDialog{width:min(calc(100vw - 32px),680px);max-width:680px;max-height:calc(100dvh - 32px);margin:auto;padding:0;border:1px solid var(--line);border-radius:18px;background:var(--paper);color:var(--ink);box-shadow:0 24px 80px #0004}
+#cropDialog::backdrop{background:#15151499}
+.crop-dialog-form{display:flex;flex-direction:column;gap:18px;max-height:calc(100dvh - 32px);overflow:auto;padding:clamp(20px,4vw,32px)}
+.crop-dialog-form .dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.crop-dialog-form h2{margin:0;font-size:clamp(22px,4vw,30px);line-height:1.1}
+#cropHelp{margin:0;color:var(--muted);font-size:14px}
+.crop-frame{--crop-frame-ratio:1 / 1;position:relative;width:min(100%,560px);max-height:62dvh;margin:0 auto;aspect-ratio:var(--crop-frame-ratio);overflow:hidden;background:var(--soft);touch-action:none;cursor:grab;border:1px solid var(--line);border-radius:12px}
+.crop-frame:active{cursor:grabbing}
+.crop-image{display:block;width:100%;height:100%;object-fit:cover;object-position:var(--crop-x,50%) var(--crop-y,50%);transform:scale(var(--crop-zoom,1));transform-origin:center;user-select:none}
+.crop-zoom{display:flex;align-items:center;gap:12px;font-size:13px;font-weight:700}
+.crop-zoom input{width:100%;min-width:0;min-height:44px;accent-color:var(--ink)}
+.crop-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+#cropDialog :where(button,input):focus-visible,.crop-frame:focus-visible{outline:3px solid #b99a61;outline-offset:3px}
+@media(max-width:500px){#cropDialog{width:calc(100vw - 20px);max-height:calc(100dvh - 20px)}.crop-dialog-form{max-height:calc(100dvh - 20px);padding:18px}.crop-frame{max-height:54dvh}.crop-actions{flex-direction:column}.crop-actions button{width:100%}.crop-zoom{align-items:stretch;flex-direction:column;gap:6px}}
+@media(prefers-reduced-motion:reduce){#cropDialog *,#cropDialog *::before,#cropDialog *::after{animation:none!important;transition:none!important}}

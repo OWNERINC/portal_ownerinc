@@ -339,3 +339,26 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /file\.size>3\*1024\*1024/);
   assert.match(dashboard, /class="autocard-link"/);
 });
+
+test('AutoCard crop editor exposes accessible dialog and responsive frame contracts', async () => {
+  const [html, styles] = await Promise.all([
+    readFile('public/autocard.html', 'utf8'),
+    readFile('public/autocard/styles.css', 'utf8'),
+  ]);
+
+  assert.match(html, /id="cropButton"/);
+  assert.match(html, /id="cropDialog"/);
+  assert.match(html, /id="cropFrame"/);
+  assert.match(html, /id="cropImage"/);
+  assert.match(html, /id="cropZoom"/);
+  assert.match(html, /id="cropReset"/);
+  assert.match(html, /id="cropCancel"/);
+  assert.match(html, /id="cropApply"/);
+  assert.match(html, /Ajustar enquadramento/);
+  assert.match(html, /Aplicar enquadramento/);
+  assert.match(html, /aria-labelledby="cropTitle"/);
+  assert.match(html, /tabindex="0" role="img"/);
+  assert.match(styles, /crop-frame/);
+  assert.match(styles, /touch-action:none/);
+  assert.match(styles, /prefers-reduced-motion/);
+});
