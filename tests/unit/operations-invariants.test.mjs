@@ -119,6 +119,28 @@ test('cron health deduplicates SMTP alerts and sends recovery notifications', as
   assert.match(packageJson, /"nodemailer"/);
 });
 
+test('AutoCard media retention is scheduled, locked, and volume-safe', async () => {
+  const [cron, cleanup, compose] = await Promise.all([
+    read('cron/index.js'), read('cron/autocard-media-retention.js'), read('docker-compose.yml'),
+  ]);
+  assert.match(cron, /enforceAutocardMediaRetention/);
+  assert.match(cron, /cron\.schedule\('30 3 \* \* \*', runRetention/);
+  assert.match(cron, /retentionTask\.stop\(\)/);
+  assert.match(cleanup, /pg_try_advisory_lock/);
+  assert.match(cleanup, /pg_advisory_unlock/);
+  assert.match(cleanup, /autocard_media/);
+  assert.match(cleanup, /m\.created_at < NOW\(\) - \(\$1::integer \* INTERVAL '1 day'\)/);
+  assert.match(cleanup, /NOT EXISTS \([\s\S]*autocard_cards[\s\S]*c\.media_id = m\.id/);
+  assert.match(cleanup, /DELETE FROM autocard_media[\s\S]*NOT EXISTS/);
+  assert.match(cleanup, /autocard-\[0-9a-f-\]\+\\\.webp/);
+  assert.match(cleanup, /path\.join\(uploadDirectory, storageKey\)/);
+  assert.match(cleanup, /autocard_media\.retention/);
+  const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
+  assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
+  assert.match(cronService, /AUTOCARD_MEDIA_ORPHAN_DAYS: \$\{AUTOCARD_MEDIA_ORPHAN_DAYS:-7\}/);
+  assert.match(cronService, /volumes:\n\s+- uploads_data:\/app\/uploads/);
+});
+
 test('CI builds and publishes commit-addressed production images', async () => {
   const [workflow, apiPackage] = await Promise.all([
     read('.github/workflows/ci.yml'), read('api/package.json'),

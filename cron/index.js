@@ -12,10 +12,12 @@ const sgMail = require('@sendgrid/mail');
 const pool = require('./db');
 const { checkReminders } = require('./checkReminders');
 const { enforceRetention, retentionDays } = require('./retention');
+const { autocardMediaRetentionDays, enforceAutocardMediaRetention } = require('./autocard-media-retention');
 const { TIME_ZONE } = require('./scheduling');
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 retentionDays();
+autocardMediaRetentionDays();
 
 async function run() {
   try {
@@ -26,15 +28,22 @@ async function run() {
 }
 
 const task = cron.schedule('0 8 * * *', run, { timezone: TIME_ZONE });
-const retentionTask = cron.schedule('30 3 * * *', async () => {
+async function runRetention() {
   try {
     await enforceRetention();
   } catch (error) {
     console.error(JSON.stringify({ service: 'cron', event: 'retention_failed', error: error.message }));
   }
-}, { timezone: TIME_ZONE });
+  try {
+    await enforceAutocardMediaRetention();
+  } catch (error) {
+    console.error(JSON.stringify({ service: 'cron', event: 'autocard_media_retention_failed', error: error.message }));
+  }
+}
+
+const retentionTask = cron.schedule('30 3 * * *', runRetention, { timezone: TIME_ZONE });
 run();
-enforceRetention().catch((error) => console.error(JSON.stringify({ service: 'cron', event: 'retention_failed', error: error.message })));
+runRetention();
 console.log(JSON.stringify({ service: 'cron', event: 'started', schedule: '0 8 * * *', timezone: TIME_ZONE }));
 
 async function shutdown(signal) {
