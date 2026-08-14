@@ -64,6 +64,7 @@ test('AutoCard media orphan retention defaults and stays bounded', () => {
 test('AutoCard media storage keys require a UUID-shaped filename', () => {
   assert.equal(isSafeStorageKey('autocard-123e4567-e89b-12d3-a456-426614174000.webp'), true);
   for (const key of [
+    'autocard-123E4567-E89B-12D3-A456-426614174000.webp',
     'autocard-123e4567-e89b-12d3-a456-42661417400.webp',
     'autocard-123e4567-e89b-12d3-a456-426614174000.jpg',
     'autocard-123e4567-e89b-12d3-a456-426614174000.webp.bak',

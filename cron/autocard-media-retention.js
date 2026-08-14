@@ -4,7 +4,7 @@ const path = require('node:path');
 const pool = require('./db');
 
 const AUTOCARD_MEDIA_RETENTION_LOCK = 7193003;
-const STORAGE_KEY_PATTERN = /^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/i;
+const STORAGE_KEY_PATTERN = /^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/;
 const STORAGE_KEY_SQL_PATTERN = '^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.webp$';
 
 function autocardMediaRetentionDays(env = process.env) {
