@@ -689,6 +689,12 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /image\.onload=\(\)=>\{cleanup\(\)/);
   assert.match(app, /image\.onerror=\(\)=>\{cleanup\(\)/);
   assert.match(app, /await img\.decode\(\)/);
+  assert.match(app, /document\.fonts\?\.ready/);
+  assert.match(app, /getBoundingClientRect\(\)/);
+  assert.match(app, /const\s+height\s*=\s*rect\.height/);
+  assert.match(app, /const\s+scale\s*=\s*1080\s*\/\s*width/);
+  assert.match(app, /height,\s*backgroundColor:\s*null/);
+  assert.doesNotMatch(app, /height\s*:\s*size/);
   assert.match(app, /button\.disabled=true/);
   assert.match(app, /button\.disabled=false/);
   assert.match(app, /Não foi possível exportar o card/);
