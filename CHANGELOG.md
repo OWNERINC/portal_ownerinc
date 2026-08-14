@@ -9,6 +9,7 @@
 
 ## Unreleased
 
+- AutoCard exports now preserve preview proportions and the employee card uses a contained stacked layout with a wordmark-only footer.
 - Implementado localmente o editor de enquadramento de imagens do AutoCard para
   os templates `aniversariante` e `novo_funcionario`, com arrastar, zoom,
   centralizar/resetar, cancelar/aplicar e `mediaCrop` persistido; o rendering
