@@ -50,7 +50,7 @@ Data do registro: 12 de agosto de 2026
 
 ## Evidências
 
-- `npm run verify`: 72 testes aprovados.
+- Histórico pré-hardening: `npm run verify`: 72 testes aprovados.
 - `git diff --check`: aprovado.
 - `bash -n scripts/smoke.sh`: aprovado.
 - CI: validação, migrations, build, scans, SBOM e publicação das imagens
