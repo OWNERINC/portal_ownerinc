@@ -620,7 +620,7 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
 });
 
 test('AutoCard UI is guarded before loading the editor', async () => {
-  const [entry, guard, html, legacy, dashboard, sidebar, crop] = await Promise.all([
+  const [entry, guard, html, legacy, dashboard, sidebar, crop, styles] = await Promise.all([
     readFile('public/autocard/entry.js', 'utf8'),
     readFile('public/autocard/guard.js', 'utf8'),
     readFile('public/autocard.html', 'utf8'),
@@ -628,6 +628,7 @@ test('AutoCard UI is guarded before loading the editor', async () => {
     readFile('public/dashboard.html', 'utf8'),
     readFile('public/js/sidebar.js', 'utf8'),
     readFile('public/autocard/crop.js', 'utf8'),
+    readFile('public/autocard/styles.css', 'utf8'),
   ]);
   assert.match(entry, /await requireAutoCard\(\)/);
   assert.match(entry, /import\('\.\/app\.js'\)/);
@@ -708,6 +709,13 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(vacancy, /style="\$\{photoStyle\}"/);
   assert.match(vacancy, /__autocardApplyMediaCropStyle/);
   assert.doesNotMatch(vacancy, /\/api\/autocard\/media|mediaId|mediaUrl/);
+  assert.match(vacancy, /employee-layout/);
+  assert.match(vacancy, /employee-copy/);
+  assert.match(vacancy, /Bem-vindo\(a\)/);
+  assert.match(styles, /\.employee-card/);
+  assert.match(styles, /\.employee-layout[^}]*flex-direction:\s*column/);
+  assert.match(styles, /\.employee-copy[^}]*min-width:\s*0/);
+  assert.match(styles, /overflow-wrap:\s*anywhere/);
   assert.match(app, /ownerinc-wordmark-(?:black|white)\.webp/);
   assert.match(vacancy, /<span>Bem-vindo\(a\)<\/span>/);
   assert.match(variant, /ownerinc-wordmark-black\.webp/);

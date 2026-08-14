@@ -12,11 +12,20 @@ body{line-height:1.5}.topbar{position:sticky;top:0;z-index:20;box-shadow:0 8px 2
 main{width:100%;max-width:none;min-height:calc(100dvh - 112px)}#createView,#savedView,.editor{width:100%}.editor{grid-template-columns:minmax(360px,32vw) minmax(0,1fr)}.preview-area{width:100%;min-height:calc(100dvh - 190px)}.gallery{min-height:calc(100dvh - 190px)}
 @media(max-width:900px){.editor{grid-template-columns:1fr}.preview-area{min-height:500px}.gallery{min-height:auto}}
 .vacancy-card .card-pad{padding:28px}.vacancy-card h2{margin-top:10px}.vacancy-description{margin:8px 0 12px}.vacancy-description>span,.vacancy-sections>div>span{font-size:9px;letter-spacing:.14em;font-weight:700}.vacancy-description p{font-size:12px;line-height:1.35;margin:4px 0 0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.vacancy-sections{display:grid;grid-template-columns:1fr 1fr;gap:15px}.vacancy-sections .requirements{margin:6px 0 0;gap:5px}.vacancy-sections .requirements span{font-size:10px;padding:6px 8px}.vacancy-apply{border-top:1px solid;padding-top:10px;margin-top:auto;display:flex;flex-wrap:wrap;gap:6px 12px;font-size:10px}.vacancy-apply strong{width:100%;font-size:11px;color:inherit}.vacancy-card .card-footer{padding-top:10px;margin-top:10px}.vacancy-card .card-footer img{height:36px}
-.employee-layout{height:100%;display:grid;grid-template-columns:38% 62%;min-height:0}.employee-photo{aspect-ratio:3/4;align-self:center;margin:28px 0 28px 28px;border-radius:18px;overflow:hidden;background:#e8e0d4;display:grid;place-items:center;color:#b99a61}.employee-photo img{display:block;width:100%;height:100%;object-fit:cover}.employee-copy{padding:30px 28px;display:flex;flex-direction:column;min-width:0}.employee-copy h2{font-size:30px}.employee-start{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:10px;margin:8px 0 14px;font-size:10px}.employee-start span{font-size:9px;letter-spacing:.14em;font-weight:700}.employee-start strong{font-size:12px}.employee-copy .body{font-size:12px;line-height:1.5}.employee-copy .card-footer{margin-top:auto}.employee-copy .card-footer img{height:36px}@media(max-width:500px){.employee-photo{margin:20px 0 20px 20px}.employee-copy{padding:22px 18px}.employee-copy h2{font-size:24px}.employee-copy .card-footer img{height:28px}}
-.employee-layout{grid-template-columns:56.25% 43.75%}.employee-photo{width:100%;height:100%;aspect-ratio:auto;align-self:stretch;margin:0;border-radius:0}.employee-photo img{aspect-ratio:auto}
+.employee-card{container-type:inline-size}
+.employee-layout{height:100%;display:flex;flex-direction:column;min-height:0}
+.employee-photo{flex:0 0 40%;width:100%;min-height:0;margin:0;border-radius:0;overflow:hidden;background:#e8e0d4;display:grid;place-items:center;color:#b99a61}
+.employee-copy{flex:1 1 60%;min-width:0;min-height:0;padding:20px 28px 22px;display:flex;flex-direction:column;overflow:hidden}
+.employee-copy h2{max-width:100%;font-size:clamp(22px,4.5cqw,28px);overflow-wrap:anywhere;word-break:normal}
+.employee-start{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:10px;margin:8px 0 14px;font-size:10px}
+.employee-start span{font-size:9px;letter-spacing:.14em;font-weight:700}
+.employee-start strong{font-size:12px}
+.employee-copy .body{flex:1 1 auto;min-height:0;overflow:hidden;font-size:12px;line-height:1.45}
+.employee-copy .card-footer{flex:0 0 auto;min-width:0;margin-top:auto}
+.employee-copy .card-footer span{min-width:0;overflow-wrap:anywhere}
+.employee-copy .card-footer img{width:min(118px,32%);height:auto;max-height:24px;object-fit:contain}
 .card-media{display:block;min-width:0;min-height:0;width:100%;height:var(--media-height);object-fit:cover;object-position:center center;max-width:100%;max-height:100%}.birthday-photo img,.employee-photo img{display:block;width:100%;height:100%;object-fit:cover;object-position:center center;max-width:100%;max-height:100%}
 .variant-segmented button{font-size:10px;line-height:1.15;padding:8px 5px}.template-tile:hover,.asset-grid button:hover{border-color:#b4a28e}button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline-color:#b4a28e}:root{--gold:#b4a28e}
-@media(max-width:500px){.employee-layout{grid-template-columns:50% 50%}}
 
 /* Portal shell integration. Keep the editor's visual language inside the shared page body. */
 body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font-sans)}
