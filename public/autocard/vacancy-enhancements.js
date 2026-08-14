@@ -59,7 +59,7 @@ function renderEmployee() {
         <p class="sub" style="color:${theme.subtext}">${escapeValue(value('subtitulo'))}</p>
         <div class="employee-start" style="background:${theme.muted};color:${theme.subtext}"><span>INÍCIO</span><strong>${escapeValue(value('data')) || 'Data de início'}</strong></div>
         <p class="body">${escapeValue(value('corpo')) || 'Dê as boas-vindas à nova pessoa do time.'}</p>
-        <div class="card-footer" style="border-color:${theme.muted};color:${theme.subtext}"><span>Bem-vindo(a) à Ownerinc</span><img src="${dark ? '/assets/ownerinc-completa-white.webp' : '/assets/ownerinc-completa-black.webp'}" alt="Ownerinc" style="filter:none"></div>
+        <div class="card-footer" style="border-color:${theme.muted};color:${theme.subtext}"><span>Bem-vindo(a)</span><img src="${dark ? '/assets/ownerinc-wordmark-white.webp' : '/assets/ownerinc-wordmark-black.webp'}" alt="Ownerinc" style="filter:none"></div>
       </div>
     </div>
   </div>`;

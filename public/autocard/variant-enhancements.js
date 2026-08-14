@@ -3,9 +3,9 @@ const variantTitle = document.getElementById('templateTitle');
 const variantFields = document.getElementById('fields');
 
 const themes = {
-  editorial: { bg: '#f7f4ef', text: '#141414', secondary: '#625e57', panel: '#e8e2d8', accent: '#c8bdae', border: '#d9d1c5', logo: '/assets/ownerinc-completa-black.webp' },
-  noir: { bg: '#111110', text: '#fff', secondary: '#ded7cc', panel: '#2a2925', accent: '#c8bdae', border: '#4a463f', logo: '/assets/ownerinc-completa-white.webp' },
-  beige: { bg: '#d9cbb8', text: '#141414', secondary: '#5e554b', panel: '#fffdf9', accent: '#b4a28e', border: '#b9aa96', logo: '/assets/ownerinc-completa-black.webp' },
+  editorial: { bg: '#f7f4ef', text: '#141414', secondary: '#625e57', panel: '#e8e2d8', accent: '#c8bdae', border: '#d9d1c5', logo: '/assets/ownerinc-wordmark-black.webp' },
+  noir: { bg: '#111110', text: '#fff', secondary: '#ded7cc', panel: '#2a2925', accent: '#c8bdae', border: '#4a463f', logo: '/assets/ownerinc-wordmark-white.webp' },
+  beige: { bg: '#d9cbb8', text: '#141414', secondary: '#5e554b', panel: '#fffdf9', accent: '#b4a28e', border: '#b9aa96', logo: '/assets/ownerinc-wordmark-black.webp' },
 };
 
 let applying = false;

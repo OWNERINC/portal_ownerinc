@@ -664,8 +664,11 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(guard, /getElementById\('main-content'\)/);
   assert.match(guard, /main\.replaceChildren\(message\)/);
   assert.match(guard, /href: '\.\/dashboard\.html'/);
-  const app = await readFile('public/autocard/app.js', 'utf8');
-  const vacancy = await readFile('public/autocard/vacancy-enhancements.js', 'utf8');
+  const [app, vacancy, variant] = await Promise.all([
+    readFile('public/autocard/app.js', 'utf8'),
+    readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
+    readFile('public/autocard/variant-enhancements.js', 'utf8'),
+  ]);
   assert.match(app, /\/api\/autocard\/cards/);
   assert.match(app, /import \{ fetchAPI, fetchAPIAsset \} from '\.\.\/js\/auth\.js'/);
   assert.match(app, /fetchAPIAsset\(`/);
@@ -705,6 +708,10 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(vacancy, /style="\$\{photoStyle\}"/);
   assert.match(vacancy, /__autocardApplyMediaCropStyle/);
   assert.doesNotMatch(vacancy, /\/api\/autocard\/media|mediaId|mediaUrl/);
+  assert.match(app, /ownerinc-wordmark-(?:black|white)\.webp/);
+  assert.match(vacancy, /<span>Bem-vindo\(a\)<\/span>/);
+  assert.match(variant, /ownerinc-wordmark-black\.webp/);
+  assert.match(variant, /ownerinc-wordmark-white\.webp/);
   assert.match(app, /\/api\/autocard\/media/);
   assert.match(app, /file\.size>3\*1024\*1024/);
   assert.match(dashboard, /class="autocard-link"/);
