@@ -933,6 +933,9 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(styles, /\.employee-layout[^}]*flex-direction:\s*column/);
   assert.match(styles, /\.employee-copy[^}]*min-width:\s*0/);
   assert.match(styles, /overflow-wrap:\s*anywhere/);
+  assert.match(styles, /\.card-footer img\{width:102px;height:auto;max-height:none;object-fit:contain/);
+  assert.match(styles, /\.vacancy-card \.card-footer img\{height:auto;max-height:36px\}/);
+  assert.doesNotMatch(styles, /\.card-footer img\{[^}]*height:50px/);
   assert.match(app, /ownerinc-wordmark-(?:black|white)\.webp/);
   assert.match(vacancy, /<span>Bem-vindo\(a\)<\/span>/);
   assert.match(variant, /ownerinc-wordmark-black\.webp/);
