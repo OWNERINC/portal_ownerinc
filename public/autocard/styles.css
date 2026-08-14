@@ -63,3 +63,21 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
 .birthday-photo,.employee-photo{position:relative}
 .birthday-photo img,.employee-photo img{position:absolute;top:0;left:0}
 .crop-image{object-fit:cover;transform-origin:top left}
+
+/* Keep employee metadata and the footer inside the mobile copy budget. */
+.employee-copy{overflow:visible}
+.employee-copy h2{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.employee-copy .body{overflow-wrap:anywhere}
+@container (max-width:500px){
+  .employee-photo{flex-basis:38%}
+  .employee-copy{padding:10px 14px 12px}
+  .employee-copy .card-kicker{gap:5px;font-size:8px;line-height:1.35}
+  .employee-copy h2{font-size:clamp(18px,5.6cqw,22px);line-height:1.05;margin:8px 0 5px;-webkit-line-clamp:2}
+  .employee-copy .sub{font-size:11px;line-height:1.2;margin:0 0 6px}
+  .employee-start{padding:6px 8px;margin:5px 0 8px;font-size:9px}
+  .employee-start span{font-size:8px;line-height:1.2}
+  .employee-start strong{font-size:10px;line-height:1.2}
+  .employee-copy .body{font-size:10px;line-height:1.35}
+  .employee-copy .card-footer{padding-top:7px;min-height:26px;gap:8px;font-size:9px}
+  .employee-copy .card-footer img{width:min(92px,32%);max-height:18px}
+}

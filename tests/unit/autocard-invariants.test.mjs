@@ -9,7 +9,7 @@ const { canUseAutoCard } = require('../../api/middleware/policy');
 
 const dho = (name) => ({ role: 'viewer', job_title: name, permissions: {} });
 
-function createAutoCardElement(id) {
+function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
   const listeners = new Map();
   const classes = new Set();
   let markup = '';
@@ -42,6 +42,7 @@ function createAutoCardElement(id) {
       naturalWidth: 1000,
       naturalHeight: 500,
       complete: true,
+      decode: decodeImage,
       parentElement: mediaFrame,
       attributes: { style: match[4] },
       setAttribute(name, value) {
@@ -83,10 +84,10 @@ function createAutoCardElement(id) {
       getPropertyValue(name) { return this.values[name] || ''; },
     },
     attributes: {},
-    clientWidth: id === 'cropFrame' ? 200 : 0,
-    clientHeight: id === 'cropFrame' ? 200 : 0,
-    rectWidth: id === 'cropFrame' ? 200 : 0,
-    rectHeight: id === 'cropFrame' ? 200 : 0,
+    clientWidth: id === 'cropFrame' ? 200 : id === 'cardCanvas' ? 420 : 0,
+    clientHeight: id === 'cropFrame' ? 200 : id === 'cardCanvas' ? 420 : 0,
+    rectWidth: id === 'cropFrame' ? 200 : id === 'cardCanvas' ? 420 : 0,
+    rectHeight: id === 'cropFrame' ? 200 : id === 'cardCanvas' ? 420 : 0,
     naturalWidth: id === 'cropImage' ? 1000 : 0,
     naturalHeight: id === 'cropImage' ? 500 : 0,
     complete: id === 'cropImage',
@@ -150,7 +151,7 @@ function createAutoCardElement(id) {
       if (selector.includes('card-media-frame') || (selector.includes('birthday-photo') && !selector.includes(' img')) || (selector.includes('employee-photo') && !selector.includes(' img'))) {
         return [nodes.frame];
       }
-      if (selector.includes('.card-media') || selector.includes(' img')) return [nodes.image];
+      if (selector === 'img' || selector.includes('.card-media') || selector.includes(' img')) return [nodes.image];
       return [];
     },
   };
@@ -168,16 +169,32 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
   const requests = [];
   const createdUrls = [];
   const revokedUrls = [];
+  const events = [];
+  const captures = [];
+  let imageDecodeError = null;
+  let decodeCalls = 0;
+  let downloadClicks = 0;
   const document = {
     activeElement: null,
+    fonts: { get ready() { events.push('fonts'); return Promise.resolve(); } },
     getElementById(id) {
       if (!elements.has(id)) {
-        const element = createAutoCardElement(id);
+        const element = createAutoCardElement(id, {
+          decodeImage: async () => {
+            events.push('decode');
+            decodeCalls += 1;
+            if (imageDecodeError) throw imageDecodeError;
+          },
+        });
         element.ownerDocument = document;
         if (id === 'cropImage') element.parentElement = elements.get('cropFrame');
         elements.set(id, element);
       }
       return elements.get(id);
+    },
+    createElement(name) {
+      if (name !== 'a') return createAutoCardElement(name);
+      return { click() { downloadClicks += 1; } };
     },
     querySelector() {
       return null;
@@ -245,6 +262,11 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
     document,
     fetchAPI: async () => ({}),
     fetchAPIAsset,
+    html2canvas: async (element, options) => {
+      events.push('capture');
+      captures.push({ element, options });
+      return { toDataURL: () => 'data:image/png;base64,test' };
+    },
     setTimeout(callback) {
       callback();
       return 0;
@@ -253,7 +275,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
   });
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
-  vm.runInContext(`${cropSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard };`, context);
+  vm.runInContext(`${cropSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard };`, context);
   return {
     cardCanvas: elements.get('cardCanvas'),
     createdUrls,
@@ -314,6 +336,29 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
       frame.rectWidth = rectWidth;
       frame.rectHeight = rectHeight;
     },
+    setCardRect(width, height) {
+      const canvas = elements.get('cardCanvas');
+      canvas.clientWidth = width;
+      canvas.clientHeight = height;
+      canvas.rectWidth = width;
+      canvas.rectHeight = height;
+    },
+    setField(id, value) {
+      const field = elements.get(`field-${id}`);
+      field.value = value;
+      field.dispatchEvent(new Event('input'));
+    },
+    async exportCard() {
+      await context.__autocardTest.exportCard();
+      return { captures, decodeCalls, downloadClicks, events };
+    },
+    setImageDecodeError(error) {
+      imageDecodeError = error;
+    },
+    captures,
+    decodeCalls: () => decodeCalls,
+    downloadClicks: () => downloadClicks,
+    events,
     resizeRenderedFrame(width, height) {
       const frame = elements.get('cardCanvas')?.querySelectorAll('.birthday-photo, .employee-photo, .card-media-frame')[0];
       assert.ok(frame, 'expected a rendered media frame');
@@ -343,7 +388,26 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
     draft: () => JSON.parse(JSON.stringify(context.__autocardTest.cropDraft())),
     focusedId: () => document.activeElement?.id || null,
     toast: () => elements.get('toast'),
+    exportButtonDisabled: () => Boolean(elements.get('exportButton').disabled),
   };
+}
+
+function employeeMobileLayoutBounds(markup, { width, height }) {
+  const bodyStart = markup.indexOf('<p class="body">');
+  const footerStart = markup.indexOf('<div class="card-footer"', bodyStart);
+  assert.ok(bodyStart >= 0, 'employee description must render');
+  assert.ok(footerStart > bodyStart, 'employee footer must follow the description');
+
+  const copyHeight = height * 0.62;
+  const padding = 10 + 12;
+  const kicker = 8 * 1.35;
+  const title = 2 * 18 * 1.05 + 8 + 5;
+  const subtitle = 11 * 1.2 + 6;
+  const startDate = 12 + 2 + (8 * 1.2) + (10 * 1.2) + 5 + 8;
+  const footer = 26;
+  const fixedHeight = padding + kicker + title + subtitle + startDate + footer;
+
+  return { width, height, copyHeight, fixedHeight, bodyHeight: copyHeight - fixedHeight };
 }
 
 async function createAutoCardCropHarness() {
@@ -556,6 +620,48 @@ test('AutoCard employee crop ratio follows the rendered frame and mobile resize'
   assert.equal(harness.cropFrameRatio(), '200 / 200');
   harness.resizeRenderedFrame(100, 200);
   assert.equal(harness.cropFrameRatio(), '100 / 200');
+});
+
+test('AutoCard export executes rendered geometry and blocks undecodable images', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+
+  harness.selectTemplate('aniversariante', { mediaId: 'photo' });
+  await harness.resolve(0);
+  harness.setCardRect(360, 540);
+
+  await harness.exportCard();
+  const { scale, width, height, backgroundColor } = harness.captures[0].options;
+  assert.equal(scale, 3);
+  assert.equal(width, 360);
+  assert.equal(height, 540);
+  assert.equal(backgroundColor, null);
+  assert.deepEqual(harness.events.slice(0, 4), ['fonts', 'fonts', 'decode', 'capture']);
+  assert.equal(harness.downloadClicks(), 1);
+  assert.equal(harness.exportButtonDisabled(), false);
+
+  harness.setImageDecodeError(new Error('decode failed'));
+  await harness.exportCard();
+  assert.equal(harness.captures.length, 1);
+  assert.equal(harness.downloadClicks(), 1);
+  assert.equal(harness.exportButtonDisabled(), false);
+  assert.match(harness.toast().textContent, /A imagem ainda não está pronta para exportação/);
+});
+
+test('AutoCard employee mobile layout bounds long names and preserves the footer', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+
+  harness.selectTemplate('novo_funcionario');
+  harness.setField('titulo', 'Nome de colaborador com uma identificacao muito longa');
+  harness.setField('subtitulo', 'Cargo com unidade e descricao extensa');
+  harness.setField('data', '01/09');
+  harness.setField('corpo', 'Mensagem de boas-vindas com texto suficiente para ocupar o espaco flexivel.');
+  harness.flushMutations();
+
+  const bounds = employeeMobileLayoutBounds(harness.cardCanvas.innerHTML, { width: 320, height: 320 });
+  assert.ok(bounds.bodyHeight > 0, `employee body budget must remain positive: ${bounds.bodyHeight}`);
+  assert.match(harness.cardCanvas.innerHTML, /employee-copy/);
+  assert.match(harness.cardCanvas.innerHTML, /Nome de colaborador com uma identificacao muito longa/);
+  assert.match(harness.cardCanvas.innerHTML, /<p class="body">[\s\S]*<div class="card-footer"/);
 });
 
 test('AutoCard access uses the exact DHO job title allowlist', () => {
