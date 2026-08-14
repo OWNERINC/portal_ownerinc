@@ -389,25 +389,121 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
     focusedId: () => document.activeElement?.id || null,
     toast: () => elements.get('toast'),
     exportButtonDisabled: () => Boolean(elements.get('exportButton').disabled),
+    cardBounds: () => elements.get('cardCanvas').getBoundingClientRect(),
   };
 }
 
-function employeeMobileLayoutBounds(markup, { width, height }) {
+function cssDeclarations(styles, selector) {
+  const declarations = {};
+  const pattern = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\{([^}]*)\\}`, 'g');
+  for (const match of styles.matchAll(pattern)) {
+    for (const declaration of match[1].split(';')) {
+      const separator = declaration.indexOf(':');
+      if (separator > 0) declarations[declaration.slice(0, separator).trim()] = declaration.slice(separator + 1).trim();
+    }
+  }
+  return declarations;
+}
+
+function cssBox(value) {
+  const values = value.split(/\s+/).map(Number.parseFloat);
+  if (values.length === 1) return { top: values[0], right: values[0], bottom: values[0], left: values[0] };
+  if (values.length === 2) return { top: values[0], right: values[1], bottom: values[0], left: values[1] };
+  if (values.length === 3) return { top: values[0], right: values[1], bottom: values[2], left: values[1] };
+  return { top: values[0], right: values[1], bottom: values[2], left: values[3] };
+}
+
+function cssFlex(value) {
+  const [, grow, shrink, basis] = value.match(/^([\d.]+)\s+([\d.]+)\s+([\d.]+)%$/) || [];
+  assert.ok(grow !== undefined && shrink !== undefined && basis !== undefined, `expected percentage flex shorthand, got ${value}`);
+  return { grow: Number(grow), shrink: Number(shrink), basis: Number(basis) };
+}
+
+function cssFontSize(value, width) {
+  const clamp = value.match(/^clamp\(([^,]+),([^,]+),([^\)]+)\)$/);
+  if (!clamp) return Number.parseFloat(value);
+  const resolve = part => part.trim().endsWith('cqw') ? Number.parseFloat(part) * width / 100 : Number.parseFloat(part);
+  return Math.min(resolve(clamp[3]), Math.max(resolve(clamp[1]), resolve(clamp[2])));
+}
+
+function cssLineHeight(value, fontSize, fallback) {
+  return value ? (value.endsWith('px') ? Number.parseFloat(value) : Number.parseFloat(value) * fontSize) : fontSize * fallback;
+}
+
+function employeeMobileLayoutBounds(harness, styles) {
+  const markup = harness.cardCanvas.innerHTML;
   const bodyStart = markup.indexOf('<p class="body">');
   const footerStart = markup.indexOf('<div class="card-footer"', bodyStart);
   assert.ok(bodyStart >= 0, 'employee description must render');
   assert.ok(footerStart > bodyStart, 'employee footer must follow the description');
 
-  const copyHeight = height * 0.62;
-  const padding = 10 + 12;
-  const kicker = 8 * 1.35;
-  const title = 2 * 18 * 1.05 + 8 + 5;
-  const subtitle = 11 * 1.2 + 6;
-  const startDate = 12 + 2 + (8 * 1.2) + (10 * 1.2) + 5 + 8;
-  const footer = 26;
-  const fixedHeight = padding + kicker + title + subtitle + startDate + footer;
+  const card = harness.cardBounds();
+  const shell = cssDeclarations(styles, '.card-shell');
+  const layout = cssDeclarations(styles, '.employee-layout');
+  const photo = cssDeclarations(styles, '.employee-photo');
+  const copy = cssDeclarations(styles, '.employee-copy');
+  const kicker = cssDeclarations(styles, '.employee-copy .card-kicker');
+  const title = cssDeclarations(styles, '.employee-copy h2');
+  const subtitle = cssDeclarations(styles, '.employee-copy .sub');
+  const start = cssDeclarations(styles, '.employee-start');
+  const startLabel = cssDeclarations(styles, '.employee-start span');
+  const startValue = cssDeclarations(styles, '.employee-start strong');
+  const body = cssDeclarations(styles, '.employee-copy .body');
+  const bodyBase = cssDeclarations(styles, '.card-shell .body');
+  const footer = cssDeclarations(styles, '.employee-copy .card-footer');
+  const globalBody = cssDeclarations(styles, 'body');
+  const global = cssDeclarations(styles, '*');
 
-  return { width, height, copyHeight, fixedHeight, bodyHeight: copyHeight - fixedHeight };
+  assert.equal(global['box-sizing'], 'border-box', 'employee bounds require border-box sizing');
+  assert.equal(shell.overflow, 'hidden', 'card shell must contain employee content');
+  assert.equal(layout.display, 'flex', 'employee layout must be a flex column');
+  assert.equal(layout['flex-direction'], 'column', 'employee layout must stack photo and copy');
+  assert.equal(photo['min-height'], '0', 'employee photo must be shrinkable');
+  assert.equal(copy.overflow, 'visible', 'employee copy must not clip fixed metadata');
+  assert.equal(copy['min-height'], '0', 'employee copy must be shrinkable');
+  assert.equal(body.overflow, 'hidden', 'employee description must be the clipping boundary');
+  assert.equal(body['min-height'], '0', 'employee description must be shrinkable');
+  assert.equal(footer.flex, '0 0 auto', 'employee footer must remain fixed after the body');
+  assert.equal(title.display, '-webkit-box', 'employee title must have a bounded layout');
+  assert.equal(Number(title['-webkit-line-clamp']), 2, 'mobile employee title must be bounded to two lines');
+
+  const photoFlex = cssFlex(photo.flex);
+  const copyFlex = cssFlex(copy.flex);
+  photoFlex.basis = Number.parseFloat(photo['flex-basis'] || photoFlex.basis);
+  assert.ok(copyFlex.grow > 0, 'employee copy must receive remaining height');
+  assert.ok(photoFlex.grow + copyFlex.grow > 0, 'employee flex layout must distribute remaining height');
+  const photoHeight = card.height * photoFlex.basis / 100;
+  const copyBasis = card.height * copyFlex.basis / 100;
+  const freeHeight = card.height - photoHeight - copyBasis;
+  assert.ok(freeHeight >= 0, 'employee mobile flex basis must fit the card');
+  const copyHeight = copyBasis + freeHeight * copyFlex.grow / (photoFlex.grow + copyFlex.grow);
+  const globalLineHeight = Number(globalBody['line-height']);
+  const copyPadding = cssBox(copy.padding);
+  const kickerSize = cssFontSize(kicker['font-size'], card.width);
+  const titleSize = cssFontSize(title['font-size'], card.width);
+  const subtitleSize = cssFontSize(subtitle['font-size'], card.width);
+  const startLabelSize = cssFontSize(startLabel['font-size'], card.width);
+  const startValueSize = cssFontSize(startValue['font-size'], card.width);
+  const footerSize = cssFontSize(footer['font-size'], card.width);
+  const titleMargin = cssBox(title.margin);
+  const subtitleMargin = cssBox(subtitle.margin);
+  const startMargin = cssBox(start.margin);
+  const startPadding = cssBox(start.padding);
+  const footerPadding = { top: Number.parseFloat(footer['padding-top'] || 0) };
+  const startLabelHeight = cssLineHeight(startLabel['line-height'], startLabelSize, globalLineHeight);
+  const startValueHeight = cssLineHeight(startValue['line-height'], startValueSize, globalLineHeight);
+  const footerHeight = Math.max(Number.parseFloat(footer['min-height']), footerSize * globalLineHeight + footerPadding.top);
+  const fixedHeight = copyPadding.top + copyPadding.bottom
+    + cssLineHeight(kicker['line-height'], kickerSize, globalLineHeight)
+    + Number(title['-webkit-line-clamp']) * cssLineHeight(title['line-height'], titleSize, globalLineHeight) + titleMargin.top + titleMargin.bottom
+    + cssLineHeight(subtitle['line-height'], subtitleSize, globalLineHeight) + subtitleMargin.bottom
+    + startPadding.top + startPadding.bottom + Number(start.gap.replace('px', '')) + startLabelHeight + startValueHeight + startMargin.top + startMargin.bottom
+    + footerHeight;
+  const bodyMargin = cssBox(bodyBase.margin);
+  const bodyHeight = copyHeight - fixedHeight - bodyMargin.top - bodyMargin.bottom;
+
+  assert.ok(bodyHeight > 0, `employee body budget must remain positive: ${bodyHeight}`);
+  return { card, copyHeight, fixedHeight, bodyHeight };
 }
 
 async function createAutoCardCropHarness() {
@@ -648,6 +744,7 @@ test('AutoCard export executes rendered geometry and blocks undecodable images',
 });
 
 test('AutoCard employee mobile layout bounds long names and preserves the footer', async () => {
+  const styles = await readFile('public/autocard/styles.css', 'utf8');
   const harness = await createAutoCardLifecycleHarness();
 
   harness.selectTemplate('novo_funcionario');
@@ -656,12 +753,20 @@ test('AutoCard employee mobile layout bounds long names and preserves the footer
   harness.setField('data', '01/09');
   harness.setField('corpo', 'Mensagem de boas-vindas com texto suficiente para ocupar o espaco flexivel.');
   harness.flushMutations();
+  harness.setCardRect(320, 320);
 
-  const bounds = employeeMobileLayoutBounds(harness.cardCanvas.innerHTML, { width: 320, height: 320 });
+  const bounds = employeeMobileLayoutBounds(harness, styles);
   assert.ok(bounds.bodyHeight > 0, `employee body budget must remain positive: ${bounds.bodyHeight}`);
   assert.match(harness.cardCanvas.innerHTML, /employee-copy/);
   assert.match(harness.cardCanvas.innerHTML, /Nome de colaborador com uma identificacao muito longa/);
   assert.match(harness.cardCanvas.innerHTML, /<p class="body">[\s\S]*<div class="card-footer"/);
+
+  const brokenOverflow = styles.replace('overflow:hidden;font-size:12px;line-height:1.45', 'overflow:visible;font-size:12px;line-height:1.45');
+  assert.throws(() => employeeMobileLayoutBounds(harness, brokenOverflow), /employee description must be the clipping boundary/);
+  const brokenFlex = styles.replace('flex:1 1 60%;min-width:0;min-height:0;', 'flex:0 0 60%;min-width:0;min-height:0;');
+  assert.throws(() => employeeMobileLayoutBounds(harness, brokenFlex), /employee copy must receive remaining height/);
+  const brokenSpace = styles.replace('.employee-copy{padding:10px 14px 12px}', '.employee-copy{padding:80px 14px 80px}');
+  assert.throws(() => employeeMobileLayoutBounds(harness, brokenSpace), /employee body budget must remain positive/);
 });
 
 test('AutoCard access uses the exact DHO job title allowlist', () => {
