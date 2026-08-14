@@ -4,8 +4,8 @@ const path = require('node:path');
 const pool = require('./db');
 
 const AUTOCARD_MEDIA_RETENTION_LOCK = 7193003;
-const STORAGE_KEY_PATTERN = /^autocard-[0-9a-f-]+\.webp$/i;
-const STORAGE_KEY_SQL_PATTERN = '^autocard-[0-9a-f-]+\\.webp$';
+const STORAGE_KEY_PATTERN = /^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/i;
+const STORAGE_KEY_SQL_PATTERN = '^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.webp$';
 
 function autocardMediaRetentionDays(env = process.env) {
   const value = Number(env.AUTOCARD_MEDIA_ORPHAN_DAYS || 7);
@@ -15,10 +15,14 @@ function autocardMediaRetentionDays(env = process.env) {
   return value;
 }
 
+function isSafeStorageKey(storageKey) {
+  return typeof storageKey === 'string'
+    && STORAGE_KEY_PATTERN.test(storageKey)
+    && path.basename(storageKey) === storageKey;
+}
+
 function storagePath(uploadDirectory, storageKey) {
-  if (typeof storageKey !== 'string' || !STORAGE_KEY_PATTERN.test(storageKey) || path.basename(storageKey) !== storageKey) {
-    return null;
-  }
+  if (!isSafeStorageKey(storageKey)) return null;
   return path.join(uploadDirectory, storageKey);
 }
 
@@ -42,11 +46,18 @@ function logFileFailure(storageKey, error) {
   }));
 }
 
+function logInvalidStorageKey(storageKey) {
+  console.error(JSON.stringify({
+    service: 'cron',
+    event: 'autocard_media_invalid_storage_key',
+    storageKey,
+  }));
+}
+
 async function removeStorageFile(uploadDirectory, storageKey) {
   const filePath = storagePath(uploadDirectory, storageKey);
   if (!filePath) {
-    const error = new Error('Unsafe AutoCard storage key');
-    logFileFailure(storageKey, error);
+    logInvalidStorageKey(storageKey);
     return { deletedFiles: 0, fileFailures: 1 };
   }
   try {
@@ -85,7 +96,11 @@ async function sweepOrphanedFiles(db, uploadDirectory, excludedKeys, cutoff) {
   const candidates = [];
   let fileFailures = 0;
   for (const entry of entries) {
-    if (!entry.isFile() || excludedKeys.has(entry.name) || !STORAGE_KEY_PATTERN.test(entry.name)) continue;
+    if (!entry.isFile() || excludedKeys.has(entry.name)) continue;
+    if (!isSafeStorageKey(entry.name)) {
+      if (entry.name.startsWith('autocard-')) logInvalidStorageKey(entry.name);
+      continue;
+    }
     const filePath = storagePath(uploadDirectory, entry.name);
     try {
       const stats = await fs.stat(filePath);
@@ -125,12 +140,25 @@ async function sweepOrphanedFiles(db, uploadDirectory, excludedKeys, cutoff) {
   return counts;
 }
 
-async function recordRetentionAudit(db, details) {
-  await db.query(
+async function insertRetentionAudit(db, details) {
+  const { rows } = await db.query(
     `INSERT INTO audit_log (action, target_type, details)
-     VALUES ('autocard_media.retention', 'system', $1::jsonb)`,
+     VALUES ('autocard_media.retention', 'system', $1::jsonb)
+     RETURNING id`,
     [JSON.stringify(details)],
   );
+  return rows[0].id;
+}
+
+async function updateRetentionAudit(db, auditId, details) {
+  const result = await db.query(
+    `UPDATE audit_log
+     SET details = $1::jsonb
+     WHERE id = $2
+     RETURNING id`,
+    [JSON.stringify(details), auditId],
+  );
+  if (result.rowCount !== 1) throw new Error('AutoCard media retention audit row was not found');
 }
 
 async function enforceAutocardMediaRetention() {
@@ -151,17 +179,17 @@ async function enforceAutocardMediaRetention() {
 
     if (!await uploadDirectoryAvailable(uploadDirectory)) {
       const details = { deletedRows: 0, deletedFiles: 0, fileFailures: 0, retentionDays: days };
-      await recordRetentionAudit(db, details);
+      await insertRetentionAudit(db, { status: 'skipped', ...details });
       console.log(JSON.stringify({ service: 'cron', event: 'autocard_media_retention_skipped', reason: 'upload_directory_unavailable', ...details }));
       return { skipped: true, ...details };
     }
 
     await db.query('BEGIN');
-    const candidates = await db.query(
+    await db.query('LOCK TABLE autocard_cards IN SHARE MODE');
+    const candidateResult = await db.query(
       `SELECT m.id, m.storage_key
        FROM autocard_media AS m
        WHERE m.created_at < NOW() - ($1::integer * INTERVAL '1 day')
-         AND m.storage_key ~ '${STORAGE_KEY_SQL_PATTERN}'
          AND NOT EXISTS (
            SELECT 1
            FROM autocard_cards AS c
@@ -169,6 +197,13 @@ async function enforceAutocardMediaRetention() {
          )`,
       [days],
     );
+    const candidates = candidateResult.rows.filter((row) => {
+      if (!isSafeStorageKey(row.storage_key)) {
+        logInvalidStorageKey(row.storage_key);
+        return false;
+      }
+      return true;
+    });
     const deleted = await db.query(
       `DELETE FROM autocard_media AS m
        WHERE m.id = ANY($1::uuid[])
@@ -179,8 +214,17 @@ async function enforceAutocardMediaRetention() {
            WHERE c.media_id = m.id
          )
        RETURNING m.id, m.storage_key`,
-      [candidates.rows.map((row) => row.id)],
+      [candidates.map((row) => row.id)],
     );
+    const pendingDetails = {
+      status: 'pending',
+      plannedDeletedRows: candidates.length,
+      deletedRows: 0,
+      deletedFiles: 0,
+      fileFailures: 0,
+      retentionDays: days,
+    };
+    const auditId = await insertRetentionAudit(db, pendingDetails);
     await db.query('COMMIT');
 
     const deletedRows = deleted.rows;
@@ -197,7 +241,21 @@ async function enforceAutocardMediaRetention() {
       fileFailures: deletedFileCounts.fileFailures + sweptFileCounts.fileFailures,
       retentionDays: days,
     };
-    await recordRetentionAudit(db, details);
+    try {
+      await updateRetentionAudit(db, auditId, {
+        status: 'completed',
+        plannedDeletedRows: candidates.length,
+        ...details,
+      });
+    } catch (error) {
+      console.error(JSON.stringify({
+        service: 'cron',
+        event: 'autocard_media_retention_audit_update_failed',
+        auditId,
+        error: error.message,
+      }));
+      return details;
+    }
     console.log(JSON.stringify({ service: 'cron', event: 'autocard_media_retention_completed', ...details }));
     return details;
   } catch (error) {
@@ -209,4 +267,4 @@ async function enforceAutocardMediaRetention() {
   }
 }
 
-module.exports = { autocardMediaRetentionDays, enforceAutocardMediaRetention };
+module.exports = { autocardMediaRetentionDays, enforceAutocardMediaRetention, isSafeStorageKey };

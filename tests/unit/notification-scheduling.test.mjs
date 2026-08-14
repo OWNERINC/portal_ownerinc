@@ -5,7 +5,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const { dueDateKeys, normalizeDateKey, reminderMatchesDate, resolveTargets } = require('../../cron/scheduling');
 const { retentionDays } = require('../../cron/retention');
-const { autocardMediaRetentionDays } = require('../../cron/autocard-media-retention');
+const { autocardMediaRetentionDays, isSafeStorageKey } = require('../../cron/autocard-media-retention');
 
 test('catch-up uses Brasilia time and is bounded to seven completed schedule dates', () => {
   assert.deepEqual(
@@ -59,4 +59,17 @@ test('AutoCard media orphan retention defaults and stays bounded', () => {
   assert.throws(() => autocardMediaRetentionDays({ AUTOCARD_MEDIA_ORPHAN_DAYS: '0' }), /between 1 and 3650/);
   assert.throws(() => autocardMediaRetentionDays({ AUTOCARD_MEDIA_ORPHAN_DAYS: '3651' }), /between 1 and 3650/);
   assert.throws(() => autocardMediaRetentionDays({ AUTOCARD_MEDIA_ORPHAN_DAYS: '1.5' }), /between 1 and 3650/);
+});
+
+test('AutoCard media storage keys require a UUID-shaped filename', () => {
+  assert.equal(isSafeStorageKey('autocard-123e4567-e89b-12d3-a456-426614174000.webp'), true);
+  for (const key of [
+    'autocard-123e4567-e89b-12d3-a456-42661417400.webp',
+    'autocard-123e4567-e89b-12d3-a456-426614174000.jpg',
+    'autocard-123e4567-e89b-12d3-a456-426614174000.webp.bak',
+    'autocard-123e4567-e89b-12d3-a456-426614174000/other.webp',
+    'autocard-123e4567-e89b-12d3-a456-426614174000.webp/..',
+  ]) {
+    assert.equal(isSafeStorageKey(key), false, key);
+  }
 });
