@@ -12,6 +12,47 @@ const dho = (name) => ({ role: 'viewer', job_title: name, permissions: {} });
 function createAutoCardElement(id) {
   const listeners = new Map();
   const classes = new Set();
+  let markup = '';
+  let mediaMarkup = null;
+  let mediaFrame = null;
+  let mediaImage = null;
+  const readMediaNodes = () => {
+    if (id !== 'cardCanvas') return null;
+    if (mediaMarkup === markup) return mediaFrame ? { frame: mediaFrame, image: mediaImage } : null;
+    mediaMarkup = markup;
+    mediaFrame = null;
+    mediaImage = null;
+    const match = markup.match(/<div class="(card-media-frame|birthday-photo|employee-photo)"[^>]*>[\s\S]*?<img(?: class="([^"]*)")? src="([^"]+)" style="([^"]*)"/);
+    if (!match) return null;
+    mediaFrame = {
+      id: 'rendered-media-frame',
+      clientWidth: 200,
+      clientHeight: 200,
+      querySelector(selector) {
+        return selector === 'img' ? mediaImage : null;
+      },
+      getBoundingClientRect() {
+        return { width: this.clientWidth, height: this.clientHeight };
+      },
+    };
+    mediaImage = {
+      id: 'rendered-media-image',
+      src: match[3],
+      className: match[2] || '',
+      naturalWidth: 1000,
+      naturalHeight: 500,
+      complete: true,
+      parentElement: mediaFrame,
+      attributes: { style: match[4] },
+      setAttribute(name, value) {
+        this.attributes[name] = value;
+      },
+      getAttribute(name) {
+        return this.attributes[name] || null;
+      },
+    };
+    return { frame: mediaFrame, image: mediaImage };
+  };
   return {
     id,
     classList: {
@@ -25,7 +66,15 @@ function createAutoCardElement(id) {
       contains(name) { return classes.has(name); },
     },
     dataset: {},
-    innerHTML: '',
+    get innerHTML() {
+      return markup;
+    },
+    set innerHTML(value) {
+      markup = String(value);
+      mediaMarkup = null;
+      mediaFrame = null;
+      mediaImage = null;
+    },
     textContent: '',
     value: '',
     style: {
@@ -54,6 +103,9 @@ function createAutoCardElement(id) {
       if (!listeners.has(type)) listeners.set(type, []);
       listeners.get(type).push(handler);
     },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
     setPointerCapture(pointerId) {
       this.pointerId = pointerId;
     },
@@ -69,6 +121,9 @@ function createAutoCardElement(id) {
       const source = this.innerHTML.match(/<img class="card-media" src="[^"]+" style="([^"]*)"/);
       return this.attributes.style || source?.[1] || null;
     },
+    getBoundingClientRect() {
+      return { width: this.clientWidth, height: this.clientHeight };
+    },
     showModal() {
       this.open = true;
     },
@@ -77,14 +132,29 @@ function createAutoCardElement(id) {
       listeners.get('close')?.forEach(handler => handler({ type: 'close', currentTarget: this }));
     },
     querySelector(selector) {
+      if (id === 'cardCanvas') {
+        const nodes = readMediaNodes();
+        if (selector === '.card-media') return nodes?.image?.className.split(' ').includes('card-media') ? nodes.image : null;
+        if (selector === 'img') return nodes?.image || null;
+      }
       if (selector !== '.card-media') return null;
       const source = this.innerHTML.match(/<img class="card-media" src="([^"]+)"(?: style="([^"]*)")?/);
       return source ? { src: source[1], getAttribute: name => name === 'style' ? source[2] || null : null } : null;
     },
+    querySelectorAll(selector) {
+      if (id !== 'cardCanvas') return [];
+      const nodes = readMediaNodes();
+      if (!nodes) return [];
+      if (selector.includes('card-media-frame') || (selector.includes('birthday-photo') && !selector.includes(' img')) || (selector.includes('employee-photo') && !selector.includes(' img'))) {
+        return [nodes.frame];
+      }
+      if (selector.includes('.card-media') || selector.includes(' img')) return [nodes.image];
+      return [];
+    },
   };
 }
 
-async function createAutoCardLifecycleHarness() {
+async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
   const [app, employee] = await Promise.all([
     readFile('public/autocard/app.js', 'utf8'),
     readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
@@ -92,6 +162,7 @@ async function createAutoCardLifecycleHarness() {
   const elements = new Map();
   const listeners = new Map();
   const observers = [];
+  const resizeObservers = [];
   const requests = [];
   const createdUrls = [];
   const revokedUrls = [];
@@ -101,6 +172,7 @@ async function createAutoCardLifecycleHarness() {
       if (!elements.has(id)) {
         const element = createAutoCardElement(id);
         element.ownerDocument = document;
+        if (id === 'cropImage') element.parentElement = elements.get('cropFrame');
         elements.set(id, element);
       }
       return elements.get(id);
@@ -108,7 +180,8 @@ async function createAutoCardLifecycleHarness() {
     querySelector() {
       return null;
     },
-    querySelectorAll() {
+    querySelectorAll(selector) {
+      if (selector.includes('#cardCanvas')) return elements.get('cardCanvas')?.querySelectorAll(selector) || [];
       return [];
     },
   };
@@ -136,6 +209,21 @@ async function createAutoCardLifecycleHarness() {
 
     observe() {}
   }
+  class ResizeObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.targets = new Set();
+      resizeObservers.push(this);
+    }
+
+    observe(target) {
+      this.targets.add(target);
+    }
+
+    unobserve(target) {
+      this.targets.delete(target);
+    }
+  }
   class Event {
     constructor(type) {
       this.type = type;
@@ -148,6 +236,7 @@ async function createAutoCardLifecycleHarness() {
   const context = vm.createContext({
     Event,
     MutationObserver,
+    ...(resizeObserver ? { ResizeObserver } : {}),
     URL,
     clearTimeout,
     console,
@@ -171,6 +260,14 @@ async function createAutoCardLifecycleHarness() {
     },
     flushMutations() {
       observers.forEach(observer => observer.callback());
+    },
+    flushResizes(target) {
+      resizeObservers.forEach(observer => {
+        const entries = [...observer.targets]
+          .filter(item => !target || item === target)
+          .map(item => ({ target: item }));
+        if (entries.length) observer.callback(entries);
+      });
     },
     async reject(index, error) {
       requests[index].reject(error);
@@ -207,6 +304,25 @@ async function createAutoCardLifecycleHarness() {
       const image = elements.get('cropImage');
       image.naturalWidth = width;
       image.naturalHeight = height;
+    },
+    setCropFrameSize(width, height) {
+      const frame = elements.get('cropFrame');
+      frame.clientWidth = width;
+      frame.clientHeight = height;
+    },
+    resizeRenderedFrame(width, height) {
+      const frame = elements.get('cardCanvas')?.querySelectorAll('.birthday-photo, .employee-photo, .card-media-frame')[0];
+      assert.ok(frame, 'expected a rendered media frame');
+      frame.clientWidth = width;
+      frame.clientHeight = height;
+      this.flushResizes(frame);
+    },
+    renderedMediaStyle() {
+      const image = elements.get('cardCanvas')?.querySelectorAll('.birthday-photo img, .employee-photo img, .card-media')[0];
+      return image?.getAttribute('style') || '';
+    },
+    cropImageStyle() {
+      return elements.get('cropImage')?.getAttribute('style') || '';
     },
     applyCrop() {
       elements.get('cropApply').onclick();
@@ -326,7 +442,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   const employeeUrl = await harness.resolve(4);
   harness.flushMutations();
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`employee-photo"><img src="${employeeUrl}"`));
-  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><img src="[^"]+" style="--crop-x:20%;--crop-y:80%;--crop-zoom:2"/);
+  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><img src="[^"]+" style="--crop-x:20%;--crop-y:80%;--crop-zoom:2(?:;|")/);
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /undefined|\/api\/autocard\/media/);
 });
 
@@ -369,6 +485,36 @@ test('AutoCard crop editor ignores movement until the preview image is ready', a
   harness.setCropImageSize(0, 0);
   harness.dragCrop(80, 40);
   assert.deepEqual(harness.draft(), before);
+});
+
+test('AutoCard reapplies confirmed crop when a rendered media frame resizes', async () => {
+  const harness = await createAutoCardLifecycleHarness({ resizeObserver: true });
+
+  harness.selectTemplate('aniversariante', { mediaId: 'photo', mediaCrop: { x: 0.2, y: 0.8, zoom: 2 } });
+  await harness.resolve(0);
+  const before = harness.renderedMediaStyle();
+
+  harness.resizeRenderedFrame(140, 260);
+
+  const after = harness.renderedMediaStyle();
+  assert.notEqual(after, before);
+  assert.match(after, /transform:translate\(/);
+});
+
+test('AutoCard reapplies the draft crop when the open dialog frame resizes', async () => {
+  const harness = await createAutoCardLifecycleHarness({ resizeObserver: true });
+
+  harness.selectTemplate('aniversariante', { mediaId: 'photo' });
+  await harness.resolve(0);
+  harness.openCrop();
+  const before = harness.cropImageStyle();
+
+  harness.setCropFrameSize(140, 260);
+  harness.flushResizes();
+
+  const after = harness.cropImageStyle();
+  assert.notEqual(after, before);
+  assert.match(after, /transform:translate\(/);
 });
 
 test('AutoCard access uses the exact DHO job title allowlist', () => {
