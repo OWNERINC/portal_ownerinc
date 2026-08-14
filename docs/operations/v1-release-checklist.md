@@ -33,6 +33,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Migration passa sobre banco existente até `010_autocard`.
 - [ ] Segunda execução não altera nem duplica o ledger.
 - [ ] `011_cron_alert_state` existe e possui os grants esperados.
+- [ ] `012_autocard_media_crop` existe e foi validada em PostgreSQL.
 - [ ] Roles `portal_api` e `portal_cron` têm somente os privilégios necessários.
 
 ## AutoCard Access
@@ -46,6 +47,9 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [x] O AutoCard aparece dentro do `page-body` com sidebar e topbar do Portal.
 - [x] Criação, histórico, edição, duplicação, exclusão, upload e exportação funcionam
   na aceitação manual autenticada.
+- [ ] Editor de enquadramento passa por aceitação manual autenticada: arrastar,
+  zoom, centralizar/resetar, cancelar/aplicar e persistência de `mediaCrop` nos
+  templates com foto.
 
 ## Content and Pagination
 
@@ -123,7 +127,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 ## Local Verification Record
 
-- [x] `npm run verify` passou com 72 testes.
+- [x] `npm run verify` passou com 83 testes.
 - [x] `npm audit --omit=dev` do cron passou sem vulnerabilidades após atualizar
   o transporte SMTP.
 - [x] `git diff --check` passou.
@@ -135,21 +139,26 @@ responsável e evidência; não marque uma validação externa usando apenas
   `cron_status` e `alert_signature` foram verificados.
 - [ ] Restore dos uploads executado separadamente; o restore PostgreSQL foi
   validado, mas a execução integral de `scripts/restore.sh` requer Bash local.
-- [x] Invariantes estáticas cobrem AutoCard, paginação, dashboard, lembretes,
-  filtros administrativos, alertas, backup S3 e acessibilidade.
+- [x] Invariantes estáticas cobrem AutoCard, enquadramento de imagem, retenção
+  de mídia, paginação, dashboard, lembretes, filtros administrativos, alertas,
+  backup S3 e acessibilidade.
 - [x] Rota canônica `/autocard.html` e redirect legado `/autocard/` foram
   verificados no domínio live após o deploy do commit `fd45dc1`.
 - [x] Aceitação manual autenticada do AutoCard foi concluída: shell, criação,
   histórico, edição, duplicação, exclusão, upload e exportação.
 - [ ] Teste físico com NVDA/VoiceOver executado; requer dispositivo/ambiente
   externo.
+- [ ] Aceitação manual do editor de enquadramento executada; requer browser
+  autenticado e não foi realizada nesta verificação local.
 
 ## Final Status
 
-- Código publicado e branch `main` sincronizado com `origin/main` no commit
-  `fd45dc1`.
-- CI/deploy concluído com sucesso no workflow
-  `31436331884`.
+- O último código publicado e validado no domínio live permanece no commit
+  `fd45dc1`; o workflow CI/deploy correspondente foi o `31436331884`.
+- A branch local contém commits posteriores de hardening do AutoCard e ainda
+  não foi enviada nem publicada novamente.
+- Push, novo CI/deploy e validação manual no browser/live do hardening permanecem
+  pendentes.
 - O projeto Firebase oficial permanece `ownerinc-portal-interno-prod`.
 - A produção não deve ser declarada plenamente pronta enquanto os itens
   externos pendentes abaixo não tiverem responsável e evidência registrados.

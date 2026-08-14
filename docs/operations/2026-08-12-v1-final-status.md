@@ -29,6 +29,25 @@ Data do registro: 12 de agosto de 2026
   controles de shell, guard, redirect sem script inline e dependência de exportação.
 - README, changelog e checklist de release foram atualizados.
 
+## Post-V1 local hardening
+
+- A branch local implementa o editor de enquadramento descrito na [especificação
+  do AutoCard](../superpowers/specs/2026-08-13-autocard-image-crop-editor-design.md)
+  e no [plano de implementação](../superpowers/plans/2026-08-13-autocard-image-crop-editor.md).
+- Os templates ativos com foto suportam arrastar, zoom, centralizar/resetar,
+  cancelar/aplicar e `mediaCrop` persistido. O rendering recalculado para frames
+  responsivos é reutilizado pelo preview, pelas variantes e pela exportação PNG.
+- Foram resolvidos localmente os erros das ações de histórico, a prontidão e as
+  falhas da exportação PNG, a limpeza de previews inválidos de upload e a
+  limpeza de mídias órfãs. A migration `012_autocard_media_crop` e a retenção
+  cron correspondente fazem parte da branch.
+- A verificação local posterior passou com 83 testes. O último deploy continua
+  sendo o commit `fd45dc1`; os commits de hardening não foram enviados nem
+  publicados, e a aceitação manual do crop no browser/live ainda está pendente.
+- PostgreSQL para a nova migration, VPS, S3, TLS, acessibilidade física,
+  serviços externos e aprovação LGPD continuam pendentes e não são declarados
+  concluídos por esta verificação local.
+
 ## Evidências
 
 - `npm run verify`: 72 testes aprovados.

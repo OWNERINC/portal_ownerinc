@@ -9,6 +9,15 @@
 
 ## Unreleased
 
+- Implementado localmente o editor de enquadramento de imagens do AutoCard para
+  os templates `aniversariante` e `novo_funcionario`, com arrastar, zoom,
+  centralizar/resetar, cancelar/aplicar e `mediaCrop` persistido; o rendering
+  responsivo e o mesmo enquadramento são reutilizados nas variantes e na
+  exportação PNG.
+- O hardening local do AutoCard passou a tratar erros das ações de histórico,
+  prontidão e falhas da exportação PNG e a limpar previews inválidos de upload;
+  a migration `012_autocard_media_crop` e a retenção cron de mídias órfãs
+  também fazem parte da branch local.
 - Mídias privadas do AutoCard agora carregam por URLs `blob:` autenticadas; o
   histórico e as variantes usam o mesmo fluxo sem emitir URLs protegidas
   quebradas durante o carregamento.
