@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { invitationMessage, passwordResetMessage, smtpOptions } = require('../../api/integrations/password-reset-email');
+const {
+  invitationMessage, passwordResetMessage, sendGridMessage, smtpOptions, usesSendGrid,
+} = require('../../api/integrations/password-reset-email');
 
 const env = {
   SMTP_ADDRESS: 'smtp.example.com', SMTP_PORT: '587', SMTP_USERNAME: 'user', SMTP_PASSWORD: 'secret',
@@ -22,6 +24,12 @@ test('SMTP password reset transport requires TLS and keeps credentials out of th
   assert.doesNotMatch(JSON.stringify(message), /secret/);
 });
 
+test('transactional mail uses the verified SendGrid sender when configured', () => {
+  assert.equal(usesSendGrid({ SENDGRID_API_KEY: 'SG.test-key', SENDGRID_FROM_EMAIL: 'portal@ownerinc.com.br' }), true);
+  assert.equal(usesSendGrid({ SENDGRID_API_KEY: 'local-not-used', SENDGRID_FROM_EMAIL: 'local@ownerinc.test' }), false);
+  assert.equal(usesSendGrid({ SENDGRID_API_KEY: 'SG.test-key', SENDGRID_FROM_EMAIL: '' }), false);
+});
+
 test('password reset always identifies the sender as Portal Interno Ownerinc', () => {
   const message = passwordResetMessage({
     to: 'user@example.com',
@@ -33,6 +41,29 @@ test('password reset always identifies the sender as Portal Interno Ownerinc', (
     name: 'Portal Interno Ownerinc',
     address: 'convites@example.com',
   });
+});
+
+test('SendGrid messages use the configured verified sender', () => {
+  const message = passwordResetMessage({
+    to: 'user@example.com',
+    link: 'https://example.com/reset',
+    env: { ...env, SENDGRID_API_KEY: 'SG.test-key', SENDGRID_FROM_EMAIL: 'portal@ownerinc.com.br' },
+  });
+  assert.deepEqual(message.from, {
+    name: 'Portal Interno Ownerinc',
+    address: 'portal@ownerinc.com.br',
+  });
+});
+
+test('SendGrid receives its expected sender shape without mutating the SMTP message', () => {
+  const message = passwordResetMessage({
+    to: 'user@example.com',
+    link: 'https://example.com/reset',
+    env: { ...env, SENDGRID_API_KEY: 'SG.test-key', SENDGRID_FROM_EMAIL: 'portal@ownerinc.com.br' },
+  });
+  const sendGrid = sendGridMessage(message);
+  assert.deepEqual(sendGrid.from, { email: 'portal@ownerinc.com.br', name: 'Portal Interno Ownerinc' });
+  assert.deepEqual(message.from, { address: 'portal@ownerinc.com.br', name: 'Portal Interno Ownerinc' });
 });
 
 test('invitation message explains password setup without exposing credentials', () => {

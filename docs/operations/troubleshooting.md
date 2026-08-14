@@ -20,9 +20,12 @@ preserva as quebras de linha representadas por `\n` no `.env`.
 
 ## Emails não enviados
 
-Verifique `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, horário e fuso do container
-cron. Confirme que `CRON_DATABASE_URL` usa `portal_cron` e consulte também
-`notifications_log` antes de repetir um envio manual.
+Convites e redefinições da API usam SendGrid quando `SENDGRID_API_KEY` começa
+com `SG.` e `SENDGRID_FROM_EMAIL` está configurado; caso contrário, usam o SMTP
+legado. Verifique o log da API pelo `requestId`, confirme que o remetente é um
+endereço verificado no SendGrid e consulte a atividade/bounces do SendGrid.
+Para lembretes, verifique também `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, o
+horário e o fuso do container cron, além de `notifications_log`.
 
 ## Upload não aparece
 

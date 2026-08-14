@@ -1,3 +1,4 @@
+const sgMail = require('@sendgrid/mail');
 const nodemailer = require('nodemailer');
 
 function portalSender(rawSender) {
@@ -20,6 +21,20 @@ function smtpOptions(env = process.env) {
   };
 }
 
+function usesSendGrid(env = process.env) {
+  return typeof env.SENDGRID_API_KEY === 'string'
+    && env.SENDGRID_API_KEY.startsWith('SG.')
+    && typeof env.SENDGRID_FROM_EMAIL === 'string'
+    && env.SENDGRID_FROM_EMAIL.trim() !== '';
+}
+
+function sendGridMessage(message) {
+  return {
+    ...message,
+    from: { email: message.from.address, name: message.from.name },
+  };
+}
+
 function safeLink(value) {
   return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
@@ -27,7 +42,7 @@ function safeLink(value) {
 function passwordResetMessage({ to, link, env = process.env }) {
   const escapedLink = safeLink(link);
   return {
-    from: portalSender(env.MAILER_SENDER_EMAIL),
+    from: portalSender(env.SENDGRID_FROM_EMAIL || env.MAILER_SENDER_EMAIL),
     to,
     subject: 'Defina sua senha — Portal Interno Ownerinc',
     text: `Seu acesso ao Portal Interno Ownerinc está pronto. Defina sua senha: ${link}\n\nDepois, entre em https://portal.ownerinc.com.br/login.html`,
@@ -41,7 +56,7 @@ function invitationMessage({ to, name, link, env = process.env }) {
   const greeting = recipient ? `Olá, ${recipient}!` : 'Olá!';
   const escapedGreeting = recipient ? `Olá, ${safeLink(recipient)}!` : 'Olá!';
   return {
-    from: portalSender(env.MAILER_SENDER_EMAIL),
+    from: portalSender(env.SENDGRID_FROM_EMAIL || env.MAILER_SENDER_EMAIL),
     to,
     subject: 'Seu convite para o Portal Interno Ownerinc',
     text: `${greeting}\n\nVocê recebeu acesso ao Portal Interno Ownerinc. Defina sua senha pelo link: ${link}\n\nDepois, entre em https://portal.ownerinc.com.br/login.html\n\nSe você não esperava este convite, ignore esta mensagem.`,
@@ -51,14 +66,23 @@ function invitationMessage({ to, name, link, env = process.env }) {
 
 let transporter;
 
-async function sendPasswordReset({ to, link, env = process.env }) {
+async function sendTransactional(message, env = process.env) {
+  if (usesSendGrid(env)) {
+    sgMail.setApiKey(env.SENDGRID_API_KEY);
+    return sgMail.send(sendGridMessage(message));
+  }
   transporter ||= nodemailer.createTransport(smtpOptions(env));
-  return transporter.sendMail(passwordResetMessage({ to, link, env }));
+  return transporter.sendMail(message);
+}
+
+async function sendPasswordReset({ to, link, env = process.env }) {
+  return sendTransactional(passwordResetMessage({ to, link, env }), env);
 }
 
 async function sendInvitation({ to, name, link, env = process.env }) {
-  transporter ||= nodemailer.createTransport(smtpOptions(env));
-  return transporter.sendMail(invitationMessage({ to, name, link, env }));
+  return sendTransactional(invitationMessage({ to, name, link, env }), env);
 }
 
-module.exports = { invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpOptions };
+module.exports = {
+  invitationMessage, passwordResetMessage, sendGridMessage, sendInvitation, sendPasswordReset, smtpOptions, usesSendGrid,
+};
