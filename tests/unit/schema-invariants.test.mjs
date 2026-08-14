@@ -66,8 +66,9 @@ test('cron schema stores deduplicated operational alert state', async () => {
 });
 
 test('AutoCard crop schema is safe for fresh installs and upgrades', async () => {
-  const [schema, migration] = await Promise.all([
+  const [schema, migration, provision, verification] = await Promise.all([
     readFile('api/db/schema.sql', 'utf8'), readFile('api/db/migrations/012_autocard_media_crop.sql', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'), readFile('api/db/verify-migrations.js', 'utf8'),
   ]);
   for (const source of [schema, migration]) {
     assert.match(source, /media_crop\s+JSONB/);
@@ -81,6 +82,13 @@ test('AutoCard crop schema is safe for fresh installs and upgrades', async () =>
   assert.match(migration, /ALTER COLUMN media_crop SET DEFAULT/);
   assert.match(migration, /ALTER COLUMN media_crop SET NOT NULL/);
   assert.match(schema, /'012_autocard_media_crop'/);
+  assert.match(provision, /GRANT SELECT ON autocard_cards TO portal_cron/);
+  assert.match(provision, /GRANT SELECT, DELETE ON autocard_media TO portal_cron/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON audit_log TO portal_cron/);
+  assert.match(verification, /autocard_media_crop_not_null/);
+  assert.match(verification, /cron_autocard_cards_privileges/);
+  assert.match(verification, /cron_autocard_media_privileges/);
+  assert.match(verification, /cron_audit_privileges/);
 });
 
 test('domain constraints are present on fresh installs and upgrades', async () => {

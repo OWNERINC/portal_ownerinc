@@ -65,11 +65,16 @@ Contract:
 
 - `x` and `y` are normalized focal-point coordinates in the range `0..1`;
 - `zoom` is a bounded positive number, with `1` as the default;
-- missing or invalid values normalize to the centered default;
+- missing or null crop data uses the centered default;
+- malformed or out-of-range API crop payloads are rejected;
 - old cards without `mediaCrop` remain valid and render centered;
 - the API validates and returns `mediaCrop` on create, read, update, list, and
   duplicate;
 - duplicate copies the crop settings together with the media reference.
+
+Persisted `autocard_cards.media_crop` is non-null and uses the centered default
+for migrated or omitted data. Migration `012_autocard_media_crop` backfills old
+rows before enforcing that contract.
 
 The crop is stored with the card rather than in the media table because the
 same private image may be referenced by more than one card with different
@@ -92,10 +97,15 @@ transform state rather than constructing a protected API URL in an `img` tag.
 ## API and Database
 
 - Extend the card payload validator with optional `mediaCrop` validation.
-- Add a forward migration for a nullable JSONB column on `autocard_cards`.
+- Add migration `012_autocard_media_crop` for a JSONB column on
+  `autocard_cards`, backfill the centered default, and enforce `NOT NULL`.
 - Add the same column to the fresh-install schema.
 - Keep the existing media authorization and file storage unchanged.
 - Preserve audit events for card create, update, and duplicate.
+- Grant the cron role only `SELECT` on `autocard_cards`, `SELECT, DELETE` on
+  `autocard_media`, and `SELECT, INSERT, UPDATE, DELETE` on `audit_log`.
+- Serialize AutoCard card mutations and orphan cleanup with advisory lock
+  `7193003`; use the transaction-level lock for card writes and media deletion.
 
 ## Error Handling
 

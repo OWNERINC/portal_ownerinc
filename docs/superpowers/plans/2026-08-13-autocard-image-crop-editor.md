@@ -17,7 +17,11 @@
 - Preserve upload, save, history, edit, duplicate, delete, filters, variants, responsive rendering, and PNG export.
 - Cover only `aniversariante` and `novo_funcionario` in this first implementation.
 - Store normalized `x` and `y` in the range `0..1`; store `zoom` in the range `1..3`.
-- Treat missing crop data as centered `{ x: 0.5, y: 0.5, zoom: 1 }` for old cards.
+- Treat missing or null crop data as centered `{ x: 0.5, y: 0.5, zoom: 1 }` for old cards; reject malformed or out-of-range API crop payloads.
+- Persist `media_crop` as non-null with the centered default through migration `012_autocard_media_crop` and the fresh-install schema.
+- Grant `portal_cron` only `SELECT` on `autocard_cards`, `SELECT, DELETE` on `autocard_media`, and `SELECT, INSERT, UPDATE, DELETE` on `audit_log` for retention.
+- Serialize AutoCard card mutations and orphan cleanup with shared advisory lock `7193003`.
+- Enable the production `notifications` Compose profile in every deployment command, including one-shot and rollback paths.
 - Do not publish, push, or deploy as part of implementation.
 
 ## File Map

@@ -85,6 +85,8 @@ function createAutoCardElement(id) {
     attributes: {},
     clientWidth: id === 'cropFrame' ? 200 : 0,
     clientHeight: id === 'cropFrame' ? 200 : 0,
+    rectWidth: id === 'cropFrame' ? 200 : 0,
+    rectHeight: id === 'cropFrame' ? 200 : 0,
     naturalWidth: id === 'cropImage' ? 1000 : 0,
     naturalHeight: id === 'cropImage' ? 500 : 0,
     complete: id === 'cropImage',
@@ -122,7 +124,7 @@ function createAutoCardElement(id) {
       return this.attributes.style || source?.[1] || null;
     },
     getBoundingClientRect() {
-      return { width: this.clientWidth, height: this.clientHeight };
+      return { width: this.rectWidth || this.clientWidth, height: this.rectHeight || this.clientHeight };
     },
     showModal() {
       this.open = true;
@@ -255,8 +257,8 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
   return {
     cardCanvas: elements.get('cardCanvas'),
     createdUrls,
-    dispatch(type) {
-      listeners.get(type)?.();
+    dispatch(type, event = { type }) {
+      listeners.get(type)?.(event);
     },
     flushMutations() {
       observers.forEach(observer => observer.callback());
@@ -305,10 +307,12 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
       image.naturalWidth = width;
       image.naturalHeight = height;
     },
-    setCropFrameSize(width, height) {
+    setCropFrameSize(width, height, rectWidth = width, rectHeight = height) {
       const frame = elements.get('cropFrame');
       frame.clientWidth = width;
       frame.clientHeight = height;
+      frame.rectWidth = rectWidth;
+      frame.rectHeight = rectHeight;
     },
     resizeRenderedFrame(width, height) {
       const frame = elements.get('cardCanvas')?.querySelectorAll('.birthday-photo, .employee-photo, .card-media-frame')[0];
@@ -323,6 +327,9 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
     },
     cropImageStyle() {
       return elements.get('cropImage')?.getAttribute('style') || '';
+    },
+    cropFrameRatio() {
+      return elements.get('cropFrame')?.style.getPropertyValue('--crop-frame-ratio') || '';
     },
     applyCrop() {
       elements.get('cropApply').onclick();
@@ -419,15 +426,22 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   harness.dispatch('pagehide');
   assert.equal(harness.state().mediaUrl, null);
   assert.deepEqual(harness.revokedUrls, [staleUrl, currentUrl]);
+  assert.equal(harness.isHidden('cropButton'), true);
+
+  harness.dispatch('pageshow', { type: 'pageshow', persisted: true });
+  assert.equal(harness.requests[2].path, '/api/autocard/media/new-media');
+  const restoredUrl = await harness.resolve(2);
+  assert.equal(harness.state().mediaUrl, restoredUrl);
+  assert.equal(harness.isHidden('cropButton'), false);
 
   harness.selectTemplate('aniversariante', { mediaId: 'hidden-media' });
   harness.dispatch('pagehide');
-  const hiddenUrl = await harness.resolve(2);
+  const hiddenUrl = await harness.resolve(3);
   assert.equal(harness.state().mediaUrl, null);
-  assert.deepEqual(harness.revokedUrls, [staleUrl, currentUrl, hiddenUrl]);
+  assert.deepEqual(harness.revokedUrls, [staleUrl, currentUrl, restoredUrl, hiddenUrl]);
 
   harness.selectTemplate('evento', { mediaId: 'failed-media' });
-  await harness.reject(3, new Error('asset unavailable'));
+  await harness.reject(4, new Error('asset unavailable'));
   assert.equal(harness.state().mediaUrl, null);
   assert.equal(harness.isHidden('cropButton'), true);
   assert.match(harness.cardCanvas.innerHTML, /card-placeholder/);
@@ -439,7 +453,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /<img[^>]+src="undefined"|\/api\/autocard\/media/);
   assert.match(harness.cardCanvas.innerHTML, /employee-photo"><i data-lucide="user-plus"/);
 
-  const employeeUrl = await harness.resolve(4);
+  const employeeUrl = await harness.resolve(5);
   harness.flushMutations();
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`employee-photo"><img src="${employeeUrl}"`));
   assert.match(harness.cardCanvas.innerHTML, /employee-photo"><img src="[^"]+" style="--crop-x:20%;--crop-y:80%;--crop-zoom:2(?:;|")/);
@@ -517,6 +531,33 @@ test('AutoCard reapplies the draft crop when the open dialog frame resizes', asy
   assert.match(after, /transform:translate\(/);
 });
 
+test('AutoCard crop geometry uses content-box dimensions when a frame has a border', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+
+  harness.selectTemplate('aniversariante', { mediaId: 'photo' });
+  await harness.resolve(0);
+  harness.setCropFrameSize(200, 200, 220, 220);
+  harness.openCrop();
+
+  const style = harness.cropImageStyle();
+  assert.match(style, /width:400px;height:200px/);
+  assert.doesNotMatch(style, /width:440px;height:220px/);
+});
+
+test('AutoCard employee crop ratio follows the rendered frame and mobile resize', async () => {
+  const harness = await createAutoCardLifecycleHarness({ resizeObserver: true });
+
+  harness.selectTemplate('novo_funcionario', { mediaId: 'employee-photo' });
+  await harness.resolve(0);
+  harness.openCrop();
+  assert.equal(harness.cropFrameRatio(), '200 / 200');
+
+  harness.flushMutations();
+  assert.equal(harness.cropFrameRatio(), '200 / 200');
+  harness.resizeRenderedFrame(100, 200);
+  assert.equal(harness.cropFrameRatio(), '100 / 200');
+});
+
 test('AutoCard access uses the exact DHO job title allowlist', () => {
   for (const title of ['Analista de DHO', 'Assistente de DHO', 'Coordenador de DHO', 'Gerente de DHO']) {
     assert.equal(canUseAutoCard(dho(title)), true, title);
@@ -528,7 +569,7 @@ test('AutoCard access uses the exact DHO job title allowlist', () => {
 });
 
 test('AutoCard API is protected and uses shared PostgreSQL storage', async () => {
-  const [auth, route, migration, cropMigration, schema, index, nginx] = await Promise.all([
+  const [auth, route, migration, cropMigration, schema, index, nginx, retention, provision, verifyMigrations] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('api/routes/autocard.js', 'utf8'),
     readFile('api/db/migrations/010_autocard.sql', 'utf8'),
@@ -536,6 +577,9 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
     readFile('api/db/schema.sql', 'utf8'),
     readFile('api/index.js', 'utf8'),
     readFile('nginx/nginx.conf', 'utf8'),
+    readFile('cron/autocard-media-retention.js', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
   ]);
   assert.match(auth, /export async function fetchAPIAsset\(/);
   assert.match(auth, /await response\.blob\(\)/);
@@ -550,6 +594,16 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
   assert.match(route, /body\.mediaCrop/);
   assert.match(route, /media_crop = \$11::jsonb/);
   assert.match(route, /SELECT name \|\| ' v2',[\s\S]*media_crop/);
+  assert.equal((route.match(/SELECT pg_advisory_xact_lock\(7193003\)/g) || []).length, 5);
+  assert.match(route, /async function removeMediaIfUnused[\s\S]*BEGIN[\s\S]*pg_advisory_xact_lock\(7193003\)[\s\S]*NOT EXISTS[\s\S]*DELETE FROM autocard_media[\s\S]*COMMIT/);
+  assert.match(retention, /pg_try_advisory_lock/);
+  assert.doesNotMatch(retention, /LOCK TABLE autocard_cards IN SHARE MODE/);
+  assert.match(provision, /GRANT SELECT ON autocard_cards TO portal_cron/);
+  assert.match(provision, /GRANT SELECT, DELETE ON autocard_media TO portal_cron/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON audit_log TO portal_cron/);
+  assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.autocard_cards', 'SELECT'\)/);
+  assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.autocard_media', 'SELECT,DELETE'\)/);
+  assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.audit_log', 'SELECT,INSERT,UPDATE,DELETE'\)/);
   assert.match(migration, /Analista de RH.*Analista de DHO/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS autocard_cards/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS autocard_media/);
@@ -639,6 +693,7 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /URL\.revokeObjectURL/);
   assert.match(app, /startsWith\('blob:'\)/);
   assert.match(app, /addEventListener\('pagehide'/);
+  assert.match(app, /addEventListener\('pageshow'/);
   assert.match(app, /current\.mediaUrl\s*\?/);
   assert.match(app, /birthday-photo">\$\{current\.mediaUrl\?/);
   assert.match(app, /birthday-photo[\s\S]*cropStyle\(current\.mediaCrop\)/);

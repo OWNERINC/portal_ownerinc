@@ -16,7 +16,7 @@ O banco usa três credenciais distintas:
 
 - `MIGRATION_DATABASE_URL`: usuário administrador definido por `POSTGRES_USER`, usado somente pelo container one-shot `migrate`.
 - `API_DATABASE_URL`: role fixa `portal_api`, sem DDL, usada pela API em execução.
-- `CRON_DATABASE_URL`: role fixa `portal_cron`, limitada a leitura de `users`/`reminders` e leitura/escrita de `notifications_log`/`cron_status`.
+- `CRON_DATABASE_URL`: role fixa `portal_cron`, limitada a leitura de `users`/`reminders`, leitura/escrita de `notifications_log`/`cron_status`, leitura de `autocard_cards`, leitura/exclusão de `autocard_media` e leitura/escrita de `audit_log` para a retenção do AutoCard.
 
 Para alertas operacionais por SMTP, defina `OPERATIONAL_ALERT_EMAIL` e repita
 as variáveis SMTP no ambiente do cron. Sem esse destinatário, o worker mantém
@@ -36,7 +36,7 @@ Configure localmente `VPS_USER`, `VPS_HOST` e, se necessário, `VPS_PATH` e `SSH
 2. Execute `bash deploy.sh` somente após revisar host e revisão.
 3. O servidor cria `releases/<commit>-<timestamp>`, resolve as imagens publicadas pelo CI e registra seus digests.
 4. Antes de trocar uma release existente, `scripts/backup.sh` interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
-5. O serviço one-shot `migrate` aplica schema/grants; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `011_cron_alert_state`, antes dos smoke tests.
+5. O serviço one-shot `migrate` aplica schema/grants; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `011_cron_alert_state` e `012_autocard_media_crop`, os privilégios mínimos do cron e o contrato não nulo do crop, antes dos smoke tests.
 6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Dados não sofrem rollback automático.
 
 `GET /api/health` é somente liveness. `GET /api/ready` executa `SELECT 1`, retorna `503` genérico quando o banco não responde e é usado por Compose, cron e smoke.
@@ -85,6 +85,11 @@ uma restauração trimestral em ambiente descartável.
 - Login, perfil e upload funcionam, e logs não expõem chaves ou dados pessoais.
 
 O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sintaxe/Compose, constrói e escaneia as imagens com Trivy, rejeita vulnerabilidades `high` ou `critical`, publica SBOMs SPDX e envia imagens imutáveis ao GHCR em pushes na `main`.
+
+O receptor de produção passa `--profile notifications` em todos os comandos
+Compose compartilhados, incluindo `up`, migrations one-shot e rollback, para
+que o cron de notificações permaneça habilitado. As mutações de cards AutoCard
+e a limpeza de órfãos compartilham o advisory lock `7193003`.
 
 ## Deploy automático da `main`
 

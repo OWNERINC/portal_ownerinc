@@ -128,7 +128,8 @@ test('AutoCard media retention is scheduled, locked, and volume-safe', async () 
   assert.match(cron, /retentionTask\.stop\(\)/);
   assert.match(cleanup, /pg_try_advisory_lock/);
   assert.match(cleanup, /pg_advisory_unlock/);
-  assert.match(cleanup, /LOCK TABLE autocard_cards IN SHARE MODE/);
+  assert.doesNotMatch(cleanup, /LOCK TABLE autocard_cards IN SHARE MODE/);
+  assert.match(cleanup, /7193003/);
   assert.match(cleanup, /autocard_media/);
   assert.match(cleanup, /m\.created_at < NOW\(\) - \(\$1::integer \* INTERVAL '1 day'\)/);
   assert.equal((cleanup.match(/NOT EXISTS \([\s\S]*?autocard_cards[\s\S]*?c\.media_id = m\.id/g) || []).length, 2);
@@ -143,16 +144,15 @@ test('AutoCard media retention is scheduled, locked, and volume-safe', async () 
   assert.match(cleanup, /INSERT INTO audit_log[\s\S]*RETURNING id/);
   assert.match(cleanup, /UPDATE audit_log[\s\S]*RETURNING id/);
   assert.match(cleanup, /autocard_media_retention_audit_update_failed/);
+  assert.match(cleanup, /autocard_media_retention_audit_update_failed[\s\S]*throw error/);
   const retentionBody = cleanup.slice(cleanup.indexOf('async function enforceAutocardMediaRetention'));
   const transactionStart = retentionBody.indexOf("await db.query('BEGIN')");
-  const lock = retentionBody.indexOf("await db.query('LOCK TABLE autocard_cards IN SHARE MODE')");
   const pendingAudit = retentionBody.indexOf('const auditId = await insertRetentionAudit');
   const commit = retentionBody.indexOf("await db.query('COMMIT')");
   const fileCleanup = retentionBody.indexOf('await removeDeletedFiles');
   const sweep = retentionBody.indexOf('await sweepOrphanedFiles');
   const auditUpdate = retentionBody.indexOf('await updateRetentionAudit');
-  assert.ok(transactionStart >= 0 && lock > transactionStart);
-  assert.ok(pendingAudit > lock && commit > pendingAudit);
+  assert.ok(transactionStart >= 0 && pendingAudit > transactionStart && commit > pendingAudit);
   assert.ok(fileCleanup > commit && sweep > commit);
   assert.ok(auditUpdate > fileCleanup && auditUpdate > sweep);
   const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
@@ -199,6 +199,7 @@ test('green main commits deploy through a restricted serialized production gate'
   assert.match(hostDeploy, /pg_dump --format=custom/);
   assert.match(hostDeploy, /pg_restore --clean --if-exists --no-owner --single-transaction/);
   assert.match(hostDeploy, /compose_for "\$release" run --rm migrate/);
+  assert.match(hostDeploy, /--profile notifications/);
   assert.match(hostDeploy, /Production readiness did not recover/);
   assert.match(hostDeploy, /restoring the previous production release/);
   assert.match(hostDeploy, /find "\$staging" -type d -exec chmod 0755/);

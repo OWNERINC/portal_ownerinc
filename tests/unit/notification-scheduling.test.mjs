@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
@@ -73,4 +74,14 @@ test('AutoCard media storage keys require a UUID-shaped filename', () => {
   ]) {
     assert.equal(isSafeStorageKey(key), false, key);
   }
+});
+
+test('AutoCard retention rethrows audit completion failures after logging them', async () => {
+  const cleanup = await readFile('cron/autocard-media-retention.js', 'utf8');
+  const failureStart = cleanup.indexOf("event: 'autocard_media_retention_audit_update_failed'");
+  const successStart = cleanup.indexOf("event: 'autocard_media_retention_completed'");
+  assert.ok(failureStart >= 0 && successStart > failureStart);
+  const failureHandler = cleanup.slice(failureStart, successStart);
+  assert.match(failureHandler, /throw error/);
+  assert.doesNotMatch(failureHandler, /return details/);
 });

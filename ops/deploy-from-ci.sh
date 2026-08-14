@@ -152,6 +152,7 @@ compose_for() {
     --file "$selected_release/docker-compose.yml" \
     --file "$selected_override" \
     --project-directory "$selected_release" \
+    --profile notifications \
     "$@"
 }
 

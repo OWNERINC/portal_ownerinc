@@ -22,10 +22,10 @@ try {
     '006_user_erasure',
     '007_solides_employee_links',
     '008_solides_link_hardening',
-      '009_job_titles',
-      '010_autocard',
-      '011_cron_alert_state',
-      '012_autocard_media_crop',
+    '009_job_titles',
+    '010_autocard',
+    '011_cron_alert_state',
+    '012_autocard_media_crop',
   ]);
   const tables = await pool.query(`SELECT to_regclass('public.audit_log') AS audit,
     to_regclass('public.cron_status') AS cron, to_regclass('public.notifications_log') AS notifications,
@@ -40,8 +40,20 @@ try {
   assert.equal(tables.rows[0].job_titles, 'job_titles');
   assert.equal(tables.rows[0].autocard_cards, 'autocard_cards');
   assert.equal(tables.rows[0].autocard_media, 'autocard_media');
+  const cropColumn = await pool.query(`SELECT is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'autocard_cards' AND column_name = 'media_crop'`);
+  assert.equal(cropColumn.rows[0]?.is_nullable, 'NO');
+  assert.match(cropColumn.rows[0]?.column_default || '', /0\.5/);
   const roles = await pool.query("SELECT rolname FROM pg_roles WHERE rolname IN ('portal_api', 'portal_cron') ORDER BY rolname");
   assert.deepEqual(roles.rows.map(({ rolname }) => rolname), ['portal_api', 'portal_cron']);
+  const privileges = await pool.query(`SELECT
+    has_table_privilege('portal_cron', 'public.autocard_cards', 'SELECT') AS cards_select,
+    has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT,DELETE') AS media_select_delete,
+    has_table_privilege('portal_cron', 'public.audit_log', 'SELECT,INSERT,UPDATE,DELETE') AS audit_privileges`);
+  assert.equal(privileges.rows[0].cards_select, true);
+  assert.equal(privileges.rows[0].media_select_delete, true);
+  assert.equal(privileges.rows[0].audit_privileges, true);
   console.log('migration integration: ok');
 } finally {
   await pool.end();

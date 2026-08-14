@@ -185,7 +185,6 @@ async function enforceAutocardMediaRetention() {
     }
 
     await db.query('BEGIN');
-    await db.query('LOCK TABLE autocard_cards IN SHARE MODE');
     const candidateResult = await db.query(
       `SELECT m.id, m.storage_key
        FROM autocard_media AS m
@@ -254,7 +253,7 @@ async function enforceAutocardMediaRetention() {
         auditId,
         error: error.message,
       }));
-      return details;
+      throw error;
     }
     console.log(JSON.stringify({ service: 'cron', event: 'autocard_media_retention_completed', ...details }));
     return details;

@@ -86,14 +86,23 @@ async function removeMediaIfUnused(mediaId) {
   if (!mediaId) return;
   const client = await pool.connect();
   try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(7193003)');
     const result = await client.query(
       `SELECT m.storage_key FROM autocard_media m
        WHERE m.id = $1 AND NOT EXISTS (SELECT 1 FROM autocard_cards c WHERE c.media_id = m.id)`,
       [mediaId],
     );
-    if (!result.rowCount) return;
+    if (!result.rowCount) {
+      await client.query('COMMIT');
+      return;
+    }
     await client.query('DELETE FROM autocard_media WHERE id = $1', [mediaId]);
+    await client.query('COMMIT');
     await fs.unlink(path.join(uploadDirectory, result.rows[0].storage_key)).catch(() => {});
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
   } finally {
     client.release();
   }
@@ -132,9 +141,10 @@ router.post('/cards', async (req, res, next) => {
   if (!card) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'autocard.card.create', 'autocard_card', async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(7193003)');
       if (!await mediaExists(client, card.mediaId)) return null;
       const { rows } = await client.query(
-         `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, created_by)
+        `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, created_by)
           VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
           RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
          [card.name, card.template, JSON.stringify(card.values), card.icon, card.illustration, card.mode, card.variant, card.mediaSize, card.mediaId, JSON.stringify(card.mediaCrop), req.user.uid],
@@ -163,9 +173,10 @@ router.put('/cards/:id', async (req, res, next) => {
   if (!card) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'autocard.card.update', 'autocard_card', async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(7193003)');
       if (!await mediaExists(client, card.mediaId)) return null;
       const { rows } = await client.query(
-       `UPDATE autocard_cards SET name = $2, template = $3, "values" = $4::jsonb, icon = $5, illustration = $6, mode = $7, variant = $8, media_size = $9, media_id = $10, media_crop = $11::jsonb, updated_at = NOW()
+        `UPDATE autocard_cards SET name = $2, template = $3, "values" = $4::jsonb, icon = $5, illustration = $6, mode = $7, variant = $8, media_size = $9, media_id = $10, media_crop = $11::jsonb, updated_at = NOW()
           WHERE id = $1
           RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
          [req.params.id, card.name, card.template, JSON.stringify(card.values), card.icon, card.illustration, card.mode, card.variant, card.mediaSize, card.mediaId, JSON.stringify(card.mediaCrop)],
@@ -181,8 +192,9 @@ router.post('/cards/:id/duplicate', async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'autocard.card.duplicate', 'autocard_card', async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(7193003)');
       const { rows } = await client.query(
-         `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, created_by)
+        `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, created_by)
           SELECT name || ' v2', template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, $2
           FROM autocard_cards WHERE id = $1
           RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
@@ -199,6 +211,7 @@ router.delete('/cards/:id', async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'autocard.card.delete', 'autocard_card', async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(7193003)');
       const { rows } = await client.query('DELETE FROM autocard_cards WHERE id = $1 RETURNING id, media_id AS "mediaId"', [req.params.id]);
       return rows[0] || null;
     }, { targetId: result => result?.id });
