@@ -13,6 +13,7 @@ cron/node_modules/
 uploads/
 *.log
 *.spdx.json
+.worktrees/
 
 # Projeto separado, fora do escopo deste repositório
 ownerinc-novo-agente/
