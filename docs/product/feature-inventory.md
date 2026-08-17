@@ -44,9 +44,9 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Acesso por cargo DHO | Operacional | O módulo só libera os cargos exatos Analista, Assistente, Coordenador e Gerente de DHO; a API bloqueia acesso direto para os demais usuários. `api/middleware/policy.js`, `api/routes/autocard.js`, `public/autocard/guard.js` |
+| Acesso por cargo RH | Operacional | O módulo só libera os cargos exatos Analista de RH Sênior e Gerente de RH; a API bloqueia acesso direto para os demais usuários. `api/middleware/policy.js`, `api/routes/autocard.js`, `public/autocard/guard.js` |
 | Criação e exportação de cards | Operacional | Templates, variações visuais, biblioteca de assets, upload e exportação PNG migrados para o Portal. `public/autocard/` |
-| Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para todos os usuários autorizados do DHO, com busca, edição, duplicação e exclusão auditadas dentro do shell padrão do Portal. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js`, `public/autocard/index.html` |
+| Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para todos os usuários autorizados de RH, com busca, edição, duplicação e exclusão auditadas dentro do shell padrão do Portal. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js`, `public/autocard/index.html` |
 | Renomeação RH para DHO | Operacional | Migration 010 reassocia usuários e renomeia cargos antigos sem quebrar a referência de usuários. `api/db/migrations/010_autocard.sql` |
 
 ## Perfil Pessoal

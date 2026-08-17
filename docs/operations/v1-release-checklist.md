@@ -100,7 +100,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Base de Conhecimento, Academy e Benefícios passam.
 - [ ] Lembretes e histórico de entregas passam.
 - [ ] Admin e Ouvidoria passam.
-- [x] AutoCard passa para `Analista de RH Sênior` e `Gerente de RH`.
+- [ ] AutoCard passa para `Analista de RH Sênior` e `Gerente de RH`.
 - [ ] Sólides permanece desligada.
 
 ## Monitoring and Alerts

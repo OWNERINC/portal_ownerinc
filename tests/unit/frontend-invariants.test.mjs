@@ -54,6 +54,18 @@ test('admin navigation restores the last verified role before paint and revalida
   }
 });
 
+test('AutoCard navigation consumes backend access instead of a frontend title allowlist', async () => {
+  const [auth, apiAuth] = await Promise.all([
+    readFile('public/js/auth.js', 'utf8'),
+    readFile('api/middleware/auth.js', 'utf8'),
+  ]);
+
+  assert.match(apiAuth, /const \{ can, canUseAutoCard \} = require\('\.\/policy'\)/);
+  assert.match(apiAuth, /req\.user\.autocard_access = canUseAutoCard\(req\.user\)/);
+  assert.match(auth, /document\.documentElement\.dataset\.autocardAccess = String\(user\?\.autocard_access === true\)/);
+  assert.doesNotMatch(auth, /analista de dho|assistente de dho|coordenador de dho|gerente de dho/i);
+});
+
 test('authenticated shell has no personalized greeting and admin invites do not ask for a password', async () => {
   const html = await Promise.all(pages.map((page) => readFile(`public/${page}.html`, 'utf8')));
   const scripts = await readFile('public/js/auth.js', 'utf8');

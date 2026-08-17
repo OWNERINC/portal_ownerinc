@@ -41,13 +41,12 @@ substitui orientação jurídica nem o registro formal das bases legais.
 
 ## AutoCard
 
-- Finalidade: permitir que cargos autorizados do DHO criem e mantenham cards
+- Finalidade: permitir que cargos autorizados de RH criem e mantenham cards
   internos com identidade visual Ownerinc.
-- Acesso: somente os cargos exatos de Analista, Assistente, Coordenador e
-  Gerente de DHO; a autorização é repetida na API e não depende de role de
-  administrador.
-- Histórico: cards e mídias são compartilhados entre usuários autorizados do
-  DHO e alterações são registradas na auditoria administrativa.
+- Acesso: somente os cargos exatos Analista de RH Sênior e Gerente de RH; a
+  autorização é repetida na API e não depende de role de administrador.
+- Histórico: cards e mídias são compartilhados entre usuários autorizados de RH
+  e alterações são registradas na auditoria administrativa.
 - Mídias: imagens são normalizadas para WebP, possuem limite de tamanho e ficam
   vinculadas ao card; arquivos sem referência são removidos quando aplicável.
 - Retenção: o histórico segue a política de dados internos e deve ser mantido

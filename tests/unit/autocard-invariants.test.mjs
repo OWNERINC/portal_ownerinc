@@ -854,6 +854,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(entry, /import\('\.\/app\.js'\)/);
   assert.match(guard, /\/api\/autocard\/access/);
   assert.match(guard, /Acesso restrito/);
+  assert.match(guard, /cargos de RH aprovados/);
+  assert.doesNotMatch(guard, /cargos do DHO/);
   assert.match(html, /class="portal-wrapper"/);
   assert.match(html, /class="sidebar"/);
   assert.match(html, /class="topbar"/);
@@ -879,6 +881,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(html, /id="templateGallery"/);
   const portalTopbar = html.match(/<header class="topbar">[\s\S]*?<\/header>/)?.[0] || '';
   assert.doesNotMatch(portalTopbar, /AutoCard DHO/);
+  assert.match(html, /<span class="eyebrow">AutoCard<\/span>/);
+  assert.doesNotMatch(html, /AutoCard DHO/);
   assert.match(legacy, /url=\.\.\/autocard\.html/);
   assert.match(legacy, /href="\.\.\/autocard\.html"/);
   assert.doesNotMatch(legacy, /<script\b/);

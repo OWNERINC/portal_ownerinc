@@ -12,9 +12,7 @@ function applyVerifiedRole(user) {
 }
 
 function applyAutoCardNavigation(user) {
-  const allowedTitles = new Set(['analista de dho', 'assistente de dho', 'coordenador de dho', 'gerente de dho']);
-  const title = String(user?.job_title || '').trim().toLocaleLowerCase('pt-BR');
-  document.documentElement.dataset.autocardAccess = String(allowedTitles.has(title));
+  document.documentElement.dataset.autocardAccess = String(user?.autocard_access === true);
 }
 
 function clearVerifiedRole() {
