@@ -5,16 +5,23 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const {
-  addPublishedBlocks, getPublishedBlocks, listPublishedAnnouncements,
+  addPublishedBlocks, getPublishedBlocksBatch, listPublishedAnnouncements,
 } = require('../../api/cms/reader');
 
 function poolFor({ document, blocks = [] } = {}) {
   const calls = [];
+  let connections = 0;
   const client = {
     async query(sql, params = []) {
       calls.push({ sql, params });
-      if (/SELECT id, published_revision_id/.test(sql)) return { rows: document ? [document] : [] };
-      if (/SELECT blocks/.test(sql)) return { rows: blocks.length ? [{ blocks }] : [] };
+      if (/scheduled\.status = 'scheduled'/.test(sql)) {
+        const scheduledAt = document?.scheduled_at && new Date(document.scheduled_at).getTime();
+        return scheduledAt && scheduledAt <= Date.now() ? { rows: [document] } : { rows: [] };
+      }
+      if (/SELECT d\.source_id, r\.blocks/.test(sql)) {
+        if (!document?.published_revision_id) return { rows: [] };
+        return { rows: (params[1] || []).map((sourceId) => ({ source_id: sourceId, blocks })) };
+      }
       if (/COUNT\(\*\)/.test(sql)) return { rows: [{ count: 1 }] };
       if (/SELECT d\.id, d\.title/.test(sql)) return { rows: [{ id: document?.id, title: document?.title, category: '', published_at: null, blocks }] };
       return { rows: [] };
@@ -24,7 +31,11 @@ function poolFor({ document, blocks = [] } = {}) {
   return {
     calls,
     async connect() {
+      connections += 1;
       return client;
+    },
+    get connections() {
+      return connections;
     },
   };
 }
@@ -38,21 +49,21 @@ test('reader returns only a published revision and normalizes its blocks', async
     blocks: [{ type: 'heading', text: 'Published', level: 2 }],
   });
 
-  assert.deepEqual(await getPublishedBlocks(pool, 'knowledge', 'source-1'), [
-    { type: 'heading', text: 'Published', level: 2 },
-  ]);
-  assert.equal(pool.calls.filter(({ sql }) => /SELECT blocks/.test(sql)).length, 1);
+  const result = await getPublishedBlocksBatch(pool, 'knowledge', ['source-1', 'source-2']);
+  assert.deepEqual(result.get('source-1'), [{ type: 'heading', text: 'Published', level: 2 }]);
+  assert.deepEqual(result.get('source-2'), [{ type: 'heading', text: 'Published', level: 2 }]);
+  assert.equal(pool.connections, 1);
 });
 
 test('draft-only and future scheduled documents use legacy fallback', async () => {
   const draftOnly = poolFor({ document: { id: 'doc-1', draft_revision_id: 'draft-1' } });
-  assert.equal(await getPublishedBlocks(draftOnly, 'academy', 'source-1'), null);
+  assert.equal((await getPublishedBlocksBatch(draftOnly, 'academy', ['source-1'])).size, 0);
 
   const future = poolFor({ document: {
     id: 'doc-2', published_revision_id: null, scheduled_revision_id: 'scheduled-2',
     scheduled_at: new Date(Date.now() + 60000),
   } });
-  assert.equal(await getPublishedBlocks(future, 'benefit', 'source-2'), null);
+  assert.equal((await getPublishedBlocksBatch(future, 'benefit', ['source-2'])).size, 0);
 });
 
 test('due scheduled revisions replace the old publication and leave an audit trail', async () => {
@@ -63,9 +74,8 @@ test('due scheduled revisions replace the old publication and leave an audit tra
     },
     blocks: [{ type: 'paragraph', text: 'Now published' }],
   });
-  assert.deepEqual(await getPublishedBlocks(pool, 'reminder', 'source-3'), [
-    { type: 'paragraph', text: 'Now published' },
-  ]);
+  const result = await getPublishedBlocksBatch(pool, 'reminder', ['source-3']);
+  assert.deepEqual(result.get('source-3'), [{ type: 'paragraph', text: 'Now published' }]);
   const statements = pool.calls.map(({ sql }) => sql);
   assert.ok(statements.findIndex((sql) => /SET status = 'archived'/.test(sql))
     < statements.findIndex((sql) => /SET status = 'published'/.test(sql)));
@@ -77,7 +87,7 @@ test('invalid published blocks are never returned as raw HTML or script content'
     document: { id: 'doc-1', published_revision_id: 'pub-1' },
     blocks: [{ type: 'paragraph', text: '<script>alert(1)</script>' }],
   });
-  assert.equal(await getPublishedBlocks(pool, 'reminder', 'source-1'), null);
+  assert.equal((await getPublishedBlocksBatch(pool, 'reminder', ['source-1'])).size, 0);
 });
 
 test('area mappings preserve legacy rows and add content_blocks only when published', async () => {
@@ -92,6 +102,11 @@ test('area mappings preserve legacy rows and add content_blocks only when publis
     assert.match(source, new RegExp(`addPublishedBlocks\\(pool, [^,]+, ['"]${contentType}['"]\\)`), contentType);
     assert.match(source, /content_blocks|addPublishedBlocks/, contentType);
   }
+  const reader = await readFile('api/cms/reader.js', 'utf8');
+  assert.match(reader, /getPublishedBlocksBatch/);
+  assert.match(reader, /getPublishedBlocksBatch\(pool, contentType, rows\.map/);
+  assert.doesNotMatch(reader, /getPublishedBlocks\(pool/);
+  assert.doesNotMatch(reader, /Promise\.all\(rows\.map/);
   const legacy = { id: 'legacy', title: 'Legacy' };
   const fallbackPool = poolFor();
   assert.deepEqual(await addPublishedBlocks(fallbackPool, [legacy], 'knowledge'), [legacy]);

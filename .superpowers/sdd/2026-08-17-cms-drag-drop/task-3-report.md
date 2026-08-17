@@ -27,3 +27,13 @@ Implemented Task 3 on `feature/cms-drag-drop`.
 ## Commit
 
 Commit message: `feat: integrate published cms content`
+
+## Reviewer Fix
+
+- Replaced the per-row `getPublishedBlocks()` transaction/connection loop with `getPublishedBlocksBatch(pool, contentType, sourceIds)`.
+- Batch loading uses one route-response transaction and one parameterized joined query for published documents/revisions; due promotion is bounded to the same content type and source IDs.
+- Updated all four legacy route readers to decorate rows from the batch map while preserving fallback rows and optional `content_blocks`.
+- Added source-contract assertions for batch helper usage, one connection for multiple source IDs, and absence of the old per-row transaction loop.
+- Focused tests after the fix: passed, 33 tests.
+- `npm run verify` after the fix: passed, 121 tests plus syntax, security, and Compose checks.
+- `git diff --check` after the fix: passed.

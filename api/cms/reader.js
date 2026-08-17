@@ -2,10 +2,6 @@ const { blocksToText, validateBlocks } = require('./blocks');
 
 const CONTENT_TYPES = new Set(['knowledge', 'academy', 'benefit', 'announcement', 'reminder']);
 
-function due(scheduledAt, now) {
-  return scheduledAt && new Date(scheduledAt).getTime() <= now.getTime();
-}
-
 async function promoteDocument(db, document, now) {
   if (document.published_revision_id) {
     await db.query(
@@ -31,14 +27,24 @@ async function promoteDocument(db, document, now) {
   );
 }
 
-async function promoteDueScheduled(db, now = new Date()) {
+async function promoteDueScheduled(db, now = new Date(), contentType = null, sourceIds = null) {
+  const values = [now];
+  const conditions = ["scheduled.status = 'scheduled'", 'd.scheduled_at <= $1'];
+  if (contentType) {
+    values.push(contentType);
+    conditions.push(`d.content_type = $${values.length}`);
+  }
+  if (sourceIds) {
+    values.push(sourceIds);
+    conditions.push(`d.source_id = ANY($${values.length}::uuid[])`);
+  }
   const { rows } = await db.query(
     `SELECT d.id, d.published_revision_id, d.scheduled_revision_id
        FROM cms_documents d
        JOIN cms_revisions scheduled ON scheduled.id = d.scheduled_revision_id
-      WHERE scheduled.status = 'scheduled' AND d.scheduled_at <= $1
+      WHERE ${conditions.join(' AND ')}
       FOR UPDATE OF d, scheduled`,
-    [now],
+    values,
   );
   for (const document of rows) await promoteDocument(db, document, now);
   return rows.length;
@@ -59,41 +65,35 @@ async function withTransaction(pool, operation) {
   }
 }
 
-async function getPublishedBlocks(pool, contentType, sourceId) {
-  if (!CONTENT_TYPES.has(contentType)) return null;
+async function getPublishedBlocksBatch(pool, contentType, sourceIds) {
+  const ids = [...new Set(sourceIds.filter(Boolean).map(String))];
+  if (!CONTENT_TYPES.has(contentType) || !ids.length) return new Map();
   return withTransaction(pool, async (db) => {
+    await promoteDueScheduled(db, new Date(), contentType, ids);
     const { rows } = await db.query(
-      `SELECT id, published_revision_id, scheduled_revision_id, scheduled_at
-         FROM cms_documents
-        WHERE content_type = $1 AND source_id IS NOT DISTINCT FROM $2::uuid
-        FOR UPDATE`,
-      [contentType, sourceId || null],
+      `SELECT d.source_id, r.blocks
+         FROM cms_documents d
+         JOIN cms_revisions r ON r.id = d.published_revision_id
+        WHERE d.content_type = $1
+          AND d.source_id = ANY($2::uuid[])
+          AND r.status = 'published'`,
+      [contentType, ids],
     );
-    const document = rows[0];
-    if (!document) return null;
-
-    let revisionId = document.published_revision_id;
-    if (due(document.scheduled_at, new Date())) {
-      await promoteDocument(db, document, new Date());
-      revisionId = document.scheduled_revision_id;
-    }
-    if (!revisionId) return null;
-
-    const { rows: revisions } = await db.query(
-      `SELECT blocks
-         FROM cms_revisions
-        WHERE id = $1 AND document_id = $2 AND status = 'published'`,
-      [revisionId, document.id],
-    );
-    return revisions[0] ? validateBlocks(revisions[0].blocks) : null;
+    return new Map(rows.flatMap((row) => {
+      const blocks = validateBlocks(row.blocks);
+      return blocks === null ? [] : [[String(row.source_id), blocks]];
+    }));
   });
 }
 
 async function addPublishedBlocks(pool, rows, contentType) {
-  return Promise.all(rows.map(async (row) => {
-    const contentBlocks = await getPublishedBlocks(pool, contentType, row.id);
-    return contentBlocks === null ? row : { ...row, content_blocks: contentBlocks };
-  }));
+  const blocksBySourceId = await getPublishedBlocksBatch(pool, contentType, rows.map((row) => row.id));
+  return rows.map((row) => {
+    const sourceId = String(row.id);
+    return blocksBySourceId.has(sourceId)
+      ? { ...row, content_blocks: blocksBySourceId.get(sourceId) }
+      : row;
+  });
 }
 
 async function listPublishedAnnouncements(pool, limit, offset) {
@@ -129,7 +129,7 @@ async function listPublishedAnnouncements(pool, limit, offset) {
 module.exports = {
   addPublishedBlocks,
   blocksToText,
-  getPublishedBlocks,
+  getPublishedBlocksBatch,
   listPublishedAnnouncements,
   promoteDueScheduled,
 };
