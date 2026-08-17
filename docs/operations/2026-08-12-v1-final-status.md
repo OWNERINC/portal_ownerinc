@@ -71,7 +71,7 @@ Data do registro: 12 de agosto de 2026
 
 - Não foi comprovada ainda a perda de acesso de um usuário desativado usando
   token anterior nem a expiração de sessão Firebase em produção.
-- O lembrete SendGrid end-to-end, histórico de entrega, retry e alertas SMTP
+- O lembrete via Resend SMTP end-to-end, histórico de entrega, retry e alertas SMTP
   deduplicados/recuperados ainda precisam de evidência operacional.
 - O restore PostgreSQL descartável foi validado; o restore integral dos uploads
   ainda requer ambiente Linux/Bash.
