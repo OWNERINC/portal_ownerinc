@@ -9,6 +9,7 @@ const {
 } = require('../../api/middleware/policy');
 const { validateEnvironment } = require('../../api/middleware/security');
 const { imageExtension, isHttpUrl, normalizeImage, validateProfile, validateUser } = require('../../api/middleware/validation');
+const { canManageCms } = require('../../api/cms/permissions');
 
 const manager = { uid: 'manager', role: 'admin', permissions: { manageUsers: true } };
 const superAdmin = { uid: 'root', role: 'admin', permissions: { superAdmin: true } };
@@ -25,6 +26,19 @@ test('authorization requires an admin role and reserves privilege mutation for a
   assert.equal(mayChangeAccountStatus(superAdmin, { uid: 'other', role: 'viewer', permissions: {} }), true);
   assert.equal(removesLastActiveSuperAdmin(superAdmin, 'viewer', {}, 1), true);
   assert.equal(removesLastActiveSuperAdmin(superAdmin, 'admin', { superAdmin: true }, 1), false);
+});
+
+test('CMS management permission mapping stays area-scoped', () => {
+  const user = {
+    role: 'admin',
+    permissions: { manageKnowledge: true, manageAcademy: false, manageBenefits: true, manageReminders: false },
+  };
+  assert.equal(canManageCms(user, 'knowledge'), true);
+  assert.equal(canManageCms(user, 'announcement'), true);
+  assert.equal(canManageCms(user, 'academy'), false);
+  assert.equal(canManageCms(user, 'benefit'), true);
+  assert.equal(canManageCms(user, 'reminder'), false);
+  assert.equal(canManageCms(user, 'unknown'), false);
 });
 
 test('permission normalization accepts only known true booleans', () => {
