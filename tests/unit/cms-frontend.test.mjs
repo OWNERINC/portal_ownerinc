@@ -110,6 +110,32 @@ test('block selection has semantic keyboard controls and visible focus', () => {
   assert.match(cmsHtml, /name="title" autocomplete="off"/);
 });
 
+test('dirty CMS navigation confirms anchors and protects reload/close without blocking editor actions', () => {
+  assert.match(cms, /window\.addEventListener\('beforeunload'/);
+  assert.match(cms, /closest\('a\[href\]'/);
+  assert.match(cms, /window\.confirm\('Há alterações do CMS/);
+  assert.match(cms, /event\.preventDefault\(\)/);
+  assert.match(cms, /navigationConfirmed = true/);
+  assert.match(cms, /navigationBusy\(\) \|\| saveQueued/);
+});
+
+test('one document-level observer cleans private media when any rendered ancestor detaches', () => {
+  assert.match(renderer, /const documentObservers = new WeakMap\(\)/);
+  assert.match(renderer, /container\.ownerDocument\?\.documentElement/);
+  assert.match(renderer, /observer\.observe\(document\.documentElement, \{ childList: true, subtree: true \}\)/);
+  assert.match(renderer, /candidate\.container\.isConnected/);
+  assert.match(renderer, /record\.states\.add\(state\)/);
+  assert.doesNotMatch(renderer, /observer\.observe\(parent/);
+});
+
+test('direct and keyboard block selection update every aria-pressed state immediately', () => {
+  assert.match(editor, /function selectBlock\(index\)/);
+  assert.match(editor, /querySelectorAll\('\.cms-block-select'\)/);
+  assert.match(editor, /button\.setAttribute\('aria-pressed', String\(buttonIndex === selectedIndex\)\)/);
+  assert.match(editor, /on: \{ click: \(\) => selectBlock\(index\) \}/);
+  assert.match(editor, /selectBlock\(index\);\s*return;/);
+});
+
 test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', () => {
   for (const source of [knowledge, academy, benefits, announcements]) {
     assert.match(source, /content_blocks/);

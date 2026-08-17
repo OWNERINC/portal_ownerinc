@@ -57,6 +57,8 @@ let editVersion = 0;
 let selectionToken = 0;
 let actionBusy = false;
 let loading = false;
+let newDocumentDirty = false;
+let navigationConfirmed = false;
 const documentsByType = new Map();
 const sourcesByType = new Map();
 
@@ -74,8 +76,30 @@ function mutationBusy() {
 }
 
 function navigationBusy() {
-  return mutationBusy() || dirty;
+  return mutationBusy() || dirty || newDocumentDirty;
 }
+
+function cmsNavigationProtected() {
+  return !navigationConfirmed && (navigationBusy() || saveQueued);
+}
+
+document.addEventListener('click', event => {
+  if (!cmsNavigationProtected() || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+  if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download') || anchor.getAttribute('href')?.startsWith('#')) return;
+  if (anchor.origin && anchor.origin !== location.origin) return;
+  if (!window.confirm('Há alterações do CMS que ainda não foram salvas. Sair mesmo assim?')) {
+    event.preventDefault();
+    return;
+  }
+  navigationConfirmed = true;
+});
+
+window.addEventListener('beforeunload', event => {
+  if (!cmsNavigationProtected()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 
 function syncBusyState() {
   newDocumentButton.disabled = !TYPES.length || navigationBusy();
@@ -108,6 +132,7 @@ function renderTypeNav() {
       clearTimeout(saveTimer);
       saveQueued = false;
       dirty = false;
+      newDocumentDirty = false;
       editVersion = 0;
       selectedType = type;
       selectedDocument = null;
@@ -241,6 +266,7 @@ async function loadDocument(id) {
     const view = await fetchAPI(`/api/cms/documents/${encodeURIComponent(id)}`);
     if (requestToken !== selectionToken || selectedDocument !== id) return;
     dirty = false;
+    newDocumentDirty = false;
     editVersion = 0;
     saveQueued = false;
     documentView = view;
@@ -428,20 +454,33 @@ async function unscheduleDocument() {
 }
 
 newDocumentButton.addEventListener('click', async () => {
+  if (navigationBusy()) return;
   newDocumentForm.hidden = false;
+  newDocumentDirty = false;
   await loadSources();
   document.getElementById('new-title').focus();
 });
-document.getElementById('cancel-new-document').addEventListener('click', () => { newDocumentForm.hidden = true; });
+newDocumentForm.addEventListener('input', () => {
+  newDocumentDirty = true;
+  syncBusyState();
+});
+document.getElementById('cancel-new-document').addEventListener('click', () => {
+  newDocumentDirty = false;
+  newDocumentForm.hidden = true;
+  syncBusyState();
+});
 newDocumentForm.addEventListener('submit', async event => {
   event.preventDefault();
+  if (mutationBusy()) return;
   if (!newDocumentForm.reportValidity()) return;
   const body = { type: selectedType, title: document.getElementById('new-title').value.trim(), category: document.getElementById('new-category').value.trim() };
   if (SOURCE_ENDPOINTS[selectedType]) body.source_id = sourceSelect.value;
   try {
     const result = await fetchAPI('/api/cms/documents', { method: 'POST', body: JSON.stringify(body) });
     newDocumentForm.reset();
+    newDocumentDirty = false;
     newDocumentForm.hidden = true;
+    syncBusyState();
     await loadDocuments();
     await loadDocument(result.document.id);
     showToast('Documento criado como rascunho.');

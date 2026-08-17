@@ -136,6 +136,14 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
     onChange(structuredClone(blocks));
   }
 
+  function selectBlock(index) {
+    selectedIndex = index;
+    root.querySelectorAll('.cms-block-select').forEach((button, buttonIndex) => {
+      button.setAttribute('aria-pressed', String(buttonIndex === selectedIndex));
+    });
+    onSelect(index, blocks[index]);
+  }
+
   function move(from, to) {
     if (to < 0 || to >= blocks.length || from === to) return;
     selectedIndex = to;
@@ -176,8 +184,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
     row.addEventListener('keydown', event => {
       if (event.target === row && (event.key === 'Enter' || event.key === ' ')) {
         event.preventDefault();
-        selectedIndex = index;
-        onSelect(index, block);
+        selectBlock(index);
         return;
       }
       if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
@@ -186,8 +193,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
     });
     row.addEventListener('click', event => {
       if (event.target === row) {
-        selectedIndex = index;
-        onSelect(index, block);
+        selectBlock(index);
       }
     });
 
@@ -203,7 +209,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
     row.append(element('button', {
       className: 'cms-block-select', type: 'button', 'aria-pressed': String(selectedIndex === index),
       'aria-label': `Editar configurações de ${LABELS[block.type]} ${index + 1}`, text: blockSummary(block),
-      on: { click: () => { selectedIndex = index; onSelect(index, block); } },
+      on: { click: () => selectBlock(index) },
     }));
     return row;
   }

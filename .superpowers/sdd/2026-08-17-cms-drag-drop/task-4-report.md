@@ -47,3 +47,16 @@ Implemented Task 4 on `feature/cms-drag-drop` in the requested worktree.
 ## Remaining Concerns
 
 - Source-contract tests verify the race, permission, renderer, cleanup, layout, and keyboard contracts; authenticated browser interaction and live PostgreSQL publication transitions still require environment acceptance testing.
+
+## P2 Review Fixes
+
+- CMS dirty, saving, loading, queued, and new-document states now protect sidebar, topbar, and same-origin anchor navigation with an explicit confirmation and also participate in a scoped `beforeunload` guard; buttons and form actions remain outside the anchor guard.
+- Private media cleanup now uses one `MutationObserver` per owner document, rooted at `document.documentElement`, to catch removal of any rendered block ancestor and deregister detached render states without duplicate observers.
+- Direct block selection and keyboard selection now update every block selection button's `aria-pressed` state synchronously through `selectBlock`.
+
+## P2 Verification
+
+- `node --test tests/unit/cms-frontend.test.mjs`: passed, 13 tests.
+- `node --test tests/unit/cms-frontend.test.mjs tests/unit/frontend-invariants.test.mjs`: passed, 28 tests.
+- `npm run verify`: passed, 134 tests plus syntax, security, and Compose checks.
+- `git diff --check`: passed.

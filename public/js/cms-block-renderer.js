@@ -5,9 +5,10 @@ export const BLOCK_TYPES = ['heading', 'paragraph', 'list', 'callout', 'image', 
 const BLOCK_TYPE_SET = new Set(BLOCK_TYPES);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const renderStates = new WeakMap();
+const documentObservers = new WeakMap();
 
 function renderState(container) {
-  if (!renderStates.has(container)) renderStates.set(container, { token: Symbol('cms-render'), urls: new Set(), observer: null });
+  if (!renderStates.has(container)) renderStates.set(container, { container, token: Symbol('cms-render'), urls: new Set(), observerRecord: null });
   return renderStates.get(container);
 }
 
@@ -20,15 +21,29 @@ export function cleanupRenderedBlocks(container) {
 }
 
 function observeContainer(container, state) {
-  if (state.observer || typeof MutationObserver === 'undefined' || !container.parentNode) return;
-  const parent = container.parentNode;
-  state.observer = new MutationObserver(() => {
-    if (container.isConnected) return;
-    cleanupRenderedBlocks(container);
-    state.observer.disconnect();
-    state.observer = null;
-  });
-  state.observer.observe(parent, { childList: true, subtree: true });
+  if (state.observerRecord || typeof MutationObserver === 'undefined' || !container.ownerDocument?.documentElement) return;
+  const document = container.ownerDocument;
+  let record = documentObservers.get(document);
+  if (!record) {
+    const states = new Set();
+    const observer = new MutationObserver(() => {
+      [...states].forEach(candidate => {
+        if (candidate.container.isConnected) return;
+        cleanupRenderedBlocks(candidate.container);
+        states.delete(candidate);
+        candidate.observerRecord = null;
+      });
+      if (!states.size) {
+        observer.disconnect();
+        documentObservers.delete(document);
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    record = { observer, states };
+    documentObservers.set(document, record);
+  }
+  record.states.add(state);
+  state.observerRecord = record;
 }
 
 function isRecord(value) {
