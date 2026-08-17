@@ -101,9 +101,11 @@ test('Sólides administration loads every eligible CLT page', async () => {
 
 test('admin job titles come from the API instead of an inline catalog', async () => {
   const script = await readFile('public/js/admin.js', 'utf8');
-  assert.match(script, /fetchAPIPage\('\/api\/job-titles\?limit=100&offset=0'\)/);
-  assert.doesNotMatch(script, /fetchAPIPage\('\/api\/job-titles\?[^']*all=true/);
+  assert.match(script, /fetchAPIPage\('\/api\/job-titles\?all=true&limit=100&offset=0'\)/);
   assert.match(script, /jobTitles = result\.data/);
+  assert.match(script, /jobTitles\.filter\(title => title\.active \|\| title\.id === selectedId\)/);
+  assert.match(script, /text: title\.active \? title\.name : `\$\{title\.name\} \(inativo\)`/);
+  assert.doesNotMatch(script, /(?:const|let|var)\s+\w*(?:catalog|titles?)\w*\s*=\s*\[\s*(?!\])/i);
   for (const title of [
     'Analista de RH Sênior', 'Gerente de RH', 'Analista Administrativo',
     'Coordenador de Compras', 'Social Media',

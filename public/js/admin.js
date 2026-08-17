@@ -115,7 +115,7 @@ function renderJobTitles() {
 async function loadJobTitles() {
   tableState('job-titles-tbody', 4, 'Carregando cargos…');
   try {
-    const result = await fetchAPIPage('/api/job-titles?limit=100&offset=0');
+    const result = await fetchAPIPage('/api/job-titles?all=true&limit=100&offset=0');
     jobTitles = result.data;
     renderJobTitles();
     renderJobTitleOptions(document.getElementById('u-job-title')?.value || '');
