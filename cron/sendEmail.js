@@ -1,7 +1,7 @@
-const sgMail = require('@sendgrid/mail');
+const { getMailTransport } = require('./mailTransport');
 
-async function sendEmail({ to, subject, text }) {
-  await sgMail.send({ to, from: process.env.SENDGRID_FROM_EMAIL, subject, text });
+async function sendEmail({ to, subject, text }, env = process.env) {
+  await getMailTransport(env).sendMail({ to, from: env.MAILER_SENDER_EMAIL, subject, text });
   console.log(`[sendEmail] Enviado para ${to}`);
 }
 

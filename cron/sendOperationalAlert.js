@@ -1,26 +1,9 @@
-const nodemailer = require('nodemailer');
-
-let transport;
-
-function getTransport(env = process.env) {
-  if (!env.OPERATIONAL_ALERT_EMAIL) return null;
-  if (!transport) {
-    transport = nodemailer.createTransport({
-      host: env.SMTP_ADDRESS,
-      port: Number(env.SMTP_PORT),
-      secure: String(env.SMTP_PORT) === '465',
-      auth: { user: env.SMTP_USERNAME, pass: env.SMTP_PASSWORD },
-      tls: { rejectUnauthorized: true },
-    });
-  }
-  return transport;
-}
+const { getMailTransport } = require('./mailTransport');
 
 async function sendOperationalAlert({ subject, text }, env = process.env) {
-  const mailer = getTransport(env);
-  if (!mailer) return false;
+  if (!env.OPERATIONAL_ALERT_EMAIL) return false;
   try {
-    await mailer.sendMail({
+    await getMailTransport(env).sendMail({
       from: env.MAILER_SENDER_EMAIL,
       to: env.OPERATIONAL_ALERT_EMAIL,
       subject: `Portal Ownerinc: ${subject}`,
@@ -34,4 +17,4 @@ async function sendOperationalAlert({ subject, text }, env = process.env) {
   }
 }
 
-module.exports = { getTransport, sendOperationalAlert };
+module.exports = { sendOperationalAlert };

@@ -1,21 +1,21 @@
 require('dotenv').config();
 
 function validateEnvironment(env = process.env) {
-  const missing = ['DATABASE_URL', 'SENDGRID_API_KEY', 'SENDGRID_FROM_EMAIL'].filter((name) => !env[name]);
+  const missing = [
+    'DATABASE_URL', 'SMTP_ADDRESS', 'SMTP_PORT', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'MAILER_SENDER_EMAIL',
+  ].filter((name) => !env[name]);
   if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
 }
 
 validateEnvironment();
 
 const cron = require('node-cron');
-const sgMail = require('@sendgrid/mail');
 const pool = require('./db');
 const { checkReminders } = require('./checkReminders');
 const { enforceRetention, retentionDays } = require('./retention');
 const { autocardMediaRetentionDays, enforceAutocardMediaRetention } = require('./autocard-media-retention');
 const { TIME_ZONE } = require('./scheduling');
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 retentionDays();
 autocardMediaRetentionDays();
 
