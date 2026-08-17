@@ -42,8 +42,13 @@ async function verifyMigrations() {
       has_table_privilege('portal_api', 'public.job_titles', 'SELECT,INSERT,UPDATE,DELETE') AS api_job_title_privileges,
       has_table_privilege('portal_api', 'public.autocard_cards', 'SELECT,INSERT,UPDATE,DELETE') AS api_autocard_cards_privileges,
       has_table_privilege('portal_api', 'public.autocard_media', 'SELECT,INSERT,UPDATE,DELETE') AS api_autocard_media_privileges,
+      has_table_privilege('portal_api', 'public.cms_documents', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_documents_privileges,
+      has_table_privilege('portal_api', 'public.cms_revisions', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_revisions_privileges,
+      has_table_privilege('portal_api', 'public.cms_assets', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_assets_privileges,
       has_table_privilege('portal_cron', 'public.autocard_cards', 'SELECT') AS cron_autocard_cards_privileges,
       has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT,DELETE') AS cron_autocard_media_privileges,
+      has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT') AS cron_cms_documents_privileges,
+      has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT') AS cron_cms_revisions_privileges,
       has_table_privilege('portal_cron', 'public.audit_log', 'SELECT,INSERT,UPDATE,DELETE') AS cron_audit_privileges`);
     if (result.rows[0].job_titles !== 'job_titles'
       || result.rows[0].autocard_cards !== 'autocard_cards'
@@ -62,8 +67,13 @@ async function verifyMigrations() {
       || result.rows[0].api_job_title_privileges !== true
       || result.rows[0].api_autocard_cards_privileges !== true
       || result.rows[0].api_autocard_media_privileges !== true
+      || result.rows[0].api_cms_documents_privileges !== true
+      || result.rows[0].api_cms_revisions_privileges !== true
+      || result.rows[0].api_cms_assets_privileges !== true
       || result.rows[0].cron_autocard_cards_privileges !== true
       || result.rows[0].cron_autocard_media_privileges !== true
+      || result.rows[0].cron_cms_documents_privileges !== true
+      || result.rows[0].cron_cms_revisions_privileges !== true
       || result.rows[0].cron_audit_privileges !== true) {
        throw new Error('Job title, AutoCard, or CMS schema/runtime privileges are incomplete');
      }

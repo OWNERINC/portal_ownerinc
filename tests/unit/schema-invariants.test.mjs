@@ -127,9 +127,11 @@ test('job title catalog migration seeds and maps the approved names', async () =
 });
 
 test('CMS migration is isolated, idempotent, and protects document revisions and assets', async () => {
-  const [migration, verification] = await Promise.all([
+  const [migration, verification, provision, migrate] = await Promise.all([
     readFile('api/db/migrations/015_cms_editor.sql', 'utf8'),
     readFile('api/db/verify-migrations.js', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'),
+    readFile('api/db/migrate.js', 'utf8'),
   ]);
   for (const table of ['cms_documents', 'cms_revisions', 'cms_assets']) {
     assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
@@ -142,14 +144,25 @@ test('CMS migration is isolated, idempotent, and protects document revisions and
     'cms_documents_published_revision_id_fkey', 'cms_documents_draft_revision_id_fkey',
     'cms_documents_scheduled_revision_id_fkey',
   ]) assert.match(migration, new RegExp(constraint));
+  assert.match(migration, /UNIQUE \(content_type, source_id\)/);
+  assert.match(migration, /UNIQUE \(document_id, version\)/);
   assert.match(migration, /storage_key UUID/);
   assert.match(migration, /jsonb_typeof\(metadata\) = 'object'/);
   assert.match(migration, /byte_size BIGINT NOT NULL CHECK \(byte_size BETWEEN 1 AND 52428800\)/);
-  assert.match(migration, /CREATE INDEX IF NOT EXISTS cms_documents_content_type_source_id_idx/);
+  for (const mimeType of ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'video/mp4', 'video/webm', 'video/quicktime']) {
+    assert.match(migration, new RegExp(`'${mimeType}'`));
+  }
+  assert.doesNotMatch(migration, /cms_documents_content_type_source_id_idx/);
   assert.match(migration, /CREATE INDEX IF NOT EXISTS cms_revisions_status_idx/);
   assert.doesNotMatch(migration, /ALTER TABLE (?!cms_)/);
   assert.match(verification, /'015_cms_editor'/);
   assert.match(verification, /cms_documents/);
   assert.match(verification, /cms_revisions/);
   assert.match(verification, /cms_assets/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON cms_documents, cms_revisions, cms_assets TO portal_api/);
+  assert.match(provision, /GRANT SELECT ON cms_documents, cms_revisions TO portal_cron/);
+  assert.ok(migrate.indexOf('await grantRuntimeAccess(client)') > migrate.indexOf('for (const file of files)'));
+  for (const privilege of ['api_cms_documents_privileges', 'api_cms_revisions_privileges', 'api_cms_assets_privileges', 'cron_cms_documents_privileges', 'cron_cms_revisions_privileges']) {
+    assert.match(verification, new RegExp(privilege));
+  }
 });

@@ -165,9 +165,19 @@ try {
   const privileges = await pool.query(`SELECT
     has_table_privilege('portal_cron', 'public.autocard_cards', 'SELECT') AS cards_select,
     has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT,DELETE') AS media_select_delete,
+    has_table_privilege('portal_api', 'public.cms_documents', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_documents,
+    has_table_privilege('portal_api', 'public.cms_revisions', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_revisions,
+    has_table_privilege('portal_api', 'public.cms_assets', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_assets,
+    has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT') AS cron_cms_documents,
+    has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT') AS cron_cms_revisions,
     has_table_privilege('portal_cron', 'public.audit_log', 'SELECT,INSERT,UPDATE,DELETE') AS audit_privileges`);
   assert.equal(privileges.rows[0].cards_select, true);
   assert.equal(privileges.rows[0].media_select_delete, true);
+  assert.equal(privileges.rows[0].api_cms_documents, true);
+  assert.equal(privileges.rows[0].api_cms_revisions, true);
+  assert.equal(privileges.rows[0].api_cms_assets, true);
+  assert.equal(privileges.rows[0].cron_cms_documents, true);
+  assert.equal(privileges.rows[0].cron_cms_revisions, true);
   assert.equal(privileges.rows[0].audit_privileges, true);
   console.log('migration integration: ok');
 } finally {

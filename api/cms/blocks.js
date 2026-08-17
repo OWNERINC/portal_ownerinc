@@ -69,9 +69,10 @@ function normalizeBlock(block) {
     case 'callout': {
       if (!keysAre(block, new Set(['type', 'tone', 'title', 'text']))) return null;
       const value = text(block.text, 2000);
-      const title = block.title === undefined ? null : text(block.title, 200, { multiline: false });
+      const hasTitle = Object.prototype.hasOwnProperty.call(block, 'title');
+      const title = hasTitle ? text(block.title, 200, { multiline: false }) : null;
       const tone = block.tone === undefined ? 'info' : block.tone;
-      return value && (title === null || title) && ['info', 'warning', 'success'].includes(tone)
+      return value && (!hasTitle || title) && ['info', 'warning', 'success'].includes(tone)
         ? { type: 'callout', tone, ...(title ? { title } : {}), text: value } : null;
     }
     case 'image': {

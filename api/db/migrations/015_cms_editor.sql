@@ -66,7 +66,5 @@ BEGIN
 END
 $$;
 
-CREATE INDEX IF NOT EXISTS cms_documents_content_type_source_id_idx
-  ON cms_documents (content_type, source_id);
 CREATE INDEX IF NOT EXISTS cms_revisions_status_idx
   ON cms_revisions (status, created_at DESC);
