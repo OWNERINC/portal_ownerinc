@@ -4,7 +4,7 @@ Atualize este arquivo antes de encerrar uma sessão relevante.
 
 ## Objetivo Atual
 
-Validar os Gates 0 a 5 em ambiente de homologação com Firebase, SendGrid,
+Validar os Gates 0 a 5 em ambiente de homologação com Firebase, Resend SMTP,
 PostgreSQL, proxy TLS e restore real antes do primeiro lançamento.
 
 ## Estado
@@ -25,7 +25,7 @@ PostgreSQL, proxy TLS e restore real antes do primeiro lançamento.
 1. Criar o commit de release no repositório Ownerinc após revisar o diff.
 2. Executar migrations e jornadas autenticadas em homologação.
 3. Validar criação, revogação, bootstrap e erasure no Firebase real.
-4. Simular crashes do worker e respostas do SendGrid.
+4. Simular crashes do worker e respostas do Resend SMTP.
 5. Executar backup, restore, smoke e rollback em ambiente descartável.
 6. Validar mobile, zoom, teclado, NVDA e VoiceOver.
 7. Obter aprovação jurídica da política de privacidade e retenção.

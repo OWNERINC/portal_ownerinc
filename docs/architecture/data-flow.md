@@ -13,7 +13,7 @@
 1. O cron executa diariamente às 08:00 no fuso de São Paulo.
 2. O serviço seleciona lembretes ativos para o dia corrente.
 3. Os destinatários são resolvidos a partir dos usuários no PostgreSQL.
-4. O SendGrid envia o email.
+4. O Resend SMTP envia o email.
 5. O resultado é registrado em `notifications_log`.
 
 ## Uploads

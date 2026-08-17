@@ -14,8 +14,8 @@ function errorMessage(error) {
 }
 
 function isRetryableUnsent(error) {
-  const status = error?.response?.statusCode;
-  return status === 429 || status >= 500;
+  const status = Number(error?.response?.statusCode ?? error?.responseCode);
+  return status === 421 || status === 429 || status === 451 || (status >= 500 && status !== 535);
 }
 
 async function claim(db, reminderId, userUid, scheduledDate, channel) {

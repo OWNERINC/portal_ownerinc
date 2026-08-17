@@ -98,7 +98,7 @@ fluxo correspondente no Portal.
 | CRUD de lembretes | Operacional | Validação, auditoria, ativação e canais para `manageReminders`. `api/routes/reminders.js`, `public/js/reminders.js` |
 | Público individual | Operacional | Formulário permite informar UIDs explícitos, preserva a audiência na edição e rejeita valores vazios, duplicados ou acima do limite. `api/route-utils.js`, `cron/scheduling.js`, `public/js/reminders.js` |
 | Agendamento mensal | Operacional | Worker roda no fuso de Brasília; dias 29 a 31 usam o último dia de meses curtos e o catch-up é limitado a sete dias. `cron/index.js`, `cron/scheduling.js` |
-| Envio por email | Operacional | SendGrid com registro prévio, isolamento por destinatário e até três tentativas para 429/5xx. Depende de credenciais externas válidas. `cron/checkReminders.js`, `cron/sendEmail.js` |
+| Envio por email | Operacional | Resend SMTP com registro prévio, isolamento por destinatário e até três tentativas para 421/451, 429 e 5xx. Depende de credenciais externas válidas. `cron/checkReminders.js`, `cron/sendEmail.js` |
 | Ledger e idempotência | Operacional | Uma ocorrência por lembrete, usuário, data e canal, com estados `pending`, `sending`, `sent`, `failed` e `skipped`. `api/db/schema.sql`, `cron/checkReminders.js` |
 | Histórico de entregas | Operacional | Interface expõe filtros por status, canal, usuário e data, com paginação server-side. `api/routes/reminders.js`, `public/js/reminders.js` |
 | Saúde do worker | Parcial | Heartbeat e healthcheck possuem estado de alerta deduplicado e envio SMTP configurável; falta homologação com caixa operacional real. `cron/health.js`, `cron/sendOperationalAlert.js`, `api/db/migrations/011_cron_alert_state.sql` |

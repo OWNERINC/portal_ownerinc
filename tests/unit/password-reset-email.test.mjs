@@ -4,8 +4,13 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
+const nodemailer = require('../../api/node_modules/nodemailer');
+const sentMessages = [];
+const transport = { sendMail: async (message) => { sentMessages.push(message); } };
+const originalCreateTransport = nodemailer.createTransport;
+nodemailer.createTransport = () => transport;
 const {
-  invitationMessage, passwordResetMessage, smtpOptions,
+  invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpOptions,
 } = require('../../api/integrations/password-reset-email');
 
 const env = {
@@ -68,6 +73,26 @@ test('invitation HTML escapes the recipient name', () => {
   assert.doesNotMatch(message.html, /<Ana>/);
 });
 
+test('transactional mailers deliver both messages through Nodemailer without network access', async () => {
+  sentMessages.length = 0;
+  await sendPasswordReset({ to: 'reset@example.com', link: 'https://example.com/reset', env });
+  await sendInvitation({ to: 'invite@example.com', name: 'Ana', link: 'https://example.com/invite', env });
+
+  assert.equal(sentMessages.length, 2);
+  assert.equal(sentMessages[0].to, 'reset@example.com');
+  assert.equal(sentMessages[0].subject, 'Defina sua senha — Portal Interno Ownerinc');
+  assert.equal(sentMessages[1].to, 'invite@example.com');
+  assert.equal(sentMessages[1].subject, 'Seu convite para o Portal Interno Ownerinc');
+  assert.deepEqual(sentMessages.map(({ from }) => from), [
+    { name: 'Portal Interno Ownerinc', address: 'portal@example.com' },
+    { name: 'Portal Interno Ownerinc', address: 'portal@example.com' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(sentMessages), /re_test_secret/);
+  const source = await readFile('api/integrations/password-reset-email.js', 'utf8');
+  assert.match(source, /transporter\.sendMail\(message\)/);
+  assert.doesNotMatch(source, /@sendgrid\/mail|SENDGRID_|sendGrid/i);
+});
+
 test('public reset flow uses the Portal API and avoids account enumeration copy', async () => {
   const login = await readFile('public/js/login.js', 'utf8');
   const route = await readFile('api/routes/auth.js', 'utf8');
@@ -75,4 +100,8 @@ test('public reset flow uses the Portal API and avoids account enumeration copy'
   assert.doesNotMatch(login, /sendPasswordResetEmail/);
   assert.match(route, /res\.status\(202\)\.json\(accepted\)/);
   assert.match(route, /max: 5/);
+});
+
+test.after(() => {
+  nodemailer.createTransport = originalCreateTransport;
 });

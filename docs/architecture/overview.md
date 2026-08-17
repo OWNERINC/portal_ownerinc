@@ -15,7 +15,7 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 ## Dependências externas
 
 - Firebase Auth autentica usuários e valida tokens na API.
-- SendGrid entrega emails gerados pelo serviço de lembretes.
+- Resend SMTP entrega emails gerados pelo serviço de lembretes.
 - Z-API está prevista, mas permanece desativada.
 
 ## Decisões

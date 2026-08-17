@@ -5,8 +5,17 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const { dueDateKeys, normalizeDateKey, reminderMatchesDate, resolveTargets } = require('../../cron/scheduling');
+const { isRetryableUnsent } = require('../../cron/checkReminders');
 const { retentionDays } = require('../../cron/retention');
 const { autocardMediaRetentionDays, isSafeStorageKey } = require('../../cron/autocard-media-retention');
+
+test('reminder retries include transient SMTP responses without retrying permanent auth errors', () => {
+  assert.equal(isRetryableUnsent({ response: { statusCode: 429 } }), true);
+  assert.equal(isRetryableUnsent({ response: { statusCode: 503 } }), true);
+  assert.equal(isRetryableUnsent({ responseCode: 421 }), true);
+  assert.equal(isRetryableUnsent({ responseCode: 451 }), true);
+  assert.equal(isRetryableUnsent({ responseCode: 535 }), false);
+});
 
 test('catch-up uses Brasilia time and is bounded to seven completed schedule dates', () => {
   assert.deepEqual(

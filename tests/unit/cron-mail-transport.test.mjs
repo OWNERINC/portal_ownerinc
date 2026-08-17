@@ -47,6 +47,29 @@ test('reminders and operational alerts send through the shared transport', async
   assert.doesNotMatch(JSON.stringify(messages), /unit-test-password/);
 });
 
+test('operational alert failures return false and log only a bounded error', async () => {
+  const transport = getMailTransport(env);
+  transport.sendMail = async () => {
+    throw new Error('x'.repeat(400));
+  };
+  const errors = [];
+  const originalError = console.error;
+  console.error = (...args) => errors.push(args);
+
+  try {
+    assert.equal(await sendOperationalAlert({ subject: 'Worker failed', text: 'Failure text' }, env), false);
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].length, 1);
+  const payload = JSON.parse(errors[0][0]);
+  assert.equal(payload.service, 'cron');
+  assert.equal(payload.event, 'operational_alert_failed');
+  assert.equal(payload.error.length, 300);
+});
+
 test('cron source and dependency manifest contain no SendGrid setup', async () => {
   const index = await readFile('cron/index.js', 'utf8');
   const sendEmailSource = await readFile('cron/sendEmail.js', 'utf8');

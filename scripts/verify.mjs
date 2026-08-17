@@ -65,7 +65,7 @@ async function checkSecrets() {
   const output = run('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
   const excluded = new Set(['.env.example', 'public/js/firebase-config.js']);
   const textExtensions = new Set(['.js', '.mjs', '.json', '.html', '.css', '.md', '.sql', '.yml', '.yaml', '.toml', '.sh']);
-  const secret = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|SENDGRID_API_KEY=SG\.[A-Za-z0-9_-]{10,}|POSTGRES_PASSWORD=\S{12,}/;
+  const secret = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|SENDGRID_API_KEY=SG\.[A-Za-z0-9_-]{10,}|SMTP_PASSWORD=re_[A-Za-z0-9_-]{10,}|POSTGRES_PASSWORD=\S{12,}/;
 
   for (const file of output.split('\0').filter(Boolean)) {
     if (excluded.has(file) || !textExtensions.has(path.extname(file))) continue;
