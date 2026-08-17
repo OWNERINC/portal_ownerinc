@@ -95,8 +95,9 @@ try {
     '012_autocard_media_crop',
     '013_job_title_catalog',
   ]);
-  const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE ORDER BY lower(name)');
-  assert.deepEqual(activeTitles.rows.map(({ name }) => name), canonicalNames.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR'))));
+  const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE');
+  const sortCatalogNames = (names) => names.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR')));
+  assert.deepEqual(sortCatalogNames(activeTitles.rows.map(({ name }) => name)), sortCatalogNames(canonicalNames));
   const mappedTitles = await pool.query(`SELECT jt.name, COUNT(u.uid)::integer AS assigned_users
     FROM job_titles jt LEFT JOIN users u ON u.job_title_id = jt.id
     WHERE lower(jt.name) IN ('analista de dho', 'gerente de dho', 'analista de rh sênior', 'gerente de rh')
