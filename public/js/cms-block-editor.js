@@ -17,15 +17,15 @@ function input(label, value, onInput, { tag = 'input', type = 'text', options = 
   return element('label', { className: 'cms-field' }, [element('span', { className: 'form-label', text: label }), field]);
 }
 
-function checkbox(label, checked, onChange) {
-  const field = element('input', { type: 'checkbox' });
+function checkbox(label, checked, onChange, name) {
+  const field = element('input', { type: 'checkbox', ...(name ? { name } : {}) });
   field.checked = checked === true;
   field.addEventListener('change', () => onChange(field.checked));
   return element('label', { className: 'cms-checkbox' }, [field, element('span', { text: label })]);
 }
 
 function assetUpload(label, accept, block, onChange) {
-  const field = element('input', { className: 'form-input', type: 'file', accept });
+  const field = element('input', { className: 'form-input', type: 'file', name: 'asset', accept });
   field.addEventListener('change', async () => {
     const file = field.files?.[0];
     if (!file) return;
@@ -68,32 +68,32 @@ function setField(block, key, value, onChange) {
 function fieldsFor(block, onChange) {
   const fields = [];
   if (block.type === 'heading') {
-    fields.push(input('Texto', block.text, value => setField(block, 'text', value, onChange)));
-    fields.push(input('Nível', block.level, value => setField(block, 'level', Number(value), onChange), { type: 'number', min: '1', max: '6', inputmode: 'numeric' }));
+    fields.push(input('Texto', block.text, value => setField(block, 'text', value, onChange), { name: 'text' }));
+    fields.push(input('Nível', block.level, value => setField(block, 'level', Number(value), onChange), { name: 'level', type: 'number', min: '1', max: '6', inputmode: 'numeric' }));
   }
-  if (block.type === 'paragraph') fields.push(input('Texto', block.text, value => setField(block, 'text', value, onChange), { tag: 'textarea', rows: '5' }));
+  if (block.type === 'paragraph') fields.push(input('Texto', block.text, value => setField(block, 'text', value, onChange), { name: 'text', tag: 'textarea', rows: '5' }));
   if (block.type === 'list') {
-    fields.push(input('Itens, um por linha', block.items?.join('\n'), value => setField(block, 'items', value.split(/\r?\n/), onChange), { tag: 'textarea', rows: '5' }));
-    fields.push(checkbox('Lista ordenada', block.ordered, value => setField(block, 'ordered', value, onChange)));
+    fields.push(input('Itens, um por linha', block.items?.join('\n'), value => setField(block, 'items', value.split(/\r?\n/), onChange), { name: 'items', tag: 'textarea', rows: '5' }));
+    fields.push(checkbox('Lista ordenada', block.ordered, value => setField(block, 'ordered', value, onChange), 'ordered'));
   }
   if (block.type === 'callout') {
-    fields.push(input('Tom', block.tone, value => setField(block, 'tone', value, onChange), { tag: 'select', options: [['info', 'Informação'], ['warning', 'Alerta'], ['success', 'Sucesso']] }));
-    fields.push(input('Título opcional', block.title, value => setField(block, 'title', value, onChange)));
-    fields.push(input('Texto', block.text, value => setField(block, 'text', value, onChange), { tag: 'textarea', rows: '4' }));
+    fields.push(input('Tom', block.tone, value => setField(block, 'tone', value, onChange), { name: 'tone', tag: 'select', options: [['info', 'Informação'], ['warning', 'Alerta'], ['success', 'Sucesso']] }));
+    fields.push(input('Título opcional', block.title, value => setField(block, 'title', value, onChange), { name: 'title' }));
+    fields.push(input('Texto', block.text, value => setField(block, 'text', value, onChange), { name: 'text', tag: 'textarea', rows: '4' }));
   }
   if (block.type === 'image') {
-    fields.push(input('ID do arquivo', block.asset_id, value => setField(block, 'asset_id', value, onChange), { autocomplete: 'off' }));
-    fields.push(input('Texto alternativo', block.alt, value => setField(block, 'alt', value, onChange)));
+    fields.push(input('ID do arquivo', block.asset_id, value => setField(block, 'asset_id', value, onChange), { name: 'asset_id', autocomplete: 'off' }));
+    fields.push(input('Texto alternativo', block.alt, value => setField(block, 'alt', value, onChange), { name: 'alt', autocomplete: 'off' }));
     fields.push(assetUpload('imagem', 'image/jpeg,image/png,image/webp', block, onChange));
   }
   if (block.type === 'link') {
-    fields.push(input('Rótulo', block.label, value => setField(block, 'label', value, onChange)));
-    fields.push(input('URL HTTPS', block.url, value => setField(block, 'url', value, onChange), { inputmode: 'url' }));
-    fields.push(checkbox('Abrir em nova aba', block.new_tab, value => setField(block, 'new_tab', value, onChange)));
+    fields.push(input('Rótulo', block.label, value => setField(block, 'label', value, onChange), { name: 'label', autocomplete: 'off' }));
+    fields.push(input('URL HTTPS', block.url, value => setField(block, 'url', value, onChange), { name: 'url', autocomplete: 'url', inputmode: 'url' }));
+    fields.push(checkbox('Abrir em nova aba', block.new_tab, value => setField(block, 'new_tab', value, onChange), 'new_tab'));
   }
   if (block.type === 'pdf') {
-    fields.push(input('ID do arquivo', block.asset_id, value => setField(block, 'asset_id', value, onChange), { autocomplete: 'off' }));
-    fields.push(input('Título', block.title, value => setField(block, 'title', value, onChange)));
+    fields.push(input('ID do arquivo', block.asset_id, value => setField(block, 'asset_id', value, onChange), { name: 'asset_id', autocomplete: 'off' }));
+    fields.push(input('Título', block.title, value => setField(block, 'title', value, onChange), { name: 'title', autocomplete: 'off' }));
     fields.push(assetUpload('PDF', 'application/pdf', block, onChange));
   }
   if (block.type === 'video') {
@@ -105,11 +105,15 @@ function fieldsFor(block, onChange) {
         delete block.asset_id;
         setField(block, 'url', value, onChange);
       }
-    }, { inputmode: 'url' }));
-    fields.push(input('Título opcional', block.title, value => setField(block, 'title', value, onChange)));
+    }, { name: 'url', autocomplete: 'url', inputmode: 'url' }));
+    fields.push(input('Título opcional', block.title, value => setField(block, 'title', value, onChange), { name: 'title', autocomplete: 'off' }));
     fields.push(assetUpload('vídeo', 'video/mp4,video/webm,video/quicktime', block, onChange));
   }
   return fields;
+}
+
+function blockSummary(block) {
+  return block.type === 'divider' ? 'Separador visual' : block.text || block.title || block.label || block.url || block.asset_id || 'Configure este bloco no inspector.';
 }
 
 export function serializeBlocks(blocks) {
@@ -170,14 +174,25 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
       if (Number.isInteger(source)) move(source, index);
     });
     row.addEventListener('keydown', event => {
+      if (event.target === row && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        selectedIndex = index;
+        onSelect(index, block);
+        return;
+      }
       if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
       event.preventDefault();
       move(index, index + (event.key === 'ArrowUp' ? -1 : 1));
     });
-    row.addEventListener('click', () => onSelect(index, block));
+    row.addEventListener('click', event => {
+      if (event.target === row) {
+        selectedIndex = index;
+        onSelect(index, block);
+      }
+    });
 
     const actions = element('div', { className: 'cms-block-actions' }, [
-      element('span', { className: 'cms-drag-handle', text: 'Arraste para reordenar', tabindex: '0' }),
+      element('span', { className: 'cms-drag-handle', text: 'Arraste para reordenar' }),
       element('span', { className: 'cms-block-type', text: LABELS[block.type] }),
       element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Subir', 'aria-label': `Mover ${LABELS[block.type]} para cima`, disabled: index === 0 ? '' : null, on: { click: () => move(index, index - 1) } }),
       element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Descer', 'aria-label': `Mover ${LABELS[block.type]} para baixo`, disabled: index === blocks.length - 1 ? '' : null, on: { click: () => move(index, index + 1) } }),
@@ -185,7 +200,11 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
       element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Remover', 'aria-label': `Remover ${LABELS[block.type]}`, on: { click: () => { blocks.splice(index, 1); render(); changed(); } } }),
     ]);
     row.append(actions);
-    row.append(element('p', { className: 'cms-block-summary', text: block.type === 'divider' ? 'Separador visual' : block.text || block.title || block.label || block.url || block.asset_id || 'Configure este bloco no inspector.' }));
+    row.append(element('button', {
+      className: 'cms-block-select', type: 'button', 'aria-pressed': String(selectedIndex === index),
+      'aria-label': `Editar configurações de ${LABELS[block.type]} ${index + 1}`, text: blockSummary(block),
+      on: { click: () => { selectedIndex = index; onSelect(index, block); } },
+    }));
     return row;
   }
 

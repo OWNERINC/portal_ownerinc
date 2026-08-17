@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [cmsHtml, cms, editor, renderer, css, admin, knowledge, academy, benefits, reminders, announcements, announcementsHtml, dashboard] = await Promise.all([
+const [cmsHtml, cms, editor, renderer, css, admin, knowledge, academy, benefits, reminders, announcements, announcementsHtml, dashboard, auth, layout] = await Promise.all([
   readFile('public/cms.html', 'utf8'),
   readFile('public/js/cms.js', 'utf8'),
   readFile('public/js/cms-block-editor.js', 'utf8'),
@@ -16,6 +16,8 @@ const [cmsHtml, cms, editor, renderer, css, admin, knowledge, academy, benefits,
   readFile('public/js/announcements.js', 'utf8'),
   readFile('public/announcements.html', 'utf8'),
   readFile('public/js/dashboard.js', 'utf8'),
+  readFile('public/js/auth.js', 'utf8'),
+  readFile('public/css/layout.css', 'utf8'),
 ]);
 
 test('CMS entry point is authenticated, linked from admin, and has responsive editor regions', () => {
@@ -64,12 +66,56 @@ test('CMS actions use the existing API contracts and keep generic failure states
   assert.match(cms, /scheduled_at/);
 });
 
+test('autosave coalesces in-flight edits and rejects stale document responses', () => {
+  assert.match(cms, /let saveQueued = false/);
+  assert.match(cms, /let editVersion = 0/);
+  assert.match(cms, /if \(saving\) \{\s*saveQueued = true/);
+  assert.match(cms, /requestVersion = editVersion/);
+  assert.match(cms, /editVersion !== requestVersion/);
+  assert.match(cms, /requestToken !== selectionToken/);
+  assert.match(cms, /actionBusy = true/);
+  assert.match(cms, /publishButton\.disabled = !active/);
+});
+
+test('CMS navigation links are permission-gated before the API remains authoritative', () => {
+  assert.match(auth, /dataset\.cmsAccess/);
+  assert.match(auth, /manageKnowledge.*manageAcademy.*manageBenefits.*manageReminders/s);
+  assert.match(layout, /\.cms-link, \.cms-entry-link \{ display: none/);
+  assert.match(layout, /html\[data-cms-access="true"\] \.cms-link/);
+  assert.match(admin, /class="cms-entry-link/);
+  assert.match(cms, /\.filter\(\(\[, , permission\]\) => can\(user, permission\)\)/);
+});
+
+test('reminder content uses the safe renderer while retaining description fallback', () => {
+  assert.match(reminders, /renderBlocks\(content, reminder\.content_blocks/);
+  assert.match(reminders, /fallbackText: reminder\.description/);
+  assert.match(dashboard, /renderBlocks\(content, reminder\.content_blocks/);
+  assert.match(dashboard, /fallbackText: reminder\.description/);
+});
+
+test('private preview URLs are revoked and media reserve intrinsic layout space', () => {
+  assert.match(renderer, /export function cleanupRenderedBlocks/);
+  assert.match(renderer, /URL\.revokeObjectURL/);
+  assert.match(renderer, /MutationObserver/);
+  assert.match(css, /aspect-ratio: 16 \/ 9/);
+});
+
+test('block selection has semantic keyboard controls and visible focus', () => {
+  assert.match(editor, /className: 'cms-block-select'/);
+  assert.match(editor, /aria-pressed/);
+  assert.match(editor, /event\.key === 'Enter'/);
+  assert.match(editor, /event\.key === ' '/);
+  assert.match(css, /\.cms-block-select:focus-visible/);
+  assert.match(cmsHtml, /name="cms-document"/);
+  assert.match(cmsHtml, /name="title" autocomplete="off"/);
+});
+
 test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', () => {
   for (const source of [knowledge, academy, benefits, announcements]) {
     assert.match(source, /content_blocks/);
     assert.match(source, /renderBlocks/);
   }
-  assert.match(reminders, /blocksToText\(reminder\.content_blocks\)/);
+  assert.match(reminders, /renderBlocks\(content, reminder\.content_blocks/);
   assert.match(announcementsHtml, /id="main-content"/);
   assert.match(dashboard, /\/api\/announcements\?limit=3&offset=0/);
   assert.match(dashboard, /announcements-preview/);

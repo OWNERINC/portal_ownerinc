@@ -112,8 +112,9 @@ async function loadReminders() {
         text: occurrence.days === 0 ? 'Hoje' : `Em ${occurrence.days} ${occurrence.days === 1 ? 'dia' : 'dias'}`,
       });
       const top = element('div', { className: 'card-heading' }, [heading, badge]);
-      const description = element('p', { className: 'card-copy', text: reminder.description || '' });
-      remindersContainer.append(element('article', { className: 'card' }, [top, description]));
+      const content = element('div', { className: 'card-copy reminder-content' });
+      renderBlocks(content, reminder.content_blocks, { fallbackText: reminder.description || '' });
+      remindersContainer.append(element('article', { className: 'card' }, [top, content]));
     });
   } catch {
     showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);

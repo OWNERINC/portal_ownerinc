@@ -51,6 +51,12 @@ let documentView = null;
 let editor = null;
 let saveTimer = null;
 let saving = false;
+let saveQueued = false;
+let dirty = false;
+let editVersion = 0;
+let selectionToken = 0;
+let actionBusy = false;
+let loading = false;
 const documentsByType = new Map();
 const sourcesByType = new Map();
 
@@ -61,6 +67,21 @@ function setError(message = '') {
 
 function setSaveState(message) {
   saveState.textContent = message;
+}
+
+function mutationBusy() {
+  return saving || actionBusy || loading;
+}
+
+function navigationBusy() {
+  return mutationBusy() || dirty;
+}
+
+function syncBusyState() {
+  newDocumentButton.disabled = !TYPES.length || navigationBusy();
+  contentTypes.querySelectorAll('button').forEach(button => { button.disabled = navigationBusy(); });
+  documentList.querySelectorAll('button').forEach(button => { button.disabled = navigationBusy(); });
+  updateInspector();
 }
 
 function statusFor(doc) {
@@ -80,7 +101,27 @@ function renderTypeNav() {
   TYPES.forEach(([type, label]) => contentTypes.append(element('button', {
     className: 'cms-content-type', type: 'button', text: label,
     'aria-current': String(type === selectedType),
-    on: { click: () => { selectedType = type; selectedDocument = null; documentView = null; newDocumentForm.hidden = true; editor = null; showState(editorRoot, 'Selecione um documento na coluna ao lado.'); showState(previewRoot, 'A prévia aparecerá aqui.'); renderTypeNav(); renderDocumentList(); updateInspector(); loadDocuments(); } },
+    ...(navigationBusy() ? { disabled: '' } : {}),
+    on: { click: () => {
+      if (navigationBusy()) return;
+      selectionToken += 1;
+      clearTimeout(saveTimer);
+      saveQueued = false;
+      dirty = false;
+      editVersion = 0;
+      selectedType = type;
+      selectedDocument = null;
+      documentView = null;
+      newDocumentForm.hidden = true;
+      editor = null;
+      showState(editorRoot, 'Selecione um documento na coluna ao lado.');
+      showState(previewRoot, 'A prévia aparecerá aqui.');
+      showState(blockSettings, 'Selecione um bloco para editar suas configurações.');
+      renderTypeNav();
+      renderDocumentList();
+      updateInspector();
+      loadDocuments();
+    } },
   })));
 }
 
@@ -93,6 +134,7 @@ function renderDocumentList() {
   }
   docs.forEach(doc => documentList.append(element('button', {
     className: 'cms-document-item', type: 'button', 'aria-current': String(doc.id === selectedDocument),
+    ...(navigationBusy() ? { disabled: '' } : {}),
     on: { click: () => loadDocument(doc.id) },
   }, [element('span', { className: 'cms-document-title', text: doc.title }), element('span', { className: 'cms-document-meta' }, [statusBadge(doc), element('span', { text: doc.category || 'Sem categoria' })])] )));
 }
@@ -107,12 +149,22 @@ function updateInspector() {
   selectedTypeNode.textContent = doc ? TYPE_LABELS[doc.content_type] || doc.content_type : '—';
   categoryNode.textContent = doc?.category || '—';
   publishedNode.textContent = doc?.published_at ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(doc.published_at)) : '—';
-  const active = !!doc;
+  const active = !!doc && !mutationBusy();
   saveDraftButton.disabled = !active;
   publishButton.disabled = !active;
   unpublishButton.disabled = !active || !doc.published_revision_id;
   scheduleButton.disabled = !active;
   unscheduleButton.disabled = !active || !doc.scheduled_revision_id;
+}
+
+function markDirty(nextBlocks) {
+  editVersion += 1;
+  dirty = true;
+  setSaveState(serializeBlocks(nextBlocks) ? 'Alterações pendentes' : 'Corrija os campos do bloco');
+  syncBusyState();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveDraft(), 900);
+  renderBlocks(previewRoot, nextBlocks, { fallbackText: 'A prévia será exibida após corrigir os blocos.' });
 }
 
 function renderEditor(blocks = []) {
@@ -126,18 +178,12 @@ function renderEditor(blocks = []) {
         return;
       }
       clear(blockSettings).append(createBlockSettings(block, () => {
-        setSaveState('Alterações pendentes');
-        clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => saveDraft(), 900);
-        renderBlocks(previewRoot, editor.getBlocks(), { fallbackText: 'A prévia será exibida após corrigir os blocos.' });
+        markDirty(editor.getBlocks());
       }));
       blockSettings.dataset.selectedIndex = String(index);
     },
     onChange(nextBlocks) {
-      setSaveState(serializeBlocks(nextBlocks) ? 'Alterações pendentes' : 'Corrija os campos do bloco');
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => saveDraft(), 900);
-      renderBlocks(previewRoot, nextBlocks, { fallbackText: 'A prévia será exibida após corrigir os blocos.' });
+      markDirty(nextBlocks);
     },
   });
   renderBlocks(previewRoot, blocks, { fallbackText: 'Adicione blocos para visualizar a prévia.' });
@@ -145,13 +191,17 @@ function renderEditor(blocks = []) {
 
 async function loadDocuments() {
   if (!selectedType) return;
+  const type = selectedType;
+  const requestToken = selectionToken;
   showState(documentList, 'Carregando documentos…');
   try {
-    const result = await fetchAPIPage(`/api/cms/documents?type=${encodeURIComponent(selectedType)}&limit=100&offset=0`);
-    documentsByType.set(selectedType, result.data || []);
+    const result = await fetchAPIPage(`/api/cms/documents?type=${encodeURIComponent(type)}&limit=100&offset=0`);
+    if (requestToken !== selectionToken || type !== selectedType) return;
+    documentsByType.set(type, result.data || []);
     renderDocumentList();
     setError('');
   } catch {
+    if (requestToken !== selectionToken || type !== selectedType) return;
     showState(documentList, 'Não foi possível carregar os documentos.', loadDocuments);
   }
 }
@@ -179,10 +229,20 @@ async function loadSources() {
 }
 
 async function loadDocument(id) {
+  if (navigationBusy()) return;
+  const requestToken = ++selectionToken;
+  selectedDocument = id;
+  documentView = null;
+  loading = true;
+  updateInspector();
+  syncBusyState();
   setSaveState('Carregando…');
   try {
     const view = await fetchAPI(`/api/cms/documents/${encodeURIComponent(id)}`);
-    selectedDocument = id;
+    if (requestToken !== selectionToken || selectedDocument !== id) return;
+    dirty = false;
+    editVersion = 0;
+    saveQueued = false;
     documentView = view;
     const blocks = view.draft?.blocks || view.schedule?.revision?.blocks || view.published?.blocks || [];
     renderEditor(blocks);
@@ -191,45 +251,83 @@ async function loadDocument(id) {
     setSaveState('Salvo');
     setError('');
   } catch {
+    if (requestToken !== selectionToken || selectedDocument !== id) return;
     setError('Não foi possível abrir este documento. Tente novamente.');
     setSaveState('Erro ao carregar');
+  } finally {
+    if (requestToken === selectionToken) {
+      loading = false;
+      syncBusyState();
+    }
   }
 }
 
 async function saveDraft() {
-  if (!documentView || !editor || saving) return null;
+  if (!documentView || !editor) return null;
+  if (saving) {
+    saveQueued = true;
+    return null;
+  }
+  const requestToken = selectionToken;
+  const requestDocument = selectedDocument;
+  const requestVersion = editVersion;
   const blocks = serializeBlocks(editor.getBlocks());
   if (!blocks) {
     setSaveState('Corrija os campos do bloco');
     return null;
   }
   saving = true;
+  syncBusyState();
   setSaveState('Salvando rascunho…');
+  let savedResult = null;
   try {
-    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(selectedDocument)}/draft`, {
+    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/draft`, {
       method: 'PUT', body: JSON.stringify({ blocks }),
     });
+    if (requestToken !== selectionToken || requestDocument !== selectedDocument) return null;
     documentView.document = result.document;
     documentView.draft = result.revision;
     updateInspector();
     renderDocumentList();
-    setSaveState('Rascunho salvo');
+    if (editVersion === requestVersion) {
+      dirty = false;
+      setSaveState('Rascunho salvo');
+    } else {
+      dirty = true;
+      saveQueued = true;
+      setSaveState('Alterações pendentes');
+    }
     setError('');
-    return result;
+    savedResult = result;
   } catch {
-    setSaveState('Não foi possível salvar o rascunho');
-    setError('Não foi possível salvar o rascunho. Suas alterações continuam na tela.');
-    return null;
+    if (requestToken === selectionToken && requestDocument === selectedDocument) {
+      if (editVersion !== requestVersion) saveQueued = true;
+      setSaveState('Não foi possível salvar o rascunho');
+      setError('Não foi possível salvar o rascunho. Suas alterações continuam na tela.');
+    }
   } finally {
     saving = false;
+    syncBusyState();
+    if (saveQueued && requestToken === selectionToken && requestDocument === selectedDocument) {
+      saveQueued = false;
+      const queuedResult = await saveDraft();
+      if (!queuedResult) savedResult = null;
+    }
   }
+  return savedResult;
 }
 
 async function publishDocument() {
+  if (!documentView || mutationBusy()) return;
+  const requestToken = selectionToken;
+  const requestDocument = selectedDocument;
+  actionBusy = true;
+  syncBusyState();
   const saved = await saveDraft();
-  if (!saved) return;
   try {
-    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(selectedDocument)}/publish`, { method: 'POST', body: JSON.stringify({}) });
+    if (!saved || requestToken !== selectionToken || requestDocument !== selectedDocument) return;
+    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/publish`, { method: 'POST', body: JSON.stringify({}) });
+    if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
     documentView.published = result.revision;
     documentView.draft = null;
@@ -238,14 +336,22 @@ async function publishDocument() {
     setSaveState('Publicado');
     showToast('Documento publicado.');
   } catch {
-    setError('Não foi possível publicar o documento.');
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível publicar o documento.');
+  } finally {
+    actionBusy = false;
+    syncBusyState();
   }
 }
 
 async function unpublishDocument() {
-  if (!documentView?.document?.published_revision_id) return;
+  if (!documentView?.document?.published_revision_id || mutationBusy()) return;
+  const requestToken = selectionToken;
+  const requestDocument = selectedDocument;
+  actionBusy = true;
+  syncBusyState();
   try {
-    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(selectedDocument)}/unpublish`, { method: 'POST', body: JSON.stringify({}) });
+    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/unpublish`, { method: 'POST', body: JSON.stringify({}) });
+    if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
     documentView.published = null;
     updateInspector();
@@ -253,13 +359,16 @@ async function unpublishDocument() {
     setSaveState('Despublicado');
     showToast('Documento despublicado.');
   } catch {
-    setError('Não foi possível despublicar o documento.');
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível despublicar o documento.');
+  } finally {
+    actionBusy = false;
+    syncBusyState();
   }
 }
 
 async function scheduleDocument(event) {
   event.preventDefault();
-  if (!documentView) return;
+  if (!documentView || mutationBusy()) return;
   const value = document.getElementById('scheduled-at').value;
   if (!value) return;
   const scheduledAt = new Date(`${value}:00Z`);
@@ -267,12 +376,17 @@ async function scheduleDocument(event) {
     setError('Informe uma data futura válida para o agendamento.');
     return;
   }
+  const requestToken = selectionToken;
+  const requestDocument = selectedDocument;
+  actionBusy = true;
+  syncBusyState();
   const saved = await saveDraft();
-  if (!saved) return;
   try {
-    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(selectedDocument)}/schedule`, {
+    if (!saved || requestToken !== selectionToken || requestDocument !== selectedDocument) return;
+    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/schedule`, {
       method: 'POST', body: JSON.stringify({ scheduled_at: scheduledAt.toISOString() }),
     });
+    if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
     documentView.schedule = { revision_id: result.revision.id, scheduled_at: result.document.scheduled_at, revision: result.revision };
     documentView.draft = null;
@@ -281,14 +395,22 @@ async function scheduleDocument(event) {
     setSaveState('Agendado');
     showToast('Documento agendado.');
   } catch {
-    setError('Não foi possível agendar o documento. Escolha uma data futura.');
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível agendar o documento. Escolha uma data futura.');
+  } finally {
+    actionBusy = false;
+    syncBusyState();
   }
 }
 
 async function unscheduleDocument() {
-  if (!documentView?.document?.scheduled_revision_id) return;
+  if (!documentView?.document?.scheduled_revision_id || mutationBusy()) return;
+  const requestToken = selectionToken;
+  const requestDocument = selectedDocument;
+  actionBusy = true;
+  syncBusyState();
   try {
-    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(selectedDocument)}/schedule`, { method: 'DELETE' });
+    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/schedule`, { method: 'DELETE' });
+    if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
     documentView.draft = documentView.schedule?.revision || null;
     documentView.schedule = null;
@@ -298,7 +420,10 @@ async function unscheduleDocument() {
     setSaveState('Agendamento cancelado');
     showToast('Agendamento cancelado.');
   } catch {
-    setError('Não foi possível cancelar o agendamento.');
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível cancelar o agendamento.');
+  } finally {
+    actionBusy = false;
+    syncBusyState();
   }
 }
 

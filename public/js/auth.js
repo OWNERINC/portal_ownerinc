@@ -15,8 +15,14 @@ function applyAutoCardNavigation(user) {
   document.documentElement.dataset.autocardAccess = String(user?.autocard_access === true);
 }
 
+function applyCmsNavigation(user) {
+  const cmsPermissions = ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders'];
+  document.documentElement.dataset.cmsAccess = String(cmsPermissions.some(permission => can(user, permission)));
+}
+
 function clearVerifiedRole() {
   delete document.documentElement.dataset.portalRole;
+  delete document.documentElement.dataset.cmsAccess;
   try {
     sessionStorage.removeItem('ownerinc-verified-role');
   } catch (_) {
@@ -117,6 +123,7 @@ export async function requireAuth(requireAdmin = false) {
   }
   applyVerifiedRole(user);
   applyAutoCardNavigation(user);
+  applyCmsNavigation(user);
   if (requireAdmin && user.role !== 'admin') {
     window.location.replace('./dashboard.html');
     return null;

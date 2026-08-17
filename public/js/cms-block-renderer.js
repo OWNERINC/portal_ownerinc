@@ -4,6 +4,32 @@ import { clear, element, safeHttpUrl } from './ui.js';
 export const BLOCK_TYPES = ['heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video'];
 const BLOCK_TYPE_SET = new Set(BLOCK_TYPES);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const renderStates = new WeakMap();
+
+function renderState(container) {
+  if (!renderStates.has(container)) renderStates.set(container, { token: Symbol('cms-render'), urls: new Set(), observer: null });
+  return renderStates.get(container);
+}
+
+export function cleanupRenderedBlocks(container) {
+  const state = renderStates.get(container);
+  if (!state) return;
+  state.token = Symbol('cms-render');
+  state.urls.forEach(url => { if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url); });
+  state.urls.clear();
+}
+
+function observeContainer(container, state) {
+  if (state.observer || typeof MutationObserver === 'undefined' || !container.parentNode) return;
+  const parent = container.parentNode;
+  state.observer = new MutationObserver(() => {
+    if (container.isConnected) return;
+    cleanupRenderedBlocks(container);
+    state.observer.disconnect();
+    state.observer = null;
+  });
+  state.observer.observe(parent, { childList: true, subtree: true });
+}
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -116,11 +142,18 @@ function assetEndpoint(assetId) {
   return `/api/cms/assets/${encodeURIComponent(assetId)}`;
 }
 
-function loadPrivateAsset(node, assetId, label) {
+function loadPrivateAsset(node, assetId, label, state) {
+  const token = state.token;
   fetchAPIAsset(assetEndpoint(assetId)).then(url => {
+    if (token !== state.token || !node.isConnected) {
+      if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+      return;
+    }
+    state.urls.add(url);
     node.src = url;
     node.dataset.loaded = 'true';
   }).catch(() => {
+    if (token !== state.token || !node.isConnected) return;
     node.replaceWith(element('span', { className: 'cms-asset-error', role: 'status', text: `Não foi possível carregar ${label}.` }));
   });
 }
@@ -149,6 +182,9 @@ function renderPdf(container, block) {
 }
 
 export function renderBlocks(container, blocks, { fallbackText = '' } = {}) {
+  cleanupRenderedBlocks(container);
+  const state = renderState(container);
+  observeContainer(container, state);
   const normalized = validateBlocks(blocks);
   clear(container);
   if (!normalized || !normalized.length) {
@@ -165,7 +201,7 @@ export function renderBlocks(container, blocks, { fallbackText = '' } = {}) {
     if (block.type === 'image') {
       const image = element('img', { className: 'cms-block cms-image', alt: block.alt, loading: 'lazy' });
       container.append(image);
-      loadPrivateAsset(image, block.asset_id, 'a imagem');
+      loadPrivateAsset(image, block.asset_id, 'a imagem', state);
     }
     if (block.type === 'divider') container.append(element('hr', { className: 'cms-block cms-divider' }));
     if (block.type === 'link') container.append(element('a', {
@@ -177,7 +213,7 @@ export function renderBlocks(container, blocks, { fallbackText = '' } = {}) {
       const video = element('video', { className: 'cms-block cms-video', controls: '', preload: 'metadata' });
       if (block.title) video.setAttribute('aria-label', block.title);
       if (block.url) video.src = block.url;
-      else loadPrivateAsset(video, block.asset_id, 'o vídeo');
+      else loadPrivateAsset(video, block.asset_id, 'o vídeo', state);
       container.append(video);
     }
   });

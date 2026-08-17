@@ -65,11 +65,11 @@
             <button id="new-document" class="btn btn-primary btn-sm" type="button">Novo</button>
           </div>
           <nav id="content-types" class="cms-content-types" aria-label="Tipos de conteúdo"></nav>
-          <form id="new-document-form" class="cms-new-document" hidden>
+          <form id="new-document-form" class="cms-new-document" name="cms-document" autocomplete="off" hidden>
             <h3>Novo documento</h3>
-            <label class="cms-field"><span class="form-label">Título</span><input id="new-title" class="form-input" type="text" maxlength="200" required></label>
-            <label class="cms-field"><span class="form-label">Categoria</span><input id="new-category" class="form-input" type="text" maxlength="100"></label>
-            <label id="new-source-field" class="cms-field"><span class="form-label">Registro vinculado</span><select id="new-source" class="form-select" required></select></label>
+            <label class="cms-field"><span class="form-label">Título</span><input id="new-title" class="form-input" name="title" autocomplete="off" type="text" maxlength="200" required></label>
+            <label class="cms-field"><span class="form-label">Categoria</span><input id="new-category" class="form-input" name="category" autocomplete="off" type="text" maxlength="100"></label>
+            <label id="new-source-field" class="cms-field"><span class="form-label">Registro vinculado</span><select id="new-source" class="form-select" name="source_id" autocomplete="off" required></select></label>
             <div class="cms-form-actions"><button id="cancel-new-document" class="btn btn-ghost btn-sm" type="button">Cancelar</button><button class="btn btn-primary btn-sm" type="submit">Criar</button></div>
           </form>
           <div id="document-list" class="cms-document-list" aria-live="polite"></div>
@@ -101,8 +101,8 @@
               <button id="publish-document" class="btn btn-ghost" type="button" disabled>Publicar</button>
               <button id="unpublish-document" class="btn btn-ghost" type="button" disabled>Despublicar</button>
             </div>
-            <form id="schedule-form" class="cms-schedule-form">
-              <label class="cms-field"><span class="form-label">Publicar em (UTC)</span><input id="scheduled-at" class="form-input" type="datetime-local" required></label>
+            <form id="schedule-form" class="cms-schedule-form" name="cms-schedule" autocomplete="off">
+              <label class="cms-field"><span class="form-label">Publicar em (UTC)</span><input id="scheduled-at" class="form-input" name="scheduled_at" autocomplete="off" type="datetime-local" required></label>
               <button id="schedule-document" class="btn btn-ghost" type="submit" disabled>Agendar</button>
               <button id="unschedule-document" class="btn btn-ghost" type="button" disabled>Cancelar agendamento</button>
             </form>
