@@ -16,6 +16,11 @@ const SOURCE_TABLES = {
   benefit: 'benefits',
   reminder: 'reminders',
 };
+const ASSET_MIMES = {
+  image: new Set(['image/jpeg', 'image/png', 'image/webp']),
+  pdf: new Set(['application/pdf']),
+  video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
+};
 
 class CmsRouteError extends Error {
   constructor(status, code) {
@@ -108,6 +113,33 @@ async function documentView(db, document) {
   };
 }
 
+async function validateAssetReferences(db, blocks) {
+  const references = new Map();
+  for (const block of blocks) {
+    if (!ASSET_MIMES[block.type] || !block.asset_id) continue;
+    const types = references.get(block.asset_id) || new Set();
+    types.add(block.type);
+    references.set(block.asset_id, types);
+  }
+  if (!references.size) return;
+
+  const { rows } = await db.query(
+    `SELECT id, mime_type, storage_key, byte_size
+       FROM cms_assets
+      WHERE id = ANY($1::uuid[])
+        AND storage_key IS NOT NULL
+        AND byte_size BETWEEN 1 AND 52428800`,
+    [[...references.keys()]],
+  );
+  const assets = new Map(rows.map((asset) => [asset.id, asset]));
+  for (const [assetId, types] of references) {
+    const asset = assets.get(assetId);
+    if (!asset || [...types].some((type) => !ASSET_MIMES[type].has(asset.mime_type))) {
+      throw new CmsRouteError(400, 'asset_invalid');
+    }
+  }
+}
+
 function sendCmsError(error, req, res, next) {
   if (!(error instanceof CmsRouteError)) return next(error);
   if (error.status === 404) return res.status(404).json({ error: 'CMS document not found.', requestId: req.id });
@@ -151,17 +183,26 @@ router.get('/documents', authMiddleware, async (req, res, next) => {
   }
   values.push(page.limit, page.offset);
   try {
-    const { rows } = await pool.query(
-      `SELECT id, content_type, source_id, title, category, published_revision_id,
-              draft_revision_id, scheduled_revision_id, scheduled_at, published_at,
-              created_by, updated_by, created_at, updated_at
-         FROM cms_documents
-        WHERE ${conditions.join(' AND ')}
-        ORDER BY updated_at DESC, id
-        LIMIT $${values.length - 1} OFFSET $${values.length}`,
-      values,
-    );
-    res.set('X-Total-Count', String(rows.length)).json(rows);
+    const filterValues = values.slice(0, -2);
+    const [{ rows: [{ count }] }, { rows }] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*)::integer AS count
+           FROM cms_documents
+          WHERE ${conditions.join(' AND ')}`,
+        filterValues,
+      ),
+      pool.query(
+        `SELECT id, content_type, source_id, title, category, published_revision_id,
+                draft_revision_id, scheduled_revision_id, scheduled_at, published_at,
+                created_by, updated_by, created_at, updated_at
+           FROM cms_documents
+          WHERE ${conditions.join(' AND ')}
+          ORDER BY updated_at DESC, id
+          LIMIT $${values.length - 1} OFFSET $${values.length}`,
+        values,
+      ),
+    ]);
+    res.set('X-Total-Count', String(count)).json(rows);
   } catch (error) {
     next(error);
   }
@@ -229,6 +270,7 @@ router.put('/documents/:id/draft', authMiddleware, async (req, res, next) => {
     const result = await withAudit(pool, req, 'cms.revision.draft', 'cms_revision', async (db) => {
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
+      await validateAssetReferences(db, blocks);
       const { rows: versions } = await db.query(
         'SELECT COALESCE(MAX(version), 0) + 1 AS version FROM cms_revisions WHERE document_id = $1',
         [document.id],
@@ -352,6 +394,33 @@ router.post('/documents/:id/unpublish', authMiddleware, async (req, res, next) =
                     draft_revision_id, scheduled_revision_id, scheduled_at, published_at,
                     created_by, updated_by, created_at, updated_at`,
         [document.id, req.user.uid],
+      );
+      return rows[0];
+    }, { targetId: req.params.id });
+    if (!result) return res.status(404).json({ error: 'CMS document not found.', requestId: req.id });
+    res.json({ document: result });
+  } catch (error) {
+    sendCmsError(error, req, res, next);
+  }
+});
+
+router.delete('/documents/:id/schedule', authMiddleware, async (req, res, next) => {
+  if (!uuid(req.params.id) || !emptyBody(req.body)) return invalid(req, res);
+  try {
+    const result = await withAudit(pool, req, 'cms.document.unschedule', 'cms_document', async (db) => {
+      const document = await findDocument(db, req.user, req.params.id, true);
+      if (!document) return null;
+      if (!document.scheduled_revision_id) throw new CmsRouteError(409, 'not_scheduled');
+      await db.query("UPDATE cms_revisions SET status = 'draft' WHERE id = $1 AND status = 'scheduled'", [document.scheduled_revision_id]);
+      const { rows } = await db.query(
+        `UPDATE cms_documents
+            SET scheduled_revision_id = NULL, scheduled_at = NULL, draft_revision_id = $2,
+                updated_by = $3, updated_at = NOW()
+          WHERE id = $1
+          RETURNING id, content_type, source_id, title, category, published_revision_id,
+                    draft_revision_id, scheduled_revision_id, scheduled_at, published_at,
+                    created_by, updated_by, created_at, updated_at`,
+        [document.id, document.scheduled_revision_id, req.user.uid],
       );
       return rows[0];
     }, { targetId: req.params.id });

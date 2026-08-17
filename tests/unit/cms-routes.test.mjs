@@ -5,6 +5,7 @@ import test from 'node:test';
 const cms = await readFile('api/routes/cms.js', 'utf8');
 const assets = await readFile('api/routes/cms-assets.js', 'utf8');
 const index = await readFile('api/index.js', 'utf8');
+const nginx = await readFile('nginx/nginx.conf', 'utf8');
 const permissions = await readFile('api/cms/permissions.js', 'utf8');
 
 test('CMS routes are authenticated and mounted at the required API boundaries', () => {
@@ -30,7 +31,7 @@ test('document endpoints validate query and body contracts and use Task 1 permis
 });
 
 test('document mutations are transactional, audited, and preserve revision immutability', () => {
-  for (const action of ['cms.document.create', 'cms.revision.draft', 'cms.document.publish', 'cms.document.schedule', 'cms.document.unpublish', 'cms.revision.delete']) {
+  for (const action of ['cms.document.create', 'cms.revision.draft', 'cms.document.publish', 'cms.document.schedule', 'cms.document.unpublish', 'cms.document.unschedule', 'cms.revision.delete']) {
     assert.match(cms, new RegExp(`withAudit\\(pool, req, '${action}'`), action);
   }
   assert.match(cms, /SELECT COALESCE\(MAX\(version\), 0\) \+ 1/);
@@ -44,6 +45,12 @@ test('document mutations are transactional, audited, and preserve revision immut
   assert.match(cms, /timestamp > Date\.now\(\)/);
   assert.match(cms, /revision\.status !== 'draft'/);
   assert.match(cms, /status = 'draft' RETURNING id, document_id/);
+  assert.match(cms, /router\.delete\('\/documents\/:id\/schedule', authMiddleware/);
+  assert.match(cms, /cms\.document\.unschedule/);
+  assert.match(cms, /UPDATE cms_revisions SET status = 'draft'/);
+  assert.match(cms, /validateAssetReferences\(db, blocks\)/);
+  assert.match(cms, /FROM cms_assets[\s\S]*storage_key IS NOT NULL[\s\S]*byte_size BETWEEN/);
+  assert.match(cms, /ASSET_MIMES\[type\]\.has\(asset\.mime_type\)/);
 });
 
 test('protected assets validate signatures, use UUID storage keys, audit uploads, and hide filesystem paths', () => {
@@ -57,5 +64,24 @@ test('protected assets validate signatures, use UUID storage keys, audit uploads
   assert.match(assets, /fs\.createReadStream\(path\.join\(privateDirectory, asset\.storage_key\)\)/);
   assert.doesNotMatch(assets, /json\([^\n]*storage_key/);
   assert.doesNotMatch(assets, /res\.json\([^\n]*uploadDirectory/);
+  assert.match(assets, /CROSS JOIN LATERAL jsonb_array_elements\(r\.blocks\)/);
+  assert.match(assets, /r\.status IN \('draft', 'published', 'scheduled'\)/);
+  assert.match(assets, /published_revision_id === row\.revision_id/);
+  assert.match(assets, /academy_active === true/);
+  assert.match(assets, /benefit_active === true/);
+  assert.match(assets, /reminderIsVisible\(row, user\)/);
+  assert.doesNotMatch(assets, /asset\.uploaded_by === user\.uid/);
   assert.match(index, /uploads\/cms-private/);
+});
+
+test('CMS list totals count all matching documents and Nginx scopes the large upload body limit', () => {
+  assert.match(cms, /SELECT COUNT\(\*\)::integer AS count/);
+  assert.match(cms, /res\.set\('X-Total-Count', String\(count\)\)/);
+  assert.doesNotMatch(cms, /String\(rows\.length\)/);
+
+  const cmsLocation = nginx.indexOf('location ^~ /api/cms/assets');
+  const genericApi = nginx.indexOf('location /api/');
+  assert.ok(cmsLocation >= 0 && cmsLocation < genericApi);
+  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 50m;[\s\S]*proxy_pass \$api_upstream/);
+  assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
 });

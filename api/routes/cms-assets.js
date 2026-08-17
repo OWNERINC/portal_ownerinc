@@ -14,6 +14,11 @@ const uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads';
 const privateDirectory = path.join(uploadDirectory, 'cms-private');
 const MAX_ASSET_SIZE = 50 * 1024 * 1024;
 const CONTENT_TYPES = ['knowledge', 'academy', 'benefit', 'announcement', 'reminder'];
+const ASSET_MIMES = {
+  image: new Set(['image/jpeg', 'image/png', 'image/webp']),
+  pdf: new Set(['application/pdf']),
+  video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
+};
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_ASSET_SIZE, files: 1 },
@@ -45,17 +50,54 @@ function assetResponse(asset) {
   };
 }
 
+function audienceFor(user) {
+  return user.contract_type === 'pj' || user.is_pj ? 'pj' : 'clt';
+}
+
+function reminderIsVisible(row, user) {
+  const targetUsers = row.reminder_target_users;
+  return row.reminder_active === true && (
+    targetUsers === 'all'
+    || targetUsers === audienceFor(user)
+    || (Array.isArray(targetUsers) && targetUsers.includes(user.uid))
+  );
+}
+
+function publishedIsVisible(row, user) {
+  if (row.content_type === 'knowledge' || row.content_type === 'announcement') return true;
+  if (row.content_type === 'academy') return row.academy_active === true;
+  if (row.content_type === 'benefit') return row.benefit_active === true;
+  if (row.content_type === 'reminder') return reminderIsVisible(row, user);
+  return false;
+}
+
+function referenceIsReadable(row, user, asset) {
+  if (!ASSET_MIMES[row.block_type]?.has(asset.mime_type)) return false;
+  if (canManageCms(user, row.content_type) && ['draft', 'published', 'scheduled'].includes(row.status)) return true;
+  return row.status === 'published'
+    && row.published_revision_id === row.revision_id
+    && publishedIsVisible(row, user);
+}
+
 async function canReadAsset(user, asset) {
-  if (!manageable(user)) return false;
-  if (asset.uploaded_by === user.uid) return true;
   const { rows } = await pool.query(
-    `SELECT d.content_type
+    `SELECT d.content_type, d.published_revision_id, r.id AS revision_id, r.status,
+            block->>'type' AS block_type,
+            academy.active AS academy_active,
+            benefits.active AS benefit_active,
+            reminders.active AS reminder_active,
+            reminders.target_users AS reminder_target_users
        FROM cms_documents d
        JOIN cms_revisions r ON r.document_id = d.id
-      WHERE r.blocks @> $1::jsonb`,
-    [JSON.stringify([{ asset_id: asset.id }])],
+       CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
+       LEFT JOIN academy ON d.content_type = 'academy' AND academy.id = d.source_id
+       LEFT JOIN benefits ON d.content_type = 'benefit' AND benefits.id = d.source_id
+       LEFT JOIN reminders ON d.content_type = 'reminder' AND reminders.id = d.source_id
+      WHERE block->>'asset_id' = $1
+        AND r.status IN ('draft', 'published', 'scheduled')`,
+    [asset.id],
   );
-  return rows.some(({ content_type }) => canManageCms(user, content_type));
+  return rows.some((row) => referenceIsReadable(row, user, asset));
 }
 
 router.post('/', authMiddleware, upload.single('asset'), async (req, res, next) => {
@@ -95,7 +137,7 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
     const { rows } = await pool.query(
-      `SELECT id, storage_key, original_name, mime_type, byte_size, uploaded_by, created_at
+      `SELECT id, storage_key, original_name, mime_type, byte_size, created_at
          FROM cms_assets WHERE id = $1`,
       [req.params.id],
     );

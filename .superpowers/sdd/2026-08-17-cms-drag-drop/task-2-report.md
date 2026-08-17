@@ -35,8 +35,28 @@ Implemented Task 2 on branch `feature/cms-drag-drop`.
 - `npm run verify`: passed, 112 tests; syntax, security, and compose checks passed.
 - `git diff --check`: passed.
 
-## Concerns
+## Initial Concerns and Resolution
 
-- The current Nginx configuration has a 100 KB global client body limit. It will prevent production uploads larger than 100 KB even though the CMS API and schema allow assets up to 50 MB. A later deployment/configuration task should add a narrowly scoped authenticated CMS upload limit without creating a public asset path.
+- The initial 100 KB Nginx body-limit concern was resolved in the review follow-up with a narrowly scoped 50 MB CMS asset proxy location.
 - Focused tests are source-contract tests and do not run PostgreSQL transactions or real multipart uploads, as required by the brief. PostgreSQL migration and end-to-end upload validation remain deployment/integration work.
+- Scheduled revision promotion and published-content consumption remain Task 3 responsibilities.
+
+## Review Follow-up
+
+- Added a narrowly scoped `location ^~ /api/cms/assets` before generic `/api/` in `nginx/nginx.conf` with a 50 MB body limit, upload rate limiting, same-origin protection, and the existing API proxy/authentication boundary. No public CMS asset location was added.
+- Changed asset reads to require a matching CMS revision block. Published assets follow authenticated area visibility: knowledge and announcements are authenticated-user visible, academy and benefits require active source records, and reminders require active audience matching. Draft and scheduled assets require the matching CMS management permission. The uploader alone no longer grants access.
+- Added draft-transaction asset validation for referenced UUIDs, usable storage keys/byte sizes, and image/PDF/video MIME compatibility.
+- Corrected `X-Total-Count` to use a separate count query over all matching documents.
+- Added `DELETE /api/cms/documents/:id/schedule`, which archives the scheduled state back to a draft, clears scheduling pointers, and audits `cms.document.unschedule`.
+- Added focused contracts for asset visibility, block/MIME validation, list totals, schedule cancellation, and Nginx ordering/body limits.
+
+## Review Follow-up Verification
+
+- `node --test tests/unit/cms-routes.test.mjs tests/unit/api-routes.test.mjs tests/unit/api-security.test.mjs`: passed, 25 tests.
+- `npm run verify`: passed, 113 tests; syntax, security, compose, and Nginx invariant checks passed.
+- `git diff --check`: passed.
+
+## Remaining Concerns
+
+- Focused tests remain source-contract tests and do not run PostgreSQL transactions or real multipart uploads. End-to-end visibility, audience, and storage-file checks remain integration/deployment work.
 - Scheduled revision promotion and published-content consumption remain Task 3 responsibilities.
