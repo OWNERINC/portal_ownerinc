@@ -769,11 +769,20 @@ test('AutoCard employee mobile layout bounds long names and preserves the footer
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenSpace), /employee body budget must remain positive/);
 });
 
-test('AutoCard access uses the exact DHO job title allowlist', () => {
-  for (const title of ['Analista de DHO', 'Assistente de DHO', 'Coordenador de DHO', 'Gerente de DHO']) {
+test('AutoCard access uses the exact RH job title allowlist', () => {
+  for (const title of ['Analista de RH Sênior', 'Gerente de RH']) {
     assert.equal(canUseAutoCard(dho(title)), true, title);
   }
-  for (const title of ['Analista de RH', 'DHO Manager', 'Analista de DHO Jr', 'Gerente de Pessoas', '']) {
+  for (const title of [
+    'Analista de RH',
+    'Analista de DHO',
+    'Assistente de DHO',
+    'Coordenador de DHO',
+    'Gerente de DHO',
+    'DHO Manager',
+    'Gerente de Pessoas',
+    '',
+  ]) {
     assert.equal(canUseAutoCard(dho(title)), false, title);
   }
   assert.equal(canUseAutoCard({ role: 'admin', permissions: { superAdmin: true }, job_title: 'Diretor' }), false);

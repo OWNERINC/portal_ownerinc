@@ -9,10 +9,8 @@ const PERMISSIONS = new Set([
 ]);
 
 const AUTOCARD_JOB_TITLES = new Set([
-  'analista de dho',
-  'assistente de dho',
-  'coordenador de dho',
-  'gerente de dho',
+  'analista de rh sênior',
+  'gerente de rh',
 ]);
 
 function isSuperAdmin(user) {

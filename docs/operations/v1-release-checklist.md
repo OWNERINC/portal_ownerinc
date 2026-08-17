@@ -38,12 +38,10 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 ## AutoCard Access
 
-- [ ] Analista de DHO acessa o AutoCard.
-- [ ] Assistente de DHO acessa o AutoCard.
-- [ ] Coordenador de DHO acessa o AutoCard.
-- [ ] Gerente de DHO acessa o AutoCard.
-- [ ] Usuário sem cargo DHO recebe acesso negado pela API.
-- [ ] Admin sem cargo DHO continua sem acesso.
+- [ ] Analista de RH Sênior acessa o AutoCard.
+- [ ] Gerente de RH acessa o AutoCard.
+- [ ] Usuário sem título aprovado recebe acesso negado pela API.
+- [ ] Admin sem título aprovado continua sem acesso.
 - [x] O AutoCard aparece dentro do `page-body` com sidebar e topbar do Portal.
 - [x] Criação, histórico, edição, duplicação, exclusão, upload e exportação funcionam
   na aceitação manual autenticada.
@@ -102,7 +100,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Base de Conhecimento, Academy e Benefícios passam.
 - [ ] Lembretes e histórico de entregas passam.
 - [ ] Admin e Ouvidoria passam.
-- [x] AutoCard passa para cargo DHO.
+- [x] AutoCard passa para `Analista de RH Sênior` e `Gerente de RH`.
 - [ ] Sólides permanece desligada.
 
 ## Monitoring and Alerts
