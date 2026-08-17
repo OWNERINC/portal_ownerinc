@@ -14,6 +14,7 @@ const expectedVersions = [
   '011_cron_alert_state',
   '012_autocard_media_crop',
   '013_job_title_catalog',
+  '015_cms_editor',
 ];
 
 async function verifyMigrations() {
@@ -27,8 +28,17 @@ async function verifyMigrations() {
     const result = await pool.query(`SELECT to_regclass('public.job_titles') AS job_titles,
       to_regclass('public.autocard_cards') AS autocard_cards,
       to_regclass('public.autocard_media') AS autocard_media,
+      to_regclass('public.cms_documents') AS cms_documents,
+      to_regclass('public.cms_revisions') AS cms_revisions,
+      to_regclass('public.cms_assets') AS cms_assets,
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'job_title_id') AS user_job_title_column,
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'autocard_cards' AND column_name = 'media_crop' AND is_nullable = 'NO') AS autocard_media_crop_not_null,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_documents_content_type_check') AS cms_content_type_check,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_revisions_status_check') AS cms_revision_status_check,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_revisions_blocks_check') AS cms_revision_blocks_check,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_documents_published_revision_id_fkey') AS cms_published_revision_fk,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_documents_draft_revision_id_fkey') AS cms_draft_revision_fk,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_documents_scheduled_revision_id_fkey') AS cms_scheduled_revision_fk,
       has_table_privilege('portal_api', 'public.job_titles', 'SELECT,INSERT,UPDATE,DELETE') AS api_job_title_privileges,
       has_table_privilege('portal_api', 'public.autocard_cards', 'SELECT,INSERT,UPDATE,DELETE') AS api_autocard_cards_privileges,
       has_table_privilege('portal_api', 'public.autocard_media', 'SELECT,INSERT,UPDATE,DELETE') AS api_autocard_media_privileges,
@@ -38,17 +48,26 @@ async function verifyMigrations() {
     if (result.rows[0].job_titles !== 'job_titles'
       || result.rows[0].autocard_cards !== 'autocard_cards'
       || result.rows[0].autocard_media !== 'autocard_media'
+      || result.rows[0].cms_documents !== 'cms_documents'
+      || result.rows[0].cms_revisions !== 'cms_revisions'
+      || result.rows[0].cms_assets !== 'cms_assets'
       || result.rows[0].user_job_title_column !== true
       || result.rows[0].autocard_media_crop_not_null !== true
+      || result.rows[0].cms_content_type_check !== true
+      || result.rows[0].cms_revision_status_check !== true
+      || result.rows[0].cms_revision_blocks_check !== true
+      || result.rows[0].cms_published_revision_fk !== true
+      || result.rows[0].cms_draft_revision_fk !== true
+      || result.rows[0].cms_scheduled_revision_fk !== true
       || result.rows[0].api_job_title_privileges !== true
       || result.rows[0].api_autocard_cards_privileges !== true
       || result.rows[0].api_autocard_media_privileges !== true
       || result.rows[0].cron_autocard_cards_privileges !== true
       || result.rows[0].cron_autocard_media_privileges !== true
       || result.rows[0].cron_audit_privileges !== true) {
-      throw new Error('Job title, AutoCard schema, or runtime privileges are incomplete');
-    }
-    console.log('migration verification: 013_job_title_catalog ok');
+       throw new Error('Job title, AutoCard, or CMS schema/runtime privileges are incomplete');
+     }
+     console.log('migration verification: 015_cms_editor ok');
   } finally {
     await pool.end();
   }

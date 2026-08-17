@@ -29,6 +29,7 @@ try {
     '011_cron_alert_state',
     '012_autocard_media_crop',
     '013_job_title_catalog',
+    '015_cms_editor',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
@@ -94,6 +95,7 @@ try {
     '011_cron_alert_state',
     '012_autocard_media_crop',
     '013_job_title_catalog',
+    '015_cms_editor',
   ]);
   const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE');
   const sortCatalogNames = (names) => names.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR')));
@@ -122,9 +124,12 @@ try {
   const tables = await pool.query(`SELECT to_regclass('public.audit_log') AS audit,
     to_regclass('public.cron_status') AS cron, to_regclass('public.notifications_log') AS notifications,
     to_regclass('public.solides_employee_links') AS solides_links,
-     to_regclass('public.job_titles') AS job_titles,
-     to_regclass('public.autocard_cards') AS autocard_cards,
-     to_regclass('public.autocard_media') AS autocard_media`);
+      to_regclass('public.job_titles') AS job_titles,
+      to_regclass('public.autocard_cards') AS autocard_cards,
+      to_regclass('public.autocard_media') AS autocard_media,
+      to_regclass('public.cms_documents') AS cms_documents,
+      to_regclass('public.cms_revisions') AS cms_revisions,
+      to_regclass('public.cms_assets') AS cms_assets`);
   assert.equal(tables.rows[0].audit, 'audit_log');
   assert.equal(tables.rows[0].cron, 'cron_status');
   assert.equal(tables.rows[0].notifications, 'notifications_log');
@@ -132,6 +137,24 @@ try {
   assert.equal(tables.rows[0].job_titles, 'job_titles');
   assert.equal(tables.rows[0].autocard_cards, 'autocard_cards');
   assert.equal(tables.rows[0].autocard_media, 'autocard_media');
+  assert.equal(tables.rows[0].cms_documents, 'cms_documents');
+  assert.equal(tables.rows[0].cms_revisions, 'cms_revisions');
+  assert.equal(tables.rows[0].cms_assets, 'cms_assets');
+  const cmsConstraints = await pool.query(`SELECT conname
+    FROM pg_constraint
+    WHERE conname IN (
+      'cms_documents_content_type_check', 'cms_revisions_status_check',
+      'cms_revisions_blocks_check', 'cms_documents_published_revision_id_fkey',
+      'cms_documents_draft_revision_id_fkey', 'cms_documents_scheduled_revision_id_fkey'
+    ) ORDER BY conname`);
+  assert.deepEqual(cmsConstraints.rows.map(({ conname }) => conname), [
+    'cms_documents_content_type_check',
+    'cms_documents_draft_revision_id_fkey',
+    'cms_documents_published_revision_id_fkey',
+    'cms_documents_scheduled_revision_id_fkey',
+    'cms_revisions_blocks_check',
+    'cms_revisions_status_check',
+  ]);
   const cropColumn = await pool.query(`SELECT is_nullable, column_default
     FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'autocard_cards' AND column_name = 'media_crop'`);

@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -124,4 +124,32 @@ test('job title catalog migration seeds and maps the approved names', async () =
   assert.match(migration, /ON CONFLICT DO NOTHING;/);
   assert.doesNotMatch(migration, /ON CONFLICT DO UPDATE/);
   assert.match(migration, /UPDATE job_titles AS existing[\s\S]*SET name = desired\.name, active = TRUE[\s\S]*lower\(existing\.name\) = lower\(desired\.name\)/);
+});
+
+test('CMS migration is isolated, idempotent, and protects document revisions and assets', async () => {
+  const [migration, verification] = await Promise.all([
+    readFile('api/db/migrations/015_cms_editor.sql', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+  ]);
+  for (const table of ['cms_documents', 'cms_revisions', 'cms_assets']) {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  for (const value of ['knowledge', 'academy', 'benefit', 'announcement', 'reminder', 'draft', 'published', 'scheduled', 'archived']) {
+    assert.match(migration, new RegExp(`'${value}'`));
+  }
+  for (const constraint of [
+    'cms_documents_content_type_check', 'cms_revisions_status_check', 'cms_revisions_blocks_check',
+    'cms_documents_published_revision_id_fkey', 'cms_documents_draft_revision_id_fkey',
+    'cms_documents_scheduled_revision_id_fkey',
+  ]) assert.match(migration, new RegExp(constraint));
+  assert.match(migration, /storage_key UUID/);
+  assert.match(migration, /jsonb_typeof\(metadata\) = 'object'/);
+  assert.match(migration, /byte_size BIGINT NOT NULL CHECK \(byte_size BETWEEN 1 AND 52428800\)/);
+  assert.match(migration, /CREATE INDEX IF NOT EXISTS cms_documents_content_type_source_id_idx/);
+  assert.match(migration, /CREATE INDEX IF NOT EXISTS cms_revisions_status_idx/);
+  assert.doesNotMatch(migration, /ALTER TABLE (?!cms_)/);
+  assert.match(verification, /'015_cms_editor'/);
+  assert.match(verification, /cms_documents/);
+  assert.match(verification, /cms_revisions/);
+  assert.match(verification, /cms_assets/);
 });
