@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(new URL('../api/package.json', import.meta.url));
@@ -11,6 +12,7 @@ await migrate();
 await migrate();
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
+const fixtureUids = [];
 try {
   const versions = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
   assert.deepEqual(versions.rows.map(({ version }) => version), [
@@ -48,6 +50,51 @@ try {
     'Gerente de RH', 'Jovem Aprendiz', 'Líder de Promoção', 'Motorista',
     'Promotor de Vendas', 'Recepcionista', 'Redator', 'SDR', 'Social Media',
   ];
+  const legacyTitles = await pool.query(`SELECT id, name FROM job_titles
+    WHERE lower(name) IN ('analista de dho', 'gerente de dho')`);
+  const legacyTitleIds = new Map(legacyTitles.rows.map(({ name, id }) => [name, id]));
+  assert.ok(legacyTitleIds.has('Analista de DHO'));
+  assert.ok(legacyTitleIds.has('Gerente de DHO'));
+  const fixtureUsers = [
+    {
+      uid: `migration-fixture-analista-${randomUUID()}`,
+      email: `migration-fixture-analista-${randomUUID()}@example.com`,
+      name: 'Migration Fixture Analista DHO',
+      jobTitleId: legacyTitleIds.get('Analista de DHO'),
+    },
+    {
+      uid: `migration-fixture-gerente-${randomUUID()}`,
+      email: `migration-fixture-gerente-${randomUUID()}@example.com`,
+      name: 'Migration Fixture Gerente DHO',
+      jobTitleId: legacyTitleIds.get('Gerente de DHO'),
+    },
+  ];
+  for (const user of fixtureUsers) {
+    fixtureUids.push(user.uid);
+    await pool.query(`INSERT INTO users (uid, email, name, job_title_id)
+      VALUES ($1, $2, $3, $4)`, [user.uid, user.email, user.name, user.jobTitleId]);
+  }
+  const removedCatalogMigration = await pool.query(
+    "DELETE FROM schema_migrations WHERE version = '013_job_title_catalog'",
+  );
+  assert.equal(removedCatalogMigration.rowCount, 1);
+  await migrate();
+  const reappliedVersions = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
+  assert.deepEqual(reappliedVersions.rows.map(({ version }) => version), [
+    '001_initial_schema',
+    '002_reliable_notifications',
+    '003_governance',
+    '004_operational_hardening',
+    '005_notification_claim_state',
+    '006_user_erasure',
+    '007_solides_employee_links',
+    '008_solides_link_hardening',
+    '009_job_titles',
+    '010_autocard',
+    '011_cron_alert_state',
+    '012_autocard_media_crop',
+    '013_job_title_catalog',
+  ]);
   const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE ORDER BY lower(name)');
   assert.deepEqual(activeTitles.rows.map(({ name }) => name), canonicalNames.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR'))));
   const mappedTitles = await pool.query(`SELECT jt.name, COUNT(u.uid)::integer AS assigned_users
@@ -57,11 +104,20 @@ try {
   const mappedByName = new Map(mappedTitles.rows.map((row) => [row.name, row.assigned_users]));
   assert.equal(mappedByName.get('Analista de DHO'), 0);
   assert.equal(mappedByName.get('Gerente de DHO'), 0);
-  assert.ok(mappedByName.has('Analista de RH Sênior'));
-  assert.ok(mappedByName.has('Gerente de RH'));
+  assert.ok(mappedByName.get('Analista de RH Sênior') >= 1);
+  assert.ok(mappedByName.get('Gerente de RH') >= 1);
+  const fixtureAssignments = await pool.query(`SELECT u.uid, jt.name
+    FROM users u JOIN job_titles jt ON jt.id = u.job_title_id
+    WHERE u.uid = ANY($1::text[]) ORDER BY u.uid`, [fixtureUids]);
+  const assignmentsByUid = new Map(fixtureAssignments.rows.map(({ uid, name }) => [uid, name]));
+  assert.equal(assignmentsByUid.get(fixtureUsers[0].uid), 'Analista de RH Sênior');
+  assert.equal(assignmentsByUid.get(fixtureUsers[1].uid), 'Gerente de RH');
   const unmappedDho = await pool.query(`SELECT name, active FROM job_titles
     WHERE lower(name) IN ('assistente de dho', 'coordenador de dho') ORDER BY lower(name)`);
-  for (const row of unmappedDho.rows) assert.equal(row.active, false);
+  assert.deepEqual(unmappedDho.rows, [
+    { name: 'Assistente de DHO', active: false },
+    { name: 'Coordenador de DHO', active: false },
+  ]);
   const tables = await pool.query(`SELECT to_regclass('public.audit_log') AS audit,
     to_regclass('public.cron_status') AS cron, to_regclass('public.notifications_log') AS notifications,
     to_regclass('public.solides_employee_links') AS solides_links,
@@ -91,5 +147,11 @@ try {
   assert.equal(privileges.rows[0].audit_privileges, true);
   console.log('migration integration: ok');
 } finally {
-  await pool.end();
+  try {
+    if (fixtureUids.length) {
+      await pool.query('DELETE FROM users WHERE uid = ANY($1::text[])', [fixtureUids]);
+    }
+  } finally {
+    await pool.end();
+  }
 }
