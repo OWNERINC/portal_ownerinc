@@ -10,8 +10,8 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] `.env` existe somente no ambiente operacional e possui modo `0600`.
 - [ ] PostgreSQL usa URLs distintas para migration, API e cron.
 - [ ] Firebase Admin está configurado somente no servidor.
-- [ ] SendGrid possui chave e remetente válidos.
-- [ ] SMTP possui endereço, porta, usuário, senha e remetente válidos.
+- [ ] Resend SMTP possui chave de API válida em `SMTP_PASSWORD` e remetente verificado.
+- [ ] SMTP possui endereço, porta, usuário e senha válidos.
 - [ ] `OPERATIONAL_ALERT_EMAIL` aponta para uma caixa monitorada.
 - [ ] `S3_BUCKET`, `S3_PREFIX` e endpoint S3-compatible foram revisados.
 - [ ] Nenhum segredo aparece no GitHub, archive, logs ou bundle frontend.
@@ -168,8 +168,8 @@ responsável e evidência; não marque uma validação externa usando apenas
 - **Firebase:** ainda falta comprovar em produção a perda de acesso de usuário
   desativado com token anterior e o comportamento de expiração de sessão.
 - **Email/cron:** convite e recuperação foram homologados; ainda falta validar
-  lembrete SendGrid end-to-end, histórico de entrega, retry e alertas SMTP
-  deduplicados/recuperados.
+  lembrete via Resend SMTP end-to-end, histórico de entrega, retry e alertas
+  SMTP deduplicados/recuperados.
 - **Backup/restore:** o restore PostgreSQL descartável foi validado, mas o
   restore integral de uploads requer execução Linux/Bash e o upload S3 real
   ainda depende do bucket operacional.

@@ -19,7 +19,7 @@ test('compose limits exposure and waits for API readiness', async () => {
 });
 
 test('API and cron require shared Resend SMTP configuration', async () => {
-  const compose = await read('docker-compose.yml');
+  const [compose, example] = await Promise.all([read('docker-compose.yml'), read('.env.example')]);
   const api = compose.match(/\n  api:\n([\s\S]*?)(?=\n  nginx:)/)?.[1] || '';
   const cron = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
   const required = ['SMTP_ADDRESS', 'SMTP_PORT', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'MAILER_SENDER_EMAIL'];
@@ -32,6 +32,10 @@ test('API and cron require shared Resend SMTP configuration', async () => {
 
   assert.doesNotMatch(api, /SENDGRID_API_KEY|SENDGRID_FROM_EMAIL/);
   assert.doesNotMatch(cron, /SENDGRID_API_KEY|SENDGRID_FROM_EMAIL/);
+  assert.match(example, /SMTP_ADDRESS=smtp\.resend\.com/);
+  assert.match(example, /SMTP_PORT=465/);
+  assert.match(example, /SMTP_USERNAME=resend/);
+  assert.match(cron, /OPERATIONAL_ALERT_EMAIL: \$\{OPERATIONAL_ALERT_EMAIL:-\}/);
 });
 
 test('local simulation isolates Firebase and keeps bootstrap SQL typed', async () => {
