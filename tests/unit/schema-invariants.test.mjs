@@ -121,4 +121,7 @@ test('job title catalog migration seeds and maps the approved names', async () =
     assert.match(migration, new RegExp(marker));
   }
   assert.match(migration, /active = FALSE/);
+  assert.match(migration, /ON CONFLICT DO NOTHING;/);
+  assert.doesNotMatch(migration, /ON CONFLICT DO UPDATE/);
+  assert.match(migration, /UPDATE job_titles AS existing[\s\S]*SET name = desired\.name, active = TRUE[\s\S]*lower\(existing\.name\) = lower\(desired\.name\)/);
 });
