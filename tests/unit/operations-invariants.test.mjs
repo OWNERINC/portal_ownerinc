@@ -74,6 +74,8 @@ test('runtime API role can read and manage job titles', async () => {
 test('job title listing hides inactive titles by default', async () => {
   const routes = await read('api/routes/job-titles.js');
   assert.match(routes, /const where = req\.query\.all === 'true' \? '' : 'WHERE jt\.active = TRUE';/);
+  assert.match(routes, /COUNT\(\*\)::integer AS count FROM job_titles jt \$\{where\}/);
+  assert.match(routes, /LEFT JOIN users u ON u\.job_title_id = jt\.id \$\{where\}/);
 });
 
 test('Sólides upstream traffic has per-user read and probe budgets', async () => {
