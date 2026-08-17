@@ -71,6 +71,11 @@ test('runtime API role can read and manage job titles', async () => {
   assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON job_titles TO portal_api/);
 });
 
+test('job title listing hides inactive titles by default', async () => {
+  const routes = await read('api/routes/job-titles.js');
+  assert.match(routes, /const where = req\.query\.all === 'true' \? '' : 'WHERE jt\.active = TRUE';/);
+});
+
 test('Sólides upstream traffic has per-user read and probe budgets', async () => {
   const routes = await readFile('api/routes/solides.js', 'utf8');
   assert.match(routes, /employeeRequestLimit = rateLimit\(\{ windowMs: 5 \* 60 \* 1000, max: 60, key: \(req\) => req\.user\.uid \}\)/);

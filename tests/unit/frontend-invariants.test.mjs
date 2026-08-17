@@ -99,6 +99,13 @@ test('Sólides administration loads every eligible CLT page', async () => {
   assert.match(script, /solides\/admin\/users\?limit=100&offset=\$\{offset\}/);
 });
 
+test('admin job titles come from the API instead of an inline catalog', async () => {
+  const script = await readFile('public/js/admin.js', 'utf8');
+  assert.match(script, /fetchAPIPage\('\/api\/job-titles\?all=true&limit=100&offset=0'\)/);
+  assert.match(script, /jobTitles = result\.data/);
+  assert.doesNotMatch(script, /(?:const|let|var)\s+\w*jobTitles\w*\s*=\s*\[\s*(?:\{|['"])/i);
+});
+
 test('public content pages expose server pagination and category filters', async () => {
   const [knowledge, academy, benefits, pagination] = await Promise.all([
     readFile('public/js/knowledge.js', 'utf8'),
