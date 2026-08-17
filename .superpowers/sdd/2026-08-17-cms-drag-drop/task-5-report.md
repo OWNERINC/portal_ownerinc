@@ -1,0 +1,162 @@
+# Task 5 Report: final verification, documentation, and release readiness
+
+## Status
+
+CONDITIONAL / BLOCKED for release readiness.
+
+The implementation audit passed for the local static and unit-contract checks.
+The PostgreSQL migration verification could not run because
+`MIGRATION_DATABASE_URL` is not configured. Deployment and live validation were
+not run, as required by the task.
+
+## Scope and history
+
+- Worktree: `C:\PROJETOS\_ownerinc_portal\.worktrees\cms-drag-drop`
+- Branch: `feature/cms-drag-drop`
+- Audited range: `ba9c34f..HEAD`
+- HEAD at audit: `fa4b1e4 fix: close cms navigation and media lifecycle gaps`
+- Range contains the CMS storage, API, published-content integration, editor,
+  follow-up fixes, tests, and prior Task 2-4 reports.
+- Worktree was clean before the documentation changes; final changes are
+  limited to the release checklist, changelog, and this report.
+
+## Audit results
+
+### Scope and safety
+
+- The changed-file list contains the expected CMS API, migration, cron,
+  frontend, navigation, Nginx asset boundary, tests, and task reports.
+- No package manifest or lockfile changed, so no dependency was introduced.
+- No deployment script or CI deployment behavior changed.
+- No production credential, private key, API key, or secret pattern was added
+  in the audited diff.
+- The migration only creates CMS tables, constraints, indexes, and grants. No
+  legacy table or legacy content is dropped, truncated, or deleted. The only
+  revision deletion is the explicitly authorized draft-only API operation.
+
+### CMS areas and permissions
+
+- Knowledge maps to `manageKnowledge`.
+- Academy maps to `manageAcademy`.
+- Benefits maps to `manageBenefits`.
+- Announcements map to `manageKnowledge`.
+- Reminders map to `manageReminders`.
+- API document discovery and mutations are scoped to the authenticated user's
+  manageable types. The editor filters the same areas client-side, while the
+  API remains authoritative.
+
+### Publication and fallback behavior
+
+- Draft, published, scheduled, and archived revision states are represented in
+  the migration and API.
+- Published revisions are not edited in place; later edits create a new draft
+  version.
+- Public readers return only a published revision and preserve the existing
+  legacy fields when no valid published CMS blocks exist.
+- Due scheduled revisions are promoted transactionally, the prior publication
+  is archived, and promotion is audited.
+- A future scheduled revision is not returned before its UTC timestamp.
+- Reminder recurrence, audience, channel, claim, retry, and notification-log
+  behavior remains in the existing flow; only the published reminder text is
+  overridden through `blocksToText`, with `description` as fallback.
+
+### Protected assets
+
+- Image, PDF, and video uploads use signature and MIME validation, a 50 MB
+  limit, UUID storage keys, and the existing private upload volume.
+- `/api/cms/assets` requires authentication and checks that the asset is
+  referenced by an authorized CMS revision with the correct visibility rules.
+- The Nginx upload proxy has a scoped large-body limit and no public
+  `/uploads/cms-private` location. The API also denies that static path.
+- Filesystem paths and storage keys are not returned as public asset paths.
+
+### Editor and renderer
+
+- All nine approved block types are available: heading, paragraph, list,
+  callout, image, divider, link, PDF, and video.
+- Server and client validators reject unknown fields/types, unsafe markup,
+  unsafe URLs, malformed asset IDs, and invalid block content.
+- The renderer uses DOM APIs and text properties rather than raw HTML sinks.
+- Native drag-and-drop, keyboard movement, selection semantics, autosave
+  coalescing, dirty-navigation protection, and private object-URL cleanup are
+  covered by tests.
+- The editor has responsive layouts at the desktop, intermediate, and mobile
+  breakpoints, including a mobile horizontal area rail and stacked inspector.
+
+### Resend migration
+
+- The audited CMS range does not modify the Resend SMTP transport or its
+  shared API/cron configuration.
+- The complete verification suite still passes the Resend transport,
+  password-reset, invitation, retry, and no-SendGrid invariants.
+
+## Static scans
+
+- Added-diff secret scan: no private-key, cloud-key, Resend-key, or PostgreSQL
+  credential pattern found. Test fixtures and the existing CI-only integration
+  database fixture were not changed by this range.
+- CMS source raw-HTML scan: no `innerHTML`, `outerHTML`,
+  `insertAdjacentHTML`, `document.write`, `eval`, `new Function`, or `srcdoc`
+  usage found in the CMS renderer/editor/dashboard integration files.
+- Destructive-operation scan: no legacy data destructive operation found.
+
+## Required commands
+
+### `npm run verify`
+
+PASS. All 134 tests passed; syntax, security, and Compose checks passed.
+
+### `npm run test:migrations`
+
+BLOCKED as required by the brief. Exact result:
+
+```text
+Error: MIGRATION_DATABASE_URL is required
+```
+
+No production credential was fabricated or changed.
+
+### `git diff --check`
+
+PASS. No whitespace errors were reported.
+
+## Manual and live acceptance
+
+The authenticated PostgreSQL acceptance flow could not be completed without a
+migration database URL. Deployment, live HTTP checks, browser-authenticated
+CMS flows, and protected PDF validation were intentionally not run.
+
+## Documentation changes
+
+- Added CMS evidence and pending gates to
+  `docs/operations/v1-release-checklist.md`.
+- Added the CMS release note and pending migration/live evidence to
+  `CHANGELOG.md`.
+- This report is the complete Task 5 audit record.
+
+## Blockers
+
+1. `MIGRATION_DATABASE_URL` is missing, so migration execution, second-run
+   idempotency, grants, and PostgreSQL-backed CMS acceptance are unverified.
+2. Authenticated manual acceptance and live smoke validation remain pending.
+3. Deployment remains intentionally not executed.
+
+## Release checklist
+
+- [x] Audit `ba9c34f..HEAD` against the CMS design, plan, product brief, and
+  repository instructions.
+- [x] Verify all five content areas and permission mappings statically.
+- [x] Verify publication, fallback, scheduling, protected assets, responsive
+  editor, safe rendering, and Resend invariants locally.
+- [x] Run `npm run verify` successfully.
+- [x] Run `git diff --check` successfully.
+- [ ] Set `MIGRATION_DATABASE_URL` and rerun `npm run test:migrations`.
+- [ ] Execute authenticated acceptance for all five areas, including a
+  protected PDF and a future scheduled revision.
+- [ ] Deploy and perform live smoke checks after this audit, outside Task 5.
+
+## Commit
+
+Documentation and this report require commit:
+
+`chore: finalize cms release checks`

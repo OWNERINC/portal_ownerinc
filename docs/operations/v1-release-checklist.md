@@ -32,6 +32,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Migration passa em banco vazio.
 - [ ] Migration passa sobre banco existente até `010_autocard`.
 - [ ] Segunda execução não altera nem duplica o ledger.
+- [ ] Migration CMS `015_cms_editor` passa em PostgreSQL e permanece idempotente na segunda execução.
 - [ ] `011_cron_alert_state` existe e possui os grants esperados.
 - [ ] `012_autocard_media_crop` existe e foi validada em PostgreSQL.
 - [ ] Roles `portal_api` e `portal_cron` têm somente os privilégios necessários.
@@ -58,6 +59,14 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Nenhuma tela pública perde registros por limite silencioso de 50 itens.
 - [ ] Admin consegue filtrar Ouvidoria por status e responsável.
 - [ ] Admin consegue navegar o histórico completo de auditoria.
+
+## CMS Drag and Drop
+
+- [x] Verificação estática cobre os cinco tipos de conteúdo CMS e o mapeamento de permissões.
+- [x] Contratos de rascunho, publicação, agendamento, fallback, assets protegidos, editor responsivo e renderer seguro passam em `npm run verify`.
+- [ ] Teste da migration CMS e validação da segunda execução requerem `MIGRATION_DATABASE_URL`.
+- [ ] Aceitação autenticada de criação, prévia, publicação, agendamento, fallback e PDF protegido permanece pendente.
+- [ ] Deploy e validação no ambiente live estão fora desta auditoria.
 
 ## Notifications
 
@@ -140,6 +149,10 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [x] Invariantes estáticas cobrem AutoCard, enquadramento de imagem, retenção
   de mídia, paginação, dashboard, lembretes, filtros administrativos, alertas,
   backup S3 e acessibilidade.
+- [x] Auditoria CMS local: `npm run verify` passou com 134 testes; os scans
+  estáticos de segredos e HTML cru não encontraram problema novo no CMS.
+- [ ] Teste de migration CMS foi bloqueado porque `MIGRATION_DATABASE_URL` não
+  está configurada neste ambiente.
 - [x] Rota canônica `/autocard.html` e redirect legado `/autocard/` foram
   verificados no domínio live após o deploy do commit `fd45dc1`.
 - [x] Aceitação manual autenticada do AutoCard foi concluída: shell, criação,
