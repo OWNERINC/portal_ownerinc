@@ -26,7 +26,42 @@ try {
     '010_autocard',
     '011_cron_alert_state',
     '012_autocard_media_crop',
+    '013_job_title_catalog',
   ]);
+  const canonicalNames = [
+    'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
+    'Analista de Pós-Vendas', 'Analista de RH Sênior',
+    'Analista de Departamento Pessoal', 'Analista Financeiro',
+    'Analista Financeiro Sênior', 'Assistente Administrativo',
+    'Auxiliar de Limpeza', 'CEO', 'Consultor de Vendas',
+    'Consultora de Pós-Vendas', 'Consultora de Pós-Vendas Júnior',
+    'Consultora de Pós-Vendas Pleno', 'Coordenador Central de Férias',
+    'Coordenador de Compras', 'Coordenador de Contratos', 'Coordenador de Sala',
+    'Coordenador Financeiro', 'Coordenador de Pós-Vendas',
+    'Coordenadora Administrativa', 'Coordenadora de Planejamento',
+    'Coordenadora de Projetos', 'Coordenadora de Vendas', 'Design',
+    'Diretor Comercial', 'Diretor de Incorporação', 'Diretor de Marketing',
+    'Engenheiro Civil', 'Especialista de Controladoria',
+    'Especialista de Marketing', 'Garçom', 'Garçom Sênior', 'Garçonete',
+    'Gerente Administrativo', 'Gerente Comercial', 'Gerente de Marketing',
+    'Gerente de Obra', 'Gerente de Pós-Vendas', 'Gerente de Promoção',
+    'Gerente de RH', 'Jovem Aprendiz', 'Líder de Promoção', 'Motorista',
+    'Promotor de Vendas', 'Recepcionista', 'Redator', 'SDR', 'Social Media',
+  ];
+  const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE ORDER BY lower(name)');
+  assert.deepEqual(activeTitles.rows.map(({ name }) => name), canonicalNames.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR'))));
+  const mappedTitles = await pool.query(`SELECT jt.name, COUNT(u.uid)::integer AS assigned_users
+    FROM job_titles jt LEFT JOIN users u ON u.job_title_id = jt.id
+    WHERE lower(jt.name) IN ('analista de dho', 'gerente de dho', 'analista de rh sênior', 'gerente de rh')
+    GROUP BY jt.name ORDER BY lower(jt.name)`);
+  const mappedByName = new Map(mappedTitles.rows.map((row) => [row.name, row.assigned_users]));
+  assert.equal(mappedByName.get('Analista de DHO'), 0);
+  assert.equal(mappedByName.get('Gerente de DHO'), 0);
+  assert.ok(mappedByName.has('Analista de RH Sênior'));
+  assert.ok(mappedByName.has('Gerente de RH'));
+  const unmappedDho = await pool.query(`SELECT name, active FROM job_titles
+    WHERE lower(name) IN ('assistente de dho', 'coordenador de dho') ORDER BY lower(name)`);
+  for (const row of unmappedDho.rows) assert.equal(row.active, false);
   const tables = await pool.query(`SELECT to_regclass('public.audit_log') AS audit,
     to_regclass('public.cron_status') AS cron, to_regclass('public.notifications_log') AS notifications,
     to_regclass('public.solides_employee_links') AS solides_links,

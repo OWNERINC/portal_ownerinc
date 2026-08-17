@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -113,4 +113,12 @@ test('job titles are managed independently and remain assigned when deactivated'
     assert.match(source, /active\s+BOOLEAN\s+NOT NULL DEFAULT TRUE/);
   }
   assert.match(migration, /INSERT INTO job_titles/);
+});
+
+test('job title catalog migration seeds and maps the approved names', async () => {
+  const migration = await readFile('api/db/migrations/013_job_title_catalog.sql', 'utf8');
+  for (const marker of ['job_titles', 'users', 'Analista de DHO', 'Analista de RH Sênior', 'Gerente de DHO', 'Gerente de RH']) {
+    assert.match(migration, new RegExp(marker));
+  }
+  assert.match(migration, /active = FALSE/);
 });
