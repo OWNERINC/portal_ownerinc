@@ -1,4 +1,5 @@
 const pool = require('./db');
+const { blocksToText, promoteDueScheduled } = require('../api/cms/reader');
 const { sendEmail } = require('./sendEmail');
 const { dueDateKeys, reminderMatchesDate, resolveTargets } = require('./scheduling');
 
@@ -99,16 +100,26 @@ async function processOccurrence(db, reminder, user, scheduledDate, channel) {
 
 async function processDate(db, scheduledDate) {
   const [{ rows: reminders }, { rows: users }] = await Promise.all([
-    db.query('SELECT id, title, description, trigger_day, target_users, channel FROM reminders WHERE active = true'),
+    db.query(`SELECT reminder.id, reminder.title, reminder.description, reminder.trigger_day,
+                     reminder.target_users, reminder.channel, revision.blocks AS cms_blocks
+                FROM reminders reminder
+                LEFT JOIN cms_documents document
+                  ON document.content_type = 'reminder' AND document.source_id = reminder.id
+                LEFT JOIN cms_revisions revision
+                  ON revision.id = document.published_revision_id AND revision.status = 'published'
+               WHERE reminder.active = true`),
     db.query(`SELECT uid, email, name, contract_type, is_pj, phone FROM users
       WHERE NOT (permissions @> '{"accountDisabled":true}'::jsonb)`)
   ]);
   const counts = { attempted: 0, sent: 0, failed: 0, skipped: 0 };
 
   for (const reminder of reminders.filter((item) => reminderMatchesDate(item.trigger_day, scheduledDate))) {
+    const deliveryReminder = reminder.cms_blocks === null || reminder.cms_blocks === undefined
+      ? reminder
+      : { ...reminder, description: blocksToText(reminder.cms_blocks) };
     for (const user of resolveTargets(reminder.target_users, users)) {
       for (const channel of channelsFor(reminder.channel)) {
-        const status = await processOccurrence(db, reminder, user, scheduledDate, channel);
+        const status = await processOccurrence(db, deliveryReminder, user, scheduledDate, channel);
         if (!status) continue;
         counts.attempted += 1;
         counts[status] += 1;
@@ -116,6 +127,18 @@ async function processDate(db, scheduledDate) {
     }
   }
   return counts;
+}
+
+async function promoteScheduledRevisions(db, now) {
+  await db.query('BEGIN');
+  try {
+    const promoted = await promoteDueScheduled(db, now);
+    await db.query('COMMIT');
+    return promoted;
+  } catch (error) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw error;
+  }
 }
 
 async function checkReminders(now = new Date()) {
@@ -137,8 +160,9 @@ async function checkReminders(now = new Date()) {
     await db.query(
       `UPDATE notifications_log SET status = 'failed', finished_at = NOW(),
           last_error = 'Delivery outcome unknown after worker interruption; not retried'
-        WHERE status = 'sending' AND claimed_at < NOW() - INTERVAL '1 hour'`
+      WHERE status = 'sending' AND claimed_at < NOW() - INTERVAL '1 hour'`
     );
+    await promoteScheduledRevisions(db, now);
 
     const { rows: [status] } = await db.query('SELECT last_scheduled_date FROM cron_status WHERE name = $1', [JOB_NAME]);
     const dates = dueDateKeys(now, status.last_scheduled_date);
@@ -176,4 +200,4 @@ async function checkReminders(now = new Date()) {
   }
 }
 
-module.exports = { checkReminders, channelsFor, isRetryableUnsent };
+module.exports = { checkReminders, channelsFor, isRetryableUnsent, promoteScheduledRevisions };

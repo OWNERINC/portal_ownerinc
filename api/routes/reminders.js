@@ -1,5 +1,6 @@
 const express = require('express');
 const pool = require('../db');
+const { addPublishedBlocks } = require('../cms/reader');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
   boolean, forbidden, integer, invalid, mayViewAll, oneOf, parseListQuery,
@@ -103,7 +104,7 @@ router.get('/upcoming', authMiddleware, async (req, res, next) => {
       .filter(reminder => reminder.next_occurrence && reminder.next_occurrence <= end)
       .sort((left, right) => left.next_occurrence - right.next_occurrence || String(left.id).localeCompare(String(right.id)))
       .map(reminder => ({ ...reminder, next_occurrence: reminder.next_occurrence.toISOString().slice(0, 10) }));
-    res.json(upcoming);
+    res.json(await addPublishedBlocks(pool, upcoming, 'reminder'));
   } catch (error) {
     next(error);
   }
@@ -129,7 +130,8 @@ router.get('/', authMiddleware, async (req, res, next) => {
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       listParams
     );
-    res.set('X-Total-Count', String(countResult.rows[0].count)).json(rows);
+    res.set('X-Total-Count', String(countResult.rows[0].count))
+      .json(await addPublishedBlocks(pool, rows, 'reminder'));
   } catch (error) {
     next(error);
   }

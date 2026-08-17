@@ -1,5 +1,6 @@
 const express = require('express');
 const pool = require('../db');
+const { addPublishedBlocks } = require('../cms/reader');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
   boolean, forbidden, integer, invalid, mayViewAll, parseListQuery, text, uuid,
@@ -45,7 +46,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
       pool.query(`SELECT COUNT(*)::integer AS count FROM benefits ${where}`, filterValues),
       pool.query(`SELECT * FROM benefits ${where} ORDER BY "order", id LIMIT $${filterValues.length + 1} OFFSET $${filterValues.length + 2}`, [...filterValues, page.limit, page.offset]),
     ]);
-    res.set('X-Total-Count', String(count)).json(rows);
+    res.set('X-Total-Count', String(count)).json(await addPublishedBlocks(pool, rows, 'benefit'));
   } catch (error) {
     next(error);
   }

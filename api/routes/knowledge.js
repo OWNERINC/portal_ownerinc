@@ -1,5 +1,6 @@
 const express = require('express');
 const pool = require('../db');
+const { addPublishedBlocks } = require('../cms/reader');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
   forbidden, invalid, parseListQuery, text, uuid, validBody, withAudit,
@@ -46,7 +47,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
       pool.query(`SELECT COUNT(*)::integer AS count FROM knowledge_base ${where}`, values),
       pool.query(`SELECT * FROM knowledge_base ${where} ORDER BY updated_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`, [...values, page.limit, page.offset]),
     ]);
-    res.set('X-Total-Count', String(count)).json(rows);
+    res.set('X-Total-Count', String(count)).json(await addPublishedBlocks(pool, rows, 'knowledge'));
   } catch (error) {
     next(error);
   }
@@ -57,7 +58,8 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
   try {
     const { rows } = await pool.query('SELECT * FROM knowledge_base WHERE id = $1', [req.params.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
-    res.json(rows[0]);
+    const [row] = await addPublishedBlocks(pool, [rows[0]], 'knowledge');
+    res.json(row);
   } catch (error) {
     next(error);
   }

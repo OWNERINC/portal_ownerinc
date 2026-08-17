@@ -29,6 +29,7 @@ app.use('/api/knowledge', require('./routes/knowledge'));
 app.use('/api/reminders', require('./routes/reminders'));
 app.use('/api/academy',   require('./routes/academy'));
 app.use('/api/benefits',  require('./routes/benefits'));
+app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/ombudsman', require('./routes/ombudsman'));
 app.use('/api/upload',    require('./routes/upload'));
 app.use('/api/solides',   require('./routes/solides'));
