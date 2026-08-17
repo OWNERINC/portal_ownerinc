@@ -1,6 +1,7 @@
 import { requireAuth, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, showState } from './ui.js';
 import { readOffset, renderPagination } from './pagination.js';
+import { renderBlocks } from './cms-block-renderer.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
@@ -58,8 +59,10 @@ async function loadBenefits() {
       items.forEach(benefit => {
         const card = element('article', { className: 'card' }, [
           element('div', { className: 'card-title', text: `🎁 ${benefit.company}` }),
-          element('p', { className: 'benefit-description', text: benefit.description || '' }),
         ]);
+        const content = element('div', { className: 'benefit-description cms-public-content' });
+        renderBlocks(content, benefit.content_blocks, { fallbackText: benefit.description || '' });
+        card.append(content);
         if (benefit.instructions) card.append(element('p', { className: 'info-panel', text: `Como usar: ${benefit.instructions}` }));
         grid.append(card);
       });

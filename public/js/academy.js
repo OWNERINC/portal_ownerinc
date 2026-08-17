@@ -1,6 +1,7 @@
 import { requireAuth, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, safeHttpUrl, showState } from './ui.js';
 import { readOffset, renderPagination } from './pagination.js';
+import { renderBlocks } from './cms-block-renderer.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
@@ -62,9 +63,11 @@ async function loadCourses() {
           className: 'card link-card', href, target: '_blank', rel: 'noopener noreferrer',
         } : { className: 'card' }, [
           element('div', { className: 'card-title', text: `🎓 ${course.title}` }),
-          element('p', { className: 'card-copy', text: course.description || '' }),
           element('span', { className: 'card-link-label', text: href ? 'Acessar curso →' : 'Link indisponível' }),
         ]);
+        const content = element('div', { className: 'card-copy cms-public-content' });
+        renderBlocks(content, course.content_blocks, { fallbackText: course.description || '' });
+        card.insertBefore(content, card.lastElementChild);
         grid.append(card);
       });
       section.append(grid);

@@ -1,6 +1,7 @@
 import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, closeDialog, element, openDialog, showState } from './ui.js';
 import { readOffset, renderPagination } from './pagination.js';
+import { renderBlocks } from './cms-block-renderer.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
@@ -61,7 +62,10 @@ async function openArticle(id, push = true) {
   articleView.hidden = false;
   document.getElementById('article-title').textContent = article.title;
   document.getElementById('article-category').textContent = article.category || 'Geral';
-  document.getElementById('article-content').textContent = article.content || '';
+  const articleContent = document.getElementById('article-content');
+  if (!renderBlocks(articleContent, article.content_blocks, { fallbackText: article.content || '' })) {
+    articleContent.textContent = article.content || '';
+  }
   const adminBar = clear(document.getElementById('article-admin-bar'));
   adminBar.hidden = !canManage;
   if (canManage) {

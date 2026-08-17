@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0F0F0F">
+  <title>Editor CMS — Portal Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./css/cms.css">
+  <script src="./js/auth-shell.js"></script>
+  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
+</head>
+<body class="cms-page">
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+<div class="portal-wrapper">
+  <aside class="sidebar" aria-label="Navegação principal">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
+        <i data-lucide="chevrons-left"></i>
+      </button>
+    </div>
+    <ul class="sidebar-nav">
+      <li><a href="./dashboard.html" title="Dashboard"><i data-lucide="home"></i><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" title="Base de Conhecimento"><i data-lucide="book-open"></i><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Lembretes"><i data-lucide="bell"></i><span>Lembretes</span></a></li>
+      <li><a href="./academy.html" title="Academy"><i data-lucide="graduation-cap"></i><span>Academy</span></a></li>
+      <li><a href="./benefits.html" title="Benefícios"><i data-lucide="gift"></i><span>Benefícios</span></a></li>
+      <li><a href="./ombudsman.html" title="Ouvidoria"><i data-lucide="message-square"></i><span>Ouvidoria</span></a></li>
+      <li><a href="./profile.html" title="Meu Perfil"><i data-lucide="user"></i><span>Meu Perfil</span></a></li>
+      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
+      <li class="cms-link"><a href="./cms.html" class="active" title="Editor CMS"><i data-lucide="file-edit"></i><span>Editor CMS</span></a></li>
+      <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><i data-lucide="layout-template"></i><span>AutoCard</span></a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <button class="sidebar-logout" type="button" aria-label="Sair"><i data-lucide="log-out"></i><span>Sair</span></button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <header class="topbar">
+      <span class="topbar-title">Editor CMS</span>
+      <div class="topbar-actions">
+        <span id="save-state" class="cms-save-state" role="status" aria-live="polite">Carregando…</span>
+        <a href="./admin.html" class="btn btn-ghost btn-sm">Voltar ao Admin</a>
+      </div>
+    </header>
+    <main class="page-body" id="main-content" tabindex="-1">
+      <div class="page-header">
+        <p class="section-label">Operações editoriais</p>
+        <h1>Editor CMS</h1>
+        <p>Edite conteúdo estruturado sem HTML livre e publique com segurança.</p>
+      </div>
+
+      <div id="cms-error" class="cms-notice" role="alert" hidden></div>
+      <div class="cms-workspace">
+        <aside class="cms-rail" aria-label="Seleção de conteúdo">
+          <div class="cms-rail-heading">
+            <div><p class="section-label">Áreas</p><h2>Conteúdo</h2></div>
+            <button id="new-document" class="btn btn-primary btn-sm" type="button">Novo</button>
+          </div>
+          <nav id="content-types" class="cms-content-types" aria-label="Tipos de conteúdo"></nav>
+          <form id="new-document-form" class="cms-new-document" hidden>
+            <h3>Novo documento</h3>
+            <label class="cms-field"><span class="form-label">Título</span><input id="new-title" class="form-input" type="text" maxlength="200" required></label>
+            <label class="cms-field"><span class="form-label">Categoria</span><input id="new-category" class="form-input" type="text" maxlength="100"></label>
+            <label id="new-source-field" class="cms-field"><span class="form-label">Registro vinculado</span><select id="new-source" class="form-select" required></select></label>
+            <div class="cms-form-actions"><button id="cancel-new-document" class="btn btn-ghost btn-sm" type="button">Cancelar</button><button class="btn btn-primary btn-sm" type="submit">Criar</button></div>
+          </form>
+          <div id="document-list" class="cms-document-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="cms-editor-column" aria-labelledby="editor-heading">
+          <div class="cms-column-heading"><div><p class="section-label">Documento</p><h2 id="editor-heading">Selecione um documento</h2></div><span id="editor-status" class="badge badge-gray">Nenhum</span></div>
+          <div id="editor-root" class="cms-editor-root"><p class="empty-state">Escolha uma área e um documento na coluna ao lado.</p></div>
+          <section class="cms-preview" aria-labelledby="preview-heading">
+            <div class="cms-column-heading"><div><p class="section-label">Leitura</p><h2 id="preview-heading">Prévia segura</h2></div></div>
+            <div id="preview-root" class="cms-preview-root"><p class="empty-state">A prévia aparecerá aqui.</p></div>
+          </section>
+        </section>
+
+        <details class="cms-inspector" open>
+          <summary>Inspector e publicação</summary>
+          <div class="cms-inspector-body">
+            <section class="cms-inspector-section" aria-labelledby="inspector-block-heading">
+              <h3 id="inspector-block-heading">Configuração do bloco</h3>
+              <div id="inspector-block-settings"><p class="empty-state">Selecione um bloco para editar suas configurações.</p></div>
+            </section>
+            <dl class="cms-meta">
+              <div><dt>Área</dt><dd id="inspector-type">—</dd></div>
+              <div><dt>Categoria</dt><dd id="inspector-category">—</dd></div>
+              <div><dt>Última publicação</dt><dd id="inspector-published">—</dd></div>
+            </dl>
+            <div class="cms-publish-controls">
+              <button id="save-draft" class="btn btn-primary" type="button" disabled>Salvar rascunho</button>
+              <button id="publish-document" class="btn btn-ghost" type="button" disabled>Publicar</button>
+              <button id="unpublish-document" class="btn btn-ghost" type="button" disabled>Despublicar</button>
+            </div>
+            <form id="schedule-form" class="cms-schedule-form">
+              <label class="cms-field"><span class="form-label">Publicar em (UTC)</span><input id="scheduled-at" class="form-input" type="datetime-local" required></label>
+              <button id="schedule-document" class="btn btn-ghost" type="submit" disabled>Agendar</button>
+              <button id="unschedule-document" class="btn btn-ghost" type="button" disabled>Cancelar agendamento</button>
+            </form>
+          </div>
+        </details>
+      </div>
+    </main>
+  </div>
+</div>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./js/cms.js"></script>
+</body>
+</html>

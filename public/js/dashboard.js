@@ -1,5 +1,6 @@
 import { requireAuth, fetchAPI } from './auth.js';
 import { clear, element, safeHttpUrl, showState } from './ui.js';
+import { renderBlocks } from './cms-block-renderer.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
@@ -60,6 +61,29 @@ if (spotlight) {
 const isPJ = user.contract_type === 'pj' || user.is_pj;
 
 const remindersContainer = document.getElementById('reminders-list');
+const announcementsPreview = document.getElementById('announcements-preview');
+async function loadAnnouncements() {
+  showState(announcementsPreview, 'Carregando anúncios…');
+  try {
+    const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
+    if (!announcements.length) return showState(announcementsPreview, 'Nenhum anúncio publicado.');
+    clear(announcementsPreview);
+    announcements.forEach(announcement => {
+      const card = element('article', { className: 'card announcement-card' }, [
+        element('div', { className: 'card-heading' }, [
+          element('div', { className: 'card-title', text: announcement.title }),
+          element('span', { className: 'badge badge-gold', text: announcement.category || 'Comunicado' }),
+        ]),
+      ]);
+      const content = element('div', { className: 'card-copy cms-public-content' });
+      renderBlocks(content, announcement.content_blocks, { fallbackText: 'Comunicado publicado.' });
+      card.append(content);
+      announcementsPreview.append(card);
+    });
+  } catch {
+    showState(announcementsPreview, 'Não foi possível carregar os anúncios.', loadAnnouncements);
+  }
+}
 async function loadReminders() {
   showState(remindersContainer, 'Carregando lembretes…');
   try {
@@ -147,4 +171,4 @@ async function loadAcademy() {
   }
 }
 
-await Promise.all([loadReminders(), loadAcademy()]);
+await Promise.all([loadAnnouncements(), loadReminders(), loadAcademy()]);

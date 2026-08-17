@@ -1,5 +1,6 @@
 import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, closeDialog, element, openDialog } from './ui.js';
+import { blocksToText } from './cms-block-renderer.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
@@ -49,7 +50,8 @@ function renderTable() {
   reminders.forEach(reminder => {
     const row = element('tr');
     const title = element('td', { className: 'break-text' }, [element('strong', { text: reminder.title })]);
-    if (reminder.description) title.append(element('span', { className: 'table-detail', text: reminder.description }));
+    const description = reminder.description || blocksToText(reminder.content_blocks);
+    if (description) title.append(element('span', { className: 'table-detail', text: description }));
     row.append(title);
     addCell(row, `Dia ${reminder.trigger_day}`);
     addCell(row, targetLabel(reminder.target_users));
