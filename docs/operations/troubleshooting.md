@@ -20,12 +20,12 @@ preserva as quebras de linha representadas por `\n` no `.env`.
 
 ## Emails não enviados
 
-Convites e redefinições da API usam SendGrid quando `SENDGRID_API_KEY` começa
-com `SG.` e `SENDGRID_FROM_EMAIL` está configurado; caso contrário, usam o SMTP
-legado. Verifique o log da API pelo `requestId`, confirme que o remetente é um
-endereço verificado no SendGrid e consulte a atividade/bounces do SendGrid.
-Para lembretes, verifique também `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, o
-horário e o fuso do container cron, além de `notifications_log`.
+Convites, redefinições da API e lembretes usam o Resend por SMTP. Verifique o
+log da API pelo `requestId` e confirme no ambiente do Compose `SMTP_ADDRESS`
+(`smtp.resend.com`), `SMTP_PORT` (`465`), `SMTP_USERNAME` (`resend`),
+`SMTP_PASSWORD` (a chave de API da Resend) e `MAILER_SENDER_EMAIL`. O remetente
+precisa estar verificado no Resend. Para lembretes, confira também o horário e
+o fuso do container cron, `OPERATIONAL_ALERT_EMAIL` e `notifications_log`.
 
 ## Upload não aparece
 

@@ -12,6 +12,11 @@
 
 O Compose entrega a cada serviço somente suas variáveis necessárias. Use `.env.example` como referência, mas nunca envie o `.env` ao Git. Senhas usadas dentro das URLs PostgreSQL devem estar em formato URL-encoded. `CORS_ORIGINS` só deve listar origens adicionais deliberadas; o acesso normal é pelo mesmo domínio do Nginx.
 
+O envio de email usa o Resend por SMTP. A chave de API da Resend deve ser
+armazenada somente em `/opt/ownerinc-portal/shared/.env`, como o valor de
+`SMTP_PASSWORD`; nunca a versione ou envie ao GitHub. O endereço definido em
+`MAILER_SENDER_EMAIL` precisa estar verificado no Resend.
+
 O banco usa três credenciais distintas:
 
 - `MIGRATION_DATABASE_URL`: usuário administrador definido por `POSTGRES_USER`, usado somente pelo container one-shot `migrate`.

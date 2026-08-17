@@ -18,6 +18,22 @@ test('compose limits exposure and waits for API readiness', async () => {
   assert.match(compose, /nginx:alpine@sha256:/);
 });
 
+test('API and cron require shared Resend SMTP configuration', async () => {
+  const compose = await read('docker-compose.yml');
+  const api = compose.match(/\n  api:\n([\s\S]*?)(?=\n  nginx:)/)?.[1] || '';
+  const cron = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
+  const required = ['SMTP_ADDRESS', 'SMTP_PORT', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'MAILER_SENDER_EMAIL'];
+
+  for (const variable of required) {
+    const declaration = new RegExp(`${variable}: \\\${${variable}:\\?Set ${variable}}`);
+    assert.match(api, declaration);
+    assert.match(cron, declaration);
+  }
+
+  assert.doesNotMatch(api, /SENDGRID_API_KEY|SENDGRID_FROM_EMAIL/);
+  assert.doesNotMatch(cron, /SENDGRID_API_KEY|SENDGRID_FROM_EMAIL/);
+});
+
 test('local simulation isolates Firebase and keeps bootstrap SQL typed', async () => {
   const [compose, emulator, bootstrap] = await Promise.all([
     read('docker-compose.yml'), read('firebase-emulator/Dockerfile'), read('api/db/bootstrap-admin.js'),
