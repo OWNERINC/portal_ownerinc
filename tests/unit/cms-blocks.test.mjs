@@ -82,6 +82,15 @@ test('blocksToText produces safe reminder text and omits visual-only blocks', ()
   assert.equal(blocksToText([{ type: 'paragraph', text: '<script>bad</script>' }]), '');
 });
 
+test('validateBlocks rejects an oversized aggregate CMS payload', () => {
+  const oversized = Array.from({ length: 20 }, () => ({
+    type: 'list',
+    items: Array.from({ length: 100 }, () => '\u0800'.repeat(500)),
+    ordered: false,
+  }));
+  assert.equal(validateBlocks(oversized), null);
+});
+
 test('canManageCms maps CMS areas to existing permissions', () => {
   const user = { role: 'admin', permissions: { manageKnowledge: true, manageBenefits: true } };
   assert.equal(canManageCms(user, 'knowledge'), true);

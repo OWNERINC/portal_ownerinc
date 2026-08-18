@@ -160,7 +160,7 @@ test('CMS migration is isolated, idempotent, and protects document revisions and
   assert.match(verification, /cms_revisions/);
   assert.match(verification, /cms_assets/);
   assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON cms_documents, cms_revisions, cms_assets TO portal_api/);
-  assert.match(provision, /GRANT SELECT ON cms_documents, cms_revisions TO portal_cron/);
+  assert.match(provision, /GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron/);
   assert.ok(migrate.indexOf('await grantRuntimeAccess(client)') > migrate.indexOf('for (const file of files)'));
   for (const privilege of ['api_cms_documents_privileges', 'api_cms_revisions_privileges', 'api_cms_assets_privileges', 'cron_cms_documents_privileges', 'cron_cms_revisions_privileges']) {
     assert.match(verification, new RegExp(privilege));

@@ -56,7 +56,7 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT, DELETE ON ombudsman TO portal_cron;
     GRANT SELECT ON autocard_cards TO portal_cron;
     GRANT SELECT, DELETE ON autocard_media TO portal_cron;
-    GRANT SELECT ON cms_documents, cms_revisions TO portal_cron;
+    GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON audit_log TO portal_cron;
   `);
 }

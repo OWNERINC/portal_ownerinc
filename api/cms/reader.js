@@ -126,8 +126,27 @@ async function listPublishedAnnouncements(pool, limit, offset) {
   });
 }
 
+async function getPublishedAnnouncement(pool, id) {
+  return withTransaction(pool, async (db) => {
+    await promoteDueScheduled(db);
+    const { rows } = await db.query(
+      `SELECT d.id, d.title, d.category, d.published_at, r.blocks
+         FROM cms_documents d
+         JOIN cms_revisions r ON r.id = d.published_revision_id
+        WHERE d.id = $1 AND d.content_type = 'announcement' AND r.status = 'published'`,
+      [id],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const { blocks, ...announcement } = row;
+    const contentBlocks = validateBlocks(blocks);
+    return contentBlocks === null ? announcement : { ...announcement, content_blocks: contentBlocks };
+  });
+}
+
 module.exports = {
   addPublishedBlocks,
+  getPublishedAnnouncement,
   blocksToText,
   getPublishedBlocksBatch,
   listPublishedAnnouncements,

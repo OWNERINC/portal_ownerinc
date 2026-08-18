@@ -145,4 +145,6 @@ test('published CMS blocks integrate with legacy fallbacks and dashboard announc
   assert.match(announcementsHtml, /id="main-content"/);
   assert.match(dashboard, /\/api\/announcements\?limit=3&offset=0/);
   assert.match(dashboard, /announcements-preview/);
+  assert.match(announcements, /\/api\/announcements\/\$\{encodeURIComponent\(announcementId\)\}/);
+  assert.match(announcements, /href: `\?id=\$\{encodeURIComponent\(announcement\.id\)\}`/);
 });

@@ -174,6 +174,24 @@ responsável e evidência; não marque uma validação externa usando apenas
 - A produção não deve ser declarada plenamente pronta enquanto os itens
   externos pendentes abaixo não tiverem responsável e evidência registrados.
 
+## CMS Release Follow-up
+
+- [x] Cron image build context includes the shared CMS reader and block validator
+  at the import path used by `cron/checkReminders.js`.
+- [x] `portal_cron` has `SELECT, UPDATE` on `cms_documents` and `cms_revisions`;
+  the existing broader `audit_log` grant remains for AutoCard retention.
+- [x] CSP `media-src` is limited to `'self'`, `blob:`, and `https:` without
+  changing script, style, or connect policies.
+- [x] Empty rendered CMS reminder blocks preserve the legacy `description`.
+- [x] CMS JSON transport is bounded at 2 MiB for CMS routes, with a 2 MiB
+  aggregate block guard; normal API JSON remains bounded at 100 KiB. The Nginx
+  CMS route uses the same 2 MiB boundary, while private asset uploads remain
+  separately limited to 50 MiB.
+- [x] Authenticated announcement detail returns only a published announcement
+  revision and the frontend links list entries to that detail request.
+- [ ] PostgreSQL migration execution and authenticated/live acceptance still
+  require the missing operational database URL and environment.
+
 ## Remaining Risks and Pending Evidence
 
 - **Firebase:** ainda falta comprovar em produção a perda de acesso de usuário

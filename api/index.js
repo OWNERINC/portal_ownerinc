@@ -15,6 +15,8 @@ app.use(requestContext);
 app.use(safeResponses);
 app.use(cors(allowedOrigins(process.env)));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+// CMS block documents are bounded separately; keep the smaller default for every other JSON API.
+app.use('/api/cms', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '100kb' }));
 
 // Serve arquivos de upload (fotos de perfil)

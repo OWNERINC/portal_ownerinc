@@ -118,8 +118,8 @@ services:
   cron:
     image: ${CRON_IMAGE:-local/ownerinc-portal-cron:latest}
     build:
-      context: ./cron
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: cron/Dockerfile
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${CRON_DATABASE_URL:?Set CRON_DATABASE_URL}

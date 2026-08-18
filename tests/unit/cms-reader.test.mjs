@@ -127,3 +127,13 @@ test('announcements require authentication and query published revisions only', 
   assert.ok(pool.calls.some(({ sql }) => /r\.status = 'published'/.test(sql)));
   assert.ok(pool.calls.some(({ sql }) => /d\.content_type = 'announcement'/.test(sql)));
 });
+
+test('announcement detail is authenticated and published-only', async () => {
+  const route = await readFile('api/routes/announcements.js', 'utf8');
+  const reader = await readFile('api/cms/reader.js', 'utf8');
+  assert.match(route, /router\.get\('\/:id', authMiddleware/);
+  assert.match(route, /uuid\(req\.params\.id\)/);
+  assert.match(route, /getPublishedAnnouncement/);
+  assert.match(reader, /WHERE d\.id = \$1 AND d\.content_type = 'announcement' AND r\.status = 'published'/);
+  assert.doesNotMatch(reader, /getPublishedAnnouncement[\s\S]*draft_revision_id/);
+});

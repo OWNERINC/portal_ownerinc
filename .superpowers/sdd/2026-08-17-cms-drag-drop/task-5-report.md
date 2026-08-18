@@ -160,3 +160,57 @@ CMS flows, and protected PDF validation were intentionally not run.
 Documentation and this report require commit:
 
 `chore: finalize cms release checks`
+
+## Follow-up: final release blocker fixes
+
+The follow-up fixes were made in the requested worktree without deployment or
+secret changes.
+
+### Implemented fixes
+
+- Changed the cron build context to the repository root and explicitly copied
+  `api/cms/` into `/api/cms/`. The existing `/app/checkReminders.js` import
+  `../api/cms/reader` therefore resolves in the built image, and the focused
+  cron invariant verifies the compose context, Dockerfile copy, reader, and
+  validator files.
+- Added `UPDATE` to the existing `SELECT` grant for `portal_cron` on
+  `cms_documents` and `cms_revisions`. `audit_log` retains its existing
+  `SELECT, INSERT, UPDATE, DELETE` grant because AutoCard retention updates its
+  audit row; migration verification now asserts the CMS `SELECT,UPDATE`
+  privileges explicitly.
+- Added `media-src 'self' blob: https:` to the Nginx CSP. Script, style, and
+  connect policies were not broadened. The operations invariant rejects data
+  and plain-HTTP media sources.
+- Added `reminderForDelivery`; a published block rendering that is empty or
+  whitespace now leaves the legacy `description` unchanged. Audience, channel,
+  claim, retry, and delivery paths were not changed.
+- Kept the normal JSON API limit at 100 KiB and added a scoped 2 MiB JSON parser
+  and Nginx body limit for `/api/cms`. `validateBlocks` also rejects CMS block
+  arrays whose serialized UTF-8 payload exceeds 2 MiB. This is bounded, supports
+  the approved 100-block/5,000-character paragraph constraints, and does not
+  widen unrelated API request bodies. The scoped limit and aggregate guard are
+  covered by CMS invariants.
+- Added `GET /api/announcements/:id`, requiring authentication, a UUID, the
+  `announcement` content type, and a `published` revision. Missing, draft-only,
+  and future unpublished records return no detail. The announcements page now
+  links published list entries to the authenticated detail request.
+
+### Follow-up verification evidence
+
+- Focused CMS, cron, security, migration-invariant, and frontend tests: PASS,
+  58 tests.
+- `npm run verify`: PASS, all 139 tests passed; syntax, security, and Compose
+  checks passed.
+- `git diff --check`: PASS on the final worktree before commit.
+- `npm run test:migrations`: BLOCKED because `MIGRATION_DATABASE_URL` is not
+  configured; no credential was fabricated or changed.
+- Docker build/deploy and live HTTP/browser acceptance: intentionally not run.
+
+### Remaining blockers
+
+1. `MIGRATION_DATABASE_URL` is still missing, so PostgreSQL migration execution,
+   second-run idempotency, grants, and database-backed CMS acceptance remain
+   unverified.
+2. Authenticated manual acceptance, protected asset validation, and live smoke
+   checks remain pending in the operational environment.
+3. Deployment remains intentionally not executed.

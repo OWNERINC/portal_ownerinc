@@ -103,6 +103,11 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 50m;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
+  assert.match(nginx, /media-src 'self' blob: https:/);
+  assert.doesNotMatch(nginx, /media-src[^;"]*(data:|http:\/\/)/);
+  assert.match(nginx, /script-src 'self' https:\/\/unpkg\.com https:\/\/www\.gstatic\.com https:\/\/cdnjs\.cloudflare\.com/);
+  assert.match(nginx, /style-src 'self' 'unsafe-inline'/);
+  assert.match(nginx, /connect-src 'self' http:\/\/127\.0\.0\.1:9099 http:\/\/localhost:9099 https:\/\/\*\.googleapis\.com https:\/\/\*\.firebaseio\.com/);
   assert.match(nginx, /limit_req_zone[\s\S]*map \$http_sec_fetch_site/);
   assert.match(nginx, /https:\/\/unpkg\.com/);
   assert.match(nginx, /https:\/\/www\.gstatic\.com/);

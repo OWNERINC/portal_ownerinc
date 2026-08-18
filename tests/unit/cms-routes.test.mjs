@@ -7,6 +7,7 @@ const assets = await readFile('api/routes/cms-assets.js', 'utf8');
 const index = await readFile('api/index.js', 'utf8');
 const nginx = await readFile('nginx/nginx.conf', 'utf8');
 const permissions = await readFile('api/cms/permissions.js', 'utf8');
+const blocks = await readFile('api/cms/blocks.js', 'utf8');
 
 test('CMS routes are authenticated and mounted at the required API boundaries', () => {
   assert.match(index, /app\.use\('\/api\/cms',\s+require\('\.\/routes\/cms'\)\)/);
@@ -84,4 +85,12 @@ test('CMS list totals count all matching documents and Nginx scopes the large up
   assert.ok(cmsLocation >= 0 && cmsLocation < genericApi);
   assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 50m;[\s\S]*proxy_pass \$api_upstream/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
+});
+
+test('CMS JSON transport is bounded separately from the normal API', () => {
+  assert.match(index, /app\.use\('\/api\/cms', express\.json\(\{ limit: '2mb' \}\)\)/);
+  assert.match(index, /express\.json\(\{ limit: '100kb' \}\)/);
+  assert.match(blocks, /MAX_CMS_PAYLOAD_BYTES = 2 \* 1024 \* 1024/);
+  assert.match(blocks, /Buffer\.byteLength\(JSON\.stringify\(value\), 'utf8'\)/);
+  assert.match(nginx, /location \^~ \/api\/cms\/[\s\S]*client_max_body_size 2m;/);
 });

@@ -1,4 +1,4 @@
-import { requireAuth, fetchAPIPage } from './auth.js';
+import { requireAuth, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, showState } from './ui.js';
 import { renderPagination } from './pagination.js';
 import { renderBlocks } from './cms-block-renderer.js';
@@ -14,6 +14,23 @@ async function loadAnnouncements() {
   showState(list, 'Carregando anúncios…');
   try {
     const query = new URLSearchParams(location.search);
+    const announcementId = query.get('id');
+    if (announcementId) {
+      const announcement = await fetchAPI(`/api/announcements/${encodeURIComponent(announcementId)}`);
+      clear(list);
+      pagination.replaceChildren();
+      const article = element('article', { className: 'card announcement-card' }, [
+        element('div', { className: 'card-heading' }, [
+          element('h2', { className: 'card-title', text: announcement.title }),
+          element('span', { className: 'badge badge-gold', text: announcement.category || 'Comunicado' }),
+        ]),
+      ]);
+      const content = element('div', { className: 'cms-public-content' });
+      renderBlocks(content, announcement.content_blocks, { fallbackText: 'Este anúncio não possui conteúdo disponível.' });
+      article.append(content);
+      list.append(article);
+      return;
+    }
     const offset = Math.max(0, Number(query.get('offset') || 0));
     const result = await fetchAPIPage(`/api/announcements?limit=${PAGE_SIZE}&offset=${offset}`);
     clear(list);
@@ -21,7 +38,9 @@ async function loadAnnouncements() {
     result.data.forEach(announcement => {
       const article = element('article', { className: 'card announcement-card' }, [
         element('div', { className: 'card-heading' }, [
-          element('h2', { className: 'card-title', text: announcement.title }),
+          element('h2', { className: 'card-title' }, [
+            element('a', { href: `?id=${encodeURIComponent(announcement.id)}`, text: announcement.title }),
+          ]),
           element('span', { className: 'badge badge-gold', text: announcement.category || 'Comunicado' }),
         ]),
       ]);

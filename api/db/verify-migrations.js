@@ -47,8 +47,8 @@ async function verifyMigrations() {
       has_table_privilege('portal_api', 'public.cms_assets', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_assets_privileges,
       has_table_privilege('portal_cron', 'public.autocard_cards', 'SELECT') AS cron_autocard_cards_privileges,
       has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT,DELETE') AS cron_autocard_media_privileges,
-      has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT') AS cron_cms_documents_privileges,
-      has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT') AS cron_cms_revisions_privileges,
+      has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT,UPDATE') AS cron_cms_documents_privileges,
+      has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT,UPDATE') AS cron_cms_revisions_privileges,
       has_table_privilege('portal_cron', 'public.audit_log', 'SELECT,INSERT,UPDATE,DELETE') AS cron_audit_privileges`);
     if (result.rows[0].job_titles !== 'job_titles'
       || result.rows[0].autocard_cards !== 'autocard_cards'

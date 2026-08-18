@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { promoteScheduledRevisions } = require('../../cron/checkReminders');
+const { promoteScheduledRevisions, reminderForDelivery } = require('../../cron/checkReminders');
 
 test('scheduled promotion is transactional, archives before publishing, and audits', async () => {
   const calls = [];
@@ -37,4 +37,28 @@ test('cron uses published reminder blocks for text while keeping delivery contro
   assert.match(source, /resolveTargets\(reminder\.target_users, users\)/);
   assert.match(source, /channelsFor\(reminder\.channel\)/);
   assert.match(source, /notifications_log/);
+});
+
+test('cron keeps legacy reminder text when published blocks render empty', () => {
+  const reminder = { description: 'Legacy description', cms_blocks: [{ type: 'divider' }] };
+  assert.equal(reminderForDelivery(reminder), reminder);
+  assert.equal(reminderForDelivery({
+    ...reminder,
+    cms_blocks: [{ type: 'paragraph', text: 'Published description' }],
+  }).description, 'Published description');
+});
+
+test('cron image contains the shared CMS reader at its actual import path', async () => {
+  const [compose, dockerfile, cronSource, reader, blocks] = await Promise.all([
+    readFile('docker-compose.yml', 'utf8'),
+    readFile('cron/Dockerfile', 'utf8'),
+    readFile('cron/checkReminders.js', 'utf8'),
+    readFile('api/cms/reader.js', 'utf8'),
+    readFile('api/cms/blocks.js', 'utf8'),
+  ]);
+  assert.match(compose, /context: \.[\s\S]*dockerfile: cron\/Dockerfile/);
+  assert.match(dockerfile, /COPY --chown=node:node api\/cms\/ \/api\/cms\//);
+  assert.match(cronSource, /require\('\.\.\/api\/cms\/reader'\)/);
+  assert.match(reader, /require\('\.\/blocks'\)/);
+  assert.match(blocks, /function blocksToText/);
 });

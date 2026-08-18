@@ -6,6 +6,12 @@ const { dueDateKeys, reminderMatchesDate, resolveTargets } = require('./scheduli
 const JOB_NAME = 'reminders';
 const MAX_ATTEMPTS = 3;
 
+function reminderForDelivery(reminder) {
+  if (reminder.cms_blocks === null || reminder.cms_blocks === undefined) return reminder;
+  const description = blocksToText(reminder.cms_blocks);
+  return description.trim() ? { ...reminder, description } : reminder;
+}
+
 function channelsFor(channel) {
   return channel === 'both' ? ['email', 'whatsapp'] : [channel || 'email'];
 }
@@ -114,9 +120,7 @@ async function processDate(db, scheduledDate) {
   const counts = { attempted: 0, sent: 0, failed: 0, skipped: 0 };
 
   for (const reminder of reminders.filter((item) => reminderMatchesDate(item.trigger_day, scheduledDate))) {
-    const deliveryReminder = reminder.cms_blocks === null || reminder.cms_blocks === undefined
-      ? reminder
-      : { ...reminder, description: blocksToText(reminder.cms_blocks) };
+    const deliveryReminder = reminderForDelivery(reminder);
     for (const user of resolveTargets(reminder.target_users, users)) {
       for (const channel of channelsFor(reminder.channel)) {
         const status = await processOccurrence(db, deliveryReminder, user, scheduledDate, channel);
@@ -200,4 +204,6 @@ async function checkReminders(now = new Date()) {
   }
 }
 
-module.exports = { checkReminders, channelsFor, isRetryableUnsent, promoteScheduledRevisions };
+module.exports = {
+  checkReminders, channelsFor, isRetryableUnsent, promoteScheduledRevisions, reminderForDelivery,
+};
