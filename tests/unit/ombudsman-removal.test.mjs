@@ -8,51 +8,48 @@ import test from 'node:test';
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const forbiddenSurface = /ombudsman|Ouvidoria|ouvidoria|viewOmbudsman/i;
-const explicitlyExcluded = new Set([
-  // These migrations are immutable historical evidence, not the current schema surface.
-  'api/db/migrations/001_initial_schema.sql',
-  'api/db/migrations/003_governance.sql',
-  // These files intentionally assert or apply the destructive removal.
-  'api/db/migrations/016_remove_ombudsman.sql',
-  'api/db/verify-migrations.js',
-  'scripts/test-migrations.mjs',
-  'tests/unit/ombudsman-removal.test.mjs',
-  // The report must name the removal to verify and explain it.
-  'docs/reports/2026-08-18-ombudsman-removal.md',
+const explicitlyExcluded = new Map([
+  ['api/db/migrations/001_initial_schema.sql', 'historical schema migration'],
+  ['api/db/migrations/003_governance.sql', 'historical schema migration'],
+  ['api/db/migrations/016_remove_ombudsman.sql', 'intentional removal migration'],
+  ['api/db/verify-migrations.js', 'intentional release-gate removal assertion'],
+  ['scripts/test-migrations.mjs', 'intentional removal integration test'],
+  ['tests/unit/ombudsman-removal.test.mjs', 'the invariant being executed'],
+  ['tests/unit/api-security.test.mjs', 'specific negative permission invariant'],
+  ['tests/unit/frontend-invariants.test.mjs', 'specific negative frontend invariant'],
+  ['tests/unit/schema-invariants.test.mjs', 'specific negative schema invariant'],
+  ['docs/reports/2026-08-18-ombudsman-removal.md', 'the removal report'],
 ]);
 
 // Dated audits, reports, designs, and plans preserve historical state rather than current contracts.
-const isDatedHistoricalDocument = (file) => /^docs\/(?:reviews|reports|design|superpowers\/plans)\/\d{4}-\d{2}-\d{2}-.+/.test(file);
-const isGeneratedArtifact = (file) => /(^|\/)(?:\.worktrees|node_modules|coverage|dist|build)(\/|$)/.test(file);
+const isDatedHistoricalDocument = (file) => /^docs\/(?:reviews|reports|design|superpowers\/plans)\/\d{4}-\d{2}-\d{2}-.+/.test(file)
+  || /^\.superpowers\/sdd\/\d{4}-\d{2}-\d{2}-.+/.test(file);
+const isGeneratedArtifact = (file) => /(^|\/)\.worktrees(\/|$)/.test(file);
 
-const isCurrentSurfaceFile = (file) => {
-  if (explicitlyExcluded.has(file) || isDatedHistoricalDocument(file) || isGeneratedArtifact(file)) return false;
-  return /^public\/.*\.(?:html|js)$/i.test(file)
-    || /^public\/.*\.css$/i.test(file)
-    || /^(?:api|cron)\/.*\.js$/i.test(file)
-    || file === 'api/db/schema.sql'
-    || /^api\/db\/migrations\/\d+_.+\.sql$/i.test(file)
-    || /^nginx\/.*\.conf$/i.test(file)
-    || /^scripts\/[^/]+\.(?:sh|mjs)$/i.test(file)
-    || /(?:^|\/)Dockerfile(?:\..*)?$/i.test(file)
-    || file === '.env.example'
-    || file === 'docker-compose.yml'
-    || /^\.github\/workflows\/.*\.(?:ya?ml|json)$/i.test(file)
-    || /^(?:[^/]+\/)*[^/]+\.(?:json|ya?ml)$/i.test(file)
-    || /^docs\/(?:product|architecture|operations)\/.+/.test(file);
-};
+const isCurrentSurfaceFile = (file) => !explicitlyExcluded.has(file)
+  && !isDatedHistoricalDocument(file)
+  && !isGeneratedArtifact(file);
 
 const trackedCurrentSurface = async () => {
-  // git ls-files limits this to tracked files; path filtering also rejects worktrees and generated artifacts.
+  // git ls-files limits this to tracked files, so untracked artifacts cannot enter the scan.
   const { stdout } = await execFileAsync('git', ['-C', repositoryRoot, 'ls-files', '-z'], { encoding: 'utf8' });
   return stdout.split('\0').filter(Boolean).filter(isCurrentSurfaceFile);
 };
+
+const surfaceSentinels = [
+  '.codex/config.toml', '.env.example', 'api/db/docker-entrypoint.sh',
+  'api/db/schema.sql', 'api/Dockerfile', 'deploy.sh', 'docs/product/brief.md',
+  'firebase-emulator/Dockerfile', 'nginx/nginx.conf', 'ops/deploy-from-ci.sh',
+  'public/assets/icon-branco.svg', 'public/autocard/styles.css',
+  'scripts/backup.sh', 'tests/unit/api-routes.test.mjs', '.github/workflows/ci.yml',
+];
 
 test('Ombudsman route, page, permission, table, grants, and retention are absent from active source', async () => {
   await assert.rejects(access('api/routes/ombudsman.js'));
   await assert.rejects(access('public/ombudsman.html'));
   await assert.rejects(access('public/js/ombudsman.js'));
   const sourceFiles = await trackedCurrentSurface();
+  assert.deepEqual(surfaceSentinels.filter((file) => !sourceFiles.includes(file)), []);
   const source = (await Promise.all(
     sourceFiles.map((file) => readFile(`${repositoryRoot}/${file}`, 'utf8')),
   )).join('\n');

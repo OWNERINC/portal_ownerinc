@@ -28,12 +28,15 @@ integração agora incluem `016_remove_ombudsman`.
   vezes em transações separadas no mesmo client PostgreSQL e confirma a remoção
   dos objetos e somente da permissão legada. O `finally` remove apenas os
   fixtures e objetos criados pelo teste.
-- `tests/unit/ombudsman-removal.test.mjs`: agora verifica toda a superfície atual
-  rastreada de HTML, JavaScript, CSS, SQL, Nginx, scripts, Dockerfiles,
-  workflows/configuração e documentação corrente de produto, arquitetura e
-  operações. Migrations históricas 001/003, a migration de remoção, o release
-  gate, testes/relatório intencionais, auditorias, relatórios e planos históricos
-  datados ficam fora por serem evidência histórica ou verificações da remoção.
+- `tests/unit/ombudsman-removal.test.mjs`: agora varre todos os arquivos
+  rastreados por `git ls-files -z`, cobrindo HTML, JavaScript, CSS, SVG e demais
+  assets públicos, SQL, Nginx, scripts de deploy/operação, Dockerfiles,
+  workflows/configuração, testes ativos e documentação corrente. Migrations
+  históricas 001/003, a migration de remoção, o release gate, os testes
+  negativos específicos, o relatório e auditorias, relatórios, designs e planos
+  históricos datados ficam fora por serem evidência histórica ou verificações da
+  remoção. Arquivos novos rastreados com os termos proibidos falham o teste;
+  artefatos não rastreados não entram porque a fonte é o índice Git.
 - `npm run verify`: passou, 141 testes.
 - `npm test`: passou, 141 testes.
 - `git diff --check`: passou.
