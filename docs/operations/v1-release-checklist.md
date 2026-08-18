@@ -33,7 +33,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Migration passa sobre banco existente até `010_autocard`.
 - [ ] Segunda execução não altera nem duplica o ledger.
 - [ ] Migration CMS `015_cms_editor` passa em PostgreSQL e permanece idempotente na segunda execução.
-- [ ] Migration de remoção `016_remove_ombudsman` passa em PostgreSQL e permanece idempotente na segunda execução.
+- [ ] A migration destrutiva mais recente passa em PostgreSQL e permanece idempotente na segunda execução.
 - [ ] `011_cron_alert_state` existe e possui os grants esperados.
 - [ ] `012_autocard_media_crop` existe e foi validada em PostgreSQL.
 - [ ] Roles `portal_api` e `portal_cron` têm somente os privilégios necessários.

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { readFile } from 'node:fs/promises';
 
 const require = createRequire(new URL('../api/package.json', import.meta.url));
 require('dotenv').config({ path: new URL('../.env', import.meta.url) });
@@ -14,6 +15,40 @@ await migrate();
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
 const fixtureUids = [];
 try {
+  const permissionFixtureUid = `migration-fixture-permissions-${randomUUID()}`;
+  fixtureUids.push(permissionFixtureUid);
+  await pool.query(`INSERT INTO users (uid, email, name, permissions)
+    VALUES ($1, $2, $3, $4::jsonb)`, [
+    permissionFixtureUid,
+    `${permissionFixtureUid}@example.com`,
+    'Migration Fixture Permissions',
+    JSON.stringify({ viewOmbudsman: true, viewDashboard: true }),
+  ]);
+  const removalMigration = await readFile(
+    new URL('../api/db/migrations/016_remove_ombudsman.sql', import.meta.url),
+    'utf8',
+  );
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await pool.query('BEGIN');
+    try {
+      await pool.query(removalMigration);
+      await pool.query('COMMIT');
+    } catch (error) {
+      await pool.query('ROLLBACK');
+      throw error;
+    }
+  }
+  const permissionFixture = await pool.query(
+    'SELECT permissions FROM users WHERE uid = $1',
+    [permissionFixtureUid],
+  );
+  assert.equal(permissionFixture.rows[0]?.permissions.viewOmbudsman, undefined);
+  assert.equal(permissionFixture.rows[0]?.permissions.viewDashboard, true);
+  const removedObjects = await pool.query(`SELECT to_regclass('public.ombudsman') AS ombudsman,
+    to_regclass('public.ombudsman_workflow_idx') AS ombudsman_workflow_idx`);
+  assert.equal(removedObjects.rows[0].ombudsman, null);
+  assert.equal(removedObjects.rows[0].ombudsman_workflow_idx, null);
+
   const versions = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
   assert.deepEqual(versions.rows.map(({ version }) => version), [
     '001_initial_schema',

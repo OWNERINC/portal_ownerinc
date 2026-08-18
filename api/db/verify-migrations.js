@@ -1,5 +1,12 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { Pool } = require('pg');
 
+const latestVersion = fs.readdirSync(path.join(__dirname, 'migrations'))
+  .filter((file) => /^\d+_.+\.sql$/.test(file))
+  .sort()
+  .at(-1)
+  .slice(0, -4);
 const expectedVersions = [
   '001_initial_schema',
   '002_reliable_notifications',
@@ -15,7 +22,7 @@ const expectedVersions = [
   '012_autocard_media_crop',
   '013_job_title_catalog',
   '015_cms_editor',
-  '016_remove_ombudsman',
+  latestVersion,
 ];
 
 async function verifyMigrations() {
@@ -27,8 +34,6 @@ async function verifyMigrations() {
       throw new Error(`Unexpected migration ledger: ${appliedVersions.join(',')}`);
     }
     const result = await pool.query(`SELECT to_regclass('public.job_titles') AS job_titles,
-      to_regclass('public.ombudsman') AS ombudsman,
-      to_regclass('public.ombudsman_workflow_idx') AS ombudsman_workflow_idx,
       to_regclass('public.autocard_cards') AS autocard_cards,
       to_regclass('public.autocard_media') AS autocard_media,
       to_regclass('public.cms_documents') AS cms_documents,
@@ -59,8 +64,6 @@ async function verifyMigrations() {
       || result.rows[0].cms_documents !== 'cms_documents'
       || result.rows[0].cms_revisions !== 'cms_revisions'
       || result.rows[0].cms_assets !== 'cms_assets'
-       || result.rows[0].ombudsman !== null
-       || result.rows[0].ombudsman_workflow_idx !== null
       || result.rows[0].user_job_title_column !== true
       || result.rows[0].autocard_media_crop_not_null !== true
       || result.rows[0].cms_content_type_check !== true
@@ -80,9 +83,9 @@ async function verifyMigrations() {
       || result.rows[0].cron_cms_documents_privileges !== true
       || result.rows[0].cron_cms_revisions_privileges !== true
       || result.rows[0].cron_audit_privileges !== true) {
-       throw new Error('Job title, AutoCard, CMS, or Ombudsman removal schema/runtime checks are incomplete');
-     }
-     console.log('migration verification: 016_remove_ombudsman ok');
+      throw new Error('Job title, AutoCard, or CMS schema/runtime checks are incomplete');
+    }
+    console.log('migration verification: current schema ok');
   } finally {
     await pool.end();
   }

@@ -151,7 +151,7 @@ fluxo correspondente no Portal.
 | --- | --- | --- |
 | Stack Docker Compose | Operacional | PostgreSQL, migrations, API, Nginx, cron e Auth Emulator opcional no perfil local. `docker-compose.yml`, `firebase-emulator/Dockerfile` |
 | Persistência | Operacional | Volumes nomeados para PostgreSQL e uploads. `docker-compose.yml` |
-| Migrations | Operacional | SQL numerado, ledger, advisory lock e transação; schema fresco e upgrades acompanham as migrations até `016_remove_ombudsman`. `api/db/migrate.js`, `api/db/migrations/`, `api/db/schema.sql` |
+| Migrations | Operacional | SQL numerado, ledger, advisory lock e transação; schema fresco e upgrades acompanham a migration mais recente. `api/db/migrate.js`, `api/db/migrations/`, `api/db/schema.sql` |
 | Liveness e readiness | Operacional | `/api/health` verifica processo e `/api/ready` consulta o banco. `api/index.js` |
 | CI e segurança de dependências | Operacional | Sintaxe, testes, migrations reais, audit, SBOM, Trivy, builds e publicação no GHCR. `.github/workflows/ci.yml`, `scripts/verify.mjs` |
 | Deploy imutável | Operacional | Publica archive de commit limpo, resolve imagens por digest e mantém release anterior para rollback. `deploy.sh`, `scripts/release.sh` |
