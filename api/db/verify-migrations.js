@@ -34,6 +34,8 @@ async function verifyMigrations() {
       throw new Error(`Unexpected migration ledger: ${appliedVersions.join(',')}`);
     }
     const result = await pool.query(`SELECT to_regclass('public.job_titles') AS job_titles,
+      to_regclass('public.ombudsman') AS ombudsman,
+      to_regclass('public.ombudsman_workflow_idx') AS ombudsman_workflow_idx,
       to_regclass('public.autocard_cards') AS autocard_cards,
       to_regclass('public.autocard_media') AS autocard_media,
       to_regclass('public.cms_documents') AS cms_documents,
@@ -59,6 +61,8 @@ async function verifyMigrations() {
       has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT,UPDATE') AS cron_cms_revisions_privileges,
       has_table_privilege('portal_cron', 'public.audit_log', 'SELECT,INSERT,UPDATE,DELETE') AS cron_audit_privileges`);
     if (result.rows[0].job_titles !== 'job_titles'
+      || result.rows[0].ombudsman !== null
+      || result.rows[0].ombudsman_workflow_idx !== null
       || result.rows[0].autocard_cards !== 'autocard_cards'
       || result.rows[0].autocard_media !== 'autocard_media'
       || result.rows[0].cms_documents !== 'cms_documents'
@@ -83,7 +87,7 @@ async function verifyMigrations() {
       || result.rows[0].cron_cms_documents_privileges !== true
       || result.rows[0].cron_cms_revisions_privileges !== true
       || result.rows[0].cron_audit_privileges !== true) {
-      throw new Error('Job title, AutoCard, or CMS schema/runtime checks are incomplete');
+      throw new Error('Job title, AutoCard, CMS, or Ombudsman removal schema/runtime checks are incomplete');
     }
     console.log('migration verification: current schema ok');
   } finally {

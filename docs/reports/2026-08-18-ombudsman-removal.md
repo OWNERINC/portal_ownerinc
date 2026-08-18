@@ -22,15 +22,18 @@ integração agora incluem `016_remove_ombudsman`.
 
 ## Verification
 
-- `scripts/test-migrations.mjs`: agora cria um usuário fixture com JSONB contendo
-  `viewOmbudsman: true` depois das migrations iniciais, executa o texto exato da
-  migration duas vezes em transações seguras e confirma a remoção da chave, da
-  tabela e do índice. O `finally` remove todos os fixtures.
+- `scripts/test-migrations.mjs`: depois das migrations normais, recria uma tabela
+  e um índice legados mínimos, cria um usuário fixture com JSONB contendo
+  `viewOmbudsman: true` e outra permissão, executa o texto exato da migration duas
+  vezes em transações separadas no mesmo client PostgreSQL e confirma a remoção
+  dos objetos e somente da permissão legada. O `finally` remove apenas os
+  fixtures e objetos criados pelo teste.
 - `tests/unit/ombudsman-removal.test.mjs`: agora verifica toda a superfície atual
-  rastreada de `public/`, `api/`, `cron/`, configuração e documentação corrente
-  de produto, arquitetura e operações. Migrations históricas 001/003, auditorias,
-  relatórios e planos históricos datados, além deste relatório e do próprio teste,
-  ficam fora por serem evidência histórica ou o mecanismo que verifica a remoção.
+  rastreada de HTML, JavaScript, CSS, SQL, Nginx, scripts, Dockerfiles,
+  workflows/configuração e documentação corrente de produto, arquitetura e
+  operações. Migrations históricas 001/003, a migration de remoção, o release
+  gate, testes/relatório intencionais, auditorias, relatórios e planos históricos
+  datados ficam fora por serem evidência histórica ou verificações da remoção.
 - `npm run verify`: passou, 141 testes.
 - `npm test`: passou, 141 testes.
 - `git diff --check`: passou.
@@ -47,9 +50,9 @@ somente referências intencionais:
 
 - `api/db/migrations/001_initial_schema.sql` e `003_governance.sql`: histórico
   aplicado, preservado por requisito.
-- `api/db/migrations/016_remove_ombudsman.sql`, `scripts/test-migrations.mjs` e
-  invariantes unitárias: identificam a remoção, sua destruição e a ausência
-  esperada.
+- `api/db/migrations/016_remove_ombudsman.sql`, `api/db/verify-migrations.js`,
+  `scripts/test-migrations.mjs` e invariantes unitárias: identificam a remoção,
+  sua destruição e a ausência esperada.
 - Relatórios/auditorias datados de 20 de julho de 2026 e planos históricos em
   `docs/reports/`, `docs/reviews/`, `docs/design/` e
   `docs/superpowers/plans/`: preservam evidência do estado anterior e não são

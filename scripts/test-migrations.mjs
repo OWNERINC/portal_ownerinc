@@ -13,11 +13,20 @@ await migrate();
 await migrate();
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
+const client = await pool.connect();
 const fixtureUids = [];
+let legacyObjectsCreated = false;
 try {
+  await client.query(`CREATE TABLE ombudsman (
+    id BIGSERIAL PRIMARY KEY,
+    message TEXT NOT NULL DEFAULT ''
+  )`);
+  await client.query('CREATE INDEX ombudsman_workflow_idx ON ombudsman (id)');
+  legacyObjectsCreated = true;
+
   const permissionFixtureUid = `migration-fixture-permissions-${randomUUID()}`;
   fixtureUids.push(permissionFixtureUid);
-  await pool.query(`INSERT INTO users (uid, email, name, permissions)
+  await client.query(`INSERT INTO users (uid, email, name, permissions)
     VALUES ($1, $2, $3, $4::jsonb)`, [
     permissionFixtureUid,
     `${permissionFixtureUid}@example.com`,
@@ -29,22 +38,21 @@ try {
     'utf8',
   );
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    await pool.query('BEGIN');
+    await client.query('BEGIN');
     try {
-      await pool.query(removalMigration);
-      await pool.query('COMMIT');
+      await client.query(removalMigration);
+      await client.query('COMMIT');
     } catch (error) {
-      await pool.query('ROLLBACK');
+      await client.query('ROLLBACK');
       throw error;
     }
   }
-  const permissionFixture = await pool.query(
+  const permissionFixture = await client.query(
     'SELECT permissions FROM users WHERE uid = $1',
     [permissionFixtureUid],
   );
-  assert.equal(permissionFixture.rows[0]?.permissions.viewOmbudsman, undefined);
-  assert.equal(permissionFixture.rows[0]?.permissions.viewDashboard, true);
-  const removedObjects = await pool.query(`SELECT to_regclass('public.ombudsman') AS ombudsman,
+  assert.deepEqual(permissionFixture.rows[0]?.permissions, { viewDashboard: true });
+  const removedObjects = await client.query(`SELECT to_regclass('public.ombudsman') AS ombudsman,
     to_regclass('public.ombudsman_workflow_idx') AS ombudsman_workflow_idx`);
   assert.equal(removedObjects.rows[0].ombudsman, null);
   assert.equal(removedObjects.rows[0].ombudsman_workflow_idx, null);
@@ -223,10 +231,15 @@ try {
   console.log('migration integration: ok');
 } finally {
   try {
+    if (legacyObjectsCreated) {
+      await client.query('DROP INDEX IF EXISTS ombudsman_workflow_idx');
+      await client.query('DROP TABLE IF EXISTS ombudsman CASCADE');
+    }
     if (fixtureUids.length) {
-      await pool.query('DELETE FROM users WHERE uid = ANY($1::text[])', [fixtureUids]);
+      await client.query('DELETE FROM users WHERE uid = ANY($1::text[])', [fixtureUids]);
     }
   } finally {
+    client.release();
     await pool.end();
   }
 }
