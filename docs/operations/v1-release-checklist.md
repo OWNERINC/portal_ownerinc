@@ -33,6 +33,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Migration passa sobre banco existente até `010_autocard`.
 - [ ] Segunda execução não altera nem duplica o ledger.
 - [ ] Migration CMS `015_cms_editor` passa em PostgreSQL e permanece idempotente na segunda execução.
+- [ ] Migration de remoção `016_remove_ombudsman` passa em PostgreSQL e permanece idempotente na segunda execução.
 - [ ] `011_cron_alert_state` existe e possui os grants esperados.
 - [ ] `012_autocard_media_crop` existe e foi validada em PostgreSQL.
 - [ ] Roles `portal_api` e `portal_cron` têm somente os privilégios necessários.
@@ -57,7 +58,6 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Academy pagina registros ativos.
 - [ ] Benefícios pagina registros ativos.
 - [ ] Nenhuma tela pública perde registros por limite silencioso de 50 itens.
-- [ ] Admin consegue filtrar Ouvidoria por status e responsável.
 - [ ] Admin consegue navegar o histórico completo de auditoria.
 
 ## CMS Drag and Drop
@@ -108,7 +108,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Perfil e upload passam.
 - [ ] Base de Conhecimento, Academy e Benefícios passam.
 - [ ] Lembretes e histórico de entregas passam.
-- [ ] Admin e Ouvidoria passam.
+- [ ] Admin passa.
 - [ ] AutoCard passa para `Analista de RH Sênior` e `Gerente de RH`.
 - [ ] Sólides permanece desligada.
 
@@ -134,7 +134,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 ## Local Verification Record
 
-- [x] `npm run verify` passou com 83 testes.
+- [x] `npm run verify` passou com 141 testes.
 - [x] `npm audit --omit=dev` do cron passou sem vulnerabilidades após atualizar
   o transporte SMTP.
 - [x] `git diff --check` passou.
@@ -147,9 +147,9 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Restore dos uploads executado separadamente; o restore PostgreSQL foi
   validado, mas a execução integral de `scripts/restore.sh` requer Bash local.
 - [x] Invariantes estáticas cobrem AutoCard, enquadramento de imagem, retenção
-  de mídia, paginação, dashboard, lembretes, filtros administrativos, alertas,
-  backup S3 e acessibilidade.
-- [x] Auditoria CMS local: `npm run verify` passou com 134 testes; os scans
+  de mídia, paginação, dashboard, lembretes, administração, alertas, backup S3 e
+  acessibilidade.
+- [x] Auditoria CMS local: `npm run verify` passou com 141 testes; os scans
   estáticos de segredos e HTML cru não encontraram problema novo no CMS.
 - [ ] Teste de migration CMS foi bloqueado porque `MIGRATION_DATABASE_URL` não
   está configurada neste ambiente.

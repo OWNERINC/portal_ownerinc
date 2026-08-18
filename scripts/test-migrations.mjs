@@ -30,6 +30,7 @@ try {
     '012_autocard_media_crop',
     '013_job_title_catalog',
     '015_cms_editor',
+    '016_remove_ombudsman',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
@@ -96,6 +97,7 @@ try {
     '012_autocard_media_crop',
     '013_job_title_catalog',
     '015_cms_editor',
+    '016_remove_ombudsman',
   ]);
   const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE');
   const sortCatalogNames = (names) => names.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR')));
@@ -122,6 +124,8 @@ try {
     { name: 'Coordenador de DHO', active: false },
   ]);
   const tables = await pool.query(`SELECT to_regclass('public.audit_log') AS audit,
+    to_regclass('public.ombudsman') AS ombudsman,
+    to_regclass('public.ombudsman_workflow_idx') AS ombudsman_workflow_idx,
     to_regclass('public.cron_status') AS cron, to_regclass('public.notifications_log') AS notifications,
     to_regclass('public.solides_employee_links') AS solides_links,
       to_regclass('public.job_titles') AS job_titles,
@@ -131,6 +135,8 @@ try {
       to_regclass('public.cms_revisions') AS cms_revisions,
       to_regclass('public.cms_assets') AS cms_assets`);
   assert.equal(tables.rows[0].audit, 'audit_log');
+  assert.equal(tables.rows[0].ombudsman, null);
+  assert.equal(tables.rows[0].ombudsman_workflow_idx, null);
   assert.equal(tables.rows[0].cron, 'cron_status');
   assert.equal(tables.rows[0].notifications, 'notifications_log');
   assert.equal(tables.rows[0].solides_links, 'solides_employee_links');

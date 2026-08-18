@@ -23,15 +23,6 @@ substitui orientação jurídica nem o registro formal das bases legais.
   em `<img>` sem token. Não devem conter documentos ou informação sensível.
 - Anonimização remove a referência e tenta excluir o arquivo correspondente.
 
-## Ouvidoria
-
-- A mensagem é armazenada sem UID ou email do autor.
-- Autenticação e logs técnicos podem permitir correlação operacional; portanto,
-  o produto não promete anonimato técnico absoluto.
-- Acesso e alterações são registrados em `audit_log`.
-- Estados: nova, em análise e resolvida, com responsável e notas internas.
-- Retenção: 730 dias após resolução, aplicada diariamente pelo worker.
-
 ## Notificações
 
 - Retenção: 730 dias, aplicada diariamente pelo worker.
@@ -54,8 +45,7 @@ substitui orientação jurídica nem o registro formal das bases legais.
 
 ## Auditoria
 
-- Retenção: 5 anos para ações privilegiadas e acessos à ouvidoria, aplicada
-  diariamente pelo worker.
+- Retenção: 5 anos para ações privilegiadas, aplicada diariamente pelo worker.
 - O log contém ator, ação, alvo, request ID, detalhes mínimos e horário.
 - Somente super-admin consulta a trilha pela interface.
 

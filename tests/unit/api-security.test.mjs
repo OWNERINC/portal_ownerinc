@@ -16,6 +16,7 @@ const superAdmin = { uid: 'root', role: 'admin', permissions: { superAdmin: true
 
 test('authorization requires an admin role and reserves privilege mutation for another super admin', () => {
   assert.equal(can(manager, 'manageUsers'), true);
+  assert.equal(can(manager, 'viewOmbudsman'), false);
   assert.equal(can({ role: 'viewer', permissions: { manageUsers: true } }, 'manageUsers'), false);
   assert.equal(isSuperAdmin(superAdmin), true);
   assert.equal(maySetPrivileges(superAdmin, 'other'), true);
@@ -49,7 +50,6 @@ test('permission normalization accepts only known true booleans', () => {
     manageAcademy: false,
     manageBenefits: false,
     manageKnowledge: false,
-    viewOmbudsman: false,
     manageSolides: false,
   });
 });
@@ -61,6 +61,7 @@ test('user and profile validation rejects unsafe privilege, URL, photo, and date
   assert.equal(validateUser({ role: 'owner' }), false);
   assert.equal(validateUser({ pj_due_day: 32 }), false);
   assert.equal(validateUser({ permissions: { superAdmin: 'true' } }), false);
+  assert.equal(validateUser({ permissions: { viewOmbudsman: true } }), false);
   assert.equal(validateUser({ permissions: { manageKnowledge: true } }), true);
   assert.equal(validateUser({ permissions: { manageSolides: true } }), true);
   assert.equal(validateUser({ job_title_id: 'e7fa4cd2-70f5-4d75-a77f-b17b5caedfa9' }), true);

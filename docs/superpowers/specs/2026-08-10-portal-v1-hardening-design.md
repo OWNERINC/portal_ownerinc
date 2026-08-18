@@ -4,7 +4,7 @@
 
 The Portal Ownerinc already has the core internal-product capabilities in
 place: closed Firebase authentication, PostgreSQL-backed profiles and content,
-administration, reminders, email delivery, Ombudsman, audit, retention, Docker
+administration, reminders, email delivery, audit, retention, Docker
 Compose, migrations, backups, and the AutoCard module. The remaining work is to
 turn that MVP-plus foundation into a cohesive V1 that can be locally validated
 and handed to operations for real-service homologation.
@@ -122,8 +122,7 @@ and heartbeat state, and receive email when defined operational failures occur.
   backup.
 - Ensure alert delivery failure is logged without stopping the cron's primary
   work.
-- Update retention and privacy documentation for AutoCard media/history and
-  Ombudsman handling.
+- Update retention and privacy documentation for AutoCard media/history.
 
 ## Verification
 
@@ -140,7 +139,7 @@ and heartbeat state, and receive email when defined operational failures occur.
 
 - Docker Compose starts the required local services.
 - Authenticated smoke checks cover login, dashboard, profile, content,
-  reminders, admin, Ombudsman, uploads, and AutoCard.
+  reminders, admin, uploads, and AutoCard.
 - Backup and restore are demonstrated against disposable local data.
 - S3 transfer preflight and missing-configuration failure paths are tested
   without requiring live credentials.

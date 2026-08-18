@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const pages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'ombudsman', 'profile', 'admin', 'solides'];
+const pages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'profile', 'admin', 'solides'];
 
 test('authenticated pages expose one heading, skip navigation, theme color, and external scripts only', async () => {
   for (const page of pages) {
@@ -18,7 +18,7 @@ test('authenticated pages expose one heading, skip navigation, theme color, and 
 
 test('frontend avoids unsafe HTML sinks and honors focus and reduced motion', async () => {
   const scripts = await Promise.all([
-    'academy', 'admin', 'auth', 'benefits', 'dashboard', 'knowledge', 'login', 'ombudsman', 'profile', 'reminders', 'sidebar', 'solides', 'ui',
+    'academy', 'admin', 'auth', 'benefits', 'dashboard', 'knowledge', 'login', 'profile', 'reminders', 'sidebar', 'solides', 'ui',
   ].map((name) => readFile(`public/js/${name}.js`, 'utf8')));
   assert.doesNotMatch(scripts.join('\n'), /\.innerHTML\s*=/);
 
@@ -31,7 +31,7 @@ test('frontend avoids unsafe HTML sinks and honors focus and reduced motion', as
 });
 
 test('admin navigation restores the last verified role before paint and revalidates it', async () => {
-  const navigationPages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'ombudsman', 'profile', 'solides'];
+  const navigationPages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'profile', 'solides'];
   const [auth, shell, layout, ...htmlPages] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('public/js/auth-shell.js', 'utf8').catch(() => ''),
@@ -157,18 +157,16 @@ test('V1 dashboard removes unavailable integrations and reminders use scoped upc
   assert.match(reminders, /deliveries-pagination/);
 });
 
-test('admin exposes paginated audit and Ombudsman filters', async () => {
+test('admin exposes paginated audit without removed sector controls', async () => {
   const [html, script] = await Promise.all([
     readFile('public/admin.html', 'utf8'),
     readFile('public/js/admin.js', 'utf8'),
   ]);
   assert.match(html, /id="audit-pagination"/);
-  assert.match(html, /id="ombudsman-filters"/);
-  assert.match(html, /id="ombudsman-status"/);
   assert.match(script, /fetchAPIPage\(`\/api\/users\/audit\?limit=\$\{AUDIT_PAGE_SIZE\}/);
   assert.match(script, /serverPagination\('audit'/);
-  assert.match(script, /ombudsman-status/);
-  assert.match(script, /ombudsman-assigned/);
+  assert.doesNotMatch(html, /ombudsman|Ouvidoria|viewOmbudsman/i);
+  assert.doesNotMatch(script, /ombudsman|Ouvidoria|viewOmbudsman/i);
 });
 
 test('AutoCard shell preserves accessible navigation and reduced motion', async () => {

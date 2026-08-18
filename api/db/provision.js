@@ -42,7 +42,6 @@ async function grantRuntimeAccess(client) {
     REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM portal_api, portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON users TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON knowledge_base, reminders, academy, benefits TO portal_api;
-    GRANT SELECT, INSERT, UPDATE ON ombudsman TO portal_api;
     GRANT SELECT ON notifications_log TO portal_api;
     GRANT SELECT ON cron_status TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON solides_employee_links TO portal_api;
@@ -53,7 +52,6 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT ON users, reminders TO portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON notifications_log TO portal_cron;
     GRANT SELECT, INSERT, UPDATE ON cron_status TO portal_cron;
-    GRANT SELECT, DELETE ON ombudsman TO portal_cron;
     GRANT SELECT ON autocard_cards TO portal_cron;
     GRANT SELECT, DELETE ON autocard_media TO portal_cron;
     GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron;

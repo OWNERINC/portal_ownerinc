@@ -16,18 +16,15 @@ const TABS = [
   ['job-titles', 'Cargos', 'manageUsers'],
   ['academy', 'Academy', 'manageAcademy'],
   ['benefits', 'Benefícios', 'manageBenefits'],
-  ['ombudsman', 'Ouvidoria', 'viewOmbudsman'],
 ];
 if (solidesAdminStatus) TABS.push(['solides', 'Sólides', 'manageSolides']);
 const pages = {};
 let users = [];
 let courses = [];
 let benefits = [];
-let ombudsman = [];
 let editingUserId = null;
 let editingCourseId = null;
 let editingBenefitId = null;
-let editingOmbudsmanId = null;
 let solidesLinks = [];
 let jobTitles = [];
 let editingJobTitleId = null;
@@ -180,7 +177,6 @@ function switchTab(id, push = false) {
   if (id === 'job-titles') loadJobTitles();
   if (id === 'academy') loadCourses();
   if (id === 'benefits') loadBenefits();
-  if (id === 'ombudsman') loadOmbudsman();
   if (id === 'solides') loadSolides();
 }
 
@@ -348,7 +344,7 @@ async function loadAudit() {
 }
 
 function resetPermissions() {
-  ['p-super', 'p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-ombudsman', 'p-solides'].forEach(id => {
+  ['p-super', 'p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-solides'].forEach(id => {
     const input = document.getElementById(id);
     input.checked = false;
     input.disabled = false;
@@ -375,7 +371,7 @@ function setUserFields(user = {}) {
   document.getElementById('u-role').disabled = !mayEditPrivileges;
   resetPermissions();
   const permissions = user.permissions || {};
-  const permissionMap = { 'p-super': 'superAdmin', 'p-users': 'manageUsers', 'p-knowledge': 'manageKnowledge', 'p-reminders': 'manageReminders', 'p-academy': 'manageAcademy', 'p-benefits': 'manageBenefits', 'p-ombudsman': 'viewOmbudsman', 'p-solides': 'manageSolides' };
+  const permissionMap = { 'p-super': 'superAdmin', 'p-users': 'manageUsers', 'p-knowledge': 'manageKnowledge', 'p-reminders': 'manageReminders', 'p-academy': 'manageAcademy', 'p-benefits': 'manageBenefits', 'p-solides': 'manageSolides' };
   Object.entries(permissionMap).forEach(([id, permission]) => { document.getElementById(id).checked = !!permissions[permission]; });
   document.getElementById('permissions-group').hidden = !(document.getElementById('u-role').value === 'admin' && mayEditPrivileges);
 }
@@ -450,7 +446,6 @@ document.getElementById('user-form').addEventListener('submit', async event => {
       manageReminders: document.getElementById('p-reminders').checked,
       manageAcademy: document.getElementById('p-academy').checked,
       manageBenefits: document.getElementById('p-benefits').checked,
-      viewOmbudsman: document.getElementById('p-ombudsman').checked,
       manageSolides: document.getElementById('p-solides').checked,
     } : {};
     if (document.getElementById('p-knowledge').checked) data.permissions.manageKnowledge = true;
@@ -597,66 +592,6 @@ document.getElementById('benefit-form').addEventListener('submit', async event =
   finally { save.disabled = false; save.textContent = 'Salvar'; }
 });
 
-async function loadOmbudsman() {
-  tableState('ombudsman-tbody', 6, 'Carregando mensagens…');
-  try {
-    pages.ombudsman ||= 0;
-    const query = new URLSearchParams({ limit: '50', offset: String(pages.ombudsman * 50) });
-    const status = document.getElementById('ombudsman-status').value;
-    const assigned = document.getElementById('ombudsman-assigned').value.trim();
-    if (status) query.set('status', status);
-    if (assigned) query.set('assigned_to', assigned);
-    const result = await fetchAPIPage(`/api/ombudsman?${query}`);
-    ombudsman = result.data;
-    if (!ombudsman.length) return tableState('ombudsman-tbody', 6, 'Nenhuma mensagem recebida.');
-    const labels = { sugestao: 'Sugestão', reclamacao: 'Reclamação', denuncia: 'Denúncia' };
-    const statuses = { new: 'Nova', in_review: 'Em análise', resolved: 'Resolvida' };
-    const tbody = clear(document.getElementById('ombudsman-tbody'));
-    ombudsman.forEach(message => {
-        const date = new Date(message.created_at);
-        tbody.append(element('tr', {}, [
-          cell(labels[message.category] || message.category || '—', 'badge badge-gray'), cell(message.message || '—'),
-          cell(statuses[message.status] || message.status || '—', `badge ${message.status === 'resolved' ? 'badge-green' : 'badge-gray'}`),
-          cell(message.assigned_to || 'Não atribuído'),
-          cell(message.created_at && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat('pt-BR').format(date) : '—'),
-          actions(element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Atualizar', 'aria-label': 'Atualizar mensagem de ouvidoria', on: { click: () => editOmbudsman(message) } })),
-        ]));
-    });
-    serverPagination('ombudsman', result.total ?? ombudsman.length, 'ombudsman-pagination', loadOmbudsman);
-  } catch (error) {
-    tableState('ombudsman-tbody', 6, error.status === 403 ? 'Você não tem permissão para acessar a ouvidoria.' : 'Não foi possível carregar as mensagens.', loadOmbudsman);
-  }
-}
-
-function editOmbudsman(message) {
-  editingOmbudsmanId = message.id;
-  document.getElementById('o-message').textContent = message.message || '';
-  document.getElementById('o-status').value = message.status || 'new';
-  document.getElementById('o-assigned').value = message.assigned_to || '';
-  document.getElementById('o-notes').value = message.internal_notes || '';
-  openDialog(document.getElementById('modal-ombudsman'), document.getElementById('o-status'));
-}
-
-document.getElementById('ombudsman-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  const assigned = document.getElementById('o-assigned').value.trim();
-  const save = document.getElementById('modal-ombudsman-save');
-  save.disabled = true;
-  try {
-    await fetchAPI(`/api/ombudsman/${encodeURIComponent(editingOmbudsmanId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: document.getElementById('o-status').value, assigned_to: assigned || null, internal_notes: document.getElementById('o-notes').value.trim() }),
-    });
-    closeDialog(document.getElementById('modal-ombudsman'), true);
-    showToast('Fluxo da ouvidoria atualizado.');
-    await loadOmbudsman();
-  } catch (error) {
-    showToast(`Não foi possível atualizar: ${error.message}`);
-  } finally {
-    save.disabled = false;
-  }
-});
-
 document.getElementById('u-contract').addEventListener('change', event => {
   const isPJ = event.target.value === 'pj';
   document.getElementById('pj-day-group').hidden = !isPJ;
@@ -664,7 +599,7 @@ document.getElementById('u-contract').addEventListener('change', event => {
 });
 document.getElementById('u-role').addEventListener('change', event => { document.getElementById('permissions-group').hidden = !(event.target.value === 'admin' && can(me, 'superAdmin')); });
 document.getElementById('p-super').addEventListener('change', event => {
-  ['p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-ombudsman', 'p-solides'].forEach(id => { document.getElementById(id).checked = event.target.checked; document.getElementById(id).disabled = event.target.checked; });
+  ['p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-solides'].forEach(id => { document.getElementById(id).checked = event.target.checked; document.getElementById(id).disabled = event.target.checked; });
 });
 document.getElementById('solides-link-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -721,18 +656,6 @@ document.getElementById('btn-new-benefit').addEventListener('click', () => benef
 [['user', 'modal-user'], ['course', 'modal-course'], ['benefit', 'modal-benefit']].forEach(([name, modalId]) => {
   document.getElementById(`${modalId}-close`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
   document.getElementById(`${modalId}-cancel`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
-});
-document.getElementById('modal-ombudsman-close').addEventListener('click', () => closeDialog(document.getElementById('modal-ombudsman')));
-document.getElementById('modal-ombudsman-cancel').addEventListener('click', () => closeDialog(document.getElementById('modal-ombudsman')));
-document.getElementById('ombudsman-filters').addEventListener('submit', event => {
-  event.preventDefault();
-  pages.ombudsman = 0;
-  loadOmbudsman();
-});
-document.getElementById('ombudsman-clear').addEventListener('click', () => {
-  document.getElementById('ombudsman-filters').reset();
-  pages.ombudsman = 0;
-  loadOmbudsman();
 });
 window.addEventListener('popstate', () => {
   const requested = new URLSearchParams(location.search).get('tab');

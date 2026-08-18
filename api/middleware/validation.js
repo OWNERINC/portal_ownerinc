@@ -38,7 +38,7 @@ function validateUser(body, { creating = false } = {}) {
 }
 
 function validPermissions(value) {
-  const allowed = new Set(['superAdmin', 'manageUsers', 'manageReminders', 'manageAcademy', 'manageBenefits', 'manageKnowledge', 'viewOmbudsman', 'manageSolides']);
+  const allowed = new Set(['superAdmin', 'manageUsers', 'manageReminders', 'manageAcademy', 'manageBenefits', 'manageKnowledge', 'manageSolides']);
   return value && typeof value === 'object' && !Array.isArray(value)
     && Object.entries(value).every(([key, enabled]) => allowed.has(key) && typeof enabled === 'boolean');
 }

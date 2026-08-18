@@ -9,7 +9,6 @@
 - Academia interna.
 - Benefícios.
 - Lembretes e notificações por email.
-- Envio e consulta autorizada de mensagens da ouvidoria.
 
 ## Fora do escopo atual
 

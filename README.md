@@ -1,7 +1,7 @@
 # Portal Ownerinc
 
 Portal interno da Ownerinc para perfis, base de conhecimento, academia,
-benefícios, lembretes e ouvidoria.
+benefícios e lembretes.
 
 ## Arquitetura
 

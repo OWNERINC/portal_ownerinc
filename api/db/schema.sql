@@ -143,25 +143,6 @@ CREATE TABLE IF NOT EXISTS benefits (
   )
 );
 
-CREATE TABLE IF NOT EXISTS ombudsman (
-  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  category        TEXT        NOT NULL DEFAULT '',
-  message         TEXT        NOT NULL,
-  status          TEXT        NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'in_review', 'resolved')),
-  assigned_to     TEXT        REFERENCES users(uid) ON DELETE SET NULL,
-  internal_notes  TEXT        NOT NULL DEFAULT '',
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  resolved_at     TIMESTAMPTZ,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT ombudsman_content_lengths CHECK (
-    char_length(category) <= 100 AND char_length(message) <= 10000
-    AND char_length(internal_notes) <= 10000 AND (assigned_to IS NULL OR char_length(assigned_to) <= 128)
-  ),
-  CONSTRAINT ombudsman_resolution_check CHECK (
-    (status = 'resolved' AND resolved_at IS NOT NULL) OR (status <> 'resolved' AND resolved_at IS NULL)
-  )
-);
-
 CREATE TABLE IF NOT EXISTS notifications_log (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   reminder_id     UUID        REFERENCES reminders(id) ON DELETE SET NULL,
@@ -231,8 +212,6 @@ CREATE TABLE IF NOT EXISTS solides_employee_links (
 
 CREATE INDEX IF NOT EXISTS notifications_log_history_idx
   ON notifications_log (scheduled_date DESC, claimed_at DESC);
-CREATE INDEX IF NOT EXISTS ombudsman_workflow_idx
-  ON ombudsman (status, assigned_to, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS solides_employee_links_external_unique
   ON solides_employee_links (employer_scope, external_id)
   WHERE external_id IS NOT NULL;

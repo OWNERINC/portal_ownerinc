@@ -63,7 +63,6 @@
       <li><a href="./reminders.html" title="Lembretes"><i data-lucide="bell"></i><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><i data-lucide="graduation-cap"></i><span>Academy</span></a></li>
       <li><a href="./benefits.html" title="Benefícios"><i data-lucide="gift"></i><span>Benefícios</span></a></li>
-      <li><a href="./ombudsman.html" title="Ouvidoria"><i data-lucide="message-square"></i><span>Ouvidoria</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><i data-lucide="user"></i><span>Meu Perfil</span></a></li>
        <li><a href="./admin.html" class="active" title="Admin"><i data-lucide="settings-2"></i><span>Admin</span></a></li>
        <li class="cms-link"><a href="./cms.html" title="Editor CMS"><i data-lucide="file-edit"></i><span>Editor CMS</span></a></li>
@@ -187,33 +186,6 @@
           </table>
         </div>
         <div id="benefits-pagination" class="pagination" aria-label="Paginação de benefícios"></div>
-      </section>
-
-      <!-- Ouvidoria -->
-      <section id="section-ombudsman" class="admin-section" role="tabpanel" aria-labelledby="tab-ombudsman" hidden>
-        <div class="section-header">
-          <h2>Ouvidoria</h2>
-        </div>
-        <form id="ombudsman-filters" class="filter-bar" autocomplete="off">
-          <label for="ombudsman-status">Status</label>
-          <select id="ombudsman-status" class="form-select"><option value="">Todos</option><option value="new">Nova</option><option value="in_review">Em análise</option><option value="resolved">Resolvida</option></select>
-          <label for="ombudsman-assigned">Responsável</label>
-          <input id="ombudsman-assigned" class="form-input" type="search" maxlength="128" placeholder="UID do responsável">
-          <button class="btn btn-primary" type="submit">Filtrar</button>
-          <button id="ombudsman-clear" class="btn btn-ghost" type="button">Limpar</button>
-        </form>
-        <div class="table-wrapper">
-          <table>
-            <caption>Mensagens recebidas pela ouvidoria</caption>
-            <thead>
-              <tr><th scope="col">Categoria</th><th scope="col">Mensagem</th><th scope="col">Status</th><th scope="col">Responsável</th><th scope="col">Data</th><th scope="col">Ações</th></tr>
-            </thead>
-            <tbody id="ombudsman-tbody">
-              <tr><td colspan="6" class="empty-state">Carregando…</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div id="ombudsman-pagination" class="pagination" aria-label="Paginação da ouvidoria"></div>
       </section>
 
       <!-- Sólides — a tab só é criada após feature discovery autorizada -->
@@ -343,10 +315,6 @@
           <label for="p-benefits">Gerenciar Benefícios</label>
         </div>
         <div class="permission-row">
-          <input type="checkbox" id="p-ombudsman" name="viewOmbudsman">
-          <label for="p-ombudsman">Ver Ouvidoria</label>
-        </div>
-        <div class="permission-row">
           <input type="checkbox" id="p-solides" name="manageSolides">
           <label for="p-solides">Gerenciar integração Sólides</label>
         </div>
@@ -433,37 +401,6 @@
     <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
       <button class="btn btn-ghost" type="button" id="modal-benefit-cancel">Cancelar</button>
       <button class="btn btn-primary" type="submit" id="modal-benefit-save">Salvar</button>
-    </div>
-  </form>
-</div>
-
-<!-- Modal: fluxo da ouvidoria -->
-<div id="modal-ombudsman" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-ombudsman-title">
-  <form class="modal" id="ombudsman-form">
-    <div class="modal-header">
-      <span class="modal-title" id="modal-ombudsman-title">Atualizar mensagem</span>
-      <button class="modal-close" id="modal-ombudsman-close" type="button" aria-label="Fechar">×</button>
-    </div>
-    <p id="o-message" class="break-text"></p>
-    <div class="form-group">
-      <label class="form-label" for="o-status">Status</label>
-      <select class="form-select" id="o-status" name="status">
-        <option value="new">Nova</option>
-        <option value="in_review">Em análise</option>
-        <option value="resolved">Resolvida</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="o-assigned">UID do responsável</label>
-      <input class="form-input" id="o-assigned" name="assigned_to" type="text" maxlength="128" autocomplete="off">
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="o-notes">Notas internas</label>
-      <textarea class="form-input" id="o-notes" name="internal_notes" maxlength="10000" rows="5"></textarea>
-    </div>
-    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
-      <button class="btn btn-ghost" type="button" id="modal-ombudsman-cancel">Cancelar</button>
-      <button class="btn btn-primary" type="submit" id="modal-ombudsman-save">Salvar</button>
     </div>
   </form>
 </div>

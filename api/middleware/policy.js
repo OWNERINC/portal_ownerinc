@@ -4,7 +4,6 @@ const PERMISSIONS = new Set([
   'manageAcademy',
   'manageBenefits',
   'manageKnowledge',
-  'viewOmbudsman',
   'manageSolides',
 ]);
 

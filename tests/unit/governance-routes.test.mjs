@@ -36,7 +36,7 @@ test('pagination is capped and all-content visibility requires the matching mana
 });
 
 test('scoped routes delegate failures and privileged changes to the audit helper', async () => {
-  for (const name of ['knowledge', 'reminders', 'academy', 'benefits', 'ombudsman', 'job-titles']) {
+  for (const name of ['knowledge', 'reminders', 'academy', 'benefits', 'job-titles']) {
     const source = await readFile(`api/routes/${name}.js`, 'utf8');
     assert.match(source, /next\(error\)/, `${name} must use generic error handling`);
   }
@@ -45,9 +45,6 @@ test('scoped routes delegate failures and privileged changes to the audit helper
     assert.match(source, /withAudit/, `${name} must audit privileged mutations`);
     assert.match(source, /X-Total-Count/, `${name} must expose pagination totals`);
   }
-  const ombudsman = await readFile('api/routes/ombudsman.js', 'utf8');
-  assert.match(ombudsman, /ombudsman\.read/);
-  assert.match(ombudsman, /ombudsman\.update/);
 });
 
 test('privileged user listing is strict, paginated, counted, and audited', async () => {

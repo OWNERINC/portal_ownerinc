@@ -10,7 +10,7 @@ Atualizado em 21 de julho de 2026.
 | Gate 1 - Fundação técnica | Concluído | Node 24, migrations, constraints, roles PostgreSQL e testes em CI |
 | Gate 2 - Jornadas e acessibilidade | Concluído no código | Mobile, teclado, dialogs, estados e deep links; validação física ainda necessária |
 | Gate 3 - Notificações | Concluído | Ledger, claim/sending, retry, catch-up, heartbeat, histórico e retenção |
-| Gate 4 - Governança | Concluído | Audit log, ouvidoria, exportação, erasure e política de retenção |
+| Gate 4 - Governança | Concluído | Audit log, exportação, erasure e política de retenção |
 | Gate 5 - Produção recuperável | Concluído no código | Digests, backup consistente, restore transacional, smoke e rollback |
 | Gate 6 - Expansões condicionais | Não iniciado por decisão | Somente após demanda validada |
 
@@ -152,7 +152,6 @@ teclado e leitor de tela.
 ### Conteúdo e design system
 
 - Padronizar termos em português e marcas deliberadas.
-- Corrigir copy da ouvidoria conforme política técnica aprovada.
 - Formalizar painel informativo, link-card e formulário.
 - Separar tokens de marca, foco, links, estados e texto inverso.
 - Adotar tipografia editorial para artigos sem redesenhar o shell.
@@ -203,24 +202,19 @@ Objetivo: completar a administração necessária ao produto interno.
 ### Auditoria e LGPD
 
 - Registrar actor, ação, alvo, horário e request ID em mudanças privilegiadas.
-- Auditar leitura/exportação da ouvidoria conforme política aprovada.
 - Definir base legal, retenção, correção, exportação e exclusão por dataset.
-- Definir anonimato técnico/organizacional da ouvidoria.
 
 ### Módulos
 
 - Unificar permissão de knowledge, decidindo se haverá `manageKnowledge`.
 - Adicionar draft/publicado apenas se houver revisão editorial real.
-- Adicionar status mínimo `new`, `in_review`, `resolved` à ouvidoria.
-- Adicionar responsável e notas internas somente se necessários para tratamento.
 - Adicionar busca/filtro de benefits quando o volume justificar.
-- Paginar usuários, ombudsman, reminders e catálogos acima de 50 registros.
+- Paginar usuários, reminders e catálogos acima de 50 registros.
 
 ### Critérios de aceite
 
 - Toda alteração privilegiada é investigável.
 - Conteúdo inativo/draft é inacessível ao usuário comum pela API.
-- Ouvidoria segue retenção e acesso aprovados.
 - Dados de titular podem ser localizados, corrigidos e tratados conforme política.
 - Listas administrativas mantêm desempenho com 500 registros.
 
@@ -253,7 +247,7 @@ Objetivo: publicar sem depender de procedimentos não testados.
 - Deploy usa artefato de commit limpo, não working tree.
 - Backup e restore são demonstrados e medidos.
 - Rollback restaura versão anterior sem apagar dados compatíveis.
-- Login, perfil, catálogos, lembretes, admin, upload e ouvidoria passam no smoke.
+- Login, perfil, catálogos, lembretes, admin e upload passam no smoke.
 - RPO e RTO aprovados são atendidos.
 
 ## Gate 6 - Refinamento e Expansões Condicionais

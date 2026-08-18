@@ -11,7 +11,6 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - Colaboradores que consultam informações, cursos e benefícios.
 - Usuários que mantêm o próprio perfil e recebem lembretes.
 - Administradores que gerenciam usuários, permissões e conteúdo interno.
-- Responsáveis autorizados que consultam mensagens da ouvidoria.
 
 ## Capacidades atuais
 
@@ -20,7 +19,6 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - Base de conhecimento interna.
 - Catálogo da academia e de benefícios.
 - Lembretes mensais enviados por email.
-- Ouvidoria com acesso restrito às mensagens recebidas.
 - Upload de foto de perfil.
 
 ## Restrições

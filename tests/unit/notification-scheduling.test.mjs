@@ -58,7 +58,7 @@ test('target resolution isolates all, contract groups, and explicit UIDs', () =>
 });
 
 test('retention windows are bounded and configurable', () => {
-  assert.deepEqual(retentionDays({}), { notifications: 730, ombudsman: 730, audit: 1825 });
+  assert.deepEqual(retentionDays({}), { notifications: 730, audit: 1825 });
   assert.throws(() => retentionDays({ AUDIT_RETENTION_DAYS: '0' }), /between 30 and 3650/);
 });
 

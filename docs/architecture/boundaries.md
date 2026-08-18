@@ -20,4 +20,4 @@ no frontend não substitui uma checagem de autorização na API.
 
 - `.env`, chaves Firebase e tokens nunca entram no Git.
 - Uploads e o volume PostgreSQL são estado operacional, não código-fonte.
-- Mensagens da ouvidoria e dados de perfil exigem acesso mínimo.
+- Dados de perfil exigem acesso mínimo.

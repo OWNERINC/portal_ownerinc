@@ -1,6 +1,6 @@
 # Inventário da Implementação Funcional
 
-Atualizado em 20 de julho de 2026.
+Atualizado em 18 de agosto de 2026.
 
 Este documento relaciona as capacidades descritas no `README.md` e no brief do
 produto com o que está efetivamente implementado no código. Roadmap, intenção e
@@ -105,24 +105,13 @@ fluxo correspondente no Portal.
 | WhatsApp | Não implementada | Canal permanece desativado e é registrado como `skipped`; não existe envio real. `cron/sendWhatsApp.js`, `cron/checkReminders.js` |
 | Lido, concluído e preferências | Não implementada | Não há estado por usuário nem opt-in/opt-out por canal. |
 
-## Ouvidoria
-
-| Funcionalidade | Estado | Implementação e evidência |
-| --- | --- | --- |
-| Enviar mensagem | Operacional | Usuário autenticado envia texto validado; limite de cinco envios por hora por usuário. `api/routes/ombudsman.js`, `public/js/ombudsman.js` |
-| Minimização da identidade | Operacional | UID e email não são gravados na mensagem, sem promessa de anonimato técnico absoluto diante de logs e infraestrutura. `api/routes/ombudsman.js`, `api/db/schema.sql` |
-| Leitura restrita e auditada | Operacional | Exige `viewOmbudsman`; toda listagem autorizada gera auditoria. `api/routes/ombudsman.js`, `public/js/admin.js` |
-| Tratamento da mensagem | Operacional | Status nova/em análise/resolvida, responsável e notas internas. `api/routes/ombudsman.js`, `public/js/admin.js` |
-| Filtros operacionais | Operacional | Interface filtra status e responsável e mantém paginação server-side. `api/routes/ombudsman.js`, `public/js/admin.js` |
-| Retenção | Operacional | Worker exclui mensagens resolvidas após o período configurado, padrão de 730 dias. `cron/retention.js` |
-
 ## Administração e Permissões
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Perfis `viewer` e `admin` | Operacional | Role persistida e permissões granulares efetivas somente para admins. `api/db/schema.sql`, `api/middleware/policy.js` |
 | Gate do painel | Operacional | Interface exibe abas permitidas; toda autorização real é repetida na API. `public/js/auth.js`, `public/js/admin.js`, `api/middleware/policy.js` |
-| Permissões granulares | Operacional | `manageUsers`, `manageReminders`, `manageAcademy`, `manageBenefits`, `manageKnowledge` e `viewOmbudsman`; somente super-admin atribui privilégios. `api/middleware/policy.js`, `api/routes/users.js` |
+| Permissões granulares | Operacional | `manageUsers`, `manageReminders`, `manageAcademy`, `manageBenefits`, `manageKnowledge` e `manageSolides`; somente super-admin atribui privilégios. `api/middleware/policy.js`, `api/routes/users.js` |
 | Gestão de usuários | Operacional | Listagem paginada, criação, edição, desativação e reativação para `manageUsers`, com restrições de hierarquia. `api/routes/users.js`, `public/js/admin.js` |
 | Gestão de cargos | Operacional | Superfície administrativa para cadastrar, editar, ativar e desativar cargos; cargos desativados permanecem associados ao histórico dos usuários. `api/routes/job-titles.js`, `public/js/admin.js`, `api/db/migrations/009_job_titles.sql` |
 | Apagamento de dados pessoais | Operacional | Super-admin remove identidade Firebase, perfil, foto e referências estáveis após desativação. `api/routes/users.js` |
@@ -152,7 +141,7 @@ fluxo correspondente no Portal.
 | Rate limit distribuído | Parcial | Limite da API é em memória por processo; Nginx cobre a borda de uma única instância. |
 | Menor privilégio no banco | Operacional | Roles separadas para migração, API e cron; serviços de runtime não recebem DDL. `api/db/provision.js`, `docker-compose.yml` |
 | Exportação, bloqueio e exclusão | Operacional | Existem mecanismos técnicos para correção, exportação, desativação e erasure. `api/routes/users.js` |
-| Retenção automática | Operacional | Padrões de 730 dias para notificações/ouvidoria resolvida e 1.825 dias para auditoria. `cron/retention.js` |
+| Retenção automática | Operacional | Padrões de 730 dias para notificações e 1.825 dias para auditoria. `cron/retention.js` |
 | Política jurídica e bases legais | Parcial | `docs/product/privacy-retention.md` é uma política técnica inicial e requer validação jurídica. |
 | Preferências de comunicação | Não implementada | Não há consentimento ou preferência individual por canal. |
 
@@ -162,7 +151,7 @@ fluxo correspondente no Portal.
 | --- | --- | --- |
 | Stack Docker Compose | Operacional | PostgreSQL, migrations, API, Nginx, cron e Auth Emulator opcional no perfil local. `docker-compose.yml`, `firebase-emulator/Dockerfile` |
 | Persistência | Operacional | Volumes nomeados para PostgreSQL e uploads. `docker-compose.yml` |
-| Migrations | Operacional | SQL numerado, ledger, advisory lock e transação; schema fresco acompanha as migrations até `011_cron_alert_state`. `api/db/migrate.js`, `api/db/migrations/`, `api/db/schema.sql` |
+| Migrations | Operacional | SQL numerado, ledger, advisory lock e transação; schema fresco e upgrades acompanham as migrations até `016_remove_ombudsman`. `api/db/migrate.js`, `api/db/migrations/`, `api/db/schema.sql` |
 | Liveness e readiness | Operacional | `/api/health` verifica processo e `/api/ready` consulta o banco. `api/index.js` |
 | CI e segurança de dependências | Operacional | Sintaxe, testes, migrations reais, audit, SBOM, Trivy, builds e publicação no GHCR. `.github/workflows/ci.yml`, `scripts/verify.mjs` |
 | Deploy imutável | Operacional | Publica archive de commit limpo, resolve imagens por digest e mantém release anterior para rollback. `deploy.sh`, `scripts/release.sh` |
@@ -201,8 +190,8 @@ fluxo correspondente no Portal.
 ## Síntese
 
 O núcleo implementado cobre autenticação fechada, perfil, conteúdos internos,
-catálogos, lembretes por email, ouvidoria, administração granular, auditoria,
-retenção e operação em Docker Compose. As limitações mais relevantes estão na
+catálogos, lembretes por email, administração granular, auditoria, retenção e
+operação em Docker Compose. As limitações mais relevantes estão na
 paginação de algumas visões comuns, controles reduzidos para históricos e
 filtros, ausência de WhatsApp, validação assistiva ainda não executada em
 dispositivos e dependências operacionais externas para TLS, alertas e backups

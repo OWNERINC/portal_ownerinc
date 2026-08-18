@@ -3,7 +3,6 @@ const pool = require('./db');
 function retentionDays(env = process.env) {
   const values = {
     notifications: Number(env.NOTIFICATION_RETENTION_DAYS || 730),
-    ombudsman: Number(env.OMBUDSMAN_RETENTION_DAYS || 730),
     audit: Number(env.AUDIT_RETENTION_DAYS || 1825),
   };
   if (Object.values(values).some((value) => !Number.isInteger(value) || value < 30 || value > 3650)) {
@@ -26,16 +25,11 @@ async function enforceRetention() {
          AND scheduled_date < CURRENT_DATE - $1::integer`,
       [days.notifications]
     );
-    const ombudsman = await db.query(
-      `DELETE FROM ombudsman
-       WHERE status = 'resolved' AND resolved_at < NOW() - ($1::integer * INTERVAL '1 day')`,
-      [days.ombudsman]
-    );
     const audit = await db.query(
       `DELETE FROM audit_log WHERE created_at < NOW() - ($1::integer * INTERVAL '1 day')`,
       [days.audit]
     );
-    const details = { notifications: notifications.rowCount, ombudsman: ombudsman.rowCount, audit: audit.rowCount, days };
+    const details = { notifications: notifications.rowCount, audit: audit.rowCount, days };
     await db.query(
       `INSERT INTO audit_log (action, target_type, details)
        VALUES ('retention.enforce', 'system', $1::jsonb)`,

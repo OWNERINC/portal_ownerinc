@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -30,18 +30,11 @@ test('Sólides links are unique, reviewable, and removed with the Portal user', 
   }
 });
 
-test('governance schema matches the upgrade migration', async () => {
+test('governance schema retains generic constraints and audit indexes', async () => {
   const schema = await readFile('api/db/schema.sql', 'utf8');
-  const migration = await readFile('api/db/migrations/003_governance.sql', 'utf8');
-  for (const source of [schema, migration]) {
-    assert.match(source, /status IN \('new', 'in_review', 'resolved'\)/);
-    assert.match(source, /resolved_at/);
-    assert.match(source, /assigned_to/);
-    assert.match(source, /internal_notes/);
-    assert.match(source, /knowledge_base_content_lengths/);
-    assert.match(source, /ombudsman_content_lengths/);
-    assert.match(source, /notifications_log_history_idx/);
-  }
+  assert.match(schema, /knowledge_base_content_lengths/);
+  assert.match(schema, /notifications_log_history_idx/);
+  assert.doesNotMatch(schema, /ombudsman|Ouvidoria|viewOmbudsman/i);
 });
 
 test('notification schema enforces one durable occurrence per channel', async () => {
