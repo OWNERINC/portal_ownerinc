@@ -51,6 +51,8 @@ test('CMS editor exposes all approved block types, native drag/drop, and keyboar
 test('safe renderer validates the allowlist and never uses raw HTML sinks', () => {
   assert.match(renderer, /export const BLOCK_TYPES/);
   assert.match(renderer, /export function validateBlocks/);
+  assert.match(renderer, /MAX_CMS_PAYLOAD_BYTES = 5 \* 1024 \* 1024/);
+  assert.match(renderer, /TextEncoder\(\)\.encode\(JSON\.stringify\(blocks\)\)/);
   assert.match(renderer, /textContent/);
   assert.match(renderer, /fetchAPIAsset/);
   assert.match(renderer, /\/api\/cms\/assets\//);

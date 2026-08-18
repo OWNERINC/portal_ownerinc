@@ -209,6 +209,8 @@ test('CI builds and publishes commit-addressed production images', async () => {
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /ownerinc-portal-api:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /docker push \$\{REGISTRY\}\/ownerinc-portal-api:\$\{GITHUB_SHA\}/);
+  assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
+  assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
   assert.match(workflow, /Test migrations against PostgreSQL/);
   const actionReferences = [...workflow.matchAll(/^\s*[-]?\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
   assert.ok(actionReferences.length > 0);

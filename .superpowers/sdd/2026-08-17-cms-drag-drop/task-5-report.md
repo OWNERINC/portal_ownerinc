@@ -141,6 +141,53 @@ CMS flows, and protected PDF validation were intentionally not run.
 2. Authenticated manual acceptance and live smoke validation remain pending.
 3. Deployment remains intentionally not executed.
 
+## Follow-up: CI and CMS transport blocker fixes
+
+The remaining release blockers were fixed in this worktree without deployment or
+runtime Docker/PostgreSQL execution.
+
+### Implemented fixes
+
+- The CI cron image now uses the repository root as its Docker build context and
+  explicitly selects `cron/Dockerfile`:
+  `docker build --tag ownerinc-portal-cron:${GITHUB_SHA} --file cron/Dockerfile .`.
+  This matches Compose and allows the Dockerfile's `cron/` and `api/cms/` COPY
+  paths to resolve. The commit tag and publish behavior remain unchanged.
+- The normal API JSON parser remains capped at 100 KiB. CMS JSON requests use a
+  scoped 6 MiB Express parser and matching Nginx `/api/cms/` body limit. The
+  longer `/api/cms/assets` prefix remains independently capped at 50 MiB for
+  multipart asset uploads.
+- CMS block content has a documented 5 MiB maximum measured from the normalized
+  UTF-8 block array, leaving transport overhead inside the 6 MiB JSON limit.
+  Structural block validation runs before this aggregate check. The browser
+  validator mirrors the same 5 MiB normalized payload bound before autosave.
+- The cron fallback now has explicit coverage for image-only published blocks;
+  visual-only content preserves the legacy reminder description when it renders
+  no delivery text.
+- CI context, Dockerfile path, image tag, CMS parser/proxy limits, aggregate
+  validation order, and the 50 MiB asset exception are covered by static
+  invariants.
+
+### Verification evidence
+
+- Focused CMS, frontend, reader, cron, and operations tests: PASS, 48 tests.
+- `npm run verify`: PASS, all 139 tests passed; JavaScript syntax, security,
+  static invariants, and Docker Compose configuration checks passed.
+- `git diff --check`: PASS. No whitespace errors were reported.
+- Runtime Docker image builds and PostgreSQL migration tests: NOT RUN. Runtime
+  Docker/PostgreSQL validation remains unavailable for this task.
+- Deployment, live HTTP checks, and browser-authenticated acceptance: NOT RUN by
+  request.
+
+### Remaining concerns
+
+1. `MIGRATION_DATABASE_URL` is still unavailable, so PostgreSQL migration
+   execution, second-run idempotency, grants, and database-backed CMS acceptance
+   remain unverified.
+2. Runtime image builds and live asset/body-limit behavior remain pending in the
+   operational environment.
+3. Deployment remains intentionally not executed.
+
 ## Release checklist
 
 - [x] Audit `ba9c34f..HEAD` against the CMS design, plan, product brief, and

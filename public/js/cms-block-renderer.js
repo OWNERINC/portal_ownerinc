@@ -3,6 +3,8 @@ import { clear, element, safeHttpUrl } from './ui.js';
 
 export const BLOCK_TYPES = ['heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video'];
 const BLOCK_TYPE_SET = new Set(BLOCK_TYPES);
+// Keep the editor aligned with the server's 5 MiB normalized block limit.
+const MAX_CMS_PAYLOAD_BYTES = 5 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const renderStates = new WeakMap();
 const documentObservers = new WeakMap();
@@ -136,7 +138,9 @@ function normalizeBlock(block) {
 export function validateBlocks(value) {
   if (!Array.isArray(value) || value.length > 100) return null;
   const blocks = value.map(normalizeBlock);
-  return blocks.every(Boolean) ? blocks : null;
+  if (!blocks.every(Boolean)) return null;
+  return new TextEncoder().encode(JSON.stringify(blocks)).byteLength <= MAX_CMS_PAYLOAD_BYTES
+    ? blocks : null;
 }
 
 export function blocksToText(blocks) {

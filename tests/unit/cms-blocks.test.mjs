@@ -83,7 +83,7 @@ test('blocksToText produces safe reminder text and omits visual-only blocks', ()
 });
 
 test('validateBlocks rejects an oversized aggregate CMS payload', () => {
-  const oversized = Array.from({ length: 20 }, () => ({
+  const oversized = Array.from({ length: 100 }, () => ({
     type: 'list',
     items: Array.from({ length: 100 }, () => '\u0800'.repeat(500)),
     ordered: false,

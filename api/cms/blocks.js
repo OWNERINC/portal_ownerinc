@@ -1,6 +1,7 @@
 const MAX_BLOCKS = 100;
 const MAX_URL_LENGTH = 2048;
-const MAX_CMS_PAYLOAD_BYTES = 2 * 1024 * 1024;
+// CMS block content is capped below the 6 MiB /api/cms JSON transport limit.
+const MAX_CMS_PAYLOAD_BYTES = 5 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const ALLOWED_BLOCK_TYPES = new Set([
@@ -117,9 +118,10 @@ function normalizeBlock(block) {
 
 function validateBlocks(value) {
   if (!Array.isArray(value) || value.length > MAX_BLOCKS) return null;
-  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_CMS_PAYLOAD_BYTES) return null;
   const normalized = value.map(normalizeBlock);
-  return normalized.every(Boolean) ? normalized : null;
+  if (!normalized.every(Boolean)) return null;
+  return Buffer.byteLength(JSON.stringify(normalized), 'utf8') <= MAX_CMS_PAYLOAD_BYTES
+    ? normalized : null;
 }
 
 function blocksToText(blocks) {

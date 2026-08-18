@@ -88,9 +88,11 @@ test('CMS list totals count all matching documents and Nginx scopes the large up
 });
 
 test('CMS JSON transport is bounded separately from the normal API', () => {
-  assert.match(index, /app\.use\('\/api\/cms', express\.json\(\{ limit: '2mb' \}\)\)/);
+  assert.match(index, /app\.use\('\/api\/cms', express\.json\(\{ limit: '6mb' \}\)\)/);
   assert.match(index, /express\.json\(\{ limit: '100kb' \}\)/);
-  assert.match(blocks, /MAX_CMS_PAYLOAD_BYTES = 2 \* 1024 \* 1024/);
-  assert.match(blocks, /Buffer\.byteLength\(JSON\.stringify\(value\), 'utf8'\)/);
-  assert.match(nginx, /location \^~ \/api\/cms\/[\s\S]*client_max_body_size 2m;/);
+  assert.match(blocks, /MAX_CMS_PAYLOAD_BYTES = 5 \* 1024 \* 1024/);
+  assert.match(blocks, /normalized\.every\(Boolean\)/);
+  assert.match(blocks, /Buffer\.byteLength\(JSON\.stringify\(normalized\), 'utf8'\)/);
+  assert.match(nginx, /location \^~ \/api\/cms\/[\s\S]*client_max_body_size 6m;/);
+  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 50m;/);
 });

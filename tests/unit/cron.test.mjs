@@ -44,19 +44,26 @@ test('cron keeps legacy reminder text when published blocks render empty', () =>
   assert.equal(reminderForDelivery(reminder), reminder);
   assert.equal(reminderForDelivery({
     ...reminder,
+    cms_blocks: [{ type: 'image', asset_id: '550e8400-e29b-41d4-a716-446655440000', alt: 'Banner' }],
+  }).description, 'Legacy description');
+  assert.equal(reminderForDelivery({
+    ...reminder,
     cms_blocks: [{ type: 'paragraph', text: 'Published description' }],
   }).description, 'Published description');
 });
 
 test('cron image contains the shared CMS reader at its actual import path', async () => {
-  const [compose, dockerfile, cronSource, reader, blocks] = await Promise.all([
+  const [compose, dockerfile, workflow, cronSource, reader, blocks] = await Promise.all([
     readFile('docker-compose.yml', 'utf8'),
     readFile('cron/Dockerfile', 'utf8'),
+    readFile('.github/workflows/ci.yml', 'utf8'),
     readFile('cron/checkReminders.js', 'utf8'),
     readFile('api/cms/reader.js', 'utf8'),
     readFile('api/cms/blocks.js', 'utf8'),
   ]);
   assert.match(compose, /context: \.[\s\S]*dockerfile: cron\/Dockerfile/);
+  assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
+  assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
   assert.match(dockerfile, /COPY --chown=node:node api\/cms\/ \/api\/cms\//);
   assert.match(cronSource, /require\('\.\.\/api\/cms\/reader'\)/);
   assert.match(reader, /require\('\.\/blocks'\)/);
