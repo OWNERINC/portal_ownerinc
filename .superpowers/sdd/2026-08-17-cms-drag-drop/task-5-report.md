@@ -231,12 +231,13 @@ secret changes.
 - Added `reminderForDelivery`; a published block rendering that is empty or
   whitespace now leaves the legacy `description` unchanged. Audience, channel,
   claim, retry, and delivery paths were not changed.
-- Kept the normal JSON API limit at 100 KiB and added a scoped 2 MiB JSON parser
+- Kept the normal JSON API limit at 100 KiB and added a scoped 6 MiB JSON parser
   and Nginx body limit for `/api/cms`. `validateBlocks` also rejects CMS block
-  arrays whose serialized UTF-8 payload exceeds 2 MiB. This is bounded, supports
-  the approved 100-block/5,000-character paragraph constraints, and does not
-  widen unrelated API request bodies. The scoped limit and aggregate guard are
-  covered by CMS invariants.
+  arrays whose normalized UTF-8 payload exceeds 5 MiB. This bounded aggregate
+  contract accommodates large approved documents without claiming every
+  theoretical combination of per-block maxima, and does not widen unrelated API
+  request bodies. The scoped limit and aggregate guard are covered by CMS
+  invariants.
 - Added `GET /api/announcements/:id`, requiring authentication, a UUID, the
   `announcement` content type, and a `published` revision. Missing, draft-only,
   and future unpublished records return no detail. The announcements page now
