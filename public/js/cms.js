@@ -38,6 +38,9 @@ const selectedTypeNode = document.getElementById('inspector-type');
 const categoryNode = document.getElementById('inspector-category');
 const publishedNode = document.getElementById('inspector-published');
 const blockSettings = document.getElementById('inspector-block-settings');
+const historyNode = document.getElementById('revision-history');
+const historyPagination = document.getElementById('revision-history-pagination');
+const loadHistoryButton = document.getElementById('load-history');
 const saveDraftButton = document.getElementById('save-draft');
 const publishButton = document.getElementById('publish-document');
 const unpublishButton = document.getElementById('unpublish-document');
@@ -59,6 +62,9 @@ let actionBusy = false;
 let loading = false;
 let newDocumentDirty = false;
 let navigationConfirmed = false;
+let historyOffset = 0;
+let historyRequestToken = 0;
+const HISTORY_PAGE_SIZE = 50;
 const documentsByType = new Map();
 const sourcesByType = new Map();
 
@@ -142,10 +148,11 @@ function renderTypeNav() {
       showState(editorRoot, 'Selecione um documento na coluna ao lado.');
       showState(previewRoot, 'A prévia aparecerá aqui.');
       showState(blockSettings, 'Selecione um bloco para editar suas configurações.');
-      renderTypeNav();
-      renderDocumentList();
-      updateInspector();
-      loadDocuments();
+       renderTypeNav();
+       renderDocumentList();
+       updateInspector();
+       if (!newDocumentForm.hidden) void loadSources();
+       loadDocuments();
     } },
   })));
 }
@@ -180,6 +187,44 @@ function updateInspector() {
   unpublishButton.disabled = !active || !doc.published_revision_id;
   scheduleButton.disabled = !active;
   unscheduleButton.disabled = !active || !doc.scheduled_revision_id;
+  loadHistoryButton.disabled = !doc || mutationBusy();
+}
+
+async function loadRevisionHistory(documentId = selectedDocument) {
+  if (!documentId) return;
+  const requestToken = selectionToken;
+  const historyToken = ++historyRequestToken;
+  historyNode.replaceChildren(element('li', { className: 'empty-state', text: 'Carregando histórico…' }));
+  try {
+    const result = await fetchAPIPage(`/api/cms/documents/${encodeURIComponent(documentId)}/revisions?limit=${HISTORY_PAGE_SIZE}&offset=${historyOffset}`);
+    if (requestToken !== selectionToken || documentId !== selectedDocument || historyToken !== historyRequestToken) return;
+    const revisions = result.data || [];
+    clear(historyNode);
+    if (!revisions.length) {
+      historyNode.append(element('li', { className: 'empty-state', text: 'Nenhuma revisão encontrada.' }));
+      clear(historyPagination);
+      return;
+    }
+    revisions.forEach(revision => historyNode.append(element('li', {}, [
+      element('strong', { text: `v${revision.version} · ${revision.status}` }),
+      element('span', { text: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(revision.created_at)) }),
+    ])));
+    clear(historyPagination);
+    const total = result.total ?? revisions.length;
+    if (total > HISTORY_PAGE_SIZE) {
+      const finalHistoryOffset = Math.max(0, Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE);
+      historyPagination.append(
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Anterior', disabled: historyOffset === 0, on: { click: () => { historyOffset = Math.max(0, historyOffset - HISTORY_PAGE_SIZE); loadRevisionHistory(); } } }),
+        element('span', { text: `Página ${Math.floor(historyOffset / HISTORY_PAGE_SIZE) + 1} de ${Math.ceil(total / HISTORY_PAGE_SIZE)}` }),
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Próxima', disabled: historyOffset + HISTORY_PAGE_SIZE >= total, on: { click: () => { historyOffset = Math.min(finalHistoryOffset, historyOffset + HISTORY_PAGE_SIZE); loadRevisionHistory(); } } }),
+      );
+    }
+  } catch {
+    if (requestToken === selectionToken && documentId === selectedDocument && historyToken === historyRequestToken) {
+      historyNode.replaceChildren(element('li', { className: 'empty-state', text: 'Não foi possível carregar o histórico.' }));
+      clear(historyPagination);
+    }
+  }
 }
 
 function markDirty(nextBlocks) {
@@ -232,7 +277,9 @@ async function loadDocuments() {
 }
 
 async function loadSources() {
-  if (!SOURCE_ENDPOINTS[selectedType]) {
+  const type = selectedType;
+  const requestToken = selectionToken;
+  if (!SOURCE_ENDPOINTS[type]) {
     sourceField.hidden = true;
     sourceSelect.required = false;
     return;
@@ -241,15 +288,24 @@ async function loadSources() {
   sourceSelect.required = true;
   sourceSelect.replaceChildren(element('option', { value: '', text: 'Selecione um registro' }));
   try {
-    const result = await fetchAPIPage(SOURCE_ENDPOINTS[selectedType]);
-    const sources = result.data || [];
-    sourcesByType.set(selectedType, sources);
+    const result = await fetchAPIPage(SOURCE_ENDPOINTS[type]);
+    if (requestToken !== selectionToken || type !== selectedType) return;
+    const sources = [...(result.data || [])];
+    const total = result.total ?? sources.length;
+    for (let offset = sources.length; offset < total; offset += 100) {
+      const page = await fetchAPIPage(SOURCE_ENDPOINTS[type].replace(/offset=\d+/, `offset=${offset}`));
+      if (requestToken !== selectionToken || type !== selectedType) return;
+      sources.push(...(page.data || []));
+    }
+    sourcesByType.set(type, sources);
     sources.forEach(source => sourceSelect.append(element('option', {
       value: source.id,
       text: source.title || source.company || source.name || source.description?.slice(0, 80) || source.id,
     })));
   } catch {
-    sourceSelect.replaceChildren(element('option', { value: '', text: 'Não foi possível carregar registros' }));
+    if (requestToken === selectionToken && type === selectedType) {
+      sourceSelect.replaceChildren(element('option', { value: '', text: 'Não foi possível carregar registros' }));
+    }
   }
 }
 
@@ -270,11 +326,13 @@ async function loadDocument(id) {
     editVersion = 0;
     saveQueued = false;
     documentView = view;
+    historyOffset = 0;
     const blocks = view.draft?.blocks || view.schedule?.revision?.blocks || view.published?.blocks || [];
     renderEditor(blocks);
     updateInspector();
     renderDocumentList();
     setSaveState('Salvo');
+    loadRevisionHistory(id);
     setError('');
   } catch {
     if (requestToken !== selectionToken || selectedDocument !== id) return;
@@ -397,7 +455,7 @@ async function scheduleDocument(event) {
   if (!documentView || mutationBusy()) return;
   const value = document.getElementById('scheduled-at').value;
   if (!value) return;
-  const scheduledAt = new Date(`${value}:00Z`);
+  const scheduledAt = new Date(value);
   if (!Number.isFinite(scheduledAt.valueOf())) {
     setError('Informe uma data futura válida para o agendamento.');
     return;
@@ -460,6 +518,7 @@ newDocumentButton.addEventListener('click', async () => {
   await loadSources();
   document.getElementById('new-title').focus();
 });
+loadHistoryButton.addEventListener('click', () => loadRevisionHistory());
 newDocumentForm.addEventListener('input', () => {
   newDocumentDirty = true;
   syncBusyState();

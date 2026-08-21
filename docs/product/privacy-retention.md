@@ -43,6 +43,28 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Retenção: o histórico segue a política de dados internos e deve ser mantido
   ou excluído conforme decisão do responsável por DHO e validação jurídica.
 
+## CMS Editorial
+
+- Revisões são imutáveis e permanecem vinculadas ao documento para auditoria.
+- Assets privados sem referência em qualquer revisão são removidos diariamente
+  após 30 dias por padrão; o prazo pode ser ajustado por
+  `CMS_ASSET_ORPHAN_RETENTION_DAYS` entre 1 e 3650 dias.
+- Uma falha ao remover o arquivo mantém o registro para nova tentativa e é
+  registrada no log operacional.
+
+## Cards Pós
+
+- Finalidade: criar e manter convites internos de Pós-Vendas no template
+  Owntime, com histórico compartilhado entre os usuários autorizados.
+- Acesso: temporariamente restrito a administradores pela política própria do
+  módulo; ocultar a navegação é apenas UX e toda rota repete a autorização.
+- Registros: `pos_cards` preserva o histórico operacional e a autoria enquanto
+  houver necessidade interna autorizada. O prazo definitivo depende da
+  validação do responsável por Pós-Vendas e LGPD.
+- Mídias: arquivos privados são normalizados para WebP e não são publicados
+  pelo diretório genérico de uploads. Mídias sem referência são removidas pelo
+  worker após a janela técnica configurada para mídias órfãs.
+
 ## Auditoria
 
 - Retenção: 5 anos para ações privilegiadas, aplicada diariamente pelo worker.

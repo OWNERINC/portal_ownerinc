@@ -49,6 +49,17 @@ fluxo correspondente no Portal.
 | Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para todos os usuários autorizados de RH, com busca, edição, duplicação e exclusão auditadas dentro do shell padrão do Portal. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js`, `public/autocard/index.html` |
 | Renomeação RH para DHO | Operacional | Migration 010 reassocia usuários e renomeia cargos antigos sem quebrar a referência de usuários. `api/db/migrations/010_autocard.sql` |
 
+## Cards Pós
+
+| Funcionalidade | Estado | Implementação e evidência |
+| --- | --- | --- |
+| Acesso temporário de administrador | Operacional | O módulo está operacional para o bypass temporário de administradores; os cargos finais de Pos-Vendas ainda não foram configurados. `api/middleware/policy.js`, `public/cards-pos/guard.js` |
+| Editor e exportação de convites | Operacional | Permite editar o convite, enviar imagem, salvar no histórico, criar, editar, duplicar e excluir cards, além de exportar o resultado pelo PDF do navegador. `public/cards-pos.html`, `public/cards-pos/app.js` |
+| Separação de produto | Operacional | A página e o módulo são separados do AutoCard e do DHO, sem reutilizar as rotas ou tabelas do AutoCard. `public/cards-pos/`, `api/routes/pos-cards.js` |
+| Autorização e armazenamento | Operacional | A autorização é server-side por `canUsePosCards` em `/api/pos-cards/*`; mídias Pos não são entregues pelo `/uploads` público e ficam disponíveis somente pela rota autenticada; os dados e mídias ficam isolados em `pos_cards` e `pos_card_media`. `api/index.js`, `api/middleware/policy.js`, `api/routes/pos-cards.js`, `api/db/migrations/018_pos_card_storage_key.sql` |
+| Limite de requisição não autenticada | Parcial | O Nginx mantém o limite global de 100 KiB para JSON; uma requisição Pos acima desse limite pode receber `413` antes da autenticação por limite do parser da borda. O upload de mídia continua com localização dedicada limitada a 4 MiB. |
+| Smoke de implantação | Parcial | Checks reais no navegador, na API e no PostgreSQL continuam sendo pré-requisito de implantação quando não estiverem disponíveis no ambiente local. |
+
 ## Perfil Pessoal
 
 | Funcionalidade | Estado | Implementação e evidência |

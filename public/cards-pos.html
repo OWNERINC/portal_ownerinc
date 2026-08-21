@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0F0F0F">
+  <title>Cards Pós — Portal Ownerinc</title>
+  <script src="./js/auth-shell.js"></script>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./cards-pos/styles.css">
+</head>
+<body class="cards-pos-page">
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+<div class="portal-wrapper">
+  <aside class="sidebar" aria-label="Navegação principal">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand">
+        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
+        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
+        <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#chevrons-left"></use></svg>
+      </button>
+    </div>
+    <!-- generated:portal-sidebar -->
+    <ul class="sidebar-nav">
+      <li><a href="./dashboard.html" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
+      <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
+      <li><a href="./benefits.html" title="Benefícios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#gift"></use></svg><span>Benefícios</span></a></li>
+      <li><a href="./announcements.html" title="Anúncios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Anúncios</span></a></li>
+      <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
+      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="cms-link"><a href="./cms.html" title="Editor CMS"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#file-edit"></use></svg><span>Editor CMS</span></a></li>
+      <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
+      <li class="pos-cards-link"><a href="./cards-pos.html" class="active" aria-current="page" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
+    </ul>
+    <!-- /generated:portal-sidebar -->
+    <div class="sidebar-footer">
+      <button class="sidebar-logout" type="button" aria-label="Sair">
+        <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#log-out"></use></svg><span>Sair</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <!-- generated:portal-topbar -->
+    <header class="topbar"><span class="topbar-title">Cards Pós</span></header>
+    <!-- /generated:portal-topbar -->
+    <main class="page-body" id="main-content" tabindex="-1">
+      <div class="cards-pos-content">
+        <header class="cards-pos-toolbar">
+          <div>
+            <span class="eyebrow">Modelo único · Owntime</span>
+            <h1>Convite de experiência</h1>
+            <p>Preencha os textos, escolha uma imagem e revise o convite no preview ao lado.</p>
+          </div>
+          <nav class="cards-pos-tabs" aria-label="Navegação dos Cards Pós">
+            <button class="nav-button active" data-view="editor" type="button" aria-pressed="true">Criar convite</button>
+            <button class="nav-button" data-view="history" type="button" aria-pressed="false">Histórico</button>
+          </nav>
+        </header>
+
+        <section id="editorView" class="cards-pos-workspace" aria-labelledby="editorTitle">
+          <aside class="editor-panel" aria-labelledby="editorTitle">
+            <div class="eyebrow">Editor</div>
+            <h2 id="editorTitle">Monte seu convite</h2>
+            <form id="cardForm">
+              <fieldset>
+                <legend>Imagem e capa</legend>
+                <button id="uploadButton" class="upload-control" type="button">
+                  <span class="upload-icon" aria-hidden="true">+</span>
+                  <span><strong>Adicionar imagem principal</strong><small>JPG, PNG ou WebP · mínimo 500 × 500 px</small></span>
+                </button>
+                <input id="imageInput" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true">
+              </fieldset>
+              <fieldset>
+                <legend>Texto da capa</legend>
+                <label for="heroTitle">Chamada<input id="heroTitle" data-field="heroTitle" maxlength="60"></label>
+                <label for="heroEmphasis">Frase em destaque<input id="heroEmphasis" data-field="heroEmphasis" maxlength="90"></label>
+                <label for="heroBrand">Assinatura da experiência<input id="heroBrand" data-field="heroBrand" maxlength="32"></label>
+              </fieldset>
+              <fieldset>
+                <legend>Informações do convite</legend>
+                <label for="greeting">Apresentação<textarea id="greeting" data-field="greeting" maxlength="260" rows="3"></textarea></label>
+                <label for="stayInfo">Hospedagem, datas e unidade<textarea id="stayInfo" data-field="stayInfo" maxlength="260" rows="4"></textarea></label>
+              </fieldset>
+              <fieldset>
+                <legend>Benefícios</legend>
+                <label for="experienceTitle">Título da primeira seção<input id="experienceTitle" data-field="experienceTitle" maxlength="70"></label>
+                <label for="experienceBody">Descrição da experiência<textarea id="experienceBody" data-field="experienceBody" maxlength="420" rows="4"></textarea></label>
+                <label for="foodInfo">Café e restaurante<textarea id="foodInfo" data-field="foodInfo" maxlength="180" rows="3"></textarea></label>
+                <label for="consumptionTitle">Título dos consumos<input id="consumptionTitle" data-field="consumptionTitle" maxlength="70"></label>
+                <label for="consumptionBody">Descrição dos consumos<textarea id="consumptionBody" data-field="consumptionBody" maxlength="320" rows="4"></textarea></label>
+              </fieldset>
+              <fieldset>
+                <legend>Observações e rodapé</legend>
+                <label for="afterStay">Orientação pós-estadia<textarea id="afterStay" data-field="afterStay" maxlength="420" rows="4"></textarea></label>
+                <label for="conditions">Condições do convite<textarea id="conditions" data-field="conditions" maxlength="220" rows="3"></textarea></label>
+                <label for="contact">Contato<input id="contact" data-field="contact" maxlength="120"></label>
+              </fieldset>
+              <div class="form-actions">
+                <button id="saveButton" class="button secondary" type="button">Salvar</button>
+                <button id="exportButton" class="button primary" type="button">Exportar PDF</button>
+              </div>
+              <p id="status" class="status" role="status" aria-live="polite"></p>
+            </form>
+          </aside>
+
+          <section class="preview-panel" aria-label="Pré-visualização do convite">
+            <div class="preview-label">Preview do convite · 108 × 192 mm</div>
+            <div class="preview-stage"><article id="cardCanvas" class="invite-card"></article></div>
+          </section>
+        </section>
+
+        <section id="historyView" class="history-view hidden" aria-labelledby="historyTitle">
+          <div class="history-heading">
+            <div><div class="eyebrow">Biblioteca compartilhada</div><h2 id="historyTitle">Convites salvos</h2></div>
+            <label class="search-label" for="historySearch">Buscar convites<input id="historySearch" type="search" aria-label="Buscar convites" placeholder="Buscar por nome..."></label>
+          </div>
+          <div id="historyList" class="history-list"></div>
+          <div id="historyPagination" class="pagination" aria-live="polite"></div>
+          <p id="historyEmpty" class="empty-state hidden" role="status" aria-live="polite">Nenhum convite salvo ainda.</p>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./cards-pos/app.js"></script>
+</body>
+</html>

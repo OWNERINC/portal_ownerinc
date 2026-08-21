@@ -14,10 +14,12 @@ const pool = require('./db');
 const { checkReminders } = require('./checkReminders');
 const { enforceRetention, retentionDays } = require('./retention');
 const { autocardMediaRetentionDays, enforceAutocardMediaRetention } = require('./autocard-media-retention');
+const { cmsAssetRetentionDays, enforceCmsAssetRetention } = require('./cms-asset-retention');
 const { TIME_ZONE } = require('./scheduling');
 
 retentionDays();
 autocardMediaRetentionDays();
+cmsAssetRetentionDays();
 
 async function run() {
   try {
@@ -38,6 +40,11 @@ async function runRetention() {
     await enforceAutocardMediaRetention();
   } catch (error) {
     console.error(JSON.stringify({ service: 'cron', event: 'autocard_media_retention_failed', error: error.message }));
+  }
+  try {
+    await enforceCmsAssetRetention();
+  } catch (error) {
+    console.error(JSON.stringify({ service: 'cron', event: 'cms_asset_retention_failed', error: error.message }));
   }
 }
 

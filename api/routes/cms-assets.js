@@ -138,7 +138,7 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, storage_key, original_name, mime_type, byte_size, created_at
-         FROM cms_assets WHERE id = $1`,
+         FROM cms_assets WHERE id = $1 AND deleting_at IS NULL`,
       [req.params.id],
     );
     const asset = rows[0];

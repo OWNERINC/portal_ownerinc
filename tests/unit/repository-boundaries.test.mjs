@@ -16,9 +16,10 @@ test('every API resource route requires authentication', async () => {
   for (const file of files.filter((name) => name.endsWith('.js'))) {
     const source = await readFile(`api/routes/${file}`, 'utf8');
     const routes = source.matchAll(/router\.(?:get|post|put|delete)\(([^\n]+)/g);
-    const globallyProtected = /router\.use\(authMiddleware,\s*requireAutoCard\)/.test(source);
+    const globalProtection = source.match(/router\.use\(authMiddleware,\s*require(?:AutoCard|PosCards)\)/);
 
     for (const route of routes) {
+      const globallyProtected = globalProtection?.index < route.index;
       if (file === 'auth.js' && route[1].includes("'/password-reset'")) {
         assert.match(route[1], /resetLimit/, 'password reset must remain rate limited');
         continue;

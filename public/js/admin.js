@@ -1,23 +1,18 @@
-import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
+import { requireAuth, getCachedUserSnapshot, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
+import { auth } from './firebase-config.js';
 import { clear, closeDialog, element, openDialog, safeHttpUrl } from './ui.js';
 
-const me = await requireAuth(true);
-if (!me) throw new Error('Administrator access required');
-
+await auth.authStateReady();
+const cachedUser = getCachedUserSnapshot();
+let me = cachedUser && cachedUser.uid === auth.currentUser?.uid ? cachedUser : null;
 let solidesAdminStatus = null;
-if (can(me, 'manageSolides')) {
-  try { solidesAdminStatus = await fetchAPI('/api/solides/admin/status'); } catch (error) {
-    if (error.status !== 404) console.warn('Sólides admin discovery failed');
-  }
-}
-
 const TABS = [
   ['users', 'Usuários', 'manageUsers'],
   ['job-titles', 'Cargos', 'manageUsers'],
   ['academy', 'Academy', 'manageAcademy'],
   ['benefits', 'Benefícios', 'manageBenefits'],
 ];
-if (solidesAdminStatus) TABS.push(['solides', 'Sólides', 'manageSolides']);
+if (me && can(me, 'manageSolides')) TABS.push(['solides', 'Sólides', 'manageSolides']);
 const pages = {};
 let users = [];
 let courses = [];
@@ -29,6 +24,16 @@ let solidesLinks = [];
 let jobTitles = [];
 let editingJobTitleId = null;
 const AUDIT_PAGE_SIZE = 50;
+
+if (me) buildTabs(false);
+me = await requireAuth(true);
+if (!me) throw new Error('Administrator access required');
+if (can(me, 'manageSolides')) {
+  try { solidesAdminStatus = await fetchAPI('/api/solides/admin/status'); } catch (error) {
+    if (error.status !== 404) console.warn('Sólides admin discovery failed');
+  }
+  if (!TABS.some(([id]) => id === 'solides')) TABS.push(['solides', 'Sólides', 'manageSolides']);
+}
 
 function tableState(tbodyId, columns, message, retry) {
   const pagination = document.getElementById(tbodyId.replace(/-tbody$/, '-pagination'));
@@ -134,7 +139,7 @@ async function toggleJobTitle(title) {
   }
 }
 
-function buildTabs() {
+function buildTabs(activate = true) {
   const tabs = TABS.filter(([, , permission]) => can(me, permission));
   const container = clear(document.getElementById('admin-tabs'));
   if (!tabs.length) {
@@ -146,15 +151,19 @@ function buildTabs() {
     'aria-controls': `section-${id}`, 'aria-selected': 'false', tabindex: '-1',
     on: { click: () => switchTab(id, true) },
   })));
-  container.addEventListener('keydown', event => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const buttons = [...container.querySelectorAll('[role="tab"]')];
-    const current = buttons.indexOf(document.activeElement);
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
-    buttons[next].click();
-    buttons[next].focus();
-  });
+  if (!container.dataset.keyboardBound) {
+    container.dataset.keyboardBound = 'true';
+    container.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const buttons = [...container.querySelectorAll('[role="tab"]')];
+      const current = buttons.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next].click();
+      buttons[next].focus();
+    });
+  }
+  if (!activate) return;
   const requested = new URLSearchParams(location.search).get('tab');
   switchTab(tabs.some(([id]) => id === requested) ? requested : tabs[0][0]);
 }

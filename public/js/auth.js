@@ -2,6 +2,31 @@ import { auth } from './firebase-config.js';
 import { signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
+const AUTH_SNAPSHOT_KEY = 'ownerinc-auth-snapshot';
+
+function setAuthState(state) {
+  document.documentElement.dataset.authState = state;
+}
+
+function renderAuthUnavailable() {
+  const main = document.querySelector('main') || document.body;
+  const status = document.createElement('section');
+  status.className = 'empty-state auth-error-state';
+  status.setAttribute('role', 'alert');
+  status.setAttribute('aria-live', 'assertive');
+  const title = document.createElement('h1');
+  title.textContent = 'Portal temporariamente indisponível';
+  const text = document.createElement('p');
+  text.textContent = 'Não foi possível validar sua sessão. Tente novamente sem sair desta página.';
+  const retry = document.createElement('button');
+  retry.className = 'btn btn-ghost';
+  retry.type = 'button';
+  retry.textContent = 'Tentar novamente';
+  retry.addEventListener('click', () => window.location.reload());
+  status.append(title, text, retry);
+  main.replaceChildren(status);
+}
+
 function applyVerifiedRole(user) {
   document.documentElement.dataset.portalRole = user.role;
   try {
@@ -15,16 +40,52 @@ function applyAutoCardNavigation(user) {
   document.documentElement.dataset.autocardAccess = String(user?.autocard_access === true);
 }
 
+function applyPosCardsNavigation(user) {
+  document.documentElement.dataset.posCardsAccess = String(user?.pos_cards_access === true);
+}
+
 function applyCmsNavigation(user) {
   const cmsPermissions = ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders'];
   document.documentElement.dataset.cmsAccess = String(cmsPermissions.some(permission => can(user, permission)));
 }
 
+function cacheAuthSnapshot(user) {
+  try {
+    sessionStorage.setItem(AUTH_SNAPSHOT_KEY, JSON.stringify({
+      version: 1,
+      savedAt: Date.now(),
+      role: user.role,
+      permissions: Object.fromEntries(Object.entries(user.permissions || {}).filter(([, value]) => value === true)),
+      user: {
+        uid: user.uid,
+        email: user.email,
+        name: user.name,
+        bio: user.bio,
+        phone: user.phone,
+        linkedin_url: user.linkedin_url,
+        photo_url: user.photo_url,
+        job_title: user.job_title,
+      },
+      autocardAccess: user?.autocard_access === true,
+      posCardsAccess: user?.pos_cards_access === true,
+      cmsAccess: ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders']
+        .some(permission => can(user, permission)),
+    }));
+  } catch (_) {
+    // The API remains authoritative when session storage is unavailable.
+  }
+}
+
 function clearVerifiedRole() {
   delete document.documentElement.dataset.portalRole;
+  delete document.documentElement.dataset.authSnapshot;
+  delete document.documentElement.dataset.autocardAccess;
   delete document.documentElement.dataset.cmsAccess;
+  delete document.documentElement.dataset.posCardsAccess;
+  setAuthState('error');
   try {
     sessionStorage.removeItem('ownerinc-verified-role');
+    sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
   } catch (_) {
     // Nothing else is required when storage is unavailable.
   }
@@ -88,6 +149,23 @@ export async function getCurrentUserDoc() {
   return fetchAPI('/api/users/me');
 }
 
+export function getCachedUserSnapshot() {
+  try {
+    const snapshot = JSON.parse(sessionStorage.getItem(AUTH_SNAPSHOT_KEY) || 'null');
+    if (!snapshot || snapshot.version !== 1 || !Number.isFinite(snapshot.savedAt)
+      || Date.now() - snapshot.savedAt >= 10 * 60 * 1000 || !snapshot.user) return null;
+    return {
+      ...snapshot.user,
+      role: snapshot.role,
+      permissions: snapshot.permissions || {},
+      autocard_access: snapshot.autocardAccess === true,
+      pos_cards_access: snapshot.posCardsAccess === true,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 export async function requireAuth(requireAdmin = false) {
   await auth.authStateReady();
   if (!auth.currentUser) {
@@ -105,25 +183,16 @@ export async function requireAuth(requireAdmin = false) {
       window.location.replace(`./login.html?reason=${error.status === 403 ? 'access' : 'session'}`);
       return null;
     }
-    const main = document.querySelector('main') || document.body;
-    main.replaceChildren();
-    const status = document.createElement('div');
-    status.className = 'empty-state';
-    status.setAttribute('role', 'alert');
-    const text = document.createElement('p');
-    text.textContent = 'Não foi possível conectar ao Portal. Verifique sua conexão e tente novamente.';
-    const retry = document.createElement('button');
-    retry.className = 'btn btn-ghost';
-    retry.type = 'button';
-    retry.textContent = 'Tentar novamente';
-    retry.addEventListener('click', () => window.location.reload());
-    status.append(text, retry);
-    main.append(status);
+    clearVerifiedRole();
+    renderAuthUnavailable();
     return null;
   }
   applyVerifiedRole(user);
   applyAutoCardNavigation(user);
+  applyPosCardsNavigation(user);
   applyCmsNavigation(user);
+  cacheAuthSnapshot(user);
+  setAuthState('ready');
   if (requireAdmin && user.role !== 'admin') {
     window.location.replace('./dashboard.html');
     return null;

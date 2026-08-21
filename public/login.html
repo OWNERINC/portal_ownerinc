@@ -6,7 +6,6 @@
   <meta name="theme-color" content="#0F0F0F">
   <title>Login — Portal Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
-  <script defer src="https://unpkg.com/lucide@0.441.0/dist/umd/lucide.min.js" integrity="sha384-+BmuXGyhRt0m3keXGimGlGjRHSt5U+wqLV71/sdbtxPN7ep6z3rHVT6Wp7q3K240" crossorigin="anonymous"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     button { min-height: 44px; }
@@ -284,19 +283,19 @@
       <p class="brand-subtitle">Hub central de conhecimento, treinamentos, benefícios e comunicação da equipe.</p>
       <ul class="feature-list">
         <li>
-          <div class="feat-icon" aria-hidden="true"><i data-lucide="book-open"></i></div>
+          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg></div>
           Base de Conhecimento e Processos
         </li>
         <li>
-          <div class="feat-icon" aria-hidden="true"><i data-lucide="graduation-cap"></i></div>
+          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg></div>
           Ownerinc Academy
         </li>
         <li>
-          <div class="feat-icon" aria-hidden="true"><i data-lucide="gift"></i></div>
+          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#gift"></use></svg></div>
           Clube de Vantagens
         </li>
         <li>
-          <div class="feat-icon" aria-hidden="true"><i data-lucide="bell"></i></div>
+          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg></div>
           Lembretes e Datas Importantes
         </li>
       </ul>
@@ -323,14 +322,14 @@
         <form id="login-form" autocomplete="on">
           <div class="form-group">
             <label class="form-label" for="email">E-mail</label>
-            <input class="form-input" type="email" id="email" name="email" autocomplete="email" spellcheck="false" required>
+            <input class="form-input" type="email" id="email" name="email" autocomplete="email" spellcheck="false" aria-label="E-mail" required>
           </div>
           <div class="form-group">
             <label class="form-label" for="password">Senha</label>
             <div class="password-wrap">
-              <input class="form-input" type="password" id="password" name="password" autocomplete="current-password" required>
+              <input class="form-input" type="password" id="password" name="password" autocomplete="current-password" aria-label="Senha" required>
               <button type="button" class="toggle-pw" id="toggle-pw" aria-label="Mostrar senha" aria-pressed="false">
-                <i data-lucide="eye" aria-hidden="true"></i>
+                <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#eye"></use></svg>
               </button>
             </div>
             <button class="forgot-link" type="button" id="forgot-link">Esqueci minha senha</button>
@@ -343,7 +342,7 @@
       <form class="reset-section" id="reset-section">
         <div class="form-group">
           <label class="form-label" for="reset-email">Seu e-mail cadastrado</label>
-           <input class="form-input" type="email" id="reset-email" name="reset-email" autocomplete="email" spellcheck="false" required placeholder="nome@exemplo.com…">
+           <input class="form-input" type="email" id="reset-email" name="reset-email" autocomplete="email" spellcheck="false" aria-label="Seu e-mail cadastrado" required placeholder="nome@exemplo.com…">
         </div>
         <p class="error-msg" id="reset-error" aria-live="polite"></p>
         <div id="reset-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>

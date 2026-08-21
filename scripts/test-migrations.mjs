@@ -74,6 +74,9 @@ try {
     '013_job_title_catalog',
     '015_cms_editor',
     '016_remove_ombudsman',
+    '017_pos_cards',
+    '018_pos_card_storage_key',
+    '019_cms_asset_deletion_state',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
@@ -141,6 +144,9 @@ try {
     '013_job_title_catalog',
     '015_cms_editor',
     '016_remove_ombudsman',
+    '017_pos_cards',
+    '018_pos_card_storage_key',
+    '019_cms_asset_deletion_state',
   ]);
   const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE');
   const sortCatalogNames = (names) => names.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR')));
@@ -176,7 +182,9 @@ try {
       to_regclass('public.autocard_media') AS autocard_media,
       to_regclass('public.cms_documents') AS cms_documents,
       to_regclass('public.cms_revisions') AS cms_revisions,
-      to_regclass('public.cms_assets') AS cms_assets`);
+      to_regclass('public.cms_assets') AS cms_assets,
+      to_regclass('public.pos_cards') AS pos_cards,
+      to_regclass('public.pos_card_media') AS pos_card_media`);
   assert.equal(tables.rows[0].audit, 'audit_log');
   assert.equal(tables.rows[0].ombudsman, null);
   assert.equal(tables.rows[0].ombudsman_workflow_idx, null);
@@ -189,6 +197,18 @@ try {
   assert.equal(tables.rows[0].cms_documents, 'cms_documents');
   assert.equal(tables.rows[0].cms_revisions, 'cms_revisions');
   assert.equal(tables.rows[0].cms_assets, 'cms_assets');
+  assert.equal(tables.rows[0].pos_cards, 'pos_cards');
+  assert.equal(tables.rows[0].pos_card_media, 'pos_card_media');
+  const storageConstraint = await pool.query(`SELECT pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint WHERE conname = 'pos_card_media_storage_key_check'`);
+  const storageConstraintDefinition = (storageConstraint.rows[0]?.definition || '').replaceAll('\\\\', '\\');
+  const canonicalStoragePattern = '^pos-card-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.webp$';
+  assert.ok(storageConstraintDefinition.includes(canonicalStoragePattern), storageConstraintDefinition);
+  await assert.rejects(
+    client.query(`INSERT INTO pos_card_media (storage_key, content_type, byte_size)
+      VALUES ('pos-card-dead.webp', 'image/webp', 1)`),
+    /pos_card_media_storage_key_check/,
+  );
   const cmsConstraints = await pool.query(`SELECT conname
     FROM pg_constraint
     WHERE conname IN (
@@ -217,8 +237,13 @@ try {
     has_table_privilege('portal_api', 'public.cms_documents', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_documents,
     has_table_privilege('portal_api', 'public.cms_revisions', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_revisions,
     has_table_privilege('portal_api', 'public.cms_assets', 'SELECT,INSERT,UPDATE,DELETE') AS api_cms_assets,
-    has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT,UPDATE') AS cron_cms_documents,
-    has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT,UPDATE') AS cron_cms_revisions,
+     has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT,UPDATE') AS cron_cms_documents,
+     has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT,UPDATE') AS cron_cms_revisions,
+     has_table_privilege('portal_cron', 'public.cms_assets', 'SELECT,DELETE') AS cron_cms_assets,
+    has_table_privilege('portal_api', 'public.pos_cards', 'SELECT,INSERT,UPDATE,DELETE') AS api_pos_cards,
+    has_table_privilege('portal_api', 'public.pos_card_media', 'SELECT,INSERT,UPDATE,DELETE') AS api_pos_card_media,
+    has_table_privilege('portal_cron', 'public.pos_cards', 'SELECT') AS cron_pos_cards,
+    has_table_privilege('portal_cron', 'public.pos_card_media', 'SELECT,DELETE') AS cron_pos_card_media,
     has_table_privilege('portal_cron', 'public.audit_log', 'SELECT,INSERT,UPDATE,DELETE') AS audit_privileges`);
   assert.equal(privileges.rows[0].cards_select, true);
   assert.equal(privileges.rows[0].media_select_delete, true);
@@ -227,6 +252,11 @@ try {
   assert.equal(privileges.rows[0].api_cms_assets, true);
   assert.equal(privileges.rows[0].cron_cms_documents, true);
   assert.equal(privileges.rows[0].cron_cms_revisions, true);
+  assert.equal(privileges.rows[0].cron_cms_assets, true);
+  assert.equal(privileges.rows[0].api_pos_cards, true);
+  assert.equal(privileges.rows[0].api_pos_card_media, true);
+  assert.equal(privileges.rows[0].cron_pos_cards, true);
+  assert.equal(privileges.rows[0].cron_pos_card_media, true);
   assert.equal(privileges.rows[0].audit_privileges, true);
   console.log('migration integration: ok');
 } finally {

@@ -1,7 +1,7 @@
 const { cert, getApps, initializeApp } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const pool = require('../db');
-const { can, canUseAutoCard } = require('./policy');
+const { can, canUseAutoCard, canUsePosCards } = require('./policy');
 const { rateLimit } = require('./security');
 
 const writeLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => req.user.uid });
@@ -45,6 +45,7 @@ async function authMiddleware(req, res, next) {
     req.firebaseUser = decoded;
     req.user = rows[0];
     req.user.autocard_access = canUseAutoCard(req.user);
+    req.user.pos_cards_access = canUsePosCards(req.user);
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return writeLimit(req, res, next);
     next();
   } catch (err) {

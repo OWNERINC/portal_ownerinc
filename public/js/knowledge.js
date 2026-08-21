@@ -18,6 +18,7 @@ const modal = document.getElementById('modal-article');
 const form = document.getElementById('article-form');
 let articles = [];
 let categories = [];
+let articlesRequest = 0;
 let total = 0;
 let editingId = null;
 const PAGE_SIZE = 20;
@@ -106,6 +107,7 @@ function render() {
 }
 
 async function loadArticles() {
+  const requestToken = ++articlesRequest;
   showState(listNode, 'Carregando artigos…');
   try {
     const query = params();
@@ -117,12 +119,13 @@ async function loadArticles() {
       fetchAPIPage(`/api/knowledge?${search}`),
       fetchAPI('/api/knowledge/categories'),
     ]);
+    if (requestToken !== articlesRequest) return;
     articles = result.data;
     total = result.total ?? articles.length;
     categories = categoryList;
     render();
   } catch {
-    showState(listNode, 'Não foi possível carregar os artigos. Verifique sua conexão.', loadArticles);
+    if (requestToken === articlesRequest) showState(listNode, 'Não foi possível carregar os artigos. Verifique sua conexão.', loadArticles);
   }
 }
 

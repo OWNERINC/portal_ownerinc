@@ -65,7 +65,24 @@ test('CMS actions use the existing API contracts and keep generic failure states
   assert.match(cms, /method: 'DELETE'/);
   assert.match(cms, /Salvando rascunho/);
   assert.match(cms, /Não foi possível salvar o rascunho/);
-  assert.match(cms, /scheduled_at/);
+  assert.match(cmsHtml, /revision-history/);
+  assert.match(cmsHtml, /revision-history-pagination/);
+  assert.match(cmsHtml, /load-history/);
+  assert.match(cmsHtml, /horário local/);
+  assert.match(cms, /documents\/\$\{encodeURIComponent\(documentId\)\}\/revisions/);
+  assert.match(cms, /requestToken !== selectionToken \|\| documentId !== selectedDocument/);
+  assert.match(cms, /if \(requestToken === selectionToken && documentId === selectedDocument && historyToken === historyRequestToken\)/);
+  assert.match(cms, /const type = selectedType/);
+  assert.match(cms, /if \(!newDocumentForm\.hidden\) void loadSources\(\)/);
+  assert.match(cms, /fetchAPIPage\(`\/api\/cms\/documents\/\$\{encodeURIComponent\(documentId\)\}\/revisions\?limit=\$\{HISTORY_PAGE_SIZE\}&offset=\$\{historyOffset\}`\)/);
+  assert.match(cms, /for \(let offset = sources\.length; offset < total; offset \+= 100\)/);
+  assert.match(cms, /new Date\(value\)/);
+});
+
+test('CMS revision history clamps pagination before loading another page', () => {
+  assert.match(cms, /historyOffset = Math\.max\(0, historyOffset - HISTORY_PAGE_SIZE\)/);
+  assert.match(cms, /const finalHistoryOffset = Math\.max\(0, Math\.floor\(\(total - 1\) \/ HISTORY_PAGE_SIZE\) \* HISTORY_PAGE_SIZE\)/);
+  assert.match(cms, /historyOffset = Math\.min\(finalHistoryOffset, historyOffset \+ HISTORY_PAGE_SIZE\)/);
 });
 
 test('autosave coalesces in-flight edits and rejects stale document responses', () => {
@@ -83,7 +100,7 @@ test('CMS navigation links are permission-gated before the API remains authorita
   assert.match(auth, /dataset\.cmsAccess/);
   assert.match(auth, /manageKnowledge.*manageAcademy.*manageBenefits.*manageReminders/s);
   assert.match(layout, /\.cms-link, \.cms-entry-link \{ display: none/);
-  assert.match(layout, /html\[data-cms-access="true"\] \.cms-link/);
+  assert.match(layout, /html\[data-auth-state="ready"\]\[data-cms-access="true"\] \.cms-link/);
   assert.match(admin, /class="cms-entry-link/);
   assert.match(cms, /\.filter\(\(\[, , permission\]\) => can\(user, permission\)\)/);
 });

@@ -13,10 +13,8 @@ document.getElementById('toggle-pw').addEventListener('click', event => {
   input.type = show ? 'text' : 'password';
   event.currentTarget.setAttribute('aria-pressed', String(show));
   event.currentTarget.setAttribute('aria-label', show ? 'Ocultar senha' : 'Mostrar senha');
-  event.currentTarget.querySelector('[data-lucide]').setAttribute('data-lucide', show ? 'eye-off' : 'eye');
-  window.lucide?.createIcons();
+  event.currentTarget.querySelector('.icon use').setAttribute('href', `./assets/icons.svg#${show ? 'eye-off' : 'eye'}`);
 });
-window.addEventListener('DOMContentLoaded', () => window.lucide?.createIcons());
 
 function setAllDisabled(disabled) {
   document.getElementById('submit-btn').disabled = disabled;

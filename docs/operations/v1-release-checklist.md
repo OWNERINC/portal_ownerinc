@@ -34,6 +34,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Segunda execução não altera nem duplica o ledger.
 - [ ] Migration CMS `015_cms_editor` passa em PostgreSQL e permanece idempotente na segunda execução.
 - [ ] A migration destrutiva mais recente passa em PostgreSQL e permanece idempotente na segunda execução.
+- [ ] `019_cms_asset_deletion_state` reserva assets antes da remoção física e permanece idempotente.
 - [ ] `011_cron_alert_state` existe e possui os grants esperados.
 - [ ] `012_autocard_media_crop` existe e foi validada em PostgreSQL.
 - [ ] Roles `portal_api` e `portal_cron` têm somente os privilégios necessários.
@@ -178,8 +179,11 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 - [x] Cron image build context includes the shared CMS reader and block validator
   at the import path used by `cron/checkReminders.js`.
-- [x] `portal_cron` has `SELECT, UPDATE` on `cms_documents` and `cms_revisions`;
-  the existing broader `audit_log` grant remains for AutoCard retention.
+- [x] `portal_cron` has `SELECT, UPDATE` on `cms_documents` and `cms_revisions`,
+  plus `SELECT, DELETE` on `cms_assets`; the existing broader `audit_log` grant
+  remains for AutoCard retention.
+- [x] CMS orphan assets are retained for 30 days by default and removed only
+  when absent from every revision; failed file deletes remain retryable.
 - [x] CSP `media-src` is limited to `'self'`, `blob:`, and `https:` without
   changing script, style, or connect policies.
 - [x] Empty rendered CMS reminder blocks preserve the legacy `description`.

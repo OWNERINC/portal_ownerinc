@@ -39,12 +39,21 @@ test('admin navigation restores the last verified role before paint and revalida
     ...navigationPages.map((page) => readFile(`public/${page}.html`, 'utf8')),
   ]);
 
-  assert.match(shell, /sessionStorage\.getItem\('ownerinc-verified-role'\)/);
-  assert.match(shell, /document\.documentElement\.dataset\.portalRole/);
+  assert.match(shell, /sessionStorage\.getItem\('ownerinc-auth-snapshot'\)/);
+  assert.match(shell, /dataset\.authState = 'pending'/);
+  assert.match(shell, /snapshot\.savedAt/);
+  assert.match(shell, /root\.dataset\.portalRole/);
   assert.match(layout, /\.admin-link\s*\{[^}]*display:\s*none/);
-  assert.match(layout, /html\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
+  assert.match(layout, /html\[data-auth-state="ready"\]\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
   assert.match(auth, /sessionStorage\.setItem\('ownerinc-verified-role', user\.role\)/);
+  assert.match(auth, /sessionStorage\.setItem\(AUTH_SNAPSHOT_KEY/);
+  assert.match(auth, /setAuthState\('ready'\)/);
+  assert.match(auth, /setAuthState\('error'\)/);
   assert.match(auth, /sessionStorage\.removeItem\('ownerinc-verified-role'\)/);
+  assert.match(auth, /sessionStorage\.removeItem\(AUTH_SNAPSHOT_KEY\)/);
+  assert.match(auth, /function renderAuthUnavailable\(\)/);
+  assert.match(auth, /auth-error-state/);
+  assert.match(auth, /window\.location\.reload\(\)/);
 
   for (const [index, html] of htmlPages.entries()) {
     const page = navigationPages[index];
@@ -60,7 +69,7 @@ test('AutoCard navigation consumes backend access instead of a frontend title al
     readFile('api/middleware/auth.js', 'utf8'),
   ]);
 
-  assert.match(apiAuth, /const \{ can, canUseAutoCard \} = require\('\.\/policy'\)/);
+  assert.match(apiAuth, /const \{ can, canUseAutoCard, canUsePosCards \} = require\('\.\/policy'\)/);
   assert.match(apiAuth, /req\.user\.autocard_access = canUseAutoCard\(req\.user\)/);
   assert.match(auth, /document\.documentElement\.dataset\.autocardAccess = String\(user\?\.autocard_access === true\)/);
   assert.doesNotMatch(auth, /analista de dho|assistente de dho|coordenador de dho|gerente de dho/i);
@@ -89,11 +98,37 @@ test('profile exposes safe API errors instead of hiding upload and save failures
   assert.match(profile, /Não foi possível salvar o perfil: \$\{err\.message\}/);
 });
 
-test('login keeps a visible page heading and pins its third-party icon script', async () => {
-  const login = await readFile('public/login.html', 'utf8');
+test('admin and profile hydrate from the provisional user snapshot before API revalidation', async () => {
+  const [auth, admin, profile] = await Promise.all([
+    readFile('public/js/auth.js', 'utf8'),
+    readFile('public/js/admin.js', 'utf8'),
+    readFile('public/js/profile.js', 'utf8'),
+  ]);
+  assert.match(auth, /export function getCachedUserSnapshot\(\)/);
+  assert.match(auth, /user: \{/);
+  assert.match(admin, /await auth\.authStateReady\(\)/);
+  assert.match(admin, /cachedUser\.uid === auth\.currentUser\?\.uid/);
+  assert.match(admin, /if \(me\) buildTabs\(false\);/);
+  assert.match(admin, /me = await requireAuth\(true\);/);
+  assert.match(profile, /await auth\.authStateReady\(\)/);
+  assert.match(profile, /cachedUser\.uid === auth\.currentUser\?\.uid/);
+  assert.match(profile, /if \(Object\.keys\(user\)\.length\) applyProfileFields\(user\);/);
+  assert.match(profile, /const verifiedUser = await requireAuth\(\);/);
+});
+
+test('login keeps a visible heading and uses local icons', async () => {
+  const [login, loginScript] = await Promise.all([
+    readFile('public/login.html', 'utf8'),
+    readFile('public/js/login.js', 'utf8'),
+  ]);
   assert.equal((login.match(/<h1(?:\s|>)/g) || []).length, 1);
   assert.match(login, /<h1 id="login-title"/);
-  assert.match(login, /lucide\.min\.js" integrity="sha384-/);
+  assert.match(login, /assets\/icons\.svg#eye/);
+  assert.match(login, /id="email"[^>]*aria-label="E-mail"/);
+  assert.match(login, /id="password"[^>]*aria-label="Senha"/);
+  assert.match(login, /id="reset-email"[^>]*aria-label="Seu e-mail cadastrado"/);
+  assert.doesNotMatch(login, /lucide\.min\.js/);
+  assert.match(loginScript, /currentTarget\.querySelector\('\.icon use'\)/);
   assert.doesNotMatch(login, /<script(?![^>]*\bsrc=)[^>]*>/);
 });
 
@@ -134,6 +169,9 @@ test('public content pages expose server pagination and category filters', async
     readFile('public/js/pagination.js', 'utf8'),
   ]);
   assert.match(knowledge, /fetchAPIPage\(`\/api\/knowledge\?\$\{search\}`\)/);
+  assert.match(knowledge, /let articlesRequest = 0/);
+  assert.match(knowledge, /const requestToken = \+\+articlesRequest/);
+  assert.match(knowledge, /if \(requestToken !== articlesRequest\) return/);
   assert.match(knowledge, /renderPagination\(document\.getElementById\('articles-pagination'/);
   assert.match(academy, /fetchAPIPage\(`\/api\/academy\?\$\{request\}`\)/);
   assert.match(academy, /academy-filters/);
@@ -187,4 +225,42 @@ test('AutoCard shell preserves accessible navigation and reduced motion', async 
     assert.doesNotMatch(pageHtml, /href="\.\/autocard\/"/, `${page}: retains legacy AutoCard link`);
   }
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
+});
+
+test('Cards Pós page and navigation stay hidden until the server verifies access', async () => {
+  const [html, app, guard, auth, sidebar, layout] = await Promise.all([
+    readFile('public/cards-pos.html', 'utf8'),
+    readFile('public/cards-pos/app.js', 'utf8'),
+    readFile('public/cards-pos/guard.js', 'utf8'),
+    readFile('public/js/auth.js', 'utf8'),
+    readFile('public/js/sidebar.js', 'utf8'),
+    readFile('public/css/layout.css', 'utf8'),
+  ]);
+  assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
+  assert.match(guard, /requireAuth\(\)/);
+  assert.match(guard, /fetchAPI\('\/api\/pos-cards\/access'\)/);
+  assert.match(app, /if \(await requirePosCards\(\)\) init\(\)/);
+  assert.match(auth, /dataset\.posCardsAccess = String\(user\?\.pos_cards_access === true\)/);
+  assert.doesNotMatch(sidebar, /posCardsItem|createElement\('li'\)/);
+  assert.match(html, /class="pos-cards-link"/);
+  assert.match(layout, /\.pos-cards-link \{ display: none; \}/);
+  assert.match(layout, /html\[data-auth-state="ready"\]\[data-pos-cards-access="true"\]\s+\.pos-cards-link \{ display: list-item; \}/);
+  assert.doesNotMatch(`${html}${app}${guard}`, /\/api\/(?!pos-cards)/);
+});
+
+test('authenticated shell is generated from one static build source', async () => {
+  const generator = await readFile('scripts/generate-public-shell.mjs', 'utf8');
+  assert.match(generator, /generated:portal-sidebar/);
+  assert.match(generator, /generated:portal-topbar/);
+  assert.match(generator, /id="btn-new"/);
+  assert.match(generator, /id="btn-new-reminder"/);
+  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides']) {
+    const html = await readFile(`public/${page}.html`, 'utf8');
+    assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);
+    assert.match(html, /<!-- generated:portal-topbar -->[\s\S]*<!-- \/generated:portal-topbar -->/, `${page}: topbar is not generated`);
+    assert.doesNotMatch(html, /data-lucide=/, `${page}: shell contains runtime icon placeholders`);
+  }
+  assert.match(await readFile('public/knowledge.html', 'utf8'), /id="search"/);
+  assert.match(await readFile('public/knowledge.html', 'utf8'), /id="btn-new"/);
+  assert.match(await readFile('public/reminders.html', 'utf8'), /id="btn-new-reminder"/);
 });
