@@ -86,10 +86,6 @@
     link.setAttribute('aria-current', 'page');
   });
 
-  window.addEventListener('DOMContentLoaded', function () {
-    if (window.lucide) window.lucide.createIcons();
-  });
-
   // Clique no ícone redondo expande a sidebar
   var brand = document.querySelector('.sidebar-brand');
   if (brand) {

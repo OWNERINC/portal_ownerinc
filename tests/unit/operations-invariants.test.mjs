@@ -97,6 +97,7 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /client_max_body_size 100k;/);
   assert.match(nginx, /location \^~ \/api\/upload\/[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
   assert.match(nginx, /location \^~ \/api\/autocard\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
+  assert.match(nginx, /location \^~ \/api\/pos-cards\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   const cmsAssets = nginx.indexOf('location ^~ /api/cms/assets');
   const genericApi = nginx.indexOf('location /api/');
   assert.ok(cmsAssets >= 0 && cmsAssets < genericApi);
@@ -199,7 +200,20 @@ test('AutoCard media retention is scheduled, locked, and volume-safe', async () 
   const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
   assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
   assert.match(cronService, /AUTOCARD_MEDIA_ORPHAN_DAYS: \$\{AUTOCARD_MEDIA_ORPHAN_DAYS:-7\}/);
+  assert.match(cronService, /CMS_ASSET_ORPHAN_RETENTION_DAYS: \$\{CMS_ASSET_ORPHAN_RETENTION_DAYS:-30\}/);
   assert.match(cronService, /volumes:\n\s+- uploads_data:\/app\/uploads/);
+});
+
+test('CMS asset retention is scheduled with the shared upload volume', async () => {
+  const [cron, cleanup, compose] = await Promise.all([
+    read('cron/index.js'), read('cron/cms-asset-retention.js'), read('docker-compose.yml'),
+  ]);
+  const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
+  assert.match(cron, /enforceCmsAssetRetention/);
+  assert.match(cleanup, /pg_advisory_xact_lock/);
+  assert.match(cleanup, /CMS_ASSET_RETENTION_LOCK = 7193029/);
+  assert.match(cronService, /CMS_ASSET_ORPHAN_RETENTION_DAYS/);
+  assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
 });
 
 test('CI builds and publishes commit-addressed production images', async () => {

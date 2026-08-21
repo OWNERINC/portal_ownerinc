@@ -40,12 +40,14 @@ button, a, input, select, textarea { touch-action: manipulation; }
 body.sidebar-ready .sidebar { transition: width var(--sidebar-transition); }
 
 .admin-link { display: none; }
-html[data-portal-role="admin"] .admin-link { display: list-item; }
+html[data-auth-state="ready"][data-portal-role="admin"] .admin-link { display: list-item; }
 .autocard-link { display: none; }
-html[data-autocard-access="true"] .autocard-link { display: list-item; }
+html[data-auth-state="ready"][data-autocard-access="true"] .autocard-link { display: list-item; }
 .cms-link, .cms-entry-link { display: none; }
-html[data-cms-access="true"] .cms-link { display: list-item; }
-html[data-cms-access="true"] .cms-entry-link { display: inline-flex; }
+html[data-auth-state="ready"][data-cms-access="true"] .cms-link { display: list-item; }
+html[data-auth-state="ready"][data-cms-access="true"] .cms-entry-link { display: inline-flex; }
+.pos-cards-link { display: none; }
+html[data-auth-state="ready"][data-pos-cards-access="true"] .pos-cards-link { display: list-item; }
 
 /* Header com logo + toggle */
 .sidebar-header {

@@ -11,6 +11,7 @@
     "security": "npm audit --prefix api --omit=dev --omit=optional --audit-level=high && npm audit --prefix cron --omit=dev --omit=optional --audit-level=high",
     "sbom": "node scripts/sbom.mjs",
     "solides:probe": "node scripts/solides-probe.mjs",
+    "build:public": "node scripts/generate-public-shell.mjs",
     "test": "node --test tests/unit/*.test.mjs",
     "test:migrations": "node scripts/test-migrations.mjs",
     "verify": "node scripts/verify.mjs"

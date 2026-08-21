@@ -21,6 +21,7 @@ app.use(express.json({ limit: '100kb' }));
 
 // Serve arquivos de upload (fotos de perfil)
 app.use('/uploads/cms-private', (req, res) => res.sendStatus(404));
+app.use('/uploads/pos-card-', (req, res) => res.sendStatus(404));
 app.use('/uploads', express.static('/app/uploads'));
 
 // Rotas
@@ -36,6 +37,8 @@ app.use('/api/upload',    require('./routes/upload'));
 app.use('/api/solides',   require('./routes/solides'));
 app.use('/api/cms',       require('./routes/cms'));
 app.use('/api/cms/assets', require('./routes/cms-assets'));
+const posCardsRoutes = require('./routes/pos-cards');
+app.use('/api/pos-cards', posCardsRoutes);
 // AutoCard is mounted at its namespaced path and at its legacy asset paths so
 // the migrated browser bundle can keep its existing /api/cards and /api/media URLs.
 const autocardRoutes = require('./routes/autocard');

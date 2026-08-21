@@ -6,6 +6,8 @@ const pool = require('./db');
 const AUTOCARD_MEDIA_RETENTION_LOCK = 7193003;
 const STORAGE_KEY_PATTERN = /^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/;
 const STORAGE_KEY_SQL_PATTERN = '^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.webp$';
+const POS_CARD_STORAGE_KEY_PATTERN = /^pos-card-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/;
+const POS_CARD_STORAGE_KEY_SQL_PATTERN = '^pos-card-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.webp$';
 
 function autocardMediaRetentionDays(env = process.env) {
   const value = Number(env.AUTOCARD_MEDIA_ORPHAN_DAYS || 7);
@@ -15,10 +17,20 @@ function autocardMediaRetentionDays(env = process.env) {
   return value;
 }
 
-function isSafeStorageKey(storageKey) {
+function isSafeAutocardStorageKey(storageKey) {
   return typeof storageKey === 'string'
     && STORAGE_KEY_PATTERN.test(storageKey)
     && path.basename(storageKey) === storageKey;
+}
+
+function isSafePosCardStorageKey(storageKey) {
+  return typeof storageKey === 'string'
+    && POS_CARD_STORAGE_KEY_PATTERN.test(storageKey)
+    && path.basename(storageKey) === storageKey;
+}
+
+function isSafeStorageKey(storageKey) {
+  return isSafeAutocardStorageKey(storageKey) || isSafePosCardStorageKey(storageKey);
 }
 
 function storagePath(uploadDirectory, storageKey) {
@@ -54,10 +66,19 @@ function logInvalidStorageKey(storageKey) {
   }));
 }
 
+function logInvalidPosCardStorageKey(storageKey) {
+  console.error(JSON.stringify({
+    service: 'cron',
+    event: 'pos_card_media_invalid_storage_key',
+    storageKey,
+  }));
+}
+
 async function removeStorageFile(uploadDirectory, storageKey) {
   const filePath = storagePath(uploadDirectory, storageKey);
   if (!filePath) {
-    logInvalidStorageKey(storageKey);
+    if (typeof storageKey === 'string' && storageKey.startsWith('pos-card-')) logInvalidPosCardStorageKey(storageKey);
+    else logInvalidStorageKey(storageKey);
     return { deletedFiles: 0, fileFailures: 1 };
   }
   try {
@@ -97,10 +118,15 @@ async function sweepOrphanedFiles(db, uploadDirectory, excludedKeys, cutoff) {
   let fileFailures = 0;
   for (const entry of entries) {
     if (!entry.isFile() || excludedKeys.has(entry.name)) continue;
-    if (!isSafeStorageKey(entry.name)) {
-      if (entry.name.startsWith('autocard-')) logInvalidStorageKey(entry.name);
+    if (entry.name.startsWith('autocard-') && !isSafeAutocardStorageKey(entry.name)) {
+      logInvalidStorageKey(entry.name);
       continue;
     }
+    if (entry.name.startsWith('pos-card-') && !isSafePosCardStorageKey(entry.name)) {
+      logInvalidPosCardStorageKey(entry.name);
+      continue;
+    }
+    if (!isSafeStorageKey(entry.name)) continue;
     const filePath = storagePath(uploadDirectory, entry.name);
     try {
       const stats = await fs.stat(filePath);
@@ -114,12 +140,24 @@ async function sweepOrphanedFiles(db, uploadDirectory, excludedKeys, cutoff) {
 
   if (!candidates.length) return { deletedFiles: 0, fileFailures };
 
-  let rows;
+  const knownKeys = new Set();
   try {
-    ({ rows } = await db.query(
-      'SELECT storage_key FROM autocard_media WHERE storage_key = ANY($1::text[])',
-      [candidates],
-    ));
+    const autocardCandidates = candidates.filter(isSafeAutocardStorageKey);
+    if (autocardCandidates.length) {
+      const { rows } = await db.query(
+        'SELECT storage_key FROM autocard_media WHERE storage_key = ANY($1::text[])',
+        [autocardCandidates],
+      );
+      rows.forEach((row) => knownKeys.add(row.storage_key));
+    }
+    const posCardCandidates = candidates.filter(isSafePosCardStorageKey);
+    if (posCardCandidates.length) {
+      const { rows } = await db.query(
+        'SELECT storage_key FROM pos_card_media WHERE storage_key = ANY($1::text[])',
+        [posCardCandidates],
+      );
+      rows.forEach((row) => knownKeys.add(row.storage_key));
+    }
   } catch (error) {
     console.error(JSON.stringify({
       service: 'cron',
@@ -129,7 +167,6 @@ async function sweepOrphanedFiles(db, uploadDirectory, excludedKeys, cutoff) {
     return { deletedFiles: 0, fileFailures: fileFailures + 1 };
   }
 
-  const knownKeys = new Set(rows.map((row) => row.storage_key));
   const counts = { deletedFiles: 0, fileFailures };
   for (const storageKey of candidates) {
     if (knownKeys.has(storageKey)) continue;
@@ -161,10 +198,11 @@ async function updateRetentionAudit(db, auditId, details) {
   if (result.rowCount !== 1) throw new Error('AutoCard media retention audit row was not found');
 }
 
-async function enforceAutocardMediaRetention() {
-  const days = autocardMediaRetentionDays();
-  const uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads';
-  const db = await pool.connect();
+async function enforceAutocardMediaRetention(options = {}) {
+  const days = options.retentionDays ?? autocardMediaRetentionDays();
+  const uploadDirectory = options.uploadDirectory || process.env.UPLOAD_DIR || '/app/uploads';
+  const ownsConnection = !options.db;
+  const db = options.db || await pool.connect();
   let locked = false;
   try {
     ({ rows: [{ pg_try_advisory_lock: locked }] } = await db.query(
@@ -196,9 +234,27 @@ async function enforceAutocardMediaRetention() {
          )`,
       [days],
     );
+    const posCardCandidateResult = await db.query(
+      `SELECT m.id, m.storage_key
+       FROM pos_card_media AS m
+       WHERE m.created_at < NOW() - ($1::integer * INTERVAL '1 day')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM pos_cards AS c
+           WHERE c.media_id = m.id
+         )`,
+      [days],
+    );
     const candidates = candidateResult.rows.filter((row) => {
-      if (!isSafeStorageKey(row.storage_key)) {
+      if (!isSafeAutocardStorageKey(row.storage_key)) {
         logInvalidStorageKey(row.storage_key);
+        return false;
+      }
+      return true;
+    });
+    const posCardCandidates = posCardCandidateResult.rows.filter((row) => {
+      if (!isSafePosCardStorageKey(row.storage_key)) {
+        logInvalidPosCardStorageKey(row.storage_key);
         return false;
       }
       return true;
@@ -215,9 +271,22 @@ async function enforceAutocardMediaRetention() {
        RETURNING m.id, m.storage_key`,
       [candidates.map((row) => row.id)],
     );
+    const deletedPosCard = await db.query(
+      `DELETE FROM pos_card_media AS m
+       WHERE m.id = ANY($1::uuid[])
+         AND m.storage_key ~ '${POS_CARD_STORAGE_KEY_SQL_PATTERN}'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM pos_cards AS c
+           WHERE c.media_id = m.id
+         )
+       RETURNING m.id, m.storage_key`,
+      [posCardCandidates.map((row) => row.id)],
+    );
+    const deletedRows = [...deleted.rows, ...deletedPosCard.rows];
     const pendingDetails = {
       status: 'pending',
-      plannedDeletedRows: candidates.length,
+      plannedDeletedRows: candidates.length + posCardCandidates.length,
       deletedRows: 0,
       deletedFiles: 0,
       fileFailures: 0,
@@ -226,7 +295,6 @@ async function enforceAutocardMediaRetention() {
     const auditId = await insertRetentionAudit(db, pendingDetails);
     await db.query('COMMIT');
 
-    const deletedRows = deleted.rows;
     const deletedFileCounts = await removeDeletedFiles(uploadDirectory, deletedRows);
     const sweptFileCounts = await sweepOrphanedFiles(
       db,
@@ -243,7 +311,7 @@ async function enforceAutocardMediaRetention() {
     try {
       await updateRetentionAudit(db, auditId, {
         status: 'completed',
-        plannedDeletedRows: candidates.length,
+        plannedDeletedRows: candidates.length + posCardCandidates.length,
         ...details,
       });
     } catch (error) {
@@ -262,8 +330,13 @@ async function enforceAutocardMediaRetention() {
     throw error;
   } finally {
     if (locked) await db.query('SELECT pg_advisory_unlock($1)', [AUTOCARD_MEDIA_RETENTION_LOCK]).catch(() => {});
-    db.release();
+    if (ownsConnection) db.release();
   }
 }
 
-module.exports = { autocardMediaRetentionDays, enforceAutocardMediaRetention, isSafeStorageKey };
+module.exports = {
+  autocardMediaRetentionDays,
+  enforceAutocardMediaRetention,
+  isSafePosCardStorageKey,
+  isSafeStorageKey,
+};

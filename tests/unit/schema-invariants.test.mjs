@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -82,6 +82,52 @@ test('AutoCard crop schema is safe for fresh installs and upgrades', async () =>
   assert.match(verification, /cron_autocard_cards_privileges/);
   assert.match(verification, /cron_autocard_media_privileges/);
   assert.match(verification, /cron_audit_privileges/);
+});
+
+test('Pos-Cards storage is isolated, constrained, granted, and verified', async () => {
+  const [schema, migration, storageMigration, provision, verification] = await Promise.all([
+    readFile('api/db/schema.sql', 'utf8'), readFile('api/db/migrations/017_pos_cards.sql', 'utf8'),
+    readFile('api/db/migrations/018_pos_card_storage_key.sql', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'), readFile('api/db/verify-migrations.js', 'utf8'),
+  ]);
+  for (const source of [migration]) {
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_card_media/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_cards/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_card_media[\s\S]*?id\s+UUID\s+PRIMARY KEY DEFAULT gen_random_uuid\(\)/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_card_media[\s\S]*?storage_key\s+TEXT\s+NOT NULL UNIQUE/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_card_media[\s\S]*?created_at\s+TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_cards[\s\S]*?id\s+UUID\s+PRIMARY KEY DEFAULT gen_random_uuid\(\)/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_cards[\s\S]*?created_at\s+TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/);
+    assert.match(source, /content_type TEXT\s+NOT NULL CHECK \(content_type IN \('image\/jpeg', 'image\/png', 'image\/webp'\)\)/);
+    assert.match(source, /byte_size\s+INTEGER\s+NOT NULL CHECK \(byte_size BETWEEN 1 AND 3145728\)/);
+    assert.match(source, /created_by\s+TEXT\s+REFERENCES users\(uid\) ON DELETE SET NULL/);
+    assert.match(source, /template\s+TEXT\s+NOT NULL CHECK \(template IN \('convite_owntime'\)\)/);
+    assert.match(source, /jsonb_typeof\("values"\) = 'object'/);
+    assert.match(source, /media_id\s+UUID\s+REFERENCES pos_card_media\(id\) ON DELETE SET NULL/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_cards[\s\S]*?created_by\s+TEXT\s+REFERENCES users\(uid\) ON DELETE SET NULL/);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS pos_cards[\s\S]*?updated_at\s+TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/);
+    assert.match(source, /pos_cards_name_check CHECK \(char_length\(btrim\(name\)\) BETWEEN 1 AND 120\)/);
+    assert.match(source, /CREATE INDEX IF NOT EXISTS pos_cards_updated_idx ON pos_cards \(updated_at DESC\)/);
+    assert.match(source, /CREATE INDEX IF NOT EXISTS pos_cards_template_idx ON pos_cards \(template, updated_at DESC\)/);
+  }
+  const exactStoragePattern = 'pos-card-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.webp';
+  assert.ok(schema.includes(exactStoragePattern));
+  assert.ok(storageMigration.includes(exactStoragePattern));
+  assert.match(storageMigration, /DROP CONSTRAINT IF EXISTS pos_card_media_storage_key_check/);
+  assert.match(storageMigration, /RAISE EXCEPTION .*invalid storage keys/);
+  assert.match(schema, /'017_pos_cards'/);
+  assert.match(schema, /'018_pos_card_storage_key'/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON pos_cards, pos_card_media TO portal_api/);
+  assert.match(provision, /GRANT SELECT ON pos_cards TO portal_cron/);
+  assert.match(provision, /GRANT SELECT, DELETE ON pos_card_media TO portal_cron/);
+  for (const marker of [
+    'pos_cards', 'pos_card_media', 'api_pos_cards_privileges', 'api_pos_card_media_privileges',
+    'cron_pos_cards_privileges', 'cron_pos_card_media_privileges',
+  ]) assert.match(verification, new RegExp(marker));
+  assert.match(verification, /pos_card_media_storage_key_exact/);
+  assert.match(verification, /\^pos-card-\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}/);
+  assert.match(verification, /chr\(92\) \|\| chr\(92\) \|\| '\.webp\$%'/);
+  assert.doesNotMatch(verification, /pg_get_constraintdef\(oid\) LIKE '%\{8\}-%\{4\}-%\{4\}-%\{4\}-%\{12\}%'/);
 });
 
 test('domain constraints are present on fresh installs and upgrades', async () => {

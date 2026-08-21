@@ -1,9 +1,28 @@
-import { requireAuth, showToast, fetchAPI, updateAuthDisplayName } from './auth.js';
+import { requireAuth, getCachedUserSnapshot, showToast, fetchAPI, updateAuthDisplayName } from './auth.js';
 import { auth } from './firebase-config.js';
 import { protectForm } from './ui.js';
 
-const user = await requireAuth();
-if (!user) throw new Error('not authenticated');
+await auth.authStateReady();
+const cachedUser = getCachedUserSnapshot();
+const user = cachedUser && cachedUser.uid === auth.currentUser?.uid ? cachedUser : {};
+
+function applyProfileFields(profile) {
+  document.getElementById('p-name').value = profile.name || '';
+  document.getElementById('p-bio').value = profile.bio || '';
+  document.getElementById('p-phone').value = profile.phone || '';
+  document.getElementById('p-linkedin').value = profile.linkedin_url || '';
+  const jobTitle = document.getElementById('profile-job-title');
+  if (jobTitle) {
+    jobTitle.textContent = profile.job_title ? `Cargo: ${profile.job_title}` : '';
+    jobTitle.hidden = !profile.job_title;
+  }
+  document.getElementById('profile-email').textContent = profile.email || '';
+}
+
+if (Object.keys(user).length) applyProfileFields(user);
+const verifiedUser = await requireAuth();
+if (!verifiedUser) throw new Error('not authenticated');
+Object.assign(user, verifiedUser);
 
 
 // ── Avatar ────────────────────────────────────────────────────────────────────
@@ -107,16 +126,7 @@ document.getElementById('remove-photo').addEventListener('click', async event =>
 
 // ── Preencher formulário ──────────────────────────────────────────────────────
 
-document.getElementById('p-name').value     = user.name        || '';
-document.getElementById('p-bio').value      = user.bio         || '';
-document.getElementById('p-phone').value    = user.phone       || '';
-document.getElementById('p-linkedin').value = user.linkedin_url || '';
-const jobTitle = document.getElementById('profile-job-title');
-if (user.job_title) {
-  jobTitle.textContent = `Cargo: ${user.job_title}`;
-  jobTitle.hidden = false;
-}
-document.getElementById('profile-email').textContent = user.email;
+applyProfileFields(user);
 
 renderAvatar(user.photo_url, user.name);
 const markProfileClean = protectForm(document.getElementById('profile-form'));

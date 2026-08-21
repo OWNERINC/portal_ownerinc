@@ -178,8 +178,11 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 - [x] Cron image build context includes the shared CMS reader and block validator
   at the import path used by `cron/checkReminders.js`.
-- [x] `portal_cron` has `SELECT, UPDATE` on `cms_documents` and `cms_revisions`;
-  the existing broader `audit_log` grant remains for AutoCard retention.
+- [x] `portal_cron` has `SELECT, UPDATE` on `cms_documents` and `cms_revisions`,
+  plus `SELECT, DELETE` on `cms_assets`; the existing broader `audit_log` grant
+  remains for AutoCard retention.
+- [x] CMS orphan assets are retained for 30 days by default and removed only
+  when absent from every revision; failed file deletes remain retryable.
 - [x] CSP `media-src` is limited to `'self'`, `blob:`, and `https:` without
   changing script, style, or connect policies.
 - [x] Empty rendered CMS reminder blocks preserve the legacy `description`.

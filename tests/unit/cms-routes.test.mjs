@@ -29,6 +29,9 @@ test('document endpoints validate query and body contracts and use Task 1 permis
   assert.match(permissions, /academy: 'manageAcademy'/);
   assert.match(permissions, /benefit: 'manageBenefits'/);
   assert.match(permissions, /reminder: 'manageReminders'/);
+  assert.match(cms, /router\.get\('\/documents\/:id\/revisions', authMiddleware/);
+  assert.match(cms, /ORDER BY version DESC/);
+  assert.match(cms, /X-Total-Count/);
 });
 
 test('document mutations are transactional, audited, and preserve revision immutability', () => {
@@ -52,6 +55,17 @@ test('document mutations are transactional, audited, and preserve revision immut
   assert.match(cms, /validateAssetReferences\(db, blocks\)/);
   assert.match(cms, /FROM cms_assets[\s\S]*storage_key IS NOT NULL[\s\S]*byte_size BETWEEN/);
   assert.match(cms, /ASSET_MIMES\[type\]\.has\(asset\.mime_type\)/);
+});
+
+test('CMS draft saves share the asset-retention advisory lock', () => {
+  assert.match(cms, /CMS_ASSET_RETENTION_LOCK = 7193029/);
+  assert.match(cms, /pg_advisory_xact_lock\(\$1\)/);
+});
+
+test('CMS revision history returns metadata without replaying block payloads', () => {
+  const historyQuery = cms.match(/SELECT id, document_id, version, status, created_by, created_at[\s\S]*?ORDER BY version DESC/);
+  assert.ok(historyQuery);
+  assert.doesNotMatch(historyQuery[0], /blocks/);
 });
 
 test('protected assets validate signatures, use UUID storage keys, audit uploads, and hide filesystem paths', () => {

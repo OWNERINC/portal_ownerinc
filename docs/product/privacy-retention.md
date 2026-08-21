@@ -43,6 +43,15 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Retenção: o histórico segue a política de dados internos e deve ser mantido
   ou excluído conforme decisão do responsável por DHO e validação jurídica.
 
+## CMS Editorial
+
+- Revisões são imutáveis e permanecem vinculadas ao documento para auditoria.
+- Assets privados sem referência em qualquer revisão são removidos diariamente
+  após 30 dias por padrão; o prazo pode ser ajustado por
+  `CMS_ASSET_ORPHAN_RETENTION_DAYS` entre 1 e 3650 dias.
+- Uma falha ao remover o arquivo mantém o registro para nova tentativa e é
+  registrada no log operacional.
+
 ## Auditoria
 
 - Retenção: 5 anos para ações privilegiadas, aplicada diariamente pelo worker.

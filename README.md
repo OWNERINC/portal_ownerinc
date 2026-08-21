@@ -8,6 +8,8 @@ benefícios e lembretes.
 - `public/`: aplicação web estática e integração com Firebase Auth.
 - `public/autocard.html`: página canônica do AutoCard dentro do shell do Portal;
   `/autocard/` permanece como redirect compatível para bookmarks antigos.
+- `public/cards-pos.html` e `public/cards-pos/`: página e módulo isolado dos
+  Cards Pós, separado do AutoCard.
 - `api/`: API Express, autorização e persistência PostgreSQL.
 - `cron/`: processamento diário de lembretes e notificações.
 - `firebase-emulator/`: imagem do Auth Emulator usada apenas no perfil local.

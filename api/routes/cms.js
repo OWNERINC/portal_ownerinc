@@ -8,6 +8,7 @@ const {
 } = require('../route-utils');
 
 const router = express.Router();
+const CMS_ASSET_RETENTION_LOCK = 7193029;
 const CONTENT_TYPES = ['knowledge', 'academy', 'benefit', 'announcement', 'reminder'];
 const REVISION_STATUSES = ['draft', 'published', 'scheduled', 'archived'];
 const SOURCE_TABLES = {
@@ -92,7 +93,7 @@ async function documentView(db, document) {
     document.scheduled_revision_id,
   ].filter(Boolean);
   const { rows } = revisionIds.length ? await db.query(
-    `SELECT id, document_id, version, status, blocks, created_by, created_at
+       `SELECT id, document_id, version, status, blocks, created_by, created_at
        FROM cms_revisions
       WHERE document_id = $1 AND id = ANY($2::uuid[])`,
     [document.id, revisionIds],
@@ -263,6 +264,33 @@ router.get('/documents/:id', authMiddleware, async (req, res, next) => {
   }
 });
 
+router.get('/documents/:id/revisions', authMiddleware, async (req, res, next) => {
+  const page = parseListQuery(req.query, { status: oneOf(...REVISION_STATUSES) });
+  if (!uuid(req.params.id) || !page) return invalid(req, res);
+  try {
+    const document = await findDocument(pool, req.user, req.params.id);
+    if (!document) return res.status(404).json({ error: 'CMS document not found.', requestId: req.id });
+    const values = [document.id];
+    const statusClause = req.query.status ? ' AND status = $2' : '';
+    if (req.query.status) values.push(req.query.status);
+    const count = await pool.query(`SELECT COUNT(*)::integer AS count FROM cms_revisions WHERE document_id = $1${statusClause}`, values);
+    const offsetIndex = values.length + 1;
+    const limitIndex = values.length + 2;
+    const { rows } = await pool.query(
+      `SELECT id, document_id, version, status, created_by, created_at
+         FROM cms_revisions
+        WHERE document_id = $1${statusClause}
+        ORDER BY version DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+      [...values, page.limit, page.offset],
+    );
+    res.setHeader('X-Total-Count', count.rows[0].count);
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.put('/documents/:id/draft', authMiddleware, async (req, res, next) => {
   if (!uuid(req.params.id) || !revisionBody(req.body)) return invalid(req, res);
   const blocks = validateBlocks(req.body.blocks);
@@ -270,6 +298,7 @@ router.put('/documents/:id/draft', authMiddleware, async (req, res, next) => {
     const result = await withAudit(pool, req, 'cms.revision.draft', 'cms_revision', async (db) => {
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
+      await db.query('SELECT pg_advisory_xact_lock($1)', [CMS_ASSET_RETENTION_LOCK]);
       await validateAssetReferences(db, blocks);
       const { rows: versions } = await db.query(
         'SELECT COALESCE(MAX(version), 0) + 1 AS version FROM cms_revisions WHERE document_id = $1',

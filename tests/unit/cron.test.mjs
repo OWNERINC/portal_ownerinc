@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const { promoteScheduledRevisions, reminderForDelivery } = require('../../cron/checkReminders');
+const {
+  enforceAutocardMediaRetention,
+  isSafePosCardStorageKey,
+  isSafeStorageKey,
+} = require('../../cron/autocard-media-retention');
 
 test('scheduled promotion is transactional, archives before publishing, and audits', async () => {
   const calls = [];
@@ -68,4 +75,59 @@ test('cron image contains the shared CMS reader at its actual import path', asyn
   assert.match(cronSource, /require\('\.\.\/api\/cms\/reader'\)/);
   assert.match(reader, /require\('\.\/blocks'\)/);
   assert.match(blocks, /function blocksToText/);
+});
+
+test('Pos-Cards retention accepts only UUID WebP keys and keeps namespaces isolated', async () => {
+  assert.equal(isSafePosCardStorageKey('pos-card-123e4567-e89b-12d3-a456-426614174000.webp'), true);
+  assert.equal(isSafeStorageKey('pos-card-123e4567-e89b-12d3-a456-426614174000.webp'), true);
+  for (const key of [
+    'pos-card-123E4567-E89B-12D3-A456-426614174000.webp',
+    'pos-card-123e4567-e89b-12d3-a456-42661417400.webp',
+    'pos-card-123e4567-e89b-12d3-a456-426614174000.jpg',
+    'pos-card-123e4567-e89b-12d3-a456-426614174000.webp.bak',
+    'pos-card-123e4567-e89b-12d3-a456-426614174000/other.webp',
+  ]) assert.equal(isSafePosCardStorageKey(key), false, key);
+
+  const retention = await readFile('cron/autocard-media-retention.js', 'utf8');
+  assert.match(retention, /pos_card_media/);
+  assert.match(retention, /pos_cards/);
+  assert.match(retention, /pg_try_advisory_lock/);
+  assert.match(retention, /pos_card_media_invalid_storage_key/);
+  assert.match(retention, /isSafeAutocardStorageKey/);
+});
+
+test('retention deletes mixed AutoCard and Pos-Cards orphans independently', async () => {
+  const uploadDirectory = await mkdtemp(path.join(tmpdir(), 'ownerinc-retention-'));
+  const autocardKey = 'autocard-123e4567-e89b-12d3-a456-426614174000.webp';
+  const posCardKey = 'pos-card-223e4567-e89b-12d3-a456-426614174000.webp';
+  const calls = [];
+  const db = {
+    async query(sql, params = []) {
+      calls.push({ sql, params });
+      if (/pg_try_advisory_lock/.test(sql)) return { rows: [{ pg_try_advisory_lock: true }] };
+      if (/DELETE FROM autocard_media/.test(sql)) return { rows: [{ id: 'auto-media', storage_key: autocardKey }] };
+      if (/DELETE FROM pos_card_media/.test(sql)) return { rows: [{ id: 'pos-media', storage_key: posCardKey }] };
+      if (/FROM autocard_media/.test(sql)) return { rows: [{ id: 'auto-media', storage_key: autocardKey }] };
+      if (/FROM pos_card_media/.test(sql)) return { rows: [{ id: 'pos-media', storage_key: posCardKey }] };
+      if (/INSERT INTO audit_log/.test(sql)) return { rows: [{ id: 'audit-1' }] };
+      if (/UPDATE audit_log/.test(sql)) return { rowCount: 1, rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  try {
+    await Promise.all([
+      writeFile(path.join(uploadDirectory, autocardKey), 'autocard'),
+      writeFile(path.join(uploadDirectory, posCardKey), 'pos-card'),
+    ]);
+    const result = await enforceAutocardMediaRetention({ db, uploadDirectory, retentionDays: 7 });
+
+    assert.deepEqual(result, { deletedRows: 2, deletedFiles: 2, fileFailures: 0, retentionDays: 7 });
+    await assert.rejects(readFile(path.join(uploadDirectory, autocardKey)));
+    await assert.rejects(readFile(path.join(uploadDirectory, posCardKey)));
+    assert.deepEqual(calls.find(({ sql }) => /DELETE FROM autocard_media/.test(sql)).params, [['auto-media']]);
+    assert.deepEqual(calls.find(({ sql }) => /DELETE FROM pos_card_media/.test(sql)).params, [['pos-media']]);
+  } finally {
+    await rm(uploadDirectory, { recursive: true, force: true });
+  }
 });

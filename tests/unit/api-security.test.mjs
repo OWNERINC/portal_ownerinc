@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const {
-  can, isSuperAdmin, mayChangeAccountStatus, maySetPrivileges, normalizePermissions,
+  can, canUseAutoCard, canUsePosCards, isSuperAdmin, mayChangeAccountStatus, maySetPrivileges, normalizePermissions,
   removesLastActiveSuperAdmin,
 } = require('../../api/middleware/policy');
 const { validateEnvironment } = require('../../api/middleware/security');
@@ -27,6 +28,36 @@ test('authorization requires an admin role and reserves privilege mutation for a
   assert.equal(mayChangeAccountStatus(superAdmin, { uid: 'other', role: 'viewer', permissions: {} }), true);
   assert.equal(removesLastActiveSuperAdmin(superAdmin, 'viewer', {}, 1), true);
   assert.equal(removesLastActiveSuperAdmin(superAdmin, 'admin', { superAdmin: true }, 1), false);
+});
+
+test('AutoCard allowlist remains exact and independent from Cards Pós access', () => {
+  assert.equal(canUseAutoCard({ job_title: 'Analista de RH Sênior' }), true);
+  assert.equal(canUseAutoCard({ job_title: 'Gerente de RH' }), true);
+  assert.equal(canUseAutoCard({ job_title: 'Analista de DHO' }), false);
+  assert.equal(canUseAutoCard({ job_title: 'Gerente de RH Jr.' }), false);
+  assert.equal(canUsePosCards({ role: 'admin', job_title: 'Diretor' }), true);
+  assert.equal(canUsePosCards({ role: 'viewer', job_title: 'Analista de RH Sênior' }), false);
+});
+
+test('Cards Pós remains isolated from AutoCard routes, storage, and the migration ledger', async () => {
+  const [autocard, posCards, verification, schema, migrationFiles] = await Promise.all([
+    readFile('api/routes/autocard.js', 'utf8'),
+    readFile('api/routes/pos-cards.js', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+    readFile('api/db/schema.sql', 'utf8'),
+    readdir('api/db/migrations'),
+  ]);
+  assert.doesNotMatch(autocard, /canUsePosCards|pos_card/);
+  assert.match(autocard, /canUseAutoCard/);
+  assert.match(posCards, /canUsePosCards/);
+  const referencedTables = [...posCards.matchAll(/\b(?:FROM|INTO|UPDATE)\s+(pos_\w+)/g)].map((match) => match[1]);
+  assert.deepEqual([...new Set(referencedTables)].sort(), ['pos_card_media', 'pos_cards']);
+  assert.match(verification, /'017_pos_cards'/);
+  assert.match(verification, /'018_pos_card_storage_key'/);
+  assert.match(schema, /'017_pos_cards'/);
+  assert.match(schema, /'018_pos_card_storage_key'/);
+  assert.ok(migrationFiles.includes('017_pos_cards.sql'));
+  assert.ok(migrationFiles.includes('018_pos_card_storage_key.sql'));
 });
 
 test('CMS management permission mapping stays area-scoped', () => {
