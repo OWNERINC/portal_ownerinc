@@ -120,6 +120,13 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
 });
 
+test('complete Pos-Card storage filenames are denied before static uploads', async () => {
+  const index = await read('api/index.js');
+  const deny = index.indexOf("/^\\/pos-card-[0-9a-f-]+\\.webp$/i.test(req.path)");
+  const uploads = index.indexOf("app.use('/uploads', express.static('/app/uploads'))");
+  assert.ok(deny >= 0 && deny < uploads);
+});
+
 test('deployment uses a committed archive, backup, smoke gate, and rollback', async () => {
   const [deploy, release, restore, backup, backupS3, alert] = await Promise.all([
     read('deploy.sh'), read('scripts/release.sh'), read('scripts/restore.sh'), read('scripts/backup.sh'), read('scripts/backup-s3.sh').catch(() => ''), read('cron/sendOperationalAlert.js'),
@@ -212,6 +219,13 @@ test('CMS asset retention is scheduled with the shared upload volume', async () 
   assert.match(cron, /enforceCmsAssetRetention/);
   assert.match(cleanup, /pg_advisory_xact_lock/);
   assert.match(cleanup, /CMS_ASSET_RETENTION_LOCK = 7193029/);
+  const lock = cleanup.indexOf("pg_advisory_xact_lock($1)");
+  const candidates = cleanup.indexOf('SELECT a.id, a.storage_key');
+  const reservation = cleanup.indexOf('SET deleting_at = NOW()');
+  const commit = cleanup.indexOf("await client.query('COMMIT')");
+  const unlink = cleanup.indexOf('await fileSystem.unlink');
+  const rowDelete = cleanup.indexOf('DELETE FROM cms_assets');
+  assert.ok(lock >= 0 && candidates > lock && reservation > candidates && commit > reservation && unlink > commit && rowDelete > unlink);
   assert.match(cronService, /CMS_ASSET_ORPHAN_RETENTION_DAYS/);
   assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
 });

@@ -18,6 +18,7 @@ const expectedVersions = [
   '016_remove_ombudsman',
   '017_pos_cards',
   '018_pos_card_storage_key',
+  '019_cms_asset_deletion_state',
 ];
 
 async function verifyMigrations() {
@@ -40,6 +41,7 @@ async function verifyMigrations() {
       to_regclass('public.cms_assets') AS cms_assets,
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'job_title_id') AS user_job_title_column,
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'autocard_cards' AND column_name = 'media_crop' AND is_nullable = 'NO') AS autocard_media_crop_not_null,
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cms_assets' AND column_name = 'deleting_at' AND data_type = 'timestamp with time zone') AS cms_asset_deleting_at,
       EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_documents_content_type_check') AS cms_content_type_check,
       EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_revisions_status_check') AS cms_revision_status_check,
        EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_revisions_blocks_check') AS cms_revision_blocks_check,
@@ -78,6 +80,7 @@ async function verifyMigrations() {
       || result.rows[0].cms_assets !== 'cms_assets'
       || result.rows[0].user_job_title_column !== true
       || result.rows[0].autocard_media_crop_not_null !== true
+      || result.rows[0].cms_asset_deleting_at !== true
       || result.rows[0].cms_content_type_check !== true
       || result.rows[0].cms_revision_status_check !== true
       || result.rows[0].cms_revision_blocks_check !== true

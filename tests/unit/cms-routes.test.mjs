@@ -68,6 +68,11 @@ test('CMS revision history returns metadata without replaying block payloads', (
   assert.doesNotMatch(historyQuery[0], /blocks/);
 });
 
+test('CMS revision history binds limit before offset', () => {
+  assert.match(cms, /const limitIndex = values\.length \+ 1;\s+const offsetIndex = values\.length \+ 2;/);
+  assert.match(cms, /LIMIT \$\$\{limitIndex\} OFFSET \$\$\{offsetIndex\}[\s\S]*\[\.\.\.values, page\.limit, page\.offset\]/);
+});
+
 test('protected assets validate signatures, use UUID storage keys, audit uploads, and hide filesystem paths', () => {
   assert.match(assets, /multer\.memoryStorage\(\)/);
   assert.match(assets, /MAX_ASSET_SIZE = 50 \* 1024 \* 1024/);

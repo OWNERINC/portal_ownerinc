@@ -12,10 +12,10 @@ test('Pos-Cards API is mounted at its isolated namespace', async () => {
 
 test('public uploads block the Pos namespace before generic static delivery', async () => {
   const source = await read('api/index.js');
-  const posBoundary = source.indexOf("app.use('/uploads/pos-card-'");
+  const posBoundary = source.indexOf("/^\\/pos-card-[0-9a-f-]+\\.webp$/i.test(req.path)");
   const genericUploads = source.indexOf("app.use('/uploads', express.static('/app/uploads'))");
   assert.ok(posBoundary >= 0 && posBoundary < genericUploads);
-  assert.match(source, /app\.use\('\/uploads\/pos-card-',\s*\(req, res\) => res\.sendStatus\(404\)\)/);
+  assert.match(source, /app\.use\('\/uploads', \(req, res, next\) => \{[\s\S]*\^\\\/pos-card-\[0-9a-f-\]\+\\\.webp\$[\s\S]*res\.sendStatus\(404\)[\s\S]*next\(\)/);
 });
 
 test('all Pos-Cards routes share authentication and the policy boundary', async () => {

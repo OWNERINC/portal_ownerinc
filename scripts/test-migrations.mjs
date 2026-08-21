@@ -76,6 +76,7 @@ try {
     '016_remove_ombudsman',
     '017_pos_cards',
     '018_pos_card_storage_key',
+    '019_cms_asset_deletion_state',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
@@ -145,6 +146,7 @@ try {
     '016_remove_ombudsman',
     '017_pos_cards',
     '018_pos_card_storage_key',
+    '019_cms_asset_deletion_state',
   ]);
   const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE');
   const sortCatalogNames = (names) => names.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR')));

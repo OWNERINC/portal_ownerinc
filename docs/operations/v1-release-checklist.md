@@ -34,6 +34,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Segunda execução não altera nem duplica o ledger.
 - [ ] Migration CMS `015_cms_editor` passa em PostgreSQL e permanece idempotente na segunda execução.
 - [ ] A migration destrutiva mais recente passa em PostgreSQL e permanece idempotente na segunda execução.
+- [ ] `019_cms_asset_deletion_state` reserva assets antes da remoção física e permanece idempotente.
 - [ ] `011_cron_alert_state` existe e possui os grants esperados.
 - [ ] `012_autocard_media_crop` existe e foi validada em PostgreSQL.
 - [ ] Roles `portal_api` e `portal_cron` têm somente os privilégios necessários.

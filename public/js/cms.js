@@ -212,10 +212,11 @@ async function loadRevisionHistory(documentId = selectedDocument) {
     clear(historyPagination);
     const total = result.total ?? revisions.length;
     if (total > HISTORY_PAGE_SIZE) {
+      const finalHistoryOffset = Math.max(0, Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE);
       historyPagination.append(
-        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Anterior', disabled: historyOffset === 0, on: { click: () => { historyOffset -= HISTORY_PAGE_SIZE; loadRevisionHistory(); } } }),
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Anterior', disabled: historyOffset === 0, on: { click: () => { historyOffset = Math.max(0, historyOffset - HISTORY_PAGE_SIZE); loadRevisionHistory(); } } }),
         element('span', { text: `Página ${Math.floor(historyOffset / HISTORY_PAGE_SIZE) + 1} de ${Math.ceil(total / HISTORY_PAGE_SIZE)}` }),
-        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Próxima', disabled: historyOffset + HISTORY_PAGE_SIZE >= total, on: { click: () => { historyOffset += HISTORY_PAGE_SIZE; loadRevisionHistory(); } } }),
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Próxima', disabled: historyOffset + HISTORY_PAGE_SIZE >= total, on: { click: () => { historyOffset = Math.min(finalHistoryOffset, historyOffset + HISTORY_PAGE_SIZE); loadRevisionHistory(); } } }),
       );
     }
   } catch {

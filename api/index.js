@@ -21,7 +21,10 @@ app.use(express.json({ limit: '100kb' }));
 
 // Serve arquivos de upload (fotos de perfil)
 app.use('/uploads/cms-private', (req, res) => res.sendStatus(404));
-app.use('/uploads/pos-card-', (req, res) => res.sendStatus(404));
+app.use('/uploads', (req, res, next) => {
+  if (/^\/pos-card-[0-9a-f-]+\.webp$/i.test(req.path)) return res.sendStatus(404);
+  return next();
+});
 app.use('/uploads', express.static('/app/uploads'));
 
 // Rotas

@@ -19,6 +19,7 @@ test('CMS asset retention queries only unreferenced revisions and deletes safely
       queries.push({ sql, values });
       if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rowCount: 0, rows: [] };
       if (sql.includes('SELECT a.id')) return { rows: [{ id: 'asset-1', storage_key: 'key-1' }] };
+      if (sql.includes('SET deleting_at = NOW()')) return { rowCount: 1, rows: [{ id: 'asset-1', storage_key: 'key-1' }] };
       return { rowCount: 1, rows: [] };
     },
     release() {},
@@ -39,6 +40,8 @@ test('CMS asset retention queries only unreferenced revisions and deletes safely
   assert.match(queries.find(({ sql }) => sql.includes('SELECT a.id')).sql, /jsonb_array_elements\(r\.blocks\)/);
   assert.match(queries.find(({ sql }) => sql.includes('DELETE FROM cms_assets')).sql, /NOT EXISTS/);
   assert.ok(queries.some(({ sql }) => sql.includes('pg_advisory_xact_lock')));
+  assert.ok(queries.some(({ sql }) => sql.includes('SET deleting_at = NOW()')));
+  assert.ok(queries.some(({ sql }) => sql.includes('deleting_at IS NOT NULL')));
 });
 
 test('CMS asset retention skips a missing private upload directory', async () => {
@@ -59,6 +62,7 @@ test('CMS asset retention does not delete a row if the upload directory disappea
     async query(sql) {
       queries.push(sql);
       if (sql.includes('SELECT a.id')) return { rows: [{ id: 'asset-1', storage_key: 'key-1' }] };
+      if (sql.includes('SET deleting_at = NOW()')) return { rowCount: 1, rows: [{ id: 'asset-1', storage_key: 'key-1' }] };
       return { rowCount: 0, rows: [] };
     },
     release() {},

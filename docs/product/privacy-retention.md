@@ -52,6 +52,19 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Uma falha ao remover o arquivo mantém o registro para nova tentativa e é
   registrada no log operacional.
 
+## Cards Pós
+
+- Finalidade: criar e manter convites internos de Pós-Vendas no template
+  Owntime, com histórico compartilhado entre os usuários autorizados.
+- Acesso: temporariamente restrito a administradores pela política própria do
+  módulo; ocultar a navegação é apenas UX e toda rota repete a autorização.
+- Registros: `pos_cards` preserva o histórico operacional e a autoria enquanto
+  houver necessidade interna autorizada. O prazo definitivo depende da
+  validação do responsável por Pós-Vendas e LGPD.
+- Mídias: arquivos privados são normalizados para WebP e não são publicados
+  pelo diretório genérico de uploads. Mídias sem referência são removidas pelo
+  worker após a janela técnica configurada para mídias órfãs.
+
 ## Auditoria
 
 - Retenção: 5 anos para ações privilegiadas, aplicada diariamente pelo worker.

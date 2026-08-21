@@ -44,6 +44,12 @@ const surfaceSentinels = [
   'scripts/backup.sh', 'tests/unit/api-routes.test.mjs', '.github/workflows/ci.yml',
 ];
 
+const currentSurfaceContent = async (file) => {
+  const source = await readFile(`${repositoryRoot}/${file}`, 'utf8');
+  if (file !== 'api/db/schema.sql') return source;
+  return source.replace(/INSERT INTO schema_migrations[\s\S]*?ON CONFLICT \(version\) DO NOTHING;/, '');
+};
+
 test('Ombudsman route, page, permission, table, grants, and retention are absent from active source', async () => {
   await assert.rejects(access('api/routes/ombudsman.js'));
   await assert.rejects(access('public/ombudsman.html'));
@@ -51,7 +57,7 @@ test('Ombudsman route, page, permission, table, grants, and retention are absent
   const sourceFiles = await trackedCurrentSurface();
   assert.deepEqual(surfaceSentinels.filter((file) => !sourceFiles.includes(file)), []);
   const source = (await Promise.all(
-    sourceFiles.map((file) => readFile(`${repositoryRoot}/${file}`, 'utf8')),
+    sourceFiles.map(currentSurfaceContent),
   )).join('\n');
   assert.doesNotMatch(source, forbiddenSurface);
   assert.match(source, /audit_log/);

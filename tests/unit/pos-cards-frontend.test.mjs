@@ -70,6 +70,19 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(css, /@page \{ size: 108mm 192mm/);
 });
 
+test('media upload and card editing cannot apply stale responses or save mid-operation', () => {
+  assert.match(app, /let mediaOperationToken = 0/);
+  assert.match(app, /let activeMediaPromise = null/);
+  assert.match(app, /const operationToken = \+\+mediaOperationToken/);
+  assert.match(app, /if \(operationToken !== mediaOperationToken\) return/);
+  assert.match(app, /\$\('saveButton'\)\.disabled = busy/);
+  assert.match(app, /if \(activeMediaPromise\) return/);
+});
+
+test('the hidden file input has a single accessible keyboard trigger', () => {
+  assert.match(html, /id="imageInput"[^>]*tabindex="-1"[^>]*aria-hidden="true"/);
+});
+
 test('Portal visual and accessibility contracts are present without external font imports', () => {
   for (const token of ['var(--bg)', 'var(--surface)', 'var(--border)', 'var(--primary)', 'var(--focus)', 'var(--space-', 'var(--radius-', 'var(--shadow-']) assert.match(css, new RegExp(token.replace(/[()[\]-]/g, '\\$&')));
   assert.match(css, /grid-template-columns: minmax\(330px, 460px\)/);

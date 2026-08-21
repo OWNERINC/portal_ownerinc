@@ -4,13 +4,19 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
   assert.match(runner, /pg_advisory_lock/);
   assert.match(runner, /BEGIN/);
   assert.match(runner, /INSERT INTO schema_migrations/);
+
+  const schema = await readFile('api/db/schema.sql', 'utf8');
+  const ledger = [...schema.matchAll(/\('([0-9]{3}_[a-z0-9_]+)'\)/g)].map((match) => match[1]);
+  for (const migration of ['013_job_title_catalog', '015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state']) {
+    assert.equal(ledger.includes(migration), false, `${migration} must run after the bootstrap schema`);
+  }
 });
 
 test('Sólides links are unique, reviewable, and removed with the Portal user', async () => {
@@ -34,7 +40,8 @@ test('governance schema retains generic constraints and audit indexes', async ()
   const schema = await readFile('api/db/schema.sql', 'utf8');
   assert.match(schema, /knowledge_base_content_lengths/);
   assert.match(schema, /notifications_log_history_idx/);
-  assert.doesNotMatch(schema, /ombudsman|Ouvidoria|viewOmbudsman/i);
+  const schemaWithoutLedger = schema.replace(/INSERT INTO schema_migrations[\s\S]*?ON CONFLICT \(version\) DO NOTHING;/, '');
+  assert.doesNotMatch(schemaWithoutLedger, /ombudsman|Ouvidoria|viewOmbudsman/i);
 });
 
 test('notification schema enforces one durable occurrence per channel', async () => {
@@ -204,4 +211,13 @@ test('CMS migration is isolated, idempotent, and protects document revisions and
   for (const privilege of ['api_cms_documents_privileges', 'api_cms_revisions_privileges', 'api_cms_assets_privileges', 'cron_cms_documents_privileges', 'cron_cms_revisions_privileges']) {
     assert.match(verification, new RegExp(privilege));
   }
+});
+
+test('CMS asset deletion reservations are applied and verified by migrations', async () => {
+  const [migration, verification] = await Promise.all([
+    readFile('api/db/migrations/019_cms_asset_deletion_state.sql', 'utf8').catch(() => ''),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+  ]);
+  assert.match(migration, /deleting_at\s+TIMESTAMPTZ/);
+  assert.match(verification, /cms_asset_deleting_at/);
 });

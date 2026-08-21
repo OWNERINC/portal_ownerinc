@@ -79,6 +79,12 @@ test('CMS actions use the existing API contracts and keep generic failure states
   assert.match(cms, /new Date\(value\)/);
 });
 
+test('CMS revision history clamps pagination before loading another page', () => {
+  assert.match(cms, /historyOffset = Math\.max\(0, historyOffset - HISTORY_PAGE_SIZE\)/);
+  assert.match(cms, /const finalHistoryOffset = Math\.max\(0, Math\.floor\(\(total - 1\) \/ HISTORY_PAGE_SIZE\) \* HISTORY_PAGE_SIZE\)/);
+  assert.match(cms, /historyOffset = Math\.min\(finalHistoryOffset, historyOffset \+ HISTORY_PAGE_SIZE\)/);
+});
+
 test('autosave coalesces in-flight edits and rejects stale document responses', () => {
   assert.match(cms, /let saveQueued = false/);
   assert.match(cms, /let editVersion = 0/);

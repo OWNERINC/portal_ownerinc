@@ -19,6 +19,8 @@ const defaults = {
 let current = { values: { ...defaults }, mediaId: null, mediaUrl: '', editingId: null, name: '' };
 let historyRequest = 0;
 let historyOffset = 0;
+let mediaOperationToken = 0;
+let activeMediaPromise = null;
 const HISTORY_PAGE_SIZE = 50;
 
 function esc(value) {
@@ -72,24 +74,55 @@ function replaceMediaUrl(url) {
   current.mediaUrl = url || '';
 }
 
+function setMediaBusy(busy) {
+  $('uploadButton').disabled = busy;
+  $('imageInput').disabled = busy;
+  $('saveButton').disabled = busy;
+}
+
+async function runMediaOperation(operation) {
+  const operationToken = ++mediaOperationToken;
+  const promise = operation(operationToken);
+  activeMediaPromise = promise;
+  setMediaBusy(true);
+  try {
+    return await promise;
+  } catch (error) {
+    if (operationToken !== mediaOperationToken) return undefined;
+    throw error;
+  } finally {
+    if (activeMediaPromise === promise) {
+      activeMediaPromise = null;
+      setMediaBusy(false);
+    }
+  }
+}
+
 async function upload(file) {
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Escolha uma imagem PNG, JPEG ou WebP.');
-  const dimensions = await new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => { URL.revokeObjectURL(image.src); resolve([image.naturalWidth, image.naturalHeight]); };
-    image.onerror = () => { URL.revokeObjectURL(image.src); reject(new Error('Não foi possível ler a imagem.')); };
-    image.src = URL.createObjectURL(file);
+  return runMediaOperation(async (operationToken) => {
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Escolha uma imagem PNG, JPEG ou WebP.');
+    const dimensions = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => { URL.revokeObjectURL(image.src); resolve([image.naturalWidth, image.naturalHeight]); };
+      image.onerror = () => { URL.revokeObjectURL(image.src); reject(new Error('Não foi possível ler a imagem.')); };
+      image.src = URL.createObjectURL(file);
+    });
+    if (operationToken !== mediaOperationToken) return;
+    if (dimensions.some((value) => value < 500)) throw new Error('A imagem precisa ter pelo menos 500 × 500 px.');
+    setStatus('Enviando imagem...');
+    const media = await fetchAPI('/api/pos-cards/media', { method: 'POST', headers: { 'content-type': file.type }, body: file });
+    if (operationToken !== mediaOperationToken) return;
+    const mediaUrl = await fetchAPIAsset(media.url || `/api/pos-cards/media/${media.id}`);
+    if (operationToken !== mediaOperationToken) return;
+    current.mediaId = media.id;
+    replaceMediaUrl(mediaUrl);
+    render();
+    setStatus('Imagem adicionada ao convite.');
   });
-  if (dimensions.some((value) => value < 500)) throw new Error('A imagem precisa ter pelo menos 500 × 500 px.');
-  setStatus('Enviando imagem...');
-  const media = await fetchAPI('/api/pos-cards/media', { method: 'POST', headers: { 'content-type': file.type }, body: file });
-  current.mediaId = media.id;
-  replaceMediaUrl(await fetchAPIAsset(media.url || `/api/pos-cards/media/${media.id}`));
-  render();
-  setStatus('Imagem adicionada ao convite.');
 }
 
 async function save() {
+  if (activeMediaPromise) return;
   const name = window.prompt('Nome do convite:', current.name || current.values.heroBrand || 'Convite Owntime');
   if (!name?.trim()) return;
   const button = $('saveButton');
@@ -166,14 +199,19 @@ async function loadHistory() {
 async function editCard(id) {
   setStatus('Carregando convite...');
   try {
-    const card = await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}`);
-    replaceMediaUrl('');
-    current = { ...current, editingId: card.id, mediaId: card.mediaId, name: card.name || '' };
-    loadValues(card.values);
-    if (card.mediaId) replaceMediaUrl(await fetchAPIAsset(`/api/pos-cards/media/${card.mediaId}`));
-    render();
-    showView('editor');
-    setStatus('Convite carregado para edição.');
+    await runMediaOperation(async (operationToken) => {
+      const card = await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}`);
+      if (operationToken !== mediaOperationToken) return;
+      const mediaUrl = card.mediaId ? await fetchAPIAsset(`/api/pos-cards/media/${card.mediaId}`) : '';
+      if (operationToken !== mediaOperationToken) return;
+      replaceMediaUrl('');
+      current = { ...current, editingId: card.id, mediaId: card.mediaId, name: card.name || '' };
+      loadValues(card.values);
+      replaceMediaUrl(mediaUrl);
+      render();
+      showView('editor');
+      setStatus('Convite carregado para edição.');
+    });
   } catch (error) {
     setStatus(error.message, true);
   }

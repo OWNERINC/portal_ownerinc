@@ -129,6 +129,7 @@ async function validateAssetReferences(db, blocks) {
        FROM cms_assets
       WHERE id = ANY($1::uuid[])
         AND storage_key IS NOT NULL
+        AND deleting_at IS NULL
         AND byte_size BETWEEN 1 AND 52428800`,
     [[...references.keys()]],
   );
@@ -274,8 +275,8 @@ router.get('/documents/:id/revisions', authMiddleware, async (req, res, next) =>
     const statusClause = req.query.status ? ' AND status = $2' : '';
     if (req.query.status) values.push(req.query.status);
     const count = await pool.query(`SELECT COUNT(*)::integer AS count FROM cms_revisions WHERE document_id = $1${statusClause}`, values);
-    const offsetIndex = values.length + 1;
-    const limitIndex = values.length + 2;
+    const limitIndex = values.length + 1;
+    const offsetIndex = values.length + 2;
     const { rows } = await pool.query(
       `SELECT id, document_id, version, status, created_by, created_at
          FROM cms_revisions
