@@ -36,6 +36,11 @@ test('CMS entry point is authenticated, linked from admin, and has responsive ed
   assert.match(css, /overflow-x: auto/);
 });
 
+test('CMS initialization has the save status element used by the editor runtime', () => {
+  assert.match(cms, /const saveState = document\.getElementById\('save-state'\)/);
+  assert.match(cmsHtml, /<span id="save-state" class="cms-save-state" role="status" aria-live="polite">/);
+});
+
 test('CMS editor exposes all approved block types, native drag/drop, and keyboard fallback controls', () => {
   for (const type of ['heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video']) assert.match(editor, new RegExp(`['"]${type}['"]`));
   assert.match(editor, /draggable: 'true'/);
