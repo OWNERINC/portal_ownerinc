@@ -1,10 +1,8 @@
 import { requireAuth, getCachedUserSnapshot, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
-import { auth } from './firebase-config.js';
 import { clear, closeDialog, element, openDialog, safeHttpUrl } from './ui.js';
 
-await auth.authStateReady();
 const cachedUser = getCachedUserSnapshot();
-let me = cachedUser && cachedUser.uid === auth.currentUser?.uid ? cachedUser : null;
+let me = cachedUser;
 let solidesAdminStatus = null;
 const TABS = [
   ['users', 'Usuários', 'manageUsers'],

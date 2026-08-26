@@ -34,7 +34,7 @@ test('editor and history retain the source field and view contract', () => {
 });
 
 test('API calls are authenticated and use only the Pos-Cards routes', () => {
-  for (const endpoint of ['/api/pos-cards/access', '/api/pos-cards/media', '/api/pos-cards/cards']) assert.match(`${app}${guard}`, new RegExp(endpoint.replaceAll('/', '\\/')));
+  for (const endpoint of ['/api/pos-cards/media', '/api/pos-cards/cards']) assert.match(`${app}${guard}`, new RegExp(endpoint.replaceAll('/', '\\/')));
   assert.match(app, /fetchAPI\('\/api\/pos-cards\/media'/);
   assert.match(app, /fetchAPIAsset/);
   assert.doesNotMatch(`${html}${app}${guard}`, /\/api\/(?!pos-cards)/);
@@ -43,8 +43,8 @@ test('API calls are authenticated and use only the Pos-Cards routes', () => {
 
 test('guard requires auth, checks access, and stops editor initialization when denied', () => {
   assert.match(guard, /requireAuth\(\)/);
-  assert.match(guard, /fetchAPI\('\/api\/pos-cards\/access'\)/);
-  assert.match(guard, /allowed\s*===\s*true/);
+  assert.match(guard, /user\.pos_cards_access === true/);
+  assert.doesNotMatch(guard, /fetchAPI\(|\/api\/pos-cards\/access/);
   assert.match(guard, /Acesso restrito/);
   assert.match(guard, /dashboard\.html/);
   assert.match(guard, /showDeniedState\(\);\s*window\.setTimeout\(\(\) => window\.location\.assign\('\.\/dashboard\.html'\), 1500\)/);
