@@ -13,7 +13,9 @@
 
     <div class="preview-shell">
       <aside class="preview-sidebar" aria-label="Navegação principal">
-        <a class="preview-brand" href="./home-preview.html">Ownerinc</a>
+        <a class="preview-brand" href="./home-preview.html">
+          <img class="preview-brand-logo" src="./assets/ownerinc-wordmark-white.webp" alt="Ownerinc" width="292" height="38">
+        </a>
         <nav aria-label="Áreas do Portal">
           <a class="active" aria-current="page" href="./home-preview.html">
             <svg aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg>
@@ -39,19 +41,22 @@
             <svg aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg>
             <span>Anúncios</span>
           </a>
-          <a href="./profile.html">
-            <svg aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg>
-            <span>Meu Perfil</span>
-          </a>
         </nav>
 
+        <a class="preview-sidebar-profile" href="./profile.html">
+          <span class="preview-sidebar-profile-avatar" aria-hidden="true">MO</span>
+          <span class="preview-sidebar-profile-copy">
+            <strong>Marina Oliveira</strong>
+            <small>Meu perfil</small>
+          </span>
+        </a>
         <p class="preview-sidebar-note">Portal interno<br>Ownerinc</p>
       </aside>
 
       <div class="preview-content">
         <header class="preview-topbar">
           <span>Visão geral</span>
-          <a class="preview-avatar" href="./profile.html" aria-label="Abrir meu perfil">MO</a>
+          <a class="preview-avatar preview-mobile-profile" href="./profile.html" aria-label="Abrir meu perfil">MO</a>
         </header>
 
         <main id="main-content" tabindex="-1">
