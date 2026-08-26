@@ -1,3 +1,35 @@
+@font-face {
+  font-family: 'Novelin';
+  src: url('../assets/Novelin-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Novelin';
+  src: url('../assets/Novelin-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Novelin';
+  src: url('../assets/Novelin-Black.otf') format('opentype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Signaturia';
+  src: url('../assets/Signaturia-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Cores */
   --bg: #F4F4F5;
@@ -19,7 +51,8 @@
   color-scheme: light;
 
   /* Tipografia */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: 'Novelin', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Signaturia', 'Novelin', sans-serif;
   --font-size-xs: 11px;
   --font-size-sm: 13px;
   --font-size-base: 14px;

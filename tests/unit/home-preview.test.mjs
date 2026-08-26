@@ -18,6 +18,7 @@ test('home preview preserves the required HTML accessibility and navigation cont
   assert.match(brandLogo, /alt="Ownerinc"/);
   assert.match(brandLogo, /width="292"/);
   assert.match(brandLogo, /height="38"/);
+  assert.match(html, /<a class="preview-brand"[^>]*aria-label="Ownerinc, ir para a visão geral"/);
   const logoAsset = await readFile('public/assets/ownerinc-wordmark-white.webp');
   assert.ok(logoAsset.byteLength > 0, 'expected the Ownerinc wordmark asset to exist');
 
@@ -66,7 +67,11 @@ test('home preview preserves the required responsive and motion CSS contract', a
   const css = await readFile('public/css/home-preview.css', 'utf8');
 
   assert.match(css, /overflow-x\s*:\s*hidden/);
+  assert.match(css, /\.preview-shell\s*\{[^}]*grid-template-columns\s*:\s*clamp\(190px,\s*16vw,\s*var\(--sidebar-width\)\)\s+minmax\(0,\s*1fr\);/s);
+  assert.match(css, /\.preview-sidebar\s*\{[^}]*position\s*:\s*fixed;[^}]*inset\s*:\s*0\s+auto\s+0\s+0;/s);
+  assert.match(css, /\.preview-sidebar\s*\{[^}]*width\s*:\s*clamp\(190px,\s*16vw,\s*var\(--sidebar-width\)\);/s);
   assert.match(css, /\.preview-sidebar\s*\{[^}]*height\s*:\s*100dvh;[^}]*max-height\s*:\s*100dvh;[^}]*overflow-y\s*:\s*auto;[^}]*overscroll-behavior\s*:\s*contain;/s);
+  assert.match(css, /\.preview-content\s*\{[^}]*grid-column\s*:\s*2;/s);
   assert.match(css, /scroll-snap-type\s*:\s*x\s+mandatory/);
   assert.match(
     css,
@@ -78,12 +83,28 @@ test('home preview preserves the required responsive and motion CSS contract', a
   assert.match(css, /\.preview-section\s*\{[^}]*margin-top\s*:\s*clamp\(48px,\s*7vw,\s*112px\)/s);
   assert.match(css, /\.section-heading h2\s*\{[^}]*font-size\s*:\s*28px;/s);
   assert.match(css, /\.story-rail\s*\{[^}]*gap\s*:\s*24px;/s);
+  assert.match(css, /\.story-rail\s*\{[^}]*grid-template-columns\s*:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*260px\),\s*1fr\)\);/s);
+  assert.match(css, /\.story-card\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;/s);
+  assert.match(css, /\.story-card-body\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;/s);
+  assert.match(css, /\.story-card strong\s*\{[^}]*font-size\s*:\s*clamp\(17px,\s*1\.5vw,\s*21px\);/s);
+  assert.match(css, /\.story-card small\s*\{[^}]*font-size\s*:\s*10px;/s);
   assert.match(css, /\.areas-grid\s*\{[^}]*gap\s*:\s*16px;/s);
-  assert.match(css, /@media \(max-width:\s*768px\)[\s\S]*\.preview-sidebar\s*\{[^}]*display\s*:\s*none;[\s\S]*\.preview-mobile-profile\s*\{[^}]*display\s*:\s*inline-flex;/s);
+  assert.match(css, /\.areas-grid\s*\{[^}]*grid-template-columns\s*:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*160px\),\s*1fr\)\);/s);
+  assert.match(css, /\.preview-sidebar nav\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;/s);
+  assert.match(css, /\.area-card-copy\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;/s);
+  assert.match(css, /\.area-card strong\s*\{[^}]*font-size\s*:\s*13px;/s);
+  assert.match(css, /\.area-card-copy > span\s*\{[^}]*font-size\s*:\s*12px;/s);
+  assert.match(css, /\.preview-hero-copy\s*\{[^}]*width\s*:\s*min\(72%,\s*760px\);[^}]*padding\s*:\s*clamp\(24px,\s*3vw,\s*40px\)\s+clamp\(40px,\s*6vw,\s*80px\);/s);
+  assert.match(css, /\.preview-hero h1\s*\{[^}]*font-size\s*:\s*clamp\(34px,\s*4vw,\s*60px\);/s);
+  assert.match(css, /@media \(max-width:\s*768px\)[\s\S]*\.preview-hero-copy\s*\{[^}]*padding\s*:\s*28px\s+clamp\(28px,\s*8vw,\s*40px\)\s+32px;/s);
+  assert.match(css, /@media \(max-width:\s*768px\)[\s\S]*\.preview-sidebar\s*\{[^}]*display\s*:\s*none;/s);
+  assert.match(css, /@media \(max-width:\s*768px\)[\s\S]*\.preview-content\s*\{[^}]*grid-column\s*:\s*auto;/s);
+  assert.match(css, /@media \(max-width:\s*768px\)[\s\S]*\.preview-mobile-profile\s*\{[^}]*display\s*:\s*inline-flex;/s);
 });
 
 test('home preview preserves the light and dark surface contrast tokens', async () => {
   const css = await readFile('public/css/home-preview.css', 'utf8');
+  const tokens = await readFile('public/css/tokens.css', 'utf8');
 
   assert.match(css, /\.eyebrow\s*\{[^}]*\bcolor:\s*var\(--primary\)\s*;/s);
   assert.match(css, /\.section-kicker\s*\{[^}]*\bcolor:\s*var\(--espresso\)\s*;/s);
@@ -98,4 +119,13 @@ test('home preview preserves the light and dark surface contrast tokens', async 
     css,
     /\.preview-meta\s*\{[^}]*rgba\(255\s*,\s*255\s*,\s*255\s*,\s*0\.62\)/s,
   );
+  assert.match(tokens, /font-family:\s*'Novelin';[\s\S]*Novelin-Regular\.otf/);
+  assert.match(tokens, /font-family:\s*'Novelin';[\s\S]*Novelin-Bold\.otf/);
+  assert.match(tokens, /font-family:\s*'Novelin';[\s\S]*Novelin-Black\.otf/);
+  assert.match(tokens, /font-family:\s*'Signaturia';[\s\S]*Signaturia-Regular\.ttf/);
+  assert.match(tokens, /--font-sans:\s*'Novelin'/);
+  assert.match(tokens, /--font-display:\s*'Signaturia',\s*'Novelin'/);
+  assert.match(css, /\.preview-hero h1\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
+  assert.match(css, /\.section-heading h2\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
+  assert.match(css, /\.story-card strong\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
 });

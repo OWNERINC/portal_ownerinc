@@ -20,7 +20,7 @@
 .cms-page .topbar { border-bottom-color: var(--cms-rule); }
 .cms-page .page-header h1,
 .cms-page h2,
-.cms-page h3 { font-family: Georgia, 'Times New Roman', serif; color: var(--cms-ink); }
+.cms-page h3 { font-family: var(--font-display); color: var(--cms-ink); }
 .cms-page .page-header h1 { font-size: clamp(26px, 4vw, 38px); letter-spacing: -0.025em; }
 .cms-page .page-header { max-width: 760px; }
 .cms-page .section-label { color: var(--cms-accent); }
@@ -86,7 +86,7 @@
 .cms-preview-root { margin-top: 16px; padding: 20px; background: var(--cms-paper); border: 1px solid var(--cms-rule); min-height: 120px; }
 
 .cms-inspector { min-height: 620px; }
-.cms-inspector summary { cursor: pointer; font: 600 18px Georgia, 'Times New Roman', serif; min-height: 44px; }
+.cms-inspector summary { cursor: pointer; font: 600 18px var(--font-display); min-height: 44px; }
 .cms-inspector-body { padding-top: 18px; }
 .cms-inspector-section { border-bottom: 1px solid var(--cms-rule); padding-bottom: 16px; margin-bottom: 18px; }
 .cms-inspector-section h3 { font-size: 16px; margin-bottom: 12px; }
@@ -109,7 +109,7 @@
 .cms-page .badge-red { background: #f5dfdb; color: #8f382b; }
 
 .cms-block { margin: 0 0 14px; line-height: 1.65; }
-.cms-heading { font-family: Georgia, 'Times New Roman', serif; line-height: 1.2; }
+.cms-heading { font-family: var(--font-display); line-height: 1.2; }
 .cms-list { padding-left: 22px; }
 .cms-callout { border-left: 3px solid var(--cms-accent); padding: 12px 14px; background: var(--cms-paper-deep); }
 .cms-callout p { margin: 4px 0 0; }
