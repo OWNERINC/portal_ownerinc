@@ -2,9 +2,8 @@ import { requireAuth, getCachedUserSnapshot, showToast, fetchAPI, updateAuthDisp
 import { auth } from './firebase-config.js';
 import { protectForm } from './ui.js';
 
-await auth.authStateReady();
 const cachedUser = getCachedUserSnapshot();
-const user = cachedUser && cachedUser.uid === auth.currentUser?.uid ? cachedUser : {};
+const user = cachedUser || {};
 
 function applyProfileFields(profile) {
   document.getElementById('p-name').value = profile.name || '';
@@ -20,6 +19,7 @@ function applyProfileFields(profile) {
 }
 
 if (Object.keys(user).length) applyProfileFields(user);
+if (Object.keys(user).length) renderAvatar(user.photo_url, user.name);
 const verifiedUser = await requireAuth();
 if (!verifiedUser) throw new Error('not authenticated');
 Object.assign(user, verifiedUser);

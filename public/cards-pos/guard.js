@@ -1,4 +1,4 @@
-import { fetchAPI, requireAuth } from '../js/auth.js';
+import { requireAuth } from '../js/auth.js';
 
 function showDeniedState() {
   const main = document.getElementById('main-content') || document.querySelector('main') || document.body;
@@ -24,10 +24,7 @@ function showDeniedState() {
 export async function requirePosCards() {
   const user = await requireAuth();
   if (!user) return false;
-  try {
-    const access = await fetchAPI('/api/pos-cards/access');
-    if (access?.allowed === true) return true;
-  } catch {}
+  if (user.pos_cards_access === true) return true;
   showDeniedState();
   window.setTimeout(() => window.location.assign('./dashboard.html'), 1500);
   return false;

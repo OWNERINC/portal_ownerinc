@@ -45,6 +45,10 @@ test('admin navigation restores the last verified role before paint and revalida
   assert.match(shell, /root\.dataset\.portalRole/);
   assert.match(layout, /\.admin-link\s*\{[^}]*display:\s*none/);
   assert.match(layout, /html\[data-auth-state="ready"\]\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
+  assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
+  assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-autocard-access="true"\]\s+\.autocard-link/);
+  assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-cms-access="true"\]\s+\.cms-link/);
+  assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-pos-cards-access="true"\]\s+\.pos-cards-link/);
   assert.match(auth, /sessionStorage\.setItem\('ownerinc-verified-role', user\.role\)/);
   assert.match(auth, /sessionStorage\.setItem\(AUTH_SNAPSHOT_KEY/);
   assert.match(auth, /setAuthState\('ready'\)/);
@@ -106,13 +110,13 @@ test('admin and profile hydrate from the provisional user snapshot before API re
   ]);
   assert.match(auth, /export function getCachedUserSnapshot\(\)/);
   assert.match(auth, /user: \{/);
-  assert.match(admin, /await auth\.authStateReady\(\)/);
-  assert.match(admin, /cachedUser\.uid === auth\.currentUser\?\.uid/);
+  assert.doesNotMatch(admin, /await auth\.authStateReady\(\)/);
+  assert.match(admin, /let me = cachedUser;/);
   assert.match(admin, /if \(me\) buildTabs\(false\);/);
   assert.match(admin, /me = await requireAuth\(true\);/);
-  assert.match(profile, /await auth\.authStateReady\(\)/);
-  assert.match(profile, /cachedUser\.uid === auth\.currentUser\?\.uid/);
+  assert.match(profile, /const user = cachedUser \|\| \{\};/);
   assert.match(profile, /if \(Object\.keys\(user\)\.length\) applyProfileFields\(user\);/);
+  assert.match(profile, /if \(Object\.keys\(user\)\.length\) renderAvatar\(user\.photo_url, user\.name\);/);
   assert.match(profile, /const verifiedUser = await requireAuth\(\);/);
 });
 
@@ -246,7 +250,7 @@ test('Cards Pós page and navigation stay hidden until the server verifies acces
   ]);
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
   assert.match(guard, /requireAuth\(\)/);
-  assert.match(guard, /fetchAPI\('\/api\/pos-cards\/access'\)/);
+  assert.match(guard, /user\.pos_cards_access === true/);
   assert.match(app, /if \(await requirePosCards\(\)\) init\(\)/);
   assert.match(auth, /dataset\.posCardsAccess = String\(user\?\.pos_cards_access === true\)/);
   assert.doesNotMatch(sidebar, /posCardsItem|createElement\('li'\)/);

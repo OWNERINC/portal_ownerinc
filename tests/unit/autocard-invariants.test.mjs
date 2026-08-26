@@ -852,7 +852,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   ]);
   assert.match(entry, /await requireAutoCard\(\)/);
   assert.match(entry, /import\('\.\/app\.js'\)/);
-  assert.match(guard, /\/api\/autocard\/access/);
+  assert.match(guard, /user\.autocard_access === true/);
+  assert.doesNotMatch(guard, /fetchAPI\(|\/api\/autocard\/access/);
   assert.match(guard, /Acesso restrito/);
   assert.match(guard, /cargos de RH aprovados/);
   assert.doesNotMatch(guard, /cargos do DHO/);
