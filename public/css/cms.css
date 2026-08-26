@@ -119,7 +119,7 @@
 .cms-video { display: block; width: 100%; max-width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; background: var(--cms-paper-deep); }
 .cms-image { min-height: 80px; }
 .cms-divider { border: 0; border-top: 1px solid var(--cms-rule); }
-.cms-link,
+.cms-block.cms-link,
 .cms-pdf-link { display: inline-flex; margin-bottom: 14px; }
 .cms-asset-error { color: var(--danger); font-size: var(--font-size-sm); }
 .cms-fallback { white-space: pre-wrap; }

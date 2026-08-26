@@ -106,6 +106,7 @@ test('CMS navigation links are permission-gated before the API remains authorita
   assert.match(auth, /manageKnowledge.*manageAcademy.*manageBenefits.*manageReminders/s);
   assert.match(layout, /\.cms-link, \.cms-entry-link \{ display: none/);
   assert.match(layout, /html\[data-auth-state="ready"\]\[data-cms-access="true"\] \.cms-link/);
+  assert.match(css, /\.cms-block\.cms-link,\s*\.cms-pdf-link \{ display: inline-flex; margin-bottom: 14px; \}/);
   assert.match(admin, /class="cms-entry-link/);
   assert.match(cms, /\.filter\(\(\[, , permission\]\) => can\(user, permission\)\)/);
 });
