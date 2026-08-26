@@ -250,12 +250,14 @@ test('CI builds and publishes commit-addressed production images', async () => {
   assert.match(apiPackage, /"sharp": "\^0\.35\.3"/);
 });
 
-test('green main commits deploy through a restricted serialized production gate', async () => {
+test('green main revisions deploy through a restricted serialized production gate', async () => {
   const [workflow, hostDeploy, productionCompose] = await Promise.all([
     read('.github/workflows/ci.yml'), read('ops/deploy-from-ci.sh'),
     read('ops/compose.production.yaml'),
   ]);
   assert.match(workflow, /deploy-production:[\s\S]*needs: validate/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /group: portal-ownerinc-production[\s\S]*cancel-in-progress: false/);
   assert.match(workflow, /--add-virtual-file="\.ci-commit:\$\{GITHUB_SHA\}"/);
   assert.match(workflow, /PORTAL_VPS_SSH_KEY/);
