@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <link rel="stylesheet" href="./css/cms.css">
+  <link rel="stylesheet" href="./css/dashboard-home.css">
   <script src="./js/auth-shell.js"></script>
 </head>
 <body>
@@ -51,45 +52,61 @@
     <!-- generated:portal-topbar -->
     <header class="topbar"><span class="topbar-title">Dashboard</span></header>
     <!-- /generated:portal-topbar -->
-    <main class="page-body" id="main-content" tabindex="-1">
-
-      <div class="page-header">
-        <h1>Visão Geral</h1>
-      </div>
-
-       <div id="home-spotlight" class="home-spotlight"></div>
-
-       <section class="content-section" aria-labelledby="announcements-heading">
-         <div class="page-header section-heading-row">
-           <h2 id="announcements-heading">Anúncios</h2>
-           <a href="./announcements.html">Ver todos →</a>
-         </div>
-         <div id="announcements-preview" class="card-grid" aria-live="polite"><p class="empty-state">Carregando anúncios…</p></div>
-       </section>
-
-       <!-- Lembretes próximos 7 dias -->
-      <div class="page-header">
-         <h2>Próximos Lembretes</h2>
-        <p>Lembretes com vencimento nos próximos 7 dias</p>
-      </div>
-      <div id="reminders-list" class="card-grid" aria-live="polite">
-        <p class="empty-state">Carregando…</p>
-      </div>
-
-      <!-- Acesso Rápido -->
-      <div class="page-header" style="margin-top:40px">
-         <h2>Acesso Rápido</h2>
-      </div>
-      <div id="quick-links" class="card-grid"></div>
-
-      <section class="content-section" aria-labelledby="academy-heading">
-        <div class="page-header section-heading-row">
-          <h2 id="academy-heading">Academy</h2>
-          <a href="./academy.html">Ver todos →</a>
+    <main class="page-body dashboard-home" id="main-content" tabindex="-1">
+      <section class="dashboard-hero" aria-labelledby="dashboard-hero-title">
+        <img src="https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1600&q=80" alt="Pessoas conversando em uma sala iluminada" width="1600" height="700">
+        <div class="dashboard-hero-copy">
+          <p id="dashboard-hero-eyebrow" class="dashboard-eyebrow">Edição da semana · Pessoas e cultura</p>
+          <h1 id="dashboard-hero-title">Como transformar intenção em hábito.</h1>
+          <p id="dashboard-hero-description" class="dashboard-hero-description">Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.</p>
+          <a class="dashboard-button dashboard-button-primary" href="./announcements.html">Ler história</a>
+          <p id="dashboard-hero-meta" class="dashboard-hero-meta">Leitura em 4 min <span aria-hidden="true">·</span> Publicado hoje</p>
         </div>
-        <div id="academy-preview" aria-live="polite"><p class="empty-state">Carregando cursos…</p></div>
       </section>
 
+      <section class="dashboard-section" aria-labelledby="announcements-heading">
+        <div class="dashboard-section-heading">
+          <div>
+            <p class="dashboard-section-kicker">Leituras selecionadas</p>
+            <h2 id="announcements-heading">Também pode interessar</h2>
+          </div>
+          <a class="dashboard-section-link" href="./announcements.html">Ver todos</a>
+        </div>
+        <div id="announcements-preview" class="dashboard-story-rail" aria-live="polite"><p class="empty-state">Carregando anúncios…</p></div>
+      </section>
+
+      <section class="dashboard-section" aria-labelledby="areas-heading">
+        <div class="dashboard-section-heading">
+          <div>
+            <p class="dashboard-section-kicker">Diretório do portal</p>
+            <h2 id="areas-heading">Acessar áreas</h2>
+          </div>
+          <span class="dashboard-section-note">Explorar diretório</span>
+        </div>
+        <div id="quick-links" class="dashboard-areas-grid"></div>
+      </section>
+
+      <section class="dashboard-section" aria-labelledby="reminders-heading">
+        <div class="dashboard-section-heading">
+          <div>
+            <p class="dashboard-section-kicker">Para não esquecer</p>
+            <h2 id="reminders-heading">Próximos lembretes</h2>
+          </div>
+          <a class="dashboard-section-link" href="./reminders.html">Ver todos</a>
+        </div>
+        <div id="reminders-list" class="dashboard-story-rail" aria-live="polite"><p class="empty-state">Carregando lembretes…</p></div>
+      </section>
+
+      <section class="dashboard-section" aria-labelledby="academy-heading">
+        <div class="dashboard-section-heading">
+          <div>
+            <p class="dashboard-section-kicker">Aprender junto</p>
+            <h2 id="academy-heading">Academy</h2>
+          </div>
+          <a class="dashboard-section-link" href="./academy.html">Ver todos</a>
+        </div>
+        <div id="academy-preview" class="dashboard-story-rail" aria-live="polite"><p class="empty-state">Carregando cursos…</p></div>
+      </section>
     </main>
   </div>
 </div>

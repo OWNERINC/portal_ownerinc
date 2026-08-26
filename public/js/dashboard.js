@@ -1,172 +1,158 @@
 import { requireAuth, fetchAPI } from './auth.js';
+import { blocksToText, renderBlocks } from './cms-block-renderer.js';
 import { clear, element, safeHttpUrl, showState } from './ui.js';
-import { renderBlocks } from './cms-block-renderer.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 
-const spotlight = document.getElementById('home-spotlight');
-const spotlightItems = [
-  { eyebrow: 'Ownerinc', title: 'Seu portal interno', copy: 'Acesse conteúdos, benefícios e recursos para sua jornada.' },
-  { eyebrow: 'Dica rápida', title: 'Mantenha seu perfil atualizado', copy: 'Revise seus dados para facilitar a comunicação interna.', href: './profile.html', action: 'Abrir perfil' },
-];
-let spotlightIndex = 0;
-let spotlightTimer = null;
-
-function renderSpotlight() {
-  if (!spotlight || !spotlightItems.length) return;
-  const current = spotlightItems[spotlightIndex];
-  const dots = spotlightItems.map((_, index) => element('button', {
-    className: `home-spotlight-dot${index === spotlightIndex ? ' active' : ''}`,
-    type: 'button',
-    'aria-label': `Mostrar destaque ${index + 1}`,
-    'aria-current': index === spotlightIndex ? 'true' : 'false',
-    on: { click: () => { spotlightIndex = index; renderSpotlight(); restartSpotlight(); } },
-  }));
-  const action = current.href ? element('a', { className: 'card-link-label', href: current.href, text: current.action }) : null;
-  clear(spotlight).append(element('article', { className: 'card home-spotlight-card' }, [
-    element('div', {}, [
-      element('div', { className: 'home-spotlight-eyebrow', text: current.eyebrow }),
-      element('h2', { className: 'home-spotlight-title', text: current.title }),
-      element('p', { className: 'home-spotlight-copy', text: current.copy }),
-    ]),
-    element('div', { className: 'home-spotlight-footer' }, [
-      element('div', { className: 'home-spotlight-dots' }, dots),
-      element('div', { className: 'home-spotlight-controls' }, [
-        element('button', { className: 'btn btn-ghost home-spotlight-control', type: 'button', 'aria-label': 'Destaque anterior', text: '‹', on: { click: () => { spotlightIndex = (spotlightIndex - 1 + spotlightItems.length) % spotlightItems.length; renderSpotlight(); restartSpotlight(); } } }),
-        element('button', { className: 'btn btn-ghost home-spotlight-control', type: 'button', 'aria-label': 'Próximo destaque', text: '›', on: { click: () => { spotlightIndex = (spotlightIndex + 1) % spotlightItems.length; renderSpotlight(); restartSpotlight(); } } }),
-      ]),
-      ...(action ? [action] : []),
-    ]),
-  ]));
-}
-
-function stopSpotlight() { if (spotlightTimer) { clearInterval(spotlightTimer); spotlightTimer = null; } }
-function restartSpotlight() {
-  stopSpotlight();
-  if (spotlightItems.length > 1 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    spotlightTimer = setInterval(() => { spotlightIndex = (spotlightIndex + 1) % spotlightItems.length; renderSpotlight(); }, 7000);
-  }
-}
-
-renderSpotlight();
-if (spotlight) {
-  spotlight.addEventListener('pointerenter', stopSpotlight);
-  spotlight.addEventListener('pointerleave', restartSpotlight);
-  spotlight.addEventListener('focusin', stopSpotlight);
-  spotlight.addEventListener('focusout', event => { if (!spotlight.contains(event.relatedTarget)) restartSpotlight(); });
-  document.addEventListener('visibilitychange', () => document.hidden ? stopSpotlight() : restartSpotlight());
-}
-
 const isPJ = user.contract_type === 'pj' || user.is_pj;
+const editorialImages = [
+  ['https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=600&q=80', 'Sala de trabalho iluminada'],
+  ['https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=600&q=80', 'Notebook aberto sobre uma mesa'],
+  ['https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=600&q=80', 'Pessoas trabalhando em uma mesa'],
+];
 
-const remindersContainer = document.getElementById('reminders-list');
+function formatDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'recentemente' : new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(date).replace('.', '');
+}
+
+function excerpt(blocks, fallback) {
+  return (blocksToText(blocks).replace(/\s+/g, ' ').trim() || fallback).slice(0, 180);
+}
+
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `./assets/icons.svg#${name}`);
+  svg.append(use);
+  return svg;
+}
+
+function storyCard({ title, category, description, blocks, href, newTab, image, alt, meta }) {
+  const body = element('div', { className: 'dashboard-story-card-body' }, [
+    element('strong', { text: title }),
+    element('small', { text: [category, meta].filter(Boolean).join(' · ') }),
+  ]);
+  if (blocks || description) {
+    const copy = element('div', { className: 'dashboard-story-card-copy' });
+    if (blocks) renderBlocks(copy, blocks, { fallbackText: description || '' });
+    else copy.append(element('p', { text: description }));
+    body.append(copy);
+  }
+  const children = image
+    ? [element('img', { src: image, alt, width: 600, height: 360, loading: 'lazy' }), body]
+    : [body];
+  const card = element(href ? 'a' : 'article', href ? {
+    className: 'dashboard-story-card', href,
+    ...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
+  } : { className: 'dashboard-story-card' }, children);
+  return card;
+}
+
+function renderHero(announcement) {
+  if (!announcement) return;
+  const title = document.getElementById('dashboard-hero-title');
+  const eyebrow = document.getElementById('dashboard-hero-eyebrow');
+  const description = document.getElementById('dashboard-hero-description');
+  const meta = document.getElementById('dashboard-hero-meta');
+  if (title) title.textContent = announcement.title;
+  if (eyebrow) eyebrow.textContent = `Edição da semana · ${announcement.category || 'Ownerinc'}`;
+  if (description) description.textContent = excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.');
+  if (meta) meta.textContent = `Publicado ${formatDate(announcement.published_at)}`;
+}
+
 const announcementsPreview = document.getElementById('announcements-preview');
 async function loadAnnouncements() {
+  if (!announcementsPreview) return;
   showState(announcementsPreview, 'Carregando anúncios…');
   try {
     const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
     if (!announcements.length) return showState(announcementsPreview, 'Nenhum anúncio publicado.');
+    renderHero(announcements[0]);
     clear(announcementsPreview);
-    announcements.forEach(announcement => {
-      const card = element('article', { className: 'card announcement-card' }, [
-        element('div', { className: 'card-heading' }, [
-          element('div', { className: 'card-title', text: announcement.title }),
-          element('span', { className: 'badge badge-gold', text: announcement.category || 'Comunicado' }),
-        ]),
-      ]);
-      const content = element('div', { className: 'card-copy cms-public-content' });
-      renderBlocks(content, announcement.content_blocks, { fallbackText: 'Comunicado publicado.' });
-      card.append(content);
-      announcementsPreview.append(card);
-    });
+    announcements.forEach((announcement, index) => announcementsPreview.append(storyCard({
+      title: announcement.title,
+      category: announcement.category || 'Comunicado',
+      blocks: announcement.content_blocks,
+      href: './announcements.html',
+      image: editorialImages[index % editorialImages.length][0],
+      alt: editorialImages[index % editorialImages.length][1],
+      meta: formatDate(announcement.published_at),
+    })));
   } catch {
     showState(announcementsPreview, 'Não foi possível carregar os anúncios.', loadAnnouncements);
   }
 }
+
+const remindersContainer = document.getElementById('reminders-list');
 async function loadReminders() {
+  if (!remindersContainer) return;
   showState(remindersContainer, 'Carregando lembretes…');
   try {
     const reminders = await fetchAPI('/api/reminders/upcoming?days=7');
     const upcoming = reminders.map(reminder => {
       const occurrence = new Date(`${reminder.next_occurrence}T00:00:00Z`);
       const days = Math.max(0, Math.round((occurrence - new Date()) / 86400000));
-      return { reminder, occurrence: { date: occurrence, days } };
+      return { reminder, days };
     });
     if (!upcoming.length) return showState(remindersContainer, 'Nenhum lembrete destinado a você nos próximos 7 dias.');
-    const next = upcoming[0];
-    spotlightItems.push({
-      eyebrow: 'Próximo lembrete',
-      title: next.reminder.title,
-      copy: next.occurrence.days === 0 ? 'Vence hoje.' : `Vence em ${next.occurrence.days} ${next.occurrence.days === 1 ? 'dia' : 'dias'}.`,
-      href: './reminders.html',
-      action: 'Ver lembretes',
-    });
-    renderSpotlight();
-    restartSpotlight();
     clear(remindersContainer);
-    upcoming.forEach(({ reminder, occurrence }) => {
-      const heading = element('div', { className: 'card-title', text: reminder.title });
-      const badge = element('span', {
-        className: `badge ${occurrence.days === 0 ? 'badge-red' : 'badge-gold'}`,
-        text: occurrence.days === 0 ? 'Hoje' : `Em ${occurrence.days} ${occurrence.days === 1 ? 'dia' : 'dias'}`,
-      });
-      const top = element('div', { className: 'card-heading' }, [heading, badge]);
-      const content = element('div', { className: 'card-copy reminder-content' });
-      renderBlocks(content, reminder.content_blocks, { fallbackText: reminder.description || '' });
-      remindersContainer.append(element('article', { className: 'card' }, [top, content]));
-    });
+    upcoming.forEach(({ reminder, days }) => remindersContainer.append(storyCard({
+      title: reminder.title,
+      category: days === 0 ? 'Hoje' : `Em ${days} ${days === 1 ? 'dia' : 'dias'}`,
+      description: reminder.description || '',
+      blocks: reminder.content_blocks,
+      href: './reminders.html',
+    })));
   } catch {
     showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);
   }
 }
 
-const links = isPJ ? [
-  ['📚', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
-  ['🔔', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
-  ['🎓', 'Academy', 'Cursos e treinamentos', './academy.html'],
-] : [
-  ['🎁', 'Benefícios', 'Parceiros e clube de vantagens', './benefits.html'],
-  ['📚', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
-  ['🔔', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
-  ['🎓', 'Academy', 'Cursos e treinamentos', './academy.html'],
-];
-
 const quickLinks = document.getElementById('quick-links');
-links.forEach(([icon, label, description, href]) => {
-  const external = href.startsWith('http');
-  quickLinks.append(element('a', {
-    className: 'card link-card', href, ...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
-  }, [element('div', { className: 'card-title', text: `${icon} ${label}` }), element('p', { className: 'card-copy', text: description })]));
-});
+const links = isPJ ? [
+  ['book-open', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
+  ['bell', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
+  ['graduation-cap', 'Academy', 'Cursos e treinamentos', './academy.html'],
+] : [
+  ['gift', 'Benefícios', 'Parceiros e clube de vantagens', './benefits.html'],
+  ['book-open', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
+  ['bell', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
+  ['graduation-cap', 'Academy', 'Cursos e treinamentos', './academy.html'],
+];
+if (quickLinks) {
+  links.forEach(([iconName, label, description, href]) => quickLinks.append(element('a', { className: 'dashboard-area-card', href }, [
+    icon(iconName),
+    element('span', { className: 'dashboard-area-card-copy' }, [
+      element('strong', { text: label }),
+      element('span', { text: description }),
+    ]),
+  ])));
+}
 
 const academySection = document.getElementById('academy-preview');
 async function loadAcademy() {
+  if (!academySection) return;
   showState(academySection, 'Carregando cursos…');
   try {
     const courses = (await fetchAPI('/api/academy?active=true&limit=3')).filter(course => course.active !== false).slice(0, 3);
     if (!courses.length) return showState(academySection, 'Nenhum curso disponível no momento.');
-    spotlightItems.push({
-      eyebrow: 'Academy',
-      title: courses[0].title,
-      copy: courses[0].description || courses[0].category || 'Confira os cursos disponíveis para você.',
-      href: './academy.html',
-      action: 'Ver Academy',
+    clear(academySection);
+    courses.forEach((course, index) => {
+      const href = safeHttpUrl(course.url) || './academy.html';
+      academySection.append(storyCard({
+        title: course.title,
+        category: course.category || 'Desenvolvimento',
+        description: course.description || '',
+        blocks: course.content_blocks,
+        href,
+        newTab: Boolean(safeHttpUrl(course.url)),
+        image: editorialImages[index % editorialImages.length][0],
+        alt: editorialImages[index % editorialImages.length][1],
+      }));
     });
-    renderSpotlight();
-    restartSpotlight();
-    const grid = element('div', { className: 'card-grid' });
-    courses.forEach(course => {
-      const href = safeHttpUrl(course.url);
-      const card = element(href ? 'a' : 'article', href ? {
-        className: 'card link-card', href, target: '_blank', rel: 'noopener noreferrer',
-      } : { className: 'card' }, [
-        element('div', { className: 'card-title', text: `🎓 ${course.title}` }),
-        element('p', { className: 'card-copy', text: course.description || course.category || '' }),
-      ]);
-      grid.append(card);
-    });
-    clear(academySection).append(grid);
   } catch {
     showState(academySection, 'Não foi possível carregar os cursos.', loadAcademy);
   }

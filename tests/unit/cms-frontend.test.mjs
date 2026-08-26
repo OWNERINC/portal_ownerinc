@@ -113,8 +113,8 @@ test('CMS navigation links are permission-gated before the API remains authorita
 test('reminder content uses the safe renderer while retaining description fallback', () => {
   assert.match(reminders, /renderBlocks\(content, reminder\.content_blocks/);
   assert.match(reminders, /fallbackText: reminder\.description/);
-  assert.match(dashboard, /renderBlocks\(content, reminder\.content_blocks/);
-  assert.match(dashboard, /fallbackText: reminder\.description/);
+  assert.match(dashboard, /renderBlocks\(copy, blocks/);
+  assert.match(dashboard, /fallbackText: description/);
 });
 
 test('private preview URLs are revoked and media reserve intrinsic layout space', () => {
