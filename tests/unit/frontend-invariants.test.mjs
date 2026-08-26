@@ -180,16 +180,24 @@ test('public content pages expose server pagination and category filters', async
   assert.match(pagination, /function renderPagination/);
 });
 
-test('V1 dashboard removes unavailable integrations and reminders use scoped upcoming data', async () => {
-  const [html, script, reminders] = await Promise.all([
+test('V1 dashboard keeps scoped data while using the editorial home composition', async () => {
+  const [html, script, reminders, homeCss] = await Promise.all([
     readFile('public/dashboard.html', 'utf8'),
     readFile('public/js/dashboard.js', 'utf8'),
     readFile('public/js/reminders.js', 'utf8'),
+    readFile('public/css/dashboard-home.css', 'utf8'),
   ]);
   assert.doesNotMatch(html, /pj-card|Nota Fiscal/);
   assert.doesNotMatch(html, /solides-card/);
   assert.match(script, /\/api\/reminders\/upcoming\?days=7/);
   assert.doesNotMatch(script, /pj-card|solides-card|app\.solides\.com\.br/);
+  assert.match(html, /class="dashboard-hero"/);
+  assert.match(html, /id="announcements-preview" class="dashboard-story-rail"/);
+  assert.match(html, /id="quick-links" class="dashboard-areas-grid"/);
+  assert.match(script, /renderHero\(announcements\[0\]\)/);
+  assert.match(homeCss, /\.dashboard-hero\s*\{/);
+  assert.match(homeCss, /@media \(max-width: 768px\)/);
+  assert.match(homeCss, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(reminders, /individual-target-group/);
   assert.match(reminders, /delivery-filters/);
   assert.match(reminders, /deliveries-pagination/);
