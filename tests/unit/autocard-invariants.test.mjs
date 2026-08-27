@@ -373,6 +373,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
     cropImageStyle() {
       return elements.get('cropImage')?.getAttribute('style') || '';
     },
+    cropDialogOpen: () => Boolean(elements.get('cropDialog')?.open),
     cropFrameRatio() {
       return elements.get('cropFrame')?.style.getPropertyValue('--crop-frame-ratio') || '';
     },
@@ -583,10 +584,16 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${currentUrl}"`));
   assert.equal(harness.isHidden('cropButton'), false);
 
+  harness.openCrop();
+  assert.equal(harness.cropDialogOpen(), true);
+  assert.deepEqual(harness.draft(), { x: 0.5, y: 0.5, zoom: 1 });
+
   harness.dispatch('pagehide');
   assert.equal(harness.state().mediaUrl, null);
   assert.deepEqual(harness.revokedUrls, [staleUrl, currentUrl]);
   assert.equal(harness.isHidden('cropButton'), true);
+  assert.equal(harness.cropDialogOpen(), false);
+  assert.equal(harness.draft(), null);
 
   harness.dispatch('pageshow', { type: 'pageshow', persisted: true });
   assert.equal(harness.requests[2].path, '/api/autocard/media/new-media');
