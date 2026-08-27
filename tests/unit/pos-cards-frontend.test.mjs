@@ -92,7 +92,8 @@ test('Portal visual and accessibility contracts are present without external fon
   assert.match(css, /:disabled/);
   assert.match(css, /prefers-reduced-motion/);
   assert.doesNotMatch(css, /fonts\.googleapis\.com|@import/);
-  assert.match(css, /Novelin-Regular\.otf/);
+  assert.match(css, /font-family:\s*var\(--font-sans\)/);
+  assert.doesNotMatch(css, /Novelin|Signaturia|Raleway/);
 });
 
 test('history actions and generated Cards Pós navigation retain shell interaction semantics', () => {

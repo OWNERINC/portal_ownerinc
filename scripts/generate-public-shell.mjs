@@ -93,8 +93,9 @@ function topbar(current, title) {
     reminders: '<button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Novo lembrete</button>',
   }[current];
   const action = actions ? `<div class="topbar-actions">${actions}</div>` : '';
+  const titleTag = current === 'profile' ? 'h1' : 'span';
   return `<!-- generated:portal-topbar -->
-    <header class="topbar"><span class="topbar-title">${title}</span>${action}</header>
+    <header class="topbar"><${titleTag} class="topbar-title">${title}</${titleTag}>${action}</header>
     <!-- /generated:portal-topbar -->`;
 }
 
