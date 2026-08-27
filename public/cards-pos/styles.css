@@ -1,17 +1,4 @@
-@font-face {
-  font-family: 'Novelin';
-  src: url('../autocard/assets/Novelin-Regular.otf') format('opentype');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'Novelin';
-  src: url('../autocard/assets/Novelin-Bold.otf') format('opentype');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
+
 
 .cards-pos-page { background: var(--bg); }
 .cards-pos-content { min-height: calc(100vh - var(--topbar-height)); }
@@ -24,7 +11,7 @@
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.cards-pos-toolbar h1, .history-heading h2 { margin-top: var(--space-2); font-family: var(--font-sans); font-size: var(--font-size-xl); line-height: 1.2; letter-spacing: -0.02em; }
+.cards-pos-toolbar h1, .history-heading h2 { margin-top: var(--space-2); font-family: var(--font-display); font-size: var(--font-size-xl); line-height: 1.2; letter-spacing: -0.02em; }
 .cards-pos-toolbar p { margin-top: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-sm); }
 .eyebrow { color: var(--primary-hover); font-size: var(--font-size-xs); font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
 .cards-pos-tabs { display: flex; gap: var(--space-1); flex-shrink: 0; }
@@ -33,7 +20,7 @@
 .nav-button.active { background: var(--espresso); color: #fff; }
 .cards-pos-workspace { display: grid; grid-template-columns: minmax(330px, 460px) minmax(0, 1fr); min-height: calc(100vh - 169px); }
 .editor-panel { padding: var(--space-8) clamp(var(--space-6), 4vw, 64px); background: var(--surface); border-right: 1px solid var(--border); overflow: auto; }
-.editor-panel h2 { margin: var(--space-2) 0 var(--space-6); font-family: var(--font-sans); font-size: var(--font-size-lg); }
+.editor-panel h2 { margin: var(--space-2) 0 var(--space-6); font-family: var(--font-display); font-size: var(--font-size-lg); }
 .editor-panel fieldset { margin: 0 0 var(--space-6); padding: 0; border: 0; }
 .editor-panel legend { width: 100%; padding: 0 0 var(--space-3); margin-bottom: var(--space-4); border-bottom: 1px solid var(--border); font-size: var(--font-size-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .editor-panel label, .search-label { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); color: var(--text); font-size: var(--font-size-xs); font-weight: 700; }
@@ -58,7 +45,7 @@
 .preview-panel { min-width: 0; display: flex; flex-direction: column; background: var(--surface-2); }
 .preview-label { padding: var(--space-3) var(--space-6); color: var(--text-secondary); font-size: var(--font-size-xs); letter-spacing: .05em; text-transform: uppercase; }
 .preview-stage { flex: 1; display: grid; place-items: start center; overflow: auto; padding: var(--space-6); }
-.invite-card { width: min(100%, 680px); min-height: 960px; display: flex; flex-direction: column; overflow: hidden; background: #fff; box-shadow: var(--shadow-md); font-family: 'Novelin', Arial, sans-serif; }
+.invite-card { width: min(100%, 680px); min-height: 960px; display: flex; flex-direction: column; overflow: hidden; background: #fff; box-shadow: var(--shadow-md); font-family: var(--font-sans); }
 .hero { position: relative; flex: 0 0 auto; min-height: 290px; aspect-ratio: 1.85; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px; color: #fff; background: linear-gradient(135deg, #8b7760, #2c2924); background-size: cover; background-position: center; text-align: center; }
 .hero-image { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; object-fit: cover; }
 .hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, #0003, #0008); }

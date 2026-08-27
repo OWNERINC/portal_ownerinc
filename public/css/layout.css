@@ -10,6 +10,10 @@ body {
   overflow-x: hidden;
 }
 
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+}
+
 button, a, input, select, textarea { touch-action: manipulation; }
 .skip-link {
   position: fixed; top: 8px; left: 8px; z-index: 1000;
@@ -258,7 +262,7 @@ body.sidebar-ready .main-content { transition: margin-left var(--sidebar-transit
   z-index: 50;
 }
 
-.topbar-title { font-size: var(--font-size-base); font-weight: 600; color: var(--text); }
+.topbar-title { margin: 0; font-size: var(--font-size-base); font-weight: 600; color: var(--text); }
 
 .topbar-actions {
   display: flex;

@@ -119,12 +119,11 @@ test('home preview preserves the light and dark surface contrast tokens', async 
     css,
     /\.preview-meta\s*\{[^}]*rgba\(255\s*,\s*255\s*,\s*255\s*,\s*0\.62\)/s,
   );
-  assert.match(tokens, /font-family:\s*'Novelin';[\s\S]*Novelin-Regular\.otf/);
-  assert.match(tokens, /font-family:\s*'Novelin';[\s\S]*Novelin-Bold\.otf/);
-  assert.match(tokens, /font-family:\s*'Novelin';[\s\S]*Novelin-Black\.otf/);
-  assert.match(tokens, /font-family:\s*'Signaturia';[\s\S]*Signaturia-Regular\.ttf/);
-  assert.match(tokens, /--font-sans:\s*'Novelin'/);
-  assert.match(tokens, /--font-display:\s*'Signaturia',\s*'Novelin'/);
+  assert.match(tokens, /font-family:\s*'Oswald';[\s\S]*assets\/fonts\/Oswald-Variable\.ttf/);
+  assert.match(tokens, /font-family:\s*'Source Serif 4';[\s\S]*assets\/fonts\/SourceSerif4-Variable\.ttf/);
+  assert.match(tokens, /--font-sans:\s*'Source Serif 4'/);
+  assert.match(tokens, /--font-display:\s*'Oswald'/);
+  assert.doesNotMatch(tokens, /Novelin|Signaturia/);
   assert.match(css, /\.preview-hero h1\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
   assert.match(css, /\.section-heading h2\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
   assert.match(css, /\.story-card strong\s*\{[^}]*font-family:\s*var\(--font-display\);/s);

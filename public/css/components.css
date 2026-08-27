@@ -13,6 +13,7 @@
   text-decoration: none;
   min-height: 44px;
   justify-content: center;
+  font-family: var(--font-display);
 }
 .btn-primary { background: var(--primary); color: var(--espresso); }
 .btn-primary:hover { background: var(--primary-hover); }
@@ -79,6 +80,7 @@
   font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--text);
+  font-family: var(--font-display);
 }
 .form-input, .form-select, .form-textarea {
   padding: var(--space-2) var(--space-3);

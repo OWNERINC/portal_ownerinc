@@ -115,6 +115,13 @@ test('profile exposes safe API errors instead of hiding upload and save failures
   assert.match(upload, /fileSize: 500 \* 1024/);
 });
 
+test('profile uses the topbar as its only page heading', async () => {
+  const profile = await readFile('public/profile.html', 'utf8');
+  assert.equal((profile.match(/<h1(?:\s|>)/g) || []).length, 1);
+  assert.match(profile, /<header class="topbar"><h1 class="topbar-title">Meu Perfil<\/h1>/);
+  assert.doesNotMatch(profile, /class="page-header"/);
+});
+
 test('admin and profile hydrate from the provisional user snapshot before API revalidation', async () => {
   const [auth, admin, profile, profileHtml] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
