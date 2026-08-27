@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone          TEXT        NOT NULL DEFAULT '',
   linkedin_url   TEXT        NOT NULL DEFAULT '',
   photo_url      TEXT        NOT NULL DEFAULT '',
+  photo_crop     JSONB       NOT NULL DEFAULT '{"x":0.5,"y":0.5,"zoom":1}'::jsonb,
   role           TEXT        NOT NULL DEFAULT 'viewer' CHECK (role IN ('viewer', 'admin')),
   contract_type  TEXT        NOT NULL DEFAULT 'clt' CHECK (contract_type IN ('clt', 'pj')),
   is_pj          BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -35,7 +36,13 @@ CREATE TABLE IF NOT EXISTS users (
   permissions    JSONB       NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(permissions) = 'object'),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT users_contract_consistency CHECK ((contract_type = 'pj') = is_pj),
-  CONSTRAINT users_linkedin_url_check CHECK (linkedin_url = '' OR linkedin_url ~ '^https?://')
+  CONSTRAINT users_linkedin_url_check CHECK (linkedin_url = '' OR linkedin_url ~ '^https?://'),
+  CONSTRAINT users_photo_crop_check CHECK (
+    jsonb_typeof(photo_crop) = 'object'
+    AND jsonb_typeof(photo_crop->'x') = 'number'
+    AND jsonb_typeof(photo_crop->'y') = 'number'
+    AND jsonb_typeof(photo_crop->'zoom') = 'number'
+  )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email));
@@ -257,5 +264,6 @@ INSERT INTO schema_migrations (version) VALUES
   ('011_cron_alert_state'),
   ('012_autocard_media_crop'),
   ('017_pos_cards'),
-  ('018_pos_card_storage_key')
+  ('018_pos_card_storage_key'),
+  ('020_profile_photo_crop')
 ON CONFLICT (version) DO NOTHING;

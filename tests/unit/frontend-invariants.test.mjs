@@ -96,17 +96,31 @@ test('admin table states tolerate sections without pagination containers', async
 });
 
 test('profile exposes safe API errors instead of hiding upload and save failures', async () => {
-  const profile = await readFile('public/js/profile.js', 'utf8');
+  const [profile, upload] = await Promise.all([
+    readFile('public/js/profile.js', 'utf8'),
+    readFile('api/routes/upload.js', 'utf8'),
+  ]);
   assert.match(profile, /async function responseError\(response, fallback\)/);
   assert.match(profile, /responseError\(res, 'O servidor recusou o arquivo/);
   assert.match(profile, /Não foi possível salvar o perfil: \$\{err\.message\}/);
+  assert.match(profile, /MAX_PHOTO_SIZE = 500 \* 1024/);
+  assert.match(profile, /typeof photoURL !== 'string' \|\| !photoURL/);
+  assert.match(profile, /frameWidth: avatarButton\?\.clientWidth \|\| 0/);
+  assert.match(profile, /frameWidth: cropFrame\?\.clientWidth \|\| 0/);
+  assert.match(profile, /if \(removed\) avatarButton\.focus\(\);/);
+  assert.match(profile, /if \(saved\) closeCropDialog\(\);/);
+  assert.match(profile, /Escolha uma imagem JPEG, PNG ou WebP de até 500 KB/);
+  assert.match(profile, /runProfileAction/);
+  assert.doesNotMatch(profile, /users\/me\/export/);
+  assert.match(upload, /fileSize: 500 \* 1024/);
 });
 
 test('admin and profile hydrate from the provisional user snapshot before API revalidation', async () => {
-  const [auth, admin, profile] = await Promise.all([
+  const [auth, admin, profile, profileHtml] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('public/js/admin.js', 'utf8'),
     readFile('public/js/profile.js', 'utf8'),
+    readFile('public/profile.html', 'utf8'),
   ]);
   assert.match(auth, /export function getCachedUserSnapshot\(\)/);
   assert.match(auth, /user: \{/);
@@ -115,9 +129,10 @@ test('admin and profile hydrate from the provisional user snapshot before API re
   assert.match(admin, /if \(me\) buildTabs\(false\);/);
   assert.match(admin, /me = await requireAuth\(true\);/);
   assert.match(profile, /const user = cachedUser \|\| \{\};/);
-  assert.match(profile, /if \(Object\.keys\(user\)\.length\) applyProfileFields\(user\);/);
-  assert.match(profile, /if \(Object\.keys\(user\)\.length\) renderAvatar\(user\.photo_url, user\.name\);/);
+  assert.match(profile, /if \(Object\.keys\(user\)\.length\) \{\s*applyProfileFields\(user\);\s*renderAvatar\(user\.photo_url, user\.name\);/);
   assert.match(profile, /const verifiedUser = await requireAuth\(\);/);
+  assert.match(profileHtml, /<textarea[^>]+class="form-textarea"[^>]+id="p-bio"/);
+  assert.match(profileHtml, /id="photo-crop-frame"[^>]+role="img"/);
 });
 
 test('login keeps a visible heading and uses local icons', async () => {

@@ -68,10 +68,9 @@ fluxo correspondente no Portal.
 | Visualizar cargo profissional | Operacional | Cargo atribuído pela administração é exibido no perfil; usuários comuns não podem alterá-lo. `public/js/profile.js`, `api/middleware/auth.js` |
 | Validação de dados | Operacional | Allowlist, limites de tamanho e URL HTTP(S); telefone possui limite, mas não valida formato regional. `api/middleware/validation.js`, `api/db/schema.sql` |
 | Sincronizar nome com Firebase | Operacional | Salva o banco e tenta atualizar o display name; falha externa é informada sem desfazer os dados persistidos. `public/js/profile.js` |
-| Upload de foto | Operacional | Aceita JPEG, PNG e WebP até 3 MB, valida assinatura, decodifica, redimensiona, remove metadados e normaliza para WebP. `api/routes/upload.js`, `api/middleware/validation.js` |
-| Substituir e remover foto | Operacional | Atualiza a referência e remove o arquivo anterior quando aplicável. `api/routes/upload.js`, `public/js/profile.js` |
+| Upload de foto | Operacional | Aceita JPEG, PNG e WebP até 500 KB, valida assinatura, decodifica, redimensiona, remove metadados e normaliza para WebP. `api/routes/upload.js`, `api/middleware/validation.js` |
+| Substituir, recentralizar e remover foto | Operacional | Atualiza a referência, persiste o enquadramento `{ x, y, zoom }` e remove o arquivo anterior quando aplicável. `api/routes/upload.js`, `public/js/profile.js`, `api/db/migrations/020_profile_photo_crop.sql` |
 | Privacidade da foto | Parcial | O nome é um UUID aleatório, mas `/uploads/` é público para uso direto em `<img>`; fotos sensíveis não são suportadas. `api/index.js`, `nginx/nginx.conf` |
-| Exportar dados pessoais | Operacional | Exporta perfil, notificações e eventos de auditoria associados em JSON e audita a ação. `api/routes/users.js`, `public/js/profile.js` |
 
 ## Base de Conhecimento
 

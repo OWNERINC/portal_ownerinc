@@ -77,6 +77,7 @@ try {
     '017_pos_cards',
     '018_pos_card_storage_key',
     '019_cms_asset_deletion_state',
+    '020_profile_photo_crop',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
@@ -147,6 +148,7 @@ try {
     '017_pos_cards',
     '018_pos_card_storage_key',
     '019_cms_asset_deletion_state',
+    '020_profile_photo_crop',
   ]);
   const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE');
   const sortCatalogNames = (names) => names.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR')));
@@ -199,6 +201,11 @@ try {
   assert.equal(tables.rows[0].cms_assets, 'cms_assets');
   assert.equal(tables.rows[0].pos_cards, 'pos_cards');
   assert.equal(tables.rows[0].pos_card_media, 'pos_card_media');
+  const profileCropColumn = await pool.query(`SELECT is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'photo_crop'`);
+  assert.equal(profileCropColumn.rows[0]?.is_nullable, 'NO');
+  assert.match(profileCropColumn.rows[0]?.column_default || '', /0\.5/);
   const storageConstraint = await pool.query(`SELECT pg_get_constraintdef(oid) AS definition
     FROM pg_constraint WHERE conname = 'pos_card_media_storage_key_check'`);
   const storageConstraintDefinition = (storageConstraint.rows[0]?.definition || '').replaceAll('\\\\', '\\');

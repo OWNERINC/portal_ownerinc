@@ -10,7 +10,7 @@ const { normalizeImage } = require('../middleware/validation');
 
 const router = express.Router();
 const uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads';
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 * 1024 * 1024, files: 1 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024, files: 1 } });
 const uploadLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: (req) => req.user.uid });
 
 async function removePhoto(photoUrl) {
@@ -43,7 +43,10 @@ router.post('/photo', authMiddleware, uploadLimit, upload.single('photo'), async
     await client.query('BEGIN');
     const current = await client.query('SELECT photo_url FROM users WHERE uid = $1 FOR UPDATE', [req.user.uid]);
     previousPhoto = current.rows[0]?.photo_url;
-    await client.query('UPDATE users SET photo_url = $2 WHERE uid = $1', [req.user.uid, photoUrl]);
+    await client.query(
+      `UPDATE users SET photo_url = $2, photo_crop = '{"x":0.5,"y":0.5,"zoom":1}'::jsonb WHERE uid = $1`,
+      [req.user.uid, photoUrl],
+    );
     await client.query('COMMIT');
     await removePhoto(previousPhoto).catch((err) => console.error(`[api] request=${req.id} old photo cleanup failed`, err));
     res.json({ url: photoUrl });
@@ -62,7 +65,10 @@ router.delete('/photo', authMiddleware, uploadLimit, async (req, res, next) => {
     client = await pool.connect();
     await client.query('BEGIN');
     const { rows } = await client.query('SELECT photo_url FROM users WHERE uid = $1 FOR UPDATE', [req.user.uid]);
-    await client.query("UPDATE users SET photo_url = '' WHERE uid = $1", [req.user.uid]);
+    await client.query(
+      `UPDATE users SET photo_url = '', photo_crop = '{"x":0.5,"y":0.5,"zoom":1}'::jsonb WHERE uid = $1`,
+      [req.user.uid],
+    );
     await client.query('COMMIT');
     await removePhoto(rows[0]?.photo_url).catch((err) => console.error(`[api] request=${req.id} photo cleanup failed`, err));
     res.json({ success: true, url: '' });

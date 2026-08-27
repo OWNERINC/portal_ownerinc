@@ -100,6 +100,13 @@ test('user and profile validation rejects unsafe privilege, URL, photo, and date
   assert.equal(validateProfile({ job_title_id: 'e7fa4cd2-70f5-4d75-a77f-b17b5caedfa9' }), false);
   assert.equal(validateProfile({ photo_url: '/uploads/anything.svg' }), false);
   assert.equal(validateProfile({ linkedin_url: 'javascript:alert(1)' }), false);
+  assert.equal(validateProfile({ name: '   ' }), false);
+  assert.equal(validateProfile({ name: 'Ana\nSilva' }), false);
+  assert.equal(validateProfile({ phone: '+55\n61 99999-9999' }), false);
+  assert.equal(validateProfile({ linkedin_url: 'https://linkedin.com/in/ana\nsilva' }), false);
+  assert.equal(validateProfile({ photo_crop: { x: 0.5, y: 0.5, zoom: 1 } }), true);
+  assert.equal(validateProfile({ photo_crop: { x: 1.1, y: 0.5, zoom: 1 } }), false);
+  assert.equal(validateProfile({ photo_crop: { x: 0.5, y: 0.5, zoom: 4 } }), false);
   assert.equal(isHttpUrl('https://www.linkedin.com/in/user'), true);
 });
 
