@@ -12,8 +12,6 @@ substitui orientação jurídica nem o registro formal das bases legais.
   a foto pelo painel após desativar a conta.
 - Referências em conteúdo, notificações e auditoria passam a nulas; o histórico
   operacional permanece sem UID estável do titular.
-- O próprio usuário pode exportar perfil, notificações e eventos de auditoria
-  associados em Meu Perfil.
 
 ## Fotos
 
@@ -99,7 +97,8 @@ substitui orientação jurídica nem o registro formal das bases legais.
 
 ## Direitos do Titular
 
-1. Exportação: disponível no perfil.
+1. Exportação: não disponível no perfil; solicitações devem seguir o fluxo LGPD
+   definido pela administração.
 2. Correção: perfil editável pelo próprio usuário; campos administrativos por
    gestor autorizado.
 3. Bloqueio: desativação revoga acesso sem destruir evidência operacional.

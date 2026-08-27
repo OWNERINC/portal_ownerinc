@@ -19,6 +19,7 @@ const expectedVersions = [
   '017_pos_cards',
   '018_pos_card_storage_key',
   '019_cms_asset_deletion_state',
+  '020_profile_photo_crop',
 ];
 
 async function verifyMigrations() {
@@ -40,6 +41,7 @@ async function verifyMigrations() {
       to_regclass('public.cms_revisions') AS cms_revisions,
       to_regclass('public.cms_assets') AS cms_assets,
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'job_title_id') AS user_job_title_column,
+      EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'photo_crop' AND is_nullable = 'NO') AS user_photo_crop_not_null,
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'autocard_cards' AND column_name = 'media_crop' AND is_nullable = 'NO') AS autocard_media_crop_not_null,
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cms_assets' AND column_name = 'deleting_at' AND data_type = 'timestamp with time zone') AS cms_asset_deleting_at,
       EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cms_documents_content_type_check') AS cms_content_type_check,
@@ -78,7 +80,8 @@ async function verifyMigrations() {
       || result.rows[0].cms_documents !== 'cms_documents'
       || result.rows[0].cms_revisions !== 'cms_revisions'
       || result.rows[0].cms_assets !== 'cms_assets'
-      || result.rows[0].user_job_title_column !== true
+       || result.rows[0].user_job_title_column !== true
+       || result.rows[0].user_photo_crop_not_null !== true
       || result.rows[0].autocard_media_crop_not_null !== true
       || result.rows[0].cms_asset_deleting_at !== true
       || result.rows[0].cms_content_type_check !== true
@@ -103,8 +106,8 @@ async function verifyMigrations() {
        || result.rows[0].cron_cms_documents_privileges !== true
        || result.rows[0].cron_cms_revisions_privileges !== true
        || result.rows[0].cron_cms_assets_privileges !== true
-      || result.rows[0].cron_audit_privileges !== true) {
-      throw new Error('Job title, AutoCard, Pos-Cards, CMS, or Ombudsman removal schema/runtime checks are incomplete');
+       || result.rows[0].cron_audit_privileges !== true) {
+      throw new Error('Job title, profile photo crop, AutoCard, Pos-Cards, CMS, or Ombudsman removal schema/runtime checks are incomplete');
     }
     console.log('migration verification: current schema ok');
   } finally {

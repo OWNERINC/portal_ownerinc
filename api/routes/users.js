@@ -41,36 +41,6 @@ async function stageStoredPhoto(photoUrl) {
 
 router.get('/me', authMiddleware, (req, res) => res.json(req.user));
 
-router.get('/me/export', authMiddleware, async (req, res, next) => {
-  let client;
-  try {
-    client = await pool.connect();
-    await client.query('BEGIN');
-    const [profile, notifications, auditEvents] = await Promise.all([
-      client.query(`SELECT u.*, jt.name AS job_title
-        FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
-        WHERE u.uid = $1`, [req.user.uid]),
-      client.query(`SELECT reminder_id, scheduled_date, channel, status, sent_at, finished_at
-        FROM notifications_log WHERE user_uid = $1 ORDER BY scheduled_date DESC`, [req.user.uid]),
-      client.query(`SELECT action, target_type, target_id, request_id, details, created_at
-        FROM audit_log WHERE actor_uid = $1 OR target_id = $1 ORDER BY created_at DESC`, [req.user.uid]),
-    ]);
-    await audit(client, req, 'user.export_self', req.user.uid, {
-      notificationCount: notifications.rowCount, auditEventCount: auditEvents.rowCount,
-    });
-    await client.query('COMMIT');
-    res.json({
-      exported_at: new Date().toISOString(), profile: profile.rows[0],
-      notifications: notifications.rows, audit_events: auditEvents.rows,
-    });
-  } catch (err) {
-    await client?.query('ROLLBACK').catch(() => {});
-    next(err);
-  } finally {
-    client?.release();
-  }
-});
-
 router.get('/audit', authMiddleware, async (req, res, next) => {
   if (!isSuperAdmin(req.user)) return forbidden(req, res);
   const page = parseListQuery(req.query);
@@ -91,13 +61,14 @@ router.get('/audit', authMiddleware, async (req, res, next) => {
 router.put('/me', authMiddleware, async (req, res, next) => {
   if (!validateProfile(req.body)) return invalid(req, res);
   try {
-    const { name, bio, phone, linkedin_url } = req.body;
+    const { name, bio, phone, linkedin_url, photo_crop } = req.body;
     const { rows } = await pool.query(
       `UPDATE users SET
         name = COALESCE($2, name), bio = COALESCE($3, bio),
-        phone = COALESCE($4, phone), linkedin_url = COALESCE($5, linkedin_url)
+        phone = COALESCE($4, phone), linkedin_url = COALESCE($5, linkedin_url),
+        photo_crop = COALESCE($6::jsonb, photo_crop)
        WHERE uid = $1 RETURNING *`,
-      [req.user.uid, name, bio, phone, linkedin_url]
+      [req.user.uid, name, bio, phone, linkedin_url, photo_crop ? JSON.stringify(photo_crop) : null]
     );
     res.json(rows[0]);
   } catch (err) {

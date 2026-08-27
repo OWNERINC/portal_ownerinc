@@ -4,7 +4,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -17,6 +17,24 @@ test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   for (const migration of ['013_job_title_catalog', '015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state']) {
     assert.equal(ledger.includes(migration), false, `${migration} must run after the bootstrap schema`);
   }
+});
+
+test('profile photo crop schema is safe for fresh installs and upgrades', async () => {
+  const [schema, migration, verification] = await Promise.all([
+    readFile('api/db/schema.sql', 'utf8'),
+    readFile('api/db/migrations/020_profile_photo_crop.sql', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+  ]);
+  for (const source of [schema, migration]) {
+    assert.match(source, /photo_crop\s+JSONB/);
+    assert.match(source, /\{"x":0\.5,"y":0\.5,"zoom":1\}/);
+    assert.match(source, /jsonb_typeof\(photo_crop\) = 'object'/);
+    assert.match(source, /jsonb_typeof\(photo_crop->'x'\) = 'number'/);
+    assert.match(source, /jsonb_typeof\(photo_crop->'y'\) = 'number'/);
+    assert.match(source, /jsonb_typeof\(photo_crop->'zoom'\) = 'number'/);
+  }
+  assert.match(schema, /\('020_profile_photo_crop'\)/);
+  assert.match(verification, /user_photo_crop_not_null/);
 });
 
 test('Sólides links are unique, reviewable, and removed with the Portal user', async () => {

@@ -77,6 +77,17 @@
     .profile-feedback, .photo-feedback { min-height: 18px; font-size: 12px; }
     .profile-feedback { margin-top: 10px; }
     .photo-feedback { margin: 0; }
+    .photo-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+    .photo-crop-dialog { width: min(calc(100vw - 32px), 420px); max-width: 420px; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: var(--shadow-md); }
+    .photo-crop-dialog::backdrop { background: rgba(17,17,17,.55); }
+    .photo-crop-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    .photo-crop-heading h2 { font-size: var(--font-size-lg); }
+    .photo-crop-help { margin-top: 4px; color: var(--text-secondary); font-size: var(--font-size-sm); line-height: 1.5; }
+    .photo-crop-frame { width: min(100%, 280px); aspect-ratio: 1; margin: 0 auto 18px; overflow: hidden; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); cursor: grab; touch-action: none; }
+    .photo-crop-frame:active { cursor: grabbing; }
+    .photo-crop-frame img { display: block; max-width: none; transform-origin: top left; }
+    .photo-crop-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    @media (max-width: 420px) { .photo-crop-dialog { width: calc(100vw - 20px); padding: 18px; } }
     .profile-email { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; overflow-wrap: anywhere; }
     .profile-copy { font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.6; }
     .section-divider {
@@ -138,10 +149,13 @@
             <span id="avatar-initials"></span>
             <div class="avatar-overlay" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#camera"></use></svg></div>
           </button>
-          <input type="file" id="photo-input" name="photo" accept="image/jpeg,image/png,image/webp" style="display:none">
-          <span class="avatar-hint" id="avatar-hint">Clique na foto para atualizar</span>
+          <input type="file" id="photo-input" name="photo" accept="image/jpeg,image/png,image/webp" aria-describedby="avatar-hint photo-feedback" style="display:none">
+          <span class="avatar-hint" id="avatar-hint">JPEG, PNG ou WebP de até 500 KB</span>
           <p class="photo-feedback" id="photo-feedback" role="status" aria-live="polite"></p>
-          <button class="btn btn-ghost btn-sm" id="remove-photo" type="button" hidden>Remover foto</button>
+          <div class="photo-actions">
+            <button class="btn btn-ghost btn-sm" id="adjust-photo" type="button" hidden>Ajustar enquadramento</button>
+            <button class="btn btn-ghost btn-sm" id="remove-photo" type="button" hidden>Remover foto</button>
+          </div>
         </div>
 
         <!-- Dados pessoais -->
@@ -151,19 +165,20 @@
 
         <div class="form-group">
           <label class="form-label" for="p-name">Nome completo *</label>
-          <input class="form-input" id="p-name" name="name" type="text" required autocomplete="name" placeholder="Seu nome completo…">
+          <input class="form-input" id="p-name" name="name" type="text" required maxlength="120" autocomplete="name" placeholder="Seu nome completo…">
         </div>
         <div class="form-group">
           <label class="form-label" for="p-bio">Bio / Cargo</label>
-          <input class="form-input" id="p-bio" name="bio" type="text" autocomplete="organization-title" placeholder="Ex.: Gerente Comercial · Ownerinc…">
+          <textarea class="form-textarea" id="p-bio" name="bio" maxlength="2000" autocomplete="organization-title" aria-describedby="bio-hint" placeholder="Conte brevemente sobre seu cargo e atuação…"></textarea>
+          <small id="bio-hint" class="form-help">Você pode escrever em mais de uma linha.</small>
         </div>
         <div class="form-group">
           <label class="form-label" for="p-phone">WhatsApp</label>
-          <input class="form-input" id="p-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[+0-9 ()-]{8,20}" placeholder="Ex.: +55 61 99999-9999…">
+          <input class="form-input" id="p-phone" name="phone" type="tel" maxlength="40" autocomplete="tel" inputmode="tel" pattern="[+0-9 ()-]{8,40}" placeholder="Ex.: +55 61 99999-9999…">
         </div>
         <div class="form-group">
           <label class="form-label" for="p-linkedin">Perfil do LinkedIn</label>
-          <input class="form-input" id="p-linkedin" name="linkedin_url" type="url" autocomplete="url" pattern="https://(www\.)?linkedin\.com/.*" placeholder="https://linkedin.com/in/seu-perfil…">
+          <input class="form-input" id="p-linkedin" name="linkedin_url" type="url" maxlength="500" autocomplete="url" pattern="https://(www\.)?linkedin\.com/.*" placeholder="https://linkedin.com/in/seu-perfil…">
         </div>
 
         <button class="btn btn-primary profile-save" id="btn-save" type="submit">
@@ -185,18 +200,28 @@
         </button>
         <p id="pw-feedback" class="profile-feedback" role="status" aria-live="polite"></p>
 
-        <hr class="section-divider">
-        <h2 class="section-label profile-section-title">Seus dados</h2>
-        <p class="profile-copy">
-          Baixe uma cópia do seu perfil e do histórico de notificações associado à sua conta.
-        </p>
-        <button class="btn btn-ghost" id="btn-export-data" type="button">Baixar meus dados</button>
-
       </div>
 
     </main>
   </div>
 </div>
+
+<dialog id="photo-crop-dialog" class="photo-crop-dialog" aria-labelledby="photo-crop-title">
+  <div class="photo-crop-heading">
+    <div>
+      <h2 id="photo-crop-title">Ajustar foto</h2>
+      <p class="photo-crop-help">Arraste a imagem para centralizar o enquadramento.</p>
+    </div>
+    <button class="btn btn-ghost btn-sm" id="photo-crop-close" type="button" aria-label="Fechar ajuste de foto">Fechar</button>
+  </div>
+  <div class="photo-crop-frame" id="photo-crop-frame" tabindex="0" role="img" aria-label="Prévia do enquadramento; use as setas ou arraste para ajustar">
+    <img id="photo-crop-img" alt="Prévia do enquadramento da foto de perfil">
+  </div>
+  <div class="photo-crop-actions">
+    <button class="btn btn-ghost btn-sm" id="photo-crop-reset" type="button">Centralizar</button>
+    <button class="btn btn-primary btn-sm" id="photo-crop-apply" type="button">Salvar enquadramento</button>
+  </div>
+</dialog>
 
 <div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>

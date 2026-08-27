@@ -3,16 +3,26 @@ const sharp = require('sharp');
 
 function validateProfile(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  const allowed = new Set(['name', 'bio', 'phone', 'linkedin_url']);
+  const allowed = new Set(['name', 'bio', 'phone', 'linkedin_url', 'photo_crop']);
   if (Object.keys(body).some((key) => !allowed.has(key))) return false;
-  if (hasOwn(body, 'name') && (typeof body.name !== 'string' || body.name.trim().length > 120)) return false;
+  if (hasOwn(body, 'name') && (typeof body.name !== 'string' || /[\r\n]/.test(body.name) || !body.name.trim() || body.name.trim().length > 120)) return false;
   if (hasOwn(body, 'bio') && (typeof body.bio !== 'string' || body.bio.length > 2000)) return false;
-  if (hasOwn(body, 'phone') && (typeof body.phone !== 'string' || body.phone.length > 40)) return false;
+  if (hasOwn(body, 'phone') && (typeof body.phone !== 'string' || /[\r\n]/.test(body.phone) || body.phone.length > 40)) return false;
   if (hasOwn(body, 'linkedin_url')) {
-    if (typeof body.linkedin_url !== 'string' || body.linkedin_url.length > 500) return false;
+    if (typeof body.linkedin_url !== 'string' || /[\r\n]/.test(body.linkedin_url) || body.linkedin_url.length > 500) return false;
     if (body.linkedin_url && !isHttpUrl(body.linkedin_url)) return false;
   }
+  if (hasOwn(body, 'photo_crop') && !validPhotoCrop(body.photo_crop)) return false;
   return true;
+}
+
+function validPhotoCrop(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (Object.keys(value).some((key) => !['x', 'y', 'zoom'].includes(key))) return false;
+  return ['x', 'y', 'zoom'].every((key) => typeof value[key] === 'number' && Number.isFinite(value[key]))
+    && value.x >= 0 && value.x <= 1
+    && value.y >= 0 && value.y <= 1
+    && value.zoom >= 1 && value.zoom <= 3;
 }
 
 function validateUser(body, { creating = false } = {}) {

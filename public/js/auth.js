@@ -64,6 +64,7 @@ function cacheAuthSnapshot(user) {
         phone: user.phone,
         linkedin_url: user.linkedin_url,
         photo_url: user.photo_url,
+        photo_crop: user.photo_crop,
         job_title: user.job_title,
       },
       autocardAccess: user?.autocard_access === true,
