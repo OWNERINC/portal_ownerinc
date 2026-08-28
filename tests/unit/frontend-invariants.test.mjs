@@ -164,6 +164,9 @@ test('Portal entry verifies Firebase before routing to dashboard or login', asyn
     readFile('public/js/index.js', 'utf8'),
   ]);
   assert.match(html, /Verificando acesso/);
+  assert.match(html, /src="\.\/assets\/icon-branco\.svg"/);
+  assert.match(html, /animation:\s*portal-pulse 2\.8s ease-in-out infinite/);
+  assert.match(html, /prefers-reduced-motion/);
   assert.match(html, /<script type="module" src="\.\/js\/index\.js"><\/script>/);
   assert.match(script, /auth\.authStateReady\(\)/);
   assert.match(script, /auth\.currentUser \? '\.\/dashboard\.html' : '\.\/login\.html'/);
