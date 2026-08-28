@@ -1,15 +1,15 @@
 @font-face {
-  font-family: 'Oswald';
-  src: url('../assets/fonts/Oswald-Variable.ttf') format('truetype');
-  font-weight: 200 700;
+  font-family: 'Raleway';
+  src: url('https://fonts.gstatic.com/s/raleway/v37/1Ptug8zYS_SKggPNyC0ITw.woff2') format('woff2');
+  font-weight: 700 800;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'Source Serif 4';
-  src: url('../assets/fonts/SourceSerif4-Variable.ttf') format('truetype');
-  font-weight: 200 900;
+  font-family: 'Hamilton';
+  src: url('https://fonts.cdnfonts.com/s/79987/Hamilton.woff') format('woff');
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
@@ -35,8 +35,8 @@
   color-scheme: light;
 
   /* Tipografia */
-  --font-sans: 'Source Serif 4', Georgia, serif;
-  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
+  --font-sans: 'Hamilton', Georgia, serif;
+  --font-display: 'Raleway', Arial, sans-serif;
   --font-size-xs: 11px;
   --font-size-sm: 13px;
   --font-size-base: 14px;
