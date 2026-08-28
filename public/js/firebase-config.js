@@ -1,5 +1,9 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { connectAuthEmulator, getAuth } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import {
+  browserLocalPersistence,
+  connectAuthEmulator,
+  initializeAuth,
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyA02-GIg0OxfaPyShgiZzTvkjCbhTAT2t8",
@@ -11,7 +15,7 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+export const auth = initializeAuth(app, { persistence: browserLocalPersistence });
 if (['localhost', '127.0.0.1'].includes(location.hostname)) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
 }

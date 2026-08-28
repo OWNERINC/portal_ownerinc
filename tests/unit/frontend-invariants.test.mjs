@@ -158,6 +158,17 @@ test('login keeps a visible heading and uses local icons', async () => {
   assert.doesNotMatch(login, /<script(?![^>]*\bsrc=)[^>]*>/);
 });
 
+test('Portal entry verifies Firebase before routing to dashboard or login', async () => {
+  const [html, script] = await Promise.all([
+    readFile('public/index.html', 'utf8'),
+    readFile('public/js/index.js', 'utf8'),
+  ]);
+  assert.match(html, /Verificando acesso/);
+  assert.match(html, /<script type="module" src="\.\/js\/index\.js"><\/script>/);
+  assert.match(script, /auth\.authStateReady\(\)/);
+  assert.match(script, /auth\.currentUser \? '\.\/dashboard\.html' : '\.\/login\.html'/);
+});
+
 test('Sólides overview loads summary, balance, and schedule independently', async () => {
   const script = await readFile('public/js/solides.js', 'utf8');
   for (const loader of ['loadSummary', 'loadBalance', 'loadSchedule']) {
