@@ -79,6 +79,7 @@ try {
     '019_cms_asset_deletion_state',
     '020_profile_photo_crop',
     '021_bulk_user_imports',
+    '022_bulk_user_import_validation',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
