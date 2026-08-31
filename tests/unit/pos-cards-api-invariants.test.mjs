@@ -35,15 +35,18 @@ test('all Pos-Cards routes share authentication and the policy boundary', async 
   assert.doesNotMatch(source, /autocard_(?:cards|media)/);
 });
 
-test('card validation is limited to the Owntime invitation contract', async () => {
+test('card validation accepts the Guest and Owner contracts', async () => {
   const source = await read('api/routes/pos-cards.js');
-  assert.match(source, /const template = 'convite_owntime';/);
+  assert.match(source, /const templates = new Set\(\['convite_owntime', 'convite_owner'\]\)/);
+  assert.match(source, /templates\.has\(body\.template\)/);
+  assert.match(source, /template: body\.template/);
   assert.match(source, /name\.length < 1 \|\| name\.length > 120/);
   assert.match(source, /body\.values \|\| typeof body\.values !== 'object' \|\| Array\.isArray\(body\.values\)/);
   assert.match(source, /serializedValues\.length > 50000/);
   assert.match(source, /parseListQuery\(req\.query, \{ search: value => value\.length <= 120 \}\)/);
   assert.match(source, /name ILIKE/);
   assert.match(source, /ORDER BY updated_at DESC/);
+  assert.match(source, /SELECT LEFT\(name \|\| ' v2', 120\), template, "values", media_id/);
 });
 
 test('Pos-Cards name search treats wildcard characters literally', async () => {

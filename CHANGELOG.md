@@ -9,6 +9,7 @@
 
 ## Unreleased
 
+- Cards Pós agora possui os módulos editáveis Convidado e Owner, com alternância na tela, template Owner baseado no frame 2 do Figma e histórico compatível com os dois formatos.
 - Added the block-based CMS for Knowledge, Academy, Benefits, Announcements, and Reminders with permission-scoped editing, safe rendering, publication scheduling, and protected assets. Static release verification passed; PostgreSQL migration and live acceptance evidence remain pending.
 - AutoCard exports now preserve preview proportions and the employee card uses a contained stacked layout with a wordmark-only footer.
 - Implementado localmente o editor de enquadramento de imagens do AutoCard para

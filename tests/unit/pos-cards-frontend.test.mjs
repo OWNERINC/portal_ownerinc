@@ -18,7 +18,17 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.doesNotMatch(html, /lucide@0\.441\.0/);
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
-  for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png']) await access(`public/cards-pos/assets/${asset}`);
+  for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
+});
+
+test('Cards Pós exposes independent Guest and Owner modules', () => {
+  for (const module of ['guest', 'owner']) assert.match(html, new RegExp(`data-module="${module}"`));
+  assert.match(html, /Convidado/);
+  assert.match(html, /Owner/);
+  assert.match(app, /convite_owntime/);
+  assert.match(app, /convite_owner/);
+  assert.match(app, /function switchModule/);
+  assert.match(app, /function renderOwner/);
 });
 
 test('editor and history retain the source field and view contract', () => {
@@ -31,6 +41,10 @@ test('editor and history retain the source field and view contract', () => {
   assert.match(html, /data-view="history"/);
   assert.match(app, /duplicate/);
   assert.match(app, /method: 'DELETE'/);
+  for (const field of ['recipientName', 'notIncludedTitle', 'notIncludedBody', 'gasInfo', 'waterInfo', 'energyInfo', 'accommodationTitle', 'accommodationBody', 'servicesTitle', 'servicesBody']) {
+    assert.match(html, new RegExp(`data-owner-field="${field}"`));
+    assert.match(app, new RegExp(field));
+  }
 });
 
 test('API calls are authenticated and use only the Pos-Cards routes', () => {
@@ -49,12 +63,12 @@ test('guard requires auth, checks access, and stops editor initialization when d
   assert.match(guard, /dashboard\.html/);
   assert.match(guard, /showDeniedState\(\);\s*window\.setTimeout\(\(\) => window\.location\.assign\('\.\/dashboard\.html'\), 1500\)/);
   assert.match(guard, /role', 'alert'/);
-  assert.match(app, /if \(await requirePosCards\(\)\) init\(\)/);
+  assert.match(app, /if \(await requirePosCards\(\)\) \{/);
 });
 
 test('history edits revoke the current blob URL before replacing media state', () => {
   const reset = app.indexOf("replaceMediaUrl('');");
-  const state = app.indexOf('current = { ...current, editingId: card.id, mediaId: card.mediaId');
+  const state = app.indexOf('current = { ...current, template: card.template, editingId: card.id, mediaId: card.mediaId');
   assert.ok(reset >= 0 && reset < state);
 });
 
@@ -64,7 +78,8 @@ test('preview escapes user values, validates image uploads, and preserves print 
   for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.match(app, new RegExp(type.replace('/', '\\/')));
   assert.match(app, /value < 500/);
   for (const logo of ['owntime-logo-white.webp', 'ownerinc-logo-white.png']) assert.match(app, new RegExp(logo.replace('.', '\\.')));
-  assert.doesNotMatch(app, /casa-logo|Casa Hotéis/);
+  assert.match(app, /casa-logo-white\.svg/);
+  assert.match(app, /Casa/);
   assert.match(css, /background: #e9e6de/);
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
@@ -105,7 +120,7 @@ test('history actions and generated Cards Pós navigation retain shell interacti
 
 test('editing a Cards Pós invitation preserves its saved history name by default', () => {
   assert.match(app, /name: ''/);
-  assert.match(app, /current\.name \|\| current\.values\.heroBrand/);
+  assert.match(app, /current\.name \|\| activeValues\(\)\.heroBrand/);
   assert.match(app, /mediaId: card\.mediaId, name: card\.name \|\| ''/);
   assert.match(app, /current\.name = saved\.name \|\| name\.trim\(\)/);
 });

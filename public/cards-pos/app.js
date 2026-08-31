@@ -2,8 +2,7 @@ import { fetchAPI, fetchAPIAsset, fetchAPIPage } from '../js/auth.js';
 import { requirePosCards } from './guard.js';
 
 const $ = (id) => document.getElementById(id);
-const fieldNames = [...document.querySelectorAll('[data-field]')].map((field) => field.dataset.field);
-const defaults = {
+const guestDefaults = {
   heroTitle: 'Este é um convite', heroEmphasis: 'para viver o seu tempo', heroBrand: 'Owntime',
   greeting: 'Você é nosso convidado para viver uma experiência Owntime Home Club Gramado:',
   stayInfo: 'Hospedagem para xx pessoas\nDe xx/xx a xx/xx\nUnidade: flat/casa | xx hóspedes',
@@ -16,7 +15,37 @@ const defaults = {
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
   contact: 'CENTRAL DE RELACIONAMENTO\n54 3421 9988  |  contato@ownerinc.com.br',
 };
-let current = { values: { ...defaults }, mediaId: null, mediaUrl: '', editingId: null, name: '' };
+const ownerDefaults = {
+  heroTitle: 'Este é um convite',
+  heroEmphasis: 'para viver o seu tempo',
+  heroBrand: 'Owntime',
+  recipientName: 'Nome do Owner',
+  greeting: 'Olá, Owner.\nVocê faz parte desta experiência Owntime Home Club Gramado.',
+  stayInfo: 'Hospedagem para xx pessoas\nDe xx/xx a xx/xx\nUnidade: flat/casa | xx hóspedes',
+  experienceTitle: 'Sua experiência inclui:',
+  experienceBody: 'Hospedagem com acesso aos espaços de lazer de uso comum disponíveis no Club House Owntime.',
+  notIncludedTitle: 'O que não está incluso:',
+  notIncludedBody: 'Itens e serviços não descritos neste convite serão tratados conforme as condições de utilização.',
+  consumptionTitle: 'O que é pago (consumo individual):',
+  gasInfo: 'Conforme consumo',
+  waterInfo: 'Conforme consumo',
+  energyInfo: 'Conforme consumo',
+  accommodationTitle: 'Hospedagem',
+  accommodationBody: 'Utilize os espaços e serviços disponíveis durante o período da sua estadia.',
+  servicesTitle: 'Serviços incluídos',
+  servicesBody: 'Consulte a disponibilidade dos serviços e espaços do empreendimento.',
+  conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
+  contact: 'CENTRAL DE RELACIONAMENTO\n54 3421 9988  |  contato@ownerinc.com.br',
+};
+let current = {
+  template: 'convite_owntime',
+  values: { ...guestDefaults },
+  ownerValues: { ...ownerDefaults },
+  mediaId: null,
+  mediaUrl: '',
+  editingId: null,
+  name: '',
+};
 let historyRequest = 0;
 let historyOffset = 0;
 let mediaOperationToken = 0;
@@ -33,10 +62,19 @@ function setStatus(message, error = false) {
   status.classList.toggle('is-error', error);
 }
 
-function render() {
-  const v = current.values;
+function renderGuest(v) {
   const media = current.mediaUrl ? `<img class="hero-image" src="${esc(current.mediaUrl)}" alt="">` : '';
-  $('cardCanvas').innerHTML = `<section class="hero">${media}<div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy"><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><p>${esc(v.foodInfo)}</p><h3>${esc(v.consumptionTitle)}</h3><p>${esc(v.consumptionBody)}</p></div><p class="closing">${esc(v.afterStay)}</p><p>${esc(v.conditions)}</p></div></section><footer class="card-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="owntime-logo" src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime Home Club Gramado"><span class="footer-divider"></span><img class="ownerinc-logo" src="./cards-pos/assets/ownerinc-logo-white.png" alt="Ownerinc"></div></footer>`;
+  return `<section class="hero">${media}<div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy"><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><p>${esc(v.foodInfo)}</p><h3>${esc(v.consumptionTitle)}</h3><p>${esc(v.consumptionBody)}</p></div><p class="closing">${esc(v.afterStay)}</p><p>${esc(v.conditions)}</p></div></section><footer class="card-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="owntime-logo" src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime Home Club Gramado"><span class="footer-divider"></span><img class="ownerinc-logo" src="./cards-pos/assets/ownerinc-logo-white.png" alt="Ownerinc"></div></footer>`;
+}
+
+function renderOwner(v) {
+  const media = current.mediaUrl ? `<img class="hero-image" src="${esc(current.mediaUrl)}" alt="">` : '';
+  return `<section class="hero owner-hero">${media}<div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><p class="owner-recipient">Olá, ${esc(v.recipientName)}</p><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box owner-benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><h3>${esc(v.notIncludedTitle)}</h3><p>${esc(v.notIncludedBody)}</p></div><h3 class="owner-section-title">${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>GÁS</strong><p>${esc(v.gasInfo)}</p></div><div><strong>ÁGUA</strong><p>${esc(v.waterInfo)}</p></div><div><strong>ENERGIA ELÉTRICA</strong><p>${esc(v.energyInfo)}</p></div></div><div class="owner-section"><h3>${esc(v.accommodationTitle)}</h3><p>${esc(v.accommodationBody)}</p></div><div class="owner-section"><h3>${esc(v.servicesTitle)}</h3><p>${esc(v.servicesBody)}</p></div><p>${esc(v.conditions)}</p></div></section><footer class="card-footer owner-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="ownerinc-logo" src="./cards-pos/assets/ownerinc-logo-white.png" alt="Ownerinc"><span class="footer-divider"></span><img class="casa-logo" src="./cards-pos/assets/casa-logo-white.svg" alt="Casa"></div></footer>`;
+}
+
+function render() {
+  const values = current.template === 'convite_owner' ? current.ownerValues : current.values;
+  $('cardCanvas').innerHTML = current.template === 'convite_owner' ? renderOwner(values) : renderGuest(values);
   requestAnimationFrame(fitCardBody);
 }
 
@@ -60,13 +98,43 @@ function preparePrint() {
   }
 }
 
-function loadValues(values = defaults) {
-  current.values = { ...defaults, ...values };
-  for (const name of fieldNames) {
-    const field = document.querySelector(`[data-field="${name}"]`);
-    if (field) field.value = current.values[name] ?? '';
+function activeValues() {
+  return current.template === 'convite_owner' ? current.ownerValues : current.values;
+}
+
+function loadValues(values = {}, template = current.template) {
+  const owner = template === 'convite_owner';
+  if (owner) current.ownerValues = { ...ownerDefaults, ...values };
+  else current.values = { ...guestDefaults, ...values };
+  const source = owner ? current.ownerValues : current.values;
+  const attribute = owner ? 'data-owner-field' : 'data-field';
+  for (const field of document.querySelectorAll(`[${attribute}]`)) {
+    field.value = source[field.getAttribute(attribute)] ?? '';
   }
   render();
+}
+
+function updateModuleControls() {
+  const owner = current.template === 'convite_owner';
+  document.querySelectorAll('.module-button').forEach((button) => {
+    const active = button.dataset.module === (owner ? 'owner' : 'guest');
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  $('guestFields').classList.toggle('hidden', owner);
+  $('ownerFields').classList.toggle('hidden', !owner);
+  $('moduleTitle').textContent = owner ? 'Convite para Owners' : 'Convite para convidados';
+  $('moduleDescription').textContent = owner
+    ? 'Edite os textos da experiência Owner, revise o frame e exporte o convite.'
+    : 'Preencha os textos, escolha uma imagem e revise o convite no preview ao lado.';
+  $('editorTitle').textContent = owner ? 'Monte o card do Owner' : 'Monte seu convite';
+}
+
+function switchModule(template) {
+  if (!['convite_owntime', 'convite_owner'].includes(template)) return;
+  current.template = template;
+  updateModuleControls();
+  loadValues(activeValues());
 }
 
 function replaceMediaUrl(url) {
@@ -123,7 +191,7 @@ async function upload(file) {
 
 async function save() {
   if (activeMediaPromise) return;
-  const name = window.prompt('Nome do convite:', current.name || current.values.heroBrand || 'Convite Owntime');
+  const name = window.prompt('Nome do convite:', current.name || activeValues().heroBrand || 'Convite Owntime');
   if (!name?.trim()) return;
   const button = $('saveButton');
   button.disabled = true;
@@ -133,7 +201,7 @@ async function save() {
     const saved = await fetchAPI(editing ? `/api/pos-cards/cards/${current.editingId}` : '/api/pos-cards/cards', {
       method: editing ? 'PUT' : 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), template: 'convite_owntime', values: current.values, mediaId: current.mediaId }),
+       body: JSON.stringify({ name: name.trim(), template: current.template, values: activeValues(), mediaId: current.mediaId }),
     });
     current.editingId = saved.id;
     current.name = saved.name || name.trim();
@@ -146,7 +214,7 @@ async function save() {
 }
 
 function renderHistory(cards) {
-  $('historyList').innerHTML = cards.map((card) => `<article class="history-item"><div><strong>${esc(card.name)}</strong><small>Atualizado em ${esc(new Date(card.updatedAt).toLocaleDateString('pt-BR'))}</small></div><div class="history-actions"><button type="button" data-edit="${esc(card.id)}">Editar</button><button type="button" data-copy="${esc(card.id)}">Duplicar</button><button type="button" data-delete="${esc(card.id)}">Excluir</button></div></article>`).join('');
+  $('historyList').innerHTML = cards.map((card) => `<article class="history-item"><div><strong>${esc(card.name)}</strong><small>${card.template === 'convite_owner' ? 'Owner' : 'Convidado'} · Atualizado em ${esc(new Date(card.updatedAt).toLocaleDateString('pt-BR'))}</small></div><div class="history-actions"><button type="button" data-edit="${esc(card.id)}">Editar</button><button type="button" data-copy="${esc(card.id)}">Duplicar</button><button type="button" data-delete="${esc(card.id)}">Excluir</button></div></article>`).join('');
   $('historyEmpty').classList.toggle('hidden', cards.length > 0);
 }
 
@@ -205,8 +273,9 @@ async function editCard(id) {
       const mediaUrl = card.mediaId ? await fetchAPIAsset(`/api/pos-cards/media/${card.mediaId}`) : '';
       if (operationToken !== mediaOperationToken) return;
       replaceMediaUrl('');
-      current = { ...current, editingId: card.id, mediaId: card.mediaId, name: card.name || '' };
-      loadValues(card.values);
+       current = { ...current, template: card.template, editingId: card.id, mediaId: card.mediaId, name: card.name || '' };
+       updateModuleControls();
+       loadValues(card.values, card.template);
       replaceMediaUrl(mediaUrl);
       render();
       showView('editor');
@@ -254,7 +323,16 @@ function showView(view) {
 }
 
 function init() {
-  for (const field of document.querySelectorAll('[data-field]')) field.addEventListener('input', () => { current.values[field.dataset.field] = field.value; render(); });
+  for (const field of document.querySelectorAll('[data-field], [data-owner-field]')) {
+    field.addEventListener('input', () => {
+      const name = field.dataset.ownerField || field.dataset.field;
+      activeValues()[name] = field.value;
+      render();
+    });
+  }
+  for (const button of document.querySelectorAll('.module-button')) {
+    button.addEventListener('click', () => switchModule(button.dataset.module === 'owner' ? 'convite_owner' : 'convite_owntime'));
+  }
   for (const button of document.querySelectorAll('.nav-button')) button.addEventListener('click', () => showView(button.dataset.view));
   $('imageInput').addEventListener('change', (event) => event.target.files[0] && upload(event.target.files[0]).catch((error) => setStatus(error.message, true)));
   $('uploadButton').addEventListener('click', () => $('imageInput').click());
@@ -274,6 +352,10 @@ function init() {
 document.fonts?.ready?.then(fitCardBody);
 window.addEventListener('resize', fitCardBody);
 window.addEventListener('beforeprint', preparePrint);
-window.addEventListener('afterprint', fitCardBody);
+  window.addEventListener('afterprint', fitCardBody);
 
-if (await requirePosCards()) init();
+if (await requirePosCards()) {
+  updateModuleControls();
+  loadValues();
+  init();
+}

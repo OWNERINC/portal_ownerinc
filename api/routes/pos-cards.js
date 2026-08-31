@@ -10,7 +10,7 @@ const { forbidden, invalid, parseListQuery, uuid, withAudit } = require('../rout
 
 const router = express.Router();
 const uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads';
-const template = 'convite_owntime';
+const templates = new Set(['convite_owntime', 'convite_owner']);
 const maxMediaBytes = 3 * 1024 * 1024;
 // Share the media-retention lock with AutoCard so reference writes cannot race cleanup.
 const posCardsLock = 7193003;
@@ -45,7 +45,7 @@ function readBody(req, limit) {
 function parseCard(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const name = typeof body.name === 'string' ? body.name.trim() : '';
-  if (name.length < 1 || name.length > 120 || body.template !== template) return null;
+  if (name.length < 1 || name.length > 120 || !templates.has(body.template)) return null;
   if (!body.values || typeof body.values !== 'object' || Array.isArray(body.values)) return null;
   let serializedValues;
   try {
@@ -55,7 +55,7 @@ function parseCard(body) {
   }
   if (serializedValues.length > 50000) return null;
   if (body.mediaId != null && !uuid(body.mediaId)) return null;
-  return { name, template, values: body.values, mediaId: body.mediaId || null };
+  return { name, template: body.template, values: body.values, mediaId: body.mediaId || null };
 }
 
 async function mediaExists(client, mediaId) {

@@ -20,6 +20,7 @@ const expectedVersions = [
   '018_pos_card_storage_key',
   '019_cms_asset_deletion_state',
   '020_profile_photo_crop',
+  '023_pos_owner_cards',
 ];
 
 async function verifyMigrations() {
@@ -54,7 +55,10 @@ async function verifyMigrations() {
          AND replace(pg_get_constraintdef(oid), chr(92) || chr(92), chr(92)) LIKE
            '%^pos-card-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
            || chr(92) || chr(92) || '.webp$%') AS pos_card_media_storage_key_exact,
-      has_table_privilege('portal_api', 'public.job_titles', 'SELECT,INSERT,UPDATE,DELETE') AS api_job_title_privileges,
+       EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pos_cards_template_check'
+         AND pg_get_constraintdef(oid) LIKE '%convite_owntime%'
+         AND pg_get_constraintdef(oid) LIKE '%convite_owner%') AS pos_cards_templates,
+       has_table_privilege('portal_api', 'public.job_titles', 'SELECT,INSERT,UPDATE,DELETE') AS api_job_title_privileges,
       has_table_privilege('portal_api', 'public.autocard_cards', 'SELECT,INSERT,UPDATE,DELETE') AS api_autocard_cards_privileges,
       has_table_privilege('portal_api', 'public.autocard_media', 'SELECT,INSERT,UPDATE,DELETE') AS api_autocard_media_privileges,
       has_table_privilege('portal_api', 'public.pos_cards', 'SELECT,INSERT,UPDATE,DELETE') AS api_pos_cards_privileges,
@@ -91,7 +95,8 @@ async function verifyMigrations() {
        || result.rows[0].cms_draft_revision_fk !== true
        || result.rows[0].cms_scheduled_revision_fk !== true
        || result.rows[0].pos_card_media_storage_key_exact !== true
-      || result.rows[0].api_job_title_privileges !== true
+       || result.rows[0].pos_cards_templates !== true
+       || result.rows[0].api_job_title_privileges !== true
       || result.rows[0].api_autocard_cards_privileges !== true
       || result.rows[0].api_autocard_media_privileges !== true
       || result.rows[0].api_pos_cards_privileges !== true

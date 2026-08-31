@@ -54,9 +54,13 @@
       <div class="cards-pos-content">
         <header class="cards-pos-toolbar">
           <div>
-            <span class="eyebrow">Modelo único · Owntime</span>
-            <h1>Convite de experiência</h1>
-            <p>Preencha os textos, escolha uma imagem e revise o convite no preview ao lado.</p>
+            <span class="eyebrow">Cards de experiência · Owntime</span>
+            <h1 id="moduleTitle">Convite para convidados</h1>
+            <p id="moduleDescription">Preencha os textos, escolha uma imagem e revise o convite no preview ao lado.</p>
+          </div>
+          <div class="module-switch" role="group" aria-label="Tipo de card">
+            <button class="module-button active" data-module="guest" type="button" aria-pressed="true">Convidado</button>
+            <button class="module-button" data-module="owner" type="button" aria-pressed="false">Owner</button>
           </div>
           <nav class="cards-pos-tabs" aria-label="Navegação dos Cards Pós">
             <button class="nav-button active" data-view="editor" type="button" aria-pressed="true">Criar convite</button>
@@ -69,15 +73,16 @@
             <div class="eyebrow">Editor</div>
             <h2 id="editorTitle">Monte seu convite</h2>
             <form id="cardForm">
-              <fieldset>
-                <legend>Imagem e capa</legend>
+               <fieldset>
+                 <legend>Imagem e capa</legend>
                 <button id="uploadButton" class="upload-control" type="button">
                   <span class="upload-icon" aria-hidden="true">+</span>
                   <span><strong>Adicionar imagem principal</strong><small>JPG, PNG ou WebP · mínimo 500 × 500 px</small></span>
                 </button>
-                <input id="imageInput" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true">
-              </fieldset>
-              <fieldset>
+                 <input id="imageInput" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true">
+               </fieldset>
+               <div id="guestFields">
+                <fieldset>
                 <legend>Texto da capa</legend>
                 <label for="heroTitle">Chamada<input id="heroTitle" data-field="heroTitle" maxlength="60"></label>
                 <label for="heroEmphasis">Frase em destaque<input id="heroEmphasis" data-field="heroEmphasis" maxlength="90"></label>
@@ -96,12 +101,50 @@
                 <label for="consumptionTitle">Título dos consumos<input id="consumptionTitle" data-field="consumptionTitle" maxlength="70"></label>
                 <label for="consumptionBody">Descrição dos consumos<textarea id="consumptionBody" data-field="consumptionBody" maxlength="320" rows="4"></textarea></label>
               </fieldset>
-              <fieldset>
-                <legend>Observações e rodapé</legend>
+               <fieldset>
+                 <legend>Observações e rodapé</legend>
                 <label for="afterStay">Orientação pós-estadia<textarea id="afterStay" data-field="afterStay" maxlength="420" rows="4"></textarea></label>
                 <label for="conditions">Condições do convite<textarea id="conditions" data-field="conditions" maxlength="220" rows="3"></textarea></label>
-                <label for="contact">Contato<input id="contact" data-field="contact" maxlength="120"></label>
-              </fieldset>
+                 <label for="contact">Contato<input id="contact" data-field="contact" maxlength="120"></label>
+                </fieldset>
+               </div>
+               <div id="ownerFields" class="owner-fields hidden">
+                 <fieldset>
+                   <legend>Capa do Owner</legend>
+                    <label for="ownerHeroTitle">Chamada<input id="ownerHeroTitle" data-owner-field="heroTitle" maxlength="60"></label>
+                    <label for="ownerHeroEmphasis">Frase em destaque<input id="ownerHeroEmphasis" data-owner-field="heroEmphasis" maxlength="90"></label>
+                    <label for="ownerHeroBrand">Assinatura da experiência<input id="ownerHeroBrand" data-owner-field="heroBrand" maxlength="32"></label>
+                </fieldset>
+                 <fieldset>
+                   <legend>Apresentação e hospedagem</legend>
+                   <label for="recipientName">Nome do Owner<input id="recipientName" data-owner-field="recipientName" maxlength="80"></label>
+                   <label for="ownerGreeting">Apresentação<textarea id="ownerGreeting" data-owner-field="greeting" maxlength="260" rows="3"></textarea></label>
+                   <label for="ownerStayInfo">Hospedagem, datas e unidade<textarea id="ownerStayInfo" data-owner-field="stayInfo" maxlength="260" rows="4"></textarea></label>
+                </fieldset>
+                 <fieldset>
+                   <legend>Experiência</legend>
+                   <label for="ownerExperienceTitle">Título da experiência<input id="ownerExperienceTitle" data-owner-field="experienceTitle" maxlength="70"></label>
+                   <label for="ownerExperienceBody">Descrição da experiência<textarea id="ownerExperienceBody" data-owner-field="experienceBody" maxlength="420" rows="4"></textarea></label>
+                   <label for="ownerNotIncludedTitle">Título do que não está incluso<input id="ownerNotIncludedTitle" data-owner-field="notIncludedTitle" maxlength="70"></label>
+                   <label for="ownerNotIncludedBody">O que não está incluso<textarea id="ownerNotIncludedBody" data-owner-field="notIncludedBody" maxlength="320" rows="4"></textarea></label>
+                </fieldset>
+                 <fieldset>
+                   <legend>Consumos e serviços</legend>
+                   <label for="ownerConsumptionTitle">Título dos consumos<input id="ownerConsumptionTitle" data-owner-field="consumptionTitle" maxlength="70"></label>
+                   <label for="gasInfo">Gás<textarea id="gasInfo" data-owner-field="gasInfo" maxlength="180" rows="2"></textarea></label>
+                   <label for="waterInfo">Água<textarea id="waterInfo" data-owner-field="waterInfo" maxlength="180" rows="2"></textarea></label>
+                   <label for="energyInfo">Energia elétrica<textarea id="energyInfo" data-owner-field="energyInfo" maxlength="180" rows="2"></textarea></label>
+                   <label for="ownerAccommodationTitle">Título da hospedagem<input id="ownerAccommodationTitle" data-owner-field="accommodationTitle" maxlength="70"></label>
+                   <label for="ownerAccommodationBody">Descrição da hospedagem<textarea id="ownerAccommodationBody" data-owner-field="accommodationBody" maxlength="420" rows="4"></textarea></label>
+                   <label for="ownerServicesTitle">Título dos serviços<input id="ownerServicesTitle" data-owner-field="servicesTitle" maxlength="70"></label>
+                   <label for="ownerServicesBody">Serviços incluídos<textarea id="ownerServicesBody" data-owner-field="servicesBody" maxlength="420" rows="4"></textarea></label>
+                 </fieldset>
+                  <fieldset>
+                   <legend>Condições e contato</legend>
+                   <label for="ownerConditions">Condições do convite<textarea id="ownerConditions" data-owner-field="conditions" maxlength="260" rows="3"></textarea></label>
+                   <label for="ownerContact">Contato<input id="ownerContact" data-owner-field="contact" maxlength="120"></label>
+                 </fieldset>
+               </div>
               <div class="form-actions">
                 <button id="saveButton" class="button secondary" type="button">Salvar</button>
                 <button id="exportButton" class="button primary" type="button">Exportar PDF</button>

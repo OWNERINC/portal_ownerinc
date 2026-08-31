@@ -287,7 +287,7 @@ test('Cards Pós page and navigation stay hidden until the server verifies acces
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
   assert.match(guard, /requireAuth\(\)/);
   assert.match(guard, /user\.pos_cards_access === true/);
-  assert.match(app, /if \(await requirePosCards\(\)\) init\(\)/);
+  assert.match(app, /if \(await requirePosCards\(\)\) \{/);
   assert.match(auth, /dataset\.posCardsAccess = String\(user\?\.pos_cards_access === true\)/);
   assert.doesNotMatch(sidebar, /posCardsItem|createElement\('li'\)/);
   assert.match(html, /class="pos-cards-link"/);

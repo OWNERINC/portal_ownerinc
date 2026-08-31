@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS pos_card_media (
 CREATE TABLE IF NOT EXISTS pos_cards (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   name       TEXT        NOT NULL,
-  template   TEXT        NOT NULL CHECK (template IN ('convite_owntime')),
+  template   TEXT        NOT NULL CHECK (template IN ('convite_owntime', 'convite_owner')),
   "values"  JSONB       NOT NULL CHECK (jsonb_typeof("values") = 'object'),
   media_id   UUID        REFERENCES pos_card_media(id) ON DELETE SET NULL,
   created_by TEXT        REFERENCES users(uid) ON DELETE SET NULL,
@@ -287,5 +287,6 @@ INSERT INTO schema_migrations (version) VALUES
   ('018_pos_card_storage_key'),
   ('020_profile_photo_crop'),
   ('021_bulk_user_imports'),
-  ('022_bulk_user_import_validation')
+  ('022_bulk_user_import_validation'),
+  ('023_pos_owner_cards')
 ON CONFLICT (version) DO NOTHING;
