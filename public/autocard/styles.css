@@ -27,9 +27,12 @@ main{width:100%;max-width:none;min-height:calc(100dvh - 112px)}#createView,#save
 .card-media{display:block;min-width:0;min-height:0;width:100%;height:var(--media-height);object-fit:cover;object-position:center center;max-width:100%;max-height:100%}.birthday-photo img,.employee-photo img{display:block;width:100%;height:100%;object-fit:cover;object-position:center center;max-width:100%;max-height:100%}
 .variant-segmented button{font-size:10px;line-height:1.15;padding:8px 5px}.template-tile:hover,.asset-grid button:hover{border-color:#b4a28e}button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline-color:#b4a28e}:root{--gold:#b4a28e}
 
+@font-face{font-family:Novelin;src:url('/assets/Novelin-Regular.otf') format('opentype');font-weight:400;font-style:normal;font-display:swap}@font-face{font-family:Novelin;src:url('/assets/Novelin-Bold.otf') format('opentype');font-weight:700;font-style:normal;font-display:swap}
+
 /* Portal shell integration. Keep the editor's visual language inside the shared page body. */
 body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font-sans)}
 .autocard-page .autocard-content{width:100%;min-width:0;font-family:var(--font-sans);color:var(--ink)}
+.autocard-page .card-shell{font-family:Novelin,Arial,sans-serif}
 .autocard-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px;padding:18px 22px;background:var(--ink);color:#fff;border-radius:0 18px 18px 18px}
 .autocard-toolbar>div:first-child{margin-right:auto}
 .autocard-toolbar p{margin:4px 0 0;color:#c9c0b4;font-size:13px}

@@ -50,6 +50,7 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT, INSERT, UPDATE, DELETE ON pos_cards, pos_card_media TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON cms_documents, cms_revisions, cms_assets TO portal_api;
     GRANT SELECT, INSERT, UPDATE ON audit_log TO portal_api;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON user_import_jobs, user_import_rows TO portal_api;
     GRANT SELECT ON users, reminders TO portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON notifications_log TO portal_cron;
     GRANT SELECT, INSERT, UPDATE ON cron_status TO portal_cron;
@@ -60,6 +61,7 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron;
     GRANT SELECT, DELETE ON cms_assets TO portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON audit_log TO portal_cron;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON user_import_jobs, user_import_rows TO portal_cron;
   `);
 }
 

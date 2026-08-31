@@ -92,7 +92,15 @@
       <section id="section-users" class="admin-section" role="tabpanel" aria-labelledby="tab-users" hidden>
         <div class="section-header">
           <h2>Usuários</h2>
-          <button id="btn-new-user" class="btn btn-primary" type="button">Convidar usuário</button>
+          <div class="topbar-actions"><button id="btn-bulk-users" class="btn btn-ghost" type="button">Importar CSV</button><button id="btn-new-user" class="btn btn-primary" type="button">Convidar usuário</button></div>
+        </div>
+        <div id="bulk-import-panel" class="card" hidden style="margin-bottom:20px">
+          <div class="card-title">Importar usuários em lote</div>
+          <p class="card-copy">CSV UTF-8 com até 500 linhas e cabeçalhos: name,email,job_title,contract_type,pj_due_day,phone. Todos serão leitores.</p>
+          <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv">
+          <div id="bulk-import-feedback" class="form-feedback" role="alert" aria-live="polite"></div>
+          <div id="bulk-preview" hidden style="margin-top:12px"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button id="bulk-preview-button" class="btn btn-ghost" type="button">Pré-visualizar</button><button id="bulk-confirm-button" class="btn btn-primary" type="button" disabled>Confirmar importação</button><button id="bulk-retry-button" class="btn btn-ghost" type="button" hidden>Tentar falhas novamente</button></div>
         </div>
         <div class="table-wrapper">
           <table>

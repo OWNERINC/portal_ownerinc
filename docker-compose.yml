@@ -89,6 +89,7 @@ services:
       SOLIDES_REQUEST_TIMEOUT_MS: ${SOLIDES_REQUEST_TIMEOUT_MS:-12000}
       SOLIDES_PILOT_UIDS: ${SOLIDES_PILOT_UIDS:-}
       UPLOAD_DIR: /app/uploads
+      BULK_IMPORT_WORKER_SECRET: ${BULK_IMPORT_WORKER_SECRET:?Set BULK_IMPORT_WORKER_SECRET}
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -135,6 +136,8 @@ services:
       UPLOAD_DIR: /app/uploads
       AUTOCARD_MEDIA_ORPHAN_DAYS: ${AUTOCARD_MEDIA_ORPHAN_DAYS:-7}
       CMS_ASSET_ORPHAN_RETENTION_DAYS: ${CMS_ASSET_ORPHAN_RETENTION_DAYS:-30}
+      BULK_IMPORT_WORKER_SECRET: ${BULK_IMPORT_WORKER_SECRET:?Set BULK_IMPORT_WORKER_SECRET}
+      BULK_IMPORT_API_URL: ${BULK_IMPORT_API_URL:-http://api:3000}
     volumes:
       - uploads_data:/app/uploads
     depends_on:

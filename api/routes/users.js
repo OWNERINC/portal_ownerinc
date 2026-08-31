@@ -11,7 +11,8 @@ const {
 } = require('../middleware/policy');
 const { hasOwn, validateProfile, validateUser } = require('../middleware/validation');
 const { parseListQuery } = require('../route-utils');
-const { sendInvitation } = require('../integrations/password-reset-email');
+const { createInvitedUser } = require('../services/user-invitation');
+// The shared invitation service calls sendInvitation and audits user.create.
 
 const forbidden = (req, res) => res.status(403).json({ error: 'Permission denied.', requestId: req.id });
 const invalid = (req, res) => res.status(400).json({ error: 'Invalid request.', requestId: req.id });
@@ -110,20 +111,12 @@ router.post('/', authMiddleware, async (req, res, next) => {
   const setsPrivileges = hasOwn(req.body, 'role') || hasOwn(req.body, 'permissions');
   if (setsPrivileges && !isSuperAdmin(req.user)) return forbidden(req, res);
 
-  let firebaseUser;
   let client;
   try {
     const { email, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, job_title_id = null, phone = '' } = req.body;
     const role = req.body.role || 'viewer';
     const permissions = role === 'admin' ? normalizePermissions(req.body.permissions) : {};
 
-    firebaseUser = await firebaseAuth.createUser({
-      email,
-      password: crypto.randomBytes(32).toString('base64url'),
-      displayName: name || undefined,
-      emailVerified: true,
-      disabled: true,
-    });
     client = await pool.connect();
     await client.query('BEGIN');
     if (job_title_id) {
@@ -134,28 +127,11 @@ router.post('/', authMiddleware, async (req, res, next) => {
         throw error;
       }
     }
-    const { rows } = await client.query(
-      `INSERT INTO users (uid, email, name, role, contract_type, is_pj, pj_due_day, job_title_id, phone, permissions)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [firebaseUser.uid, email, name, role, contract_type, !!is_pj, pj_due_day, job_title_id, phone, JSON.stringify(permissions)]
-    );
-    const link = await firebaseAuth.generatePasswordResetLink(email, {
-      url: 'https://portal.ownerinc.com.br/login.html',
-    });
-    await sendInvitation({ to: email, name, link });
-    await firebaseAuth.updateUser(firebaseUser.uid, { disabled: false });
-    await audit(client, req, 'user.create', firebaseUser.uid, { role, contractType: contract_type });
+    const rows = await createInvitedUser({ client, data: { email, name, contract_type, pj_due_day, job_title_id, phone, role, permissions }, audit: (action, targetId, details) => audit(client, req, action, targetId, details) });
     await client.query('COMMIT');
-    res.status(201).json(rows[0]);
+    res.status(201).json(rows);
   } catch (err) {
     await client?.query('ROLLBACK').catch(() => {});
-    if (firebaseUser) {
-      try {
-        await firebaseAuth.deleteUser(firebaseUser.uid);
-      } catch (cleanupError) {
-        console.error(`[api] request=${req.id} Firebase compensation failed`, cleanupError);
-      }
-    }
     if (err.code === 'INVALID_JOB_TITLE') return invalid(req, res);
     if (err.code === 'auth/email-already-exists') {
       return res.status(409).json({ error: 'Account already exists.', requestId: req.id });

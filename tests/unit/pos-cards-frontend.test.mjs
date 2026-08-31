@@ -18,7 +18,7 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.doesNotMatch(html, /lucide@0\.441\.0/);
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
-  for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
+  for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png']) await access(`public/cards-pos/assets/${asset}`);
 });
 
 test('editor and history retain the source field and view contract', () => {
@@ -63,7 +63,8 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(app, /innerHTML = .*esc\(/s);
   for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.match(app, new RegExp(type.replace('/', '\\/')));
   assert.match(app, /value < 500/);
-  for (const logo of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) assert.match(app, new RegExp(logo.replace('.', '\\.')));
+  for (const logo of ['owntime-logo-white.webp', 'ownerinc-logo-white.png']) assert.match(app, new RegExp(logo.replace('.', '\\.')));
+  assert.doesNotMatch(app, /casa-logo|Casa Hotéis/);
   assert.match(css, /background: #e9e6de/);
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
@@ -93,7 +94,7 @@ test('Portal visual and accessibility contracts are present without external fon
   assert.match(css, /prefers-reduced-motion/);
   assert.doesNotMatch(css, /fonts\.googleapis\.com|@import/);
   assert.match(css, /font-family:\s*var\(--font-sans\)/);
-  assert.doesNotMatch(css, /Novelin|Signaturia|Raleway/);
+  assert.match(css, /font-family:\s*['"]Novelin['"]/);
 });
 
 test('history actions and generated Cards Pós navigation retain shell interaction semantics', () => {

@@ -29,7 +29,8 @@ async function enforceRetention() {
       `DELETE FROM audit_log WHERE created_at < NOW() - ($1::integer * INTERVAL '1 day')`,
       [days.audit]
     );
-    const details = { notifications: notifications.rowCount, audit: audit.rowCount, days };
+    const userImports = await db.query('DELETE FROM user_import_jobs WHERE expires_at < NOW()');
+    const details = { notifications: notifications.rowCount, audit: audit.rowCount, userImports: userImports.rowCount, days };
     await db.query(
       `INSERT INTO audit_log (action, target_type, details)
        VALUES ('retention.enforce', 'system', $1::jsonb)`,

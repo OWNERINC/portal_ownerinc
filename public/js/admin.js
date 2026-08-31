@@ -22,6 +22,8 @@ let solidesLinks = [];
 let jobTitles = [];
 let editingJobTitleId = null;
 const AUDIT_PAGE_SIZE = 50;
+let bulkPreviewRows = [];
+let bulkJobId = null;
 
 if (me) buildTabs(false);
 me = await requireAuth(true);
@@ -320,6 +322,54 @@ async function loadUsers() {
     tableState('users-tbody', 8, 'Não foi possível carregar os usuários.', loadUsers);
   }
 }
+
+function renderBulkPreview(report) {
+  bulkPreviewRows = report.rows;
+  const preview = clear(document.getElementById('bulk-preview'));
+  preview.hidden = false;
+  preview.append(element('p', { className: 'card-copy', text: `${report.total} linhas · ${report.ready} prontas · ${report.total - report.ready} ignoradas` }));
+  const table = element('table', {}, element('tbody'));
+  table.querySelector('tbody').append(...report.rows.map(row => element('tr', {}, [
+    cell(row.row_number), cell(row.name || '—'), cell(row.email || '—'), cell(row.job_title || '—'),
+    cell(row.status === 'ready' ? 'Pronta' : row.status === 'duplicate' ? 'Duplicada' : `Inválida: ${row.errors.join(', ')}`, `badge ${row.status === 'ready' ? 'badge-green' : 'badge-gray'}`),
+  ])));
+  preview.append(element('div', { className: 'table-wrapper' }, table));
+  document.getElementById('bulk-confirm-button').disabled = report.ready === 0;
+}
+
+async function pollBulkJob() {
+  const feedback = document.getElementById('bulk-import-feedback');
+  try {
+    const job = await fetchAPI(`/api/users/bulk/${encodeURIComponent(bulkJobId)}`);
+    const invited = job.invited_count || 0;
+    const failed = job.failed_count || 0;
+    feedback.textContent = `Processamento: ${invited} convidados, ${failed} falhas de ${job.ready_count}.`;
+    document.getElementById('bulk-retry-button').hidden = failed === 0;
+    if (job.status !== 'completed') return setTimeout(pollBulkJob, 3000);
+    await loadUsers();
+  } catch (error) { feedback.textContent = `Não foi possível consultar o processamento: ${error.message}`; }
+}
+
+document.getElementById('btn-bulk-users').addEventListener('click', () => { document.getElementById('bulk-import-panel').hidden = false; });
+document.getElementById('bulk-preview-button').addEventListener('click', async () => {
+  const file = document.getElementById('bulk-csv').files[0];
+  const feedback = document.getElementById('bulk-import-feedback');
+  if (!file) { feedback.textContent = 'Selecione um arquivo CSV.'; return; }
+  try { renderBulkPreview(await fetchAPI('/api/users/bulk/preview', { method: 'POST', body: JSON.stringify({ csv: await file.text() }) })); }
+  catch (error) { feedback.textContent = error.message; }
+});
+document.getElementById('bulk-confirm-button').addEventListener('click', async () => {
+  if (!bulkPreviewRows.length || !confirm('Confirmar a criação e o envio dos convites para as linhas prontas?')) return;
+  const feedback = document.getElementById('bulk-import-feedback');
+  try {
+    const job = await fetchAPI('/api/users/bulk/confirm', { method: 'POST', body: JSON.stringify({ rows: bulkPreviewRows }) });
+    bulkJobId = job.id; feedback.textContent = 'Importação enfileirada.'; document.getElementById('bulk-confirm-button').disabled = true; pollBulkJob();
+  } catch (error) { feedback.textContent = error.message; }
+});
+document.getElementById('bulk-retry-button').addEventListener('click', async () => {
+  try { await fetchAPI(`/api/users/bulk/${encodeURIComponent(bulkJobId)}/retry`, { method: 'POST' }); document.getElementById('bulk-retry-button').hidden = true; pollBulkJob(); }
+  catch (error) { document.getElementById('bulk-import-feedback').textContent = error.message; }
+});
 
 async function loadAudit() {
   const panel = document.getElementById('audit-panel');

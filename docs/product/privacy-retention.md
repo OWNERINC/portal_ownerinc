@@ -69,6 +69,15 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - O log contém ator, ação, alvo, request ID, detalhes mínimos e horário.
 - Somente super-admin consulta a trilha pela interface.
 
+## Importação de Usuários
+
+- O CSV é processado somente por administradores com `manageUsers` e não é
+  armazenado antes da confirmação explícita.
+- O histórico do job e suas linhas permanece por 30 dias; convites concluídos e
+  usuários criados seguem as retenções próprias do Portal.
+- Duplicatas, cargos desconhecidos ou inativos e falhas de envio ficam
+  registrados por linha, sem re-convidar contas existentes.
+
 ## Integração Sólides
 
 - Finalidade inicial: exibir ao titular seu resumo de ponto, escala e saldo.

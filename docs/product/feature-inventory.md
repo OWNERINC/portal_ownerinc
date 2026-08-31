@@ -123,6 +123,7 @@ fluxo correspondente no Portal.
 | Gate do painel | Operacional | Interface exibe abas permitidas; toda autorização real é repetida na API. `public/js/auth.js`, `public/js/admin.js`, `api/middleware/policy.js` |
 | Permissões granulares | Operacional | `manageUsers`, `manageReminders`, `manageAcademy`, `manageBenefits`, `manageKnowledge` e `manageSolides`; somente super-admin atribui privilégios. `api/middleware/policy.js`, `api/routes/users.js` |
 | Gestão de usuários | Operacional | Listagem paginada, criação, edição, desativação e reativação para `manageUsers`, com restrições de hierarquia. `api/routes/users.js`, `public/js/admin.js` |
+| Importação em lote de usuários | Operacional | Administradores importam CSV UTF-8 de até 500 usuários após pré-visualização e confirmação; todos entram como viewer, duplicatas e cargos inválidos são reportados por linha, e o envio assíncrono usa cron com até três tentativas. `api/routes/user-imports.js`, `api/services/bulk-user-import.js`, `cron/user-imports.js` |
 | Gestão de cargos | Operacional | Superfície administrativa para cadastrar, editar, ativar e desativar cargos; cargos desativados permanecem associados ao histórico dos usuários. `api/routes/job-titles.js`, `public/js/admin.js`, `api/db/migrations/009_job_titles.sql` |
 | Apagamento de dados pessoais | Operacional | Super-admin remove identidade Firebase, perfil, foto e referências estáveis após desativação. `api/routes/users.js` |
 | Auditoria administrativa | Operacional | API e interface registram, paginam e exibem ator, ação, alvo, request ID e horário para super-admin. `api/route-utils.js`, `api/routes/users.js`, `public/js/admin.js` |
@@ -151,7 +152,7 @@ fluxo correspondente no Portal.
 | Rate limit distribuído | Parcial | Limite da API é em memória por processo; Nginx cobre a borda de uma única instância. |
 | Menor privilégio no banco | Operacional | Roles separadas para migração, API e cron; serviços de runtime não recebem DDL. `api/db/provision.js`, `docker-compose.yml` |
 | Exportação, bloqueio e exclusão | Operacional | Existem mecanismos técnicos para correção, exportação, desativação e erasure. `api/routes/users.js` |
-| Retenção automática | Operacional | Padrões de 730 dias para notificações e 1.825 dias para auditoria. `cron/retention.js` |
+| Retenção automática | Operacional | Padrões de 730 dias para notificações e 1.825 dias para auditoria; históricos de importação expiram em 30 dias. `cron/retention.js` |
 | Política jurídica e bases legais | Parcial | `docs/product/privacy-retention.md` é uma política técnica inicial e requer validação jurídica. |
 | Preferências de comunicação | Não implementada | Não há consentimento ou preferência individual por canal. |
 

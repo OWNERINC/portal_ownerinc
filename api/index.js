@@ -17,6 +17,7 @@ app.use(cors(allowedOrigins(process.env)));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 // CMS block documents are bounded separately; keep the smaller default for every other JSON API.
 app.use('/api/cms', express.json({ limit: '6mb' }));
+app.use('/api/users/bulk', express.json({ limit: '1mb' }));
 app.use(express.json({ limit: '100kb' }));
 
 // Serve arquivos de upload (fotos de perfil)
@@ -30,6 +31,9 @@ app.use('/uploads', express.static('/app/uploads'));
 // Rotas
 app.use('/api/auth',      require('./routes/auth'));
 app.use('/api/users',     require('./routes/users'));
+const userImports = require('./routes/user-imports');
+app.use('/api/users/bulk', userImports.router);
+app.use('/api/internal/user-imports', userImports.internalRouter);
 app.use('/api/job-titles', require('./routes/job-titles'));
 app.use('/api/knowledge', require('./routes/knowledge'));
 app.use('/api/reminders', require('./routes/reminders'));
