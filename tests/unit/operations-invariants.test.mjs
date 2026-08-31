@@ -101,7 +101,7 @@ test('nginx protects the edge without shadowing uploads', async () => {
   const cmsAssets = nginx.indexOf('location ^~ /api/cms/assets');
   const genericApi = nginx.indexOf('location /api/');
   assert.ok(cmsAssets >= 0 && cmsAssets < genericApi);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 50m;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 51m;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
   assert.match(nginx, /media-src 'self' blob: https:/);

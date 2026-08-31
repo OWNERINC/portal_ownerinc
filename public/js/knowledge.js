@@ -16,11 +16,20 @@ const listNode = document.getElementById('articles-list');
 const articleView = document.getElementById('article-view');
 const modal = document.getElementById('modal-article');
 const form = document.getElementById('article-form');
+const pdfInput = document.getElementById('f-pdf');
+const pdfStatus = document.getElementById('f-pdf-status');
+const pdfRemove = document.getElementById('f-pdf-remove');
 let articles = [];
 let categories = [];
 let articlesRequest = 0;
+let articleRequest = 0;
 let total = 0;
 let editingId = null;
+let selectedPdf = null;
+let currentPdf = null;
+let pdfChanged = false;
+let pdfUploadRequest = 0;
+let pdfUploadPromise = null;
 const PAGE_SIZE = 20;
 
 function params() {
@@ -31,6 +40,78 @@ function updateUrl(changes, push = false) {
   const url = new URL(location.href);
   Object.entries(changes).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
   history[push ? 'pushState' : 'replaceState']({}, '', url);
+}
+
+function pdfBlock(article) {
+  return Array.isArray(article?.content_blocks)
+    ? article.content_blocks.find(block => block.type === 'pdf') || null
+    : null;
+}
+
+function updatePdfField() {
+  const pdf = selectedPdf || currentPdf;
+  pdfRemove.hidden = !pdf;
+  if (selectedPdf) {
+    pdfStatus.textContent = `Selecionado: ${selectedPdf.title}. Será anexado ao salvar.`;
+  } else if (currentPdf) {
+    pdfStatus.textContent = `PDF atual: ${currentPdf.title}. Escolha outro arquivo para substituir.`;
+  } else {
+    pdfStatus.textContent = 'Opcional. O arquivo será exibido dentro do artigo após o salvamento.';
+  }
+}
+
+async function uploadPdf(file) {
+  if (file.type !== 'application/pdf') {
+    pdfInput.value = '';
+    pdfStatus.textContent = 'Selecione um arquivo PDF válido.';
+    return;
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    pdfInput.value = '';
+    pdfStatus.textContent = 'O PDF deve ter no máximo 50 MB.';
+    return;
+  }
+  const request = ++pdfUploadRequest;
+  const body = new FormData();
+  body.append('asset', file);
+  pdfInput.disabled = true;
+  pdfRemove.disabled = true;
+  document.getElementById('modal-article-save').disabled = true;
+  document.getElementById('modal-article-close').disabled = true;
+  document.getElementById('modal-article-cancel').disabled = true;
+  pdfStatus.textContent = 'Enviando PDF…';
+  try {
+    const asset = await fetchAPI('/api/cms/assets', { method: 'POST', body });
+    if (request !== pdfUploadRequest) return;
+    selectedPdf = { id: asset.id, title: asset.original_name.slice(0, 200) };
+    pdfChanged = true;
+    pdfInput.value = '';
+    updatePdfField();
+  } catch (error) {
+    if (request === pdfUploadRequest) {
+      pdfInput.value = '';
+      pdfStatus.textContent = `Não foi possível enviar o PDF: ${error.message}`;
+    }
+  } finally {
+    if (request === pdfUploadRequest) {
+      pdfInput.disabled = false;
+      pdfRemove.disabled = false;
+      document.getElementById('modal-article-save').disabled = false;
+      document.getElementById('modal-article-close').disabled = false;
+      document.getElementById('modal-article-cancel').disabled = false;
+    }
+  }
+}
+
+function resetPdfField() {
+  pdfUploadRequest += 1;
+  pdfInput.value = '';
+  pdfInput.disabled = false;
+  pdfRemove.disabled = false;
+  selectedPdf = null;
+  currentPdf = null;
+  pdfChanged = false;
+  updatePdfField();
 }
 
 function renderCategories() {
@@ -48,10 +129,12 @@ function renderCategories() {
 }
 
 async function openArticle(id, push = true) {
+  const requestToken = ++articleRequest;
   let article = articles.find(item => String(item.id) === String(id));
   if (!article) {
     try { article = await fetchAPI(`/api/knowledge/${encodeURIComponent(id)}`); } catch { article = null; }
   }
+  if (requestToken !== articleRequest) return;
   if (!article) {
     updateUrl({ article: '' });
     showToast('O artigo solicitado não foi encontrado.');
@@ -64,8 +147,14 @@ async function openArticle(id, push = true) {
   document.getElementById('article-title').textContent = article.title;
   document.getElementById('article-category').textContent = article.category || 'Geral';
   const articleContent = document.getElementById('article-content');
-  if (!renderBlocks(articleContent, article.content_blocks, { fallbackText: article.content || '' })) {
+  const blocks = Array.isArray(article.content_blocks) ? article.content_blocks : [];
+  const rendered = renderBlocks(articleContent, blocks, { fallbackText: article.content || '' });
+  if (!rendered) {
     articleContent.textContent = article.content || '';
+  } else if (blocks.some(block => block.type === 'pdf')
+    && !blocks.some(block => ['heading', 'paragraph', 'list', 'callout'].includes(block.type))
+    && article.content) {
+    articleContent.prepend(element('p', { className: 'article-legacy-content', text: article.content }));
   }
   const adminBar = clear(document.getElementById('article-admin-bar'));
   adminBar.hidden = !canManage;
@@ -90,10 +179,18 @@ function render() {
   else {
     clear(listNode);
     articles.forEach(article => {
-      const button = element('button', { className: 'card article-card', type: 'button', on: { click: () => openArticle(article.id) } }, [
-        element('span', { className: 'card-title', text: article.title }),
+      const pdf = pdfBlock(article);
+      const metadata = [
         element('span', { className: 'badge badge-gold', text: article.category || 'Geral' }),
-        element('span', { className: 'article-excerpt', text: (article.content || '').slice(0, 120) }),
+        ...(pdf ? [element('span', { className: 'badge badge-gray', text: 'PDF' })] : []),
+      ];
+      const button = element('button', { className: 'card article-card', type: 'button', on: { click: () => openArticle(article.id) } }, [
+        element('span', { className: 'article-card-heading' }, [
+          element('span', { className: 'card-title', text: article.title }),
+          element('span', { className: 'article-card-arrow', 'aria-hidden': 'true', text: '→' }),
+        ]),
+        element('span', { className: 'article-card-meta' }, metadata),
+        element('span', { className: 'article-excerpt', text: (article.content || '').slice(0, 140) || (pdf ? 'Material em PDF disponível para leitura.' : 'Consulte este artigo para ver os detalhes.') }),
       ]);
       listNode.append(button);
     });
@@ -104,10 +201,12 @@ function render() {
   });
   const articleId = params().get('article');
   if (articleId) void openArticle(articleId, false);
+  else articleRequest += 1;
 }
 
 async function loadArticles() {
   const requestToken = ++articlesRequest;
+  articleRequest += 1;
   showState(listNode, 'Carregando artigos…');
   try {
     const query = params();
@@ -131,6 +230,7 @@ async function loadArticles() {
 
 function newArticle() {
   editingId = null;
+  resetPdfField();
   form.reset();
   document.getElementById('modal-article-title').textContent = 'Novo Artigo';
   openDialog(modal, document.getElementById('f-title'));
@@ -138,10 +238,14 @@ function newArticle() {
 
 function editArticle(article) {
   editingId = article.id;
+  resetPdfField();
+  const pdf = pdfBlock(article);
+  currentPdf = pdf ? { id: pdf.asset_id, title: pdf.title } : null;
   document.getElementById('modal-article-title').textContent = 'Editar Artigo';
   document.getElementById('f-title').value = article.title || '';
   document.getElementById('f-category').value = article.category || '';
   document.getElementById('f-content').value = article.content || '';
+  updatePdfField();
   openDialog(modal, document.getElementById('f-title'));
 }
 
@@ -159,12 +263,24 @@ async function deleteArticle(id) {
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
+  if (pdfUploadPromise) {
+    showToast('Aguarde o envio do PDF terminar.');
+    return;
+  }
   if (!form.reportValidity()) return;
   const data = {
     title: document.getElementById('f-title').value.trim(),
     category: document.getElementById('f-category').value.trim(),
     content: document.getElementById('f-content').value.trim(),
   };
+  if (pdfChanged) {
+    if (selectedPdf) {
+      data.pdf_asset_id = selectedPdf.id;
+      data.pdf_title = selectedPdf.title;
+    } else if (editingId) {
+      data.pdf_asset_id = null;
+    }
+  }
   const save = document.getElementById('modal-article-save');
   save.disabled = true;
   save.textContent = 'Salvando…';
@@ -185,8 +301,31 @@ form.addEventListener('submit', async event => {
 
 document.getElementById('btn-back').addEventListener('click', () => { updateUrl({ article: '' }, true); render(); });
 document.getElementById('btn-new').addEventListener('click', newArticle);
-document.getElementById('modal-article-close').addEventListener('click', () => closeDialog(modal));
-document.getElementById('modal-article-cancel').addEventListener('click', () => closeDialog(modal));
+document.getElementById('modal-article-close').addEventListener('click', () => {
+  if (pdfUploadPromise) return showToast('Aguarde o envio do PDF terminar.');
+  closeDialog(modal);
+});
+document.getElementById('modal-article-cancel').addEventListener('click', () => {
+  if (pdfUploadPromise) return showToast('Aguarde o envio do PDF terminar.');
+  closeDialog(modal);
+});
+pdfInput.addEventListener('change', () => {
+  const file = pdfInput.files?.[0];
+  if (!file) return;
+  const promise = uploadPdf(file);
+  pdfUploadPromise = promise;
+  void promise.finally(() => { if (pdfUploadPromise === promise) pdfUploadPromise = null; });
+});
+pdfRemove.addEventListener('click', () => {
+  if (selectedPdf) {
+    selectedPdf = null;
+    pdfChanged = Boolean(currentPdf);
+  } else {
+    currentPdf = null;
+    pdfChanged = true;
+  }
+  updatePdfField();
+});
 searchInput.addEventListener('input', () => { updateUrl({ q: searchInput.value.trim(), offset: '' }); loadArticles(); });
 window.addEventListener('popstate', loadArticles);
 loadArticles();

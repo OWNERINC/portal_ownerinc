@@ -121,6 +121,10 @@
 .cms-divider { border: 0; border-top: 1px solid var(--cms-rule); }
 .cms-block.cms-link,
 .cms-pdf-link { display: inline-flex; margin-bottom: 14px; }
+.cms-pdf-block { margin: 18px 0 24px; }
+.cms-pdf-frame { display: block; width: 100%; min-height: min(760px, 80vh); border: 1px solid var(--cms-rule); background: var(--cms-paper-deep); }
+.cms-pdf-block .cms-pdf-link { margin-top: 12px; }
+.cms-asset-status { color: var(--text-secondary); font-size: var(--font-size-sm); }
 .cms-asset-error { color: var(--danger); font-size: var(--font-size-sm); }
 .cms-fallback { white-space: pre-wrap; }
 .announcements-list { display: grid; gap: 16px; }

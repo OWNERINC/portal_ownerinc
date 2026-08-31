@@ -89,7 +89,7 @@ function topbar(current, title) {
   const actions = {
     admin: '<a href="./cms.html" class="cms-entry-link btn btn-ghost btn-sm">Abrir Editor CMS</a>',
     cms: '<span id="save-state" class="cms-save-state" role="status" aria-live="polite">Carregando…</span>',
-    knowledge: '<label class="search-bar" for="search"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#search"></use></svg><input type="search" id="search" name="search" autocomplete="off" placeholder="Buscar artigos." aria-label="Buscar artigos"></label><button id="btn-new" class="btn btn-primary" type="button" style="display:none">Novo artigo</button>',
+    knowledge: '<button id="btn-new" class="btn btn-primary" type="button" style="display:none">Novo artigo</button>',
     reminders: '<button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Novo lembrete</button>',
   }[current];
   const action = actions ? `<div class="topbar-actions">${actions}</div>` : '';

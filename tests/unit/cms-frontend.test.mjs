@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [cmsHtml, cms, editor, renderer, css, admin, knowledge, academy, benefits, reminders, announcements, announcementsHtml, dashboard, auth, layout] = await Promise.all([
+const [cmsHtml, cms, editor, renderer, css, knowledgeCss, knowledgeHtml, admin, knowledge, academy, benefits, reminders, announcements, announcementsHtml, dashboard, auth, layout] = await Promise.all([
   readFile('public/cms.html', 'utf8'),
   readFile('public/js/cms.js', 'utf8'),
   readFile('public/js/cms-block-editor.js', 'utf8'),
   readFile('public/js/cms-block-renderer.js', 'utf8'),
   readFile('public/css/cms.css', 'utf8'),
+  readFile('public/css/knowledge.css', 'utf8'),
+  readFile('public/knowledge.html', 'utf8'),
   readFile('public/admin.html', 'utf8'),
   readFile('public/js/knowledge.js', 'utf8'),
   readFile('public/js/academy.js', 'utf8'),
@@ -63,6 +65,21 @@ test('safe renderer validates the allowlist and never uses raw HTML sinks', () =
   assert.match(renderer, /\/api\/cms\/assets\//);
   assert.doesNotMatch(renderer, /innerHTML|outerHTML|insertAdjacentHTML/);
   assert.doesNotMatch(editor, /innerHTML|outerHTML|insertAdjacentHTML/);
+});
+
+test('knowledge articles support compact search and private PDF attachments', () => {
+  assert.match(knowledgeHtml, /href="\.\/css\/knowledge\.css"/);
+  assert.match(knowledgeHtml, /id="f-pdf"[^>]*type="file"[^>]*accept="application\/pdf"/);
+  assert.match(knowledgeHtml, /id="f-pdf-remove"/);
+  assert.match(knowledgeCss, /\.knowledge-search\s*\{/);
+  assert.match(knowledgeCss, /@media \(max-width: 700px\)/);
+  assert.match(knowledge, /FormData/);
+  assert.match(knowledge, /pdf_asset_id/);
+  assert.match(knowledge, /pdf_title/);
+  assert.match(knowledge, /pdfUploadPromise/);
+  assert.match(renderer, /iframe/);
+  assert.match(renderer, /Abrir PDF em nova aba/);
+  assert.match(renderer, /URL\.revokeObjectURL/);
 });
 
 test('CMS actions use the existing API contracts and keep generic failure states visible', () => {

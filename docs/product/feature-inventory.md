@@ -80,8 +80,9 @@ fluxo correspondente no Portal.
 | Busca por título e conteúdo | Operacional | Busca server-side em título e conteúdo e persiste `q`, categoria e offset na URL. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Filtro por categoria | Operacional | Lista categorias no servidor e aplica o filtro na consulta paginada. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Link direto para artigo | Operacional | `article` na URL e histórico Back/Forward selecionam o detalhe. `public/js/knowledge.js` |
-| CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. Conteúdo é renderizado como texto. `api/routes/knowledge.js`, `public/js/knowledge.js` |
-| Draft, revisão, anexos e rich text | Não implementada | O modelo atual armazena texto simples e categoria. |
+| CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. Texto legado e blocos CMS publicados são renderizados com saída segura. `api/routes/knowledge.js`, `public/js/knowledge.js`, `public/js/cms-block-renderer.js` |
+| Anexo PDF no artigo | Operacional | Gestores podem enviar, substituir e remover um PDF de até 50 MB; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `public/js/cms-block-renderer.js` |
+| Draft, revisão e rich text na tela legada | Não implementada | A tela legada continua editando título, categoria e texto simples; drafts e revisões avançadas ficam no Editor CMS. |
 
 ## Academy
 

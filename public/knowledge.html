@@ -9,9 +9,10 @@
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <link rel="stylesheet" href="./css/cms.css">
+  <link rel="stylesheet" href="./css/knowledge.css">
   <script src="./js/auth-shell.js"></script>
 </head>
-<body>
+<body class="knowledge-page">
 <a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
@@ -48,14 +49,28 @@
 
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><span class="topbar-title">Base de Conhecimento</span><div class="topbar-actions"><label class="search-bar" for="search"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#search"></use></svg><input type="search" id="search" name="search" autocomplete="off" placeholder="Buscar artigos." aria-label="Buscar artigos"></label><button id="btn-new" class="btn btn-primary" type="button" style="display:none">Novo artigo</button></div></header>
+    <header class="topbar"><span class="topbar-title">Base de Conhecimento</span><div class="topbar-actions"><button id="btn-new" class="btn btn-primary" type="button" style="display:none">Novo artigo</button></div></header>
     <!-- /generated:portal-topbar -->
     <main class="page-body" id="main-content" tabindex="-1">
 
-      <div class="page-header"><h1>Base de Conhecimento</h1></div>
+      <div class="knowledge-header">
+        <div>
+          <p class="section-label">Informação interna</p>
+          <h1>Base de Conhecimento</h1>
+          <p class="knowledge-intro">Encontre orientações, processos e materiais importantes para o dia a dia.</p>
+        </div>
+        <label class="knowledge-search" for="search">
+          <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#search"></use></svg>
+          <span class="sr-only">Buscar artigos</span>
+          <input type="search" id="search" name="search" autocomplete="off" placeholder="Buscar artigos" aria-label="Buscar artigos">
+        </label>
+      </div>
 
       <!-- Category filter -->
-      <div id="categories" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:24px"></div>
+      <div class="knowledge-filter-row">
+        <span class="knowledge-filter-label">Filtrar por categoria</span>
+        <div id="categories" class="knowledge-categories"></div>
+      </div>
 
       <!-- Articles list -->
       <div id="articles-list" class="card-grid" aria-live="polite">
@@ -65,10 +80,14 @@
 
       <!-- Article view -->
       <article id="article-view" class="card article-view" hidden>
-        <button id="btn-back" class="btn btn-ghost btn-sm" style="margin-bottom:16px">← Voltar</button>
-        <div id="article-admin-bar" class="actions" style="margin-bottom:16px" hidden></div>
-        <h2 id="article-title" tabindex="-1"></h2>
-        <span id="article-category" class="badge badge-gold" style="margin-bottom:16px; display:inline-flex"></span>
+        <div class="article-view-toolbar">
+          <button id="btn-back" class="btn btn-ghost btn-sm" type="button">Voltar</button>
+          <div id="article-admin-bar" class="actions" hidden></div>
+        </div>
+        <div class="article-view-heading">
+          <span id="article-category" class="badge badge-gold"></span>
+          <h2 id="article-title" tabindex="-1"></h2>
+        </div>
         <div id="article-content" class="article-content"></div>
       </article>
 
@@ -94,6 +113,12 @@
     <div class="form-group">
       <label class="form-label" for="f-content">Conteúdo</label>
       <textarea class="form-textarea" id="f-content" name="content" rows="8" required placeholder="Conteúdo em texto simples…"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="f-pdf">PDF do artigo</label>
+      <input class="form-input" id="f-pdf" name="pdf" type="file" accept="application/pdf">
+      <p class="form-help" id="f-pdf-status" role="status" aria-live="polite">Opcional. O arquivo será exibido dentro do artigo após o salvamento.</p>
+      <button class="btn btn-ghost btn-sm knowledge-pdf-remove" type="button" id="f-pdf-remove" hidden>Remover PDF</button>
     </div>
     <div style="display:flex; gap:8px; justify-content:flex-end">
       <button class="btn btn-ghost" type="button" id="modal-article-cancel">Cancelar</button>

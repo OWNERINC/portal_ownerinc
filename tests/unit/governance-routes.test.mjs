@@ -73,6 +73,9 @@ test('public content routes provide server-side filters and category metadata', 
   assert.match(knowledge, /ILIKE/);
   assert.match(knowledge, /category = \$\$\{values\.length\}/);
   assert.match(knowledge, /router\.get\('\/:id'/);
+  assert.match(knowledge, /pdf_asset_id/);
+  assert.match(knowledge, /syncKnowledgePdf/);
+  assert.doesNotMatch(knowledge, /DELETE FROM cms_documents/);
   assert.match(academy, /router\.get\('\/categories'/);
   assert.match(academy, /category = \$1/);
   assert.match(benefits, /router\.get\('\/categories'/);

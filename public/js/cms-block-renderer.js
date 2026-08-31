@@ -177,27 +177,39 @@ function loadPrivateAsset(node, assetId, label, state) {
   });
 }
 
-function renderPdf(container, block) {
+function renderPdf(container, block, state) {
+  const frame = element('iframe', {
+    className: 'cms-block cms-pdf-frame',
+    title: `Visualização do PDF: ${block.title}`,
+    loading: 'lazy',
+    hidden: '',
+  });
+  const status = element('p', { className: 'cms-asset-status', role: 'status', text: 'Carregando PDF...' });
   const link = element('a', {
     className: 'btn btn-ghost cms-pdf-link',
-    href: assetEndpoint(block.asset_id),
-    role: 'button',
-    text: `Abrir PDF: ${block.title}`,
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    text: `Abrir PDF em nova aba: ${block.title}`,
+    hidden: '',
   });
-  link.addEventListener('click', async event => {
-    event.preventDefault();
-    try {
-      const url = await fetchAPIAsset(link.getAttribute('href'));
-      const download = element('a', { href: url, target: '_blank', rel: 'noopener noreferrer' });
-      document.body.append(download);
-      download.click();
-      download.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch {
-      link.textContent = 'Não foi possível abrir o PDF.';
+  const wrapper = element('section', { className: 'cms-pdf-block', 'aria-label': block.title }, [frame, status, link]);
+  container.append(wrapper);
+  const token = state.token;
+  fetchAPIAsset(assetEndpoint(block.asset_id)).then(url => {
+    if (token !== state.token || !wrapper.isConnected) {
+      if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+      return;
     }
+    state.urls.add(url);
+    frame.src = url;
+    frame.hidden = false;
+    link.href = url;
+    link.hidden = false;
+    status.hidden = true;
+  }).catch(() => {
+    if (token !== state.token || !wrapper.isConnected) return;
+    status.textContent = 'Não foi possível carregar o PDF.';
   });
-  container.append(link);
 }
 
 export function renderBlocks(container, blocks, { fallbackText = '' } = {}) {
@@ -227,7 +239,7 @@ export function renderBlocks(container, blocks, { fallbackText = '' } = {}) {
       className: 'btn btn-ghost cms-block cms-link', href: block.url,
       ...(block.new_tab ? { target: '_blank', rel: 'noopener noreferrer' } : {}), text: block.label,
     }));
-    if (block.type === 'pdf') renderPdf(container, block);
+    if (block.type === 'pdf') renderPdf(container, block, state);
     if (block.type === 'video') {
       const video = element('video', { className: 'cms-block cms-video', controls: '', preload: 'metadata' });
       if (block.title) video.setAttribute('aria-label', block.title);

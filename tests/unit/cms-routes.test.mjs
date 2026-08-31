@@ -102,7 +102,8 @@ test('CMS list totals count all matching documents and Nginx scopes the large up
   const cmsLocation = nginx.indexOf('location ^~ /api/cms/assets');
   const genericApi = nginx.indexOf('location /api/');
   assert.ok(cmsLocation >= 0 && cmsLocation < genericApi);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 50m;[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 51m;[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /frame-src https:\/\/\*\.firebaseapp\.com blob:/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
 });
 
@@ -113,5 +114,5 @@ test('CMS JSON transport is bounded separately from the normal API', () => {
   assert.match(blocks, /normalized\.every\(Boolean\)/);
   assert.match(blocks, /Buffer\.byteLength\(JSON\.stringify\(normalized\), 'utf8'\)/);
   assert.match(nginx, /location \^~ \/api\/cms\/[\s\S]*client_max_body_size 6m;/);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 50m;/);
+  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 51m;/);
 });
