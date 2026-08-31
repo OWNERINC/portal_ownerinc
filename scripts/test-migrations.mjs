@@ -152,6 +152,7 @@ try {
     '019_cms_asset_deletion_state',
     '020_profile_photo_crop',
     '021_bulk_user_imports',
+    '022_bulk_user_import_validation',
   ]);
   const activeTitles = await pool.query('SELECT name FROM job_titles WHERE active = TRUE');
   const sortCatalogNames = (names) => names.slice().sort((a, b) => a.toLocaleLowerCase('pt-BR').localeCompare(b.toLocaleLowerCase('pt-BR')));
