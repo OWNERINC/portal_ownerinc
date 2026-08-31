@@ -80,6 +80,7 @@ try {
     '020_profile_photo_crop',
     '021_bulk_user_imports',
     '022_bulk_user_import_validation',
+    '023_pos_owner_cards',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
