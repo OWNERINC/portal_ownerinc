@@ -203,10 +203,9 @@ function fitCardBody() {
   const styles = getComputedStyle(body);
   const available = body.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom);
   if (available <= 0) return;
-  const scale = Math.min(1, available / copy.scrollHeight);
+  const scale = Math.min(1, Math.max(0, available - 1) / copy.scrollHeight);
   if (scale < 1) {
     copy.style.transform = `scale(${scale})`;
-    copy.style.width = `${100 / scale}%`;
   }
 }
 

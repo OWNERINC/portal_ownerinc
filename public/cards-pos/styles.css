@@ -92,6 +92,7 @@
 .gold-rule { position: absolute; z-index: 2; left: 10%; right: 10%; bottom: -3px; height: 7px; background: #a99b85; }
 .card-body { min-height: 0; padding: 4.6% 15.2% 4.2%; display: flex; flex-direction: column; overflow: hidden; color: #171717; }
 .card-copy { display: flex; min-width: 0; min-height: 0; height: max-content; flex: none; flex-direction: column; gap: 10px; transform-origin: top center; overflow-wrap: anywhere; }
+.card-copy > * { flex-shrink: 0; }
 .card-body p, .card-body .rich-copy { min-width: 0; margin: 0; white-space: pre-line; overflow-wrap: anywhere; word-break: break-word; font-size: clamp(10px, 1.5vw, 15px); line-height: 1.18; }
 .card-body ul, .card-body ol { min-width: 0; margin: 0 0 19px 1.25em; padding: 0; font-size: clamp(10px, 1.5vw, 15px); line-height: 1.18; overflow-wrap: anywhere; word-break: break-word; }
 .card-body li { margin: 0 0 .35em; }

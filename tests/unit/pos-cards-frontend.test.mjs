@@ -100,8 +100,11 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(css, /@media print/);
   assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
   assert.match(app, /if \(available <= 0\) return/);
+  assert.match(app, /Math\.max\(0, available - 1\) \/ copy\.scrollHeight/);
   assert.match(app, /querySelectorAll\('img'\)\.forEach\(\(image\) => image\.addEventListener\('load', fitCardBody/);
+  assert.doesNotMatch(app, /copy\.style\.width = `\$\{100 \/ scale\}%`/);
   assert.match(css, /\.card-copy \{[^}]*height: max-content; flex: none;/);
+  assert.match(css, /\.card-copy > \* \{ flex-shrink: 0; \}/);
   assert.match(css, /\.guest-card \{ page: guest-page; height: 175\.1mm/);
   assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 290\.6mm/);
   assert.match(css, /page-break-inside: avoid/);
