@@ -99,6 +99,11 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
   assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
+  assert.match(css, /\.guest-card \{ page: guest-page; height: 175\.1mm/);
+  assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 290\.6mm/);
+  assert.match(css, /page-break-inside: avoid/);
+  assert.match(css, /break-inside: avoid/);
+  assert.match(css, /break-after: avoid-page/);
   assert.match(app, /const available = body\.clientHeight - parseFloat\(styles\.paddingTop\) - parseFloat\(styles\.paddingBottom\)/);
   assert.doesNotMatch(app, /current\.template !== 'convite_owner'\) return/);
   assert.match(app, /text\.replace\(\/\[\^\\d\+\(\)\.\\s-\]\//);

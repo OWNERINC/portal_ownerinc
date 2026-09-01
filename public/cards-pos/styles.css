@@ -187,11 +187,11 @@
 @media print {
   html, body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .skip-link, .sidebar, .topbar, .cards-pos-toolbar, .editor-panel, .preview-label, .history-view { display: none !important; }
-  .portal-wrapper, .main-content, .page-body, .cards-pos-content, .cards-pos-workspace, .preview-panel, .preview-stage { display: block; min-height: 0; padding: 0; background: #fff; }
+  .portal-wrapper, .main-content, .page-body, .cards-pos-content, .cards-pos-workspace, #editorView, .preview-panel, .preview-stage { display: block; width: 108mm; min-height: 0; height: auto; margin: 0; padding: 0; background: #fff; }
   .invite-card, .hero, .benefit-box, .card-footer { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .invite-card { width: 108mm; height: auto; min-height: 0; box-shadow: none; margin: 0; }
-  .guest-card { page: guest-page; aspect-ratio: 1448 / 2347; grid-template-rows: 30.59% minmax(0, 1fr) 13.08%; }
-  .owner-card { page: owner-page; width: 108mm; height: auto; aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; }
+  .invite-card { width: 108mm; min-height: 0; box-shadow: none; margin: 0; page-break-inside: avoid; break-inside: avoid; page-break-after: avoid; break-after: avoid-page; }
+  .guest-card { page: guest-page; height: 175.1mm; aspect-ratio: 1448 / 2347; grid-template-rows: 30.59% minmax(0, 1fr) 13.08%; }
+  .owner-card { page: owner-page; width: 108mm; height: 290.6mm; aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; }
   .hero { min-height: 0; aspect-ratio: auto; }
   .card-body { min-height: 0; overflow: hidden; }
   .footer-phone-editable { font-size: 1.2mm; }
@@ -204,9 +204,9 @@
   .owner-icon { width: 6.5mm; height: 6.5mm; }
   .owner-service, .owner-pet { grid-template-columns: 8mm minmax(0, 1fr); gap: 2.5mm; }
   .footer-contact { font-size: 2.2mm; }
-  @page guest-page { size: 108mm 175.1mm; margin: 0; }
-  @page owner-page { size: 108mm 290.6mm; margin: 0; }
 }
+@page guest-page { size: 108mm 175.1mm; margin: 0; }
+@page owner-page { size: 108mm 290.6mm; margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
   .upload-control:active, .button:active, .history-actions button:active { transform: none; }
