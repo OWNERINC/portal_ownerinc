@@ -190,6 +190,7 @@ function render() {
   const card = $('cardCanvas');
   card.className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
   card.innerHTML = owner ? renderOwner(values) : renderGuest(values);
+  card.querySelectorAll('img').forEach((image) => image.addEventListener('load', fitCardBody, { once: true }));
   requestAnimationFrame(fitCardBody);
 }
 
@@ -201,6 +202,7 @@ function fitCardBody() {
   copy.style.width = '100%';
   const styles = getComputedStyle(body);
   const available = body.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom);
+  if (available <= 0) return;
   const scale = Math.min(1, available / copy.scrollHeight);
   if (scale < 1) {
     copy.style.transform = `scale(${scale})`;

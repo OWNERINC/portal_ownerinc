@@ -99,6 +99,9 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
   assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
+  assert.match(app, /if \(available <= 0\) return/);
+  assert.match(app, /querySelectorAll\('img'\)\.forEach\(\(image\) => image\.addEventListener\('load', fitCardBody/);
+  assert.match(css, /\.card-copy \{[^}]*height: max-content; flex: none;/);
   assert.match(css, /\.guest-card \{ page: guest-page; height: 175\.1mm/);
   assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 290\.6mm/);
   assert.match(css, /page-break-inside: avoid/);
