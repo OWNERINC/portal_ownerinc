@@ -116,6 +116,10 @@ test('Figma frames keep their proportions, address, photos, and editable phone f
   assert.match(html, /Telefone/);
   assert.match(css, /\.footer-phone-backdrop/);
   assert.match(css, /\.footer-phone-editable/);
+  assert.match(css, /container-type: inline-size/);
+  assert.match(css, /font-size: 1\.105cqw/);
+  assert.match(css, /left: 5\.28%; top: 61\.72%/);
+  assert.match(css, /\.footer-phone-editable \{ font-size: 1\.2mm; \}/);
   assert.match(css, /border-radius: 10% \/ 20%/);
   assert.match(css, /border-radius: 10% \/ 28%/);
   assert.match(css, /\.address-line \{[^}]*white-space: nowrap/);

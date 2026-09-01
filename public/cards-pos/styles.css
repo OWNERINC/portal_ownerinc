@@ -140,10 +140,10 @@
 .owner-services > p, .owner-services > .rich-copy { margin-bottom: 5.5%; }
 .owner-services .owner-service { margin-bottom: 3.6%; }
 .owner-footer { min-height: 0; }
-.card-footer { position: relative; min-height: 0; overflow: hidden; background: #050505; color: #fff; }
+.card-footer { position: relative; min-height: 0; overflow: hidden; background: #050505; color: #fff; container-type: inline-size; }
 .footer-art { display: block; width: 100%; height: auto; }
 .footer-phone-backdrop { position: absolute; z-index: 1; left: 4.6%; top: 60.5%; width: 16%; height: 18%; background: #000; }
-.footer-phone-editable { position: absolute; z-index: 2; left: 5.2%; top: 61.5%; color: #fff; font-family: 'Raleway', Arial, sans-serif; font-size: clamp(8px, 1.25vw, 12px); line-height: 1.45; white-space: nowrap; }
+.footer-phone-editable { position: absolute; z-index: 2; left: 5.28%; top: 61.72%; color: #fff; font-family: 'Raleway', Arial, sans-serif; font-size: clamp(8px, 1.25vw, 12px); font-size: 1.105cqw; line-height: 1; white-space: nowrap; }
 .history-view { max-width: 1100px; margin: 0 auto; padding: var(--space-8); }
 .history-heading { display: flex; align-items: end; justify-content: space-between; gap: var(--space-6); margin-bottom: var(--space-6); }
 .search-label { width: min(100%, 300px); margin: 0; }
@@ -194,7 +194,7 @@
   .owner-card { page: owner-page; width: 108mm; height: auto; aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; }
   .hero { min-height: 0; aspect-ratio: auto; }
   .card-body { min-height: 0; overflow: hidden; }
-  .footer-phone-editable { font-size: 2.2mm; }
+  .footer-phone-editable { font-size: 1.2mm; }
   .owner-card .hero h2 { font-size: 6.1mm; }
   .owner-card .hero-brand { font-size: 4.7mm; }
   .owner-body p, .owner-body .rich-copy, .owner-service-copy, .owner-pet-copy { font-size: 2.4mm; }
