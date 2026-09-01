@@ -162,6 +162,8 @@
 .secondary-button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); text-decoration: none; }
 .secondary-button:hover { background: var(--surface-2); }
 .hidden { display: none !important; }
+.pos-card-export-surface { position: fixed; top: 0; left: -100000px; z-index: -1; width: 0; height: 0; overflow: visible; pointer-events: none; }
+.pos-card-export-surface .invite-card { width: 100%; max-width: none; box-shadow: none; }
 
 @media (max-width: 900px) {
   .cards-pos-toolbar { align-items: flex-start; flex-direction: column; }

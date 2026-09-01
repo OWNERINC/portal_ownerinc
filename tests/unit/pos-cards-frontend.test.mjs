@@ -77,7 +77,7 @@ test('history edits revoke the current blob URL before replacing media state', (
   assert.ok(reset >= 0 && reset < state);
 });
 
-test('preview escapes user values, validates image uploads, and preserves print composition', () => {
+test('preview escapes user values, validates image uploads, and preserves export composition', () => {
   assert.match(app, /function esc/);
   assert.match(app, /innerHTML = .*esc\(/s);
   for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.match(app, new RegExp(type.replace('/', '\\/')));
@@ -102,6 +102,17 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(app, /if \(available <= 0\) return/);
   assert.match(app, /Math\.max\(0, available - 1\) \/ copy\.scrollHeight/);
   assert.match(app, /querySelectorAll\('img'\)\.forEach\(\(image\) => image\.addEventListener\('load', fitCardBody/);
+  assert.match(app, /async function waitForCardAssets/);
+  assert.match(app, /typeof root\.querySelector === 'function'/);
+  assert.match(app, /window\.html2canvas/);
+  assert.match(app, /new window\.jspdf\.jsPDF/);
+  assert.match(app, /pdf\.addImage/);
+  assert.match(app, /pdf\.save/);
+  assert.match(app, /setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(app, /const fileName = pdfFileName\(\)/);
+  assert.doesNotMatch(app, /window\.print/);
+  assert.match(html, /html2canvas\/1\.4\.1\/html2canvas\.min\.js/);
+  assert.match(html, /jspdf\/2\.5\.1\/jspdf\.umd\.min\.js/);
   assert.doesNotMatch(app, /copy\.style\.width = `\$\{100 \/ scale\}%`/);
   assert.match(css, /\.card-copy \{[^}]*height: max-content; flex: none;/);
   assert.match(css, /\.card-copy > \* \{ flex-shrink: 0; \}/);
@@ -163,7 +174,7 @@ test('media upload and card editing cannot apply stale responses or save mid-ope
   assert.match(app, /const operationToken = \+\+mediaOperationToken/);
   assert.match(app, /if \(operationToken !== mediaOperationToken\) return/);
   assert.match(app, /\$\('saveButton'\)\.disabled = busy/);
-  assert.match(app, /if \(activeMediaPromise\) return/);
+  assert.match(app, /if \(activeMediaPromise(?: \|\| exportInProgress)?\) return/);
 });
 
 test('the hidden file input has a single accessible keyboard trigger', () => {

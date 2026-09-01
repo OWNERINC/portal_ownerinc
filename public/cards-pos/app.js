@@ -67,6 +67,11 @@ const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
 const ADDRESS_LABEL = 'Como chegar:';
 const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
 const FOOTER_ASSET = './cards-pos/assets/footer.svg';
+const PDF_CARD_SIZES = {
+  convite_owntime: { width: 108, height: 175.1 },
+  convite_owner: { width: 108, height: 290.6 },
+};
+const PDF_RENDER_SCALE = 3;
 let current = {
   template: 'convite_owntime',
   values: { ...guestDefaults },
@@ -81,6 +86,7 @@ let historyOffset = 0;
 let mediaOperationToken = 0;
 let activeMediaPromise = null;
 let activeEditor = null;
+let exportInProgress = false;
 const HISTORY_PAGE_SIZE = 50;
 const RICH_VALUE = Symbol('rich-value');
 const RICH_TAGS = new Set(['STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'BR', 'UL', 'OL', 'LI']);
@@ -194,9 +200,10 @@ function render() {
   requestAnimationFrame(fitCardBody);
 }
 
-function fitCardBody() {
-  const body = document.querySelector('.card-body');
-  const copy = document.querySelector('.card-copy');
+function fitCardBody(root = $('cardCanvas')) {
+  const target = root && typeof root.querySelector === 'function' ? root : $('cardCanvas');
+  const body = target?.querySelector('.card-body');
+  const copy = target?.querySelector('.card-copy');
   if (!body || !copy) return;
   copy.style.transform = 'none';
   copy.style.width = '100%';
@@ -209,9 +216,83 @@ function fitCardBody() {
   }
 }
 
-function preparePrint() {
-  document.body.classList.toggle('printing-owner', current.template === 'convite_owner');
-  fitCardBody();
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+async function waitForImage(image) {
+  if (!image.complete) {
+    await new Promise((resolve, reject) => {
+      image.addEventListener('load', resolve, { once: true });
+      image.addEventListener('error', () => reject(new Error('Não foi possível carregar uma imagem do card.')), { once: true });
+    });
+  }
+  if (!image.naturalWidth) throw new Error('Não foi possível carregar uma imagem do card.');
+  if (image.decode) {
+    try { await image.decode(); } catch { /* O canvas ainda pode renderizar imagens já carregadas. */ }
+  }
+}
+
+async function waitForCardAssets(card) {
+  await document.fonts?.ready;
+  await Promise.all([...card.querySelectorAll('img')].map(waitForImage));
+  await nextFrame();
+  await nextFrame();
+}
+
+function pdfFileName() {
+  const source = current.name || richTextToPlainText(activeValues().heroBrand) || 'convite-owntime';
+  const safe = source.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  return safe || 'convite-owntime';
+}
+
+async function exportPdf() {
+  if (exportInProgress) return;
+  if (activeMediaPromise) {
+    setStatus('Aguarde o carregamento da imagem antes de exportar.', true);
+    return;
+  }
+  if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error('O exportador de PDF ainda está carregando. Tente novamente em instantes.');
+  const source = $('cardCanvas');
+  const size = PDF_CARD_SIZES[current.template];
+  const bounds = source.getBoundingClientRect();
+  if (!size || !bounds.width || !bounds.height) throw new Error('Não foi possível preparar o card para exportação.');
+  const fileName = pdfFileName();
+
+  exportInProgress = true;
+  const surface = document.createElement('div');
+  surface.className = 'pos-card-export-surface';
+  surface.setAttribute('aria-hidden', 'true');
+  const card = source.cloneNode(true);
+  card.removeAttribute('id');
+  card.style.width = `${bounds.width}px`;
+  card.style.height = `${bounds.height}px`;
+  card.style.maxWidth = 'none';
+  card.style.boxShadow = 'none';
+  surface.append(card);
+  document.body.append(surface);
+  try {
+    await waitForCardAssets(card);
+    fitCardBody(card);
+    await nextFrame();
+    fitCardBody(card);
+    const canvas = await window.html2canvas(card, {
+      backgroundColor: '#fff',
+      scale: PDF_RENDER_SCALE,
+      useCORS: true,
+      logging: false,
+      width: bounds.width,
+      height: bounds.height,
+    });
+    const pdf = new window.jspdf.jsPDF({ unit: 'mm', format: [size.width, size.height], orientation: 'portrait', compress: true });
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, size.width, size.height, undefined, 'FAST');
+    pdf.save(`${fileName}.pdf`);
+    setStatus('PDF baixado com o card completo.');
+  } finally {
+    surface.remove();
+    fitCardBody();
+    exportInProgress = false;
+  }
 }
 
 function activeValues() {
@@ -380,6 +461,7 @@ function updateModuleControls() {
 }
 
 function switchModule(template) {
+  if (exportInProgress) return;
   if (!['convite_owntime', 'convite_owner'].includes(template)) return;
   activeEditor = null;
   updateToolbarState();
@@ -418,6 +500,7 @@ async function runMediaOperation(operation) {
 }
 
 async function upload(file) {
+  if (exportInProgress) return;
   return runMediaOperation(async (operationToken) => {
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Escolha uma imagem PNG, JPEG ou WebP.');
     const dimensions = await new Promise((resolve, reject) => {
@@ -441,7 +524,7 @@ async function upload(file) {
 }
 
 async function save() {
-  if (activeMediaPromise) return;
+  if (activeMediaPromise || exportInProgress) return;
   const name = window.prompt('Nome do convite:', current.name || richTextToPlainText(activeValues().heroBrand) || 'Convite Owntime');
   if (!name?.trim()) return;
   const button = $('saveButton');
@@ -516,6 +599,7 @@ async function loadHistory() {
 }
 
 async function editCard(id) {
+  if (exportInProgress) return;
   activeEditor = null;
   updateToolbarState();
   setStatus('Carregando convite...');
@@ -540,6 +624,7 @@ async function editCard(id) {
 }
 
 async function duplicateCard(id) {
+  if (exportInProgress) return;
   setStatus('Duplicando convite...');
   try {
     await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
@@ -552,6 +637,7 @@ async function duplicateCard(id) {
 }
 
 async function deleteCard(id) {
+  if (exportInProgress) return;
   if (!window.confirm('Excluir este convite?')) return;
   setStatus('Excluindo convite...');
   try {
@@ -565,6 +651,7 @@ async function deleteCard(id) {
 }
 
 function showView(view) {
+  if (exportInProgress) return;
   if (view !== 'editor') {
     activeEditor = null;
     updateToolbarState();
@@ -593,7 +680,13 @@ function init() {
   $('imageInput').addEventListener('change', (event) => event.target.files[0] && upload(event.target.files[0]).catch((error) => setStatus(error.message, true)));
   $('uploadButton').addEventListener('click', () => $('imageInput').click());
   $('saveButton').addEventListener('click', save);
-  $('exportButton').addEventListener('click', () => { setStatus('Na janela de impressão, escolha "Salvar como PDF".'); preparePrint(); window.print(); });
+  $('exportButton').addEventListener('click', async () => {
+    const button = $('exportButton');
+    button.disabled = true;
+    setStatus('Gerando PDF...');
+    try { await exportPdf(); } catch (error) { setStatus(error.message, true); }
+    finally { button.disabled = false; }
+  });
   $('historySearch').addEventListener('input', () => { historyOffset = 0; loadHistory(); });
   $('historyList').addEventListener('click', (event) => {
     const button = event.target.closest('button');
@@ -606,8 +699,6 @@ function init() {
 
 document.fonts?.ready?.then(fitCardBody);
 window.addEventListener('resize', fitCardBody);
-window.addEventListener('beforeprint', preparePrint);
-  window.addEventListener('afterprint', () => { document.body.classList.remove('printing-owner'); fitCardBody(); });
 
 if (await requirePosCards()) {
   updateModuleControls();
