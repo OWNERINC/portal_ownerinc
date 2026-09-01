@@ -30,6 +30,7 @@ test('Cards Pós exposes independent Guest and Owner modules', () => {
   assert.match(app, /convite_owner/);
   assert.match(app, /function switchModule/);
   assert.match(app, /function renderOwner/);
+  assert.match(app, /previewLabel.*316.*192/);
 });
 
 test('editor and history retain the source field and view contract', () => {
