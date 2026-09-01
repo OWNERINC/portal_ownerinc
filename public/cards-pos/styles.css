@@ -100,7 +100,7 @@
 .benefit-box h3 { margin: 0 0 17px; color: #a99b85; overflow-wrap: anywhere; word-break: break-word; font-size: clamp(14px, 2vw, 21px); line-height: 1.15; }
 .benefit-box p, .benefit-box .rich-copy { margin-bottom: 19px; }
 .benefit-box p:last-child, .benefit-box .rich-copy:last-child { margin-bottom: 0; }
-.address-line { margin: 3.7% 0 0; text-align: center !important; font-size: clamp(10px, 1.5vw, 15px) !important; line-height: 1.2 !important; white-space: nowrap; }
+.address-line { margin: 3.7% 0 0; text-align: left !important; font-size: clamp(10px, 1.5vw, 15px) !important; line-height: 1.2 !important; white-space: nowrap; }
 .address-line strong { font-weight: 700; }
 .address-line span { font-weight: 400; }
 .guest-card .address-line { color: #171717; }

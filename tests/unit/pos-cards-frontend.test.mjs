@@ -123,6 +123,7 @@ test('Figma frames keep their proportions, address, photos, and editable phone f
   assert.match(css, /border-radius: 10% \/ 20%/);
   assert.match(css, /border-radius: 10% \/ 28%/);
   assert.match(css, /\.address-line \{[^}]*white-space: nowrap/);
+  assert.match(css, /\.address-line \{[^}]*text-align: left !important/);
   assert.match(css, /\.address-line span \{ font-weight: 400; \}/);
   assert.doesNotMatch(app, /replaceFooterWithAsset/);
 });
