@@ -86,6 +86,7 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(app, /ownerinc-logo-footer\.png/);
   assert.match(css, /footer-bar\.png/);
   assert.match(css, /width: 16\.3%/);
+  assert.match(css, /\.card-footer\.owner-footer .*background-image: url\('\.\/assets\/owner\/footer-bar\.png'\)/);
   assert.match(css, /font-family: ['"]Raleway['"]/);
   assert.match(css, /@page owner-page/);
   assert.match(css, /height: 2180px/);
