@@ -4,24 +4,25 @@ import { requirePosCards } from './guard.js';
 const $ = (id) => document.getElementById(id);
 const guestDefaults = {
   heroTitle: 'Este é um convite', heroEmphasis: 'para viver o seu tempo', heroBrand: 'Owntime',
-  greeting: 'Você é nosso convidado para viver uma experiência Owntime Home Club Gramado:',
-  stayInfo: 'Hospedagem para xx pessoas\nDe xx/xx a xx/xx\nUnidade: flat/casa | xx hóspedes',
+  greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
+  stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx',
   experienceTitle: 'Sua experiência inclui:',
   experienceBody: 'Hospedagem com acesso aos espaços de lazer de uso comum disponíveis no Club House Owntime.',
-  foodInfo: 'Café da manhã para xx pessoas.\nRestaurante Tempo | 7h às 11h',
   consumptionTitle: 'Consumos da hospedagem:',
-  consumptionBody: 'Água, energia elétrica, gás e demais consumos relacionados à estadia serão tratados conforme a condição indicada acima.',
+  consumptionBody: 'Água, energia elétrica, gás e demais consumos relacionados à estadia.',
+  notIncludedTitle: 'O que não está incluso:',
+  notIncludedBody: 'Alimentação, bebidas e serviços on demand serão cobrados à parte.',
   afterStay: 'Como parte da experiência, após a estadia, o presenteado deverá preencher a pesquisa de satisfação pós-estada, compartilhando sua percepção sobre a hospedagem e contribuindo para o aprimoramento contínuo da experiência Owntime.',
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
-  contact: 'CENTRAL DE RELACIONAMENTO\n54 3421 9988  |  contato@ownerinc.com.br',
+  contact: '54 3421 9988',
 };
 const ownerDefaults = {
-  heroTitle: 'Este é um convite',
-  heroEmphasis: 'para viver o seu tempo',
+  heroTitle: 'Confirmação de',
+  heroEmphasis: 'reserva',
   heroBrand: 'Owntime',
   recipientName: 'Fulano da Silva Santos',
-  greeting: 'Você é nosso convidado para viver uma experiência Owntime Home Club Gramado:',
-  stayInfo: 'Hospedagem para xx pessoas\nDe xx/xx a xx/xx\nUnidade: flat/casa | xx hóspedes',
+  greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
+  stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx\nCortesia: um almoço.',
   experienceTitle: 'Sua experiência inclui:',
   experienceBody: 'Hospedagem com acesso aos espaços de lazer de uso comum disponíveis no Club House Owntime.',
   includedConsumptionTitle: 'Consumos da hospedagem:',
@@ -59,8 +60,11 @@ const ownerDefaults = {
   carWashTitle: 'Car Wash',
   carWashBody: 'Estética e lavagem automotiva sem precisar sair do condomínio.',
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
-  contact: 'CENTRAL DE RELACIONAMENTO\n54 3421 9988  |  contato@ownerinc.com.br',
+  contact: '54 3421 9988',
 };
+const GUEST_COVER_ASSET = './cards-pos/assets/guest/guest-cover.jpg';
+const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
+const ADDRESS_TEXT = 'Como chegar: Rua João XXIII, 222, Centro - Gramado';
 const FOOTER_ASSET = './cards-pos/assets/footer.svg';
 let current = {
   template: 'convite_owntime',
@@ -147,34 +151,36 @@ function setStatus(message, error = false) {
   status.classList.toggle('is-error', error);
 }
 
+function phoneFromContact(value) {
+  const source = value && typeof value === 'object' && value[RICH_VALUE] ? value.value : value;
+  const text = String(source ?? '').trim();
+  const match = text.match(/(?:\+\d{1,3}\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/);
+  return (match?.[0] || text.replace(/[^\d+().\s-]/g, '')).trim().slice(0, 24);
+}
+
+function renderFooter(v) {
+  return `<footer class="card-footer"><img class="footer-art" src="${FOOTER_ASSET}" alt="Ownerinc"><span class="footer-phone-backdrop" aria-hidden="true"></span><span class="footer-phone-editable">${esc(phoneFromContact(v.contact))}</span></footer>`;
+}
+
+function renderAddress() {
+  return `<p class="address-line">${ADDRESS_TEXT}</p>`;
+}
+
 function renderGuest(v) {
-  const media = current.mediaUrl ? `<img class="hero-image" src="${esc(current.mediaUrl)}" alt="">` : '';
-  return `<section class="hero">${media}<div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy">${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo)}<div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}${richCopy(v.foodInfo)}<h3>${esc(v.consumptionTitle)}</h3>${richCopy(v.consumptionBody)}</div>${richCopy(v.afterStay, 'closing')}${richCopy(v.conditions)}</div></section><footer class="card-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="owntime-logo" src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime Home Club Gramado"><span class="footer-divider"></span><img class="ownerinc-logo" src="./cards-pos/assets/ownerinc-logo-white.png" alt="Ownerinc"></div></footer>`;
+  const media = current.mediaUrl || GUEST_COVER_ASSET;
+  const notIncludedBody = v.notIncludedBody || v.foodInfo;
+  return `<section class="hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy">${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo, 'stay-info')}<div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}<div class="inline-copy"><strong>${esc(v.consumptionTitle)}</strong> ${esc(v.consumptionBody)}</div><h3>${esc(v.notIncludedTitle)}</h3>${richCopy(notIncludedBody)}</div>${renderAddress()}</div></section>${renderFooter(v)}`;
 }
 
 function renderOwnerTemplate(v) {
-  const media = current.mediaUrl || './cards-pos/assets/owner/owner-cover.png';
+  const media = current.mediaUrl || OWNER_COVER_ASSET;
   const icon = (name, label = '') => `<img class="owner-icon" src="./cards-pos/assets/owner/${name}" alt="${label}">`;
-  const service = (iconName, title, body) => `<div class="owner-service">${icon(iconName)}<p><strong>${esc(title)}:</strong> ${esc(body)}</p></div>`;
-  const heroBrand = `<div class="hero-brand">${esc(v.heroBrand)}</div>`;
-  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2>${heroBrand}</div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><p class="owner-recipient">Olá, ${esc(v.recipientName)}</p><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box owner-benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><p><strong>${esc(v.includedConsumptionTitle)}</strong> ${esc(v.includedConsumptionBody)}</p><h3>${esc(v.notIncludedTitle)}</h3><p>${esc(v.notIncludedBody)}</p></div><section class="owner-included"><p>${esc(v.includedIntro)}</p><h3>${esc(v.includedTitle)}</h3>${service('icon-cleaning.svg', v.cleaningTitle, v.cleaningBody)}${service('icon-support.svg', v.supportTitle, v.supportBody)}${service('icon-security.svg', v.securityTitle, v.securityBody)}</section><section class="owner-consumption"><h3>${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>${esc(v.gasTitle)}</strong><p>${esc(v.gasInfo)}</p></div><div><strong>${esc(v.waterTitle)}</strong><p>${esc(v.waterInfo)}</p></div><div><strong>${esc(v.energyTitle)}</strong><p>${esc(v.energyInfo)}</p></div></div></section><div class="owner-pet">${icon('icon-pet.svg')}<p><strong>${esc(v.petTitle)}:</strong> ${esc(v.petBody)}</p></div><section class="owner-services"><p>${esc(v.servicesIntro)}</p>${service('icon-food.svg', v.gastronomyTitle, v.gastronomyBody)}${service('icon-chef.svg', v.chefTitle, v.chefBody)}${service('icon-cleaning-extra.svg', v.extraCleaningTitle, v.extraCleaningBody)}${service('icon-trainer.svg', v.trainerTitle, v.trainerBody)}${service('icon-babysitter.svg', v.babysitterTitle, v.babysitterBody)}${service('icon-car.svg', v.carWashTitle, v.carWashBody)}</section></div></section><footer class="card-footer owner-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="ownerinc-logo" src="./cards-pos/assets/owner/ownerinc-logo-footer.png" alt="Ownerinc"></div></footer>`;
+  const service = (iconName, title, body) => `<div class="owner-service">${icon(iconName)}<div class="owner-service-copy"><strong>${esc(title)}:</strong> ${esc(body)}</div></div>`;
+  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><div class="owner-recipient">Olá, ${esc(v.recipientName)}</div>${richCopy(v.greeting, 'greeting')}<div class="owner-stay-box">${richCopy(v.stayInfo)}</div>${renderAddress()}<section class="owner-included">${richCopy(v.includedIntro)}<h3>${esc(v.includedTitle)}</h3>${service('icon-cleaning.svg', v.cleaningTitle, v.cleaningBody)}${service('icon-support.svg', v.supportTitle, v.supportBody)}${service('icon-security.svg', v.securityTitle, v.securityBody)}</section><section class="owner-consumption"><h3>${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>${esc(v.gasTitle)}</strong>${richCopy(v.gasInfo)}</div><div><strong>${esc(v.waterTitle)}</strong>${richCopy(v.waterInfo)}</div><div><strong>${esc(v.energyTitle)}</strong>${richCopy(v.energyInfo)}</div></div></section><div class="owner-pet">${icon('icon-pet.svg')}<div class="owner-pet-copy"><strong>${esc(v.petTitle)}:</strong> ${esc(v.petBody)}</div></div><section class="owner-services">${richCopy(v.servicesIntro)}${service('icon-food.svg', v.gastronomyTitle, v.gastronomyBody)}${service('icon-chef.svg', v.chefTitle, v.chefBody)}${service('icon-cleaning-extra.svg', v.extraCleaningTitle, v.extraCleaningBody)}${service('icon-trainer.svg', v.trainerTitle, v.trainerBody)}${service('icon-babysitter.svg', v.babysitterTitle, v.babysitterBody)}${service('icon-car.svg', v.carWashTitle, v.carWashBody)}</section></div></section>${renderFooter(v)}`;
 }
 
 function renderOwner(v) {
-  return renderOwnerTemplate(v)
-    .replace(/<p class="([^"]+)">/g, '<div class="rich-copy $1">')
-    .replace(/<p>/g, '<div class="rich-copy">')
-    .replace(/<\/p>/g, '</div>');
-}
-
-function replaceFooterWithAsset(card) {
-  const footer = card.querySelector('.card-footer');
-  if (!footer) return;
-  const image = document.createElement('img');
-  image.className = 'footer-art';
-  image.src = FOOTER_ASSET;
-  image.alt = 'Rodape Ownerinc e Owntime Home Club Gramado';
-  footer.replaceChildren(image);
+  return renderOwnerTemplate(v);
 }
 
 function render() {
@@ -183,7 +189,6 @@ function render() {
   const card = $('cardCanvas');
   card.className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
   card.innerHTML = owner ? renderOwner(values) : renderGuest(values);
-  replaceFooterWithAsset(card);
   requestAnimationFrame(fitCardBody);
 }
 
@@ -193,8 +198,9 @@ function fitCardBody() {
   if (!body || !copy) return;
   copy.style.transform = 'none';
   copy.style.width = '100%';
-  if (current.template !== 'convite_owner') return;
-  const scale = Math.min(1, body.clientHeight / copy.scrollHeight);
+  const styles = getComputedStyle(body);
+  const available = body.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom);
+  const scale = Math.min(1, available / copy.scrollHeight);
   if (scale < 1) {
     copy.style.transform = `scale(${scale})`;
     copy.style.width = `${100 / scale}%`;
@@ -203,16 +209,7 @@ function fitCardBody() {
 
 function preparePrint() {
   document.body.classList.toggle('printing-owner', current.template === 'convite_owner');
-  const body = document.querySelector('.card-body');
-  const copy = document.querySelector('.card-copy');
-  if (!body || !copy) return;
-  copy.style.transform = 'none';
-  copy.style.width = '100%';
-  const scale = Math.min(1, body.clientHeight / copy.scrollHeight);
-  if (scale < 1) {
-    copy.style.transform = `scale(${scale})`;
-    copy.style.width = `${100 / scale}%`;
-  }
+  fitCardBody();
 }
 
 function activeValues() {
@@ -349,12 +346,16 @@ function createRichToolbar() {
 function loadValues(values = {}, template = current.template) {
   const owner = template === 'convite_owner';
   if (owner) current.ownerValues = { ...ownerDefaults, ...values };
-  else current.values = { ...guestDefaults, ...values };
+  else {
+    current.values = { ...guestDefaults, ...values };
+    if (!Object.prototype.hasOwnProperty.call(values, 'notIncludedBody') && values.foodInfo) current.values.notIncludedBody = values.foodInfo;
+  }
   const source = owner ? current.ownerValues : current.values;
   const attribute = owner ? 'data-owner-field' : 'data-field';
   for (const field of document.querySelectorAll(`[${attribute}]`)) {
     const name = field.getAttribute(attribute);
-    source[name] = setRichFieldValue(field, source[name]);
+    const value = name === 'contact' ? phoneFromContact(source[name]) : source[name];
+    source[name] = setRichFieldValue(field, value);
   }
   render();
 }
@@ -368,7 +369,7 @@ function updateModuleControls() {
   });
   $('guestFields').classList.toggle('hidden', owner);
   $('ownerFields').classList.toggle('hidden', !owner);
-  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? 350 : 192} mm`;
+  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? '290,6' : '175,1'} mm`;
   $('moduleTitle').textContent = owner ? 'Convite para Owners' : 'Convite para convidados';
   $('moduleDescription').textContent = owner
     ? 'Edite os textos da experiência Owner, revise o frame e exporte o convite.'

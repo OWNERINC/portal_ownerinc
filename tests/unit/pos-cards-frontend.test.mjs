@@ -20,7 +20,8 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
   for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
-  for (const asset of ['owner-cover.png', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
+  await access('public/cards-pos/assets/guest/guest-cover.jpg');
+  for (const asset of ['owner-cover.jpg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
   assert.match(footer, /width="1448" height="307" viewBox="0 0 1448 307"/);
 });
 
@@ -32,11 +33,11 @@ test('Cards Pós exposes independent Guest and Owner modules', () => {
   assert.match(app, /convite_owner/);
   assert.match(app, /function switchModule/);
   assert.match(app, /function renderOwner/);
-  assert.match(app, /previewLabel.*350.*192/);
+  assert.match(app, /previewLabel.*290,6.*175,1/);
 });
 
 test('editor and history retain the source field and view contract', () => {
-  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'greeting', 'stayInfo', 'experienceTitle', 'experienceBody', 'foodInfo', 'consumptionTitle', 'consumptionBody', 'afterStay', 'conditions', 'contact']) {
+  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'greeting', 'stayInfo', 'experienceTitle', 'experienceBody', 'consumptionTitle', 'consumptionBody', 'notIncludedBody', 'contact']) {
     assert.match(html, new RegExp(`data-field="${field}"`));
     assert.match(app, new RegExp(field));
   }
@@ -45,7 +46,7 @@ test('editor and history retain the source field and view contract', () => {
   assert.match(html, /data-view="history"/);
   assert.match(app, /duplicate/);
   assert.match(app, /method: 'DELETE'/);
-  for (const field of ['recipientName', 'includedConsumptionTitle', 'includedConsumptionBody', 'notIncludedTitle', 'notIncludedBody', 'includedIntro', 'includedTitle', 'cleaningTitle', 'cleaningBody', 'supportTitle', 'supportBody', 'securityTitle', 'securityBody', 'consumptionTitle', 'gasTitle', 'gasInfo', 'waterTitle', 'waterInfo', 'energyTitle', 'energyInfo', 'petTitle', 'petBody', 'servicesIntro', 'gastronomyTitle', 'gastronomyBody', 'chefTitle', 'chefBody', 'extraCleaningTitle', 'extraCleaningBody', 'trainerTitle', 'trainerBody', 'babysitterTitle', 'babysitterBody', 'carWashTitle', 'carWashBody']) {
+  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'recipientName', 'greeting', 'stayInfo', 'includedIntro', 'includedTitle', 'cleaningTitle', 'cleaningBody', 'supportTitle', 'supportBody', 'securityTitle', 'securityBody', 'consumptionTitle', 'gasTitle', 'gasInfo', 'waterTitle', 'waterInfo', 'energyTitle', 'energyInfo', 'petTitle', 'petBody', 'servicesIntro', 'gastronomyTitle', 'gastronomyBody', 'chefTitle', 'chefBody', 'extraCleaningTitle', 'extraCleaningBody', 'trainerTitle', 'trainerBody', 'babysitterTitle', 'babysitterBody', 'carWashTitle', 'carWashBody', 'contact']) {
     assert.match(html, new RegExp(`data-owner-field="${field}"`));
     assert.match(app, new RegExp(field));
   }
@@ -81,23 +82,39 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(app, /innerHTML = .*esc\(/s);
   for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.match(app, new RegExp(type.replace('/', '\\/')));
   assert.match(app, /value < 500/);
-  assert.match(app, /FOOTER_ASSET/);
-  assert.match(app, /replaceFooterWithAsset/);
-  assert.match(app, /footer-art/);
+  assert.match(app, /GUEST_COVER_ASSET|OWNER_COVER_ASSET/);
+  assert.match(app, /function renderFooter/);
+  assert.match(app, /footer-phone-editable/);
+  assert.match(app, /address-line/);
   assert.match(css, /background: #e9e6de/);
-  assert.match(app, /owner-cover\.png/);
-  assert.match(css, /\.footer-art \{/);
-  assert.match(css, /grid-template-rows: 17% minmax\(0, 1fr\) auto/);
-  assert.match(css, /grid-template-rows: 27% minmax\(0, 1fr\) auto/);
+  assert.match(app, /guest-cover\.jpg/);
+  assert.match(app, /owner-cover\.jpg/);
+  assert.match(css, /aspect-ratio: 1448 \/ 2347/);
+  assert.match(css, /aspect-ratio: 1448 \/ 3896/);
+  assert.match(css, /grid-template-rows: 18\.43% minmax\(0, 1fr\) 7\.88%/);
+  assert.match(css, /grid-template-rows: 30\.59% minmax\(0, 1fr\) 13\.08%/);
   assert.match(css, /font-family: ['"]Raleway['"]/);
   assert.match(css, /@page owner-page/);
-  assert.match(css, /height: 2180px/);
-  assert.match(css, /height: 250vw/);
-  assert.match(css, /height: 294vw/);
-  assert.match(css, /@page owner-page \{ size: 108mm 350mm/);
+  assert.match(css, /@page owner-page \{ size: 108mm 290\.6mm/);
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
-  assert.match(css, /@page \{ size: 108mm 192mm/);
+  assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
+  assert.match(app, /const available = body\.clientHeight - parseFloat\(styles\.paddingTop\) - parseFloat\(styles\.paddingBottom\)/);
+  assert.doesNotMatch(app, /current\.template !== 'convite_owner'\) return/);
+  assert.match(app, /text\.replace\(\/\[\^\\d\+\(\)\.\\s-\]\//);
+});
+
+test('Figma frames keep their proportions, address, photos, and editable phone footer', () => {
+  assert.match(app, /const ADDRESS_TEXT = 'Como chegar: Rua João XXIII, 222, Centro - Gramado'/);
+  assert.match(app, /function renderAddress/);
+  assert.match(app, /renderAddress\(\)/g);
+  assert.match(app, /FOOTER_ASSET/);
+  assert.match(app, /footer-phone-editable.*phoneFromContact/);
+  assert.match(app, /current\.mediaUrl \|\| (?:GUEST|OWNER)_COVER_ASSET/);
+  assert.match(html, /Telefone/);
+  assert.match(css, /\.footer-phone-backdrop/);
+  assert.match(css, /\.footer-phone-editable/);
+  assert.doesNotMatch(app, /replaceFooterWithAsset/);
 });
 
 test('rich text fields expose a native toolbar and a strict HTML allowlist', () => {
