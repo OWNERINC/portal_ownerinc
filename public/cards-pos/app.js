@@ -19,21 +19,45 @@ const ownerDefaults = {
   heroTitle: 'Este é um convite',
   heroEmphasis: 'para viver o seu tempo',
   heroBrand: 'Owntime',
-  recipientName: 'Nome do Owner',
-  greeting: 'Olá, Owner.\nVocê faz parte desta experiência Owntime Home Club Gramado.',
+  recipientName: 'Fulano da Silva Santos',
+  greeting: 'Você é nosso convidado para viver uma experiência Owntime Home Club Gramado:',
   stayInfo: 'Hospedagem para xx pessoas\nDe xx/xx a xx/xx\nUnidade: flat/casa | xx hóspedes',
   experienceTitle: 'Sua experiência inclui:',
   experienceBody: 'Hospedagem com acesso aos espaços de lazer de uso comum disponíveis no Club House Owntime.',
+  includedConsumptionTitle: 'Consumos da hospedagem:',
+  includedConsumptionBody: 'Água, energia elétrica, gás e demais consumos relacionados à estadia.',
   notIncludedTitle: 'O que não está incluso:',
-  notIncludedBody: 'Itens e serviços não descritos neste convite serão tratados conforme as condições de utilização.',
-  consumptionTitle: 'O que é pago (consumo individual):',
-  gasInfo: 'Conforme consumo',
-  waterInfo: 'Conforme consumo',
-  energyInfo: 'Conforme consumo',
-  accommodationTitle: 'Hospedagem',
-  accommodationBody: 'Utilize os espaços e serviços disponíveis durante o período da sua estadia.',
-  servicesTitle: 'Serviços incluídos',
-  servicesBody: 'Consulte a disponibilidade dos serviços e espaços do empreendimento.',
+  notIncludedBody: 'Alimentação, bebidas e serviços on demand serão cobrados à parte.',
+  includedIntro: 'Para que sua estada seja a mais confortável e transparente possível, alinhamos abaixo os serviços que já estão inclusos na sua hospedagem e as despesas que são contabilizadas à parte.',
+  includedTitle: 'O que já está INCLUSO na sua estadia:',
+  cleaningTitle: 'Serviço de Limpeza',
+  cleaningBody: 'Você tem direito a 1 limpeza completa com troca de enxoval durante o período. Para utilizá-la, basta fazer o agendamento com 24h de antecedência na recepção.',
+  supportTitle: 'Equipe de Apoio',
+  supportBody: 'Nossos Anfitriões e Mensageiros/Manobristas estão prontos para ajudar você no que for preciso.',
+  securityTitle: 'Segurança e Praticidade',
+  securityBody: 'Serviço de portaria 24h à sua disposição para total tranquilidade.',
+  consumptionTitle: 'O que é PAGO (Consumo individual):',
+  gasTitle: 'GÁS (GLP)',
+  gasInfo: 'Aquecimento de Água\n\nLareiras a Gás;\n\nFogão / Cooktop;\n\nAquecimento de Piso e calefação.',
+  waterTitle: 'ÁGUA',
+  waterInfo: 'Chuveiros de Alta Vazão e Banheiras/Spas;\n\nTorneiras;\n\nEletrodomésticos da Cozinha;',
+  energyTitle: 'ENERGIA ELÉTRICA',
+  energyInfo: 'Ar-Condicionado;\n\nToalheiros Aquecidos\n\nEletrodomésticos e Gourmet;\n\nIluminação.',
+  petTitle: 'Hospedagem Pet',
+  petBody: 'sujeito à cobrança diária de R$ 85,00 por animal.',
+  servicesIntro: 'Solicite à recepção ou ao seu concierge durante a estadia (valores sob consulta):',
+  gastronomyTitle: 'Gastronomia',
+  gastronomyBody: 'Restaurante, Bar, Coffee Shop e Café da Manhã.',
+  chefTitle: 'Chef em Casa',
+  chefBody: 'Experiência culinária privativa na sua unidade.',
+  extraCleaningTitle: 'Limpeza Adicional',
+  extraCleaningBody: 'Serviços extras de faxina ou troca de enxoval.',
+  trainerTitle: 'Personal Trainer',
+  trainerBody: 'Acompanhamento profissional exclusivo no fitness center.',
+  babysitterTitle: 'Babysitter & Pet Care',
+  babysitterBody: 'Cuidados dedicados para seus filhos ou seu pet.',
+  carWashTitle: 'Car Wash',
+  carWashBody: 'Estética e lavagem automotiva sem precisar sair do condomínio.',
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
   contact: 'CENTRAL DE RELACIONAMENTO\n54 3421 9988  |  contato@ownerinc.com.br',
 };
@@ -68,24 +92,37 @@ function renderGuest(v) {
 }
 
 function renderOwner(v) {
-  const media = current.mediaUrl ? `<img class="hero-image" src="${esc(current.mediaUrl)}" alt="">` : '';
-  return `<section class="hero owner-hero">${media}<div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><p class="owner-recipient">Olá, ${esc(v.recipientName)}</p><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box owner-benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><h3>${esc(v.notIncludedTitle)}</h3><p>${esc(v.notIncludedBody)}</p></div><h3 class="owner-section-title">${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>GÁS</strong><p>${esc(v.gasInfo)}</p></div><div><strong>ÁGUA</strong><p>${esc(v.waterInfo)}</p></div><div><strong>ENERGIA ELÉTRICA</strong><p>${esc(v.energyInfo)}</p></div></div><div class="owner-section"><h3>${esc(v.accommodationTitle)}</h3><p>${esc(v.accommodationBody)}</p></div><div class="owner-section"><h3>${esc(v.servicesTitle)}</h3><p>${esc(v.servicesBody)}</p></div><p>${esc(v.conditions)}</p></div></section><footer class="card-footer owner-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="ownerinc-logo" src="./cards-pos/assets/ownerinc-logo-white.png" alt="Ownerinc"><span class="footer-divider"></span><img class="casa-logo" src="./cards-pos/assets/casa-logo-white.svg" alt="Casa"></div></footer>`;
+  const media = current.mediaUrl || './cards-pos/assets/owner/owner-cover.png';
+  const icon = (name, label = '') => `<img class="owner-icon" src="./cards-pos/assets/owner/${name}" alt="${label}">`;
+  const service = (iconName, title, body) => `<div class="owner-service">${icon(iconName)}<p><strong>${esc(title)}:</strong> ${esc(body)}</p></div>`;
+  const heroBrand = `<div class="hero-brand">${esc(v.heroBrand)}</div>`;
+  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2>${heroBrand}</div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><p class="owner-recipient">Olá, ${esc(v.recipientName)}</p><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box owner-benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><p><strong>${esc(v.includedConsumptionTitle)}</strong> ${esc(v.includedConsumptionBody)}</p><h3>${esc(v.notIncludedTitle)}</h3><p>${esc(v.notIncludedBody)}</p></div><section class="owner-included"><p>${esc(v.includedIntro)}</p><h3>${esc(v.includedTitle)}</h3>${service('icon-cleaning.svg', v.cleaningTitle, v.cleaningBody)}${service('icon-support.svg', v.supportTitle, v.supportBody)}${service('icon-security.svg', v.securityTitle, v.securityBody)}</section><section class="owner-consumption"><h3>${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>${esc(v.gasTitle)}</strong><p>${esc(v.gasInfo)}</p></div><div><strong>${esc(v.waterTitle)}</strong><p>${esc(v.waterInfo)}</p></div><div><strong>${esc(v.energyTitle)}</strong><p>${esc(v.energyInfo)}</p></div></div></section><div class="owner-pet">${icon('icon-pet.svg')}<p><strong>${esc(v.petTitle)}:</strong> ${esc(v.petBody)}</p></div><section class="owner-services"><p>${esc(v.servicesIntro)}</p>${service('icon-food.svg', v.gastronomyTitle, v.gastronomyBody)}${service('icon-chef.svg', v.chefTitle, v.chefBody)}${service('icon-cleaning-extra.svg', v.extraCleaningTitle, v.extraCleaningBody)}${service('icon-trainer.svg', v.trainerTitle, v.trainerBody)}${service('icon-babysitter.svg', v.babysitterTitle, v.babysitterBody)}${service('icon-car.svg', v.carWashTitle, v.carWashBody)}</section></div></section><footer class="card-footer owner-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="ownerinc-logo" src="./cards-pos/assets/owner/ownerinc-logo.svg" alt="Ownerinc"></div></footer>`;
 }
 
 function render() {
-  const values = current.template === 'convite_owner' ? current.ownerValues : current.values;
-  $('cardCanvas').innerHTML = current.template === 'convite_owner' ? renderOwner(values) : renderGuest(values);
+  const owner = current.template === 'convite_owner';
+  const values = owner ? current.ownerValues : current.values;
+  $('cardCanvas').className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
+  $('cardCanvas').innerHTML = owner ? renderOwner(values) : renderGuest(values);
   requestAnimationFrame(fitCardBody);
 }
 
 function fitCardBody() {
+  const body = document.querySelector('.card-body');
   const copy = document.querySelector('.card-copy');
-  if (!copy) return;
+  if (!body || !copy) return;
   copy.style.transform = 'none';
   copy.style.width = '100%';
+  if (current.template !== 'convite_owner') return;
+  const scale = Math.min(1, body.clientHeight / copy.scrollHeight);
+  if (scale < 1) {
+    copy.style.transform = `scale(${scale})`;
+    copy.style.width = `${100 / scale}%`;
+  }
 }
 
 function preparePrint() {
+  document.body.classList.toggle('printing-owner', current.template === 'convite_owner');
   const body = document.querySelector('.card-body');
   const copy = document.querySelector('.card-copy');
   if (!body || !copy) return;
@@ -352,7 +389,7 @@ function init() {
 document.fonts?.ready?.then(fitCardBody);
 window.addEventListener('resize', fitCardBody);
 window.addEventListener('beforeprint', preparePrint);
-  window.addEventListener('afterprint', fitCardBody);
+  window.addEventListener('afterprint', () => { document.body.classList.remove('printing-owner'); fitCardBody(); });
 
 if (await requirePosCards()) {
   updateModuleControls();

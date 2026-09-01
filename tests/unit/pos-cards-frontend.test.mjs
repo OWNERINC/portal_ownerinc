@@ -19,6 +19,7 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
   for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
+  for (const asset of ['owner-cover.png', 'ownerinc-logo.svg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
 });
 
 test('Cards Pós exposes independent Guest and Owner modules', () => {
@@ -41,7 +42,7 @@ test('editor and history retain the source field and view contract', () => {
   assert.match(html, /data-view="history"/);
   assert.match(app, /duplicate/);
   assert.match(app, /method: 'DELETE'/);
-  for (const field of ['recipientName', 'notIncludedTitle', 'notIncludedBody', 'gasInfo', 'waterInfo', 'energyInfo', 'accommodationTitle', 'accommodationBody', 'servicesTitle', 'servicesBody']) {
+  for (const field of ['recipientName', 'includedConsumptionTitle', 'includedConsumptionBody', 'notIncludedTitle', 'notIncludedBody', 'includedIntro', 'includedTitle', 'cleaningTitle', 'cleaningBody', 'supportTitle', 'supportBody', 'securityTitle', 'securityBody', 'consumptionTitle', 'gasTitle', 'gasInfo', 'waterTitle', 'waterInfo', 'energyTitle', 'energyInfo', 'petTitle', 'petBody', 'servicesIntro', 'gastronomyTitle', 'gastronomyBody', 'chefTitle', 'chefBody', 'extraCleaningTitle', 'extraCleaningBody', 'trainerTitle', 'trainerBody', 'babysitterTitle', 'babysitterBody', 'carWashTitle', 'carWashBody']) {
     assert.match(html, new RegExp(`data-owner-field="${field}"`));
     assert.match(app, new RegExp(field));
   }
@@ -78,9 +79,12 @@ test('preview escapes user values, validates image uploads, and preserves print 
   for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.match(app, new RegExp(type.replace('/', '\\/')));
   assert.match(app, /value < 500/);
   for (const logo of ['owntime-logo-white.webp', 'ownerinc-logo-white.png']) assert.match(app, new RegExp(logo.replace('.', '\\.')));
-  assert.match(app, /casa-logo-white\.svg/);
-  assert.match(app, /Casa/);
+  assert.match(app, /ownerinc-logo\.svg/);
   assert.match(css, /background: #e9e6de/);
+  assert.match(app, /owner-cover\.png/);
+  assert.match(app, /ownerinc-logo\.svg/);
+  assert.match(css, /font-family: ['"]Raleway['"]/);
+  assert.match(css, /@page owner-page/);
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
   assert.match(css, /@page \{ size: 108mm 192mm/);
