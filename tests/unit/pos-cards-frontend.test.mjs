@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [html, app, guard, css, sidebar] = await Promise.all([
+const [html, app, guard, css, sidebar, footer] = await Promise.all([
   readFile('public/cards-pos.html', 'utf8'),
   readFile('public/cards-pos/app.js', 'utf8'),
   readFile('public/cards-pos/guard.js', 'utf8'),
   readFile('public/cards-pos/styles.css', 'utf8'),
   readFile('public/js/sidebar.js', 'utf8'),
+  readFile('public/cards-pos/assets/footer.svg', 'utf8'),
 ]);
 
 test('Cards Pós uses the authenticated Portal shell and local module assets', async () => {
@@ -19,7 +20,8 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
   for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
-  for (const asset of ['owner-cover.png', 'footer-bar.png', 'ownerinc-logo-footer.png', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
+  for (const asset of ['owner-cover.png', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
+  assert.match(footer, /width="1448" height="307" viewBox="0 0 1448 307"/);
 });
 
 test('Cards Pós exposes independent Guest and Owner modules', () => {
@@ -79,14 +81,14 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(app, /innerHTML = .*esc\(/s);
   for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.match(app, new RegExp(type.replace('/', '\\/')));
   assert.match(app, /value < 500/);
-  for (const logo of ['owntime-logo-white.webp', 'ownerinc-logo-white.png']) assert.match(app, new RegExp(logo.replace('.', '\\.')));
-  assert.match(app, /ownerinc-logo-footer\.png/);
+  assert.match(app, /FOOTER_ASSET/);
+  assert.match(app, /replaceFooterWithAsset/);
+  assert.match(app, /footer-art/);
   assert.match(css, /background: #e9e6de/);
   assert.match(app, /owner-cover\.png/);
-  assert.match(app, /ownerinc-logo-footer\.png/);
-  assert.match(css, /footer-bar\.png/);
-  assert.match(css, /width: 16\.3%/);
-  assert.match(css, /\.card-footer\.owner-footer .*background-image: url\('\.\/assets\/owner\/footer-bar\.png'\)/);
+  assert.match(css, /\.footer-art \{/);
+  assert.match(css, /grid-template-rows: 17% minmax\(0, 1fr\) auto/);
+  assert.match(css, /grid-template-rows: 27% minmax\(0, 1fr\) auto/);
   assert.match(css, /font-family: ['"]Raleway['"]/);
   assert.match(css, /@page owner-page/);
   assert.match(css, /height: 2180px/);

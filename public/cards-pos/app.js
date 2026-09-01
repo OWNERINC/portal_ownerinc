@@ -61,6 +61,7 @@ const ownerDefaults = {
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
   contact: 'CENTRAL DE RELACIONAMENTO\n54 3421 9988  |  contato@ownerinc.com.br',
 };
+const FOOTER_ASSET = './cards-pos/assets/footer.svg';
 let current = {
   template: 'convite_owntime',
   values: { ...guestDefaults },
@@ -99,11 +100,23 @@ function renderOwner(v) {
   return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2>${heroBrand}</div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><p class="owner-recipient">Olá, ${esc(v.recipientName)}</p><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box owner-benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><p><strong>${esc(v.includedConsumptionTitle)}</strong> ${esc(v.includedConsumptionBody)}</p><h3>${esc(v.notIncludedTitle)}</h3><p>${esc(v.notIncludedBody)}</p></div><section class="owner-included"><p>${esc(v.includedIntro)}</p><h3>${esc(v.includedTitle)}</h3>${service('icon-cleaning.svg', v.cleaningTitle, v.cleaningBody)}${service('icon-support.svg', v.supportTitle, v.supportBody)}${service('icon-security.svg', v.securityTitle, v.securityBody)}</section><section class="owner-consumption"><h3>${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>${esc(v.gasTitle)}</strong><p>${esc(v.gasInfo)}</p></div><div><strong>${esc(v.waterTitle)}</strong><p>${esc(v.waterInfo)}</p></div><div><strong>${esc(v.energyTitle)}</strong><p>${esc(v.energyInfo)}</p></div></div></section><div class="owner-pet">${icon('icon-pet.svg')}<p><strong>${esc(v.petTitle)}:</strong> ${esc(v.petBody)}</p></div><section class="owner-services"><p>${esc(v.servicesIntro)}</p>${service('icon-food.svg', v.gastronomyTitle, v.gastronomyBody)}${service('icon-chef.svg', v.chefTitle, v.chefBody)}${service('icon-cleaning-extra.svg', v.extraCleaningTitle, v.extraCleaningBody)}${service('icon-trainer.svg', v.trainerTitle, v.trainerBody)}${service('icon-babysitter.svg', v.babysitterTitle, v.babysitterBody)}${service('icon-car.svg', v.carWashTitle, v.carWashBody)}</section></div></section><footer class="card-footer owner-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="ownerinc-logo" src="./cards-pos/assets/owner/ownerinc-logo-footer.png" alt="Ownerinc"></div></footer>`;
 }
 
+function replaceFooterWithAsset(card) {
+  const footer = card.querySelector('.card-footer');
+  if (!footer) return;
+  const image = document.createElement('img');
+  image.className = 'footer-art';
+  image.src = FOOTER_ASSET;
+  image.alt = 'Rodape Ownerinc e Owntime Home Club Gramado';
+  footer.replaceChildren(image);
+}
+
 function render() {
   const owner = current.template === 'convite_owner';
   const values = owner ? current.ownerValues : current.values;
-  $('cardCanvas').className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
-  $('cardCanvas').innerHTML = owner ? renderOwner(values) : renderGuest(values);
+  const card = $('cardCanvas');
+  card.className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
+  card.innerHTML = owner ? renderOwner(values) : renderGuest(values);
+  replaceFooterWithAsset(card);
   requestAnimationFrame(fitCardBody);
 }
 
