@@ -5,7 +5,7 @@ const express = require('express');
 const pool = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { canUsePosCards } = require('../middleware/policy');
-const { normalizeImage } = require('../middleware/validation');
+const { normalizeImage, sanitizeRichValues } = require('../middleware/validation');
 const { forbidden, invalid, parseListQuery, uuid, withAudit } = require('../route-utils');
 
 const router = express.Router();
@@ -47,15 +47,21 @@ function parseCard(body) {
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (name.length < 1 || name.length > 120 || !templates.has(body.template)) return null;
   if (!body.values || typeof body.values !== 'object' || Array.isArray(body.values)) return null;
+  let values;
   let serializedValues;
   try {
-    serializedValues = JSON.stringify(body.values);
+    values = sanitizeRichValues(body.values);
+    serializedValues = JSON.stringify(values);
   } catch {
     return null;
   }
   if (serializedValues.length > 50000) return null;
   if (body.mediaId != null && !uuid(body.mediaId)) return null;
-  return { name, template: body.template, values: body.values, mediaId: body.mediaId || null };
+  return { name, template: body.template, values, mediaId: body.mediaId || null };
+}
+
+function safeCard(card) {
+  return card ? { ...card, values: sanitizeRichValues(card.values) } : card;
 }
 
 async function mediaExists(client, mediaId) {
@@ -108,7 +114,7 @@ router.get('/cards', async (req, res, next) => {
       pool.query(`SELECT COUNT(*)::integer AS total FROM pos_cards ${where}`, values),
     ]);
     res.setHeader('X-Total-Count', count.rows[0].total);
-    return res.json(cards.rows);
+    return res.json(cards.rows.map(safeCard));
   } catch (error) { return next(error); }
 });
 
@@ -128,7 +134,7 @@ router.post('/cards', async (req, res, next) => {
       return rows[0];
     }, { targetId: result => result?.id });
     if (!result) return res.status(404).json({ error: 'Mídia não encontrada.', requestId: req.id });
-    return res.status(201).json(result);
+    return res.status(201).json(safeCard(result));
   } catch (error) { return next(error); }
 });
 
@@ -139,7 +145,7 @@ router.get('/cards/:id', async (req, res, next) => {
       `SELECT id, name, template, "values", media_id AS "mediaId", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM pos_cards WHERE id = $1`, [req.params.id],
     );
-    return rows[0] ? res.json(rows[0]) : res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
+    return rows[0] ? res.json(safeCard(rows[0])) : res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
   } catch (error) { return next(error); }
 });
 
@@ -162,7 +168,7 @@ router.put('/cards/:id', async (req, res, next) => {
     }, { targetId: result => result?.card?.id });
     if (!result) return res.status(404).json({ error: 'Card ou mídia não encontrado.', requestId: req.id });
     if (result.oldMediaId !== result.card.mediaId) await removeMediaIfUnused(result.oldMediaId);
-    return res.json(result.card);
+    return res.json(safeCard(result.card));
   } catch (error) { return next(error); }
 });
 
@@ -171,17 +177,18 @@ router.post('/cards/:id/duplicate', async (req, res, next) => {
   try {
     const result = await withAudit(pool, req, 'pos-cards.card.duplicate', 'pos_card', async (client) => {
       await client.query(`SELECT pg_advisory_xact_lock(${posCardsLock})`);
+      const source = await client.query('SELECT name, template, "values", media_id AS "mediaId" FROM pos_cards WHERE id = $1', [req.params.id]);
+      if (!source.rowCount) return null;
       const { rows } = await client.query(
         `INSERT INTO pos_cards (name, template, "values", media_id, created_by)
-         SELECT LEFT(name || ' v2', 120), template, "values", media_id, $2
-         FROM pos_cards WHERE id = $1
+         VALUES (LEFT($1 || ' v2', 120), $2, $3::jsonb, $4, $5)
          RETURNING id, name, template, "values", media_id AS "mediaId", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
-        [req.params.id, req.user.uid],
+        [source.rows[0].name, source.rows[0].template, JSON.stringify(sanitizeRichValues(source.rows[0].values)), source.rows[0].mediaId, req.user.uid],
       );
       return rows[0] || null;
     }, { targetId: result => result?.id });
     if (!result) return res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
-    return res.status(201).json(result);
+    return res.status(201).json(safeCard(result));
   } catch (error) { return next(error); }
 });
 

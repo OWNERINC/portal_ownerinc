@@ -75,10 +75,70 @@ let historyRequest = 0;
 let historyOffset = 0;
 let mediaOperationToken = 0;
 let activeMediaPromise = null;
+let activeEditor = null;
 const HISTORY_PAGE_SIZE = 50;
+const RICH_VALUE = Symbol('rich-value');
+const RICH_TAGS = new Set(['STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'BR', 'UL', 'OL', 'LI']);
+const RICH_BLOCK_TAGS = new Set(['DIV', 'P']);
+const RICH_BLOCK_COMMANDS = new Set(['insertUnorderedList', 'insertOrderedList']);
+const RICH_TAG_PATTERN = /<!--[\s\S]*?-->|<\/?([a-z][a-z0-9:-]*)(?:\s[^<>]*)?>/gi;
 
 function esc(value) {
+  if (value && typeof value === 'object' && value[RICH_VALUE]) return toRichHtml(value.value);
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
+}
+
+function escapeRichText(value) {
+  return String(value)
+    .replace(/&(?!(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);)/gi, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function sanitizeRichHtml(value) {
+  const source = String(value ?? '');
+  let output = '';
+  let cursor = 0;
+  const openTags = [];
+  for (const match of source.matchAll(RICH_TAG_PATTERN)) {
+    output += escapeRichText(source.slice(cursor, match.index));
+    const tag = match[1]?.toUpperCase();
+    if (tag && RICH_TAGS.has(tag)) {
+      if (tag === 'BR') output += '<br>';
+      else if (match[0].startsWith('</')) {
+        const index = openTags.lastIndexOf(tag);
+        if (index >= 0) {
+          while (openTags.length > index + 1) output += `</${openTags.pop().toLowerCase()}>`;
+          output += `</${openTags.pop().toLowerCase()}>`;
+        }
+      } else {
+        output += `<${tag.toLowerCase()}>`;
+        openTags.push(tag);
+      }
+    } else if (tag && RICH_BLOCK_TAGS.has(tag)) {
+      if (match[0].startsWith('</')) {
+        const remainder = source.slice(match.index + match[0].length);
+        if (remainder.trim() && !/^<(?:div|p|br)\b/i.test(remainder.trim())) output += '<br>';
+      } else if (output && !output.endsWith('<br>')) output += '<br>';
+    }
+    cursor = match.index + match[0].length;
+  }
+  output += escapeRichText(source.slice(cursor));
+  while (openTags.length) output += `</${openTags.pop().toLowerCase()}>`;
+  return output.replace(/(?:<br>)+$/, '<br>');
+}
+
+function toRichHtml(value) {
+  return sanitizeRichHtml(value);
+}
+
+function richValues(values) {
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { [RICH_VALUE]: true, value }]));
+}
+
+function richCopy(value, className = '') {
+  return `<div class="rich-copy${className ? ` ${className}` : ''}">${esc(value)}</div>`;
 }
 
 function setStatus(message, error = false) {
@@ -89,15 +149,22 @@ function setStatus(message, error = false) {
 
 function renderGuest(v) {
   const media = current.mediaUrl ? `<img class="hero-image" src="${esc(current.mediaUrl)}" alt="">` : '';
-  return `<section class="hero">${media}<div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy"><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><p>${esc(v.foodInfo)}</p><h3>${esc(v.consumptionTitle)}</h3><p>${esc(v.consumptionBody)}</p></div><p class="closing">${esc(v.afterStay)}</p><p>${esc(v.conditions)}</p></div></section><footer class="card-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="owntime-logo" src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime Home Club Gramado"><span class="footer-divider"></span><img class="ownerinc-logo" src="./cards-pos/assets/ownerinc-logo-white.png" alt="Ownerinc"></div></footer>`;
+  return `<section class="hero">${media}<div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy">${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo)}<div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}${richCopy(v.foodInfo)}<h3>${esc(v.consumptionTitle)}</h3>${richCopy(v.consumptionBody)}</div>${richCopy(v.afterStay, 'closing')}${richCopy(v.conditions)}</div></section><footer class="card-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="owntime-logo" src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime Home Club Gramado"><span class="footer-divider"></span><img class="ownerinc-logo" src="./cards-pos/assets/ownerinc-logo-white.png" alt="Ownerinc"></div></footer>`;
 }
 
-function renderOwner(v) {
+function renderOwnerTemplate(v) {
   const media = current.mediaUrl || './cards-pos/assets/owner/owner-cover.png';
   const icon = (name, label = '') => `<img class="owner-icon" src="./cards-pos/assets/owner/${name}" alt="${label}">`;
   const service = (iconName, title, body) => `<div class="owner-service">${icon(iconName)}<p><strong>${esc(title)}:</strong> ${esc(body)}</p></div>`;
   const heroBrand = `<div class="hero-brand">${esc(v.heroBrand)}</div>`;
   return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2>${heroBrand}</div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><p class="owner-recipient">Olá, ${esc(v.recipientName)}</p><p class="greeting">${esc(v.greeting)}</p><p>${esc(v.stayInfo)}</p><div class="benefit-box owner-benefit-box"><h3>${esc(v.experienceTitle)}</h3><p>${esc(v.experienceBody)}</p><p><strong>${esc(v.includedConsumptionTitle)}</strong> ${esc(v.includedConsumptionBody)}</p><h3>${esc(v.notIncludedTitle)}</h3><p>${esc(v.notIncludedBody)}</p></div><section class="owner-included"><p>${esc(v.includedIntro)}</p><h3>${esc(v.includedTitle)}</h3>${service('icon-cleaning.svg', v.cleaningTitle, v.cleaningBody)}${service('icon-support.svg', v.supportTitle, v.supportBody)}${service('icon-security.svg', v.securityTitle, v.securityBody)}</section><section class="owner-consumption"><h3>${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>${esc(v.gasTitle)}</strong><p>${esc(v.gasInfo)}</p></div><div><strong>${esc(v.waterTitle)}</strong><p>${esc(v.waterInfo)}</p></div><div><strong>${esc(v.energyTitle)}</strong><p>${esc(v.energyInfo)}</p></div></div></section><div class="owner-pet">${icon('icon-pet.svg')}<p><strong>${esc(v.petTitle)}:</strong> ${esc(v.petBody)}</p></div><section class="owner-services"><p>${esc(v.servicesIntro)}</p>${service('icon-food.svg', v.gastronomyTitle, v.gastronomyBody)}${service('icon-chef.svg', v.chefTitle, v.chefBody)}${service('icon-cleaning-extra.svg', v.extraCleaningTitle, v.extraCleaningBody)}${service('icon-trainer.svg', v.trainerTitle, v.trainerBody)}${service('icon-babysitter.svg', v.babysitterTitle, v.babysitterBody)}${service('icon-car.svg', v.carWashTitle, v.carWashBody)}</section></div></section><footer class="card-footer owner-footer"><div class="contact">${esc(v.contact)}</div><div class="footer-logos"><img class="ownerinc-logo" src="./cards-pos/assets/owner/ownerinc-logo-footer.png" alt="Ownerinc"></div></footer>`;
+}
+
+function renderOwner(v) {
+  return renderOwnerTemplate(v)
+    .replace(/<p class="([^"]+)">/g, '<div class="rich-copy $1">')
+    .replace(/<p>/g, '<div class="rich-copy">')
+    .replace(/<\/p>/g, '</div>');
 }
 
 function replaceFooterWithAsset(card) {
@@ -112,7 +179,7 @@ function replaceFooterWithAsset(card) {
 
 function render() {
   const owner = current.template === 'convite_owner';
-  const values = owner ? current.ownerValues : current.values;
+  const values = richValues(owner ? current.ownerValues : current.values);
   const card = $('cardCanvas');
   card.className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
   card.innerHTML = owner ? renderOwner(values) : renderGuest(values);
@@ -152,6 +219,133 @@ function activeValues() {
   return current.template === 'convite_owner' ? current.ownerValues : current.values;
 }
 
+function richTextLength(value) {
+  const container = document.createElement('div');
+  container.innerHTML = value;
+  return container.textContent.length + container.querySelectorAll('br').length;
+}
+
+function richTextToPlainText(value) {
+  const container = document.createElement('div');
+  container.innerHTML = toRichHtml(value);
+  return container.textContent.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeRichField(field, value) {
+  let html = toRichHtml(value);
+  if (field.getAttribute('aria-multiline') !== 'true') {
+    html = html.replace(/<\/li><li>/g, ' ').replace(/<\/?(?:ul|ol|li)>/g, '').replace(/<br>/g, ' ');
+  }
+  const maxLength = Number(field.dataset.maxlength);
+  if (maxLength && richTextLength(html) > maxLength) {
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    let text = container.textContent.slice(0, maxLength);
+    if (text.length && /[\uD800-\uDBFF]/.test(text[text.length - 1])) text = text.slice(0, -1);
+    container.textContent = text;
+    html = sanitizeRichHtml(container.innerHTML);
+  }
+  return html;
+}
+
+function setRichFieldValue(field, value) {
+  const html = normalizeRichField(field, value);
+  if (field.dataset.richEditor === 'true') field.innerHTML = html;
+  else field.value = value ?? '';
+  return html;
+}
+
+function upgradeRichFields() {
+  for (const field of document.querySelectorAll('[data-field], [data-owner-field]')) {
+    const editor = document.createElement('div');
+    const multiline = field.tagName === 'TEXTAREA';
+    editor.id = field.id;
+    editor.className = `rich-editor${multiline ? ' is-multiline' : ''}`;
+    editor.contentEditable = 'true';
+    editor.dataset.richEditor = 'true';
+    editor.dataset.maxlength = field.maxLength > 0 ? String(field.maxLength) : '';
+    editor.setAttribute('role', 'textbox');
+    editor.setAttribute('aria-multiline', String(multiline));
+    if (field.dataset.field) editor.dataset.field = field.dataset.field;
+    if (field.dataset.ownerField) editor.dataset.ownerField = field.dataset.ownerField;
+    const label = field.closest('label');
+    if (label) {
+      const labelText = [...label.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent).join(' ').trim();
+      if (labelText) editor.setAttribute('aria-label', labelText);
+      label.addEventListener('click', () => editor.focus());
+    }
+    editor.addEventListener('focus', () => { activeEditor = editor; });
+    editor.addEventListener('keydown', (event) => {
+      if (!multiline && event.key === 'Enter') event.preventDefault();
+    });
+    editor.addEventListener('paste', (event) => {
+      event.preventDefault();
+      const pasted = event.clipboardData?.getData('text/html') || event.clipboardData?.getData('text/plain') || '';
+      const html = sanitizeRichHtml(pasted);
+      document.execCommand('insertHTML', false, multiline ? html : html.replace(/<br>/g, ' '));
+      updateRichField(editor);
+    });
+    field.replaceWith(editor);
+  }
+}
+
+function updateRichField(field) {
+  const html = normalizeRichField(field, field.innerHTML);
+  if (field.innerHTML !== html) field.innerHTML = html;
+  const name = field.dataset.ownerField || field.dataset.field;
+  activeValues()[name] = html;
+  render();
+  updateToolbarState();
+}
+
+function updateToolbarState() {
+  document.querySelectorAll('.rich-toolbar button').forEach((button) => {
+    const command = button.dataset.command;
+    const blocked = RICH_BLOCK_COMMANDS.has(command) && activeEditor?.getAttribute('aria-multiline') !== 'true';
+    button.disabled = !activeEditor || blocked;
+    button.setAttribute('aria-disabled', String(button.disabled));
+    if (command === 'removeFormat') return;
+    const pressed = Boolean(activeEditor && !button.disabled && document.queryCommandState(command));
+    button.classList.toggle('active', pressed);
+    button.setAttribute('aria-pressed', String(pressed));
+  });
+}
+
+function createRichToolbar() {
+  const toolbar = document.createElement('div');
+  toolbar.className = 'rich-toolbar';
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', 'Formatação do campo selecionado');
+  const commands = [
+    ['bold', 'N', 'Negrito'],
+    ['italic', 'I', 'Itálico'],
+    ['underline', 'S', 'Sublinhado'],
+    ['strikeThrough', 'T', 'Tachado'],
+    ['insertUnorderedList', '•', 'Lista com marcadores'],
+    ['insertOrderedList', '1.', 'Lista numerada'],
+    ['removeFormat', 'Limpar', 'Limpar formatação'],
+  ];
+  for (const [command, label, title] of commands) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.command = command;
+    button.textContent = label;
+    button.title = title;
+    button.setAttribute('aria-label', title);
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => {
+      if (!activeEditor) return;
+      activeEditor.focus();
+      document.execCommand(command, false, null);
+      updateRichField(activeEditor);
+    });
+    toolbar.append(button);
+  }
+  $('cardForm').prepend(toolbar);
+  document.addEventListener('selectionchange', updateToolbarState);
+  updateToolbarState();
+}
+
 function loadValues(values = {}, template = current.template) {
   const owner = template === 'convite_owner';
   if (owner) current.ownerValues = { ...ownerDefaults, ...values };
@@ -159,7 +353,8 @@ function loadValues(values = {}, template = current.template) {
   const source = owner ? current.ownerValues : current.values;
   const attribute = owner ? 'data-owner-field' : 'data-field';
   for (const field of document.querySelectorAll(`[${attribute}]`)) {
-    field.value = source[field.getAttribute(attribute)] ?? '';
+    const name = field.getAttribute(attribute);
+    source[name] = setRichFieldValue(field, source[name]);
   }
   render();
 }
@@ -183,6 +378,8 @@ function updateModuleControls() {
 
 function switchModule(template) {
   if (!['convite_owntime', 'convite_owner'].includes(template)) return;
+  activeEditor = null;
+  updateToolbarState();
   current.template = template;
   updateModuleControls();
   loadValues(activeValues());
@@ -242,7 +439,7 @@ async function upload(file) {
 
 async function save() {
   if (activeMediaPromise) return;
-  const name = window.prompt('Nome do convite:', current.name || activeValues().heroBrand || 'Convite Owntime');
+  const name = window.prompt('Nome do convite:', current.name || richTextToPlainText(activeValues().heroBrand) || 'Convite Owntime');
   if (!name?.trim()) return;
   const button = $('saveButton');
   button.disabled = true;
@@ -316,6 +513,8 @@ async function loadHistory() {
 }
 
 async function editCard(id) {
+  activeEditor = null;
+  updateToolbarState();
   setStatus('Carregando convite...');
   try {
     await runMediaOperation(async (operationToken) => {
@@ -363,6 +562,10 @@ async function deleteCard(id) {
 }
 
 function showView(view) {
+  if (view !== 'editor') {
+    activeEditor = null;
+    updateToolbarState();
+  }
   document.querySelectorAll('.nav-button').forEach((button) => {
     const active = button.dataset.view === view;
     button.classList.toggle('active', active);
@@ -374,13 +577,12 @@ function showView(view) {
 }
 
 function init() {
+  createRichToolbar();
+  upgradeRichFields();
   for (const field of document.querySelectorAll('[data-field], [data-owner-field]')) {
-    field.addEventListener('input', () => {
-      const name = field.dataset.ownerField || field.dataset.field;
-      activeValues()[name] = field.value;
-      render();
-    });
+    field.addEventListener('input', () => updateRichField(field));
   }
+  loadValues();
   for (const button of document.querySelectorAll('.module-button')) {
     button.addEventListener('click', () => switchModule(button.dataset.module === 'owner' ? 'convite_owner' : 'convite_owntime'));
   }
@@ -397,7 +599,6 @@ function init() {
     if (button.dataset.copy) duplicateCard(button.dataset.copy);
     if (button.dataset.delete) deleteCard(button.dataset.delete);
   });
-  loadValues();
 }
 
 document.fonts?.ready?.then(fitCardBody);
@@ -407,6 +608,5 @@ window.addEventListener('beforeprint', preparePrint);
 
 if (await requirePosCards()) {
   updateModuleControls();
-  loadValues();
   init();
 }

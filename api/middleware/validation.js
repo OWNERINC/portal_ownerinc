@@ -1,5 +1,56 @@
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const sharp = require('sharp');
+const richTags = new Set(['STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'BR', 'UL', 'OL', 'LI']);
+const richBlockTags = new Set(['DIV', 'P']);
+const richTagPattern = /<!--[\s\S]*?-->|<\/?([a-z][a-z0-9:-]*)(?:\s[^<>]*)?>/gi;
+
+function escapeRichText(value) {
+  return String(value)
+    .replace(/&(?!(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);)/gi, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function sanitizeRichText(value) {
+  const source = String(value ?? '');
+  let output = '';
+  let cursor = 0;
+  const openTags = [];
+  for (const match of source.matchAll(richTagPattern)) {
+    output += escapeRichText(source.slice(cursor, match.index));
+    const tag = match[1]?.toUpperCase();
+    if (tag && richTags.has(tag)) {
+      if (tag === 'BR') output += '<br>';
+      else if (match[0].startsWith('</')) {
+        const index = openTags.lastIndexOf(tag);
+        if (index >= 0) {
+          while (openTags.length > index + 1) output += `</${openTags.pop().toLowerCase()}>`;
+          output += `</${openTags.pop().toLowerCase()}>`;
+        }
+      } else {
+        output += `<${tag.toLowerCase()}>`;
+        openTags.push(tag);
+      }
+    } else if (tag && richBlockTags.has(tag)) {
+      if (match[0].startsWith('</')) {
+        const remainder = source.slice(match.index + match[0].length);
+        if (remainder.trim() && !/^<(?:div|p|br)\b/i.test(remainder.trim())) output += '<br>';
+      } else if (output && !output.endsWith('<br>')) output += '<br>';
+    }
+    cursor = match.index + match[0].length;
+  }
+  output += escapeRichText(source.slice(cursor));
+  while (openTags.length) output += `</${openTags.pop().toLowerCase()}>`;
+  return output.replace(/(?:<br>)+$/, '<br>');
+}
+
+function sanitizeRichValues(value) {
+  if (typeof value === 'string') return sanitizeRichText(value);
+  if (Array.isArray(value)) return value.map(sanitizeRichValues);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeRichValues(item)]));
+  return value;
+}
 
 function validateProfile(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
@@ -93,4 +144,4 @@ function hasExactImageBoundary(buffer, format) {
   return buffer.length >= 12 && buffer.readUInt32LE(4) + 8 === buffer.length;
 }
 
-module.exports = { hasOwn, imageExtension, isHttpUrl, normalizeImage, validateProfile, validateUser };
+module.exports = { hasOwn, imageExtension, isHttpUrl, normalizeImage, sanitizeRichText, sanitizeRichValues, validateProfile, validateUser };

@@ -13,6 +13,7 @@
 - O convite Owner foi alinhado ao Frame 2 do Figma: capa vertical, conteúdo editorial longo, serviços com ícones, consumo em três colunas, assets locais e exportação em página longa.
 - A altura do Owner foi ampliada para preservar o Car Wash e o respiro antes do rodapé, inclusive na exportação PDF.
 - Guest e Owner agora usam o rodapé completo `Ativo 5 2.svg` exportado do Figma como um único asset vetorial em preview, responsivo e impressão.
+- Campos de texto dos módulos Guest e Owner agora aceitam formatação rica segura com negrito, itálico, sublinhado, tachado e listas.
 - Added the block-based CMS for Knowledge, Academy, Benefits, Announcements, and Reminders with permission-scoped editing, safe rendering, publication scheduling, and protected assets. Static release verification passed; PostgreSQL migration and live acceptance evidence remain pending.
 - AutoCard exports now preserve preview proportions and the employee card uses a contained stacked layout with a wordmark-only footer.
 - Implementado localmente o editor de enquadramento de imagens do AutoCard para

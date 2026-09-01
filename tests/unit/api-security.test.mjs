@@ -9,7 +9,7 @@ const {
   removesLastActiveSuperAdmin,
 } = require('../../api/middleware/policy');
 const { validateEnvironment } = require('../../api/middleware/security');
-const { imageExtension, isHttpUrl, normalizeImage, validateProfile, validateUser } = require('../../api/middleware/validation');
+const { imageExtension, isHttpUrl, normalizeImage, sanitizeRichText, sanitizeRichValues, validateProfile, validateUser } = require('../../api/middleware/validation');
 const { canManageCms } = require('../../api/cms/permissions');
 
 const manager = { uid: 'manager', role: 'admin', permissions: { manageUsers: true } };
@@ -115,6 +115,20 @@ test('image validation uses file signatures rather than supplied MIME or extensi
   assert.equal(imageExtension(Buffer.from('89504e470d0a1a0a', 'hex')), '.png');
   assert.equal(imageExtension(Buffer.from('524946460000000057454250', 'hex')), '.webp');
   assert.equal(imageExtension(Buffer.from('<svg><script>')), null);
+});
+
+test('rich text sanitizer is canonical, attribute-free, and recursive', () => {
+  const value = '<strong onclick="alert(1)">A & B</strong><script>alert(2)</script><ul><li>Item</li></ul>\nFim';
+  const sanitized = sanitizeRichText(value);
+  assert.equal(sanitized, '<strong>A &amp; B</strong>alert(2)<ul><li>Item</li></ul><br>Fim');
+  assert.equal(sanitizeRichText(sanitized), sanitized);
+  assert.equal(sanitizeRichText('Uma linha<div>Outra linha</div>'), 'Uma linha<br>Outra linha');
+  assert.equal(sanitizeRichText('<div>Uma linha</div><div>Outra linha</div>'), 'Uma linha<br>Outra linha');
+  assert.equal(sanitizeRichText('<div>Uma linha</div>Outra linha'), 'Uma linha<br>Outra linha');
+  assert.equal(sanitizeRichText('<p>Uma linha</p><strong>Outra linha</strong>'), 'Uma linha<br><strong>Outra linha</strong>');
+  assert.equal(sanitizeRichText('<strong>Sem fechamento'), '<strong>Sem fechamento</strong>');
+  assert.deepEqual(sanitizeRichValues({ body: value, nested: [value] }), { body: sanitized, nested: [sanitized] });
+  assert.doesNotMatch(sanitized, /on\w+\s*=|<script|<\/script/i);
 });
 
 test('image normalization decodes valid input and rejects a malformed signature prefix', async () => {

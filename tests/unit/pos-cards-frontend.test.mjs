@@ -100,6 +100,24 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(css, /@page \{ size: 108mm 192mm/);
 });
 
+test('rich text fields expose a native toolbar and a strict HTML allowlist', () => {
+  assert.match(app, /function sanitizeRichHtml/);
+  assert.match(app, /const RICH_TAG_PATTERN/);
+  assert.match(app, /contentEditable/);
+  assert.match(app, /dataset\.maxlength/);
+  assert.match(app, /container\.textContent\.slice\(0, maxLength\)/);
+  assert.match(app, /function toRichHtml\(value\) \{\s*return sanitizeRichHtml\(value\);/);
+  assert.match(app, /event\.clipboardData\?\.getData\('text\/html'\)/);
+  assert.match(app, /function init\(\) \{[\s\S]*?upgradeRichFields\(\);[\s\S]*?loadValues\(\);/);
+  for (const command of ['bold', 'italic', 'underline', 'strikeThrough', 'insertUnorderedList', 'insertOrderedList', 'removeFormat']) {
+    assert.match(app, new RegExp(command));
+  }
+  for (const tag of ['STRONG', 'EM', 'U', 'S', 'BR', 'UL', 'OL', 'LI']) assert.match(app, new RegExp(tag));
+  assert.match(css, /\.rich-toolbar \{/);
+  assert.match(css, /\.rich-editor \{/);
+  assert.doesNotMatch(app, /<\/?(?:script|iframe)\b/i);
+});
+
 test('media upload and card editing cannot apply stale responses or save mid-operation', () => {
   assert.match(app, /let mediaOperationToken = 0/);
   assert.match(app, /let activeMediaPromise = null/);
@@ -134,7 +152,7 @@ test('history actions and generated Cards Pós navigation retain shell interacti
 
 test('editing a Cards Pós invitation preserves its saved history name by default', () => {
   assert.match(app, /name: ''/);
-  assert.match(app, /current\.name \|\| activeValues\(\)\.heroBrand/);
+  assert.match(app, /current\.name \|\| richTextToPlainText\(activeValues\(\)\.heroBrand\)/);
   assert.match(app, /mediaId: card\.mediaId, name: card\.name \|\| ''/);
   assert.match(app, /current\.name = saved\.name \|\| name\.trim\(\)/);
 });

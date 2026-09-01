@@ -53,6 +53,15 @@
 .editor-panel input, .editor-panel textarea, .search-label input { width: 100%; min-height: 44px; padding: 10px var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; outline: 0; resize: vertical; }
 .editor-panel textarea { min-height: 88px; }
 .editor-panel input:focus-visible, .editor-panel textarea:focus-visible, .search-label input:focus-visible, button:focus-visible, a:focus-visible { border-color: var(--focus); outline: 3px solid color-mix(in srgb, var(--focus) 28%, transparent); outline-offset: 1px; }
+.rich-toolbar { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: var(--space-4); padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.rich-toolbar button { min-width: 44px; min-height: 44px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; font: inherit; }
+.rich-toolbar button:hover { background: var(--surface-2); }
+.rich-toolbar button.active { background: var(--espresso); border-color: var(--espresso); color: #fff; }
+.rich-toolbar button:disabled { cursor: not-allowed; opacity: .5; }
+.rich-editor { width: 100%; min-height: 44px; padding: 10px var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; outline: 0; }
+.rich-editor.is-multiline { min-height: 88px; white-space: pre-wrap; }
+.rich-editor:focus-visible { border-color: var(--focus); outline: 3px solid color-mix(in srgb, var(--focus) 28%, transparent); outline-offset: 1px; }
+.rich-editor ul, .rich-editor ol { margin: 0 0 0 1.25em; padding: 0; }
 .upload-control { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 64px; padding: var(--space-3); border: 1px dashed var(--primary); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; text-align: left; }
 .upload-control:hover { background: var(--surface-2); }
 .upload-control:active, .button:active, .history-actions button:active { transform: translateY(1px); }
@@ -82,12 +91,14 @@
 .gold-rule { position: absolute; z-index: 2; left: 10%; right: 10%; bottom: -3px; height: 7px; background: #a99b85; }
 .card-body { flex: 0 0 auto; min-height: 0; padding: 27px 12% 48px; display: flex; flex-direction: column; overflow: visible; color: #171717; }
 .card-copy { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 10px; transform-origin: top center; overflow-wrap: anywhere; }
-.card-body p { min-width: 0; margin: 0; white-space: pre-line; overflow-wrap: anywhere; word-break: break-word; font-size: clamp(10px, 1.5vw, 15px); line-height: 1.18; }
+.card-body p, .card-body .rich-copy { min-width: 0; margin: 0; white-space: pre-line; overflow-wrap: anywhere; word-break: break-word; font-size: clamp(10px, 1.5vw, 15px); line-height: 1.18; }
+.card-body ul, .card-body ol { min-width: 0; margin: 0 0 19px 1.25em; padding: 0; font-size: clamp(10px, 1.5vw, 15px); line-height: 1.18; overflow-wrap: anywhere; word-break: break-word; }
+.card-body li { margin: 0 0 .35em; }
 .card-body .greeting { font-size: clamp(11px, 1.7vw, 17px); line-height: 1.25; }
 .benefit-box { padding: 20px 11%; border-radius: 46px; background: #e9e6de; }
 .benefit-box h3 { margin: 0 0 17px; color: #a99b85; overflow-wrap: anywhere; word-break: break-word; font-size: clamp(14px, 2vw, 21px); line-height: 1.15; }
-.benefit-box p { margin-bottom: 19px; }
-.benefit-box p:last-child { margin-bottom: 0; }
+.benefit-box p, .benefit-box .rich-copy { margin-bottom: 19px; }
+.benefit-box p:last-child, .benefit-box .rich-copy:last-child { margin-bottom: 0; }
 .owner-card { width: min(100%, 680px); height: 2180px; min-height: 0; display: grid; grid-template-rows: 17% minmax(0, 1fr) auto; font-family: 'Raleway', Arial, sans-serif; }
 .owner-card .hero { min-height: 0; aspect-ratio: auto; padding: 36px 8%; background: #233b43; }
 .owner-card .hero::after { background: linear-gradient(180deg, #0001 0%, #0008 100%); }
@@ -98,29 +109,30 @@
 .owner-card .gold-rule { left: 9.7%; right: 9.7%; bottom: -3px; height: 7px; background: #a99b85; }
 .owner-body { padding: 6.8% 8.1% 5.2%; overflow: hidden; }
 .owner-body .card-copy { gap: 0; }
-.owner-body p { font-size: clamp(11px, 1.68vw, 15.5px); line-height: 1.18; text-align: justify; }
+.owner-body p, .owner-body .rich-copy { font-size: clamp(11px, 1.68vw, 15.5px); line-height: 1.18; text-align: justify; }
+.owner-body ul, .owner-body ol { font-size: clamp(11px, 1.68vw, 15.5px); line-height: 1.18; text-align: left; }
 .owner-body .greeting { margin-top: 4.2%; font-size: clamp(12px, 1.85vw, 17px); line-height: 1.25; }
 .owner-recipient { font-size: clamp(12px, 1.8vw, 17px) !important; font-weight: 500; text-align: left !important; }
 .owner-benefit-box { margin: 6.1% 0 7.2%; padding: 6.8% 10.2%; border-radius: 9%; background: #e9e6de; }
 .owner-benefit-box h3 { margin: 0 0 4.6%; color: #a99b85; font-size: clamp(16px, 2.55vw, 22px); line-height: 1.12; }
-.owner-benefit-box p { margin: 0 0 5.2%; text-align: left; }
-.owner-benefit-box p:last-child { margin-bottom: 0; }
-.owner-included > p { margin-bottom: 5.3%; }
+.owner-benefit-box p, .owner-benefit-box .rich-copy { margin: 0 0 5.2%; text-align: left; }
+.owner-benefit-box p:last-child, .owner-benefit-box .rich-copy:last-child { margin-bottom: 0; }
+.owner-included > p, .owner-included > .rich-copy { margin-bottom: 5.3%; }
 .owner-included > h3 { margin: 0 0 5.4%; font-size: clamp(12px, 1.75vw, 16px); line-height: 1.2; }
 .owner-service { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: start; gap: 12px; margin-bottom: 3.7%; }
 .owner-icon { display: block; width: 30px; height: 30px; object-fit: contain; }
-.owner-service p { text-align: justify; }
+.owner-service p, .owner-service .rich-copy { text-align: justify; }
 .owner-service strong, .owner-pet strong { font-weight: 700; }
 .owner-consumption { margin-top: 2.5%; }
 .owner-consumption h3 { margin: 0 0 4.2%; font-size: clamp(12px, 1.75vw, 16px); line-height: 1.2; }
 .consumption-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8.3%; }
 .consumption-grid > div { min-width: 0; }
 .consumption-grid strong { display: block; margin-bottom: 14%; font-size: clamp(10px, 1.5vw, 14px); line-height: 1.1; }
-.consumption-grid p { text-align: left; }
+.consumption-grid p, .consumption-grid .rich-copy { text-align: left; }
 .owner-pet { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 12px; margin-top: 6.5%; }
-.owner-pet p { text-align: left; }
+.owner-pet p, .owner-pet .rich-copy { text-align: left; }
 .owner-services { margin-top: 5.7%; padding-bottom: 3%; }
-.owner-services > p { margin-bottom: 5.5%; }
+.owner-services > p, .owner-services > .rich-copy { margin-bottom: 5.5%; }
 .owner-services .owner-service { margin-bottom: 3.6%; }
 .owner-footer { min-height: 0; }
 .card-footer { flex: 0 0 auto; display: flex; align-items: stretch; justify-content: center; min-height: 0; padding: 0; overflow: hidden; background: #050505; color: #fff; }
@@ -179,7 +191,7 @@
   .owner-body { padding: 6.8% 8.1% 5.2%; }
   .owner-card .hero h2 { font-size: 6.1mm; }
   .owner-card .hero-brand { font-size: 4.7mm; }
-  .owner-body p { font-size: 2.4mm; }
+   .owner-body p, .owner-body .rich-copy { font-size: 2.4mm; }
   .owner-body .greeting, .owner-recipient { font-size: 2.7mm !important; }
   .owner-benefit-box h3 { font-size: 3.5mm; }
   .owner-included > h3, .owner-consumption h3 { font-size: 2.7mm; }

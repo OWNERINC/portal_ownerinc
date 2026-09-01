@@ -42,11 +42,12 @@ test('card validation accepts the Guest and Owner contracts', async () => {
   assert.match(source, /template: body\.template/);
   assert.match(source, /name\.length < 1 \|\| name\.length > 120/);
   assert.match(source, /body\.values \|\| typeof body\.values !== 'object' \|\| Array\.isArray\(body\.values\)/);
+  assert.match(source, /sanitizeRichValues\(body\.values\)/);
   assert.match(source, /serializedValues\.length > 50000/);
   assert.match(source, /parseListQuery\(req\.query, \{ search: value => value\.length <= 120 \}\)/);
   assert.match(source, /name ILIKE/);
   assert.match(source, /ORDER BY updated_at DESC/);
-  assert.match(source, /SELECT LEFT\(name \|\| ' v2', 120\), template, "values", media_id/);
+  assert.match(source, /LEFT\(\$1 \|\| ' v2', 120\)/);
 });
 
 test('Pos-Cards name search treats wildcard characters literally', async () => {
@@ -104,7 +105,7 @@ test('Pos-Cards writes share the AutoCard media-retention lock', async () => {
 
 test('duplicate names remain within the 120-character contract', async () => {
   const source = await read('api/routes/pos-cards.js');
-  assert.match(source, /LEFT\(name \|\| ' v2', 120\)/);
+  assert.match(source, /LEFT\(\$1 \|\| ' v2', 120\)/);
 });
 
 test('malformed image normalization returns invalid while storage cleanup remains active', async () => {
