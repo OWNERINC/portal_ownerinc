@@ -30,7 +30,7 @@ test('Cards Pós exposes independent Guest and Owner modules', () => {
   assert.match(app, /convite_owner/);
   assert.match(app, /function switchModule/);
   assert.match(app, /function renderOwner/);
-  assert.match(app, /previewLabel.*316.*192/);
+  assert.match(app, /previewLabel.*350.*192/);
 });
 
 test('editor and history retain the source field and view contract', () => {
@@ -86,6 +86,10 @@ test('preview escapes user values, validates image uploads, and preserves print 
   assert.match(app, /ownerinc-logo\.svg/);
   assert.match(css, /font-family: ['"]Raleway['"]/);
   assert.match(css, /@page owner-page/);
+  assert.match(css, /height: 2180px/);
+  assert.match(css, /height: 250vw/);
+  assert.match(css, /height: 294vw/);
+  assert.match(css, /@page owner-page \{ size: 108mm 350mm/);
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
   assert.match(css, /@page \{ size: 108mm 192mm/);

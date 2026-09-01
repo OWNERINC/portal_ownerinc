@@ -160,7 +160,7 @@ function updateModuleControls() {
   });
   $('guestFields').classList.toggle('hidden', owner);
   $('ownerFields').classList.toggle('hidden', !owner);
-  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? 316 : 192} mm`;
+  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? 350 : 192} mm`;
   $('moduleTitle').textContent = owner ? 'Convite para Owners' : 'Convite para convidados';
   $('moduleDescription').textContent = owner
     ? 'Edite os textos da experiência Owner, revise o frame e exporte o convite.'
