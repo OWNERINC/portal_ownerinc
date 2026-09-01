@@ -96,11 +96,13 @@
 .card-body ul, .card-body ol { min-width: 0; margin: 0 0 19px 1.25em; padding: 0; font-size: clamp(10px, 1.5vw, 15px); line-height: 1.18; overflow-wrap: anywhere; word-break: break-word; }
 .card-body li { margin: 0 0 .35em; }
 .card-body .greeting { font-size: clamp(11px, 1.7vw, 17px); line-height: 1.25; }
-.benefit-box { padding: 5.5% 10.5%; border-radius: 6.5%; background: #e9e6de; }
+.benefit-box { padding: 5.5% 10.5%; border-radius: 10% / 20%; background: #e9e6de; }
 .benefit-box h3 { margin: 0 0 17px; color: #a99b85; overflow-wrap: anywhere; word-break: break-word; font-size: clamp(14px, 2vw, 21px); line-height: 1.15; }
 .benefit-box p, .benefit-box .rich-copy { margin-bottom: 19px; }
 .benefit-box p:last-child, .benefit-box .rich-copy:last-child { margin-bottom: 0; }
-.address-line { margin: 3.7% 0 0; text-align: center !important; font-size: clamp(10px, 1.5vw, 15px) !important; font-weight: 700; line-height: 1.2 !important; }
+.address-line { margin: 3.7% 0 0; text-align: center !important; font-size: clamp(10px, 1.5vw, 15px) !important; line-height: 1.2 !important; white-space: nowrap; }
+.address-line strong { font-weight: 700; }
+.address-line span { font-weight: 400; }
 .guest-card .address-line { color: #171717; }
 .owner-card { aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; font-family: 'Raleway', Arial, sans-serif; }
 .owner-card .hero { padding: 36px 8%; background: #233b43; }
@@ -117,7 +119,7 @@
 .owner-body .greeting { margin-top: 4.2%; font-size: clamp(12px, 1.85vw, 17px); line-height: 1.25; }
 .owner-recipient { margin: 0 0 3.9%; font-size: clamp(12px, 1.8vw, 17px) !important; font-weight: 500; text-align: left !important; }
 .owner-body .greeting { margin-bottom: 3.8%; }
-.owner-stay-box { margin: 0; padding: 5.2% 10.2%; border-radius: 9%; background: #e9e6de; }
+.owner-stay-box { margin: 0; padding: 5.2% 10.2%; border-radius: 10% / 28%; background: #e9e6de; }
 .owner-stay-box .rich-copy { text-align: left; }
 .owner-card .address-line { margin: 4.8% 0 5.6%; color: #a99b85; }
 .owner-included > p, .owner-included > .rich-copy { margin-bottom: 5.3%; }

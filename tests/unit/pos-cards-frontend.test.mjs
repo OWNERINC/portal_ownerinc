@@ -105,15 +105,21 @@ test('preview escapes user values, validates image uploads, and preserves print 
 });
 
 test('Figma frames keep their proportions, address, photos, and editable phone footer', () => {
-  assert.match(app, /const ADDRESS_TEXT = 'Como chegar: Rua João XXIII, 222, Centro - Gramado'/);
+  assert.match(app, /const ADDRESS_LABEL = 'Como chegar:'/);
+  assert.match(app, /const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado'/);
   assert.match(app, /function renderAddress/);
   assert.match(app, /renderAddress\(\)/g);
+  assert.match(app, /address-line"><strong>\$\{ADDRESS_LABEL\}<\/strong> <span>\$\{ADDRESS_TEXT\}<\/span>/);
   assert.match(app, /FOOTER_ASSET/);
   assert.match(app, /footer-phone-editable.*phoneFromContact/);
   assert.match(app, /current\.mediaUrl \|\| (?:GUEST|OWNER)_COVER_ASSET/);
   assert.match(html, /Telefone/);
   assert.match(css, /\.footer-phone-backdrop/);
   assert.match(css, /\.footer-phone-editable/);
+  assert.match(css, /border-radius: 10% \/ 20%/);
+  assert.match(css, /border-radius: 10% \/ 28%/);
+  assert.match(css, /\.address-line \{[^}]*white-space: nowrap/);
+  assert.match(css, /\.address-line span \{ font-weight: 400; \}/);
   assert.doesNotMatch(app, /replaceFooterWithAsset/);
 });
 

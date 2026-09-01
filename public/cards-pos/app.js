@@ -64,7 +64,8 @@ const ownerDefaults = {
 };
 const GUEST_COVER_ASSET = './cards-pos/assets/guest/guest-cover.jpg';
 const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
-const ADDRESS_TEXT = 'Como chegar: Rua João XXIII, 222, Centro - Gramado';
+const ADDRESS_LABEL = 'Como chegar:';
+const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
 const FOOTER_ASSET = './cards-pos/assets/footer.svg';
 let current = {
   template: 'convite_owntime',
@@ -163,7 +164,7 @@ function renderFooter(v) {
 }
 
 function renderAddress() {
-  return `<p class="address-line">${ADDRESS_TEXT}</p>`;
+  return `<p class="address-line"><strong>${ADDRESS_LABEL}</strong> <span>${ADDRESS_TEXT}</span></p>`;
 }
 
 function renderGuest(v) {
