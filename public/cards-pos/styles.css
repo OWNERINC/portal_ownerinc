@@ -122,9 +122,9 @@
 .owner-services { margin-top: 5.7%; padding-bottom: 3%; }
 .owner-services > p { margin-bottom: 5.5%; }
 .owner-services .owner-service { margin-bottom: 3.6%; }
-.owner-footer { min-height: 0; padding: 4.3% 5.3%; }
+.owner-footer { min-height: 0; padding: 4.3% 5.3%; background-color: #050505; background-image: url('./assets/owner/footer-bar.png'); background-position: center top; background-repeat: no-repeat; background-size: 90.34% auto; }
 .owner-footer .contact { font-size: clamp(8px, 1.2vw, 12px); }
-.owner-footer .ownerinc-logo { width: clamp(110px, 18vw, 245px); height: auto; }
+.owner-footer .ownerinc-logo { width: 16.3%; height: auto; }
 .card-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; min-height: 96px; padding: 16px 7%; background: #050505; color: #fff; }
 .contact { white-space: pre-line; font-size: clamp(8px, 1.2vw, 12px); letter-spacing: .16em; line-height: 1.6; }
 .footer-logos { display: flex; align-items: center; gap: 10px; }

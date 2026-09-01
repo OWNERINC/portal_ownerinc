@@ -19,7 +19,7 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
   for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
-  for (const asset of ['owner-cover.png', 'ownerinc-logo.svg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
+  for (const asset of ['owner-cover.png', 'footer-bar.png', 'ownerinc-logo-footer.png', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
 });
 
 test('Cards Pós exposes independent Guest and Owner modules', () => {
@@ -80,10 +80,12 @@ test('preview escapes user values, validates image uploads, and preserves print 
   for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.match(app, new RegExp(type.replace('/', '\\/')));
   assert.match(app, /value < 500/);
   for (const logo of ['owntime-logo-white.webp', 'ownerinc-logo-white.png']) assert.match(app, new RegExp(logo.replace('.', '\\.')));
-  assert.match(app, /ownerinc-logo\.svg/);
+  assert.match(app, /ownerinc-logo-footer\.png/);
   assert.match(css, /background: #e9e6de/);
   assert.match(app, /owner-cover\.png/);
-  assert.match(app, /ownerinc-logo\.svg/);
+  assert.match(app, /ownerinc-logo-footer\.png/);
+  assert.match(css, /footer-bar\.png/);
+  assert.match(css, /width: 16\.3%/);
   assert.match(css, /font-family: ['"]Raleway['"]/);
   assert.match(css, /@page owner-page/);
   assert.match(css, /height: 2180px/);
