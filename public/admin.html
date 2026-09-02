@@ -9,39 +9,6 @@
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <script src="./js/auth-shell.js"></script>
-  <style>
-    .admin-tabs {
-      display: flex;
-      gap: 2px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 24px;
-      flex-wrap: wrap;
-    }
-    .admin-tab {
-      padding: 9px 18px;
-      background: none;
-      border: none;
-      border-bottom: 2px solid transparent;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-secondary);
-      font-family: var(--font-sans);
-      margin-bottom: -1px;
-      transition: color 150ms, border-color 150ms;
-    }
-    .admin-tab.active { color: var(--espresso); border-bottom-color: var(--primary); }
-    .admin-tab:hover { color: var(--espresso); }
-    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-    .section-header h2 { font-size: 18px; font-weight: 600; color: var(--espresso); }
-    .permission-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; color: var(--text); }
-    .permission-row input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--primary); }
-    .permissions-block { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin-top: 4px; background: #fafafa; }
-    @media (max-width: 640px) {
-      .admin-tabs { flex-wrap: nowrap; overflow-x: auto; margin-inline: -16px; padding-inline: 16px; scrollbar-width: thin; }
-      .admin-tab { flex: 0 0 auto; }
-    }
-  </style>
 </head>
 <body>
 <a class="skip-link" href="#main-content">Pular para o conteúdo</a>

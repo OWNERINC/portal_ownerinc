@@ -58,7 +58,7 @@ async function loadBenefits() {
       const grid = element('div', { className: 'card-grid' });
       items.forEach(benefit => {
         const card = element('article', { className: 'card' }, [
-          element('div', { className: 'card-title', text: `🎁 ${benefit.company}` }),
+          element('div', { className: 'card-title', text: benefit.company }),
         ]);
         const content = element('div', { className: 'benefit-description cms-public-content' });
         renderBlocks(content, benefit.content_blocks, { fallbackText: benefit.description || '' });
