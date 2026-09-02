@@ -1,12 +1,4 @@
 @font-face {
-  font-family: 'Oswald';
-  src: url('../assets/fonts/Oswald-Variable.ttf') format('truetype');
-  font-weight: 200 700;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
   font-family: 'Hamilton';
   src: url('https://fonts.cdnfonts.com/s/79987/Hamilton.woff') format('woff');
   font-weight: 400;
@@ -36,7 +28,7 @@
 
   /* Tipografia */
   --font-sans: 'Hamilton', Georgia, serif;
-  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
+  --font-display: 'Hamilton', Georgia, serif;
   --font-size-xs: 11px;
   --font-size-sm: 13px;
   --font-size-base: 15px;
