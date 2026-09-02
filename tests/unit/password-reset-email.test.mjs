@@ -10,7 +10,7 @@ const transport = { sendMail: async (message) => { sentMessages.push(message); }
 const originalCreateTransport = nodemailer.createTransport;
 nodemailer.createTransport = () => transport;
 const {
-  invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpOptions,
+  invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpAcceptanceAuditDetails, smtpOptions,
 } = require('../../api/integrations/password-reset-email');
 
 const env = {
@@ -91,6 +91,20 @@ test('transactional mailers deliver both messages through Nodemailer without net
   const source = await readFile('api/integrations/password-reset-email.js', 'utf8');
   assert.match(source, /transporter\.sendMail\(message\)/);
   assert.doesNotMatch(source, /@sendgrid\/mail|SENDGRID_|sendGrid/i);
+});
+
+test('SMTP acceptance audit keeps a correlation without recipients or raw provider response', () => {
+  const details = smtpAcceptanceAuditDetails({
+    messageId: '<provider-message@example.test>',
+    response: '250 queued recipient@example.test provider-private-detail',
+    accepted: ['recipient@example.test'], rejected: [],
+  });
+
+  assert.deepEqual(details, {
+    state: 'accepted_by_smtp', message_id: '<provider-message@example.test>',
+    response_code: 250, accepted_count: 1, rejected_count: 0,
+  });
+  assert.doesNotMatch(JSON.stringify(details), /recipient@example\.test|provider-private-detail/);
 });
 
 test('public reset flow uses the Portal API and avoids account enumeration copy', async () => {

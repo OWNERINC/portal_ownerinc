@@ -56,6 +56,25 @@ async function sendTransactional(message, env = process.env) {
   return transporter.sendMail(message);
 }
 
+function safeMessageId(value) {
+  const messageId = String(value || '').trim();
+  return /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~@<>()-]{1,320}$/.test(messageId) ? messageId : null;
+}
+
+function smtpAcceptanceAuditDetails(result = {}) {
+  const response = String(result.response || '');
+  const responseCode = Number.isInteger(result.responseCode) ? result.responseCode
+    : Number.parseInt(response.match(/^\s*(\d{3})\b/)?.[1] || '', 10);
+
+  return {
+    state: 'accepted_by_smtp',
+    message_id: safeMessageId(result.messageId),
+    response_code: Number.isInteger(responseCode) && responseCode >= 200 && responseCode <= 599 ? responseCode : null,
+    accepted_count: Array.isArray(result.accepted) ? result.accepted.length : 0,
+    rejected_count: Array.isArray(result.rejected) ? result.rejected.length : 0,
+  };
+}
+
 async function sendPasswordReset({ to, link, env = process.env }) {
   return sendTransactional(passwordResetMessage({ to, link, env }), env);
 }
@@ -65,5 +84,5 @@ async function sendInvitation({ to, name, link, env = process.env }) {
 }
 
 module.exports = {
-  invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpOptions,
+  invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpOptions, smtpAcceptanceAuditDetails,
 };

@@ -515,11 +515,15 @@ document.getElementById('user-form').addEventListener('submit', async event => {
   feedback.textContent = '';
   feedback.style.color = '';
   try {
-    await fetchAPI(editingUserId ? `/api/users/${encodeURIComponent(editingUserId)}` : '/api/users', {
+    const result = await fetchAPI(editingUserId ? `/api/users/${encodeURIComponent(editingUserId)}` : '/api/users', {
       method: editingUserId ? 'PUT' : 'POST', body: JSON.stringify(data),
     });
     closeDialog(document.getElementById('modal-user'), true);
-    showToast(isInvite ? `Convite enviado para ${data.email}.` : 'Usuário atualizado.');
+    showToast(isInvite
+      ? result?.invitation?.state === 'accepted_by_smtp'
+        ? 'Convite encaminhado ao serviço de e-mail. Confirme o recebimento na caixa de entrada.'
+        : 'Conta criada. Confirme o recebimento do convite na caixa de entrada.'
+      : 'Usuário atualizado.');
     await loadUsers();
   } catch (error) {
     feedback.style.color = 'var(--danger)';

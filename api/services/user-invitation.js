@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { firebaseAuth } = require('../middleware/auth');
-const { sendInvitation } = require('../integrations/password-reset-email');
+const { sendInvitation, smtpAcceptanceAuditDetails } = require('../integrations/password-reset-email');
 
 async function createInvitedUser({ client, data, audit }) {
   const firebaseUser = await firebaseAuth.createUser({
@@ -14,10 +14,11 @@ async function createInvitedUser({ client, data, audit }) {
       [firebaseUser.uid, data.email, data.name, data.role || 'viewer', data.contract_type, data.contract_type === 'pj', data.pj_due_day || null, data.job_title_id, data.phone || '', JSON.stringify(data.permissions || {})]
     );
     const link = await firebaseAuth.generatePasswordResetLink(data.email, { url: 'https://portal.ownerinc.com.br/login.html' });
-    await sendInvitation({ to: data.email, name: data.name, link });
+    const delivery = await sendInvitation({ to: data.email, name: data.name, link });
+    const invitation = smtpAcceptanceAuditDetails(delivery);
     await firebaseAuth.updateUser(firebaseUser.uid, { disabled: false });
-    if (audit) await audit('user.create', firebaseUser.uid, { role: data.role || 'viewer' });
-    return rows[0];
+    if (audit) await audit('user.create', firebaseUser.uid, { role: data.role || 'viewer', invitation });
+    return { ...rows[0], invitation: { state: invitation.state } };
   } catch (error) {
     await firebaseAuth.deleteUser(firebaseUser.uid).catch(() => {});
     throw error;
