@@ -1,7 +1,7 @@
 .dashboard-home {
-  width: min(100%, 1320px);
+  width: min(100%, 1360px);
   margin: 0 auto;
-  padding: clamp(24px, 4vw, 72px) clamp(20px, 4vw, 72px) 88px;
+  padding: clamp(28px, 4vw, 56px) clamp(20px, 4vw, 64px) 96px;
 }
 
 .dashboard-home,
@@ -13,7 +13,7 @@
   position: relative;
   aspect-ratio: 16 / 7;
   overflow: hidden;
-  border-radius: var(--radius-lg);
+  border-radius: 24px;
   isolation: isolate;
   background: var(--espresso);
   color: var(--surface);
@@ -124,7 +124,7 @@
 }
 
 .dashboard-section {
-  margin-top: clamp(48px, 7vw, 112px);
+  margin-top: clamp(48px, 6vw, 88px);
 }
 
 .dashboard-section-heading {
@@ -139,7 +139,7 @@
   margin: 5px 0 0;
   color: var(--espresso);
   font-family: var(--font-display);
-  font-size: 28px;
+  font-size: clamp(26px, 2.5vw, 32px);
   font-weight: 400;
   letter-spacing: -0.04em;
   line-height: 1.05;
@@ -171,7 +171,7 @@
 .dashboard-story-rail {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 24px;
+  gap: 20px;
 }
 
 .dashboard-story-card {
@@ -179,7 +179,7 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   color: inherit;
@@ -189,7 +189,7 @@
 
 .dashboard-story-card:hover,
 .dashboard-story-card:active {
-  border-color: rgba(196, 162, 86, 0.7);
+  border-color: rgba(197, 155, 96, 0.7);
   background: #fffdf8;
   box-shadow: var(--shadow-md);
 }
@@ -263,7 +263,7 @@
 
 .dashboard-area-card:hover,
 .dashboard-area-card:active {
-  border-color: rgba(196, 162, 86, 0.7);
+  border-color: rgba(197, 155, 96, 0.7);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }

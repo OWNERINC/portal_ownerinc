@@ -62,7 +62,7 @@ async function loadCourses() {
         const card = element(href ? 'a' : 'article', href ? {
           className: 'card link-card', href, target: '_blank', rel: 'noopener noreferrer',
         } : { className: 'card' }, [
-          element('div', { className: 'card-title', text: `🎓 ${course.title}` }),
+          element('div', { className: 'card-title', text: course.title }),
           element('span', { className: 'card-link-label', text: href ? 'Acessar curso →' : 'Link indisponível' }),
         ]);
         const content = element('div', { className: 'card-copy cms-public-content' });

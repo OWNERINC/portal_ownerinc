@@ -1,10 +1,10 @@
 .cms-page {
-  --cms-paper: #f7f1e8;
-  --cms-paper-deep: #eee3d5;
-  --cms-ink: #201c18;
-  --cms-muted: #6f665d;
-  --cms-rule: #d8cbbb;
-  --cms-accent: #b85f45;
+  --cms-paper: var(--bg);
+  --cms-paper-deep: var(--surface-2);
+  --cms-ink: var(--text);
+  --cms-muted: var(--text-secondary);
+  --cms-rule: var(--border);
+  --cms-accent: var(--primary-hover);
   --cms-warning: #8a5b16;
   background: var(--cms-paper);
   color: var(--cms-ink);
@@ -14,14 +14,14 @@
 .cms-page .cms-rail,
 .cms-page .cms-editor-column,
 .cms-page .cms-inspector {
-  background: #fbf8f3;
+  background: var(--surface);
 }
 
 .cms-page .topbar { border-bottom-color: var(--cms-rule); }
 .cms-page .page-header h1,
 .cms-page h2,
 .cms-page h3 { font-family: var(--font-display); color: var(--cms-ink); }
-.cms-page .page-header h1 { font-size: clamp(26px, 4vw, 38px); letter-spacing: -0.025em; }
+.cms-page .page-header h1 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.035em; }
 .cms-page .page-header { max-width: 760px; }
 .cms-page .section-label { color: var(--cms-accent); }
 

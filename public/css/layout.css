@@ -5,6 +5,7 @@ body {
   font-size: var(--font-size-base);
   background: var(--bg);
   color: var(--text);
+  line-height: 1.5;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
@@ -39,6 +40,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   top: 0; left: 0; bottom: 0;
   z-index: 100;
   overflow: hidden;
+  border-right: 1px solid rgba(255,255,255,0.06);
   transition: none;
 }
 body.sidebar-ready .sidebar { transition: width var(--sidebar-transition); }
@@ -63,7 +65,7 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: max(18px, env(safe-area-inset-top)) var(--space-4) 18px;
+  padding: max(22px, env(safe-area-inset-top)) var(--space-5) 22px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
   min-height: 64px;
   flex-shrink: 0;
@@ -113,7 +115,7 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
 /* Nav */
 .sidebar-nav {
   flex: 1;
-  padding: var(--space-3) 0;
+  padding: var(--space-4) var(--space-2);
   list-style: none;
   overflow-y: auto;
   overflow-x: hidden;
@@ -123,13 +125,15 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
-  padding: 10px var(--space-4);
+  min-height: 46px;
+  margin: 2px 0;
+  padding: 10px var(--space-3);
   color: var(--sidebar-text);
   text-decoration: none;
   font-size: var(--font-size-sm);
   font-weight: 400;
   white-space: nowrap;
+  border-radius: var(--radius-sm);
   transition: background 150ms, color 150ms;
 }
 
@@ -153,15 +157,16 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
 .sidebar-nav a.active {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-active);
-  border-left: 2px solid var(--primary);
-  padding-left: calc(var(--space-4) - 2px);
+  border-left: 0;
+  box-shadow: inset 3px 0 var(--primary);
+  padding-left: var(--space-3);
   font-weight: 500;
 }
 .sidebar-nav a.active svg { opacity: 1; }
 
 /* Footer / Logout */
 .sidebar-footer {
-  padding: var(--space-4) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
+  padding: var(--space-5) var(--space-4) max(var(--space-5), env(safe-area-inset-bottom));
   border-top: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0;
 }
@@ -201,10 +206,11 @@ body.sidebar-collapsed .sidebar-nav a {
   padding: 10px;
   gap: 0;
   border-left: none !important;
+  box-shadow: none;
 }
 body.sidebar-collapsed .sidebar-nav a.active {
-  border-left: 2px solid var(--primary) !important;
-  padding-left: calc(10px - 2px) !important;
+  box-shadow: inset 3px 0 var(--primary);
+  padding-left: 10px !important;
 }
 body.sidebar-collapsed .sidebar-nav a span { display: none; }
 
@@ -256,7 +262,7 @@ body.sidebar-ready .main-content { transition: margin-left var(--sidebar-transit
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-8);
+  padding: 0 clamp(20px, 4vw, 48px);
   position: sticky;
   top: 0;
   z-index: 50;
@@ -271,11 +277,11 @@ body.sidebar-ready .main-content { transition: margin-left var(--sidebar-transit
   min-width: 0;
 }
 
-.page-body { padding: var(--space-8); flex: 1; }
+.page-body { padding: clamp(28px, 4vw, 48px); flex: 1; }
 
 .page-header { margin-bottom: var(--space-6); }
 .page-header h1 {
-  font-size: var(--font-size-xl);
+  font-size: clamp(28px, 3vw, 40px);
   font-weight: 700;
   color: var(--text);
   letter-spacing: -0.01em;
@@ -322,12 +328,12 @@ body.sidebar-ready .main-content { transition: margin-left var(--sidebar-transit
     height: auto; min-height: var(--topbar-height); gap: 10px;
     padding: max(6px, env(safe-area-inset-top)) 16px 6px;
   }
-  .topbar-title { display: none; }
+  .topbar-title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .topbar > div { min-width: 0; flex: 1; justify-content: flex-end; }
   .topbar > div { flex-wrap: wrap; }
   .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }
   .topbar .search-bar { flex: 1 1 140px; width: auto; min-width: 0; }
-  .page-body { padding: 20px 16px max(20px, env(safe-area-inset-bottom)); min-width: 0; }
+  .page-body { padding: 24px 16px max(24px, env(safe-area-inset-bottom)); min-width: 0; }
 }
 
 @media (max-width: 420px) {

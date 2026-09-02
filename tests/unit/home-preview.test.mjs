@@ -79,10 +79,10 @@ test('home preview preserves the required responsive and motion CSS contract', a
   );
   assert.match(css, /min-width\s*:\s*44px/);
   assert.match(css, /aspect-ratio\s*:/);
-  assert.match(css, /main\s*\{[^}]*width\s*:\s*min\(100%,\s*1320px\)[^}]*padding\s*:[^}]*72px[^}]*88px/s);
-  assert.match(css, /\.preview-section\s*\{[^}]*margin-top\s*:\s*clamp\(48px,\s*7vw,\s*112px\)/s);
-  assert.match(css, /\.section-heading h2\s*\{[^}]*font-size\s*:\s*28px;/s);
-  assert.match(css, /\.story-rail\s*\{[^}]*gap\s*:\s*24px;/s);
+  assert.match(css, /main\s*\{[^}]*width\s*:\s*min\(100%,\s*1360px\)[^}]*padding\s*:[^}]*56px[^}]*96px/s);
+  assert.match(css, /\.preview-section\s*\{[^}]*margin-top\s*:\s*clamp\(48px,\s*6vw,\s*88px\)/s);
+  assert.match(css, /\.section-heading h2\s*\{[^}]*font-size\s*:\s*clamp\(26px,\s*2\.5vw,\s*32px\);/s);
+  assert.match(css, /\.story-rail\s*\{[^}]*gap\s*:\s*20px;/s);
   assert.match(css, /\.story-rail\s*\{[^}]*grid-template-columns\s*:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*260px\),\s*1fr\)\);/s);
   assert.match(css, /\.story-card\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;/s);
   assert.match(css, /\.story-card-body\s*\{[^}]*display\s*:\s*flex;[^}]*flex-direction\s*:\s*column;/s);
