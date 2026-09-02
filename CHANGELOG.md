@@ -9,6 +9,7 @@
 
 ## Unreleased
 
+- Refinado o espaçamento vertical dos Cards Pós, com separação explícita entre o bloco `Consumos da hospedagem` e o título `O que não está incluso`, preservando as dimensões, o conteúdo e a exportação dos templates Guest e Owner.
 - Cards Pós agora possui os módulos editáveis Convidado e Owner, com alternância na tela, template Owner baseado no frame 2 do Figma e histórico compatível com os dois formatos.
 - O convite Owner foi alinhado ao Frame 2 do Figma: capa vertical, conteúdo editorial longo, serviços com ícones, consumo em três colunas, assets locais e exportação em página longa.
 - Guest e Owner agora seguem as proporções atuais dos Frames 01 (`1448 × 2347`) e 02 (`1448 × 3896`) na pré-visualização e na exportação PDF.

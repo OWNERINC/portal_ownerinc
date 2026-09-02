@@ -116,6 +116,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.doesNotMatch(app, /copy\.style\.width = `\$\{100 \/ scale\}%`/);
   assert.match(css, /\.card-copy \{[^}]*height: max-content; flex: none;/);
   assert.match(css, /\.card-copy > \* \{ flex-shrink: 0; \}/);
+  assert.match(css, /\.benefit-box \.inline-copy \{[^}]*margin-bottom:\s*19px;/);
   assert.match(css, /\.guest-card \{ page: guest-page; height: 175\.1mm/);
   assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 290\.6mm/);
   assert.match(css, /page-break-inside: avoid/);
