@@ -114,6 +114,9 @@ test('public reset flow uses the Portal API and avoids account enumeration copy'
   assert.doesNotMatch(login, /sendPasswordResetEmail/);
   assert.match(route, /res\.status\(202\)\.json\(accepted\)/);
   assert.match(route, /max: 5/);
+  assert.match(route, /smtpAcceptanceAuditDetails/);
+  assert.match(route, /auth\.password_reset\.accepted/);
+  assert.match(route, /INSERT INTO audit_log/);
 });
 
 test.after(() => {

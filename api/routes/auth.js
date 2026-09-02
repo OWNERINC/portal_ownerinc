@@ -2,7 +2,7 @@ const express = require('express');
 const pool = require('../db');
 const { firebaseAuth } = require('../middleware/auth');
 const { rateLimit } = require('../middleware/security');
-const { sendPasswordReset } = require('../integrations/password-reset-email');
+const { sendPasswordReset, smtpAcceptanceAuditDetails } = require('../integrations/password-reset-email');
 
 const router = express.Router();
 const resetLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
@@ -31,8 +31,17 @@ router.post('/password-reset', resetLimit, async (req, res, next) => {
     const link = await firebaseAuth.generatePasswordResetLink(email, {
       url: 'https://portal.ownerinc.com.br/login.html',
     });
-    await sendPasswordReset({ to: email, link });
-    console.log(JSON.stringify({ service: 'api', event: 'password_reset_email_accepted', requestId: req.id }));
+    const delivery = smtpAcceptanceAuditDetails(await sendPasswordReset({ to: email, link }));
+    try {
+      await pool.query(
+        `INSERT INTO audit_log (actor_uid, action, target_type, target_id, request_id, details)
+         VALUES (NULL, 'auth.password_reset.accepted', 'user', $1, $2, $3::jsonb)`,
+        [firebaseUser.uid, req.id, JSON.stringify({ password_reset: delivery })],
+      );
+    } catch {
+      console.error(JSON.stringify({ service: 'api', event: 'password_reset_audit_failed', requestId: req.id }));
+    }
+    console.log(JSON.stringify({ service: 'api', event: 'password_reset_email_accepted', requestId: req.id, delivery }));
     res.status(202).json(accepted);
   } catch (error) {
     next(error);
