@@ -119,10 +119,10 @@ test('home preview preserves the light and dark surface contrast tokens', async 
     css,
     /\.preview-meta\s*\{[^}]*rgba\(255\s*,\s*255\s*,\s*255\s*,\s*0\.62\)/s,
   );
-  assert.match(tokens, /font-family:\s*'Raleway';[\s\S]*fonts\.gstatic\.com/);
+  assert.match(tokens, /font-family:\s*'Oswald';[\s\S]*assets\/fonts\/Oswald-Variable\.ttf/);
   assert.match(tokens, /font-family:\s*'Hamilton';[\s\S]*fonts\.cdnfonts\.com/);
   assert.match(tokens, /--font-sans:\s*'Hamilton'/);
-  assert.match(tokens, /--font-display:\s*'Raleway'/);
+  assert.match(tokens, /--font-display:\s*'Oswald'/);
   assert.doesNotMatch(tokens, /Novelin|Signaturia/);
   assert.match(css, /\.preview-hero h1\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
   assert.match(css, /\.section-heading h2\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
