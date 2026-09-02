@@ -1,4 +1,12 @@
 @font-face {
+  font-family: 'Raleway';
+  src: url('https://fonts.gstatic.com/s/raleway/v37/1Ptug8zYS_SKggPNyC0ITw.woff2') format('woff2');
+  font-weight: 700 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
   font-family: 'Hamilton';
   src: url('https://fonts.cdnfonts.com/s/79987/Hamilton.woff') format('woff');
   font-weight: 400;
@@ -28,7 +36,7 @@
 
   /* Tipografia */
   --font-sans: 'Hamilton', Georgia, serif;
-  --font-display: 'Hamilton', Georgia, serif;
+  --font-display: 'Raleway', Arial, sans-serif;
   --font-size-xs: 11px;
   --font-size-sm: 13px;
   --font-size-base: 15px;
