@@ -30,13 +30,13 @@ test('authorization requires an admin role and reserves privilege mutation for a
   assert.equal(removesLastActiveSuperAdmin(superAdmin, 'admin', { superAdmin: true }, 1), false);
 });
 
-test('AutoCard allowlist remains exact and independent from Cards Pós access', () => {
-  assert.equal(canUseAutoCard({ job_title: 'Analista de RH Sênior' }), true);
-  assert.equal(canUseAutoCard({ job_title: 'Gerente de RH' }), true);
-  assert.equal(canUseAutoCard({ job_title: 'Analista de DHO' }), false);
-  assert.equal(canUseAutoCard({ job_title: 'Gerente de RH Jr.' }), false);
-  assert.equal(canUsePosCards({ role: 'admin', job_title: 'Diretor' }), true);
-  assert.equal(canUsePosCards({ role: 'viewer', job_title: 'Analista de RH Sênior' }), false);
+test('page access follows the job title and super-admin bypass', () => {
+  assert.equal(canUseAutoCard({ role: 'viewer', job_title_access: { autocard: true } }), true);
+  assert.equal(canUsePosCards({ role: 'viewer', job_title_access: { posCards: true } }), true);
+  assert.equal(canUseAutoCard({ role: 'viewer', job_title: 'Analista de RH Sênior' }), false);
+  assert.equal(canUsePosCards({ role: 'admin', job_title: 'Diretor' }), false);
+  assert.equal(canUseAutoCard(superAdmin), true);
+  assert.equal(canUsePosCards(superAdmin), true);
 });
 
 test('Cards Pós remains isolated from AutoCard routes, storage, and the migration ledger', async () => {

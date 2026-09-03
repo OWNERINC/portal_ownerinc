@@ -1,10 +1,13 @@
 const express = require('express');
 const pool = require('../db');
 const { authMiddleware, can } = require('../middleware/auth');
+const { normalizeJobTitlePages } = require('../middleware/policy');
 const { boolean, forbidden, invalid, parseListQuery, text, uuid, validBody, withAudit } = require('../route-utils');
 
 const router = express.Router();
-const schema = { name: text(120, true), active: boolean };
+const pageAccess = (value) => value === undefined || (value && typeof value === 'object' && !Array.isArray(value)
+  && Object.keys(value).every((key) => ['autocard', 'posCards'].includes(key) && typeof value[key] === 'boolean'));
+const schema = { name: text(120, true), active: boolean, page_access: pageAccess };
 const listQuery = { all: (value) => ['true', 'false'].includes(value), active: (value) => value === 'true' };
 
 function canManage(req, res) {
@@ -39,8 +42,8 @@ router.post('/', authMiddleware, async (req, res, next) => {
   try {
     const row = await withAudit(pool, req, 'job_title.create', 'job_title', async (db) => {
       const { rows } = await db.query(
-        'INSERT INTO job_titles (name, active) VALUES ($1, $2) RETURNING *',
-        [req.body.name.trim(), req.body.active ?? true]
+        'INSERT INTO job_titles (name, active, page_access) VALUES ($1, $2, $3::jsonb) RETURNING *',
+        [req.body.name.trim(), req.body.active ?? true, JSON.stringify(normalizeJobTitlePages(req.body.page_access))]
       );
       return rows[0];
     }, { targetId: (result) => result.id });
@@ -57,9 +60,9 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
   try {
     const row = await withAudit(pool, req, 'job_title.update', 'job_title', async (db) => {
       const { rows } = await db.query(
-        `UPDATE job_titles SET name = $2, active = $3, updated_at = NOW()
-         WHERE id = $1 RETURNING *`,
-        [req.params.id, req.body.name.trim(), req.body.active]
+         `UPDATE job_titles SET name = $2, active = $3, page_access = $4::jsonb, updated_at = NOW()
+          WHERE id = $1 RETURNING *`,
+         [req.params.id, req.body.name.trim(), req.body.active, JSON.stringify(normalizeJobTitlePages(req.body.page_access))]
       );
       return rows[0];
     }, { targetId: req.params.id, details: { fields: Object.keys(req.body).sort() } });

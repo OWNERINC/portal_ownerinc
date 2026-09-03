@@ -35,7 +35,7 @@ async function authMiddleware(req, res, next) {
 
   try {
     const { rows } = await pool.query(
-      `SELECT u.*, jt.name AS job_title
+      `SELECT u.*, jt.name AS job_title, jt.page_access AS job_title_access
        FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
        WHERE u.uid = $1`, [decoded.uid]
     );

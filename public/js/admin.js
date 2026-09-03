@@ -91,6 +91,8 @@ function showJobTitleEditor(title = null) {
   editingJobTitleId = title?.id || null;
   document.getElementById('job-title-name').value = title?.name || '';
   document.getElementById('job-title-active').checked = title ? !!title.active : true;
+  document.getElementById('job-title-autocard').checked = title?.page_access?.autocard === true;
+  document.getElementById('job-title-pos-cards').checked = title?.page_access?.posCards === true;
   document.getElementById('job-title-editor').hidden = false;
   document.getElementById('job-title-name').focus();
 }
@@ -701,6 +703,10 @@ document.getElementById('job-title-form').addEventListener('submit', async event
       body: JSON.stringify({
         name: document.getElementById('job-title-name').value.trim(),
         active: document.getElementById('job-title-active').checked,
+        page_access: {
+          autocard: document.getElementById('job-title-autocard').checked,
+          posCards: document.getElementById('job-title-pos-cards').checked,
+        },
       }),
     });
     hideJobTitleEditor();

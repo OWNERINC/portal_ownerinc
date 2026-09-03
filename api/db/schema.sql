@@ -11,9 +11,15 @@ CREATE TABLE IF NOT EXISTS job_titles (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   name       TEXT        NOT NULL,
   active     BOOLEAN     NOT NULL DEFAULT TRUE,
+  page_access JSONB      NOT NULL DEFAULT '{"autocard":false,"posCards":false}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT job_titles_name_check CHECK (char_length(btrim(name)) BETWEEN 1 AND 120),
+  CONSTRAINT job_titles_page_access_check CHECK (
+    jsonb_typeof(page_access) = 'object'
+    AND jsonb_typeof(page_access->'autocard') = 'boolean'
+    AND jsonb_typeof(page_access->'posCards') = 'boolean'
+  ),
   CONSTRAINT job_titles_name_unique UNIQUE (name)
 );
 

@@ -5,37 +5,26 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const {
-  POS_CARDS_ADMIN_BYPASS,
-  POS_CARDS_JOB_TITLES,
   canUseAutoCard,
   canUsePosCards,
 } = require('../../api/middleware/policy');
 
 const user = (role, job_title) => ({ role, job_title, permissions: {} });
 
-test('Pos-Cards policy allows temporary admins and future exact titles', () => {
-  assert.equal(POS_CARDS_ADMIN_BYPASS, true);
-  assert.equal(POS_CARDS_JOB_TITLES.size, 0);
-  assert.equal(canUsePosCards(user('admin', 'Diretor')), true);
+test('Pos-Cards access follows the configured job title page', () => {
+  assert.equal(canUsePosCards({ ...user('viewer', 'Diretor'), job_title_access: { posCards: true } }), true);
+  assert.equal(canUsePosCards(user('admin', 'Diretor')), false);
   assert.equal(canUsePosCards(user('viewer', 'Analista de Pos-Vendas')), false);
-
-  POS_CARDS_JOB_TITLES.add('analista de pos-vendas');
-  try {
-    assert.equal(canUsePosCards(user('viewer', 'Analista de Pos-Vendas')), true);
-    assert.equal(canUsePosCards(user('viewer', 'Analista de Pos-Vendas Jr.')), false);
-  } finally {
-    POS_CARDS_JOB_TITLES.delete('analista de pos-vendas');
-  }
 });
 
 test('Pos-Cards policy remains independent from AutoCard policy', () => {
   const rhViewer = user('viewer', 'Analista de RH Sênior');
   const admin = user('admin', 'Diretor');
 
-  assert.equal(canUseAutoCard(rhViewer), true);
+  assert.equal(canUseAutoCard(rhViewer), false);
   assert.equal(canUsePosCards(rhViewer), false);
   assert.equal(canUseAutoCard(admin), false);
-  assert.equal(canUsePosCards(admin), true);
+  assert.equal(canUsePosCards(admin), false);
 });
 
 test('auth and frontend propagate the Pos-Cards access field', async () => {

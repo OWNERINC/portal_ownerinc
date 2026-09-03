@@ -7,12 +7,7 @@ const PERMISSIONS = new Set([
   'manageSolides',
 ]);
 
-const AUTOCARD_JOB_TITLES = new Set([
-  'analista de rh sênior',
-  'gerente de rh',
-]);
-const POS_CARDS_JOB_TITLES = new Set();
-const POS_CARDS_ADMIN_BYPASS = true;
+const JOB_TITLE_PAGES = ['autocard', 'posCards'];
 
 function isSuperAdmin(user) {
   return user?.role === 'admin' && user?.permissions?.superAdmin === true;
@@ -24,13 +19,15 @@ function can(user, permission) {
 }
 
 function canUseAutoCard(user) {
-  const title = String(user?.job_title || '').trim().toLocaleLowerCase('pt-BR');
-  return AUTOCARD_JOB_TITLES.has(title);
+  return isSuperAdmin(user) || user?.job_title_access?.autocard === true;
 }
 
 function canUsePosCards(user) {
-  const title = String(user?.job_title || '').trim().toLocaleLowerCase('pt-BR');
-  return (POS_CARDS_ADMIN_BYPASS && user?.role === 'admin') || POS_CARDS_JOB_TITLES.has(title);
+  return isSuperAdmin(user) || user?.job_title_access?.posCards === true;
+}
+
+function normalizeJobTitlePages(value = {}) {
+  return Object.fromEntries(JOB_TITLE_PAGES.map((page) => [page, value[page] === true]));
 }
 
 function maySetPrivileges(actor, targetUid) {
@@ -57,7 +54,7 @@ function normalizePermissions(value = {}) {
 }
 
 module.exports = {
-  AUTOCARD_JOB_TITLES, PERMISSIONS, POS_CARDS_ADMIN_BYPASS, POS_CARDS_JOB_TITLES, can, canUseAutoCard,
+  JOB_TITLE_PAGES, PERMISSIONS, can, canUseAutoCard,
   canUsePosCards, isSuperAdmin, mayChangeAccountStatus, maySetPrivileges,
-  normalizePermissions, removesLastActiveSuperAdmin,
+  normalizeJobTitlePages, normalizePermissions, removesLastActiveSuperAdmin,
 };
