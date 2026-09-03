@@ -81,6 +81,7 @@ try {
     '021_bulk_user_imports',
     '022_bulk_user_import_validation',
     '023_pos_owner_cards',
+    '024_job_title_page_access',
   ]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
