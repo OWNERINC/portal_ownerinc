@@ -46,10 +46,11 @@ test('editor and history retain the source field and view contract', () => {
   assert.match(html, /data-view="history"/);
   assert.match(app, /duplicate/);
   assert.match(app, /method: 'DELETE'/);
-  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'recipientName', 'greeting', 'stayInfo', 'includedIntro', 'includedTitle', 'cleaningTitle', 'cleaningBody', 'supportTitle', 'supportBody', 'securityTitle', 'securityBody', 'consumptionTitle', 'gasTitle', 'gasInfo', 'waterTitle', 'waterInfo', 'energyTitle', 'energyInfo', 'petTitle', 'petBody', 'servicesIntro', 'gastronomyTitle', 'gastronomyBody', 'chefTitle', 'chefBody', 'extraCleaningTitle', 'extraCleaningBody', 'trainerTitle', 'trainerBody', 'babysitterTitle', 'babysitterBody', 'carWashTitle', 'carWashBody', 'contact']) {
+  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'stayInfo', 'hostNote', 'contact']) {
     assert.match(html, new RegExp(`data-owner-field="${field}"`));
     assert.match(app, new RegExp(field));
   }
+  assert.doesNotMatch(html, /data-owner-field="(?:recipientName|greeting|included|cleaning|support|security|consumption|gas|water|energy|pet|services|gastronomy|chef|extraCleaning|trainer|babysitter|carWash)/);
 });
 
 test('API calls are authenticated and use only the Pos-Cards routes', () => {
@@ -87,6 +88,11 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(app, /footer-phone-editable/);
   assert.match(app, /address-line/);
   assert.match(css, /background: #e9e6de/);
+  assert.match(css, /\.owner-card \{[^}]*background: #000/);
+  assert.match(css, /\.owner-body \{[^}]*background: #000/);
+  assert.match(app, /owner-host-note/);
+  assert.doesNotMatch(app, /owner-included|owner-consumption|owner-services|owner-service/);
+  assert.doesNotMatch(css, /\.owner-included|\.owner-consumption|\.owner-services|\.owner-service/);
   assert.match(app, /guest-cover\.jpg/);
   assert.match(app, /owner-cover\.jpg/);
   assert.match(css, /aspect-ratio: 1448 \/ 2347/);

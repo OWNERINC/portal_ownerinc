@@ -20,46 +20,8 @@ const ownerDefaults = {
   heroTitle: 'Confirmação de',
   heroEmphasis: 'reserva',
   heroBrand: 'Owntime',
-  recipientName: 'Fulano da Silva Santos',
-  greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
   stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx\nCortesia: um almoço.',
-  experienceTitle: 'Sua experiência inclui:',
-  experienceBody: 'Hospedagem com acesso aos espaços de lazer de uso comum disponíveis no Club House Owntime.',
-  includedConsumptionTitle: 'Consumos da hospedagem:',
-  includedConsumptionBody: 'Água, energia elétrica, gás e demais consumos relacionados à estadia.',
-  notIncludedTitle: 'O que não está incluso:',
-  notIncludedBody: 'Alimentação, bebidas e serviços on demand serão cobrados à parte.',
-  includedIntro: 'Para que sua estada seja a mais confortável e transparente possível, alinhamos abaixo os serviços que já estão inclusos na sua hospedagem e as despesas que são contabilizadas à parte.',
-  includedTitle: 'O que já está INCLUSO na sua estadia:',
-  cleaningTitle: 'Serviço de Limpeza',
-  cleaningBody: 'Você tem direito a 1 limpeza completa com troca de enxoval durante o período. Para utilizá-la, basta fazer o agendamento com 24h de antecedência na recepção.',
-  supportTitle: 'Equipe de Apoio',
-  supportBody: 'Nossos Anfitriões e Mensageiros/Manobristas estão prontos para ajudar você no que for preciso.',
-  securityTitle: 'Segurança e Praticidade',
-  securityBody: 'Serviço de portaria 24h à sua disposição para total tranquilidade.',
-  consumptionTitle: 'O que é PAGO (Consumo individual):',
-  gasTitle: 'GÁS (GLP)',
-  gasInfo: 'Aquecimento de Água\n\nLareiras a Gás;\n\nFogão / Cooktop;\n\nAquecimento de Piso e calefação.',
-  waterTitle: 'ÁGUA',
-  waterInfo: 'Chuveiros de Alta Vazão e Banheiras/Spas;\n\nTorneiras;\n\nEletrodomésticos da Cozinha;',
-  energyTitle: 'ENERGIA ELÉTRICA',
-  energyInfo: 'Ar-Condicionado;\n\nToalheiros Aquecidos\n\nEletrodomésticos e Gourmet;\n\nIluminação.',
-  petTitle: 'Hospedagem Pet',
-  petBody: 'sujeito à cobrança diária de R$ 85,00 por animal.',
-  servicesIntro: 'Solicite à recepção ou ao seu concierge durante a estadia (valores sob consulta):',
-  gastronomyTitle: 'Gastronomia',
-  gastronomyBody: 'Restaurante, Bar, Coffee Shop e Café da Manhã.',
-  chefTitle: 'Chef em Casa',
-  chefBody: 'Experiência culinária privativa na sua unidade.',
-  extraCleaningTitle: 'Limpeza Adicional',
-  extraCleaningBody: 'Serviços extras de faxina ou troca de enxoval.',
-  trainerTitle: 'Personal Trainer',
-  trainerBody: 'Acompanhamento profissional exclusivo no fitness center.',
-  babysitterTitle: 'Babysitter & Pet Care',
-  babysitterBody: 'Cuidados dedicados para seus filhos ou seu pet.',
-  carWashTitle: 'Car Wash',
-  carWashBody: 'Estética e lavagem automotiva sem precisar sair do condomínio.',
-  conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
+  hostNote: 'O time de anfitriões entrará em contato com você até 7 dias antes de sua hospedagem.',
   contact: '54 3421 9988',
 };
 const GUEST_COVER_ASSET = './cards-pos/assets/guest/guest-cover.jpg';
@@ -181,9 +143,7 @@ function renderGuest(v) {
 
 function renderOwnerTemplate(v) {
   const media = current.mediaUrl || OWNER_COVER_ASSET;
-  const icon = (name, label = '') => `<img class="owner-icon" src="./cards-pos/assets/owner/${name}" alt="${label}">`;
-  const service = (iconName, title, body) => `<div class="owner-service">${icon(iconName)}<div class="owner-service-copy"><strong>${esc(title)}:</strong> ${esc(body)}</div></div>`;
-  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><div class="owner-recipient">Olá, ${esc(v.recipientName)}</div>${richCopy(v.greeting, 'greeting')}<div class="owner-stay-box">${richCopy(v.stayInfo)}</div>${renderAddress()}<section class="owner-included">${richCopy(v.includedIntro)}<h3>${esc(v.includedTitle)}</h3>${service('icon-cleaning.svg', v.cleaningTitle, v.cleaningBody)}${service('icon-support.svg', v.supportTitle, v.supportBody)}${service('icon-security.svg', v.securityTitle, v.securityBody)}</section><section class="owner-consumption"><h3>${esc(v.consumptionTitle)}</h3><div class="consumption-grid"><div><strong>${esc(v.gasTitle)}</strong>${richCopy(v.gasInfo)}</div><div><strong>${esc(v.waterTitle)}</strong>${richCopy(v.waterInfo)}</div><div><strong>${esc(v.energyTitle)}</strong>${richCopy(v.energyInfo)}</div></div></section><div class="owner-pet">${icon('icon-pet.svg')}<div class="owner-pet-copy"><strong>${esc(v.petTitle)}:</strong> ${esc(v.petBody)}</div></div><section class="owner-services">${richCopy(v.servicesIntro)}${service('icon-food.svg', v.gastronomyTitle, v.gastronomyBody)}${service('icon-chef.svg', v.chefTitle, v.chefBody)}${service('icon-cleaning-extra.svg', v.extraCleaningTitle, v.extraCleaningBody)}${service('icon-trainer.svg', v.trainerTitle, v.trainerBody)}${service('icon-babysitter.svg', v.babysitterTitle, v.babysitterBody)}${service('icon-car.svg', v.carWashTitle, v.carWashBody)}</section></div></section>${renderFooter(v)}`;
+  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><div class="owner-stay-box">${richCopy(v.stayInfo)}</div>${renderAddress()}${richCopy(v.hostNote, 'owner-host-note')}</div></section>${renderFooter(v)}`;
 }
 
 function renderOwner(v) {
@@ -455,7 +415,7 @@ function updateModuleControls() {
   $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? '290,6' : '175,1'} mm`;
   $('moduleTitle').textContent = owner ? 'Convite para Owners' : 'Convite para convidados';
   $('moduleDescription').textContent = owner
-    ? 'Edite os textos da experiência Owner, revise o frame e exporte o convite.'
+    ? 'Edite a capa, os dados da reserva e a mensagem final do convite.'
     : 'Preencha os textos, escolha uma imagem e revise o convite no preview ao lado.';
   $('editorTitle').textContent = owner ? 'Monte o card do Owner' : 'Monte seu convite';
 }

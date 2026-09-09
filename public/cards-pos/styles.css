@@ -106,7 +106,7 @@
 .address-line strong { font-weight: 700; }
 .address-line span { font-weight: 400; }
 .guest-card .address-line { color: #171717; }
-.owner-card { aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; font-family: 'Raleway', Arial, sans-serif; }
+.owner-card { aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; background: #000; color: #fff; font-family: 'Raleway', Arial, sans-serif; }
 .owner-card .hero { padding: 36px 8%; background: #233b43; }
 .owner-card .hero::after { background: linear-gradient(180deg, #0001 0%, #0008 100%); }
 .owner-card .hero-content { max-width: 94%; gap: 0; }
@@ -114,33 +114,14 @@
 .owner-card .hero h2 em { margin-top: 2px; font-size: 1.04em; font-style: italic; font-weight: 700; }
 .owner-card .hero-brand { margin-top: 22px; font-size: clamp(20px, 3vw, 28px); }
 .owner-card .gold-rule { left: 9.7%; right: 9.7%; bottom: -3px; height: 7px; background: #a99b85; }
-.owner-body { padding: 5.7% 7.7% 4.2%; }
-.owner-body .card-copy { gap: 0; }
+.owner-body { padding: 17.8% 7.7% 4.2%; background: #000; color: #fff; }
+.owner-body .card-copy { gap: 0; height: 100%; flex: 1 1 auto; }
 .owner-body p, .owner-body .rich-copy { font-size: clamp(11px, 1.68vw, 15.5px); line-height: 1.18; text-align: justify; }
 .owner-body ul, .owner-body ol { font-size: clamp(11px, 1.68vw, 15.5px); line-height: 1.18; text-align: left; }
-.owner-body .greeting { margin-top: 4.2%; font-size: clamp(12px, 1.85vw, 17px); line-height: 1.25; }
-.owner-recipient { margin: 0 0 3.9%; font-size: clamp(12px, 1.8vw, 17px) !important; font-weight: 500; text-align: left !important; }
-.owner-body .greeting { margin-bottom: 3.8%; }
-.owner-stay-box { margin: 0; padding: 5.2% 10.2%; border-radius: 10% / 28%; background: #e9e6de; }
+.owner-stay-box { margin: 0; padding: 5.2% 10.2%; border-radius: 10% / 28%; background: #e9e6de; color: #171717; }
 .owner-stay-box .rich-copy { text-align: left; }
 .owner-card .address-line { margin: 4.8% 0 5.6%; color: #a99b85; }
-.owner-included > p, .owner-included > .rich-copy { margin-bottom: 5.3%; }
-.owner-included > h3 { margin: 0 0 5.4%; font-size: clamp(12px, 1.75vw, 16px); line-height: 1.2; }
-.owner-service { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: start; gap: 12px; margin-bottom: 3.7%; }
-.owner-icon { display: block; width: 30px; height: 30px; object-fit: contain; }
-.owner-service-copy { min-width: 0; text-align: justify; }
-.owner-service strong, .owner-pet strong { font-weight: 700; }
-.owner-consumption { margin-top: 2.5%; }
-.owner-consumption h3 { margin: 0 0 4.2%; font-size: clamp(12px, 1.75vw, 16px); line-height: 1.2; }
-.consumption-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8.3%; }
-.consumption-grid > div { min-width: 0; }
-.consumption-grid strong { display: block; margin-bottom: 14%; font-size: clamp(10px, 1.5vw, 14px); line-height: 1.1; }
-.consumption-grid p, .consumption-grid .rich-copy { text-align: left; }
-.owner-pet { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 12px; margin-top: 6.5%; }
-.owner-pet-copy { min-width: 0; text-align: left; }
-.owner-services { margin-top: 5.7%; padding-bottom: 3%; }
-.owner-services > p, .owner-services > .rich-copy { margin-bottom: 5.5%; }
-.owner-services .owner-service { margin-bottom: 3.6%; }
+.owner-host-note { margin: auto 10% 0; color: #a99b85; font-size: clamp(11px, 1.68vw, 15.5px); font-weight: 700; line-height: 1.2; text-align: left !important; }
 .owner-footer { min-height: 0; }
 .card-footer { position: relative; min-height: 0; overflow: hidden; background: #050505; color: #fff; container-type: inline-size; }
 .footer-art { display: block; width: 100%; height: auto; }
@@ -186,7 +167,6 @@
   .history-heading { display: block; }
   .search-label { width: 100%; margin-top: var(--space-4); }
   .history-item { align-items: flex-start; flex-direction: column; }
-  .consumption-grid { grid-template-columns: 1fr; gap: 4px; }
 }
 @media print {
   html, body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -201,13 +181,7 @@
   .footer-phone-editable { font-size: 1.2mm; }
   .owner-card .hero h2 { font-size: 6.1mm; }
   .owner-card .hero-brand { font-size: 4.7mm; }
-  .owner-body p, .owner-body .rich-copy, .owner-service-copy, .owner-pet-copy { font-size: 2.4mm; }
-  .owner-body .greeting, .owner-recipient { font-size: 2.7mm !important; }
-  .owner-included > h3, .owner-consumption h3 { font-size: 2.7mm; }
-  .consumption-grid strong { font-size: 2.4mm; }
-  .owner-icon { width: 6.5mm; height: 6.5mm; }
-  .owner-service, .owner-pet { grid-template-columns: 8mm minmax(0, 1fr); gap: 2.5mm; }
-  .footer-contact { font-size: 2.2mm; }
+  .owner-body p, .owner-body .rich-copy, .owner-host-note { font-size: 2.4mm; }
 }
 @page guest-page { size: 108mm 175.1mm; margin: 0; }
 @page owner-page { size: 108mm 290.6mm; margin: 0; }
