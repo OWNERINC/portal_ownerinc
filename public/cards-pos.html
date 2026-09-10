@@ -106,26 +106,48 @@
                   <label for="contact">Telefone<input id="contact" data-field="contact" maxlength="24"></label>
                 </fieldset>
                </div>
-                <div id="ownerFields" class="owner-fields hidden">
-                  <fieldset>
-                    <legend>Capa do Owner</legend>
+                 <div id="ownerFields" class="owner-fields hidden">
+                   <fieldset>
+                     <legend>Capa do Owner</legend>
                      <label for="ownerHeroTitle">Chamada<input id="ownerHeroTitle" data-owner-field="heroTitle" maxlength="60"></label>
                      <label for="ownerHeroEmphasis">Frase em destaque<input id="ownerHeroEmphasis" data-owner-field="heroEmphasis" maxlength="90"></label>
                      <label for="ownerHeroBrand">Assinatura da experiência<input id="ownerHeroBrand" data-owner-field="heroBrand" maxlength="32"></label>
-                 </fieldset>
-                   <fieldset>
-                     <legend>Dados da reserva</legend>
-                     <label for="ownerStayInfo">Responsável, hóspedes, unidade e datas<textarea id="ownerStayInfo" data-owner-field="stayInfo" maxlength="320" rows="6"></textarea></label>
                    </fieldset>
                    <fieldset>
-                     <legend>Mensagem final</legend>
-                     <label for="ownerHostNote">Contato dos anfitriões<textarea id="ownerHostNote" data-owner-field="hostNote" maxlength="180" rows="3"></textarea></label>
+                     <legend>Reserva</legend>
+                     <label for="ownerSalutation">Saudação<input id="ownerSalutation" data-owner-field="salutation" maxlength="80"></label>
+                     <label for="ownerGreeting">Apresentação<textarea id="ownerGreeting" data-owner-field="greeting" maxlength="300" rows="3"></textarea></label>
+                     <label for="ownerStayInfo">Responsável, hóspedes, unidade e datas<textarea id="ownerStayInfo" data-owner-field="stayInfo" maxlength="360" rows="6"></textarea></label>
+                     <label for="ownerAddress">Como chegar<input id="ownerAddress" data-owner-field="address" maxlength="140"></label>
                    </fieldset>
                    <fieldset>
-                     <legend>Rodapé</legend>
+                     <legend>Serviços e consumos</legend>
+                     <label for="ownerIncludedIntro">Introdução<textarea id="ownerIncludedIntro" data-owner-field="includedIntro" maxlength="460" rows="4"></textarea></label>
+                     <label for="ownerIncludedTitle">Título dos serviços inclusos<input id="ownerIncludedTitle" data-owner-field="includedTitle" maxlength="100"></label>
+                     <label for="ownerCleaning">Serviço de limpeza<textarea id="ownerCleaning" data-owner-field="cleaning" maxlength="420" rows="4"></textarea></label>
+                     <label for="ownerSupport">Equipe de apoio e portaria<textarea id="ownerSupport" data-owner-field="support" maxlength="280" rows="3"></textarea></label>
+                     <label for="ownerPaidTitle">Título dos consumos pagos<input id="ownerPaidTitle" data-owner-field="paidTitle" maxlength="100"></label>
+                     <label for="ownerUtilities">Gás, água e energia<textarea id="ownerUtilities" data-owner-field="utilities" maxlength="280" rows="3"></textarea></label>
+                     <label for="ownerPet">Hospedagem pet<textarea id="ownerPet" data-owner-field="pet" maxlength="220" rows="2"></textarea></label>
+                   </fieldset>
+                   <fieldset>
+                     <legend>Serviços sob consulta</legend>
+                     <label for="ownerServicesIntro">Apresentação<textarea id="ownerServicesIntro" data-owner-field="servicesIntro" maxlength="280" rows="3"></textarea></label>
+                     <label for="ownerGastronomy">Gastronomia<input id="ownerGastronomy" data-owner-field="gastronomy" maxlength="80"></label>
+                     <label for="ownerChef">Chef em Casa<input id="ownerChef" data-owner-field="chef" maxlength="80"></label>
+                     <label for="ownerExtraCleaning">Limpeza adicional<input id="ownerExtraCleaning" data-owner-field="extraCleaning" maxlength="80"></label>
+                     <label for="ownerBabysitter">Babysitter<input id="ownerBabysitter" data-owner-field="babysitter" maxlength="80"></label>
+                     <label for="ownerTrainer">Personal trainer<input id="ownerTrainer" data-owner-field="trainer" maxlength="80"></label>
+                     <label for="ownerCarWash">Car wash<input id="ownerCarWash" data-owner-field="carWash" maxlength="80"></label>
+                   </fieldset>
+                   <fieldset>
+                     <legend>Mensagem final e rodapé</legend>
+                     <label for="ownerHostNote">Contato dos anfitriões<textarea id="ownerHostNote" data-owner-field="hostNote" maxlength="220" rows="3"></textarea></label>
+                     <label for="ownerFooterLabel">Nome da central<input id="ownerFooterLabel" data-owner-field="footerLabel" maxlength="80"></label>
                      <label for="ownerContact">Telefone<input id="ownerContact" data-owner-field="contact" maxlength="24"></label>
-                  </fieldset>
-               </div>
+                     <label for="ownerFooterEmail">Email<input id="ownerFooterEmail" data-owner-field="footerEmail" maxlength="120"></label>
+                   </fieldset>
+                </div>
               <div class="form-actions">
                 <button id="saveButton" class="button secondary" type="button">Salvar</button>
                 <button id="exportButton" class="button primary" type="button">Exportar PDF</button>

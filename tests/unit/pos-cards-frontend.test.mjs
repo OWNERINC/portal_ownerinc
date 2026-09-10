@@ -21,7 +21,7 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
   for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
   await access('public/cards-pos/assets/guest/guest-cover.jpg');
-  for (const asset of ['owner-cover.jpg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-security.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
+  for (const asset of ['owner-cover.jpg', 'ownerinc-logo.svg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-cleaning-extra.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
   assert.match(footer, /width="1448" height="307" viewBox="0 0 1448 307"/);
 });
 
@@ -33,7 +33,7 @@ test('Cards Pós exposes independent Guest and Owner modules', () => {
   assert.match(app, /convite_owner/);
   assert.match(app, /function switchModule/);
   assert.match(app, /function renderOwner/);
-  assert.match(app, /previewLabel.*290,6.*175,1/);
+  assert.match(app, /previewLabel.*248,6.*175,1/);
 });
 
 test('editor and history retain the source field and view contract', () => {
@@ -46,11 +46,10 @@ test('editor and history retain the source field and view contract', () => {
   assert.match(html, /data-view="history"/);
   assert.match(app, /duplicate/);
   assert.match(app, /method: 'DELETE'/);
-  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'stayInfo', 'hostNote', 'contact']) {
+  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'salutation', 'greeting', 'stayInfo', 'address', 'includedIntro', 'includedTitle', 'cleaning', 'support', 'paidTitle', 'utilities', 'pet', 'servicesIntro', 'gastronomy', 'chef', 'extraCleaning', 'babysitter', 'trainer', 'carWash', 'hostNote', 'footerLabel', 'contact', 'footerEmail']) {
     assert.match(html, new RegExp(`data-owner-field="${field}"`));
     assert.match(app, new RegExp(field));
   }
-  assert.doesNotMatch(html, /data-owner-field="(?:recipientName|greeting|included|cleaning|support|security|consumption|gas|water|energy|pet|services|gastronomy|chef|extraCleaning|trainer|babysitter|carWash)/);
 });
 
 test('API calls are authenticated and use only the Pos-Cards routes', () => {
@@ -88,20 +87,19 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(app, /footer-phone-editable/);
   assert.match(app, /address-line/);
   assert.match(css, /background: #e9e6de/);
-  assert.match(css, /\.owner-card \{[^}]*background: #000/);
-  assert.match(css, /\.owner-body \{[^}]*background: #000/);
+  assert.match(css, /\.owner-body \{[^}]*background: #fff/);
   assert.match(app, /owner-host-note/);
-  assert.doesNotMatch(app, /owner-included|owner-consumption|owner-services|owner-service/);
-  assert.doesNotMatch(css, /\.owner-included|\.owner-consumption|\.owner-services|\.owner-service/);
+  for (const marker of ['owner-included', 'owner-paid', 'owner-services-grid', 'owner-footer-contact']) assert.match(app, new RegExp(marker));
+  assert.match(css, /\.owner-services-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(app, /guest-cover\.jpg/);
   assert.match(app, /owner-cover\.jpg/);
   assert.match(css, /aspect-ratio: 1448 \/ 2347/);
-  assert.match(css, /aspect-ratio: 1448 \/ 3896/);
-  assert.match(css, /grid-template-rows: 18\.43% minmax\(0, 1fr\) 7\.88%/);
+  assert.match(css, /aspect-ratio: 862 \/ 1984/);
+  assert.match(css, /grid-template-rows: 21\.32% minmax\(0, 1fr\) 8\.02%/);
   assert.match(css, /grid-template-rows: 30\.59% minmax\(0, 1fr\) 13\.08%/);
   assert.match(css, /font-family: ['"]Raleway['"]/);
   assert.match(css, /@page owner-page/);
-  assert.match(css, /@page owner-page \{ size: 108mm 290\.6mm/);
+  assert.match(css, /@page owner-page \{ size: 108mm 248\.6mm/);
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
   assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
@@ -124,7 +122,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(css, /\.card-copy > \* \{ flex-shrink: 0; \}/);
   assert.match(css, /\.benefit-box \.inline-copy \{[^}]*margin-bottom:\s*19px;/);
   assert.match(css, /\.guest-card \{ page: guest-page; height: 175\.1mm/);
-  assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 290\.6mm/);
+  assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 248\.6mm/);
   assert.match(css, /page-break-inside: avoid/);
   assert.match(css, /break-inside: avoid/);
   assert.match(css, /break-after: avoid-page/);
@@ -150,7 +148,7 @@ test('Figma frames keep their proportions, address, photos, and editable phone f
   assert.match(css, /left: 5\.28%; top: 61\.72%/);
   assert.match(css, /\.footer-phone-editable \{ font-size: 1\.2mm; \}/);
   assert.match(css, /border-radius: 10% \/ 20%/);
-  assert.match(css, /border-radius: 10% \/ 28%/);
+  assert.match(app, /ownerinc-logo\.svg/);
   assert.match(css, /\.address-line \{[^}]*white-space: nowrap/);
   assert.match(css, /\.address-line \{[^}]*text-align: left !important/);
   assert.match(css, /\.address-line span \{ font-weight: 400; \}/);

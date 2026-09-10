@@ -11,9 +11,9 @@
 
 - Refinado o espaçamento vertical dos Cards Pós, com separação explícita entre o bloco `Consumos da hospedagem` e o título `O que não está incluso`, preservando as dimensões, o conteúdo e a exportação dos templates Guest e Owner.
 - Cards Pós agora possui os módulos editáveis Convidado e Owner, com alternância na tela, template Owner baseado no frame 2 do Figma e histórico compatível com os dois formatos.
-- O convite Owner foi alinhado ao Frame 2 do Figma: capa vertical, conteúdo editorial longo, serviços com ícones, consumo em três colunas, assets locais e exportação em página longa.
-- Guest e Owner agora seguem as proporções atuais dos Frames 01 (`1448 × 2347`) e 02 (`1448 × 3896`) na pré-visualização e na exportação PDF.
-- O bloco de endereço foi reposicionado nos dois convites e o footer passou a manter logos e composição fixos, com somente o telefone editável.
+- O convite Owner foi atualizado pelo print do Frame 02: corpo editorial branco, reserva destacada, serviços com ícones, consumos, grade de extras e rodapé Ownerinc.
+- Guest mantém o Frame 01 (`1448 × 2347`); Owner passa a seguir a proporção do novo print (`862 × 1984`) e exporta em `108 × 248,6 mm`.
+- Todos os textos do Owner, incluindo endereço e dados da central de relacionamento, são editáveis; ícones e logo permanecem fixos.
 - Campos de texto dos módulos Guest e Owner agora aceitam formatação rica segura com negrito, itálico, sublinhado, tachado e listas.
 - Added the block-based CMS for Knowledge, Academy, Benefits, Announcements, and Reminders with permission-scoped editing, safe rendering, publication scheduling, and protected assets. Static release verification passed; PostgreSQL migration and live acceptance evidence remain pending.
 - AutoCard exports now preserve preview proportions and the employee card uses a contained stacked layout with a wordmark-only footer.

@@ -106,23 +106,43 @@
 .address-line strong { font-weight: 700; }
 .address-line span { font-weight: 400; }
 .guest-card .address-line { color: #171717; }
-.owner-card { aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; background: #000; color: #fff; font-family: 'Raleway', Arial, sans-serif; }
-.owner-card .hero { padding: 36px 8%; background: #233b43; }
-.owner-card .hero::after { background: linear-gradient(180deg, #0001 0%, #0008 100%); }
+.owner-card { aspect-ratio: 862 / 1984; grid-template-rows: 21.32% minmax(0, 1fr) 8.02%; background: #fff; color: #171717; container-type: inline-size; font-family: 'Raleway', Arial, sans-serif; }
+.owner-card .hero { padding: 5% 8%; background: #233b43; }
+.owner-card .hero::after { background: #0007; }
 .owner-card .hero-content { max-width: 94%; gap: 0; }
-.owner-card .hero h2 { font-size: clamp(28px, 5.95vw, 40px); line-height: 1.1; letter-spacing: -.035em; }
-.owner-card .hero h2 em { margin-top: 2px; font-size: 1.04em; font-style: italic; font-weight: 700; }
-.owner-card .hero-brand { margin-top: 22px; font-size: clamp(20px, 3vw, 28px); }
-.owner-card .gold-rule { left: 9.7%; right: 9.7%; bottom: -3px; height: 7px; background: #a99b85; }
-.owner-body { padding: 17.8% 7.7% 4.2%; background: #000; color: #fff; }
+.owner-card .hero h2 { font-size: clamp(25px, 6.1cqw, 42px); line-height: 1.02; letter-spacing: -.035em; }
+.owner-card .hero h2 em { margin-top: 1.2%; font-size: 1.04em; font-style: normal; font-weight: 700; }
+.owner-card .hero-brand { margin-top: 8%; font-size: clamp(18px, 4cqw, 28px); }
+.owner-card .gold-rule { left: 9.4%; right: 9.4%; bottom: -3px; height: max(4px, .8cqw); background: #a99b85; }
+.owner-body { padding: 5.2% 7.7% 2.8%; background: #fff; color: #171717; }
 .owner-body .card-copy { gap: 0; height: 100%; flex: 1 1 auto; }
-.owner-body p, .owner-body .rich-copy { font-size: clamp(11px, 1.68vw, 15.5px); line-height: 1.18; text-align: justify; }
-.owner-body ul, .owner-body ol { font-size: clamp(11px, 1.68vw, 15.5px); line-height: 1.18; text-align: left; }
-.owner-stay-box { margin: 0; padding: 5.2% 10.2%; border-radius: 10% / 28%; background: #e9e6de; color: #171717; }
-.owner-stay-box .rich-copy { text-align: left; }
-.owner-card .address-line { margin: 4.8% 0 5.6%; color: #a99b85; }
-.owner-host-note { margin: auto 10% 0; color: #a99b85; font-size: clamp(11px, 1.68vw, 15.5px); font-weight: 700; line-height: 1.2; text-align: left !important; }
-.owner-footer { min-height: 0; }
+.owner-body p, .owner-body .rich-copy { font-size: clamp(8px, 2.25cqw, 15.5px); line-height: 1.2; text-align: left; }
+.owner-body ul, .owner-body ol { font-size: clamp(8px, 2.25cqw, 15.5px); line-height: 1.2; text-align: left; }
+.owner-salutation, .owner-greeting { margin-right: 8% !important; margin-left: 8% !important; }
+.owner-salutation { margin-bottom: 3.2% !important; }
+.owner-greeting { margin-bottom: 2.8% !important; text-align: justify !important; }
+.owner-stay-box { margin: 0 -2%; padding: 4.3% 10.2%; border-radius: 10% / 28%; background: #e9e6de; color: #171717; }
+.owner-stay-box .rich-copy { line-height: 1.72; text-align: left; }
+.owner-address { margin: 3.6% 0 4.7% !important; color: #a99b85; font-weight: 500; text-align: center !important; white-space: nowrap !important; }
+.owner-intro { margin-bottom: 4.2% !important; text-align: justify !important; }
+.owner-included h3, .owner-paid h3 { margin: 0 0 4%; font-size: clamp(8px, 2.25cqw, 15.5px); line-height: 1.2; }
+.owner-info-row { display: grid; grid-template-columns: 5.8cqw minmax(0, 1fr); align-items: start; gap: 1.2%; margin-bottom: 3.5%; }
+.owner-icon { display: block; width: 3.3cqw; height: 3.3cqw; margin-top: .2cqw; object-fit: contain; }
+.owner-info-row .rich-copy { text-align: justify; }
+.owner-paid { margin-top: 6%; }
+.owner-paid h3 { margin-bottom: 4.5%; }
+.owner-services { margin-top: 5.8%; }
+.owner-services-intro { margin-bottom: 4.4% !important; }
+.owner-services-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12%; row-gap: 3.2cqw; padding: 0 8%; }
+.owner-extra-service { display: grid; grid-template-columns: 4.6cqw minmax(0, 1fr); align-items: center; gap: 1.2cqw; }
+.owner-extra-service .rich-copy { white-space: nowrap; }
+.owner-host-note { margin: auto 8% 0; color: #a99b85; font-weight: 700; line-height: 1.2 !important; }
+.owner-footer { min-height: 0; display: flex; align-items: center; justify-content: space-between; padding: 4.8% 5.2% 1.8%; background: #000; }
+.owner-footer-rule { position: absolute; top: 0; right: 4.8%; left: 4.8%; height: .9cqw; background: #a99b85; }
+.owner-footer-contact { display: grid; gap: 1.1cqw; color: #fff; font-size: 1.15cqw; line-height: 1; }
+.owner-footer-contact > strong { font-size: 1.15cqw; font-weight: 500; letter-spacing: .42em; white-space: nowrap; }
+.owner-footer-contact > div { display: flex; align-items: center; gap: 1.4cqw; letter-spacing: .05em; white-space: nowrap; }
+.owner-footer > img { display: block; width: 17.2%; height: auto; }
 .card-footer { position: relative; min-height: 0; overflow: hidden; background: #050505; color: #fff; container-type: inline-size; }
 .footer-art { display: block; width: 100%; height: auto; }
 .footer-phone-backdrop { position: absolute; z-index: 1; left: 4.6%; top: 60.5%; width: 16%; height: 18%; background: #000; }
@@ -175,16 +195,16 @@
   .invite-card, .hero, .benefit-box, .card-footer { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .invite-card { width: 108mm; min-height: 0; box-shadow: none; margin: 0; page-break-inside: avoid; break-inside: avoid; page-break-after: avoid; break-after: avoid-page; }
   .guest-card { page: guest-page; height: 175.1mm; aspect-ratio: 1448 / 2347; grid-template-rows: 30.59% minmax(0, 1fr) 13.08%; }
-  .owner-card { page: owner-page; width: 108mm; height: 290.6mm; aspect-ratio: 1448 / 3896; grid-template-rows: 18.43% minmax(0, 1fr) 7.88%; }
+  .owner-card { page: owner-page; width: 108mm; height: 248.6mm; aspect-ratio: 862 / 1984; grid-template-rows: 21.32% minmax(0, 1fr) 8.02%; }
   .hero { min-height: 0; aspect-ratio: auto; }
   .card-body { min-height: 0; overflow: hidden; }
   .footer-phone-editable { font-size: 1.2mm; }
   .owner-card .hero h2 { font-size: 6.1mm; }
   .owner-card .hero-brand { font-size: 4.7mm; }
-  .owner-body p, .owner-body .rich-copy, .owner-host-note { font-size: 2.4mm; }
+  .owner-body p, .owner-body .rich-copy, .owner-included h3, .owner-paid h3 { font-size: 2.4mm; }
 }
 @page guest-page { size: 108mm 175.1mm; margin: 0; }
-@page owner-page { size: 108mm 290.6mm; margin: 0; }
+@page owner-page { size: 108mm 248.6mm; margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
   .upload-control:active, .button:active, .history-actions button:active { transform: none; }

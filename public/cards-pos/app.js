@@ -20,9 +20,28 @@ const ownerDefaults = {
   heroTitle: 'Confirmação de',
   heroEmphasis: 'reserva',
   heroBrand: 'Owntime',
+  salutation: 'Olá,',
+  greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
   stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx\nCortesia: um almoço.',
+  address: '<strong>Como chegar:</strong> Rua João XXIII, 222, Centro - Gramado',
+  includedIntro: 'Para que sua estada seja a mais confortável e transparente possível, alinhamos abaixo os serviços que já estão inclusos na sua hospedagem e as despesas que são contabilizadas à parte.',
+  includedTitle: 'O que já está INCLUSO na sua estadia:',
+  cleaning: '<strong>Serviço de Limpeza:</strong> Você tem direito a 1 limpeza completa com troca de enxoval durante o período. Para utilizá-la, basta fazer o agendamento com 24h de antecedência na recepção.',
+  support: '<strong>Equipe de Apoio e portaria:</strong> 24h à disposição para ajudar você no que for preciso.',
+  paidTitle: 'O que é PAGO (Consumo individual):',
+  utilities: '<strong>GÁS GLP</strong>, água e energia elétrica referentes à sua unidade, proporcionais ao período da estadia.',
+  pet: '<strong>Hospedagem Pet:</strong> Cobrança diária de R$ 85,00 por animal.',
+  servicesIntro: 'Solicite ao time de anfitriões durante a estadia (valores sob consulta):',
+  gastronomy: 'Gastronomia',
+  chef: 'Chef em Casa',
+  extraCleaning: 'Limpeza adicional.',
+  babysitter: 'Babysitter',
+  trainer: 'Personal trainer',
+  carWash: 'Car wash',
   hostNote: 'O time de anfitriões entrará em contato com você até 7 dias antes de sua hospedagem.',
+  footerLabel: 'CENTRAL DE RELACIONAMENTO',
   contact: '54 3421 9988',
+  footerEmail: 'contato@ownerinc.com.br',
 };
 const GUEST_COVER_ASSET = './cards-pos/assets/guest/guest-cover.jpg';
 const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
@@ -31,7 +50,7 @@ const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
 const FOOTER_ASSET = './cards-pos/assets/footer.svg';
 const PDF_CARD_SIZES = {
   convite_owntime: { width: 108, height: 175.1 },
-  convite_owner: { width: 108, height: 290.6 },
+  convite_owner: { width: 108, height: 248.6 },
 };
 const PDF_RENDER_SCALE = 3;
 let current = {
@@ -143,7 +162,14 @@ function renderGuest(v) {
 
 function renderOwnerTemplate(v) {
   const media = current.mediaUrl || OWNER_COVER_ASSET;
-  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy"><div class="owner-stay-box">${richCopy(v.stayInfo)}</div>${renderAddress()}${richCopy(v.hostNote, 'owner-host-note')}</div></section>${renderFooter(v)}`;
+  const icon = (name) => `<img class="owner-icon" src="./cards-pos/assets/owner/${name}" alt="">`;
+  const info = (name, value) => `<div class="owner-info-row">${name ? icon(name) : '<span class="owner-icon" aria-hidden="true"></span>'}${richCopy(value)}</div>`;
+  const service = (name, value) => `<div class="owner-extra-service">${icon(name)}${richCopy(value)}</div>`;
+  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy">${richCopy(v.salutation, 'owner-salutation')}${richCopy(v.greeting, 'owner-greeting')}<div class="owner-stay-box">${richCopy(v.stayInfo)}</div>${richCopy(v.address, 'owner-address')}<section class="owner-included">${richCopy(v.includedIntro, 'owner-intro')}<h3>${esc(v.includedTitle)}</h3>${info('icon-cleaning.svg', v.cleaning)}${info('icon-support.svg', v.support)}</section><section class="owner-paid"><h3>${esc(v.paidTitle)}</h3>${info('', v.utilities)}${info('icon-pet.svg', v.pet)}</section><section class="owner-services">${richCopy(v.servicesIntro, 'owner-services-intro')}<div class="owner-services-grid">${service('icon-food.svg', v.gastronomy)}${service('icon-babysitter.svg', v.babysitter)}${service('icon-chef.svg', v.chef)}${service('icon-trainer.svg', v.trainer)}${service('icon-cleaning-extra.svg', v.extraCleaning)}${service('icon-car.svg', v.carWash)}</div></section>${richCopy(v.hostNote, 'owner-host-note')}</div></section>${renderOwnerFooter(v)}`;
+}
+
+function renderOwnerFooter(v) {
+  return `<footer class="card-footer owner-footer"><span class="owner-footer-rule" aria-hidden="true"></span><div class="owner-footer-contact"><strong>${esc(v.footerLabel)}</strong><div><span>${esc(phoneFromContact(v.contact))}</span><span aria-hidden="true">|</span><span>${esc(v.footerEmail)}</span></div></div><img src="./cards-pos/assets/owner/ownerinc-logo.svg" alt="Ownerinc"></footer>`;
 }
 
 function renderOwner(v) {
@@ -412,10 +438,10 @@ function updateModuleControls() {
   });
   $('guestFields').classList.toggle('hidden', owner);
   $('ownerFields').classList.toggle('hidden', !owner);
-  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? '290,6' : '175,1'} mm`;
+  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? '248,6' : '175,1'} mm`;
   $('moduleTitle').textContent = owner ? 'Convite para Owners' : 'Convite para convidados';
   $('moduleDescription').textContent = owner
-    ? 'Edite a capa, os dados da reserva e a mensagem final do convite.'
+    ? 'Edite todos os textos do Frame 02, revise o card e exporte o PDF.'
     : 'Preencha os textos, escolha uma imagem e revise o convite no preview ao lado.';
   $('editorTitle').textContent = owner ? 'Monte o card do Owner' : 'Monte seu convite';
 }
