@@ -91,6 +91,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(app, /owner-host-note/);
   for (const marker of ['owner-included', 'owner-paid', 'owner-services-grid', 'owner-footer-contact']) assert.match(app, new RegExp(marker));
   assert.match(css, /\.owner-services-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(css, /\.owner-host-note \{[^}]*transform: translateY\(3\.4cqw\)/);
   assert.match(app, /guest-cover\.jpg/);
   assert.match(app, /owner-cover\.jpg/);
   assert.match(css, /aspect-ratio: 1448 \/ 2347/);

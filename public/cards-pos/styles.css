@@ -136,7 +136,7 @@
 .owner-services-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12%; row-gap: 3.2cqw; padding: 0 8%; }
 .owner-extra-service { display: grid; grid-template-columns: 4.6cqw minmax(0, 1fr); align-items: center; gap: 1.2cqw; }
 .owner-extra-service .rich-copy { white-space: nowrap; }
-.owner-host-note { margin: auto 8% 0; color: #a99b85; font-weight: 700; line-height: 1.2 !important; }
+.owner-host-note { margin: auto 8% 0; color: #a99b85; font-weight: 700; line-height: 1.2 !important; transform: translateY(3.4cqw); }
 .owner-footer { min-height: 0; display: flex; align-items: center; justify-content: space-between; padding: 4.8% 5.2% 1.8%; background: #000; }
 .owner-footer-rule { position: absolute; top: 0; right: 4.8%; left: 4.8%; height: .9cqw; background: #a99b85; }
 .owner-footer-contact { display: grid; gap: 1.1cqw; color: #fff; font-size: 1.15cqw; line-height: 1; }
