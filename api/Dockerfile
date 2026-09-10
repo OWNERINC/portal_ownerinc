@@ -3,8 +3,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --omit=optional \
  && npm install --no-save --ignore-scripts --omit=dev --omit=optional \
-      @img/sharp-linuxmusl-x64@0.35.3 \
-      @img/sharp-libvips-linuxmusl-x64@1.3.2
+      @img/sharp-linuxmusl-x64@0.35.4 \
+      @img/sharp-libvips-linuxmusl-x64@1.3.3
 COPY --chown=node:node . .
 RUN apk upgrade --no-cache \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \

@@ -1,14 +1,16 @@
 {
   "name": "portal-ownerinc-cron",
   "description": "Serviço de cron para lembretes do Portal Ownerinc",
-  "engines": { "node": "24" },
+  "engines": {
+    "node": "24"
+  },
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "pg": "^8.11.0",
-    "nodemailer": "^9.0.5",
+    "dotenv": "^16.0.0",
     "node-cron": "^4.6.0",
-    "dotenv": "^16.0.0"
+    "nodemailer": "^10.0.2",
+    "pg": "^8.11.0"
   }
 }
