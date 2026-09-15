@@ -43,10 +43,13 @@ async function loadCourses() {
       fetchAPIPage(`/api/academy?${request}`),
       fetchAPI('/api/academy/categories'),
     ]);
-    const courses = result.data.filter(course => course.active !== false);
-    categories = categoryList;
+    const courses = (result.data || []).filter(course => course.active !== false);
+    categories = categoryList || [];
     renderFilters();
-    if (!courses.length) return showState(container, 'Nenhum curso disponível no momento.');
+    if (!courses.length) {
+      renderPagination(pagination, 0, offset, PAGE_SIZE, () => {});
+      return showState(container, 'Nenhum curso disponível no momento.');
+    }
     const categories = Map.groupBy ? Map.groupBy(courses, course => course.category || 'Geral') : courses.reduce((map, course) => {
       const category = course.category || 'Geral';
       map.set(category, [...(map.get(category) || []), course]);

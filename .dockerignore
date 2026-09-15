@@ -2,6 +2,11 @@
 .github
 .codex
 .env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
 **/node_modules
 docs
 scripts

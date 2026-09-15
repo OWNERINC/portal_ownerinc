@@ -6,7 +6,6 @@ const DEFAULT_DAYS = 30;
 const MIN_DAYS = 1;
 const MAX_DAYS = 3650;
 const CMS_ASSET_RETENTION_LOCK = 7193029;
-
 function cmsAssetRetentionDays(env = process.env) {
   const value = Number(env.CMS_ASSET_ORPHAN_RETENTION_DAYS || DEFAULT_DAYS);
   if (!Number.isInteger(value) || value < MIN_DAYS || value > MAX_DAYS) throw new Error(`CMS_ASSET_ORPHAN_RETENTION_DAYS must be an integer between ${MIN_DAYS} and ${MAX_DAYS}`);
@@ -66,7 +65,10 @@ async function enforceCmsAssetRetention(db = pool, env = process.env, fileSystem
     return details;
   }
   const client = await db.connect();
+  let locked = false;
   try {
+    await client.query('SELECT pg_advisory_lock($1)', [CMS_ASSET_RETENTION_LOCK]);
+    locked = true;
     const reserved = await reserveCmsAssets(client, days);
     let deletedRows = 0;
     let deletedFiles = 0;
@@ -106,6 +108,7 @@ async function enforceCmsAssetRetention(db = pool, env = process.env, fileSystem
   } catch (error) {
     throw error;
   } finally {
+    if (locked) await client.query('SELECT pg_advisory_unlock($1)', [CMS_ASSET_RETENTION_LOCK]).catch(() => {});
     client.release();
   }
 }

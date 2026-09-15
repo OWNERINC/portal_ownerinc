@@ -4,13 +4,13 @@ import { clear, closeDialog, element, openDialog, safeHttpUrl } from './ui.js';
 const cachedUser = getCachedUserSnapshot();
 let me = cachedUser;
 let solidesAdminStatus = null;
+let solidesAdminAvailable = false;
 const TABS = [
   ['users', 'Usuários', 'manageUsers'],
+  ['registrations', 'Solicitações', 'manageUsers'],
   ['job-titles', 'Cargos', 'manageUsers'],
   ['academy', 'Academy', 'manageAcademy'],
-  ['benefits', 'Benefícios', 'manageBenefits'],
 ];
-if (me && can(me, 'manageSolides')) TABS.push(['solides', 'Sólides', 'manageSolides']);
 const pages = {};
 let users = [];
 let courses = [];
@@ -20,20 +20,18 @@ let editingCourseId = null;
 let editingBenefitId = null;
 let solidesLinks = [];
 let jobTitles = [];
+let registrations = [];
 let editingJobTitleId = null;
+let reviewingRegistration = null;
+let registrationReviewAction = 'approve';
 const AUDIT_PAGE_SIZE = 50;
 let bulkPreviewRows = [];
 let bulkJobId = null;
+const BULK_JOB_STORAGE_KEY_PREFIX = 'ownerinc-active-import-job:';
 
 if (me) buildTabs(false);
 me = await requireAuth(true);
 if (!me) throw new Error('Administrator access required');
-if (can(me, 'manageSolides')) {
-  try { solidesAdminStatus = await fetchAPI('/api/solides/admin/status'); } catch (error) {
-    if (error.status !== 404) console.warn('Sólides admin discovery failed');
-  }
-  if (!TABS.some(([id]) => id === 'solides')) TABS.push(['solides', 'Sólides', 'manageSolides']);
-}
 
 function tableState(tbodyId, columns, message, retry) {
   const pagination = document.getElementById(tbodyId.replace(/-tbody$/, '-pagination'));
@@ -128,8 +126,20 @@ async function loadJobTitles() {
   }
 }
 
+async function discoverAdminFeatures() {
+  solidesAdminAvailable = false;
+  solidesAdminStatus = null;
+  if (!can(me, 'manageSolides')) return;
+  try {
+    solidesAdminStatus = await fetchAPI('/api/solides/admin/status');
+    solidesAdminAvailable = true;
+  } catch {
+    // The API intentionally hides Sólides while its release stage is off.
+  }
+}
+
 async function toggleJobTitle(title) {
-  if (title.active && !confirm(`Desativar o cargo "${title.name}"? Usuários atuais manterão o cargo.`)) return;
+  if (title.active && !confirm(`Desativar o cargo "${title.name}"? Usuários atuais manterão o cargo, mas perderão o acesso derivado dele.`)) return;
   try {
     await fetchAPI(`/api/job-titles/${encodeURIComponent(title.id)}`, {
       method: 'PUT', body: JSON.stringify({ name: title.name, active: !title.active }),
@@ -143,6 +153,8 @@ async function toggleJobTitle(title) {
 
 function buildTabs(activate = true) {
   const tabs = TABS.filter(([, , permission]) => can(me, permission));
+  if (can(me, 'manageBenefits')) tabs.push(['benefits', 'Benefícios']);
+  if (solidesAdminAvailable) tabs.push(['solides', 'Sólides']);
   const container = clear(document.getElementById('admin-tabs'));
   if (!tabs.length) {
     container.append(element('p', { className: 'empty-state', text: 'Nenhuma permissão administrativa configurada.' }));
@@ -185,6 +197,7 @@ function switchTab(id, push = false) {
     loadUsers();
     if (can(me, 'superAdmin')) loadAudit();
   }
+  if (id === 'registrations') loadRegistrations();
   if (id === 'job-titles') loadJobTitles();
   if (id === 'academy') loadCourses();
   if (id === 'benefits') loadBenefits();
@@ -304,12 +317,14 @@ async function loadUsers() {
     const tbody = clear(document.getElementById('users-tbody'));
     users.forEach(user => {
         const isPJ = user.contract_type === 'pj' || user.is_pj;
-        const disabled = user.permissions?.accountDisabled === true;
+        const disabled = user.state === 'disabled' || user.permissions?.accountDisabled === true;
+        const enablePending = !disabled && (user.state === 'enable_pending' || user.firebase_enable_pending === true);
+        const stateLabel = disabled ? 'Desativado' : enablePending ? 'Habilitação pendente' : 'Ativo';
         tbody.append(element('tr', {}, [
           cell(user.name || '—'), cell(user.email || '—'),
           cell(user.role === 'admin' ? 'Administrador' : 'Leitor', `badge ${user.role === 'admin' ? 'badge-gold' : 'badge-gray'}`),
           cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), cell(user.job_title || '—'), cell(isPJ ? user.pj_due_day || '—' : '—'),
-          cell(disabled ? 'Desativado' : 'Ativo', `badge ${disabled ? 'badge-gray' : 'badge-green'}`),
+          cell(stateLabel, `badge ${disabled || enablePending ? 'badge-gray' : 'badge-green'}`),
           actions(
             element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar usuário: ${user.name || user.email}`, on: { click: () => editUser(user) } }),
             element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', 'aria-label': `${disabled ? 'Reativar' : 'Desativar'} usuário: ${user.name || user.email}`, on: { click: () => disabled ? reactivateUser(user.uid) : deleteUser(user.uid) } }),
@@ -323,6 +338,52 @@ async function loadUsers() {
   } catch {
     tableState('users-tbody', 8, 'Não foi possível carregar os usuários.', loadUsers);
   }
+}
+
+async function loadRegistrations() {
+  tableState('registrations-tbody', 5, 'Carregando solicitações…');
+  try {
+    pages.registrations ||= 0;
+    const result = await fetchAPIPage(`/api/registrations?status=pending&limit=50&offset=${pages.registrations * 50}`);
+    registrations = result.data;
+    if (!registrations.length) return tableState('registrations-tbody', 5, 'Nenhuma solicitação pendente.');
+    const format = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    const tbody = clear(document.getElementById('registrations-tbody'));
+    registrations.forEach(registration => tbody.append(element('tr', {}, [
+      cell(registration.name), cell(registration.email), cell(registration.state_label || 'Cadastro recebido', `badge ${registration.state === 'confirmed' ? 'badge-green' : 'badge-gray'}`), cell(format.format(new Date(registration.created_at))),
+      actions(
+        element('button', { className: 'btn btn-primary btn-sm', type: 'button', text: 'Analisar', 'aria-label': `Analisar cadastro: ${registration.name}`, on: { click: () => openRegistrationReview(registration, 'approve') } }),
+        element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Rejeitar', 'aria-label': `Rejeitar cadastro: ${registration.name}`, on: { click: () => openRegistrationReview(registration, 'reject') } }),
+      ),
+    ])));
+    serverPagination('registrations', result.total ?? registrations.length, 'registrations-pagination', loadRegistrations);
+  } catch {
+    tableState('registrations-tbody', 5, 'Não foi possível carregar as solicitações.', loadRegistrations);
+  }
+}
+
+async function openRegistrationReview(registration, action) {
+  reviewingRegistration = registration;
+  registrationReviewAction = action;
+  if (!jobTitles.length) await loadJobTitles();
+  const titleSelect = document.getElementById('registration-job-title');
+  clear(titleSelect).append(element('option', { value: '', text: 'Selecione um cargo' }));
+  jobTitles.filter(title => title.active).forEach(title => titleSelect.append(element('option', { value: title.id, text: title.name })));
+  document.getElementById('modal-registration-title').textContent = action === 'approve' ? 'Aprovar cadastro' : 'Rejeitar cadastro';
+  document.getElementById('registration-summary').textContent = `${registration.name} · ${registration.email}`;
+  document.getElementById('registration-contract-group').hidden = action !== 'approve';
+  document.getElementById('registration-contract').value = 'clt';
+  document.getElementById('registration-pj-day-group').hidden = true;
+  document.getElementById('registration-pj-day').value = '';
+  document.getElementById('registration-pj-day').required = false;
+  document.getElementById('registration-job-title-group').hidden = action !== 'approve';
+  titleSelect.required = action === 'approve';
+  document.getElementById('registration-reason-group').hidden = action !== 'reject';
+  document.getElementById('registration-reason').value = '';
+  document.getElementById('registration-form-feedback').textContent = '';
+  document.getElementById('modal-registration-save').textContent = action === 'approve' ? 'Aprovar cadastro' : 'Rejeitar cadastro';
+  document.getElementById('modal-registration-save').className = action === 'approve' ? 'btn btn-primary' : 'btn btn-danger';
+  openDialog(document.getElementById('modal-registration'), titleSelect);
 }
 
 function renderBulkPreview(report) {
@@ -339,17 +400,52 @@ function renderBulkPreview(report) {
   document.getElementById('bulk-confirm-button').disabled = report.ready === 0;
 }
 
-async function pollBulkJob() {
+function persistBulkJobId(id) {
+  try {
+    const key = `${BULK_JOB_STORAGE_KEY_PREFIX}${me.uid}`;
+    if (id) localStorage.setItem(key, id);
+    else localStorage.removeItem(key);
+  } catch (_) {
+    // The job remains available while this page is open when storage is unavailable.
+  }
+}
+
+function renderBulkJob(job) {
+  const feedback = document.getElementById('bulk-import-feedback');
+  const retryable = (job.rows || []).some(row => row.status === 'failed' && row.attempt_count < 3);
+  const processed = (job.invited_count || 0) + (job.failed_count || 0) + (job.ignored_count || 0);
+  feedback.textContent = `Processamento: ${processed} de ${job.total_count || 0} linhas, ${job.invited_count || 0} convidados, ${job.failed_count || 0} falhas, ${job.ignored_count || 0} ignoradas e ${job.pending_count || 0} em andamento.`;
+  document.getElementById('bulk-retry-button').hidden = job.status !== 'completed' || !retryable;
+  const preview = clear(document.getElementById('bulk-preview'));
+  preview.hidden = false;
+  const table = element('table', {}, element('tbody'));
+  table.querySelector('tbody').append(...(job.rows || []).map(row => {
+    const errors = Array.isArray(row.validation_errors) ? row.validation_errors : [];
+    const errorText = row.last_error || (errors.length ? errors.join(', ') : '');
+    const label = row.status === 'invited' ? 'Convidado' : row.status === 'failed' ? `Falha${errorText ? `: ${errorText}` : ''}` : row.status === 'pending' ? 'Pendente' : row.status === 'processing' ? 'Processando' : `Ignorada${errorText ? `: ${errorText}` : ''}`;
+    return element('tr', {}, [
+      cell(row.row_number), cell(row.name || '—'), cell(row.email || '—'), cell(label, `badge ${row.status === 'invited' ? 'badge-green' : row.status === 'failed' ? 'badge-gray' : 'badge-gray'}`),
+    ]);
+  }));
+  preview.append(element('div', { className: 'table-wrapper' }, table));
+}
+
+async function pollBulkJob(jobId = bulkJobId) {
+  if (!jobId) return;
   const feedback = document.getElementById('bulk-import-feedback');
   try {
-    const job = await fetchAPI(`/api/users/bulk/${encodeURIComponent(bulkJobId)}`);
-    const invited = job.invited_count || 0;
-    const failed = job.failed_count || 0;
-    feedback.textContent = `Processamento: ${invited} convidados, ${failed} falhas de ${job.ready_count}.`;
-    document.getElementById('bulk-retry-button').hidden = failed === 0;
-    if (job.status !== 'completed') return setTimeout(pollBulkJob, 3000);
+    const job = await fetchAPI(`/api/users/bulk/${encodeURIComponent(jobId)}`);
+    if (jobId !== bulkJobId) return;
+    renderBulkJob(job);
+    if (job.status !== 'completed') return setTimeout(() => pollBulkJob(jobId), 3000);
     await loadUsers();
-  } catch (error) { feedback.textContent = `Não foi possível consultar o processamento: ${error.message}`; }
+  } catch (error) {
+    feedback.textContent = `Não foi possível consultar o processamento: ${error.message}`;
+    if (error.status === 404 || error.status === 410) {
+      bulkJobId = null;
+      persistBulkJobId(null);
+    }
+  }
 }
 
 document.getElementById('btn-bulk-users').addEventListener('click', () => { document.getElementById('bulk-import-panel').hidden = false; });
@@ -365,12 +461,28 @@ document.getElementById('bulk-confirm-button').addEventListener('click', async (
   const feedback = document.getElementById('bulk-import-feedback');
   try {
     const job = await fetchAPI('/api/users/bulk/confirm', { method: 'POST', body: JSON.stringify({ rows: bulkPreviewRows }) });
-    bulkJobId = job.id; feedback.textContent = 'Importação enfileirada.'; document.getElementById('bulk-confirm-button').disabled = true; pollBulkJob();
+    bulkJobId = job.id;
+    persistBulkJobId(bulkJobId);
+    document.getElementById('bulk-import-panel').hidden = false;
+    feedback.textContent = job.status === 'completed' ? 'Importação concluída; nenhuma linha estava pronta.' : 'Importação enfileirada.';
+    document.getElementById('bulk-confirm-button').disabled = true;
+    pollBulkJob(bulkJobId);
   } catch (error) { feedback.textContent = error.message; }
 });
 document.getElementById('bulk-retry-button').addEventListener('click', async () => {
-  try { await fetchAPI(`/api/users/bulk/${encodeURIComponent(bulkJobId)}/retry`, { method: 'POST' }); document.getElementById('bulk-retry-button').hidden = true; pollBulkJob(); }
-  catch (error) { document.getElementById('bulk-import-feedback').textContent = error.message; }
+  try {
+    const job = await fetchAPI(`/api/users/bulk/${encodeURIComponent(bulkJobId)}/retry`, { method: 'POST' });
+    document.getElementById('bulk-retry-button').hidden = true;
+    document.getElementById('bulk-import-feedback').textContent = job.retried ? 'Falhas elegíveis reenfileiradas.' : 'Não há falhas elegíveis para tentar novamente.';
+    pollBulkJob(bulkJobId);
+  }
+  catch (error) {
+    if (error.status === 404 || error.status === 410) {
+      bulkJobId = null;
+      persistBulkJobId(null);
+    }
+    document.getElementById('bulk-import-feedback').textContent = error.message;
+  }
 });
 
 async function loadAudit() {
@@ -529,8 +641,14 @@ document.getElementById('user-form').addEventListener('submit', async event => {
     await loadUsers();
   } catch (error) {
     feedback.style.color = 'var(--danger)';
-    feedback.textContent = error.status === 409
-      ? 'Este e-mail já está cadastrado. Verifique a lista de usuários antes de tentar novamente.'
+    feedback.textContent = error.reason === 'firebase_identity_referenced'
+      ? 'Este e-mail pertence a um cadastro pendente. Resolva a solicitação antes de enviar outro convite.'
+      : error.reason === 'firebase_cleanup_pending'
+        ? 'A limpeza desta identidade ainda está pendente. Tente novamente após a reconciliação.'
+        : error.reason === 'firebase_identity_indeterminate'
+          ? 'Não foi possível confirmar a identidade Firebase. Tente novamente em instantes.'
+          : error.status === 409
+            ? 'Este e-mail já está cadastrado. Verifique a lista de usuários antes de tentar novamente.'
       : isInvite
         ? 'Não foi possível enviar o convite. Nenhuma conta foi criada; tente novamente.'
         : `Não foi possível salvar: ${error.message}`;
@@ -659,6 +777,13 @@ document.getElementById('u-contract').addEventListener('change', event => {
   const isPJ = event.target.value === 'pj';
   document.getElementById('pj-day-group').hidden = !isPJ;
   document.getElementById('u-pjday').required = isPJ;
+  if (!isPJ) document.getElementById('u-pjday').value = '';
+});
+document.getElementById('registration-contract').addEventListener('change', event => {
+  const isPJ = event.target.value === 'pj';
+  document.getElementById('registration-pj-day-group').hidden = !isPJ;
+  document.getElementById('registration-pj-day').required = isPJ;
+  if (!isPJ) document.getElementById('registration-pj-day').value = '';
 });
 document.getElementById('u-role').addEventListener('change', event => { document.getElementById('permissions-group').hidden = !(event.target.value === 'admin' && can(me, 'superAdmin')); });
 document.getElementById('p-super').addEventListener('change', event => {
@@ -718,9 +843,42 @@ document.getElementById('job-title-form').addEventListener('submit', async event
     save.disabled = false;
   }
 });
+document.getElementById('registration-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!event.currentTarget.reportValidity() || !reviewingRegistration) return;
+  const save = document.getElementById('modal-registration-save');
+  const feedback = document.getElementById('registration-form-feedback');
+  save.disabled = true;
+  feedback.textContent = '';
+  const endpoint = registrationReviewAction === 'approve'
+    ? `/api/registrations/${encodeURIComponent(reviewingRegistration.id)}/approve`
+    : `/api/registrations/${encodeURIComponent(reviewingRegistration.id)}/reject`;
+  const body = registrationReviewAction === 'approve'
+    ? {
+      job_title_id: document.getElementById('registration-job-title').value,
+      contract_type: document.getElementById('registration-contract').value,
+      pj_due_day: document.getElementById('registration-contract').value === 'pj'
+        ? Number(document.getElementById('registration-pj-day').value) : null,
+    }
+    : { reason: document.getElementById('registration-reason').value.trim() || null };
+  try {
+    const result = await fetchAPI(endpoint, { method: 'POST', body: JSON.stringify(body) });
+    closeDialog(document.getElementById('modal-registration'), true);
+    showToast(registrationReviewAction === 'approve'
+      ? result?.state === 'enable_pending' ? 'Cadastro aprovado; habilitação pendente.' : 'Cadastro aprovado e ativo.'
+      : result?.state === 'cleanup_pending' ? 'Rejeição registrada; limpeza pendente.' : 'Cadastro rejeitado.');
+    reviewingRegistration = null;
+    await loadRegistrations();
+  } catch (error) {
+    feedback.textContent = error.status === 409 ? 'Esta solicitação já foi analisada.' : error.status === 400
+      ? 'Informe um contrato válido, o dia PJ quando aplicável e um cargo ativo.' : `Não foi possível concluir: ${error.message}`;
+  } finally {
+    save.disabled = false;
+  }
+});
 document.getElementById('btn-new-course').addEventListener('click', () => courseDialog());
 document.getElementById('btn-new-benefit').addEventListener('click', () => benefitDialog());
-[['user', 'modal-user'], ['course', 'modal-course'], ['benefit', 'modal-benefit']].forEach(([name, modalId]) => {
+[['user', 'modal-user'], ['registration', 'modal-registration'], ['course', 'modal-course'], ['benefit', 'modal-benefit']].forEach(([name, modalId]) => {
   document.getElementById(`${modalId}-close`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
   document.getElementById(`${modalId}-cancel`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
 });
@@ -729,4 +887,15 @@ window.addEventListener('popstate', () => {
   if (document.getElementById(`tab-${requested}`)) switchTab(requested);
 });
 if (can(me, 'manageUsers')) await loadJobTitles();
+await discoverAdminFeatures();
 buildTabs();
+try {
+  const savedJobId = localStorage.getItem(`${BULK_JOB_STORAGE_KEY_PREFIX}${me.uid}`);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(savedJobId || '')) {
+    bulkJobId = savedJobId;
+    document.getElementById('bulk-import-panel').hidden = false;
+    pollBulkJob(bulkJobId);
+  }
+} catch (_) {
+  // A reload still keeps the current job in memory when storage is unavailable.
+}

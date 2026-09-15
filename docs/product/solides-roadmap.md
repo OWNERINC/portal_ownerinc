@@ -9,7 +9,7 @@ Atualizado em 21 de julho de 2026.
 - A integração nasce desligada e não aparece na navegação global.
 - Cada liberação exige vínculo verificado e autorização server-side.
 - O frontend nunca recebe token, CPF, PIS, PIN, biometria ou geolocalização.
-- Operações de escrita permanecem bloqueadas até homologação e aprovação do RH.
+- Operações de escrita permanecem bloqueadas até homologação e aprovação do DHO.
 - Leituras upstream têm orçamento por usuário; probes administrativos usam um
   limite separado e mais restritivo para proteger o token e o rate limit externo.
 
@@ -24,7 +24,7 @@ O estágio é controlado por `SOLIDES_RELEASE_STAGE`.
 | `pilot` | Card e página aparecem somente após descoberta autorizada | UIDs em `SOLIDES_PILOT_UIDS`, CLT e vínculo verificado | Leitura individual |
 | `general` | Card e página para usuários elegíveis | Todos os CLTs com vínculo verificado | Leitura individual |
 | `manager` | Reservado | Gestores sincronizados | Futuro: equipe e pendências agregadas |
-| `write` | Reservado | RH/gestores autorizados | Futuro: solicitações e operações aprovadas |
+| `write` | Reservado | DHO/gestores autorizados | Futuro: solicitações e operações aprovadas |
 
 `manager` e `write` não liberam hoje rotas adicionais; seus nomes reservam a
 ordem de rollout sem habilitar funcionalidades incompletas.

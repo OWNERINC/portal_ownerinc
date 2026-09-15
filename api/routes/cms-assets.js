@@ -1,5 +1,4 @@
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const express = require('express');
@@ -7,6 +6,7 @@ const multer = require('multer');
 const pool = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
+const { lockCmsAssets } = require('../cms/locks');
 const { forbidden, invalid, uuid, withAudit } = require('../route-utils');
 
 const router = express.Router();
@@ -79,8 +79,8 @@ function referenceIsReadable(row, user, asset) {
     && publishedIsVisible(row, user);
 }
 
-async function canReadAsset(user, asset) {
-  const { rows } = await pool.query(
+async function canReadAsset(db, user, asset) {
+  const { rows } = await db.query(
     `SELECT d.content_type, d.published_revision_id, r.id AS revision_id, r.status,
             block->>'type' AS block_type,
             academy.active AS academy_active,
@@ -100,7 +100,18 @@ async function canReadAsset(user, asset) {
   return rows.some((row) => referenceIsReadable(row, user, asset));
 }
 
-router.post('/', authMiddleware, upload.single('asset'), async (req, res, next) => {
+function uploadMiddleware(req, res, next) {
+  upload.single('asset')(req, res, (error) => {
+    if (!error) return handleAssetUpload(req, res, next);
+    if (!(error instanceof multer.MulterError)) return next(error);
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'Asset too large.', requestId: req.id });
+    }
+    return invalid(req, res);
+  });
+}
+
+async function handleAssetUpload(req, res, next) {
   if (!manageable(req.user)) return forbidden(req, res);
   if (!req.file || !req.file.buffer?.length) return invalid(req, res);
   const mimeType = detectedMime(req.file.buffer);
@@ -131,30 +142,64 @@ router.post('/', authMiddleware, upload.single('asset'), async (req, res, next) 
     if (fileWritten) await fsp.unlink(target).catch(() => {});
     next(error);
   }
-});
+}
+
+router.post('/', authMiddleware, uploadMiddleware);
 
 router.get('/:id', authMiddleware, async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
+  let db;
+  let file;
+  let stream;
+  let inTransaction = false;
+  let released = false;
   try {
-    const { rows } = await pool.query(
+    db = await pool.connect();
+    await db.query('BEGIN');
+    inTransaction = true;
+    await lockCmsAssets(db);
+    const { rows } = await db.query(
       `SELECT id, storage_key, original_name, mime_type, byte_size, created_at
          FROM cms_assets WHERE id = $1 AND deleting_at IS NULL`,
       [req.params.id],
     );
     const asset = rows[0];
-    if (!asset) return res.status(404).json({ error: 'Asset not found.', requestId: req.id });
-    if (!await canReadAsset(req.user, asset)) return forbidden(req, res);
+    if (!asset) {
+      await db.query('ROLLBACK');
+      inTransaction = false;
+      db.release();
+      released = true;
+      return res.status(404).json({ error: 'Asset not found.', requestId: req.id });
+    }
+    if (!await canReadAsset(db, req.user, asset)) {
+      await db.query('ROLLBACK');
+      inTransaction = false;
+      db.release();
+      released = true;
+      return forbidden(req, res);
+    }
 
+    file = await fsp.open(path.join(privateDirectory, asset.storage_key), 'r');
+    stream = file.createReadStream();
+    file = null;
+    await db.query('COMMIT');
+    inTransaction = false;
+    db.release();
+    released = true;
     res.set({
       'Content-Length': String(asset.byte_size),
       'Content-Type': asset.mime_type,
       'Content-Disposition': `inline; filename="${asset.original_name.replace(/["\\\r\n]/g, '_')}"`,
       'X-Content-Type-Options': 'nosniff',
     });
-    const stream = fs.createReadStream(path.join(privateDirectory, asset.storage_key));
     stream.on('error', next).pipe(res);
   } catch (error) {
+    stream?.destroy();
+    if (file) await file.close().catch(() => {});
+    if (inTransaction) await db.query('ROLLBACK').catch(() => {});
     next(error);
+  } finally {
+    if (!released && db) db.release();
   }
 });
 

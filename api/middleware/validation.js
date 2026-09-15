@@ -76,6 +76,18 @@ function validPhotoCrop(value) {
     && value.zoom >= 1 && value.zoom <= 3;
 }
 
+function isPjDueDay(value) {
+  const day = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  return Number.isInteger(day) && day >= 1 && day <= 31;
+}
+
+function normalizeContract(contractType, pjDueDay) {
+  if (contractType === 'clt') return { contract_type: 'clt', is_pj: false, pj_due_day: null };
+  if (contractType !== 'pj' || !isPjDueDay(pjDueDay)) return null;
+  const day = typeof pjDueDay === 'string' ? Number(pjDueDay) : pjDueDay;
+  return { contract_type: 'pj', is_pj: true, pj_due_day: day };
+}
+
 function validateUser(body, { creating = false } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const allowed = new Set(['name', 'role', 'contract_type', 'is_pj', 'pj_due_day', 'job_title_id', 'phone', 'permissions']);
@@ -90,12 +102,25 @@ function validateUser(body, { creating = false } = {}) {
   if (hasOwn(body, 'is_pj') && typeof body.is_pj !== 'boolean') return false;
   if (hasOwn(body, 'contract_type') !== hasOwn(body, 'is_pj')) return false;
   if (hasOwn(body, 'contract_type') && (body.contract_type === 'pj') !== body.is_pj) return false;
+  if (hasOwn(body, 'contract_type') && body.contract_type === 'pj'
+      && (!hasOwn(body, 'pj_due_day') || !isPjDueDay(body.pj_due_day))) return false;
+  if (hasOwn(body, 'contract_type') && body.contract_type === 'clt'
+      && hasOwn(body, 'pj_due_day') && body.pj_due_day !== null) return false;
   if (hasOwn(body, 'phone') && (typeof body.phone !== 'string' || body.phone.length > 40)) return false;
   if (hasOwn(body, 'pj_due_day') && body.pj_due_day !== null
-      && (!Number.isInteger(body.pj_due_day) || body.pj_due_day < 1 || body.pj_due_day > 31)) return false;
+      && !isPjDueDay(body.pj_due_day)) return false;
   if (hasOwn(body, 'job_title_id') && body.job_title_id !== null && !isUuid(body.job_title_id)) return false;
   if (hasOwn(body, 'permissions') && !validPermissions(body.permissions)) return false;
   return true;
+}
+
+function validateRegistration(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  if (Object.keys(body).some((key) => !['name', 'email'].includes(key))) return false;
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const email = typeof body.email === 'string' ? body.email.trim() : '';
+  return isEmail(email)
+    && typeof body.name === 'string' && !/[\r\n]/.test(body.name) && name.length >= 2 && name.length <= 120;
 }
 
 function validPermissions(value) {
@@ -144,4 +169,7 @@ function hasExactImageBoundary(buffer, format) {
   return buffer.length >= 12 && buffer.readUInt32LE(4) + 8 === buffer.length;
 }
 
-module.exports = { hasOwn, imageExtension, isHttpUrl, normalizeImage, sanitizeRichText, sanitizeRichValues, validateProfile, validateUser };
+module.exports = {
+  hasOwn, imageExtension, isHttpUrl, isPjDueDay, normalizeContract, normalizeImage,
+  sanitizeRichText, sanitizeRichValues, validateProfile, validateRegistration, validateUser,
+};

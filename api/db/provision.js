@@ -5,6 +5,7 @@ const rolePasswords = {
   portal_api: process.env.PORTAL_API_DB_PASSWORD,
   portal_cron: process.env.PORTAL_CRON_DB_PASSWORD,
 };
+const MIGRATION_LOCK = 7192026;
 
 function literal(value) {
   return `'${value.replaceAll("'", "''")}'`;
@@ -41,6 +42,8 @@ async function grantRuntimeAccess(client) {
     REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM portal_api, portal_cron;
     REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM portal_api, portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON users TO portal_api;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON pending_registrations TO portal_api;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON firebase_cleanup_queue TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON knowledge_base, reminders, academy, benefits TO portal_api;
     GRANT SELECT ON notifications_log TO portal_api;
     GRANT SELECT ON cron_status TO portal_api;
@@ -59,9 +62,10 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT ON pos_cards TO portal_cron;
     GRANT SELECT, DELETE ON pos_card_media TO portal_cron;
     GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron;
-    GRANT SELECT, DELETE ON cms_assets TO portal_cron;
+    GRANT SELECT, UPDATE, DELETE ON cms_assets TO portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON audit_log TO portal_cron;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON user_import_jobs, user_import_rows TO portal_cron;
+    GRANT DELETE ON user_import_jobs TO portal_cron;
+    GRANT SELECT (expires_at) ON user_import_jobs TO portal_cron;
   `);
 }
 
@@ -71,9 +75,11 @@ async function provision() {
   try {
     const client = await pool.connect();
     try {
+      await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK]);
       await provisionRoles(client);
       await grantRuntimeAccess(client);
     } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK]).catch(() => {});
       client.release();
     }
   } finally {
@@ -88,4 +94,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { grantRuntimeAccess, provisionRoles };
+module.exports = { grantRuntimeAccess, MIGRATION_LOCK, provisionRoles };

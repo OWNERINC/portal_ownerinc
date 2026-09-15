@@ -1,9 +1,16 @@
 # Catálogo de Cargos e Acessos por Cargo
 
+> Documento histórico. O catálogo atual usa DHO; as ocorrências de RH abaixo
+> permanecem somente quando registram a nomenclatura legada usada pela migração.
+>
+> A allowlist de dois cargos descrita neste documento também é histórica. A
+> política atual exige cargo ativo e `page_access` explícito; os dois cargos DHO
+> canônicos são apenas defaults da migration 030.
+
 ## Objetivo
 
 Atualizar o catálogo de cargos do Portal com as nomenclaturas padronizadas
-aprovadas e alinhar o acesso ao AutoCard às novas nomenclaturas de RH.
+aprovadas e alinhar o acesso ao AutoCard às nomenclaturas atuais de DHO.
 
 ## Catálogo Ativo
 
@@ -13,7 +20,7 @@ Os seguintes cargos permanecerão ativos:
 - Analista de Cobrança
 - Analista de Engenharia
 - Analista de Pós-Vendas
-- Analista de RH Sênior
+- Analista de DHO Sênior
 - Analista de Departamento Pessoal
 - Analista Financeiro
 - Analista Financeiro Sênior
@@ -50,7 +57,7 @@ Os seguintes cargos permanecerão ativos:
 - Gerente de Obra
 - Gerente de Pós-Vendas
 - Gerente de Promoção
-- Gerente de RH
+- Gerente de DHO
 - Jovem Aprendiz
 - Líder de Promoção
 - Motorista
@@ -74,18 +81,18 @@ RESTRICT`.
 
 Os vínculos atuais serão migrados nestes casos:
 
-- `Analista de DHO` para `Analista de RH Sênior`;
-- `Gerente de DHO` para `Gerente de RH`.
+- o nome legado `Analista de RH Sênior` para `Analista de DHO Sênior`;
+- o nome legado `Gerente de RH` para `Gerente de DHO`, consolidando o registro DHO existente.
 
 `Assistente de DHO` e `Coordenador de DHO` serão mantidos apenas como registros
 inativos, sem substituição automática e sem acesso ao AutoCard.
 
-## Acesso ao AutoCard
+## Acesso ao AutoCard (modelo histórico, superseded)
 
 O conjunto de cargos permitido será substituído por:
 
-- `Analista de RH Sênior`;
-- `Gerente de RH`.
+- `Analista de DHO Sênior`;
+- `Gerente de DHO`.
 
 A comparação continuará normalizada para minúsculas com locale `pt-BR`. Admin
 ou super-admin sem um desses cargos não receberá acesso ao AutoCard por essa

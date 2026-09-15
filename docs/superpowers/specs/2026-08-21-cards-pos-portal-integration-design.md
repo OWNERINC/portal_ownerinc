@@ -1,5 +1,9 @@
 # Integracao do Cards Pos ao Portal Ownerinc
 
+> Documento histórico. O acesso temporário por `role=admin` abaixo foi
+> substituído por cargo ativo e `page_access.posCards=true`; os defaults DHO não
+> são uma allowlist.
+
 Data: 21 de agosto de 2026
 Status: aprovado pelo usuario
 

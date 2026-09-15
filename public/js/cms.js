@@ -1,5 +1,6 @@
 import { requireAuth, can, fetchAPI, fetchAPIPage, showToast } from './auth.js';
 import { clear, element, showState } from './ui.js';
+import { renderPagination } from './pagination.js';
 import { createBlockEditor, createBlockSettings, serializeBlocks } from './cms-block-editor.js';
 import { renderBlocks } from './cms-block-renderer.js';
 
@@ -24,6 +25,7 @@ const SOURCE_ENDPOINTS = {
 
 const contentTypes = document.getElementById('content-types');
 const documentList = document.getElementById('document-list');
+const documentPagination = document.getElementById('document-pagination');
 const newDocumentButton = document.getElementById('new-document');
 const newDocumentForm = document.getElementById('new-document-form');
 const sourceField = document.getElementById('new-source-field');
@@ -65,8 +67,11 @@ let navigationConfirmed = false;
 let historyOffset = 0;
 let historyRequestToken = 0;
 const HISTORY_PAGE_SIZE = 50;
+const DOCUMENT_PAGE_SIZE = 50;
 const documentsByType = new Map();
 const sourcesByType = new Map();
+let documentOffset = 0;
+let documentTotal = 0;
 
 function setError(message = '') {
   errorNode.hidden = !message;
@@ -115,10 +120,24 @@ function syncBusyState() {
 }
 
 function statusFor(doc) {
+  if (doc?.draft_revision_id && doc?.scheduled_revision_id) return ['Rascunho · agendado', 'badge-gold'];
   if (doc?.draft_revision_id) return ['Rascunho', 'badge-gold'];
   if (doc?.scheduled_revision_id) return ['Agendado', 'badge-gold'];
   if (doc?.published_revision_id) return ['Publicado', 'badge-green'];
   return ['Arquivado', 'badge-gray'];
+}
+
+function syncListedDocument(document) {
+  if (!document) return;
+  const documents = documentsByType.get(document.content_type) || [];
+  const index = documents.findIndex(item => item.id === document.id);
+  if (index >= 0) documents[index] = document;
+}
+
+function mutationError(error, fallback) {
+  if (error?.status === 409) return 'O rascunho mudou em outra sessão. Recarregue o documento antes de publicar ou agendar.';
+  if (error?.status === 400) return 'Revise os blocos e os arquivos anexados antes de continuar.';
+  return fallback;
 }
 
 function statusBadge(doc) {
@@ -137,11 +156,14 @@ function renderTypeNav() {
       selectionToken += 1;
       clearTimeout(saveTimer);
       saveQueued = false;
-      dirty = false;
-      newDocumentDirty = false;
-      editVersion = 0;
-      selectedType = type;
-      selectedDocument = null;
+       dirty = false;
+       newDocumentDirty = false;
+       editVersion = 0;
+       documentOffset = 0;
+       documentTotal = 0;
+       selectedType = type;
+       documentsByType.set(type, []);
+       selectedDocument = null;
       documentView = null;
       newDocumentForm.hidden = true;
       editor = null;
@@ -162,6 +184,7 @@ function renderDocumentList() {
   clear(documentList);
   if (!docs.length) {
     documentList.append(element('p', { className: 'empty-state', text: 'Nenhum documento nesta área.' }));
+    renderPagination(documentPagination, documentTotal, documentOffset, DOCUMENT_PAGE_SIZE, changeDocumentPage);
     return;
   }
   docs.forEach(doc => documentList.append(element('button', {
@@ -169,6 +192,14 @@ function renderDocumentList() {
     ...(navigationBusy() ? { disabled: '' } : {}),
     on: { click: () => loadDocument(doc.id) },
   }, [element('span', { className: 'cms-document-title', text: doc.title }), element('span', { className: 'cms-document-meta' }, [statusBadge(doc), element('span', { text: doc.category || 'Sem categoria' })])] )));
+  renderPagination(documentPagination, documentTotal, documentOffset, DOCUMENT_PAGE_SIZE, changeDocumentPage);
+}
+
+function changeDocumentPage(offset) {
+  if (navigationBusy()) return;
+  documentOffset = offset;
+  selectionToken += 1;
+  loadDocuments();
 }
 
 function updateInspector() {
@@ -176,7 +207,7 @@ function updateInspector() {
   if (!doc) showState(blockSettings, 'Selecione um bloco para editar suas configurações.');
   const [status] = statusFor(doc);
   editorHeading.textContent = doc?.title || 'Selecione um documento';
-  editorStatus.className = `badge ${status === 'Publicado' ? 'badge-green' : status === 'Rascunho' || status === 'Agendado' ? 'badge-gold' : 'badge-gray'}`;
+  editorStatus.className = `badge ${status === 'Publicado' ? 'badge-green' : status.includes('Rascunho') || status.includes('agendado') ? 'badge-gold' : 'badge-gray'}`;
   editorStatus.textContent = doc ? status : 'Nenhum';
   selectedTypeNode.textContent = doc ? TYPE_LABELS[doc.content_type] || doc.content_type : '—';
   categoryNode.textContent = doc?.category || '—';
@@ -263,11 +294,13 @@ async function loadDocuments() {
   if (!selectedType) return;
   const type = selectedType;
   const requestToken = selectionToken;
+  const requestOffset = documentOffset;
   showState(documentList, 'Carregando documentos…');
   try {
-    const result = await fetchAPIPage(`/api/cms/documents?type=${encodeURIComponent(type)}&limit=100&offset=0`);
-    if (requestToken !== selectionToken || type !== selectedType) return;
+    const result = await fetchAPIPage(`/api/cms/documents?type=${encodeURIComponent(type)}&limit=${DOCUMENT_PAGE_SIZE}&offset=${requestOffset}`);
+    if (requestToken !== selectionToken || type !== selectedType || requestOffset !== documentOffset) return;
     documentsByType.set(type, result.data || []);
+    documentTotal = result.total ?? result.data?.length ?? 0;
     renderDocumentList();
     setError('');
   } catch {
@@ -326,6 +359,7 @@ async function loadDocument(id) {
     editVersion = 0;
     saveQueued = false;
     documentView = view;
+    syncListedDocument(view.document);
     historyOffset = 0;
     const blocks = view.draft?.blocks || view.schedule?.revision?.blocks || view.published?.blocks || [];
     renderEditor(blocks);
@@ -371,6 +405,7 @@ async function saveDraft() {
     if (requestToken !== selectionToken || requestDocument !== selectedDocument) return null;
     documentView.document = result.document;
     documentView.draft = result.revision;
+    syncListedDocument(result.document);
     updateInspector();
     renderDocumentList();
     if (editVersion === requestVersion) {
@@ -410,17 +445,21 @@ async function publishDocument() {
   const saved = await saveDraft();
   try {
     if (!saved || requestToken !== selectionToken || requestDocument !== selectedDocument) return;
-    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/publish`, { method: 'POST', body: JSON.stringify({}) });
+    const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/publish`, {
+      method: 'POST', body: JSON.stringify({ revision_id: saved.revision.id }),
+    });
     if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
     documentView.published = result.revision;
     documentView.draft = null;
+    documentView.schedule = null;
+    syncListedDocument(result.document);
     updateInspector();
     renderDocumentList();
     setSaveState('Publicado');
     showToast('Documento publicado.');
-  } catch {
-    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível publicar o documento.');
+  } catch (error) {
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError(mutationError(error, 'Não foi possível publicar o documento.'));
   } finally {
     actionBusy = false;
     syncBusyState();
@@ -438,12 +477,14 @@ async function unpublishDocument() {
     if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
     documentView.published = null;
+    documentView.schedule = null;
+    syncListedDocument(result.document);
     updateInspector();
     renderDocumentList();
     setSaveState('Despublicado');
     showToast('Documento despublicado.');
-  } catch {
-    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível despublicar o documento.');
+  } catch (error) {
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError(mutationError(error, 'Não foi possível despublicar o documento.'));
   } finally {
     actionBusy = false;
     syncBusyState();
@@ -468,18 +509,19 @@ async function scheduleDocument(event) {
   try {
     if (!saved || requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/schedule`, {
-      method: 'POST', body: JSON.stringify({ scheduled_at: scheduledAt.toISOString() }),
+      method: 'POST', body: JSON.stringify({ revision_id: saved.revision.id, scheduled_at: scheduledAt.toISOString() }),
     });
     if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
     documentView.schedule = { revision_id: result.revision.id, scheduled_at: result.document.scheduled_at, revision: result.revision };
     documentView.draft = null;
+    syncListedDocument(result.document);
     updateInspector();
     renderDocumentList();
     setSaveState('Agendado');
     showToast('Documento agendado.');
-  } catch {
-    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível agendar o documento. Escolha uma data futura.');
+  } catch (error) {
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError(mutationError(error, 'Não foi possível agendar o documento. Escolha uma data futura.'));
   } finally {
     actionBusy = false;
     syncBusyState();
@@ -496,15 +538,16 @@ async function unscheduleDocument() {
     const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/schedule`, { method: 'DELETE' });
     if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     documentView.document = result.document;
-    documentView.draft = documentView.schedule?.revision || null;
+    documentView.draft = result.draft || null;
     documentView.schedule = null;
     renderEditor(documentView.draft?.blocks || []);
+    syncListedDocument(result.document);
     updateInspector();
     renderDocumentList();
     setSaveState('Agendamento cancelado');
     showToast('Agendamento cancelado.');
-  } catch {
-    if (requestToken === selectionToken && requestDocument === selectedDocument) setError('Não foi possível cancelar o agendamento.');
+  } catch (error) {
+    if (requestToken === selectionToken && requestDocument === selectedDocument) setError(mutationError(error, 'Não foi possível cancelar o agendamento.'));
   } finally {
     actionBusy = false;
     syncBusyState();
@@ -536,10 +579,11 @@ newDocumentForm.addEventListener('submit', async event => {
   if (SOURCE_ENDPOINTS[selectedType]) body.source_id = sourceSelect.value;
   try {
     const result = await fetchAPI('/api/cms/documents', { method: 'POST', body: JSON.stringify(body) });
-    newDocumentForm.reset();
-    newDocumentDirty = false;
-    newDocumentForm.hidden = true;
-    syncBusyState();
+     newDocumentForm.reset();
+     newDocumentDirty = false;
+     newDocumentForm.hidden = true;
+     documentOffset = 0;
+     syncBusyState();
     await loadDocuments();
     await loadDocument(result.document.id);
     showToast('Documento criado como rascunho.');

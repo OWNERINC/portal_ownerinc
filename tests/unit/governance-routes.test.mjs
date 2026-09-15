@@ -63,6 +63,119 @@ test('privileged user listing is strict, paginated, counted, and audited', async
   assert.match(jobTitles, /active = TRUE/);
 });
 
+test('admin invitations expose actionable Firebase identity conflicts', async () => {
+  const [users, admin] = await Promise.all([
+    readFile('api/routes/users.js', 'utf8'),
+    readFile('public/js/admin.js', 'utf8'),
+  ]);
+  assert.match(users, /FIREBASE_IDENTITY_REFERENCED/);
+  assert.match(users, /FIREBASE_CLEANUP_PENDING/);
+  assert.match(users, /FIREBASE_IDENTITY_INDETERMINATE/);
+  assert.match(users, /reason: 'firebase_identity_referenced'/);
+  assert.match(users, /reason: 'firebase_cleanup_pending'/);
+  assert.match(users, /reason: 'firebase_identity_indeterminate'/);
+  assert.match(admin, /firebase_identity_referenced/);
+  assert.match(admin, /firebase_cleanup_pending/);
+  assert.match(admin, /firebase_identity_indeterminate/);
+});
+
+test('user status commits reconcile through a new connection before Firebase compensation', async () => {
+  const users = await readFile('api/routes/users.js', 'utf8');
+  const reactivate = users.slice(users.indexOf("router.put('/:uid/reactivate'"), users.indexOf("router.put('/:uid'"));
+  const disable = users.slice(users.indexOf("router.delete('/:uid',"));
+  for (const route of [reactivate, disable]) {
+    assert.match(route, /commitAttempted/);
+    assert.match(route, /commitCompleted/);
+    assert.match(route, /reconcileFirebaseAccountStatus/);
+    assert.match(route, /failedClient\?\.release\(true\)/);
+    assert.ok(route.indexOf('reconcileFirebaseAccountStatus') < route.indexOf('next(err)'));
+  }
+  assert.match(users, /SELECT permissions->>'accountDisabled' AS account_disabled/);
+  assert.match(users, /lockFirebaseIdentity/);
+  assert.match(reactivate, /firebase_enable_pending = FALSE/);
+  const reconciliation = users.slice(users.indexOf('async function reconcileFirebaseAccountStatus'), users.indexOf('async function stageStoredPhoto'));
+  assert.match(reconciliation, /pool\.connect\(\)/);
+  assert.match(reconciliation, /FOR UPDATE/);
+  assert.match(reconciliation, /firebaseAuth\.updateUser/);
+  assert.ok(reconciliation.indexOf('lockFirebaseIdentity') < reconciliation.indexOf('firebaseAuth.updateUser'));
+});
+
+test('Firebase account reconciliation holds the row and identity locks through the external update', async (t) => {
+  const routePath = require.resolve('../../api/routes/users');
+  const dbPath = require.resolve('../../api/db');
+  const authPath = require.resolve('../../api/middleware/auth');
+  const invitationPath = require.resolve('../../api/services/user-invitation');
+  const originals = new Map([
+    [routePath, require.cache[routePath]],
+    [dbPath, require.cache[dbPath]],
+    [authPath, require.cache[authPath]],
+    [invitationPath, require.cache[invitationPath]],
+  ]);
+  const steps = [];
+  let failFirebase = false;
+  const firebaseAuth = {
+    updateUser: async () => {
+      steps.push('firebase:update');
+      if (failFirebase) throw new Error('Firebase unavailable');
+    },
+  };
+  const clients = [];
+  const makeClient = () => ({
+    query: async (sql) => {
+      steps.push(sql);
+      if (sql.startsWith('SELECT email')) return { rows: [{ email: 'ana@example.com' }] };
+      if (sql.startsWith('SELECT uid, email')) return { rows: [{ uid: 'uid-1', email: 'ana@example.com' }] };
+      if (sql.startsWith('SELECT permissions')) return { rows: [{ account_disabled: 'true' }] };
+      return { rows: [], rowCount: 1 };
+    },
+    release() {},
+  });
+  const pool = { connect: async () => { const client = makeClient(); clients.push(client); return client; } };
+  require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: pool };
+  require.cache[authPath] = {
+    id: authPath,
+    filename: authPath,
+    loaded: true,
+    exports: { authMiddleware: (req, res, next) => next(), firebaseAuth },
+  };
+  require.cache[invitationPath] = {
+    id: invitationPath,
+    filename: invitationPath,
+    loaded: true,
+    exports: {
+      compensateCreatedInvitedUser: async () => {},
+      createInvitedUser: async () => {},
+      enableActiveUser: async () => ({ state: 'active' }),
+      lockFirebaseIdentity: async (client, identity) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [identity.uid]);
+      },
+    },
+  };
+  delete require.cache[routePath];
+  const { reconcileFirebaseAccountStatus } = require(routePath);
+
+  t.after(() => {
+    delete require.cache[routePath];
+    for (const [path, original] of originals) {
+      if (original) require.cache[path] = original;
+      else delete require.cache[path];
+    }
+  });
+
+  assert.equal(await reconcileFirebaseAccountStatus('uid-1', 'request-id'), true);
+  const rowLock = steps.findIndex((step) => typeof step === 'string' && step.startsWith('SELECT uid, email'));
+  const identityLock = steps.findIndex((step) => typeof step === 'string' && step.includes('pg_advisory_xact_lock'));
+  const statusRead = steps.findIndex((step) => typeof step === 'string' && step.startsWith('SELECT permissions'));
+  const firebaseUpdate = steps.indexOf('firebase:update');
+  const commit = steps.indexOf('COMMIT');
+  assert.ok(identityLock < rowLock && rowLock < statusRead && statusRead < firebaseUpdate && firebaseUpdate < commit);
+
+  steps.length = 0;
+  failFirebase = true;
+  assert.equal(await reconcileFirebaseAccountStatus('uid-1', 'request-id'), false);
+  assert.ok(steps.includes('ROLLBACK'));
+});
+
 test('public content routes provide server-side filters and category metadata', async () => {
   const [knowledge, academy, benefits] = await Promise.all([
     readFile('api/routes/knowledge.js', 'utf8'),
@@ -70,7 +183,8 @@ test('public content routes provide server-side filters and category metadata', 
     readFile('api/routes/benefits.js', 'utf8'),
   ]);
   assert.match(knowledge, /router\.get\('\/categories'/);
-  assert.match(knowledge, /ILIKE/);
+  assert.match(knowledge, /publishedBodyText/);
+  assert.doesNotMatch(knowledge, /CMS_BODY_SQL/);
   assert.match(knowledge, /category = \$\$\{values\.length\}/);
   assert.match(knowledge, /router\.get\('\/:id'/);
   assert.match(knowledge, /pdf_asset_id/);

@@ -5,7 +5,6 @@ import { clear, element, safeHttpUrl, showState } from './ui.js';
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 
-const isPJ = user.contract_type === 'pj' || user.is_pj;
 const editorialImages = [
   ['https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=600&q=80', 'Sala de trabalho iluminada'],
   ['https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=600&q=80', 'Notebook aberto sobre uma mesa'],
@@ -112,12 +111,7 @@ async function loadReminders() {
 }
 
 const quickLinks = document.getElementById('quick-links');
-const links = isPJ ? [
-  ['book-open', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
-  ['bell', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
-  ['graduation-cap', 'Academy', 'Cursos e treinamentos', './academy.html'],
-] : [
-  ['gift', 'Benefícios', 'Parceiros e clube de vantagens', './benefits.html'],
+const links = [
   ['book-open', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
   ['bell', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
   ['graduation-cap', 'Academy', 'Cursos e treinamentos', './academy.html'],

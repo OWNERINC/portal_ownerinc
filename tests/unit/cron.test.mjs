@@ -19,7 +19,12 @@ test('scheduled promotion is transactional, archives before publishing, and audi
     async query(sql, params = []) {
       calls.push({ sql, params });
       if (/SELECT d\.id, d\.published_revision_id/.test(sql)) {
-        return { rows: [{ id: 'doc-1', published_revision_id: 'old-1', scheduled_revision_id: 'new-1' }] };
+        return {
+          rows: [{
+            id: 'doc-1', published_revision_id: 'old-1', scheduled_revision_id: 'new-1',
+            scheduled_blocks: [{ type: 'paragraph', text: 'Scheduled body' }],
+          }],
+        };
       }
       return { rows: [] };
     },

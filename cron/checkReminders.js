@@ -7,9 +7,13 @@ const JOB_NAME = 'reminders';
 const MAX_ATTEMPTS = 3;
 
 function reminderForDelivery(reminder) {
-  if (reminder.cms_blocks === null || reminder.cms_blocks === undefined) return reminder;
+  if (reminder.cms_document_id === null || reminder.cms_document_id === undefined) {
+    if (reminder.cms_blocks === null || reminder.cms_blocks === undefined) return reminder;
+    const description = blocksToText(reminder.cms_blocks);
+    return description.trim() ? { ...reminder, description } : reminder;
+  }
   const description = blocksToText(reminder.cms_blocks);
-  return description.trim() ? { ...reminder, description } : reminder;
+  return description.trim() ? { ...reminder, description } : null;
 }
 
 function channelsFor(channel) {
@@ -107,13 +111,15 @@ async function processOccurrence(db, reminder, user, scheduledDate, channel) {
 async function processDate(db, scheduledDate) {
   const [{ rows: reminders }, { rows: users }] = await Promise.all([
     db.query(`SELECT reminder.id, reminder.title, reminder.description, reminder.trigger_day,
-                     reminder.target_users, reminder.channel, revision.blocks AS cms_blocks
+                     reminder.target_users, reminder.channel, document.id AS cms_document_id,
+                     revision.blocks AS cms_blocks
                 FROM reminders reminder
                 LEFT JOIN cms_documents document
                   ON document.content_type = 'reminder' AND document.source_id = reminder.id
                 LEFT JOIN cms_revisions revision
                   ON revision.id = document.published_revision_id AND revision.status = 'published'
-               WHERE reminder.active = true`),
+               WHERE reminder.active = true
+                 AND (document.id IS NULL OR revision.id IS NOT NULL)`),
     db.query(`SELECT uid, email, name, contract_type, is_pj, phone FROM users
       WHERE NOT (permissions @> '{"accountDisabled":true}'::jsonb)`)
   ]);
@@ -121,6 +127,7 @@ async function processDate(db, scheduledDate) {
 
   for (const reminder of reminders.filter((item) => reminderMatchesDate(item.trigger_day, scheduledDate))) {
     const deliveryReminder = reminderForDelivery(reminder);
+    if (!deliveryReminder) continue;
     for (const user of resolveTargets(reminder.target_users, users)) {
       for (const channel of channelsFor(reminder.channel)) {
         const status = await processOccurrence(db, deliveryReminder, user, scheduledDate, channel);
@@ -156,9 +163,10 @@ async function checkReminders(now = new Date()) {
     if (!locked) return { skipped: true, reason: 'already-running' };
 
     await db.query(
-      `INSERT INTO cron_status (name, heartbeat_at, last_started_at, last_error)
+       `INSERT INTO cron_status (name, heartbeat_at, last_started_at, last_error)
        VALUES ($1, NOW(), NOW(), NULL)
-       ON CONFLICT (name) DO UPDATE SET heartbeat_at = NOW(), last_started_at = NOW(), last_error = NULL`,
+       ON CONFLICT (name) DO UPDATE SET heartbeat_at = NOW(), last_started_at = NOW(),
+         last_error = CASE WHEN cron_status.last_error = 'Worker status missing' THEN NULL ELSE cron_status.last_error END`,
       [JOB_NAME]
     );
     await db.query(
@@ -182,10 +190,12 @@ async function checkReminders(now = new Date()) {
     }
 
     await db.query(
-      `UPDATE cron_status SET heartbeat_at = NOW(), last_finished_at = NOW(), last_success_at = NOW(),
+      `UPDATE cron_status SET heartbeat_at = NOW(), last_finished_at = NOW(),
+         last_success_at = CASE WHEN $5 = 0 THEN NOW() ELSE last_success_at END,
          duration_ms = $2, attempted_count = $3, sent_count = $4, failed_count = $5,
-         skipped_count = $6, last_error = NULL WHERE name = $1`,
-      [JOB_NAME, Date.now() - started, totals.attempted, totals.sent, totals.failed, totals.skipped]
+         skipped_count = $6, last_error = $7 WHERE name = $1`,
+      [JOB_NAME, Date.now() - started, totals.attempted, totals.sent, totals.failed, totals.skipped,
+        totals.failed ? `${totals.failed} reminder deliveries failed.` : null]
     );
     console.log(JSON.stringify({ service: 'cron', event: 'run_completed', days: dates.length, ...totals }));
     return totals;

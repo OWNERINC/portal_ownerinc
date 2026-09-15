@@ -46,7 +46,10 @@ async function loadBenefits() {
     const benefits = result.data.filter(item => item.active !== false);
     categories = categoryList;
     renderFilters();
-    if (!benefits.length) return showState(container, 'Nenhum benefício disponível no momento.');
+    if (!benefits.length) {
+      renderPagination(pagination, 0, offset, PAGE_SIZE, () => {});
+      return showState(container, 'Nenhum benefício disponível no momento.');
+    }
     const categories = benefits.reduce((map, benefit) => {
       const category = benefit.category || 'Geral';
       map.set(category, [...(map.get(category) || []), benefit]);

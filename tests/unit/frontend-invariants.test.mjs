@@ -67,6 +67,21 @@ test('admin navigation restores the last verified role before paint and revalida
   }
 });
 
+test('authenticated requests centralize auth redirects without treating permission denial as logout', async () => {
+  const auth = await readFile('public/js/auth.js', 'utf8');
+  const authenticatedFetch = auth.slice(auth.indexOf('function authRedirectReason'), auth.indexOf('async function requestAPI'));
+  const requireAuth = auth.slice(auth.indexOf('export async function requireAuth'), auth.indexOf('export async function logout'));
+  assert.match(authenticatedFetch, /response\.status === 401/);
+  assert.match(authenticatedFetch, /response\.clone\(\)/);
+  assert.match(authenticatedFetch, /clearVerifiedRole\(\)/);
+  assert.match(authenticatedFetch, /await signOut\(auth\)\.catch/);
+  assert.match(authenticatedFetch, /redirectToLogin\(/);
+  assert.match(authenticatedFetch, /body\?\.reason === 'email-not-verified'\) return 'email'/);
+  assert.match(authenticatedFetch, /\/api\/users\/me/);
+  assert.match(requireAuth, /if \(error\.status === 401 \|\| error\.status === 403\) return null;/);
+  assert.doesNotMatch(authenticatedFetch, /response\.status === 403\) \{/);
+});
+
 test('AutoCard navigation consumes backend access instead of a frontend title allowlist', async () => {
   const [auth, apiAuth] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
@@ -96,11 +111,14 @@ test('admin table states tolerate sections without pagination containers', async
 });
 
 test('profile exposes safe API errors instead of hiding upload and save failures', async () => {
-  const [profile, upload] = await Promise.all([
+  const [profile, upload, auth] = await Promise.all([
     readFile('public/js/profile.js', 'utf8'),
     readFile('api/routes/upload.js', 'utf8'),
+    readFile('public/js/auth.js', 'utf8'),
   ]);
-  assert.match(profile, /async function responseError\(response, fallback\)/);
+  assert.match(profile, /const res = await authenticatedFetch\('\/api\/upload\/photo', \{[\s\S]*body: formData/);
+  assert.doesNotMatch(profile, /fetch\('\/api\/upload\/photo'/);
+  assert.doesNotMatch(profile, /getIdToken\(\)/);
   assert.match(profile, /responseError\(res, 'O servidor recusou o arquivo/);
   assert.match(profile, /Não foi possível salvar o perfil: \$\{err\.message\}/);
   assert.match(profile, /MAX_PHOTO_SIZE = 500 \* 1024/);
@@ -112,6 +130,9 @@ test('profile exposes safe API errors instead of hiding upload and save failures
   assert.match(profile, /Escolha uma imagem JPEG, PNG ou WebP de até 500 KB/);
   assert.match(profile, /runProfileAction/);
   assert.doesNotMatch(profile, /users\/me\/export/);
+  assert.match(auth, /export async function authenticatedFetch\(/);
+  assert.match(auth, /await handleAuthenticationFailure\(path, response\)/);
+  assert.match(auth, /path === '\/api\/users\/me' \? 'access' : null/);
   assert.match(upload, /fileSize: 500 \* 1024/);
 });
 
@@ -194,7 +215,7 @@ test('admin job titles come from the API instead of an inline catalog', async ()
   assert.match(script, /text: title\.active \? title\.name : `\$\{title\.name\} \(inativo\)`/);
   assert.doesNotMatch(script, /(?:const|let|var)\s+\w*(?:catalog|titles?)\w*\s*=\s*\[\s*(?!\])/i);
   for (const title of [
-    'Analista de RH Sênior', 'Gerente de RH', 'Analista Administrativo',
+    'Analista de DHO Sênior', 'Gerente de DHO', 'Analista Administrativo',
     'Coordenador de Compras', 'Social Media',
   ]) {
     assert.equal(script.includes(title), false, `admin script must not hardcode ${title}`);
@@ -215,8 +236,10 @@ test('public content pages expose server pagination and category filters', async
   assert.match(knowledge, /renderPagination\(document\.getElementById\('articles-pagination'/);
   assert.match(academy, /fetchAPIPage\(`\/api\/academy\?\$\{request\}`\)/);
   assert.match(academy, /academy-filters/);
+  assert.match(academy, /if \(!courses\.length\) \{[\s\S]*renderPagination\(pagination, 0, offset, PAGE_SIZE/);
   assert.match(benefits, /fetchAPIPage\(`\/api\/benefits\?\$\{request\}`\)/);
   assert.match(benefits, /benefits-filters/);
+  assert.match(benefits, /if \(!benefits\.length\) \{[\s\S]*renderPagination\(pagination, 0, offset, PAGE_SIZE/);
   assert.match(pagination, /function renderPagination/);
 });
 
@@ -249,10 +272,37 @@ test('admin exposes paginated audit without removed sector controls', async () =
     readFile('public/js/admin.js', 'utf8'),
   ]);
   assert.match(html, /id="audit-pagination"/);
+  assert.match(html, /Cargo ativo para atribuição e acesso atual/);
+  assert.match(html, /páginas marcadas ficam disponíveis para usuários com este cargo enquanto ele estiver ativo/);
   assert.match(script, /fetchAPIPage\(`\/api\/users\/audit\?limit=\$\{AUDIT_PAGE_SIZE\}/);
   assert.match(script, /serverPagination\('audit'/);
   assert.doesNotMatch(html, /ombudsman|Ouvidoria|viewOmbudsman/i);
   assert.doesNotMatch(script, /ombudsman|Ouvidoria|viewOmbudsman/i);
+});
+
+test('global navigation omits Benefits and Sólides while admin discovers gated tabs', async () => {
+  const [generator, dashboard, preview, admin] = await Promise.all([
+    readFile('scripts/generate-public-shell.mjs', 'utf8'),
+    readFile('public/js/dashboard.js', 'utf8'),
+    readFile('public/home-preview.html', 'utf8'),
+    readFile('public/js/admin.js', 'utf8'),
+  ]);
+  const sidebarSource = generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '';
+  const adminTabs = admin.match(/const TABS = \[[\s\S]*?\n\];/)?.[0] || '';
+  assert.doesNotMatch(sidebarSource, /benefits|solides/i);
+  assert.doesNotMatch(dashboard, /benefits\.html|Benefícios/);
+  assert.doesNotMatch(preview, /benefits\.html|Benefícios|solides\.html|Sólides/);
+  assert.doesNotMatch(adminTabs, /benefits|solides/i);
+  assert.match(admin, /if \(can\(me, 'manageBenefits'\)\) tabs\.push\(\['benefits', 'Benefícios'\]\)/);
+  assert.match(admin, /if \(!can\(me, 'manageSolides'\)\) return;/);
+  assert.match(admin, /fetchAPI\('\/api\/solides\/admin\/status'\)/);
+  assert.match(admin, /if \(solidesAdminAvailable\) tabs\.push\(\['solides', 'Sólides'\]\)/);
+  assert.match(admin, /await discoverAdminFeatures\(\)/);
+  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'profile', 'admin', 'benefits', 'solides']) {
+    const html = await readFile(`public/${page}.html`, 'utf8');
+    const sidebar = html.match(/<!-- generated:portal-sidebar -->[\s\S]*?<!-- \/generated:portal-sidebar -->/)?.[0] || '';
+    assert.doesNotMatch(sidebar, /benefits\.html|Benefícios|solides\.html|Sólides/);
+  }
 });
 
 test('AutoCard shell preserves accessible navigation and reduced motion', async () => {
@@ -302,6 +352,7 @@ test('authenticated shell is generated from one static build source', async () =
   assert.match(generator, /generated:portal-topbar/);
   assert.match(generator, /id="btn-new"/);
   assert.match(generator, /id="btn-new-reminder"/);
+  assert.doesNotMatch(generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '', /benefits|solides/i);
   for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);

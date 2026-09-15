@@ -1,5 +1,9 @@
 # Cards Pos Portal Integration Implementation Plan
 
+> Documento histórico. O bypass temporário de `role=admin` descrito abaixo foi
+> substituído por cargo ativo e `page_access.posCards=true`; os defaults DHO não
+> são uma allowlist.
+
 > **For agentic workers:** Implement this plan task-by-task with focused verification after each task.
 
 **Goal:** Integrate the `cards_pós` invitation editor into the Portal as a standalone, visually standardized page with temporary admin access and isolated API/storage.

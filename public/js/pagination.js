@@ -4,6 +4,7 @@ export function readOffset(searchParams, limit = 20) {
 }
 
 export function renderPagination(node, total, offset, limit, onPage) {
+  if (!node) return;
   node.replaceChildren();
   const pageCount = Math.max(1, Math.ceil(total / limit));
   const page = Math.min(Math.floor(offset / limit), pageCount - 1);

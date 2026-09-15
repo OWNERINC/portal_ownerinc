@@ -19,11 +19,11 @@ function can(user, permission) {
 }
 
 function canUseAutoCard(user) {
-  return isSuperAdmin(user) || user?.job_title_access?.autocard === true;
+  return isSuperAdmin(user) || (user?.job_title_active === true && user?.job_title_access?.autocard === true);
 }
 
 function canUsePosCards(user) {
-  return isSuperAdmin(user) || user?.job_title_access?.posCards === true;
+  return isSuperAdmin(user) || (user?.job_title_active === true && user?.job_title_access?.posCards === true);
 }
 
 function normalizeJobTitlePages(value = {}) {

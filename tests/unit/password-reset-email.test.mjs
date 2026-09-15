@@ -11,6 +11,7 @@ const originalCreateTransport = nodemailer.createTransport;
 nodemailer.createTransport = () => transport;
 const {
   invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpAcceptanceAuditDetails, smtpOptions,
+  verificationMessage, portalLoginUrl,
 } = require('../../api/integrations/password-reset-email');
 
 const env = {
@@ -56,6 +57,12 @@ test('password reset ignores unsupported provider-specific sender settings', () 
   });
 });
 
+test('portal email links use the configured public URL', () => {
+  const staging = { ...env, PORTAL_PUBLIC_URL: 'https://staging.example.test' };
+  assert.equal(portalLoginUrl(staging), 'https://staging.example.test/login.html');
+  assert.match(passwordResetMessage({ to: 'user@example.com', link: 'https://example.com/reset', env: staging }).text, /https:\/\/staging\.example\.test\/login\.html/);
+});
+
 test('invitation message explains password setup without exposing credentials', () => {
   const message = invitationMessage({
     to: 'user@example.com', name: 'Ana', link: 'https://example.com/invite?a=1&b=2', env,
@@ -70,6 +77,17 @@ test('invitation message explains password setup without exposing credentials', 
 test('invitation HTML escapes the recipient name', () => {
   const message = invitationMessage({ to: 'user@example.com', name: '<Ana>', link: 'https://example.com/invite', env });
   assert.match(message.html, /&lt;Ana&gt;/);
+  assert.doesNotMatch(message.html, /<Ana>/);
+});
+
+test('verification message is distinct and escapes the recipient and link', () => {
+  const message = verificationMessage({
+    to: 'user@example.com', name: '<Ana>', link: 'https://example.com/verify?a=1&b=2', env,
+  });
+  assert.equal(message.subject, 'Confirme seu e-mail — Portal Interno Ownerinc');
+  assert.match(message.text, /confirme seu e-mail/i);
+  assert.match(message.html, /&lt;Ana&gt;/);
+  assert.match(message.html, /a=1&amp;b=2/);
   assert.doesNotMatch(message.html, /<Ana>/);
 });
 

@@ -9,9 +9,11 @@ const {
   can, isSuperAdmin, mayChangeAccountStatus, maySetPrivileges, normalizePermissions,
   removesLastActiveSuperAdmin,
 } = require('../middleware/policy');
-const { hasOwn, validateProfile, validateUser } = require('../middleware/validation');
-const { parseListQuery } = require('../route-utils');
-const { createInvitedUser } = require('../services/user-invitation');
+const { hasOwn, normalizeContract, validateProfile, validateUser } = require('../middleware/validation');
+const { firebaseUid, parseListQuery } = require('../route-utils');
+const {
+  compensateCreatedInvitedUser, createInvitedUser, enableActiveUser, lockFirebaseIdentity,
+} = require('../services/user-invitation');
 // The shared invitation service calls sendInvitation and audits user.create.
 
 const forbidden = (req, res) => res.status(403).json({ error: 'Permission denied.', requestId: req.id });
@@ -23,6 +25,66 @@ async function audit(client, req, action, targetId, details = {}) {
      VALUES ($1, $2, 'user', $3, $4, $5::jsonb)`,
     [req.user.uid, action, targetId || null, req.id, JSON.stringify(details)]
   );
+}
+
+async function reconcileFirebaseAccountStatus(uid, requestId) {
+  let client;
+  let transactionOpen = false;
+  let commitAttempted = false;
+  let commitCompleted = false;
+  let discardClient = false;
+  try {
+    client = await pool.connect();
+    const hint = await client.query('SELECT email FROM users WHERE uid = $1', [uid]);
+    const knownEmail = hint.rows[0]?.email?.trim().toLowerCase() || null;
+    await client.query('BEGIN');
+    transactionOpen = true;
+    if (knownEmail) await lockFirebaseIdentity(client, { email: knownEmail });
+    else await lockFirebaseIdentity(client, { uid });
+    const identity = await client.query('SELECT uid, email FROM users WHERE uid = $1 FOR UPDATE', [uid]);
+    if (!identity.rows[0]) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return false;
+    }
+    if (knownEmail && identity.rows[0].email?.trim().toLowerCase() !== knownEmail) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return false;
+    }
+    await lockFirebaseIdentity(client, { uid });
+    const result = await client.query(
+      `SELECT permissions->>'accountDisabled' AS account_disabled
+       FROM users WHERE uid = $1 FOR UPDATE`,
+      [uid],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return false;
+    }
+    await firebaseAuth.updateUser(uid, { disabled: row.account_disabled === 'true' });
+    commitAttempted = true;
+    await client.query('COMMIT');
+    commitCompleted = true;
+    transactionOpen = false;
+    return true;
+  } catch (error) {
+    if (commitAttempted && !commitCompleted) {
+      discardClient = true;
+      transactionOpen = false;
+    } else if (transactionOpen) {
+      await client?.query('ROLLBACK').catch(() => { discardClient = true; });
+      transactionOpen = false;
+    }
+    transactionOpen = false;
+    console.error(JSON.stringify({ service: 'api', event: 'user_status_reconcile_failed', requestId, error: error.message }));
+    return false;
+  } finally {
+    if (transactionOpen) await client?.query('ROLLBACK').catch(() => { discardClient = true; });
+    client?.release(discardClient);
+  }
 }
 
 async function stageStoredPhoto(photoUrl) {
@@ -85,11 +147,14 @@ router.get('/', authMiddleware, async (req, res, next) => {
   try {
     client = await pool.connect();
     await client.query('BEGIN');
-    const [{ rows }, count] = await Promise.all([
-      client.query(`SELECT u.uid, u.email, u.name, u.phone, u.role, u.contract_type, u.is_pj, u.pj_due_day,
-          u.job_title_id, jt.name AS job_title, u.permissions, u.created_at
-        FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
-        ORDER BY u.name, u.uid LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
+       const [{ rows }, count] = await Promise.all([
+       client.query(`SELECT u.uid, u.email, u.name, u.phone, u.role, u.contract_type, u.is_pj, u.pj_due_day,
+           u.job_title_id, jt.name AS job_title, u.permissions, u.firebase_enable_pending,
+           CASE WHEN u.permissions->>'accountDisabled' = 'true' THEN 'disabled'
+                WHEN u.firebase_enable_pending THEN 'enable_pending' ELSE 'active' END AS state,
+           u.created_at
+         FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
+         ORDER BY u.name, u.uid LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
       client.query('SELECT COUNT(*)::integer AS total FROM users'),
     ]);
     await audit(client, req, 'user.list', null, { limit: page.limit, offset: page.offset, resultCount: rows.length });
@@ -112,11 +177,18 @@ router.post('/', authMiddleware, async (req, res, next) => {
   if (setsPrivileges && !isSuperAdmin(req.user)) return forbidden(req, res);
 
   let client;
+  let createdUid;
+  let firebaseWasCreated = false;
+  let commitAttempted = false;
+  let commitCompleted = false;
+  let discardClient = false;
+  const { email, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, job_title_id = null, phone = '' } = req.body;
+  const contract = normalizeContract(contract_type, pj_due_day);
+  if (!contract || contract.is_pj !== is_pj) return invalid(req, res);
+  const normalizedEmail = email.trim().toLowerCase();
+  const role = req.body.role || 'viewer';
+  const permissions = role === 'admin' ? normalizePermissions(req.body.permissions) : {};
   try {
-    const { email, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, job_title_id = null, phone = '' } = req.body;
-    const role = req.body.role || 'viewer';
-    const permissions = role === 'admin' ? normalizePermissions(req.body.permissions) : {};
-
     client = await pool.connect();
     await client.query('BEGIN');
     if (job_title_id) {
@@ -127,28 +199,89 @@ router.post('/', authMiddleware, async (req, res, next) => {
         throw error;
       }
     }
-    const rows = await createInvitedUser({ client, data: { email, name, contract_type, pj_due_day, job_title_id, phone, role, permissions }, audit: (action, targetId, details) => audit(client, req, action, targetId, details) });
+    const rows = await createInvitedUser({ client, data: { email: normalizedEmail, name, ...contract, job_title_id, phone, role, permissions }, audit: (action, targetId, details) => audit(client, req, action, targetId, details) });
+    createdUid = rows.uid;
+    firebaseWasCreated = rows.firebaseCreated;
+    commitAttempted = true;
     await client.query('COMMIT');
+    commitCompleted = true;
+    try {
+       const enable = await enableActiveUser({ pool, uid: rows.uid, email: normalizedEmail, requestId: req.id });
+      if (enable.state !== 'active') {
+        console.error(JSON.stringify({ service: 'api', event: 'firebase_enable_pending', requestId: req.id }));
+      }
+    } catch {
+      console.error(JSON.stringify({ service: 'api', event: 'firebase_enable_pending', requestId: req.id }));
+    }
+    createdUid = null;
     res.status(201).json(rows);
   } catch (err) {
-    await client?.query('ROLLBACK').catch(() => {});
+    let rollbackFailed = false;
+    if (!commitAttempted) await client?.query('ROLLBACK').catch(() => { rollbackFailed = true; discardClient = true; });
+    await compensateCreatedInvitedUser({
+      pool,
+      uid: createdUid || err.firebaseUid,
+      email: normalizedEmail,
+      firebaseCreated: firebaseWasCreated || err.firebaseCreated === true,
+      commitAttempted: commitAttempted || rollbackFailed,
+      commitCompleted,
+      requestId: req.id,
+      reason: 'admin_invitation',
+    });
     if (err.code === 'INVALID_JOB_TITLE') return invalid(req, res);
-    if (err.code === 'auth/email-already-exists') {
+    if (err.code === 'INVALID_CONTRACT') return invalid(req, res);
+    if (err.code === 'FIREBASE_IDENTITY_REFERENCED') {
+      return res.status(409).json({
+        error: 'Esta identidade pertence a um cadastro pendente; resolva a solicitação antes de convidar novamente.',
+        reason: 'firebase_identity_referenced', requestId: req.id,
+      });
+    }
+    if (err.code === 'FIREBASE_CLEANUP_PENDING') {
+      return res.status(409).json({
+        error: 'A limpeza da identidade Firebase ainda está pendente; tente novamente após a reconciliação.',
+        reason: 'firebase_cleanup_pending', requestId: req.id,
+      });
+    }
+    if (err.code === 'FIREBASE_IDENTITY_INDETERMINATE' || err.identityIndeterminate === true) {
+      return res.status(503).json({
+        error: 'Não foi possível confirmar o estado da identidade Firebase; tente novamente.',
+        reason: 'firebase_identity_indeterminate', requestId: req.id,
+      });
+    }
+    if (err.code === 'auth/email-already-exists' || err.code === '23505') {
       return res.status(409).json({ error: 'Account already exists.', requestId: req.id });
     }
     next(err);
   } finally {
-    client?.release();
+    client?.release(discardClient || (commitAttempted && !commitCompleted));
   }
 });
 
 router.put('/:uid/reactivate', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageUsers')) return forbidden(req, res);
+  if (!firebaseUid(req.params.uid)) return invalid(req, res);
   let client;
-  let enabled = false;
+  let firebaseMutationStarted = false;
+  let commitAttempted = false;
+  let commitCompleted = false;
+  let discardClient = false;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
+    const hint = await client.query('SELECT email FROM users WHERE uid = $1', [req.params.uid]);
+    const knownEmail = hint.rows[0]?.email?.trim().toLowerCase() || null;
+    if (knownEmail) await lockFirebaseIdentity(client, { email: knownEmail });
+    else await lockFirebaseIdentity(client, { uid: req.params.uid });
+    const identity = await client.query('SELECT uid, email, role, permissions FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid]);
+    if (!identity.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Account not found.', requestId: req.id });
+    }
+    if (knownEmail && identity.rows[0].email?.trim().toLowerCase() !== knownEmail) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Account identity changed; try again.', requestId: req.id });
+    }
+    await lockFirebaseIdentity(client, { uid: req.params.uid });
     const { rows } = await client.query('SELECT uid, role, permissions FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid]);
     const target = rows[0];
     if (!target) {
@@ -160,31 +293,39 @@ router.put('/:uid/reactivate', authMiddleware, async (req, res, next) => {
       return forbidden(req, res);
     }
 
+    firebaseMutationStarted = true;
     await firebaseAuth.updateUser(req.params.uid, { disabled: false });
-    enabled = true;
     const result = await client.query(
-      `UPDATE users SET permissions = permissions - 'accountDisabled' WHERE uid = $1 RETURNING *`,
+      `UPDATE users
+       SET permissions = permissions - 'accountDisabled', firebase_enable_pending = FALSE
+       WHERE uid = $1 RETURNING *`,
       [req.params.uid]
     );
     await audit(client, req, 'user.reactivate', req.params.uid);
+    commitAttempted = true;
     await client.query('COMMIT');
-    enabled = false;
+    commitCompleted = true;
     res.json(result.rows[0]);
   } catch (err) {
-    await client?.query('ROLLBACK').catch(() => {});
-    if (enabled) {
-      await firebaseAuth.updateUser(req.params.uid, { disabled: true }).catch((cleanupError) => {
-        console.error(`[api] request=${req.id} Firebase compensation failed`, cleanupError);
-      });
+    if (!commitAttempted) {
+      await client?.query('ROLLBACK').catch(() => { discardClient = true; });
+      if (firebaseMutationStarted) await reconcileFirebaseAccountStatus(req.params.uid, req.id);
+    } else if (!commitCompleted) {
+      discardClient = true;
+      const failedClient = client;
+      client = null;
+      failedClient?.release(true);
+      await reconcileFirebaseAccountStatus(req.params.uid, req.id);
     }
     next(err);
   } finally {
-    client?.release();
+    client?.release(discardClient || (commitAttempted && !commitCompleted));
   }
 });
 
 router.put('/:uid', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageUsers')) return forbidden(req, res);
+  if (!firebaseUid(req.params.uid)) return invalid(req, res);
   if (!validateUser(req.body)) return invalid(req, res);
 
   const setsPrivileges = hasOwn(req.body, 'role') || hasOwn(req.body, 'permissions');
@@ -194,8 +335,21 @@ router.put('/:uid', authMiddleware, async (req, res, next) => {
   try {
     client = await pool.connect();
     await client.query('BEGIN');
-    const { rows } = await client.query('SELECT * FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid]);
-    const target = rows[0];
+    const hint = await client.query('SELECT email FROM users WHERE uid = $1', [req.params.uid]);
+    const knownEmail = hint.rows[0]?.email?.trim().toLowerCase() || null;
+    if (knownEmail) await lockFirebaseIdentity(client, { email: knownEmail });
+    else await lockFirebaseIdentity(client, { uid: req.params.uid });
+    let target = (await client.query('SELECT * FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid])).rows[0];
+    if (!target) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Account not found.', requestId: req.id });
+    }
+    if (knownEmail && target.email?.trim().toLowerCase() !== knownEmail) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Account identity changed; try again.', requestId: req.id });
+    }
+    await lockFirebaseIdentity(client, { uid: req.params.uid });
+    target = (await client.query('SELECT * FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid])).rows[0];
     if (!target) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Account not found.', requestId: req.id });
@@ -224,6 +378,14 @@ router.put('/:uid', authMiddleware, async (req, res, next) => {
     }
 
     const { name, contract_type, is_pj, pj_due_day, phone } = req.body;
+    const contract = normalizeContract(
+      hasOwn(req.body, 'contract_type') ? contract_type : target.contract_type,
+      hasOwn(req.body, 'pj_due_day') ? pj_due_day : target.pj_due_day,
+    );
+    if (!contract || (hasOwn(req.body, 'is_pj') && contract.is_pj !== is_pj)) {
+      await client.query('ROLLBACK');
+      return invalid(req, res);
+    }
     const jobTitleId = hasOwn(req.body, 'job_title_id') ? req.body.job_title_id : target.job_title_id;
     if (jobTitleId) {
       const { rowCount } = await client.query(
@@ -238,12 +400,11 @@ router.put('/:uid', authMiddleware, async (req, res, next) => {
     const result = await client.query(
       `UPDATE users SET
         name = COALESCE($2, name), role = $3,
-        contract_type = COALESCE($4, contract_type),
-        is_pj = COALESCE($5, is_pj), pj_due_day = $6,
-        job_title_id = $7, phone = COALESCE($8, phone), permissions = $9
-       WHERE uid = $1 RETURNING *`,
-      [req.params.uid, name, role, contract_type, is_pj, hasOwn(req.body, 'pj_due_day') ? pj_due_day : target.pj_due_day,
-        jobTitleId, phone, JSON.stringify(permissions)]
+         contract_type = $4, is_pj = $5, pj_due_day = $6,
+         job_title_id = $7, phone = COALESCE($8, phone), permissions = $9
+        WHERE uid = $1 RETURNING *`,
+       [req.params.uid, name, role, contract.contract_type, contract.is_pj, contract.pj_due_day,
+         jobTitleId, phone, JSON.stringify(permissions)]
     );
     await audit(client, req, 'user.update', req.params.uid, { fields: Object.keys(req.body).sort() });
     await client.query('COMMIT');
@@ -257,12 +418,27 @@ router.put('/:uid', authMiddleware, async (req, res, next) => {
 });
 
 router.delete('/:uid/personal-data', authMiddleware, async (req, res, next) => {
+  if (!firebaseUid(req.params.uid)) return invalid(req, res);
   if (!isSuperAdmin(req.user) || req.user.uid === req.params.uid) return forbidden(req, res);
   let client;
   let stagedPhoto;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
+    const hint = await client.query('SELECT email FROM users WHERE uid = $1', [req.params.uid]);
+    const knownEmail = hint.rows[0]?.email?.trim().toLowerCase() || null;
+    if (knownEmail) await lockFirebaseIdentity(client, { email: knownEmail });
+    else await lockFirebaseIdentity(client, { uid: req.params.uid });
+    const identity = await client.query('SELECT * FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid]);
+    if (!identity.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Account not found.', requestId: req.id });
+    }
+    if (knownEmail && identity.rows[0].email?.trim().toLowerCase() !== knownEmail) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Account identity changed; try again.', requestId: req.id });
+    }
+    await lockFirebaseIdentity(client, { uid: req.params.uid });
     const { rows } = await client.query('SELECT * FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid]);
     const target = rows[0];
     if (!target) {
@@ -290,6 +466,7 @@ router.delete('/:uid/personal-data', authMiddleware, async (req, res, next) => {
        WHERE jsonb_typeof(target_users) = 'array' AND target_users ? $1`,
       [req.params.uid]
     );
+    await client.query('DELETE FROM pending_registrations WHERE firebase_uid = $1', [req.params.uid]);
     await client.query('DELETE FROM users WHERE uid = $1', [req.params.uid]);
     await audit(client, req, 'user.erase_personal_data', null, { recordDeleted: true });
     if (stagedPhoto) await fs.unlink(stagedPhoto.staged);
@@ -309,12 +486,30 @@ router.delete('/:uid/personal-data', authMiddleware, async (req, res, next) => {
 
 router.delete('/:uid', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageUsers')) return forbidden(req, res);
+  if (!firebaseUid(req.params.uid)) return invalid(req, res);
 
   let client;
-  let firebaseDisabled = false;
+  let firebaseMutationStarted = false;
+  let commitAttempted = false;
+  let commitCompleted = false;
+  let discardClient = false;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
+    const hint = await client.query('SELECT email FROM users WHERE uid = $1', [req.params.uid]);
+    const knownEmail = hint.rows[0]?.email?.trim().toLowerCase() || null;
+    if (knownEmail) await lockFirebaseIdentity(client, { email: knownEmail });
+    else await lockFirebaseIdentity(client, { uid: req.params.uid });
+    const identity = await client.query('SELECT uid, email, role, permissions FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid]);
+    if (!identity.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Account not found.', requestId: req.id });
+    }
+    if (knownEmail && identity.rows[0].email?.trim().toLowerCase() !== knownEmail) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Account identity changed; try again.', requestId: req.id });
+    }
+    await lockFirebaseIdentity(client, { uid: req.params.uid });
     const { rows } = await client.query('SELECT * FROM users WHERE uid = $1 FOR UPDATE', [req.params.uid]);
     const target = rows[0];
     if (!target) {
@@ -338,8 +533,8 @@ router.delete('/:uid', authMiddleware, async (req, res, next) => {
       }
     }
 
+    firebaseMutationStarted = true;
     await firebaseAuth.updateUser(req.params.uid, { disabled: true });
-    firebaseDisabled = true;
     await firebaseAuth.revokeRefreshTokens(req.params.uid);
     await client.query(
       `UPDATE users SET permissions = jsonb_set(permissions, '{accountDisabled}', 'true'::jsonb)
@@ -347,20 +542,26 @@ router.delete('/:uid', authMiddleware, async (req, res, next) => {
       [req.params.uid]
     );
     await audit(client, req, 'user.disable', req.params.uid);
+    commitAttempted = true;
     await client.query('COMMIT');
-    firebaseDisabled = false;
+    commitCompleted = true;
     res.json({ success: true, disabled: true });
   } catch (err) {
-    await client?.query('ROLLBACK').catch(() => {});
-    if (firebaseDisabled) {
-      await firebaseAuth.updateUser(req.params.uid, { disabled: false }).catch((cleanupError) => {
-        console.error(`[api] request=${req.id} Firebase compensation failed`, cleanupError);
-      });
+    if (!commitAttempted) {
+      await client?.query('ROLLBACK').catch(() => { discardClient = true; });
+      if (firebaseMutationStarted) await reconcileFirebaseAccountStatus(req.params.uid, req.id);
+    } else if (!commitCompleted) {
+      discardClient = true;
+      const failedClient = client;
+      client = null;
+      failedClient?.release(true);
+      await reconcileFirebaseAccountStatus(req.params.uid, req.id);
     }
     next(err);
   } finally {
-    client?.release();
+    client?.release(discardClient || (commitAttempted && !commitCompleted));
   }
 });
 
 module.exports = router;
+module.exports.reconcileFirebaseAccountStatus = reconcileFirebaseAccountStatus;

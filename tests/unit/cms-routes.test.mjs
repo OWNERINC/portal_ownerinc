@@ -51,6 +51,8 @@ test('document mutations are transactional, audited, and preserve revision immut
   assert.match(cms, /status = 'draft' RETURNING id, document_id/);
   assert.match(cms, /router\.delete\('\/documents\/:id\/schedule', authMiddleware/);
   assert.match(cms, /cms\.document\.unschedule/);
+  assert.match(cms, /const body = req\.body === undefined \? \{\} : req\.body/);
+  assert.match(cms, /resolveDraftRevisionId\(document, body\.revision_id\)/);
   assert.match(cms, /UPDATE cms_revisions SET status = 'draft'/);
   assert.match(cms, /validateAssetReferences\(db, blocks\)/);
   assert.match(cms, /FROM cms_assets[\s\S]*storage_key IS NOT NULL[\s\S]*byte_size BETWEEN/);
@@ -80,8 +82,12 @@ test('protected assets validate signatures, use UUID storage keys, audit uploads
   assert.match(assets, /mimeType !== req\.file\.mimetype/);
   assert.match(assets, /crypto\.randomUUID\(\)/);
   assert.match(assets, /withAudit\(pool, req, 'cms\.asset\.upload'/);
-  assert.match(assets, /canReadAsset\(req\.user, asset\)/);
-  assert.match(assets, /fs\.createReadStream\(path\.join\(privateDirectory, asset\.storage_key\)\)/);
+  assert.match(assets, /canReadAsset\(db, req\.user, asset\)/);
+  assert.match(assets, /lockCmsAssets\(db\)/);
+  assert.match(assets, /fsp\.open\(path\.join\(privateDirectory, asset\.storage_key\), 'r'\)/);
+  assert.match(assets, /file\.createReadStream\(\)/);
+  assert.match(assets, /LIMIT_FILE_SIZE/);
+  assert.match(assets, /status\(413\)/);
   assert.doesNotMatch(assets, /json\([^\n]*storage_key/);
   assert.doesNotMatch(assets, /res\.json\([^\n]*uploadDirectory/);
   assert.match(assets, /CROSS JOIN LATERAL jsonb_array_elements\(r\.blocks\)/);
@@ -99,10 +105,12 @@ test('CMS list totals count all matching documents and Nginx scopes the large up
   assert.match(cms, /res\.set\('X-Total-Count', String\(count\)\)/);
   assert.doesNotMatch(cms, /String\(rows\.length\)/);
 
-  const cmsLocation = nginx.indexOf('location ^~ /api/cms/assets');
+  const cmsLocation = nginx.indexOf('location = /api/cms/assets');
+  const cmsReadLocation = nginx.indexOf('location ^~ /api/cms/assets/');
   const genericApi = nginx.indexOf('location /api/');
-  assert.ok(cmsLocation >= 0 && cmsLocation < genericApi);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 51m;[\s\S]*proxy_pass \$api_upstream/);
+  assert.ok(cmsLocation >= 0 && cmsReadLocation > cmsLocation && cmsReadLocation < genericApi);
+  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 51m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /frame-src https:\/\/\*\.firebaseapp\.com blob:/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
 });
@@ -114,5 +122,5 @@ test('CMS JSON transport is bounded separately from the normal API', () => {
   assert.match(blocks, /normalized\.every\(Boolean\)/);
   assert.match(blocks, /Buffer\.byteLength\(JSON\.stringify\(normalized\), 'utf8'\)/);
   assert.match(nginx, /location \^~ \/api\/cms\/[\s\S]*client_max_body_size 6m;/);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 51m;/);
+  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 51m;/);
 });

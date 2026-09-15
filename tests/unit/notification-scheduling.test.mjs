@@ -58,8 +58,21 @@ test('target resolution isolates all, contract groups, and explicit UIDs', () =>
 });
 
 test('retention windows are bounded and configurable', () => {
-  assert.deepEqual(retentionDays({}), { notifications: 730, audit: 1825 });
+  assert.deepEqual(retentionDays({}), { notifications: 730, audit: 1825, pendingRegistrations: 730 });
   assert.throws(() => retentionDays({ AUDIT_RETENTION_DAYS: '0' }), /between 30 and 3650/);
+});
+
+test('import retention has only the privileges required by its DELETE predicate', async () => {
+  const [retention, provision, verification] = await Promise.all([
+    readFile('cron/retention.js', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+  ]);
+  assert.match(retention, /DELETE FROM user_import_jobs WHERE expires_at < NOW\(\)/);
+  assert.match(provision, /GRANT DELETE ON user_import_jobs TO portal_cron/);
+  assert.match(provision, /GRANT SELECT \(expires_at\) ON user_import_jobs TO portal_cron/);
+  assert.match(verification, /has_column_privilege\('portal_cron', 'public\.user_import_jobs', 'expires_at', 'SELECT'\)/);
+  assert.match(verification, /NOT has_table_privilege\('portal_cron', 'public\.user_import_jobs', 'UPDATE'\)/);
 });
 
 test('AutoCard media orphan retention defaults and stays bounded', () => {

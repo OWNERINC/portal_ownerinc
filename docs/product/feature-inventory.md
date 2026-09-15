@@ -1,6 +1,6 @@
 # Inventário da Implementação Funcional
 
-Atualizado em 18 de agosto de 2026.
+Atualizado em 14 de setembro de 2026.
 
 Este documento relaciona as capacidades descritas no `README.md` e no brief do
 produto com o que está efetivamente implementado no código. Roadmap, intenção e
@@ -22,13 +22,13 @@ fluxo correspondente no Portal.
 | Persistência de sessão | Operacional | Firebase restaura a sessão; respostas 401/403 encerram a sessão local. `public/js/auth.js` |
 | Logout | Operacional | Encerra a sessão Firebase e retorna ao login. `public/js/auth.js`, `public/js/sidebar.js` |
 | Recuperação de senha | Operacional | Envio de email pelo Firebase a partir do login ou perfil. `public/js/login.js`, `public/js/profile.js` |
-| Admissão fechada | Operacional | Não há cadastro público nem autoprovisionamento; o UID precisa existir no banco. `api/middleware/auth.js`, `api/routes/users.js` |
+| Admissão controlada | Operacional | O cadastro público cria apenas uma solicitação pendente sem aceitar senha inicial; após confirmar o e-mail, o solicitante usa o fluxo separado de primeiro acesso do Firebase para criar a senha e um administrador com `manageUsers` deve aprovar atribuindo contrato e cargo ativo antes do acesso. A UI só confirma o contrato HTTP 202 `{status:"accepted",state:"received"}`; falhas inesperadas retornam estado genérico controlado, enquanto duplicidades preservam anti-enumeração. `public/login.html`, `public/js/login.js`, `api/routes/auth.js`, `api/routes/registrations.js`, `api/services/pending-registration.js` |
 | Criação administrativa de usuário | Operacional | Firebase Admin cria a identidade sem trocar a sessão do administrador e compensa falha de persistência. Exige `manageUsers`; role e permissões exigem super-admin. `api/routes/users.js` |
-| Convite administrativo por e-mail | Operacional | Administrador provisiona a conta sem senha inicial; o Portal gera link seguro do Firebase para definição de senha e envia o convite pelo SMTP existente. Falhas de envio desfazem a identidade e o registro. `api/routes/users.js`, `api/integrations/password-reset-email.js`, `public/js/admin.js` |
+| Convite administrativo por e-mail | Operacional | Administrador provisiona a conta com cargo ativo e contrato validado, sem receber ou fornecer a senha inicial; o Portal gera link seguro do Firebase para criação da primeira senha e envia o convite pelo SMTP existente. Falhas de envio/commit compensam a identidade criada, sem apagar identidade reutilizada; o enable serializado deixa a conta pendente quando o estado externo/local é ambíguo ou localmente desativado. `api/routes/users.js`, `api/services/user-invitation.js`, `api/integrations/password-reset-email.js`, `public/js/admin.js` |
 | Primeiro super-admin | Operacional | Ferramenta one-shot valida identidade, email verificado e ausência de outro super-admin ativo. `api/db/bootstrap-admin.js` |
 | Administrador local | Operacional | Em desenvolvimento, cria identidade no Auth Emulator e o primeiro super-admin no banco. `api/db/create-local-admin.js`, `firebase-emulator/Dockerfile` |
 | Desativação e reativação | Operacional | Desabilita Firebase, revoga tokens e bloqueia localmente; protege a própria conta, superiores e o último super-admin. `api/routes/users.js` |
-| Cadastro público, login social e MFA | Não implementada | Não existem providers ou fluxos correspondentes no frontend/API. |
+| Cadastro público controlado, login social e MFA | Parcial | Cadastro público pendente, confirmação de e-mail e aprovação administrativa estão implementados; login social e MFA não fazem parte do fluxo. `public/js/login.js`, `api/routes/auth.js`, `api/routes/registrations.js` |
 
 ## Dashboard
 
@@ -44,17 +44,18 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Acesso por cargo RH | Operacional | O módulo só libera os cargos exatos Analista de RH Sênior e Gerente de RH; a API bloqueia acesso direto para os demais usuários. `api/middleware/policy.js`, `api/routes/autocard.js`, `public/autocard/guard.js` |
+| Acesso por cargo DHO | Operacional | AutoCard libera qualquer cargo ativo com `page_access.autocard=true`; super-admin possui bypass explícito e `role=admin` sozinho não concede acesso. `Analista de DHO Sênior` e `Gerente de DHO` recebem a flag como default da migration 030, não como allowlist. `api/middleware/policy.js`, `api/middleware/auth.js`, `api/routes/autocard.js`, `public/autocard/guard.js` |
 | Criação e exportação de cards | Operacional | Templates, variações visuais, biblioteca de assets, upload e exportação PNG migrados para o Portal. `public/autocard/` |
-| Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para todos os usuários autorizados de RH, com busca, edição, duplicação e exclusão auditadas dentro do shell padrão do Portal. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js`, `public/autocard/index.html` |
-| Renomeação RH para DHO | Operacional | Migration 010 reassocia usuários e renomeia cargos antigos sem quebrar a referência de usuários. `api/db/migrations/010_autocard.sql` |
+| Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para usuários DHO com cargo ativo e acesso de página, com busca, edição, duplicação e exclusão auditadas dentro do shell padrão do Portal. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js`, `public/autocard/index.html` |
+| Matriz de páginas DHO | Operacional | A migration 030 dá `autocard` e `posCards` como defaults aos dois cargos DHO canônicos; a autorização efetiva aceita qualquer cargo ativo com a flag correspondente. Cargo sem acesso, cargo inativo ou ausência de cargo nega o acesso derivado. `api/db/migrations/030_dho_job_title_catalog.sql`, `api/middleware/policy.js` |
+| Migração de nomes legados RH para DHO | Operacional | A migration 030 substitui os nomes legados que continham RH, consolida colisões case-insensitive e reassocia usuários preservando estado e acessos. As ocorrências de RH nesta descrição identificam somente a entrada histórica da migração. `api/db/migrations/030_dho_job_title_catalog.sql` |
 
 ## Cards Pós
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Acesso temporário de administrador | Operacional | O módulo está operacional para o bypass temporário de administradores; os cargos finais de Pos-Vendas ainda não foram configurados. `api/middleware/policy.js`, `public/cards-pos/guard.js` |
-| Editor e exportação de convites | Operacional | Possui dois módulos alternáveis, Convidado (`convite_owntime`, Frame 01 de 1448 × 2347) e Owner (`convite_owner`, Frame 02 de 1448 × 3896 do Figma), ambos com campos de conteúdo editáveis, formatação rica segura, imagem, histórico, CRUD e exportação pelo PDF do navegador. Os dois módulos reproduzem o bloco fixo de endereço e o footer de marca, mantendo somente o telefone como texto editável; o Owner mantém capa, ícones, fonte Raleway local e página longa próprios. `public/cards-pos.html`, `public/cards-pos/app.js`, `public/cards-pos/assets/` |
+| Acesso por cargo DHO | Operacional | Cards Pós libera qualquer cargo ativo com `page_access.posCards=true`; super-admin possui bypass explícito, enquanto `role=admin` sozinho permanece bloqueado. `api/middleware/policy.js`, `api/routes/pos-cards.js`, `public/cards-pos/guard.js` |
+| Editor e exportação de convites | Operacional | Possui dois módulos alternáveis, Convidado (`convite_owntime`, Frame 01 de 1448 × 2347) e Owner (`convite_owner`, Frame 02 de 862 × 1984), ambos com formatação rica segura, imagem, histórico, CRUD e exportação PDF. O Owner exporta em 108 × 248,6 mm e reproduz o corpo editorial branco, a reserva, os serviços com ícones, os consumos, a grade de extras e o rodapé do print; todos os textos são editáveis, enquanto ícones e logo permanecem fixos. `public/cards-pos.html`, `public/cards-pos/app.js`, `public/cards-pos/assets/` |
 | Separação de produto | Operacional | A página e o módulo são separados do AutoCard e do DHO, sem reutilizar as rotas ou tabelas do AutoCard; os dois modelos de Cards Pós compartilham a mesma tabela e distinguem-se pelo template persistido. `public/cards-pos/`, `api/routes/pos-cards.js`, `api/db/migrations/023_pos_owner_cards.sql` |
 | Autorização e armazenamento | Operacional | A autorização é server-side por `canUsePosCards` em `/api/pos-cards/*`; mídias Pos não são entregues pelo `/uploads` público e ficam disponíveis somente pela rota autenticada; os dados e mídias ficam isolados em `pos_cards` e `pos_card_media`. `api/index.js`, `api/middleware/policy.js`, `api/routes/pos-cards.js`, `api/db/migrations/018_pos_card_storage_key.sql` |
 | Limite de requisição não autenticada | Parcial | O Nginx mantém o limite global de 100 KiB para JSON; uma requisição Pos acima desse limite pode receber `413` antes da autenticação por limite do parser da borda. O upload de mídia continua com localização dedicada limitada a 4 MiB. |
@@ -76,24 +77,24 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Listar e ler artigos | Operacional | Possui loading, vazio, erro, retry, paginação server-side e leitura por ID para links diretos fora da página atual. `public/js/knowledge.js`, `api/routes/knowledge.js` |
-| Busca por título e conteúdo | Operacional | Busca server-side em título e conteúdo e persiste `q`, categoria e offset na URL. `public/js/knowledge.js`, `api/routes/knowledge.js` |
+| Listar e ler artigos | Operacional | Possui loading, vazio, erro, retry, paginação com contagem correta e leitura por ID; quando há documento CMS, somente a revisão publicada validada compõe o corpo. Uma fonte sem documento mantém o texto legado. `public/js/knowledge.js`, `api/cms/reader.js`, `api/routes/knowledge.js` |
+| Busca por título e conteúdo | Operacional | Busca no título e no corpo efetivamente publicado, filtrando candidatos após a projeção validada centralizada em `blocksToText`; bloco CMS inválido não vira texto bruto nem reativa o legacy. Persiste `q`, categoria e offset na URL. `public/js/knowledge.js`, `api/cms/reader.js`, `api/routes/knowledge.js` |
 | Filtro por categoria | Operacional | Lista categorias no servidor e aplica o filtro na consulta paginada. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Link direto para artigo | Operacional | `article` na URL e histórico Back/Forward selecionam o detalhe. `public/js/knowledge.js` |
-| CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. Texto legado e blocos CMS publicados são renderizados com saída segura. `api/routes/knowledge.js`, `public/js/knowledge.js`, `public/js/cms-block-renderer.js` |
-| Anexo PDF no artigo | Operacional | Gestores podem enviar, substituir e remover um PDF de até 50 MB; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `public/js/cms-block-renderer.js` |
-| Draft, revisão e rich text na tela legada | Não implementada | A tela legada continua editando título, categoria e texto simples; drafts e revisões avançadas ficam no Editor CMS. |
+| CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. A edição legada atualiza metadados, fonte e PDF sem substituir parágrafos/blocos CMS; leitura usa renderização segura da revisão publicada. `api/routes/knowledge.js`, `api/cms/sources.js`, `public/js/knowledge.js`, `public/js/cms-block-renderer.js` |
+| Anexo PDF no artigo | Operacional | Gestores podem enviar, substituir e remover um PDF de até 50 MB; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. Alterações legadas preservam o corpo CMS e só alteram o único PDF sem ambiguidade; múltiplos PDFs exigem o Editor CMS. A retenção só remove arquivo sem referências. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `cron/cms-asset-retention.js` |
+| Draft, revisão e rich text | Operacional | Editor CMS mantém revisões imutáveis, publica/agendada somente o draft atual sob lock, retorna `409` para seleção obsoleta, cancela agendamento sem descartar draft posterior e despublica também o scheduled pendente. Scheduled vencido com bloco/asset inválido é arquivado e auditado sem substituir a publicação. A lista administrativa possui paginação por total. `api/routes/cms.js`, `api/cms/revisions.js`, `api/cms/reader.js`, `public/js/cms.js` |
 
 ## Academy
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Catálogo ativo por categoria | Operacional | Usuários comuns recebem somente itens ativos, com categorias server-side, paginação e filtros restauráveis pela URL. `api/routes/academy.js`, `public/js/academy.js` |
+| Catálogo ativo por categoria | Operacional | Usuários comuns recebem somente itens ativos, com categorias server-side, paginação e filtros restauráveis pela URL; o corpo publicado CMS substitui a descrição legada quando houver documento. `api/routes/academy.js`, `api/cms/reader.js`, `public/js/academy.js` |
 | Links externos | Operacional | Apenas HTTP(S), com `noopener noreferrer`; URL inválida não é oferecida como link. `api/route-utils.js`, `public/js/academy.js` |
 | CRUD, ordenação e ativação | Operacional | Administração paginada, validada e auditada para `manageAcademy`. `api/routes/academy.js`, `public/js/admin.js` |
 | Matrícula, progresso e certificado | Fora do escopo | Academy é um catálogo, não um LMS. |
 
-## Benefícios
+## Benefícios (rota futura fora da navegação inicial)
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
@@ -105,10 +106,10 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Listagem segmentada | Operacional | Filtra ativos e audiência `all`, `pj`, `clt` ou UID no servidor; página possui paginação. `api/routes/reminders.js`, `public/js/reminders.js` |
+| Listagem segmentada | Operacional | Filtra ativos e audiência `all`, `pj`, `clt` ou UID no servidor; página possui paginação e não entrega descrição legada quando o documento CMS não tem publicação válida. `api/routes/reminders.js`, `api/cms/reader.js`, `public/js/reminders.js` |
 | CRUD de lembretes | Operacional | Validação, auditoria, ativação e canais para `manageReminders`. `api/routes/reminders.js`, `public/js/reminders.js` |
 | Público individual | Operacional | Formulário permite informar UIDs explícitos, preserva a audiência na edição e rejeita valores vazios, duplicados ou acima do limite. `api/route-utils.js`, `cron/scheduling.js`, `public/js/reminders.js` |
-| Agendamento mensal | Operacional | Worker roda no fuso de Brasília; dias 29 a 31 usam o último dia de meses curtos e o catch-up é limitado a sete dias. `cron/index.js`, `cron/scheduling.js` |
+| Agendamento mensal | Operacional | Worker roda no fuso de Brasília; dias 29 a 31 usam o último dia de meses curtos, o catch-up é limitado a sete dias e lembretes CMS sem publicação válida não usam fallback legado. `cron/index.js`, `cron/scheduling.js`, `cron/checkReminders.js` |
 | Envio por email | Operacional | Resend SMTP com registro prévio, isolamento por destinatário e até três tentativas para 421/451, 429 e 5xx. Depende de credenciais externas válidas. `cron/checkReminders.js`, `cron/sendEmail.js` |
 | Ledger e idempotência | Operacional | Uma ocorrência por lembrete, usuário, data e canal, com estados `pending`, `sending`, `sent`, `failed` e `skipped`. `api/db/schema.sql`, `cron/checkReminders.js` |
 | Histórico de entregas | Operacional | Interface expõe filtros por status, canal, usuário e data, com paginação server-side. `api/routes/reminders.js`, `public/js/reminders.js` |
@@ -124,7 +125,7 @@ fluxo correspondente no Portal.
 | Gate do painel | Operacional | Interface exibe abas permitidas; toda autorização real é repetida na API. `public/js/auth.js`, `public/js/admin.js`, `api/middleware/policy.js` |
 | Permissões granulares | Operacional | `manageUsers`, `manageReminders`, `manageAcademy`, `manageBenefits`, `manageKnowledge` e `manageSolides`; somente super-admin atribui privilégios. `api/middleware/policy.js`, `api/routes/users.js` |
 | Gestão de usuários | Operacional | Listagem paginada, criação, edição, desativação e reativação para `manageUsers`, com restrições de hierarquia. `api/routes/users.js`, `public/js/admin.js` |
-| Importação em lote de usuários | Operacional | Administradores importam CSV UTF-8 de até 500 usuários após pré-visualização e confirmação; todos entram como viewer, duplicatas e cargos inválidos são reportados por linha, e o envio assíncrono usa cron com até três tentativas. `api/routes/user-imports.js`, `api/services/bulk-user-import.js`, `cron/user-imports.js` |
+| Importação em lote de usuários | Operacional | Administradores importam CSV UTF-8 de até 500 usuários após pré-visualização e confirmação com a mesma validação de contrato; todos entram como viewer sem permissões privilegiadas, CLT ignora/normaliza dia PJ, PJ exige 1–31, e o job durável expõe progresso/erros por linha, sobrevive a reload e permite retry apenas de falhas elegíveis até três tentativas. GET/retry são limitados ao criador ou superadmin, jobs expirados retornam 410, commits ambíguos permanecem `processing` para reconciliação por UID/e-mail e UIDs em cleanup pendente não consomem tentativa. `api/routes/user-imports.js`, `api/services/bulk-user-import.js`, `cron/user-imports.js`, `public/js/admin.js` |
 | Gestão de cargos | Operacional | Superfície administrativa para cadastrar, editar, ativar e desativar cargos; cargos desativados permanecem associados ao histórico dos usuários. `api/routes/job-titles.js`, `public/js/admin.js`, `api/db/migrations/009_job_titles.sql` |
 | Apagamento de dados pessoais | Operacional | Super-admin remove identidade Firebase, perfil, foto e referências estáveis após desativação. `api/routes/users.js` |
 | Auditoria administrativa | Operacional | API e interface registram, paginam e exibem ator, ação, alvo, request ID e horário para super-admin. `api/route-utils.js`, `api/routes/users.js`, `public/js/admin.js` |
@@ -133,7 +134,7 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Navegação desktop | Operacional | Sidebar consistente e estado recolhido persistido em local storage. `public/js/sidebar.js` |
+| Navegação desktop | Operacional | Sidebar consistente, sem Benefícios ou Sólides na navegação inicial, e estado recolhido persistido em local storage; as rotas futuras permanecem preservadas. `scripts/generate-public-shell.mjs`, `public/js/sidebar.js` |
 | Navegação mobile | Operacional | Drawer com `inert`, `aria-hidden`, Escape, foco preso e restauração do foco. `public/js/sidebar.js` |
 | Teclado e foco | Operacional | Foco visível, tabs por setas/Home/End e elementos interativos sem div clicável. `public/css/components.css`, `public/js/admin.js` |
 | Diálogos | Operacional | `role=dialog`, `aria-modal`, foco preso, Escape, restauração e proteção contra descarte acidental. `public/js/ui.js` |
@@ -173,7 +174,7 @@ fluxo correspondente no Portal.
 | Observabilidade | Parcial | Request IDs, logs, heartbeat, contadores e alertas SMTP deduplicados existem; métricas externas e rotação de logs ainda dependem da operação. `api/middleware/security.js`, `cron/health.js`, `cron/sendOperationalAlert.js` |
 | HTTPS | Parcial | O Nginx interno serve HTTP; TLS deve ser terminado por proxy externo na VPS. `nginx/nginx.conf`, `docs/operations/deployment.md` |
 
-## Integração Sólides
+## Integração Sólides (fora da navegação inicial)
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
@@ -193,7 +194,6 @@ fluxo correspondente no Portal.
 - LMS com matrícula, progresso, conclusão e certificado.
 - Cupons, validade, elegibilidade e resgate de benefícios.
 - Confirmação de leitura ou conclusão de lembretes.
-- Draft e revisão editorial da base de conhecimento.
 - MFA e login social.
 - Dark mode.
 - Aplicativo móvel nativo.

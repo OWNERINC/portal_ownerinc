@@ -37,12 +37,14 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] `019_cms_asset_deletion_state` reserva assets antes da remoção física e permanece idempotente.
 - [ ] `011_cron_alert_state` existe e possui os grants esperados.
 - [ ] `012_autocard_media_crop` existe e foi validada em PostgreSQL.
+- [ ] `030_dho_job_title_catalog` substitui nomes legados RH por DHO e permanece
+  idempotente, sem perder atribuições, estado ou `page_access`.
 - [ ] Roles `portal_api` e `portal_cron` têm somente os privilégios necessários.
 
 ## AutoCard Access
 
-- [ ] Analista de RH Sênior acessa o AutoCard.
-- [ ] Gerente de RH acessa o AutoCard.
+- [ ] Analista de DHO Sênior acessa o AutoCard com cargo ativo.
+- [ ] Gerente de DHO acessa o AutoCard com cargo ativo.
 - [ ] Usuário sem título aprovado recebe acesso negado pela API.
 - [ ] Admin sem título aprovado continua sem acesso.
 - [x] O AutoCard aparece dentro do `page-body` com sidebar e topbar do Portal.
@@ -65,6 +67,11 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 - [x] Verificação estática cobre os cinco tipos de conteúdo CMS e o mapeamento de permissões.
 - [x] Contratos de rascunho, publicação, agendamento, fallback, assets protegidos, editor responsivo e renderer seguro passam em `npm run verify`.
+- [x] Documento CMS sem publicação válida nunca reativa corpo legacy; somente fonte sem
+  `cms_documents` usa fallback. Scheduled vencido só é promovido após validação de
+  blocos e assets; scheduled inválido é arquivado e auditado.
+- [x] Edição legacy de PDF substitui/remove somente o único bloco PDF identificável;
+  artigos com múltiplos PDFs exigem o Editor CMS.
 - [ ] Teste da migration CMS e validação da segunda execução requerem `MIGRATION_DATABASE_URL`.
 - [ ] Aceitação autenticada de criação, prévia, publicação, agendamento, fallback e PDF protegido permanece pendente.
 - [ ] Deploy e validação no ambiente live estão fora desta auditoria.
@@ -110,8 +117,10 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Base de Conhecimento, Academy e Benefícios passam.
 - [ ] Lembretes e histórico de entregas passam.
 - [ ] Admin passa.
-- [ ] AutoCard passa para `Analista de RH Sênior` e `Gerente de RH`.
-- [ ] Sólides permanece desligada.
+- [ ] AutoCard passa para um cargo ativo com `page_access.autocard=true`; os dois
+  cargos DHO canônicos continuam cobertos pelos defaults da migration 030.
+- [ ] Sólides permanece fora da navegação global; a tab administrativa só aparece
+  com estágio `internal` ou superior e `manageSolides`.
 
 ## Monitoring and Alerts
 
@@ -186,11 +195,15 @@ responsável e evidência; não marque uma validação externa usando apenas
   when absent from every revision; failed file deletes remain retryable.
 - [x] CSP `media-src` is limited to `'self'`, `blob:`, and `https:` without
   changing script, style, or connect policies.
-- [x] Empty rendered CMS reminder blocks preserve the legacy `description`.
-- [x] CMS JSON transport is bounded at 2 MiB for CMS routes, with a 2 MiB
-  aggregate block guard; normal API JSON remains bounded at 100 KiB. The Nginx
-  CMS route uses the same 2 MiB boundary, while private asset uploads remain
-  separately limited to 50 MiB.
+- [x] A reminder without a CMS document may use legacy `description`; a managed
+  CMS document with empty or invalid published blocks is skipped without a
+  legacy fallback.
+- [x] CMS JSON transport is bounded at 6 MiB for CMS routes, with a 5 MiB
+  aggregate validated block guard; normal API JSON remains bounded at 100 KiB.
+  The Nginx CMS route uses a 6 MiB boundary, while private asset uploads remain
+  separately limited to 50 MiB in the API and 51 MiB at Nginx for multipart
+  overhead. Multer returns 400 for unexpected/multiple files and 413 for the
+  file-size limit.
 - [x] Authenticated announcement detail returns only a published announcement
   revision and the frontend links list entries to that detail request.
 - [ ] PostgreSQL migration execution and authenticated/live acceptance still

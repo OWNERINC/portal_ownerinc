@@ -20,8 +20,9 @@ test('every API resource route requires authentication', async () => {
 
     for (const route of routes) {
       const globallyProtected = globalProtection?.index < route.index;
-      if (file === 'auth.js' && route[1].includes("'/password-reset'")) {
-        assert.match(route[1], /resetLimit/, 'password reset must remain rate limited');
+      if (file === 'auth.js' && (route[1].includes("'/password-reset'")
+        || route[1].includes("'/register'") || route[1].includes("'/registration-password'"))) {
+        assert.match(route[1], /(?:resetLimit|registrationLimit|registrationPasswordLimit)/, 'public auth route must remain rate limited');
         continue;
       }
       if (!globallyProtected) assert.match(route[1], /authMiddleware/, `${file}: unauthenticated route`);

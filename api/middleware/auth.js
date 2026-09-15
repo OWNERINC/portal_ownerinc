@@ -30,20 +30,36 @@ async function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token.', requestId: req.id });
   }
   if (decoded.email_verified !== true) {
-    return res.status(403).json({ error: 'A verified email is required.', requestId: req.id });
+    return res.status(403).json({ error: 'A verified email is required.', reason: 'email-not-verified', requestId: req.id });
   }
 
   try {
-    const { rows } = await pool.query(
-      `SELECT u.*, jt.name AS job_title, jt.page_access AS job_title_access
-       FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
+     const { rows } = await pool.query(
+       `SELECT u.*, jt.name AS job_title, jt.active AS job_title_active, jt.page_access AS job_title_access
+        FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
        WHERE u.uid = $1`, [decoded.uid]
-    );
-    if (!rows[0] || rows[0].permissions?.accountDisabled === true) {
-      return res.status(403).json({ error: 'Account is not active.', requestId: req.id });
-    }
-    req.firebaseUser = decoded;
-    req.user = rows[0];
+     );
+     const user = rows[0];
+     if (!user) {
+       const pending = await pool.query(
+         `SELECT status FROM pending_registrations
+          WHERE firebase_uid = $1 ORDER BY created_at DESC LIMIT 1`,
+         [decoded.uid],
+       );
+       if (pending.rows[0]?.status === 'pending') {
+         return res.status(403).json({ error: 'Cadastro pendente de aprovação.', reason: 'pending-approval', requestId: req.id });
+       }
+       return res.status(403).json({ error: 'Account is not active.', requestId: req.id });
+     }
+     const accountDisabled = user.permissions?.accountDisabled === true || user.permissions?.accountDisabled === 'true';
+     if (accountDisabled) {
+       return res.status(403).json({ error: 'Account is disabled.', reason: 'account-disabled', requestId: req.id });
+     }
+     if (user.firebase_enable_pending === true) {
+       return res.status(403).json({ error: 'Account enablement is pending.', reason: 'enable-pending', requestId: req.id });
+     }
+     req.firebaseUser = decoded;
+     req.user = user;
     req.user.autocard_access = canUseAutoCard(req.user);
     req.user.pos_cards_access = canUsePosCards(req.user);
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return writeLimit(req, res, next);

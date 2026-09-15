@@ -4,6 +4,9 @@ const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
 const { validateBlocks } = require('../cms/blocks');
 const {
+  CmsRouteError, resolveDraftRevisionId, unscheduleRevisionState, withdrawalState,
+} = require('../cms/revisions');
+const {
   forbidden, invalid, oneOf, parseListQuery, text, uuid, validBody, withAudit,
 } = require('../route-utils');
 
@@ -22,14 +25,6 @@ const ASSET_MIMES = {
   pdf: new Set(['application/pdf']),
   video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
 };
-
-class CmsRouteError extends Error {
-  constructor(status, code) {
-    super(code);
-    this.status = status;
-    this.code = code;
-  }
-}
 
 function manageableTypes(user) {
   return CONTENT_TYPES.filter((type) => canManageCms(user, type));
@@ -62,6 +57,10 @@ function futureIso(value) {
 function publishBody(value) {
   return value === undefined
     || validBody(value, { revision_id: (revisionId) => revisionId === undefined || uuid(revisionId) });
+}
+
+async function lockCmsMutation(db) {
+  await db.query('SELECT pg_advisory_xact_lock($1)', [CMS_ASSET_RETENTION_LOCK]);
 }
 
 function scheduleBody(value) {
@@ -218,9 +217,10 @@ router.post('/documents', authMiddleware, async (req, res, next) => {
 
   try {
     const result = await withAudit(pool, req, 'cms.document.create', 'cms_document', async (db) => {
+      await lockCmsMutation(db);
       const sourceTable = SOURCE_TABLES[req.body.type];
       if (sourceTable) {
-        const source = await db.query(`SELECT id FROM ${sourceTable} WHERE id = $1`, [sourceId]);
+        const source = await db.query(`SELECT id FROM ${sourceTable} WHERE id = $1 FOR KEY SHARE`, [sourceId]);
         if (!source.rows[0]) throw new CmsRouteError(404, 'source_not_found');
       }
       const { rows: documents } = await db.query(
@@ -297,9 +297,9 @@ router.put('/documents/:id/draft', authMiddleware, async (req, res, next) => {
   const blocks = validateBlocks(req.body.blocks);
   try {
     const result = await withAudit(pool, req, 'cms.revision.draft', 'cms_revision', async (db) => {
+      await lockCmsMutation(db);
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
-      await db.query('SELECT pg_advisory_xact_lock($1)', [CMS_ASSET_RETENTION_LOCK]);
       await validateAssetReferences(db, blocks);
       const { rows: versions } = await db.query(
         'SELECT COALESCE(MAX(version), 0) + 1 AS version FROM cms_revisions WHERE document_id = $1',
@@ -326,12 +326,14 @@ router.put('/documents/:id/draft', authMiddleware, async (req, res, next) => {
 });
 
 router.post('/documents/:id/publish', authMiddleware, async (req, res, next) => {
-  if (!uuid(req.params.id) || !publishBody(req.body)) return invalid(req, res);
+  const body = req.body === undefined ? {} : req.body;
+  if (!uuid(req.params.id) || !publishBody(body)) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'cms.document.publish', 'cms_document', async (db) => {
+      await lockCmsMutation(db);
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
-      const revisionId = req.body.revision_id || document.draft_revision_id;
+       const revisionId = resolveDraftRevisionId(document, body.revision_id);
       const { rows: revisions } = await db.query(
         `SELECT id, document_id, version, status, blocks, created_by, created_at
            FROM cms_revisions
@@ -341,6 +343,9 @@ router.post('/documents/:id/publish', authMiddleware, async (req, res, next) => 
       );
       const revision = revisions[0];
       if (!revision || revision.status !== 'draft') throw new CmsRouteError(409, 'draft_required');
+      const blocks = validateBlocks(revision.blocks);
+      if (!blocks) throw new CmsRouteError(409, 'draft_required');
+      await validateAssetReferences(db, blocks);
       if (document.published_revision_id) {
         await db.query("UPDATE cms_revisions SET status = 'archived' WHERE id = $1", [document.published_revision_id]);
       }
@@ -372,9 +377,10 @@ router.post('/documents/:id/schedule', authMiddleware, async (req, res, next) =>
   if (!uuid(req.params.id) || !scheduleBody(req.body)) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'cms.document.schedule', 'cms_document', async (db) => {
+      await lockCmsMutation(db);
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
-      const revisionId = req.body.revision_id || document.draft_revision_id;
+      const revisionId = resolveDraftRevisionId(document, req.body.revision_id);
       const { rows: revisions } = await db.query(
         `SELECT id, document_id, version, status, blocks, created_by, created_at
            FROM cms_revisions
@@ -384,6 +390,9 @@ router.post('/documents/:id/schedule', authMiddleware, async (req, res, next) =>
       );
       const revision = revisions[0];
       if (!revision || revision.status !== 'draft') throw new CmsRouteError(409, 'draft_required');
+      const blocks = validateBlocks(revision.blocks);
+      if (!blocks) throw new CmsRouteError(409, 'draft_required');
+      await validateAssetReferences(db, blocks);
       if (document.scheduled_revision_id && document.scheduled_revision_id !== revision.id) {
         await db.query("UPDATE cms_revisions SET status = 'archived' WHERE id = $1 AND status = 'scheduled'", [document.scheduled_revision_id]);
       }
@@ -412,23 +421,39 @@ router.post('/documents/:id/unpublish', authMiddleware, async (req, res, next) =
   if (!uuid(req.params.id) || !emptyBody(req.body)) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'cms.document.unpublish', 'cms_document', async (db) => {
+      await lockCmsMutation(db);
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
-      if (!document.published_revision_id) throw new CmsRouteError(409, 'not_published');
-      await db.query("UPDATE cms_revisions SET status = 'archived' WHERE id = $1", [document.published_revision_id]);
+      const withdrawal = withdrawalState(document);
+      if (!withdrawal.publishedRevisionId && !withdrawal.scheduledRevisionId) {
+        throw new CmsRouteError(409, 'not_published');
+      }
+      if (withdrawal.publishedRevisionId) {
+        await db.query(
+          "UPDATE cms_revisions SET status = 'archived' WHERE id = $1 AND status = 'published'",
+          [withdrawal.publishedRevisionId],
+        );
+      }
+      if (withdrawal.scheduledRevisionId) {
+        await db.query(
+          "UPDATE cms_revisions SET status = 'archived' WHERE id = $1 AND status = 'scheduled'",
+          [withdrawal.scheduledRevisionId],
+        );
+      }
       const { rows } = await db.query(
         `UPDATE cms_documents
             SET published_revision_id = NULL, published_at = NULL, updated_by = $2, updated_at = NOW()
-          WHERE id = $1
+                , scheduled_revision_id = NULL, scheduled_at = NULL
+           WHERE id = $1
           RETURNING id, content_type, source_id, title, category, published_revision_id,
                     draft_revision_id, scheduled_revision_id, scheduled_at, published_at,
                     created_by, updated_by, created_at, updated_at`,
         [document.id, req.user.uid],
       );
-      return rows[0];
+      return { document: rows[0], withdrawal };
     }, { targetId: req.params.id });
     if (!result) return res.status(404).json({ error: 'CMS document not found.', requestId: req.id });
-    res.json({ document: result });
+    res.json({ document: result.document });
   } catch (error) {
     sendCmsError(error, req, res, next);
   }
@@ -438,10 +463,22 @@ router.delete('/documents/:id/schedule', authMiddleware, async (req, res, next) 
   if (!uuid(req.params.id) || !emptyBody(req.body)) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'cms.document.unschedule', 'cms_document', async (db) => {
+      await lockCmsMutation(db);
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
-      if (!document.scheduled_revision_id) throw new CmsRouteError(409, 'not_scheduled');
-      await db.query("UPDATE cms_revisions SET status = 'draft' WHERE id = $1 AND status = 'scheduled'", [document.scheduled_revision_id]);
+      const state = unscheduleRevisionState(document);
+      if (!state) throw new CmsRouteError(409, 'not_scheduled');
+      if (state.preserveDraft) {
+        await db.query(
+          "UPDATE cms_revisions SET status = 'archived' WHERE id = $1 AND status = 'scheduled'",
+          [state.scheduledRevisionId],
+        );
+      } else {
+        await db.query(
+          "UPDATE cms_revisions SET status = 'draft' WHERE id = $1 AND status = 'scheduled'",
+          [state.scheduledRevisionId],
+        );
+      }
       const { rows } = await db.query(
         `UPDATE cms_documents
             SET scheduled_revision_id = NULL, scheduled_at = NULL, draft_revision_id = $2,
@@ -450,12 +487,17 @@ router.delete('/documents/:id/schedule', authMiddleware, async (req, res, next) 
           RETURNING id, content_type, source_id, title, category, published_revision_id,
                     draft_revision_id, scheduled_revision_id, scheduled_at, published_at,
                     created_by, updated_by, created_at, updated_at`,
-        [document.id, document.scheduled_revision_id, req.user.uid],
+        [document.id, state.draftRevisionId, req.user.uid],
       );
-      return rows[0];
+      const { rows: drafts } = await db.query(
+        `SELECT id, document_id, version, status, blocks, created_by, created_at
+           FROM cms_revisions WHERE id = $1`,
+        [state.draftRevisionId],
+      );
+      return { document: rows[0], draft: drafts[0] || null };
     }, { targetId: req.params.id });
     if (!result) return res.status(404).json({ error: 'CMS document not found.', requestId: req.id });
-    res.json({ document: result });
+    res.json(result);
   } catch (error) {
     sendCmsError(error, req, res, next);
   }
@@ -465,17 +507,27 @@ router.delete('/revisions/:id', authMiddleware, async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'cms.revision.delete', 'cms_revision', async (db) => {
+      await lockCmsMutation(db);
       const types = manageableTypes(req.user);
       if (!types.length) return null;
       const { rows } = await db.query(
         `SELECT r.id, r.document_id, r.status, d.content_type
            FROM cms_revisions r
            JOIN cms_documents d ON d.id = r.document_id
-          WHERE r.id = $1 AND d.content_type = ANY($2::text[])
-          FOR UPDATE OF r, d`,
+          WHERE r.id = $1 AND d.content_type = ANY($2::text[])`,
         [req.params.id, types],
       );
-      const revision = rows[0];
+      const candidate = rows[0];
+      if (candidate) await db.query('SELECT id FROM cms_documents WHERE id = $1 FOR UPDATE', [candidate.document_id]);
+      const { rows: lockedRevisions } = candidate ? await db.query(
+        `SELECT r.id, r.document_id, r.status, d.content_type
+           FROM cms_revisions r
+           JOIN cms_documents d ON d.id = r.document_id
+          WHERE r.id = $1 AND r.document_id = $2
+          FOR UPDATE OF r`,
+        [req.params.id, candidate.document_id],
+      ) : { rows: [] };
+      const revision = lockedRevisions[0];
       if (!revision) return null;
       if (revision.status !== 'draft') throw new CmsRouteError(409, 'draft_only');
       const { rows: deleted } = await db.query(
@@ -496,3 +548,6 @@ router.delete('/revisions/:id', authMiddleware, async (req, res, next) => {
 });
 
 module.exports = router;
+module.exports.resolveDraftRevisionId = resolveDraftRevisionId;
+module.exports.unscheduleRevisionState = unscheduleRevisionState;
+module.exports.withdrawalState = withdrawalState;

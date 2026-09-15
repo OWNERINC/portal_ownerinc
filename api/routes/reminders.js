@@ -1,6 +1,9 @@
 const express = require('express');
 const pool = require('../db');
-const { addPublishedBlocks } = require('../cms/reader');
+const {
+  addPublishedBlocks, isPublicCmsRow, promoteDueScheduledForPool,
+} = require('../cms/reader');
+const { deleteCmsSource } = require('../cms/sources');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
   boolean, forbidden, integer, invalid, mayViewAll, oneOf, parseListQuery,
@@ -13,6 +16,20 @@ const schema = {
   target_users: targetUsers, channel: oneOf('email', 'whatsapp', 'both'), active: boolean,
 };
 const listQuery = { all: (value) => ['true', 'false'].includes(value), active: (value) => value === 'true' };
+const cmsVisible = `(
+  NOT EXISTS (
+    SELECT 1 FROM cms_documents hidden_document
+     WHERE hidden_document.content_type = 'reminder' AND hidden_document.source_id = reminders.id
+  )
+  OR EXISTS (
+    SELECT 1
+      FROM cms_documents visible_document
+      JOIN cms_revisions visible_revision ON visible_revision.id = visible_document.published_revision_id
+     WHERE visible_document.content_type = 'reminder'
+       AND visible_document.source_id = reminders.id
+       AND visible_revision.status = 'published'
+  )
+)`;
 const date = (value) => {
   const parsed = new Date(`${value}T00:00:00Z`);
   return /^\d{4}-\d{2}-\d{2}$/.test(value)
@@ -94,17 +111,19 @@ router.get('/upcoming', authMiddleware, async (req, res, next) => {
     target_users = '"all"'::jsonb
     OR target_users = to_jsonb($1::text)
     OR target_users ? $2
-  )`;
+  ) AND ${cmsVisible}`;
   try {
+    await promoteDueScheduledForPool(pool, new Date(), 'reminder');
     const { rows } = await pool.query(`SELECT * FROM reminders ${where} ORDER BY trigger_day, id`, [audience, req.user.uid]);
     const start = brasiliaDate();
     const end = new Date(start.getTime() + 7 * 86400000);
-    const upcoming = rows
+    const upcoming = (await addPublishedBlocks(pool, rows, 'reminder'))
+      .filter(isPublicCmsRow)
       .map(reminder => ({ ...reminder, next_occurrence: nextOccurrence(reminder.trigger_day, start) }))
       .filter(reminder => reminder.next_occurrence && reminder.next_occurrence <= end)
       .sort((left, right) => left.next_occurrence - right.next_occurrence || String(left.id).localeCompare(String(right.id)))
       .map(reminder => ({ ...reminder, next_occurrence: reminder.next_occurrence.toISOString().slice(0, 10) }));
-    res.json(await addPublishedBlocks(pool, upcoming, 'reminder'));
+    res.json(upcoming);
   } catch (error) {
     next(error);
   }
@@ -119,10 +138,20 @@ router.get('/', authMiddleware, async (req, res, next) => {
     target_users = '"all"'::jsonb
     OR target_users = to_jsonb($1::text)
     OR target_users ? $2
-  )`;
+  ) AND ${cmsVisible}`;
   const audience = req.user.contract_type === 'pj' || req.user.is_pj ? 'pj' : 'clt';
   const params = viewAll ? [] : [audience, req.user.uid];
   try {
+    await promoteDueScheduledForPool(pool, new Date(), 'reminder');
+    if (!viewAll) {
+      const { rows } = await pool.query(
+        `SELECT * FROM reminders ${where} ORDER BY trigger_day, id`,
+        params,
+      );
+      const visible = (await addPublishedBlocks(pool, rows, 'reminder')).filter(isPublicCmsRow);
+      return res.set('X-Total-Count', String(visible.length))
+        .json(visible.slice(page.offset, page.offset + page.limit));
+    }
     const countResult = await pool.query(`SELECT COUNT(*)::integer AS count FROM reminders ${where}`, params);
     const listParams = [...params, page.limit, page.offset];
     const { rows } = await pool.query(
@@ -182,10 +211,8 @@ router.delete('/:id', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageReminders')) return forbidden(req, res);
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
-    const row = await withAudit(pool, req, 'reminder.delete', 'reminder', async (db) => {
-      const { rows } = await db.query('DELETE FROM reminders WHERE id=$1 RETURNING id', [req.params.id]);
-      return rows[0];
-    }, { targetId: req.params.id });
+    const row = await withAudit(pool, req, 'reminder.delete', 'reminder',
+      db => deleteCmsSource(db, 'reminder', req.params.id), { targetId: req.params.id });
     if (!row) return res.status(404).json({ error: 'Reminder not found.', requestId: req.id });
     res.json({ success: true });
   } catch (error) {

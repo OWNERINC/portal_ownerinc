@@ -12,6 +12,7 @@ if (canManage) {
 }
 
 const tbody = document.getElementById('reminders-tbody');
+const remindersPagination = document.getElementById('reminders-pagination');
 const modal = document.getElementById('modal-reminder');
 const form = document.getElementById('reminder-form');
 let reminders = [];
@@ -23,7 +24,7 @@ let deliveriesTotal = 0;
 const DELIVERY_PAGE_SIZE = 20;
 
 function tableState(message, retry) {
-  clear(document.getElementById('reminders-pagination'));
+  if (remindersPagination) clear(remindersPagination);
   const cell = element('td', { colspan: '6', className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
   if (retry) {
     cell.append(document.createElement('br'), element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
@@ -66,7 +67,8 @@ function renderTable() {
     row.append(actions);
     tbody.append(row);
   });
-  const pagination = clear(document.getElementById('reminders-pagination'));
+  if (!remindersPagination) return;
+  const pagination = clear(remindersPagination);
   const pageCount = Math.max(1, Math.ceil(totalReminders / 50));
   if (pageCount > 1) {
     pagination.append(
@@ -83,7 +85,7 @@ async function loadReminders(reset = false) {
   try {
     const separator = canManage ? '&' : '?';
     const result = await fetchAPIPage(`${canManage ? '/api/reminders?all=true' : '/api/reminders'}${separator}limit=50&offset=${page * 50}`);
-    reminders = result.data;
+    reminders = result.data || [];
     totalReminders = result.total || reminders.length;
     renderTable();
   } catch {

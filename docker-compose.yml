@@ -35,6 +35,7 @@ services:
       PORTAL_API_DB_PASSWORD: ${PORTAL_API_DB_PASSWORD:?Set PORTAL_API_DB_PASSWORD}
       PORTAL_CRON_DB_PASSWORD: ${PORTAL_CRON_DB_PASSWORD:?Set PORTAL_CRON_DB_PASSWORD}
       RUN_MIGRATIONS: "true"
+      MIGRATION_ONLY: "true"
     command: ["true"]
     depends_on:
       postgres:
@@ -66,6 +67,9 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
+      PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:-https://portal.ownerinc.com.br}
+      MAX_PENDING_REGISTRATIONS_PER_HOUR: ${MAX_PENDING_REGISTRATIONS_PER_HOUR:-100}
+      PENDING_REGISTRATION_RETENTION_DAYS: ${PENDING_REGISTRATION_RETENTION_DAYS:-730}
       DATABASE_URL: ${API_DATABASE_URL:?Set API_DATABASE_URL}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?Set FIREBASE_PROJECT_ID}
       FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:-}
@@ -133,11 +137,13 @@ services:
       TZ: ${TZ:-America/Sao_Paulo}
       NOTIFICATION_RETENTION_DAYS: ${NOTIFICATION_RETENTION_DAYS:-730}
       AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-1825}
+      PENDING_REGISTRATION_RETENTION_DAYS: ${PENDING_REGISTRATION_RETENTION_DAYS:-730}
       UPLOAD_DIR: /app/uploads
       AUTOCARD_MEDIA_ORPHAN_DAYS: ${AUTOCARD_MEDIA_ORPHAN_DAYS:-7}
       CMS_ASSET_ORPHAN_RETENTION_DAYS: ${CMS_ASSET_ORPHAN_RETENTION_DAYS:-30}
       BULK_IMPORT_WORKER_SECRET: ${BULK_IMPORT_WORKER_SECRET:?Set BULK_IMPORT_WORKER_SECRET}
       BULK_IMPORT_API_URL: ${BULK_IMPORT_API_URL:-http://api:3000}
+      CRON_BOOTSTRAP_ONLY: ${CRON_BOOTSTRAP_ONLY:-false}
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -146,7 +152,7 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "health.js"]
-      interval: 15m
+      interval: 15s
       timeout: 10s
       retries: 2
       start_period: 2m

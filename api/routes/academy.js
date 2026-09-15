@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db');
-const { addPublishedBlocks } = require('../cms/reader');
+const { addPublishedBlocks, isPublicCmsRow } = require('../cms/reader');
+const { deleteCmsSource } = require('../cms/sources');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
   boolean, forbidden, httpUrl, integer, invalid, mayViewAll, parseListQuery,
@@ -18,8 +19,16 @@ router.get('/categories', authMiddleware, async (req, res, next) => {
   const all = req.query.all;
   if (all !== undefined && !['true', 'false'].includes(all)) return invalid(req, res);
   if (all === 'true' && !can(req.user, 'manageAcademy')) return forbidden(req, res);
-  const where = mayViewAll(req.user, 'manageAcademy', all) ? '' : 'WHERE active = TRUE';
+  const viewAll = mayViewAll(req.user, 'manageAcademy', all);
+  const where = viewAll ? '' : 'WHERE active = TRUE';
   try {
+    if (!viewAll) {
+      const { rows } = await pool.query(
+        `SELECT id, category FROM academy ${where} AND btrim(category) <> '' ORDER BY category, id`,
+      );
+      const visible = (await addPublishedBlocks(pool, rows, 'academy')).filter(isPublicCmsRow);
+      return res.json([...new Set(visible.map(({ category }) => category.trim()))]);
+    }
     const { rows } = await pool.query(
       `SELECT DISTINCT btrim(category) AS category
        FROM academy ${where} ${where ? 'AND' : 'WHERE'} btrim(category) <> ''
@@ -36,12 +45,22 @@ router.get('/', authMiddleware, async (req, res, next) => {
   if (!page) return invalid(req, res);
   if (req.query.all === 'true' && !can(req.user, 'manageAcademy')) return forbidden(req, res);
   const conditions = [];
-  if (!mayViewAll(req.user, 'manageAcademy', req.query.all)) conditions.push('active = TRUE');
+  const viewAll = mayViewAll(req.user, 'manageAcademy', req.query.all);
+  if (!viewAll) conditions.push('active = TRUE');
   if (req.query.active === 'true') conditions.push('active = TRUE');
   if (req.query.category) conditions.push('category = $1');
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const filterValues = req.query.category ? [req.query.category] : [];
   try {
+    if (!viewAll) {
+      const { rows } = await pool.query(
+        `SELECT * FROM academy ${where} ORDER BY "order", id`,
+        filterValues,
+      );
+      const visible = (await addPublishedBlocks(pool, rows, 'academy')).filter(isPublicCmsRow);
+      return res.set('X-Total-Count', String(visible.length))
+        .json(visible.slice(page.offset, page.offset + page.limit));
+    }
     const [{ rows: [{ count }] }, { rows }] = await Promise.all([
       pool.query(`SELECT COUNT(*)::integer AS count FROM academy ${where}`, filterValues),
       pool.query(`SELECT * FROM academy ${where} ORDER BY "order", id LIMIT $${filterValues.length + 1} OFFSET $${filterValues.length + 2}`, [...filterValues, page.limit, page.offset]),
@@ -95,10 +114,8 @@ router.delete('/:id', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageAcademy')) return forbidden(req, res);
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
-    const row = await withAudit(pool, req, 'academy.delete', 'academy', async (db) => {
-      const { rows } = await db.query('DELETE FROM academy WHERE id=$1 RETURNING id', [req.params.id]);
-      return rows[0];
-    }, { targetId: req.params.id });
+    const row = await withAudit(pool, req, 'academy.delete', 'academy',
+      db => deleteCmsSource(db, 'academy', req.params.id), { targetId: req.params.id });
     if (!row) return res.status(404).json({ error: 'Course not found.', requestId: req.id });
     res.json({ success: true });
   } catch (error) {

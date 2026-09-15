@@ -12,17 +12,18 @@ const {
 const user = (role, job_title) => ({ role, job_title, permissions: {} });
 
 test('Pos-Cards access follows the configured job title page', () => {
-  assert.equal(canUsePosCards({ ...user('viewer', 'Diretor'), job_title_access: { posCards: true } }), true);
+  assert.equal(canUsePosCards({ ...user('viewer', 'Gerente de DHO'), job_title_active: true, job_title_access: { posCards: true } }), true);
+  assert.equal(canUsePosCards({ ...user('viewer', 'Gerente de DHO'), job_title_active: false, job_title_access: { posCards: true } }), false);
   assert.equal(canUsePosCards(user('admin', 'Diretor')), false);
   assert.equal(canUsePosCards(user('viewer', 'Analista de Pos-Vendas')), false);
 });
 
 test('Pos-Cards policy remains independent from AutoCard policy', () => {
-  const rhViewer = user('viewer', 'Analista de RH Sênior');
+  const dhoViewer = user('viewer', 'Analista de DHO Sênior');
   const admin = user('admin', 'Diretor');
 
-  assert.equal(canUseAutoCard(rhViewer), false);
-  assert.equal(canUsePosCards(rhViewer), false);
+  assert.equal(canUseAutoCard(dhoViewer), false);
+  assert.equal(canUsePosCards(dhoViewer), false);
   assert.equal(canUseAutoCard(admin), false);
   assert.equal(canUsePosCards(admin), false);
 });

@@ -1,5 +1,9 @@
 # Portal Ownerinc V1 Hardening and Integration
 
+> Documento histórico. A autorização DHO descrita aqui foi substituída pela
+> matriz atual de cargo ativo mais `page_access` explícito; os defaults DHO da
+> migration 030 não formam uma allowlist.
+
 ## Context
 
 The Portal Ownerinc already has the core internal-product capabilities in

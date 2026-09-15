@@ -52,7 +52,6 @@ test('home preview preserves the required HTML accessibility and navigation cont
     './knowledge.html',
     './reminders.html',
     './academy.html',
-    './benefits.html',
     './announcements.html',
     './profile.html',
   ]) {

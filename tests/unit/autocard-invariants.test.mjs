@@ -7,7 +7,10 @@ import vm from 'node:vm';
 const require = createRequire(import.meta.url);
 const { canUseAutoCard } = require('../../api/middleware/policy');
 
-const dho = (name) => ({ role: 'viewer', job_title: name, permissions: {} });
+const dho = (name, active = true) => ({
+  role: 'viewer', job_title: name, job_title_active: active,
+  job_title_access: { autocard: true }, permissions: {},
+});
 
 function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
   const listeners = new Map();
@@ -777,17 +780,21 @@ test('AutoCard employee mobile layout bounds long names and preserves the footer
 });
 
 test('AutoCard access follows the configured job title page', () => {
-  assert.equal(canUseAutoCard({ role: 'viewer', job_title_access: { autocard: true } }), true);
-  assert.equal(canUseAutoCard(dho('Analista de RH Sênior')), false);
+  assert.equal(canUseAutoCard(dho('Analista de DHO Sênior')), true);
+  assert.equal(canUseAutoCard(dho('Gerente de DHO')), true);
+  assert.equal(canUseAutoCard(dho('Analista Administrativo')), true);
+  assert.equal(canUseAutoCard(dho('Analista de DHO Sênior', false)), false);
   assert.equal(canUseAutoCard({ role: 'viewer' }), false);
+  assert.equal(canUseAutoCard({ role: 'admin', permissions: { manageUsers: true } }), false);
   assert.equal(canUseAutoCard({ role: 'admin', permissions: { superAdmin: true } }), true);
 });
 
 test('AutoCard API is protected and uses shared PostgreSQL storage', async () => {
-  const [auth, route, migration, cropMigration, schema, index, nginx, retention, provision, verifyMigrations] = await Promise.all([
+  const [auth, route, migration, dhoMigration, cropMigration, schema, index, nginx, retention, provision, verifyMigrations] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('api/routes/autocard.js', 'utf8'),
     readFile('api/db/migrations/010_autocard.sql', 'utf8'),
+    readFile('api/db/migrations/030_dho_job_title_catalog.sql', 'utf8'),
     readFile('api/db/migrations/012_autocard_media_crop.sql', 'utf8'),
     readFile('api/db/schema.sql', 'utf8'),
     readFile('api/index.js', 'utf8'),
@@ -808,7 +815,12 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
   assert.match(route, /media_crop AS "mediaCrop"/);
   assert.match(route, /body\.mediaCrop/);
   assert.match(route, /media_crop = \$11::jsonb/);
-  assert.match(route, /SELECT name \|\| ' v2',[\s\S]*media_crop/);
+  assert.match(route, /SELECT LEFT\(COALESCE\(NULLIF\(BTRIM\(name\), ''\), 'Card'\), 117\) \|\| ' v2',[\s\S]*media_crop/);
+  assert.equal(('x'.repeat(120).slice(0, 117) + ' v2').length, 120);
+  assert.equal(('Card'.slice(0, 116) + ' v2').length, 7);
+  assert.match(route, /CASE WHEN icon = ANY\(\$3::text\[\]\) THEN icon ELSE NULL END/);
+  assert.match(route, /CASE WHEN illustration = ANY\(\$4::text\[\]\) THEN illustration ELSE NULL END/);
+  assert.match(route, /\[req\.params\.id, req\.user\.uid, \[\.\.\.icons\], \[\.\.\.illustrations\]\]/);
   assert.equal((route.match(/SELECT pg_advisory_xact_lock\(7193003\)/g) || []).length, 5);
   assert.match(route, /async function removeMediaIfUnused[\s\S]*BEGIN[\s\S]*pg_advisory_xact_lock\(7193003\)[\s\S]*NOT EXISTS[\s\S]*DELETE FROM autocard_media[\s\S]*COMMIT/);
   assert.match(retention, /pg_try_advisory_lock/);
@@ -817,9 +829,19 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
   assert.match(provision, /GRANT SELECT, DELETE ON autocard_media TO portal_cron/);
   assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON audit_log TO portal_cron/);
   assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.autocard_cards', 'SELECT'\)/);
-  assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.autocard_media', 'SELECT,DELETE'\)/);
-  assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.audit_log', 'SELECT,INSERT,UPDATE,DELETE'\)/);
-  assert.match(migration, /Analista de RH.*Analista de DHO/);
+  assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.autocard_media', 'SELECT'\)[\s\S]*has_table_privilege\('portal_cron', 'public\.autocard_media', 'DELETE'\)/);
+  assert.match(verifyMigrations, /has_table_privilege\('portal_cron', 'public\.audit_log', 'SELECT'\)[\s\S]*has_table_privilege\('portal_cron', 'public\.audit_log', 'DELETE'\)/);
+    assert.match(dhoMigration, /migrated_name := btrim\(item\.name\)/);
+    assert.match(dhoMigration, /regexp_replace\([\s\S]*E'\\\\1DHO\\\\2'[\s\S]*'i'/);
+   assert.match(dhoMigration, /btrim\(name\) ~\* '\(\^\|\[\^\[:alnum:\]_\]\)RH\(\[\^\[:alnum:\]_\]\|\$\)'/);
+   assert.match(dhoMigration, /DHO job title migration aborted before mutation:/);
+   assert.ok(dhoMigration.indexOf('before mutation') < dhoMigration.indexOf('DROP INDEX IF EXISTS job_titles_name_lower_unique'));
+   assert.match(dhoMigration, /page_access/);
+   assert.match(dhoMigration, /UPDATE users SET job_title_id = target_id/);
+   assert.match(dhoMigration, /DROP INDEX IF EXISTS job_titles_name_lower_unique/);
+   assert.match(dhoMigration, /CREATE UNIQUE INDEX IF NOT EXISTS job_titles_name_lower_unique/);
+   assert.match(dhoMigration, /Analista de DHO Sênior/);
+   assert.match(dhoMigration, /Gerente de DHO/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS autocard_cards/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS autocard_media/);
   assert.match(cropMigration, /ADD COLUMN IF NOT EXISTS media_crop/);
@@ -831,7 +853,8 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
   assert.match(schema, /autocard_cards_media_crop_check/);
   assert.match(schema, /010_autocard/);
   assert.match(index, /app\.use\('\/api\/autocard', autocardRoutes\)/);
-  assert.match(nginx, /location \^~ \/api\/autocard\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
+  assert.match(nginx, /location = \/api\/autocard\/media[\s\S]*client_max_body_size 3m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads/);
+  assert.match(nginx, /location \^~ \/api\/autocard\/media\/[\s\S]*limit_req zone=media_reads/);
 });
 
 test('AutoCard UI is guarded before loading the editor', async () => {
@@ -849,9 +872,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(entry, /import\('\.\/app\.js'\)/);
   assert.match(guard, /user\.autocard_access === true/);
   assert.doesNotMatch(guard, /fetchAPI\(|\/api\/autocard\/access/);
-  assert.match(guard, /Acesso restrito/);
-  assert.match(guard, /cargos de RH aprovados/);
-  assert.doesNotMatch(guard, /cargos do DHO/);
+   assert.match(guard, /Acesso restrito/);
+   assert.match(guard, /cargos ativos do DHO autorizados/);
   assert.match(html, /class="portal-wrapper"/);
   assert.match(html, /class="sidebar"/);
   assert.match(html, /class="topbar"/);

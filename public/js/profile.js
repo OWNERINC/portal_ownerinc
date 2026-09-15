@@ -1,5 +1,4 @@
-import { requireAuth, getCachedUserSnapshot, fetchAPI, updateAuthDisplayName } from './auth.js';
-import { auth } from './firebase-config.js';
+import { requireAuth, getCachedUserSnapshot, authenticatedFetch, fetchAPI, updateAuthDisplayName } from './auth.js';
 import { protectForm } from './ui.js';
 import { DEFAULT_MEDIA_CROP, cropRenderStyle, dragMediaCrop, normalizeMediaCrop } from '../autocard/crop.js';
 
@@ -165,16 +164,11 @@ photoInput.addEventListener('change', async () => {
 
   await runProfileAction(async () => {
     try {
-      await auth.authStateReady();
-      const token = await auth.currentUser?.getIdToken();
-      if (!token) throw new Error('Sessão encerrada.');
-
       const formData = new FormData();
       formData.append('photo', file);
 
-      const res = await fetch('/api/upload/photo', {
+      const res = await authenticatedFetch('/api/upload/photo', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
         body: formData,
       });
       if (!res.ok) throw await responseError(res, 'O servidor recusou o arquivo. Use JPEG, PNG ou WebP de até 500 KB.');

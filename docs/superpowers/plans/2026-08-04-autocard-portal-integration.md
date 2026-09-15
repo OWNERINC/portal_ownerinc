@@ -2,6 +2,12 @@
 
 Referencia: `docs/superpowers/specs/2026-08-04-autocard-portal-integration-design.md`
 
+> Documento histórico. As referências a RH identificam somente os nomes legados
+> usados para testar a migração para DHO.
+>
+> Este plano também antecede a matriz atual: acesso exige cargo ativo e
+> `page_access.autocard=true`; não existe allowlist fixa de nomes.
+
 ## 1. Migrar a interface
 
 - Copiar apenas a interface, estilos e assets necessarios de
@@ -17,7 +23,7 @@ Referencia: `docs/superpowers/specs/2026-08-04-autocard-portal-integration-desig
 ## 2. Cargos e schema
 
 - Criar `api/db/migrations/010_autocard.sql`.
-- Renomear/reassociar os quatro cargos RH para DHO sem violar o índice único de
+- Renomear/reassociar os quatro nomes legados contendo RH para DHO sem violar o índice único de
   nomes ou a FK de `users.job_title_id`.
 - Criar `autocard_cards` e `autocard_media` com constraints para JSON, enums,
   UUID, timestamps e foreign keys.
@@ -50,7 +56,7 @@ Referencia: `docs/superpowers/specs/2026-08-04-autocard-portal-integration-desig
 ## 5. Testes
 
 - Testar normalização e allowlist de cargos DHO.
-- Testar migration 010 em banco fresco e banco com cargos RH/DHO existentes.
+- Testar migration 010 em banco fresco e banco com cargos legados/DHO existentes.
 - Testar grants e ledger.
 - Testar todas as rotas com acesso autorizado e não autorizado.
 - Testar cards compartilhados entre diferentes usuários DHO.

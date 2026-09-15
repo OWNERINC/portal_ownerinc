@@ -8,7 +8,7 @@ export async function requireAutoCard() {
   const message = Object.assign(document.createElement('section'), { className: 'empty-state', tabIndex: -1 });
   message.append(
     Object.assign(document.createElement('h1'), { textContent: 'Acesso restrito' }),
-    Object.assign(document.createElement('p'), { textContent: 'O AutoCard está disponível somente para cargos de RH aprovados.' }),
+    Object.assign(document.createElement('p'), { textContent: 'O AutoCard está disponível somente para cargos ativos do DHO autorizados.' }),
     Object.assign(document.createElement('a'), { className: 'secondary-button', href: './dashboard.html', textContent: 'Voltar ao Portal' }),
   );
   main.replaceChildren(message);

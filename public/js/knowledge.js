@@ -1,7 +1,7 @@
 import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, closeDialog, element, openDialog, showState } from './ui.js';
 import { readOffset, renderPagination } from './pagination.js';
-import { renderBlocks } from './cms-block-renderer.js';
+import { blocksToText, renderBlocks } from './cms-block-renderer.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
@@ -19,6 +19,7 @@ const form = document.getElementById('article-form');
 const pdfInput = document.getElementById('f-pdf');
 const pdfStatus = document.getElementById('f-pdf-status');
 const pdfRemove = document.getElementById('f-pdf-remove');
+const legacyContentInput = document.getElementById('f-content');
 let articles = [];
 let categories = [];
 let articlesRequest = 0;
@@ -30,6 +31,7 @@ let currentPdf = null;
 let pdfChanged = false;
 let pdfUploadRequest = 0;
 let pdfUploadPromise = null;
+let editingCmsManaged = false;
 const PAGE_SIZE = 20;
 
 function params() {
@@ -46,6 +48,18 @@ function pdfBlock(article) {
   return Array.isArray(article?.content_blocks)
     ? article.content_blocks.find(block => block.type === 'pdf') || null
     : null;
+}
+
+function articleBody(article) {
+  return Array.isArray(article?.content_blocks) ? blocksToText(article.content_blocks) : article?.content || '';
+}
+
+function syncLegacyContentField() {
+  legacyContentInput.disabled = editingCmsManaged;
+  legacyContentInput.required = !editingCmsManaged;
+  legacyContentInput.placeholder = editingCmsManaged
+    ? 'O corpo é gerenciado pelo Editor CMS.'
+    : 'Conteúdo em texto simples…';
 }
 
 function updatePdfField() {
@@ -148,13 +162,9 @@ async function openArticle(id, push = true) {
   document.getElementById('article-category').textContent = article.category || 'Geral';
   const articleContent = document.getElementById('article-content');
   const blocks = Array.isArray(article.content_blocks) ? article.content_blocks : [];
-  const rendered = renderBlocks(articleContent, blocks, { fallbackText: article.content || '' });
-  if (!rendered) {
+  const rendered = renderBlocks(articleContent, blocks, { fallbackText: article.cms_managed ? '' : article.content || '' });
+  if (!rendered && !article.cms_managed) {
     articleContent.textContent = article.content || '';
-  } else if (blocks.some(block => block.type === 'pdf')
-    && !blocks.some(block => ['heading', 'paragraph', 'list', 'callout'].includes(block.type))
-    && article.content) {
-    articleContent.prepend(element('p', { className: 'article-legacy-content', text: article.content }));
   }
   const adminBar = clear(document.getElementById('article-admin-bar'));
   adminBar.hidden = !canManage;
@@ -190,7 +200,7 @@ function render() {
           element('span', { className: 'article-card-arrow', 'aria-hidden': 'true', text: '→' }),
         ]),
         element('span', { className: 'article-card-meta' }, metadata),
-        element('span', { className: 'article-excerpt', text: (article.content || '').slice(0, 140) || (pdf ? 'Material em PDF disponível para leitura.' : 'Consulte este artigo para ver os detalhes.') }),
+         element('span', { className: 'article-excerpt', text: articleBody(article).slice(0, 140) || (pdf ? 'Material em PDF disponível para leitura.' : 'Consulte este artigo para ver os detalhes.') }),
       ]);
       listNode.append(button);
     });
@@ -219,9 +229,9 @@ async function loadArticles() {
       fetchAPI('/api/knowledge/categories'),
     ]);
     if (requestToken !== articlesRequest) return;
-    articles = result.data;
+    articles = result.data || [];
     total = result.total ?? articles.length;
-    categories = categoryList;
+    categories = categoryList || [];
     render();
   } catch {
     if (requestToken === articlesRequest) showState(listNode, 'Não foi possível carregar os artigos. Verifique sua conexão.', loadArticles);
@@ -230,21 +240,25 @@ async function loadArticles() {
 
 function newArticle() {
   editingId = null;
+  editingCmsManaged = false;
   resetPdfField();
   form.reset();
+  syncLegacyContentField();
   document.getElementById('modal-article-title').textContent = 'Novo Artigo';
   openDialog(modal, document.getElementById('f-title'));
 }
 
 function editArticle(article) {
   editingId = article.id;
+  editingCmsManaged = article.cms_managed === true;
   resetPdfField();
   const pdf = pdfBlock(article);
   currentPdf = pdf ? { id: pdf.asset_id, title: pdf.title } : null;
   document.getElementById('modal-article-title').textContent = 'Editar Artigo';
   document.getElementById('f-title').value = article.title || '';
   document.getElementById('f-category').value = article.category || '';
-  document.getElementById('f-content').value = article.content || '';
+  legacyContentInput.value = editingCmsManaged ? '' : article.content || '';
+  syncLegacyContentField();
   updatePdfField();
   openDialog(modal, document.getElementById('f-title'));
 }
@@ -271,7 +285,7 @@ form.addEventListener('submit', async event => {
   const data = {
     title: document.getElementById('f-title').value.trim(),
     category: document.getElementById('f-category').value.trim(),
-    content: document.getElementById('f-content').value.trim(),
+    ...(editingCmsManaged ? {} : { content: legacyContentInput.value.trim() }),
   };
   if (pdfChanged) {
     if (selectedPdf) {

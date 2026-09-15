@@ -14,6 +14,8 @@ const templates = new Set(['comunicado', 'vaga', 'aniversariante', 'novo_funcion
 const modes = new Set(['light', 'dark', 'beige']);
 const variants = new Set(['editorial', 'noir', 'beige']);
 const mediaSizes = new Set(['small', 'medium', 'large']);
+const icons = new Set(['triangle-alert', 'info', 'megaphone', 'bell', 'shield-check', 'file-text', 'mail', 'phone', 'user', 'users', 'heart', 'star', 'gift', 'wallet', 'coffee', 'utensils', 'car-front', 'circle-check', 'search', 'briefcase-business', 'bar-chart-3', 'settings', 'package', 'party-popper', 'trophy', 'cake', 'calendar-days', 'clock', 'map-pin', 'house', 'wrench', 'bed-double', 'trees', 'sparkles', 'send', 'message-circle', 'share-2', 'target']);
+const illustrations = new Set(['hard-hat', 'shield-check', 'user-plus', 'users', 'cake', 'trophy', 'rabbit', 'utensils', 'car-front', 'house', 'syringe', 'piggy-bank', 'trees', 'ghost', 'party-popper', 'drama']);
 const maxMediaBytes = 3 * 1024 * 1024;
 const defaultMediaCrop = { x: 0.5, y: 0.5, zoom: 1 };
 const maxMediaCropZoom = 3;
@@ -35,20 +37,31 @@ function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let settled = false;
     req.on('data', (chunk) => {
+      if (settled) return;
       size += chunk.length;
       if (size > limit) {
         const error = new Error('Payload too large.');
         error.code = 'LIMIT_FILE_SIZE';
+        settled = true;
         reject(error);
-        req.destroy();
+        req.resume();
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    req.on('end', () => { if (!settled) resolve(Buffer.concat(chunks)); });
+    req.on('error', (error) => { if (!settled) reject(error); });
   });
+}
+
+function safeIcon(value, allowed) {
+  return typeof value === 'string' && allowed.has(value) ? value : null;
+}
+
+function safeCard(card) {
+  return card ? { ...card, icon: safeIcon(card.icon, icons), illustration: safeIcon(card.illustration, illustrations) } : card;
 }
 
 function parseCard(body) {
@@ -56,8 +69,8 @@ function parseCard(body) {
   if (typeof body.name !== 'string' || body.name.trim().length < 1 || body.name.trim().length > 120) return null;
   if (!templates.has(body.template) || !body.values || typeof body.values !== 'object' || Array.isArray(body.values)) return null;
   if (JSON.stringify(body.values).length > 50000) return null;
-  if (body.icon != null && (typeof body.icon !== 'string' || body.icon.length > 80)) return null;
-  if (body.illustration != null && (typeof body.illustration !== 'string' || body.illustration.length > 80)) return null;
+  if (body.icon != null && !icons.has(body.icon)) return null;
+  if (body.illustration != null && !illustrations.has(body.illustration)) return null;
   if (!modes.has(body.mode || 'light') || !variants.has(body.variant || 'editorial') || !mediaSizes.has(body.mediaSize || 'medium')) return null;
   if (body.mediaId != null && !uuid(body.mediaId)) return null;
   const mediaCrop = parseMediaCrop(body.mediaCrop);
@@ -132,7 +145,7 @@ router.get('/cards', async (req, res, next) => {
       pool.query(`SELECT COUNT(*)::integer AS total FROM autocard_cards ${where}`, values),
     ]);
     res.setHeader('X-Total-Count', count.rows[0].total);
-    return res.json(cards.rows);
+    return res.json(cards.rows.map(safeCard));
   } catch (error) { return next(error); }
 });
 
@@ -152,7 +165,7 @@ router.post('/cards', async (req, res, next) => {
       return rows[0];
     }, { targetId: result => result?.id });
     if (!result) return invalid(req, res);
-    return res.status(201).json(result);
+    return res.status(201).json(safeCard(result));
   } catch (error) { return next(error); }
 });
 
@@ -163,7 +176,7 @@ router.get('/cards/:id', async (req, res, next) => {
       `SELECT id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM autocard_cards WHERE id = $1`, [req.params.id],
     );
-    return rows[0] ? res.json(rows[0]) : res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
+    return rows[0] ? res.json(safeCard(rows[0])) : res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
   } catch (error) { return next(error); }
 });
 
@@ -184,7 +197,7 @@ router.put('/cards/:id', async (req, res, next) => {
       return rows[0] || null;
     }, { targetId: result => result?.id });
     if (!result) return res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
-    return res.json(result);
+    return res.json(safeCard(result));
   } catch (error) { return next(error); }
 });
 
@@ -195,15 +208,18 @@ router.post('/cards/:id/duplicate', async (req, res, next) => {
       await client.query('SELECT pg_advisory_xact_lock(7193003)');
       const { rows } = await client.query(
         `INSERT INTO autocard_cards (name, template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, created_by)
-          SELECT name || ' v2', template, "values", icon, illustration, mode, variant, media_size, media_id, media_crop, $2
-          FROM autocard_cards WHERE id = $1
-          RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
-        [req.params.id, req.user.uid],
+           SELECT LEFT(COALESCE(NULLIF(BTRIM(name), ''), 'Card'), 117) || ' v2', template, "values",
+             CASE WHEN icon = ANY($3::text[]) THEN icon ELSE NULL END,
+             CASE WHEN illustration = ANY($4::text[]) THEN illustration ELSE NULL END,
+             mode, variant, media_size, media_id, media_crop, $2
+           FROM autocard_cards WHERE id = $1
+           RETURNING id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`,
+        [req.params.id, req.user.uid, [...icons], [...illustrations]],
       );
       return rows[0] || null;
     }, { targetId: result => result?.id });
     if (!result) return res.status(404).json({ error: 'Card não encontrado.', requestId: req.id });
-    return res.status(201).json(result);
+    return res.status(201).json(safeCard(result));
   } catch (error) { return next(error); }
 });
 

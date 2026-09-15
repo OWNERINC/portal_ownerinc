@@ -2,7 +2,7 @@ require('dotenv').config();
 const { readdir, readFile } = require('node:fs/promises');
 const path = require('node:path');
 const { Pool } = require('pg');
-const { grantRuntimeAccess, provisionRoles } = require('./provision');
+const { grantRuntimeAccess, MIGRATION_LOCK, provisionRoles } = require('./provision');
 
 async function migrate() {
   if (!process.env.MIGRATION_DATABASE_URL) throw new Error('Missing required environment variable: MIGRATION_DATABASE_URL');
@@ -11,8 +11,8 @@ async function migrate() {
   let client;
   try {
     client = await pool.connect();
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK]);
     await provisionRoles(client);
-    await client.query('SELECT pg_advisory_lock($1)', [7192026]);
     await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       version TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -22,6 +22,7 @@ async function migrate() {
     const files = (await readdir(directory)).filter((name) => /^\d+_[a-z0-9_]+\.sql$/.test(name)).sort();
     const { rows } = await client.query('SELECT version FROM schema_migrations');
     const applied = new Set(rows.map(({ version }) => version));
+    let appliedCount = 0;
 
     for (const file of files) {
       const version = file.slice(0, -4);
@@ -32,14 +33,16 @@ async function migrate() {
         await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version]);
         await client.query('COMMIT');
         console.log(`[migrate] Applied ${version}`);
+        appliedCount += 1;
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;
       }
     }
     await grantRuntimeAccess(client);
+    console.log(`[migrate] Complete; ${appliedCount} migration${appliedCount === 1 ? '' : 's'} applied`);
   } finally {
-    await client?.query('SELECT pg_advisory_unlock($1)', [7192026]).catch(() => {});
+    await client?.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK]).catch(() => {});
     client?.release();
     await pool.end();
   }

@@ -30,6 +30,7 @@ test('CMS entry point is authenticated, linked from admin, and has responsive ed
   assert.match(cmsHtml, /id="inspector-type"/);
   assert.match(cmsHtml, /id="inspector-block-settings"/);
   assert.match(cmsHtml, /id="publish-document"/);
+  assert.match(cmsHtml, /id="document-pagination"/);
   assert.match(admin, /href="\.\/cms\.html"[^>]*>.*Editor CMS/s);
   assert.match(cms, /requireAuth\(true\)/);
   for (const permission of ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders']) assert.match(cms, new RegExp(permission));
@@ -95,6 +96,9 @@ test('CMS actions use the existing API contracts and keep generic failure states
   assert.match(cms, /requestToken !== selectionToken \|\| documentId !== selectedDocument/);
   assert.match(cms, /if \(requestToken === selectionToken && documentId === selectedDocument && historyToken === historyRequestToken\)/);
   assert.match(cms, /const type = selectedType/);
+  assert.match(cms, /const DOCUMENT_PAGE_SIZE = 50/);
+  assert.match(cms, /result\.total/);
+  assert.match(cms, /requestOffset !== documentOffset/);
   assert.match(cms, /if \(!newDocumentForm\.hidden\) void loadSources\(\)/);
   assert.match(cms, /fetchAPIPage\(`\/api\/cms\/documents\/\$\{encodeURIComponent\(documentId\)\}\/revisions\?limit=\$\{HISTORY_PAGE_SIZE\}&offset=\$\{historyOffset\}`\)/);
   assert.match(cms, /for \(let offset = sources\.length; offset < total; offset \+= 100\)/);
@@ -105,6 +109,15 @@ test('CMS revision history clamps pagination before loading another page', () =>
   assert.match(cms, /historyOffset = Math\.max\(0, historyOffset - HISTORY_PAGE_SIZE\)/);
   assert.match(cms, /const finalHistoryOffset = Math\.max\(0, Math\.floor\(\(total - 1\) \/ HISTORY_PAGE_SIZE\) \* HISTORY_PAGE_SIZE\)/);
   assert.match(cms, /historyOffset = Math\.min\(finalHistoryOffset, historyOffset \+ HISTORY_PAGE_SIZE\)/);
+});
+
+test('optional pagination containers stay null-safe on list and detail pages', async () => {
+  const [pagination, announcements] = await Promise.all([
+    readFile('public/js/pagination.js', 'utf8'),
+    readFile('public/js/announcements.js', 'utf8'),
+  ]);
+  assert.match(pagination, /if \(!node\) return/);
+  assert.match(announcements, /pagination\?\.replaceChildren\(\)/);
 });
 
 test('autosave coalesces in-flight edits and rejects stale document responses', () => {

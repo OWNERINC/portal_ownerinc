@@ -8,8 +8,9 @@ const {
   can, canUseAutoCard, canUsePosCards, isSuperAdmin, mayChangeAccountStatus, maySetPrivileges, normalizePermissions,
   removesLastActiveSuperAdmin,
 } = require('../../api/middleware/policy');
-const { validateEnvironment } = require('../../api/middleware/security');
-const { imageExtension, isHttpUrl, normalizeImage, sanitizeRichText, sanitizeRichValues, validateProfile, validateUser } = require('../../api/middleware/validation');
+const { containsLegacyJobTitleToken } = require('../../api/route-utils');
+const { errorHandler, requestOrigin, safeResponses, validateEnvironment } = require('../../api/middleware/security');
+const { imageExtension, isHttpUrl, normalizeContract, normalizeImage, sanitizeRichText, sanitizeRichValues, validateProfile, validateRegistration, validateUser } = require('../../api/middleware/validation');
 const { canManageCms } = require('../../api/cms/permissions');
 
 const manager = { uid: 'manager', role: 'admin', permissions: { manageUsers: true } };
@@ -31,12 +32,27 @@ test('authorization requires an admin role and reserves privilege mutation for a
 });
 
 test('page access follows the job title and super-admin bypass', () => {
-  assert.equal(canUseAutoCard({ role: 'viewer', job_title_access: { autocard: true } }), true);
-  assert.equal(canUsePosCards({ role: 'viewer', job_title_access: { posCards: true } }), true);
-  assert.equal(canUseAutoCard({ role: 'viewer', job_title: 'Analista de RH Sênior' }), false);
+  const activeDho = { role: 'viewer', job_title: 'Analista de DHO Sênior', job_title_active: true, job_title_access: { autocard: true, posCards: true } };
+  const activeCustom = { role: 'viewer', job_title: 'Analista Administrativo', job_title_active: true, job_title_access: { autocard: true, posCards: true } };
+  assert.equal(canUseAutoCard(activeDho), true);
+  assert.equal(canUsePosCards(activeDho), true);
+  assert.equal(canUseAutoCard(activeCustom), true);
+  assert.equal(canUsePosCards(activeCustom), true);
+  assert.equal(canUseAutoCard({ ...activeDho, job_title_active: false }), false);
+  assert.equal(canUsePosCards({ ...activeDho, job_title_active: false }), false);
+  assert.equal(canUseAutoCard({ role: 'viewer', job_title: 'Analista de DHO Sênior', job_title_access: { autocard: true } }), false);
   assert.equal(canUsePosCards({ role: 'admin', job_title: 'Diretor' }), false);
+  assert.equal(canUseAutoCard({ role: 'admin', permissions: { manageUsers: true }, job_title_active: true, job_title_access: {} }), false);
   assert.equal(canUseAutoCard(superAdmin), true);
   assert.equal(canUsePosCards(superAdmin), true);
+});
+
+test('job title validation rejects RH as a token without rejecting larger words', () => {
+  assert.equal(containsLegacyJobTitleToken('Analista de RH'), true);
+  assert.equal(containsLegacyJobTitleToken(' RH '), true);
+  assert.equal(containsLegacyJobTitleToken('RHub'), false);
+  assert.equal(containsLegacyJobTitleToken('RHOps'), false);
+  assert.equal(containsLegacyJobTitleToken('ÁreaRH'), false);
 });
 
 test('Cards Pós remains isolated from AutoCard routes, storage, and the migration ledger', async () => {
@@ -58,6 +74,22 @@ test('Cards Pós remains isolated from AutoCard routes, storage, and the migrati
   assert.match(schema, /'018_pos_card_storage_key'/);
   assert.ok(migrationFiles.includes('017_pos_cards.sql'));
   assert.ok(migrationFiles.includes('018_pos_card_storage_key.sql'));
+});
+
+test('public uploads expose only profile-photo keys and AutoCard icons stay allowlisted', async () => {
+  const [index, autocard] = await Promise.all([
+    readFile('api/index.js', 'utf8'),
+    readFile('api/routes/autocard.js', 'utf8'),
+  ]);
+  assert.match(index, /autocard-\[0-9a-f-\]\+\\\.webp/);
+  assert.match(index, /!\/\^\\\/\[0-9a-f\]\{8\}/);
+  assert.match(autocard, /const icons = new Set\(/);
+  assert.match(autocard, /const illustrations = new Set\(/);
+  assert.match(autocard, /body\.icon != null && !icons\.has\(body\.icon\)/);
+  assert.match(autocard, /body\.illustration != null && !illustrations\.has\(body\.illustration\)/);
+  assert.match(autocard, /function safeCard\(card\)/);
+  assert.doesNotMatch(autocard, /body\.icon != null && \(typeof body\.icon/);
+  assert.doesNotMatch(autocard, /body\.illustration != null && \(typeof body\.illustration/);
 });
 
 test('CMS management permission mapping stays area-scoped', () => {
@@ -91,6 +123,12 @@ test('user and profile validation rejects unsafe privilege, URL, photo, and date
   assert.equal(validateUser({ name: 'User', email: 'bad', job_title_id: 'e7fa4cd2-70f5-4d75-a77f-b17b5caedfa9' }, { creating: true }), false);
   assert.equal(validateUser({ role: 'owner' }), false);
   assert.equal(validateUser({ pj_due_day: 32 }), false);
+  assert.equal(validateUser({ contract_type: 'pj', is_pj: true, pj_due_day: 15 }), true);
+  assert.equal(validateUser({ contract_type: 'pj', is_pj: true, pj_due_day: null }), false);
+  assert.equal(validateUser({ contract_type: 'clt', is_pj: false, pj_due_day: 15 }), false);
+  assert.deepEqual(normalizeContract('clt', 'not-a-day'), { contract_type: 'clt', is_pj: false, pj_due_day: null });
+  assert.deepEqual(normalizeContract('pj', '07'), { contract_type: 'pj', is_pj: true, pj_due_day: 7 });
+  assert.equal(normalizeContract('pj', 32), null);
   assert.equal(validateUser({ permissions: { superAdmin: 'true' } }), false);
   assert.equal(validateUser({ permissions: { viewOmbudsman: true } }), false);
   assert.equal(validateUser({ permissions: { manageKnowledge: true } }), true);
@@ -108,6 +146,16 @@ test('user and profile validation rejects unsafe privilege, URL, photo, and date
   assert.equal(validateProfile({ photo_crop: { x: 1.1, y: 0.5, zoom: 1 } }), false);
   assert.equal(validateProfile({ photo_crop: { x: 0.5, y: 0.5, zoom: 4 } }), false);
   assert.equal(isHttpUrl('https://www.linkedin.com/in/user'), true);
+});
+
+test('public registration validation accepts only the name and email contract', () => {
+  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'ana@example.com' }), true);
+  assert.equal(validateRegistration({ name: ' Ana Silva ', email: ' ana@example.com ' }), true);
+  assert.equal(validateRegistration({ name: 'A', email: 'ana@example.com' }), false);
+  assert.equal(validateRegistration({ name: 'Ana\nSilva', email: 'ana@example.com' }), false);
+  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'bad' }), false);
+  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'ana@example.com', password: 'known-secret' }), false);
+  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'ana@example.com', role: 'admin' }), false);
 });
 
 test('image validation uses file signatures rather than supplied MIME or extension', () => {
@@ -147,19 +195,66 @@ test('startup validation names missing settings without exposing values', () => 
     FIREBASE_PROJECT_ID: 'project',
     FIREBASE_CLIENT_EMAIL: 'service@example.com',
     FIREBASE_PRIVATE_KEY: 'secret',
+    BULK_IMPORT_WORKER_SECRET: 'x'.repeat(32),
     PORT: '3000',
     CORS_ORIGINS: 'https://portal.example.com',
   }));
   assert.doesNotThrow(() => validateEnvironment({
     NODE_ENV: 'development', DATABASE_URL: 'secret', FIREBASE_PROJECT_ID: 'project',
-    FIREBASE_AUTH_EMULATOR_HOST: 'firebase-auth:9099',
+     FIREBASE_AUTH_EMULATOR_HOST: 'firebase-auth:9099', BULK_IMPORT_WORKER_SECRET: 'x'.repeat(32),
   }));
   assert.throws(() => validateEnvironment({
     NODE_ENV: 'production', DATABASE_URL: 'secret', FIREBASE_PROJECT_ID: 'project',
-    FIREBASE_AUTH_EMULATOR_HOST: 'firebase-auth:9099',
-  }), /FIREBASE_CLIENT_EMAIL.*FIREBASE_PRIVATE_KEY/);
+     FIREBASE_AUTH_EMULATOR_HOST: 'firebase-auth:9099', BULK_IMPORT_WORKER_SECRET: 'x'.repeat(32),
+  }), /FIREBASE_AUTH_EMULATOR_HOST/);
   assert.throws(() => validateEnvironment({
-    DATABASE_URL: 'secret', FIREBASE_PROJECT_ID: 'project',
-    FIREBASE_CLIENT_EMAIL: 'service@example.com', FIREBASE_PRIVATE_KEY: 'secret', PORT: '99999',
+     DATABASE_URL: 'secret', FIREBASE_PROJECT_ID: 'project',
+     FIREBASE_CLIENT_EMAIL: 'service@example.com', FIREBASE_PRIVATE_KEY: 'secret', BULK_IMPORT_WORKER_SECRET: 'x'.repeat(32), PORT: '99999',
   }), /PORT/);
+});
+
+test('CORS derives same-origin from forwarded host and port and invalid JSON is a client error', () => {
+  const headers = {
+    'x-forwarded-proto': 'http',
+    'x-forwarded-host': 'portal.example.test:8080',
+    'x-forwarded-port': '8080',
+  };
+  const req = { protocol: 'http', get: name => headers[name] };
+  assert.equal(requestOrigin(req), 'http://portal.example.test:8080');
+
+  let statusCode;
+  let body;
+  const res = {
+    headersSent: false,
+    status(status) { statusCode = status; return this; },
+    json(value) { body = value; return this; },
+  };
+  errorHandler({ type: 'entity.parse.failed', message: 'unexpected token' }, { id: 'request-1' }, res, () => {});
+  assert.equal(statusCode, 400);
+  assert.notEqual(statusCode, 500);
+  assert.deepEqual(body, { error: 'Invalid JSON.', requestId: 'request-1' });
+  assert.doesNotMatch(JSON.stringify(body), /unexpected token/);
+});
+
+test('5xx responses preserve only the allowlisted Firebase identity reason', (t) => {
+  const originalError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = originalError; });
+
+  let body;
+  const response = {
+    statusCode: 503,
+    json(value) { body = value; return this; },
+  };
+  safeResponses({ id: 'request-1' }, response, () => {});
+
+  response.json({ error: 'private error', reason: 'firebase_identity_indeterminate', uid: 'secret-uid' });
+  assert.deepEqual(body, {
+    error: 'Internal server error.',
+    reason: 'firebase_identity_indeterminate',
+    requestId: 'request-1',
+  });
+
+  response.json({ error: 'private error', reason: 'arbitrary-internal-state', uid: 'secret-uid' });
+  assert.deepEqual(body, { error: 'Internal server error.', requestId: 'request-1' });
 });

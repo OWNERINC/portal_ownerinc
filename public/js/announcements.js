@@ -18,7 +18,7 @@ async function loadAnnouncements() {
     if (announcementId) {
       const announcement = await fetchAPI(`/api/announcements/${encodeURIComponent(announcementId)}`);
       clear(list);
-      pagination.replaceChildren();
+      pagination?.replaceChildren();
       const article = element('article', { className: 'card announcement-card' }, [
         element('div', { className: 'card-heading' }, [
           element('h2', { className: 'card-title', text: announcement.title }),

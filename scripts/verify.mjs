@@ -49,7 +49,9 @@ async function checkSyntax() {
   const bash = spawnSync('bash', ['--version'], { encoding: 'utf8' });
   if (bash.status === 0) {
     run('bash', ['-n', 'deploy.sh']);
-    for (const file of await filesUnder('scripts', '.sh')) run('bash', ['-n', file]);
+    for (const directory of ['scripts', 'ops']) {
+      for (const file of await filesUnder(directory, '.sh')) run('bash', ['-n', file]);
+    }
   }
 }
 
@@ -89,9 +91,14 @@ function checkCompose() {
   run('docker', ['compose', '--env-file', '.env.example', 'config', '--quiet']);
 }
 
+function checkDhoNaming() {
+  run(process.execPath, ['scripts/check-dho-naming.mjs']);
+}
+
 const mode = process.argv[2] || 'all';
 if (mode === 'all' || mode === 'syntax') await checkSyntax();
 if (mode === 'all' || mode === 'tests') await checkTests();
 if (mode === 'all' || mode === 'security') await checkSecrets();
+if (mode === 'all' || mode === 'dho') checkDhoNaming();
 if (mode === 'all') checkCompose();
 console.log('verify: ok');

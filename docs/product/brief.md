@@ -17,7 +17,8 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - Autenticação pelo Firebase Auth.
 - Perfis e permissões persistidos no PostgreSQL.
 - Base de conhecimento interna.
-- Catálogo da academia e de benefícios.
+- Catálogo da Academy; o catálogo de benefícios permanece preservado para uma
+  etapa futura e fora da experiência inicial.
 - Lembretes mensais enviados por email.
 - Upload de foto de perfil.
 

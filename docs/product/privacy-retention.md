@@ -30,11 +30,16 @@ substitui orientação jurídica nem o registro formal das bases legais.
 
 ## AutoCard
 
-- Finalidade: permitir que cargos autorizados de RH criem e mantenham cards
+- Finalidade: permitir que cargos autorizados de DHO criem e mantenham cards
   internos com identidade visual Ownerinc.
-- Acesso: somente os cargos exatos Analista de RH Sênior e Gerente de RH; a
-  autorização é repetida na API e não depende de role de administrador.
-- Histórico: cards e mídias são compartilhados entre usuários autorizados de RH
+- Acesso: qualquer usuário com cargo ativo e `page_access.autocard=true`; super-admin
+  possui bypass explícito, mas `role=admin` sozinho não concede acesso. Os cargos
+  DHO canônicos recebem essa flag como default da migration 030, não como allowlist.
+- Cards Pós usa a mesma matriz real: qualquer usuário com cargo ativo e
+  `page_access.posCards=true`; super-admin possui bypass explícito e `role=admin`
+  sozinho permanece bloqueado. As duas páginas continuam independentes no
+  armazenamento e nas rotas.
+- Histórico: cards e mídias são compartilhados entre usuários autorizados de DHO
   e alterações são registradas na auditoria administrativa.
 - Mídias: imagens são normalizadas para WebP, possuem limite de tamanho e ficam
   vinculadas ao card; arquivos sem referência são removidos quando aplicável.
@@ -54,8 +59,9 @@ substitui orientação jurídica nem o registro formal das bases legais.
 
 - Finalidade: criar e manter convites internos de Pós-Vendas no template
   Owntime, com histórico compartilhado entre os usuários autorizados.
-- Acesso: temporariamente restrito a administradores pela política própria do
-  módulo; ocultar a navegação é apenas UX e toda rota repete a autorização.
+- Acesso: qualquer usuário com cargo ativo e `page_access.posCards=true`, além do
+  bypass explícito de super-admin; `role=admin` sozinho não recebe acesso. Ocultar
+  a navegação é apenas UX e toda rota repete a autorização.
 - Registros: `pos_cards` preserva o histórico operacional e a autoria enquanto
   houver necessidade interna autorizada. O prazo definitivo depende da
   validação do responsável por Pós-Vendas e LGPD.

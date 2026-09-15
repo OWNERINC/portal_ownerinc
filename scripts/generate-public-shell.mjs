@@ -6,7 +6,6 @@ const pages = [
   ['knowledge', 'Base de Conhecimento', 'book-open'],
   ['reminders', 'Lembretes', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
-  ['benefits', 'Benefícios', 'gift'],
   ['announcements', 'Anúncios', 'megaphone'],
   ['profile', 'Meu Perfil', 'user'],
 ];
