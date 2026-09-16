@@ -106,8 +106,8 @@ conditional and is intentionally not marked approved.
 - The report committed at baseline `1085bbe` documents `69` targeted tests and
   `297` tests for `node --test tests/unit/*.test.mjs`, with `npm run verify`
   reported as passing. This is the verifiable historical baseline record.
-- No repository evidence is available for a later full-suite execution beyond
-  that baseline, so no additional full-suite count is claimed here.
+- After checkpoint `8e46f34`, `npm run verify` passed, including the complete
+  unit suite: `325` passed, `0` failed, plus syntax, security and compose checks.
 - Focused deterministic source/invariant checks cover source absence versus legacy presence, CMS draft and
   invalid publication status, missing/incompatible/deleting/oversized assets,
   invalid scheduled promotion, source removal before the final locked recheck,
@@ -129,7 +129,6 @@ conditional and is intentionally not marked approved.
 - The requested focused `node --test` command, expanded for the cron/API
   findings: `151` passed, `0` failed after the deferred Reminders request-order
   behavior test, notification-log identity handling and the five follow-up fixes.
-- The complete suite was intentionally not rerun in this follow-up.
 
 ## Limitations
 

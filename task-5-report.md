@@ -133,9 +133,9 @@ authenticated browser acceptance remain outside this check.
 - The report committed at baseline `1085bbe` documents `69` targeted tests and
   `297` tests for `node --test tests/unit/*.test.mjs`, with `npm run verify`
   reported as passing. This is the verifiable historical baseline record.
-- No repository evidence is available for a later full-suite execution beyond
-  that baseline, so no additional full-suite count is claimed here.
 - Current follow-up focused CMS/cron/API tests: `151` passed, `0` failed.
+- After checkpoint `8e46f34`, `npm run verify` passed, including the complete
+  unit suite: `325` passed, `0` failed, plus syntax, security and compose checks.
 - `node scripts/verify.mjs syntax`: passed.
 - `git diff --check`: passed.
 
@@ -143,8 +143,6 @@ authenticated browser acceptance remain outside this check.
 
 - No Docker containers, PostgreSQL/Firebase services or external requests were
   started, per the task constraints.
-- The complete test suite was not rerun in this follow-up, per the requested
-  focused verification workflow.
 - Real PostgreSQL concurrency remains a deployment prerequisite for proving
   lock waits and transaction timing beyond the deterministic mocks.
 
