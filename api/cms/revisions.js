@@ -6,9 +6,15 @@ class CmsRouteError extends Error {
   }
 }
 
+function sameId(left, right) {
+  return typeof left === 'string' && typeof right === 'string'
+    && left.length > 0 && right.length > 0
+    && left.toLowerCase() === right.toLowerCase();
+}
+
 function resolveDraftRevisionId(document, requestedRevisionId) {
   if (!document?.draft_revision_id
-    || (requestedRevisionId !== undefined && requestedRevisionId !== document.draft_revision_id)) {
+    || (requestedRevisionId !== undefined && !sameId(requestedRevisionId, document.draft_revision_id))) {
     throw new CmsRouteError(409, 'draft_required');
   }
   return document.draft_revision_id;
@@ -16,7 +22,8 @@ function resolveDraftRevisionId(document, requestedRevisionId) {
 
 function unscheduleRevisionState(document) {
   if (!document?.scheduled_revision_id) return null;
-  const preserveDraft = document.draft_revision_id && document.draft_revision_id !== document.scheduled_revision_id;
+  const preserveDraft = document.draft_revision_id
+    && !sameId(document.draft_revision_id, document.scheduled_revision_id);
   return {
     scheduledRevisionId: document.scheduled_revision_id,
     draftRevisionId: preserveDraft ? document.draft_revision_id : document.scheduled_revision_id,
@@ -34,6 +41,7 @@ function withdrawalState(document) {
 module.exports = {
   CmsRouteError,
   resolveDraftRevisionId,
+  sameId,
   unscheduleRevisionState,
   withdrawalState,
 };

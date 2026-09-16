@@ -21,7 +21,14 @@ const ASSET_MIMES = {
 };
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_ASSET_SIZE, files: 1 },
+  limits: {
+    fieldNameSize: 100,
+    fieldSize: 1024,
+    fields: 0,
+    fileSize: MAX_ASSET_SIZE,
+    files: 1,
+    parts: 2,
+  },
 });
 
 function detectedMime(buffer) {
@@ -79,6 +86,11 @@ function referenceIsReadable(row, user, asset) {
     && publishedIsVisible(row, user);
 }
 
+function isMalformedMultipart(error) {
+  if (error?.code === 'ERR_MULTIPART_BOUNDARY') return true;
+  return /multipart|part header|Unexpected end of form/i.test(String(error?.message || ''));
+}
+
 async function canReadAsset(db, user, asset) {
   const { rows } = await db.query(
     `SELECT d.content_type, d.published_revision_id, r.id AS revision_id, r.status,
@@ -101,13 +113,17 @@ async function canReadAsset(db, user, asset) {
 }
 
 function uploadMiddleware(req, res, next) {
+  if (!manageable(req.user)) return forbidden(req, res);
   upload.single('asset')(req, res, (error) => {
     if (!error) return handleAssetUpload(req, res, next);
-    if (!(error instanceof multer.MulterError)) return next(error);
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({ error: 'Asset too large.', requestId: req.id });
     }
-    return invalid(req, res);
+    if (error instanceof multer.MulterError
+      || error.code === 'LIMIT_UNEXPECTED_FILE' || error.code === 'LIMIT_FILE_COUNT') {
+      return invalid(req, res);
+    }
+    return isMalformedMultipart(error) ? invalid(req, res) : next(error);
   });
 }
 
@@ -205,3 +221,4 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
 
 module.exports = router;
 module.exports.detectedMime = detectedMime;
+module.exports.isMalformedMultipart = isMalformedMultipart;

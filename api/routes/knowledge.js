@@ -55,7 +55,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
   const conditions = [];
   if (category) {
     values.push(category);
-    conditions.push(`knowledge_base.category = $${values.length}`);
+    conditions.push(`btrim(knowledge_base.category) = $${values.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   try {
@@ -142,7 +142,7 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
     const result = await withAudit(pool, req, 'knowledge.update', 'knowledge', async (db) => {
       await lockCmsAssets(db);
       const existing = await db.query('SELECT * FROM knowledge_base WHERE id=$1 FOR UPDATE', [req.params.id]);
-      if (!existing.rows[0]) return { row: null, cms: null };
+      if (!existing.rows[0]) return null;
       const content = req.body.content === undefined ? existing.rows[0].content : req.body.content;
       const { rows } = await db.query(
         `UPDATE knowledge_base SET title=$2, category=$3, content=$4, updated_at=NOW()
@@ -168,7 +168,7 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
         pdf_changed: result.cms.pdfChanged,
       } : {},
     });
-    if (!result.row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
+    if (!result || !result.row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
     res.json(result.row);
   } catch (error) {
     if (error instanceof KnowledgePdfError) {

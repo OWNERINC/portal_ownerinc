@@ -31,6 +31,7 @@ const newDocumentForm = document.getElementById('new-document-form');
 const sourceField = document.getElementById('new-source-field');
 const sourceSelect = document.getElementById('new-source');
 const editorRoot = document.getElementById('editor-root');
+const inspectorRoot = document.querySelector('.cms-inspector');
 const previewRoot = document.getElementById('preview-root');
 const editorHeading = document.getElementById('editor-heading');
 const editorStatus = document.getElementById('editor-status');
@@ -57,15 +58,23 @@ let editor = null;
 let saveTimer = null;
 let saving = false;
 let saveQueued = false;
+let saveInFlight = null;
 let dirty = false;
 let editVersion = 0;
 let selectionToken = 0;
 let actionBusy = false;
 let loading = false;
+let documentsLoading = false;
 let newDocumentDirty = false;
+let creatingDocument = false;
+let assetUploading = 0;
+let assetUploadVersion = 0;
+let editorGeneration = 0;
+let creationRequestToken = 0;
 let navigationConfirmed = false;
 let historyOffset = 0;
 let historyRequestToken = 0;
+let documentsRequestToken = 0;
 const HISTORY_PAGE_SIZE = 50;
 const DOCUMENT_PAGE_SIZE = 50;
 const documentsByType = new Map();
@@ -83,7 +92,32 @@ function setSaveState(message) {
 }
 
 function mutationBusy() {
-  return saving || actionBusy || loading;
+  return saving || actionBusy || loading || documentsLoading || assetUploading > 0;
+}
+
+function editorInteractionBusy() {
+  return creatingDocument || actionBusy || loading || documentsLoading || assetUploading > 0;
+}
+
+function editorSavePending() {
+  return dirty || saveQueued || saving || saveInFlight || saveTimer !== null || assetUploading > 0;
+}
+
+function scheduleAutosave() {
+  if (!dirty || !documentView || !editor || editorInteractionBusy() || saveQueued || saving || saveInFlight || saveTimer !== null) return;
+  const timer = setTimeout(() => {
+    if (saveTimer !== timer) return;
+    saveTimer = null;
+    void saveDraft();
+  }, 900);
+  saveTimer = timer;
+}
+
+function setAssetUploading(busy, rearmAutosave = false) {
+  if (busy) assetUploadVersion += 1;
+  assetUploading = Math.max(0, assetUploading + (busy ? 1 : -1));
+  syncBusyState();
+  if (rearmAutosave && assetUploading === 0) scheduleAutosave();
 }
 
 function navigationBusy() {
@@ -113,9 +147,20 @@ window.addEventListener('beforeunload', event => {
 });
 
 function syncBusyState() {
-  newDocumentButton.disabled = !TYPES.length || navigationBusy();
-  contentTypes.querySelectorAll('button').forEach(button => { button.disabled = navigationBusy(); });
-  documentList.querySelectorAll('button').forEach(button => { button.disabled = navigationBusy(); });
+  const editorBusy = editorInteractionBusy();
+  const navigationBlocked = navigationBusy() || creatingDocument;
+  editorRoot.inert = editorBusy;
+  editorRoot.setAttribute('aria-busy', String(editorBusy));
+  blockSettings.inert = editorBusy;
+  blockSettings.setAttribute('aria-busy', String(editorBusy));
+  inspectorRoot.inert = editorBusy;
+  inspectorRoot.setAttribute('aria-busy', String(editorBusy));
+  newDocumentForm.inert = editorBusy;
+  newDocumentForm.setAttribute('aria-busy', String(editorBusy));
+  newDocumentButton.disabled = !TYPES.length || navigationBlocked;
+  contentTypes.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
+  documentList.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
+  documentPagination.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
   updateInspector();
 }
 
@@ -155,6 +200,7 @@ function renderTypeNav() {
       if (navigationBusy()) return;
       selectionToken += 1;
       clearTimeout(saveTimer);
+      saveTimer = null;
       saveQueued = false;
        dirty = false;
        newDocumentDirty = false;
@@ -195,10 +241,17 @@ function renderDocumentList() {
   renderPagination(documentPagination, documentTotal, documentOffset, DOCUMENT_PAGE_SIZE, changeDocumentPage);
 }
 
+function restoreDocumentList(type, snapshot) {
+  if (snapshot.hadDocuments) documentsByType.set(type, snapshot.documents);
+  else documentsByType.delete(type);
+  documentOffset = snapshot.offset;
+  documentTotal = snapshot.total;
+  renderDocumentList();
+}
+
 function changeDocumentPage(offset) {
   if (navigationBusy()) return;
   documentOffset = offset;
-  selectionToken += 1;
   loadDocuments();
 }
 
@@ -212,13 +265,15 @@ function updateInspector() {
   selectedTypeNode.textContent = doc ? TYPE_LABELS[doc.content_type] || doc.content_type : '—';
   categoryNode.textContent = doc?.category || '—';
   publishedNode.textContent = doc?.published_at ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(doc.published_at)) : '—';
-  const active = !!doc && !mutationBusy();
-  saveDraftButton.disabled = !active;
-  publishButton.disabled = !active;
-  unpublishButton.disabled = !active || !doc.published_revision_id;
-  scheduleButton.disabled = !active;
-  unscheduleButton.disabled = !active || !doc.scheduled_revision_id;
-  loadHistoryButton.disabled = !doc || mutationBusy();
+  const active = !!doc && !editorInteractionBusy();
+  const savePending = editorSavePending();
+  const saveInProgress = saving || saveInFlight;
+  saveDraftButton.disabled = !active || saving;
+  publishButton.disabled = !active || saveInProgress;
+  unpublishButton.disabled = !active || savePending || !doc.published_revision_id;
+  scheduleButton.disabled = !active || saveInProgress;
+  unscheduleButton.disabled = !active || savePending || !doc.scheduled_revision_id;
+  loadHistoryButton.disabled = !doc || mutationBusy() || creatingDocument;
 }
 
 async function loadRevisionHistory(documentId = selectedDocument) {
@@ -259,53 +314,82 @@ async function loadRevisionHistory(documentId = selectedDocument) {
 }
 
 function markDirty(nextBlocks) {
+  if (editorInteractionBusy()) return;
   editVersion += 1;
   dirty = true;
   setSaveState(serializeBlocks(nextBlocks) ? 'Alterações pendentes' : 'Corrija os campos do bloco');
   syncBusyState();
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => saveDraft(), 900);
+  saveTimer = null;
+  scheduleAutosave();
   renderBlocks(previewRoot, nextBlocks, { fallbackText: 'A prévia será exibida após corrigir os blocos.' });
 }
 
-function renderEditor(blocks = []) {
+function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersion) {
+  if (expectedAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return false;
   if (editor) editor = null;
-  editor = createBlockEditor({
+  const generation = ++editorGeneration;
+  const renderToken = selectionToken;
+  const renderDocument = selectedDocument;
+  let editorInstance;
+  const currentEditor = () => generation === editorGeneration
+    && renderToken === selectionToken && renderDocument === selectedDocument;
+  let blockSelectionToken = 0;
+  editorInstance = createBlockEditor({
     root: editorRoot,
     initialBlocks: blocks,
     onSelect(index, block) {
+      const selection = ++blockSelectionToken;
       if (!block) {
         showState(blockSettings, 'Selecione um bloco para editar suas configurações.');
         return;
       }
+      const canApplyUpload = () => currentEditor() && blockSelectionToken === selection;
       clear(blockSettings).append(createBlockSettings(block, () => {
-        markDirty(editor.getBlocks());
-      }));
+        if (!canApplyUpload()) return;
+        markDirty(editorInstance.getBlocks());
+      }, setAssetUploading, canApplyUpload));
       blockSettings.dataset.selectedIndex = String(index);
     },
     onChange(nextBlocks) {
+      if (!currentEditor()) return;
       markDirty(nextBlocks);
     },
   });
+  editor = editorInstance;
   renderBlocks(previewRoot, blocks, { fallbackText: 'Adicione blocos para visualizar a prévia.' });
+  return true;
 }
 
 async function loadDocuments() {
-  if (!selectedType) return;
+  if (!selectedType) return false;
   const type = selectedType;
-  const requestToken = selectionToken;
+  const requestToken = ++documentsRequestToken;
+  const selectionRequestToken = selectionToken;
   const requestOffset = documentOffset;
+  documentsLoading = true;
+  syncBusyState();
   showState(documentList, 'Carregando documentos…');
+  clear(documentPagination);
   try {
     const result = await fetchAPIPage(`/api/cms/documents?type=${encodeURIComponent(type)}&limit=${DOCUMENT_PAGE_SIZE}&offset=${requestOffset}`);
-    if (requestToken !== selectionToken || type !== selectedType || requestOffset !== documentOffset) return;
+    if (requestToken !== documentsRequestToken || selectionRequestToken !== selectionToken
+      || type !== selectedType || requestOffset !== documentOffset) return false;
     documentsByType.set(type, result.data || []);
     documentTotal = result.total ?? result.data?.length ?? 0;
     renderDocumentList();
     setError('');
+    return true;
   } catch {
-    if (requestToken !== selectionToken || type !== selectedType) return;
-    showState(documentList, 'Não foi possível carregar os documentos.', loadDocuments);
+    if (requestToken === documentsRequestToken && selectionRequestToken === selectionToken && type === selectedType) {
+      showState(documentList, 'Não foi possível carregar os documentos.', loadDocuments);
+    }
+    return false;
+  } finally {
+    if (requestToken === documentsRequestToken) {
+      documentsLoading = false;
+      syncBusyState();
+    }
   }
 }
 
@@ -343,7 +427,12 @@ async function loadSources() {
 }
 
 async function loadDocument(id) {
-  if (navigationBusy()) return;
+  if (navigationBusy()) return false;
+  if (!newDocumentForm.hidden && !newDocumentDirty) {
+    newDocumentForm.reset();
+    newDocumentForm.hidden = true;
+  }
+  const requestAssetUploadVersion = assetUploadVersion;
   const requestToken = ++selectionToken;
   selectedDocument = id;
   documentView = null;
@@ -353,7 +442,8 @@ async function loadDocument(id) {
   setSaveState('Carregando…');
   try {
     const view = await fetchAPI(`/api/cms/documents/${encodeURIComponent(id)}`);
-    if (requestToken !== selectionToken || selectedDocument !== id) return;
+    if (requestToken !== selectionToken || selectedDocument !== id
+      || requestAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return false;
     dirty = false;
     newDocumentDirty = false;
     editVersion = 0;
@@ -362,16 +452,22 @@ async function loadDocument(id) {
     syncListedDocument(view.document);
     historyOffset = 0;
     const blocks = view.draft?.blocks || view.schedule?.revision?.blocks || view.published?.blocks || [];
-    renderEditor(blocks);
+    if (!renderEditor(blocks, requestAssetUploadVersion)) return false;
     updateInspector();
     renderDocumentList();
     setSaveState('Salvo');
     loadRevisionHistory(id);
     setError('');
+    return true;
   } catch {
-    if (requestToken !== selectionToken || selectedDocument !== id) return;
+    if (requestToken !== selectionToken || selectedDocument !== id
+      || requestAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return false;
+    editor = null;
+    showState(editorRoot, 'Não foi possível abrir este documento.', () => loadDocument(id));
+    showState(blockSettings, 'Selecione um documento para editar suas configurações.');
     setError('Não foi possível abrir este documento. Tente novamente.');
     setSaveState('Erro ao carregar');
+    return false;
   } finally {
     if (requestToken === selectionToken) {
       loading = false;
@@ -381,10 +477,12 @@ async function loadDocument(id) {
 }
 
 async function saveDraft() {
-  if (!documentView || !editor) return null;
+  if (creatingDocument || assetUploading > 0 || !documentView || !editor) return null;
+  clearTimeout(saveTimer);
+  saveTimer = null;
   if (saving) {
     saveQueued = true;
-    return null;
+    return saveInFlight || null;
   }
   const requestToken = selectionToken;
   const requestDocument = selectedDocument;
@@ -394,6 +492,8 @@ async function saveDraft() {
     setSaveState('Corrija os campos do bloco');
     return null;
   }
+  let resolveSave;
+  saveInFlight = new Promise(resolve => { resolveSave = resolve; });
   saving = true;
   syncBusyState();
   setSaveState('Salvando rascunho…');
@@ -430,20 +530,36 @@ async function saveDraft() {
     if (saveQueued && requestToken === selectionToken && requestDocument === selectedDocument) {
       saveQueued = false;
       const queuedResult = await saveDraft();
-      if (!queuedResult) savedResult = null;
+      savedResult = queuedResult;
     }
+    resolveSave(savedResult);
+    saveInFlight = null;
+    syncBusyState();
   }
   return savedResult;
 }
 
+async function saveBeforeAction() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  try {
+    return await saveDraft();
+  } finally {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}
+
 async function publishDocument() {
-  if (!documentView || mutationBusy()) return;
+  if (!documentView || editorInteractionBusy() || saving || saveInFlight) return;
   const requestToken = selectionToken;
   const requestDocument = selectedDocument;
+  clearTimeout(saveTimer);
+  saveTimer = null;
   actionBusy = true;
   syncBusyState();
-  const saved = await saveDraft();
   try {
+    const saved = await saveBeforeAction();
     if (!saved || requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/publish`, {
       method: 'POST', body: JSON.stringify({ revision_id: saved.revision.id }),
@@ -467,7 +583,9 @@ async function publishDocument() {
 }
 
 async function unpublishDocument() {
-  if (!documentView?.document?.published_revision_id || mutationBusy()) return;
+  if (!documentView?.document?.published_revision_id || mutationBusy() || creatingDocument || editorSavePending()) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
   const requestToken = selectionToken;
   const requestDocument = selectedDocument;
   actionBusy = true;
@@ -493,7 +611,7 @@ async function unpublishDocument() {
 
 async function scheduleDocument(event) {
   event.preventDefault();
-  if (!documentView || mutationBusy()) return;
+  if (!documentView || editorInteractionBusy() || saving || saveInFlight) return;
   const value = document.getElementById('scheduled-at').value;
   if (!value) return;
   const scheduledAt = new Date(value);
@@ -503,10 +621,12 @@ async function scheduleDocument(event) {
   }
   const requestToken = selectionToken;
   const requestDocument = selectedDocument;
+  clearTimeout(saveTimer);
+  saveTimer = null;
   actionBusy = true;
   syncBusyState();
-  const saved = await saveDraft();
   try {
+    const saved = await saveBeforeAction();
     if (!saved || requestToken !== selectionToken || requestDocument !== selectedDocument) return;
     const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/schedule`, {
       method: 'POST', body: JSON.stringify({ revision_id: saved.revision.id, scheduled_at: scheduledAt.toISOString() }),
@@ -529,18 +649,22 @@ async function scheduleDocument(event) {
 }
 
 async function unscheduleDocument() {
-  if (!documentView?.document?.scheduled_revision_id || mutationBusy()) return;
+  if (!documentView?.document?.scheduled_revision_id || mutationBusy() || creatingDocument || editorSavePending()) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
   const requestToken = selectionToken;
   const requestDocument = selectedDocument;
+  const requestAssetUploadVersion = assetUploadVersion;
   actionBusy = true;
   syncBusyState();
   try {
     const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/schedule`, { method: 'DELETE' });
-    if (requestToken !== selectionToken || requestDocument !== selectedDocument) return;
+    if (requestToken !== selectionToken || requestDocument !== selectedDocument
+      || requestAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return;
     documentView.document = result.document;
     documentView.draft = result.draft || null;
     documentView.schedule = null;
-    renderEditor(documentView.draft?.blocks || []);
+    if (!renderEditor(documentView.draft?.blocks || [], requestAssetUploadVersion)) return;
     syncListedDocument(result.document);
     updateInspector();
     renderDocumentList();
@@ -555,7 +679,7 @@ async function unscheduleDocument() {
 }
 
 newDocumentButton.addEventListener('click', async () => {
-  if (navigationBusy()) return;
+  if (navigationBusy() || editorInteractionBusy()) return;
   newDocumentForm.hidden = false;
   newDocumentDirty = false;
   await loadSources();
@@ -563,32 +687,73 @@ newDocumentButton.addEventListener('click', async () => {
 });
 loadHistoryButton.addEventListener('click', () => loadRevisionHistory());
 newDocumentForm.addEventListener('input', () => {
+  if (editorInteractionBusy()) return;
   newDocumentDirty = true;
   syncBusyState();
 });
 document.getElementById('cancel-new-document').addEventListener('click', () => {
+  if (editorInteractionBusy()) return;
   newDocumentDirty = false;
   newDocumentForm.hidden = true;
   syncBusyState();
 });
 newDocumentForm.addEventListener('submit', async event => {
   event.preventDefault();
-  if (mutationBusy()) return;
+  if (mutationBusy() || editorInteractionBusy()) return;
+  if (editorSavePending()) {
+    setError('Salve as alterações do editor antes de criar um documento.');
+    return;
+  }
   if (!newDocumentForm.reportValidity()) return;
-  const body = { type: selectedType, title: document.getElementById('new-title').value.trim(), category: document.getElementById('new-category').value.trim() };
-  if (SOURCE_ENDPOINTS[selectedType]) body.source_id = sourceSelect.value;
+  const type = selectedType;
+  const listSnapshot = {
+    hadDocuments: documentsByType.has(type),
+    documents: documentsByType.get(type),
+    offset: documentOffset,
+    total: documentTotal,
+  };
+  const requestToken = ++creationRequestToken;
+  const body = { type, title: document.getElementById('new-title').value.trim(), category: document.getElementById('new-category').value.trim() };
+  if (SOURCE_ENDPOINTS[type]) body.source_id = sourceSelect.value;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  creatingDocument = true;
+  actionBusy = true;
+  syncBusyState();
   try {
     const result = await fetchAPI('/api/cms/documents', { method: 'POST', body: JSON.stringify(body) });
-     newDocumentForm.reset();
-     newDocumentDirty = false;
-     newDocumentForm.hidden = true;
-     documentOffset = 0;
-     syncBusyState();
-    await loadDocuments();
-    await loadDocument(result.document.id);
+    if (requestToken !== creationRequestToken || type !== selectedType) return;
+    documentOffset = 0;
+    documentTotal = 0;
+    documentsByType.set(type, []);
+    clear(documentPagination);
+    newDocumentForm.reset();
+    newDocumentDirty = false;
+    newDocumentForm.hidden = true;
+    const refreshed = await loadDocuments();
+    if (requestToken !== creationRequestToken || type !== selectedType) return;
+    if (!refreshed) {
+      restoreDocumentList(type, listSnapshot);
+      setError('Documento criado, mas não foi possível atualizar a lista. O documento foi criado; tente recarregar.');
+      return;
+    }
+    actionBusy = false;
+    syncBusyState();
+    const loaded = await loadDocument(result.document.id);
+    if (!loaded) {
+      setError('Documento criado, mas não foi possível abrir o documento. Use o botão "Tentar novamente" ou selecione-o na lista.');
+      return;
+    }
     showToast('Documento criado como rascunho.');
   } catch {
-    setError('Não foi possível criar o documento. Verifique o registro vinculado.');
+    if (requestToken === creationRequestToken && type === selectedType) {
+      restoreDocumentList(type, listSnapshot);
+      setError('Não foi possível criar o documento. Verifique o registro vinculado.');
+    }
+  } finally {
+    creatingDocument = false;
+    actionBusy = false;
+    syncBusyState();
   }
 });
 saveDraftButton.addEventListener('click', () => saveDraft());

@@ -11,22 +11,40 @@ const { reminderForDelivery } = require('../../cron/checkReminders');
 
 const assetId = '550e8400-e29b-41d4-a716-446655440000';
 
-function readerPool(rows) {
+function readerPool(rows, assetFixtures = null) {
   const calls = [];
   const client = {
     async query(sql, params = []) {
       calls.push({ sql, params });
-      if (/SELECT d\.source_id, r\.blocks/.test(sql)) return { rows };
+      if (/FOR UPDATE OF s/.test(sql)) {
+        const requested = new Set((params[0] || []).map(String));
+        return { rows: rows
+          .filter(row => requested.has(String(row.source_id)))
+          .map(row => ({
+            source_id: row.source_id,
+            document_id: row.document_id || null,
+            published_revision_id: row.published_revision_id || null,
+          })) };
+      }
+      if (/FROM (knowledge_base|academy|benefits|reminders) s/.test(sql)) {
+        const requested = new Set((params[1] || []).map(String));
+        return { rows: rows.filter(row => requested.has(String(row.source_id))) };
+      }
       if (/FROM cms_assets/.test(sql)) {
         const blocks = rows.flatMap(row => row.blocks || []);
-        return {
-          rows: (params[0] || []).map(id => ({
+        const candidates = assetFixtures === null
+          ? (params[0] || []).map(id => ({
             id,
             mime_type: blocks.find(block => block.asset_id === id)?.type === 'pdf' ? 'application/pdf' : 'image/png',
             storage_key: id,
             byte_size: 1,
             deleting_at: null,
-          })),
+          }))
+          : assetFixtures;
+        return {
+          rows: candidates.filter(asset => (params[0] || []).map(String).includes(String(asset.id))
+            && asset.storage_key !== null && asset.deleting_at == null
+            && asset.byte_size >= 1 && asset.byte_size <= 52428800),
         };
       }
       return { rows: [] };
@@ -43,6 +61,9 @@ test('stale publish and schedule selections resolve to 409 before changing state
   const document = { draft_revision_id: 'draft-current' };
   assert.equal(cms.resolveDraftRevisionId(document), 'draft-current');
   assert.equal(cms.resolveDraftRevisionId(document, 'draft-current'), 'draft-current');
+  assert.equal(cms.resolveDraftRevisionId({
+    draft_revision_id: '550e8400-e29b-41d4-a716-446655440000',
+  }, '550E8400-E29B-41D4-A716-446655440000'), '550e8400-e29b-41d4-a716-446655440000');
   assert.throws(() => cms.resolveDraftRevisionId(document, 'draft-old'), error => error.status === 409);
   assert.throws(() => cms.resolveDraftRevisionId({ draft_revision_id: null }), error => error.status === 409);
 });
@@ -56,6 +77,10 @@ test('unschedule archives the scheduled revision when a newer draft exists', () 
   assert.deepEqual(cms.unscheduleRevisionState({ scheduled_revision_id: 'scheduled-1', draft_revision_id: null }), {
     scheduledRevisionId: 'scheduled-1', draftRevisionId: 'scheduled-1', preserveDraft: false,
   });
+  assert.equal(cms.unscheduleRevisionState({
+    scheduled_revision_id: '550e8400-e29b-41d4-a716-446655440000',
+    draft_revision_id: '550E8400-E29B-41D4-A716-446655440000',
+  }).preserveDraft, false);
 });
 
 test('unpublish withdraws both published and scheduled revisions without selecting a draft', () => {
@@ -132,6 +157,16 @@ test('scheduled promotion and retention share the CMS asset lock before row work
   ]);
   assert.ok(cms.indexOf('lockCmsMutation(db)') < cms.indexOf('findDocument(db, req.user, req.params.id, true)'));
   assert.ok(reader.indexOf('await lockCmsAssets(db);') < reader.indexOf('SELECT d.id, d.published_revision_id'));
+  const publicReadStart = reader.indexOf('async function getPublishedBlocksBatch');
+  const sourceTableStart = reader.indexOf('  const sourceTable = SOURCE_TABLES[contentType];', publicReadStart);
+  const finalRecheckStart = reader.indexOf('  const sourceTable = SOURCE_TABLES[contentType];', sourceTableStart + 1);
+  const publicRead = reader.slice(publicReadStart, finalRecheckStart);
+  const finalRecheck = reader.slice(finalRecheckStart, reader.indexOf('async function promoteDueScheduledForPool'));
+  assert.doesNotMatch(publicRead, /lockCmsAssets|pg_advisory_xact_lock/);
+  assert.match(publicRead, /await promoteDueScheduledForPool\(pool/);
+  assert.match(publicRead, /validatePublishedBlocksBatch/);
+  assert.match(finalRecheck, /await lockCmsAssets/);
+  assert.match(finalRecheck, /FOR UPDATE OF s/);
   assert.ok(retention.indexOf('pg_advisory_lock') < retention.indexOf('const reserved = await reserveCmsAssets'));
 });
 

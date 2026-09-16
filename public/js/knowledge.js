@@ -144,9 +144,32 @@ function renderCategories() {
 
 async function openArticle(id, push = true) {
   const requestToken = ++articleRequest;
-  let article = articles.find(item => String(item.id) === String(id));
-  if (!article) {
-    try { article = await fetchAPI(`/api/knowledge/${encodeURIComponent(id)}`); } catch { article = null; }
+  const articleContent = document.getElementById('article-content');
+  const articleTitle = document.getElementById('article-title');
+  if (push) updateUrl({ article: id }, true);
+  listNode.hidden = true;
+  categoriesNode.hidden = true;
+  articleView.hidden = false;
+  articleTitle.textContent = 'Carregando artigo…';
+  document.getElementById('article-category').textContent = '';
+  clear(document.getElementById('article-admin-bar')).hidden = true;
+  showState(articleContent, 'Carregando artigo…');
+  articleTitle.focus();
+
+  let article;
+  try {
+    article = await fetchAPI(`/api/knowledge/${encodeURIComponent(id)}`);
+  } catch (error) {
+    if (requestToken !== articleRequest) return;
+    if (error?.status === 404) {
+      updateUrl({ article: '' });
+      showToast('O artigo solicitado não foi encontrado.');
+      return render();
+    }
+    articleTitle.textContent = 'Não foi possível carregar o artigo.';
+    showState(articleContent, 'Não foi possível carregar o artigo. Verifique sua conexão.', () => openArticle(id, false));
+    articleTitle.focus();
+    return;
   }
   if (requestToken !== articleRequest) return;
   if (!article) {
@@ -154,13 +177,9 @@ async function openArticle(id, push = true) {
     showToast('O artigo solicitado não foi encontrado.');
     return render();
   }
-  if (push) updateUrl({ article: article.id }, true);
-  listNode.hidden = true;
-  categoriesNode.hidden = true;
-  articleView.hidden = false;
-  document.getElementById('article-title').textContent = article.title;
+  if (!push) updateUrl({ article: article.id });
+  articleTitle.textContent = article.title;
   document.getElementById('article-category').textContent = article.category || 'Geral';
-  const articleContent = document.getElementById('article-content');
   const blocks = Array.isArray(article.content_blocks) ? article.content_blocks : [];
   const rendered = renderBlocks(articleContent, blocks, { fallbackText: article.cms_managed ? '' : article.content || '' });
   if (!rendered && !article.cms_managed) {
@@ -174,7 +193,7 @@ async function openArticle(id, push = true) {
       element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir artigo: ${article.title}`, on: { click: () => deleteArticle(article.id) } }),
     );
   }
-  document.getElementById('article-title').focus();
+  articleTitle.focus();
 }
 
 function render() {
@@ -232,6 +251,10 @@ async function loadArticles() {
     articles = result.data || [];
     total = result.total ?? articles.length;
     categories = categoryList || [];
+    if (!articles.length && offset > 0) {
+      updateUrl({ offset: '' });
+      return loadArticles();
+    }
     render();
   } catch {
     if (requestToken === articlesRequest) showState(listNode, 'Não foi possível carregar os artigos. Verifique sua conexão.', loadArticles);

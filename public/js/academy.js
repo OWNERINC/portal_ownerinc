@@ -11,6 +11,7 @@ const filters = document.getElementById('academy-filters');
 const pagination = document.getElementById('academy-pagination');
 const PAGE_SIZE = 20;
 let categories = [];
+let coursesRequest = 0;
 
 function updateUrl(category = '', offset = 0) {
   const url = new URL(location.href);
@@ -33,6 +34,7 @@ function renderFilters() {
 }
 
 async function loadCourses() {
+  const requestToken = ++coursesRequest;
   showState(container, 'Carregando cursos…');
   try {
     const query = new URLSearchParams(location.search);
@@ -43,11 +45,17 @@ async function loadCourses() {
       fetchAPIPage(`/api/academy?${request}`),
       fetchAPI('/api/academy/categories'),
     ]);
+    if (requestToken !== coursesRequest) return;
     const courses = (result.data || []).filter(course => course.active !== false);
     categories = categoryList || [];
     renderFilters();
+    const total = Number(result.total ?? courses.length);
+    if (!courses.length && offset > 0) {
+      updateUrl(query.get('category') || '', 0);
+      return loadCourses();
+    }
     if (!courses.length) {
-      renderPagination(pagination, 0, offset, PAGE_SIZE, () => {});
+      clear(pagination);
       return showState(container, 'Nenhum curso disponível no momento.');
     }
     const categories = Map.groupBy ? Map.groupBy(courses, course => course.category || 'Geral') : courses.reduce((map, course) => {
@@ -76,12 +84,14 @@ async function loadCourses() {
       section.append(grid);
       container.append(section);
     });
-    renderPagination(pagination, Number(result.total ?? courses.length), offset, PAGE_SIZE, nextOffset => {
+    renderPagination(pagination, total, offset, PAGE_SIZE, nextOffset => {
       updateUrl(query.get('category') || '', nextOffset);
       loadCourses();
     });
   } catch {
-    showState(container, 'Não foi possível carregar os cursos. Verifique sua conexão.', loadCourses);
+    if (requestToken === coursesRequest) {
+      showState(container, 'Não foi possível carregar os cursos. Verifique sua conexão.', loadCourses);
+    }
   }
 }
 

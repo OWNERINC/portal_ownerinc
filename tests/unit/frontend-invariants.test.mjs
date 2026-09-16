@@ -236,11 +236,43 @@ test('public content pages expose server pagination and category filters', async
   assert.match(knowledge, /renderPagination\(document\.getElementById\('articles-pagination'/);
   assert.match(academy, /fetchAPIPage\(`\/api\/academy\?\$\{request\}`\)/);
   assert.match(academy, /academy-filters/);
-  assert.match(academy, /if \(!courses\.length\) \{[\s\S]*renderPagination\(pagination, 0, offset, PAGE_SIZE/);
+  assert.match(academy, /let coursesRequest = 0/);
+  assert.match(academy, /if \(requestToken !== coursesRequest\) return/);
+  assert.match(academy, /if \(!courses\.length && offset > 0\)/);
+  assert.match(academy, /updateUrl\(query\.get\('category'\) \|\| '', 0\)/);
+  assert.match(academy, /return loadCourses\(\)/);
+  assert.match(academy, /if \(!courses\.length\) \{[\s\S]*clear\(pagination\)/);
   assert.match(benefits, /fetchAPIPage\(`\/api\/benefits\?\$\{request\}`\)/);
   assert.match(benefits, /benefits-filters/);
-  assert.match(benefits, /if \(!benefits\.length\) \{[\s\S]*renderPagination\(pagination, 0, offset, PAGE_SIZE/);
+  assert.match(benefits, /let benefitsRequest = 0/);
+  assert.match(benefits, /if \(requestToken !== benefitsRequest\) return/);
+  assert.match(benefits, /if \(!benefits\.length && offset > 0\)/);
+  assert.match(benefits, /updateUrl\(query\.get\('category'\) \|\| '', 0\)/);
+  assert.match(benefits, /return loadBenefits\(\)/);
+  assert.match(benefits, /if \(!benefits\.length\) \{[\s\S]*clear\(pagination\)/);
   assert.match(pagination, /function renderPagination/);
+});
+
+test('Knowledge detail reads the authoritative article and stale pages recover', async () => {
+  const [knowledge, reminders] = await Promise.all([
+    readFile('public/js/knowledge.js', 'utf8'),
+    readFile('public/js/reminders.js', 'utf8'),
+  ]);
+  assert.match(knowledge, /fetchAPI\(`\/api\/knowledge\/\$\{encodeURIComponent\(id\)\}`\)/);
+  assert.doesNotMatch(knowledge, /articles\.find/);
+  assert.match(knowledge, /showState\(articleContent, 'Carregando artigo…'/);
+  assert.match(knowledge, /error\?\.status === 404/);
+  assert.match(knowledge, /articleTitle\.focus\(\)/);
+  assert.match(knowledge, /if \(!articles\.length && offset > 0\)/);
+  assert.match(knowledge, /return loadArticles\(\)/);
+  assert.match(reminders, /const PAGE_SIZE = 50/);
+  assert.match(reminders, /let remindersRequest = 0/);
+  assert.match(reminders, /const requestToken = \+\+remindersRequest/);
+  assert.match(reminders, /const requestPage = page/);
+  assert.match(reminders, /if \(!loaded\.length && requestPage > 0\)/);
+  assert.match(reminders, /const lastPage = Math\.max\(0, Math\.ceil\(loadedTotal \/ PAGE_SIZE\) - 1\)/);
+  assert.match(reminders, /if \(requestToken !== remindersRequest\) return/);
+  assert.match(reminders, /return loadReminders\(\)/);
 });
 
 test('V1 dashboard keeps scoped data while using the editorial home composition', async () => {

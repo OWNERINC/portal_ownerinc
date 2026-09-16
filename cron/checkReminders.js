@@ -1,5 +1,6 @@
 const pool = require('./db');
 const { blocksToText, promoteDueScheduled } = require('../api/cms/reader');
+const { lockCmsAssets } = require('../api/cms/locks');
 const { sendEmail } = require('./sendEmail');
 const { dueDateKeys, reminderMatchesDate, resolveTargets } = require('./scheduling');
 
@@ -30,79 +31,146 @@ function isRetryableUnsent(error) {
 }
 
 async function claim(db, reminderId, userUid, scheduledDate, channel) {
-  const { rowCount } = await db.query(
-    `INSERT INTO notifications_log
-       (reminder_id, user_uid, scheduled_date, channel, status)
-     VALUES ($1, $2, $3, $4, 'pending')
-     ON CONFLICT (reminder_id, user_uid, scheduled_date, channel) DO UPDATE
-       SET claimed_at = NOW(), attempt_count = LEAST(notifications_log.attempt_count + 1, $5),
-           finished_at = NULL, last_error = NULL
-       WHERE notifications_log.status = 'pending'
-      `,
-    [reminderId, userUid, scheduledDate, channel, MAX_ATTEMPTS]
-  );
-  return rowCount === 1;
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO notifications_log
+         (reminder_id, user_uid, scheduled_date, channel, status)
+       VALUES ($1, $2, $3, $4, 'pending')
+       ON CONFLICT (reminder_id, user_uid, scheduled_date, channel) DO UPDATE
+         SET claimed_at = NOW(), attempt_count = LEAST(notifications_log.attempt_count + 1, $5),
+             finished_at = NULL, last_error = NULL
+         WHERE notifications_log.status = 'pending'
+       RETURNING id`,
+      [reminderId, userUid, scheduledDate, channel, MAX_ATTEMPTS]
+    );
+    return rows[0]?.id ?? null;
+  } catch (error) {
+    if (error?.code === '23503') return null;
+    throw error;
+  }
 }
 
-async function markSending(db, reminderId, userUid, scheduledDate, channel) {
+async function markSending(db, logId) {
   await db.query(
     `UPDATE notifications_log SET status = 'sending'
-     WHERE reminder_id = $1 AND user_uid = $2 AND scheduled_date = $3 AND channel = $4 AND status = 'pending'`,
-    [reminderId, userUid, scheduledDate, channel]
+     WHERE id = $1 AND status = 'pending'`,
+    [logId]
   );
 }
 
-async function finish(db, reminderId, userUid, scheduledDate, channel, status, error = null) {
+async function finish(db, logId, status, error = null) {
   await db.query(
     `UPDATE notifications_log
-     SET status = $5, sent_at = CASE WHEN $5 = 'sent' THEN NOW() ELSE NULL END,
-         finished_at = NOW(), last_error = $6
-     WHERE reminder_id = $1 AND user_uid = $2 AND scheduled_date = $3 AND channel = $4`,
-    [reminderId, userUid, scheduledDate, channel, status, error]
+     SET status = $2, sent_at = CASE WHEN $2 = 'sent' THEN NOW() ELSE NULL END,
+         finished_at = NOW(), last_error = $3
+     WHERE id = $1`,
+    [logId, status, error]
   );
 }
 
-async function deliverEmail(db, reminder, user, scheduledDate) {
+async function withTransaction(db, operation) {
+  await db.query('BEGIN');
+  try {
+    const result = await operation(db);
+    await db.query('COMMIT');
+    return result;
+  } catch (error) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw error;
+  }
+}
+
+async function currentReminderForDelivery(db, reminderId, user, scheduledDate, channel) {
+  await lockCmsAssets(db);
+  const { rows } = await db.query(
+    `SELECT reminder.id, reminder.title, reminder.description, reminder.active,
+            reminder.trigger_day, reminder.target_users, reminder.channel,
+            document.id AS cms_document_id, document.published_revision_id
+       FROM reminders reminder
+       LEFT JOIN cms_documents document
+         ON document.content_type = 'reminder' AND document.source_id = reminder.id
+      WHERE reminder.id = $1 AND reminder.active = TRUE
+      FOR UPDATE OF reminder`,
+    [reminderId],
+  );
+  const reminder = rows[0];
+  if (!reminder || reminder.active !== true
+    || !reminderMatchesDate(reminder.trigger_day, scheduledDate)
+    || !channelsFor(reminder.channel).includes(channel)
+    || !resolveTargets(reminder.target_users, [user]).some(target => target.uid === user.uid)) {
+    return null;
+  }
+  if (!reminder.cms_document_id) return reminder;
+
+  const published = await db.query(
+    `SELECT document.id AS cms_document_id, revision.blocks AS cms_blocks
+       FROM cms_documents document
+       JOIN cms_revisions revision
+         ON revision.id = document.published_revision_id AND revision.status = 'published'
+      WHERE document.id = $1 AND document.content_type = 'reminder'
+      FOR UPDATE OF document, revision`,
+    [reminder.cms_document_id],
+  );
+  return published.rows[0] ? { ...reminder, ...published.rows[0] } : null;
+}
+
+async function deliverEmail(db, reminder, user, scheduledDate, logId) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    await markSending(db, reminder.id, user.uid, scheduledDate, 'email');
-    try {
-      await sendEmail({
-        to: user.email,
-        subject: `Lembrete: ${reminder.title}`,
-        text: `Ola, ${user.name || 'colaborador(a)'}!\n\n${reminder.description || reminder.title}\n\nPortal Ownerinc`
-      });
-      await finish(db, reminder.id, user.uid, scheduledDate, 'email', 'sent');
-      return 'sent';
-    } catch (error) {
-      if (!isRetryableUnsent(error) || attempt === MAX_ATTEMPTS) {
-        await finish(db, reminder.id, user.uid, scheduledDate, 'email', 'failed', errorMessage(error));
-        return 'failed';
-      }
-      await db.query(
-        `UPDATE notifications_log SET status = 'pending', attempt_count = $5, last_error = $6
-         WHERE reminder_id = $1 AND user_uid = $2 AND scheduled_date = $3 AND channel = $4`,
-        [reminder.id, user.uid, scheduledDate, 'email', attempt + 1, errorMessage(error)]
+    const result = await withTransaction(db, async (transaction) => {
+      const currentReminder = await currentReminderForDelivery(
+        transaction, reminder.id, user, scheduledDate, 'email',
       );
-      await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** (attempt - 1))));
-    }
+      const current = currentReminder ? reminderForDelivery(currentReminder) : null;
+      if (!current) {
+        await finish(transaction, logId, 'skipped',
+          'Reminder is no longer active or published');
+        return 'skipped';
+      }
+
+      await markSending(transaction, logId);
+      try {
+        // ponytail: hold the shared lock through delivery for send/unpublish ordering; use an outbox if throughput requires shorter transactions.
+        await sendEmail({
+          to: user.email,
+          subject: `Lembrete: ${current.title}`,
+          text: `Ola, ${user.name || 'colaborador(a)'}!\n\n${current.description || current.title}\n\nPortal Ownerinc`
+        });
+        await finish(transaction, logId, 'sent');
+        return 'sent';
+      } catch (error) {
+        if (!isRetryableUnsent(error) || attempt === MAX_ATTEMPTS) {
+          await finish(transaction, logId, 'failed', errorMessage(error));
+          return 'failed';
+        }
+        await transaction.query(
+          `UPDATE notifications_log SET status = 'pending', attempt_count = $2, last_error = $3
+           WHERE id = $1`,
+          [logId, attempt + 1, errorMessage(error)]
+        );
+        return null;
+      }
+    });
+    if (result) return result;
+    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** (attempt - 1))));
   }
 }
 
 async function processOccurrence(db, reminder, user, scheduledDate, channel) {
-  if (!await claim(db, reminder.id, user.uid, scheduledDate, channel)) return null;
+  const logId = await claim(db, reminder.id, user.uid, scheduledDate, channel);
+  if (logId === null) return null;
 
   try {
     if (channel === 'whatsapp') {
-      await finish(db, reminder.id, user.uid, scheduledDate, channel, 'skipped', 'WhatsApp channel is disabled');
+      await finish(db, logId, 'skipped', 'WhatsApp channel is disabled');
       return 'skipped';
     }
     if (!user.email) {
-      await finish(db, reminder.id, user.uid, scheduledDate, channel, 'skipped', 'Recipient has no email');
+      await finish(db, logId, 'skipped', 'Recipient has no email');
       return 'skipped';
     }
-    return await deliverEmail(db, reminder, user, scheduledDate);
+    return await deliverEmail(db, reminder, user, scheduledDate, logId);
   } catch (error) {
-    await finish(db, reminder.id, user.uid, scheduledDate, channel, 'failed', errorMessage(error)).catch(() => {});
+    await finish(db, logId, 'failed', errorMessage(error)).catch(() => {});
     console.error(`[checkReminders] Falha isolada para ${user.uid}/${channel}:`, errorMessage(error));
     return 'failed';
   }
@@ -215,5 +283,6 @@ async function checkReminders(now = new Date()) {
 }
 
 module.exports = {
-  checkReminders, channelsFor, isRetryableUnsent, promoteScheduledRevisions, reminderForDelivery,
+  checkReminders, channelsFor, currentReminderForDelivery, deliverEmail, isRetryableUnsent,
+  processOccurrence, promoteScheduledRevisions, reminderForDelivery,
 };

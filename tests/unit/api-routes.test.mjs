@@ -17,6 +17,30 @@ const pool = {
       user_uid: params[0], employee_id: params[1], external_id: params[2], employer_scope: params[3],
       status: params[4], matched_by: params[5],
     }] };
+    if (/FOR UPDATE OF s/.test(sql)) {
+      const sourceIds = params[0] || [];
+      return { rows: sourceIds.map(sourceId => ({
+        source_id: sourceId,
+        source_active: Object.values(contentRows).flat().find(row => row.id === sourceId)?.active !== false,
+        document_id: null,
+      })) };
+    }
+    if (/FROM (knowledge_base|academy|benefits|reminders) s/.test(sql)) {
+      const contentKeys = { academy: 'academy', benefit: 'benefits', knowledge: 'knowledge', reminder: 'reminders' };
+      const contentKey = contentKeys[params[0]];
+      const sourceIds = params[1] || [];
+      return {
+        rows: (contentKey ? contentRows[contentKey] : []).filter(row => sourceIds.includes(row.id)).map(row => {
+          const document = cmsRows.find(item => item.content_type === params[0] && item.source_id === row.id);
+          return {
+            source_id: row.id,
+            source_active: row.active !== false,
+            document_id: document ? document.document_id || 'cms-document' : null,
+            blocks: document?.published ? document.blocks : null,
+          };
+        }),
+      };
+    }
     if (/SELECT d\.source_id, r\.blocks/.test(sql)) {
       const [contentType, sourceIds] = params;
       return { rows: cmsRows
@@ -190,6 +214,26 @@ test('public CMS lists, categories, counts, and details exclude unpublished docu
   assert.equal(reminders.status, 200);
   assert.deepEqual(reminders.body, []);
   assert.equal(reminders.headers['x-total-count'], '0');
+});
+
+test('category filters trim persisted whitespace for Knowledge, Academy, and Benefits', async () => {
+  const id = '00000000-0000-4000-8000-000000000003';
+  contentRows.knowledge.push({ id, category: ' Finance ', title: 'Knowledge', content: 'Body' });
+  contentRows.academy.push({ id, category: ' Finance ', title: 'Academy', active: true });
+  contentRows.benefits.push({ id, category: ' Finance ', company: 'Benefits', active: true });
+
+  for (const [path, table] of [
+    ['/api/knowledge', 'knowledge_base'],
+    ['/api/academy', 'academy'],
+    ['/api/benefits', 'benefits'],
+  ]) {
+    calls.length = 0;
+    const response = await request(app).get(`${path}?category=Finance&limit=20&offset=0`);
+    assert.equal(response.status, 200, path);
+    const read = calls.find(({ sql }) => new RegExp(`FROM ${table}\\b`).test(sql) && /btrim\(/.test(sql));
+    assert.ok(read, `${path} must trim its category filter`);
+    assert.deepEqual(read.params, ['Finance']);
+  }
 });
 
 test('Sólides tools are undiscoverable until an explicit release stage grants access', async () => {

@@ -160,7 +160,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
       listParams
     );
     res.set('X-Total-Count', String(countResult.rows[0].count))
-      .json(await addPublishedBlocks(pool, rows, 'reminder'));
+      .json((await addPublishedBlocks(pool, rows, 'reminder')).filter(Boolean));
   } catch (error) {
     next(error);
   }

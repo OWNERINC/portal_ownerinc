@@ -48,7 +48,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
   const viewAll = mayViewAll(req.user, 'manageAcademy', req.query.all);
   if (!viewAll) conditions.push('active = TRUE');
   if (req.query.active === 'true') conditions.push('active = TRUE');
-  if (req.query.category) conditions.push('category = $1');
+  if (req.query.category) conditions.push('btrim(academy.category) = $1');
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const filterValues = req.query.category ? [req.query.category] : [];
   try {
@@ -65,7 +65,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
       pool.query(`SELECT COUNT(*)::integer AS count FROM academy ${where}`, filterValues),
       pool.query(`SELECT * FROM academy ${where} ORDER BY "order", id LIMIT $${filterValues.length + 1} OFFSET $${filterValues.length + 2}`, [...filterValues, page.limit, page.offset]),
     ]);
-    res.set('X-Total-Count', String(count)).json(await addPublishedBlocks(pool, rows, 'academy'));
+    res.set('X-Total-Count', String(count)).json((await addPublishedBlocks(pool, rows, 'academy')).filter(Boolean));
   } catch (error) {
     next(error);
   }

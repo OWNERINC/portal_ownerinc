@@ -19,8 +19,10 @@ let reminders = [];
 let editingId = null;
 let page = 0;
 let totalReminders = 0;
+let remindersRequest = 0;
 let deliveriesPage = 0;
 let deliveriesTotal = 0;
+const PAGE_SIZE = 50;
 const DELIVERY_PAGE_SIZE = 20;
 
 function tableState(message, retry) {
@@ -69,7 +71,7 @@ function renderTable() {
   });
   if (!remindersPagination) return;
   const pagination = clear(remindersPagination);
-  const pageCount = Math.max(1, Math.ceil(totalReminders / 50));
+  const pageCount = Math.max(1, Math.ceil(totalReminders / PAGE_SIZE));
   if (pageCount > 1) {
     pagination.append(
       element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', ...(page === 0 ? { disabled: '' } : {}), on: { click: () => { page -= 1; loadReminders(); } } }),
@@ -81,15 +83,30 @@ function renderTable() {
 
 async function loadReminders(reset = false) {
   if (reset) page = 0;
+  const requestToken = ++remindersRequest;
+  const requestPage = page;
+  const requestPath = `${canManage ? '/api/reminders?all=true' : '/api/reminders'}${canManage ? '&' : '?'}limit=${PAGE_SIZE}&offset=${requestPage * PAGE_SIZE}`;
   tableState('Carregando lembretes…');
   try {
-    const separator = canManage ? '&' : '?';
-    const result = await fetchAPIPage(`${canManage ? '/api/reminders?all=true' : '/api/reminders'}${separator}limit=50&offset=${page * 50}`);
-    reminders = result.data || [];
-    totalReminders = result.total || reminders.length;
+    const result = await fetchAPIPage(requestPath);
+    if (requestToken !== remindersRequest) return;
+    const loaded = result.data || [];
+    const loadedTotal = result.total ?? loaded.length;
+    if (!loaded.length && requestPage > 0) {
+      const lastPage = Math.max(0, Math.ceil(loadedTotal / PAGE_SIZE) - 1);
+      const fallbackPage = Math.min(requestPage - 1, lastPage);
+      if (fallbackPage !== requestPage) {
+        page = fallbackPage;
+        return loadReminders();
+      }
+    }
+    if (requestToken !== remindersRequest) return;
+    page = requestPage;
+    reminders = loaded;
+    totalReminders = loadedTotal;
     renderTable();
   } catch {
-    tableState('Não foi possível carregar os lembretes.', loadReminders);
+    if (requestToken === remindersRequest) tableState('Não foi possível carregar os lembretes.', () => loadReminders());
   }
 }
 
