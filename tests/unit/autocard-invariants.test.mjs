@@ -1201,6 +1201,24 @@ test('AutoCard loads history pages with a stable query and keeps the visible pag
   assert.equal(harness.savedPagination().getAttribute('aria-busy'), 'false');
 });
 
+test('AutoCard rebuilds live history pagination after a page request fails', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const firstPage = harness.loadSaved();
+  await harness.resolveAPI(0, { data: [{ id: 'first-card', name: 'Primeiro', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  await firstPage;
+
+  await harness.clickSavedPage('Próxima');
+  await harness.rejectAPI(1, new Error('histórico indisponível'));
+  assert.match(harness.savedList().innerHTML, /Primeiro/);
+  assert.equal(harness.savedPagination().getAttribute('aria-busy'), 'false');
+  assert.match(harness.toast().textContent, /histórico indisponível/);
+
+  await harness.clickSavedPage('Anterior');
+  assert.equal(harness.apiRequests[2].path, '/api/autocard/cards?search=&template=&limit=20&offset=0');
+  await harness.resolveAPI(2, { data: [{ id: 'retry-card', name: 'Retry', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  assert.match(harness.savedList().innerHTML, /Retry/);
+});
+
 test('AutoCard resets history pagination after search and filter changes', async () => {
   const harness = await createAutoCardLifecycleHarness();
   const initial = harness.loadSaved(20);
@@ -1268,6 +1286,20 @@ test('AutoCard rejects invalid manual names before saving and trims valid names'
   assert.equal(JSON.parse(harness.apiRequests[0].options.body).name, 'Nome válido');
   await harness.resolveAPI(0, { id: 'named-card' });
   await save;
+
+  harness.setPrompt('a'.repeat(119));
+  const save119 = harness.saveCard();
+  assert.equal(harness.apiRequests.length, 2);
+  assert.equal(JSON.parse(harness.apiRequests[1].options.body).name.length, 119);
+  await harness.resolveAPI(1, { id: 'named-card-119' });
+  await save119;
+
+  harness.setPrompt('b'.repeat(120));
+  const save120 = harness.saveCard();
+  assert.equal(harness.apiRequests.length, 3);
+  assert.equal(JSON.parse(harness.apiRequests[2].options.body).name.length, 120);
+  await harness.resolveAPI(2, { id: 'named-card-120' });
+  await save120;
 });
 
 test('AutoCard does not download an export after the document changes', async () => {
