@@ -91,6 +91,180 @@ function isMalformedMultipart(error) {
   return /multipart|part header|Unexpected end of form/i.test(String(error?.message || ''));
 }
 
+async function reserveUnreferencedAsset(db, assetId, { lock = true } = {}) {
+  if (lock) await lockCmsAssets(db);
+  const { rows } = await db.query(
+    `SELECT id, storage_key, deleting_at
+       FROM cms_assets
+      WHERE id = $1
+      FOR UPDATE`,
+    [assetId],
+  );
+  const asset = rows[0];
+  if (!asset) return null;
+  const { rows: references } = await db.query(
+    `SELECT 1
+       FROM cms_revisions r
+       CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
+       WHERE lower(block->>'asset_id') = lower($1::text)
+      LIMIT 1`,
+    [assetId],
+  );
+  if (references[0]) {
+    if (asset.deleting_at) {
+      await db.query(
+        'UPDATE cms_assets SET deleting_at = NULL WHERE id = $1 AND deleting_at IS NOT NULL',
+        [assetId],
+      );
+    }
+    return { referenced: true, cleared: Boolean(asset.deleting_at) };
+  }
+  if (asset.deleting_at) {
+    return reservationIsActive(asset.deleting_at) ? { asset, deleting: true } : { asset, retry: true };
+  }
+  const { rows: reserved } = await db.query(
+    `UPDATE cms_assets
+        SET deleting_at = NOW()
+      WHERE id = $1 AND deleting_at IS NULL
+      RETURNING id, storage_key`,
+    [assetId],
+  );
+  return reserved[0] ? { asset: reserved[0] } : { asset, deleting: true };
+}
+
+function reservationIsActive(value) {
+  const markedAt = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(markedAt) && Date.now() - markedAt < 60 * 1000;
+}
+
+async function finalizeUnreferencedAsset(db, assetId, { lock = true } = {}) {
+  if (lock) await lockCmsAssets(db);
+  const { rows } = await db.query(
+    `DELETE FROM cms_assets
+      WHERE id = $1
+        AND deleting_at IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+             FROM cms_revisions r
+             CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
+           WHERE lower(block->>'asset_id') = lower($1::text)
+         )
+       RETURNING id`,
+    [assetId],
+  );
+  if (rows[0]) return rows[0];
+  const { rows: references } = await db.query(
+    `SELECT 1
+       FROM cms_revisions r
+       CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
+       WHERE lower(block->>'asset_id') = lower($1::text)
+       LIMIT 1`,
+    [assetId],
+  );
+  if (references[0]) {
+    await db.query(
+      'UPDATE cms_assets SET deleting_at = NULL WHERE id = $1 AND deleting_at IS NOT NULL',
+      [assetId],
+    );
+    return { referenced: true };
+  }
+  return null;
+}
+
+async function auditAssetAction(db, req, action, targetId, details = {}) {
+  await db.query(
+    `INSERT INTO audit_log (actor_uid, action, target_type, target_id, request_id, details)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+    [req.user.uid, action, 'cms_asset', targetId || null, req.id, JSON.stringify(details)],
+  );
+}
+
+async function deleteUnreferencedAsset(req, assetId, {
+  dbPool = pool,
+  fileSystem = fsp,
+  directory = privateDirectory,
+} = {}) {
+  const client = await dbPool.connect();
+  let inTransaction = false;
+  const commit = async () => {
+    await client.query('COMMIT');
+    inTransaction = false;
+  };
+  try {
+    await client.query('BEGIN');
+    inTransaction = true;
+    await lockCmsAssets(client);
+
+    const reservation = await reserveUnreferencedAsset(client, assetId, { lock: false });
+    if (!reservation) {
+      await commit();
+      return { status: 404, body: { error: 'Asset not found.', reason: 'not_found', requestId: req.id } };
+    }
+    await auditAssetAction(client, req, 'cms.asset.delete.reserve', assetId, {
+      outcome: reservation.referenced ? 'referenced' : reservation.deleting ? 'already_deleting' : reservation.retry ? 'retry' : 'reserved',
+    });
+    if (reservation.referenced) {
+      await commit();
+      return { status: 409, body: { error: 'Asset is still referenced by CMS content.', reason: 'referenced', requestId: req.id } };
+    }
+    if (reservation.deleting) {
+      await commit();
+      return { status: 409, body: { error: 'Asset cleanup is already in progress.', reason: 'already_deleting', requestId: req.id } };
+    }
+
+    const storageKey = String(reservation.asset.storage_key);
+    if (path.basename(storageKey) !== storageKey) {
+      await client.query('UPDATE cms_assets SET deleting_at = NULL WHERE id = $1 AND deleting_at IS NOT NULL', [assetId]);
+      await commit();
+      return { status: 500, body: { error: 'Invalid asset storage key.', requestId: req.id } };
+    }
+    try {
+      await fileSystem.unlink(path.join(directory, storageKey));
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        // A missing file is already in the desired physical state; finalize the row below.
+      } else {
+        await client.query('UPDATE cms_assets SET deleting_at = NULL WHERE id = $1 AND deleting_at IS NOT NULL', [assetId]);
+        await auditAssetAction(client, req, 'cms.asset.delete.finalize', assetId, { outcome: 'unlink_failed' });
+        await commit();
+        throw error;
+      }
+    }
+
+    let deleted;
+    try {
+      await client.query('SAVEPOINT cms_asset_finalize');
+      deleted = await finalizeUnreferencedAsset(client, assetId, { lock: false });
+      const outcome = deleted?.referenced ? 'referenced' : deleted ? 'deleted' : 'pending';
+      await auditAssetAction(client, req, 'cms.asset.delete.finalize', assetId, { outcome });
+      await client.query('RELEASE SAVEPOINT cms_asset_finalize');
+    } catch {
+      await client.query('ROLLBACK TO SAVEPOINT cms_asset_finalize');
+      await client.query('UPDATE cms_assets SET deleting_at = NULL WHERE id = $1 AND deleting_at IS NOT NULL', [assetId]);
+      await auditAssetAction(client, req, 'cms.asset.delete.finalize', assetId, { outcome: 'pending' });
+      await client.query('RELEASE SAVEPOINT cms_asset_finalize');
+      await commit();
+      return { status: 202, body: { error: 'Asset cleanup is pending.', reason: 'pending', requestId: req.id } };
+    }
+
+    if (deleted?.referenced) {
+      await commit();
+      return { status: 409, body: { error: 'Asset is still referenced by CMS content.', reason: 'referenced', requestId: req.id } };
+    }
+    if (!deleted) {
+      await commit();
+      return { status: 202, body: { error: 'Asset cleanup is pending.', reason: 'pending', requestId: req.id } };
+    }
+    await commit();
+    return { status: 204 };
+  } catch (error) {
+    if (inTransaction) await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function canReadAsset(db, user, asset) {
   const { rows } = await db.query(
     `SELECT d.content_type, d.published_revision_id, r.id AS revision_id, r.status,
@@ -105,7 +279,7 @@ async function canReadAsset(db, user, asset) {
        LEFT JOIN academy ON d.content_type = 'academy' AND academy.id = d.source_id
        LEFT JOIN benefits ON d.content_type = 'benefit' AND benefits.id = d.source_id
        LEFT JOIN reminders ON d.content_type = 'reminder' AND reminders.id = d.source_id
-      WHERE block->>'asset_id' = $1
+         WHERE lower(block->>'asset_id') = lower($1::text)
         AND r.status IN ('draft', 'published', 'scheduled')`,
     [asset.id],
   );
@@ -161,6 +335,19 @@ async function handleAssetUpload(req, res, next) {
 }
 
 router.post('/', authMiddleware, uploadMiddleware);
+
+router.delete('/:id', authMiddleware, async (req, res, next) => {
+  if (!manageable(req.user)) return forbidden(req, res);
+  if (!uuid(req.params.id)) return invalid(req, res);
+  const assetId = req.params.id;
+  try {
+    const result = await deleteUnreferencedAsset(req, assetId);
+    if (result.status === 204) return res.status(204).end();
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.get('/:id', authMiddleware, async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
@@ -222,3 +409,4 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
 module.exports = router;
 module.exports.detectedMime = detectedMime;
 module.exports.isMalformedMultipart = isMalformedMultipart;
+module.exports.deleteUnreferencedAsset = deleteUnreferencedAsset;

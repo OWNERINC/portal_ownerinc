@@ -11,7 +11,7 @@
 
 .dashboard-hero {
   position: relative;
-  aspect-ratio: 16 / 7;
+  min-height: clamp(320px, 43.75vw, 595px);
   overflow: hidden;
   border-radius: 24px;
   isolation: isolate;
@@ -43,7 +43,8 @@
   align-items: flex-start;
   justify-content: center;
   width: min(72%, 760px);
-  height: 100%;
+  min-height: clamp(320px, 43.75vw, 595px);
+  height: auto;
   padding: clamp(24px, 3vw, 40px) clamp(40px, 6vw, 80px);
 }
 
@@ -73,6 +74,8 @@
   font-weight: 400;
   letter-spacing: -0.045em;
   line-height: 0.99;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .dashboard-hero-description {
@@ -80,6 +83,7 @@
   margin: 0 0 16px;
   color: rgba(255, 255, 255, 0.82);
   font-size: clamp(15px, 1.5vw, 18px);
+  overflow-wrap: anywhere;
 }
 
 .dashboard-button,
@@ -117,6 +121,7 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .dashboard-hero-meta span {
@@ -209,14 +214,22 @@
   padding: 18px 18px 20px;
 }
 
-.dashboard-story-card-body > strong {
+.dashboard-story-card-body > strong,
+.dashboard-story-card-title {
+  display: block;
+  min-height: 44px;
   color: var(--espresso);
   font-family: var(--font-display);
   font-size: clamp(17px, 1.5vw, 21px);
   font-weight: 400;
   letter-spacing: -0.015em;
   line-height: 1.1;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
+
+.dashboard-story-card-title strong { font: inherit; }
 
 .dashboard-story-card-body > small {
   color: var(--text-secondary);
@@ -224,13 +237,14 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .dashboard-story-card-copy {
-  max-height: 130px;
-  overflow: hidden;
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .dashboard-story-card-copy > * {
@@ -312,7 +326,7 @@
   }
 
   .dashboard-hero {
-    aspect-ratio: 4 / 5;
+    min-height: clamp(400px, 125vw, 760px);
     margin: 0 -16px;
     border-radius: 0;
   }
@@ -324,6 +338,7 @@
   .dashboard-hero-copy {
     justify-content: end;
     width: 100%;
+    min-height: clamp(400px, 125vw, 760px);
     padding: 28px clamp(28px, 8vw, 40px) 32px;
   }
 

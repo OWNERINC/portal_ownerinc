@@ -30,7 +30,7 @@
 
 .knowledge-search:focus-within {
   border-color: var(--focus);
-  outline: 2px solid var(--focus);
+  outline: 3px solid var(--focus);
   outline-offset: 1px;
 }
 
@@ -127,7 +127,7 @@
 }
 
 .article-view-heading { display: grid; gap: 10px; margin-bottom: 24px; }
-.article-view-heading h2 { margin: 0; font-size: clamp(24px, 4vw, 34px); line-height: 1.15; }
+.article-view-heading h2 { margin: 0; font-size: clamp(24px, 4vw, 34px); line-height: 1.15; overflow-wrap: anywhere; word-break: normal; }
 .article-view-heading .badge { width: fit-content; }
 .knowledge-pdf-remove { width: fit-content; }
 

@@ -1,6 +1,6 @@
 import { requireAuth, fetchAPI } from './auth.js';
 import { blocksToText, renderBlocks } from './cms-block-renderer.js';
-import { clear, element, safeHttpUrl, showState } from './ui.js';
+import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
@@ -62,8 +62,14 @@ function icon(name) {
 }
 
 function storyCard({ title, category, description, blocks, href, newTab, image, alt, meta }) {
+  const titleNode = href
+    ? element('a', {
+      className: 'dashboard-story-card-title', href,
+      ...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
+    }, [element('strong', { text: title })])
+    : element('strong', { text: title });
   const body = element('div', { className: 'dashboard-story-card-body' }, [
-    element('strong', { text: title }),
+    titleNode,
     element('small', { text: [category, meta].filter(Boolean).join(' · ') }),
   ]);
   if (blocks || description) {
@@ -75,11 +81,7 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
   const children = image
     ? [element('img', { src: image, alt, width: 600, height: 360, loading: 'lazy' }), body]
     : [body];
-  const card = element(href ? 'a' : 'article', href ? {
-    className: 'dashboard-story-card', href,
-    ...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
-  } : { className: 'dashboard-story-card' }, children);
-  return card;
+  return element('article', { className: 'dashboard-story-card' }, children);
 }
 
 function renderHero(announcement) {
@@ -95,11 +97,14 @@ function renderHero(announcement) {
 }
 
 const announcementsPreview = document.getElementById('announcements-preview');
+let announcementsRequest = 0;
 async function loadAnnouncements() {
   if (!announcementsPreview) return;
-  showState(announcementsPreview, 'Carregando anúncios…');
+  const requestToken = ++announcementsRequest;
+  setBusy(announcementsPreview, true);
   try {
     const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
+    if (requestToken !== announcementsRequest) return;
     if (!announcements.length) return showState(announcementsPreview, 'Nenhum anúncio publicado.');
     renderHero(announcements[0]);
     clear(announcementsPreview);
@@ -113,16 +118,21 @@ async function loadAnnouncements() {
       meta: formatDate(announcement.published_at),
     })));
   } catch {
-    showState(announcementsPreview, 'Não foi possível carregar os anúncios.', loadAnnouncements);
+    if (requestToken === announcementsRequest) showState(announcementsPreview, 'Não foi possível carregar os anúncios.', loadAnnouncements);
+  } finally {
+    if (requestToken === announcementsRequest) setBusy(announcementsPreview, false);
   }
 }
 
 const remindersContainer = document.getElementById('reminders-list');
+let remindersRequest = 0;
 async function loadReminders() {
   if (!remindersContainer) return;
-  showState(remindersContainer, 'Carregando lembretes…');
+  const requestToken = ++remindersRequest;
+  setBusy(remindersContainer, true);
   try {
     const reminders = await fetchAPI('/api/reminders/upcoming?days=7');
+    if (requestToken !== remindersRequest) return;
     const upcoming = reminders.map(reminder => {
       return { reminder, days: daysUntil(reminder.next_occurrence) };
     });
@@ -136,7 +146,9 @@ async function loadReminders() {
       href: reminderContentHref(reminder),
     })));
   } catch {
-    showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);
+    if (requestToken === remindersRequest) showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);
+  } finally {
+    if (requestToken === remindersRequest) setBusy(remindersContainer, false);
   }
 }
 
@@ -157,11 +169,14 @@ if (quickLinks) {
 }
 
 const academySection = document.getElementById('academy-preview');
+let academyRequest = 0;
 async function loadAcademy() {
   if (!academySection) return;
-  showState(academySection, 'Carregando cursos…');
+  const requestToken = ++academyRequest;
+  setBusy(academySection, true);
   try {
     const courses = (await fetchAPI('/api/academy?active=true&limit=3')).filter(course => course.active !== false).slice(0, 3);
+    if (requestToken !== academyRequest) return;
     if (!courses.length) return showState(academySection, 'Nenhum curso disponível no momento.');
     clear(academySection);
     courses.forEach((course, index) => {
@@ -178,7 +193,9 @@ async function loadAcademy() {
       }));
     });
   } catch {
-    showState(academySection, 'Não foi possível carregar os cursos.', loadAcademy);
+    if (requestToken === academyRequest) showState(academySection, 'Não foi possível carregar os cursos.', loadAcademy);
+  } finally {
+    if (requestToken === academyRequest) setBusy(academySection, false);
   }
 }
 

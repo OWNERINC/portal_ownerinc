@@ -65,6 +65,7 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: relative;
   padding: max(22px, env(safe-area-inset-top)) var(--space-5) 22px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
   min-height: 64px;
@@ -111,6 +112,7 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
 }
 .sidebar-toggle:hover { color: #fff; background: rgba(255,255,255,0.08); }
 .sidebar-toggle svg { width: 15px; height: 15px; }
+.sidebar :focus-visible { outline-color: #fff; }
 
 /* Nav */
 .sidebar-nav {
@@ -132,7 +134,8 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
   text-decoration: none;
   font-size: var(--font-size-sm);
   font-weight: 400;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   border-radius: var(--radius-sm);
   transition: background 150ms, color 150ms;
 }
@@ -147,7 +150,10 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
 }
 
 .sidebar-nav a span {
-  overflow: hidden;
+  min-width: 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
   transition: opacity 150ms, width 150ms;
 }
 
@@ -199,7 +205,14 @@ body.sidebar-collapsed .main-content { margin-left: var(--sidebar-width-collapse
 body.sidebar-collapsed .logo-full { display: none !important; }
 body.sidebar-collapsed .logo-icon { display: block !important; }
 body.sidebar-collapsed .sidebar-header { justify-content: center; padding: 18px var(--space-2); }
-body.sidebar-collapsed .sidebar-toggle { margin-left: 0; display: none; }
+body.sidebar-collapsed .sidebar-toggle {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  margin-left: 0;
+  transform: none;
+}
+body.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
 
 body.sidebar-collapsed .sidebar-nav a {
   justify-content: center;
@@ -328,7 +341,7 @@ body.sidebar-ready .main-content { transition: margin-left var(--sidebar-transit
     height: auto; min-height: var(--topbar-height); gap: 10px;
     padding: max(6px, env(safe-area-inset-top)) 16px 6px;
   }
-  .topbar-title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .topbar-title { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: normal; white-space: normal; line-height: 1.25; font-size: 13px; }
   .topbar > div { min-width: 0; flex: 1; justify-content: flex-end; }
   .topbar > div { flex-wrap: wrap; }
   .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }

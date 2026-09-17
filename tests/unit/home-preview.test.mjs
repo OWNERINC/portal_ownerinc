@@ -118,9 +118,9 @@ test('home preview preserves the light and dark surface contrast tokens', async 
     css,
     /\.preview-meta\s*\{[^}]*rgba\(255\s*,\s*255\s*,\s*255\s*,\s*0\.62\)/s,
   );
-  assert.match(tokens, /font-family:\s*'Raleway';[\s\S]*fonts\.gstatic\.com/);
+  assert.doesNotMatch(tokens, /@font-face|fonts\.gstatic\.com|Raleway/);
   assert.match(tokens, /--font-sans:\s*Arial/);
-  assert.match(tokens, /--font-display:\s*'Raleway'/);
+  assert.match(tokens, /--font-display:\s*Arial, sans-serif/);
   assert.doesNotMatch(tokens, /Hamilton|Novelin|Signaturia/);
   assert.match(css, /\.preview-topbar\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
   assert.match(css, /\.preview-hero h1\s*\{[^}]*font-family:\s*var\(--font-display\);/s);

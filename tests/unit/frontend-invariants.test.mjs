@@ -169,7 +169,7 @@ test('profile exposes safe API errors instead of hiding upload and save failures
   assert.match(profile, /typeof photoURL !== 'string' \|\| !photoURL/);
   assert.match(profile, /frameWidth: avatarButton\?\.clientWidth \|\| 0/);
   assert.match(profile, /frameWidth: cropFrame\?\.clientWidth \|\| 0/);
-  assert.match(profile, /if \(removed\) avatarButton\.focus\(\);/);
+   assert.match(profile, /const focusHidden =/);
   assert.match(profile, /if \(saved\) closeCropDialog\(\);/);
   assert.match(profile, /Escolha uma imagem JPEG, PNG ou WebP de até 500 KB/);
   assert.match(profile, /runProfileAction/);
@@ -277,13 +277,13 @@ test('public content pages expose server pagination and category filters', async
   assert.match(knowledge, /let articlesRequest = 0/);
   assert.match(knowledge, /const requestToken = \+\+articlesRequest/);
   assert.match(knowledge, /if \(requestToken !== articlesRequest\) return/);
-  assert.match(knowledge, /renderPagination\(document\.getElementById\('articles-pagination'/);
+  assert.match(knowledge, /renderPagination\(articlesPagination/);
   assert.match(academy, /fetchAPIPage\(`\/api\/academy\?\$\{request\}`\)/);
   assert.match(academy, /academy-filters/);
   assert.match(academy, /let coursesRequest = 0/);
   assert.match(academy, /if \(requestToken !== coursesRequest\) return/);
   assert.match(academy, /if \(!courses\.length && offset > 0\)/);
-  assert.match(academy, /updateUrl\(query\.get\('category'\) \|\| '', 0\)/);
+  assert.match(academy, /updateUrl\(category, 0\)/);
   assert.match(academy, /return loadCourses\(\)/);
   assert.match(academy, /if \(!courses\.length\) \{[\s\S]*clear\(pagination\)/);
   assert.match(benefits, /fetchAPIPage\(`\/api\/benefits\?\$\{request\}`\)/);
@@ -295,6 +295,10 @@ test('public content pages expose server pagination and category filters', async
   assert.match(benefits, /return loadBenefits\(\)/);
   assert.match(benefits, /if \(!benefits\.length\) \{[\s\S]*clear\(pagination\)/);
   assert.match(pagination, /function renderPagination/);
+  assert.match(academy, /setPaginationBusy\(pagination, true\)/);
+  assert.match(academy, /setPaginationBusy\(pagination, false\)/);
+  assert.match(knowledge, /setPaginationBusy\(articlesPagination, true\)/);
+  assert.match(knowledge, /setPaginationBusy\(articlesPagination, false\)/);
 });
 
 test('Knowledge detail reads the authoritative article and stale pages recover', async () => {

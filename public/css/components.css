@@ -21,6 +21,8 @@
 .btn-ghost:hover { background: var(--surface-2); }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-sm { padding: var(--space-1) var(--space-3); font-size: var(--font-size-xs); }
+.btn:disabled,
+button:disabled { cursor: not-allowed; opacity: .62; }
 
 :where(a, button, input, select, textarea):focus-visible {
   outline: 3px solid var(--focus);
@@ -40,9 +42,11 @@
   font-size: var(--font-size-base);
   font-weight: 600;
   margin-bottom: var(--space-3);
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 .card-copy { font-size: 13px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; min-width: 0; }
 .card-heading .card-title { margin: 0; }
 .link-card { color: var(--text); text-decoration: none; cursor: pointer; }
 .link-card:hover { border-color: rgba(138,104,24,.55); }
@@ -84,6 +88,8 @@
   font-family: var(--font-display);
 }
 .form-input, .form-select, .form-textarea {
+  min-width: 0;
+  max-width: 100%;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -100,6 +106,7 @@
 .form-textarea { resize: vertical; min-height: 100px; }
 .filter-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .filter-bar .form-group { min-width: 150px; margin-bottom: 0; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
 .profile-save { width: 100%; margin-top: 4px; }
 
 /* Table */
@@ -167,7 +174,7 @@ body.modal-open { overflow: hidden; }
   font-size: var(--font-size-sm); font-family: var(--font-sans);
   flex: 1; color: var(--text);
 }
-.search-bar:focus-within { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 1px; }
+.search-bar:focus-within { border-color: var(--focus); outline: 3px solid var(--focus); outline-offset: 1px; }
 .search-bar input:focus-visible { outline: 0; }
 
 /* Empty state */
@@ -182,7 +189,7 @@ body.modal-open { overflow: hidden; }
 .form-help { color: var(--text-secondary); font-size: var(--font-size-xs); line-height: 1.5; margin: -4px 0 var(--space-4); }
 .form-feedback { min-height: 18px; margin-top: 10px; font-size: var(--font-size-xs); }
 .actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
-.section-header { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 20px; }
+.section-header { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 20px; min-width: 0; }
 .section-header h2 { font-size: var(--font-size-lg); font-weight: 700; color: var(--espresso); }
 .admin-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 28px; flex-wrap: wrap; }
 .admin-tab { padding: 10px 16px; background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer; font-size: var(--font-size-sm); font-weight: 600; color: var(--text-secondary); font-family: var(--font-display); margin-bottom: -1px; transition: color 150ms, border-color 150ms, background 150ms; }
@@ -198,11 +205,14 @@ body.modal-open { overflow: hidden; }
 .article-card { display: flex; flex-direction: column; align-items: flex-start; text-align: left; color: var(--text); font: inherit; cursor: pointer; }
 .article-card:hover { border-color: rgba(138,104,24,.55); }
 .article-excerpt { margin-top: 10px; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.card-link-title { display: block; min-height: 44px; color: inherit; text-decoration: none; }
+.card-link-title:focus-visible { outline-offset: 3px; }
+.announcement-card:focus { outline: 3px solid var(--focus); outline-offset: 3px; }
 .category-filter { cursor: pointer; border: 0; min-height: 36px; padding-inline: 14px; }
 .category-filter, .admin-tab, button { min-height: 44px; }
 .content-section { margin-top: 36px; }
 .content-section:first-child { margin-top: 0; }
-.content-section > h2 { margin-bottom: 16px; font-size: var(--font-size-lg); }
+.content-section > h2 { margin-bottom: 16px; font-size: var(--font-size-lg); overflow-wrap: anywhere; }
 .home-spotlight { display: none; }
 .home-spotlight-card { min-height: 150px; padding: 20px; border-left: 4px solid var(--primary); display: flex; flex-direction: column; justify-content: space-between; gap: 16px; }
 .home-spotlight-eyebrow { color: var(--focus); font-size: var(--font-size-xs); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -217,7 +227,9 @@ body.modal-open { overflow: hidden; }
 .section-heading-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .benefit-description { color: var(--espresso); font-weight: 500; overflow-wrap: anywhere; }
 .info-panel { margin-top: 10px; padding: 10px 12px; background: var(--bg); border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
-.card-link-label { display: inline-block; margin-top: 12px; color: var(--focus); font-size: 12px; }
+.card-link-label { display: inline-flex; align-items: center; min-height: 44px; margin-top: 12px; color: var(--focus); font-size: 12px; }
+.cms-pdf-frame { height: min(80dvh, 760px); }
+.cms-pdf-note { margin-top: 8px; color: var(--text-secondary); font-size: var(--font-size-xs); line-height: 1.5; }
 .table-detail { display: block; margin-top: 3px; font-size: 12px; color: var(--text-secondary); }
 .table-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .pagination { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 16px; }
