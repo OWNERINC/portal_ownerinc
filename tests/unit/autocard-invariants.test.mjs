@@ -183,7 +183,7 @@ function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML =
   };
 }
 
-async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAssetImages = false, deferLocalImages = false } = {}) {
+async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAssetImages = false, deferLocalImages = false, deferFonts = false } = {}) {
   const [app, employee, pagination] = await Promise.all([
     readFile('public/autocard/app.js', 'utf8'),
     readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
@@ -208,6 +208,8 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   let downloadClicks = 0;
   let promptValue = null;
   let confirmValue = true;
+  let releaseFonts = null;
+  const fontsReady = deferFonts ? new Promise(resolve => { releaseFonts = resolve; }) : Promise.resolve();
   const rebuildFilters = markup => {
     filterElements.splice(0, filterElements.length);
     for (const match of String(markup).matchAll(/<button class="filter( active)?" data-template="([^"]*)">/g)) {
@@ -226,7 +228,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   };
   const document = {
     activeElement: null,
-    fonts: { get ready() { events.push('fonts'); return Promise.resolve(); } },
+    fonts: { get ready() { events.push('fonts'); return fontsReady; } },
     getElementById(id) {
       if (!elements.has(id)) {
         const element = createAutoCardElement(id, {
@@ -577,6 +579,9 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     },
     setImageDecodeError(error) {
       imageDecodeError = error;
+    },
+    resolveFonts() {
+      releaseFonts?.();
     },
     captures,
     decodeCalls: () => decodeCalls,
@@ -1044,6 +1049,24 @@ test('AutoCard export executes rendered geometry and blocks undecodable images',
   assert.equal(harness.downloadClicks(), 1);
   assert.equal(harness.exportButtonDisabled(), false);
   assert.match(harness.toast().textContent, /A imagem ainda não está pronta para exportação/);
+});
+
+test('AutoCard keeps the export gate disabled when overflow appears during an awaited export step', async () => {
+  const harness = await createAutoCardLifecycleHarness({ deferFonts: true });
+  harness.selectTemplate('novo_funcionario');
+
+  const exporting = harness.exportCard();
+  harness.setRenderedTextMetrics({ scrollHeight: 120, clientHeight: 100 });
+  assert.match(harness.contentOverflowText(), /texto cortado/);
+  assert.equal(harness.exportButtonDisabled(), true);
+
+  harness.resolveFonts();
+  await exporting;
+
+  assert.equal(harness.captures.length, 0);
+  assert.equal(harness.downloadClicks(), 0);
+  assert.equal(harness.exportButtonDisabled(), true);
+  assert.match(harness.contentOverflowText(), /texto cortado/);
 });
 
 test('AutoCard upload trigger is keyboard reachable and accepts the same file twice', async () => {
