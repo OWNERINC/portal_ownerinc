@@ -352,7 +352,7 @@ try {
   );
   await assert.rejects(
     client.query(`INSERT INTO autocard_cards (name, template, "values", icon)
-      VALUES ('invalid icon fixture', 'comunicado', '{}'::jsonb, 'not-safe')`),
+      VALUES ('invalid icon fixture', 'comunicado', '{}'::jsonb, 'not_safe')`),
     /autocard_cards_icon_check/,
   );
   const cmsConstraints = await pool.query(`SELECT conname
@@ -470,11 +470,21 @@ try {
         AND column_name = 'firebase_uid' AND data_type = 'text') AS import_identity,
     EXISTS (SELECT 1 FROM pg_constraint
       WHERE conrelid = 'public.users'::regclass
-        AND conname = 'users_contract_consistency'
-        AND pg_get_constraintdef(oid) LIKE '%pj_due_day BETWEEN 1 AND 31%') AS contract_constraint`);
+        AND conname = 'users_contract_consistency') AS contract_constraint`);
   assert.equal(contract.rows[0].valid, true);
   assert.equal(contract.rows[0].import_identity, true);
   assert.equal(contract.rows[0].contract_constraint, true);
+  const invalidContractUid = `migration-fixture-contract-${randomUUID()}`;
+  fixtureUids.push(invalidContractUid);
+  await assert.rejects(
+    client.query(`INSERT INTO users (uid, email, name, contract_type, is_pj, pj_due_day)
+      VALUES ($1, $2, $3, 'pj', FALSE, 1)`, [
+      invalidContractUid,
+      `${invalidContractUid}@example.com`,
+      'Migration Fixture Invalid Contract',
+    ]),
+    /users_contract_consistency/,
+  );
   console.log('migration integration: ok');
 } finally {
   try {
