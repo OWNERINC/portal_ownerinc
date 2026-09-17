@@ -2,9 +2,9 @@
 
 ## Status
 
-Correções da revisão implementadas no worktree `task-7-shell-mobile`, sem commit,
-Docker ou serviços. O focused check está verde; o aceite visual/manual final ainda
-não foi alegado porque não houve browser real.
+Correções da revisão implementadas no worktree `task-7-shell-mobile`, revisadas
+com `PASS` e integradas à `main` no checkpoint `0ae4781`. O aceite visual/manual
+final ainda não foi alegado porque não houve browser real.
 
 ## Arquivos alterados
 
@@ -32,12 +32,15 @@ Nenhum trecho de shell gerado foi alterado; a checagem do gerador continua limpa
 - `node scripts/verify.mjs syntax` — **passou**.
 - `node scripts/generate-public-shell.mjs --check` — **passou**.
 - `git diff --check` — **passou**.
+- Após o checkpoint `0ae4781`, `npm run verify` passou: suíte completa com
+  **404 testes, 0 falhas, 0 cancelados, 0 skipped**, além de syntax, security e
+  compose checks.
 
-`npm run verify`, a suíte completa, Docker e serviços não foram executados conforme solicitado.
+Docker e serviços reais não foram executados conforme solicitado.
 
 ## Limitações e concerns
 
-- Não foi executado browser real, viewport real de 320 px, zoom real de 200%, teste com leitor de tela, teclado em browser ou visualização real de PDF. Os testes cobrem apenas invariantes estáticas/determinísticas; não há alegação de aceitação desses critérios reais.
+- Não foi executado browser real, viewport real de 320 px, zoom real de 200%, teste com leitor de tela, teclado em browser ou visualização real de PDF. Os testes cobrem invariantes estáticas/determinísticas e handlers com DOM fake/deferred; não há alegação de aceitação desses critérios reais.
 - O PDF continua sujeito à acessibilidade do arquivo fornecido; a interface oferece iframe e abertura em nova aba, sem prometer PDF acessível.
 - Upload de PDF pendente ou não salvo mantém o modal aberto, bloqueia navegação SPA e limpa todos os assets recém-criados não persistidos ao substituir/remover/fechar; respostas `202`/`already_deleting` mantêm o asset para retry, enquanto `referenced` só é retirado com razão explícita. Um encerramento forçado do navegador ainda depende da retenção de órfãos do cron.
 - Uploads PDF stale agora tentam DELETE do asset retornado e mantêm o asset rastreado quando o cleanup falha; artigo novo usa o ID retornado antes de qualquer cleanup e uma repetição usa PUT.
