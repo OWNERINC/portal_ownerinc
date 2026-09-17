@@ -104,7 +104,10 @@
   }
 
   document.querySelectorAll('.sidebar-logout').forEach(function (button) {
-    button.addEventListener('click', function () { import('./auth.js').then(function (module) { module.logout(); }); });
+    button.addEventListener('click', function (event) {
+      if (event.defaultPrevented) return;
+      import('./auth.js').then(function (module) { module.logout(); });
+    });
   });
 
   document.querySelectorAll('.sidebar-nav a.active').forEach(function (link) {

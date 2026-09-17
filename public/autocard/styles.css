@@ -131,3 +131,10 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
     padding: 10px;
   }
 }
+.autocard-page .saved-card strong,
+.autocard-page .card-shell h2,
+.autocard-page .card-shell .body,
+.autocard-page .card-shell .sub,
+.autocard-page .card-shell .highlight {
+  overflow-wrap: anywhere;
+}

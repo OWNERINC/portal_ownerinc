@@ -30,6 +30,11 @@ function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML =
     if (!match) return null;
     mediaFrame = {
       id: 'rendered-media-frame',
+      style: {
+        values: {},
+        setProperty(name, value) { this.values[name] = value; },
+        getPropertyValue(name) { return this.values[name] || ''; },
+      },
       clientWidth: 200,
       clientHeight: 200,
       querySelector(selector) {
@@ -43,6 +48,7 @@ function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML =
       id: 'rendered-media-image',
       src: match[3],
       className: match[2] || '',
+      style: { filter: '', setProperty() {} },
       naturalWidth: 1000,
       naturalHeight: 500,
       complete: true,
@@ -73,6 +79,9 @@ function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML =
     dataset: {},
     get innerHTML() {
       return markup || children.map(child => child.textContent || '').join('');
+    },
+    get children() {
+      return id === 'cardCanvas' && markup ? [{}] : children;
     },
     set innerHTML(value) {
       markup = String(value);
@@ -163,6 +172,7 @@ function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML =
       if (id === 'cardCanvas') {
         const nodes = readMediaNodes();
         if (selector === '.card-media') return nodes?.image?.className.split(' ').includes('card-media') ? nodes.image : null;
+        if (selector === '.birthday-photo' || selector === '.employee-photo' || selector === '.card-media-frame') return nodes?.frame || null;
         if (selector === 'img') return nodes?.image || null;
       }
       if (selector !== '.card-media') return null;
@@ -184,9 +194,10 @@ function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML =
 }
 
 async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAssetImages = false, deferLocalImages = false, deferFonts = false } = {}) {
-  const [app, employee, pagination] = await Promise.all([
+  const [app, employee, variant, pagination] = await Promise.all([
     readFile('public/autocard/app.js', 'utf8'),
     readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
+    readFile('public/autocard/variant-enhancements.js', 'utf8'),
     readFile('public/js/pagination.js', 'utf8'),
   ]);
   const elements = new Map();
@@ -196,6 +207,26 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const requests = [];
   const apiRequests = [];
   const filterElements = [];
+  let activeTab = 'create';
+  const tabElements = ['create', 'saved'].map(tab => {
+    const classes = new Set(['tab', ...(tab === activeTab ? ['active'] : [])]);
+    return {
+      dataset: { tab },
+      classList: {
+        add(...names) { names.forEach(name => classes.add(name)); if (names.includes('active')) activeTab = tab; },
+        remove(...names) { names.forEach(name => classes.delete(name)); },
+        toggle(name, force) {
+          const next = force === undefined ? !classes.has(name) : force;
+          if (next) classes.add(name); else classes.delete(name);
+          if (name === 'active' && next) activeTab = tab;
+          return next;
+        },
+        contains(name) { return classes.has(name); },
+      },
+      onclick: null,
+      click() { this.onclick?.(); },
+    };
+  });
   const assetUrls = new Set();
   const deferredAssetImages = [];
   const deferredLocalImages = [];
@@ -208,6 +239,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   let downloadClicks = 0;
   let promptValue = null;
   let confirmValue = true;
+  let logoutCalls = 0;
   let releaseFonts = null;
   const fontsReady = deferFonts ? new Promise(resolve => { releaseFonts = resolve; }) : Promise.resolve();
   const rebuildFilters = markup => {
@@ -251,6 +283,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     },
     querySelector(selector) {
       if (selector === '.filter.active') return filterElements.find(filter => filter.classList.contains('active')) || null;
+      if (selector === '.tab.active') return tabElements.find(tab => tab.classList.contains('active')) || null;
       return null;
     },
     addEventListener(type, handler) {
@@ -262,6 +295,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     },
     querySelectorAll(selector) {
       if (selector === '.filter') return filterElements;
+      if (selector === '.tab') return tabElements;
       if (selector.includes('#cardCanvas')) return elements.get('cardCanvas')?.querySelectorAll(selector) || [];
       return [];
     },
@@ -379,11 +413,12 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
   const paginationSource = pagination.replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
-  vm.runInContext(`${cropSource}\n${paginationSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, showTab, syncOverflow };`, context);
+  vm.runInContext(`${cropSource}\n${paginationSource}\n${appSource}\n${employee}\n(()=>{${variant}\n})()\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, openSavedCard, showTab, syncOverflow, generation: () => documentGeneration };`, context);
   const cardCanvas = elements.get('cardCanvas');
   const nativeQuerySelectorAll = cardCanvas.querySelectorAll.bind(cardCanvas);
   const renderedTextNodes = [];
   cardCanvas.querySelectorAll = selector => selector.includes('.vacancy-card') || selector.includes('.employee-card')
+    || selector.includes('.card-shell')
     ? renderedTextNodes
     : nativeQuerySelectorAll(selector);
   return {
@@ -402,6 +437,9 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
           .map(item => ({ target: item }));
         if (entries.length) observer.callback(entries);
       });
+    },
+    resizeObserverTargets() {
+      return [...new Set(resizeObservers.flatMap(observer => [...observer.targets].map(target => target.id)))];
     },
     async reject(index, error) {
       requests[index].reject(error);
@@ -466,7 +504,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     },
     mediaStatus: () => elements.get('mediaStatus').getAttribute('data-state'),
     mediaStatusText: () => elements.get('mediaStatus').textContent,
-    savedList: () => elements.get('savedList'),
+    savedList: () => elements.get('savedList') || document.getElementById('savedList'),
     savedPagination: () => elements.get('savedPagination'),
     setSavedSearch(value) {
       const input = elements.get('savedSearch');
@@ -501,11 +539,33 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
         preventDefault() {
           this.defaultPrevented = true;
         },
+        stopPropagation() {
+          this.propagationStopped = true;
+        },
       };
       if (!target.closest) target.closest = selector => selector === 'a[href]' ? target : null;
       document.dispatchEvent(event);
       return !event.defaultPrevented;
     },
+    dispatchLogout(answer) {
+      confirmValue = answer;
+      const target = {
+        closest(selector) { return selector === '.sidebar-logout' ? this : null; },
+      };
+      const event = {
+        type: 'click',
+        target,
+        button: 0,
+        defaultPrevented: false,
+        propagationStopped: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.propagationStopped = true; },
+      };
+      document.dispatchEvent(event);
+      if (!event.propagationStopped) logoutCalls += 1;
+      return { allowed: !event.defaultPrevented, loggedOut: logoutCalls };
+    },
+    openSavedCard: id => context.__autocardTest.openSavedCard(id),
     confirmNavigation(answer) {
       confirmValue = answer;
       return this.dispatchClick({
@@ -568,6 +628,10 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
       canvas.rectWidth = width;
       canvas.rectHeight = height;
     },
+    birthdayMediaSize() {
+      const frame = elements.get('cardCanvas')?.querySelectorAll('.birthday-photo')[0];
+      return Number.parseFloat(frame?.style?.getPropertyValue('width') || 0);
+    },
     setField(id, value) {
       const field = elements.get(`field-${id}`);
       field.value = value;
@@ -586,6 +650,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     captures,
     decodeCalls: () => decodeCalls,
     downloadClicks: () => downloadClicks,
+    logoutCalls: () => logoutCalls,
     events,
     resizeRenderedFrame(width, height) {
       const frame = elements.get('cardCanvas')?.querySelectorAll('.birthday-photo, .employee-photo, .card-media-frame')[0];
@@ -623,7 +688,10 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     syncOverflow: () => context.__autocardTest.syncOverflow(),
     cardBounds: () => elements.get('cardCanvas').getBoundingClientRect(),
     setRenderedTextMetrics(metrics = {}) {
-      renderedTextNodes.splice(0, renderedTextNodes.length, { ...metrics });
+      renderedTextNodes.splice(0, renderedTextNodes.length, {
+        ...metrics,
+        style: { setProperty() {} },
+      });
       this.syncOverflow();
     },
   };
@@ -1014,6 +1082,28 @@ test('AutoCard blocks measurable text clipping and non-positive preview bounds',
   assert.equal(harness.captures.length, 0);
 });
 
+test('AutoCard blocks long user content clipped by every text-card layout on mobile', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const cases = [
+    ['comunicado', 'corpo'],
+    ['evento', 'corpo'],
+    ['beneficio', 'corpo'],
+    ['institucional', 'corpo'],
+    ['vaga', 'descricao'],
+    ['novo_funcionario', 'corpo'],
+  ];
+  for (const [template, field] of cases) {
+    harness.selectTemplate(template);
+    harness.setCardRect(320, 320);
+    harness.setField(field, 'Conteúdo muito longo '.repeat(30));
+    harness.setRenderedTextMetrics({ scrollHeight: 900, clientHeight: 320 });
+    assert.match(harness.contentOverflowText(), /texto cortado/);
+    assert.equal(harness.exportButtonDisabled(), true);
+  }
+  await harness.exportCard();
+  assert.equal(harness.captures.length, 0);
+});
+
 test('AutoCard keeps rendered preview bounds positive at desktop and mobile widths', async () => {
   const harness = await createAutoCardLifecycleHarness();
   harness.selectTemplate('comunicado');
@@ -1094,6 +1184,25 @@ test('AutoCard keeps previous media visible while replacement is pending', async
   assert.match(harness.cardCanvas.innerHTML, /src="[^"]+"/);
 });
 
+test('AutoCard blocks export while upload or authenticated blob work is pending', async () => {
+  const uploading = await createAutoCardLifecycleHarness();
+  uploading.selectTemplate('aniversariante');
+  await uploading.chooseFile({ name: 'new.png', type: 'image/png', size: 1024 });
+  assert.equal(uploading.mediaStatus(), 'uploading');
+  await uploading.exportCard();
+  assert.equal(uploading.captures.length, 0);
+  assert.equal(uploading.downloadClicks(), 0);
+
+  const loading = await createAutoCardLifecycleHarness({ deferAssetImages: true });
+  loading.selectTemplate('aniversariante', { mediaId: 'pending-media' });
+  await loading.resolveAsset(0);
+  await loading.flushAsync();
+  assert.equal(loading.mediaStatus(), 'loading');
+  await loading.exportCard();
+  assert.equal(loading.captures.length, 0);
+  assert.equal(loading.downloadClicks(), 0);
+});
+
 test('AutoCard commits replacement media only after its blob loads and restores failures', async () => {
   const harness = await createAutoCardLifecycleHarness();
   harness.selectTemplate('aniversariante', { mediaId: 'old-media', mediaCrop: { x: 0.2, y: 0.8, zoom: 2 } });
@@ -1147,6 +1256,36 @@ test('AutoCard snapshots media confirmed during replacement validation', async (
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${oldUrl}"`));
   assert.ok(harness.revokedUrls.includes(harness.createdUrls[0]));
   assert.ok(!harness.revokedUrls.includes(oldUrl));
+});
+
+test('AutoCard restarts a delayed previous media load after replacement failure', async () => {
+  const harness = await createAutoCardLifecycleHarness({ deferAssetImages: true });
+  harness.selectTemplate('aniversariante', {
+    mediaId: 'old-media',
+    mediaCrop: { x: 0.15, y: 0.75, zoom: 2 },
+  });
+  const initialUrl = await harness.resolveAsset(0);
+  await harness.flushAsync();
+  assert.equal(harness.mediaStatus(), 'loading');
+
+  await harness.chooseFile({ name: 'new.png', type: 'image/png', size: 1024 });
+  await harness.rejectAPI(0, new Error('upload failed'));
+  await harness.flushAsync();
+
+  assert.equal(harness.state().mediaId, 'old-media');
+  assert.equal(harness.state().mediaCrop.x, 0.15);
+  assert.equal(harness.state().mediaCrop.y, 0.75);
+  assert.equal(harness.state().mediaCrop.zoom, 2);
+  assert.equal(harness.mediaStatus(), 'loading');
+  assert.equal(harness.requests[1].path, '/api/autocard/media/old-media');
+  assert.ok(harness.revokedUrls.includes(initialUrl));
+
+  const restoredUrl = await harness.resolveAsset(1);
+  await harness.resolveImageLoad(1);
+  assert.equal(harness.state().mediaId, 'old-media');
+  assert.equal(harness.state().mediaUrl, restoredUrl);
+  assert.equal(harness.mediaStatus(), 'ready');
+  assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${restoredUrl}"`));
 });
 
 test('AutoCard ignores a replacement response after a newer crop revision', async () => {
@@ -1286,12 +1425,56 @@ test('AutoCard ignores stale history and export responses', async () => {
   assert.doesNotMatch(harness.savedList().innerHTML, /Antigo/);
 });
 
+test('AutoCard history editing enters create before applying a clean or confirmed card', async () => {
+  const clean = await createAutoCardLifecycleHarness();
+  const saved = clean.showTab('saved');
+  assert.equal(saved, true);
+  await clean.resolveAPI(0, { data: [], total: 0 });
+  const cleanEdit = clean.openSavedCard('clean-card');
+  assert.equal(clean.isHidden('createView'), false);
+  assert.equal(clean.isHidden('savedView'), true);
+  await clean.resolveAPI(1, { id: 'clean-card', template: 'comunicado', values: { titulo: 'Card limpo' } });
+  await cleanEdit;
+  assert.equal(clean.state().editingId, 'clean-card');
+  assert.equal(clean.state().template, 'comunicado');
+
+  const confirmed = await createAutoCardLifecycleHarness();
+  confirmed.selectTemplate('comunicado');
+  confirmed.setField('titulo', 'Rascunho alterado');
+  confirmed.showTab('saved');
+  await confirmed.resolveAPI(0, { data: [], total: 0 });
+  const confirmedEdit = confirmed.openSavedCard('confirmed-card');
+  assert.equal(confirmed.isHidden('savedView'), true);
+  await confirmed.resolveAPI(1, { id: 'confirmed-card', template: 'vaga', values: { titulo: 'Card confirmado' } });
+  await confirmedEdit;
+  assert.equal(confirmed.state().editingId, 'confirmed-card');
+  assert.equal(confirmed.state().template, 'vaga');
+});
+
+test('AutoCard ignores out-of-order history card responses from the same document', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.showTab('saved');
+  await harness.resolveAPI(0, { data: [], total: 0 });
+
+  const older = harness.openSavedCard('older-card');
+  const newer = harness.openSavedCard('newer-card');
+  await harness.resolveAPI(2, { id: 'newer-card', template: 'vaga', values: { titulo: 'Mais novo' } });
+  await newer;
+  await harness.resolveAPI(1, { id: 'older-card', template: 'comunicado', values: { titulo: 'Mais antigo' } });
+  await older;
+
+  assert.equal(harness.state().editingId, 'newer-card');
+  assert.equal(harness.state().template, 'vaga');
+});
+
 test('AutoCard loads history pages with a stable query and keeps the visible page while pending', async () => {
   const harness = await createAutoCardLifecycleHarness();
   const firstPage = harness.loadSaved();
   assert.equal(harness.apiRequests[0].path, '/api/autocard/cards?search=&template=&limit=20&offset=0');
   await harness.resolveAPI(0, { data: [{ id: 'first-card', name: 'Primeiro', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
   await firstPage;
+  assert.match(harness.savedList().innerHTML, /aria-label="Editar Primeiro"/);
+  assert.match(harness.savedList().innerHTML, /aria-label="Excluir Primeiro"/);
   assert.match(harness.savedPagination().innerHTML, /Página 1 de 2/);
 
   await harness.clickSavedPage('Próxima');
@@ -1427,6 +1610,53 @@ test('AutoCard protects dirty editor navigation and beforeunload', async () => {
   assert.equal(harness.beforeUnloadBlocked(), false);
 });
 
+test('AutoCard cancels dirty logout before the sidebar handler and allows confirmed logout', async () => {
+  const cancelled = await createAutoCardLifecycleHarness();
+  cancelled.selectTemplate('comunicado');
+  cancelled.setField('titulo', 'Alteração que deve permanecer');
+  const before = JSON.stringify(cancelled.state());
+  const blocked = cancelled.dispatchLogout(false);
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.loggedOut, 0);
+  assert.equal(cancelled.logoutCalls(), 0);
+  assert.equal(JSON.stringify(cancelled.state()), before);
+
+  const confirmed = await createAutoCardLifecycleHarness();
+  confirmed.selectTemplate('comunicado');
+  confirmed.setField('titulo', 'Alteração confirmada');
+  const allowed = confirmed.dispatchLogout(true);
+  assert.equal(allowed.allowed, true);
+  assert.equal(allowed.loggedOut, 1);
+  assert.equal(confirmed.logoutCalls(), 1);
+});
+
+test('AutoCard pagehide invalidates pending save, history, and export continuations', async () => {
+  const saveHarness = await createAutoCardLifecycleHarness();
+  saveHarness.selectTemplate('comunicado');
+  saveHarness.setPrompt('Salvar antes de sair');
+  const pendingSave = saveHarness.saveCard();
+  saveHarness.dispatch('pagehide');
+  await saveHarness.resolveAPI(0, { id: 'stale-save' });
+  await pendingSave;
+  assert.equal(saveHarness.state().editingId, null);
+
+  const historyHarness = await createAutoCardLifecycleHarness();
+  const pendingHistory = historyHarness.loadSaved();
+  historyHarness.dispatch('pagehide');
+  await historyHarness.resolveAPI(0, { data: [{ id: 'stale-history', name: 'Stale', template: 'comunicado' }], total: 1 });
+  await pendingHistory;
+  assert.doesNotMatch(historyHarness.savedList().innerHTML, /Stale/);
+
+  const exportHarness = await createAutoCardLifecycleHarness({ deferFonts: true });
+  exportHarness.selectTemplate('comunicado');
+  const pendingExport = exportHarness.exportCard();
+  exportHarness.dispatch('pagehide');
+  exportHarness.resolveFonts();
+  await pendingExport;
+  assert.equal(exportHarness.captures.length, 0);
+  assert.equal(exportHarness.downloadClicks(), 0);
+});
+
 test('AutoCard employee mobile layout bounds long names and preserves the footer', async () => {
   const styles = await readFile('public/autocard/styles.css', 'utf8');
   const harness = await createAutoCardLifecycleHarness();
@@ -1451,6 +1681,23 @@ test('AutoCard employee mobile layout bounds long names and preserves the footer
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenFlex), /employee copy must receive remaining height/);
   const brokenSpace = styles.replace('.employee-copy{padding:10px 14px 12px}', '.employee-copy{padding:80px 14px 80px}');
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenSpace), /employee body budget must remain positive/);
+});
+
+test('AutoCard birthday variant registers resize observation and remeasures media', async () => {
+  const harness = await createAutoCardLifecycleHarness({ resizeObserver: true });
+  harness.selectTemplate('aniversariante', { mediaId: 'birthday-photo' });
+  await harness.resolveAsset(0);
+  harness.setCardRect(420, 420);
+  harness.flushMutations();
+  assert.ok(harness.resizeObserverTargets().includes('cardCanvas'));
+
+  harness.setCardRect(280, 280);
+  harness.flushResizes(harness.cardCanvas);
+  assert.equal(harness.birthdayMediaSize(), 165);
+
+  harness.setCardRect(600, 600);
+  harness.flushResizes(harness.cardCanvas);
+  assert.equal(harness.birthdayMediaSize(), 190);
 });
 
 test('AutoCard access follows the configured job title page', () => {
@@ -1605,13 +1852,19 @@ test('AutoCard UI is guarded before loading the editor', async () => {
    assert.match(app, /function syncOverflow\(/);
    assert.match(app, /scrollHeight/);
    assert.match(app, /scrollWidth/);
+   assert.match(app, /\.card-shell \.body/);
    assert.match(app, /data-overflow/);
   assert.match(app, /fetchAPIAsset\(`/);
   assert.match(app, /mediaUrl: null/);
   assert.match(app, /mediaStatus:'idle'/);
-  assert.match(app, /let documentGeneration = 0;/);
-  assert.match(app, /let editRevision = 0;/);
-  assert.match(app, /let savedSnapshot = null;/);
+   assert.match(app, /let documentGeneration = 0;/);
+   assert.match(app, /let editRevision = 0;/);
+   assert.match(app, /let savedSnapshot = null;/);
+   assert.match(app, /let historyCardLoadToken = 0;/);
+   assert.match(app, /cardLoadToken!==historyCardLoadToken/);
+   assert.match(app, /if\(!showTab\('create'\)\)return/);
+   assert.match(app, /function hasPendingMediaWork\(/);
+   assert.match(app, /documentGeneration\+=1/);
   assert.match(app, /Há alterações do AutoCard que ainda não foram salvas\. Sair mesmo assim\?/);
   assert.match(app, /setAttribute\('aria-live','polite'\)/);
   assert.match(app, /setAttribute\('data-state',status\)/);
@@ -1668,9 +1921,10 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(styles, /\.card-footer img\{width:102px;height:auto;max-height:none;object-fit:contain/);
   assert.match(styles, /\.vacancy-card \.card-footer img\{height:auto;max-height:36px\}/);
   assert.match(styles, /\.canvas-frame[^}]*min-width:\s*0/);
-  assert.match(styles, /#cardCanvas[^}]*max-width:\s*100%/);
-  assert.match(styles, /width:\s*min\(100%,\s*420px\)/);
-  assert.match(styles, /\.canvas-frame[^}]*overflow:\s*auto/);
+   assert.match(styles, /#cardCanvas[^}]*max-width:\s*100%/);
+   assert.match(styles, /width:\s*min\(100%,\s*420px\)/);
+   assert.match(styles, /\.canvas-frame[^}]*overflow:\s*auto/);
+   assert.match(styles, /\.saved-card strong[\s\S]*overflow-wrap:\s*anywhere/);
   assert.doesNotMatch(styles, /overflow-x\s*:\s*hidden/);
   assert.doesNotMatch(styles, /\.card-footer img\{[^}]*height:50px/);
   assert.match(app, /ownerinc-wordmark-(?:black|white)\.webp/);
@@ -1679,9 +1933,10 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(variant, /ownerinc-wordmark-white\.webp/);
   assert.match(variant, /ResizeObserver/);
   assert.match(app, /\/api\/autocard\/media/);
-  assert.match(app, /file\.size>3\*1024\*1024/);
-  assert.match(dashboard, /class="autocard-link"/);
-});
+   assert.match(app, /file\.size>3\*1024\*1024/);
+   assert.match(dashboard, /class="autocard-link"/);
+   assert.match(sidebar, /if \(event\.defaultPrevented\) return/);
+ });
 
 test('AutoCard crop editor exposes accessible dialog and responsive frame contracts', async () => {
   const [html, styles] = await Promise.all([
