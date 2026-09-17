@@ -377,7 +377,13 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
   const paginationSource = pagination.replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
-  vm.runInContext(`${cropSource}\n${paginationSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, showTab };`, context);
+  vm.runInContext(`${cropSource}\n${paginationSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, showTab, syncOverflow };`, context);
+  const cardCanvas = elements.get('cardCanvas');
+  const nativeQuerySelectorAll = cardCanvas.querySelectorAll.bind(cardCanvas);
+  const renderedTextNodes = [];
+  cardCanvas.querySelectorAll = selector => selector.includes('.vacancy-card') || selector.includes('.employee-card')
+    ? renderedTextNodes
+    : nativeQuerySelectorAll(selector);
   return {
     cardCanvas: elements.get('cardCanvas'),
     createdUrls,
@@ -607,7 +613,13 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     focusedId: () => document.activeElement?.id || null,
     toast: () => elements.get('toast'),
     exportButtonDisabled: () => Boolean(elements.get('exportButton').disabled),
+    contentOverflowText: () => elements.get('contentOverflow').textContent,
+    syncOverflow: () => context.__autocardTest.syncOverflow(),
     cardBounds: () => elements.get('cardCanvas').getBoundingClientRect(),
+    setRenderedTextMetrics(metrics = {}) {
+      renderedTextNodes.splice(0, renderedTextNodes.length, { ...metrics });
+      this.syncOverflow();
+    },
   };
 }
 
@@ -940,6 +952,73 @@ test('AutoCard employee crop ratio follows the rendered frame and mobile resize'
   assert.equal(harness.cropFrameRatio(), '200 / 200');
   harness.resizeRenderedFrame(100, 200);
   assert.equal(harness.cropFrameRatio(), '100 / 200');
+});
+
+test('AutoCard reports vacancy list overflow without discarding saved values', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const requirements = ['Experiência', 'Disponibilidade', 'Ensino médio', 'CNH', 'Liderança', 'Comunicação'].join('\n');
+  const benefits = ['Plano de saúde', 'Vale-alimentação', 'Gympass', 'Auxílio educação', 'Bônus'].join('\n');
+
+  harness.selectTemplate('vaga');
+  harness.setField('requisitos', requirements);
+  harness.setField('beneficios', benefits);
+  harness.flushMutations();
+
+  assert.equal(harness.state().values.requisitos, requirements);
+  assert.equal(harness.state().values.beneficios, benefits);
+  assert.match(harness.cardCanvas.innerHTML, /\+2 requisitos além do limite visual/);
+  assert.match(harness.cardCanvas.innerHTML, /\+1 benefício além do limite visual/);
+  assert.match(harness.contentOverflowText(), /2 requisitos/);
+  assert.match(harness.contentOverflowText(), /1 benefício/);
+  assert.equal(harness.exportButtonDisabled(), true);
+
+  harness.setPrompt('Vaga com conteúdo completo');
+  const save = harness.saveCard();
+  const payload = JSON.parse(harness.apiRequests[0].options.body);
+  assert.equal(payload.values.requisitos, requirements);
+  assert.equal(payload.values.beneficios, benefits);
+  await harness.resolveAPI(0, { id: 'full-vacancy' });
+  await save;
+
+  await harness.exportCard();
+  assert.equal(harness.captures.length, 0);
+});
+
+test('AutoCard blocks measurable text clipping and non-positive preview bounds', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+
+  harness.selectTemplate('novo_funcionario');
+  harness.setRenderedTextMetrics({ scrollHeight: 120, clientHeight: 100 });
+  assert.match(harness.contentOverflowText(), /texto cortado/);
+  assert.equal(harness.exportButtonDisabled(), true);
+  await harness.exportCard();
+  assert.equal(harness.captures.length, 0);
+
+  harness.setRenderedTextMetrics({ scrollWidth: 120, clientWidth: 100 });
+  assert.match(harness.contentOverflowText(), /texto cortado/);
+  assert.equal(harness.exportButtonDisabled(), true);
+
+  harness.setRenderedTextMetrics({ scrollHeight: 100, clientHeight: 100 });
+  harness.setCardRect(0, 0);
+  harness.syncOverflow();
+  assert.match(harness.contentOverflowText(), /dimensões válidas/);
+  assert.equal(harness.exportButtonDisabled(), true);
+  await harness.exportCard();
+  assert.equal(harness.captures.length, 0);
+});
+
+test('AutoCard keeps rendered preview bounds positive at desktop and mobile widths', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('comunicado');
+
+  for (const width of [1440, 768, 500, 320]) {
+    harness.setCardRect(width, Math.round(width * 0.75));
+    harness.syncOverflow();
+    const bounds = harness.cardBounds();
+    assert.ok(bounds.width > 0, `expected positive width at ${width}px`);
+    assert.ok(bounds.height > 0, `expected positive height at ${width}px`);
+    assert.equal(harness.exportButtonDisabled(), false);
+  }
 });
 
 test('AutoCard export executes rendered geometry and blocks undecodable images', async () => {
@@ -1493,9 +1572,14 @@ test('AutoCard UI is guarded before loading the editor', async () => {
    assert.match(app, /import \{ fetchAPI, fetchAPIAsset, fetchAPIPage \} from '\.\.\/js\/auth\.js'/);
    assert.match(app, /import \{ renderPagination, setPaginationBusy \} from '\.\.\/js\/pagination\.js'/);
    assert.match(html, /id="savedPagination"/);
+   assert.match(html, /id="contentOverflow"[^>]*role="status"[^>]*aria-live="polite"[^>]*data-overflow="false"/);
    assert.match(app, /fetchAPIPage/);
    assert.match(app, /limit=20/);
    assert.match(app, /renderPagination/);
+   assert.match(app, /function syncOverflow\(/);
+   assert.match(app, /scrollHeight/);
+   assert.match(app, /scrollWidth/);
+   assert.match(app, /data-overflow/);
   assert.match(app, /fetchAPIAsset\(`/);
   assert.match(app, /mediaUrl: null/);
   assert.match(app, /mediaStatus:'idle'/);
@@ -1547,6 +1631,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(vacancy, /__autocardApplyMediaCropStyle/);
   assert.doesNotMatch(vacancy, /\/api\/autocard\/media|mediaId|mediaUrl/);
   assert.match(vacancy, /employee-layout/);
+  assert.match(vacancy, /slice\(0, 4\)/);
+  assert.match(vacancy, /além do limite visual/);
   assert.match(vacancy, /employee-copy/);
   assert.match(vacancy, /Bem-vindo\(a\)/);
   assert.match(styles, /\.employee-card/);
@@ -1555,11 +1641,17 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(styles, /overflow-wrap:\s*anywhere/);
   assert.match(styles, /\.card-footer img\{width:102px;height:auto;max-height:none;object-fit:contain/);
   assert.match(styles, /\.vacancy-card \.card-footer img\{height:auto;max-height:36px\}/);
+  assert.match(styles, /\.canvas-frame[^}]*min-width:\s*0/);
+  assert.match(styles, /#cardCanvas[^}]*max-width:\s*100%/);
+  assert.match(styles, /width:\s*min\(100%,\s*420px\)/);
+  assert.match(styles, /\.canvas-frame[^}]*overflow:\s*auto/);
+  assert.doesNotMatch(styles, /overflow-x\s*:\s*hidden/);
   assert.doesNotMatch(styles, /\.card-footer img\{[^}]*height:50px/);
   assert.match(app, /ownerinc-wordmark-(?:black|white)\.webp/);
   assert.match(vacancy, /<span>Bem-vindo\(a\)<\/span>/);
   assert.match(variant, /ownerinc-wordmark-black\.webp/);
   assert.match(variant, /ownerinc-wordmark-white\.webp/);
+  assert.match(variant, /ResizeObserver/);
   assert.match(app, /\/api\/autocard\/media/);
   assert.match(app, /file\.size>3\*1024\*1024/);
   assert.match(dashboard, /class="autocard-link"/);

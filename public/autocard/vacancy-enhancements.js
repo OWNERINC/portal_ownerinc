@@ -5,7 +5,10 @@ let ignoreMutation = false;
 
 const escapeValue = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 const value = id => document.getElementById(`field-${id}`)?.value || '';
-const list = id => value(id).split('\n').map(item => item.trim()).filter(Boolean).slice(0, 4);
+const lines = id => value(id).split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+const list = id => lines(id).slice(0, 4);
+const extraCount = id => Math.max(0, lines(id).length - 4);
+const overflowMessage = (count, singular, plural = singular) => count ? `<span class="vacancy-overflow" role="note">+${escapeValue(count)} ${count === 1 ? singular : plural} além do limite visual</span>` : '';
 
 function renderVacancy() {
   if (rendering || ignoreMutation || templateTitle.textContent !== 'Vaga / Recrutamento') return;
@@ -17,6 +20,8 @@ function renderVacancy() {
     : { bg: '#f6f1e9', header: '#1d1d1b', text: '#171716', subtext: '#746653', accent: '#b99a61', muted: '#e8e0d4' };
   const requirements = list('requisitos').map(item => `<span style="background:${theme.muted}">${escapeValue(item)}</span>`).join('');
   const benefits = list('beneficios').map(item => `<span style="background:${theme.muted}">${escapeValue(item)}</span>`).join('');
+  const requirementsOverflow = overflowMessage(extraCount('requisitos'), 'requisito', 'requisitos');
+  const benefitsOverflow = overflowMessage(extraCount('beneficios'), 'benefício', 'benefícios');
   const iconMarkup = document.getElementById('iconPreview')?.innerHTML || '';
   cardCanvas.innerHTML = `<div class="card-shell vacancy-card" style="background:${theme.bg};color:${theme.text}">
     <div class="card-pad">
@@ -25,8 +30,8 @@ function renderVacancy() {
       <p class="sub" style="color:${theme.subtext}">${escapeValue(value('subtitulo'))}</p>
       <div class="vacancy-description"><span style="color:${theme.accent}">SOBRE A POSIÇÃO</span><p>${escapeValue(value('descricao')) || 'Descreva a missão e o dia a dia da posição.'}</p></div>
       <div class="vacancy-sections">
-        <div><span style="color:${theme.accent}">REQUISITOS</span><div class="requirements">${requirements || `<span style="background:${theme.muted}">Adicione os requisitos</span>`}</div></div>
-        <div><span style="color:${theme.accent}">BENEFÍCIOS</span><div class="requirements">${benefits || `<span style="background:${theme.muted}">Adicione os benefícios</span>`}</div></div>
+         <div><span style="color:${theme.accent}">REQUISITOS</span><div class="requirements">${requirements || `<span style="background:${theme.muted}">Adicione os requisitos</span>`}</div>${requirementsOverflow}</div>
+         <div><span style="color:${theme.accent}">BENEFÍCIOS</span><div class="requirements">${benefits || `<span style="background:${theme.muted}">Adicione os benefícios</span>`}</div>${benefitsOverflow}</div>
       </div>
       <div class="vacancy-apply" style="border-color:${theme.muted};color:${theme.subtext}"><strong>Candidate-se</strong><span>${escapeValue(value('prazo'))}</span><span>${escapeValue(value('contato'))}</span></div>
       <div class="card-footer" style="border-color:${theme.muted};color:${theme.subtext}"><span>Faça parte da Ownerinc</span><img src="${dark ? '/assets/ownerinc-completa-white.webp' : '/assets/ownerinc-completa-black.webp'}" alt="Ownerinc" style="filter:none"></div>
@@ -34,6 +39,7 @@ function renderVacancy() {
   </div>`;
   window.__autocardApplyMediaCropStyle?.();
   window.lucide?.createIcons?.();
+  window.__autocardSyncOverflow?.();
   rendering = false;
   setTimeout(() => { ignoreMutation = false; }, 0);
 }
@@ -65,6 +71,7 @@ function renderEmployee() {
   </div>`;
   window.__autocardApplyMediaCropStyle?.();
   window.lucide?.createIcons?.();
+  window.__autocardSyncOverflow?.();
   rendering = false;
   setTimeout(() => { ignoreMutation = false; }, 0);
 }

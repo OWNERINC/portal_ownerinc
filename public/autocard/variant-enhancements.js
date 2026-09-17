@@ -9,6 +9,7 @@ const themes = {
 };
 
 let applying = false;
+let variantResizeObserver = null;
 
 function selectedVariant() {
   const selected = document.querySelector('[data-mode].active')?.dataset.mode;
@@ -50,18 +51,21 @@ function applyVariant() {
   variantCanvas.querySelectorAll('i, svg').forEach(element => setImportant(element, 'color', theme.secondary));
   if (variantTitle.textContent === 'Aniversariante') {
     const size = document.querySelector('[data-size].active')?.dataset.size || 'medium';
-    const dimensions = window.matchMedia('(max-width: 500px)').matches
+    const renderedWidth = variantCanvas.getBoundingClientRect?.().width || variantCanvas.clientWidth || 0;
+    const dimensions = renderedWidth > 0 && renderedWidth <= 500
       ? { small: 130, medium: 165, large: 195 }
       : { small: 155, medium: 190, large: 225 };
+    const dimension = renderedWidth > 0 ? Math.min(dimensions[size] || dimensions.medium, renderedWidth) : dimensions[size] || dimensions.medium;
     const photo = variantCanvas.querySelector('.birthday-photo');
     if (photo) {
-      setImportant(photo, 'width', `${dimensions[size]}px`);
-      setImportant(photo, 'height', `${dimensions[size]}px`);
-      setImportant(photo, 'flex-basis', `${dimensions[size]}px`);
+      setImportant(photo, 'width', `${dimension}px`);
+      setImportant(photo, 'height', `${dimension}px`);
+      setImportant(photo, 'flex-basis', `${dimension}px`);
     }
   }
   window.__autocardApplyMediaCropStyle?.();
   applying = false;
+  window.__autocardSyncOverflow?.();
 }
 
 function setupDateMasks() {
@@ -89,3 +93,14 @@ observer.observe(variantCanvas, { childList: true, subtree: true });
 observer.observe(variantTitle, { childList: true, characterData: true, subtree: true });
 observer.observe(variantFields, { childList: true, subtree: true });
 setupDateMasks();
+
+function setupVariantResizeObserver() {
+  const ResizeObserverClass = typeof ResizeObserver === 'function' ? ResizeObserver : window.ResizeObserver;
+  if (typeof ResizeObserverClass !== 'function') return;
+  variantResizeObserver = new ResizeObserverClass(entries => {
+    if ([...(entries || [])].some(entry => entry.target === variantCanvas)) applyVariant();
+  });
+  variantResizeObserver.observe(variantCanvas);
+}
+
+setupVariantResizeObserver();
