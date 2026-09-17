@@ -406,6 +406,7 @@ Create `.superpowers/sdd/2026-09-17-autocard-task-8/task-5-report.md` with the i
 - [ ] **Step 5: Commit the documentation record**
 
 ```sh
-git add CHANGELOG.md .superpowers/sdd/2026-09-17-autocard-task-8/task-5-report.md
+git add CHANGELOG.md
+git add -f .superpowers/sdd/2026-09-17-autocard-task-8/task-5-report.md
 git commit -m "docs: record AutoCard Task 8 verification"
 ```
