@@ -25,7 +25,7 @@ O banco usa três credenciais distintas:
 
 - `MIGRATION_DATABASE_URL`: usuário administrador definido por `POSTGRES_USER`, usado somente pelo container one-shot `migrate`.
 - `API_DATABASE_URL`: role fixa `portal_api`, sem DDL, usada pela API em execução.
-- `CRON_DATABASE_URL`: role fixa `portal_cron`, limitada a leitura de `users`/`reminders`, leitura/escrita de `notifications_log`/`cron_status`, leitura de `autocard_cards`, leitura/exclusão de `autocard_media` e leitura/escrita de `audit_log` para a retenção do AutoCard.
+- `CRON_DATABASE_URL`: role fixa `portal_cron`, com leitura e apenas o `UPDATE` necessário para `SELECT ... FOR UPDATE` em `users`/`reminders`, leitura/escrita de `notifications_log`/`cron_status`, leitura de `autocard_cards`, leitura/exclusão de `autocard_media` e leitura/escrita de `audit_log` para a retenção do AutoCard.
 
 Para alertas operacionais por SMTP, defina `OPERATIONAL_ALERT_EMAIL` e repita
 as variáveis SMTP no ambiente do cron. Sem esse destinatário, o worker mantém

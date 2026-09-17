@@ -4,8 +4,16 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { dueDateKeys, normalizeDateKey, reminderMatchesDate, resolveTargets } = require('../../cron/scheduling');
-const { isRetryableUnsent } = require('../../cron/checkReminders');
+const {
+  civilDateKey, dueDateKeys, normalizeDateKey, reminderIsEligibleForDate, reminderMatchesDate,
+  resolveTargets, zonedDateTime,
+} = require('../../cron/scheduling');
+const { isRetryableUnsent, reminderContentUrl } = require('../../cron/checkReminders');
+const {
+  classifySmtpCode, classifySmtpError, classifySmtpResult, smtpResponseCode,
+} = require('../../cron/mailTransport');
+const { reminderContentPath } = require('../../api/cms/blocks');
+const { targetUsers } = require('../../api/route-utils');
 const { retentionDays } = require('../../cron/retention');
 const { autocardMediaRetentionDays, isSafeStorageKey } = require('../../cron/autocard-media-retention');
 
@@ -15,6 +23,28 @@ test('reminder retries include transient SMTP responses without retrying permane
   assert.equal(isRetryableUnsent({ responseCode: 421 }), true);
   assert.equal(isRetryableUnsent({ responseCode: 451 }), true);
   assert.equal(isRetryableUnsent({ responseCode: 535 }), false);
+  assert.equal(classifySmtpCode(550), 'permanent');
+  assert.equal(classifySmtpError({ response: '451 4.3.0 Try again' }), 'retryable');
+  assert.equal(classifySmtpError({ responseCode: 550 }), 'permanent');
+  assert.equal(classifySmtpError({ code: 'ETIMEDOUT' }), 'retryable');
+  assert.equal(classifySmtpResult(undefined, 'user@example.com'), 'unknown');
+  assert.equal(classifySmtpResult({ responseCode: 550 }, 'user@example.com'), 'permanent');
+  assert.equal(classifySmtpResult({ accepted: ['user@example.com'], responseCode: 550 }, 'user@example.com'), 'permanent');
+  assert.equal(classifySmtpResult({ accepted: ['user@example.com'], responseCode: 451 }, 'user@example.com'), 'unknown');
+  assert.equal(classifySmtpResult({ response: '250 queued' }, 'user@example.com'), 'unknown');
+  assert.equal(classifySmtpResult({ accepted: ['user@example.com'] }, 'user@example.com'), 'accepted');
+  assert.equal(classifySmtpResult({ rejected: ['user@example.com'], responseCode: 451 }, 'user@example.com'), 'retryable');
+  assert.equal(classifySmtpResult({ rejected: ['user@example.com'] }, 'user@example.com'), 'permanent');
+  assert.equal(classifySmtpResult({ accepted: [], rejected: [] }, 'user@example.com'), 'unknown');
+  assert.equal(smtpResponseCode({ response: '550 5.1.1 rejected' }), 550);
+});
+
+test('SMTP recipient state conflicts are ambiguous and never retryable', () => {
+  const recipient = 'user@example.com';
+  assert.equal(classifySmtpResult({ accepted: [recipient], rejected: [recipient] }, recipient), 'unknown');
+  assert.equal(classifySmtpResult({ accepted: [recipient], pending: [recipient], responseCode: 451 }, recipient), 'unknown');
+  assert.equal(classifySmtpResult({ rejected: [recipient], pending: [recipient], responseCode: 451 }, recipient), 'unknown');
+  assert.equal(classifySmtpError({ accepted: [recipient], rejected: [recipient], responseCode: 451 }, recipient), 'unknown');
 });
 
 test('catch-up uses Brasilia time and is bounded to seven completed schedule dates', () => {
@@ -32,6 +62,14 @@ test('catch-up accepts PostgreSQL DATE values returned as JavaScript Date object
   assert.equal(normalizeDateKey(new Date('2026-07-20T00:00:00.000Z')), '2026-07-20');
   assert.deepEqual(dueDateKeys(new Date('2026-07-21T12:00:00.000Z'), new Date('2026-07-20T00:00:00.000Z')), ['2026-07-21']);
   assert.throws(() => normalizeDateKey('not-a-date'), /Invalid scheduled date/);
+});
+
+test('civil reminder dates and creation vigência stay in São Paulo', () => {
+  assert.equal(civilDateKey(new Date('2026-07-21T02:00:00Z')), '2026-07-20');
+  assert.equal(reminderIsEligibleForDate(new Date('2026-07-20T10:59:59Z'), '2026-07-20'), true);
+  assert.equal(reminderIsEligibleForDate(new Date('2026-07-20T11:00:01Z'), '2026-07-20'), false);
+  assert.equal(reminderIsEligibleForDate(new Date('2026-07-19T12:00:00Z'), '2026-07-20'), true);
+  assert.equal(zonedDateTime('2026-07-20').toISOString(), '2026-07-20T11:00:00.000Z');
 });
 
 test('days 29 through 31 run on the last day of a short month', () => {
@@ -55,6 +93,18 @@ test('target resolution isolates all, contract groups, and explicit UIDs', () =>
   assert.deepEqual(resolveTargets('clt', users).map((user) => user.uid), ['clt']);
   assert.deepEqual(resolveTargets(['pj', 'missing', 'pj'], users).map((user) => user.uid), ['pj']);
   assert.deepEqual(resolveTargets('unknown', users), []);
+});
+
+test('reminder audiences reject empty or malformed UIDs and keep the public content path constrained', () => {
+  assert.equal(targetUsers([]), false);
+  assert.equal(targetUsers(['valid.uid']), true);
+  assert.equal(targetUsers(['has space']), false);
+  assert.equal(targetUsers(['valid.uid', 'valid.uid']), false);
+  const id = '550e8400-e29b-41d4-a716-446655440000';
+  assert.equal(reminderContentPath(id.toUpperCase()), '/reminders.html#reminder-550e8400-e29b-41d4-a716-446655440000');
+  assert.equal(reminderContentPath('not-an-id'), null);
+  assert.equal(reminderContentUrl(id, { PORTAL_PUBLIC_URL: 'https://portal.example.test', NODE_ENV: 'production' }), 'https://portal.example.test/reminders.html#reminder-550e8400-e29b-41d4-a716-446655440000');
+  assert.throws(() => reminderContentUrl(id, { PORTAL_PUBLIC_URL: 'http://portal.example.test', NODE_ENV: 'production' }), /Invalid PORTAL_PUBLIC_URL/);
 });
 
 test('retention windows are bounded and configurable', () => {

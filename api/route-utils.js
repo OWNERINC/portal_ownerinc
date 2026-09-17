@@ -38,8 +38,8 @@ function firebaseUid(value) {
 
 function targetUsers(value) {
   return value === undefined || ['all', 'pj', 'clt'].includes(value)
-    || (Array.isArray(value) && value.length <= 500 && new Set(value).size === value.length
-      && value.every((uid) => typeof uid === 'string' && uid.length > 0 && uid.length <= 128));
+    || (Array.isArray(value) && value.length > 0 && value.length <= 500
+      && new Set(value).size === value.length && value.every(firebaseUid));
 }
 
 function validBody(body, schema, required = []) {

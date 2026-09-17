@@ -65,6 +65,11 @@
         </table>
       </div>
       <div id="reminders-pagination" class="pagination" aria-label="Paginação"></div>
+      <section id="reminder-detail" class="content-section article-view" hidden tabindex="-1" aria-labelledby="reminder-detail-title">
+        <h2 id="reminder-detail-title">Detalhe do lembrete</h2>
+        <p id="reminder-detail-meta" class="table-detail"></p>
+        <div id="reminder-detail-content" class="article-content"></div>
+      </section>
       <section id="delivery-manager" hidden style="margin-top:32px">
         <div class="section-header">
           <div>
@@ -76,8 +81,8 @@
         <div class="table-wrapper">
           <table>
             <caption>Histórico compacto das últimas entregas</caption>
-            <thead><tr><th scope="col">Data</th><th scope="col">Usuário</th><th scope="col">Canal</th><th scope="col">Status</th><th scope="col">Tentativas</th></tr></thead>
-            <tbody id="deliveries-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
+            <thead><tr><th scope="col">Data</th><th scope="col">Lembrete</th><th scope="col">Destinatário</th><th scope="col">Canal</th><th scope="col">Status</th><th scope="col">Motivo</th><th scope="col">Tentativas</th></tr></thead>
+            <tbody id="deliveries-tbody"><tr><td colspan="7" class="empty-state">Carregando…</td></tr></tbody>
           </table>
         </div>
         <form id="delivery-filters" class="filter-bar" autocomplete="off">
@@ -85,6 +90,8 @@
           <select id="delivery-status" class="form-select"><option value="">Todos</option><option value="sent">Enviado</option><option value="failed">Falhou</option><option value="skipped">Ignorado</option><option value="pending">Pendente</option><option value="sending">Enviando</option></select>
           <label for="delivery-channel">Canal</label>
           <select id="delivery-channel" class="form-select"><option value="">Todos</option><option value="email">E-mail</option><option value="whatsapp">WhatsApp</option></select>
+          <label for="delivery-reminder">Lembrete</label>
+          <input id="delivery-reminder" class="form-input" type="search" maxlength="36" placeholder="ID do lembrete">
           <label for="delivery-user">UID</label>
           <input id="delivery-user" class="form-input" type="search" maxlength="128" placeholder="UID do usuário">
           <label for="delivery-from">De</label>

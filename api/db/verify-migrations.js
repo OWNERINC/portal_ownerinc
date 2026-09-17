@@ -200,9 +200,17 @@ async function verifyMigrations() {
          AND has_table_privilege('portal_api', 'public.cms_assets', 'UPDATE')
          AND has_table_privilege('portal_api', 'public.cms_assets', 'DELETE')) AS api_cms_assets_privileges,
        has_table_privilege('portal_cron', 'public.autocard_cards', 'SELECT') AS cron_autocard_cards_privileges,
-       (has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT')
-         AND has_table_privilege('portal_cron', 'public.autocard_media', 'DELETE')) AS cron_autocard_media_privileges,
-        (NOT has_table_privilege('portal_cron', 'public.pending_registrations', 'SELECT')
+        (has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT')
+          AND has_table_privilege('portal_cron', 'public.autocard_media', 'DELETE')) AS cron_autocard_media_privileges,
+        (has_table_privilege('portal_cron', 'public.users', 'SELECT')
+          AND has_table_privilege('portal_cron', 'public.users', 'UPDATE')
+          AND NOT has_table_privilege('portal_cron', 'public.users', 'INSERT')
+          AND NOT has_table_privilege('portal_cron', 'public.users', 'DELETE')) AS cron_users_lock_privileges,
+        (has_table_privilege('portal_cron', 'public.reminders', 'SELECT')
+          AND has_table_privilege('portal_cron', 'public.reminders', 'UPDATE')
+          AND NOT has_table_privilege('portal_cron', 'public.reminders', 'INSERT')
+          AND NOT has_table_privilege('portal_cron', 'public.reminders', 'DELETE')) AS cron_reminders_lock_privileges,
+         (NOT has_table_privilege('portal_cron', 'public.pending_registrations', 'SELECT')
           AND NOT has_table_privilege('portal_cron', 'public.pending_registrations', 'DELETE')) AS cron_pending_registrations_denied,
          (has_table_privilege('portal_cron', 'public.user_import_jobs', 'DELETE')
            AND has_column_privilege('portal_cron', 'public.user_import_jobs', 'expires_at', 'SELECT')
@@ -279,9 +287,11 @@ async function verifyMigrations() {
       || result.rows[0].api_cms_documents_privileges !== true
       || result.rows[0].api_cms_revisions_privileges !== true
       || result.rows[0].api_cms_assets_privileges !== true
-       || result.rows[0].cron_autocard_cards_privileges !== true
-       || result.rows[0].cron_autocard_media_privileges !== true
-        || result.rows[0].cron_pending_registrations_denied !== true
+        || result.rows[0].cron_autocard_cards_privileges !== true
+        || result.rows[0].cron_autocard_media_privileges !== true
+        || result.rows[0].cron_users_lock_privileges !== true
+        || result.rows[0].cron_reminders_lock_privileges !== true
+         || result.rows[0].cron_pending_registrations_denied !== true
         || result.rows[0].cron_user_import_jobs_privileges !== true
         || result.rows[0].cron_user_import_rows_denied !== true
        || result.rows[0].cron_pos_cards_privileges !== true

@@ -1,8 +1,52 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
 
 const pages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'profile', 'admin', 'solides'];
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createReminderDetailHarness(source) {
+  const context = {
+    window: { location: { hash: '' } },
+    reminderDetail: { hidden: true, focus() { this.focused = true; } },
+    reminderDetailTitle: { textContent: '' },
+    reminderDetailMeta: { textContent: '' },
+    reminderDetailContent: {
+      childNodes: [],
+      append(...children) { this.childNodes.push(...children); },
+    },
+    reminderDetailRequest: 0,
+    page: 4,
+    fetchImpl: () => { throw new Error('fetchImpl not configured'); },
+    rendered: [],
+    states: [],
+    fetchAPI: (...args) => context.fetchImpl(...args),
+    clear(node) {
+      node.childNodes = [];
+      return node;
+    },
+    element: (tag, options = {}) => ({ tag, ...options }),
+    renderReminderDetail: detail => context.rendered.push(detail),
+    renderReminderDetailState: (message, retry) => context.states.push({ message, retry }),
+    encodeURIComponent,
+  };
+  context.reminderIdFromHash = (hash = context.window.location.hash) => {
+    const match = /^#reminder-([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.exec(hash);
+    return match ? match[1].toLowerCase() : null;
+  };
+  vm.runInNewContext(`${source}\nglobalThis.loadReminderDetail = loadReminderDetail;`, context, { filename: 'reminders.js' });
+  return context;
+}
 
 test('authenticated pages expose one heading, skip navigation, theme color, and external scripts only', async () => {
   for (const page of pages) {
@@ -296,6 +340,80 @@ test('V1 dashboard keeps scoped data while using the editorial home composition'
   assert.match(reminders, /individual-target-group/);
   assert.match(reminders, /delivery-filters/);
   assert.match(reminders, /deliveries-pagination/);
+});
+
+test('reminder UI derives safe content links and formats civil dates in São Paulo', async () => {
+  const [dashboard, reminders, html] = await Promise.all([
+    readFile('public/js/dashboard.js', 'utf8'),
+    readFile('public/js/reminders.js', 'utf8'),
+    readFile('public/reminders.html', 'utf8'),
+  ]);
+  for (const source of [dashboard, reminders]) {
+    assert.match(source, /America\/Sao_Paulo/);
+    assert.match(source, /content_url/);
+    assert.match(source, /reminders\.html#reminder-/);
+  }
+  assert.match(dashboard, /function daysUntil/);
+  assert.match(dashboard, /civilDateOrdinal/);
+  assert.match(reminders, /function formatCivilDate/);
+  assert.match(reminders, /deliveriesRequest/);
+  assert.match(reminders, /delivery\.reason/);
+  assert.match(reminders, /function reminderIdFromHash/);
+  assert.match(reminders, /location\.hash/);
+  assert.match(reminders, /fetchAPI\(`\/api\/reminders\/\$\{encodeURIComponent\(id\)\}`\)/);
+  assert.match(reminders, /addEventListener\('hashchange', loadReminderDetail\)/);
+  assert.match(reminders, /reminderDetailRequest/);
+  assert.match(reminders, /error\.status === 404/);
+  assert.match(reminders, /focusReminderDetail\(\)/);
+  assert.doesNotMatch(reminders, /reminders\.push\(detail\)/);
+  assert.match(html, /Lembrete.*Destinatário.*Motivo.*Tentativas/);
+  assert.match(html, /id="delivery-reminder"/);
+  assert.match(html, /id="reminder-detail"/);
+});
+
+test('reminder health timestamp formatting keeps absent values neutral', async () => {
+  const reminders = await readFile('public/js/reminders.js', 'utf8');
+  const sourceStart = reminders.indexOf('function formatTimestamp(');
+  const source = reminders.slice(sourceStart, reminders.indexOf('\n\nfunction tableState', sourceStart));
+  const context = { Intl, TIME_ZONE: 'America/Sao_Paulo' };
+  vm.runInNewContext(`${source}\nglobalThis.formatTimestamp = formatTimestamp;`, context, { filename: 'reminders.js' });
+
+  assert.equal(context.formatTimestamp(null), '—');
+  assert.equal(context.formatTimestamp(undefined), '—');
+  assert.match(context.formatTimestamp('2026-08-17T12:00:00.000Z'), /17\/08\/2026/);
+});
+
+test('reminder hash detail ignores stale responses, preserves pagination, and retries 404s', async () => {
+  const reminders = await readFile('public/js/reminders.js', 'utf8');
+  const sourceStart = reminders.indexOf('async function loadReminderDetail(');
+  const source = reminders.slice(sourceStart, reminders.indexOf('\n\nasync function loadReminders', sourceStart));
+  const context = createReminderDetailHarness(source);
+  const firstId = '550e8400-e29b-41d4-a716-446655440000';
+  const secondId = '550e8400-e29b-41d4-a716-446655440001';
+  const first = deferred();
+  const second = deferred();
+  context.fetchImpl = path => path.includes(firstId) ? first.promise : second.promise;
+
+  context.window.location.hash = `#reminder-${firstId}`;
+  const firstLoad = context.loadReminderDetail();
+  context.window.location.hash = `#reminder-${secondId}`;
+  const secondLoad = context.loadReminderDetail();
+  first.resolve({ id: firstId, title: 'Stale' });
+  second.resolve({ id: secondId, title: 'Current' });
+  await Promise.all([firstLoad, secondLoad]);
+
+  assert.deepEqual(context.rendered.map(detail => detail.id), [secondId]);
+  assert.equal(context.page, 4);
+
+  context.window.location.hash = `#reminder-${firstId}`;
+  context.fetchImpl = async () => { throw { status: 404 }; };
+  await context.loadReminderDetail();
+  assert.match(context.states.at(-1).message, /não está disponível/);
+  assert.equal(typeof context.states.at(-1).retry, 'function');
+
+  context.fetchImpl = async () => ({ id: firstId, title: 'Retried' });
+  await context.states.at(-1).retry();
+  assert.equal(context.rendered.at(-1).id, firstId);
 });
 
 test('admin exposes paginated audit without removed sector controls', async () => {

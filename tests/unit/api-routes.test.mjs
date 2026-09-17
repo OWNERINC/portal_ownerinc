@@ -9,6 +9,9 @@ let solidesLink = null;
 let solidesPayload = null;
 const contentRows = { academy: [], benefits: [], knowledge: [], reminders: [] };
 let cmsRows = [];
+let deliveryRows = [];
+let deliveryCount = 0;
+let cronStatus = null;
 const pool = {
   async query(sql, params = []) {
     calls.push({ sql, params });
@@ -47,15 +50,25 @@ const pool = {
         .filter(row => row.content_type === contentType && sourceIds.includes(row.source_id))
         .map(row => ({ source_id: row.source_id, blocks: row.published ? row.blocks : null })) };
     }
+    if (/FROM cron_status/.test(sql)) return { rows: cronStatus ? [cronStatus] : [] };
     const tableNames = { academy: 'academy', benefits: 'benefits', knowledge: 'knowledge_base', reminders: 'reminders' };
     const table = Object.entries(tableNames).find(([, tableName]) => new RegExp(`FROM ${tableName}\\b`).test(sql))?.[0];
     if (/^\s*SELECT/i.test(sql) && table && !/COUNT\(\*\)/.test(sql)) {
-      const rows = /WHERE id = \$1/.test(sql)
+      let rows = /WHERE id = \$1/.test(sql)
         ? contentRows[table].filter(row => row.id === params[0])
         : contentRows[table];
+      if (table === 'reminders' && /WHERE id = \$1 AND active = TRUE/.test(sql)) {
+        const [id, audience, uid] = params;
+        rows = rows.filter((row) => row.active !== false
+          && (params.length < 3 || row.target_users === 'all' || row.target_users === audience
+            || (Array.isArray(row.target_users) && row.target_users.includes(uid))));
+      }
       return { rows };
     }
-    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ count: 0 }] };
+    if (/COUNT\(\*\)/.test(sql)) {
+      return { rows: [{ count: /FROM notifications_log/.test(sql) ? deliveryCount : 0 }] };
+    }
+    if (/SELECT notifications_log\.id/.test(sql)) return { rows: deliveryRows };
     return { rows: [] };
   },
   async connect() {
@@ -111,6 +124,9 @@ test.beforeEach(() => {
   solidesPayload = null;
   for (const rows of Object.values(contentRows)) rows.length = 0;
   cmsRows = [];
+  deliveryRows = [];
+  deliveryCount = 0;
+  cronStatus = null;
   process.env.SOLIDES_RELEASE_STAGE = 'off';
   delete process.env.SOLIDES_PILOT_UIDS;
 });
@@ -140,6 +156,106 @@ test('upcoming reminders are scoped and require the fixed seven-day contract', a
   assert.match(read.sql, /active = TRUE/);
   assert.match(read.sql, /target_users/);
   assert.deepEqual(read.params, ['clt', 'viewer-1']);
+});
+
+test('reminder details are authenticated, scoped, active, CMS-visible, and linkable', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  contentRows.reminders.push({
+    id, title: 'Detalhe', description: 'Conteúdo', active: true, target_users: 'all', trigger_day: 10,
+  });
+
+  const invalid = await request(app).get('/api/reminders/not-an-id');
+  assert.equal(invalid.status, 404);
+  assert.deepEqual(invalid.body, { error: 'Reminder not found.', requestId: 'test-request' });
+  assert.equal(calls.length, 0);
+
+  const response = await request(app).get(`/api/reminders/${id}`);
+  assert.equal(response.status, 200);
+  assert.equal(response.body.id, id);
+  assert.equal(response.body.content_url, `/reminders.html#reminder-${id}`);
+  const read = calls.find(({ sql }) => /SELECT \* FROM reminders/.test(sql));
+  assert.ok(read);
+  assert.match(read.sql, /id = \$1 AND active = TRUE/);
+  assert.match(read.sql, /cms_documents/);
+  assert.match(read.sql, /target_users/);
+  assert.deepEqual(read.params, [id, 'clt', 'viewer-1']);
+
+  for (const change of [
+    { active: false, target_users: 'all' },
+    { active: true, target_users: ['another-user'] },
+  ]) {
+    contentRows.reminders[0] = { ...contentRows.reminders[0], ...change };
+    calls.length = 0;
+    const hidden = await request(app).get(`/api/reminders/${id}`);
+    assert.equal(hidden.status, 404, JSON.stringify(change));
+  }
+
+  contentRows.reminders[0] = { ...contentRows.reminders[0], active: true, target_users: 'all' };
+  cmsRows = [{ content_type: 'reminder', source_id: id, published: false, blocks: [] }];
+  calls.length = 0;
+  const unpublished = await request(app).get(`/api/reminders/${id}`);
+  assert.equal(unpublished.status, 404);
+});
+
+test('cron status exposes heartbeat, execution state, and delivery state separately', async () => {
+  cronStatus = {
+    name: 'reminders', heartbeat_at: '2026-08-17T12:00:00.000Z', last_error: null,
+    attempted_count: 2, sent_count: 1, failed_count: 1, skipped_count: 0,
+    execution_status: 'succeeded', delivery_status: 'partial_failure',
+  };
+  const response = await request(app).get('/api/reminders/cron-status').set('x-test-admin', 'true');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.execution_status, 'succeeded');
+  assert.equal(response.body.delivery_status, 'partial_failure');
+  assert.equal(response.body.heartbeat_at, cronStatus.heartbeat_at);
+  const read = calls.find(({ sql }) => /FROM cron_status/.test(sql));
+  assert.match(read.sql, /CASE[\s\S]*execution_status/);
+  assert.match(read.sql, /CASE[\s\S]*delivery_status/);
+});
+
+test('reminder writes reject empty or malformed audiences and channels absent from the form', async () => {
+  for (const target of [[], ['has space'], ['valid.uid', 'valid.uid']]) {
+    calls.length = 0;
+    const response = await request(app)
+      .post('/api/reminders')
+      .set('x-test-admin', 'true')
+      .send({ title: 'Reminder', trigger_day: 10, target_users: target, channel: 'email' });
+    assert.equal(response.status, 400, JSON.stringify(target));
+    assert.equal(calls.length, 0, JSON.stringify(target));
+  }
+  calls.length = 0;
+  const channel = await request(app)
+    .post('/api/reminders')
+    .set('x-test-admin', 'true')
+    .send({ title: 'Reminder', trigger_day: 10, target_users: 'all', channel: 'both' });
+  assert.equal(channel.status, 400);
+  assert.equal(calls.length, 0);
+});
+
+test('delivery history returns reminder, recipient, reason, stable ID, and pagination fields', async () => {
+  const reminderId = '00000000-0000-4000-8000-000000000001';
+  deliveryRows = [{
+    id: '00000000-0000-4000-8000-000000000002', reminder_id: reminderId,
+    scheduled_date: '2026-08-17', status: 'failed', attempt_count: 2,
+  }];
+  deliveryCount = 1;
+  const response = await request(app)
+    .get('/api/reminders/deliveries?limit=20&offset=20&status=failed&reminder_id=00000000-0000-4000-8000-000000000001');
+  assert.equal(response.status, 403);
+  const adminResponse = await request(app)
+    .get('/api/reminders/deliveries?limit=20&offset=20&status=failed&reminder_id=00000000-0000-4000-8000-000000000001')
+    .set('x-test-admin', 'true');
+  assert.equal(adminResponse.status, 200);
+  assert.equal(adminResponse.headers['x-total-count'], '1');
+  assert.equal(adminResponse.body[0].content_url, `/reminders.html#reminder-${reminderId}`);
+  const history = calls.find(({ sql }) => /SELECT notifications_log\.id/.test(sql));
+  assert.ok(history);
+  assert.match(history.sql, /scheduled_date::text AS scheduled_date/);
+  assert.match(history.sql, /LEFT JOIN reminders/);
+  assert.match(history.sql, /LEFT JOIN users/);
+  assert.match(history.sql, /last_error AS reason/);
+  assert.match(history.sql, /ORDER BY notifications_log\.scheduled_date/);
+  assert.deepEqual(history.params, ['failed', '00000000-0000-4000-8000-000000000001', 20, 20]);
 });
 
 test('only reminder managers can request inactive and all-audience records', async () => {

@@ -84,6 +84,19 @@ test('cron grants match the CMS retention UPDATE and are checked per privilege',
   assert.doesNotMatch(verification, /public\.cms_assets', 'SELECT,DELETE'/);
 });
 
+test('cron grants row-lock privileges only for user and reminder rechecks', async () => {
+  const [provision, verification] = await Promise.all([
+    read('api/db/provision.js'),
+    read('api/db/verify-migrations.js'),
+  ]);
+  assert.match(provision, /GRANT SELECT, UPDATE ON users, reminders TO portal_cron/);
+  assert.match(verification, /NOT has_table_privilege\('portal_cron', 'public\.users', 'INSERT'\)/);
+  assert.match(verification, /NOT has_table_privilege\('portal_cron', 'public\.reminders', 'DELETE'\)/);
+  assert.match(verification, /AS cron_users_lock_privileges/);
+  assert.match(verification, /AS cron_reminders_lock_privileges/);
+  assert.doesNotMatch(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON users, reminders TO portal_cron/);
+});
+
 test('job title listing hides inactive titles by default', async () => {
   const routes = await read('api/routes/job-titles.js');
   assert.match(routes, /const where = req\.query\.all === 'true' \? '' : 'WHERE jt\.active = TRUE';/);
@@ -235,7 +248,7 @@ test('cron health deduplicates SMTP alerts and sends recovery notifications', as
   assert.match(health, /worker recuperado/);
   assert.match(health, /worker atrasado/);
   assert.match(health, /name IN \('reminders', 'retention'\)/);
-  assert.match(health, /!signature && row\?\.alert_signature/);
+  assert.match(health, /!signature && canRecover\(row\) && row\.alert_signature/);
   assert.match(compose, /OPERATIONAL_ALERT_EMAIL: \$\{OPERATIONAL_ALERT_EMAIL:-\}/);
   assert.match(example, /OPERATIONAL_ALERT_EMAIL=/);
   assert.match(packageJson, /"nodemailer"/);

@@ -5,6 +5,9 @@ import { clear, element, safeHttpUrl, showState } from './ui.js';
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 
+const TIME_ZONE = 'America/Sao_Paulo';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const editorialImages = [
   ['https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=600&q=80', 'Sala de trabalho iluminada'],
   ['https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=600&q=80', 'Notebook aberto sobre uma mesa'],
@@ -13,7 +16,36 @@ const editorialImages = [
 
 function formatDate(value) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'recentemente' : new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(date).replace('.', '');
+  return Number.isNaN(date.getTime()) ? 'recentemente' : new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TIME_ZONE, day: '2-digit', month: 'short',
+  }).format(date).replace('.', '');
+}
+
+function civilDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  return parts.reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+}
+
+function civilDateOrdinal(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : NaN;
+}
+
+function daysUntil(value) {
+  const today = civilDateKey();
+  const todayKey = `${today.year}-${today.month}-${today.day}`;
+  const difference = civilDateOrdinal(value) - civilDateOrdinal(todayKey);
+  return Number.isFinite(difference) ? Math.max(0, Math.round(difference / 86400000)) : 0;
+}
+
+function reminderContentHref(reminder) {
+  const id = typeof reminder?.id === 'string' && UUID_PATTERN.test(reminder.id)
+    ? reminder.id.toLowerCase() : null;
+  if (!id) return './reminders.html';
+  const expected = `/reminders.html#reminder-${id}`;
+  return reminder.content_url === expected ? reminder.content_url : expected;
 }
 
 function excerpt(blocks, fallback) {
@@ -92,9 +124,7 @@ async function loadReminders() {
   try {
     const reminders = await fetchAPI('/api/reminders/upcoming?days=7');
     const upcoming = reminders.map(reminder => {
-      const occurrence = new Date(`${reminder.next_occurrence}T00:00:00Z`);
-      const days = Math.max(0, Math.round((occurrence - new Date()) / 86400000));
-      return { reminder, days };
+      return { reminder, days: daysUntil(reminder.next_occurrence) };
     });
     if (!upcoming.length) return showState(remindersContainer, 'Nenhum lembrete destinado a você nos próximos 7 dias.');
     clear(remindersContainer);
@@ -103,7 +133,7 @@ async function loadReminders() {
       category: days === 0 ? 'Hoje' : `Em ${days} ${days === 1 ? 'dia' : 'dias'}`,
       description: reminder.description || '',
       blocks: reminder.content_blocks,
-      href: './reminders.html',
+      href: reminderContentHref(reminder),
     })));
   } catch {
     showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);

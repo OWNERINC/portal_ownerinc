@@ -24,11 +24,46 @@
 
 ## Lembretes
 
-1. O cron executa diariamente às 08:00 no fuso de São Paulo.
-2. O serviço seleciona lembretes ativos para o dia corrente.
-3. Os destinatários são resolvidos a partir dos usuários no PostgreSQL.
-4. O Resend SMTP envia o email.
-5. O resultado é registrado em `notifications_log`.
+1. O cron executa diariamente às 08:00 no fuso de São Paulo e usa chaves de
+   data civil, sem depender do fuso do processo ou do navegador.
+2. O serviço seleciona lembretes ativos para a data corrente e não faz
+   catch-up de uma ocorrência anterior ao instante de criação do lembrete.
+3. Os destinatários são resolvidos a partir dos usuários no PostgreSQL; a API
+   rejeita audiência vazia, UID fora do formato Firebase e canais que a UI não
+   oferece (`whatsapp`/`both`).
+4. Cada ocorrência é reivindicada uma vez em `notifications_log`; a tentativa
+   fica em `sending` antes do SMTP e o `attempt_count` é incrementado pelo
+   próprio ledger. Códigos SMTP transitórios conhecidos podem voltar a
+   `pending`; códigos permanentes encerram a ocorrência.
+5. Antes do envio, o cron relê o destinatário e mantém sua linha bloqueada com
+   `FOR UPDATE` dentro da transação. A seleção e o recheck aplicam os mesmos
+   gates de autenticação (`permissions.accountDisabled` booleano/string e
+   `firebase_enable_pending`). Conta removida/desativada, sem e-mail ou fora da
+   audiência corrente encerra a ocorrência como `skipped` sem envio; o snapshot
+   bloqueado é o usado no email e o motivo específico fica no ledger.
+6. O Resend SMTP envia o email com um link absoluto para a âncora pública do
+   lembrete, derivada de um UUID validado. O histórico administrativo expõe
+   lembrete, destinatário, motivo e tentativas com paginação.
+7. `GET /api/reminders/:id` aplica autenticação, `active`, publicação CMS e
+   audiência. A página de lembretes lê o fragmento, busca esse detalhe
+   autoritativo e o renderiza/focaliza sem alterar ou duplicar a página atual.
+8. `heartbeat_at` mede liveness; `last_error`/`last_success_at` representam o
+   resultado da execução do worker, enquanto os contadores e o ledger
+   representam o resultado de entrega, incluindo falhas isoladas. O healthcheck
+   distingue execução `running` de uma execução concluída sem erro e só envia
+   recovery depois de um `last_success_at` posterior ao início.
+9. Falhas do transporte/classificação SMTP podem atualizar a ocorrência como
+   `failed` ou `pending`; um resultado SMTP sem evidência de aceite é ambíguo e
+   propaga como erro operacional. Falhas de SQL, lock, configuração de URL ou
+   finalização propagam como erro de execução e não atualizam
+   `last_success_at`. Se o processo cair depois de `sending`, a ocorrência vencida é encerrada
+   como `failed` com resultado desconhecido e não é reenviada. O reaper encerra
+   `sending` ou `pending` órfãos causados por remoção do lembrete ou destinatário
+   como `skipped`, com motivo específico, antes de aplicar o timeout genérico, e
+   soma essas recuperações aos contadores da execução. Isso evita duplicidade
+   quando o SMTP já aceitou a mensagem, mas não prova entrega absoluta: um outbox
+   ou idempotência do provedor seria necessário para essa garantia e não faz parte
+   desta arquitetura.
 
 ## Conteúdo CMS
 

@@ -379,8 +379,16 @@ try {
   assert.deepEqual(roles.rows.map(({ rolname }) => rolname), ['portal_api', 'portal_cron']);
   const privileges = await pool.query(`SELECT
     has_table_privilege('portal_cron', 'public.autocard_cards', 'SELECT') AS cards_select,
-      (has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT')
-        AND has_table_privilege('portal_cron', 'public.autocard_media', 'DELETE')) AS media_select_delete,
+       (has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT')
+         AND has_table_privilege('portal_cron', 'public.autocard_media', 'DELETE')) AS media_select_delete,
+       (has_table_privilege('portal_cron', 'public.users', 'SELECT')
+         AND has_table_privilege('portal_cron', 'public.users', 'UPDATE')
+         AND NOT has_table_privilege('portal_cron', 'public.users', 'INSERT')
+         AND NOT has_table_privilege('portal_cron', 'public.users', 'DELETE')) AS cron_users_lock,
+       (has_table_privilege('portal_cron', 'public.reminders', 'SELECT')
+         AND has_table_privilege('portal_cron', 'public.reminders', 'UPDATE')
+         AND NOT has_table_privilege('portal_cron', 'public.reminders', 'INSERT')
+         AND NOT has_table_privilege('portal_cron', 'public.reminders', 'DELETE')) AS cron_reminders_lock,
       (has_table_privilege('portal_api', 'public.autocard_cards', 'SELECT')
         AND has_table_privilege('portal_api', 'public.autocard_cards', 'INSERT')
         AND has_table_privilege('portal_api', 'public.autocard_cards', 'UPDATE')
@@ -434,6 +442,8 @@ try {
         AND has_table_privilege('portal_cron', 'public.audit_log', 'DELETE')) AS audit_privileges`);
   assert.equal(privileges.rows[0].cards_select, true);
   assert.equal(privileges.rows[0].media_select_delete, true);
+  assert.equal(privileges.rows[0].cron_users_lock, true);
+  assert.equal(privileges.rows[0].cron_reminders_lock, true);
   assert.equal(privileges.rows[0].api_autocard_cards, true);
   assert.equal(privileges.rows[0].api_autocard_media, true);
   assert.equal(privileges.rows[0].api_cms_documents, true);

@@ -61,11 +61,16 @@ test('contract invariants and import identity survive fresh schema and upgrades'
   assert.match(schema, /firebase_uid TEXT/);
   assert.match(provision, /GRANT DELETE ON user_import_jobs TO portal_cron/);
   assert.match(provision, /GRANT SELECT \(expires_at\) ON user_import_jobs TO portal_cron/);
+  assert.match(provision, /GRANT SELECT, UPDATE ON users, reminders TO portal_cron/);
   assert.match(verification, /has_column_privilege\('portal_cron', 'public\.user_import_jobs', 'expires_at', 'SELECT'\)/);
   assert.match(verification, /user_contract_invariants/);
   assert.match(migrationTest, /const expectedVersions = \[[\s\S]*'031_contract_invariants'[\s\S]*'032_user_import_identity'/);
   assert.equal((migrationTest.match(/assert\.deepEqual\([^\n]+expectedVersions\)/g) || []).length, 2);
   assert.match(migrationTest, /cron_user_import_jobs/);
+  assert.match(migrationTest, /NOT has_table_privilege\('portal_cron', 'public\.users', 'DELETE'\)/);
+  assert.match(migrationTest, /NOT has_table_privilege\('portal_cron', 'public\.reminders', 'INSERT'\)/);
+  assert.match(migrationTest, /AS cron_users_lock/);
+  assert.match(migrationTest, /AS cron_reminders_lock/);
 });
 
 test('pending registration cleanup is resumable after external deletion failure', async () => {

@@ -13,6 +13,10 @@ if (canManage) {
 
 const tbody = document.getElementById('reminders-tbody');
 const remindersPagination = document.getElementById('reminders-pagination');
+const reminderDetail = document.getElementById('reminder-detail');
+const reminderDetailTitle = document.getElementById('reminder-detail-title');
+const reminderDetailMeta = document.getElementById('reminder-detail-meta');
+const reminderDetailContent = document.getElementById('reminder-detail-content');
 const modal = document.getElementById('modal-reminder');
 const form = document.getElementById('reminder-form');
 let reminders = [];
@@ -24,6 +28,41 @@ let deliveriesPage = 0;
 let deliveriesTotal = 0;
 const PAGE_SIZE = 50;
 const DELIVERY_PAGE_SIZE = 20;
+const TIME_ZONE = 'America/Sao_Paulo';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const REMINDER_HASH_PATTERN = /^#reminder-([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+let deliveriesRequest = 0;
+let reminderDetailRequest = 0;
+
+function reminderContentHref(reminder) {
+  const id = typeof reminder?.id === 'string' && UUID_PATTERN.test(reminder.id)
+    ? reminder.id.toLowerCase() : null;
+  if (!id) return null;
+  const expected = `/reminders.html#reminder-${id}`;
+  return reminder.content_url === expected ? reminder.content_url : expected;
+}
+
+function reminderIdFromHash(hash = window.location.hash) {
+  const match = REMINDER_HASH_PATTERN.exec(hash);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function formatCivilDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return '—';
+  const date = new Date(`${value}T12:00:00.000Z`);
+  return Number.isNaN(date.valueOf()) ? '—' : new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric',
+  }).format(date);
+}
+
+function formatTimestamp(value) {
+  if (value === null || value === undefined) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? '—' : new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TIME_ZONE, dateStyle: 'short', timeStyle: 'short',
+  }).format(date);
+}
 
 function tableState(message, retry) {
   if (remindersPagination) clear(remindersPagination);
@@ -52,7 +91,12 @@ function renderTable() {
   clear(tbody);
   reminders.forEach(reminder => {
     const row = element('tr');
-    const title = element('td', { className: 'break-text' }, [element('strong', { text: reminder.title })]);
+    const contentHref = reminderContentHref(reminder);
+    const titleContent = element('strong', { text: reminder.title });
+    const title = element('td', { className: 'break-text' }, [contentHref
+      ? element('a', { href: contentHref, 'aria-label': `Abrir conteúdo: ${reminder.title}` }, titleContent)
+      : titleContent]);
+    if (contentHref) row.id = `reminder-${reminder.id.toLowerCase()}`;
     const content = element('div', { className: 'table-detail reminder-content' });
     renderBlocks(content, reminder.content_blocks, { fallbackText: reminder.description || '' });
     if (content.childNodes.length) title.append(content);
@@ -77,6 +121,62 @@ function renderTable() {
       element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', ...(page === 0 ? { disabled: '' } : {}), on: { click: () => { page -= 1; loadReminders(); } } }),
       element('span', { text: `Página ${page + 1} de ${pageCount}` }),
       element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', ...(page >= pageCount - 1 ? { disabled: '' } : {}), on: { click: () => { page += 1; loadReminders(); } } }),
+    );
+  }
+}
+
+function focusReminderDetail() {
+  reminderDetail?.focus({ preventScroll: false });
+}
+
+function renderReminderDetailState(message, retry) {
+  if (!reminderDetail) return;
+  reminderDetail.hidden = false;
+  reminderDetailTitle.textContent = 'Detalhe do lembrete';
+  reminderDetailMeta.textContent = '';
+  clear(reminderDetailContent).append(element('p', { text: message }));
+  if (retry) reminderDetailContent.append(element('button', {
+    className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry },
+  }));
+  focusReminderDetail();
+}
+
+function renderReminderDetail(reminder) {
+  if (!reminderDetail) return;
+  reminderDetail.hidden = false;
+  reminderDetailTitle.textContent = reminder.title || 'Lembrete';
+  reminderDetailMeta.textContent = `Dia ${reminder.trigger_day || '—'} · ${targetLabel(reminder.target_users)}`;
+  renderBlocks(reminderDetailContent, reminder.content_blocks, { fallbackText: reminder.description || '' });
+  if (!reminderDetailContent.childNodes.length) {
+    reminderDetailContent.append(element('p', { text: 'Este lembrete não possui conteúdo publicado.' }));
+  }
+  focusReminderDetail();
+}
+
+async function loadReminderDetail() {
+  if (!reminderDetail) return;
+  const id = reminderIdFromHash();
+  const requestToken = ++reminderDetailRequest;
+  if (!id) {
+    reminderDetail.hidden = true;
+    clear(reminderDetailContent);
+    return;
+  }
+  reminderDetail.hidden = false;
+  reminderDetailTitle.textContent = 'Carregando lembrete…';
+  reminderDetailMeta.textContent = '';
+  clear(reminderDetailContent).append(element('p', { className: 'loading-state', text: 'Carregando conteúdo…' }));
+  try {
+    const detail = await fetchAPI(`/api/reminders/${encodeURIComponent(id)}`);
+    if (requestToken !== reminderDetailRequest || reminderIdFromHash() !== id) return;
+    renderReminderDetail(detail);
+  } catch (error) {
+    if (requestToken !== reminderDetailRequest || reminderIdFromHash() !== id) return;
+    renderReminderDetailState(
+      error.status === 404
+        ? 'Este lembrete não está disponível para sua conta.'
+        : 'Não foi possível carregar este lembrete.',
+      () => loadReminderDetail(),
     );
   }
 }
@@ -112,12 +212,15 @@ async function loadReminders(reset = false) {
 
 async function loadDeliveryManager() {
   if (!canManage) return;
+  const requestToken = ++deliveriesRequest;
+  const requestPage = deliveriesPage;
   const deliveriesBody = document.getElementById('deliveries-tbody');
   try {
-    const params = new URLSearchParams({ limit: String(DELIVERY_PAGE_SIZE), offset: String(deliveriesPage * DELIVERY_PAGE_SIZE) });
+    const params = new URLSearchParams({ limit: String(DELIVERY_PAGE_SIZE), offset: String(requestPage * DELIVERY_PAGE_SIZE) });
     const filters = {
       status: document.getElementById('delivery-status').value,
       channel: document.getElementById('delivery-channel').value,
+      reminder_id: document.getElementById('delivery-reminder').value.trim(),
       user_uid: document.getElementById('delivery-user').value.trim(),
       scheduled_from: document.getElementById('delivery-from').value,
       scheduled_to: document.getElementById('delivery-to').value,
@@ -127,25 +230,47 @@ async function loadDeliveryManager() {
       fetchAPIPage(`/api/reminders/deliveries?${params}`),
       fetchAPI('/api/reminders/cron-status'),
     ]);
-    deliveriesTotal = total ?? deliveries.length;
+    if (requestToken !== deliveriesRequest) return;
+    const loaded = deliveries || [];
+    const loadedTotal = total ?? loaded.length;
+    if (!loaded.length && requestPage > 0) {
+      const lastPage = Math.max(0, Math.ceil(loadedTotal / DELIVERY_PAGE_SIZE) - 1);
+      const fallbackPage = Math.min(requestPage - 1, lastPage);
+      if (fallbackPage !== requestPage) {
+        deliveriesPage = fallbackPage;
+        return loadDeliveryManager();
+      }
+    }
+    if (requestToken !== deliveriesRequest) return;
+    deliveriesPage = requestPage;
+    deliveriesTotal = loadedTotal;
     clear(deliveriesBody);
-    if (!deliveries.length) {
-      deliveriesBody.append(element('tr', {}, element('td', { colspan: '5', className: 'empty-state', text: 'Nenhuma entrega registrada.' })));
+    if (!loaded.length) {
+      deliveriesBody.append(element('tr', {}, element('td', { colspan: '7', className: 'empty-state', text: 'Nenhuma entrega registrada.' })));
     } else {
-      deliveries.forEach(delivery => {
-        const date = delivery.scheduled_date ? new Date(`${delivery.scheduled_date}T00:00:00`) : null;
+      loaded.forEach(delivery => {
+        const contentHref = reminderContentHref({ id: delivery.reminder_id, content_url: delivery.content_url });
+        const reminderLabel = delivery.reminder_title || delivery.reminder_id || 'Lembrete removido';
+        const recipient = [delivery.recipient_name, delivery.recipient_email].filter(Boolean).join(' · ')
+          || delivery.user_uid || 'Usuário removido';
         deliveriesBody.append(element('tr', {}, [
-          element('td', { text: date && !Number.isNaN(date.valueOf()) ? new Intl.DateTimeFormat('pt-BR').format(date) : '—' }),
-          element('td', { className: 'break-text', text: delivery.user_uid || '—' }),
+          element('td', { text: formatCivilDate(delivery.scheduled_date) }),
+          element('td', { className: 'break-text' }, contentHref
+            ? element('a', { href: contentHref, text: reminderLabel })
+            : document.createTextNode(reminderLabel)),
+          element('td', { className: 'break-text', text: recipient }),
           element('td', { text: delivery.channel || '—' }),
-          element('td', {}, element('span', { className: `badge ${delivery.status === 'sent' ? 'badge-green' : 'badge-gray'}`, text: delivery.status || '—' })),
+          element('td', {}, element('span', { className: `badge ${delivery.status === 'sent' ? 'badge-green' : delivery.status === 'failed' ? 'badge-red' : 'badge-gray'}`, text: delivery.status || '—' })),
+          element('td', { className: 'break-text', text: delivery.reason || delivery.last_error || '—' }),
           element('td', { text: String(delivery.attempt_count || 0) }),
         ]));
       });
     }
-    const deliveryPagination = clear(document.getElementById('deliveries-pagination'));
+    const deliveryPaginationElement = document.getElementById('deliveries-pagination');
+    if (deliveryPaginationElement) clear(deliveryPaginationElement);
+    const deliveryPagination = deliveryPaginationElement;
     const pageCount = Math.max(1, Math.ceil(deliveriesTotal / DELIVERY_PAGE_SIZE));
-    if (pageCount > 1) {
+    if (deliveryPagination && pageCount > 1) {
       deliveryPagination.append(
         element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', ...(deliveriesPage === 0 ? { disabled: '' } : {}), on: { click: () => { deliveriesPage -= 1; loadDeliveryManager(); } } }),
         element('span', { text: `Página ${deliveriesPage + 1} de ${pageCount}` }),
@@ -153,22 +278,33 @@ async function loadDeliveryManager() {
       );
     }
     const health = document.getElementById('cron-health');
+    if (!health) return;
     if (!cron) {
       health.textContent = 'Cron sem heartbeat';
       health.className = 'badge badge-gray';
     } else {
       const heartbeat = new Date(cron.heartbeat_at);
       const stale = Number.isNaN(heartbeat.valueOf()) || Date.now() - heartbeat.valueOf() > 26 * 60 * 60 * 1000;
-      const unhealthy = !!cron.last_error || stale;
-      health.textContent = unhealthy ? (stale ? 'Cron atrasado' : 'Cron com falha') : `Cron ativo · ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(heartbeat)}`;
-      health.className = `badge ${unhealthy ? 'badge-gray' : 'badge-green'}`;
-      health.title = cron.last_error || `Último sucesso: ${cron.last_success_at || 'não registrado'}`;
+      const executionFailed = cron.execution_status === 'failed' || (!cron.execution_status && !!cron.last_error);
+      const deliveryFailed = Number(cron.failed_count) > 0;
+      const unhealthy = executionFailed || stale;
+      const timestamp = formatTimestamp(cron.heartbeat_at);
+      health.textContent = unhealthy
+        ? (stale ? 'Cron atrasado' : 'Cron com falha')
+        : deliveryFailed
+          ? `Cron ativo · ${timestamp} · ${cron.failed_count} falha(s) de entrega`
+          : `Cron ativo · ${timestamp}`;
+      health.className = `badge ${unhealthy ? 'badge-gray' : deliveryFailed ? 'badge-red' : 'badge-green'}`;
+      health.title = cron.execution_error || cron.last_error
+        || `Execução: ${cron.execution_status || 'concluída'} · Entrega: ${cron.delivery_status || 'sem dados'} · Último sucesso: ${formatTimestamp(cron.last_success_at)}`;
     }
   } catch {
-    const state = element('td', { colspan: '5', className: 'empty-state', role: 'alert', text: 'Não foi possível carregar o histórico. ' });
+    if (requestToken !== deliveriesRequest) return;
+    const state = element('td', { colspan: '7', className: 'empty-state', role: 'alert', text: 'Não foi possível carregar o histórico. ' });
     state.append(element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: loadDeliveryManager } }));
     clear(deliveriesBody).append(element('tr', {}, state));
-    document.getElementById('cron-health').textContent = 'Cron indisponível';
+    const health = document.getElementById('cron-health');
+    if (health) health.textContent = 'Cron indisponível';
   }
 }
 
@@ -194,7 +330,7 @@ function editReminder(reminder) {
   document.getElementById('r-target').value = target;
   document.getElementById('r-uids').value = Array.isArray(reminder.target_users) ? reminder.target_users.join('\n') : '';
   syncTargetFields();
-  document.getElementById('r-channel').value = reminder.channel || 'email';
+  document.getElementById('r-channel').value = 'email';
   document.getElementById('r-active').checked = !!reminder.active;
   openDialog(modal, document.getElementById('r-title'));
 }
@@ -208,8 +344,8 @@ function syncTargetFields() {
 function readTargetUsers() {
   const target = document.getElementById('r-target').value;
   if (target !== 'uids') return target;
-  const values = document.getElementById('r-uids').value.split(/\s+/).map(value => value.trim()).filter(Boolean);
-  if (!values.length || values.length > 500 || new Set(values).size !== values.length || values.some(value => value.length > 128)) {
+  const values = document.getElementById('r-uids').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  if (!values.length || values.length > 500 || new Set(values).size !== values.length || values.some(value => !UID_PATTERN.test(value))) {
     throw new Error('Informe UIDs válidos, únicos e um por linha.');
   }
   return values;
@@ -220,7 +356,7 @@ async function deleteReminder(id) {
   try {
     await fetchAPI(`/api/reminders/${encodeURIComponent(id)}`, { method: 'DELETE' });
     showToast('Lembrete excluído.');
-     await loadReminders(true);
+    await loadReminders(true);
   } catch (error) {
     showToast(`Não foi possível excluir: ${error.message}`);
   }
@@ -229,13 +365,13 @@ async function deleteReminder(id) {
 form.addEventListener('submit', async event => {
   event.preventDefault();
   if (!form.reportValidity()) return;
-    let targetUsers;
-    try { targetUsers = readTargetUsers(); } catch (error) { showToast(error.message); return; }
-    const data = {
+  let targetUsers;
+  try { targetUsers = readTargetUsers(); } catch (error) { showToast(error.message); return; }
+  const data = {
     title: document.getElementById('r-title').value.trim(),
     description: document.getElementById('r-desc').value.trim(),
     trigger_day: Number(document.getElementById('r-day').value),
-      target_users: targetUsers,
+    target_users: targetUsers,
     channel: document.getElementById('r-channel').value,
     active: document.getElementById('r-active').checked,
   };
@@ -268,5 +404,7 @@ document.getElementById('delivery-clear').addEventListener('click', () => {
   loadDeliveryManager();
 });
 syncTargetFields();
+window.addEventListener('hashchange', loadReminderDetail);
 loadReminders(true);
 loadDeliveryManager();
+loadReminderDetail();
