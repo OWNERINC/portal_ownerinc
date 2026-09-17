@@ -33,9 +33,9 @@
 - `public/autocard/styles.css`: bounded preview container, upload/status/pagination/overflow presentation, and mobile rules.
 - `tests/unit/autocard-invariants.test.mjs`: focused VM, source, API, race, pagination, overflow, and responsive contracts.
 - `CHANGELOG.md`: one concise user-visible AutoCard entry.
-- `.superpowers/sdd/2026-09-11-portal-full-implementation/task-8-report.md`: tracked verification report for the completed task.
-- `.superpowers/sdd/2026-09-11-portal-full-implementation/progress.md`: local task ledger; keep it out of the production commit unless already tracked by the repository.
-- `.superpowers/sdd/2026-09-11-portal-full-implementation/task-8-brief.md`: task-specific acceptance checklist.
+- `.superpowers/sdd/2026-09-17-autocard-task-8/task-8-report.md`: tracked verification report for the completed task.
+- `.superpowers/sdd/2026-09-17-autocard-task-8/progress.md`: local task ledger; keep it out of the production commit unless already tracked by the repository.
+- `.superpowers/sdd/2026-09-17-autocard-task-8/task-1-brief.md` through `task-5-brief.md`: generated task-specific acceptance checklists.
 
 ### Task 1: Close AutoCard API Boundary Gaps
 
@@ -358,9 +358,8 @@ git commit -m "fix: make AutoCard overflow explicit"
 
 **Files:**
 - Modify: `CHANGELOG.md`
-- Create: `.superpowers/sdd/2026-09-11-portal-full-implementation/task-8-report.md`
-- Modify: `.superpowers/sdd/2026-09-11-portal-full-implementation/progress.md`
-- Modify: `.superpowers/sdd/2026-09-11-portal-full-implementation/task-8-brief.md`
+- Create: `.superpowers/sdd/2026-09-17-autocard-task-8/task-8-report.md`
+- Modify: `.superpowers/sdd/2026-09-17-autocard-task-8/progress.md`
 - Verify: `docs/superpowers/specs/2026-09-17-autocard-task-8-design.md`
 
 **Interfaces:**
@@ -402,11 +401,11 @@ Confirm that only the approved AutoCard API/UI/test/changelog behavior is presen
 
 - [ ] **Step 4: Mark the ledger and brief complete**
 
-Create `.superpowers/sdd/2026-09-11-portal-full-implementation/task-8-report.md` with the implementation checkpoint, focused count, full `npm run verify` count, `git diff --check`, reviewer result, and remaining browser/PostgreSQL/live acceptance limitations. Update the local progress and brief checkboxes only after the reviewer returns `PASS`.
+Create `.superpowers/sdd/2026-09-17-autocard-task-8/task-8-report.md` with the implementation checkpoint, focused count, full `npm run verify` count, `git diff --check`, reviewer result, and remaining browser/PostgreSQL/live acceptance limitations. Update the local progress and brief checkboxes only after the reviewer returns `PASS`.
 
 - [ ] **Step 5: Commit the documentation record**
 
 ```sh
-git add CHANGELOG.md .superpowers/sdd/2026-09-11-portal-full-implementation/task-8-report.md
+git add CHANGELOG.md .superpowers/sdd/2026-09-17-autocard-task-8/task-8-report.md
 git commit -m "docs: record AutoCard Task 8 verification"
 ```
