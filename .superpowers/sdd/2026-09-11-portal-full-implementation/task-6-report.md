@@ -3,8 +3,8 @@
 ## Status
 
 Implementado e corrigido após o fix round no worktree `feature/task-6-cron-gates`,
-com a validação local focada concluída. Nenhum commit, serviço Docker ou
-alteração no checkout pai foi feito.
+revisado com `PASS` e integrado à `main` no checkpoint `512d115`. Nenhum
+serviço Docker ou externo foi iniciado.
 
 ## Entregas
 
@@ -106,8 +106,9 @@ Resultados:
 - `node scripts/verify.mjs syntax`: `verify: ok`.
 - `node scripts/generate-public-shell.mjs --check`: passou sem saída.
 - Suíte focada: **169 testes pass, 0 falhas, 0 cancelados, 0 skipped**.
-- `npm run verify`: não executado por restrição da Task 6 antes de um
-  checkpoint commitado.
+- Após o checkpoint `512d115`, `npm run verify` passou: suíte completa com
+  **351 testes pass, 0 falhas, 0 cancelados, 0 skipped**, além de syntax,
+  security e compose checks.
 
 ## Limitações conhecidas
 
