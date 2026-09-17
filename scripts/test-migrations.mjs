@@ -352,7 +352,7 @@ try {
   );
   await assert.rejects(
     client.query(`INSERT INTO autocard_cards (name, template, "values", icon)
-      VALUES ('invalid icon fixture', 'comunicado', '{}'::jsonb, 'not-safe')`),
+      VALUES ('invalid icon fixture', 'comunicado', '{}'::jsonb, 'not_safe')`),
     /autocard_cards_icon_check/,
   );
   const cmsConstraints = await pool.query(`SELECT conname
