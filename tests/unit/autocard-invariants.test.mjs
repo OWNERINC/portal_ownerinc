@@ -94,6 +94,9 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
     naturalWidth: id === 'cropImage' ? 1000 : 0,
     naturalHeight: id === 'cropImage' ? 500 : 0,
     complete: id === 'cropImage',
+    files: [],
+    disabled: false,
+    hidden: false,
     parentElement: null,
     open: false,
     focused: false,
@@ -101,6 +104,10 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
     onclick: null,
     onchange: null,
     oninput: null,
+    click() {
+      this.clicks = (this.clicks || 0) + 1;
+      this.onclick?.();
+    },
     dispatchEvent(event) {
       if (event.type === 'input') this.oninput?.(event);
       listeners.get(event.type)?.forEach(handler => handler({ ...event, currentTarget: this }));
@@ -111,6 +118,7 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
     },
     setAttribute(name, value) {
       this.attributes[name] = String(value);
+      if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, character) => character.toUpperCase())] = String(value);
     },
     setPointerCapture(pointerId) {
       this.pointerId = pointerId;
@@ -126,6 +134,9 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
       if (name !== 'style') return this.attributes[name] || null;
       const source = this.innerHTML.match(/<img class="card-media" src="[^"]+" style="([^"]*)"/);
       return this.attributes.style || source?.[1] || null;
+    },
+    hasAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attributes, name);
     },
     getBoundingClientRect() {
       return { width: this.rectWidth || this.clientWidth, height: this.rectHeight || this.clientHeight };
@@ -170,6 +181,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
   const observers = [];
   const resizeObservers = [];
   const requests = [];
+  const apiRequests = [];
   const createdUrls = [];
   const revokedUrls = [];
   const events = [];
@@ -177,6 +189,8 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
   let imageDecodeError = null;
   let decodeCalls = 0;
   let downloadClicks = 0;
+  let promptValue = null;
+  let confirmValue = true;
   const document = {
     activeElement: null,
     fonts: { get ready() { events.push('fonts'); return Promise.resolve(); } },
@@ -202,6 +216,13 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
     querySelector() {
       return null;
     },
+    addEventListener(type, handler) {
+      if (!listeners.has(`document:${type}`)) listeners.set(`document:${type}`, []);
+      listeners.get(`document:${type}`).push(handler);
+    },
+    dispatchEvent(event) {
+      listeners.get(`document:${event.type}`)?.forEach(handler => handler(event));
+    },
     querySelectorAll(selector) {
       if (selector.includes('#cardCanvas')) return elements.get('cardCanvas')?.querySelectorAll(selector) || [];
       return [];
@@ -209,9 +230,17 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
   };
   const window = {
     addEventListener(type, handler) {
-      listeners.set(type, handler);
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    dispatchEvent(event) {
+      listeners.get(event.type)?.forEach(handler => handler(event));
     },
     lucide: null,
+    location: { origin: 'http://localhost' },
+    confirm() {
+      return confirmValue;
+    },
   };
   const URL = {
     createObjectURL() {
@@ -251,19 +280,42 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
       this.type = type;
     }
   }
+  class Image {
+    constructor() {
+      this.naturalWidth = 1000;
+      this.naturalHeight = 1000;
+      this.complete = false;
+      this.onload = null;
+      this.onerror = null;
+    }
+
+    set src(value) {
+      this._src = value;
+      this.complete = true;
+      this.onload?.();
+    }
+
+    get src() {
+      return this._src || '';
+    }
+  }
   const fetchAPIAsset = (path) => new Promise((resolve, reject) => {
     requests.push({ path, resolve, reject });
+  });
+  const fetchAPI = (path, options = {}) => new Promise((resolve, reject) => {
+    apiRequests.push({ path, options, resolve, reject });
   });
   const drain = () => new Promise(resolve => setImmediate(resolve));
   const context = vm.createContext({
     Event,
+    Image,
     MutationObserver,
     ...(resizeObserver ? { ResizeObserver } : {}),
     URL,
     clearTimeout,
     console,
     document,
-    fetchAPI: async () => ({}),
+    fetchAPI,
     fetchAPIAsset,
     html2canvas: async (element, options) => {
       events.push('capture');
@@ -274,16 +326,22 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
       callback();
       return 0;
     },
+    prompt() {
+      return promptValue;
+    },
+    confirm() {
+      return confirmValue;
+    },
     window,
   });
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
-  vm.runInContext(`${cropSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard };`, context);
+  vm.runInContext(`${cropSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved };`, context);
   return {
     cardCanvas: elements.get('cardCanvas'),
     createdUrls,
     dispatch(type, event = { type }) {
-      listeners.get(type)?.(event);
+      listeners.get(type)?.forEach(handler => handler(event));
     },
     flushMutations() {
       observers.forEach(observer => observer.callback());
@@ -300,16 +358,91 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false } = {}) {
       requests[index].reject(error);
       await drain();
     },
+    async rejectAPI(index, error) {
+      apiRequests[index].reject(error);
+      await drain();
+    },
     requests,
+    apiRequests,
     async resolve(index) {
+      return this.resolveAsset(index);
+    },
+    async resolveAsset(index) {
       const url = URL.createObjectURL({});
       requests[index].resolve(url);
       await drain();
       return url;
     },
+    async resolveAPI(index, value) {
+      apiRequests[index].resolve(value);
+      await drain();
+      return value;
+    },
     revokedUrls,
     state: () => context.__autocardTest.current(),
     selectTemplate: (key, card) => context.__autocardTest.selectTemplate(key, card),
+    clickUpload() {
+      elements.get('imageButton').click();
+    },
+    fileInputClicks: () => elements.get('imageInput').clicks || 0,
+    fileInputValue: () => elements.get('imageInput').value,
+    async chooseFile(file) {
+      const input = elements.get('imageInput');
+      input.files = [file];
+      input.value = file.name;
+      input.onchange?.({ type: 'change', target: input });
+      await drain();
+      return this.flushAsync();
+    },
+    mediaStatus: () => elements.get('mediaStatus').getAttribute('data-state'),
+    mediaStatusText: () => elements.get('mediaStatus').textContent,
+    savedList: () => elements.get('savedList'),
+    setPrompt(value) {
+      promptValue = value;
+    },
+    saveCard: () => context.__autocardTest.saveCard(),
+    loadSaved: offset => context.__autocardTest.loadSaved(offset),
+    dispatchClick(anchor = {}) {
+      const target = anchor;
+      const event = {
+        type: 'click',
+        target,
+        button: 0,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+      };
+      if (!target.closest) target.closest = selector => selector === 'a[href]' ? target : null;
+      document.dispatchEvent(event);
+      return !event.defaultPrevented;
+    },
+    confirmNavigation(answer) {
+      confirmValue = answer;
+      return this.dispatchClick({
+        href: './dashboard.html',
+        origin: 'http://localhost',
+        target: '',
+        getAttribute(name) { return name === 'href' ? this.href : null; },
+        hasAttribute() { return false; },
+        closest(selector) { return selector === 'a[href]' ? this : null; },
+      });
+    },
+    beforeUnloadBlocked() {
+      const event = {
+        type: 'beforeunload',
+        returnValue: null,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+      };
+      window.dispatchEvent(event);
+      return event.returnValue === '';
+    },
+    async flushAsync() {
+      await drain();
+      await drain();
+    },
     isHidden: id => elements.get(id).classList.contains('hidden'),
     openCrop() {
       const button = elements.get('cropButton');
@@ -753,6 +886,130 @@ test('AutoCard export executes rendered geometry and blocks undecodable images',
   assert.match(harness.toast().textContent, /A imagem ainda não está pronta para exportação/);
 });
 
+test('AutoCard upload trigger is keyboard reachable and accepts the same file twice', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('aniversariante');
+  harness.clickUpload();
+  harness.clickUpload();
+  assert.equal(harness.fileInputClicks(), 2);
+  await harness.chooseFile({ name: 'photo.png', type: 'image/png', size: 1024 });
+  assert.equal(harness.fileInputValue(), '');
+  assert.equal(harness.mediaStatus(), 'uploading');
+  assert.match(harness.mediaStatusText(), /Enviando imagem/);
+});
+
+test('AutoCard keeps previous media visible while replacement is pending', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('aniversariante', { mediaId: 'old-media' });
+  await harness.resolveAsset(0);
+  await harness.chooseFile({ name: 'new.png', type: 'image/png', size: 1024 });
+  assert.equal(harness.mediaStatus(), 'uploading');
+  assert.match(harness.mediaStatusText(), /Enviando imagem/);
+  assert.match(harness.cardCanvas.innerHTML, /src="[^"]+"/);
+});
+
+test('AutoCard commits replacement media only after its blob loads and restores failures', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('aniversariante', { mediaId: 'old-media', mediaCrop: { x: 0.2, y: 0.8, zoom: 2 } });
+  const oldUrl = await harness.resolveAsset(0);
+  harness.openCrop();
+  harness.cancelCrop();
+  await harness.chooseFile({ name: 'new.png', type: 'image/png', size: 1024 });
+  await harness.resolveAPI(0, { id: 'new-media' });
+  await harness.flushAsync();
+  assert.equal(harness.state().mediaId, 'old-media');
+  assert.equal(harness.mediaStatus(), 'loading');
+  assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${oldUrl}"`));
+  const newUrl = await harness.resolveAsset(1);
+  assert.equal(harness.state().mediaId, 'new-media');
+  assert.equal(harness.state().mediaUrl, newUrl);
+  assert.equal(harness.mediaStatus(), 'ready');
+  assert.ok(harness.revokedUrls.includes(oldUrl));
+
+  const failed = await createAutoCardLifecycleHarness();
+  failed.selectTemplate('aniversariante', { mediaId: 'old-media' });
+  const failedOldUrl = await failed.resolveAsset(0);
+  await failed.chooseFile({ name: 'bad.png', type: 'image/png', size: 1024 });
+  await failed.resolveAPI(0, { id: 'failed-media' });
+  await failed.flushAsync();
+  await failed.reject(1, new Error('asset unavailable'));
+  assert.equal(failed.state().mediaId, 'old-media');
+  assert.equal(failed.state().mediaUrl, failedOldUrl);
+  assert.equal(failed.mediaStatus(), 'error');
+  assert.match(failed.cardCanvas.innerHTML, new RegExp(`src="${failedOldUrl}"`));
+});
+
+test('AutoCard blocks export until media loading finishes', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('aniversariante', { mediaId: 'pending-media' });
+  await harness.exportCard();
+  assert.equal(harness.mediaStatus(), 'loading');
+  assert.match(harness.mediaStatusText(), /Carregando imagem/);
+  assert.equal(harness.captures.length, 0);
+  assert.equal(harness.downloadClicks(), 0);
+});
+
+test('AutoCard ignores a save response after the editor document changes', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('comunicado');
+  harness.setField('titulo', 'Comunicado antigo');
+  harness.setPrompt('Card antigo');
+  const save = harness.saveCard();
+  harness.selectTemplate('vaga');
+  await harness.resolveAPI(0, { id: 'old-card', template: 'comunicado', values: {} });
+  await save;
+  assert.equal(harness.state().editingId, null);
+});
+
+test('AutoCard accepts an older same-document save identity without clearing newer edits', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('comunicado');
+  harness.setField('titulo', 'Versão inicial');
+  harness.setPrompt('Card inicial');
+  const save = harness.saveCard();
+  harness.setField('titulo', 'Versão mais nova');
+  await harness.resolveAPI(0, { id: 'saved-card', template: 'comunicado', values: {} });
+  await save;
+  assert.equal(harness.state().editingId, 'saved-card');
+  assert.equal(harness.state().values.titulo, 'Versão mais nova');
+  assert.match(harness.mediaStatusText(), /Nenhuma imagem/);
+  const followUp = harness.saveCard();
+  assert.equal(harness.apiRequests[1].path, '/api/autocard/cards/saved-card');
+  await harness.resolveAPI(1, { id: 'saved-card', template: 'comunicado', values: {} });
+  await followUp;
+});
+
+test('AutoCard ignores stale history and export responses', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const oldHistory = harness.loadSaved(0);
+  const newHistory = harness.loadSaved(20);
+  await harness.resolveAPI(1, { data: [{ id: 'new-card', name: 'Novo', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  await harness.resolveAPI(0, { data: [{ id: 'old-card', name: 'Antigo', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  await Promise.all([oldHistory, newHistory]);
+  assert.match(harness.savedList().innerHTML, /Novo/);
+  assert.doesNotMatch(harness.savedList().innerHTML, /Antigo/);
+});
+
+test('AutoCard does not download an export after the document changes', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('comunicado');
+  const exporting = harness.exportCard();
+  harness.selectTemplate('vaga');
+  await exporting;
+  assert.equal(harness.captures.length, 0);
+  assert.equal(harness.downloadClicks(), 0);
+  assert.equal(harness.exportButtonDisabled(), false);
+});
+
+test('AutoCard protects dirty editor navigation and beforeunload', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('comunicado');
+  harness.setField('titulo', 'Alterado');
+  assert.equal(harness.confirmNavigation(false), false);
+  assert.equal(harness.confirmNavigation(true), true);
+  assert.equal(harness.beforeUnloadBlocked(), false);
+});
+
 test('AutoCard employee mobile layout bounds long names and preserves the footer', async () => {
   const styles = await readFile('public/autocard/styles.css', 'utf8');
   const harness = await createAutoCardLifecycleHarness();
@@ -901,6 +1158,10 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(sidebar, /querySelectorAll\('\.sidebar-logout'\)/);
   assert.match(sidebar, /import\('\.\/auth\.js'\)/);
   assert.match(html, /id="templateGallery"/);
+  assert.match(html, /<button id="imageButton"[^>]*type="button"/);
+  assert.match(html, /<input id="imageInput"[^>]*type="file"[^>]*hidden/);
+  assert.match(html, /id="mediaStatus"[^>]*role="status"[^>]*aria-live="polite"[^>]*data-state="idle"/);
+  assert.doesNotMatch(html, /Formato de exportação: 1080 × 1080 px/);
   const portalTopbar = html.match(/<header class="topbar">[\s\S]*?<\/header>/)?.[0] || '';
   assert.doesNotMatch(portalTopbar, /AutoCard DHO/);
   assert.match(html, /<span class="eyebrow">AutoCard<\/span>/);
@@ -920,6 +1181,13 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /import \{ fetchAPI, fetchAPIAsset \} from '\.\.\/js\/auth\.js'/);
   assert.match(app, /fetchAPIAsset\(`/);
   assert.match(app, /mediaUrl: null/);
+  assert.match(app, /mediaStatus:'idle'/);
+  assert.match(app, /let documentGeneration = 0;/);
+  assert.match(app, /let editRevision = 0;/);
+  assert.match(app, /let savedSnapshot = null;/);
+  assert.match(app, /Há alterações do AutoCard que ainda não foram salvas\. Sair mesmo assim\?/);
+  assert.match(app, /setAttribute\('aria-live','polite'\)/);
+  assert.match(app, /setAttribute\('data-state',status\)/);
   assert.match(app, /mediaCrop:\s*\{\.\.\.DEFAULT_MEDIA_CROP\}/);
   assert.match(app, /mediaCrop:normalizeMediaCrop\(card\?\.mediaCrop\)/);
   assert.match(app, /function loadMedia\(mediaId,version,openCrop=false\)/);

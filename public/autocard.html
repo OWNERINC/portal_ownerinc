@@ -74,15 +74,16 @@
               <div id="fields"></div>
               <div class="editor-actions">
                 <button id="iconButton" class="secondary-button" type="button"><span id="iconPreview"></span> Escolher ícone</button>
-                <button id="illustrationButton" class="secondary-button hidden" type="button">Escolher ilustração</button>
-                <label id="imageButton" class="secondary-button hidden">Adicionar imagem<input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp"></label>
+               <button id="illustrationButton" class="secondary-button hidden" type="button">Escolher ilustração</button>
+                <button id="imageButton" class="secondary-button hidden" type="button">Adicionar imagem</button><input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
                 <button id="cropButton" class="secondary-button hidden" type="button" aria-controls="cropDialog">Ajustar enquadramento</button>
               </div>
+              <p id="mediaStatus" class="media-status" role="status" aria-live="polite" data-state="idle">Nenhuma imagem selecionada.</p>
               <div id="mediaSizeControl" class="control hidden"><span>Tamanho da mídia</span><div class="segmented"><button data-size="small" type="button">Pequena</button><button data-size="medium" class="active" type="button">Média</button><button data-size="large" type="button">Grande</button></div></div>
               <div class="control"><span>Variação visual</span><div class="segmented variant-segmented"><button data-mode="light" type="button">Editorial claro</button><button data-mode="dark" type="button">Noir</button><button data-mode="beige" type="button">Paper beige</button></div></div>
               <div class="editor-actions bottom"><button id="saveButton" class="secondary-button" type="button">Salvar</button><button id="exportButton" class="primary-button" type="button">Exportar PNG</button></div>
             </section>
-            <section class="preview-area"><div class="canvas-frame"><div id="cardCanvas"></div></div><p>Formato de exportação: 1080 × 1080 px</p></section>
+             <section class="preview-area"><div class="canvas-frame"><div id="cardCanvas"></div></div><p>Exportação PNG: largura de 1080 px, proporção do card preservada.</p></section>
           </div>
         </section>
 
