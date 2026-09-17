@@ -9,6 +9,7 @@
 
 ## Unreleased
 
+- AutoCard agora protege alterações pendentes, pagina o histórico, explicita excesso de conteúdo e mantém preview/exportação responsivos.
 - Refinado o espaçamento vertical dos Cards Pós, com separação explícita entre o bloco `Consumos da hospedagem` e o título `O que não está incluso`, preservando as dimensões, o conteúdo e a exportação dos templates Guest e Owner.
 - Cards Pós agora possui os módulos editáveis Convidado e Owner, com alternância na tela, template Owner baseado no frame 2 do Figma e histórico compatível com os dois formatos.
 - O convite Owner foi atualizado pelo print do Frame 02: corpo editorial branco, reserva destacada, serviços com ícones, consumos, grade de extras e rodapé Ownerinc.

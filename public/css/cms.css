@@ -108,7 +108,7 @@
 .cms-page .badge-gray { background: #ebe7e1; color: #5d554e; }
 .cms-page .badge-red { background: #f5dfdb; color: #8f382b; }
 
-.cms-block { margin: 0 0 14px; line-height: 1.65; }
+.cms-block { margin: 0 0 14px; line-height: 1.65; overflow-wrap: anywhere; word-break: normal; }
 .cms-heading { font-family: var(--font-display); line-height: 1.2; }
 .cms-list { padding-left: 22px; }
 .cms-callout { border-left: 3px solid var(--cms-accent); padding: 12px 14px; background: var(--cms-paper-deep); }
@@ -126,7 +126,7 @@
 .cms-pdf-block .cms-pdf-link { margin-top: 12px; }
 .cms-asset-status { color: var(--text-secondary); font-size: var(--font-size-sm); }
 .cms-asset-error { color: var(--danger); font-size: var(--font-size-sm); }
-.cms-fallback { white-space: pre-wrap; }
+.cms-fallback { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
 .announcements-list { display: grid; gap: 16px; }
 .announcement-card { border-left: 3px solid var(--cms-accent); }
 .announcement-card .card-heading { align-items: flex-start; }

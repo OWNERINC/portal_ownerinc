@@ -11,6 +11,7 @@ const filters = document.getElementById('benefits-filters');
 const pagination = document.getElementById('benefits-pagination');
 const PAGE_SIZE = 20;
 let categories = [];
+let benefitsRequest = 0;
 
 function updateUrl(category = '', offset = 0) {
   const url = new URL(location.href);
@@ -33,6 +34,7 @@ function renderFilters() {
 }
 
 async function loadBenefits() {
+  const requestToken = ++benefitsRequest;
   showState(container, 'Carregando benefícios…');
   try {
     const query = new URLSearchParams(location.search);
@@ -43,10 +45,19 @@ async function loadBenefits() {
       fetchAPIPage(`/api/benefits?${request}`),
       fetchAPI('/api/benefits/categories'),
     ]);
-    const benefits = result.data.filter(item => item.active !== false);
-    categories = categoryList;
+    if (requestToken !== benefitsRequest) return;
+    const benefits = (result.data || []).filter(item => item.active !== false);
+    categories = categoryList || [];
     renderFilters();
-    if (!benefits.length) return showState(container, 'Nenhum benefício disponível no momento.');
+    const total = Number(result.total ?? benefits.length);
+    if (!benefits.length && offset > 0) {
+      updateUrl(query.get('category') || '', 0);
+      return loadBenefits();
+    }
+    if (!benefits.length) {
+      clear(pagination);
+      return showState(container, 'Nenhum benefício disponível no momento.');
+    }
     const categories = benefits.reduce((map, benefit) => {
       const category = benefit.category || 'Geral';
       map.set(category, [...(map.get(category) || []), benefit]);
@@ -69,12 +80,14 @@ async function loadBenefits() {
       section.append(grid);
       container.append(section);
     });
-    renderPagination(pagination, Number(result.total ?? benefits.length), offset, PAGE_SIZE, nextOffset => {
+    renderPagination(pagination, total, offset, PAGE_SIZE, nextOffset => {
       updateUrl(query.get('category') || '', nextOffset);
       loadBenefits();
     });
   } catch {
-    showState(container, 'Não foi possível carregar os benefícios. Verifique sua conexão.', loadBenefits);
+    if (requestToken === benefitsRequest) {
+      showState(container, 'Não foi possível carregar os benefícios. Verifique sua conexão.', loadBenefits);
+    }
   }
 }
 

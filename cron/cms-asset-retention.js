@@ -6,7 +6,6 @@ const DEFAULT_DAYS = 30;
 const MIN_DAYS = 1;
 const MAX_DAYS = 3650;
 const CMS_ASSET_RETENTION_LOCK = 7193029;
-
 function cmsAssetRetentionDays(env = process.env) {
   const value = Number(env.CMS_ASSET_ORPHAN_RETENTION_DAYS || DEFAULT_DAYS);
   if (!Number.isInteger(value) || value < MIN_DAYS || value > MAX_DAYS) throw new Error(`CMS_ASSET_ORPHAN_RETENTION_DAYS must be an integer between ${MIN_DAYS} and ${MAX_DAYS}`);
@@ -26,7 +25,7 @@ async function reserveCmsAssets(client, days) {
            SELECT 1
              FROM cms_revisions r
              CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
-            WHERE block->>'asset_id' = a.id::text
+             WHERE lower(block->>'asset_id') = lower(a.id::text)
          )
        ORDER BY a.created_at
        LIMIT 500`, [days]);
@@ -41,7 +40,7 @@ async function reserveCmsAssets(client, days) {
              SELECT 1
                FROM cms_revisions r
                CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
-              WHERE block->>'asset_id' = a.id::text
+               WHERE lower(block->>'asset_id') = lower(a.id::text)
            )
         RETURNING a.id, a.storage_key`, [asset.id]);
       if (reservation.rows[0]) reserved.push(reservation.rows[0]);
@@ -66,11 +65,15 @@ async function enforceCmsAssetRetention(db = pool, env = process.env, fileSystem
     return details;
   }
   const client = await db.connect();
+  let locked = false;
   try {
+    await client.query('SELECT pg_advisory_lock($1)', [CMS_ASSET_RETENTION_LOCK]);
+    locked = true;
     const reserved = await reserveCmsAssets(client, days);
     let deletedRows = 0;
     let deletedFiles = 0;
     let fileFailures = 0;
+    let finalizeFailures = 0;
     for (const asset of reserved) {
       try {
         await fileSystem.unlink(path.join(privateDirectory, asset.storage_key));
@@ -88,24 +91,33 @@ async function enforceCmsAssetRetention(db = pool, env = process.env, fileSystem
           continue;
         }
       }
-      const deleted = await client.query(`
-        DELETE FROM cms_assets
-         WHERE id = $1
-           AND deleting_at IS NOT NULL
-           AND NOT EXISTS (
-             SELECT 1
-               FROM cms_revisions r
-               CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
-              WHERE block->>'asset_id' = $1::text
-           )`, [asset.id]);
-      deletedRows += deleted.rowCount;
+      try {
+        const deleted = await client.query(`
+          DELETE FROM cms_assets
+           WHERE id = $1
+             AND deleting_at IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM cms_revisions r
+                 CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
+                 WHERE lower(block->>'asset_id') = lower($1::text)
+             )`, [asset.id]);
+        deletedRows += deleted.rowCount;
+      } catch {
+        finalizeFailures += 1;
+        await client.query(
+          'UPDATE cms_assets SET deleting_at = NULL WHERE id = $1 AND deleting_at IS NOT NULL',
+          [asset.id],
+        ).catch(() => {});
+      }
     }
-    const result = { deletedRows, deletedFiles, fileFailures, retentionDays: days };
+    const result = { deletedRows, deletedFiles, fileFailures, finalizeFailures, retentionDays: days };
     console.log(JSON.stringify({ service: 'cron', event: 'cms_asset_retention_completed', ...result }));
     return result;
   } catch (error) {
     throw error;
   } finally {
+    if (locked) await client.query('SELECT pg_advisory_unlock($1)', [CMS_ASSET_RETENTION_LOCK]).catch(() => {});
     client.release();
   }
 }

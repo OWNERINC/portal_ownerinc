@@ -1,5 +1,9 @@
 # Portal Ownerinc V1 Implementation Plan
 
+> Documento histórico. A autorização DHO exata descrita abaixo foi substituída
+> pela matriz atual de cargo ativo mais `page_access` explícito; os defaults DHO
+> da migration 030 não formam uma allowlist.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Evolve the current Portal Ownerinc implementation into a locally verified V1 with native AutoCard integration, complete bounded lists, reliable notification operations, S3-compatible backups, SMTP alerts, accessibility coverage, and an explicit production handoff.

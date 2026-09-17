@@ -1,7 +1,11 @@
 const express = require('express');
 const pool = require('../db');
-const { addPublishedBlocks } = require('../cms/reader');
+const {
+  addPublishedBlocks, isPublicCmsRow, publishedBodyText,
+} = require('../cms/reader');
 const { KnowledgePdfError, syncKnowledgePdf } = require('../cms/knowledge');
+const { lockCmsAssets } = require('../cms/locks');
+const { deleteCmsSource } = require('../cms/sources');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
   forbidden, invalid, parseListQuery, text, uuid, validBody, withAudit,
@@ -31,12 +35,13 @@ router.get('/categories', authMiddleware, async (req, res, next) => {
   if (Object.keys(req.query).length) return invalid(req, res);
   try {
     const { rows } = await pool.query(
-      `SELECT DISTINCT btrim(category) AS category
+      `SELECT id, btrim(category) AS category
        FROM knowledge_base
        WHERE btrim(category) <> ''
-       ORDER BY category`,
+       ORDER BY category, id`,
     );
-    res.json(rows.map(({ category }) => category));
+    const visible = (await addPublishedBlocks(pool, rows, 'knowledge')).filter(isPublicCmsRow);
+    res.json([...new Set(visible.map(({ category }) => category))]);
   } catch (error) {
     next(error);
   }
@@ -45,23 +50,31 @@ router.get('/categories', authMiddleware, async (req, res, next) => {
 router.get('/', authMiddleware, async (req, res, next) => {
   const page = parseListQuery(req.query, listQuery);
   if (!page) return invalid(req, res);
+  const category = req.query.category;
   const values = [];
   const conditions = [];
-  if (req.query.q) {
-    values.push(`%${req.query.q.replace(/[\\%_]/g, '\\$&')}%`);
-    conditions.push(`(title ILIKE $${values.length} ESCAPE '\\' OR content ILIKE $${values.length} ESCAPE '\\')`);
-  }
-  if (req.query.category) {
-    values.push(req.query.category);
-    conditions.push(`category = $${values.length}`);
+  if (category) {
+    values.push(category);
+    conditions.push(`btrim(knowledge_base.category) = $${values.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   try {
-    const [{ rows: [{ count }] }, { rows }] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::integer AS count FROM knowledge_base ${where}`, values),
-      pool.query(`SELECT * FROM knowledge_base ${where} ORDER BY updated_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`, [...values, page.limit, page.offset]),
-    ]);
-    res.set('X-Total-Count', String(count)).json(await addPublishedBlocks(pool, rows, 'knowledge'));
+    const { rows } = await pool.query(
+      `SELECT knowledge_base.*
+         FROM knowledge_base ${where}
+        ORDER BY knowledge_base.updated_at DESC, knowledge_base.id`,
+      values,
+    );
+    const publishedRows = (await addPublishedBlocks(pool, rows, 'knowledge')).filter(isPublicCmsRow);
+    const matches = req.query.q
+      ? publishedRows.filter((row) => {
+        const needle = req.query.q.toLocaleLowerCase('pt-BR');
+        return [row.title, publishedBodyText(row)].some((value) => String(value || '')
+          .toLocaleLowerCase('pt-BR').includes(needle));
+      })
+      : publishedRows;
+    res.set('X-Total-Count', String(matches.length))
+      .json(matches.slice(page.offset, page.offset + page.limit));
   } catch (error) {
     next(error);
   }
@@ -73,6 +86,7 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
     const { rows } = await pool.query('SELECT * FROM knowledge_base WHERE id = $1', [req.params.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
     const [row] = await addPublishedBlocks(pool, [rows[0]], 'knowledge');
+    if (!isPublicCmsRow(row)) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
     res.json(row);
   } catch (error) {
     next(error);
@@ -86,6 +100,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
     const { title, category = '', content = '' } = req.body;
     const pdf = pdfChange(req.body);
     const result = await withAudit(pool, req, 'knowledge.create', 'knowledge', async (db) => {
+      await lockCmsAssets(db);
       const { rows } = await db.query(
         `INSERT INTO knowledge_base (title, category, content, created_by)
           VALUES ($1, $2, $3, $4) RETURNING *`,
@@ -111,21 +126,28 @@ router.post('/', authMiddleware, async (req, res, next) => {
     });
     res.status(201).json(result.row);
   } catch (error) {
-    if (error instanceof KnowledgePdfError) return invalid(req, res);
+    if (error instanceof KnowledgePdfError) {
+      if (error.code === 'ambiguous_pdf') return res.status(409).json({ error: error.message, requestId: req.id });
+      return invalid(req, res);
+    }
     next(error);
   }
 });
 
 router.put('/:id', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
-  if (!uuid(req.params.id) || !validBody(req.body, schema, ['title', 'category', 'content'])) return invalid(req, res);
+  if (!uuid(req.params.id) || !validBody(req.body, schema, ['title', 'category'])) return invalid(req, res);
   try {
     const pdf = pdfChange(req.body);
     const result = await withAudit(pool, req, 'knowledge.update', 'knowledge', async (db) => {
+      await lockCmsAssets(db);
+      const existing = await db.query('SELECT * FROM knowledge_base WHERE id=$1 FOR UPDATE', [req.params.id]);
+      if (!existing.rows[0]) return null;
+      const content = req.body.content === undefined ? existing.rows[0].content : req.body.content;
       const { rows } = await db.query(
         `UPDATE knowledge_base SET title=$2, category=$3, content=$4, updated_at=NOW()
-          WHERE id=$1 RETURNING *`,
-        [req.params.id, req.body.title.trim(), req.body.category, req.body.content]
+           WHERE id=$1 RETURNING *`,
+        [req.params.id, req.body.title.trim(), req.body.category, content]
       );
       if (!rows[0]) return null;
       const cms = await syncKnowledgePdf(db, {
@@ -146,10 +168,13 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
         pdf_changed: result.cms.pdfChanged,
       } : {},
     });
-    if (!result.row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
+    if (!result || !result.row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
     res.json(result.row);
   } catch (error) {
-    if (error instanceof KnowledgePdfError) return invalid(req, res);
+    if (error instanceof KnowledgePdfError) {
+      if (error.code === 'ambiguous_pdf') return res.status(409).json({ error: error.message, requestId: req.id });
+      return invalid(req, res);
+    }
     next(error);
   }
 });
@@ -158,10 +183,8 @@ router.delete('/:id', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
-    const row = await withAudit(pool, req, 'knowledge.delete', 'knowledge', async (db) => {
-      const { rows } = await db.query('DELETE FROM knowledge_base WHERE id=$1 RETURNING id', [req.params.id]);
-      return rows[0];
-    }, { targetId: req.params.id });
+    const row = await withAudit(pool, req, 'knowledge.delete', 'knowledge',
+      db => deleteCmsSource(db, 'knowledge', req.params.id), { targetId: req.params.id });
     if (!row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
     res.json({ success: true });
   } catch (error) {

@@ -3,6 +3,7 @@ import { signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 const AUTH_SNAPSHOT_KEY = 'ownerinc-auth-snapshot';
+const AUTH_REDIRECT_REASONS = new Set(['email-not-verified', 'pending-approval', 'enable-pending', 'account-disabled']);
 
 function setAuthState(state) {
   document.documentElement.dataset.authState = state;
@@ -92,26 +93,64 @@ function clearVerifiedRole() {
   }
 }
 
-async function authenticatedFetch(path, options = {}) {
+function currentDestination() {
+  const url = new URL(window.location.href);
+  if (url.pathname.endsWith('/login.html')) return '';
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function redirectToLogin(reason) {
+  const params = new URLSearchParams({ reason });
+  const destination = currentDestination();
+  if (destination) params.set('next', destination);
+  window.location.replace(`./login.html?${params.toString()}`);
+}
+
+function authRedirectReason(path, response, body) {
+  if (response.status === 401) return 'session';
+  if (response.status !== 403) return null;
+  if (body?.reason === 'email-not-verified') return 'email';
+  if (AUTH_REDIRECT_REASONS.has(body?.reason)) return body.reason;
+  return path === '/api/users/me' ? 'access' : null;
+}
+
+async function handleAuthenticationFailure(path, response) {
+  if (response.status !== 401 && response.status !== 403) return false;
+  const body = await response.clone().json().catch(() => ({}));
+  const reason = authRedirectReason(path, response, body);
+  if (!reason) return false;
+  clearVerifiedRole();
+  await signOut(auth).catch(() => {});
+  redirectToLogin(reason);
+  throw new APIError(body.error || `A solicitação falhou (${response.status}).`, response.status, body.reason);
+}
+
+export async function authenticatedFetch(path, options = {}) {
   await auth.authStateReady();
-  if (!auth.currentUser) throw new APIError('Sessão encerrada.', 401);
+  if (!auth.currentUser) {
+    clearVerifiedRole();
+    redirectToLogin('session');
+    throw new APIError('Sessão encerrada.', 401, 'session');
+  }
   const token = await auth.currentUser.getIdToken();
   const headers = {
     ...(typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
     'Authorization': `Bearer ${token}`,
     ...(options.headers || {}),
   };
-  return fetch(path, {
+  const response = await fetch(path, {
     ...options,
     headers,
   });
+  await handleAuthenticationFailure(path, response);
+  return response;
 }
 
 async function requestAPI(path, options = {}) {
   const res = await authenticatedFetch(path, options);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new APIError(body.error || `A solicitação falhou (${res.status}).`, res.status);
+    throw new APIError(body.error || `A solicitação falhou (${res.status}).`, res.status, body.reason);
   }
   const data = res.status === 204 ? null : await res.json();
   const totalHeader = res.headers.get('X-Total-Count');
@@ -123,7 +162,7 @@ export async function fetchAPIAsset(path, options = {}) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const requestId = body.requestId ? ` (referência ${body.requestId})` : '';
-    throw new APIError(`${body.error || `A solicitação falhou (${response.status}).`}${requestId}`, response.status);
+    throw new APIError(`${body.error || `A solicitação falhou (${response.status}).`}${requestId}`, response.status, body.reason);
   }
   const blob = await response.blob();
   return URL.createObjectURL(blob);
@@ -138,9 +177,10 @@ export function fetchAPIPage(path, options = {}) {
 }
 
 export class APIError extends Error {
-  constructor(message, status) {
+  constructor(message, status, reason) {
     super(message);
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -171,19 +211,14 @@ export async function requireAuth(requireAdmin = false) {
   await auth.authStateReady();
   if (!auth.currentUser) {
     clearVerifiedRole();
-    window.location.replace('./login.html');
+    redirectToLogin('session');
     return null;
   }
   let user;
   try {
     user = await getCurrentUserDoc();
   } catch (error) {
-    if (error.status === 401 || error.status === 403) {
-      clearVerifiedRole();
-      await signOut(auth).catch(() => {});
-      window.location.replace(`./login.html?reason=${error.status === 403 ? 'access' : 'session'}`);
-      return null;
-    }
+    if (error.status === 401 || error.status === 403) return null;
     clearVerifiedRole();
     renderAuthUnavailable();
     return null;

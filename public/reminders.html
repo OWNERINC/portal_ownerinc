@@ -30,7 +30,6 @@
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" class="active" aria-current="page" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./benefits.html" title="Benefícios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#gift"></use></svg><span>Benefícios</span></a></li>
       <li><a href="./announcements.html" title="Anúncios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Anúncios</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
       <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
@@ -66,6 +65,11 @@
         </table>
       </div>
       <div id="reminders-pagination" class="pagination" aria-label="Paginação"></div>
+      <section id="reminder-detail" class="content-section article-view" hidden tabindex="-1" aria-labelledby="reminder-detail-title">
+        <h2 id="reminder-detail-title">Detalhe do lembrete</h2>
+        <p id="reminder-detail-meta" class="table-detail"></p>
+        <div id="reminder-detail-content" class="article-content"></div>
+      </section>
       <section id="delivery-manager" hidden style="margin-top:32px">
         <div class="section-header">
           <div>
@@ -77,8 +81,8 @@
         <div class="table-wrapper">
           <table>
             <caption>Histórico compacto das últimas entregas</caption>
-            <thead><tr><th scope="col">Data</th><th scope="col">Usuário</th><th scope="col">Canal</th><th scope="col">Status</th><th scope="col">Tentativas</th></tr></thead>
-            <tbody id="deliveries-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
+            <thead><tr><th scope="col">Data</th><th scope="col">Lembrete</th><th scope="col">Destinatário</th><th scope="col">Canal</th><th scope="col">Status</th><th scope="col">Motivo</th><th scope="col">Tentativas</th></tr></thead>
+            <tbody id="deliveries-tbody"><tr><td colspan="7" class="empty-state">Carregando…</td></tr></tbody>
           </table>
         </div>
         <form id="delivery-filters" class="filter-bar" autocomplete="off">
@@ -86,6 +90,8 @@
           <select id="delivery-status" class="form-select"><option value="">Todos</option><option value="sent">Enviado</option><option value="failed">Falhou</option><option value="skipped">Ignorado</option><option value="pending">Pendente</option><option value="sending">Enviando</option></select>
           <label for="delivery-channel">Canal</label>
           <select id="delivery-channel" class="form-select"><option value="">Todos</option><option value="email">E-mail</option><option value="whatsapp">WhatsApp</option></select>
+          <label for="delivery-reminder">Lembrete</label>
+          <input id="delivery-reminder" class="form-input" type="search" maxlength="36" placeholder="ID do lembrete">
           <label for="delivery-user">UID</label>
           <input id="delivery-user" class="form-input" type="search" maxlength="128" placeholder="UID do usuário">
           <label for="delivery-from">De</label>

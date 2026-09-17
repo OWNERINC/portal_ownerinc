@@ -3,6 +3,7 @@ const MAX_URL_LENGTH = 2048;
 // CMS block content is capped below the 6 MiB /api/cms JSON transport limit.
 const MAX_CMS_PAYLOAD_BYTES = 5 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const REMINDER_CONTENT_PATH = '/reminders.html';
 
 const ALLOWED_BLOCK_TYPES = new Set([
   'heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video',
@@ -38,6 +39,11 @@ function url(value) {
 
 function assetId(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
+}
+
+function reminderContentPath(value) {
+  return typeof value === 'string' && UUID_PATTERN.test(value)
+    ? `${REMINDER_CONTENT_PATH}#reminder-${value.toLowerCase()}` : null;
 }
 
 function keysAre(block, allowed) {
@@ -151,4 +157,4 @@ function blocksToText(blocks) {
   }).filter(Boolean).join('\n\n');
 }
 
-module.exports = { blocksToText, validateBlocks };
+module.exports = { blocksToText, reminderContentPath, REMINDER_CONTENT_PATH, validateBlocks };

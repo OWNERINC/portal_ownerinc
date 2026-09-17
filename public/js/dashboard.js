@@ -1,11 +1,13 @@
 import { requireAuth, fetchAPI } from './auth.js';
 import { blocksToText, renderBlocks } from './cms-block-renderer.js';
-import { clear, element, safeHttpUrl, showState } from './ui.js';
+import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
 
 const user = await requireAuth();
 if (!user) throw new Error('Authentication required');
 
-const isPJ = user.contract_type === 'pj' || user.is_pj;
+const TIME_ZONE = 'America/Sao_Paulo';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const editorialImages = [
   ['https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=600&q=80', 'Sala de trabalho iluminada'],
   ['https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=600&q=80', 'Notebook aberto sobre uma mesa'],
@@ -14,7 +16,36 @@ const editorialImages = [
 
 function formatDate(value) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'recentemente' : new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(date).replace('.', '');
+  return Number.isNaN(date.getTime()) ? 'recentemente' : new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TIME_ZONE, day: '2-digit', month: 'short',
+  }).format(date).replace('.', '');
+}
+
+function civilDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  return parts.reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+}
+
+function civilDateOrdinal(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : NaN;
+}
+
+function daysUntil(value) {
+  const today = civilDateKey();
+  const todayKey = `${today.year}-${today.month}-${today.day}`;
+  const difference = civilDateOrdinal(value) - civilDateOrdinal(todayKey);
+  return Number.isFinite(difference) ? Math.max(0, Math.round(difference / 86400000)) : 0;
+}
+
+function reminderContentHref(reminder) {
+  const id = typeof reminder?.id === 'string' && UUID_PATTERN.test(reminder.id)
+    ? reminder.id.toLowerCase() : null;
+  if (!id) return './reminders.html';
+  const expected = `/reminders.html#reminder-${id}`;
+  return reminder.content_url === expected ? reminder.content_url : expected;
 }
 
 function excerpt(blocks, fallback) {
@@ -31,8 +62,14 @@ function icon(name) {
 }
 
 function storyCard({ title, category, description, blocks, href, newTab, image, alt, meta }) {
+  const titleNode = href
+    ? element('a', {
+      className: 'dashboard-story-card-title', href,
+      ...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
+    }, [element('strong', { text: title })])
+    : element('strong', { text: title });
   const body = element('div', { className: 'dashboard-story-card-body' }, [
-    element('strong', { text: title }),
+    titleNode,
     element('small', { text: [category, meta].filter(Boolean).join(' · ') }),
   ]);
   if (blocks || description) {
@@ -44,11 +81,7 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
   const children = image
     ? [element('img', { src: image, alt, width: 600, height: 360, loading: 'lazy' }), body]
     : [body];
-  const card = element(href ? 'a' : 'article', href ? {
-    className: 'dashboard-story-card', href,
-    ...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
-  } : { className: 'dashboard-story-card' }, children);
-  return card;
+  return element('article', { className: 'dashboard-story-card' }, children);
 }
 
 function renderHero(announcement) {
@@ -64,11 +97,14 @@ function renderHero(announcement) {
 }
 
 const announcementsPreview = document.getElementById('announcements-preview');
+let announcementsRequest = 0;
 async function loadAnnouncements() {
   if (!announcementsPreview) return;
-  showState(announcementsPreview, 'Carregando anúncios…');
+  const requestToken = ++announcementsRequest;
+  setBusy(announcementsPreview, true);
   try {
     const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
+    if (requestToken !== announcementsRequest) return;
     if (!announcements.length) return showState(announcementsPreview, 'Nenhum anúncio publicado.');
     renderHero(announcements[0]);
     clear(announcementsPreview);
@@ -82,20 +118,23 @@ async function loadAnnouncements() {
       meta: formatDate(announcement.published_at),
     })));
   } catch {
-    showState(announcementsPreview, 'Não foi possível carregar os anúncios.', loadAnnouncements);
+    if (requestToken === announcementsRequest) showState(announcementsPreview, 'Não foi possível carregar os anúncios.', loadAnnouncements);
+  } finally {
+    if (requestToken === announcementsRequest) setBusy(announcementsPreview, false);
   }
 }
 
 const remindersContainer = document.getElementById('reminders-list');
+let remindersRequest = 0;
 async function loadReminders() {
   if (!remindersContainer) return;
-  showState(remindersContainer, 'Carregando lembretes…');
+  const requestToken = ++remindersRequest;
+  setBusy(remindersContainer, true);
   try {
     const reminders = await fetchAPI('/api/reminders/upcoming?days=7');
+    if (requestToken !== remindersRequest) return;
     const upcoming = reminders.map(reminder => {
-      const occurrence = new Date(`${reminder.next_occurrence}T00:00:00Z`);
-      const days = Math.max(0, Math.round((occurrence - new Date()) / 86400000));
-      return { reminder, days };
+      return { reminder, days: daysUntil(reminder.next_occurrence) };
     });
     if (!upcoming.length) return showState(remindersContainer, 'Nenhum lembrete destinado a você nos próximos 7 dias.');
     clear(remindersContainer);
@@ -104,20 +143,17 @@ async function loadReminders() {
       category: days === 0 ? 'Hoje' : `Em ${days} ${days === 1 ? 'dia' : 'dias'}`,
       description: reminder.description || '',
       blocks: reminder.content_blocks,
-      href: './reminders.html',
+      href: reminderContentHref(reminder),
     })));
   } catch {
-    showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);
+    if (requestToken === remindersRequest) showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);
+  } finally {
+    if (requestToken === remindersRequest) setBusy(remindersContainer, false);
   }
 }
 
 const quickLinks = document.getElementById('quick-links');
-const links = isPJ ? [
-  ['book-open', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
-  ['bell', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
-  ['graduation-cap', 'Academy', 'Cursos e treinamentos', './academy.html'],
-] : [
-  ['gift', 'Benefícios', 'Parceiros e clube de vantagens', './benefits.html'],
+const links = [
   ['book-open', 'Base de Conhecimento', 'Regras e boas práticas da empresa', './knowledge.html'],
   ['bell', 'Lembretes', 'Datas importantes e vencimentos', './reminders.html'],
   ['graduation-cap', 'Academy', 'Cursos e treinamentos', './academy.html'],
@@ -133,11 +169,14 @@ if (quickLinks) {
 }
 
 const academySection = document.getElementById('academy-preview');
+let academyRequest = 0;
 async function loadAcademy() {
   if (!academySection) return;
-  showState(academySection, 'Carregando cursos…');
+  const requestToken = ++academyRequest;
+  setBusy(academySection, true);
   try {
     const courses = (await fetchAPI('/api/academy?active=true&limit=3')).filter(course => course.active !== false).slice(0, 3);
+    if (requestToken !== academyRequest) return;
     if (!courses.length) return showState(academySection, 'Nenhum curso disponível no momento.');
     clear(academySection);
     courses.forEach((course, index) => {
@@ -154,7 +193,9 @@ async function loadAcademy() {
       }));
     });
   } catch {
-    showState(academySection, 'Não foi possível carregar os cursos.', loadAcademy);
+    if (requestToken === academyRequest) showState(academySection, 'Não foi possível carregar os cursos.', loadAcademy);
+  } finally {
+    if (requestToken === academyRequest) setBusy(academySection, false);
   }
 }
 

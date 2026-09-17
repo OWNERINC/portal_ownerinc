@@ -40,6 +40,7 @@ test('API and cron require shared Resend SMTP configuration', async () => {
   assert.match(cron, /OPERATIONAL_ALERT_EMAIL: \$\{OPERATIONAL_ALERT_EMAIL:-\}/);
   assert.match(verify, /SMTP_PASSWORD=re_\[A-Za-z0-9_-\]\{10,\}/);
   assert.match(verify, /new Set\(\['\.env\.example'/);
+  assert.match(verify, /\['scripts', 'ops'\]/);
 });
 
 test('local simulation isolates Firebase and keeps bootstrap SQL typed', async () => {
@@ -71,11 +72,62 @@ test('runtime API role can read and manage job titles', async () => {
   assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON job_titles TO portal_api/);
 });
 
+test('cron grants match the CMS retention UPDATE and are checked per privilege', async () => {
+  const [provision, verification] = await Promise.all([
+    read('api/db/provision.js'),
+    read('api/db/verify-migrations.js'),
+  ]);
+  assert.match(provision, /GRANT SELECT, UPDATE, DELETE ON cms_assets TO portal_cron/);
+  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'SELECT'\)/);
+  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'UPDATE'\)/);
+  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'DELETE'\)/);
+  assert.doesNotMatch(verification, /public\.cms_assets', 'SELECT,DELETE'/);
+});
+
+test('cron grants row-lock privileges only for user and reminder rechecks', async () => {
+  const [provision, verification] = await Promise.all([
+    read('api/db/provision.js'),
+    read('api/db/verify-migrations.js'),
+  ]);
+  assert.match(provision, /GRANT SELECT, UPDATE ON users, reminders TO portal_cron/);
+  assert.match(verification, /NOT has_table_privilege\('portal_cron', 'public\.users', 'INSERT'\)/);
+  assert.match(verification, /NOT has_table_privilege\('portal_cron', 'public\.reminders', 'DELETE'\)/);
+  assert.match(verification, /AS cron_users_lock_privileges/);
+  assert.match(verification, /AS cron_reminders_lock_privileges/);
+  assert.doesNotMatch(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON users, reminders TO portal_cron/);
+});
+
 test('job title listing hides inactive titles by default', async () => {
   const routes = await read('api/routes/job-titles.js');
   assert.match(routes, /const where = req\.query\.all === 'true' \? '' : 'WHERE jt\.active = TRUE';/);
   assert.match(routes, /COUNT\(\*\)::integer AS count FROM job_titles jt \$\{where\}/);
   assert.match(routes, /LEFT JOIN users u ON u\.job_title_id = jt\.id \$\{where\}/);
+});
+
+test('job title access is returned, validated, and preserved on partial updates', async () => {
+  const [routes, auth] = await Promise.all([
+    read('api/routes/job-titles.js'),
+    read('api/middleware/auth.js'),
+  ]);
+  assert.match(routes, /jt\.page_access/);
+  assert.match(routes, /const pageAccess = \(value\) =>/);
+  assert.match(routes, /Object\.keys\(value\)\.every\(\(key\) => \['autocard', 'posCards'\]/);
+  assert.match(routes, /page_access = COALESCE\(\$4::jsonb, page_access\)/);
+  assert.match(routes, /const pageAccessValue = req\.body\.page_access === undefined/);
+  assert.match(auth, /jt\.active AS job_title_active/);
+});
+
+test('job title POST and PUT reject legacy RH tokens before SQL', async () => {
+  const routes = await read('api/routes/job-titles.js');
+  assert.match(routes, /const jobTitleName = \(value\) => text\(120, true\)\(value\) && !containsLegacyJobTitleToken\(value\)/);
+  assert.match(routes, /const schema = \{ name: jobTitleName, active: boolean, page_access: pageAccess \};/);
+
+  const postValidation = routes.indexOf("if (!validBody(req.body, schema, ['name'])) return invalid(req, res);");
+  const postSql = routes.indexOf("INSERT INTO job_titles", postValidation);
+  const putValidation = routes.indexOf("if (!uuid(req.params.id) || !validBody(req.body, schema, ['name', 'active'])) return invalid(req, res);");
+  const putSql = routes.indexOf("UPDATE job_titles SET", putValidation);
+  assert.ok(postValidation >= 0 && postValidation < postSql);
+  assert.ok(putValidation >= 0 && putValidation < putSql);
 });
 
 test('Sólides upstream traffic has per-user read and probe budgets', async () => {
@@ -95,13 +147,20 @@ test('nginx protects the edge without shadowing uploads', async () => {
   }
   assert.match(nginx, /location \^~ \/uploads\//);
   assert.match(nginx, /client_max_body_size 100k;/);
-  assert.match(nginx, /location \^~ \/api\/upload\/[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
-  assert.match(nginx, /location \^~ \/api\/autocard\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads/);
-  assert.match(nginx, /location \^~ \/api\/pos-cards\/media[\s\S]*client_max_body_size 4m;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
-  const cmsAssets = nginx.indexOf('location ^~ /api/cms/assets');
+  assert.match(nginx, /location \^~ \/api\/upload\/[\s\S]*client_max_body_size 1m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads/);
+  assert.match(nginx, /location = \/api\/autocard\/media[\s\S]*client_max_body_size 3m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads/);
+  assert.match(nginx, /location \^~ \/api\/autocard\/media\/[\s\S]*limit_req zone=media_reads/);
+  assert.match(nginx, /location = \/api\/media[\s\S]*client_max_body_size 3m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads/);
+  assert.match(nginx, /location \^~ \/api\/media\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads/);
+  assert.match(nginx, /location = \/api\/pos-cards\/media[\s\S]*client_max_body_size 3m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location \^~ \/api\/pos-cards\/media\/[\s\S]*limit_req zone=media_reads/);
+  const cmsAssets = nginx.indexOf('location = /api/cms/assets');
+  const cmsAssetReads = nginx.indexOf('location ^~ /api/cms/assets/');
   const genericApi = nginx.indexOf('location /api/');
-  assert.ok(cmsAssets >= 0 && cmsAssets < genericApi);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets[\s\S]*client_max_body_size 51m;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
+  assert.ok(cmsAssets >= 0 && cmsAssetReads > cmsAssets && cmsAssetReads < genericApi);
+  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 51m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location \^~ \/api\/users\/bulk[\s\S]*client_max_body_size 1m;[\s\S]*proxy_pass \$api_upstream/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
   assert.match(nginx, /media-src 'self' blob: https:/);
@@ -110,6 +169,9 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /style-src 'self' 'unsafe-inline'/);
   assert.match(nginx, /connect-src 'self' http:\/\/127\.0\.0\.1:9099 http:\/\/localhost:9099 https:\/\/\*\.googleapis\.com https:\/\/\*\.firebaseio\.com/);
   assert.match(nginx, /limit_req_zone[\s\S]*map \$http_sec_fetch_site/);
+  assert.match(nginx, /limit_req_zone \$binary_remote_addr zone=media_reads/);
+  assert.match(nginx, /proxy_set_header X-Forwarded-Host \$http_host/);
+  assert.match(nginx, /proxy_set_header X-Forwarded-Port \$server_port/);
   assert.match(nginx, /https:\/\/unpkg\.com/);
   assert.match(nginx, /https:\/\/www\.gstatic\.com/);
   assert.match(nginx, /font-src 'self'/);
@@ -120,31 +182,53 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
 });
 
-test('complete Pos-Card storage filenames are denied before static uploads', async () => {
+test('Docker build context excludes environment files recursively', async () => {
+  const dockerignore = await read('.dockerignore');
+  assert.match(dockerignore, /\*\*\/\.env/);
+  assert.match(dockerignore, /\*\*\/\.env\.\*/);
+  assert.match(dockerignore, /!\.env\.example/);
+});
+
+test('complete AutoCard and Pos-Card storage filenames are denied before static uploads', async () => {
   const index = await read('api/index.js');
+  const autoDeny = index.indexOf("/^\\/autocard-[0-9a-f-]+\\.webp$/i.test(req.path)");
   const deny = index.indexOf("/^\\/pos-card-[0-9a-f-]+\\.webp$/i.test(req.path)");
   const uploads = index.indexOf("app.use('/uploads', express.static('/app/uploads'))");
+  assert.ok(autoDeny >= 0 && autoDeny < uploads);
   assert.ok(deny >= 0 && deny < uploads);
 });
 
 test('deployment uses a committed archive, backup, smoke gate, and rollback', async () => {
-  const [deploy, release, restore, backup, backupS3, alert] = await Promise.all([
+  const [deploy, release, restore, backup, backupS3, alert, pendingRegistration] = await Promise.all([
     read('deploy.sh'), read('scripts/release.sh'), read('scripts/restore.sh'), read('scripts/backup.sh'), read('scripts/backup-s3.sh').catch(() => ''), read('cron/sendOperationalAlert.js'),
+    read('api/services/pending-registration.js'),
   ]);
-  assert.match(deploy, /git diff --quiet --exit-code HEAD/);
+  assert.match(deploy, /git status --porcelain=v1 --untracked-files=all/);
   assert.match(deploy, /git archive[\s\S]*exclude\)ownerinc-novo-agente/);
   assert.match(release, /scripts\/backup\.sh/);
   assert.match(release, /scripts\/smoke\.sh/);
   assert.match(release, /db\/verify-migrations\.js/);
-  assert.match(release, /RUN_MIGRATIONS=false/);
-  assert.match(release, /docker pull "\$api_tag"[\s\S]*docker pull "\$cron_tag"/);
-  assert.match(release, /RepoDigests[\s\S]*@sha256/);
+  assert.match(release, /up -d --no-deps postgres[\s\S]*run --rm migrate[\s\S]*db\/verify-migrations\.js[\s\S]*up -d --no-deps api cron[\s\S]*up -d --no-deps nginx/);
+  assert.match(release, /CRON_BOOTSTRAP_ONLY=true[\s\S]*smoke\.sh[\s\S]*CRON_BOOTSTRAP_ONLY=false/);
+  assert.match(release, /RUN_MIGRATIONS=false[\s\S]*MIGRATION_ONLY=false/);
+  assert.match(deploy, /Set API_IMAGE to an immutable API image digest/);
+  assert.match(deploy, /tar --append[\s\S]*\.image-env/);
+  assert.match(release, /Immutable image manifest is missing/);
+  assert.match(release, /docker pull "\$API_IMAGE"[\s\S]*docker pull "\$CRON_IMAGE"/);
+  assert.match(release, /@sha256:\[0-9a-f\]\{64\}/);
   assert.doesNotMatch(release, /docker compose[^\n]*\sbuild(?:\s|$)/);
   assert.match(release, /rolling back containers/);
   assert.match(restore, /--confirm && \$\{3:-\} == RESTORE/);
   assert.match(restore, /manifest\.sha256/);
   assert.match(restore, /LEAVE_STOPPED=true/);
   assert.match(restore, /pg_restore --single-transaction/);
+  assert.match(restore, /DROP TABLE IF EXISTS public\.pending_registrations CASCADE/);
+  assert.match(restore, /DROP TABLE IF EXISTS public\.firebase_cleanup_queue CASCADE/);
+  assert.match(restore, /COMPOSE_ENV_FILE/);
+  assert.match(backup, /COMPOSE_ENV_FILE/);
+  assert.match(pendingRegistration, /created_at = \$4::timestamptz AND firebase_cleanup_pending = TRUE/);
+  assert.match(pendingRegistration, /firebase_uid = \$2 AND status = \$3/);
+  assert.match(restore, /RUN_MIGRATIONS=true[\s\S]*MIGRATION_ONLY=true[\s\S]*migrate/);
   assert.match(restore, /services remain stopped/);
   assert.match(backup, /stop "\$\{stopped\[@\]\}"[\s\S]*pg_dump[\s\S]*uploads[\s\S]*restore_services/);
   assert.match(backupS3, /BACKUP_DIR/);
@@ -163,6 +247,8 @@ test('cron health deduplicates SMTP alerts and sends recovery notifications', as
   assert.match(health, /alert_signature/);
   assert.match(health, /worker recuperado/);
   assert.match(health, /worker atrasado/);
+  assert.match(health, /name IN \('reminders', 'retention'\)/);
+  assert.match(health, /!signature && canRecover\(row\) && row\.alert_signature/);
   assert.match(compose, /OPERATIONAL_ALERT_EMAIL: \$\{OPERATIONAL_ALERT_EMAIL:-\}/);
   assert.match(example, /OPERATIONAL_ALERT_EMAIL=/);
   assert.match(packageJson, /"nodemailer"/);
@@ -240,6 +326,7 @@ test('CI builds and publishes commit-addressed production images', async () => {
   assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
   assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
   assert.match(workflow, /Test migrations against PostgreSQL/);
+  assert.match(workflow, /MIGRATION_TEST_DISPOSABLE: "true"/);
   const actionReferences = [...workflow.matchAll(/^\s*[-]?\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
   assert.ok(actionReferences.length > 0);
   assert.equal(
@@ -251,15 +338,22 @@ test('CI builds and publishes commit-addressed production images', async () => {
 });
 
 test('green main revisions deploy through a restricted serialized production gate', async () => {
-  const [workflow, hostDeploy, productionCompose] = await Promise.all([
-    read('.github/workflows/ci.yml'), read('ops/deploy-from-ci.sh'),
+  const [workflow, hostDeploy, stagingReceiver, productionReceiver, productionCompose] = await Promise.all([
+    read('.github/workflows/ci.yml'), read('ops/deploy-from-ci.sh'), read('ops/deploy-from-staging-ci.sh'), read('ops/deploy-from-production-ci.sh'),
     read('ops/compose.production.yaml'),
   ]);
-  assert.match(workflow, /deploy-production:[\s\S]*needs: validate/);
+  assert.match(workflow, /deploy-staging:[\s\S]*environment: staging/);
+  assert.match(workflow, /PORTAL_STAGING_VPS_SSH_KEY/);
+  assert.match(workflow, /staging:\$GITHUB_SHA/);
+  assert.match(workflow, /deploy-production:[\s\S]*needs: \[validate, deploy-staging\]/);
+  assert.match(workflow, /deploy-production:[\s\S]*environment: production/);
+  assert.match(workflow, /production:\$GITHUB_SHA/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /group: portal-ownerinc-production[\s\S]*cancel-in-progress: false/);
   assert.match(workflow, /--add-virtual-file="\.ci-commit:\$\{GITHUB_SHA\}"/);
+  assert.match(workflow, /API_IMAGE: \$\{\{ needs\.validate\.outputs\.api_image \}\}/);
+  assert.match(workflow, /tar --append --file=portal-release\.tar \.ci-images/);
   assert.match(workflow, /PORTAL_VPS_SSH_KEY/);
   assert.match(workflow, /StrictHostKeyChecking=yes/);
   assert.match(workflow, /for attempt in 1 2 3/);
@@ -269,12 +363,40 @@ test('green main revisions deploy through a restricted serialized production gat
   assert.match(hostDeploy, /SSH_ORIGINAL_COMMAND/);
   assert.match(hostDeploy, /flock -n/);
   assert.match(hostDeploy, /archive commit does not match requested commit/);
+  assert.match(hostDeploy, /\.ci-images/);
+  assert.match(hostDeploy, /docker pull "\$api_image"[\s\S]*docker pull "\$cron_image"/);
   assert.match(hostDeploy, /pg_dump --format=custom/);
   assert.match(hostDeploy, /pg_restore --clean --if-exists --no-owner --single-transaction/);
+  assert.match(hostDeploy, /DROP TABLE IF EXISTS public\.pending_registrations CASCADE/);
+  assert.match(hostDeploy, /DROP TABLE IF EXISTS public\.firebase_cleanup_queue CASCADE/);
+  assert.match(hostDeploy, /if ! docker exec[\s\S]*database_restored=false/);
+  assert.match(hostDeploy, /Database restore failed; services remain stopped/);
+  assert.match(hostDeploy, /cron_container="\$project-cron-1"/);
+  assert.match(hostDeploy, /stop_services\(\)/);
+  assert.match(hostDeploy, /stop_container "\$web_container"/);
+  assert.match(hostDeploy, /stop_container "\$api_container"/);
   assert.match(hostDeploy, /compose_for "\$release" run --rm migrate/);
+  assert.match(hostDeploy, /MIGRATION_ONLY=false[\s\S]*db\/verify-migrations\.js/);
+  assert.match(hostDeploy, /cron container is not using the resolved immutable digest/);
+  assert.match(hostDeploy, /CRON_BOOTSTRAP_ONLY=true[\s\S]*CRON_BOOTSTRAP_ONLY=false/);
+  assert.match(hostDeploy, /release became current/);
+  assert.match(hostDeploy, /New cron did not become healthy/);
   assert.match(hostDeploy, /--profile notifications/);
-  assert.match(hostDeploy, /Production readiness did not recover/);
-  assert.match(hostDeploy, /restoring the previous production release/);
+  assert.match(hostDeploy, /readiness did not recover/);
+  assert.match(hostDeploy, /scripts\/smoke\.sh/);
+  assert.match(hostDeploy, /production:/);
+  assert.match(hostDeploy, /restoring the previous \$target release/);
+  assert.match(hostDeploy, /staging:\*/);
+  assert.match(hostDeploy, /DEPLOY_CONFIG/);
+  assert.match(hostDeploy, /DEPLOY_COMPOSE_OVERRIDE/);
+  assert.match(hostDeploy, /mkdir -p "\$root\/incoming"/);
+  assert.match(hostDeploy, /realpath -e/);
+  assert.match(stagingReceiver, /staging targets/);
+  assert.match(stagingReceiver, /DEPLOY_TARGET=staging/);
+  assert.match(stagingReceiver, /DEPLOY_RECEIVER_ROLE=staging/);
+  assert.match(stagingReceiver, /portal-staging-deploy\.conf/);
+  assert.match(productionReceiver, /production targets/);
+  assert.match(productionReceiver, /DEPLOY_RECEIVER_ROLE=production/);
   assert.match(hostDeploy, /find "\$staging" -type d -exec chmod 0755/);
   assert.match(hostDeploy, /find "\$staging" -type f -exec chmod 0644/);
   assert.match(productionCompose, /postgres:[\s\S]*volumes: !override[\s\S]*postgres_data/);

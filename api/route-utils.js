@@ -1,6 +1,11 @@
 const { can } = require('./middleware/policy');
 
 const MAX_PAGE_SIZE = 100;
+const legacyJobTitleToken = /(^|[^\p{L}\p{N}_])RH([^\p{L}\p{N}_]|$)/iu;
+
+function containsLegacyJobTitleToken(value) {
+  return typeof value === 'string' && legacyJobTitleToken.test(value);
+}
 
 function text(max, required = false) {
   return (value) => value === undefined ? !required
@@ -27,10 +32,14 @@ function uuid(value) {
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function firebaseUid(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+}
+
 function targetUsers(value) {
   return value === undefined || ['all', 'pj', 'clt'].includes(value)
-    || (Array.isArray(value) && value.length <= 500 && new Set(value).size === value.length
-      && value.every((uid) => typeof uid === 'string' && uid.length > 0 && uid.length <= 128));
+    || (Array.isArray(value) && value.length > 0 && value.length <= 500
+      && new Set(value).size === value.length && value.every(firebaseUid));
 }
 
 function validBody(body, schema, required = []) {
@@ -87,6 +96,6 @@ const invalid = (req, res) => res.status(400).json({ error: 'Invalid request.', 
 const forbidden = (req, res) => res.status(403).json({ error: 'Permission denied.', requestId: req.id });
 
 module.exports = {
-  boolean, forbidden, httpUrl, integer, invalid, mayViewAll, oneOf, parseListQuery,
+  boolean, containsLegacyJobTitleToken, firebaseUid, forbidden, httpUrl, integer, invalid, mayViewAll, oneOf, parseListQuery,
   targetUsers, text, uuid, validBody, withAudit,
 };

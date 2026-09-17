@@ -3,6 +3,10 @@
 Data: 31 de julho de 2026
 Status: aprovado pelo usuario
 
+Atualizacao: o cadastro publico foi incorporado posteriormente no fluxo de
+registro pendente; esta especificacao continua descrevendo apenas convites
+administrativos.
+
 ## Objetivo
 
 Remover a saudacao personalizada do shell autenticado, revisar a experiencia de
@@ -15,7 +19,7 @@ admissao, role e permissoes do Portal.
 
 ## Fora de escopo
 
-- Cadastro publico.
+- Cadastro publico (fora do escopo desta especificacao original; implementado posteriormente).
 - Convite por dominio ou allowlist de dominios.
 - Sistema proprio de tokens, tabela de convites ou link de autenticacao customizado.
 - Alteracao do modelo de permissoes ou da regra de autorizacao server-side.

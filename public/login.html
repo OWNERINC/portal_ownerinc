@@ -219,8 +219,8 @@
     }
     .forgot-link:hover { color: var(--primary); }
 
-    .reset-section { display: none; }
-    .reset-section.active { display: block; }
+     .reset-section, .registration-password-section { display: none; }
+     .reset-section.active, .registration-password-section.active { display: block; }
     .login-form-wrap.hidden { display: none; }
 
     .success-msg {
@@ -228,6 +228,7 @@
       border: 1px solid #b7e4c7; border-radius: var(--radius-sm);
       padding: 12px 14px; margin-top: 8px; line-height: 1.5;
     }
+    .form-help { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin: -4px 0 8px; }
 
     .back-link {
       display: block; text-align: center; margin-top: 16px;
@@ -235,6 +236,15 @@
       background: none; border: none; padding: 0; font-family: var(--font-sans);
     }
     .back-link:hover { color: var(--primary); }
+
+    .register-section { display: none; }
+    .register-section.active { display: block; }
+    .register-link {
+      display: block; text-align: center; margin-top: 10px;
+      font-size: 12px; color: var(--primary); cursor: pointer;
+      background: none; border: none; padding: 0; font-family: var(--font-sans);
+    }
+    .register-link:hover { color: var(--espresso); }
 
     .password-wrap { position: relative; }
     .password-wrap .form-input { padding-right: 40px; width: 100%; }
@@ -332,10 +342,12 @@
                 <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#eye"></use></svg>
               </button>
             </div>
-            <button class="forgot-link" type="button" id="forgot-link">Esqueci minha senha</button>
+           <button class="forgot-link" type="button" id="forgot-link">Esqueci minha senha</button>
+           <button class="forgot-link" type="button" id="registration-password-link">Primeiro acesso: criar senha</button>
           </div>
           <p class="error-msg" id="error-msg" aria-live="polite"></p>
           <button class="btn-login" type="submit" id="submit-btn">Entrar no portal</button>
+          <button class="register-link" type="button" id="register-link">Cadastre-se</button>
         </form>
       </div><!-- /.login-form-wrap -->
 
@@ -348,6 +360,34 @@
         <div id="reset-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="reset-btn">Enviar link de redefinição</button>
         <button class="back-link" type="button" id="back-link">← Voltar ao login</button>
+      </form>
+
+      <form class="registration-password-section" id="registration-password-section">
+        <div class="form-group">
+          <label class="form-label" for="registration-password-email">E-mail do cadastro</label>
+          <input class="form-input" type="email" id="registration-password-email" name="registration-password-email" autocomplete="email" spellcheck="false" required placeholder="nome@exemplo.com…">
+        </div>
+        <p class="form-help">Use esta opção depois de confirmar seu e-mail para criar a primeira senha. O cadastro continua aguardando aprovação.</p>
+        <p class="error-msg" id="registration-password-error" aria-live="polite"></p>
+        <div id="registration-password-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
+        <button class="btn-login" type="submit" id="registration-password-btn">Enviar link para criar senha</button>
+        <button class="back-link" type="button" id="registration-password-back-link">← Voltar ao login</button>
+      </form>
+
+      <form class="register-section" id="register-section">
+        <div class="form-group">
+          <label class="form-label" for="register-name">Nome completo</label>
+          <input class="form-input" type="text" id="register-name" name="name" autocomplete="name" maxlength="120" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="register-email">E-mail</label>
+          <input class="form-input" type="email" id="register-email" name="email" autocomplete="email" maxlength="254" spellcheck="false" required>
+        </div>
+        <p class="form-help">Confirme seu e-mail. Depois, use “Primeiro acesso: criar senha” para definir sua senha e aguarde a aprovação do administrador.</p>
+        <p class="error-msg" id="register-error" aria-live="polite"></p>
+        <div id="register-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
+        <button class="btn-login" type="submit" id="register-btn">Criar cadastro</button>
+        <button class="back-link" type="button" id="register-back-link">← Voltar ao login</button>
       </form>
 
       <a class="support-link" href="mailto:suporte@ownerinc.com.br">Preciso de suporte</a>

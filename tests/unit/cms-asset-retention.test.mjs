@@ -1,15 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { cmsAssetRetentionDays } from '../../cron/cms-asset-retention.js';
+
+const retentionSource = await readFile('cron/cms-asset-retention.js', 'utf8');
 
 test('CMS asset retention keeps a bounded configurable orphan window', () => {
   assert.equal(cmsAssetRetentionDays({}), 30);
   assert.equal(cmsAssetRetentionDays({ CMS_ASSET_ORPHAN_RETENTION_DAYS: '7' }), 7);
   assert.throws(() => cmsAssetRetentionDays({ CMS_ASSET_ORPHAN_RETENTION_DAYS: '0' }), /between 1 and 3650/);
   assert.throws(() => cmsAssetRetentionDays({ CMS_ASSET_ORPHAN_RETENTION_DAYS: '3651' }), /between 1 and 3650/);
+});
+
+test('CMS asset retention compares revision asset references case-insensitively', () => {
+  assert.equal((retentionSource.match(/lower\(block->>'asset_id'\)/g) || []).length, 3);
+  assert.doesNotMatch(retentionSource, /WHERE block->>'asset_id'\s*=\s*a\.id::text/);
+  assert.doesNotMatch(retentionSource, /WHERE block->>'asset_id'\s*=\s*\$1::text/);
 });
 
 test('CMS asset retention queries only unreferenced revisions and deletes safely', async () => {
@@ -85,4 +93,30 @@ test('CMS asset retention does not delete a row if the upload directory disappea
     /private upload directory became unavailable/,
   );
   assert.equal(queries.some(sql => sql.includes('DELETE FROM cms_assets')), false);
+});
+
+test('CMS asset retention clears a reservation when finalization fails after unlink', async () => {
+  const queries = [];
+  const client = {
+    async query(sql) {
+      queries.push(sql);
+      if (sql.includes('SELECT a.id')) return { rows: [{ id: 'asset-1', storage_key: 'key-1' }] };
+      if (sql.includes('SET deleting_at = NOW()')) return { rowCount: 1, rows: [{ id: 'asset-1', storage_key: 'key-1' }] };
+      if (sql.includes('DELETE FROM cms_assets')) throw new Error('simulated finalization failure');
+      return { rowCount: 0, rows: [] };
+    },
+    release() {},
+  };
+  const fileSystem = {
+    async access() {},
+    async unlink() {},
+  };
+  const result = await (await import('../../cron/cms-asset-retention.js')).enforceCmsAssetRetention(
+    { async connect() { return client; } },
+    { UPLOAD_DIR: '/tmp/uploads' },
+    fileSystem,
+  );
+
+  assert.equal(result.finalizeFailures, 1);
+  assert.ok(queries.some(sql => sql.includes('UPDATE cms_assets SET deleting_at = NULL')));
 });

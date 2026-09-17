@@ -1,34 +1,26 @@
-@font-face {
-  font-family: 'Raleway';
-  src: url('https://fonts.gstatic.com/s/raleway/v37/1Ptug8zYS_SKggPNyC0ITw.woff2') format('woff2');
-  font-weight: 700 800;
-  font-style: normal;
-  font-display: swap;
-}
-
 :root {
   /* Cores */
   --bg: #F3F1EC;
   --surface: #FFFDF9;
   --surface-2: #EBE8E0;
   --sidebar-bg: #101412;
-  --sidebar-text: rgba(255,255,255,0.62);
+  --sidebar-text: rgba(255,255,255,0.74);
   --sidebar-active: #FFFFFF;
   --sidebar-active-bg: rgba(197,155,96,0.14);
   --primary: #C59B60;
   --primary-hover: #9C6F35;
   --espresso: #171B18;
   --text: #1D2420;
-  --text-secondary: #5D665F;
+  --text-secondary: #4B554E;
   --border: rgba(29,36,32,0.13);
   --danger: #DC2626;
   --success: #15803D;
-  --focus: #805925;
+  --focus: #5B3A12;
   color-scheme: light;
 
   /* Tipografia */
   --font-sans: Arial, sans-serif;
-  --font-display: 'Raleway', Arial, sans-serif;
+  --font-display: Arial, sans-serif;
   --font-size-xs: 11px;
   --font-size-sm: 13px;
   --font-size-base: 15px;

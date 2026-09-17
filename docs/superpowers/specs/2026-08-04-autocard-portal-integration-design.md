@@ -3,6 +3,13 @@
 Data: 4 de agosto de 2026
 Status: aprovado pelo usuario
 
+> Documento histórico. Os nomes RH abaixo são entradas legadas citadas apenas
+> para documentar a migration que os converteu para DHO.
+>
+> A lista de cargos e o modelo de acesso abaixo são históricos. A política atual
+> exige cargo ativo e `page_access.autocard=true`; os cargos DHO canônicos são
+> defaults da migration 030, não uma allowlist.
+
 ## Objetivo
 
 Integrar o AutoCard ao Portal Ownerinc como um modulo autenticado para criacao,
@@ -105,7 +112,7 @@ serao auditadas com o usuario autenticado.
 ## Testes e aceite
 
 - Cargo DHO autorizado recebe `allowed=true` e acessa cards e midias.
-- Cargo RH antigo, cargo nao relacionado, viewer sem cargo e admin sem cargo
+- Cargo legado anterior, cargo nao relacionado, viewer sem cargo e admin sem cargo
   DHO recebem `403` depois da migration.
 - A migration renomeia/reassocia RH para DHO sem quebrar foreign keys.
 - Historico e busca retornam cards de todos os usuarios DHO.

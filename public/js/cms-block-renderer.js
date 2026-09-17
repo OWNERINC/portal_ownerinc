@@ -192,7 +192,11 @@ function renderPdf(container, block, state) {
     text: `Abrir PDF em nova aba: ${block.title}`,
     hidden: '',
   });
-  const wrapper = element('section', { className: 'cms-pdf-block', 'aria-label': block.title }, [frame, status, link]);
+  const note = element('p', {
+    className: 'cms-pdf-note',
+    text: 'A acessibilidade do arquivo depende do documento PDF original.',
+  });
+  const wrapper = element('section', { className: 'cms-pdf-block', 'aria-label': block.title }, [frame, status, link, note]);
   container.append(wrapper);
   const token = state.token;
   fetchAPIAsset(assetEndpoint(block.asset_id)).then(url => {

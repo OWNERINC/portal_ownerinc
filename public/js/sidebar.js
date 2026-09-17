@@ -1,30 +1,32 @@
 (function () {
   var KEY = 'ownerinc-sidebar-collapsed';
+  var mobileMedia = null;
+  var drawerOpen = false;
+  var drawerReturnFocus = null;
 
   function applyCollapsed(collapsed) {
     document.body.classList.toggle('sidebar-collapsed', collapsed);
     localStorage.setItem(KEY, collapsed ? '1' : '');
     var toggle = document.getElementById('sidebar-toggle');
-    if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', String(mobileMedia?.matches ? drawerOpen : !collapsed));
+      toggle.setAttribute('aria-label', mobileMedia?.matches
+        ? (drawerOpen ? 'Fechar menu' : 'Abrir menu')
+        : (collapsed ? 'Expandir menu' : 'Recolher menu'));
+    }
   }
 
   // Restaurar estado salvo antes de qualquer render
   applyCollapsed(!!localStorage.getItem(KEY));
   document.body.classList.add('sidebar-ready');
 
-  // Botão de toggle
   var toggle = document.getElementById('sidebar-toggle');
-  if (toggle) {
-    toggle.addEventListener('click', function () {
-      applyCollapsed(!document.body.classList.contains('sidebar-collapsed'));
-    });
-  }
 
   var sidebar = document.querySelector('.sidebar');
   var topbar = document.querySelector('.topbar');
   if (sidebar && topbar) {
     var mainContent = document.querySelector('.main-content');
-    var mobileMedia = window.matchMedia('(max-width: 768px)');
+    mobileMedia = window.matchMedia('(max-width: 768px)');
     sidebar.id = 'portal-navigation';
     if (toggle) toggle.setAttribute('aria-controls', sidebar.id);
     var mobileToggle = document.createElement('button');
@@ -38,18 +40,41 @@
     overlay.className = 'sidebar-overlay';
     overlay.type = 'button';
     overlay.setAttribute('aria-label', 'Fechar menu');
-    function setDrawer(open, restoreFocus) {
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.inert = true;
+    overlay.tabIndex = -1;
+    function setDrawer(open, restoreFocus, restoreInside) {
+      var isMobile = mobileMedia.matches;
+      var active = document.activeElement;
+      var focusInSidebar = isMobile && active?.closest?.('#portal-navigation') === sidebar;
+      if (open && isMobile) drawerReturnFocus = document.activeElement;
+      drawerOpen = Boolean(open && isMobile);
       document.body.classList.remove('sidebar-open');
-      document.body.classList.toggle('sidebar-open', open);
-      mobileToggle.setAttribute('aria-expanded', String(open));
-      mobileToggle.setAttribute('aria-label', open ? 'Fechar menu' : 'Abrir menu');
-      sidebar.inert = mobileMedia.matches && !open;
-      sidebar.setAttribute('aria-hidden', String(mobileMedia.matches && !open));
-      if (mainContent) mainContent.inert = mobileMedia.matches && open;
-      overlay.tabIndex = open ? 0 : -1;
-      if (open) sidebar.querySelector('a, button')?.focus();
-      else if (restoreFocus) mobileToggle.focus();
+      document.body.classList.toggle('sidebar-open', drawerOpen);
+      var expanded = isMobile ? drawerOpen : !document.body.classList.contains('sidebar-collapsed');
+      var label = isMobile ? (drawerOpen ? 'Fechar menu' : 'Abrir menu') : (expanded ? 'Recolher menu' : 'Expandir menu');
+      toggle?.setAttribute('aria-expanded', String(expanded));
+      toggle?.setAttribute('aria-label', label);
+      mobileToggle.setAttribute('aria-expanded', String(drawerOpen));
+      mobileToggle.setAttribute('aria-label', drawerOpen ? 'Fechar menu' : 'Abrir menu');
+      sidebar.inert = isMobile && !drawerOpen;
+      sidebar.setAttribute('aria-hidden', String(isMobile && !drawerOpen));
+      if (mainContent) mainContent.inert = isMobile && drawerOpen;
+      overlay.tabIndex = drawerOpen ? 0 : -1;
+      overlay.inert = !drawerOpen;
+      overlay.setAttribute('aria-hidden', String(!drawerOpen));
+      if (drawerOpen) sidebar.querySelector('a, button')?.focus();
+      else if (restoreFocus || (restoreInside && focusInSidebar)) {
+        var target = drawerReturnFocus;
+        drawerReturnFocus = null;
+        if (target?.isConnected && !target.closest?.('#portal-navigation')) target.focus();
+        else mobileToggle.focus();
+      } else drawerReturnFocus = null;
     }
+    if (toggle) toggle.addEventListener('click', function () {
+      if (mobileMedia.matches) setDrawer(false, true);
+      else applyCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+    });
     function closeDrawer(restoreFocus) {
       setDrawer(false, restoreFocus !== false);
     }
@@ -74,12 +99,15 @@
         }
       }
     });
-    mobileMedia.addEventListener('change', function () { setDrawer(false, false); });
+    mobileMedia.addEventListener('change', function () { setDrawer(false, false, true); });
     setDrawer(false, false);
   }
 
   document.querySelectorAll('.sidebar-logout').forEach(function (button) {
-    button.addEventListener('click', function () { import('./auth.js').then(function (module) { module.logout(); }); });
+    button.addEventListener('click', function (event) {
+      if (event.defaultPrevented) return;
+      import('./auth.js').then(function (module) { module.logout(); });
+    });
   });
 
   document.querySelectorAll('.sidebar-nav a.active').forEach(function (link) {

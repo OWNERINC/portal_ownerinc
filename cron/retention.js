@@ -4,6 +4,7 @@ function retentionDays(env = process.env) {
   const values = {
     notifications: Number(env.NOTIFICATION_RETENTION_DAYS || 730),
     audit: Number(env.AUDIT_RETENTION_DAYS || 1825),
+    pendingRegistrations: Number(env.PENDING_REGISTRATION_RETENTION_DAYS || 730),
   };
   if (Object.values(values).some((value) => !Number.isInteger(value) || value < 30 || value > 3650)) {
     throw new Error('Retention days must be integers between 30 and 3650');
@@ -30,7 +31,12 @@ async function enforceRetention() {
       [days.audit]
     );
     const userImports = await db.query('DELETE FROM user_import_jobs WHERE expires_at < NOW()');
-    const details = { notifications: notifications.rowCount, audit: audit.rowCount, userImports: userImports.rowCount, days };
+    const details = {
+      notifications: notifications.rowCount,
+      audit: audit.rowCount,
+      userImports: userImports.rowCount,
+      days,
+    };
     await db.query(
       `INSERT INTO audit_log (action, target_type, details)
        VALUES ('retention.enforce', 'system', $1::jsonb)`,

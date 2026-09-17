@@ -1,10 +1,17 @@
 # Job Title Catalog Implementation Plan
 
+> Documento histórico, superseded by the DHO migration in Task 3. The RH names
+> retained below are legacy migration inputs, not current catalog labels.
+>
+> The old two-title AutoCard allowlist below is also historical. The current
+> policy is active job title plus explicit `page_access`; the two canonical DHO
+> titles are migration defaults, not the access boundary.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the active job-title catalog with the approved standardized list, migrate the two approved DHO nomenclatures, and restrict AutoCard access to the new RH titles.
+**Historical goal:** Replace the active job-title catalog with the approved standardized list, migrate the two approved DHO nomenclatures, and restrict AutoCard access to the current DHO titles.
 
-**Architecture:** A new idempotent PostgreSQL migration seeds the canonical active catalog, preserves old rows as inactive, and moves users from the two explicitly mapped DHO titles to their RH equivalents. The API policy becomes the single source of truth for AutoCard title access; the existing admin API/UI automatically consumes active job titles.
+**Architecture:** A new idempotent PostgreSQL migration seeds the canonical active catalog, preserves old rows as inactive, and moves users from legacy rows to their DHO equivalents. The API policy becomes the single source of truth for AutoCard title access; the existing admin API/UI automatically consumes active job titles.
 
 **Tech Stack:** PostgreSQL migrations, Express policy middleware, static admin UI, Node.js 24, Node test runner, migration integration checks.
 
@@ -13,7 +20,7 @@
 - Keep the existing `users.job_title_id` foreign key with `ON DELETE RESTRICT`.
 - Do not delete historical job-title rows or leave assigned users without a readable title.
 - Active catalog names are exactly the standardized list in `docs/superpowers/specs/2026-08-17-job-title-catalog-design.md`.
-- AutoCard access is allowed only for `Analista de RH Sênior` and `Gerente de RH`.
+- AutoCard access is allowed only for `Analista de DHO Sênior` and `Gerente de DHO`.
 - `Assistente de DHO` and `Coordenador de DHO` remain inactive and are not migrated automatically.
 - Continue normalizing AutoCard comparisons with `toLocaleLowerCase('pt-BR')`.
 - Keep API and `api/`/`public/` boundaries; do not add client-side access bypasses.
@@ -37,7 +44,7 @@
 
 - [ ] **Step 1: Extend static migration expectations before implementation.**
 
-  Add `013_job_title_catalog` to the expected ordered migration arrays in `api/db/verify-migrations.js`, `scripts/test-migrations.mjs`, and `tests/unit/schema-invariants.test.mjs`. Add static assertions that the new migration contains `job_titles`, `users`, `Analista de DHO`, `Analista de RH Sênior`, `Gerente de DHO`, `Gerente de RH`, and `active = FALSE`.
+  Add the historical legacy migration assertions to the expected ordered migration arrays in `api/db/verify-migrations.js`, `scripts/test-migrations.mjs`, and `tests/unit/schema-invariants.test.mjs`. Add static assertions that the DHO migration contains `job_titles`, `users`, `Analista de DHO`, `Analista de DHO Sênior`, `Gerente de DHO`, and `active = FALSE`.
 
 - [ ] **Step 2: Run the focused static migration test and confirm it fails.**
 
@@ -56,7 +63,7 @@
   ```sql
   WITH desired(name) AS (VALUES
     ('Analista Administrativo'), ('Analista de Cobrança'), ('Analista de Engenharia'),
-    ('Analista de Pós-Vendas'), ('Analista de RH Sênior'),
+    ('Analista de Pós-Vendas'), ('Analista de DHO Sênior'),
     ('Analista de Departamento Pessoal'), ('Analista Financeiro'),
     ('Analista Financeiro Sênior'), ('Assistente Administrativo'),
     ('Auxiliar de Limpeza'), ('CEO'), ('Consultor de Vendas'),
@@ -71,7 +78,7 @@
     ('Especialista de Marketing'), ('Garçom'), ('Garçom Sênior'), ('Garçonete'),
     ('Gerente Administrativo'), ('Gerente Comercial'), ('Gerente de Marketing'),
     ('Gerente de Obra'), ('Gerente de Pós-Vendas'), ('Gerente de Promoção'),
-    ('Gerente de RH'), ('Jovem Aprendiz'), ('Líder de Promoção'), ('Motorista'),
+    ('Gerente de DHO'), ('Jovem Aprendiz'), ('Líder de Promoção'), ('Motorista'),
     ('Promotor de Vendas'), ('Recepcionista'), ('Redator'), ('SDR'), ('Social Media')
   )
   INSERT INTO job_titles (name, active)
@@ -79,11 +86,11 @@
   ON CONFLICT DO UPDATE SET name = EXCLUDED.name, active = TRUE, updated_at = NOW();
   ```
 
-  Use a canonical case-insensitive comparison for the subsequent operations. Move users whose current title is `Analista de DHO` to the canonical `Analista de RH Sênior`, and users whose current title is `Gerente de DHO` to `Gerente de RH`. Then set `active = FALSE` for every title whose lowercased name is not in the canonical list. Keep `Assistente de DHO` and `Coordenador de DHO` as inactive rows and never delete any row.
+  Use a canonical case-insensitive comparison for the subsequent operations. Move users whose current legacy RH title maps to `Analista de DHO Sênior` or `Gerente de DHO`, preserving user assignments and page access. Then set `active = FALSE` for every title whose lowercased name is not in the canonical list.
 
 - [ ] **Step 4: Add integration assertions for the post-migration catalog.**
 
-  After the existing migration version assertion in `scripts/test-migrations.mjs`, query `job_titles` and assert that the active names equal the 50 canonical names sorted by `lower(name)`, that both mapped DHO titles have zero assigned users, that `Analista de RH Sênior` and `Gerente de RH` receive those assignments, and that `Assistente de DHO` and `Coordenador de DHO` are inactive when present.
+  After the existing migration version assertion in `scripts/test-migrations.mjs`, query `job_titles` and assert that the active names equal the 50 canonical DHO names sorted by `lower(name)`, that migrated legacy titles have zero assigned users, and that `Analista de DHO Sênior` and `Gerente de DHO` receive those assignments.
 
 - [ ] **Step 5: Run migration and static tests.**
 
@@ -116,7 +123,7 @@
 
 - [ ] **Step 1: Update the access regression test.**
 
-  Change the allowlist test to assert `true` for `Analista de RH Sênior` and `Gerente de RH`, and `false` for `Analista de RH`, all four old DHO names, `DHO Manager`, `Gerente de Pessoas`, an empty title, and a super-admin with an unrelated title.
+  Change the allowlist test to assert `true` for `Analista de DHO Sênior` and `Gerente de DHO`, and `false` for all other titles, an empty title, and an admin without an authorized active cargo.
 
 - [ ] **Step 2: Run the focused AutoCard test and confirm it fails against the old policy.**
 
@@ -134,8 +141,8 @@
 
   ```js
   const AUTOCARD_JOB_TITLES = new Set([
-    'analista de rh sênior',
-    'gerente de rh',
+    'analista de dho sênior',
+    'gerente de dho',
   ]);
   ```
 
@@ -143,7 +150,7 @@
 
 - [ ] **Step 4: Update the release checklist.**
 
-  Replace the four DHO AutoCard access checks with the two approved RH titles, and keep the negative checks for a user without an approved title and an admin without an approved title.
+  Replace the four DHO AutoCard access checks with the two approved DHO titles, and keep the negative checks for a user without an approved title and an admin without an approved title.
 
 - [ ] **Step 5: Run the focused AutoCard tests and commit.**
 
@@ -151,7 +158,7 @@
 
   ```text
   git add api/middleware/policy.js tests/unit/autocard-invariants.test.mjs docs/operations/v1-release-checklist.md
-  git commit -m "fix: align AutoCard access with RH titles"
+  git commit -m "fix: align AutoCard access with DHO titles"
   ```
 
 ### Task 3: Verify admin catalog behavior and repository contracts
@@ -201,4 +208,4 @@
 
 - [ ] **Step 4: Validate production.**
 
-  Confirm `https://portal.ownerinc.com.br` returns HTTP 200, then verify in the admin UI that the active list contains the approved catalog and that AutoCard access works for `Analista de RH Sênior` and `Gerente de RH` while old DHO titles do not receive access.
+  Confirm `https://portal.ownerinc.com.br` returns HTTP 200, then verify in the admin UI that the active list contains the approved catalog and that AutoCard access works for `Analista de DHO Sênior` and `Gerente de DHO` while inactive titles do not receive access.

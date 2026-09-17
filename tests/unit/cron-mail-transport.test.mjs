@@ -35,6 +35,7 @@ test('reminders and operational alerts send through the shared transport', async
   const messages = [];
   transport.sendMail = async (message) => {
     messages.push(message);
+    return { accepted: [message.to], rejected: [] };
   };
 
   await sendEmail({ to: 'user@example.com', subject: 'Reminder', text: 'Reminder text' }, env);

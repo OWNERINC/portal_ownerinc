@@ -20,10 +20,13 @@ CREATE TABLE IF NOT EXISTS job_titles (
     AND jsonb_typeof(page_access->'autocard') = 'boolean'
     AND jsonb_typeof(page_access->'posCards') = 'boolean'
   ),
+  CONSTRAINT job_titles_name_no_legacy_rh_check CHECK (
+    name !~* '(^|[^[:alnum:]_])RH([^[:alnum:]_]|$)'
+  ),
   CONSTRAINT job_titles_name_unique UNIQUE (name)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS job_titles_name_lower_unique ON job_titles (lower(name));
+CREATE UNIQUE INDEX IF NOT EXISTS job_titles_name_lower_unique ON job_titles (btrim(lower(name)));
 
 CREATE TABLE IF NOT EXISTS users (
   uid            TEXT        PRIMARY KEY,
@@ -40,16 +43,58 @@ CREATE TABLE IF NOT EXISTS users (
   pj_due_day     INTEGER     CHECK (pj_due_day BETWEEN 1 AND 31),
   job_title_id   UUID        REFERENCES job_titles(id) ON DELETE RESTRICT,
   permissions    JSONB       NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(permissions) = 'object'),
+  firebase_enable_pending BOOLEAN NOT NULL DEFAULT FALSE,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT users_contract_consistency CHECK ((contract_type = 'pj') = is_pj),
+  CONSTRAINT users_contract_consistency CHECK (
+    (contract_type = 'pj' AND is_pj IS TRUE AND pj_due_day BETWEEN 1 AND 31)
+    OR (contract_type = 'clt' AND is_pj IS FALSE AND pj_due_day IS NULL)
+  ),
   CONSTRAINT users_linkedin_url_check CHECK (linkedin_url = '' OR linkedin_url ~ '^https?://'),
   CONSTRAINT users_photo_crop_check CHECK (
     jsonb_typeof(photo_crop) = 'object'
     AND jsonb_typeof(photo_crop->'x') = 'number'
     AND jsonb_typeof(photo_crop->'y') = 'number'
     AND jsonb_typeof(photo_crop->'zoom') = 'number'
+    AND jsonb_path_exists(photo_crop, '$ ? (@.x >= 0 && @.x <= 1 && @.y >= 0 && @.y <= 1 && @.zoom >= 1 && @.zoom <= 3)')
   )
 );
+
+CREATE INDEX IF NOT EXISTS users_job_title_id_idx ON users (job_title_id);
+CREATE INDEX IF NOT EXISTS users_firebase_enable_pending_idx
+  ON users (created_at) WHERE firebase_enable_pending = TRUE;
+
+CREATE TABLE IF NOT EXISTS pending_registrations (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  firebase_uid      TEXT NOT NULL UNIQUE,
+  email             TEXT NOT NULL CHECK (email = lower(email) AND char_length(email) BETWEEN 3 AND 254),
+  name              TEXT NOT NULL CHECK (char_length(btrim(name)) BETWEEN 2 AND 120),
+  status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reviewed_at       TIMESTAMPTZ,
+  reviewed_by       TEXT REFERENCES users(uid) ON DELETE SET NULL,
+  rejection_reason  TEXT CHECK (rejection_reason IS NULL OR char_length(rejection_reason) <= 500),
+  firebase_cleanup_pending BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS pending_registrations_pending_email_unique
+  ON pending_registrations (lower(email)) WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS pending_registrations_status_created_idx
+  ON pending_registrations (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS pending_registrations_cleanup_idx
+  ON pending_registrations (firebase_cleanup_pending, created_at);
+
+CREATE TABLE IF NOT EXISTS firebase_cleanup_queue (
+  firebase_uid    TEXT PRIMARY KEY CHECK (btrim(firebase_uid) <> ''),
+  reason          TEXT NOT NULL DEFAULT 'compensation' CHECK (char_length(btrim(reason)) BETWEEN 1 AND 120),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_attempt_at TIMESTAMPTZ,
+  attempts        INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  last_error      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS firebase_cleanup_queue_attempt_idx
+  ON firebase_cleanup_queue (last_attempt_at NULLS FIRST, created_at);
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email));
 
@@ -60,7 +105,7 @@ CREATE TABLE IF NOT EXISTS autocard_media (
   byte_size    INTEGER     NOT NULL CHECK (byte_size BETWEEN 1 AND 3145728),
   created_by   TEXT        REFERENCES users(uid) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT autocard_media_storage_key_check CHECK (storage_key ~ '^autocard-[0-9a-f-]+\.webp$')
+  CONSTRAINT autocard_media_storage_key_check CHECK (storage_key ~ '^autocard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$')
 );
 
 CREATE TABLE IF NOT EXISTS autocard_cards (
@@ -79,13 +124,14 @@ CREATE TABLE IF NOT EXISTS autocard_cards (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT autocard_cards_name_check CHECK (char_length(btrim(name)) BETWEEN 1 AND 120),
-  CONSTRAINT autocard_cards_icon_check CHECK (icon IS NULL OR char_length(icon) BETWEEN 1 AND 80),
-  CONSTRAINT autocard_cards_illustration_check CHECK (illustration IS NULL OR char_length(illustration) BETWEEN 1 AND 80),
+  CONSTRAINT autocard_cards_icon_check CHECK (icon IS NULL OR (char_length(icon) BETWEEN 1 AND 80 AND icon ~ '^[a-z0-9]+(-[a-z0-9]+)*$')),
+  CONSTRAINT autocard_cards_illustration_check CHECK (illustration IS NULL OR (char_length(illustration) BETWEEN 1 AND 80 AND illustration ~ '^[a-z0-9]+(-[a-z0-9]+)*$')),
   CONSTRAINT autocard_cards_media_crop_check CHECK (
     jsonb_typeof(media_crop) = 'object'
     AND jsonb_typeof(media_crop->'x') = 'number'
     AND jsonb_typeof(media_crop->'y') = 'number'
     AND jsonb_typeof(media_crop->'zoom') = 'number'
+    AND jsonb_path_exists(media_crop, '$ ? (@.x >= 0 && @.x <= 1 && @.y >= 0 && @.y <= 1 && @.zoom >= 1 && @.zoom <= 3)')
   )
 );
 
@@ -233,12 +279,14 @@ CREATE TABLE IF NOT EXISTS user_import_jobs (
 );
 CREATE TABLE IF NOT EXISTS user_import_rows (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), job_id UUID NOT NULL REFERENCES user_import_jobs(id) ON DELETE CASCADE,
-  row_number INTEGER NOT NULL CHECK (row_number >= 2), name TEXT NOT NULL, email TEXT NOT NULL, job_title TEXT NOT NULL,
+  row_number INTEGER NOT NULL CHECK (row_number >= 2), name TEXT NOT NULL, email TEXT NOT NULL, firebase_uid TEXT,
+  job_title TEXT NOT NULL,
   contract_type TEXT NOT NULL, pj_due_day TEXT, phone TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'invited', 'failed', 'invalid', 'duplicate')), attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 3),
   last_error TEXT CHECK (last_error IS NULL OR char_length(last_error) <= 1000), invited_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT user_import_rows_job_row_unique UNIQUE (job_id, row_number),
-  validation_errors JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(validation_errors) = 'array')
+  validation_errors JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(validation_errors) = 'array'),
+  CONSTRAINT user_import_rows_firebase_uid_check CHECK (firebase_uid IS NULL OR btrim(firebase_uid) <> '')
 );
 CREATE INDEX IF NOT EXISTS user_import_jobs_pending_idx ON user_import_jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS user_import_jobs_expiry_idx ON user_import_jobs (expires_at);
@@ -276,6 +324,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS solides_employee_links_external_unique
 CREATE INDEX IF NOT EXISTS solides_employee_links_status_idx
   ON solides_employee_links (status, updated_at DESC);
 
+-- The legacy catalog seed is superseded by migration 030 on fresh databases.
 INSERT INTO schema_migrations (version) VALUES
   ('001_initial_schema'),
   ('002_reliable_notifications'),
@@ -289,10 +338,14 @@ INSERT INTO schema_migrations (version) VALUES
   ('010_autocard'),
   ('011_cron_alert_state'),
   ('012_autocard_media_crop'),
+  ('013_job_title_catalog'),
   ('017_pos_cards'),
   ('018_pos_card_storage_key'),
   ('020_profile_photo_crop'),
   ('021_bulk_user_imports'),
   ('022_bulk_user_import_validation'),
-  ('023_pos_owner_cards')
+  ('023_pos_owner_cards'),
+  ('029_autocard_media_safety'),
+  ('031_contract_invariants'),
+  ('032_user_import_identity')
 ON CONFLICT (version) DO NOTHING;

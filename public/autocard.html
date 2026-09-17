@@ -32,7 +32,6 @@
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./benefits.html" title="Benefícios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#gift"></use></svg><span>Benefícios</span></a></li>
       <li><a href="./announcements.html" title="Anúncios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Anúncios</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
       <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
@@ -75,19 +74,21 @@
               <div id="fields"></div>
               <div class="editor-actions">
                 <button id="iconButton" class="secondary-button" type="button"><span id="iconPreview"></span> Escolher ícone</button>
-                <button id="illustrationButton" class="secondary-button hidden" type="button">Escolher ilustração</button>
-                <label id="imageButton" class="secondary-button hidden">Adicionar imagem<input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp"></label>
+               <button id="illustrationButton" class="secondary-button hidden" type="button">Escolher ilustração</button>
+                <button id="imageButton" class="secondary-button hidden" type="button">Adicionar imagem</button><input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
                 <button id="cropButton" class="secondary-button hidden" type="button" aria-controls="cropDialog">Ajustar enquadramento</button>
               </div>
+              <p id="mediaStatus" class="media-status" role="status" aria-live="polite" data-state="idle">Nenhuma imagem selecionada.</p>
               <div id="mediaSizeControl" class="control hidden"><span>Tamanho da mídia</span><div class="segmented"><button data-size="small" type="button">Pequena</button><button data-size="medium" class="active" type="button">Média</button><button data-size="large" type="button">Grande</button></div></div>
               <div class="control"><span>Variação visual</span><div class="segmented variant-segmented"><button data-mode="light" type="button">Editorial claro</button><button data-mode="dark" type="button">Noir</button><button data-mode="beige" type="button">Paper beige</button></div></div>
               <div class="editor-actions bottom"><button id="saveButton" class="secondary-button" type="button">Salvar</button><button id="exportButton" class="primary-button" type="button">Exportar PNG</button></div>
+              <p id="contentOverflow" class="content-overflow" role="status" aria-live="polite" data-overflow="false"></p>
             </section>
-            <section class="preview-area"><div class="canvas-frame"><div id="cardCanvas"></div></div><p>Formato de exportação: 1080 × 1080 px</p></section>
+             <section class="preview-area"><div class="canvas-frame"><div id="cardCanvas"></div></div><p>Exportação PNG: largura de 1080 px, proporção do card preservada.</p></section>
           </div>
         </section>
 
-        <section id="savedView" class="panel saved-view hidden"><div class="section-heading"><div><span class="eyebrow">Biblioteca compartilhada</span><h1>Histórico de cards</h1></div><input id="savedSearch" aria-label="Buscar cards por nome" type="search" placeholder="Buscar por nome..."></div><div id="savedFilters" class="filters"></div><div id="savedList" class="saved-list"></div><p id="savedEmpty" class="empty">Nenhum card salvo ainda.</p></section>
+        <section id="savedView" class="panel saved-view hidden"><div class="section-heading"><div><span class="eyebrow">Biblioteca compartilhada</span><h1>Histórico de cards</h1></div><input id="savedSearch" aria-label="Buscar cards por nome" type="search" placeholder="Buscar por nome..."></div><div id="savedFilters" class="filters"></div><div id="savedList" class="saved-list"></div><div id="savedPagination" class="pagination saved-pagination" aria-live="polite"></div><p id="savedEmpty" class="empty">Nenhum card salvo ainda.</p></section>
       </div>
     </main>
   </div>

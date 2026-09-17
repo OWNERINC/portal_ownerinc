@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const { blocksToText, validateBlocks } = require('../../api/cms/blocks');
-const { legacyTextBlocks, syncKnowledgePdf } = require('../../api/cms/knowledge');
+const { KnowledgePdfError, legacyTextBlocks, syncKnowledgePdf } = require('../../api/cms/knowledge');
 const { canManageCms } = require('../../api/cms/permissions');
 
 const assetId = '550e8400-e29b-41d4-a716-446655440000';
@@ -129,9 +129,47 @@ test('knowledge PDF synchronization creates a published revision from legacy con
     { type: 'pdf', asset_id: assetId, title: 'Policy PDF' },
   ]);
   assert.match(calls[0].sql, /pg_advisory_xact_lock/);
+
+  calls.length = 0;
+  await syncKnowledgePdf(db, {
+    sourceId: 'empty-article-id',
+    title: 'Empty guide',
+    category: 'Operations',
+    content: '  \n\t  ',
+    pdf: { assetId, title: 'Policy PDF' },
+    actorUid: 'admin-id',
+  });
+  const emptyRevisionInsert = calls.find(({ sql }) => sql.includes('INSERT INTO cms_revisions'));
+  assert.deepEqual(JSON.parse(emptyRevisionInsert.values[2]), [
+    { type: 'pdf', asset_id: assetId, title: 'Policy PDF' },
+  ]);
 });
 
-test('knowledge PDF removal keeps other published blocks and unpublished CMS work intact', async () => {
+test('unsafe legacy content rejects first PDF publication before CMS mutation', async () => {
+  const calls = [];
+  const db = {
+    query: async (sql) => {
+      calls.push(sql);
+      if (sql.includes('FROM cms_assets')) return { rows: [{ id: assetId }] };
+      if (sql.includes('FROM cms_documents')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  await assert.rejects(
+    syncKnowledgePdf(db, {
+      sourceId: 'unsafe-article-id', title: 'Unsafe', category: 'Operations',
+      content: 'Legacy <script>alert(1)</script>',
+      pdf: { assetId, title: 'Policy PDF' }, actorUid: 'admin-id',
+    }),
+    error => error instanceof KnowledgePdfError
+      && error.code === 'unsafe_legacy_content'
+      && error.message === 'Article content contains unsafe markup and cannot be converted to CMS blocks.',
+  );
+  assert.equal(calls.some(sql => /INSERT INTO cms_(documents|revisions)|UPDATE cms_documents/.test(sql)), false);
+});
+
+test('legacy knowledge edits never replace CMS draft paragraphs while changing PDF', async () => {
   const calls = [];
   const db = {
     query: async (sql, values) => {
@@ -142,13 +180,12 @@ test('knowledge PDF removal keeps other published blocks and unpublished CMS wor
           published_revision_id: 'published-id',
           draft_revision_id: 'draft-id',
           scheduled_revision_id: 'scheduled-id',
-          published_blocks: [
-            { type: 'paragraph', text: 'Old text' },
-            { type: 'pdf', asset_id: assetId, title: 'Old PDF' },
-            { type: 'pdf', asset_id: '650e8400-e29b-41d4-a716-446655440000', title: 'Other PDF' },
+          published_blocks: [{ type: 'paragraph', text: 'Old text' }],
+          draft_blocks: [
+            { type: 'paragraph', text: 'Keep this paragraph' },
+            { type: 'pdf', asset_id: assetId, title: 'Draft PDF' },
             { type: 'callout', tone: 'info', text: 'Keep this note' },
           ],
-          draft_blocks: [{ type: 'pdf', asset_id: assetId, title: 'Draft PDF' }],
         }],
       };
       if (sql.includes('COALESCE(MAX(version)')) return { rows: [{ version: 3 }] };
@@ -167,14 +204,72 @@ test('knowledge PDF removal keeps other published blocks and unpublished CMS wor
   });
 
   const revisionInsert = calls.find(({ sql }) => sql.includes('INSERT INTO cms_revisions'));
-  assert.deepEqual(JSON.parse(revisionInsert.values[2]), [
-    { type: 'paragraph', text: 'New text.' },
-    { type: 'pdf', asset_id: '650e8400-e29b-41d4-a716-446655440000', title: 'Other PDF' },
+  assert.equal(revisionInsert.values[2], 'draft');
+  assert.deepEqual(JSON.parse(revisionInsert.values[3]), [
+    { type: 'paragraph', text: 'Keep this paragraph' },
     { type: 'callout', tone: 'info', text: 'Keep this note' },
   ]);
-  assert.equal(result.pdfAssetId, '650e8400-e29b-41d4-a716-446655440000');
-  assert.equal(calls.filter(({ sql }) => sql.includes("status = 'archived' WHERE id = $1 AND status = 'draft'")).length, 0);
+  assert.equal(result.pdfAssetId, null);
+  assert.equal(calls.filter(({ sql }) => sql.includes("status = 'archived' WHERE id = $1 AND status = 'draft'")).length, 1);
   assert.equal(calls.filter(({ sql }) => sql.includes("status = 'archived' WHERE id = $1 AND status = 'scheduled'")).length, 0);
+});
+
+test('legacy PDF edits reject ambiguous CMS PDF blocks', async () => {
+  const db = {
+    query: async (sql) => {
+      if (sql.includes('FROM cms_documents')) return {
+        rows: [{
+          id: 'document-id', published_revision_id: null, draft_revision_id: 'draft-id',
+          scheduled_revision_id: null, published_blocks: null,
+          draft_blocks: [
+            { type: 'pdf', asset_id: assetId, title: 'First' },
+            { type: 'pdf', asset_id: '650e8400-e29b-41d4-a716-446655440000', title: 'Second' },
+          ], scheduled_blocks: null,
+        }],
+      };
+      return { rows: [] };
+    },
+  };
+
+  await assert.rejects(
+    syncKnowledgePdf(db, {
+      sourceId: 'article-id', title: 'Guide', category: 'Operations', content: 'Ignored',
+      pdf: null, actorUid: 'admin-id',
+    }),
+    error => error instanceof KnowledgePdfError
+      && error.code === 'ambiguous_pdf'
+      && /Editor CMS/.test(error.message),
+  );
+});
+
+test('legacy metadata-only knowledge edits preserve a published CMS body', async () => {
+  const calls = [];
+  const db = {
+    query: async (sql, values) => {
+      calls.push({ sql, values });
+      if (sql.includes('FROM cms_documents')) return {
+        rows: [{
+          id: 'document-id',
+          published_revision_id: 'published-id',
+          draft_revision_id: null,
+          scheduled_revision_id: null,
+          published_blocks: [{ type: 'paragraph', text: 'CMS body' }],
+          draft_blocks: null,
+          scheduled_blocks: null,
+        }],
+      };
+      return { rows: [] };
+    },
+  };
+
+  const result = await syncKnowledgePdf(db, {
+    sourceId: 'article-id', title: 'Guide', category: 'Operations', content: 'Legacy replacement',
+    pdf: undefined, actorUid: 'admin-id',
+  });
+
+  assert.equal(result.pdfChanged, false);
+  assert.equal(calls.some(({ sql }) => sql.includes('INSERT INTO cms_revisions')), false);
+  assert.equal(calls.some(({ values }) => values?.includes('Legacy replacement')), false);
 });
 
 test('canManageCms maps CMS areas to existing permissions', () => {

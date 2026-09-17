@@ -1,8 +1,52 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
 
 const pages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'profile', 'admin', 'solides'];
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createReminderDetailHarness(source) {
+  const context = {
+    window: { location: { hash: '' } },
+    reminderDetail: { hidden: true, focus() { this.focused = true; } },
+    reminderDetailTitle: { textContent: '' },
+    reminderDetailMeta: { textContent: '' },
+    reminderDetailContent: {
+      childNodes: [],
+      append(...children) { this.childNodes.push(...children); },
+    },
+    reminderDetailRequest: 0,
+    page: 4,
+    fetchImpl: () => { throw new Error('fetchImpl not configured'); },
+    rendered: [],
+    states: [],
+    fetchAPI: (...args) => context.fetchImpl(...args),
+    clear(node) {
+      node.childNodes = [];
+      return node;
+    },
+    element: (tag, options = {}) => ({ tag, ...options }),
+    renderReminderDetail: detail => context.rendered.push(detail),
+    renderReminderDetailState: (message, retry) => context.states.push({ message, retry }),
+    encodeURIComponent,
+  };
+  context.reminderIdFromHash = (hash = context.window.location.hash) => {
+    const match = /^#reminder-([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.exec(hash);
+    return match ? match[1].toLowerCase() : null;
+  };
+  vm.runInNewContext(`${source}\nglobalThis.loadReminderDetail = loadReminderDetail;`, context, { filename: 'reminders.js' });
+  return context;
+}
 
 test('authenticated pages expose one heading, skip navigation, theme color, and external scripts only', async () => {
   for (const page of pages) {
@@ -67,6 +111,21 @@ test('admin navigation restores the last verified role before paint and revalida
   }
 });
 
+test('authenticated requests centralize auth redirects without treating permission denial as logout', async () => {
+  const auth = await readFile('public/js/auth.js', 'utf8');
+  const authenticatedFetch = auth.slice(auth.indexOf('function authRedirectReason'), auth.indexOf('async function requestAPI'));
+  const requireAuth = auth.slice(auth.indexOf('export async function requireAuth'), auth.indexOf('export async function logout'));
+  assert.match(authenticatedFetch, /response\.status === 401/);
+  assert.match(authenticatedFetch, /response\.clone\(\)/);
+  assert.match(authenticatedFetch, /clearVerifiedRole\(\)/);
+  assert.match(authenticatedFetch, /await signOut\(auth\)\.catch/);
+  assert.match(authenticatedFetch, /redirectToLogin\(/);
+  assert.match(authenticatedFetch, /body\?\.reason === 'email-not-verified'\) return 'email'/);
+  assert.match(authenticatedFetch, /\/api\/users\/me/);
+  assert.match(requireAuth, /if \(error\.status === 401 \|\| error\.status === 403\) return null;/);
+  assert.doesNotMatch(authenticatedFetch, /response\.status === 403\) \{/);
+});
+
 test('AutoCard navigation consumes backend access instead of a frontend title allowlist', async () => {
   const [auth, apiAuth] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
@@ -96,22 +155,28 @@ test('admin table states tolerate sections without pagination containers', async
 });
 
 test('profile exposes safe API errors instead of hiding upload and save failures', async () => {
-  const [profile, upload] = await Promise.all([
+  const [profile, upload, auth] = await Promise.all([
     readFile('public/js/profile.js', 'utf8'),
     readFile('api/routes/upload.js', 'utf8'),
+    readFile('public/js/auth.js', 'utf8'),
   ]);
-  assert.match(profile, /async function responseError\(response, fallback\)/);
+  assert.match(profile, /const res = await authenticatedFetch\('\/api\/upload\/photo', \{[\s\S]*body: formData/);
+  assert.doesNotMatch(profile, /fetch\('\/api\/upload\/photo'/);
+  assert.doesNotMatch(profile, /getIdToken\(\)/);
   assert.match(profile, /responseError\(res, 'O servidor recusou o arquivo/);
   assert.match(profile, /Não foi possível salvar o perfil: \$\{err\.message\}/);
   assert.match(profile, /MAX_PHOTO_SIZE = 500 \* 1024/);
   assert.match(profile, /typeof photoURL !== 'string' \|\| !photoURL/);
   assert.match(profile, /frameWidth: avatarButton\?\.clientWidth \|\| 0/);
   assert.match(profile, /frameWidth: cropFrame\?\.clientWidth \|\| 0/);
-  assert.match(profile, /if \(removed\) avatarButton\.focus\(\);/);
+   assert.match(profile, /const focusHidden =/);
   assert.match(profile, /if \(saved\) closeCropDialog\(\);/);
   assert.match(profile, /Escolha uma imagem JPEG, PNG ou WebP de até 500 KB/);
   assert.match(profile, /runProfileAction/);
   assert.doesNotMatch(profile, /users\/me\/export/);
+  assert.match(auth, /export async function authenticatedFetch\(/);
+  assert.match(auth, /await handleAuthenticationFailure\(path, response\)/);
+  assert.match(auth, /path === '\/api\/users\/me' \? 'access' : null/);
   assert.match(upload, /fileSize: 500 \* 1024/);
 });
 
@@ -194,7 +259,7 @@ test('admin job titles come from the API instead of an inline catalog', async ()
   assert.match(script, /text: title\.active \? title\.name : `\$\{title\.name\} \(inativo\)`/);
   assert.doesNotMatch(script, /(?:const|let|var)\s+\w*(?:catalog|titles?)\w*\s*=\s*\[\s*(?!\])/i);
   for (const title of [
-    'Analista de RH Sênior', 'Gerente de RH', 'Analista Administrativo',
+    'Analista de DHO Sênior', 'Gerente de DHO', 'Analista Administrativo',
     'Coordenador de Compras', 'Social Media',
   ]) {
     assert.equal(script.includes(title), false, `admin script must not hardcode ${title}`);
@@ -212,12 +277,50 @@ test('public content pages expose server pagination and category filters', async
   assert.match(knowledge, /let articlesRequest = 0/);
   assert.match(knowledge, /const requestToken = \+\+articlesRequest/);
   assert.match(knowledge, /if \(requestToken !== articlesRequest\) return/);
-  assert.match(knowledge, /renderPagination\(document\.getElementById\('articles-pagination'/);
+  assert.match(knowledge, /renderPagination\(articlesPagination/);
   assert.match(academy, /fetchAPIPage\(`\/api\/academy\?\$\{request\}`\)/);
   assert.match(academy, /academy-filters/);
+  assert.match(academy, /let coursesRequest = 0/);
+  assert.match(academy, /if \(requestToken !== coursesRequest\) return/);
+  assert.match(academy, /if \(!courses\.length && offset > 0\)/);
+  assert.match(academy, /updateUrl\(category, 0\)/);
+  assert.match(academy, /return loadCourses\(\)/);
+  assert.match(academy, /if \(!courses\.length\) \{[\s\S]*clear\(pagination\)/);
   assert.match(benefits, /fetchAPIPage\(`\/api\/benefits\?\$\{request\}`\)/);
   assert.match(benefits, /benefits-filters/);
+  assert.match(benefits, /let benefitsRequest = 0/);
+  assert.match(benefits, /if \(requestToken !== benefitsRequest\) return/);
+  assert.match(benefits, /if \(!benefits\.length && offset > 0\)/);
+  assert.match(benefits, /updateUrl\(query\.get\('category'\) \|\| '', 0\)/);
+  assert.match(benefits, /return loadBenefits\(\)/);
+  assert.match(benefits, /if \(!benefits\.length\) \{[\s\S]*clear\(pagination\)/);
   assert.match(pagination, /function renderPagination/);
+  assert.match(academy, /setPaginationBusy\(pagination, true\)/);
+  assert.match(academy, /setPaginationBusy\(pagination, false\)/);
+  assert.match(knowledge, /setPaginationBusy\(articlesPagination, true\)/);
+  assert.match(knowledge, /setPaginationBusy\(articlesPagination, false\)/);
+});
+
+test('Knowledge detail reads the authoritative article and stale pages recover', async () => {
+  const [knowledge, reminders] = await Promise.all([
+    readFile('public/js/knowledge.js', 'utf8'),
+    readFile('public/js/reminders.js', 'utf8'),
+  ]);
+  assert.match(knowledge, /fetchAPI\(`\/api\/knowledge\/\$\{encodeURIComponent\(id\)\}`\)/);
+  assert.doesNotMatch(knowledge, /articles\.find/);
+  assert.match(knowledge, /showState\(articleContent, 'Carregando artigo…'/);
+  assert.match(knowledge, /error\?\.status === 404/);
+  assert.match(knowledge, /articleTitle\.focus\(\)/);
+  assert.match(knowledge, /if \(!articles\.length && offset > 0\)/);
+  assert.match(knowledge, /return loadArticles\(\)/);
+  assert.match(reminders, /const PAGE_SIZE = 50/);
+  assert.match(reminders, /let remindersRequest = 0/);
+  assert.match(reminders, /const requestToken = \+\+remindersRequest/);
+  assert.match(reminders, /const requestPage = page/);
+  assert.match(reminders, /if \(!loaded\.length && requestPage > 0\)/);
+  assert.match(reminders, /const lastPage = Math\.max\(0, Math\.ceil\(loadedTotal \/ PAGE_SIZE\) - 1\)/);
+  assert.match(reminders, /if \(requestToken !== remindersRequest\) return/);
+  assert.match(reminders, /return loadReminders\(\)/);
 });
 
 test('V1 dashboard keeps scoped data while using the editorial home composition', async () => {
@@ -243,16 +346,117 @@ test('V1 dashboard keeps scoped data while using the editorial home composition'
   assert.match(reminders, /deliveries-pagination/);
 });
 
+test('reminder UI derives safe content links and formats civil dates in São Paulo', async () => {
+  const [dashboard, reminders, html] = await Promise.all([
+    readFile('public/js/dashboard.js', 'utf8'),
+    readFile('public/js/reminders.js', 'utf8'),
+    readFile('public/reminders.html', 'utf8'),
+  ]);
+  for (const source of [dashboard, reminders]) {
+    assert.match(source, /America\/Sao_Paulo/);
+    assert.match(source, /content_url/);
+    assert.match(source, /reminders\.html#reminder-/);
+  }
+  assert.match(dashboard, /function daysUntil/);
+  assert.match(dashboard, /civilDateOrdinal/);
+  assert.match(reminders, /function formatCivilDate/);
+  assert.match(reminders, /deliveriesRequest/);
+  assert.match(reminders, /delivery\.reason/);
+  assert.match(reminders, /function reminderIdFromHash/);
+  assert.match(reminders, /location\.hash/);
+  assert.match(reminders, /fetchAPI\(`\/api\/reminders\/\$\{encodeURIComponent\(id\)\}`\)/);
+  assert.match(reminders, /addEventListener\('hashchange', loadReminderDetail\)/);
+  assert.match(reminders, /reminderDetailRequest/);
+  assert.match(reminders, /error\.status === 404/);
+  assert.match(reminders, /focusReminderDetail\(\)/);
+  assert.doesNotMatch(reminders, /reminders\.push\(detail\)/);
+  assert.match(html, /Lembrete.*Destinatário.*Motivo.*Tentativas/);
+  assert.match(html, /id="delivery-reminder"/);
+  assert.match(html, /id="reminder-detail"/);
+});
+
+test('reminder health timestamp formatting keeps absent values neutral', async () => {
+  const reminders = await readFile('public/js/reminders.js', 'utf8');
+  const sourceStart = reminders.indexOf('function formatTimestamp(');
+  const source = reminders.slice(sourceStart, reminders.indexOf('\n\nfunction tableState', sourceStart));
+  const context = { Intl, TIME_ZONE: 'America/Sao_Paulo' };
+  vm.runInNewContext(`${source}\nglobalThis.formatTimestamp = formatTimestamp;`, context, { filename: 'reminders.js' });
+
+  assert.equal(context.formatTimestamp(null), '—');
+  assert.equal(context.formatTimestamp(undefined), '—');
+  assert.match(context.formatTimestamp('2026-08-17T12:00:00.000Z'), /17\/08\/2026/);
+});
+
+test('reminder hash detail ignores stale responses, preserves pagination, and retries 404s', async () => {
+  const reminders = await readFile('public/js/reminders.js', 'utf8');
+  const sourceStart = reminders.indexOf('async function loadReminderDetail(');
+  const source = reminders.slice(sourceStart, reminders.indexOf('\n\nasync function loadReminders', sourceStart));
+  const context = createReminderDetailHarness(source);
+  const firstId = '550e8400-e29b-41d4-a716-446655440000';
+  const secondId = '550e8400-e29b-41d4-a716-446655440001';
+  const first = deferred();
+  const second = deferred();
+  context.fetchImpl = path => path.includes(firstId) ? first.promise : second.promise;
+
+  context.window.location.hash = `#reminder-${firstId}`;
+  const firstLoad = context.loadReminderDetail();
+  context.window.location.hash = `#reminder-${secondId}`;
+  const secondLoad = context.loadReminderDetail();
+  first.resolve({ id: firstId, title: 'Stale' });
+  second.resolve({ id: secondId, title: 'Current' });
+  await Promise.all([firstLoad, secondLoad]);
+
+  assert.deepEqual(context.rendered.map(detail => detail.id), [secondId]);
+  assert.equal(context.page, 4);
+
+  context.window.location.hash = `#reminder-${firstId}`;
+  context.fetchImpl = async () => { throw { status: 404 }; };
+  await context.loadReminderDetail();
+  assert.match(context.states.at(-1).message, /não está disponível/);
+  assert.equal(typeof context.states.at(-1).retry, 'function');
+
+  context.fetchImpl = async () => ({ id: firstId, title: 'Retried' });
+  await context.states.at(-1).retry();
+  assert.equal(context.rendered.at(-1).id, firstId);
+});
+
 test('admin exposes paginated audit without removed sector controls', async () => {
   const [html, script] = await Promise.all([
     readFile('public/admin.html', 'utf8'),
     readFile('public/js/admin.js', 'utf8'),
   ]);
   assert.match(html, /id="audit-pagination"/);
+  assert.match(html, /Cargo ativo para atribuição e acesso atual/);
+  assert.match(html, /páginas marcadas ficam disponíveis para usuários com este cargo enquanto ele estiver ativo/);
   assert.match(script, /fetchAPIPage\(`\/api\/users\/audit\?limit=\$\{AUDIT_PAGE_SIZE\}/);
   assert.match(script, /serverPagination\('audit'/);
   assert.doesNotMatch(html, /ombudsman|Ouvidoria|viewOmbudsman/i);
   assert.doesNotMatch(script, /ombudsman|Ouvidoria|viewOmbudsman/i);
+});
+
+test('global navigation omits Benefits and Sólides while admin discovers gated tabs', async () => {
+  const [generator, dashboard, preview, admin] = await Promise.all([
+    readFile('scripts/generate-public-shell.mjs', 'utf8'),
+    readFile('public/js/dashboard.js', 'utf8'),
+    readFile('public/home-preview.html', 'utf8'),
+    readFile('public/js/admin.js', 'utf8'),
+  ]);
+  const sidebarSource = generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '';
+  const adminTabs = admin.match(/const TABS = \[[\s\S]*?\n\];/)?.[0] || '';
+  assert.doesNotMatch(sidebarSource, /benefits|solides/i);
+  assert.doesNotMatch(dashboard, /benefits\.html|Benefícios/);
+  assert.doesNotMatch(preview, /benefits\.html|Benefícios|solides\.html|Sólides/);
+  assert.doesNotMatch(adminTabs, /benefits|solides/i);
+  assert.match(admin, /if \(can\(me, 'manageBenefits'\)\) tabs\.push\(\['benefits', 'Benefícios'\]\)/);
+  assert.match(admin, /if \(!can\(me, 'manageSolides'\)\) return;/);
+  assert.match(admin, /fetchAPI\('\/api\/solides\/admin\/status'\)/);
+  assert.match(admin, /if \(solidesAdminAvailable\) tabs\.push\(\['solides', 'Sólides'\]\)/);
+  assert.match(admin, /await discoverAdminFeatures\(\)/);
+  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'profile', 'admin', 'benefits', 'solides']) {
+    const html = await readFile(`public/${page}.html`, 'utf8');
+    const sidebar = html.match(/<!-- generated:portal-sidebar -->[\s\S]*?<!-- \/generated:portal-sidebar -->/)?.[0] || '';
+    assert.doesNotMatch(sidebar, /benefits\.html|Benefícios|solides\.html|Sólides/);
+  }
 });
 
 test('AutoCard shell preserves accessible navigation and reduced motion', async () => {
@@ -302,6 +506,7 @@ test('authenticated shell is generated from one static build source', async () =
   assert.match(generator, /generated:portal-topbar/);
   assert.match(generator, /id="btn-new"/);
   assert.match(generator, /id="btn-new-reminder"/);
+  assert.doesNotMatch(generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '', /benefits|solides/i);
   for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);

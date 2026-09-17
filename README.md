@@ -1,7 +1,8 @@
 # Portal Ownerinc
 
-Portal interno da Ownerinc para perfis, base de conhecimento, academia,
-benefícios e lembretes.
+Portal interno da Ownerinc para perfis, base de conhecimento, Academy e
+lembretes. O catálogo de benefícios permanece disponível como rota futura, fora
+da navegação inicial.
 
 ## Arquitetura
 

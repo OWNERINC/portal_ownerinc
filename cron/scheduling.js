@@ -1,6 +1,7 @@
 const TIME_ZONE = 'America/Sao_Paulo';
 const RUN_HOUR = 8;
 const MAX_CATCH_UP_DAYS = 7;
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function addDays(dateKey, days) {
   const date = new Date(`${dateKey}T00:00:00Z`);
@@ -15,6 +16,10 @@ function normalizeDateKey(value) {
   return match[1];
 }
 
+function civilDateKey(date = new Date(), timeZone = TIME_ZONE) {
+  return zonedDateAndHour(date, timeZone).dateKey;
+}
+
 function zonedDateAndHour(date, timeZone = TIME_ZONE) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -22,6 +27,32 @@ function zonedDateAndHour(date, timeZone = TIME_ZONE) {
     hourCycle: 'h23'
   }).formatToParts(date).map(({ type, value }) => [type, value]));
   return { dateKey: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
+}
+
+function zonedDateTime(dateKey, hour = RUN_HOUR, minute = 0, timeZone = TIME_ZONE) {
+  const normalized = normalizeDateKey(dateKey);
+  if (!DATE_KEY_PATTERN.test(normalized) || !Number.isInteger(hour) || hour < 0 || hour > 23
+    || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+    throw new Error('Invalid scheduled date');
+  }
+  const probe = new Date(`${normalized}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00.000Z`);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(probe).map(({ type, value }) => [type, value]));
+  const localAsUtc = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour), Number(parts.minute), Number(parts.second),
+  );
+  return new Date(probe.getTime() - (localAsUtc - probe.getTime()));
+}
+
+function reminderIsEligibleForDate(createdAt, dateKey) {
+  if (createdAt === undefined || createdAt === null || createdAt === '') return true;
+  const created = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  if (Number.isNaN(created.getTime())) return false;
+  return created <= zonedDateTime(dateKey);
 }
 
 function dueDateKeys(now, lastScheduledDate, maxDays = MAX_CATCH_UP_DAYS) {
@@ -55,4 +86,16 @@ function resolveTargets(targetUsers, users) {
   return users.filter((user) => requested.has(user.uid));
 }
 
-module.exports = { TIME_ZONE, RUN_HOUR, MAX_CATCH_UP_DAYS, dueDateKeys, normalizeDateKey, reminderMatchesDate, resolveTargets };
+module.exports = {
+  TIME_ZONE,
+  RUN_HOUR,
+  MAX_CATCH_UP_DAYS,
+  civilDateKey,
+  dueDateKeys,
+  normalizeDateKey,
+  reminderIsEligibleForDate,
+  reminderMatchesDate,
+  resolveTargets,
+  zonedDateAndHour,
+  zonedDateTime,
+};

@@ -1,5 +1,4 @@
-import { requireAuth, getCachedUserSnapshot, fetchAPI, updateAuthDisplayName } from './auth.js';
-import { auth } from './firebase-config.js';
+import { requireAuth, getCachedUserSnapshot, authenticatedFetch, fetchAPI, updateAuthDisplayName } from './auth.js';
 import { protectForm } from './ui.js';
 import { DEFAULT_MEDIA_CROP, cropRenderStyle, dragMediaCrop, normalizeMediaCrop } from '../autocard/crop.js';
 
@@ -24,11 +23,14 @@ const cropCloseButton = document.getElementById('photo-crop-close');
 const cropResetButton = document.getElementById('photo-crop-reset');
 const cropApplyButton = document.getElementById('photo-crop-apply');
 const profileActionButtons = [saveButton, avatarButton, adjustPhotoButton, removePhotoButton, resetPasswordButton, cropCloseButton, cropResetButton, cropApplyButton].filter(Boolean);
+const cropFrameTabIndex = cropFrame?.tabIndex ?? 0;
+const cropFramePointerEvents = cropFrame?.style?.pointerEvents || '';
 let profileActionBusy = false;
 let cropDraft = null;
 let cropDrag = null;
 let cropOpener = null;
 let profileCrop = normalizeMediaCrop(user.photo_crop);
+let avatarRenderToken = 0;
 
 function applyProfileFields(profile) {
   document.getElementById('p-name').value = profile.name || '';
@@ -45,10 +47,47 @@ function applyProfileFields(profile) {
 
 function setProfileActionsBusy(busy) {
   profileActionButtons.forEach(button => { button.disabled = busy; });
+  if (cropFrame) {
+    cropDrag = busy ? null : cropDrag;
+    cropFrame.inert = busy;
+    cropFrame.tabIndex = busy ? -1 : cropFrameTabIndex;
+    cropFrame.style.pointerEvents = busy ? 'none' : cropFramePointerEvents;
+    cropFrame.setAttribute('aria-busy', String(busy));
+    cropFrame.setAttribute('aria-disabled', String(busy));
+  }
+  profileForm?.setAttribute('aria-busy', String(busy));
+}
+
+function hasInertAncestor(node) {
+  let current = node?.parentNode;
+  while (current) {
+    if (current.inert) return true;
+    current = current.parentNode;
+  }
+  return false;
+}
+
+function visibleProfileFocusTarget(node) {
+  return Boolean(node && node !== document.body && node.isConnected !== false
+    && !node.hidden && !node.disabled && !node.inert && !hasInertAncestor(node) && node.style?.display !== 'none'
+    && !node.closest?.('[hidden], .hidden, [aria-hidden="true"]'));
+}
+
+function profileFocusFallback() {
+  return [
+    avatarButton,
+    document.getElementById('p-name'),
+    document.querySelector('main h1, main h2, main [role="heading"]'),
+  ].find(visibleProfileFocusTarget);
+}
+
+function profileFormSnapshot() {
+  return JSON.stringify([...new FormData(profileForm).entries()]);
 }
 
 async function runProfileAction(action) {
   if (profileActionBusy) return false;
+  const initialFocus = document.activeElement;
   profileActionBusy = true;
   setProfileActionsBusy(true);
   try {
@@ -57,6 +96,15 @@ async function runProfileAction(action) {
   } finally {
     profileActionBusy = false;
     setProfileActionsBusy(false);
+    const currentFocus = document.activeElement;
+    const focusHidden = currentFocus?.hidden || currentFocus?.closest?.('[hidden], .hidden, [aria-hidden="true"]');
+    const focusLost = !currentFocus?.isConnected || currentFocus === document.body || currentFocus === initialFocus || currentFocus.disabled || focusHidden;
+    if (focusLost) {
+      const target = visibleProfileFocusTarget(initialFocus) && initialFocus !== photoInput
+        ? initialFocus
+        : profileFocusFallback();
+      target?.focus();
+    }
   }
 }
 
@@ -92,6 +140,7 @@ function renderAvatar(photoURL, name) {
   const img      = document.getElementById('avatar-img');
   const initials = document.getElementById('avatar-initials');
   const safePhoto = avatarPhotoUrl(photoURL);
+  const renderToken = ++avatarRenderToken;
   if (safePhoto) {
     img.alt = `Foto de perfil de ${name || 'usuário'}`;
     img.src = safePhoto;
@@ -99,9 +148,14 @@ function renderAvatar(photoURL, name) {
     initials.style.display = 'none';
     adjustPhotoButton.hidden = false;
     removePhotoButton.hidden = false;
-    if (img.complete) applyAvatarCropStyle();
-    else img.addEventListener('load', applyAvatarCropStyle, { once: true });
+    const applyCurrentAvatarCropStyle = () => {
+      if (renderToken !== avatarRenderToken || img.src !== safePhoto) return;
+      applyAvatarCropStyle();
+    };
+    if (img.complete) applyCurrentAvatarCropStyle();
+    else img.addEventListener('load', applyCurrentAvatarCropStyle, { once: true });
   } else {
+    img.src = '';
     img.style.display = 'none';
     initials.textContent = (name || user.email || '?').charAt(0).toUpperCase();
     initials.style.display = '';
@@ -141,7 +195,10 @@ async function responseError(response, fallback) {
 
 avatarButton.addEventListener('click', () => photoInput.click());
 document.getElementById('avatar-img').addEventListener('error', () => {
-  document.getElementById('avatar-img').style.display = 'none';
+  const image = document.getElementById('avatar-img');
+  const currentPhoto = avatarPhotoUrl(user.photo_url);
+  if (!currentPhoto || image.src !== currentPhoto) return;
+  image.style.display = 'none';
   document.getElementById('avatar-initials').textContent = (user.name || user.email || '?').charAt(0).toUpperCase();
   document.getElementById('avatar-initials').style.display = '';
   adjustPhotoButton.hidden = true;
@@ -165,16 +222,11 @@ photoInput.addEventListener('change', async () => {
 
   await runProfileAction(async () => {
     try {
-      await auth.authStateReady();
-      const token = await auth.currentUser?.getIdToken();
-      if (!token) throw new Error('Sessão encerrada.');
-
       const formData = new FormData();
       formData.append('photo', file);
 
-      const res = await fetch('/api/upload/photo', {
+      const res = await authenticatedFetch('/api/upload/photo', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
         body: formData,
       });
       if (!res.ok) throw await responseError(res, 'O servidor recusou o arquivo. Use JPEG, PNG ou WebP de até 500 KB.');
@@ -194,7 +246,6 @@ photoInput.addEventListener('change', async () => {
 });
 
 removePhotoButton.addEventListener('click', async () => {
-  let removed = false;
   setFeedback(photoFeedback, 'Removendo foto…');
   await runProfileAction(async () => {
     try {
@@ -202,13 +253,11 @@ removePhotoButton.addEventListener('click', async () => {
       Object.assign(user, { photo_url: '', photo_crop: { ...DEFAULT_MEDIA_CROP } });
       profileCrop = normalizeMediaCrop(user.photo_crop);
       renderAvatar('', document.getElementById('p-name').value);
-      removed = true;
       setFeedback(photoFeedback, 'Foto removida.', 'success');
     } catch (err) {
       setFeedback(photoFeedback, `Não foi possível remover a foto: ${err.message}`, 'danger');
     }
   });
-  if (removed) avatarButton.focus();
 });
 
 applyProfileFields(user);
@@ -230,6 +279,7 @@ profileForm.addEventListener('submit', async event => {
   const bio         = document.getElementById('p-bio').value.trim();
   const phone       = document.getElementById('p-phone').value.trim();
   const linkedin_url = document.getElementById('p-linkedin').value.trim();
+  const submittedForm = profileFormSnapshot();
 
   btn.textContent = 'Salvando…';
   setFeedback(profileFeedback, 'Salvando…');
@@ -241,13 +291,25 @@ profileForm.addEventListener('submit', async event => {
         body: JSON.stringify({ name, bio, phone, linkedin_url }),
       });
       Object.assign(user, updatedUser);
-      applyProfileFields(user);
-      markProfileClean();
+      const changedDuringRequest = profileFormSnapshot() !== submittedForm;
+      let formBaseline = submittedForm;
+      if (!changedDuringRequest) {
+        applyProfileFields(user);
+        formBaseline = profileFormSnapshot();
+      }
       try {
         await updateAuthDisplayName(name);
-        setFeedback(profileFeedback, 'Perfil atualizado com sucesso.', 'success');
+        const hasPendingFormChanges = profileFormSnapshot() !== formBaseline;
+        if (!hasPendingFormChanges) markProfileClean();
+        setFeedback(profileFeedback, hasPendingFormChanges
+          ? 'Perfil salvo. As alterações feitas durante o salvamento permanecem no formulário.'
+          : 'Perfil atualizado com sucesso.', 'success');
       } catch {
-        setFeedback(profileFeedback, 'Perfil salvo. O nome de acesso será sincronizado no próximo login.', 'focus');
+        const hasPendingFormChanges = profileFormSnapshot() !== formBaseline;
+        if (!hasPendingFormChanges) markProfileClean();
+        setFeedback(profileFeedback, hasPendingFormChanges
+          ? 'Perfil salvo. As alterações feitas durante o salvamento permanecem no formulário; o nome de acesso será sincronizado no próximo login.'
+          : 'Perfil salvo. O nome de acesso será sincronizado no próximo login.', 'focus');
       }
     } catch (err) {
       setFeedback(profileFeedback, `Não foi possível salvar o perfil: ${err.message}`, 'danger');
@@ -302,14 +364,19 @@ function updateCropPreview() {
 }
 
 function closeCropDialog() {
+  if (profileActionBusy) return false;
+  const opener = cropOpener;
   cropDraft = null;
   cropDrag = null;
   if (cropDialog?.open) cropDialog.close();
-  cropOpener?.focus?.();
   cropOpener = null;
+  const target = visibleProfileFocusTarget(opener) ? opener : profileFocusFallback();
+  target?.focus?.();
+  return true;
 }
 
 function openCropDialog() {
+  if (profileActionBusy) return;
   const photoURL = avatarPhotoUrl(user.photo_url);
   if (!photoURL || !cropDialog || !cropFrame || !cropImage) return;
   cropOpener = document.activeElement;
@@ -320,26 +387,26 @@ function openCropDialog() {
 }
 
 function moveCrop(dx, dy) {
-  if (!cropDraft) return;
+  if (!cropDraft || profileActionBusy) return;
   cropDraft = dragMediaCrop(cropDraft, { ...cropMetrics(), dx, dy });
   updateCropPreview();
 }
 
 function handleCropPointerDown(event) {
-  if (!cropDraft) return;
+  if (!cropDraft || profileActionBusy) return;
   cropDrag = { x: event.clientX, y: event.clientY, draft: { ...cropDraft } };
   cropFrame.setPointerCapture?.(event.pointerId);
 }
 
 function handleCropPointerMove(event) {
-  if (!cropDrag) return;
+  if (!cropDrag || profileActionBusy) return;
   const { dx, dy } = { dx: event.clientX - cropDrag.x, dy: event.clientY - cropDrag.y };
   cropDraft = dragMediaCrop(cropDrag.draft, { ...cropMetrics(), dx, dy });
   updateCropPreview();
 }
 
 function handleCropPointerEnd(event) {
-  if (!cropDrag) return;
+  if (!cropDrag || profileActionBusy) return;
   cropFrame.releasePointerCapture?.(event.pointerId);
   cropDrag = null;
 }
@@ -356,18 +423,18 @@ function handleCropKeydown(event) {
 }
 
 async function saveCrop() {
-  if (!cropDraft) return;
+  if (!cropDraft || profileActionBusy) return false;
+  const savedCrop = normalizeMediaCrop(cropDraft);
   let saved = false;
   cropApplyButton.textContent = 'Salvando…';
   await runProfileAction(async () => {
     try {
-      const photo_crop = normalizeMediaCrop(cropDraft);
       const updatedUser = await fetchAPI('/api/users/me', {
         method: 'PUT',
-        body: JSON.stringify({ photo_crop }),
+        body: JSON.stringify({ photo_crop: savedCrop }),
       });
-      Object.assign(user, updatedUser);
-      profileCrop = normalizeMediaCrop(user.photo_crop);
+      Object.assign(user, updatedUser, { photo_crop: savedCrop });
+      profileCrop = { ...savedCrop };
       renderAvatar(user.photo_url, user.name);
       saved = true;
       setFeedback(photoFeedback, 'Enquadramento salvo.', 'success');
@@ -382,6 +449,7 @@ async function saveCrop() {
 adjustPhotoButton.addEventListener('click', openCropDialog);
 cropCloseButton.addEventListener('click', closeCropDialog);
 cropResetButton.addEventListener('click', () => {
+  if (profileActionBusy) return;
   cropDraft = { ...DEFAULT_MEDIA_CROP };
   updateCropPreview();
 });

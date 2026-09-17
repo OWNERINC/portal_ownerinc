@@ -10,8 +10,9 @@ do Compose e que as senhas coincidem com `POSTGRES_PASSWORD` e
 
 Se o log indicar falha em grants ou criação de roles, a credencial de
 `MIGRATION_DATABASE_URL` precisa ser a role administradora `POSTGRES_USER`.
-Reaplique com `docker compose run --rm api node db/provision.js` somente depois
-que as tabelas já existirem.
+Reaplique com `docker compose run --rm --no-deps -e RUN_MIGRATIONS=false
+-e MIGRATION_ONLY=false migrate node db/provision.js` somente depois que as
+tabelas já existirem.
 
 ## Token inválido
 
@@ -36,7 +37,7 @@ Confirme a existência do volume `uploads_data`, os logs da API e o proxy de
 
 Consulte a saída JSON de `scripts/smoke.sh`, `docker compose ps` e os logs de
 Nginx/API. O deploy tenta reativar a release anterior sem reconstruí-la; confirme
-o destino de `current` e não restaure dados automaticamente.
+o destino de `current-release`, o `.image-env` por digest e não restaure dados automaticamente.
 
 ## Backup falhou
 

@@ -29,7 +29,6 @@
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./benefits.html" title="Benefícios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#gift"></use></svg><span>Benefícios</span></a></li>
       <li><a href="./announcements.html" title="Anúncios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Anúncios</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
       <li id="admin-link" class="admin-link"><a href="./admin.html" class="active" aria-current="page" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
@@ -55,6 +54,22 @@
 
       <div class="admin-tabs" id="admin-tabs" role="tablist" aria-label="Áreas administrativas"></div>
 
+      <!-- Solicitações de cadastro -->
+      <section id="section-registrations" class="admin-section" role="tabpanel" aria-labelledby="tab-registrations" hidden>
+        <div class="section-header">
+          <h2>Solicitações de cadastro</h2>
+        </div>
+        <p class="card-copy">Revise os novos cadastros. O e-mail precisa estar confirmado; ao aprovar, escolha contrato e cargo ativo antes de liberar o acesso.</p>
+        <div class="table-wrapper">
+          <table>
+            <caption>Cadastros aguardando aprovação</caption>
+            <thead><tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col">Estado</th><th scope="col">Solicitado em</th><th scope="col">Ações</th></tr></thead>
+            <tbody id="registrations-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="registrations-pagination" class="pagination" aria-label="Paginação de solicitações"></div>
+      </section>
+
       <!-- Usuários -->
       <section id="section-users" class="admin-section" role="tabpanel" aria-labelledby="tab-users" hidden>
         <div class="section-header">
@@ -63,7 +78,7 @@
         </div>
         <div id="bulk-import-panel" class="card" hidden style="margin-bottom:20px">
           <div class="card-title">Importar usuários em lote</div>
-          <p class="card-copy">CSV UTF-8 com até 500 linhas e cabeçalhos: name,email,job_title,contract_type,pj_due_day,phone. Todos serão leitores.</p>
+          <p class="card-copy">CSV UTF-8 com até 500 linhas e cabeçalhos: name,email,job_title,contract_type,pj_due_day,phone. Todos serão leitores; cargos precisam estar ativos e o dia só vale para PJ.</p>
           <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv">
           <div id="bulk-import-feedback" class="form-feedback" role="alert" aria-live="polite"></div>
           <div id="bulk-preview" hidden style="margin-top:12px"></div>
@@ -104,16 +119,17 @@
           <form id="job-title-form">
             <div class="form-group">
               <label class="form-label" for="job-title-name">Nome do cargo</label>
-              <input class="form-input" id="job-title-name" name="name" type="text" maxlength="120" required placeholder="Ex.: Analista de RH…" autocomplete="off">
+              <input class="form-input" id="job-title-name" name="name" type="text" maxlength="120" required placeholder="Ex.: Analista de DHO…" autocomplete="off">
             </div>
             <div class="form-group" style="flex-direction:row; align-items:center; gap:8px">
               <input type="checkbox" id="job-title-active" name="active" checked>
-              <label class="form-label" for="job-title-active" style="margin:0">Cargo ativo para novos usuários</label>
+              <label class="form-label" for="job-title-active" style="margin:0">Cargo ativo para atribuição e acesso atual</label>
             </div>
             <fieldset class="form-group">
               <legend class="form-label">Páginas com acesso</legend>
               <label><input type="checkbox" id="job-title-autocard"> AutoCard</label>
               <label><input type="checkbox" id="job-title-pos-cards"> Cards Pós</label>
+              <p class="form-help">As páginas marcadas ficam disponíveis para usuários com este cargo enquanto ele estiver ativo.</p>
             </fieldset>
             <div style="display:flex; gap:8px; justify-content:flex-end">
               <button class="btn btn-ghost" id="job-title-cancel" type="button">Cancelar</button>
@@ -243,7 +259,7 @@
         <option value="">Sem cargo definido</option>
       </select>
     </div>
-    <p id="user-form-help" class="form-help">A pessoa receberá um e-mail para definir a própria senha e acessar o Portal.</p>
+     <p id="user-form-help" class="form-help">Convite administrativo: a pessoa receberá um e-mail para criar a primeira senha e, depois, acessar o Portal.</p>
     <div class="form-group">
       <label class="form-label" for="u-role">Perfil</label>
       <select class="form-select" id="u-role" name="role">
@@ -308,6 +324,44 @@
       <button class="btn btn-primary" type="submit" id="modal-user-save">Enviar convite</button>
     </div>
     <p id="user-form-feedback" class="form-feedback" role="alert" aria-live="polite"></p>
+  </form>
+</div>
+
+<!-- Modal: Solicitação de cadastro -->
+<div id="modal-registration" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-registration-title">
+  <form class="modal" id="registration-form">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-registration-title">Analisar cadastro</span>
+      <button class="modal-close" id="modal-registration-close" type="button" aria-label="Fechar">×</button>
+    </div>
+    <p id="registration-summary" class="card-copy"></p>
+    <p class="form-help">A aprovação cria um usuário leitor. Informe contrato e cargo ativo antes de liberar o acesso; PJ exige dia de nota entre 1 e 31 e CLT não usa esse campo.</p>
+    <div class="form-group" id="registration-contract-group">
+      <label class="form-label" for="registration-contract">Tipo de contrato</label>
+      <select class="form-select" id="registration-contract" required>
+        <option value="clt">CLT</option>
+        <option value="pj">PJ</option>
+      </select>
+    </div>
+    <div class="form-group" id="registration-pj-day-group" hidden>
+      <label class="form-label" for="registration-pj-day">Dia do mês para emitir nota (1–31)</label>
+      <input class="form-input" id="registration-pj-day" type="number" min="1" max="31" inputmode="numeric">
+    </div>
+    <div class="form-group" id="registration-job-title-group">
+      <label class="form-label" for="registration-job-title">Cargo para aprovação</label>
+      <select class="form-select" id="registration-job-title" required>
+        <option value="">Selecione um cargo</option>
+      </select>
+    </div>
+    <div class="form-group" id="registration-reason-group" hidden>
+      <label class="form-label" for="registration-reason">Motivo da rejeição (opcional)</label>
+      <textarea class="form-input" id="registration-reason" maxlength="500" rows="3"></textarea>
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
+      <button class="btn btn-ghost" type="button" id="modal-registration-cancel">Cancelar</button>
+      <button class="btn btn-primary" type="submit" id="modal-registration-save">Aprovar cadastro</button>
+    </div>
+    <p id="registration-form-feedback" class="form-feedback" role="alert" aria-live="polite"></p>
   </form>
 </div>
 
