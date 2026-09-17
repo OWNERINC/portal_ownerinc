@@ -364,7 +364,7 @@ git commit -m "fix: make AutoCard overflow explicit"
 
 **Interfaces:**
 - Changelog records only the user-visible behavior; reports distinguish local verification from live acceptance.
-- The task ledger marks Task 8 complete only after the focused reviewer and full verification pass.
+- The task ledger marks Task 5 complete only after the focused reviewer and full verification pass.
 
 - [ ] **Step 1: Add the concise changelog entry**
 
