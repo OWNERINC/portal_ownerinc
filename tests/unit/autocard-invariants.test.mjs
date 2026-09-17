@@ -171,7 +171,7 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
   };
 }
 
-async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAssetImages = false } = {}) {
+async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAssetImages = false, deferLocalImages = false } = {}) {
   const [app, employee] = await Promise.all([
     readFile('public/autocard/app.js', 'utf8'),
     readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
@@ -184,6 +184,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const apiRequests = [];
   const assetUrls = new Set();
   const deferredAssetImages = [];
+  const deferredLocalImages = [];
   const createdUrls = [];
   const revokedUrls = [];
   const events = [];
@@ -295,6 +296,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
       this._src = value;
       this.complete = true;
       if (assetUrls.has(value) && deferAssetImages) deferredAssetImages.push(this);
+      else if (!assetUrls.has(value) && deferLocalImages) deferredLocalImages.push(this);
       else this.onload?.();
     }
 
@@ -387,6 +389,10 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
         image.error = error;
         image.onerror?.(error);
       }
+      await drain();
+    },
+    async resolveLocalImage(index) {
+      deferredLocalImages[index]?.onload?.();
       await drain();
     },
     async resolveAPI(index, value) {
@@ -957,6 +963,30 @@ test('AutoCard commits replacement media only after its blob loads and restores 
   assert.equal(failed.state().mediaUrl, failedOldUrl);
   assert.equal(failed.mediaStatus(), 'error');
   assert.match(failed.cardCanvas.innerHTML, new RegExp(`src="${failedOldUrl}"`));
+});
+
+test('AutoCard snapshots media confirmed during replacement validation', async () => {
+  const harness = await createAutoCardLifecycleHarness({ deferLocalImages: true });
+  harness.selectTemplate('aniversariante', {
+    mediaId: 'old-media',
+    mediaCrop: { x: 0.15, y: 0.75, zoom: 2 },
+  });
+  const replacement = harness.chooseFile({ name: 'new.png', type: 'image/png', size: 1024 });
+  const oldUrl = await harness.resolveAsset(0);
+  await harness.resolveLocalImage(0);
+  await harness.flushAsync();
+  await harness.rejectAPI(0, new Error('upload failed'));
+  await replacement;
+
+  assert.equal(harness.state().mediaId, 'old-media');
+  assert.equal(harness.state().mediaUrl, oldUrl);
+  assert.equal(harness.state().mediaCrop.x, 0.15);
+  assert.equal(harness.state().mediaCrop.y, 0.75);
+  assert.equal(harness.state().mediaCrop.zoom, 2);
+  assert.equal(harness.mediaStatus(), 'error');
+  assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${oldUrl}"`));
+  assert.ok(harness.revokedUrls.includes(harness.createdUrls[0]));
+  assert.ok(!harness.revokedUrls.includes(oldUrl));
 });
 
 test('AutoCard ignores a replacement response after a newer crop revision', async () => {
