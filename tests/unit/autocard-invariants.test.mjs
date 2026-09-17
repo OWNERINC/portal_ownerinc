@@ -12,10 +12,11 @@ const dho = (name, active = true) => ({
   job_title_access: { autocard: true }, permissions: {},
 });
 
-function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
+function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML = null } = {}) {
   const listeners = new Map();
   const classes = new Set();
   let markup = '';
+  let children = [];
   let mediaMarkup = null;
   let mediaFrame = null;
   let mediaImage = null;
@@ -71,13 +72,22 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
     },
     dataset: {},
     get innerHTML() {
-      return markup;
+      return markup || children.map(child => child.textContent || '').join('');
     },
     set innerHTML(value) {
       markup = String(value);
+      children = [];
+      onInnerHTML?.(markup);
       mediaMarkup = null;
       mediaFrame = null;
       mediaImage = null;
+    },
+    replaceChildren(...nodes) {
+      markup = '';
+      children = nodes;
+    },
+    append(...nodes) {
+      children.push(...nodes);
     },
     textContent: '',
     value: '',
@@ -107,6 +117,7 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
     click() {
       this.clicks = (this.clicks || 0) + 1;
       this.onclick?.();
+      listeners.get('click')?.forEach(handler => handler({ type: 'click', currentTarget: this, target: this }));
     },
     dispatchEvent(event) {
       if (event.type === 'input') this.oninput?.(event);
@@ -159,6 +170,7 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
       return source ? { src: source[1], getAttribute: name => name === 'style' ? source[2] || null : null } : null;
     },
     querySelectorAll(selector) {
+      if (selector === 'button') return children.filter(child => child.type === 'button');
       if (id !== 'cardCanvas') return [];
       const nodes = readMediaNodes();
       if (!nodes) return [];
@@ -172,9 +184,10 @@ function createAutoCardElement(id, { decodeImage = async () => {} } = {}) {
 }
 
 async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAssetImages = false, deferLocalImages = false } = {}) {
-  const [app, employee] = await Promise.all([
+  const [app, employee, pagination] = await Promise.all([
     readFile('public/autocard/app.js', 'utf8'),
     readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
+    readFile('public/js/pagination.js', 'utf8'),
   ]);
   const elements = new Map();
   const listeners = new Map();
@@ -182,6 +195,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const resizeObservers = [];
   const requests = [];
   const apiRequests = [];
+  const filterElements = [];
   const assetUrls = new Set();
   const deferredAssetImages = [];
   const deferredLocalImages = [];
@@ -194,6 +208,22 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   let downloadClicks = 0;
   let promptValue = null;
   let confirmValue = true;
+  const rebuildFilters = markup => {
+    filterElements.splice(0, filterElements.length);
+    for (const match of String(markup).matchAll(/<button class="filter( active)?" data-template="([^"]*)">/g)) {
+      const classes = new Set(['filter', ...(match[1] ? ['active'] : [])]);
+      filterElements.push({
+        dataset: { template: match[2] },
+        classList: {
+          add(...names) { names.forEach(name => classes.add(name)); },
+          remove(...names) { names.forEach(name => classes.delete(name)); },
+          contains(name) { return classes.has(name); },
+        },
+        onclick: null,
+        click() { this.onclick?.(); },
+      });
+    }
+  };
   const document = {
     activeElement: null,
     fonts: { get ready() { events.push('fonts'); return Promise.resolve(); } },
@@ -205,6 +235,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
             decodeCalls += 1;
             if (imageDecodeError) throw imageDecodeError;
           },
+          onInnerHTML: id === 'savedFilters' ? rebuildFilters : null,
         });
         element.ownerDocument = document;
         if (id === 'cropImage') element.parentElement = elements.get('cropFrame');
@@ -216,7 +247,8 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
       if (name !== 'a') return createAutoCardElement(name);
       return { click() { downloadClicks += 1; } };
     },
-    querySelector() {
+    querySelector(selector) {
+      if (selector === '.filter.active') return filterElements.find(filter => filter.classList.contains('active')) || null;
       return null;
     },
     addEventListener(type, handler) {
@@ -227,6 +259,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
       listeners.get(`document:${event.type}`)?.forEach(handler => handler(event));
     },
     querySelectorAll(selector) {
+      if (selector === '.filter') return filterElements;
       if (selector.includes('#cardCanvas')) return elements.get('cardCanvas')?.querySelectorAll(selector) || [];
       return [];
     },
@@ -310,6 +343,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const fetchAPI = (path, options = {}) => new Promise((resolve, reject) => {
     apiRequests.push({ path, options, resolve, reject });
   });
+  const fetchAPIPage = fetchAPI;
   const drain = () => new Promise(resolve => setImmediate(resolve));
   const context = vm.createContext({
     Event,
@@ -321,6 +355,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     console,
     document,
     fetchAPI,
+    fetchAPIPage,
     fetchAPIAsset,
     html2canvas: async (element, options) => {
       events.push('capture');
@@ -340,8 +375,9 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     window,
   });
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
+  const paginationSource = pagination.replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
-  vm.runInContext(`${cropSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, showTab };`, context);
+  vm.runInContext(`${cropSource}\n${paginationSource}\n${appSource}\n${employee}\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, showTab };`, context);
   return {
     cardCanvas: elements.get('cardCanvas'),
     createdUrls,
@@ -423,6 +459,25 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     mediaStatus: () => elements.get('mediaStatus').getAttribute('data-state'),
     mediaStatusText: () => elements.get('mediaStatus').textContent,
     savedList: () => elements.get('savedList'),
+    savedPagination: () => elements.get('savedPagination'),
+    setSavedSearch(value) {
+      const input = elements.get('savedSearch');
+      input.value = value;
+      input.oninput?.({ target: input });
+    },
+    async selectSavedFilter(template) {
+      const filter = filterElements.find(item => item.dataset.template === template);
+      assert.ok(filter, `expected saved filter ${template}`);
+      filter.click();
+      await drain();
+    },
+    async clickSavedPage(label) {
+      const button = elements.get('savedPagination').querySelectorAll('button')
+        .find(item => item.textContent === label);
+      assert.ok(button, `expected saved pagination button ${label}`);
+      button.click();
+      await drain();
+    },
     setPrompt(value) {
       promptValue = value;
     },
@@ -1126,6 +1181,95 @@ test('AutoCard ignores stale history and export responses', async () => {
   assert.doesNotMatch(harness.savedList().innerHTML, /Antigo/);
 });
 
+test('AutoCard loads history pages with a stable query and keeps the visible page while pending', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const firstPage = harness.loadSaved();
+  assert.equal(harness.apiRequests[0].path, '/api/autocard/cards?search=&template=&limit=20&offset=0');
+  await harness.resolveAPI(0, { data: [{ id: 'first-card', name: 'Primeiro', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  await firstPage;
+  assert.match(harness.savedPagination().innerHTML, /Página 1 de 2/);
+
+  await harness.clickSavedPage('Próxima');
+  assert.equal(harness.apiRequests[1].path, '/api/autocard/cards?search=&template=&limit=20&offset=20');
+  assert.match(harness.savedList().innerHTML, /Primeiro/);
+  assert.equal(harness.savedPagination().getAttribute('aria-busy'), 'true');
+
+  await harness.resolveAPI(1, { data: [{ id: 'second-card', name: 'Segundo', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  assert.match(harness.savedList().innerHTML, /Segundo/);
+  assert.doesNotMatch(harness.savedList().innerHTML, /Primeiro/);
+  assert.match(harness.savedPagination().innerHTML, /Página 2 de 2/);
+  assert.equal(harness.savedPagination().getAttribute('aria-busy'), 'false');
+});
+
+test('AutoCard resets history pagination after search and filter changes', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const initial = harness.loadSaved(20);
+  await harness.resolveAPI(0, { data: [{ id: 'page-two', name: 'Página dois', template: 'comunicado', updatedAt: '2026-09-17' }], total: 41 });
+  await initial;
+
+  harness.setSavedSearch('Novo & card');
+  assert.equal(harness.apiRequests[1].path, '/api/autocard/cards?search=Novo%20%26%20card&template=&limit=20&offset=0');
+  await harness.resolveAPI(1, { data: [{ id: 'search-card', name: 'Novo card', template: 'comunicado', updatedAt: '2026-09-17' }], total: 1 });
+  await harness.flushAsync();
+
+  await harness.selectSavedFilter('vaga');
+  assert.equal(harness.apiRequests[2].path, '/api/autocard/cards?search=Novo%20%26%20card&template=vaga&limit=20&offset=0');
+  await harness.resolveAPI(2, { data: [{ id: 'filtered-card', name: 'Vaga', template: 'vaga', updatedAt: '2026-09-17' }], total: 1 });
+});
+
+test('AutoCard ignores a stale history query after search changes', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const oldQuery = harness.loadSaved();
+  harness.setSavedSearch('novo');
+  const newQuery = harness.apiRequests[1];
+  assert.equal(newQuery.path, '/api/autocard/cards?search=novo&template=&limit=20&offset=0');
+  await harness.resolveAPI(1, { data: [{ id: 'new-query', name: 'Novo', template: 'comunicado', updatedAt: '2026-09-17' }], total: 1 });
+  await harness.resolveAPI(0, { data: [{ id: 'old-query', name: 'Antigo', template: 'comunicado', updatedAt: '2026-09-17' }], total: 1 });
+  await oldQuery;
+  assert.match(harness.savedList().innerHTML, /Novo/);
+  assert.doesNotMatch(harness.savedList().innerHTML, /Antigo/);
+});
+
+test('AutoCard recovers an empty non-first history page at the last valid offset', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  const firstPage = harness.loadSaved();
+  await harness.resolveAPI(0, { data: [{ id: 'first-card', name: 'Primeiro', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  await firstPage;
+
+  const stalePage = harness.loadSaved(40);
+  assert.equal(harness.apiRequests[1].path, '/api/autocard/cards?search=&template=&limit=20&offset=40');
+  await harness.resolveAPI(1, { data: [], total: 21 });
+  assert.equal(harness.apiRequests.length, 3);
+  assert.equal(harness.apiRequests[2].path, '/api/autocard/cards?search=&template=&limit=20&offset=20');
+  assert.match(harness.savedList().innerHTML, /Primeiro/);
+
+  await harness.resolveAPI(2, { data: [{ id: 'last-card', name: 'Último', template: 'comunicado', updatedAt: '2026-09-17' }], total: 21 });
+  await stalePage;
+  assert.match(harness.savedList().innerHTML, /Último/);
+  assert.doesNotMatch(harness.savedList().innerHTML, /Primeiro/);
+});
+
+test('AutoCard rejects invalid manual names before saving and trims valid names', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('comunicado');
+
+  harness.setPrompt('   ');
+  await harness.saveCard();
+  assert.equal(harness.apiRequests.length, 0);
+  assert.match(harness.toast().textContent, /nome do card/);
+
+  harness.setPrompt('x'.repeat(121));
+  await harness.saveCard();
+  assert.equal(harness.apiRequests.length, 0);
+
+  harness.setPrompt('  Nome válido  ');
+  const save = harness.saveCard();
+  assert.equal(harness.apiRequests.length, 1);
+  assert.equal(JSON.parse(harness.apiRequests[0].options.body).name, 'Nome válido');
+  await harness.resolveAPI(0, { id: 'named-card' });
+  await save;
+});
+
 test('AutoCard does not download an export after the document changes', async () => {
   const harness = await createAutoCardLifecycleHarness();
   harness.selectTemplate('comunicado');
@@ -1314,7 +1458,12 @@ test('AutoCard UI is guarded before loading the editor', async () => {
     readFile('public/autocard/variant-enhancements.js', 'utf8'),
   ]);
   assert.match(app, /\/api\/autocard\/cards/);
-  assert.match(app, /import \{ fetchAPI, fetchAPIAsset \} from '\.\.\/js\/auth\.js'/);
+   assert.match(app, /import \{ fetchAPI, fetchAPIAsset, fetchAPIPage \} from '\.\.\/js\/auth\.js'/);
+   assert.match(app, /import \{ renderPagination, setPaginationBusy \} from '\.\.\/js\/pagination\.js'/);
+   assert.match(html, /id="savedPagination"/);
+   assert.match(app, /fetchAPIPage/);
+   assert.match(app, /limit=20/);
+   assert.match(app, /renderPagination/);
   assert.match(app, /fetchAPIAsset\(`/);
   assert.match(app, /mediaUrl: null/);
   assert.match(app, /mediaStatus:'idle'/);

@@ -84,3 +84,4 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
   .employee-copy .card-footer{padding-top:7px;min-height:26px;gap:8px;font-size:9px}
   .employee-copy .card-footer img{width:min(92px,32%);max-height:18px}
 }
+.autocard-page .saved-pagination{justify-content:center;margin-top:20px;min-height:44px}
