@@ -619,6 +619,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     toast: () => elements.get('toast'),
     exportButtonDisabled: () => Boolean(elements.get('exportButton').disabled),
     contentOverflowText: () => elements.get('contentOverflow').textContent,
+    contentOverflowHidden: () => Boolean(elements.get('contentOverflow').hidden),
     syncOverflow: () => context.__autocardTest.syncOverflow(),
     cardBounds: () => elements.get('cardCanvas').getBoundingClientRect(),
     setRenderedTextMetrics(metrics = {}) {
@@ -995,6 +996,7 @@ test('AutoCard blocks measurable text clipping and non-positive preview bounds',
   harness.selectTemplate('novo_funcionario');
   harness.setRenderedTextMetrics({ scrollHeight: 120, clientHeight: 100 });
   assert.match(harness.contentOverflowText(), /texto cortado/);
+  assert.equal(harness.contentOverflowHidden(), false);
   assert.equal(harness.exportButtonDisabled(), true);
   await harness.exportCard();
   assert.equal(harness.captures.length, 0);
@@ -1065,6 +1067,7 @@ test('AutoCard keeps the export gate disabled when overflow appears during an aw
 
   assert.equal(harness.captures.length, 0);
   assert.equal(harness.downloadClicks(), 0);
+  assert.equal(harness.contentOverflowHidden(), false);
   assert.equal(harness.exportButtonDisabled(), true);
   assert.match(harness.contentOverflowText(), /texto cortado/);
 });
