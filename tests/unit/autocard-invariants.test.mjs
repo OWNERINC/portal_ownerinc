@@ -815,7 +815,11 @@ test('AutoCard API is protected and uses shared PostgreSQL storage', async () =>
   assert.match(route, /media_crop AS "mediaCrop"/);
   assert.match(route, /body\.mediaCrop/);
   assert.match(route, /media_crop = \$11::jsonb/);
+  assert.match(route, /ORDER BY updated_at DESC, id DESC/);
+  assert.match(route, /let normalized;[\s\S]*try \{[\s\S]*normalizeImage\(content\)[\s\S]*\} catch \{[\s\S]*return invalid\(req, res\);/);
   assert.match(route, /SELECT LEFT\(COALESCE\(NULLIF\(BTRIM\(name\), ''\), 'Card'\), 117\) \|\| ' v2',[\s\S]*media_crop/);
+  assert.match(route, /LEFT\(COALESCE\(NULLIF\(BTRIM\(name\), ''\), 'Card'\), 117\) \|\| ' v2'/);
+  assert.equal(('x'.repeat(119).slice(0, 117) + ' v2').length, 120);
   assert.equal(('x'.repeat(120).slice(0, 117) + ' v2').length, 120);
   assert.equal(('Card'.slice(0, 116) + ' v2').length, 7);
   assert.match(route, /CASE WHEN icon = ANY\(\$3::text\[\]\) THEN icon ELSE NULL END/);

@@ -87,7 +87,9 @@ require.cache[authPath] = {
   exports: {
     authMiddleware(req, res, next) {
       req.id = 'test-request';
-      req.user = req.get('x-test-admin') === 'true'
+      req.user = req.get('x-test-autocard') === 'true'
+        ? { uid: 'autocard-1', role: 'viewer', contract_type: 'clt', is_pj: false, job_title_active: true, job_title_access: { autocard: true } }
+        : req.get('x-test-admin') === 'true'
         ? { uid: 'admin-1', role: 'admin', contract_type: 'clt', is_pj: false, permissions: { manageReminders: true, manageAcademy: true, manageBenefits: true, manageKnowledge: true, manageSolides: true } }
         : { uid: 'viewer-1', role: 'viewer', contract_type: 'clt', is_pj: false, permissions: {} };
       next();
@@ -117,6 +119,7 @@ app.use('/api/academy', require('./routes/academy'));
 app.use('/api/benefits', require('./routes/benefits'));
 app.use('/api/knowledge', require('./routes/knowledge'));
 app.use('/api/solides', require('./routes/solides'));
+app.use('/api/autocard', require('./routes/autocard'));
 
 test.beforeEach(() => {
   calls.length = 0;
@@ -136,6 +139,17 @@ test('CMS route modules are registered without exposing a public asset mount', a
   assert.match(source, /app\.use\('\/api\/cms',\s+require\('\.\/routes\/cms'\)\)/);
   assert.match(source, /app\.use\('\/api\/cms\/assets',\s+require\('\.\/routes\/cms-assets'\)\)/);
   assert.doesNotMatch(source, /express\.static\([^)]*cms/i);
+});
+
+test('AutoCard rejects malformed image bytes before touching PostgreSQL', async () => {
+  const response = await request(app)
+    .post('/api/autocard/media')
+    .set('x-test-autocard', 'true')
+    .set('Content-Type', 'image/png')
+    .send(Buffer.from('not an image'));
+
+  assert.equal(response.status, 400);
+  assert.equal(calls.length, 0);
 });
 
 test('ordinary reminder reads are always active and audience scoped', async () => {

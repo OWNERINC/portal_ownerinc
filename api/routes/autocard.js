@@ -141,7 +141,7 @@ router.get('/cards', async (req, res, next) => {
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const [cards, count] = await Promise.all([
       pool.query(`SELECT id, name, template, "values", icon, illustration, mode, variant, media_size AS "mediaSize", media_id AS "mediaId", media_crop AS "mediaCrop", created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
-        FROM autocard_cards ${where} ORDER BY updated_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`, [...values, page.limit, page.offset]),
+        FROM autocard_cards ${where} ORDER BY updated_at DESC, id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`, [...values, page.limit, page.offset]),
       pool.query(`SELECT COUNT(*)::integer AS total FROM autocard_cards ${where}`, values),
     ]);
     res.setHeader('X-Total-Count', count.rows[0].total);
@@ -243,7 +243,12 @@ router.post('/media', async (req, res, next) => {
   let storageKey;
   try {
     const content = await readBody(req, maxMediaBytes);
-    const normalized = await normalizeImage(content);
+    let normalized;
+    try {
+      normalized = await normalizeImage(content);
+    } catch {
+      return invalid(req, res);
+    }
     const id = crypto.randomUUID();
     storageKey = `autocard-${id}.webp`;
     await fs.mkdir(uploadDirectory, { recursive: true });
