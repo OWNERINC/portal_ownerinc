@@ -4,6 +4,7 @@ import { requirePosCards } from './guard.js';
 const $ = (id) => document.getElementById(id);
 const guestDefaults = {
   heroTitle: 'Este é um convite', heroEmphasis: 'para viver o seu tempo', heroBrand: 'Owntime',
+  salutation: 'Olá, Nome Sobrenome.',
   greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
   stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx',
   experienceTitle: 'Sua experiência inclui:',
@@ -11,7 +12,7 @@ const guestDefaults = {
   consumptionTitle: 'Consumos da hospedagem:',
   consumptionBody: 'Água, energia elétrica, gás e demais consumos relacionados à estadia.',
   notIncludedTitle: 'O que não está incluso:',
-  notIncludedBody: 'Alimentação, bebidas e serviços on demand serão cobrados à parte.',
+  notIncludedBody: 'Alimentação, bebidas e serviços <em>on demand</em> serão cobrados à parte.',
   afterStay: 'Como parte da experiência, após a estadia, o presenteado deverá preencher a pesquisa de satisfação pós-estada, compartilhando sua percepção sobre a hospedagem e contribuindo para o aprimoramento contínuo da experiência Owntime.',
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
   contact: '54 3421 9988',
@@ -43,7 +44,7 @@ const ownerDefaults = {
   contact: '54 3421 9988',
   footerEmail: 'contato@ownerinc.com.br',
 };
-const GUEST_COVER_ASSET = './cards-pos/assets/guest/guest-cover.jpg';
+const GUEST_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
 const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
 const ADDRESS_LABEL = 'Como chegar:';
 const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
@@ -157,7 +158,7 @@ function renderAddress() {
 function renderGuest(v) {
   const media = current.mediaUrl || GUEST_COVER_ASSET;
   const notIncludedBody = v.notIncludedBody || v.foodInfo;
-  return `<section class="hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy">${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo, 'stay-info')}<div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}<div class="inline-copy"><strong>${esc(v.consumptionTitle)}</strong> ${esc(v.consumptionBody)}</div><h3>${esc(v.notIncludedTitle)}</h3>${richCopy(notIncludedBody)}</div>${renderAddress()}</div></section>${renderFooter(v)}`;
+  return `<section class="hero"><div class="guest-photo"><img class="hero-image" src="${esc(media)}" alt=""></div><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="guest-wordmark"><img src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime"></div></div><div class="gold-rule"></div></section><section class="card-body guest-body"><div class="card-copy"><div class="guest-intro">${richCopy(v.salutation, 'guest-salutation')}${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo, 'stay-info')}</div><div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}<div class="inline-copy"><strong>${esc(v.consumptionTitle)}</strong> ${esc(v.consumptionBody)}</div><h3>${esc(v.notIncludedTitle)}</h3>${richCopy(notIncludedBody)}</div>${renderAddress()}</div></section>${renderFooter(v)}`;
 }
 
 function renderOwnerTemplate(v) {
@@ -182,6 +183,9 @@ function render() {
   const card = $('cardCanvas');
   card.className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
   card.innerHTML = owner ? renderOwner(values) : renderGuest(values);
+  // html2canvas supports background cover, but not img object-fit; keep the img for asset validation.
+  const photo = card.querySelector('.guest-photo');
+  if (photo) photo.style.backgroundImage = `url("${photo.firstElementChild.src}")`;
   card.querySelectorAll('img').forEach((image) => image.addEventListener('load', fitCardBody, { once: true }));
   requestAnimationFrame(fitCardBody);
 }
@@ -241,7 +245,9 @@ async function exportPdf() {
   if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error('O exportador de PDF ainda está carregando. Tente novamente em instantes.');
   const source = $('cardCanvas');
   const size = PDF_CARD_SIZES[current.template];
-  const bounds = source.getBoundingClientRect();
+  const guest = current.template === 'convite_owntime';
+  // ponytail: one fixed Guest artboard keeps mobile and desktop PDFs identical.
+  const bounds = guest ? { width: 1448, height: 2347 } : source.getBoundingClientRect();
   if (!size || !bounds.width || !bounds.height) throw new Error('Não foi possível preparar o card para exportação.');
   const fileName = pdfFileName();
 
@@ -264,7 +270,7 @@ async function exportPdf() {
     fitCardBody(card);
     const canvas = await window.html2canvas(card, {
       backgroundColor: '#fff',
-      scale: PDF_RENDER_SCALE,
+      scale: guest ? 1 : PDF_RENDER_SCALE,
       useCORS: true,
       logging: false,
       width: bounds.width,
