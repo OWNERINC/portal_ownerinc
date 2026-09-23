@@ -152,7 +152,7 @@ jobs:
               -o ConnectTimeout=15 \
               -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes \
-              "$VPS_USER@$VPS_HOST" "production:$GITHUB_SHA" < portal-release.tar.gz; then
+              "$VPS_USER@$VPS_HOST" "$GITHUB_SHA" < portal-release.tar.gz; then
               exit 0
             else
               status=$?

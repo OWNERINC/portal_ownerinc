@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import test from 'node:test';
 
 const read = (file) => readFile(new URL(`../../${file}`, import.meta.url), 'utf8');
@@ -345,7 +347,7 @@ test('green main revisions deploy through a restricted serialized production gat
   assert.doesNotMatch(workflow, /deploy-staging:|PORTAL_STAGING_VPS_/);
   assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: validate\n    if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /deploy-production:[\s\S]*environment: production/);
-  assert.match(workflow, /production:\$GITHUB_SHA/);
+  assert.match(workflow, /"\$VPS_USER@\$VPS_HOST" "\$GITHUB_SHA" < portal-release\.tar\.gz/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /group: portal-ownerinc-production[\s\S]*cancel-in-progress: false/);
@@ -398,4 +400,27 @@ test('green main revisions deploy through a restricted serialized production gat
   assert.match(hostDeploy, /find "\$staging" -type d -exec chmod 0755/);
   assert.match(hostDeploy, /find "\$staging" -type f -exec chmod 0644/);
   assert.match(productionCompose, /postgres:[\s\S]*volumes: !override[\s\S]*postgres_data/);
+});
+
+test('production SSH entrypoint normalizes legacy SHA commands without admitting staging or shell commands', async (t) => {
+  const bash = process.platform === 'win32'
+    ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git/bin/bash.exe') : 'bash';
+  const available = spawnSync(bash, ['--version'], { encoding: 'utf8' });
+  if (process.platform === 'win32' && available.error?.code === 'ENOENT') return t.skip('Git Bash is unavailable');
+  assert.equal(available.status, 0, available.stderr);
+  const receiver = await read('ops/deploy-from-production-ci.sh');
+  const dispatch = 'exec /usr/local/libexec/ownerinc-portal-deploy "$@"';
+  assert.ok(receiver.includes(dispatch));
+  const probe = receiver.replace(dispatch, 'printf "%s\\n%s\\n" "$SSH_ORIGINAL_COMMAND" "$DEPLOY_RECEIVER_ROLE"');
+  const sha = 'a'.repeat(40);
+  for (const command of [sha, `production:${sha}`]) {
+    const result = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.replace(/\r/g, ''), `production:${sha}\nproduction\n`);
+  }
+  for (const command of [`staging:${sha}`, sha.slice(1), `${sha}; echo unsafe`, ` ${sha}`, sha.toUpperCase()]) {
+    const result = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command } });
+    assert.equal(result.status, 2, `must reject ${command}`);
+    assert.equal(result.stdout, '');
+  }
 });
