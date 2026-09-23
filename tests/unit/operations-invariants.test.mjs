@@ -342,10 +342,8 @@ test('green main revisions deploy through a restricted serialized production gat
     read('.github/workflows/ci.yml'), read('ops/deploy-from-ci.sh'), read('ops/deploy-from-staging-ci.sh'), read('ops/deploy-from-production-ci.sh'),
     read('ops/compose.production.yaml'),
   ]);
-  assert.match(workflow, /deploy-staging:[\s\S]*environment: staging/);
-  assert.match(workflow, /PORTAL_STAGING_VPS_SSH_KEY/);
-  assert.match(workflow, /staging:\$GITHUB_SHA/);
-  assert.match(workflow, /deploy-production:[\s\S]*needs: \[validate, deploy-staging\]/);
+  assert.doesNotMatch(workflow, /deploy-staging:|PORTAL_STAGING_VPS_/);
+  assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: validate\n    if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /deploy-production:[\s\S]*environment: production/);
   assert.match(workflow, /production:\$GITHUB_SHA/);
   assert.match(workflow, /workflow_dispatch:/);
