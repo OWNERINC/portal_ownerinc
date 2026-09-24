@@ -782,13 +782,11 @@ function init() {
     historyOffset = Number(button.dataset.historyOffset);
     loadHistory();
   });
-}
-
-document.fonts?.ready?.then(() => { if (page.active) fitCardBody(); });
-page.listen(window, 'resize', fitCardBody);
-updateModuleControls();
-init();
-document.body.classList.add('cards-pos-editing');
-page.cleanup(() => { document.body.classList.remove('cards-pos-editing'); layoutUpdate = null; });
-for (const template of ['convite_owntime', 'convite_owner']) savedSnapshots.set(template, snapshot(template));
+  page.wait(document.fonts?.ready).then(() => { if (page.active) fitCardBody(); });
+  page.listen(window, 'resize', fitCardBody);
+  updateModuleControls();
+  init();
+  document.body.classList.add('cards-pos-editing');
+  page.cleanup(() => { document.body.classList.remove('cards-pos-editing'); layoutUpdate = null; });
+  for (const template of ['convite_owntime', 'convite_owner']) savedSnapshots.set(template, snapshot(template));
 }
