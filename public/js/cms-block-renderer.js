@@ -20,6 +20,17 @@ export function cleanupRenderedBlocks(container) {
   state.token = Symbol('cms-render');
   state.urls.forEach(url => { if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url); });
   state.urls.clear();
+  state.controller?.abort();
+  state.releaseSignal?.();
+  const record = state.observerRecord;
+  if (record) {
+    record.states.delete(state);
+    state.observerRecord = null;
+    if (!record.states.size) {
+      record.observer.disconnect();
+      documentObservers.delete(container.ownerDocument);
+    }
+  }
 }
 
 function observeContainer(container, state) {
@@ -163,7 +174,7 @@ function assetEndpoint(assetId) {
 
 function loadPrivateAsset(node, assetId, label, state) {
   const token = state.token;
-  fetchAPIAsset(assetEndpoint(assetId)).then(url => {
+  fetchAPIAsset(assetEndpoint(assetId), { signal: state.controller.signal }).then(url => {
     if (token !== state.token || !node.isConnected) {
       if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
       return;
@@ -199,7 +210,7 @@ function renderPdf(container, block, state) {
   const wrapper = element('section', { className: 'cms-pdf-block', 'aria-label': block.title }, [frame, status, link, note]);
   container.append(wrapper);
   const token = state.token;
-  fetchAPIAsset(assetEndpoint(block.asset_id)).then(url => {
+  fetchAPIAsset(assetEndpoint(block.asset_id), { signal: state.controller.signal }).then(url => {
     if (token !== state.token || !wrapper.isConnected) {
       if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
       return;
@@ -216,9 +227,16 @@ function renderPdf(container, block, state) {
   });
 }
 
-export function renderBlocks(container, blocks, { fallbackText = '' } = {}) {
+export function renderBlocks(container, blocks, { fallbackText = '', signal } = {}) {
   cleanupRenderedBlocks(container);
   const state = renderState(container);
+  state.controller = new AbortController();
+  if (signal) {
+    const dispose = () => cleanupRenderedBlocks(container);
+    signal.addEventListener('abort', dispose, { once: true });
+    state.releaseSignal = () => signal.removeEventListener('abort', dispose);
+    if (signal.aborted) { dispose(); return false; }
+  }
   observeContainer(container, state);
   const normalized = validateBlocks(blocks);
   clear(container);

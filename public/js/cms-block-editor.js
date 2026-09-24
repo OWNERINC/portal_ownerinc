@@ -24,7 +24,7 @@ function checkbox(label, checked, onChange, name) {
   return element('label', { className: 'cms-checkbox' }, [field, element('span', { text: label })]);
 }
 
-function assetUpload(label, accept, block, onChange, onUploadBusy = () => {}, canApplyUpload = () => true) {
+function assetUpload(label, accept, block, onChange, onUploadBusy = () => {}, canApplyUpload = () => true, page) {
   const field = element('input', { className: 'form-input', type: 'file', name: 'asset', accept });
   field.addEventListener('change', async () => {
     const file = field.files?.[0];
@@ -36,7 +36,8 @@ function assetUpload(label, accept, block, onChange, onUploadBusy = () => {}, ca
     try {
       onUploadBusy(true);
       uploadPending = true;
-      const asset = await fetchAPI('/api/cms/assets', { method: 'POST', body });
+      const request = page ? page.bindAPI({ fetchAPI }).fetchAPI : fetchAPI;
+      const asset = await request('/api/cms/assets', { method: 'POST', body });
       if (!canApplyUpload()) return;
       delete block.url;
       block.asset_id = asset.id;
@@ -45,9 +46,9 @@ function assetUpload(label, accept, block, onChange, onUploadBusy = () => {}, ca
       onChange();
       showToast(`${label} enviado.`);
     } catch {
-      showToast(`Não foi possível enviar ${label.toLocaleLowerCase('pt-BR')}.`);
+      if (!page || page.active) showToast(`Não foi possível enviar ${label.toLocaleLowerCase('pt-BR')}.`);
     } finally {
-      if (uploadPending) onUploadBusy(false, true);
+      if (uploadPending && (!page || page.active)) onUploadBusy(false, true);
       field.disabled = false;
       field.value = '';
     }
@@ -72,7 +73,7 @@ function setField(block, key, value, onChange) {
   onChange();
 }
 
-function fieldsFor(block, onChange, onUploadBusy, canApplyUpload) {
+function fieldsFor(block, onChange, onUploadBusy, canApplyUpload, page) {
   const fields = [];
   if (block.type === 'heading') {
     fields.push(input('Texto', block.text, value => setField(block, 'text', value, onChange), { name: 'text' }));
@@ -91,7 +92,7 @@ function fieldsFor(block, onChange, onUploadBusy, canApplyUpload) {
   if (block.type === 'image') {
     fields.push(input('ID do arquivo', block.asset_id, value => setField(block, 'asset_id', value, onChange), { name: 'asset_id', autocomplete: 'off' }));
     fields.push(input('Texto alternativo', block.alt, value => setField(block, 'alt', value, onChange), { name: 'alt', autocomplete: 'off' }));
-    fields.push(assetUpload('imagem', 'image/jpeg,image/png,image/webp', block, onChange, onUploadBusy, canApplyUpload));
+    fields.push(assetUpload('imagem', 'image/jpeg,image/png,image/webp', block, onChange, onUploadBusy, canApplyUpload, page));
   }
   if (block.type === 'link') {
     fields.push(input('Rótulo', block.label, value => setField(block, 'label', value, onChange), { name: 'label', autocomplete: 'off' }));
@@ -101,7 +102,7 @@ function fieldsFor(block, onChange, onUploadBusy, canApplyUpload) {
   if (block.type === 'pdf') {
     fields.push(input('ID do arquivo', block.asset_id, value => setField(block, 'asset_id', value, onChange), { name: 'asset_id', autocomplete: 'off' }));
     fields.push(input('Título', block.title, value => setField(block, 'title', value, onChange), { name: 'title', autocomplete: 'off' }));
-    fields.push(assetUpload('PDF', 'application/pdf', block, onChange, onUploadBusy, canApplyUpload));
+    fields.push(assetUpload('PDF', 'application/pdf', block, onChange, onUploadBusy, canApplyUpload, page));
   }
   if (block.type === 'video') {
     fields.push(input('URL HTTPS ou ID do arquivo', block.url || block.asset_id, value => {
@@ -114,7 +115,7 @@ function fieldsFor(block, onChange, onUploadBusy, canApplyUpload) {
       }
     }, { name: 'url', autocomplete: 'url', inputmode: 'url' }));
     fields.push(input('Título opcional', block.title, value => setField(block, 'title', value, onChange), { name: 'title', autocomplete: 'off' }));
-    fields.push(assetUpload('vídeo', 'video/mp4,video/webm,video/quicktime', block, onChange, onUploadBusy, canApplyUpload));
+    fields.push(assetUpload('vídeo', 'video/mp4,video/webm,video/quicktime', block, onChange, onUploadBusy, canApplyUpload, page));
   }
   return fields;
 }
@@ -127,9 +128,9 @@ export function serializeBlocks(blocks) {
   return validateBlocks(blocks);
 }
 
-export function createBlockSettings(block, onChange, onUploadBusy, canApplyUpload) {
+export function createBlockSettings(block, onChange, onUploadBusy, canApplyUpload, page) {
   const container = element('div', { className: 'cms-inspector-block-fields' });
-  container.append(...fieldsFor(block, onChange, onUploadBusy, canApplyUpload));
+  container.append(...fieldsFor(block, onChange, onUploadBusy, canApplyUpload, page));
   return container;
 }
 

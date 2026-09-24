@@ -1,16 +1,21 @@
 # Portal Ownerinc
 
-Portal interno da Ownerinc para perfis, base de conhecimento, Academy e
+Portal interno da Ownerinc para perfis, base de conhecimento, Academy, Owner News e
 lembretes. O catálogo de benefícios permanece disponível como rota futura, fora
 da navegação inicial.
 
 ## Arquitetura
 
 - `public/`: aplicação web estática e integração com Firebase Auth.
+- A navegação entre áreas mantém o shell no mesmo documento, com montagem e
+  descarte explícitos por página; links diretos e histórico continuam usando as
+  URLs `.html`. Contrato em [Arquitetura](docs/architecture/overview.md#navegação-persistente-do-frontend).
 - `public/autocard.html`: página canônica do AutoCard dentro do shell do Portal;
   `/autocard/` permanece como redirect compatível para bookmarks antigos.
 - `public/cards-pos.html` e `public/cards-pos/`: página e módulo isolado dos
   Cards Pós, separado do AutoCard.
+- `public/announcements.html`: Owner News, publicação editorial interna que
+  substitui Anúncios, mantendo o endereço e o CMS existentes.
 - `api/`: API Express, autorização e persistência PostgreSQL.
 - `cron/`: processamento diário de lembretes e notificações.
 - `firebase-emulator/`: imagem do Auth Emulator usada apenas no perfil local.
@@ -76,6 +81,7 @@ HTML.
 - [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)
 - [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)
 - [Fluxo de dados](docs/architecture/data-flow.md)
+- [Importação privada da Owner News](docs/operations/owner-news-import.md)
 - [Deploy](docs/operations/deployment.md)
 - [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Status final da V1](docs/operations/2026-08-12-v1-final-status.md)

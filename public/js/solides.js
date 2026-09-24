@@ -1,19 +1,9 @@
-import { APIError, fetchAPI, fetchAPIPage, requireAuth } from './auth.js';
+import { fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, showState } from './ui.js';
 
-const user = await requireAuth();
-if (!user) throw new Error('Authentication required');
-
-try {
-  const status = await fetchAPI('/api/solides/me/status');
-  if (!status.linked) window.location.replace('./dashboard.html');
-} catch (error) {
-  if (error instanceof APIError && error.status === 404) window.location.replace('./dashboard.html');
-  else {
-    showState(document.getElementById('main-content'), 'Não foi possível carregar sua jornada. Tente novamente.', () => window.location.reload());
-    throw error;
-  }
-}
+const requests = { fetchAPI, fetchAPIPage };
+export function mount(page) {
+const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
 
 const now = new Date();
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
@@ -157,8 +147,10 @@ async function loadHistory(reset = true) {
       historyError.hidden = false;
     }
   } finally {
+    if (page.active) {
     historyMore.disabled = false;
     historyMore.textContent = historyError.hidden ? 'Carregar mais' : 'Tentar novamente';
+    }
   }
 }
 
@@ -168,4 +160,5 @@ document.getElementById('history-filter').addEventListener('submit', (event) => 
 });
 historyMore.addEventListener('click', () => loadHistory(false));
 
-await Promise.all([loadOverview(), loadAdjustments(), loadHistory()]);
+void Promise.all([loadOverview(), loadAdjustments(), loadHistory()]);
+}

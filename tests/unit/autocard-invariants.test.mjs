@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { mountSource } from '../helpers/page-mount.mjs';
 
 const require = createRequire(import.meta.url);
 const { canUseAutoCard } = require('../../api/middleware/policy');
@@ -413,7 +414,8 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
   const paginationSource = pagination.replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
-  vm.runInContext(`${cropSource}\n${paginationSource}\n${appSource}\n${employee}\n(()=>{${variant}\n})()\nglobalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, openSavedCard, showTab, syncOverflow, generation: () => documentGeneration };`, context);
+  const mountedApp = mountSource(appSource, 'globalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, openSavedCard, showTab, syncOverflow, canLeave, generation: () => documentGeneration };');
+  vm.runInContext(`${cropSource}\n${paginationSource}\n(()=>{${mountedApp}})();\n(()=>{${mountSource(employee)}})();\n(()=>{${mountSource(variant)}})();`, context);
   const cardCanvas = elements.get('cardCanvas');
   const nativeQuerySelectorAll = cardCanvas.querySelectorAll.bind(cardCanvas);
   const renderedTextNodes = [];
@@ -561,21 +563,14 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
         preventDefault() { this.defaultPrevented = true; },
         stopPropagation() { this.propagationStopped = true; },
       };
-      document.dispatchEvent(event);
-      if (!event.propagationStopped) logoutCalls += 1;
+      if (!context.__autocardTest.canLeave()) event.preventDefault();
+      else logoutCalls += 1;
       return { allowed: !event.defaultPrevented, loggedOut: logoutCalls };
     },
     openSavedCard: id => context.__autocardTest.openSavedCard(id),
     confirmNavigation(answer) {
       confirmValue = answer;
-      return this.dispatchClick({
-        href: './dashboard.html',
-        origin: 'http://localhost',
-        target: '',
-        getAttribute(name) { return name === 'href' ? this.href : null; },
-        hasAttribute() { return false; },
-        closest(selector) { return selector === 'a[href]' ? this : null; },
-      });
+      return context.__autocardTest.canLeave();
     },
     beforeUnloadBlocked() {
       const event = {
@@ -1321,20 +1316,22 @@ test('AutoCard abandons an upload response after a newer editor revision', async
   assert.match(harness.cardCanvas.innerHTML, new RegExp(`src="${oldUrl}"`));
 });
 
-test('AutoCard clears an abandoned replacement when tab navigation is confirmed', async () => {
+test('AutoCard blocks tab navigation during upload and cleans stale media on a forced pagehide', async () => {
   const harness = await createAutoCardLifecycleHarness();
   harness.selectTemplate('aniversariante', { mediaId: 'old-media' });
   const oldUrl = await harness.resolveAsset(0);
   await harness.chooseFile({ name: 'new.png', type: 'image/png', size: 1024 });
   assert.equal(harness.mediaStatus(), 'uploading');
-  harness.showTab('saved');
+  assert.equal(harness.showTab('saved'), false);
+  assert.equal(harness.state().mediaUrl, oldUrl);
+  harness.dispatch('pagehide');
   await harness.resolveAPI(0, { id: 'new-media' });
   await harness.flushAsync();
   assert.equal(harness.state().mediaId, 'old-media');
   assert.equal(harness.state().mediaUrl, null);
   assert.equal(harness.mediaStatus(), 'idle');
   assert.ok(harness.revokedUrls.includes(oldUrl));
-  harness.showTab('create');
+  harness.dispatch('pageshow', { persisted: true });
   assert.equal(harness.mediaStatus(), 'loading');
   await harness.resolveAsset(1);
   assert.equal(harness.state().mediaId, 'old-media');
@@ -1384,13 +1381,14 @@ test('AutoCard blocks export until media loading finishes', async () => {
   assert.equal(harness.downloadClicks(), 0);
 });
 
-test('AutoCard ignores a save response after the editor document changes', async () => {
+test('AutoCard blocks changing documents during save and ignores the response after forced departure', async () => {
   const harness = await createAutoCardLifecycleHarness();
   harness.selectTemplate('comunicado');
   harness.setField('titulo', 'Comunicado antigo');
   harness.setPrompt('Card antigo');
   const save = harness.saveCard();
-  harness.selectTemplate('vaga');
+  assert.equal(harness.selectTemplate('vaga'), false);
+  harness.dispatch('pagehide');
   await harness.resolveAPI(0, { id: 'old-card', template: 'comunicado', values: {} });
   await save;
   assert.equal(harness.state().editingId, null);
@@ -1607,7 +1605,7 @@ test('AutoCard protects dirty editor navigation and beforeunload', async () => {
   harness.setField('titulo', 'Alterado');
   assert.equal(harness.confirmNavigation(false), false);
   assert.equal(harness.confirmNavigation(true), true);
-  assert.equal(harness.beforeUnloadBlocked(), false);
+  assert.equal(harness.beforeUnloadBlocked(), true, 'a leave check must not discard edits before the router commits');
 });
 
 test('AutoCard cancels dirty logout before the sidebar handler and allows confirmed logout', async () => {
@@ -1793,8 +1791,11 @@ test('AutoCard UI is guarded before loading the editor', async () => {
     readFile('public/autocard/crop.js', 'utf8'),
     readFile('public/autocard/styles.css', 'utf8'),
   ]);
-  assert.match(entry, /await requireAutoCard\(\)/);
-  assert.match(entry, /import\('\.\/app\.js'\)/);
+  const router = await readFile('public/js/router.js', 'utf8');
+  assert.match(router, /path === '\/autocard\.html'\) return user\.autocard_access === true/);
+  assert.match(router, /if \(!routeAllowed\(url\.pathname, user\)\) throw/);
+  assert.match(entry, /export function mount\(page\)/);
+  assert.match(entry, /mountEditor\(page\)/);
   assert.match(guard, /user\.autocard_access === true/);
   assert.doesNotMatch(guard, /fetchAPI\(|\/api\/autocard\/access/);
    assert.match(guard, /Acesso restrito/);
@@ -1804,7 +1805,7 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(html, /class="topbar"/);
   assert.match(html, /class="page-body"[^>]+id="main-content"/);
   assert.match(html, /href="\.\/autocard\.html" class="active"/);
-  assert.match(html, /src="\.\/autocard\/entry\.js"/);
+  assert.match(html, /src="\.\/js\/router-bootstrap\.js"/);
   for (const path of [
     /<script src="\.\/js\/auth-shell\.js"><\/script>/,
     /<link rel="stylesheet" href="\.\/css\/tokens\.css">/,
@@ -1814,13 +1815,13 @@ test('AutoCard UI is guarded before loading the editor', async () => {
     /<img src="\.\/assets\/logo-branco\.svg"/,
     /<img src="\.\/assets\/icon-branco\.svg"/,
     /<script src="\.\/js\/sidebar\.js"><\/script>/,
-    /<script type="module" src="\.\/autocard\/entry\.js"><\/script>/,
+    /<script type="module" src="\.\/js\/router-bootstrap\.js"><\/script>/,
   ]) assert.match(html, path);
   assert.match(html, /class="sidebar-toggle" id="sidebar-toggle"/);
   assert.match(html, /class="sidebar-logout"/);
   assert.match(sidebar, /mobileToggle\.className = 'mobile-menu-toggle'/);
   assert.match(sidebar, /querySelectorAll\('\.sidebar-logout'\)/);
-  assert.match(sidebar, /import\('\.\/auth\.js'\)/);
+  assert.match(sidebar, /import\('\.\/router\.js'\)/);
   assert.match(html, /id="templateGallery"/);
   assert.match(html, /<button id="imageButton"[^>]*type="button"/);
   assert.match(html, /<input id="imageInput"[^>]*type="file"[^>]*hidden/);
@@ -1880,9 +1881,9 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /window\.__autocardApplyMediaCropStyle=applyMediaCropStyle/);
   assert.match(app, /function onCropPointerDown\(event\)\{const \{frameWidth,frameHeight,imageWidth,imageHeight\}=cropMetrics\(\)/);
   assert.match(app, /mediaCrop:current\.mediaCrop/);
-  assert.match(app, /image\.onload=\(\)=>\{cleanup\(\)/);
-  assert.match(app, /image\.onerror=\(\)=>\{cleanup\(\)/);
-  assert.match(app, /await img\.decode\(\)/);
+  assert.match(app, /page\.image\(previewUrl\)/);
+  assert.match(app, /finally\(\(\)=>revokeMediaUrl\(previewUrl\)\)/);
+  assert.match(app, /await page\.wait\(img\.decode\(\)\)/);
   assert.match(app, /document\.fonts\?\.ready/);
   assert.match(app, /getBoundingClientRect\(\)/);
   assert.match(app, /const\s+height\s*=\s*rect\.height/);
@@ -1896,8 +1897,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
   assert.match(app, /method:'DELETE'[\s\S]*catch\(\(\)=>toast\('Não foi possível excluir o card\.'/);
   assert.match(app, /URL\.revokeObjectURL/);
   assert.match(app, /startsWith\('blob:'\)/);
-  assert.match(app, /addEventListener\('pagehide'/);
-  assert.match(app, /addEventListener\('pageshow'/);
+  assert.match(app, /page\.listen\(window,'pagehide'/);
+  assert.match(app, /page\.listen\(window,'pageshow'/);
   assert.match(app, /current\.mediaUrl\s*\?/);
   assert.match(app, /birthday-photo">\$\{current\.mediaUrl\?/);
   assert.match(app, /birthday-photo[\s\S]*cropStyle\(current\.mediaCrop\)/);

@@ -6,7 +6,7 @@
 
   function applyCollapsed(collapsed) {
     document.body.classList.toggle('sidebar-collapsed', collapsed);
-    localStorage.setItem(KEY, collapsed ? '1' : '');
+    try { localStorage.setItem(KEY, collapsed ? '1' : ''); } catch (_) { /* Storage is optional. */ }
     var toggle = document.getElementById('sidebar-toggle');
     if (toggle) {
       toggle.setAttribute('aria-expanded', String(mobileMedia?.matches ? drawerOpen : !collapsed));
@@ -17,7 +17,7 @@
   }
 
   // Restaurar estado salvo antes de qualquer render
-  applyCollapsed(!!localStorage.getItem(KEY));
+  applyCollapsed(document.body.classList.contains('sidebar-collapsed'));
   document.body.classList.add('sidebar-ready');
 
   var toggle = document.getElementById('sidebar-toggle');
@@ -101,12 +101,13 @@
     });
     mobileMedia.addEventListener('change', function () { setDrawer(false, false, true); });
     setDrawer(false, false);
+    document.addEventListener('portal:navigated', function () { closeDrawer(false); });
   }
 
   document.querySelectorAll('.sidebar-logout').forEach(function (button) {
     button.addEventListener('click', function (event) {
       if (event.defaultPrevented) return;
-      import('./auth.js').then(function (module) { module.logout(); });
+      import('./router.js').then(function (module) { module.requestLogout(); });
     });
   });
 

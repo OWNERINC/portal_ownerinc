@@ -12,6 +12,7 @@
   <script src="./js/auth-shell.js"></script>
 </head>
 <body class="cms-page">
+<script src="./js/sidebar-state.js"></script>
 <a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
@@ -30,7 +31,7 @@
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./announcements.html" title="Anúncios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Anúncios</span></a></li>
+      <li><a href="./announcements.html" title="Owner News"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Owner News</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
       <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
       <li class="cms-link"><a href="./cms.html" class="active" aria-current="page" title="Editor CMS"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#file-edit"></use></svg><span>Editor CMS</span></a></li>
@@ -47,7 +48,7 @@
     <!-- generated:portal-topbar -->
     <header class="topbar"><span class="topbar-title">Editor CMS</span><div class="topbar-actions"><span id="save-state" class="cms-save-state" role="status" aria-live="polite">Carregando…</span></div></header>
     <!-- /generated:portal-topbar -->
-    <main class="page-body" id="main-content" tabindex="-1">
+    <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
       <div class="page-header">
         <p class="section-label">Operações editoriais</p>
         <h1>Editor CMS</h1>
@@ -117,6 +118,6 @@
 </div>
 <div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>
-<script type="module" src="./js/cms.js"></script>
+<script type="module" src="./js/router-bootstrap.js"></script>
 </body>
 </html>

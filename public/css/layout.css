@@ -29,6 +29,8 @@ button, a, input, select, textarea { touch-action: manipulation; }
   min-height: 100vh;
 }
 
+main[data-route-pending] { visibility: hidden; }
+
 /* ─── Sidebar ─── */
 .sidebar {
   width: var(--sidebar-width);

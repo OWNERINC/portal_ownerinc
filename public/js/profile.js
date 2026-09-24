@@ -1,9 +1,12 @@
-import { requireAuth, getCachedUserSnapshot, authenticatedFetch, fetchAPI, updateAuthDisplayName } from './auth.js';
+import { authenticatedFetch, fetchAPI, updateAuthDisplayName } from './auth.js';
 import { protectForm } from './ui.js';
 import { DEFAULT_MEDIA_CROP, cropRenderStyle, dragMediaCrop, normalizeMediaCrop } from '../autocard/crop.js';
 
-const cachedUser = getCachedUserSnapshot();
-const user = cachedUser || {};
+const requests = { authenticatedFetch, fetchAPI };
+export function mount(page) {
+const user = { ...page.user };
+const { authenticatedFetch, fetchAPI } = page.bindAPI(requests);
+const fetch = page.bindAPI({ fetch: window.fetch.bind(window) }).fetch;
 const MAX_PHOTO_SIZE = 500 * 1024;
 const profileForm = document.getElementById('profile-form');
 const saveButton = document.getElementById('btn-save');
@@ -31,6 +34,15 @@ let cropDrag = null;
 let cropOpener = null;
 let profileCrop = normalizeMediaCrop(user.photo_crop);
 let avatarRenderToken = 0;
+page.beforeLeave(() => {
+  if (profileActionBusy) return false;
+  return !cropDraft || JSON.stringify(cropDraft) === JSON.stringify(profileCrop)
+    || window.confirm('Descartar o enquadramento não salvo?');
+});
+page.cleanup(() => {
+  ++avatarRenderToken;
+  if (cropDialog?.open) cropDialog.close();
+});
 
 function applyProfileFields(profile) {
   document.getElementById('p-name').value = profile.name || '';
@@ -95,6 +107,7 @@ async function runProfileAction(action) {
     return true;
   } finally {
     profileActionBusy = false;
+    if (page.active) {
     setProfileActionsBusy(false);
     const currentFocus = document.activeElement;
     const focusHidden = currentFocus?.hidden || currentFocus?.closest?.('[hidden], .hidden, [aria-hidden="true"]');
@@ -104,6 +117,7 @@ async function runProfileAction(action) {
         ? initialFocus
         : profileFocusFallback();
       target?.focus();
+    }
     }
   }
 }
@@ -153,7 +167,7 @@ function renderAvatar(photoURL, name) {
       applyAvatarCropStyle();
     };
     if (img.complete) applyCurrentAvatarCropStyle();
-    else img.addEventListener('load', applyCurrentAvatarCropStyle, { once: true });
+    else page.listen(img, 'load', applyCurrentAvatarCropStyle, { once: true });
   } else {
     img.src = '';
     img.style.display = 'none';
@@ -181,9 +195,6 @@ if (Object.keys(user).length) {
   applyProfileFields(user);
   renderAvatar(user.photo_url, user.name);
 }
-const verifiedUser = await requireAuth();
-if (!verifiedUser) throw new Error('not authenticated');
-Object.assign(user, verifiedUser);
 profileCrop = normalizeMediaCrop(user.photo_crop);
 
 async function responseError(response, fallback) {
@@ -194,7 +205,7 @@ async function responseError(response, fallback) {
 }
 
 avatarButton.addEventListener('click', () => photoInput.click());
-document.getElementById('avatar-img').addEventListener('error', () => {
+page.listen(document.getElementById('avatar-img'), 'error', () => {
   const image = document.getElementById('avatar-img');
   const currentPhoto = avatarPhotoUrl(user.photo_url);
   if (!currentPhoto || image.src !== currentPhoto) return;
@@ -231,6 +242,7 @@ photoInput.addEventListener('change', async () => {
       });
       if (!res.ok) throw await responseError(res, 'O servidor recusou o arquivo. Use JPEG, PNG ou WebP de até 500 KB.');
       const { url } = await res.json();
+      if (!page.active) return;
 
       Object.assign(user, { photo_url: url, photo_crop: { ...DEFAULT_MEDIA_CROP } });
       profileCrop = normalizeMediaCrop(user.photo_crop);
@@ -262,7 +274,7 @@ removePhotoButton.addEventListener('click', async () => {
 
 applyProfileFields(user);
 renderAvatar(user.photo_url, user.name);
-const markProfileClean = protectForm(profileForm);
+const markProfileClean = protectForm(profileForm, page);
 
 // ── Salvar ────────────────────────────────────────────────────────────────────
 
@@ -299,6 +311,7 @@ profileForm.addEventListener('submit', async event => {
       }
       try {
         await updateAuthDisplayName(name);
+        if (!page.active) return;
         const hasPendingFormChanges = profileFormSnapshot() !== formBaseline;
         if (!hasPendingFormChanges) markProfileClean();
         setFeedback(profileFeedback, hasPendingFormChanges
@@ -364,7 +377,7 @@ function updateCropPreview() {
 }
 
 function closeCropDialog() {
-  if (profileActionBusy) return false;
+  if (!page.active || profileActionBusy) return false;
   const opener = cropOpener;
   cropDraft = null;
   cropDrag = null;
@@ -454,7 +467,7 @@ cropResetButton.addEventListener('click', () => {
   updateCropPreview();
 });
 cropApplyButton.addEventListener('click', saveCrop);
-cropImage.addEventListener('load', updateCropPreview);
+page.listen(cropImage, 'load', updateCropPreview);
 cropFrame.addEventListener('pointerdown', handleCropPointerDown);
 cropFrame.addEventListener('pointermove', handleCropPointerMove);
 cropFrame.addEventListener('pointerup', handleCropPointerEnd);
@@ -465,3 +478,4 @@ cropDialog.addEventListener('cancel', event => {
   event.preventDefault();
   closeCropDialog();
 });
+}

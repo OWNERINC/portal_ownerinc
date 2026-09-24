@@ -11,6 +11,7 @@ const [html, app, guard, css, sidebar, footer] = await Promise.all([
   readFile('public/js/sidebar.js', 'utf8'),
   readFile('public/cards-pos/assets/footer.svg', 'utf8'),
 ]);
+const router = await readFile('public/js/router.js', 'utf8');
 
 test('Cards Pós uses the authenticated Portal shell and local module assets', async () => {
   for (const marker of ['portal-wrapper', 'sidebar', 'topbar', 'skip-link', 'id="main-content"', 'sidebar-logout']) assert.match(html, new RegExp(marker));
@@ -19,7 +20,7 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /assets\/icons\.svg#/);
   assert.doesNotMatch(html, /lucide@0\.441\.0/);
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
-  assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
+  assert.match(html, /type="module" src="\.\/js\/router-bootstrap\.js"/);
   for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg', 'Raleway-Italic.ttf', 'Raleway-BoldItalic.ttf']) await access(`public/cards-pos/assets/${asset}`);
   await access('public/cards-pos/assets/guest/guest-cover.jpg');
   for (const asset of ['owner-cover.jpg', 'ownerinc-logo.svg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-cleaning-extra.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
@@ -70,7 +71,9 @@ test('guard requires auth, checks access, and stops editor initialization when d
   assert.match(guard, /dashboard\.html/);
   assert.match(guard, /showDeniedState\(\);\s*window\.setTimeout\(\(\) => window\.location\.assign\('\.\/dashboard\.html'\), 1500\)/);
   assert.match(guard, /role', 'alert'/);
-  assert.match(app, /if \(await requirePosCards\(\)\) \{/);
+  assert.match(router, /path === '\/cards-pos\.html'\) return user\.pos_cards_access === true/);
+  assert.match(router, /if \(!routeAllowed\(url\.pathname, user\)\) throw/);
+  assert.match(app, /export function mount\(page\)/);
 });
 
 test('history edits revoke the current blob URL before replacing media state', () => {
@@ -108,7 +111,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
   assert.match(app, /if \(available <= 0\) return/);
   assert.match(app, /Math\.max\(0, available - 1\) \/ copy\.scrollHeight/);
-  assert.match(app, /querySelectorAll\('img'\)\.forEach\(\(image\) => image\.addEventListener\('load', fitCardBody/);
+  assert.match(app, /querySelectorAll\('img'\)\.forEach\(\(image\) => page\.listen\(image, 'load', fitCardBody/);
   assert.match(app, /async function waitForCardAssets/);
   assert.match(app, /typeof root\.querySelector === 'function'/);
   assert.match(app, /window\.html2canvas/);
@@ -182,7 +185,7 @@ test('media upload and card editing cannot apply stale responses or save mid-ope
   assert.match(app, /const operationToken = \+\+mediaOperationToken/);
   assert.match(app, /if \(operationToken !== mediaOperationToken\) return/);
   assert.match(app, /\$\('saveButton'\)\.disabled = busy/);
-  assert.match(app, /if \(activeMediaPromise(?: \|\| exportInProgress)?\) return/);
+  assert.match(app, /if \(saving \|\| activeMediaPromise \|\| exportInProgress\) return/);
 });
 
 test('the hidden file input has a single accessible keyboard trigger', () => {
@@ -241,6 +244,10 @@ function guestHarness(width = 600) {
     querySelectorAll: () => [], body: { append() {} },
     createElement: () => ({ setAttribute() {}, append() {}, remove() { captured.removed = true; } }),
   };
+  const page = {
+    active: true, beforeLeave() {}, listen() {}, cleanup() {}, frame: callback => callback(),
+    wait: promise => Promise.resolve(promise),
+  };
   const window = {
     html2canvas: async (clone, options) => {
       captured.render = options;
@@ -254,9 +261,7 @@ function guestHarness(width = 600) {
     } },
   };
   const source = app.slice(app.indexOf('const $ ='), app.indexOf('document.fonts?.ready?.then'));
-  const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, exportPdf });`, {
-    document, window, requestAnimationFrame: callback => callback(),
-  });
+  const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, exportPdf });`, { document, page, window });
   return { ...api, card, captured };
 }
 

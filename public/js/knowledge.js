@@ -1,10 +1,19 @@
-import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
+import { can, fetchAPI, fetchAPIPage } from './auth.js';
 import { canCloseDialog, clear, closeDialog, element, openDialog, setBusy, setDialogCloseGuard, showState } from './ui.js';
 import { readOffset, renderPagination, setPaginationBusy } from './pagination.js';
 import { blocksToText, renderBlocks } from './cms-block-renderer.js';
 
-const user = await requireAuth();
-if (!user) throw new Error('Authentication required');
+const requests = { fetchAPI, fetchAPIPage };
+const renderContent = renderBlocks;
+export function mount(page) {
+const user = page.user;
+const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
+const showToast = page.toast;
+const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
+const history = page.history;
+const location = page.location;
+page.cleanup(() => { ++articlesRequest; ++articleRequest; ++articleDeleteRequest; ++pdfUploadRequest; });
+page.beforeLeave(() => !articleDeleteInFlight && !articleSaveInFlight && !pdfUploadPromise && !pdfCleanupPromise);
 const canManage = can(user, 'manageKnowledge');
 if (canManage) {
   document.getElementById('btn-new').style.display = '';
@@ -42,7 +51,10 @@ let articleSaveInFlight = false;
 let editingCmsManaged = false;
 let lastKnownUrl = location.href;
 const PAGE_SIZE = 20;
-if (modal) setDialogCloseGuard(modal, canCloseArticleDialog);
+if (modal) setDialogCloseGuard(modal, canCloseArticleDialog, {
+  canLeave: () => !pdfUploadPromise && !pdfCleanupPromise && !articleSaveInFlight,
+  discard: () => createdPdfAssets.size ? cleanupCreatedPdfAssets() : true,
+});
 
 function params() {
   return new URLSearchParams(location.search);
@@ -283,7 +295,7 @@ function cleanupCreatedPdfAssets({ onlyIds = null, keepIds = new Set(), closeAft
   if (pdfCleanupPromise) return pdfCleanupPromise;
   const ids = [...createdPdfAssets.keys()].filter(id => (!onlyIds || onlyIds.includes(id)) && !keepIds.has(id));
   if (!ids.length) {
-    if (closeAfter) closeDialog(modal);
+    if (closeAfter) closeDialog(modal, true);
     return Promise.resolve(true);
   }
 
@@ -310,7 +322,7 @@ function cleanupCreatedPdfAssets({ onlyIds = null, keepIds = new Set(), closeAft
       setArticleEditorBusy(false);
       syncPdfState();
       flushPdfRemoveFocus();
-      if (cleaned && closeAfter) closeDialog(modal);
+      if (page.active && cleaned && closeAfter) closeDialog(modal, true);
     }
   });
   pdfCleanupPromise = promise;
@@ -335,6 +347,7 @@ function canCloseArticleDialog() {
 }
 
 function setArticleEditorBusy(busy) {
+  if (!page.active) return;
   [
     document.getElementById('f-title'),
     document.getElementById('f-category'),
@@ -393,8 +406,8 @@ async function uploadPdf(file) {
     invalidatePdfUpload('Selecione um arquivo PDF válido.', request);
     return;
   }
-  if (file.size > 50 * 1024 * 1024) {
-    invalidatePdfUpload('O PDF deve ter no máximo 50 MB.', request);
+  if (file.size > 100 * 1024 * 1024) {
+    invalidatePdfUpload('O PDF deve ter no máximo 100 MB.', request);
     return;
   }
   const previousPdfId = selectedPdf?.id;
@@ -661,6 +674,7 @@ async function deleteArticle(id) {
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
+  if (articleSaveInFlight || pdfCleanupPromise) return;
   if (pdfUploadPromise) {
     showToast('Aguarde o envio do PDF terminar.');
     return;
@@ -740,8 +754,8 @@ pdfInput.addEventListener('change', () => {
     invalidatePdfUpload('Selecione um arquivo PDF válido.');
     return;
   }
-  if (file.size > 50 * 1024 * 1024) {
-    invalidatePdfUpload('O PDF deve ter no máximo 50 MB.');
+  if (file.size > 100 * 1024 * 1024) {
+    invalidatePdfUpload('O PDF deve ter no máximo 100 MB.');
     return;
   }
   const promise = uploadPdf(file);
@@ -764,7 +778,7 @@ pdfRemove.addEventListener('click', async () => {
   updatePdfField();
 });
 searchInput.addEventListener('input', () => { invalidateArticleDelete(); updateUrl({ q: searchInput.value.trim(), offset: '' }); loadArticles(); });
-window.addEventListener('popstate', () => {
+page.listen(window, 'popstate', () => {
   if (!modal.classList.contains('hidden') && !canCloseDialog(modal)) {
     history.pushState({}, '', lastKnownUrl);
     return;
@@ -779,3 +793,4 @@ window.addEventListener('popstate', () => {
   loadArticles();
 });
 loadArticles();
+}

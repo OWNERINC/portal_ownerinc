@@ -19,7 +19,7 @@ fluxo correspondente no Portal.
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Login por email e senha | Operacional | Firebase Auth no frontend; a API valida token não revogado, email verificado, UID admitido no PostgreSQL e conta ativa. `public/js/login.js`, `public/js/auth.js`, `api/middleware/auth.js` |
-| Persistência de sessão | Operacional | Firebase restaura a sessão; respostas 401/403 encerram a sessão local. `public/js/auth.js` |
+| Persistência de sessão | Operacional | Firebase restaura a sessão; navegação mantém a instância autenticada. Validação concorrente é deduplicada e snapshot visual vinculado ao UID não concede autorização. Falha transitória preserva o menu; logout, troca de conta, 401 ou 403 definitivo de sessão invalidam estado e conteúdo. 403 de recurso permanece erro de permissão desse recurso. `public/js/auth.js`, `public/js/auth-shell.js` |
 | Logout | Operacional | Encerra a sessão Firebase e retorna ao login. `public/js/auth.js`, `public/js/sidebar.js` |
 | Recuperação de senha | Operacional | Envio de email pelo Firebase a partir do login ou perfil. `public/js/login.js`, `public/js/profile.js` |
 | Admissão controlada | Operacional | O cadastro público cria apenas uma solicitação pendente sem aceitar senha inicial; após confirmar o e-mail, o solicitante usa o fluxo separado de primeiro acesso do Firebase para criar a senha e um administrador com `manageUsers` deve aprovar atribuindo contrato e cargo ativo antes do acesso. A UI só confirma o contrato HTTP 202 `{status:"accepted",state:"received"}`; falhas inesperadas retornam estado genérico controlado, enquanto duplicidades preservam anti-enumeração. `public/login.html`, `public/js/login.js`, `api/routes/auth.js`, `api/routes/registrations.js`, `api/services/pending-registration.js` |
@@ -39,6 +39,17 @@ fluxo correspondente no Portal.
 | Próximos lembretes | Operacional | Endpoint autenticado calcula no servidor as ocorrências dos próximos sete dias com regra de fim do mês e audiência individual; o dashboard não depende de uma primeira página arbitrária. `public/js/dashboard.js`, `api/routes/reminders.js` |
 | Links rápidos | Operacional | Atalhos internos conforme o contrato; Sólides permanece desligada na V1. `public/js/dashboard.js` |
 | Destaques da Academy | Operacional | Exibe até três cursos com estados de carregamento, vazio, erro e nova tentativa. `public/js/dashboard.js` |
+
+## Owner News
+
+Atualização desta área: 22 de setembro de 2026.
+
+| Funcionalidade | Estado | Implementação e evidência |
+| --- | --- | --- |
+| Publicação editorial contínua | Operacional | Substitui Anúncios na navegação e no CMS, mantendo `announcements.html` e `/api/announcements`. Destaque automático da mais recente, capas privadas, resumo, estimativa de leitura e cards responsivos. `public/js/announcements.js`, `public/css/owner-news.css` |
+| Editorias e leitura | Operacional | Categorias e filtro server-side sobre publicações validadas, contagem antes da paginação, detalhe por ID e navegação Back/Forward. `api/routes/announcements.js`, `api/cms/reader.js` |
+| Publicação administrativa | Operacional | Reutiliza `announcement`, permissão `manageKnowledge`, revisões e agendamento do Editor CMS. Autoria importada preservada no corpo. `public/js/cms.js` |
+| Migração da referência | Operacional local | Importadas 19 matérias publicadas e 24 mídias privadas no ambiente local autorizado; 24/24 assets retornaram HTTP 200 autenticado. Importador com dry-run, identidade determinística e reconciliação sem sobrescrita. Não aplicado em produção. `scripts/import-owner-news.mjs`, `docs/operations/owner-news-import.md` |
 
 ## AutoCard
 
@@ -83,7 +94,7 @@ fluxo correspondente no Portal.
 | Filtro por categoria | Operacional | Lista categorias no servidor e aplica o filtro na consulta paginada. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Link direto para artigo | Operacional | `article` na URL e histórico Back/Forward selecionam o detalhe. `public/js/knowledge.js` |
 | CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. A edição legada atualiza metadados, fonte e PDF sem substituir parágrafos/blocos CMS; leitura usa renderização segura da revisão publicada. `api/routes/knowledge.js`, `api/cms/sources.js`, `public/js/knowledge.js`, `public/js/cms-block-renderer.js` |
-| Anexo PDF no artigo | Operacional | Gestores podem enviar, substituir e remover um PDF de até 50 MB; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. Alterações legadas preservam o corpo CMS e só alteram o único PDF sem ambiguidade; múltiplos PDFs exigem o Editor CMS. A retenção só remove arquivo sem referências. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `cron/cms-asset-retention.js` |
+| Anexo PDF no artigo | Operacional | Gestores podem enviar, substituir e remover um PDF de até 100 MB; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. Alterações legadas preservam o corpo CMS e só alteram o único PDF sem ambiguidade; múltiplos PDFs exigem o Editor CMS. A retenção só remove arquivo sem referências. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `cron/cms-asset-retention.js` |
 | Draft, revisão e rich text | Operacional | Editor CMS mantém revisões imutáveis, publica/agendada somente o draft atual sob lock, retorna `409` para seleção obsoleta, cancela agendamento sem descartar draft posterior e despublica também o scheduled pendente. Scheduled vencido com bloco/asset inválido é arquivado e auditado sem substituir a publicação. A lista administrativa possui paginação por total. `api/routes/cms.js`, `api/cms/revisions.js`, `api/cms/reader.js`, `public/js/cms.js` |
 
 ## Academy
@@ -136,6 +147,8 @@ fluxo correspondente no Portal.
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Navegação desktop | Operacional | Sidebar consistente, sem Benefícios ou Sólides na navegação inicial, e estado recolhido persistido em local storage; as rotas futuras permanecem preservadas. `scripts/generate-public-shell.mjs`, `public/js/sidebar.js` |
+| Navegação persistente entre áreas | Operacional | Router nativo mantém documento, sidebar, topbar e estrutura principal; montagem/desmontagem explícita cancela loaders, listeners, timers e assets temporários. URLs `.html`, detalhes e Back/Forward preservados, com confirmação para alterações não salvas e bloqueio de saída durante mutations. `public/js/router.js`, `public/js/page-lifecycle.js` |
+| Estabilidade das permissões visuais | Operacional | O menu mantém o último estado da mesma conta durante revalidação; Admin reconcilia abas sem reconstruir botões idênticos. Revogação remove conteúdo e overlays, mesmo se a preparação de outra área falhar. Validação local: 20 trocas sem recarga e nenhum frame com Admin oculto. `public/js/auth.js`, `public/js/admin.js`, `tests/unit/navigation-review-regressions.test.mjs` |
 | Navegação mobile | Operacional | Drawer com `inert`, `aria-hidden`, Escape, foco preso e restauração do foco. `public/js/sidebar.js` |
 | Teclado e foco | Operacional | Foco visível, tabs por setas/Home/End e elementos interativos sem div clicável. `public/css/components.css`, `public/js/admin.js` |
 | Diálogos | Operacional | `role=dialog`, `aria-modal`, foco preso, Escape, restauração e proteção contra descarte acidental. `public/js/ui.js` |

@@ -187,7 +187,7 @@ test('profile uses the topbar as its only page heading', async () => {
   assert.doesNotMatch(profile, /class="page-header"/);
 });
 
-test('admin and profile hydrate from the provisional user snapshot before API revalidation', async () => {
+test('admin and profile mount from validated identity while navigation snapshots stay visual', async () => {
   const [auth, admin, profile, profileHtml] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('public/js/admin.js', 'utf8'),
@@ -197,12 +197,14 @@ test('admin and profile hydrate from the provisional user snapshot before API re
   assert.match(auth, /export function getCachedUserSnapshot\(\)/);
   assert.match(auth, /user: \{/);
   assert.doesNotMatch(admin, /await auth\.authStateReady\(\)/);
-  assert.match(admin, /let me = cachedUser;/);
-  assert.match(admin, /if \(me\) buildTabs\(false\);/);
-  assert.match(admin, /me = await requireAuth\(true\);/);
-  assert.match(profile, /const user = cachedUser \|\| \{\};/);
+  assert.match(admin, /const me = page\.user;/);
+  assert.doesNotMatch(admin, /clear\(document\.getElementById\('admin-tabs'\)\)/);
+  const router = await readFile('public/js/router.js', 'utf8');
+  assert.match(router, /getCurrentUserDoc\(\)/);
+  assert.match(router, /if \(!routeAllowed\(activeURL\.pathname, user\)\)/);
+  assert.match(profile, /const user = \{ \.\.\.page\.user \};/);
   assert.match(profile, /if \(Object\.keys\(user\)\.length\) \{\s*applyProfileFields\(user\);\s*renderAvatar\(user\.photo_url, user\.name\);/);
-  assert.match(profile, /const verifiedUser = await requireAuth\(\);/);
+  assert.doesNotMatch(profile, /const user = cachedUser/);
   assert.match(profileHtml, /<textarea[^>]+class="form-textarea"[^>]+id="p-bio"/);
   assert.match(profileHtml, /id="photo-crop-frame"[^>]+role="img"/);
 });
@@ -365,7 +367,7 @@ test('reminder UI derives safe content links and formats civil dates in São Pau
   assert.match(reminders, /function reminderIdFromHash/);
   assert.match(reminders, /location\.hash/);
   assert.match(reminders, /fetchAPI\(`\/api\/reminders\/\$\{encodeURIComponent\(id\)\}`\)/);
-  assert.match(reminders, /addEventListener\('hashchange', loadReminderDetail\)/);
+  assert.match(reminders, /pageScope\.listen\(window, 'hashchange', loadReminderDetail\)/);
   assert.match(reminders, /reminderDetailRequest/);
   assert.match(reminders, /error\.status === 404/);
   assert.match(reminders, /focusReminderDetail\(\)/);
@@ -451,7 +453,7 @@ test('global navigation omits Benefits and Sólides while admin discovers gated 
   assert.match(admin, /if \(!can\(me, 'manageSolides'\)\) return;/);
   assert.match(admin, /fetchAPI\('\/api\/solides\/admin\/status'\)/);
   assert.match(admin, /if \(solidesAdminAvailable\) tabs\.push\(\['solides', 'Sólides'\]\)/);
-  assert.match(admin, /await discoverAdminFeatures\(\)/);
+  assert.match(admin, /buildTabs\(\);\s*if \(can\(me, 'manageUsers'\)[\s\S]*void discoverAdminFeatures\(\)\.then/);
   for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'profile', 'admin', 'benefits', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     const sidebar = html.match(/<!-- generated:portal-sidebar -->[\s\S]*?<!-- \/generated:portal-sidebar -->/)?.[0] || '';
@@ -488,10 +490,12 @@ test('Cards Pós page and navigation stay hidden until the server verifies acces
     readFile('public/js/sidebar.js', 'utf8'),
     readFile('public/css/layout.css', 'utf8'),
   ]);
-  assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
+  assert.match(html, /type="module" src="\.\/js\/router-bootstrap\.js"/);
   assert.match(guard, /requireAuth\(\)/);
   assert.match(guard, /user\.pos_cards_access === true/);
-  assert.match(app, /if \(await requirePosCards\(\)\) \{/);
+  const router = await readFile('public/js/router.js', 'utf8');
+  assert.match(router, /path === '\/cards-pos\.html'\) return user\.pos_cards_access === true/);
+  assert.match(app, /export function mount\(page\)/);
   assert.match(auth, /dataset\.posCardsAccess = String\(user\?\.pos_cards_access === true\)/);
   assert.doesNotMatch(sidebar, /posCardsItem|createElement\('li'\)/);
   assert.match(html, /class="pos-cards-link"/);

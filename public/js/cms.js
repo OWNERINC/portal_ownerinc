@@ -1,17 +1,23 @@
-import { requireAuth, can, fetchAPI, fetchAPIPage, showToast } from './auth.js';
+import { can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, showState } from './ui.js';
 import { renderPagination } from './pagination.js';
 import { createBlockEditor, createBlockSettings, serializeBlocks } from './cms-block-editor.js';
 import { renderBlocks } from './cms-block-renderer.js';
 
-const user = await requireAuth(true);
-if (!user) throw new Error('Administrator access required');
+const requests = { fetchAPI, fetchAPIPage };
+const renderContent = renderBlocks;
+export function mount(page) {
+const user = page.user;
+const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
+const showToast = page.toast;
+const setTimeout = page.timeout;
+const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
 
 const TYPES = [
   ['knowledge', 'Knowledge', 'manageKnowledge'],
   ['academy', 'Academy', 'manageAcademy'],
   ['benefit', 'Benefícios', 'manageBenefits'],
-  ['announcement', 'Anúncios', 'manageKnowledge'],
+  ['announcement', 'Owner News', 'manageKnowledge'],
   ['reminder', 'Lembretes', 'manageReminders'],
 ].filter(([, , permission]) => can(user, permission));
 
@@ -81,6 +87,19 @@ const documentsByType = new Map();
 const sourcesByType = new Map();
 let documentOffset = 0;
 let documentTotal = 0;
+page.beforeLeave(() => {
+  if (saving || actionBusy || creatingDocument || assetUploading || saveInFlight) {
+    showToast('Aguarde a operação do CMS terminar.');
+    return false;
+  }
+  return !(dirty || newDocumentDirty || saveQueued)
+    || window.confirm('Há alterações do CMS que ainda não foram salvas. Sair mesmo assim?');
+});
+page.cleanup(() => {
+  ++selectionToken; ++documentsRequestToken; ++historyRequestToken;
+  ++creationRequestToken; ++editorGeneration;
+  clearTimeout(saveTimer); saveTimer = null; saveQueued = false;
+});
 
 function setError(message = '') {
   errorNode.hidden = !message;
@@ -128,25 +147,14 @@ function cmsNavigationProtected() {
   return !navigationConfirmed && (navigationBusy() || saveQueued);
 }
 
-document.addEventListener('click', event => {
-  if (!cmsNavigationProtected() || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
-  if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download') || anchor.getAttribute('href')?.startsWith('#')) return;
-  if (anchor.origin && anchor.origin !== location.origin) return;
-  if (!window.confirm('Há alterações do CMS que ainda não foram salvas. Sair mesmo assim?')) {
-    event.preventDefault();
-    return;
-  }
-  navigationConfirmed = true;
-});
-
-window.addEventListener('beforeunload', event => {
+page.listen(window, 'beforeunload', event => {
   if (!cmsNavigationProtected()) return;
   event.preventDefault();
   event.returnValue = '';
 });
 
 function syncBusyState() {
+  if (!page.active) return;
   const editorBusy = editorInteractionBusy();
   const navigationBlocked = navigationBusy() || creatingDocument;
   editorRoot.inert = editorBusy;
@@ -332,7 +340,7 @@ function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersi
   const renderToken = selectionToken;
   const renderDocument = selectedDocument;
   let editorInstance;
-  const currentEditor = () => generation === editorGeneration
+  const currentEditor = () => page.active && generation === editorGeneration
     && renderToken === selectionToken && renderDocument === selectedDocument;
   let blockSelectionToken = 0;
   editorInstance = createBlockEditor({
@@ -348,7 +356,7 @@ function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersi
       clear(blockSettings).append(createBlockSettings(block, () => {
         if (!canApplyUpload()) return;
         markDirty(editorInstance.getBlocks());
-      }, setAssetUploading, canApplyUpload));
+      }, setAssetUploading, canApplyUpload, page));
       blockSettings.dataset.selectedIndex = String(index);
     },
     onChange(nextBlocks) {
@@ -683,6 +691,7 @@ newDocumentButton.addEventListener('click', async () => {
   newDocumentForm.hidden = false;
   newDocumentDirty = false;
   await loadSources();
+  if (!page.active) return;
   document.getElementById('new-title').focus();
 });
 loadHistoryButton.addEventListener('click', () => loadRevisionHistory());
@@ -772,4 +781,5 @@ if (!TYPES.length) {
   renderDocumentList();
   loadDocuments();
   updateInspector();
+}
 }

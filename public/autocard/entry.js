@@ -1,7 +1,9 @@
-import { requireAutoCard } from './guard.js';
+import { mount as mountEditor } from './app.js';
+import { mount as mountVacancy } from './vacancy-enhancements.js';
+import { mount as mountVariants } from './variant-enhancements.js';
 
-if (await requireAutoCard()) {
-  await import('./app.js');
-  await import('./vacancy-enhancements.js');
-  await import('./variant-enhancements.js');
+export function mount(page) {
+  mountEditor(page);
+  mountVacancy(page);
+  mountVariants(page);
 }

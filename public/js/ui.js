@@ -70,6 +70,8 @@ let activeDialog = null;
 let restoreFocus = null;
 let inertSiblings = [];
 const dialogCloseGuards = new WeakMap();
+const dialogLeaveGuards = new WeakMap();
+const dialogDiscards = new WeakMap();
 const initialValues = new WeakMap();
 const guardedForms = new Map();
 
@@ -113,15 +115,20 @@ export function openDialog(backdrop, initialFocus) {
   (initialFocus || backdrop.querySelector('input, select, textarea, button'))?.focus();
 }
 
-export function setDialogCloseGuard(backdrop, guard) {
+export function setDialogCloseGuard(backdrop, guard, { canLeave = guard, discard } = {}) {
   if (typeof guard === 'function') dialogCloseGuards.set(backdrop, guard);
   else dialogCloseGuards.delete(backdrop);
+  if (typeof canLeave === 'function') dialogLeaveGuards.set(backdrop, canLeave);
+  else dialogLeaveGuards.delete(backdrop);
+  if (typeof discard === 'function') dialogDiscards.set(backdrop, discard);
+  else dialogDiscards.delete(backdrop);
 }
 
 export function canCloseDialog(backdrop) {
   if (!backdrop) return true;
-  if (dialogCloseGuards.get(backdrop)?.() === false) return false;
-  return !isDirty(backdrop) || window.confirm('Descartar alterações não salvas?');
+  if (dialogLeaveGuards.get(backdrop)?.() === false) return false;
+  if (isDirty(backdrop) && !window.confirm('Descartar alterações não salvas?')) return false;
+  return dialogCloseGuards.get(backdrop)?.() !== false;
 }
 
 export function closeDialog(backdrop, force = false) {
@@ -145,6 +152,7 @@ export function closeDialog(backdrop, force = false) {
   return true;
 }
 
+export function preparePageUI() {
 document.querySelectorAll('.table-wrapper').forEach(wrapper => {
   if (wrapper.hasAttribute('role')) return;
   const caption = wrapper.querySelector('caption');
@@ -152,11 +160,36 @@ document.querySelectorAll('.table-wrapper').forEach(wrapper => {
   wrapper.tabIndex = 0;
   wrapper.setAttribute('aria-label', caption?.textContent?.trim() || 'Tabela com rolagem horizontal');
 });
+}
+preparePageUI();
 
-export function protectForm(form) {
-  const markClean = () => guardedForms.set(form, serializeForm(form));
+export function protectForm(form, page) {
+  const markClean = () => { if (page?.active !== false) guardedForms.set(form, serializeForm(form)); };
   markClean();
+  page?.cleanup(() => guardedForms.delete(form));
   return markClean;
+}
+
+export function canLeavePageUI() {
+  if (activeDialog && dialogLeaveGuards.get(activeDialog)?.() === false) return false;
+  const dirty = (activeDialog && isDirty(activeDialog))
+    || [...guardedForms].some(([form, initial]) => form.isConnected && serializeForm(form) !== initial);
+  return !dirty || window.confirm('Descartar alterações não salvas?');
+}
+
+// Called only after leave preflight succeeds and the destination is prepared.
+// A failed discard keeps the editor mounted so cleanup can be retried safely.
+export function commitPageLeaveUI() {
+  return activeDialog ? dialogDiscards.get(activeDialog)?.() ?? true : true;
+}
+
+export function disposePageUI() {
+  closePageDialogs();
+  guardedForms.clear();
+}
+
+export function closePageDialogs() {
+  if (activeDialog) closeDialog(activeDialog, true);
 }
 
 document.addEventListener('keydown', event => {

@@ -1,9 +1,13 @@
-import { requireAuth, fetchAPI } from './auth.js';
+import { fetchAPI, fetchAPIAsset } from './auth.js';
 import { blocksToText, renderBlocks } from './cms-block-renderer.js';
 import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
 
-const user = await requireAuth();
-if (!user) throw new Error('Authentication required');
+const requests = { fetchAPI, fetchAPIAsset };
+const renderContent = renderBlocks;
+export function mount(page) {
+const { fetchAPI, fetchAPIAsset } = page.bindAPI(requests);
+const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
+page.cleanup(() => { ++announcementsRequest; ++remindersRequest; ++academyRequest; releaseNewsImages(); });
 
 const TIME_ZONE = 'America/Sao_Paulo';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -49,7 +53,8 @@ function reminderContentHref(reminder) {
 }
 
 function excerpt(blocks, fallback) {
-  return (blocksToText(blocks).replace(/\s+/g, ' ').trim() || fallback).slice(0, 180);
+  const firstText = blocks?.find(block => ['paragraph', 'callout'].includes(block.type));
+  return ((firstText?.text || blocksToText(blocks)).replace(/\s+/g, ' ').trim() || fallback).slice(0, 180);
 }
 
 function icon(name) {
@@ -85,19 +90,47 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
 }
 
 function renderHero(announcement) {
-  if (!announcement) return;
   const title = document.getElementById('dashboard-hero-title');
   const eyebrow = document.getElementById('dashboard-hero-eyebrow');
   const description = document.getElementById('dashboard-hero-description');
   const meta = document.getElementById('dashboard-hero-meta');
-  if (title) title.textContent = announcement.title;
-  if (eyebrow) eyebrow.textContent = `Edição da semana · ${announcement.category || 'Ownerinc'}`;
-  if (description) description.textContent = excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.');
-  if (meta) meta.textContent = `Publicado ${formatDate(announcement.published_at)}`;
+  if (title) title.textContent = announcement?.title || 'Owner News';
+  if (eyebrow) eyebrow.textContent = `Owner News · ${announcement?.category || 'Ownerinc'}`;
+  if (description) description.textContent = announcement ? excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.') : 'Nenhuma publicação no Owner News.';
+  if (meta) meta.textContent = announcement ? `Publicado ${formatDate(announcement.published_at)}` : '';
+  const link = document.querySelector('.dashboard-hero-copy a');
+  if (link) link.href = announcement ? `./announcements.html?id=${encodeURIComponent(announcement.id)}` : './announcements.html';
+  const image = document.querySelector('.dashboard-hero > img');
+  loadNewsImage(image, announcement);
 }
 
 const announcementsPreview = document.getElementById('announcements-preview');
 let announcementsRequest = 0;
+const newsImageUrls = new Set();
+function releaseNewsImages() {
+  newsImageUrls.forEach(url => URL.revokeObjectURL(url));
+  newsImageUrls.clear();
+}
+
+function loadNewsImage(image, announcement) {
+  if (!image) return;
+  const requestToken = announcementsRequest;
+  image.src = './assets/logo-branco.svg';
+  image.alt = 'Owner News';
+  const cover = announcement?.content_blocks?.find(block => block.type === 'image');
+  if (!cover) return;
+  fetchAPIAsset(`/api/cms/assets/${encodeURIComponent(cover.asset_id)}`).then(url => {
+    if (requestToken !== announcementsRequest || !image.isConnected) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    newsImageUrls.add(url);
+    image.src = url;
+    image.alt = cover.alt;
+  }).catch(() => { /* The local brand image remains available when a cover fails. */ });
+}
+page.listen(window, 'pagehide', () => { ++announcementsRequest; releaseNewsImages(); });
+page.listen(window, 'pageshow', event => { if (event.persisted) loadAnnouncements(); });
 async function loadAnnouncements() {
   if (!announcementsPreview) return;
   const requestToken = ++announcementsRequest;
@@ -105,20 +138,25 @@ async function loadAnnouncements() {
   try {
     const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
     if (requestToken !== announcementsRequest) return;
-    if (!announcements.length) return showState(announcementsPreview, 'Nenhum anúncio publicado.');
+    releaseNewsImages();
     renderHero(announcements[0]);
+    if (!announcements.length) return showState(announcementsPreview, 'Nenhuma publicação no Owner News.');
     clear(announcementsPreview);
-    announcements.forEach((announcement, index) => announcementsPreview.append(storyCard({
+    announcements.forEach(announcement => {
+      const card = storyCard({
       title: announcement.title,
       category: announcement.category || 'Comunicado',
-      blocks: announcement.content_blocks,
-      href: './announcements.html',
-      image: editorialImages[index % editorialImages.length][0],
-      alt: editorialImages[index % editorialImages.length][1],
+      description: excerpt(announcement.content_blocks, ''),
+      href: `./announcements.html?id=${encodeURIComponent(announcement.id)}`,
+      image: './assets/logo-branco.svg',
+      alt: 'Owner News',
       meta: formatDate(announcement.published_at),
-    })));
+      });
+      announcementsPreview.append(card);
+      loadNewsImage(card.querySelector('img'), announcement);
+    });
   } catch {
-    if (requestToken === announcementsRequest) showState(announcementsPreview, 'Não foi possível carregar os anúncios.', loadAnnouncements);
+    if (requestToken === announcementsRequest) showState(announcementsPreview, 'Não foi possível carregar o Owner News.', loadAnnouncements);
   } finally {
     if (requestToken === announcementsRequest) setBusy(announcementsPreview, false);
   }
@@ -199,4 +237,5 @@ async function loadAcademy() {
   }
 }
 
-await Promise.all([loadAnnouncements(), loadReminders(), loadAcademy()]);
+void Promise.all([loadAnnouncements(), loadReminders(), loadAcademy()]);
+}

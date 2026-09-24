@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { mountSource, activePageDouble } from '../helpers/page-mount.mjs';
 
 const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cmsCss, profile, dashboard, knowledge, academy, announcements, renderer, nginx] = await Promise.all([
   readFile('public/js/ui.js', 'utf8'),
@@ -296,8 +297,8 @@ function loadAcademyHarness() {
   const source = academy
     .replace(/^import[^\n]+\n/gm, '')
     .replace(/const user = await requireAuth\(\);\nif \(!user\) throw new Error\('Authentication required'\);\n/, '')
-    .replace(/\nwindow\.addEventListener\('popstate', loadCourses\);\nloadCourses\(\);\s*$/, '\n');
-  vm.runInNewContext(`${source}\nglobalThis.loadCourses = loadCourses;`, context, { filename: 'academy.js' });
+    .replace(/\nloadCourses\(\);\n}\s*$/, '\n}');
+  vm.runInNewContext(mountSource(source, 'globalThis.loadCourses = loadCourses;'), context, { filename: 'academy.js' });
   return { context, document, nodes, container, filters, pagination, location, requests };
 }
 
@@ -363,6 +364,8 @@ function loadAnnouncementsHarness() {
       return Number.isInteger(value) && value >= 0 ? Math.floor(value / limit) * limit : 0;
     },
     renderBlocks() {},
+    cleanupRenderedBlocks() {},
+    blocksToText: blocks => (blocks || []).map(block => block.text || '').join('\n'),
     renderPagination(node, total, offset, limit, onPage) {
       context.paginationCallback = onPage;
       context.clear(node);
@@ -379,8 +382,9 @@ function loadAnnouncementsHarness() {
   const source = announcements
     .replace(/^import[^\n]+\n/gm, '')
     .replace(/const user = await requireAuth\(\);\nif \(!user\) throw new Error\('Authentication required'\);\n/, '')
-    .replace(/\nwindow\.addEventListener\('popstate', loadAnnouncements\);\nloadAnnouncements\(\);\s*$/, '\n');
-  vm.runInNewContext(`${source}\nglobalThis.loadAnnouncements = loadAnnouncements;`, context, { filename: 'announcements.js' });
+    .replace(/\nloadAnnouncements\(\);\nloadHighlight\(\);\nloadCategories\(\);\n}\s*$/, '\n}');
+  vm.runInNewContext(mountSource(source, 'globalThis.loadAnnouncements = loadAnnouncements;'), context, { filename: 'announcements.js' });
+  assert.equal(requests.length, 0, 'page loads are explicitly driven and awaited by each test');
   return { context, document, list, pagination, location, requests };
 }
 
@@ -495,10 +499,11 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
       node.classList.add('hidden');
       return true;
     },
-    setDialogCloseGuard(node, guard) { node.closeGuard = guard; },
+    setDialogCloseGuard(node, guard, { canLeave = guard } = {}) { node.closeGuard = guard; node.leaveGuard = canLeave; },
     canCloseDialog(node) {
-      if (node.closeGuard?.() === false) return false;
-      return !node.formDirty || context.window.confirm('Descartar alterações não salvas?');
+      if (node.leaveGuard?.() === false) return false;
+      if (node.formDirty && !context.window.confirm('Descartar alterações não salvas?')) return false;
+      return node.closeGuard?.() !== false;
     },
     showState(node, message, retry) {
       const state = context.element('div', { role: retry ? 'alert' : 'status' }, [context.element('p', { text: message })]);
@@ -538,8 +543,8 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
   const source = knowledge
     .replace(/^import[^\n]+\n/gm, '')
     .replace(/const user = await requireAuth\(\);\nif \(!user\) throw new Error\('Authentication required'\);\n/, '')
-    .replace(/\nloadArticles\(\);\s*$/, '\n');
-  vm.runInNewContext(`${source}\nglobalThis.loadArticles = loadArticles;\nglobalThis.openArticle = openArticle;\nglobalThis.editArticle = editArticle;\nglobalThis.newArticle = newArticle;\nglobalThis.deleteArticle = deleteArticle;`, context, { filename: 'knowledge.js' });
+    .replace(/\nloadArticles\(\);\n}\s*$/, '\n}');
+  vm.runInNewContext(mountSource(source, 'globalThis.loadArticles = loadArticles; globalThis.openArticle = openArticle; globalThis.editArticle = editArticle; globalThis.newArticle = newArticle; globalThis.deleteArticle = deleteArticle;'), context, { filename: 'knowledge.js' });
   return { context, document, nodes, location, listRequests, detail, detailRequests, uploadRequests, deleteRequests, articleDeleteRequests, saveRequests, window, pageHeading };
 }
 
@@ -616,11 +621,12 @@ function loadProfileCropHarness() {
     profile.slice(profile.indexOf('function setFeedback'), profile.indexOf('\nif (Object.keys(user).length)')),
     profile.slice(profile.indexOf('function cropMetrics'), profile.indexOf('\nadjustPhotoButton.addEventListener')),
   ].join('\n');
-  const listeners = profile.slice(profile.indexOf('adjustPhotoButton.addEventListener'));
+  const listeners = profile.slice(profile.indexOf('adjustPhotoButton.addEventListener'), profile.lastIndexOf('}'));
   const context = {
     document,
     URL,
     location: { origin: 'https://portal.test' },
+    page: activePageDouble,
     DEFAULT_MEDIA_CROP: { x: 0.5, y: 0.5, zoom: 1 },
     profileForm,
     saveButton: nodes.get('btn-save'),
@@ -998,7 +1004,7 @@ test('Announcements restores pagination focus to the list or empty state when co
   const emptyPage = empty.context.loadAnnouncements();
   empty.requests[1].page.resolve({ data: [], total: 0 });
   await emptyPage;
-  assert.match(empty.document.activeElement.textContent, /Nenhum anúncio publicado/);
+  assert.match(empty.document.activeElement.textContent, /Nenhuma publicação nesta editoria/);
 });
 
 test('Knowledge preserves legacy fallback, hides list pagination in detail, and does not steal moved focus', async () => {
@@ -1531,6 +1537,7 @@ test('profile action keeps moved focus and falls back from a hidden avatar remov
   const context = {
     document,
     profileActionButtons: [removeButton, avatarButton],
+    page: activePageDouble,
     profileForm: null,
     photoInput,
     cropFrame: null,
@@ -1589,6 +1596,7 @@ test('profile ignores an old avatar load after the photo has been removed', () =
     user: { email: 'user@example.test', photo_url: 'https://example.test/avatar.jpg' },
     profileCrop: {},
     cropRenderStyle: () => 'transform: translate(1px, 1px)',
+    page: activePageDouble,
     normalizeMediaCrop: value => value || {},
     URL,
     location: { origin: 'https://portal.test' },
