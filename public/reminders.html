@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <link rel="stylesheet" href="./css/cms.css">
+  <link rel="stylesheet" href="./css/reminders.css">
   <script src="./js/auth-shell.js"></script>
 </head>
 <body>
@@ -51,7 +52,8 @@
     <!-- /generated:portal-topbar -->
     <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
       <div class="page-header"><h1>Lembretes</h1></div>
-      <div class="table-wrapper">
+      <div id="reminders-table-state" class="empty-state reminders-table-state" role="status" hidden></div>
+      <div id="reminders-table-wrapper" class="table-wrapper reminders-table-wrapper">
         <table>
           <caption>Lembretes e seus destinatários</caption>
           <thead>

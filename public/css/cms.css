@@ -155,3 +155,8 @@
   .cms-drag-handle { flex-basis: 100%; }
   .cms-page .topbar-actions { gap: 6px; }
 }
+.cms-callout { border-left-color: var(--cms-accent, var(--primary-hover)); background: var(--cms-paper-deep, var(--surface-2)); }
+.cms-callout-warning { border-left-color: var(--cms-warning, #8a5b16); }
+.cms-divider { border-top-color: var(--cms-rule, var(--border)); }
+.cms-image, .cms-video, .cms-pdf-frame { background: var(--cms-paper-deep, var(--surface-2)); }
+.cms-pdf-frame { border-color: var(--cms-rule, var(--border)); }

@@ -20,6 +20,8 @@ if (canManage) {
 
 const tbody = document.getElementById('reminders-tbody');
 const remindersPagination = document.getElementById('reminders-pagination');
+const tableWrapper = document.getElementById('reminders-table-wrapper');
+const tableStateNode = document.getElementById('reminders-table-state');
 const reminderDetail = document.getElementById('reminder-detail');
 const reminderDetailTitle = document.getElementById('reminder-detail-title');
 const reminderDetailMeta = document.getElementById('reminder-detail-meta');
@@ -74,7 +76,14 @@ function formatTimestamp(value) {
 
 function tableState(message, retry) {
   if (remindersPagination) clear(remindersPagination);
-  const cell = element('td', { colspan: '6', className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
+  if (tableStateNode) {
+    tableStateNode.hidden = false;
+    tableStateNode.setAttribute('role', retry ? 'alert' : 'status');
+    clear(tableStateNode).append(document.createTextNode(message));
+    if (retry) tableStateNode.append(document.createElement('br'), element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
+  }
+  if (tableWrapper) tableWrapper.hidden = true;
+  const cell = element('td', { colspan: '6', className: 'empty-state', text: message });
   if (retry) {
     cell.append(document.createElement('br'), element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
   }
@@ -96,6 +105,8 @@ function addCell(row, text, className) {
 
 function renderTable() {
   if (!reminders.length) return tableState('Nenhum lembrete cadastrado.');
+  if (tableStateNode) { tableStateNode.hidden = true; clear(tableStateNode); }
+  if (tableWrapper) tableWrapper.hidden = false;
   clear(tbody);
   reminders.forEach(reminder => {
     const row = element('tr');

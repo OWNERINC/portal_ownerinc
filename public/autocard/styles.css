@@ -31,6 +31,9 @@ main{width:100%;max-width:none;min-height:calc(100dvh - 112px)}#createView,#save
 
 /* Portal shell integration. Keep the editor's visual language inside the shared page body. */
 body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font-sans)}
+.autocard-page .editor-actions { flex-wrap: wrap; gap: 8px; }
+.autocard-page .editor-actions > button { min-height: 44px; max-width: 100%; }
+@media (max-width: 640px) { .autocard-page .toast, .autocard-page .toast.show { left: 16px; right: 16px; width: auto; transform: translateY(0); } }
 .autocard-page .autocard-content{width:100%;min-width:0;font-family:var(--font-sans);color:var(--ink)}
 .autocard-page .card-shell{font-family:Novelin,Arial,sans-serif}
 .autocard-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px;padding:18px 22px;background:var(--ink);color:#fff;border-radius:0 18px 18px 18px}

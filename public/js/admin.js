@@ -1,5 +1,6 @@
 import { can, fetchAPI, fetchAPIPage } from './auth.js';
 import { canLeavePageUI, clear, closeDialog, element, openDialog, safeHttpUrl, setDialogCloseGuard, protectForm } from './ui.js';
+import { createBulkPreviewState } from './bulk-preview-state.js';
 
 const requests = { fetchAPI, fetchAPIPage };
 export function mount(page) {
@@ -34,6 +35,7 @@ let reviewingRegistration = null;
 let registrationReviewAction = 'approve';
 const AUDIT_PAGE_SIZE = 50;
 let bulkPreviewRows = [];
+const bulkPreviewState = createBulkPreviewState();
 let bulkJobId = null;
 const BULK_JOB_STORAGE_KEY_PREFIX = 'ownerinc-active-import-job:';
 
@@ -417,7 +419,7 @@ async function openRegistrationReview(registration, action) {
 }
 
 function renderBulkPreview(report) {
-  bulkPreviewRows = report.rows;
+  bulkPreviewRows = bulkPreviewState.confirmedRows();
   const preview = clear(document.getElementById('bulk-preview'));
   preview.hidden = false;
   preview.append(element('p', { className: 'card-copy', text: `${report.total} linhas · ${report.ready} prontas · ${report.total - report.ready} ignoradas` }));
@@ -478,15 +480,35 @@ async function pollBulkJob(jobId = bulkJobId) {
   }
 }
 
-document.getElementById('btn-bulk-users').addEventListener('click', () => { document.getElementById('bulk-import-panel').hidden = false; });
-document.getElementById('bulk-preview-button').addEventListener('click', async () => {
+page.listen(document.getElementById('btn-bulk-users'), 'click', () => { document.getElementById('bulk-import-panel').hidden = false; });
+page.listen(document.getElementById('bulk-csv'), 'change', () => {
+  bulkPreviewState.select(document.getElementById('bulk-csv').files?.[0] || null);
+  bulkPreviewRows = [];
+  document.getElementById('bulk-preview').hidden = true;
+  document.getElementById('bulk-confirm-button').disabled = true;
+  document.getElementById('bulk-import-feedback').textContent = 'Pré-visualize o arquivo selecionado antes de confirmar.';
+});
+page.listen(document.getElementById('bulk-preview-button'), 'click', async () => {
   const file = document.getElementById('bulk-csv').files[0];
   const feedback = document.getElementById('bulk-import-feedback');
   if (!file) { feedback.textContent = 'Selecione um arquivo CSV.'; return; }
-  try { renderBulkPreview(await fetchAPI('/api/users/bulk/preview', { method: 'POST', body: JSON.stringify({ csv: await file.text() }) })); }
-  catch (error) { feedback.textContent = error.message; }
+  const ticket = bulkPreviewState.begin();
+  try {
+    const report = await fetchAPI('/api/users/bulk/preview', { method: 'POST', body: JSON.stringify({ csv: await file.text() }) });
+    if (!bulkPreviewState.accept(ticket, report)) return;
+    renderBulkPreview(report);
+  }
+  catch (error) {
+    if (!page.active || !bulkPreviewState.current(ticket)) return;
+    bulkPreviewRows = [];
+    const preview = document.getElementById('bulk-preview');
+    preview.replaceChildren();
+    preview.hidden = true;
+    document.getElementById('bulk-confirm-button').disabled = true;
+    feedback.textContent = error.message;
+  }
 });
-document.getElementById('bulk-confirm-button').addEventListener('click', async () => {
+page.listen(document.getElementById('bulk-confirm-button'), 'click', async () => {
   if (!bulkPreviewRows.length || !confirm('Confirmar a criação e o envio dos convites para as linhas prontas?')) return;
   const feedback = document.getElementById('bulk-import-feedback');
   try {
@@ -499,7 +521,7 @@ document.getElementById('bulk-confirm-button').addEventListener('click', async (
     pollBulkJob(bulkJobId);
   } catch (error) { feedback.textContent = error.message; }
 });
-document.getElementById('bulk-retry-button').addEventListener('click', async () => {
+page.listen(document.getElementById('bulk-retry-button'), 'click', async () => {
   try {
     const job = await fetchAPI(`/api/users/bulk/${encodeURIComponent(bulkJobId)}/retry`, { method: 'POST' });
     document.getElementById('bulk-retry-button').hidden = true;

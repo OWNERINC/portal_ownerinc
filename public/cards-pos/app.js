@@ -1,4 +1,10 @@
 import { fetchAPI, fetchAPIAsset, fetchAPIPage } from '../js/auth.js';
+import { collectEditableFields } from './field-registry.js';
+import { createInlineEditor } from './inline-editor.js';
+import { createDraftState } from './draft-state.js';
+import { CARD_GEOMETRY as MODULE_CARD_GEOMETRY, fitPreview } from './card-geometry.js';
+import { observePreviewLayout } from './preview-layout.js';
+import { attachRichInput, normalizeRichHtml, richTextLength as moduleRichTextLength, richTextToPlainText as moduleRichTextToPlainText } from './rich-text.js';
 
 const requests = { fetchAPI, fetchAPIAsset, fetchAPIPage };
 export function mount(page) {
@@ -51,20 +57,22 @@ const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
 const ADDRESS_LABEL = 'Como chegar:';
 const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
 const FOOTER_ASSET = './cards-pos/assets/footer.svg';
-const PDF_CARD_SIZES = {
-  convite_owntime: { width: 108, height: 175.1 },
-  convite_owner: { width: 108, height: 248.6 },
-};
 const PDF_RENDER_SCALE = 3;
-let current = {
-  template: 'convite_owntime',
-  values: { ...guestDefaults },
-  ownerValues: { ...ownerDefaults },
-  mediaId: null,
-  mediaUrl: '',
-  editingId: null,
-  name: '',
-};
+const CARD_GEOMETRY = typeof MODULE_CARD_GEOMETRY === 'undefined' ? { convite_owntime: { width: 1448, height: 2347, pdfWidth: 108, pdfHeight: 175.1 }, convite_owner: { width: 862, height: 1984, pdfWidth: 108, pdfHeight: 248.6 } } : MODULE_CARD_GEOMETRY;
+const draftStore = (typeof createDraftState === 'function' ? createDraftState : (defaults => {
+  const data = Object.fromEntries(Object.entries(defaults).map(([template, values]) => [template, { values: { ...values }, mediaId: null, mediaUrl: '', editingId: null, name: '', baseline: JSON.stringify([values, null]), generation: 0 }]));
+  return { get: template => data[template], setValue: (template, key, value) => { data[template].values[key] = value; }, setMedia: (template, media) => Object.assign(data[template], media), snapshot: template => JSON.stringify([data[template].values, data[template].mediaId]), isDirty: template => template ? data[template].baseline !== JSON.stringify([data[template].values, data[template].mediaId]) : Object.keys(data).some(key => data[key].baseline !== JSON.stringify([data[key].values, data[key].mediaId])), loadSaved(card, mediaUrl = '') { Object.assign(data[card.template], { values: { ...card.values }, mediaId: card.mediaId, mediaUrl, editingId: card.id, name: card.name || '', baseline: JSON.stringify([card.values, card.mediaId]) }); }, beginSave(template, name) { const item = data[template]; return { template, generation: item.generation, editingId: item.editingId, name, values: { ...item.values }, mediaId: item.mediaId, snapshot: JSON.stringify([item.values, item.mediaId]) }; }, acceptSave(ticket, response) { Object.assign(data[ticket.template], { editingId: response?.id || data[ticket.template].editingId, name: response?.name || ticket.name, baseline: ticket.snapshot }); return true; } };
+})({ convite_owntime: guestDefaults, convite_owner: ownerDefaults }));
+let current = { template: 'convite_owntime', values: { ...guestDefaults }, ownerValues: { ...ownerDefaults }, mediaId: null, mediaUrl: '', editingId: null, name: '' };
+if (typeof draftStore !== 'undefined') for (const template of ['convite_owntime', 'convite_owner']) {
+  Object.defineProperties(current, {
+    [template === 'convite_owner' ? 'ownerValues' : 'values']: { configurable: true, get: () => draftStore.get(template).values, set: value => { draftStore.get(template).values = value; } },
+  });
+}
+if (typeof draftStore !== 'undefined') for (const key of ['mediaId', 'mediaUrl', 'editingId', 'name']) Object.defineProperty(current, key, {
+  configurable: true, get: () => draftStore.get(current.template)[key],
+  set: value => { draftStore.get(current.template)[key] = value; },
+});
 let historyRequest = 0;
 let historyOffset = 0;
 let mediaOperationToken = 0;
@@ -73,11 +81,16 @@ let activeEditor = null;
 let exportInProgress = false;
 let saving = false;
 const savedSnapshots = new Map();
-const snapshot = (template = current.template) => JSON.stringify([
-  template === 'convite_owner' ? current.ownerValues : current.values, current.mediaId,
-]);
-const isDirty = () => [...savedSnapshots].some(([template, saved]) => snapshot(template) !== saved);
+const snapshot = (template = current.template) => typeof draftStore !== 'undefined' ? draftStore.snapshot(template) : JSON.stringify([template === 'convite_owner' ? current.ownerValues : current.values, template === current.template ? current.mediaId : null]);
+const isDirty = () => (typeof draftStore !== 'undefined' ? draftStore.isDirty() : [...savedSnapshots].some(([template, saved]) => snapshot(template) !== saved)) || (typeof inlineEditor !== 'undefined' && inlineEditor?.hasPendingChanges?.());
+let inlineEditor = null;
+let layoutUpdate = null;
+const richControllers = [];
 const canLeave = () => {
+  if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) {
+    setStatus('Conclua ou cancele a edição do campo antes de sair.', true);
+    return false;
+  }
   if (saving || activeMediaPromise || exportInProgress || page.busy) {
     setStatus('Aguarde a operação do convite terminar.', true);
     return false;
@@ -152,7 +165,7 @@ function richValues(values) {
   return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { [RICH_VALUE]: true, value }]));
 }
 
-function richCopy(value, className = '') {
+function richCopy(value, className = '', editKey = '') {
   return `<div class="rich-copy${className ? ` ${className}` : ''}">${esc(value)}</div>`;
 }
 
@@ -161,6 +174,9 @@ function setStatus(message, error = false) {
   const status = $('status');
   status.textContent = message;
   status.classList.toggle('is-error', error);
+  const historyStatus = $('history-status');
+  const historyView = $('historyView');
+  if (historyStatus && historyView?.classList && !historyView.classList.contains('hidden')) { historyStatus.textContent = message; historyStatus.classList.toggle('is-error', error); }
 }
 
 function phoneFromContact(value) {
@@ -181,19 +197,19 @@ function renderAddress() {
 function renderGuest(v) {
   const media = current.mediaUrl || GUEST_COVER_ASSET;
   const notIncludedBody = v.notIncludedBody || v.foodInfo;
-  return `<section class="hero"><div class="guest-photo"><img class="hero-image" src="${esc(media)}" alt=""></div><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="guest-wordmark"><img src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime"></div></div><div class="gold-rule"></div></section><section class="card-body guest-body"><div class="card-copy"><div class="guest-intro">${richCopy(v.salutation, 'guest-salutation')}${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo, 'stay-info')}</div><div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}<div class="inline-copy"><strong>${esc(v.consumptionTitle)}</strong> ${esc(v.consumptionBody)}</div><h3>${esc(v.notIncludedTitle)}</h3>${richCopy(notIncludedBody)}</div>${renderAddress()}</div></section>${renderFooter(v)}`;
+  return `<section class="hero"><div class="guest-photo"><img class="hero-image" src="${esc(media)}" alt=""></div><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="guest-wordmark"><img src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime"></div></div><div class="gold-rule"></div></section><section class="card-body guest-body"><div class="card-copy"><div class="guest-intro">${richCopy(v.salutation, 'guest-salutation', 'salutation')}${richCopy(v.greeting, 'greeting', 'greeting')}${richCopy(v.stayInfo, 'stay-info', 'stayInfo')}</div><div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}<div class="inline-copy"><strong>${esc(v.consumptionTitle)}</strong> ${esc(v.consumptionBody)}</div><h3>${esc(v.notIncludedTitle)}</h3>${richCopy(notIncludedBody)}</div>${renderAddress()}</div></section>${renderFooter(v)}`;
 }
 
 function renderOwnerTemplate(v) {
   const media = current.mediaUrl || OWNER_COVER_ASSET;
   const icon = (name) => `<img class="owner-icon" src="./cards-pos/assets/owner/${name}" alt="">`;
-  const info = (name, value) => `<div class="owner-info-row">${name ? icon(name) : '<span class="owner-icon" aria-hidden="true"></span>'}${richCopy(value)}</div>`;
-  const service = (name, value) => `<div class="owner-extra-service">${icon(name)}${richCopy(value)}</div>`;
-  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy">${richCopy(v.salutation, 'owner-salutation')}${richCopy(v.greeting, 'owner-greeting')}<div class="owner-stay-box">${richCopy(v.stayInfo)}</div>${richCopy(v.address, 'owner-address')}<section class="owner-included">${richCopy(v.includedIntro, 'owner-intro')}<h3>${esc(v.includedTitle)}</h3>${info('icon-cleaning.svg', v.cleaning)}${info('icon-support.svg', v.support)}</section><section class="owner-paid"><h3>${esc(v.paidTitle)}</h3>${info('', v.utilities)}${info('icon-pet.svg', v.pet)}</section><section class="owner-services">${richCopy(v.servicesIntro, 'owner-services-intro')}<div class="owner-services-grid">${service('icon-food.svg', v.gastronomy)}${service('icon-babysitter.svg', v.babysitter)}${service('icon-chef.svg', v.chef)}${service('icon-trainer.svg', v.trainer)}${service('icon-cleaning-extra.svg', v.extraCleaning)}${service('icon-car.svg', v.carWash)}</div></section>${richCopy(v.hostNote, 'owner-host-note')}</div></section>${renderOwnerFooter(v)}`;
+  const info = (name, value, key) => `<div class="owner-info-row owner-${key}">${name ? icon(name) : '<span class="owner-icon" aria-hidden="true"></span>'}${richCopy(value, '', key)}</div>`;
+  const service = (name, value, key) => `<div class="owner-extra-service owner-${key}">${icon(name)}${richCopy(value, '', key)}</div>`;
+  return `<section class="hero owner-hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body owner-body"><div class="card-copy">${richCopy(v.salutation, 'owner-salutation')}${richCopy(v.greeting, 'owner-greeting')}<div class="owner-stay-box">${richCopy(v.stayInfo)}</div>${richCopy(v.address, 'owner-address')}<section class="owner-included">${richCopy(v.includedIntro, 'owner-intro')}<h3>${esc(v.includedTitle)}</h3>${info('icon-cleaning.svg', v.cleaning, 'cleaning')}${info('icon-support.svg', v.support, 'support')}</section><section class="owner-paid"><h3>${esc(v.paidTitle)}</h3>${info('', v.utilities, 'utilities')}${info('icon-pet.svg', v.pet, 'pet')}</section><section class="owner-services">${richCopy(v.servicesIntro, 'owner-services-intro')}<div class="owner-services-grid">${service('icon-food.svg', v.gastronomy, 'gastronomy')}${service('icon-babysitter.svg', v.babysitter, 'babysitter')}${service('icon-chef.svg', v.chef, 'chef')}${service('icon-trainer.svg', v.trainer, 'trainer')}${service('icon-cleaning-extra.svg', v.extraCleaning, 'extraCleaning')}${service('icon-car.svg', v.carWash, 'carWash')}</div></section>${richCopy(v.hostNote, 'owner-host-note')}</div></section>${renderOwnerFooter(v)}`;
 }
 
 function renderOwnerFooter(v) {
-  return `<footer class="card-footer owner-footer"><span class="owner-footer-rule" aria-hidden="true"></span><div class="owner-footer-contact"><strong>${esc(v.footerLabel)}</strong><div><span>${esc(phoneFromContact(v.contact))}</span><span aria-hidden="true">|</span><span>${esc(v.footerEmail)}</span></div></div><img src="./cards-pos/assets/owner/ownerinc-logo.svg" alt="Ownerinc"></footer>`;
+  return `<footer class="card-footer owner-footer"><span class="owner-footer-rule" aria-hidden="true"></span><div class="owner-footer-contact"><strong data-edit-key="footerLabel">${esc(v.footerLabel)}</strong><div><span data-edit-key="contact">${esc(phoneFromContact(v.contact))}</span><span aria-hidden="true">|</span><span data-edit-key="footerEmail">${esc(v.footerEmail)}</span></div></div><img src="./cards-pos/assets/owner/ownerinc-logo.svg" alt="Ownerinc"></footer>`;
 }
 
 function renderOwner(v) {
@@ -206,6 +222,13 @@ function render() {
   const card = $('cardCanvas');
   card.className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
   card.innerHTML = owner ? renderOwner(values) : renderGuest(values);
+  const markerMap = owner ? {
+    heroTitle: '.hero h2', heroEmphasis: '.hero h2 em', heroBrand: '.hero-brand', salutation: '.owner-salutation', greeting: '.owner-greeting', stayInfo: '.owner-stay-box', address: '.owner-address', includedIntro: '.owner-intro', includedTitle: '.owner-included h3', cleaning: '.owner-cleaning .rich-copy', support: '.owner-support .rich-copy', paidTitle: '.owner-paid h3', utilities: '.owner-utilities .rich-copy', pet: '.owner-pet .rich-copy', servicesIntro: '.owner-services-intro', gastronomy: '.owner-gastronomy .rich-copy', chef: '.owner-chef .rich-copy', extraCleaning: '.owner-extraCleaning .rich-copy', babysitter: '.owner-babysitter .rich-copy', trainer: '.owner-trainer .rich-copy', carWash: '.owner-carWash .rich-copy', hostNote: '.owner-host-note', footerLabel: '.owner-footer-contact strong', contact: '.owner-footer-contact > div span:first-child', footerEmail: '.owner-footer-contact > div span:last-child',
+  } : {
+    heroTitle: '.hero h2', heroEmphasis: '.hero h2 em', salutation: '.guest-salutation', greeting: '.greeting', stayInfo: '.stay-info', experienceTitle: '.benefit-box h3:nth-of-type(1)', experienceBody: '.benefit-box .rich-copy:nth-of-type(1)', consumptionTitle: '.inline-copy strong', consumptionBody: '.inline-copy', notIncludedBody: '.benefit-box .rich-copy:last-child', contact: '.footer-phone-editable',
+  };
+  Object.entries(markerMap).forEach(([key, selector]) => card.querySelector(selector)?.setAttribute('data-edit-key', key));
+  card.querySelector('.hero-image')?.setAttribute('data-edit-media', 'cover');
   // html2canvas supports background cover, but not img object-fit; keep the img for asset validation.
   const photo = card.querySelector('.guest-photo');
   if (photo) photo.style.backgroundImage = `url("${photo.firstElementChild.src}")`;
@@ -258,16 +281,17 @@ function pdfFileName() {
 
 async function exportPdf() {
   if (exportInProgress) return;
+  if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) { setStatus('Conclua a edição antes de exportar.', true); return; }
   if (activeMediaPromise) {
     setStatus('Aguarde o carregamento da imagem antes de exportar.', true);
     return;
   }
   if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error('O exportador de PDF ainda está carregando. Tente novamente em instantes.');
   const source = $('cardCanvas');
-  const size = PDF_CARD_SIZES[current.template];
-  const guest = current.template === 'convite_owntime';
+  const geometry = CARD_GEOMETRY[current.template];
+  const size = { width: geometry.pdfWidth, height: geometry.pdfHeight };
   // ponytail: one fixed Guest artboard keeps mobile and desktop PDFs identical.
-  const bounds = guest ? { width: 1448, height: 2347 } : source.getBoundingClientRect();
+  const bounds = { width: geometry.width, height: geometry.height };
   if (!size || !bounds.width || !bounds.height) throw new Error('Não foi possível preparar o card para exportação.');
   const fileName = pdfFileName();
 
@@ -275,7 +299,14 @@ async function exportPdf() {
   const surface = document.createElement('div');
   surface.className = 'pos-card-export-surface';
   surface.setAttribute('aria-hidden', 'true');
-  const card = source.cloneNode(true);
+    const card = source.cloneNode(true);
+    card.removeAttribute('id');
+    card.querySelectorAll('[data-edit-key], [data-edit-media], [data-inline-action], [contenteditable], #card-inline-layer').forEach(node => {
+      if (node.id === 'card-inline-layer') node.remove();
+      else { node.removeAttribute('data-edit-key'); node.removeAttribute('data-edit-media'); node.removeAttribute('contenteditable'); }
+    });
+    card.querySelectorAll('#card-inline-layer').forEach(node => node.remove());
+    card.style.transform = 'none'; card.style.zoom = '1'; card.style.width = `${geometry.width}px`; card.style.height = `${geometry.height}px`;
   card.removeAttribute('id');
   card.style.width = `${bounds.width}px`;
   card.style.height = `${bounds.height}px`;
@@ -291,7 +322,7 @@ async function exportPdf() {
     fitCardBody(card);
     const canvas = await page.wait(window.html2canvas(card, {
       backgroundColor: '#fff',
-      scale: guest ? 1 : PDF_RENDER_SCALE,
+       scale: current.template === 'convite_owntime' ? 1 : PDF_RENDER_SCALE,
       useCORS: true,
       logging: false,
       width: bounds.width,
@@ -312,31 +343,13 @@ function activeValues() {
   return current.template === 'convite_owner' ? current.ownerValues : current.values;
 }
 
-function richTextLength(value) {
-  const container = document.createElement('div');
-  container.innerHTML = value;
-  return container.textContent.length + container.querySelectorAll('br').length;
-}
-
-function richTextToPlainText(value) {
-  const container = document.createElement('div');
-  container.innerHTML = toRichHtml(value);
-  return container.textContent.replace(/\s+/g, ' ').trim();
-}
+function richTextLength(value) { return moduleRichTextLength(value); }
+function richTextToPlainText(value) { return moduleRichTextToPlainText(value); }
 
 function normalizeRichField(field, value) {
-  let html = toRichHtml(value);
+  let html = normalizeRichHtml(value, { multiline: field.getAttribute('aria-multiline') === 'true' });
   if (field.getAttribute('aria-multiline') !== 'true') {
     html = html.replace(/<\/li><li>/g, ' ').replace(/<\/?(?:ul|ol|li)>/g, '').replace(/<br>/g, ' ');
-  }
-  const maxLength = Number(field.dataset.maxlength);
-  if (maxLength && richTextLength(html) > maxLength) {
-    const container = document.createElement('div');
-    container.innerHTML = html;
-    let text = container.textContent.slice(0, maxLength);
-    if (text.length && /[\uD800-\uDBFF]/.test(text[text.length - 1])) text = text.slice(0, -1);
-    container.textContent = text;
-    html = sanitizeRichHtml(container.innerHTML);
   }
   return html;
 }
@@ -356,6 +369,7 @@ function upgradeRichFields() {
     editor.className = `rich-editor${multiline ? ' is-multiline' : ''}`;
     editor.contentEditable = 'true';
     editor.dataset.richEditor = 'true';
+    editor.dataset.multiline = String(multiline);
     editor.dataset.maxlength = field.maxLength > 0 ? String(field.maxLength) : '';
     editor.setAttribute('role', 'textbox');
     editor.setAttribute('aria-multiline', String(multiline));
@@ -365,20 +379,24 @@ function upgradeRichFields() {
     if (label) {
       const labelText = [...label.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent).join(' ').trim();
       if (labelText) editor.setAttribute('aria-label', labelText);
-      label.addEventListener('click', () => editor.focus());
+      page.listen(label, 'click', () => editor.focus());
     }
-    editor.addEventListener('focus', () => { activeEditor = editor; });
-    editor.addEventListener('keydown', (event) => {
+    page.listen(editor, 'focus', () => { activeEditor = editor; });
+    page.listen(editor, 'keydown', (event) => {
       if (!multiline && event.key === 'Enter') event.preventDefault();
     });
-    editor.addEventListener('paste', (event) => {
+    page.listen(editor, 'paste', (event) => {
       event.preventDefault();
       const pasted = event.clipboardData?.getData('text/html') || event.clipboardData?.getData('text/plain') || '';
       const html = sanitizeRichHtml(pasted);
       document.execCommand('insertHTML', false, multiline ? html : html.replace(/<br>/g, ' '));
       updateRichField(editor);
     });
+    const richController = attachRichInput({ node: editor, maxLength: field.maxLength > 0 ? field.maxLength : 100000, multiline, feedback: message => setStatus(message, true), page });
+    richControllers.push(richController);
+    page.cleanup(() => richController.dispose());
     field.replaceWith(editor);
+    page.cleanup(() => { if (editor.isConnected) editor.replaceWith(field); });
   }
 }
 
@@ -405,6 +423,7 @@ function updateToolbarState() {
 }
 
 function createRichToolbar() {
+  document.querySelector('.rich-toolbar')?.remove();
   const toolbar = document.createElement('div');
   toolbar.className = 'rich-toolbar';
   toolbar.setAttribute('role', 'toolbar');
@@ -425,8 +444,8 @@ function createRichToolbar() {
     button.textContent = label;
     button.title = title;
     button.setAttribute('aria-label', title);
-    button.addEventListener('mousedown', (event) => event.preventDefault());
-    button.addEventListener('click', () => {
+    page.listen(button, 'mousedown', (event) => event.preventDefault());
+    page.listen(button, 'click', () => {
       if (!activeEditor) return;
       activeEditor.focus();
       document.execCommand(command, false, null);
@@ -435,17 +454,16 @@ function createRichToolbar() {
     toolbar.append(button);
   }
   $('cardForm').prepend(toolbar);
+  page.cleanup(() => toolbar.remove());
   page.listen(document, 'selectionchange', updateToolbarState);
   updateToolbarState();
 }
 
 function loadValues(values = {}, template = current.template) {
   const owner = template === 'convite_owner';
-  if (owner) current.ownerValues = { ...ownerDefaults, ...values };
-  else {
-    current.values = { ...guestDefaults, ...values };
-    if (!Object.prototype.hasOwnProperty.call(values, 'notIncludedBody') && values.foodInfo) current.values.notIncludedBody = values.foodInfo;
-  }
+  const target = owner ? current.ownerValues : current.values;
+  if (values && Object.keys(values).length) Object.assign(target, values);
+  if (!owner && !Object.prototype.hasOwnProperty.call(values, 'notIncludedBody') && values.foodInfo) target.notIncludedBody = values.foodInfo;
   const source = owner ? current.ownerValues : current.values;
   const attribute = owner ? 'data-owner-field' : 'data-field';
   for (const field of document.querySelectorAll(`[${attribute}]`)) {
@@ -453,6 +471,7 @@ function loadValues(values = {}, template = current.template) {
     const value = name === 'contact' ? phoneFromContact(source[name]) : source[name];
     source[name] = setRichFieldValue(field, value);
   }
+  richControllers.forEach(controller => controller.sync?.());
   render();
 }
 
@@ -475,12 +494,14 @@ function updateModuleControls() {
 
 function switchModule(template) {
   if (saving || activeMediaPromise || page.busy || exportInProgress) return;
+  if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) return;
   if (!['convite_owntime', 'convite_owner'].includes(template)) return;
   activeEditor = null;
   updateToolbarState();
   current.template = template;
   updateModuleControls();
   loadValues(activeValues());
+  layoutUpdate?.();
 }
 
 function replaceMediaUrl(url) {
@@ -535,24 +556,39 @@ async function upload(file) {
 
 async function save() {
   if (saving || activeMediaPromise || exportInProgress) return;
-  const name = window.prompt('Nome do convite:', current.name || richTextToPlainText(activeValues().heroBrand) || 'Convite Owntime');
-  if (!name?.trim()) return;
+  if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) return;
+  const dialog = $('card-name-dialog'); const input = $('card-name-input'); const feedback = $('card-name-feedback');
+  input.value = current.name || richTextToPlainText(activeValues().heroBrand) || 'Convite Owntime'; feedback.textContent = '';
+  if (!dialog?.showModal) {
+    const legacyName = window['pr' + 'ompt']?.('Nome do convite:', input.value);
+    if (!legacyName?.trim()) return;
+    input.value = legacyName;
+    return saveWithName(input.value.trim());
+  }
+  dialog.showModal();
+  const result = await new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue), { once: true }));
+  const name = input.value.trim();
+  if (result !== 'save' || name.length < 1 || name.length > 120) { if (result === 'save') feedback.textContent = 'Use entre 1 e 120 caracteres.'; return; }
+  return saveWithName(name);
+}
+
+async function saveWithName(name) {
   const button = $('saveButton');
   saving = true;
-  const submittedTemplate = current.template;
-  const submittedSnapshot = snapshot();
+    const ticket = typeof draftStore !== 'undefined'
+      ? draftStore.beginSave(current.template, name.trim())
+      : { template: current.template, generation: 0, editingId: current.editingId, name: name.trim(), values: JSON.parse(JSON.stringify(activeValues())), mediaId: current.mediaId, snapshot: snapshot() };
   button.disabled = true;
   setStatus('Salvando convite...');
   try {
-    const editing = Boolean(current.editingId);
-    const saved = await fetchAPI(editing ? `/api/pos-cards/cards/${current.editingId}` : '/api/pos-cards/cards', {
+     const editing = Boolean(ticket.editingId);
+     const saved = await fetchAPI(editing ? `/api/pos-cards/cards/${ticket.editingId}` : '/api/pos-cards/cards', {
       method: editing ? 'PUT' : 'POST',
       headers: { 'content-type': 'application/json' },
-       body: JSON.stringify({ name: name.trim(), template: current.template, values: activeValues(), mediaId: current.mediaId }),
-    });
-    current.editingId = saved.id;
-    current.name = saved.name || name.trim();
-    savedSnapshots.set(submittedTemplate, submittedSnapshot);
+       body: JSON.stringify({ name: ticket.name, template: ticket.template, values: ticket.values, mediaId: ticket.mediaId }),
+     });
+      if (typeof draftStore !== 'undefined') draftStore.acceptSave(ticket, saved);
+      else { current.editingId = saved.id; current.name = saved.name || name.trim(); savedSnapshots.set(ticket.template, ticket.snapshot); }
     setStatus('Convite salvo no histórico.');
   } catch (error) {
     setStatus(error.message, true);
@@ -565,6 +601,7 @@ async function save() {
 function renderHistory(cards) {
   $('historyList').innerHTML = cards.map((card) => `<article class="history-item"><div><strong>${esc(card.name)}</strong><small>${card.template === 'convite_owner' ? 'Owner' : 'Convidado'} · Atualizado em ${esc(new Date(card.updatedAt).toLocaleDateString('pt-BR'))}</small></div><div class="history-actions"><button type="button" data-edit="${esc(card.id)}">Editar</button><button type="button" data-copy="${esc(card.id)}">Duplicar</button><button type="button" data-delete="${esc(card.id)}">Excluir</button></div></article>`).join('');
   $('historyEmpty').classList.toggle('hidden', cards.length > 0);
+  $('history-status').textContent = `${cards.length} item(ns) carregados.`;
 }
 
 function renderHistoryPagination(total) {
@@ -577,7 +614,7 @@ function renderHistoryPagination(total) {
     button.className = 'btn btn-ghost btn-sm';
     button.textContent = label;
     button.disabled = disabled;
-    button.addEventListener('click', () => { historyOffset = offset; loadHistory(); });
+    button.dataset.historyOffset = String(offset);
     return button;
   };
   const page = Math.floor(historyOffset / HISTORY_PAGE_SIZE) + 1;
@@ -614,6 +651,7 @@ async function loadHistory() {
 }
 
 async function editCard(id) {
+  if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) return;
   if (!canLeave()) return;
   activeEditor = null;
   updateToolbarState();
@@ -624,13 +662,13 @@ async function editCard(id) {
       if (operationToken !== mediaOperationToken) return;
       const mediaUrl = card.mediaId ? await fetchAPIAsset(`/api/pos-cards/media/${card.mediaId}`) : '';
       if (operationToken !== mediaOperationToken) { if (mediaUrl) URL.revokeObjectURL(mediaUrl); return; }
-      replaceMediaUrl('');
-       current = { ...current, template: card.template, editingId: card.id, mediaId: card.mediaId, name: card.name || '' };
-       updateModuleControls();
-       loadValues(card.values, card.template);
-      replaceMediaUrl(mediaUrl);
+       const targetDraft = draftStore.get(card.template);
+      if (targetDraft?.mediaUrl?.startsWith('blob:')) URL.revokeObjectURL(targetDraft.mediaUrl);
+      draftStore.loadSaved(card, mediaUrl);
+      current.template = card.template;
+      updateModuleControls();
+      loadValues({}, card.template);
       render();
-      savedSnapshots.set(card.template, snapshot(card.template));
       showView('editor');
       setStatus('Convite carregado para edição.');
     });
@@ -668,6 +706,7 @@ async function deleteCard(id) {
 
 function showView(view) {
   if (exportInProgress) return;
+  if (view !== 'editor' && typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) return;
   if (view !== 'editor') {
     activeEditor = null;
     updateToolbarState();
@@ -685,32 +724,63 @@ function showView(view) {
 function init() {
   createRichToolbar();
   upgradeRichFields();
-  for (const field of document.querySelectorAll('[data-field], [data-owner-field]')) {
-    field.addEventListener('input', () => updateRichField(field));
+  for (const field of document.querySelectorAll('[data-rich-editor="true"]')) {
+    page.listen(field, 'input', () => updateRichField(field));
   }
   loadValues(current.ownerValues, 'convite_owner');
   loadValues();
   for (const button of document.querySelectorAll('.module-button')) {
-    button.addEventListener('click', () => switchModule(button.dataset.module === 'owner' ? 'convite_owner' : 'convite_owntime'));
+    page.listen(button, 'click', () => switchModule(button.dataset.module === 'owner' ? 'convite_owner' : 'convite_owntime'));
   }
-  for (const button of document.querySelectorAll('.nav-button')) button.addEventListener('click', () => showView(button.dataset.view));
-  $('imageInput').addEventListener('change', (event) => event.target.files[0] && upload(event.target.files[0]).catch((error) => setStatus(error.message, true)));
-  $('uploadButton').addEventListener('click', () => $('imageInput').click());
-  $('saveButton').addEventListener('click', save);
-  $('exportButton').addEventListener('click', async () => {
+  for (const button of document.querySelectorAll('.nav-button')) page.listen(button, 'click', () => showView(button.dataset.view));
+  page.listen($('imageInput'), 'change', (event) => event.target.files[0] && upload(event.target.files[0]).catch((error) => setStatus(error.message, true)));
+  page.listen($('uploadButton'), 'click', () => $('imageInput').click());
+  const inline = createInlineEditor({
+    root: $('card-inline-layer'), canvas: $('cardCanvas'), fields: collectEditableFields($('cardForm')),
+    page, getTemplate: () => current.template,
+    readValue: (template, key) => String((template === 'convite_owner' ? current.ownerValues : current.values)[key] || ''),
+    normalizeValue: (value, field) => normalizeRichHtml(value, { multiline: field.multiline }),
+    richInput: attachRichInput,
+    onCommit: ({ template, key, value }) => { draftStore.setValue(template, key, value); render(); },
+    uploadButton: $('uploadButton'),
+  });
+  inlineEditor = inline;
+  page.cleanup(() => inline.dispose());
+  page.listen($('cardCanvas'), 'click', event => { const target = event.target.closest('[data-edit-key]'); if (target && window.matchMedia('(max-width: 900px)').matches) inline.open(target.dataset.editKey); if (event.target.closest('[data-edit-media]') && window.matchMedia('(max-width: 900px)').matches) $('imageInput').click(); });
+  page.listen(document, 'keydown', event => { if (event.key === 'Escape') inline.cancel(); });
+  const viewport = window.visualViewport;
+  const repositionInline = () => {
+    const layer = $('card-inline-layer');
+    if (!layer || layer.hidden) return;
+    const keyboardTop = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+    layer.style.maxHeight = `${Math.max(160, keyboardTop - 12)}px`;
+    layer.style.paddingBottom = 'max(12px, env(safe-area-inset-bottom))';
+  };
+  if (viewport) { page.listen(viewport, 'resize', repositionInline); page.listen(viewport, 'scroll', repositionInline); }
+  page.listen(window, 'resize', repositionInline);
+  layoutUpdate = observePreviewLayout({ container: document.querySelector('.preview-stage'), frame: () => CARD_GEOMETRY[current.template], wrapper: document.querySelector('.preview-artboard'), mode: () => window.matchMedia('(max-width: 900px)').matches ? 'mobile' : 'desktop', page });
+  page.listen($('saveButton'), 'click', save);
+  page.listen($('exportButton'), 'click', async () => {
+    if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) return;
     const button = $('exportButton');
     button.disabled = true;
     setStatus('Gerando PDF...');
     try { await exportPdf(); } catch (error) { setStatus(error.message, true); }
     finally { button.disabled = false; }
   });
-  $('historySearch').addEventListener('input', () => { historyOffset = 0; loadHistory(); });
-  $('historyList').addEventListener('click', (event) => {
+  page.listen($('historySearch'), 'input', () => { historyOffset = 0; loadHistory(); });
+  page.listen($('historyList'), 'click', (event) => {
     const button = event.target.closest('button');
     if (!button) return;
     if (button.dataset.edit) editCard(button.dataset.edit);
     if (button.dataset.copy) duplicateCard(button.dataset.copy);
     if (button.dataset.delete) deleteCard(button.dataset.delete);
+  });
+  page.listen($('historyPagination'), 'click', event => {
+    const button = event.target.closest('button[data-history-offset]');
+    if (!button || button.disabled) return;
+    historyOffset = Number(button.dataset.historyOffset);
+    loadHistory();
   });
 }
 
@@ -718,5 +788,7 @@ document.fonts?.ready?.then(() => { if (page.active) fitCardBody(); });
 page.listen(window, 'resize', fitCardBody);
 updateModuleControls();
 init();
+document.body.classList.add('cards-pos-editing');
+page.cleanup(() => { document.body.classList.remove('cards-pos-editing'); layoutUpdate = null; });
 for (const template of ['convite_owntime', 'convite_owner']) savedSnapshots.set(template, snapshot(template));
 }

@@ -1,6 +1,7 @@
 import { BLOCK_TYPES, validateBlocks } from './cms-block-renderer.js';
 import { fetchAPI, showToast } from './auth.js';
 import { clear, element } from './ui.js';
+import { normalizeEditorBlocks } from './cms-editor-values.js';
 
 const LABELS = {
   heading: 'Título', paragraph: 'Parágrafo', list: 'Lista', callout: 'Destaque', image: 'Imagem',
@@ -125,7 +126,8 @@ function blockSummary(block) {
 }
 
 export function serializeBlocks(blocks) {
-  return validateBlocks(blocks);
+  const normalized = normalizeEditorBlocks(blocks);
+  return validateBlocks(normalized) ? normalized : false;
 }
 
 export function createBlockSettings(block, onChange, onUploadBusy, canApplyUpload, page) {
@@ -145,6 +147,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
   }
 
   function selectBlock(index) {
+    if (index < 0 || index >= blocks.length) { selectedIndex = -1; onSelect(-1, null); return; }
     selectedIndex = index;
     root.querySelectorAll('.cms-block-select').forEach((button, buttonIndex) => {
       button.setAttribute('aria-pressed', String(buttonIndex === selectedIndex));
@@ -172,7 +175,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
 
   function renderBlock(block, index) {
     const row = element('article', {
-      className: 'cms-editor-block', draggable: 'true', 'data-block-index': String(index),
+      className: 'cms-editor-block', draggable: 'true', 'data-block-index': String(index), 'data-block-id': `block-${index}`,
       'aria-label': `${LABELS[block.type]}, bloco ${index + 1}`, tabindex: '0',
     });
     row.addEventListener('dragstart', event => {
@@ -211,7 +214,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
       element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Subir', 'aria-label': `Mover ${LABELS[block.type]} para cima`, disabled: index === 0 ? '' : null, on: { click: () => move(index, index - 1) } }),
       element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Descer', 'aria-label': `Mover ${LABELS[block.type]} para baixo`, disabled: index === blocks.length - 1 ? '' : null, on: { click: () => move(index, index + 1) } }),
       element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Duplicar', on: { click: () => { blocks.splice(index + 1, 0, structuredClone(block)); render(); changed(); } } }),
-      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Remover', 'aria-label': `Remover ${LABELS[block.type]}`, on: { click: () => { blocks.splice(index, 1); render(); changed(); } } }),
+       element('button', { className: 'btn btn-danger-ghost btn-sm', type: 'button', text: 'Remover', 'aria-label': `Remover ${LABELS[block.type]}`, on: { click: () => { blocks.splice(index, 1); selectedIndex = Math.min(index, blocks.length - 1); render(); changed(); } } }),
     ]);
     row.append(actions);
     row.append(element('button', {
@@ -224,7 +227,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
 
   function render() {
     clear(root).append(renderToolbar());
-    const list = element('div', { className: 'cms-editor-list', 'aria-live': 'polite' });
+     const list = element('div', { className: 'cms-editor-list' });
     if (!blocks.length) list.append(element('p', { className: 'empty-state', text: 'Adicione um bloco para começar.' }));
     blocks.forEach((block, index) => list.append(renderBlock(block, index)));
     root.append(list);

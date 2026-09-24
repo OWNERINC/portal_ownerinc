@@ -76,10 +76,10 @@ test('guard requires auth, checks access, and stops editor initialization when d
   assert.match(app, /export function mount\(page\)/);
 });
 
-test('history edits revoke the current blob URL before replacing media state', () => {
-  const reset = app.indexOf("replaceMediaUrl('');");
-  const state = app.indexOf('current = { ...current, template: card.template, editingId: card.id, mediaId: card.mediaId');
-  assert.ok(reset >= 0 && reset < state);
+test('history edits replace only the target draft media and preserve the other template', () => {
+  assert.match(app, /const targetDraft = draftStore\.get\(card\.template\)/);
+  assert.match(app, /targetDraft\?\.mediaUrl\?\.startsWith\('blob:'\)/);
+  assert.match(app, /draftStore\.loadSaved\(card, mediaUrl\)/);
 });
 
 test('preview escapes user values, validates image uploads, and preserves export composition', () => {
@@ -166,7 +166,7 @@ test('rich text fields expose a native toolbar and a strict HTML allowlist', () 
   assert.match(app, /const RICH_TAG_PATTERN/);
   assert.match(app, /contentEditable/);
   assert.match(app, /dataset\.maxlength/);
-  assert.match(app, /container\.textContent\.slice\(0, maxLength\)/);
+  assert.doesNotMatch(app, /container\.textContent\.slice\(0, maxLength\)/);
   assert.match(app, /function toRichHtml\(value\) \{\s*return sanitizeRichHtml\(value\);/);
   assert.match(app, /event\.clipboardData\?\.getData\('text\/html'\)/);
   assert.match(app, /function init\(\) \{[\s\S]*?upgradeRichFields\(\);[\s\S]*?loadValues\(\);/);
@@ -214,8 +214,7 @@ test('history actions and generated Cards Pós navigation retain shell interacti
 test('editing a Cards Pós invitation preserves its saved history name by default', () => {
   assert.match(app, /name: ''/);
   assert.match(app, /current\.name \|\| richTextToPlainText\(activeValues\(\)\.heroBrand\)/);
-  assert.match(app, /mediaId: card\.mediaId, name: card\.name \|\| ''/);
-  assert.match(app, /current\.name = saved\.name \|\| name\.trim\(\)/);
+  assert.match(app, /draftStore\.loadSaved\(card, mediaUrl\)/);
 });
 
 test('Cards Pós history ignores stale search responses', () => {
@@ -261,9 +260,22 @@ function guestHarness(width = 600) {
     } },
   };
   const source = app.slice(app.indexOf('const $ ='), app.indexOf('document.fonts?.ready?.then'));
-  const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, exportPdf });`, { document, page, window });
+  const normalizeRichHtml = value => String(value ?? '').replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '').replace(/\s(on\w+|style|href)=(?:"[^"]*"|'[^']*')/gi, '');
+  const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, updateRichField, exportPdf });`, { document, page, window, normalizeRichHtml });
   return { ...api, card, captured };
 }
+
+test('desktop rich editor input updates the active draft and rerenders the preview', () => {
+  const { current, updateRichField, card } = guestHarness();
+  const field = {
+    innerHTML: '<strong>Texto editado</strong>',
+    dataset: { field: 'greeting', richEditor: 'true' },
+    getAttribute: name => name === 'aria-multiline' ? 'true' : null,
+  };
+  updateRichField(field);
+  assert.equal(current.values.greeting, '<strong>Texto editado</strong>');
+  assert.match(card.innerHTML, /<strong>Texto editado<\/strong>/);
+});
 
 test('Guest Frame 1 keeps saved rich text and media, adds safe salutation and uses the official logo', () => {
   const { current, loadValues, card } = guestHarness();
@@ -313,7 +325,8 @@ test('Guest PDF uses the reference resolution at any viewport and retains the ph
   current.template = 'convite_owner';
   current.name = 'Owner';
   await exportPdf();
-  assert.equal(captured.render.width, 600);
+  assert.equal(captured.render.width, 862);
+  assert.equal(captured.render.height, 1984);
   assert.equal(captured.render.scale, 3);
   assert.equal(captured.pdf.format.join(','), '108,248.6');
 });

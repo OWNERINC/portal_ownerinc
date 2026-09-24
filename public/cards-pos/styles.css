@@ -60,6 +60,7 @@
 .nav-button.active { background: var(--espresso); color: #fff; }
 .cards-pos-workspace { display: grid; grid-template-columns: minmax(330px, 460px) minmax(0, 1fr); min-height: calc(100vh - 169px); }
 .editor-panel { padding: var(--space-8) clamp(var(--space-6), 4vw, 64px); background: var(--surface); border-right: 1px solid var(--border); overflow: auto; }
+.editor-fields-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .editor-panel h2 { margin: var(--space-2) 0 var(--space-6); font-family: var(--font-display); font-size: var(--font-size-lg); }
 .editor-panel fieldset { margin: 0 0 var(--space-6); padding: 0; border: 0; }
 .editor-panel legend { width: 100%; padding: 0 0 var(--space-3); margin-bottom: var(--space-4); border-bottom: 1px solid var(--border); font-size: var(--font-size-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -199,6 +200,7 @@
 .history-actions { display: flex; gap: var(--space-2); }
 .history-actions button { min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; font: inherit; }
 .history-actions button:hover { background: var(--surface-2); }
+.card-name-dialog { max-width: 480px; }
 .empty-state { color: var(--text-secondary); }
 .pos-cards-access-denied { max-width: 560px; margin: var(--space-8) auto; padding: var(--space-8); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
 .pos-cards-access-denied h1 { margin-bottom: var(--space-3); font-size: var(--font-size-xl); }
@@ -215,6 +217,15 @@
   .editor-panel { border-right: 0; border-bottom: 1px solid var(--border); }
   .preview-panel { min-height: 720px; }
   .invite-card { width: min(78vw, 680px); }
+}
+@media (min-width: 901px) {
+  body.cards-pos-page.cards-pos-editing { overflow-y: hidden; }
+  .cards-pos-editing .cards-pos-content { min-height: 0; height: calc(100dvh - var(--topbar-height)); display: grid; grid-template-rows: auto minmax(0, 1fr); }
+  .cards-pos-editing .cards-pos-workspace { min-height: 0; overflow: hidden; }
+  .cards-pos-editing .editor-panel { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  .cards-pos-editing #cardForm { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+  .cards-pos-editing .editor-fields-scroll { flex: 1; }
+  .cards-pos-editing .preview-panel, .cards-pos-editing .preview-stage { min-height: 0; overflow: hidden; }
 }
 @media (max-width: 600px) {
   .cards-pos-toolbar, .history-view { padding: var(--space-6) var(--space-4); }
@@ -251,3 +262,12 @@
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
   .upload-control:active, .button:active, .history-actions button:active { transform: none; }
 }
+
+/* Mobile editing remains a sibling of the exportable art. */
+.preview-artboard { width: var(--preview-width, min(100%, 680px)); height: var(--preview-height, auto); position: relative; }
+.preview-artboard > .invite-card { width: 100%; }
+.card-edit-layer { position: absolute; inset: 0; z-index: 5; pointer-events: none; padding: 12px; }
+.card-edit-layer:not([hidden]) { display: grid; align-content: start; gap: 8px; pointer-events: auto; background: color-mix(in srgb, var(--surface) 96%, transparent); }
+.card-edit-layer textarea { width: 100%; min-height: 64px; font-size: 16px; padding: 10px; }
+.inline-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.editor-panel .file-input { width: 1px; height: 1px; min-width: 0; min-height: 0; padding: 0; border: 0; }
