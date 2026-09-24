@@ -94,7 +94,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   for (const marker of ['owner-included', 'owner-paid', 'owner-services-grid', 'owner-footer-contact']) assert.match(app, new RegExp(marker));
   assert.match(css, /\.owner-services-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css, /\.owner-host-note \{[^}]*transform: translateY\(3\.4cqw\)/);
-  assert.match(app, /GUEST_COVER_ASSET = '\.\/cards-pos\/assets\/owner\/owner-cover\.jpg'/);
+  assert.match(app, /GUEST_COVER_ASSET = '\.\/cards-pos\/assets\/guest\/guest-cover\.jpg'/);
   assert.match(app, /owner-cover\.jpg/);
   assert.match(css, /aspect-ratio: 1448 \/ 2347/);
   assert.match(css, /aspect-ratio: 862 \/ 1984/);
@@ -261,8 +261,16 @@ function guestHarness(width = 600) {
 }
 
 test('Guest Frame 1 keeps saved rich text and media, adds safe salutation and uses the official logo', () => {
-  const { current, guestDefaults, loadValues, card } = guestHarness();
-  loadValues({ greeting: '<strong>Convite salvo</strong>', heroBrand: 'Nome anterior', foodInfo: 'Texto antigo' });
+  const { current, loadValues, card } = guestHarness();
+  loadValues();
+  assert.match(card.innerHTML, /<h2>Um convite<em>a viver o seu tempo<\/em><\/h2>/);
+  assert.match(card.innerHTML, /Você é nosso convidado para viver uma experiência no <strong>Owntime Home Club Gramado:<\/strong>/);
+  assert.match(card.innerHTML, /Alimentação, bebidas e serviços sob demanda serão cobrados à parte\./);
+  assert.doesNotMatch(card.innerHTML, /on demand/);
+
+  loadValues({ heroTitle: 'Este é um convite', heroEmphasis: 'para viver o seu tempo', greeting: '<strong>Convite salvo</strong>', heroBrand: 'Nome anterior', foodInfo: 'Texto antigo' });
+  assert.equal(current.values.heroTitle, 'Este é um convite');
+  assert.equal(current.values.heroEmphasis, 'para viver o seu tempo');
   assert.equal(current.values.greeting, '<strong>Convite salvo</strong>');
   assert.equal(current.values.heroBrand, 'Nome anterior');
   assert.equal(current.values.notIncludedBody, 'Texto antigo');
@@ -271,8 +279,7 @@ test('Guest Frame 1 keeps saved rich text and media, adds safe salutation and us
   assert.match(card.innerHTML, /<strong>Convite salvo<\/strong>/);
   assert.match(card.innerHTML, /guest-wordmark"><img src="\.\/cards-pos\/assets\/owntime-logo-white.webp" alt="Owntime"/);
   assert.doesNotMatch(card.innerHTML, /Nome anterior/);
-  assert.match(card.innerHTML, /owner\/owner-cover\.jpg/);
-  assert.match(guestDefaults.notIncludedBody, /<em>on demand<\/em>/);
+  assert.match(card.innerHTML, /guest\/guest-cover\.jpg/);
 
   current.mediaUrl = 'blob:uploaded-guest-photo';
   loadValues({ salutation: '<img src=x onerror=alert(1)>Olá, <strong>Ana</strong>.' });

@@ -123,7 +123,7 @@
 /* Frame 1: 1448 × 2347. All Guest lengths scale with the card, not the viewport. */
 .guest-card { container-type: inline-size; font-family: 'Raleway', Arial, sans-serif; font-weight: 400; color: #000; }
 .guest-card .hero { padding: 0; }
-.guest-photo { position: absolute; inset: 0 0 0 -3.5%; background-size: cover; background-position: center 34%; }
+.guest-photo { position: absolute; inset: 0; background-size: cover; background-position: center top; }
 .guest-card .hero-image { opacity: 0; }
 .guest-card .hero::after { background: rgb(0 0 0 / 50%); }
 .guest-card .hero-content { position: absolute; inset: 0; display: block; max-width: none; }
@@ -137,15 +137,14 @@
 .guest-body .guest-intro { margin: 0 9.25414cqw; }
 .guest-body p, .guest-body .rich-copy, .guest-body .inline-copy, .guest-body ul, .guest-body ol { font-size: 2.20994cqw; line-height: 1.2; }
 .guest-body .guest-salutation { margin-bottom: 2.76243cqw; }
-.guest-body .greeting { margin-bottom: .82873cqw; text-align: justify; }
-.guest-body .stay-info { line-height: 1.875; }
-.guest-body .benefit-box { margin: 2.76243cqw 0 0; padding: 5.52486cqw 9.25414cqw; border-radius: 9.11602cqw; background: #e9e6de; color: #000; }
+.guest-body .greeting { margin-bottom: 3.03867cqw; text-align: justify; }
+.guest-body .stay-info { line-height: 1.5625; }
+.guest-body .benefit-box { margin: 2.76243cqw 0 0; padding: 5.52486cqw 7.73481cqw; border-radius: 9.11602cqw; background: #e9e6de; color: #000; }
 .guest-body .benefit-box h3 { margin: 0 0 2.20994cqw; color: #a49581; font-family: inherit; font-size: 3.31492cqw; font-weight: 700; line-height: 1.2; letter-spacing: 0; }
 .guest-body .benefit-box .rich-copy { margin-bottom: 2.62431cqw; text-align: justify; }
 .guest-body .benefit-box .inline-copy { margin-bottom: 2.76243cqw; text-align: justify; }
 .guest-body .benefit-box .rich-copy:last-child { margin-bottom: 0; }
-.guest-body .address-line { margin: 4.14365cqw 9.25414cqw 0; color: #000; font-size: 2.20994cqw !important; font-weight: 700; line-height: 1.2 !important; white-space: normal; }
-.guest-body .address-line span { font-weight: inherit; }
+.guest-body .address-line { margin: 4.14365cqw 9.25414cqw 0; color: #000; font-size: 2.20994cqw !important; font-weight: 400; line-height: 1.2 !important; white-space: normal; }
 .guest-card .card-footer { background: #fff; }
 .guest-card .footer-phone-backdrop { width: 15.2%; }
 .guest-card .footer-phone-editable { font-family: 'Novelin', Arial, sans-serif; font-size: 1.45cqw; letter-spacing: .02em; }

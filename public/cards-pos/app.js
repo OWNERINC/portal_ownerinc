@@ -3,16 +3,16 @@ import { requirePosCards } from './guard.js';
 
 const $ = (id) => document.getElementById(id);
 const guestDefaults = {
-  heroTitle: 'Este é um convite', heroEmphasis: 'para viver o seu tempo', heroBrand: 'Owntime',
+  heroTitle: 'Um convite', heroEmphasis: 'a viver o seu tempo', heroBrand: 'Owntime',
   salutation: 'Olá, Nome Sobrenome.',
-  greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
+  greeting: 'Você é nosso convidado para viver uma experiência no <strong>Owntime Home Club Gramado:</strong>',
   stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx',
   experienceTitle: 'Sua experiência inclui:',
   experienceBody: 'Hospedagem com acesso aos espaços de lazer de uso comum disponíveis no Club House Owntime.',
   consumptionTitle: 'Consumos da hospedagem:',
   consumptionBody: 'Água, energia elétrica, gás e demais consumos relacionados à estadia.',
   notIncludedTitle: 'O que não está incluso:',
-  notIncludedBody: 'Alimentação, bebidas e serviços <em>on demand</em> serão cobrados à parte.',
+  notIncludedBody: 'Alimentação, bebidas e serviços sob demanda serão cobrados à parte.',
   afterStay: 'Como parte da experiência, após a estadia, o presenteado deverá preencher a pesquisa de satisfação pós-estada, compartilhando sua percepção sobre a hospedagem e contribuindo para o aprimoramento contínuo da experiência Owntime.',
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
   contact: '54 3421 9988',
@@ -44,7 +44,7 @@ const ownerDefaults = {
   contact: '54 3421 9988',
   footerEmail: 'contato@ownerinc.com.br',
 };
-const GUEST_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
+const GUEST_COVER_ASSET = './cards-pos/assets/guest/guest-cover.jpg';
 const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
 const ADDRESS_LABEL = 'Como chegar:';
 const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
