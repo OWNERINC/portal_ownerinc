@@ -782,6 +782,7 @@ function init() {
     historyOffset = Number(button.dataset.historyOffset);
     loadHistory();
   });
+}
   page.wait(document.fonts?.ready).then(() => { if (page.active) fitCardBody(); });
   page.listen(window, 'resize', fitCardBody);
   updateModuleControls();

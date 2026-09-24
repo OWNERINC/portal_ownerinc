@@ -259,8 +259,7 @@ function guestHarness(width = 600) {
       save(name) { captured.name = name; }
     } },
   };
-  const mountEnd = app.lastIndexOf('\n}');
-  const source = app.slice(app.indexOf('const $ ='), mountEnd + 2);
+  const source = app.slice(app.indexOf('const $ ='), app.indexOf('page.wait(document.fonts?.ready).then'));
   const normalizeRichHtml = value => String(value ?? '').replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '').replace(/\s(on\w+|style|href)=(?:"[^"]*"|'[^']*')/gi, '');
   const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, updateRichField, exportPdf });`, { document, page, window, normalizeRichHtml });
   return { ...api, card, captured };
