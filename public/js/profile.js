@@ -440,6 +440,8 @@ async function saveCrop() {
   const savedCrop = normalizeMediaCrop(cropDraft);
   let saved = false;
   cropApplyButton.textContent = 'Salvando…';
+  const cropFeedback = document.getElementById('photo-crop-feedback');
+  if (cropFeedback) cropFeedback.textContent = '';
   await runProfileAction(async () => {
     try {
       const updatedUser = await fetchAPI('/api/users/me', {
@@ -452,7 +454,7 @@ async function saveCrop() {
       saved = true;
       setFeedback(photoFeedback, 'Enquadramento salvo.', 'success');
     } catch (error) {
-      setFeedback(photoFeedback, `Não foi possível salvar o enquadramento: ${error.message}`, 'danger');
+      setFeedback(cropFeedback || photoFeedback, `Não foi possível salvar o enquadramento: ${error.message}`, 'danger');
     }
   });
   cropApplyButton.textContent = 'Salvar enquadramento';

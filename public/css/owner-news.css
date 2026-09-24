@@ -13,7 +13,9 @@
 .news-card h2 a:hover { text-decoration: underline; text-underline-offset: 4px; }
 .news-meta { font-size: 13px; margin: 16px 0 0; line-height: 1.6; }
 .news-excerpt { line-height: 1.6; margin: 0; max-width: 65ch; }
-.news-feature { display: grid; grid-template-columns: 1.25fr 1fr; gap: 32px; align-items: center; padding-bottom: 32px; }
+.news-feature { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 32px; align-items: center; padding-bottom: 32px; }
+.news-feature > * { min-width: 0; }
+.news-card h2, .news-detail h2, .news-excerpt, .news-meta { overflow-wrap: anywhere; }
 .news-feature h2 { font-size: clamp(28px, 3vw, 42px); }
 .news-feature .news-meta { margin-top: 0; }
 .news-categories { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 20px 0; border-bottom: 1px solid var(--border); }

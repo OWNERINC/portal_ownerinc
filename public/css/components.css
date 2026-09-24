@@ -1,4 +1,5 @@
 /* Botões */
+[hidden]:not([hidden="until-found"]) { display: none !important; }
 .btn {
   display: inline-flex;
   align-items: center;
@@ -20,6 +21,8 @@
 .btn-ghost { background: var(--surface); color: var(--text); border-color: var(--border); }
 .btn-ghost:hover { background: var(--surface-2); }
 .btn-danger { background: var(--danger); color: #fff; }
+.btn-danger-ghost { background: var(--surface); color: var(--danger); border-color: currentColor; }
+.btn-danger-ghost:not(:disabled):hover { background: #fff1f1; }
 .btn-sm { padding: var(--space-1) var(--space-3); font-size: var(--font-size-xs); }
 .btn:disabled,
 button:disabled { cursor: not-allowed; opacity: .62; }

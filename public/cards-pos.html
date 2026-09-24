@@ -81,7 +81,7 @@
                 </button>
                  <input id="imageInput" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true">
                </fieldset>
-               <div id="guestFields">
+                <div class="editor-fields-scroll"><div id="guestFields">
                 <fieldset>
                 <legend>Texto da capa</legend>
                 <label for="heroTitle">Chamada<input id="heroTitle" data-field="heroTitle" maxlength="60"></label>
@@ -105,8 +105,8 @@
                   <legend>Rodapé</legend>
                   <label for="contact">Telefone<input id="contact" data-field="contact" maxlength="24"></label>
                 </fieldset>
-               </div>
-                 <div id="ownerFields" class="owner-fields hidden">
+                  </div>
+                  <div id="ownerFields" class="owner-fields hidden">
                    <fieldset>
                      <legend>Capa do Owner</legend>
                      <label for="ownerHeroTitle">Chamada<input id="ownerHeroTitle" data-owner-field="heroTitle" maxlength="60"></label>
@@ -147,7 +147,7 @@
                      <label for="ownerContact">Telefone<input id="ownerContact" data-owner-field="contact" maxlength="24"></label>
                      <label for="ownerFooterEmail">Email<input id="ownerFooterEmail" data-owner-field="footerEmail" maxlength="120"></label>
                    </fieldset>
-                </div>
+                 </div></div>
               <div class="form-actions">
                 <button id="saveButton" class="button secondary" type="button">Salvar</button>
                 <button id="exportButton" class="button primary" type="button">Exportar PDF</button>
@@ -158,7 +158,7 @@
 
           <section class="preview-panel" aria-label="Pré-visualização do convite">
             <div class="preview-label" id="previewLabel">Preview do convite · 108 × 175,1 mm</div>
-            <div class="preview-stage"><article id="cardCanvas" class="invite-card"></article></div>
+            <div class="preview-stage"><div class="preview-artboard"><article id="cardCanvas" class="invite-card"></article></div><div id="card-inline-layer" class="card-edit-layer" hidden><label for="card-inline-field">Editar campo</label><div id="card-inline-field" class="inline-rich-field" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true"></div><p id="card-inline-feedback" class="form-feedback" role="alert" aria-live="polite"></p><div class="inline-editor-actions"><button type="button" class="button primary" data-inline-action="apply">Concluir</button><button type="button" class="button secondary" data-inline-action="cancel">Cancelar</button><button type="button" class="button secondary" data-inline-action="previous">Anterior</button><button type="button" class="button secondary" data-inline-action="next">Próximo</button></div></div></div>
           </section>
         </section>
 
@@ -167,7 +167,8 @@
             <div><div class="eyebrow">Biblioteca compartilhada</div><h2 id="historyTitle">Convites salvos</h2></div>
             <label class="search-label" for="historySearch">Buscar convites<input id="historySearch" type="search" aria-label="Buscar convites" placeholder="Buscar por nome..."></label>
           </div>
-          <div id="historyList" class="history-list"></div>
+           <div id="historyList" class="history-list"></div>
+           <p id="history-status" class="status" role="status" aria-live="polite"></p>
           <div id="historyPagination" class="pagination" aria-live="polite"></div>
           <p id="historyEmpty" class="empty-state hidden" role="status" aria-live="polite">Nenhum convite salvo ainda.</p>
         </section>
@@ -175,6 +176,7 @@
     </main>
   </div>
 </div>
+<dialog id="card-name-dialog" aria-labelledby="card-name-title"><form method="dialog" class="modal"><h2 id="card-name-title">Salvar card</h2><label class="form-label" for="card-name-input">Nome do card</label><input id="card-name-input" class="form-input" minlength="1" maxlength="120" required><p id="card-name-feedback" class="form-feedback" role="alert"></p><div class="actions"><button value="cancel" class="button secondary">Cancelar</button><button id="card-name-save" value="save" class="button primary">Salvar</button></div></form></dialog>
 <script src="./js/sidebar.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfcEqDTTHgtNA==" crossorigin="anonymous"></script>

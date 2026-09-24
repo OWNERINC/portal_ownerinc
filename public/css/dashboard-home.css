@@ -202,6 +202,7 @@
 .dashboard-story-card > img {
   display: block;
   width: 100%;
+  height: auto;
   aspect-ratio: 5 / 3;
   object-fit: cover;
 }

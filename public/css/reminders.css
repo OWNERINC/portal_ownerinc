@@ -1,0 +1,2 @@
+.reminders-table-state { max-width: 100%; padding: 24px 0; }
+.reminders-table-wrapper[hidden] + .pagination { display: none; }

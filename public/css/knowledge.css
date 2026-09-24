@@ -27,6 +27,8 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+.knowledge-search > .icon { width: 20px; height: 20px; flex: 0 0 20px; }
+.knowledge-search input { flex: 1 1 0; }
 
 .knowledge-search:focus-within {
   border-color: var(--focus);

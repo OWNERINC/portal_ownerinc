@@ -1,0 +1,7 @@
+import assert from 'node:assert/strict'; import { readFile } from 'node:fs/promises'; import test from 'node:test';
+const importReal = async path => import('data:text/javascript;base64,' + Buffer.from(await readFile(path, 'utf8')).toString('base64'));
+const { createDraftState } = await importReal('public/cards-pos/draft-state.js');
+test('drafts e baselines Guest/Owner são independentes', () => { const s = createDraftState({ convite_owntime: { heroTitle: 'Guest' }, convite_owner: { heroTitle: 'Owner' } }); s.loadSaved({ id: 'g', template: 'convite_owntime', values: { heroTitle: 'salvo' }, mediaId: null }, ''); assert.equal(s.beginSave('convite_owner', 'B').editingId, null); s.setValue('convite_owntime', 'heroTitle', 'alterado'); const t = s.beginSave('convite_owner', 'B'); s.acceptSave(t, { id: 'o', name: 'B' }); assert.equal(s.isDirty('convite_owntime'), true); });
+
+
+test('carregar hist?rico Owner n?o revoga nem substitui m?dia Guest', () => { const s = createDraftState({ convite_owntime: { heroTitle: 'Guest' }, convite_owner: { heroTitle: 'Owner' } }); s.setMedia('convite_owntime', { mediaId: 'guest-media', mediaUrl: 'blob:guest' }); s.loadSaved({ id: 'o', template: 'convite_owner', values: { heroTitle: 'salvo' }, mediaId: 'owner-media' }, 'blob:owner'); assert.equal(s.get('convite_owntime').mediaUrl, 'blob:guest'); assert.equal(s.get('convite_owntime').mediaId, 'guest-media'); assert.equal(s.get('convite_owner').mediaUrl, 'blob:owner'); });
