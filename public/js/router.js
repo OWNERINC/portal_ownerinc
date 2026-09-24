@@ -305,6 +305,12 @@ export async function navigate(destination, { historyPosition = null, initial = 
     commit(doc, selectedStyles, module, user, url, positions.get(historyPosition));
     return true;
   } catch (error) {
+    console.error('[Portal] falha ao abrir a área', {
+      path: url.pathname,
+      message: error?.message,
+      stack: error?.stack,
+      status: error?.status,
+    });
     if (!signal.aborted && error.name !== 'AbortError') showError(error, () => navigate(url, { historyPosition, initial: initial || committed }), initial || committed || revoked);
     return false;
   } finally {
