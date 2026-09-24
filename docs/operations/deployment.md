@@ -109,17 +109,29 @@ e a limpeza de órfãos compartilham o advisory lock `7193003`.
 ## Deploy automático da `main`
 
 Depois que o job `validate` termina verde em um push para `main`, o job
-`deploy-staging` empacota exatamente o commit validado e o envia ao receptor
-SSH exclusivo de staging. O ambiente GitHub `staging` deve exigir a aprovação
-operacional correspondente e o receptor deve executar backup, migration,
-readiness, smoke e rollback antes de retornar sucesso. Só então o job
-`deploy-production` fica elegível; o ambiente GitHub `production` deve manter
-uma aprovação separada.
+`deploy-production` empacota exatamente o commit validado e o envia ao receptor
+SSH de produção. O mesmo fluxo pode ser iniciado por `workflow_dispatch` na
+`main`. O ambiente GitHub `production` mantém suas regras de aprovação e o
+receptor executa backup, migration, readiness, smoke e rollback.
+
+O fluxo autorizado em 23 de setembro de 2026 é **Validação → Produção**. Ele usa
+os secrets `PORTAL_VPS_HOST`, `PORTAL_VPS_PORT`, `PORTAL_VPS_USER`,
+`PORTAL_VPS_SSH_KEY` e `PORTAL_VPS_KNOWN_HOSTS`, já configurados para produção.
+Staging não é uma dependência do autodeploy; os testes, scans e a publicação de
+imagens imutáveis continuam obrigatórios antes de liberar produção.
+
+## Receptor separado de staging
+
+O receptor abaixo permanece disponível para uma implantação de staging
+independente. Sua configuração não é exigida pelo workflow de produção.
 
 Os receptores de staging e produção são separados. Cada chave usa `restrict` e
-`command=` no `authorized_keys`, não abre shell, não encaminha portas e aceita
-somente o alvo explícito (`staging:` ou `production:`) com SHA de 40 caracteres
-acompanhado pelo archive da release. Staging
+`command=` no `authorized_keys`, não abre shell e não encaminha portas. Staging
+exige `staging:<sha>`. O workflow de produção envia somente o SHA de 40 caracteres,
+compatível com o receptor de produção já instalado na VPS. O entrypoint exclusivo
+de produção versionado normaliza esse SHA para `production:<sha>` antes de
+delegar ao receptor comum; também aceita o prefixo explícito e rejeita staging.
+Ambos recebem o archive da release correspondente. Staging
 usa os secrets `PORTAL_STAGING_VPS_HOST`, `PORTAL_STAGING_VPS_PORT`,
 `PORTAL_STAGING_VPS_USER`, `PORTAL_STAGING_VPS_SSH_KEY` e
 `PORTAL_STAGING_VPS_KNOWN_HOSTS`; produção usa os equivalentes
@@ -158,7 +170,8 @@ restrict,command="/usr/local/libexec/ownerinc-portal-deploy-staging" ssh-ed25519
 
 O entrypoint da chave de produção é `ops/deploy-from-production-ci.sh`,
 instalado como `/usr/local/libexec/ownerinc-portal-deploy-production`; ele
-aponta para o receptor comum e aceita somente `production:<sha>`. Os três
+aponta para o receptor comum e aceita `production:<sha>` ou o SHA isolado, sempre
+com `DEPLOY_RECEIVER_ROLE=production`. Os três
 binários devem ser root-owned, modo `0755`, instalados a partir dos arquivos
 versionados correspondentes. O arquivo de
 configuração de staging deve usar nomes de projeto, volumes, containers e

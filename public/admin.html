@@ -80,6 +80,17 @@
         <div id="bulk-import-panel" class="card" hidden style="margin-bottom:20px">
           <div class="card-title">Importar usuários em lote</div>
           <p class="card-copy">CSV UTF-8 com até 500 linhas e cabeçalhos: name,email,job_title,contract_type,pj_due_day,phone. Todos serão leitores; cargos precisam estar ativos e o dia só vale para PJ.</p>
+          <a class="btn btn-ghost btn-sm" href="./modelo-convites-usuarios.csv" download>Baixar modelo CSV</a>
+          <p class="card-copy"><strong>Antes de importar:</strong> substitua ou remova as duas linhas de exemplo do modelo.</p>
+          <ul class="card-copy">
+            <li><code>name</code>: obrigatório, até 120 caracteres.</li>
+            <li><code>email</code>: obrigatório, válido e não repetido no arquivo ou no Portal.</li>
+            <li><code>job_title</code>: nome exato de um cargo ativo cadastrado no Portal.</li>
+            <li><code>contract_type</code>: somente <code>clt</code> ou <code>pj</code>, em letras minúsculas.</li>
+            <li><code>pj_due_day</code>: deixe vazio para CLT; para PJ, informe um dia de 1 a 31.</li>
+            <li><code>phone</code>: opcional, até 40 caracteres.</li>
+          </ul>
+          <p class="card-copy">Mantenha o formato CSV UTF-8, os cabeçalhos na mesma ordem e o limite de 500 pessoas.</p>
           <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv">
           <div id="bulk-import-feedback" class="form-feedback" role="alert" aria-live="polite"></div>
           <div id="bulk-preview" hidden style="margin-top:12px"></div>

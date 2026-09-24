@@ -40,8 +40,8 @@ Changes belong to the Guest template, its editor fields, local assets and checks
 Retain stored rich text, uploaded photos, saved names and historical JSON keys.
 Missing salutation fields receive the new default; stored values are not
 rewritten. The legacy Guest `heroBrand` remains readable for naming saved cards,
-but the visible brand becomes the official image. Use the existing safe rich-text
-and media pipeline. No API or database migration is needed.
+but the visible brand becomes the official image. Use the existing authentication,
+safe rich-text and media pipeline. No API or database migration is needed.
 
 ## Acceptance
 

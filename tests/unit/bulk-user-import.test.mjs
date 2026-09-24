@@ -13,6 +13,21 @@ test('bulk parser handles UTF-8 BOM and quoted commas without dependencies', () 
   assert.deepEqual(rows[0], { name: 'José, Silva', email: 'jose@example.com', job_title: 'Analista', contract_type: 'pj', pj_due_day: '15', phone: '+55 61 9999-9999' });
 });
 
+test('bulk invitation panel provides a documented parseable CSV template', async () => {
+  const [html, csv] = await Promise.all([
+    readFile('public/admin.html', 'utf8'),
+    readFile('public/modelo-convites-usuarios.csv', 'utf8'),
+  ]);
+  assert.match(html, /href="\.\/modelo-convites-usuarios\.csv"[^>]*download/);
+  for (const guidance of ['name', 'email', 'job_title', 'contract_type', 'pj_due_day', 'phone', '500']) {
+    assert.match(html, new RegExp(guidance));
+  }
+  assert.equal(csv.split(/\r?\n/, 1)[0], 'name,email,job_title,contract_type,pj_due_day,phone');
+  const rows = parseCsv(csv);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map(row => row.contract_type), ['clt', 'pj']);
+});
+
 test('bulk validation marks duplicates and inactive or unknown titles per row', () => {
   const titles = new Map([['analista', { id: 'title-1' }]]);
   const rows = validateRows([
