@@ -1,3 +1,5 @@
+export function mount(page) {
+const setTimeout = page.timeout;
 const cardCanvas = document.getElementById('cardCanvas');
 const templateTitle = document.getElementById('templateTitle');
 let rendering = false;
@@ -80,3 +82,5 @@ const observer = new MutationObserver(() => { renderVacancy(); renderEmployee();
 observer.observe(cardCanvas, { childList: true, subtree: true });
 observer.observe(templateTitle, { childList: true, characterData: true, subtree: true });
 observer.observe(document.getElementById('fields'), { childList: true, subtree: true });
+page.cleanup(() => observer.disconnect());
+}

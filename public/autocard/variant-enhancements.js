@@ -1,3 +1,4 @@
+export function mount(page) {
 const variantCanvas = document.getElementById('cardCanvas');
 const variantTitle = document.getElementById('templateTitle');
 const variantFields = document.getElementById('fields');
@@ -104,3 +105,5 @@ function setupVariantResizeObserver() {
 }
 
 setupVariantResizeObserver();
+page.cleanup(() => { observer.disconnect(); variantResizeObserver?.disconnect(); });
+}

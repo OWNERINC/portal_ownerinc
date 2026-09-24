@@ -364,8 +364,12 @@ test('CMS revision history binds limit before offset', () => {
 test('protected assets validate signatures, use UUID storage keys, audit uploads, and hide filesystem paths', () => {
   assert.match(assets, /multer\.memoryStorage\(\)/);
   assert.match(assets, /MAX_ASSET_SIZE = 50 \* 1024 \* 1024/);
+  assert.match(assets, /MAX_PDF_SIZE = 100 \* 1024 \* 1024/);
+  assert.match(assets, /fileSize: MAX_PDF_SIZE/);
   assert.match(assets, /detectedMime\(req\.file\.buffer\)/);
   assert.match(assets, /mimeType !== req\.file\.mimetype/);
+  assert.match(assets, /mimeType === 'application\/pdf' \? MAX_PDF_SIZE : MAX_ASSET_SIZE/);
+  assert.match(assets, /req\.file\.size > maxSize[\s\S]*status\(413\)/);
   assert.match(assets, /crypto\.randomUUID\(\)/);
   assert.match(assets, /withAudit\(pool, req, 'cms\.asset\.upload'/);
   assert.match(assets, /canReadAsset\(db, req\.user, asset\)/);
@@ -614,8 +618,8 @@ test('CMS list totals count all matching documents and Nginx scopes the large up
   const genericApi = nginx.indexOf('location /api/');
   assert.ok(cmsLocation >= 0 && cmsUploadLocation > cmsLocation
     && cmsReadLocation > cmsUploadLocation && cmsReadLocation < genericApi);
-  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 51m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
-  assert.match(nginx, /location = \/api\/cms\/assets\/[\s\S]*client_max_body_size 51m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
+  assert.match(nginx, /location = \/api\/cms\/assets\/[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /frame-src https:\/\/\*\.firebaseapp\.com blob:/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
@@ -628,7 +632,7 @@ test('CMS JSON transport is bounded separately from the normal API', () => {
   assert.match(blocks, /normalized\.every\(Boolean\)/);
   assert.match(blocks, /Buffer\.byteLength\(JSON\.stringify\(normalized\), 'utf8'\)/);
   assert.match(nginx, /location \^~ \/api\/cms\/[\s\S]*client_max_body_size 6m;/);
-  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 51m;/);
+  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;/);
 });
 
 test('missing Knowledge updates return 404 without a success audit payload', () => {

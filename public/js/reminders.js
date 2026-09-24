@@ -1,9 +1,16 @@
-import { requireAuth, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
-import { clear, closeDialog, element, openDialog } from './ui.js';
+import { can, fetchAPI, fetchAPIPage } from './auth.js';
+import { clear, closeDialog, element, openDialog, setDialogCloseGuard } from './ui.js';
 import { renderBlocks } from './cms-block-renderer.js';
 
-const user = await requireAuth();
-if (!user) throw new Error('Authentication required');
+const requests = { fetchAPI, fetchAPIPage };
+const renderContent = renderBlocks;
+export function mount(pageScope) {
+const user = pageScope.user;
+const { fetchAPI, fetchAPIPage } = pageScope.bindAPI(requests);
+const showToast = pageScope.toast;
+const location = pageScope.location;
+const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: pageScope.signal });
+pageScope.cleanup(() => { ++remindersRequest; ++deliveriesRequest; ++reminderDetailRequest; });
 const canManage = can(user, 'manageReminders');
 if (canManage) {
   document.getElementById('btn-new-reminder').style.display = '';
@@ -18,6 +25,7 @@ const reminderDetailTitle = document.getElementById('reminder-detail-title');
 const reminderDetailMeta = document.getElementById('reminder-detail-meta');
 const reminderDetailContent = document.getElementById('reminder-detail-content');
 const modal = document.getElementById('modal-reminder');
+setDialogCloseGuard(modal, () => !pageScope.busy);
 const form = document.getElementById('reminder-form');
 let reminders = [];
 let editingId = null;
@@ -43,7 +51,7 @@ function reminderContentHref(reminder) {
   return reminder.content_url === expected ? reminder.content_url : expected;
 }
 
-function reminderIdFromHash(hash = window.location.hash) {
+function reminderIdFromHash(hash = location.hash) {
   const match = REMINDER_HASH_PATTERN.exec(hash);
   return match ? match[1].toLowerCase() : null;
 }
@@ -364,6 +372,7 @@ async function deleteReminder(id) {
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
+  if (pageScope.busy) return;
   if (!form.reportValidity()) return;
   let targetUsers;
   try { targetUsers = readTargetUsers(); } catch (error) { showToast(error.message); return; }
@@ -404,7 +413,8 @@ document.getElementById('delivery-clear').addEventListener('click', () => {
   loadDeliveryManager();
 });
 syncTargetFields();
-window.addEventListener('hashchange', loadReminderDetail);
+pageScope.listen(window, 'hashchange', loadReminderDetail);
 loadReminders(true);
 loadDeliveryManager();
 loadReminderDetail();
+}

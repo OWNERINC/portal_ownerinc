@@ -113,7 +113,7 @@ function startAssetUpload(harness, label, block, onChange, onUploadBusy, canAppl
 
 test('CMS entry point is authenticated, linked from admin, and has responsive editor regions', () => {
   assert.match(cmsHtml, /<script src="\.\/js\/auth-shell\.js"><\/script>/);
-  assert.match(cmsHtml, /type="module" src="\.\/js\/cms\.js"/);
+  assert.match(cmsHtml, /type="module" src="\.\/js\/router-bootstrap\.js"/);
   assert.match(cmsHtml, /id="content-types"/);
   assert.match(cmsHtml, /id="editor-root"/);
   assert.match(cmsHtml, /id="inspector-type"/);
@@ -121,7 +121,8 @@ test('CMS entry point is authenticated, linked from admin, and has responsive ed
   assert.match(cmsHtml, /id="publish-document"/);
   assert.match(cmsHtml, /id="document-pagination"/);
   assert.match(admin, /href="\.\/cms\.html"[^>]*>.*Editor CMS/s);
-  assert.match(cms, /requireAuth\(true\)/);
+  assert.match(cms, /export function mount\(page\)/);
+  assert.match(cms, /const user = page\.user/);
   for (const permission of ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders']) assert.match(cms, new RegExp(permission));
   assert.match(css, /grid-template-columns:/);
   assert.match(css, /@media \(max-width: 700px\)/);
@@ -141,28 +142,28 @@ test('CMS editor exposes all approved block types, native drag/drop, and keyboar
   assert.match(editor, /Mover.*para cima/);
   assert.match(editor, /Mover.*para baixo/);
   assert.match(editor, /serializeBlocks/);
-  assert.match(editor, /fetchAPI\('\/api\/cms\/assets'/);
+  assert.match(editor, /request\('\/api\/cms\/assets'/);
   assert.match(editor, /FormData/);
 });
 
 test('CMS asset uploads propagate busy state and release it before success changes', () => {
-  assert.match(editor, /function assetUpload\(label, accept, block, onChange, onUploadBusy = \(\) => \{\}, canApplyUpload = \(\) => true\)/);
+  assert.match(editor, /function assetUpload\(label, accept, block, onChange, onUploadBusy = \(\) => \{\}, canApplyUpload = \(\) => true, page\)/);
   assert.match(editor, /onUploadBusy\(true\)/);
-  const uploadResponse = editor.indexOf("const asset = await fetchAPI('/api/cms/assets'");
+  const uploadResponse = editor.indexOf("const asset = await request('/api/cms/assets'");
   const applyGuard = editor.indexOf('if (!canApplyUpload()) return;', uploadResponse);
   const blockMutation = editor.indexOf('delete block.url;', uploadResponse);
   assert.ok(uploadResponse >= 0 && applyGuard > uploadResponse && blockMutation > applyGuard);
   assert.doesNotMatch(editor.slice(applyGuard, blockMutation), /onChange|showToast/);
-  assert.match(editor, /if \(uploadPending\) onUploadBusy\(false, true\)/);
+  assert.match(editor, /if \(uploadPending && \(!page \|\| page.active\)\) onUploadBusy\(false, true\)/);
   const uploadCatch = editor.indexOf('} catch {', uploadResponse);
   const uploadFinally = editor.indexOf('} finally {', uploadCatch);
   assert.doesNotMatch(editor.slice(uploadCatch, uploadFinally), /setSaveState|setError|markDirty/);
   const release = editor.indexOf('onUploadBusy(false);');
   const successChange = editor.indexOf('onChange();', release);
   assert.ok(release >= 0 && successChange > release);
-  assert.match(editor, /function fieldsFor\(block, onChange, onUploadBusy, canApplyUpload\)/);
-  assert.match(editor, /assetUpload\('imagem',[\s\S]*onUploadBusy, canApplyUpload\)/);
-  assert.match(editor, /createBlockSettings\(block, onChange, onUploadBusy, canApplyUpload\)/);
+  assert.match(editor, /function fieldsFor\(block, onChange, onUploadBusy, canApplyUpload, page\)/);
+  assert.match(editor, /assetUpload\('imagem',[\s\S]*onUploadBusy, canApplyUpload, page\)/);
+  assert.match(editor, /createBlockSettings\(block, onChange, onUploadBusy, canApplyUpload, page\)/);
   assert.match(cms, /let assetUploading = 0/);
   assert.match(cms, /let assetUploadVersion = 0/);
   assert.match(cms, /let editorGeneration = 0/);
@@ -177,7 +178,7 @@ test('CMS asset uploads propagate busy state and release it before success chang
   assert.match(cms, /let blockSelectionToken = 0/);
   assert.match(cms, /const selection = \+\+blockSelectionToken/);
   assert.match(cms, /currentEditor\(\) \&\& blockSelectionToken === selection/);
-  assert.match(cms, /createBlockSettings\(block, \(\) => \{[\s\S]*setAssetUploading, canApplyUpload\)/);
+  assert.match(cms, /createBlockSettings\(block, \(\) => \{[\s\S]*setAssetUploading, canApplyUpload, page\)/);
 });
 
 test('CMS assetUpload handles deferred success, failure, and stale responses behaviorally', async () => {
@@ -350,6 +351,11 @@ test('knowledge articles support compact search and private PDF attachments', ()
   assert.match(renderer, /iframe/);
   assert.match(renderer, /Abrir PDF em nova aba/);
   assert.match(renderer, /URL\.revokeObjectURL/);
+});
+
+test('Knowledge accepts PDF attachments up to 100 MB', () => {
+  assert.equal((knowledge.match(/file\.size > 100 \* 1024 \* 1024/g) || []).length, 2);
+  assert.equal((knowledge.match(/O PDF deve ter no máximo 100 MB\./g) || []).length, 2);
 });
 
 test('CMS actions use the existing API contracts and keep generic failure states visible', () => {
@@ -557,12 +563,12 @@ test('block selection has semantic keyboard controls and visible focus', () => {
   assert.match(cmsHtml, /name="title" autocomplete="off"/);
 });
 
-test('dirty CMS navigation confirms anchors and protects reload/close without blocking editor actions', () => {
-  assert.match(cms, /window\.addEventListener\('beforeunload'/);
-  assert.match(cms, /closest\('a\[href\]'/);
+test('dirty CMS navigation uses the lifecycle guard and protects reload/close without blocking editor actions', () => {
+  assert.match(cms, /page\.listen\(window, 'beforeunload'/);
+  assert.match(cms, /page\.beforeLeave\(/);
   assert.match(cms, /window\.confirm\('Há alterações do CMS/);
   assert.match(cms, /event\.preventDefault\(\)/);
-  assert.match(cms, /navigationConfirmed = true/);
+  assert.match(cms, /if \(saving \|\| actionBusy \|\| creatingDocument \|\| assetUploading \|\| saveInFlight\)/);
   assert.match(cms, /navigationBusy\(\) \|\| saveQueued/);
 });
 

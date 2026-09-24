@@ -21,6 +21,20 @@
   font-weight: 100 900;
   font-display: swap;
 }
+@font-face {
+  font-family: 'Raleway';
+  src: url('./assets/Raleway-Italic.ttf') format('truetype');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Raleway';
+  src: url('./assets/Raleway-BoldItalic.ttf') format('truetype');
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
 
 .cards-pos-page { background: var(--bg); font-family: var(--font-sans); }
 .cards-pos-content { min-height: calc(100vh - var(--topbar-height)); }
@@ -106,6 +120,34 @@
 .address-line strong { font-weight: 700; }
 .address-line span { font-weight: 400; }
 .guest-card .address-line { color: #171717; }
+/* Frame 1: 1448 × 2347. All Guest lengths scale with the card, not the viewport. */
+.guest-card { container-type: inline-size; font-family: 'Raleway', Arial, sans-serif; font-weight: 400; color: #000; }
+.guest-card .hero { padding: 0; }
+.guest-photo { position: absolute; inset: 0; background-size: cover; background-position: center top; }
+.guest-card .hero-image { opacity: 0; }
+.guest-card .hero::after { background: rgb(0 0 0 / 50%); }
+.guest-card .hero-content { position: absolute; inset: 0; display: block; max-width: none; }
+.guest-card .hero h2 { position: absolute; top: 17.3cqw; left: 0; width: 100%; margin: 0; font-family: inherit; font-size: 5.8011cqw; line-height: 1.2; letter-spacing: 0; }
+.guest-card .hero em { font-size: 1em; font-weight: 700; font-style: italic; }
+.guest-wordmark { position: absolute; top: 42.47cqw; left: 41.4%; width: 17.2%; height: 3.125cqw; overflow: hidden; }
+.guest-wordmark img { display: block; width: 100%; height: auto; }
+.guest-card .gold-rule { left: 9.67%; right: 9.67%; bottom: -.4834cqw; height: .96685cqw; background: #a49581; }
+.guest-body { padding: 4.14365cqw 5.87017cqw 0; color: #000; }
+.guest-body .card-copy { gap: 0; color: inherit; }
+.guest-body .guest-intro { margin: 0 9.25414cqw; }
+.guest-body p, .guest-body .rich-copy, .guest-body .inline-copy, .guest-body ul, .guest-body ol { font-size: 2.20994cqw; line-height: 1.2; }
+.guest-body .guest-salutation { margin-bottom: 2.76243cqw; }
+.guest-body .greeting { margin-bottom: 3.03867cqw; text-align: justify; }
+.guest-body .stay-info { line-height: 1.5625; }
+.guest-body .benefit-box { margin: 2.76243cqw 0 0; padding: 5.52486cqw 7.73481cqw; border-radius: 9.11602cqw; background: #e9e6de; color: #000; }
+.guest-body .benefit-box h3 { margin: 0 0 2.20994cqw; color: #a49581; font-family: inherit; font-size: 3.31492cqw; font-weight: 700; line-height: 1.2; letter-spacing: 0; }
+.guest-body .benefit-box .rich-copy { margin-bottom: 2.62431cqw; text-align: justify; }
+.guest-body .benefit-box .inline-copy { margin-bottom: 2.76243cqw; text-align: justify; }
+.guest-body .benefit-box .rich-copy:last-child { margin-bottom: 0; }
+.guest-body .address-line { margin: 4.14365cqw 9.25414cqw 0; color: #000; font-size: 2.20994cqw !important; font-weight: 400; line-height: 1.2 !important; white-space: normal; }
+.guest-card .card-footer { background: #fff; }
+.guest-card .footer-phone-backdrop { width: 15.2%; }
+.guest-card .footer-phone-editable { font-family: 'Novelin', Arial, sans-serif; font-size: 1.45cqw; letter-spacing: .02em; }
 .owner-card { aspect-ratio: 862 / 1984; grid-template-rows: 21.32% minmax(0, 1fr) 8.02%; background: #fff; color: #171717; container-type: inline-size; font-family: 'Raleway', Arial, sans-serif; }
 .owner-card .hero { padding: 5% 8%; background: #233b43; }
 .owner-card .hero::after { background: #0007; }

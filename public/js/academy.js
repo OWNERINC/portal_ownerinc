@@ -1,10 +1,16 @@
-import { requireAuth, fetchAPI, fetchAPIPage } from './auth.js';
+import { fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
 import { readOffset, renderPagination, setPaginationBusy } from './pagination.js';
 import { renderBlocks } from './cms-block-renderer.js';
 
-const user = await requireAuth();
-if (!user) throw new Error('Authentication required');
+const requests = { fetchAPI, fetchAPIPage };
+const renderContent = renderBlocks;
+export function mount(page) {
+const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
+const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
+const history = page.history;
+const location = page.location;
+page.cleanup(() => { ++coursesRequest; });
 
 const container = document.getElementById('academy-content');
 const filters = document.getElementById('academy-filters');
@@ -217,5 +223,6 @@ async function loadCourses() {
   }
 }
 
-window.addEventListener('popstate', loadCourses);
+page.listen(window, 'popstate', loadCourses);
 loadCourses();
+}

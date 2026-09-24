@@ -335,7 +335,7 @@ function publishedBodyText(row, legacyField = 'content') {
   return typeof row?.[legacyField] === 'string' ? row[legacyField] : '';
 }
 
-async function listPublishedAnnouncements(pool, limit, offset) {
+async function stablePublishedAnnouncements(pool) {
   await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const visible = await withTransaction(pool, async (db) => {
     const { rows } = await db.query(
@@ -357,7 +357,18 @@ async function listPublishedAnnouncements(pool, limit, offset) {
     id: row.id,
     publishedRevisionId: row.published_revision_id,
   })));
-  const stable = visible.filter(row => stableIds.has(String(row.id).toLowerCase()));
+  return visible.filter(row => stableIds.has(String(row.id).toLowerCase()));
+}
+
+async function listPublishedAnnouncementCategories(pool) {
+  const rows = await stablePublishedAnnouncements(pool);
+  return [...new Set(rows.map(row => row.category).filter(category => typeof category === 'string' && category.trim()))]
+    .sort();
+}
+
+async function listPublishedAnnouncements(pool, limit, offset, category) {
+  const rows = await stablePublishedAnnouncements(pool);
+  const stable = rows.filter(row => category === undefined || row.category === category);
   return {
     count: stable.length,
     rows: stable.slice(offset, offset + limit)
@@ -400,6 +411,7 @@ module.exports = {
   blocksToText,
   getPublishedBlocksBatch,
   isPublicCmsRow,
+  listPublishedAnnouncementCategories,
   listPublishedAnnouncements,
   publishedBodyText,
   promoteDueScheduled,

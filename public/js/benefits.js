@@ -1,10 +1,16 @@
-import { requireAuth, fetchAPI, fetchAPIPage } from './auth.js';
+import { fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, showState } from './ui.js';
 import { readOffset, renderPagination } from './pagination.js';
 import { renderBlocks } from './cms-block-renderer.js';
 
-const user = await requireAuth();
-if (!user) throw new Error('Authentication required');
+const requests = { fetchAPI, fetchAPIPage };
+const renderContent = renderBlocks;
+export function mount(page) {
+const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
+const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
+const history = page.history;
+const location = page.location;
+page.cleanup(() => { ++benefitsRequest; });
 
 const container = document.getElementById('benefits-content');
 const filters = document.getElementById('benefits-filters');
@@ -91,5 +97,6 @@ async function loadBenefits() {
   }
 }
 
-window.addEventListener('popstate', loadBenefits);
+page.listen(window, 'popstate', loadBenefits);
 loadBenefits();
+}

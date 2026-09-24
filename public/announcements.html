@@ -4,14 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0F0F0F">
-  <title>Anúncios — Portal Ownerinc</title>
+  <title>Owner News — Portal Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <link rel="stylesheet" href="./css/cms.css">
+  <link rel="stylesheet" href="./css/owner-news.css">
   <script src="./js/auth-shell.js"></script>
 </head>
 <body class="cms-page">
+<script src="./js/sidebar-state.js"></script>
 <a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
@@ -25,7 +27,7 @@
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./announcements.html" class="active" aria-current="page" title="Anúncios"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Anúncios</span></a></li>
+      <li><a href="./announcements.html" class="active" aria-current="page" title="Owner News"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Owner News</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
       <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
       <li class="cms-link"><a href="./cms.html" title="Editor CMS"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#file-edit"></use></svg><span>Editor CMS</span></a></li>
@@ -37,17 +39,22 @@
   </aside>
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><span class="topbar-title">Anúncios</span></header>
+    <header class="topbar"><span class="topbar-title">Owner News</span></header>
     <!-- /generated:portal-topbar -->
-    <main class="page-body" id="main-content" tabindex="-1">
-      <div class="page-header"><h1>Anúncios</h1><p>Comunicados publicados para a equipe</p></div>
-      <div id="announcements-list" class="announcements-list" aria-live="polite"><p class="empty-state">Carregando anúncios…</p></div>
-      <div id="announcements-pagination" class="pagination" aria-label="Paginação de anúncios"></div>
+    <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
+      <header class="news-masthead"><h1>Owner News<span aria-hidden="true">.</span></h1><p>Histórias, ideias e notícias da Ownerinc.</p></header>
+      <div id="news-index">
+        <section id="news-highlight" aria-label="Publicação mais recente" aria-live="polite"></section>
+        <nav id="news-categories" class="news-categories" aria-label="Editorias"></nav>
+        <h2 class="news-section-title">Últimas publicações</h2>
+      </div>
+      <div id="announcements-list" class="announcements-list news-grid" aria-live="polite"><p class="empty-state">Carregando publicações…</p></div>
+      <div id="announcements-pagination" class="pagination" aria-label="Paginação de publicações"></div>
     </main>
   </div>
 </div>
 <div id="toast" class="toast hidden" aria-live="polite"></div>
 <script src="./js/sidebar.js"></script>
-<script type="module" src="./js/announcements.js"></script>
+<script type="module" src="./js/router-bootstrap.js"></script>
 </body>
 </html>

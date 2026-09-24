@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
 
 const [html, app, guard, css, sidebar, footer] = await Promise.all([
   readFile('public/cards-pos.html', 'utf8'),
@@ -10,6 +11,7 @@ const [html, app, guard, css, sidebar, footer] = await Promise.all([
   readFile('public/js/sidebar.js', 'utf8'),
   readFile('public/cards-pos/assets/footer.svg', 'utf8'),
 ]);
+const router = await readFile('public/js/router.js', 'utf8');
 
 test('Cards Pós uses the authenticated Portal shell and local module assets', async () => {
   for (const marker of ['portal-wrapper', 'sidebar', 'topbar', 'skip-link', 'id="main-content"', 'sidebar-logout']) assert.match(html, new RegExp(marker));
@@ -18,8 +20,8 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /assets\/icons\.svg#/);
   assert.doesNotMatch(html, /lucide@0\.441\.0/);
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);
-  assert.match(html, /type="module" src="\.\/cards-pos\/app\.js"/);
-  for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg']) await access(`public/cards-pos/assets/${asset}`);
+  assert.match(html, /type="module" src="\.\/js\/router-bootstrap\.js"/);
+  for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg', 'Raleway-Italic.ttf', 'Raleway-BoldItalic.ttf']) await access(`public/cards-pos/assets/${asset}`);
   await access('public/cards-pos/assets/guest/guest-cover.jpg');
   for (const asset of ['owner-cover.jpg', 'ownerinc-logo.svg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-cleaning-extra.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
   assert.match(footer, /width="1448" height="307" viewBox="0 0 1448 307"/);
@@ -37,10 +39,11 @@ test('Cards Pós exposes independent Guest and Owner modules', () => {
 });
 
 test('editor and history retain the source field and view contract', () => {
-  for (const field of ['heroTitle', 'heroEmphasis', 'heroBrand', 'greeting', 'stayInfo', 'experienceTitle', 'experienceBody', 'consumptionTitle', 'consumptionBody', 'notIncludedBody', 'contact']) {
+  for (const field of ['heroTitle', 'heroEmphasis', 'salutation', 'greeting', 'stayInfo', 'experienceTitle', 'experienceBody', 'consumptionTitle', 'consumptionBody', 'notIncludedBody', 'contact']) {
     assert.match(html, new RegExp(`data-field="${field}"`));
     assert.match(app, new RegExp(field));
   }
+  assert.doesNotMatch(html, /data-field="heroBrand"/);
   for (const id of ['editorView', 'historyView', 'cardCanvas', 'historySearch', 'historyList', 'historyEmpty']) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /data-view="history"/);
@@ -68,7 +71,9 @@ test('guard requires auth, checks access, and stops editor initialization when d
   assert.match(guard, /dashboard\.html/);
   assert.match(guard, /showDeniedState\(\);\s*window\.setTimeout\(\(\) => window\.location\.assign\('\.\/dashboard\.html'\), 1500\)/);
   assert.match(guard, /role', 'alert'/);
-  assert.match(app, /if \(await requirePosCards\(\)\) \{/);
+  assert.match(router, /path === '\/cards-pos\.html'\) return user\.pos_cards_access === true/);
+  assert.match(router, /if \(!routeAllowed\(url\.pathname, user\)\) throw/);
+  assert.match(app, /export function mount\(page\)/);
 });
 
 test('history edits revoke the current blob URL before replacing media state', () => {
@@ -92,7 +97,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   for (const marker of ['owner-included', 'owner-paid', 'owner-services-grid', 'owner-footer-contact']) assert.match(app, new RegExp(marker));
   assert.match(css, /\.owner-services-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css, /\.owner-host-note \{[^}]*transform: translateY\(3\.4cqw\)/);
-  assert.match(app, /guest-cover\.jpg/);
+  assert.match(app, /GUEST_COVER_ASSET = '\.\/cards-pos\/assets\/guest\/guest-cover\.jpg'/);
   assert.match(app, /owner-cover\.jpg/);
   assert.match(css, /aspect-ratio: 1448 \/ 2347/);
   assert.match(css, /aspect-ratio: 862 \/ 1984/);
@@ -106,7 +111,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
   assert.match(app, /if \(available <= 0\) return/);
   assert.match(app, /Math\.max\(0, available - 1\) \/ copy\.scrollHeight/);
-  assert.match(app, /querySelectorAll\('img'\)\.forEach\(\(image\) => image\.addEventListener\('load', fitCardBody/);
+  assert.match(app, /querySelectorAll\('img'\)\.forEach\(\(image\) => page\.listen\(image, 'load', fitCardBody/);
   assert.match(app, /async function waitForCardAssets/);
   assert.match(app, /typeof root\.querySelector === 'function'/);
   assert.match(app, /window\.html2canvas/);
@@ -180,7 +185,7 @@ test('media upload and card editing cannot apply stale responses or save mid-ope
   assert.match(app, /const operationToken = \+\+mediaOperationToken/);
   assert.match(app, /if \(operationToken !== mediaOperationToken\) return/);
   assert.match(app, /\$\('saveButton'\)\.disabled = busy/);
-  assert.match(app, /if \(activeMediaPromise(?: \|\| exportInProgress)?\) return/);
+  assert.match(app, /if \(saving \|\| activeMediaPromise \|\| exportInProgress\) return/);
 });
 
 test('the hidden file input has a single accessible keyboard trigger', () => {
@@ -223,4 +228,92 @@ test('Cards Pós history exposes pagination for more than one page of saved card
   assert.match(html, /id="historyPagination"/);
   assert.match(app, /fetchAPIPage\(`\/api\/pos-cards\/cards\?search=\$\{search\}&limit=\$\{HISTORY_PAGE_SIZE\}&offset=\$\{historyOffset\}`\)/);
   assert.match(app, /renderHistoryPagination\(result\.total/);
+});
+
+function guestHarness(width = 600) {
+  const captured = {};
+  const card = {
+    style: {}, innerHTML: '',
+    getBoundingClientRect: () => ({ width, height: width * 2347 / 1448 }),
+    querySelector: () => null, querySelectorAll: () => [], removeAttribute() {},
+    cloneNode() { return { ...this, style: {} }; },
+  };
+  const document = {
+    fonts: { ready: Promise.resolve() },
+    getElementById: id => id === 'status' ? { classList: { toggle() {} } } : card,
+    querySelectorAll: () => [], body: { append() {} },
+    createElement: () => ({ setAttribute() {}, append() {}, remove() { captured.removed = true; } }),
+  };
+  const page = {
+    active: true, beforeLeave() {}, listen() {}, cleanup() {}, frame: callback => callback(),
+    wait: promise => Promise.resolve(promise),
+  };
+  const window = {
+    html2canvas: async (clone, options) => {
+      captured.render = options;
+      captured.size = { ...clone.style };
+      return { toDataURL: () => 'data:image/png;base64,test' };
+    },
+    jspdf: { jsPDF: class {
+      constructor(options) { captured.pdf = options; }
+      addImage(...args) { captured.image = args; }
+      save(name) { captured.name = name; }
+    } },
+  };
+  const source = app.slice(app.indexOf('const $ ='), app.indexOf('document.fonts?.ready?.then'));
+  const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, exportPdf });`, { document, page, window });
+  return { ...api, card, captured };
+}
+
+test('Guest Frame 1 keeps saved rich text and media, adds safe salutation and uses the official logo', () => {
+  const { current, loadValues, card } = guestHarness();
+  loadValues();
+  assert.match(card.innerHTML, /<h2>Um convite<em>a viver o seu tempo<\/em><\/h2>/);
+  assert.match(card.innerHTML, /Você é nosso convidado para viver uma experiência no <strong>Owntime Home Club Gramado:<\/strong>/);
+  assert.match(card.innerHTML, /Alimentação, bebidas e serviços sob demanda serão cobrados à parte\./);
+  assert.doesNotMatch(card.innerHTML, /on demand/);
+
+  loadValues({ heroTitle: 'Este é um convite', heroEmphasis: 'para viver o seu tempo', greeting: '<strong>Convite salvo</strong>', heroBrand: 'Nome anterior', foodInfo: 'Texto antigo' });
+  assert.equal(current.values.heroTitle, 'Este é um convite');
+  assert.equal(current.values.heroEmphasis, 'para viver o seu tempo');
+  assert.equal(current.values.greeting, '<strong>Convite salvo</strong>');
+  assert.equal(current.values.heroBrand, 'Nome anterior');
+  assert.equal(current.values.notIncludedBody, 'Texto antigo');
+  assert.equal(current.values.salutation, 'Olá, Nome Sobrenome.');
+  assert.match(card.innerHTML, /guest-salutation">Olá, Nome Sobrenome\./);
+  assert.match(card.innerHTML, /<strong>Convite salvo<\/strong>/);
+  assert.match(card.innerHTML, /guest-wordmark"><img src="\.\/cards-pos\/assets\/owntime-logo-white.webp" alt="Owntime"/);
+  assert.doesNotMatch(card.innerHTML, /Nome anterior/);
+  assert.match(card.innerHTML, /guest\/guest-cover\.jpg/);
+
+  current.mediaUrl = 'blob:uploaded-guest-photo';
+  loadValues({ salutation: '<img src=x onerror=alert(1)>Olá, <strong>Ana</strong>.' });
+  assert.match(card.innerHTML, /guest-salutation">Olá, <strong>Ana<\/strong>\./);
+  assert.doesNotMatch(card.innerHTML, /onerror|src=x/);
+  assert.match(card.innerHTML, /src="blob:uploaded-guest-photo"/);
+  loadValues({ salutation: '' });
+  assert.equal(current.values.salutation, '');
+});
+
+test('Guest PDF uses the reference resolution at any viewport and retains the physical page size', async () => {
+  for (const width of [320, 600]) {
+    const { exportPdf, captured, current } = guestHarness(width);
+    current.name = 'Convite Ana';
+    await exportPdf();
+    assert.equal(captured.size.width, '1448px');
+    assert.equal(captured.size.height, '2347px');
+    assert.equal(captured.render.width, 1448);
+    assert.equal(captured.render.height, 2347);
+    assert.equal(captured.render.scale, 1);
+    assert.equal(captured.pdf.format.join(','), '108,175.1');
+    assert.equal(captured.name, 'convite-ana.pdf');
+    assert.equal(captured.removed, true);
+  }
+  const { exportPdf, captured, current } = guestHarness();
+  current.template = 'convite_owner';
+  current.name = 'Owner';
+  await exportPdf();
+  assert.equal(captured.render.width, 600);
+  assert.equal(captured.render.scale, 3);
+  assert.equal(captured.pdf.format.join(','), '108,248.6');
 });

@@ -25,6 +25,74 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 - O frontend continua estático enquanto essa solução atender ao produto.
 - Serviços só devem ser separados ou reescritos quando existir pressão real.
 
+## Navegação persistente do frontend
+
+- `public/js/router-bootstrap.js` inicia os links diretos e o router nativo de
+  `router.js`. As URLs `.html` continuam sendo documentos estáticos completos.
+  Navegações entre as 12 áreas registradas preservam o documento, sidebar,
+  topbar, `.main-content` e o próprio `main#main-content`.
+- A preparação obtém o HTML, importa o módulo ES em cache e aguarda as folhas de
+  estilo e bibliotecas necessárias. A API valida `/users/me` antes de montar;
+  Admin, CMS e ferramentas também verificam as permissões retornadas. Sólides
+  exige vínculo ativo. Snapshot visual nunca fornece o perfil usado na montagem.
+  Falha de preparação conserva a página anterior e oferece retry.
+- Cada módulo de página exporta `mount(page)`, síncrono, com estado local novo
+  por visita. `page.user` é o perfil validado; `page.bindAPI()` preserva as
+  assinaturas dos helpers e associa requisições ao AbortSignal da visita.
+  Respostas obsoletas rejeitam com `AbortError`, inclusive quando o transporte
+  ignora cancelamento. As APIs originais de autenticação continuam independentes.
+- `page.listen`, `timeout`, `frame`, `image`, `wait`, `objectURL` e `cleanup`
+  registram recursos de vida limitada. `dispose()` aborta loaders, remove
+  listeners, cancela timers/frames, desconecta observers registrados e revoga
+  blobs. `renderBlocks(..., { signal })` limpa mídia privada explicitamente;
+  seu observer também cobre substituições internas de conteúdo.
+- `page.beforeLeave()` protege CMS, ferramentas e enquadramento do perfil.
+  Formulários e diálogos usam as guardas de `ui.js`. Mutações pendentes bloqueiam
+  navegação/logout e submissões duplicadas da mesma operação; confirmar descarte
+  não autoriza abandonar uma gravação ou upload em andamento.
+  O preflight `canLeavePageUI()` é livre de mutações: diálogos com assets
+  temporários registram `canLeave` e `discard` separadamente. Só depois do
+  consentimento e da preparação da rota, `commitPageLeaveUI()` executa e aguarda
+  a remoção; falha mantém o editor aberto. Os Cards Pós mantêm baselines separados
+  para Guest e Owner, atualizando apenas o conteúdo realmente salvo.
+- Páginas usam `page.history.pushState/replaceState`, preservando metadados do
+  router junto de seus parâmetros. `page.location` expõe a URL efetivada, para
+  que loaders antigos não leiam filtros de uma entrada ainda não aceita durante
+  `popstate`. Back/Forward entre áreas prepara a página
+  mantendo a URL anterior até o commit; uma guarda rejeitada retorna à entrada
+  original sem inserir histórico duplicado. Query/hash locais continuam com os
+  loaders da página. Foco e rolagem são restaurados após os loaders, desde que o
+  usuário não tenha começado outra interação.
+- `generate-public-shell.mjs` gera o bootstrap e a restauração antecipada da
+  sidebar em todos os HTMLs. CSS específico fica inativo fora da sua página;
+  html2canvas, Lucide e jsPDF são reutilizados no documento. Admin reconcilia
+  botões de abas por ID e ativa a aba antes das consultas secundárias.
+  Uma intenção `?tab=solides` permanece na URL enquanto sua descoberta está
+  pendente, sem substituir uma seleção posterior do usuário. Revalidação de
+  autorização é processada independentemente de falhas no HTML de destino;
+  revogação ou perda de sessão desmonta e remove também todos os overlays da página.
+
+Checks de comportamento: `tests/unit/persistent-navigation.test.mjs`,
+`tests/unit/navigation-review-regressions.test.mjs` e
+`tests/unit/auth-stability.test.mjs`, junto dos testes existentes de CMS, perfil,
+filtros, PDF, Owner News e AutoCard.
+
+### Evidência local — 22/09/2026
+
+- `npm run verify`: 506 testes passaram; `git diff --check` sem erros.
+- Edge autenticado em 1440 × 900: duas visitas às dez áreas da sidebar, com
+  zero novas navegações de documento e identidade preservada de `document`,
+  `.sidebar`, `.topbar` e `.main-content`.
+- Durante esse percurso, 447 frames observados e nenhum com Admin oculto.
+- Verificados detalhe/voltar da Owner News, abas administrativas, Back/Forward
+  entre áreas, resposta 503 na revalidação preservando a página/permissões e retry.
+- Confirmados cancelamento e descarte de edições no Perfil, CMS e nos dois
+  editores; cancelar Back no formulário novo do CMS conservou os campos.
+- Exportações reais PNG no AutoCard e PDF nos Cards Pós funcionaram após
+  navegação interna; nova visita manteve somente um canvas e um diálogo da biblioteca.
+- Mobile de 390 px: drawer fecha após navegar e não há overflow horizontal.
+  Nenhum erro JavaScript foi observado nos dois percursos autenticados.
+
 ## Evolução Aprovada
 
 O alvo técnico mantém os mesmos serviços e adiciona admissão controlada,

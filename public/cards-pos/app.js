@@ -1,17 +1,20 @@
 import { fetchAPI, fetchAPIAsset, fetchAPIPage } from '../js/auth.js';
-import { requirePosCards } from './guard.js';
 
+const requests = { fetchAPI, fetchAPIAsset, fetchAPIPage };
+export function mount(page) {
+const { fetchAPI, fetchAPIAsset, fetchAPIPage } = page.bindAPI(requests);
 const $ = (id) => document.getElementById(id);
 const guestDefaults = {
-  heroTitle: 'Este é um convite', heroEmphasis: 'para viver o seu tempo', heroBrand: 'Owntime',
-  greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
+  heroTitle: 'Um convite', heroEmphasis: 'a viver o seu tempo', heroBrand: 'Owntime',
+  salutation: 'Olá, Nome Sobrenome.',
+  greeting: 'Você é nosso convidado para viver uma experiência no <strong>Owntime Home Club Gramado:</strong>',
   stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx',
   experienceTitle: 'Sua experiência inclui:',
   experienceBody: 'Hospedagem com acesso aos espaços de lazer de uso comum disponíveis no Club House Owntime.',
   consumptionTitle: 'Consumos da hospedagem:',
   consumptionBody: 'Água, energia elétrica, gás e demais consumos relacionados à estadia.',
   notIncludedTitle: 'O que não está incluso:',
-  notIncludedBody: 'Alimentação, bebidas e serviços on demand serão cobrados à parte.',
+  notIncludedBody: 'Alimentação, bebidas e serviços sob demanda serão cobrados à parte.',
   afterStay: 'Como parte da experiência, após a estadia, o presenteado deverá preencher a pesquisa de satisfação pós-estada, compartilhando sua percepção sobre a hospedagem e contribuindo para o aprimoramento contínuo da experiência Owntime.',
   conditions: 'Necessária reserva prévia e sujeita à disponibilidade de datas.\nConsulte as condições de utilização deste convite.',
   contact: '54 3421 9988',
@@ -68,6 +71,26 @@ let mediaOperationToken = 0;
 let activeMediaPromise = null;
 let activeEditor = null;
 let exportInProgress = false;
+let saving = false;
+const savedSnapshots = new Map();
+const snapshot = (template = current.template) => JSON.stringify([
+  template === 'convite_owner' ? current.ownerValues : current.values, current.mediaId,
+]);
+const isDirty = () => [...savedSnapshots].some(([template, saved]) => snapshot(template) !== saved);
+const canLeave = () => {
+  if (saving || activeMediaPromise || exportInProgress || page.busy) {
+    setStatus('Aguarde a operação do convite terminar.', true);
+    return false;
+  }
+  return !isDirty()
+    || window.confirm('Há alterações dos Cards Pós que ainda não foram salvas. Sair mesmo assim?');
+};
+page.beforeLeave(canLeave);
+page.listen(window, 'beforeunload', event => {
+  if (!saving && !activeMediaPromise && !exportInProgress && !isDirty()) return;
+  event.preventDefault(); event.returnValue = '';
+});
+page.cleanup(() => { ++historyRequest; ++mediaOperationToken; replaceMediaUrl(''); });
 const HISTORY_PAGE_SIZE = 50;
 const RICH_VALUE = Symbol('rich-value');
 const RICH_TAGS = new Set(['STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'BR', 'UL', 'OL', 'LI']);
@@ -134,6 +157,7 @@ function richCopy(value, className = '') {
 }
 
 function setStatus(message, error = false) {
+  if (!page.active) return;
   const status = $('status');
   status.textContent = message;
   status.classList.toggle('is-error', error);
@@ -157,7 +181,7 @@ function renderAddress() {
 function renderGuest(v) {
   const media = current.mediaUrl || GUEST_COVER_ASSET;
   const notIncludedBody = v.notIncludedBody || v.foodInfo;
-  return `<section class="hero"><img class="hero-image" src="${esc(media)}" alt=""><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="hero-brand">${esc(v.heroBrand)}</div></div><div class="gold-rule"></div></section><section class="card-body"><div class="card-copy">${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo, 'stay-info')}<div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}<div class="inline-copy"><strong>${esc(v.consumptionTitle)}</strong> ${esc(v.consumptionBody)}</div><h3>${esc(v.notIncludedTitle)}</h3>${richCopy(notIncludedBody)}</div>${renderAddress()}</div></section>${renderFooter(v)}`;
+  return `<section class="hero"><div class="guest-photo"><img class="hero-image" src="${esc(media)}" alt=""></div><div class="hero-content"><h2>${esc(v.heroTitle)}<em>${esc(v.heroEmphasis)}</em></h2><div class="guest-wordmark"><img src="./cards-pos/assets/owntime-logo-white.webp" alt="Owntime"></div></div><div class="gold-rule"></div></section><section class="card-body guest-body"><div class="card-copy"><div class="guest-intro">${richCopy(v.salutation, 'guest-salutation')}${richCopy(v.greeting, 'greeting')}${richCopy(v.stayInfo, 'stay-info')}</div><div class="benefit-box"><h3>${esc(v.experienceTitle)}</h3>${richCopy(v.experienceBody)}<div class="inline-copy"><strong>${esc(v.consumptionTitle)}</strong> ${esc(v.consumptionBody)}</div><h3>${esc(v.notIncludedTitle)}</h3>${richCopy(notIncludedBody)}</div>${renderAddress()}</div></section>${renderFooter(v)}`;
 }
 
 function renderOwnerTemplate(v) {
@@ -182,8 +206,11 @@ function render() {
   const card = $('cardCanvas');
   card.className = `invite-card ${owner ? 'owner-card' : 'guest-card'}`;
   card.innerHTML = owner ? renderOwner(values) : renderGuest(values);
-  card.querySelectorAll('img').forEach((image) => image.addEventListener('load', fitCardBody, { once: true }));
-  requestAnimationFrame(fitCardBody);
+  // html2canvas supports background cover, but not img object-fit; keep the img for asset validation.
+  const photo = card.querySelector('.guest-photo');
+  if (photo) photo.style.backgroundImage = `url("${photo.firstElementChild.src}")`;
+  card.querySelectorAll('img').forEach((image) => page.listen(image, 'load', fitCardBody, { once: true }));
+  page.frame(fitCardBody);
 }
 
 function fitCardBody(root = $('cardCanvas')) {
@@ -203,24 +230,21 @@ function fitCardBody(root = $('cardCanvas')) {
 }
 
 function nextFrame() {
-  return new Promise((resolve) => requestAnimationFrame(resolve));
+  return page.wait(new Promise((resolve) => page.frame(resolve)));
 }
 
 async function waitForImage(image) {
   if (!image.complete) {
-    await new Promise((resolve, reject) => {
-      image.addEventListener('load', resolve, { once: true });
-      image.addEventListener('error', () => reject(new Error('Não foi possível carregar uma imagem do card.')), { once: true });
-    });
+    await page.image(image.src);
   }
   if (!image.naturalWidth) throw new Error('Não foi possível carregar uma imagem do card.');
   if (image.decode) {
-    try { await image.decode(); } catch { /* O canvas ainda pode renderizar imagens já carregadas. */ }
+    try { await page.wait(image.decode()); } catch { page.assertActive(); /* Imagens já carregadas ainda podem ser renderizadas. */ }
   }
 }
 
 async function waitForCardAssets(card) {
-  await document.fonts?.ready;
+  await page.wait(document.fonts?.ready);
   await Promise.all([...card.querySelectorAll('img')].map(waitForImage));
   await nextFrame();
   await nextFrame();
@@ -241,7 +265,9 @@ async function exportPdf() {
   if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error('O exportador de PDF ainda está carregando. Tente novamente em instantes.');
   const source = $('cardCanvas');
   const size = PDF_CARD_SIZES[current.template];
-  const bounds = source.getBoundingClientRect();
+  const guest = current.template === 'convite_owntime';
+  // ponytail: one fixed Guest artboard keeps mobile and desktop PDFs identical.
+  const bounds = guest ? { width: 1448, height: 2347 } : source.getBoundingClientRect();
   if (!size || !bounds.width || !bounds.height) throw new Error('Não foi possível preparar o card para exportação.');
   const fileName = pdfFileName();
 
@@ -257,26 +283,27 @@ async function exportPdf() {
   card.style.boxShadow = 'none';
   surface.append(card);
   document.body.append(surface);
+  page.cleanup(() => surface.remove());
   try {
     await waitForCardAssets(card);
     fitCardBody(card);
     await nextFrame();
     fitCardBody(card);
-    const canvas = await window.html2canvas(card, {
+    const canvas = await page.wait(window.html2canvas(card, {
       backgroundColor: '#fff',
-      scale: PDF_RENDER_SCALE,
+      scale: guest ? 1 : PDF_RENDER_SCALE,
       useCORS: true,
       logging: false,
       width: bounds.width,
       height: bounds.height,
-    });
+    }));
     const pdf = new window.jspdf.jsPDF({ unit: 'mm', format: [size.width, size.height], orientation: 'portrait', compress: true });
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, size.width, size.height, undefined, 'FAST');
     pdf.save(`${fileName}.pdf`);
     setStatus('PDF baixado com o card completo.');
   } finally {
     surface.remove();
-    fitCardBody();
+    if (page.active) fitCardBody();
     exportInProgress = false;
   }
 }
@@ -408,7 +435,7 @@ function createRichToolbar() {
     toolbar.append(button);
   }
   $('cardForm').prepend(toolbar);
-  document.addEventListener('selectionchange', updateToolbarState);
+  page.listen(document, 'selectionchange', updateToolbarState);
   updateToolbarState();
 }
 
@@ -447,7 +474,7 @@ function updateModuleControls() {
 }
 
 function switchModule(template) {
-  if (exportInProgress) return;
+  if (saving || activeMediaPromise || page.busy || exportInProgress) return;
   if (!['convite_owntime', 'convite_owner'].includes(template)) return;
   activeEditor = null;
   updateToolbarState();
@@ -478,7 +505,7 @@ async function runMediaOperation(operation) {
     if (operationToken !== mediaOperationToken) return undefined;
     throw error;
   } finally {
-    if (activeMediaPromise === promise) {
+    if (page.active && activeMediaPromise === promise) {
       activeMediaPromise = null;
       setMediaBusy(false);
     }
@@ -489,19 +516,16 @@ async function upload(file) {
   if (exportInProgress) return;
   return runMediaOperation(async (operationToken) => {
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Escolha uma imagem PNG, JPEG ou WebP.');
-    const dimensions = await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => { URL.revokeObjectURL(image.src); resolve([image.naturalWidth, image.naturalHeight]); };
-      image.onerror = () => { URL.revokeObjectURL(image.src); reject(new Error('Não foi possível ler a imagem.')); };
-      image.src = URL.createObjectURL(file);
-    });
+    const previewUrl = page.objectURL(file);
+    const dimensions = await page.image(previewUrl).then(image => [image.naturalWidth, image.naturalHeight])
+      .finally(() => URL.revokeObjectURL(previewUrl));
     if (operationToken !== mediaOperationToken) return;
     if (dimensions.some((value) => value < 500)) throw new Error('A imagem precisa ter pelo menos 500 × 500 px.');
     setStatus('Enviando imagem...');
     const media = await fetchAPI('/api/pos-cards/media', { method: 'POST', headers: { 'content-type': file.type }, body: file });
     if (operationToken !== mediaOperationToken) return;
     const mediaUrl = await fetchAPIAsset(media.url || `/api/pos-cards/media/${media.id}`);
-    if (operationToken !== mediaOperationToken) return;
+    if (operationToken !== mediaOperationToken) { URL.revokeObjectURL(mediaUrl); return; }
     current.mediaId = media.id;
     replaceMediaUrl(mediaUrl);
     render();
@@ -510,10 +534,13 @@ async function upload(file) {
 }
 
 async function save() {
-  if (activeMediaPromise || exportInProgress) return;
+  if (saving || activeMediaPromise || exportInProgress) return;
   const name = window.prompt('Nome do convite:', current.name || richTextToPlainText(activeValues().heroBrand) || 'Convite Owntime');
   if (!name?.trim()) return;
   const button = $('saveButton');
+  saving = true;
+  const submittedTemplate = current.template;
+  const submittedSnapshot = snapshot();
   button.disabled = true;
   setStatus('Salvando convite...');
   try {
@@ -525,10 +552,12 @@ async function save() {
     });
     current.editingId = saved.id;
     current.name = saved.name || name.trim();
+    savedSnapshots.set(submittedTemplate, submittedSnapshot);
     setStatus('Convite salvo no histórico.');
   } catch (error) {
     setStatus(error.message, true);
   } finally {
+    saving = false;
     button.disabled = false;
   }
 }
@@ -585,7 +614,7 @@ async function loadHistory() {
 }
 
 async function editCard(id) {
-  if (exportInProgress) return;
+  if (!canLeave()) return;
   activeEditor = null;
   updateToolbarState();
   setStatus('Carregando convite...');
@@ -594,13 +623,14 @@ async function editCard(id) {
       const card = await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}`);
       if (operationToken !== mediaOperationToken) return;
       const mediaUrl = card.mediaId ? await fetchAPIAsset(`/api/pos-cards/media/${card.mediaId}`) : '';
-      if (operationToken !== mediaOperationToken) return;
+      if (operationToken !== mediaOperationToken) { if (mediaUrl) URL.revokeObjectURL(mediaUrl); return; }
       replaceMediaUrl('');
        current = { ...current, template: card.template, editingId: card.id, mediaId: card.mediaId, name: card.name || '' };
        updateModuleControls();
        loadValues(card.values, card.template);
       replaceMediaUrl(mediaUrl);
       render();
+      savedSnapshots.set(card.template, snapshot(card.template));
       showView('editor');
       setStatus('Convite carregado para edição.');
     });
@@ -658,6 +688,7 @@ function init() {
   for (const field of document.querySelectorAll('[data-field], [data-owner-field]')) {
     field.addEventListener('input', () => updateRichField(field));
   }
+  loadValues(current.ownerValues, 'convite_owner');
   loadValues();
   for (const button of document.querySelectorAll('.module-button')) {
     button.addEventListener('click', () => switchModule(button.dataset.module === 'owner' ? 'convite_owner' : 'convite_owntime'));
@@ -683,10 +714,9 @@ function init() {
   });
 }
 
-document.fonts?.ready?.then(fitCardBody);
-window.addEventListener('resize', fitCardBody);
-
-if (await requirePosCards()) {
-  updateModuleControls();
-  init();
+document.fonts?.ready?.then(() => { if (page.active) fitCardBody(); });
+page.listen(window, 'resize', fitCardBody);
+updateModuleControls();
+init();
+for (const template of ['convite_owntime', 'convite_owner']) savedSnapshots.set(template, snapshot(template));
 }

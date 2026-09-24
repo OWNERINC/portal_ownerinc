@@ -6,7 +6,7 @@ const pages = [
   ['knowledge', 'Base de Conhecimento', 'book-open'],
   ['reminders', 'Lembretes', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
-  ['announcements', 'Anúncios', 'megaphone'],
+  ['announcements', 'Owner News', 'megaphone'],
   ['profile', 'Meu Perfil', 'user'],
 ];
 
@@ -16,7 +16,7 @@ const generatedPages = [
   ['reminders.html', 'reminders', 'Lembretes'],
   ['academy.html', 'academy', 'Academy'],
   ['benefits.html', 'benefits', 'Benefícios'],
-  ['announcements.html', 'announcements', 'Anúncios'],
+  ['announcements.html', 'announcements', 'Owner News'],
   ['profile.html', 'profile', 'Meu Perfil'],
   ['admin.html', 'admin', 'Painel Admin'],
   ['cms.html', 'cms', 'Editor CMS'],
@@ -107,7 +107,11 @@ async function generate(checkOnly = false) {
     const topbarPattern = /(?:<!-- generated:portal-topbar -->\s*)?<header class="topbar">[\s\S]*?<\/header>(?:\s*<!-- \/generated:portal-topbar -->)?/;
     if (!sidebarPattern.test(source) || !topbarPattern.test(source)) throw new Error(`${filename}: shell markers not found`);
     const generated = replaceIcons(source.replace(sidebarPattern, sidebar(current)).replace(topbarPattern, topbar(current, title)));
-    const next = current === 'autocard' ? generated : removeLucideScript(generated);
+    const shell = current === 'autocard' ? generated : removeLucideScript(generated);
+    const next = shell
+      .replace(/<main\b([^>]*?)>/, (_, attrs) => `<main${attrs.replace(/\s+data-route-pending(?:="[^"]*")?/g, '')} data-route-pending>`)
+      .replace(/(<body[^>]*>)(?:\s*<script src="\.\/js\/sidebar-state\.js"><\/script>)?/, '$1\n<script src="./js/sidebar-state.js"></script>')
+      .replace(/<script type="module" src="(?:\.\/js\/[^"/]+\.js|\.\/autocard\/entry\.js|\.\/cards-pos\/app\.js)"><\/script>/, '<script type="module" src="./js/router-bootstrap.js"></script>');
     if (checkOnly) {
       if (next !== source) mismatches.push(filename);
     } else if (next !== source) {

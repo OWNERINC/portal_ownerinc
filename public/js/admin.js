@@ -1,10 +1,18 @@
-import { requireAuth, getCachedUserSnapshot, showToast, can, fetchAPI, fetchAPIPage } from './auth.js';
-import { clear, closeDialog, element, openDialog, safeHttpUrl } from './ui.js';
+import { can, fetchAPI, fetchAPIPage } from './auth.js';
+import { canLeavePageUI, clear, closeDialog, element, openDialog, safeHttpUrl, setDialogCloseGuard, protectForm } from './ui.js';
 
-const cachedUser = getCachedUserSnapshot();
-let me = cachedUser;
+const requests = { fetchAPI, fetchAPIPage };
+export function mount(page) {
+const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
+const showToast = page.toast;
+const setTimeout = page.timeout;
+const history = page.history;
+const location = page.location;
+const me = page.user;
+let activeTab = null;
 let solidesAdminStatus = null;
 let solidesAdminAvailable = false;
+let solidesDiscoveryPending = can(me, 'manageSolides');
 const TABS = [
   ['users', 'Usuários', 'manageUsers'],
   ['registrations', 'Solicitações', 'manageUsers'],
@@ -29,11 +37,10 @@ let bulkPreviewRows = [];
 let bulkJobId = null;
 const BULK_JOB_STORAGE_KEY_PREFIX = 'ownerinc-active-import-job:';
 
-if (me) buildTabs(false);
-me = await requireAuth(true);
-if (!me) throw new Error('Administrator access required');
+const markJobTitleClean = protectForm(document.getElementById('job-title-form'), page);
 
 function tableState(tbodyId, columns, message, retry) {
+  if (!page.active) return;
   const pagination = document.getElementById(tbodyId.replace(/-tbody$/, '-pagination'));
   if (pagination) clear(pagination);
   const cell = element('td', { colspan: String(columns), className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
@@ -93,11 +100,13 @@ function showJobTitleEditor(title = null) {
   document.getElementById('job-title-pos-cards').checked = title?.page_access?.posCards === true;
   document.getElementById('job-title-editor').hidden = false;
   document.getElementById('job-title-name').focus();
+  markJobTitleClean();
 }
 
 function hideJobTitleEditor() {
   editingJobTitleId = null;
   document.getElementById('job-title-editor').hidden = true;
+  markJobTitleClean();
 }
 
 function renderJobTitles() {
@@ -135,6 +144,8 @@ async function discoverAdminFeatures() {
     solidesAdminAvailable = true;
   } catch {
     // The API intentionally hides Sólides while its release stage is off.
+  } finally {
+    solidesDiscoveryPending = false;
   }
 }
 
@@ -152,19 +163,25 @@ async function toggleJobTitle(title) {
 }
 
 function buildTabs(activate = true) {
+  if (!page.active) return;
   const tabs = TABS.filter(([, , permission]) => can(me, permission));
   if (can(me, 'manageBenefits')) tabs.push(['benefits', 'Benefícios']);
   if (solidesAdminAvailable) tabs.push(['solides', 'Sólides']);
-  const container = clear(document.getElementById('admin-tabs'));
+  const container = document.getElementById('admin-tabs');
+  const allowed = new Set(tabs.map(([id]) => `tab-${id}`));
+  [...container.children].forEach(node => { if (!allowed.has(node.id)) node.remove(); });
   if (!tabs.length) {
     container.append(element('p', { className: 'empty-state', text: 'Nenhuma permissão administrativa configurada.' }));
     return;
   }
-  tabs.forEach(([id, label]) => container.append(element('button', {
+  tabs.forEach(([id, label], index) => {
+    const button = document.getElementById(`tab-${id}`) || element('button', {
     className: 'admin-tab', id: `tab-${id}`, role: 'tab', type: 'button', text: label,
     'aria-controls': `section-${id}`, 'aria-selected': 'false', tabindex: '-1',
     on: { click: () => switchTab(id, true) },
-  })));
+    });
+    if (container.children[index] !== button) container.insertBefore(button, container.children[index] || null);
+  });
   if (!container.dataset.keyboardBound) {
     container.dataset.keyboardBound = 'true';
     container.addEventListener('keydown', event => {
@@ -179,10 +196,24 @@ function buildTabs(activate = true) {
   }
   if (!activate) return;
   const requested = new URLSearchParams(location.search).get('tab');
-  switchTab(tabs.some(([id]) => id === requested) ? requested : tabs[0][0]);
+  const preserveRequest = requested === 'solides' && solidesDiscoveryPending;
+  const selected = tabs.some(([id]) => id === requested) ? requested
+    : tabs.some(([id]) => id === activeTab) ? activeTab : tabs[0][0];
+  if (selected === activeTab && (requested === selected || preserveRequest)) return;
+  switchTab(selected, false, preserveRequest);
 }
 
-function switchTab(id, push = false) {
+function switchTab(id, push = false, preserveRequest = false) {
+  if (!page.active || !document.getElementById(`tab-${id}`)) return;
+  if (push && (!page.canLeave() || !canLeavePageUI())) return;
+  if (activeTab === id && new URLSearchParams(location.search).get('tab') === id) return;
+  if (!preserveRequest) {
+    const url = new URL(location.href);
+    url.searchParams.set('tab', id);
+    history[push ? 'pushState' : 'replaceState']({}, '', url);
+  }
+  if (activeTab === id) return;
+  activeTab = id;
   document.querySelectorAll('[role="tab"]').forEach(tab => {
     const active = tab.id === `tab-${id}`;
     tab.classList.toggle('active', active);
@@ -190,9 +221,6 @@ function switchTab(id, push = false) {
     tab.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll('.admin-section').forEach(section => { section.hidden = section.id !== `section-${id}`; });
-  const url = new URL(location.href);
-  url.searchParams.set('tab', id);
-  history[push ? 'pushState' : 'replaceState']({}, '', url);
   if (id === 'users') {
     loadUsers();
     if (can(me, 'superAdmin')) loadAudit();
@@ -244,6 +272,7 @@ async function loadSolides() {
       fetchAPIPage(`/api/solides/admin/links?limit=50&offset=${pages.solides * 50}`), loadSolidesUsers(),
       fetchAPI('/api/solides/admin/status'),
     ]);
+    if (!page.active) return;
     solidesAdminStatus = refreshedStatus;
     solidesLinks = linksResult.data;
     renderSolidesStatus();
@@ -366,6 +395,7 @@ async function openRegistrationReview(registration, action) {
   reviewingRegistration = registration;
   registrationReviewAction = action;
   if (!jobTitles.length) await loadJobTitles();
+  if (!page.active) return;
   const titleSelect = document.getElementById('registration-job-title');
   clear(titleSelect).append(element('option', { value: '', text: 'Selecione um cargo' }));
   jobTitles.filter(title => title.active).forEach(title => titleSelect.append(element('option', { value: title.id, text: title.name })));
@@ -807,7 +837,7 @@ document.getElementById('solides-link-form').addEventListener('submit', async ev
       }),
     });
     showToast('Vínculo Sólides salvo.');
-    event.currentTarget.reset();
+    document.getElementById('solides-link-form').reset();
     await loadSolides();
   } catch (error) { showToast(`Não foi possível salvar: ${error.message}`); }
   finally { save.disabled = false; }
@@ -879,16 +909,17 @@ document.getElementById('registration-form').addEventListener('submit', async ev
 document.getElementById('btn-new-course').addEventListener('click', () => courseDialog());
 document.getElementById('btn-new-benefit').addEventListener('click', () => benefitDialog());
 [['user', 'modal-user'], ['registration', 'modal-registration'], ['course', 'modal-course'], ['benefit', 'modal-benefit']].forEach(([name, modalId]) => {
+  setDialogCloseGuard(document.getElementById(modalId), () => !page.busy);
   document.getElementById(`${modalId}-close`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
   document.getElementById(`${modalId}-cancel`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
 });
-window.addEventListener('popstate', () => {
+page.listen(window, 'popstate', () => {
   const requested = new URLSearchParams(location.search).get('tab');
   if (document.getElementById(`tab-${requested}`)) switchTab(requested);
 });
-if (can(me, 'manageUsers')) await loadJobTitles();
-await discoverAdminFeatures();
 buildTabs();
+if (can(me, 'manageUsers') && activeTab !== 'job-titles') void loadJobTitles();
+void discoverAdminFeatures().then(() => { if (page.active) buildTabs(); });
 try {
   const savedJobId = localStorage.getItem(`${BULK_JOB_STORAGE_KEY_PREFIX}${me.uid}`);
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(savedJobId || '')) {
@@ -898,4 +929,5 @@ try {
   }
 } catch (_) {
   // A reload still keeps the current job in memory when storage is unavailable.
+}
 }
