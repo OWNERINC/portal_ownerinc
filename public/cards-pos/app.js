@@ -59,10 +59,16 @@ const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
 const FOOTER_ASSET = './cards-pos/assets/footer.svg';
 const PDF_RENDER_SCALE = 3;
 const CARD_GEOMETRY = typeof MODULE_CARD_GEOMETRY === 'undefined' ? { convite_owntime: { width: 1448, height: 2347, pdfWidth: 108, pdfHeight: 175.1 }, convite_owner: { width: 862, height: 1984, pdfWidth: 108, pdfHeight: 248.6 } } : MODULE_CARD_GEOMETRY;
-const draftStore = (typeof createDraftState === 'function' ? createDraftState : (defaults => {
+const fallbackDraftState = defaults => {
   const data = Object.fromEntries(Object.entries(defaults).map(([template, values]) => [template, { values: { ...values }, mediaId: null, mediaUrl: '', editingId: null, name: '', baseline: JSON.stringify([values, null]), generation: 0 }]));
   return { get: template => data[template], setValue: (template, key, value) => { data[template].values[key] = value; }, setMedia: (template, media) => Object.assign(data[template], media), snapshot: template => JSON.stringify([data[template].values, data[template].mediaId]), isDirty: template => template ? data[template].baseline !== JSON.stringify([data[template].values, data[template].mediaId]) : Object.keys(data).some(key => data[key].baseline !== JSON.stringify([data[key].values, data[key].mediaId])), loadSaved(card, mediaUrl = '') { Object.assign(data[card.template], { values: { ...card.values }, mediaId: card.mediaId, mediaUrl, editingId: card.id, name: card.name || '', baseline: JSON.stringify([card.values, card.mediaId]) }); }, beginSave(template, name) { const item = data[template]; return { template, generation: item.generation, editingId: item.editingId, name, values: { ...item.values }, mediaId: item.mediaId, snapshot: JSON.stringify([item.values, item.mediaId]) }; }, acceptSave(ticket, response) { Object.assign(data[ticket.template], { editingId: response?.id || data[ticket.template].editingId, name: response?.name || ticket.name, baseline: ticket.snapshot }); return true; } };
-})({ convite_owntime: guestDefaults, convite_owner: ownerDefaults }));
+};
+const draftDefaults = { convite_owntime: guestDefaults, convite_owner: ownerDefaults };
+const draftStore = (() => {
+  const candidate = typeof createDraftState === 'function' ? createDraftState(draftDefaults) : null;
+  return candidate && typeof candidate.get === 'function' && typeof candidate.snapshot === 'function'
+    ? candidate : fallbackDraftState(draftDefaults);
+})();
 let current = { template: 'convite_owntime', values: { ...guestDefaults }, ownerValues: { ...ownerDefaults }, mediaId: null, mediaUrl: '', editingId: null, name: '' };
 if (typeof draftStore !== 'undefined') for (const template of ['convite_owntime', 'convite_owner']) {
   Object.defineProperties(current, {
