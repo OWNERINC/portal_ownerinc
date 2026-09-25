@@ -6,6 +6,58 @@ import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helper
 
 const viewer = { uid: 'user-1', role: 'viewer', permissions: {} };
 
+test('navigation keeps the current stylesheet active while destination CSS is loading', async () => {
+  const h = await createRouterHarness();
+  h.page('/dashboard.html', { styles: ['/current.css'] });
+  h.page('/academy.html', { styles: ['/destination.css'] });
+  assert.equal(await h.router.navigate('/dashboard.html'), true);
+
+  const current = [...h.doc.querySelectorAll('link[rel="stylesheet"]')]
+    .find(link => link.href === 'https://portal.test/current.css');
+  assert.ok(current);
+  assert.notEqual(current.media, 'not all');
+
+  const loading = deferred();
+  h.context.resourcePause = loading.promise;
+  const navigation = h.router.navigate('/academy.html');
+  await drain();
+
+  const destination = [...h.doc.querySelectorAll('link[rel="stylesheet"]')]
+    .find(link => link.href === 'https://portal.test/destination.css');
+  assert.ok(destination);
+  assert.notEqual(current.media, 'not all');
+  assert.equal(destination.media, 'not all');
+
+  loading.resolve();
+  assert.equal(await navigation, true);
+  assert.equal(destination.media, 'all');
+  assert.equal(current.media, 'not all');
+});
+
+test('stylesheet failure preserves the current page and does not retain the failed destination', async () => {
+  const h = await createRouterHarness();
+  h.page('/dashboard.html', { styles: ['/current.css'] });
+  h.page('/academy.html', { styles: ['/destination.css'] });
+  assert.equal(await h.router.navigate('/dashboard.html'), true);
+  const previous = h.scope;
+  const current = [...h.doc.querySelectorAll('link[rel="stylesheet"]')]
+    .find(link => link.href === 'https://portal.test/current.css');
+  assert.ok(current);
+
+  h.context.resourceFailure = true;
+  assert.equal(await h.router.navigate('/academy.html'), false);
+  assert.equal(previous.active, true);
+  assert.equal(h.location.pathname, '/dashboard.html');
+  assert.notEqual(current.media, 'not all');
+  assert.equal([...h.doc.querySelectorAll('link[rel="stylesheet"]')]
+    .find(link => link.href === 'https://portal.test/destination.css'), undefined);
+
+  h.context.resourceFailure = false;
+  assert.equal(await h.router.navigate('/academy.html'), true);
+  assert.equal([...h.doc.querySelectorAll('link[rel="stylesheet"]')]
+    .find(link => link.href === 'https://portal.test/destination.css').media, 'all');
+});
+
 function privateDialog(h) {
   const dialog = new Node('div', h.doc, { id: 'private-dialog', 'data-page-overlay': '' });
   const form = new Node('form', h.doc);
