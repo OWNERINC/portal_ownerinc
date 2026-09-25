@@ -150,8 +150,14 @@ async function prepareStyles(doc, url) {
 }
 
 function activateStyles(selected, doc) {
-  document.querySelectorAll('link[rel="stylesheet"]').forEach(node => { node.media = 'not all'; });
-  selected.forEach(node => { node.media = 'all'; document.head.append(node); });
+  const next = new Set(selected);
+  next.forEach(node => {
+    node.media = 'all';
+    if (node.parentNode !== document.head) document.head.append(node);
+  });
+  document.querySelectorAll('link[rel="stylesheet"]').forEach(node => {
+    if (!next.has(node)) node.media = 'not all';
+  });
   document.querySelectorAll('style[data-page-style]').forEach(node => node.remove());
   doc.querySelectorAll('head style').forEach(style => {
     const node = style.cloneNode(true); node.dataset.pageStyle = ''; document.head.append(node);
