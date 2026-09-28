@@ -12,6 +12,32 @@
 
 O Compose entrega a cada serviço somente suas variáveis necessárias. Use `.env.example` como referência, mas nunca envie o `.env` ao Git. Senhas usadas dentro das URLs PostgreSQL devem estar em formato URL-encoded. `CORS_ORIGINS` só deve listar origens adicionais deliberadas; o acesso normal é pelo mesmo domínio do Nginx.
 
+### Origem pública atrás do proxy TLS
+
+O proxy TLS deve preservar o `Host` público completo (inclusive uma porta pública
+não padrão) e sobrescrever `X-Forwarded-Proto` com o protocolo externo correto.
+O Nginx encaminha essa autoridade em `X-Forwarded-Host` e remove
+`X-Forwarded-Port` da requisição enviada à API. A porta 80 do listener interno
+não representa a porta HTTPS pública; encaminhá-la fazia a API reconstruir
+`https://portal.ownerinc.com.br:80` e recusar uploads do próprio Portal com 403.
+A remoção explícita também impede repassar um valor de porta recebido do cliente.
+
+Valide a configuração efetiva da borda antes da publicação: se a borda substitui
+o Host pelo nome/porta do upstream, ajuste-a para preservar a autoridade pública.
+O Nginx interno deve continuar acessível somente pelo ingress previsto. Não
+amplie `CORS_ORIGINS` indiscriminadamente para contornar divergências do proxy.
+
+O smoke agora inclui um GET de health com o cabeçalho `Origin` derivado de
+`BASE_URL`, além de health/readiness sem Origin. Execute-o também pelo endereço
+HTTPS público; um health simples pode retornar 200 enquanto uploads retornam 403.
+
+```sh
+BASE_URL=https://portal.ownerinc.com.br bash scripts/smoke.sh
+```
+
+Após o smoke, confirme upload autenticado e exportação em Cards Pós e AutoCard,
+além do upload de perfil. O smoke não realiza essas mutações.
+
 O envio de email usa o Resend por SMTP. A chave de API da Resend deve ser
 armazenada somente em `/opt/ownerinc-portal/shared/.env`, como o valor de
 `SMTP_PASSWORD`; nunca a versione ou envie ao GitHub. O endereço definido em

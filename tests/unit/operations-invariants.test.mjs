@@ -173,7 +173,13 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /limit_req_zone[\s\S]*map \$http_sec_fetch_site/);
   assert.match(nginx, /limit_req_zone \$binary_remote_addr zone=media_reads/);
   assert.match(nginx, /proxy_set_header X-Forwarded-Host \$http_host/);
-  assert.match(nginx, /proxy_set_header X-Forwarded-Port \$server_port/);
+  assert.doesNotMatch(nginx, /proxy_set_header X-Forwarded-Port \$server_port/);
+  const proxyBlocks = [...nginx.matchAll(/location [^{]+\{([^}]*proxy_pass[^}]*)\}/g)].map(match => match[1]);
+  assert.ok(proxyBlocks.length > 0);
+  for (const block of proxyBlocks) {
+    assert.match(block, /proxy_set_header X-Forwarded-Host \$http_host;/);
+    assert.match(block, /proxy_set_header X-Forwarded-Port "";/);
+  }
   assert.match(nginx, /https:\/\/unpkg\.com/);
   assert.match(nginx, /https:\/\/www\.gstatic\.com/);
   assert.match(nginx, /font-src 'self'/);
@@ -239,6 +245,8 @@ test('deployment uses a committed archive, backup, smoke gate, and rollback', as
   const smoke = await read('scripts/smoke.sh');
   assert.match(smoke, /api\/health/);
   assert.match(smoke, /api\/ready/);
+  assert.match(smoke, /--header "Origin: \$origin"/);
+  assert.match(smoke, /\[\[ \$same_origin == \*'"status":"ok"'\* \]\]/);
   assert.match(smoke, /autocard\//);
 });
 
