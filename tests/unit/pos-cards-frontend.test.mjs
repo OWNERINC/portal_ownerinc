@@ -23,7 +23,7 @@ test('Cards Pós uses the authenticated Portal shell and local module assets', a
   assert.match(html, /type="module" src="\.\/js\/router-bootstrap\.js"/);
   for (const asset of ['owntime-logo-white.webp', 'ownerinc-logo-white.png', 'casa-logo-white.svg', 'Raleway-Italic.ttf', 'Raleway-BoldItalic.ttf']) await access(`public/cards-pos/assets/${asset}`);
   await access('public/cards-pos/assets/guest/guest-cover.jpg');
-  for (const asset of ['owner-cover.jpg', 'ownerinc-logo.svg', 'icon-cleaning.svg', 'icon-support.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-cleaning-extra.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
+  for (const asset of ['owner-cover.png', 'ownerinc-logo.svg', 'ownerinc-logo-footer.png', 'icon-cleaning.svg', 'icon-support.svg', 'icon-pet.svg', 'icon-food.svg', 'icon-chef.svg', 'icon-cleaning-extra.svg', 'icon-trainer.svg', 'icon-babysitter.svg', 'icon-car.svg', 'Raleway-Variable.woff2']) await access(`public/cards-pos/assets/owner/${asset}`);
   assert.match(footer, /width="1448" height="307" viewBox="0 0 1448 307"/);
 });
 
@@ -35,7 +35,7 @@ test('Cards Pós exposes independent Guest and Owner modules', () => {
   assert.match(app, /convite_owner/);
   assert.match(app, /function switchModule/);
   assert.match(app, /function renderOwner/);
-  assert.match(app, /previewLabel.*248,6.*175,1/);
+  assert.match(app, /previewLabel.*250,68.*175,1/);
 });
 
 test('editor and history retain the source field and view contract', () => {
@@ -91,21 +91,22 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(app, /function renderFooter/);
   assert.match(app, /footer-phone-editable/);
   assert.match(app, /address-line/);
-  assert.match(css, /background: #e9e6de/);
+  assert.match(css, /background: #eae8e0/);
   assert.match(css, /\.owner-body \{[^}]*background: #fff/);
   assert.match(app, /owner-host-note/);
   for (const marker of ['owner-included', 'owner-paid', 'owner-services-grid', 'owner-footer-contact']) assert.match(app, new RegExp(marker));
-  assert.match(css, /\.owner-services-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.match(css, /\.owner-host-note \{[^}]*transform: translateY\(3\.4cqw\)/);
+  assert.match(css, /\.owner-services-grid \{[^}]*grid-template-columns:/);
+  assert.doesNotMatch(css, /\.owner-host-note \{[^}]*transform:/);
   assert.match(app, /GUEST_COVER_ASSET = '\.\/cards-pos\/assets\/guest\/guest-cover\.jpg'/);
-  assert.match(app, /owner-cover\.jpg/);
+  assert.match(app, /owner-cover\.png/);
+  assert.match(app, /ownerinc-logo-footer\.png/);
   assert.match(css, /aspect-ratio: 1448 \/ 2347/);
-  assert.match(css, /aspect-ratio: 862 \/ 1984/);
-  assert.match(css, /grid-template-rows: 21\.32% minmax\(0, 1fr\) 8\.02%/);
+  assert.match(css, /aspect-ratio: 1448 \/ 3361/);
+  assert.match(css, /grid-template-rows: 21\.15442% minmax\(0, 1fr\) 8\.74740%/);
   assert.match(css, /grid-template-rows: 30\.59% minmax\(0, 1fr\) 13\.08%/);
   assert.match(css, /font-family: ['"]Raleway['"]/);
   assert.match(css, /@page owner-page/);
-  assert.match(css, /@page owner-page \{ size: 108mm 248\.6mm/);
+  assert.match(css, /@page owner-page \{ size: 108mm 250\.68mm/);
   assert.match(css, /gold-rule/);
   assert.match(css, /@media print/);
   assert.match(css, /@page guest-page \{ size: 108mm 175\.1mm/);
@@ -128,7 +129,7 @@ test('preview escapes user values, validates image uploads, and preserves export
   assert.match(css, /\.card-copy > \* \{ flex-shrink: 0; \}/);
   assert.match(css, /\.benefit-box \.inline-copy \{[^}]*margin-bottom:\s*19px;/);
   assert.match(css, /\.guest-card \{ page: guest-page; height: 175\.1mm/);
-  assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 248\.6mm/);
+  assert.match(css, /\.owner-card \{ page: owner-page; width: 108mm; height: 250\.68mm/);
   assert.match(css, /page-break-inside: avoid/);
   assert.match(css, /break-inside: avoid/);
   assert.match(css, /break-after: avoid-page/);
@@ -440,12 +441,14 @@ test('Guest PDF uses the reference resolution at any viewport and retains the ph
     assert.equal(captured.name, 'convite-ana.pdf');
     assert.equal(captured.removed, true);
   }
-  const { exportPdf, captured, current } = guestHarness();
-  current.template = 'convite_owner';
-  current.name = 'Owner';
-  await exportPdf();
-  assert.equal(captured.render.width, 862);
-  assert.equal(captured.render.height, 1984);
-  assert.equal(captured.render.scale, 3);
-  assert.equal(captured.pdf.format.join(','), '108,248.6');
+  for (const width of [320, 600]) {
+    const { exportPdf, captured, current } = guestHarness(width);
+    current.template = 'convite_owner';
+    current.name = 'Owner';
+    await exportPdf();
+    assert.equal(captured.render.width, 1448);
+    assert.equal(captured.render.height, 3361);
+    assert.equal(captured.render.scale, 1);
+    assert.equal(captured.pdf.format.join(','), '108,250.68');
+  }
 });

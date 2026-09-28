@@ -34,11 +34,11 @@ const ownerDefaults = {
   stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx\nCortesia: um almoço.',
   address: '<strong>Como chegar:</strong> Rua João XXIII, 222, Centro - Gramado',
   includedIntro: 'Para que sua estada seja a mais confortável e transparente possível, alinhamos abaixo os serviços que já estão inclusos na sua hospedagem e as despesas que são contabilizadas à parte.',
-  includedTitle: 'O que já está INCLUSO na sua estadia:',
+  includedTitle: 'O que já está INCLUSO na sua estadia :',
   cleaning: '<strong>Serviço de Limpeza:</strong> Você tem direito a 1 limpeza completa com troca de enxoval durante o período. Para utilizá-la, basta fazer o agendamento com 24h de antecedência na recepção.',
   support: '<strong>Equipe de Apoio e portaria:</strong> 24h à disposição para ajudar você no que for preciso.',
   paidTitle: 'O que é PAGO (Consumo individual):',
-  utilities: '<strong>GÁS GLP</strong>, água e energia elétrica referentes à sua unidade, proporcionais ao período da estadia.',
+  utilities: 'GÁS GLP, água e energia elétrica referentes à sua unidade, proporcionais ao período da estadia.',
   pet: '<strong>Hospedagem Pet:</strong> Cobrança diária de R$ 85,00 por animal.',
   servicesIntro: 'Solicite ao time de anfitriões durante a estadia (valores sob consulta):',
   gastronomy: 'Gastronomia',
@@ -53,12 +53,11 @@ const ownerDefaults = {
   footerEmail: 'contato@ownerinc.com.br',
 };
 const GUEST_COVER_ASSET = './cards-pos/assets/guest/guest-cover.jpg';
-const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.jpg';
+const OWNER_COVER_ASSET = './cards-pos/assets/owner/owner-cover.png';
 const ADDRESS_LABEL = 'Como chegar:';
 const ADDRESS_TEXT = 'Rua João XXIII, 222, Centro - Gramado';
 const FOOTER_ASSET = './cards-pos/assets/footer.svg';
-const PDF_RENDER_SCALE = 3;
-const CARD_GEOMETRY = typeof MODULE_CARD_GEOMETRY === 'undefined' ? { convite_owntime: { width: 1448, height: 2347, pdfWidth: 108, pdfHeight: 175.1 }, convite_owner: { width: 862, height: 1984, pdfWidth: 108, pdfHeight: 248.6 } } : MODULE_CARD_GEOMETRY;
+const CARD_GEOMETRY = typeof MODULE_CARD_GEOMETRY === 'undefined' ? { convite_owntime: { width: 1448, height: 2347, pdfWidth: 108, pdfHeight: 175.1 }, convite_owner: { width: 1448, height: 3361, pdfWidth: 108, pdfHeight: 250.68 } } : MODULE_CARD_GEOMETRY;
 const fallbackDraftState = defaults => {
   const data = Object.fromEntries(Object.entries(defaults).map(([template, values]) => [template, { values: { ...values }, mediaId: null, mediaUrl: '', editingId: null, name: '', baseline: JSON.stringify([values, null]), generation: 0 }]));
   return { get: template => data[template], setValue: (template, key, value) => { data[template].values[key] = value; }, setMedia: (template, media) => Object.assign(data[template], media), snapshot: template => JSON.stringify([data[template].values, data[template].mediaId]), isDirty: template => template ? data[template].baseline !== JSON.stringify([data[template].values, data[template].mediaId]) : Object.keys(data).some(key => data[key].baseline !== JSON.stringify([data[key].values, data[key].mediaId])), loadSaved(card, mediaUrl = '') { Object.assign(data[card.template], { values: { ...card.values }, mediaId: card.mediaId, mediaUrl, editingId: card.id, name: card.name || '', baseline: JSON.stringify([card.values, card.mediaId]) }); }, beginSave(template, name) { const item = data[template]; return { template, generation: item.generation, editingId: item.editingId, name, values: { ...item.values }, mediaId: item.mediaId, snapshot: JSON.stringify([item.values, item.mediaId]) }; }, acceptSave(ticket, response) { Object.assign(data[ticket.template], { editingId: response?.id || data[ticket.template].editingId, name: response?.name || ticket.name, baseline: ticket.snapshot }); return true; } };
@@ -216,7 +215,7 @@ function renderOwnerTemplate(v) {
 }
 
 function renderOwnerFooter(v) {
-  return `<footer class="card-footer owner-footer"><span class="owner-footer-rule" aria-hidden="true"></span><div class="owner-footer-contact"><strong data-edit-key="footerLabel">${esc(v.footerLabel)}</strong><div><span data-edit-key="contact">${esc(phoneFromContact(v.contact))}</span><span aria-hidden="true">|</span><span data-edit-key="footerEmail">${esc(v.footerEmail)}</span></div></div><img src="./cards-pos/assets/owner/ownerinc-logo.svg" alt="Ownerinc"></footer>`;
+  return `<footer class="card-footer owner-footer"><span class="owner-footer-rule" aria-hidden="true"></span><div class="owner-footer-contact"><strong data-edit-key="footerLabel">${esc(v.footerLabel)}</strong><div><span data-edit-key="contact">${esc(phoneFromContact(v.contact))}</span><span aria-hidden="true">|</span><span data-edit-key="footerEmail">${esc(v.footerEmail)}</span></div></div><img src="./cards-pos/assets/owner/ownerinc-logo-footer.png" alt="Ownerinc"></footer>`;
 }
 
 function renderOwner(v) {
@@ -239,6 +238,19 @@ function render() {
   // html2canvas supports background cover, but not img object-fit; keep the img for asset validation.
   const photo = card.querySelector('.guest-photo');
   if (photo) photo.style.backgroundImage = `url("${photo.firstElementChild.src}")`;
+  const ownerPhoto = card.querySelector('.owner-hero');
+  if (ownerPhoto) {
+    ownerPhoto.style.backgroundImage = `url("${ownerPhoto.querySelector('.hero-image').src}")`;
+    ownerPhoto.classList.toggle('owner-default-cover', !current.mediaUrl);
+  }
+  const ownerBrand = card.querySelector('.owner-hero .hero-brand');
+  if (ownerBrand && current.ownerValues.heroBrand === ownerDefaults.heroBrand) {
+    const logo = document.createElement('img');
+    // This legacy-named asset contains the Owntime wordmark, not Ownerinc.
+    logo.src = './cards-pos/assets/owner/ownerinc-logo.svg';
+    logo.alt = ownerDefaults.heroBrand;
+    ownerBrand.replaceChildren(logo);
+  }
   card.querySelectorAll('img').forEach((image) => page.listen(image, 'load', fitCardBody, { once: true }));
   page.frame(fitCardBody);
   renderMediaStatus();
@@ -298,7 +310,7 @@ async function exportPdf() {
   const source = $('cardCanvas');
   const geometry = CARD_GEOMETRY[current.template];
   const size = { width: geometry.pdfWidth, height: geometry.pdfHeight };
-  // ponytail: one fixed Guest artboard keeps mobile and desktop PDFs identical.
+   // Fixed artboards keep mobile and desktop PDFs identical.
   const bounds = { width: geometry.width, height: geometry.height };
   if (!size || !bounds.width || !bounds.height) throw new Error('Não foi possível preparar o card para exportação.');
   const fileName = pdfFileName();
@@ -330,7 +342,7 @@ async function exportPdf() {
     fitCardBody(card);
     const canvas = await page.wait(window.html2canvas(card, {
       backgroundColor: '#fff',
-       scale: current.template === 'convite_owntime' ? 1 : PDF_RENDER_SCALE,
+      scale: 1,
       useCORS: true,
       logging: false,
       width: bounds.width,
@@ -492,7 +504,7 @@ function updateModuleControls() {
   });
   $('guestFields').classList.toggle('hidden', owner);
   $('ownerFields').classList.toggle('hidden', !owner);
-  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? '248,6' : '175,1'} mm`;
+  $('previewLabel').textContent = `Preview do convite · 108 × ${owner ? '250,68' : '175,1'} mm`;
   $('moduleTitle').textContent = owner ? 'Convite para Owners' : 'Convite para convidados';
   $('moduleDescription').textContent = owner
     ? 'Edite todos os textos do Frame 02, revise o card e exporte o PDF.'
