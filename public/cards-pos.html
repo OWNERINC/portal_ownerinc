@@ -158,7 +158,13 @@
           </aside>
 
           <section class="preview-panel" aria-label="Pré-visualização do convite">
-            <div class="preview-label" id="previewLabel">Preview do convite · 108 × 175,1 mm</div>
+            <div class="preview-toolbar">
+              <div class="preview-label" id="previewLabel">Preview do convite · 108 × 175,1 mm</div>
+              <div class="preview-controls" role="group" aria-label="Tamanho da prévia">
+                <button type="button" class="preview-mode" data-preview-mode="fit" aria-pressed="true">Arte inteira</button>
+                <button type="button" class="preview-mode" data-preview-mode="width" aria-pressed="false">Ampliar</button>
+              </div>
+            </div>
             <div class="preview-stage"><div class="preview-artboard"><article id="cardCanvas" class="invite-card"></article></div><div id="card-inline-layer" class="card-edit-layer" hidden><label for="card-inline-field">Editar campo</label><div id="card-inline-field" class="inline-rich-field" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true"></div><p id="card-inline-feedback" class="form-feedback" role="alert" aria-live="polite"></p><div class="inline-editor-actions"><button type="button" class="button primary" data-inline-action="apply">Concluir</button><button type="button" class="button secondary" data-inline-action="cancel">Cancelar</button><button type="button" class="button secondary" data-inline-action="previous">Anterior</button><button type="button" class="button secondary" data-inline-action="next">Próximo</button></div></div></div>
           </section>
         </section>

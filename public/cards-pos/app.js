@@ -91,6 +91,7 @@ const snapshot = (template = current.template) => typeof draftStore !== 'undefin
 const isDirty = () => (typeof draftStore !== 'undefined' ? draftStore.isDirty() : [...savedSnapshots].some(([template, saved]) => snapshot(template) !== saved)) || (typeof inlineEditor !== 'undefined' && inlineEditor?.hasPendingChanges?.());
 let inlineEditor = null;
 let layoutUpdate = null;
+let previewMode = 'fit';
 const richControllers = [];
 const canLeave = () => {
   if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) {
@@ -771,6 +772,8 @@ function showView(view) {
   });
   $('editorView').classList.toggle('hidden', view !== 'editor');
   $('historyView').classList.toggle('hidden', view !== 'history');
+  document.body.classList.toggle('cards-pos-editing', view === 'editor');
+  if (view === 'editor') layoutUpdate?.();
   if (view === 'history') loadHistory();
 }
 
@@ -815,7 +818,16 @@ function init() {
   };
   if (viewport) { page.listen(viewport, 'resize', repositionInline); page.listen(viewport, 'scroll', repositionInline); }
   page.listen(window, 'resize', repositionInline);
-  layoutUpdate = observePreviewLayout({ container: document.querySelector('.preview-stage'), frame: () => CARD_GEOMETRY[current.template], wrapper: document.querySelector('.preview-artboard'), mode: () => window.matchMedia('(max-width: 900px)').matches ? 'mobile' : 'desktop', page });
+  const previewStage = document.querySelector('.preview-stage');
+  layoutUpdate = observePreviewLayout({ container: previewStage, frame: () => CARD_GEOMETRY[current.template], wrapper: document.querySelector('.preview-artboard'), toolbar: document.querySelector('.cards-pos-toolbar'), mode: () => previewMode, page });
+  for (const button of document.querySelectorAll('[data-preview-mode]')) page.listen(button, 'click', () => {
+    previewMode = button.dataset.previewMode;
+    document.querySelectorAll('[data-preview-mode]').forEach(control => control.setAttribute('aria-pressed', String(control.dataset.previewMode === previewMode)));
+    layoutUpdate?.();
+    previewStage.scrollTop = 0;
+    previewStage.scrollLeft = 0;
+    fitCardBody();
+  });
   page.listen($('saveButton'), 'click', save);
   page.listen($('exportButton'), 'click', async () => {
     if (typeof inlineEditor !== 'undefined' && inlineEditor && !inlineEditor.flush()) return;
@@ -840,7 +852,7 @@ function init() {
     loadHistory();
   });
 }
-  page.wait(document.fonts?.ready).then(() => { if (page.active) fitCardBody(); });
+  page.wait(document.fonts?.ready).then(() => { if (page.active) { layoutUpdate?.(); fitCardBody(); } });
   page.listen(window, 'resize', fitCardBody);
   updateModuleControls();
   init();

@@ -5,6 +5,6 @@ export const CARD_GEOMETRY = Object.freeze({
 export function fitPreview(frame, available, mode = 'desktop') {
   const widthScale = Math.max(0, Number(available?.width) || 0) / frame.width;
   const heightScale = Math.max(0, Number(available?.height) || 0) / frame.height;
-  const scale = mode === 'desktop' ? Math.min(1, widthScale, heightScale) : Math.min(1, widthScale);
+  const scale = mode === 'width' ? Math.min(1, widthScale) : Math.min(1, widthScale, heightScale);
   return { scale, width: frame.width * scale, height: frame.height * scale };
 }
