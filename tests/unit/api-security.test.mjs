@@ -9,7 +9,7 @@ const {
   removesLastActiveSuperAdmin,
 } = require('../../api/middleware/policy');
 const { containsLegacyJobTitleToken } = require('../../api/route-utils');
-const { errorHandler, requestOrigin, safeResponses, validateEnvironment } = require('../../api/middleware/security');
+const { cors, errorHandler, requestOrigin, safeResponses, validateEnvironment } = require('../../api/middleware/security');
 const { imageExtension, isHttpUrl, normalizeContract, normalizeImage, sanitizeRichText, sanitizeRichValues, validateProfile, validateRegistration, validateUser } = require('../../api/middleware/validation');
 const { canManageCms } = require('../../api/cms/permissions');
 
@@ -234,6 +234,41 @@ test('CORS derives same-origin from forwarded host and port and invalid JSON is 
   assert.notEqual(statusCode, 500);
   assert.deepEqual(body, { error: 'Invalid JSON.', requestId: 'request-1' });
   assert.doesNotMatch(JSON.stringify(body), /unexpected token/);
+});
+
+test('CORS accepts the public Host authority after internal forwarded-port is suppressed', () => {
+  for (const [protocol, host, expected] of [
+    ['https', 'portal.example.test', 'https://portal.example.test'],
+    ['https', 'portal.example.test:443', 'https://portal.example.test'],
+    ['https', 'portal.example.test:8443', 'https://portal.example.test:8443'],
+    ['http', 'localhost:8080', 'http://localhost:8080'],
+    ['http', 'localhost', 'http://localhost'],
+    ['http', '[::1]:8080', 'http://[::1]:8080'],
+  ]) {
+    for (const method of ['POST', 'OPTIONS']) {
+      for (const origin of [expected, 'https://unrelated.example.test']) {
+        const headers = { origin, 'x-forwarded-host': host, 'x-forwarded-proto': protocol };
+        const req = { protocol: 'http', method, get: name => headers[name] };
+        assert.equal(requestOrigin(req), expected);
+        const result = {};
+        const res = {
+          setHeader(key, value) { result[key] = value; },
+          status(value) { result.status = value; return this; },
+          sendStatus(value) { result.status = value; },
+          json(value) { result.body = value; },
+        };
+        cors([])(req, res, () => { result.next = true; });
+        if (origin === expected) {
+          assert.equal(result['Access-Control-Allow-Origin'], expected);
+          if (method === 'OPTIONS') assert.equal(result.status, 204);
+          else assert.equal(result.next, true);
+        } else {
+          assert.equal(result.status, 403);
+          assert.equal(result.next, undefined);
+        }
+      }
+    }
+  }
 });
 
 test('5xx responses preserve only the allowlisted Firebase identity reason', (t) => {

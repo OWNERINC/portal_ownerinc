@@ -2,6 +2,13 @@
 
 Data do registro: 12 de agosto de 2026
 
+> Registro histórico. A informação abaixo sobre commits locais ainda não
+> publicados descreve agosto, não a release atual. A revisão de 28/09/2026
+> confirmou implementações de hardening na `main` e um workflow posterior com
+> validação e deploy concluídos. Consulte o
+> [acompanhamento das issues](../reports/2026-09-28-issue-remediation.md) para
+> distinguir as evidências atuais das homologações operacionais pendentes.
+
 ## Release
 
 - Repositório: `OWNERINC/portal_ownerinc`

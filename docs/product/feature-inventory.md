@@ -63,6 +63,12 @@ Atualização desta área: 22 de setembro de 2026.
 
 ## Cards Pós
 
+O upload de imagem mantém a mídia anterior até a nova mídia autenticada estar
+carregada. Falhas permanecem em um status próprio da imagem, por modelo, com
+mensagem em português e referência de suporte quando fornecida pela API. O
+sucesso de uma exportação não apaga esse aviso. É possível tentar novamente com
+o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
+
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Acesso por cargo DHO | Operacional | Cards Pós libera qualquer cargo ativo com `page_access.posCards=true`; super-admin possui bypass explícito, enquanto `role=admin` sozinho permanece bloqueado. `api/middleware/policy.js`, `api/routes/pos-cards.js`, `public/cards-pos/guard.js` |

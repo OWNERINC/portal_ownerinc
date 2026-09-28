@@ -208,6 +208,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const requests = [];
   const apiRequests = [];
   const filterElements = [];
+  const historyActions = [];
   let activeTab = 'create';
   const tabElements = ['create', 'saved'].map(tab => {
     const classes = new Set(['tab', ...(tab === activeTab ? ['active'] : [])]);
@@ -236,6 +237,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const events = [];
   const captures = [];
   let imageDecodeError = null;
+  let captureError = null;
   let decodeCalls = 0;
   let downloadClicks = 0;
   let promptValue = null;
@@ -259,6 +261,12 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
       });
     }
   };
+  const rebuildHistoryActions = markup => {
+    historyActions.splice(0);
+    for (const match of String(markup).matchAll(/data-(edit|copy|delete)="([^"]+)"/g)) {
+      historyActions.push({ dataset: { [match[1]]: match[2] }, onclick: null });
+    }
+  };
   const document = {
     activeElement: null,
     fonts: { get ready() { events.push('fonts'); return fontsReady; } },
@@ -270,7 +278,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
             decodeCalls += 1;
             if (imageDecodeError) throw imageDecodeError;
           },
-          onInnerHTML: id === 'savedFilters' ? rebuildFilters : null,
+          onInnerHTML: id === 'savedFilters' ? rebuildFilters : id === 'savedList' ? rebuildHistoryActions : null,
         });
         element.ownerDocument = document;
         if (id === 'cropImage') element.parentElement = elements.get('cropFrame');
@@ -297,6 +305,9 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     querySelectorAll(selector) {
       if (selector === '.filter') return filterElements;
       if (selector === '.tab') return tabElements;
+      for (const action of ['edit', 'copy', 'delete']) {
+        if (selector === `[data-${action}]`) return historyActions.filter(button => button.dataset[action]);
+      }
       if (selector.includes('#cardCanvas')) return elements.get('cardCanvas')?.querySelectorAll(selector) || [];
       return [];
     },
@@ -397,6 +408,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     html2canvas: async (element, options) => {
       events.push('capture');
       captures.push({ element, options });
+      if (captureError) throw captureError;
       return { toDataURL: () => 'data:image/png;base64,test' };
     },
     setTimeout(callback) {
@@ -479,6 +491,10 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
       deferredLocalImages[index]?.onload?.();
       await drain();
     },
+    async rejectLocalImage(index) {
+      deferredLocalImages[index]?.onerror?.();
+      await drain();
+    },
     async resolveAPI(index, value) {
       apiRequests[index].resolve(value);
       await drain();
@@ -507,6 +523,12 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     mediaStatus: () => elements.get('mediaStatus').getAttribute('data-state'),
     mediaStatusText: () => elements.get('mediaStatus').textContent,
     savedList: () => elements.get('savedList') || document.getElementById('savedList'),
+    async clickHistoryAction(action) {
+      const button = historyActions.find(item => item.dataset[action]);
+      assert.ok(button, `expected history action ${action}`);
+      button.onclick();
+      await drain();
+    },
     savedPagination: () => elements.get('savedPagination'),
     setSavedSearch(value) {
       const input = elements.get('savedSearch');
@@ -639,6 +661,7 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     setImageDecodeError(error) {
       imageDecodeError = error;
     },
+    setCaptureError(error) { captureError = error; },
     resolveFonts() {
       releaseFonts?.();
     },
@@ -1136,6 +1159,60 @@ test('AutoCard export executes rendered geometry and blocks undecodable images',
   assert.equal(harness.downloadClicks(), 1);
   assert.equal(harness.exportButtonDisabled(), false);
   assert.match(harness.toast().textContent, /A imagem ainda não está pronta para exportação/);
+});
+
+test('AutoCard capture failures show feedback, release the button and allow retry', async () => {
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('comunicado');
+  h.setCaptureError(new Error('capture failed'));
+  await h.exportCard();
+  assert.equal(h.downloadClicks(), 0);
+  assert.equal(h.exportButtonDisabled(), false);
+  assert.match(h.toast().textContent, /Não foi possível exportar/);
+  h.setCaptureError(null);
+  await h.exportCard();
+  assert.equal(h.downloadClicks(), 1);
+});
+
+test('AutoCard validation revokes the local URL on both image load and failure', async () => {
+  for (const success of [true, false]) {
+    const h = await createAutoCardLifecycleHarness({ deferLocalImages: true });
+    h.selectTemplate('aniversariante');
+    await h.chooseFile({ name: 'photo.png', type: 'image/png', size: 1000 });
+    if (success) await h.resolveLocalImage(0);
+    else await h.rejectLocalImage(0);
+    await h.flushAsync();
+    assert.ok(h.revokedUrls.includes(h.createdUrls[0]));
+    if (success) await h.rejectAPI(0, new Error('test finished'));
+    else assert.equal(h.apiRequests.length, 0);
+  }
+});
+
+test('AutoCard history action failures preserve the list and successful mutations reload it', async () => {
+  const card = { id: 'saved', name: 'Saved card', template: 'comunicado', values: {}, updatedAt: '2026-09-28T12:00:00Z' };
+  for (const action of ['edit', 'copy', 'delete']) {
+    const h = await createAutoCardLifecycleHarness();
+    const loading = h.loadSaved();
+    await h.resolveAPI(0, { data: [card], total: 1 });
+    await loading;
+    const previousList = h.savedList().innerHTML;
+    await h.clickHistoryAction(action);
+    await h.rejectAPI(1, new Error('offline'));
+    await h.flushAsync();
+    assert.match(h.toast().textContent, /Não foi possível/);
+    assert.equal(h.savedList().innerHTML, previousList);
+    assert.equal(h.apiRequests.length, 2);
+    await h.clickHistoryAction(action);
+    await h.resolveAPI(2, action === 'edit' ? card : { ok: true });
+    await h.flushAsync();
+    if (action === 'edit') assert.equal(h.state().editingId, 'saved');
+    else {
+      assert.equal(h.apiRequests.length, 4);
+      await h.resolveAPI(3, { data: action === 'delete' ? [] : [card], total: action === 'delete' ? 0 : 1 });
+      await h.flushAsync();
+      assert.match(h.toast().textContent, /Card (duplicado|excluído)/);
+    }
+  }
 });
 
 test('AutoCard keeps the export gate disabled when overflow appears during an awaited export step', async () => {

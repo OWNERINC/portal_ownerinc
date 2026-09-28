@@ -189,6 +189,21 @@ test('resource 403 does not invalidate the session; 401 and definitive session 4
   }
 });
 
+test('API errors preserve support reference for JSON and authenticated media without ending a resource-denied session', async () => {
+  for (const method of ['fetchAPI', 'fetchAPIPage', 'fetchAPIAsset']) {
+    const h = harness({ fetchImpl: () => response({ error: 'Request not allowed.', requestId: 'support-123' }, 403) });
+    await assert.rejects(h.api[method]('/api/pos-cards/media'), error => {
+      assert.equal(error.status, 403);
+      assert.equal(error.requestId, 'support-123');
+      return true;
+    });
+    assert.equal(h.signouts, 0);
+    assert.equal(h.redirects.length, 0);
+  }
+  const h = harness({ fetchImpl: () => response({ error: 'Unavailable' }, 503) });
+  await assert.rejects(h.api.fetchAPI('/api/pos-cards/media'), error => error.requestId === undefined);
+});
+
 test('late validation cannot restore permissions after logout, remote logout or account switch', async () => {
   for (const endSession of [h => h.api.logout(), h => h.changeUser(null), h => h.changeUser('b')]) {
     const pending = deferred();
