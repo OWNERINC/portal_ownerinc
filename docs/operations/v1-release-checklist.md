@@ -174,6 +174,13 @@ responsável e evidência; não marque uma validação externa usando apenas
 
 ## Final Status
 
+> Os três itens de publicação abaixo são o registro histórico de agosto.
+> Em 28/09/2026, `main` já contém o hardening do AutoCard e a retenção de mídias;
+> o workflow `36137451587`, revisão `3062cc7e2304286dd44f8bca56eeee074c495979`,
+> concluiu `validate` e `Deploy production`. Isso não comprova automaticamente
+> restore integral, rollback, S3 ou todas as jornadas autenticadas. Consulte o
+> [acompanhamento atualizado](../reports/2026-09-28-issue-remediation.md).
+
 - O último código publicado e validado no domínio live permanece no commit
   `fd45dc1`; o workflow CI/deploy correspondente foi o `31436331884`.
 - A branch local contém commits posteriores de hardening do AutoCard e ainda
