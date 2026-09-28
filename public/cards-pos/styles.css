@@ -93,8 +93,13 @@
 .status { min-height: 20px; margin: var(--space-3) 0 0; color: var(--text-secondary); font-size: var(--font-size-xs); }
 .status.is-error { color: var(--danger); }
 .preview-panel { min-width: 0; display: flex; flex-direction: column; background: var(--surface-2); }
+.preview-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; flex: none; }
+.preview-toolbar .preview-label { padding: 0; }
+.preview-controls { display: flex; gap: 4px; }
+.preview-mode { min-height: 44px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.preview-mode[aria-pressed="true"] { background: var(--espresso); color: #fff; border-color: var(--espresso); }
 .preview-label { padding: var(--space-3) var(--space-6); color: var(--text-secondary); font-size: var(--font-size-xs); letter-spacing: .05em; text-transform: uppercase; }
-.preview-stage { flex: 1; display: grid; place-items: start center; overflow: auto; padding: var(--space-6); }
+.preview-stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: start center; align-content: start; overflow: auto; padding: var(--space-6); }
 .invite-card { width: min(100%, 680px); min-height: 0; display: grid; overflow: hidden; background: #fff; box-shadow: var(--shadow-md); font-family: 'Novelin', Arial, sans-serif; }
 .guest-card { aspect-ratio: 1448 / 2347; grid-template-rows: 30.59% minmax(0, 1fr) 13.08%; }
 .hero { position: relative; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px; color: #fff; background: linear-gradient(135deg, #8b7760, #2c2924); background-size: cover; background-position: center; text-align: center; }
@@ -222,12 +227,19 @@
 .pos-card-export-surface .invite-card { width: 100%; max-width: none; box-shadow: none; }
 
 @media (max-width: 900px) {
-  .cards-pos-toolbar { align-items: flex-start; flex-direction: column; }
+  .cards-pos-toolbar { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; align-items: center; }
+  .cards-pos-toolbar > div:first-child { grid-column: 1 / -1; }
+  .cards-pos-toolbar .eyebrow, .cards-pos-toolbar p { display: none; }
+  .cards-pos-toolbar h1 { margin: 0; font-size: 20px; }
+  .cards-pos-toolbar .module-switch, .cards-pos-toolbar .cards-pos-tabs { min-width: 0; width: 100%; }
+  .cards-pos-toolbar .nav-button, .cards-pos-toolbar .module-button { flex: 1; padding: 0 6px; font-size: 12px; }
   .cards-pos-workspace { grid-template-columns: 1fr; }
   .editor-panel { border-right: 0; border-bottom: 1px solid var(--border); }
-  .preview-panel { min-height: 720px; }
+  .preview-panel { grid-row: 1; min-height: 0; }
+  .preview-stage { flex: none; }
   .invite-card { width: min(78vw, 680px); }
 }
+.cards-pos-editing .page-body { padding: 0; }
 @media (min-width: 901px) {
   body.cards-pos-page.cards-pos-editing { overflow-y: hidden; }
   .cards-pos-editing .cards-pos-content { min-height: 0; height: calc(100dvh - var(--topbar-height)); display: grid; grid-template-rows: auto minmax(0, 1fr); }
@@ -235,16 +247,16 @@
   .cards-pos-editing .editor-panel { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   .cards-pos-editing #cardForm { min-height: 0; flex: 1; display: flex; flex-direction: column; }
   .cards-pos-editing .editor-fields-scroll { flex: 1; }
-  .cards-pos-editing .preview-panel, .cards-pos-editing .preview-stage { min-height: 0; overflow: hidden; }
+  .cards-pos-editing .preview-panel { min-height: 0; overflow: hidden; }
+  .cards-pos-editing .preview-stage { min-height: 0; }
 }
 @media (max-width: 600px) {
-  .cards-pos-toolbar, .history-view { padding: var(--space-6) var(--space-4); }
+  .history-view { padding: var(--space-6) var(--space-4); }
   .cards-pos-tabs { width: 100%; }
   .module-switch { width: 100%; }
   .module-button { flex: 1; }
   .nav-button { flex: 1; }
   .editor-panel { padding: var(--space-6) var(--space-4); }
-  .preview-panel { min-height: 600px; }
   .preview-stage { padding: var(--space-2); }
   .invite-card { width: 92vw; }
   .history-heading { display: block; }
@@ -253,7 +265,7 @@
 }
 @media print {
   html, body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .skip-link, .sidebar, .topbar, .cards-pos-toolbar, .editor-panel, .preview-label, .history-view { display: none !important; }
+  .skip-link, .sidebar, .topbar, .cards-pos-toolbar, .editor-panel, .preview-toolbar, .preview-label, .history-view { display: none !important; }
   .portal-wrapper, .main-content, .page-body, .cards-pos-content, .cards-pos-workspace, #editorView, .preview-panel, .preview-stage { display: block; width: 108mm; min-height: 0; height: auto; margin: 0; padding: 0; background: #fff; }
   .invite-card, .hero, .benefit-box, .card-footer { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .invite-card { width: 108mm; min-height: 0; box-shadow: none; margin: 0; page-break-inside: avoid; break-inside: avoid; page-break-after: avoid; break-after: avoid-page; }

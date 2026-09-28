@@ -74,3 +74,26 @@ glifos: não se afirma identidade pixel a pixel com o PNG original.
 
 Comparações de navegador são locais. Este documento não registra deploy nem
 homologação desta composição em produção.
+
+## Correção posterior da visualização em telas pequenas
+
+Após a publicação, o usuário relatou que a arte não cabia inteira na tela.
+Os testes anteriores comparavam o canvas exportado e o overflow horizontal;
+não verificavam se o rodapé da prévia ficava dentro da altura visível.
+
+O cálculo da prévia agora desconta o padding do container e respeita largura
+e altura em todos os tamanhos de tela. O editor desktop usa a área efetivamente
+disponível abaixo da topbar. Em telas até 900 px, a prévia aparece antes do
+formulário e sua altura considera o espaço restante na tela.
+
+- **Arte inteira**: padrão, exibe o card completo, incluindo rodapé.
+- **Ampliar**: usa a largura disponível e libera rolagem para ler os detalhes.
+- Os controles alteram apenas a prévia; exportação e proporções da arte são
+  preservadas. A volta do histórico recalcula o espaço disponível.
+
+Playwright/Chrome verificou os limites reais da arte e do rodapé, ampliação,
+rolagem, retorno à arte inteira e histórico em 1366 × 768, 1024 × 600,
+900 × 600, 768 × 1024, 390 × 844, 320 × 568 e 844 × 390, nos dois modelos.
+Em paisagem muito baixa, a página pode exigir rolagem até a prévia; a arte
+cabe inteira nesse viewport. Edição inline mobile e PDFs nos dois modos
+também passaram, sem erros JS.
