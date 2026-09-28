@@ -229,8 +229,13 @@ test('Cards Pós history exposes pagination for more than one page of saved card
   assert.match(app, /renderHistoryPagination\(result\.total/);
 });
 
-function guestHarness(width = 600) {
+function guestHarness(width = 600, overrides = {}) {
   const captured = {};
+  const elements = new Map();
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, { textContent: '', classList: { toggle() {}, contains: () => true } });
+    return elements.get(id);
+  };
   const card = {
     style: {}, innerHTML: '',
     getBoundingClientRect: () => ({ width, height: width * 2347 / 1448 }),
@@ -239,15 +244,19 @@ function guestHarness(width = 600) {
   };
   const document = {
     fonts: { ready: Promise.resolve() },
-    getElementById: id => id === 'status' ? { classList: { toggle() {} } } : card,
+    getElementById: id => id === 'cardCanvas' ? card : element(id),
     querySelectorAll: () => [], body: { append() {} },
     createElement: () => ({ setAttribute() {}, append() {}, remove() { captured.removed = true; } }),
   };
-  const page = {
+  const page = overrides.lifecycle || {
     active: true, beforeLeave() {}, listen() {}, cleanup() {}, frame: callback => callback(),
     wait: promise => Promise.resolve(promise),
+    objectURL: () => 'blob:validation',
+    image: async () => ({ complete: true, naturalWidth: 800, naturalHeight: 800, decode: async () => {} }),
   };
+  Object.assign(page, overrides.page);
   const window = {
+    addEventListener() {}, removeEventListener() {},
     html2canvas: async (clone, options) => {
       captured.render = options;
       captured.size = { ...clone.style };
@@ -261,9 +270,119 @@ function guestHarness(width = 600) {
   };
   const source = app.slice(app.indexOf('const $ ='), app.indexOf('page.wait(document.fonts?.ready).then'));
   const normalizeRichHtml = value => String(value ?? '').replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '').replace(/\s(on\w+|style|href)=(?:"[^"]*"|'[^']*')/gi, '');
-  const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, updateRichField, exportPdf });`, { document, page, window, normalizeRichHtml });
-  return { ...api, card, captured };
+  const revoked = [];
+  const api = vm.runInNewContext(`${source}\n({ current, guestDefaults, loadValues, updateRichField, exportPdf, upload, renderMediaStatus });`, {
+    document, page, window, normalizeRichHtml,
+    moduleRichTextToPlainText: value => String(value ?? '').replace(/<[^>]*>/g, ''),
+    URL: { revokeObjectURL: url => revoked.push(url) },
+    fetchAPI: overrides.fetchAPI || (async () => ({ id: 'replacement' })),
+    fetchAPIAsset: overrides.fetchAPIAsset || (async () => 'blob:replacement'),
+  });
+  return { ...api, card, captured, element, revoked, page };
 }
+
+test('failed photo replacement keeps the previous media and support feedback through PDF export', async () => {
+  for (const failure of ['post', 'asset', 'decode']) {
+    const error = Object.assign(new Error('Request not allowed.'), { requestId: 'support-123' });
+    const h = guestHarness(600, {
+      fetchAPI: async () => { if (failure === 'post') throw error; return { id: 'replacement' }; },
+      fetchAPIAsset: async () => { if (failure === 'asset') throw error; return 'blob:replacement'; },
+      page: { image: async src => {
+        if (failure === 'decode' && src === 'blob:replacement') throw error;
+        return { complete: true, naturalWidth: 800, naturalHeight: 800 };
+      } },
+    });
+    h.current.mediaId = 'previous';
+    h.current.mediaUrl = 'blob:previous';
+    await h.upload({ type: 'image/jpeg', size: 1000 });
+    assert.equal(h.current.mediaId, 'previous');
+    assert.equal(h.current.mediaUrl, 'blob:previous');
+    const message = h.element('mediaStatus').textContent;
+    assert.match(message, /A imagem anterior foi mantida/);
+    assert.match(message, /support-123/);
+    assert.doesNotMatch(message, /Request not allowed/);
+    assert.ok(h.revoked.includes('blob:validation'));
+    assert.ok(!h.revoked.includes('blob:previous'));
+    if (failure === 'decode') assert.ok(h.revoked.includes('blob:replacement'));
+    await h.exportPdf();
+    assert.equal(h.element('mediaStatus').textContent, message);
+    assert.match(h.element('status').textContent, /PDF baixado/);
+    assert.equal(h.element('saveButton').disabled, false);
+  }
+});
+
+test('photo replacement commits only when ready, retries and scopes feedback to its template', async () => {
+  let resolveImage;
+  let fail = true;
+  const h = guestHarness(600, {
+    fetchAPI: async () => { if (fail) throw new Error('offline'); return { id: 'replacement' }; },
+    page: { image: src => src === 'blob:validation'
+      ? Promise.resolve({ naturalWidth: 800, naturalHeight: 800 })
+      : new Promise(resolve => { resolveImage = resolve; }) },
+  });
+  h.current.mediaId = 'previous';
+  h.current.mediaUrl = 'blob:previous';
+  await h.upload({ type: 'image/jpeg', size: 1000 });
+  const failure = h.element('mediaStatus').textContent;
+  h.current.template = 'convite_owner'; h.renderMediaStatus();
+  assert.equal(h.element('mediaStatus').textContent, '');
+  h.current.template = 'convite_owntime'; h.renderMediaStatus();
+  assert.equal(h.element('mediaStatus').textContent, failure);
+  fail = false;
+  const upload = h.upload({ type: 'image/jpeg', size: 1000 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.current.mediaUrl, 'blob:previous');
+  await h.exportPdf();
+  assert.equal(h.captured.pdf, undefined);
+  resolveImage({ complete: true, naturalWidth: 800, naturalHeight: 800 });
+  await upload;
+  assert.equal(h.current.mediaId, 'replacement');
+  assert.equal(h.current.mediaUrl, 'blob:replacement');
+  assert.ok(h.revoked.includes('blob:previous'));
+  assert.match(h.element('mediaStatus').textContent, /Imagem adicionada/);
+});
+
+test('invalid local photos never reach upload and remain retryable', async () => {
+  for (const file of [{ type: 'text/plain', size: 10 }, { type: 'image/png', size: 4 * 1024 * 1024 }]) {
+    let calls = 0;
+    const h = guestHarness(600, { fetchAPI: async () => { calls++; } });
+    await h.upload(file);
+    assert.equal(calls, 0);
+    assert.match(h.element('mediaStatus').textContent, /Não foi possível aplicar/);
+    assert.equal(h.element('imageInput').disabled, false);
+  }
+  assert.match(app, /const file = event\.target\.files\?\.\[0\];\s*event\.target\.value = '';/);
+});
+
+test('disposing the real lifecycle during decode revokes the staged photo without committing or updating detached feedback', async () => {
+  const lifecycleSource = await readFile('public/js/page-lifecycle.js', 'utf8');
+  const lifecycle = vm.runInNewContext(`${lifecycleSource.replace(/^export /gm, '')}\ncreatePageLifecycle()`, {
+    window: { history: {} }, AbortController, DOMException, URL,
+    setTimeout, clearTimeout, requestAnimationFrame: setImmediate, cancelAnimationFrame: clearImmediate,
+  });
+  let finishDecode;
+  const decoding = new Promise(resolve => { finishDecode = resolve; });
+  const h = guestHarness(600, {
+    lifecycle,
+    page: {
+      objectURL: () => 'blob:validation',
+      image: async src => ({ complete: true, naturalWidth: 800, naturalHeight: 800,
+        decode: src === 'blob:replacement' ? () => decoding : undefined }),
+    },
+  });
+  h.current.mediaId = 'previous'; h.current.mediaUrl = 'blob:previous';
+  const pending = h.upload({ type: 'image/png', size: 1000 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.current.mediaId, 'previous');
+  const feedback = h.element('mediaStatus').textContent;
+  lifecycle.dispose();
+  await pending;
+  finishDecode();
+  assert.equal(h.current.mediaId, 'previous');
+  assert.notEqual(h.current.mediaUrl, 'blob:replacement');
+  assert.equal(h.element('mediaStatus').textContent, feedback);
+  assert.ok(h.revoked.includes('blob:replacement'));
+});
 
 test('desktop rich editor input updates the active draft and rerenders the preview', () => {
   const { current, updateRichField, card } = guestHarness();

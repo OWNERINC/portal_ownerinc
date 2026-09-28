@@ -83,6 +83,7 @@ let historyRequest = 0;
 let historyOffset = 0;
 let mediaOperationToken = 0;
 let activeMediaPromise = null;
+const mediaFeedback = new Map();
 let activeEditor = null;
 let exportInProgress = false;
 let saving = false;
@@ -240,6 +241,7 @@ function render() {
   if (photo) photo.style.backgroundImage = `url("${photo.firstElementChild.src}")`;
   card.querySelectorAll('img').forEach((image) => page.listen(image, 'load', fitCardBody, { once: true }));
   page.frame(fitCardBody);
+  renderMediaStatus();
 }
 
 function fitCardBody(root = $('cardCanvas')) {
@@ -515,6 +517,19 @@ function replaceMediaUrl(url) {
   current.mediaUrl = url || '';
 }
 
+function renderMediaStatus() {
+  const element = $('mediaStatus');
+  if (!element) return;
+  const feedback = mediaFeedback.get(current.template);
+  element.textContent = feedback?.message || '';
+  element.classList.toggle('is-error', Boolean(feedback?.error));
+}
+
+function setMediaFeedback(message, error = false) {
+  mediaFeedback.set(current.template, { message, error });
+  renderMediaStatus();
+}
+
 function setMediaBusy(busy) {
   $('uploadButton').disabled = busy;
   $('imageInput').disabled = busy;
@@ -540,24 +555,43 @@ async function runMediaOperation(operation) {
 }
 
 async function upload(file) {
-  if (exportInProgress) return;
-  return runMediaOperation(async (operationToken) => {
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Escolha uma imagem PNG, JPEG ou WebP.');
-    const previewUrl = page.objectURL(file);
-    const dimensions = await page.image(previewUrl).then(image => [image.naturalWidth, image.naturalHeight])
-      .finally(() => URL.revokeObjectURL(previewUrl));
-    if (operationToken !== mediaOperationToken) return;
-    if (dimensions.some((value) => value < 500)) throw new Error('A imagem precisa ter pelo menos 500 × 500 px.');
-    setStatus('Enviando imagem...');
-    const media = await fetchAPI('/api/pos-cards/media', { method: 'POST', headers: { 'content-type': file.type }, body: file });
-    if (operationToken !== mediaOperationToken) return;
-    const mediaUrl = await fetchAPIAsset(media.url || `/api/pos-cards/media/${media.id}`);
-    if (operationToken !== mediaOperationToken) { URL.revokeObjectURL(mediaUrl); return; }
-    current.mediaId = media.id;
-    replaceMediaUrl(mediaUrl);
-    render();
-    setStatus('Imagem adicionada ao convite.');
-  });
+  if (saving || activeMediaPromise || exportInProgress || page.busy) return;
+  let validationMessage = '';
+  let pendingUrl = '';
+  const invalidFile = message => { validationMessage = message; throw new Error(message); };
+  try {
+    await runMediaOperation(async (operationToken) => {
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) invalidFile('Escolha uma imagem PNG, JPEG ou WebP.');
+      if (file.size > 3 * 1024 * 1024) invalidFile('Escolha uma imagem de até 3 MB.');
+      const previewUrl = page.objectURL(file);
+      const dimensions = await page.image(previewUrl).then(image => [image.naturalWidth, image.naturalHeight])
+        .finally(() => URL.revokeObjectURL(previewUrl));
+      if (operationToken !== mediaOperationToken) return;
+      if (dimensions.some((value) => value < 500)) invalidFile('A imagem precisa ter pelo menos 500 × 500 px.');
+      setMediaFeedback('Enviando imagem...');
+      const media = await fetchAPI('/api/pos-cards/media', { method: 'POST', headers: { 'content-type': file.type }, body: file });
+      if (operationToken !== mediaOperationToken) return;
+      pendingUrl = await fetchAPIAsset(media.url || `/api/pos-cards/media/${media.id}`);
+      if (operationToken !== mediaOperationToken) return;
+      // Commit the replacement only after the authenticated image can render.
+      const image = await page.image(pendingUrl);
+      await waitForImage(image);
+      if (operationToken !== mediaOperationToken || !page.active) return;
+      current.mediaId = media.id;
+      replaceMediaUrl(pendingUrl);
+      pendingUrl = '';
+      setMediaFeedback('Imagem adicionada ao convite.');
+      render();
+      setStatus('Imagem adicionada ao convite.');
+    });
+  } catch (error) {
+    if (!page.active) return;
+    const reference = error.requestId ? ` Referência: ${error.requestId}.` : '';
+    const detail = validationMessage || 'Tente novamente.';
+    setMediaFeedback(`Não foi possível aplicar a nova imagem. A imagem anterior foi mantida. ${detail}${reference}`, true);
+  } finally {
+    if (pendingUrl) URL.revokeObjectURL(pendingUrl);
+  }
 }
 
 async function save() {
@@ -671,6 +705,7 @@ async function editCard(id) {
        const targetDraft = draftStore.get(card.template);
       if (targetDraft?.mediaUrl?.startsWith('blob:')) URL.revokeObjectURL(targetDraft.mediaUrl);
       draftStore.loadSaved(card, mediaUrl);
+      mediaFeedback.delete(card.template);
       current.template = card.template;
       updateModuleControls();
       loadValues({}, card.template);
@@ -739,7 +774,11 @@ function init() {
     page.listen(button, 'click', () => switchModule(button.dataset.module === 'owner' ? 'convite_owner' : 'convite_owntime'));
   }
   for (const button of document.querySelectorAll('.nav-button')) page.listen(button, 'click', () => showView(button.dataset.view));
-  page.listen($('imageInput'), 'change', (event) => event.target.files[0] && upload(event.target.files[0]).catch((error) => setStatus(error.message, true)));
+  page.listen($('imageInput'), 'change', (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) upload(file);
+  });
   page.listen($('uploadButton'), 'click', () => $('imageInput').click());
   const inline = createInlineEditor({
     root: $('card-inline-layer'), canvas: $('cardCanvas'), fields: collectEditableFields($('cardForm')),

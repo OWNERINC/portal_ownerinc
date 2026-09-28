@@ -75,11 +75,12 @@
             <form id="cardForm">
                <fieldset>
                  <legend>Imagem e capa</legend>
-                <button id="uploadButton" class="upload-control" type="button">
+                <button id="uploadButton" class="upload-control" type="button" aria-describedby="mediaStatus">
                   <span class="upload-icon" aria-hidden="true">+</span>
                   <span><strong>Adicionar imagem principal</strong><small>JPG, PNG ou WebP · mínimo 500 × 500 px</small></span>
                 </button>
-                 <input id="imageInput" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true">
+                  <input id="imageInput" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-hidden="true">
+                  <p id="mediaStatus" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
                </fieldset>
                 <div class="editor-fields-scroll"><div id="guestFields">
                 <fieldset>

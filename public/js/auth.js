@@ -203,7 +203,7 @@ async function handleAuthenticationFailure(path, response) {
   const reason = authRedirectReason(path, response, body);
   if (!reason) return false;
   await endSession(reason);
-  throw new APIError(body.error || `A solicitação falhou (${response.status}).`, response.status, body.reason);
+  throw new APIError(body.error || `A solicitação falhou (${response.status}).`, response.status, body.reason, body.requestId);
 }
 
 // Guards the token/request against account changes. Raw Response consumers must
@@ -255,7 +255,7 @@ async function requestAPI(path, options = {}, session) {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     assertCurrentSession(session);
-    throw new APIError(body.error || `A solicitação falhou (${res.status}).`, res.status, body.reason);
+    throw new APIError(body.error || `A solicitação falhou (${res.status}).`, res.status, body.reason, body.requestId);
   }
   const data = res.status === 204 ? null : await res.json();
   assertCurrentSession(session);
@@ -271,7 +271,7 @@ export async function fetchAPIAsset(path, options = {}) {
     const body = await response.json().catch(() => ({}));
     assertCurrentSession(session);
     const requestId = body.requestId ? ` (referência ${body.requestId})` : '';
-    throw new APIError(`${body.error || `A solicitação falhou (${response.status}).`}${requestId}`, response.status, body.reason);
+    throw new APIError(`${body.error || `A solicitação falhou (${response.status}).`}${requestId}`, response.status, body.reason, body.requestId);
   }
   const blob = await response.blob();
   assertCurrentSession(session);
@@ -287,10 +287,11 @@ export function fetchAPIPage(path, options = {}) {
 }
 
 export class APIError extends Error {
-  constructor(message, status, reason) {
+  constructor(message, status, reason, requestId) {
     super(message);
     this.status = status;
     this.reason = reason;
+    this.requestId = typeof requestId === 'string' ? requestId : undefined;
   }
 }
 
