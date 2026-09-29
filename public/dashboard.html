@@ -54,18 +54,19 @@
     <header class="topbar"><span class="topbar-title">Dashboard</span></header>
     <!-- /generated:portal-topbar -->
     <main class="page-body dashboard-home" id="main-content" tabindex="-1" data-route-pending>
-      <section class="dashboard-hero" aria-labelledby="dashboard-hero-title">
-        <img src="./assets/logo-branco.svg" alt="Owner News" width="1600" height="700">
+      <section class="dashboard-hero" data-state="loading" aria-busy="true" aria-labelledby="dashboard-hero-title">
+        <img src="./assets/logo-branco.svg" alt="Owner News" width="1600" height="700" hidden>
         <div class="dashboard-hero-copy">
           <p id="dashboard-hero-eyebrow" class="dashboard-eyebrow">Owner News</p>
-          <h1 id="dashboard-hero-title">Histórias da Ownerinc.</h1>
-          <p id="dashboard-hero-description" class="dashboard-hero-description">Acompanhe as publicações da nossa equipe.</p>
-          <a class="dashboard-button dashboard-button-primary" href="./announcements.html">Ler publicação</a>
+          <h1 id="dashboard-hero-title">Owner News</h1>
+          <p id="dashboard-hero-description" class="dashboard-hero-description" role="status">Carregando publicações…</p>
+          <a class="dashboard-button dashboard-button-primary" href="#quick-links" hidden>Acessar áreas</a>
+          <button id="dashboard-hero-retry" class="dashboard-button dashboard-button-primary" type="button" hidden>Tentar novamente</button>
           <p id="dashboard-hero-meta" class="dashboard-hero-meta"></p>
         </div>
       </section>
 
-      <section class="dashboard-section" aria-labelledby="announcements-heading">
+      <section id="dashboard-news-section" class="dashboard-section" aria-labelledby="announcements-heading" hidden>
         <div class="dashboard-section-heading">
           <div>
             <p class="dashboard-section-kicker">Últimas publicações</p>
@@ -73,7 +74,7 @@
           </div>
           <a class="dashboard-section-link" href="./announcements.html">Ver todos</a>
         </div>
-        <div id="announcements-preview" class="dashboard-story-rail" aria-live="polite"><p class="empty-state">Carregando publicações…</p></div>
+        <div id="announcements-preview" class="dashboard-story-rail" aria-live="polite"></div>
       </section>
 
       <section class="dashboard-section" aria-labelledby="areas-heading">

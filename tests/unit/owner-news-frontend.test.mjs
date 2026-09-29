@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createFeedbackHarness, TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
 
 const news = await readFile('public/js/announcements.js', 'utf8');
 const dashboard = await readFile('public/js/dashboard.js', 'utf8');
@@ -106,34 +107,76 @@ test('dashboard protected covers revoke stale and retained object URLs', async (
   assert.equal(paths.length, 1);
 });
 
-test('dashboard clears a withdrawn hero on an empty refresh and restores it for a new publication', async () => {
-  const title = {};
-  const link = {};
-  const results = [[{ id: 'old', title: 'Old story' }], [], [{ id: 'new', title: 'New story' }]];
-  const context = vm.createContext({
-    announcementsPreview: node('div'), announcementsRequest: 0,
-    document: {
-      querySelector: selector => selector === '.dashboard-hero-copy a' ? link : null,
-      getElementById: id => id === 'dashboard-hero-title' ? title : null,
-    },
-    fetchAPI: async () => results.shift(),
-    setBusy() {}, releaseNewsImages() {}, loadNewsImage() {},
-    clear: target => { target.children = []; },
-    showState: (target, text) => { target.children = [text]; },
-    storyCard: () => ({ querySelector() { return null; } }),
-    excerpt: () => '', formatDate: () => '', encodeURIComponent,
-  });
-  vm.runInContext(section(dashboard, 'function renderHero(', 'const announcementsPreview'), context);
-  vm.runInContext(section(dashboard, 'async function loadAnnouncements(', 'const remindersContainer'), context);
-  await context.loadAnnouncements();
-  assert.equal(title.textContent, 'Old story');
-  await context.loadAnnouncements();
-  assert.equal(title.textContent, 'Owner News');
-  assert.equal(link.href, './announcements.html');
-  assert.match(context.announcementsPreview.children[0], /Nenhuma publicação/);
-  await context.loadAnnouncements();
-  assert.equal(title.textContent, 'New story');
+test('dashboard clears a withdrawn hero on an empty refresh and restores it for a new publication', async t => {
+  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
+  const hero = h.doc.querySelector('.dashboard-hero'), link = h.doc.querySelector('.dashboard-hero-copy a');
+  const cover = h.doc.querySelector('.dashboard-hero > img');
+  assert.equal(hero.dataset.state, 'loading');
+  assert.equal(link.hidden, true);
+  assert.match(h.node('dashboard-hero-description').textContent, /Carregando/);
+  const story = { id: 'old', title: 'Old story', published_at: '2026-09-29T12:00:00Z', content_blocks: [{ type: 'image', asset_id: 'asset-a', alt: 'Capa' }] };
+  h.latest('/api/announcements?').resolve([story]); await drain();
+  assert.equal(hero.dataset.state, 'populated');
+  assert.equal(h.node('dashboard-hero-title').textContent, 'Old story');
+  assert.equal(link.href, './announcements.html?id=old');
+  assert.equal(link.hidden, false); assert.equal(cover.hidden, false);
+  assert.equal(h.node('dashboard-news-section').hidden, false);
+  const assets = h.requests.filter(item => item.kind === 'asset');
+  assets[0].resolve('blob:hero'); assets[1].resolve('blob:rail'); await drain();
+  assert.equal(cover.src, 'blob:hero');
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  assert.equal(hero.dataset.state, 'loading');
+  assert.ok(h.revoked.includes('blob:hero') && h.revoked.includes('blob:rail'));
+  h.latest('/api/announcements?').resolve([]); await drain();
+  assert.equal(hero.dataset.state, 'empty');
+  assert.equal(h.node('dashboard-hero-title').textContent, 'Owner News');
+  assert.equal(link.href, '#quick-links'); assert.equal(link.textContent, 'Acessar áreas');
+  assert.equal(link.hidden, false); assert.equal(cover.hidden, true);
+  assert.equal(cover.src, './assets/logo-branco.svg');
+  assert.equal(h.node('dashboard-news-section').hidden, true);
+  assert.equal(h.node('announcements-preview').children.length, 0);
+  assert.equal(h.doc.querySelectorAll('h1').length, 1);
+  assert.equal(h.node('quick-links').querySelectorAll('a').length, 3);
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  h.latest('/api/announcements?').resolve([{ ...story, id: 'new', title: 'New story', content_blocks: [] }]); await drain();
+  assert.equal(hero.dataset.state, 'populated');
+  assert.equal(h.node('dashboard-hero-title').textContent, 'New story');
   assert.equal(link.href, './announcements.html?id=new');
+  assert.equal(cover.hidden, false); assert.equal(h.node('dashboard-news-section').hidden, false);
+  assert.equal(h.node('announcements-preview').children.length, 1);
+});
+
+test('dashboard initial markup is loading, empty styles are compact and a query error offers a scoped retry', async t => {
+  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
+  const css = await readFile('public/css/dashboard-home.css', 'utf8');
+  assert.match(h.html, /data-state="loading" aria-busy="true"/);
+  assert.doesNotMatch(h.html, />Ler publicação</);
+  assert.match(css, /\.dashboard-hero:not\(\[data-state="populated"\]\) \{ min-height: 0; \}/);
+  assert.match(css, /\.dashboard-hero:not\(\[data-state="populated"\]\) \.dashboard-hero-copy \{\s*width: 100%;\s*min-height: 0;\s*padding: 24px;/);
+  h.latest('/api/announcements?').reject(new Error('offline')); await drain();
+  const hero = h.doc.querySelector('.dashboard-hero'), retry = h.node('dashboard-hero-retry');
+  assert.equal(hero.dataset.state, 'error'); assert.equal(retry.hidden, false);
+  assert.match(h.node('dashboard-hero-description').textContent, /Não foi possível/);
+  assert.doesNotMatch(h.node('dashboard-hero-description').textContent, /Nenhuma/);
+  assert.equal(h.doc.querySelector('.dashboard-hero-copy a').hidden, true);
+  retry.click(); const count = h.requests.length; retry.click();
+  assert.equal(h.requests.length, count, 'a hidden retry cannot start another loading query');
+  assert.equal(hero.dataset.state, 'loading'); assert.equal(retry.hidden, true);
+  h.latest('/api/announcements?').resolve([]); await drain();
+  assert.equal(hero.dataset.state, 'empty'); assert.equal(hero.getAttribute('aria-busy'), 'false');
+});
+
+for (const outcome of ['success', 'failure']) test(`dashboard ignores stale ${outcome} and disposes pending private covers`, async t => {
+  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
+  const old = h.latest('/api/announcements?');
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  h.latest('/api/announcements?').resolve([{ id: 'new', title: 'Current', content_blocks: [{ type: 'image', asset_id: 'asset-a', alt: 'Capa' }] }]); await drain();
+  if (outcome === 'success') old.resolve([]); else old.reject(new Error('old error'));
+  await drain(); assert.equal(h.node('dashboard-hero-title').textContent, 'Current');
+  const assets = h.requests.filter(item => item.kind === 'asset');
+  h.page.dispose(); assets.forEach((item, i) => item.resolve(`blob:late-${i}`)); await drain();
+  assert.ok(h.revoked.includes('blob:late-0'));
+  assert.notEqual(h.doc.querySelector('.dashboard-hero > img').src, 'blob:late-0');
 });
 
 test('reader filters before pagination, ignores stale pages and preserves category on next page', async () => {

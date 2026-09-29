@@ -80,6 +80,8 @@ if (typeof draftStore !== 'undefined') for (const key of ['mediaId', 'mediaUrl',
 });
 let historyRequest = 0;
 let historyOffset = 0;
+let historyPending = false;
+let historyMutation = null;
 let mediaOperationToken = 0;
 let activeMediaPromise = null;
 const mediaFeedback = new Map();
@@ -98,7 +100,7 @@ const canLeave = () => {
     setStatus('Conclua ou cancele a edição do campo antes de sair.', true);
     return false;
   }
-  if (saving || activeMediaPromise || exportInProgress || page.busy) {
+  if (saving || activeMediaPromise || exportInProgress || historyMutation || page.busy) {
     setStatus('Aguarde a operação do convite terminar.', true);
     return false;
   }
@@ -107,10 +109,10 @@ const canLeave = () => {
 };
 page.beforeLeave(canLeave);
 page.listen(window, 'beforeunload', event => {
-  if (!saving && !activeMediaPromise && !exportInProgress && !isDirty()) return;
+  if (!saving && !activeMediaPromise && !exportInProgress && !historyMutation && !isDirty()) return;
   event.preventDefault(); event.returnValue = '';
 });
-page.cleanup(() => { ++historyRequest; ++mediaOperationToken; replaceMediaUrl(''); });
+page.cleanup(() => { ++historyRequest; historyMutation = null; ++mediaOperationToken; replaceMediaUrl(''); });
 const HISTORY_PAGE_SIZE = 50;
 const RICH_VALUE = Symbol('rich-value');
 const RICH_TAGS = new Set(['STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'BR', 'UL', 'OL', 'LI']);
@@ -637,7 +639,6 @@ async function saveWithName(name) {
      const editing = Boolean(ticket.editingId);
      const saved = await fetchAPI(editing ? `/api/pos-cards/cards/${ticket.editingId}` : '/api/pos-cards/cards', {
       method: editing ? 'PUT' : 'POST',
-      headers: { 'content-type': 'application/json' },
        body: JSON.stringify({ name: ticket.name, template: ticket.template, values: ticket.values, mediaId: ticket.mediaId }),
      });
       if (typeof draftStore !== 'undefined') draftStore.acceptSave(ticket, saved);
@@ -651,13 +652,38 @@ async function saveWithName(name) {
   }
 }
 
-function renderHistory(cards) {
-  $('historyList').innerHTML = cards.map((card) => `<article class="history-item"><div><strong>${esc(card.name)}</strong><small>${card.template === 'convite_owner' ? 'Owner' : 'Convidado'} · Atualizado em ${esc(new Date(card.updatedAt).toLocaleDateString('pt-BR'))}</small></div><div class="history-actions"><button type="button" data-edit="${esc(card.id)}">Editar</button><button type="button" data-copy="${esc(card.id)}">Duplicar</button><button type="button" data-delete="${esc(card.id)}">Excluir</button></div></article>`).join('');
-  $('historyEmpty').classList.toggle('hidden', cards.length > 0);
-  $('history-status').textContent = `${cards.length} item(ns) carregados.`;
+function setHistoryStatus(message, error = false) {
+  const status = $('history-status');
+  status.textContent = message;
+  status.classList.toggle('is-error', error);
 }
 
-function renderHistoryPagination(total) {
+function syncHistoryActions() {
+  const list = $('historyList');
+  if (!page.active || !list) return;
+  const busy = historyPending || historyMutation !== null;
+  list.setAttribute('aria-busy', String(busy));
+  list.querySelectorAll('button').forEach(button => {
+    button.disabled = busy || button.dataset.historyRequest !== String(historyRequest);
+  });
+}
+
+function beginHistoryMutation() {
+  if (!page.active || exportInProgress || historyPending || historyMutation) return null;
+  // A query token cannot own writes: a different search/ID can share or advance
+  // it. This operation owns the write AND its refresh until its own finally.
+  const operation = { request: historyRequest };
+  historyMutation = operation;
+  syncHistoryActions();
+  return operation;
+}
+
+function renderHistory(cards, requestToken) {
+  $('historyList').innerHTML = cards.map((card) => `<article class="history-item"><div><strong>${esc(card.name)}</strong><small>${card.template === 'convite_owner' ? 'Owner' : 'Convidado'} · Atualizado em ${esc(new Date(card.updatedAt).toLocaleDateString('pt-BR'))}</small></div><div class="history-actions"><button type="button" data-history-request="${requestToken}" data-edit="${esc(card.id)}">Editar</button><button type="button" data-history-request="${requestToken}" data-copy="${esc(card.id)}">Duplicar</button><button type="button" data-history-request="${requestToken}" data-delete="${esc(card.id)}">Excluir</button></div></article>`).join('');
+  syncHistoryActions();
+}
+
+function renderHistoryPagination(total, requestToken) {
   const pagination = $('historyPagination');
   pagination.replaceChildren();
   if (total <= HISTORY_PAGE_SIZE) return;
@@ -668,6 +694,7 @@ function renderHistoryPagination(total) {
     button.textContent = label;
     button.disabled = disabled;
     button.dataset.historyOffset = String(offset);
+    button.dataset.historyRequest = String(requestToken);
     return button;
   };
   const page = Math.floor(historyOffset / HISTORY_PAGE_SIZE) + 1;
@@ -680,26 +707,58 @@ function renderHistoryPagination(total) {
   );
 }
 
-async function loadHistory() {
+async function loadHistory(query = { search: $('historySearch').value.trim(), offset: historyOffset }) {
+  if (!page.active) return false;
   const requestToken = ++historyRequest;
+  const isCurrent = () => page.active && requestToken === historyRequest;
+  historyOffset = query.offset;
+  historyPending = true;
+  const list = $('historyList');
+  list.replaceChildren();
+  list.setAttribute('aria-busy', 'true');
+  $('historyPagination').replaceChildren();
   const empty = $('historyEmpty');
-  empty.textContent = 'Carregando convites...';
-  empty.classList.remove('hidden');
+  empty.replaceChildren();
+  empty.classList.add('hidden');
+  setHistoryStatus('Carregando convites...');
+  const action = (label, callback) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-ghost';
+    button.textContent = label;
+    page.listen(button, 'click', () => { if (isCurrent() && !historyPending) callback(); });
+    empty.classList.remove('hidden');
+    empty.append(button);
+  };
   try {
-    const search = encodeURIComponent($('historySearch').value);
-    const result = await fetchAPIPage(`/api/pos-cards/cards?search=${search}&limit=${HISTORY_PAGE_SIZE}&offset=${historyOffset}`);
-    if (requestToken !== historyRequest) return;
+    const search = encodeURIComponent(query.search);
+    const result = await fetchAPIPage(`/api/pos-cards/cards?search=${search}&limit=${HISTORY_PAGE_SIZE}&offset=${query.offset}`);
+    if (!isCurrent()) return false;
     const cards = result.data || [];
-    renderHistory(cards);
-    renderHistoryPagination(result.total ?? cards.length);
-    empty.textContent = 'Nenhum convite salvo ainda.';
-    setStatus(cards.length ? `${cards.length} convite(s) encontrado(s).` : 'Nenhum convite salvo ainda.');
+    const total = result.total ?? cards.length;
+    const lastOffset = Math.max(0, Math.ceil(total / HISTORY_PAGE_SIZE) - 1) * HISTORY_PAGE_SIZE;
+    if (!cards.length && query.offset > lastOffset) return loadHistory({ ...query, offset: lastOffset });
+    renderHistory(cards, requestToken);
+    renderHistoryPagination(total, requestToken);
+    if (cards.length) setHistoryStatus(`${cards.length} convite(s) encontrado(s).`);
+    else if (total > 0) {
+      setHistoryStatus('Nenhum convite nesta página. Atualize o histórico.');
+      action('Tentar novamente', () => loadHistory(query));
+    } else if (query.search) {
+      setHistoryStatus('Nenhum convite encontrado para esta busca.');
+      action('Limpar busca', () => { $('historySearch').value = ''; historyOffset = 0; loadHistory(); $('historySearch').focus(); });
+    } else {
+      setHistoryStatus('Nenhum convite salvo ainda.');
+      action('Criar convite', () => showView('editor'));
+    }
+    return requestToken;
   } catch (error) {
-    if (requestToken !== historyRequest) return;
-    $('historyList').replaceChildren();
-    $('historyPagination').replaceChildren();
-    empty.textContent = 'Não foi possível carregar o histórico.';
-    setStatus(error.message, true);
+    if (!isCurrent()) return false;
+    setHistoryStatus('Não foi possível carregar o histórico.', true);
+    action('Tentar novamente', () => loadHistory(query));
+    return false;
+  } finally {
+    if (isCurrent()) { historyPending = false; syncHistoryActions(); }
   }
 }
 
@@ -732,29 +791,41 @@ async function editCard(id) {
 }
 
 async function duplicateCard(id) {
-  if (exportInProgress) return;
+  const operation = beginHistoryMutation();
+  if (!operation) return;
   setStatus('Duplicando convite...');
   try {
     await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
-    historyOffset = 0;
-    await loadHistory();
-    setStatus('Convite duplicado.');
+    if (!page.active || historyMutation !== operation || $('historyView').classList.contains('hidden')) return;
+    const sameQuery = operation.request === historyRequest;
+    if (sameQuery) historyOffset = 0;
+    // A search made during the write also needs a post-commit refresh, using
+    // its current filter/page rather than resurrecting the previous query.
+    const loadedRequest = await loadHistory();
+    if (sameQuery && loadedRequest === historyRequest) setStatus('Convite duplicado.');
   } catch (error) {
-    setStatus(error.message, true);
+    if (historyMutation === operation && operation.request === historyRequest) setStatus(error.message, true);
+  } finally {
+    if (historyMutation === operation) { historyMutation = null; syncHistoryActions(); }
   }
 }
 
 async function deleteCard(id) {
-  if (exportInProgress) return;
-  if (!window.confirm('Excluir este convite?')) return;
-  setStatus('Excluindo convite...');
+  const operation = beginHistoryMutation();
+  if (!operation) return;
   try {
+    if (!window.confirm('Excluir este convite?')) return;
+    setStatus('Excluindo convite...');
     await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    historyOffset = 0;
-    await loadHistory();
-    setStatus('Convite excluído.');
+    if (!page.active || historyMutation !== operation || $('historyView').classList.contains('hidden')) return;
+    const sameQuery = operation.request === historyRequest;
+    if (sameQuery) historyOffset = 0;
+    const loadedRequest = await loadHistory();
+    if (sameQuery && loadedRequest === historyRequest) setStatus('Convite excluído.');
   } catch (error) {
-    setStatus(error.message, true);
+    if (historyMutation === operation && operation.request === historyRequest) setStatus(error.message, true);
+  } finally {
+    if (historyMutation === operation) { historyMutation = null; syncHistoryActions(); }
   }
 }
 
@@ -773,7 +844,7 @@ function showView(view) {
   $('editorView').classList.toggle('hidden', view !== 'editor');
   $('historyView').classList.toggle('hidden', view !== 'history');
   document.body.classList.toggle('cards-pos-editing', view === 'editor');
-  if (view === 'editor') layoutUpdate?.();
+  if (view === 'editor') { ++historyRequest; historyPending = false; layoutUpdate?.(); }
   if (view === 'history') loadHistory();
 }
 
@@ -840,14 +911,14 @@ function init() {
   page.listen($('historySearch'), 'input', () => { historyOffset = 0; loadHistory(); });
   page.listen($('historyList'), 'click', (event) => {
     const button = event.target.closest('button');
-    if (!button) return;
+    if (!button || button.disabled || historyPending || historyMutation || button.dataset.historyRequest !== String(historyRequest) || !$('historyList').contains(button)) return;
     if (button.dataset.edit) editCard(button.dataset.edit);
     if (button.dataset.copy) duplicateCard(button.dataset.copy);
     if (button.dataset.delete) deleteCard(button.dataset.delete);
   });
   page.listen($('historyPagination'), 'click', event => {
     const button = event.target.closest('button[data-history-offset]');
-    if (!button || button.disabled) return;
+    if (!button || button.disabled || historyPending || button.dataset.historyRequest !== String(historyRequest) || !$('historyPagination').contains(button)) return;
     historyOffset = Number(button.dataset.historyOffset);
     loadHistory();
   });

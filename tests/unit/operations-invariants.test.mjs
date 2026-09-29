@@ -101,7 +101,9 @@ test('cron grants row-lock privileges only for user and reminder rechecks', asyn
 
 test('job title listing hides inactive titles by default', async () => {
   const routes = await read('api/routes/job-titles.js');
-  assert.match(routes, /const where = req\.query\.all === 'true' \? '' : 'WHERE jt\.active = TRUE';/);
+  assert.match(routes, /const active = req\.query\.active \?\? \(req\.query\.all === 'true' \? undefined : 'true'\);/);
+  assert.match(routes, /params\.push\(active === 'true'\)/);
+  assert.match(routes, /jt\.active = \$\$\{params\.length\}/);
   assert.match(routes, /COUNT\(\*\)::integer AS count FROM job_titles jt \$\{where\}/);
   assert.match(routes, /LEFT JOIN users u ON u\.job_title_id = jt\.id \$\{where\}/);
 });

@@ -95,7 +95,7 @@
   </div>
 </div>
 
-<dialog id="assetDialog" aria-labelledby="assetTitle"><form method="dialog"><div class="dialog-heading"><h2 id="assetTitle">Biblioteca</h2><button value="cancel" aria-label="Fechar biblioteca" class="close-button">×</button></div><input id="assetSearch" aria-label="Buscar na biblioteca" type="search" placeholder="Buscar..."><div id="assetGrid" class="asset-grid"></div></form></dialog>
+<dialog id="assetDialog" aria-labelledby="assetTitle"><form method="dialog"><div class="dialog-heading"><h2 id="assetTitle">Biblioteca</h2><button value="cancel" aria-label="Fechar biblioteca" class="close-button">×</button></div><input id="assetSearch" aria-label="Buscar na biblioteca" aria-describedby="assetSearchStatus" type="search" placeholder="Buscar em português ou pelo nome original"><p id="assetSearchStatus" role="status"></p><button id="assetSearchClear" class="secondary-button" type="button" hidden>Limpar busca</button><div id="assetGrid" class="asset-grid"></div></form></dialog>
 <dialog id="cropDialog" aria-labelledby="cropTitle">
    <form method="dialog" class="crop-dialog-form">
      <div class="dialog-heading">

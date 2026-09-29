@@ -79,7 +79,10 @@
             <p class="section-label">Operação</p>
             <h2>Entregas recentes</h2>
           </div>
-          <p id="cron-health" class="badge badge-gray" role="status">Verificando cron…</p>
+          <div>
+            <p id="cron-health" class="badge badge-gray" role="status">Consultando saúde do cron…</p>
+            <div id="cron-health-actions" class="actions"></div>
+          </div>
         </div>
         <div class="table-wrapper">
           <table>
@@ -88,19 +91,37 @@
             <tbody id="deliveries-tbody"><tr><td colspan="7" class="empty-state">Carregando…</td></tr></tbody>
           </table>
         </div>
-        <form id="delivery-filters" class="filter-bar" autocomplete="off">
-          <label for="delivery-status">Status</label>
-          <select id="delivery-status" class="form-select"><option value="">Todos</option><option value="sent">Enviado</option><option value="failed">Falhou</option><option value="skipped">Ignorado</option><option value="pending">Pendente</option><option value="sending">Enviando</option></select>
-          <label for="delivery-channel">Canal</label>
-          <select id="delivery-channel" class="form-select"><option value="">Todos</option><option value="email">E-mail</option><option value="whatsapp">WhatsApp</option></select>
-          <label for="delivery-reminder">Lembrete</label>
-          <input id="delivery-reminder" class="form-input" type="search" maxlength="36" placeholder="ID do lembrete">
-          <label for="delivery-user">UID</label>
-          <input id="delivery-user" class="form-input" type="search" maxlength="128" placeholder="UID do usuário">
-          <label for="delivery-from">De</label>
-          <input id="delivery-from" class="form-input" type="date">
-          <label for="delivery-to">Até</label>
-          <input id="delivery-to" class="form-input" type="date">
+        <form id="delivery-filters" class="filter-bar" autocomplete="off" novalidate>
+          <div class="form-group">
+            <label for="delivery-status">Status</label>
+            <select id="delivery-status" class="form-select"><option value="">Todos</option><option value="sent">Enviado</option><option value="failed">Falhou</option><option value="skipped">Ignorado</option><option value="pending">Pendente</option><option value="sending">Enviando</option></select>
+          </div>
+          <div class="form-group">
+            <label for="delivery-channel">Canal</label>
+            <select id="delivery-channel" class="form-select"><option value="">Todos</option><option value="email">E-mail</option><option value="whatsapp">WhatsApp</option></select>
+          </div>
+          <div class="form-group">
+            <label for="delivery-reminder">Lembrete</label>
+            <input id="delivery-reminder" class="form-input" type="search" maxlength="36" placeholder="ID do lembrete" aria-describedby="delivery-reminder-help delivery-reminder-error" aria-invalid="false">
+            <small id="delivery-reminder-help" class="form-help">UUID do lembrete, não o título. Deixe vazio para todos.</small>
+            <span id="delivery-reminder-error" class="error-msg" hidden></span>
+          </div>
+          <div class="form-group">
+            <label for="delivery-user">UID</label>
+            <input id="delivery-user" class="form-input" type="search" maxlength="128" placeholder="UID do usuário" aria-describedby="delivery-user-help delivery-user-error" aria-invalid="false">
+            <small id="delivery-user-help" class="form-help">Identificador do usuário, não nome ou e-mail. Deixe vazio para todos.</small>
+            <span id="delivery-user-error" class="error-msg" hidden></span>
+          </div>
+          <div class="form-group">
+            <label for="delivery-from">De</label>
+            <input id="delivery-from" class="form-input" type="date" aria-describedby="delivery-from-error" aria-invalid="false">
+            <span id="delivery-from-error" class="error-msg" hidden></span>
+          </div>
+          <div class="form-group">
+            <label for="delivery-to">Até</label>
+            <input id="delivery-to" class="form-input" type="date" aria-describedby="delivery-to-error" aria-invalid="false">
+            <span id="delivery-to-error" class="error-msg" hidden></span>
+          </div>
           <button class="btn btn-primary" type="submit">Filtrar</button>
           <button id="delivery-clear" class="btn btn-ghost" type="button">Limpar</button>
         </form>

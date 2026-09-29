@@ -424,10 +424,11 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     window,
   });
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
+  const catalogSource = (await readFile('public/autocard/asset-catalog.js', 'utf8')).replace(/^export /gm, '');
   const paginationSource = pagination.replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
   const mountedApp = mountSource(appSource, 'globalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, openSavedCard, showTab, syncOverflow, canLeave, generation: () => documentGeneration };');
-  vm.runInContext(`${cropSource}\n${paginationSource}\n(()=>{${mountedApp}})();\n(()=>{${mountSource(employee)}})();\n(()=>{${mountSource(variant)}})();`, context);
+  vm.runInContext(`${cropSource}\n${catalogSource}\n${paginationSource}\n(()=>{${mountedApp}})();\n(()=>{${mountSource(employee)}})();\n(()=>{${mountSource(variant)}})();`, context);
   const cardCanvas = elements.get('cardCanvas');
   const nativeQuerySelectorAll = cardCanvas.querySelectorAll.bind(cardCanvas);
   const renderedTextNodes = [];
@@ -1174,6 +1175,21 @@ test('AutoCard capture failures show feedback, release the button and allow retr
   assert.equal(h.downloadClicks(), 1);
 });
 
+test('AutoCard PNG feedback does not turn an earlier optional-media rejection into an export failure', async () => {
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('aniversariante');
+  await h.chooseFile({ name: 'large.png', type: 'image/png', size: 4 * 1024 * 1024 });
+  assert.equal(h.mediaStatus(), 'error');
+  assert.equal(h.state().mediaId, null);
+  const mediaMessage = h.mediaStatusText();
+  await h.exportCard();
+  assert.equal(h.downloadClicks(), 1);
+  assert.match(h.toast().textContent, /PNG gerado; download solicitado ao navegador/);
+  assert.equal(h.mediaStatusText(), mediaMessage);
+  assert.equal(h.mediaStatus(), 'error');
+  assert.equal(h.exportButtonDisabled(), false);
+});
+
 test('AutoCard validation revokes the local URL on both image load and failure', async () => {
   for (const success of [true, false]) {
     const h = await createAutoCardLifecycleHarness({ deferLocalImages: true });
@@ -1304,6 +1320,11 @@ test('AutoCard commits replacement media only after its blob loads and restores 
   assert.equal(failed.state().mediaUrl, failedOldUrl);
   assert.equal(failed.mediaStatus(), 'error');
   assert.match(failed.cardCanvas.innerHTML, new RegExp(`src="${failedOldUrl}"`));
+  const mediaMessage = failed.mediaStatusText();
+  await failed.exportCard();
+  assert.equal(failed.downloadClicks(), 0, 'retained media in an error state keeps its existing export fence');
+  assert.doesNotMatch(failed.toast().textContent, /PNG gerado|Não foi possível exportar/);
+  assert.equal(failed.mediaStatusText(), mediaMessage);
 });
 
 test('AutoCard snapshots media confirmed during replacement validation', async () => {
@@ -1756,6 +1777,44 @@ test('AutoCard employee mobile layout bounds long names and preserves the footer
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenFlex), /employee copy must receive remaining height/);
   const brokenSpace = styles.replace('.employee-copy{padding:10px 14px 12px}', '.employee-copy{padding:80px 14px 80px}');
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenSpace), /employee body budget must remain positive/);
+});
+
+test('employee heading line-height survives the container cascade without changing clamp or canvas geometry', async () => {
+  const styles = await readFile('public/autocard/styles.css', 'utf8');
+  const rules = [...styles.matchAll(/\.employee-copy h2\s*\{([^}]+)\}/g)].map(match => match[1]);
+  assert.deepEqual(rules.flatMap(rule => [...rule.matchAll(/(?:^|;)line-height:([^;]+)/g)].map(match => match[1])), ['1.1']);
+  assert.equal(cssDeclarations(styles, '.employee-copy h2')['line-height'], '1.1');
+  assert.ok(rules.some(rule => rule.includes('-webkit-line-clamp:3;overflow:hidden')));
+  assert.ok(rules.some(rule => rule.includes('-webkit-line-clamp:2')));
+  assert.match(styles, /@container \(max-width:500px\)/);
+  assert.match(styles, /\.autocard-page #cardCanvas\s*\{[^}]*aspect-ratio:\s*1;/);
+});
+
+test('employee export preserves short, multiline and accented titles but still blocks even one measured pixel of clipping', async () => {
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('novo_funcionario');
+  for (const width of [420, 280]) {
+    h.setCardRect(width, width);
+    for (const title of ['QA local 20260929', 'Nome em\nduas linhas', 'João Gonçalves — Criação']) {
+      h.setField('titulo', title); h.flushMutations();
+      assert.ok(h.cardCanvas.innerHTML.includes(title));
+      // DOM dimensions are controlled here; real Novelin/Chromium text metrics
+      // and exported files remain a separate browser acceptance requirement.
+      h.setRenderedTextMetrics({ clientHeight: 24, scrollHeight: 24 });
+      const downloads = h.downloadClicks();
+      await h.exportCard();
+      assert.equal(h.downloadClicks(), downloads + 1);
+      assert.equal(h.captures.at(-1).options.width * h.captures.at(-1).options.scale, 1080);
+      h.setRenderedTextMetrics({ clientHeight: 23, scrollHeight: 24 });
+      await h.exportCard();
+      assert.equal(h.downloadClicks(), downloads + 1, 'one clipped pixel remains a real export blocker');
+      assert.equal(h.exportButtonDisabled(), true);
+    }
+    h.setField('titulo', 'Título realmente longo e cortado '.repeat(12)); h.flushMutations();
+    h.setRenderedTextMetrics({ clientHeight: 48, scrollHeight: 192 });
+    const downloads = h.downloadClicks(); await h.exportCard(); assert.equal(h.downloadClicks(), downloads);
+    assert.match(h.contentOverflowText(), /texto cortado/);
+  }
 });
 
 test('AutoCard birthday variant registers resize observation and remeasures media', async () => {
