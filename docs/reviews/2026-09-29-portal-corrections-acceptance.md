@@ -462,3 +462,54 @@ produção e dispositivos físicos dependem da homologação operacional apropri
 Node 24 é o runtime usado pelos manifests e pelas verificações atuais; a
 instrução preexistente de compatibilidade Node 18 continua divergente das
 dependências existentes e não é comprovada por esta rodada.
+
+## Adendo — homologação operacional local de SMTP e primeiro acesso
+
+Em 29/09/2026, sobre HEAD `4f3e51c236085503d1fdf2434427db4a1a84e6de`, a sessão
+principal executou o QA SMTP local autorizado e restaurou a configuração
+original. O PR #42 continuava aberto, com CI verde informada pelo primário;
+**merge, autodeploy e operações de produção permaneciam pendentes**. Este adendo
+não substitui resultados históricos nem declara recebimento externo.
+
+Detalhamento, fontes, IDs sintéticos e limites no
+[relatório de homologação operacional](2026-09-29-portal-operational-acceptance.md).
+
+- Convite individual pela API: **201**, `accepted_by_smtp`. CSV com duas linhas
+  prontas confirmado em **202**, job `7e954c71-e34d-42ea-b950-a028725178dd`.
+- Primeiro tick natural: **1 invited / 1 failed / 0 pending**, com recusa
+  controlada **RCPT 550** para PJ. Compensação observada: nenhum usuário PJ,
+  Firebase `auth/user-not-found`, fila de cleanup correspondente zero.
+- Retry manual de **uma** linha: **2 invited / 0 failed / 0 pending**; CLT manteve
+  UID/tentativa 1, PJ concluiu na tentativa 2. Retry posterior retornou zero;
+  duplicata do convite individual foi recusada com **409**.
+- **Três convites** capturados, correlacionados por Message-ID aos eventos de
+  auditoria SMTP **250 / accepted=1 / rejected=0**. Houve uma **quarta mensagem
+  de recuperação do individual**, necessária após interrupção do harness: não se
+  afirma primeiro acesso individual com um único link original, sem reemissão.
+- Três logins pela UI, em contextos novos, chegaram ao Dashboard com
+  `/api/users/me` **200**, role `viewer`, permissões vazias, contratos CLT/CLT/PJ
+  corretos e zero erros de página. CLT/PJ usaram os convites originais; individual
+  usou a recuperação. O handler `GET /emulator/action` exige `newPassword` e
+  **não é o formulário de produção**; a causa da falha inicial de instrumentação
+  não foi estabelecida. Host original local preservado, sem rewrite.
+- Após ticks posteriores: linhas estáveis e **3 convites + 1 recuperação**.
+  Isso não comprova entrega externa nem garantia universal de exactly-once.
+- Restauração: arquivo de ambiente com hash igual; imagens, hashes de ambiente,
+  mounts e redes originais de API/cron; IDs de Nginx/PostgreSQL/Firebase
+  preservados. Primário confirmou sink parado/removido, com volume privado de
+  captura mantido. As três fixtures ativas e o job concluído ficaram registrados
+  por IDs, sem convites pendentes dessas fixtures.
+
+Continuam **autorizados, mas pendentes de execução/observação em produção**:
+merge/autodeploy, recebimento somente em `gabriel.garcia@ownerinc.com.br`, as
+três alterações de cargos aprovadas, validação em iPhone e publicação/validação
+do PDF **“edição 4 maio 2026”** (identificação literal do despacho), com capa/anexo
+completos. Nenhum dado
+oficial, produção ou PDF versionado foi alterado por esta entrega documental.
+
+O worker apenas documentou a execução primária: `npm run verify` passou com
+**788 testes**, zero falhas/cancelamentos/testes pulados, e `git diff --check`
+passou. A subetapa Compose foi explicitamente não executada, com Docker fora
+do PATH apenas desse processo, para respeitar a proibição de Docker neste
+despacho. Sem acesso à stack, DB, credenciais, e-mails brutos ou arquivos
+`*.private.json`, sem navegador, Git de escrita, deploy ou delegação pelo worker.
