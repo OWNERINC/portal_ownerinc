@@ -255,9 +255,9 @@ test('Sólides administration loads every eligible CLT page', async () => {
 
 test('admin job titles come from the API instead of an inline catalog', async () => {
   const script = await readFile('public/js/admin.js', 'utf8');
-  assert.match(script, /fetchAPIPage\('\/api\/job-titles\?all=true&limit=100&offset=0'\)/);
-  assert.match(script, /jobTitles = result\.data/);
-  assert.match(script, /jobTitles\.filter\(title => title\.active \|\| title\.id === selectedId\)/);
+  assert.match(script, /fetchAPIPage\(`\/api\/job-titles\?all=true&limit=100&offset=\$\{offset\}`\)/);
+  assert.match(script, /jobTitleOptions = \[\.\.\.complete\.values\(\)\]/);
+  assert.match(script, /jobTitleOptions\.filter\(title => all \|\| title\.active === true/);
   assert.match(script, /text: title\.active \? title\.name : `\$\{title\.name\} \(inativo\)`/);
   assert.doesNotMatch(script, /(?:const|let|var)\s+\w*(?:catalog|titles?)\w*\s*=\s*\[\s*(?!\])/i);
   for (const title of [
@@ -430,8 +430,8 @@ test('admin exposes paginated audit without removed sector controls', async () =
   assert.match(html, /id="audit-pagination"/);
   assert.match(html, /Cargo ativo para atribuição e acesso atual/);
   assert.match(html, /páginas marcadas ficam disponíveis para usuários com este cargo enquanto ele estiver ativo/);
-  assert.match(script, /fetchAPIPage\(`\/api\/users\/audit\?limit=\$\{AUDIT_PAGE_SIZE\}/);
-  assert.match(script, /serverPagination\('audit'/);
+  assert.match(script, /loadAdminList\('audit', '\/api\/users\/audit'/);
+  assert.match(script, /timeZone: 'America\/Sao_Paulo'/);
   assert.doesNotMatch(html, /ombudsman|Ouvidoria|viewOmbudsman/i);
   assert.doesNotMatch(script, /ombudsman|Ouvidoria|viewOmbudsman/i);
 });

@@ -4,6 +4,13 @@ import { renderPagination } from './pagination.js';
 import { createBlockEditor, createBlockSettings, serializeBlocks } from './cms-block-editor.js';
 import { renderBlocks } from './cms-block-renderer.js';
 
+const REVISION_STATUS_LABELS = new Map([
+  ['draft', 'Rascunho'],
+  ['published', 'Publicado'],
+  ['scheduled', 'Agendado'],
+  ['archived', 'Arquivado'],
+]);
+
 const requests = { fetchAPI, fetchAPIPage };
 const renderContent = renderBlocks;
 export function mount(page) {
@@ -14,7 +21,7 @@ const setTimeout = page.timeout;
 const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
 
 const TYPES = [
-  ['knowledge', 'Knowledge', 'manageKnowledge'],
+  ['knowledge', 'Base de Conhecimento', 'manageKnowledge'],
   ['academy', 'Academy', 'manageAcademy'],
   ['benefit', 'Benefícios', 'manageBenefits'],
   ['announcement', 'Owner News', 'manageKnowledge'],
@@ -319,7 +326,7 @@ async function loadRevisionHistory(documentId = selectedDocument) {
       return;
     }
     revisions.forEach(revision => historyNode.append(element('li', {}, [
-      element('strong', { text: `v${revision.version} · ${revision.status}` }),
+      element('strong', { text: `v${revision.version} · ${REVISION_STATUS_LABELS.get(revision.status) ?? revision.status}` }),
       element('span', { text: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(revision.created_at)) }),
     ])));
     clear(historyPagination);

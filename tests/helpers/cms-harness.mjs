@@ -46,7 +46,7 @@ class FormNode extends Node {
   reportValidity() { return true; }
 }
 
-function parseFixture(html) {
+export function parseFixture(html) {
   const doc = new FormNode('document');
   doc.ownerDocument = doc;
   doc.createElement = tag => new FormNode(tag, doc);

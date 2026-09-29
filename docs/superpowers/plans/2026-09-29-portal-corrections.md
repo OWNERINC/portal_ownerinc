@@ -84,30 +84,35 @@ git diff --check
 `public/autocard/app.js`, novo `public/autocard/asset-catalog.js`,
 testes de Owner News, layout/feedback Cards Pós e busca/exportação AutoCard.
 
-- [ ] Dashboard distingue carregamento, vazio, falha e publicação; estado vazio
+- [x] Dashboard distingue carregamento, vazio, falha e publicação; estado vazio
   compacto leva aos atalhos e não promete uma leitura inexistente.
-- [ ] Agendar medições do ResizeObserver por frame, evitar escritas idênticas e
+- [x] Agendar medições do ResizeObserver por frame, evitar escritas idênticas e
   cancelar frames no descarte; manter medidas de impressão e exportação.
-- [ ] Catálogo de assets aceita português, acentos e IDs originais, informa
+- [x] Catálogo de assets aceita português, acentos e IDs originais, informa
   ausência de resultados e mantém os identificadores persistidos.
-- [ ] Histórico Cards Pós usa uma mensagem por estado e oferece limpar busca
+- [x] Histórico Cards Pós usa uma mensagem por estado e oferece limpar busca
   ou repetir consulta; avisos de mídia independentes permanecem válidos.
-- [ ] PNG informa geração e download solicitado ao navegador; continua sujeito
+- [x] PNG informa geração e download solicitado ao navegador; continua sujeito
   aos bloqueios de mídia, overflow e mudança de documento.
-- [ ] Alternar modelos/ampliação/tamanhos, navegar e recuperar PNG/PDF reais.
-- [ ] Revisão do lote: serializar ações do histórico até o refresh, preservando
+- [x] Alternar modelos/ampliação/tamanhos, navegar e recuperar PNG/PDF reais.
+- [x] Revisão do lote: serializar ações do histórico até o refresh, preservando
   proteção contra consultas obsoletas e feedback de falha.
-- [ ] F09 adicional, reproduzido na homologação: eliminar o header JSON duplicado
+- [x] F09 adicional, reproduzido na homologação: eliminar o header JSON duplicado
   nos callers de gravação das ferramentas e confirmar POST/PUT reais.
-- [ ] F10 adicional, reproduzido na homologação: corrigir o corte de 1 px no título
+- [x] F10 adicional, reproduzido na homologação: corrigir o corte de 1 px no título
   do Novo Funcionário com ajuste tipográfico localizado em
   `public/autocard/styles.css`, mantendo o bloqueio de overflow verdadeiro.
-- [ ] Aceitação móvel adicional: título de duas linhas do Novo Funcionário em
-  390 × 844 ainda apresenta corte após estabilizar; ajustar o orçamento de layout
+- [x] Aceitação móvel adicional: título de duas linhas do Novo Funcionário em
+  390 × 844 apresentava corte após estabilizar; ajustar o orçamento de layout
   mantendo a geometria e o bloqueio de corte real.
-- [ ] F11 adicional: ícone padrão `user-plus` do Novo Funcionário é recusado como
+- [x] F11 adicional: ícone padrão `user-plus` do Novo Funcionário é recusado como
   ícone pela API; usar default válido sem alterar os catálogos canônicos e
   regressão com o validador real.
+
+**Aceite do lote 3 R3:** revisão independente `ship`, verificação primária com
+691 testes aprovados e navegador local com POST/reabertura/PUT nos seis modelos.
+PNGs 1080 × 1080 e PDFs nas dimensões contratadas recuperados e inspecionados,
+incluindo título móvel de duas linhas sem override; guardas de corte preservadas.
 
 ```sh
 npm run verify
@@ -143,19 +148,21 @@ parâmetros de UI diretamente ao backend. Filtros vazios são omitidos; valores
 repetidos/objetos/arrays/nomes desconhecidos na API retornam 400.
 
 Subetapas: **4A (backend) aceito**, com revisão independente `ship`, 654 testes
-e consultas executadas no PostgreSQL local. **4B (interface) pendente**;
+e consultas executadas no PostgreSQL local. **4B (interface) aceito**, com revisão
+`ship`, 734 testes e dois percursos Chromium/HTTP reais, incluindo mutações de
+cargo sintético e retry de catálogo incompleto;
 especificação delimitada em `.openchamber/reviews/batch-4b-specification.md`.
 
-- [ ] Usuários: nome/e-mail, role, estado e cargo; retornar `job_title_active`.
-- [ ] Cargos: nome, ativo/inativo, paginação da tabela separada do carregamento
+- [x] Usuários: nome/e-mail, role, estado e cargo; retornar `job_title_active`.
+- [x] Cargos: nome, ativo/inativo, paginação da tabela separada do carregamento
   integral das opções dos formulários.
-- [ ] Auditoria: período civil São Paulo e ação; nome atual do ator, código
+- [x] Auditoria: período civil São Paulo e ação; nome atual do ator, código
   técnico e request ID; fallback para sistema/ator removido/ação desconhecida.
-- [ ] Filtros persistem na URL, reiniciam a página e rejeitam respostas antigas.
-- [ ] Própria conta e super-admin protegido têm ações indisponíveis e explicadas;
+- [x] Filtros persistem na URL, reiniciam a página e rejeitam respostas antigas.
+- [x] Própria conta e super-admin protegido têm ações indisponíveis e explicadas;
   cargo inativo gera aviso, sem alterar dados reais automaticamente.
-- [ ] Associar label e instruções ao CSV, preservando parser e limite de 500.
-- [ ] Testar caracteres literais `%`/`_`, combinações de filtros, totais, mais
+- [x] Associar label e instruções ao CSV, preservando parser e limite de 500.
+- [x] Testar caracteres literais `%`/`_`, combinações de filtros, totais, mais
   de 50 usuários/100 cargos, voltar/avançar e perfis sem autorização.
 
 ```sh
@@ -170,15 +177,23 @@ git diff --check
 `docs/product/feature-inventory.md`, documentos de arquitetura/operação
 afetados e novo relatório de correções.
 
-- [ ] Traduzir somente rótulos visíveis do CMS; payloads e URLs preservados.
-- [ ] Explicar metadados/anexo na edição simples e corpo/publicação/revisões no
+- [x] Traduzir somente rótulos visíveis do CMS; payloads e URLs preservados.
+- [x] Explicar metadados/anexo na edição simples e corpo/publicação/revisões no
   CMS; links condicionados às permissões, sem parâmetros não suportados.
-- [ ] Corrigir documentação sobre saudação, dimensões Owner e evidência/runtime.
-- [ ] Homologar persistência, permissões, uploads, publicação e exportações com
+- [x] Corrigir documentação sobre saudação, dimensões Owner e evidência/runtime.
+- [x] Homologar persistência, permissões, uploads, publicação e exportações com
   fixtures locais; registrar IDs criados para eventual limpeza exata.
-- [ ] Registrar resultados por fluxo, limitações e decisões operacionais ainda
+- [x] Registrar resultados por fluxo, limitações e decisões operacionais ainda
   abertas; não marcar e-mail, dispositivo físico ou produção sem evidência.
-- [ ] Executar verificação final e obter parecer independente sobre o diff total.
+- [x] Executar verificação final e obter parecer independente sobre o diff total.
+
+**Aceite final:** lote 5 e diff integrado com parecer novo **ship** após corrigir
+o gate estrito do link CMS e duas alegações documentais sobre UID de auditoria.
+Primário repetiu **788 testes**, gerador/whitespace e percurso editorial real;
+navegação integrada passou em 20 transições desktop + quatro mobile. Todos os
+lotes técnicos estão fechados. Evidência e limites no
+[registro de aceitação](../../reviews/2026-09-29-portal-corrections-acceptance.md);
+entrega pelo [PR #42](https://github.com/OWNERINC/portal_ownerinc/pull/42).
 
 ## Critério de conclusão
 

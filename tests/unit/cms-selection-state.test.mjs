@@ -136,7 +136,7 @@ for (const outcome of ['success', 'failure']) {
     await drain();
     assertCleared(h);
     // Returning to A must start history at zero rather than retaining offset 50.
-    typeButton(h, 'Knowledge').click();
+    typeButton(h, 'Base de Conhecimento').click();
     h.latest('/documents?').resolve({ data: [docA], total: 1 });
     await drain();
     await openA(h, { history: false, blocks: blocksA.slice(0, 1) });

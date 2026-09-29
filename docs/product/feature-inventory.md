@@ -1,11 +1,17 @@
 # Inventário da Implementação Funcional
 
-Atualizado em 14 de setembro de 2026.
+Atualizado em 29 de setembro de 2026.
 
 Este documento relaciona as capacidades descritas no `README.md` e no brief do
 produto com o que está efetivamente implementado no código. Roadmap, intenção e
 capacidade nativa de serviços externos não são considerados implementação sem
 fluxo correspondente no Portal.
+
+Os estados abaixo descrevem implementação, não implantação ou recebimento de
+serviços externos. Resultados reais das correções de setembro e aceites por lote
+ficam no [registro da sessão principal](../reviews/2026-09-29-portal-corrections-acceptance.md).
+Checks automatizados e homologação com fixtures locais não comprovam produção,
+entrega externa de e-mail, conteúdo oficial ou uso em dispositivo físico.
 
 ## Legenda
 
@@ -34,10 +40,10 @@ fluxo correspondente no Portal.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Saudação personalizada | Operacional | Exibe nome ou email do perfil autenticado. `public/js/dashboard.js` |
-| Conteúdo por contrato PJ/CLT | Parcial | Mostra links diferentes por contrato; a indicação de nota fiscal PJ foi removida até existir um fluxo real. Sólides permanece desligada na V1. `public/js/dashboard.js` |
+| Destaque Owner News | Operacional | Exibe a publicação mais recente, com estados distintos de carregamento, vazio, erro/retry e conteúdo. Sem publicação, mostra estado compacto e “Acessar áreas”; “Ler publicação” só existe com notícia. Não há saudação personalizada por nome/e-mail. `public/js/dashboard.js`, `public/dashboard.html` |
+| Conteúdo por contrato PJ/CLT | Não implementada no Dashboard | Os atalhos atuais não variam por contrato. Não há fluxo de nota fiscal PJ no Dashboard; Sólides permanece desligada na V1. `public/js/dashboard.js` |
 | Próximos lembretes | Operacional | Endpoint autenticado calcula no servidor as ocorrências dos próximos sete dias com regra de fim do mês e audiência individual; o dashboard não depende de uma primeira página arbitrária. `public/js/dashboard.js`, `api/routes/reminders.js` |
-| Links rápidos | Operacional | Atalhos internos conforme o contrato; Sólides permanece desligada na V1. `public/js/dashboard.js` |
+| Links rápidos | Operacional | Atalhos para Base de Conhecimento, Lembretes e Academy, iguais para os contratos PJ/CLT; Sólides permanece fora desses atalhos. `public/js/dashboard.js` |
 | Destaques da Academy | Operacional | Exibe até três cursos com estados de carregamento, vazio, erro e nova tentativa. `public/js/dashboard.js` |
 
 ## Owner News
@@ -56,7 +62,7 @@ Atualização desta área: 22 de setembro de 2026.
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Acesso por cargo DHO | Operacional | AutoCard libera qualquer cargo ativo com `page_access.autocard=true`; super-admin possui bypass explícito e `role=admin` sozinho não concede acesso. `Analista de DHO Sênior` e `Gerente de DHO` recebem a flag como default da migration 030, não como allowlist. `api/middleware/policy.js`, `api/middleware/auth.js`, `api/routes/autocard.js`, `public/autocard/guard.js` |
-| Criação e exportação de cards | Operacional | Templates, variações visuais, biblioteca de assets, upload e exportação PNG migrados para o Portal. `public/autocard/` |
+| Criação e exportação de cards | Operacional | Templates, variações visuais, biblioteca de assets, upload e exportação PNG de 1080 × 1080 px migrados para o Portal. O detector de corte impede exportar conteúdo que excede a arte. `public/autocard/` |
 | Histórico compartilhado | Operacional | Cards persistidos no PostgreSQL e visíveis para usuários DHO com cargo ativo e acesso de página, com busca, edição, duplicação e exclusão auditadas dentro do shell padrão do Portal. `api/db/migrations/010_autocard.sql`, `api/routes/autocard.js`, `public/autocard/index.html` |
 | Matriz de páginas DHO | Operacional | A migration 030 dá `autocard` e `posCards` como defaults aos dois cargos DHO canônicos; a autorização efetiva aceita qualquer cargo ativo com a flag correspondente. Cargo sem acesso, cargo inativo ou ausência de cargo nega o acesso derivado. `api/db/migrations/030_dho_job_title_catalog.sql`, `api/middleware/policy.js` |
 | Migração de nomes legados RH para DHO | Operacional | A migration 030 substitui os nomes legados que continham RH, consolida colisões case-insensitive e reassocia usuários preservando estado e acessos. As ocorrências de RH nesta descrição identificam somente a entrada histórica da migração. `api/db/migrations/030_dho_job_title_catalog.sql` |
@@ -72,7 +78,7 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Acesso por cargo DHO | Operacional | Cards Pós libera qualquer cargo ativo com `page_access.posCards=true`; super-admin possui bypass explícito, enquanto `role=admin` sozinho permanece bloqueado. `api/middleware/policy.js`, `api/routes/pos-cards.js`, `public/cards-pos/guard.js` |
-| Editor e exportação de convites | Operacional | Possui dois módulos alternáveis, Convidado (`convite_owntime`, Frame 01 de 1448 × 2347) e Owner (`convite_owner`, Frame 02 de 862 × 1984), ambos com formatação rica segura, imagem, histórico, CRUD e exportação PDF. O Owner exporta em 108 × 248,6 mm e reproduz o corpo editorial branco, a reserva, os serviços com ícones, os consumos, a grade de extras e o rodapé do print; todos os textos são editáveis, enquanto ícones e logo permanecem fixos. `public/cards-pos.html`, `public/cards-pos/app.js`, `public/cards-pos/assets/` |
+| Editor e exportação de convites | Operacional | Possui dois módulos alternáveis, Convidado (`convite_owntime`, 1448 × 2347 px / 108 × 175,1 mm) e Owner (`convite_owner`, 1448 × 3361 px / 108 × 250,68 mm), ambos com formatação rica segura, imagem, histórico, CRUD e exportação PDF. O Owner reproduz o corpo editorial branco, a reserva, os serviços com ícones, os consumos, a grade de extras e o rodapé do print; todos os textos são editáveis, enquanto ícones e logo permanecem fixos. A geometria canônica não depende do tamanho da prévia. `public/cards-pos.html`, `public/cards-pos/app.js`, `public/cards-pos/card-geometry.js`, `public/cards-pos/assets/` |
 | Convidado — referência Figma | Operacional | Segue o Frame 1 (3), com foto de hospedagem, chamada “Um convite / a viver o seu tempo”, serviços “sob demanda”, wordmark oficial Owntime fixo, Raleway 32 proporcional ao frame e saudação editável. O PDF de 108 × 175,1 mm é renderizado em 1448 × 2347 px, com o mesmo recorte da prévia e resolução independente do dispositivo. Convites antigos recebem a saudação padrão quando ausente e preservam seus textos, nomes e fotos. `docs/superpowers/specs/2026-09-23-cards-pos-guest-figma-design.md` |
 | Separação de produto | Operacional | A página e o módulo são separados do AutoCard e do DHO, sem reutilizar as rotas ou tabelas do AutoCard; os dois modelos de Cards Pós compartilham a mesma tabela e distinguem-se pelo template persistido. `public/cards-pos/`, `api/routes/pos-cards.js`, `api/db/migrations/023_pos_owner_cards.sql` |
 | Autorização e armazenamento | Operacional | A autorização é server-side por `canUsePosCards` em `/api/pos-cards/*`; mídias Pos não são entregues pelo `/uploads` público e ficam disponíveis somente pela rota autenticada; os dados e mídias ficam isolados em `pos_cards` e `pos_card_media`. `api/index.js`, `api/middleware/policy.js`, `api/routes/pos-cards.js`, `api/db/migrations/018_pos_card_storage_key.sql` |
@@ -100,8 +106,10 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 | Filtro por categoria | Operacional | Lista categorias no servidor e aplica o filtro na consulta paginada. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Link direto para artigo | Operacional | `article` na URL e histórico Back/Forward selecionam o detalhe. `public/js/knowledge.js` |
 | CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. A edição legada atualiza metadados, fonte e PDF sem substituir parágrafos/blocos CMS; leitura usa renderização segura da revisão publicada. `api/routes/knowledge.js`, `api/cms/sources.js`, `public/js/knowledge.js`, `public/js/cms-block-renderer.js` |
-| Anexo PDF no artigo | Operacional | Gestores podem enviar, substituir e remover um PDF de até 100 MB; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. Alterações legadas preservam o corpo CMS e só alteram o único PDF sem ambiguidade; múltiplos PDFs exigem o Editor CMS. A retenção só remove arquivo sem referências. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `cron/cms-asset-retention.js` |
+| Edição simples e Editor CMS | Operacional | O editor simples mantém título, categoria e anexo PDF. Sem gerenciamento CMS, o texto simples continua editável; com `cms_managed=true`, o campo corpo fica desabilitado e é omitido do payload para preservar os blocos. A ajuda oferece `./cms.html` somente a administrador com permissão editorial da área, orientando selecionar Base de Conhecimento e o documento existente, sem deep link não implementado. Corpo/blocos, revisões, publicação e agendamento ficam no CMS; o link mantém os guards de alterações, gravação, upload e limpeza de PDF. `public/knowledge.html`, `public/js/knowledge.js` |
+| Anexo PDF no artigo | Parcial | Gestores podem enviar, substituir e remover o anexo; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. Interface e upload aceitam até 100 MiB, mas a associação pelo editor simples ainda valida até 50 MiB em `syncKnowledgePdf`: não há garantia ponta a ponta de 100 MiB. Alterações legadas preservam o corpo CMS e só alteram o único PDF sem ambiguidade; múltiplos PDFs exigem o Editor CMS. A retenção só remove arquivo sem referências. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `cron/cms-asset-retention.js` |
 | Draft, revisão e rich text | Operacional | Editor CMS mantém revisões imutáveis, publica/agendada somente o draft atual sob lock, retorna `409` para seleção obsoleta, cancela agendamento sem descartar draft posterior e despublica também o scheduled pendente. Scheduled vencido com bloco/asset inválido é arquivado e auditado sem substituir a publicação. A lista administrativa possui paginação por total. `api/routes/cms.js`, `api/cms/revisions.js`, `api/cms/reader.js`, `public/js/cms.js` |
+| Linguagem e salvamento do CMS | Operacional | Histórico exibe Rascunho/Publicado/Agendado/Arquivado, a área `knowledge` aparece como Base de Conhecimento e o painel como Configuração e publicação. Tradução apenas de apresentação: enums, payloads, URLs, classes e ações permanecem técnicos; código desconhecido aparece como texto seguro. Salvar rascunho e autosave não publicam: Publicar/Agendar continuam ações explícitas. `public/cms.html`, `public/js/cms.js` |
 
 ## Academy
 
@@ -142,11 +150,12 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 | Perfis `viewer` e `admin` | Operacional | Role persistida e permissões granulares efetivas somente para admins. `api/db/schema.sql`, `api/middleware/policy.js` |
 | Gate do painel | Operacional | Interface exibe abas permitidas; toda autorização real é repetida na API. `public/js/auth.js`, `public/js/admin.js`, `api/middleware/policy.js` |
 | Permissões granulares | Operacional | `manageUsers`, `manageReminders`, `manageAcademy`, `manageBenefits`, `manageKnowledge` e `manageSolides`; somente super-admin atribui privilégios. `api/middleware/policy.js`, `api/routes/users.js` |
-| Gestão de usuários | Operacional | Listagem paginada, criação, edição, desativação e reativação para `manageUsers`, com restrições de hierarquia. `api/routes/users.js`, `public/js/admin.js` |
+| Gestão de usuários | Operacional | Listagem paginada com filtros server-side combináveis por nome/e-mail literal, perfil, estado e cargo, com total filtrado. Criação, edição, desativação e reativação para `manageUsers`; UI explica as restrições da própria conta e de super-admin protegido, sem substituir a política da API. `api/routes/users.js`, `public/js/admin.js` |
 | Importação em lote de usuários | Operacional | Administradores importam CSV UTF-8 de até 500 usuários após pré-visualização e confirmação com a mesma validação de contrato; todos entram como viewer sem permissões privilegiadas, CLT ignora/normaliza dia PJ, PJ exige 1–31, e o job durável expõe progresso/erros por linha, sobrevive a reload e permite retry apenas de falhas elegíveis até três tentativas. GET/retry são limitados ao criador ou superadmin, jobs expirados retornam 410, commits ambíguos permanecem `processing` para reconciliação por UID/e-mail e UIDs em cleanup pendente não consomem tentativa. `api/routes/user-imports.js`, `api/services/bulk-user-import.js`, `cron/user-imports.js`, `public/js/admin.js` |
-| Gestão de cargos | Operacional | Superfície administrativa para cadastrar, editar, ativar e desativar cargos; cargos desativados permanecem associados ao histórico dos usuários. `api/routes/job-titles.js`, `public/js/admin.js`, `api/db/migrations/009_job_titles.sql` |
+| Gestão de cargos | Operacional | Tabela paginada com busca literal por nome, situação e total filtrado server-side; cadastro, edição, ativação e desativação. As opções dos formulários vêm de um catálogo completo, paginado em requisições de 100 e independente da tabela/filtros, sem publicar resultados parciais. Convite/aprovação oferecem ativos; edição preserva o cargo inativo já atribuído, com aviso de acesso derivado indisponível. `api/routes/job-titles.js`, `public/js/admin.js`, `api/db/migrations/009_job_titles.sql` |
+| Estado das listas administrativas | Operacional | Filtros e páginas separados em `users_*`, `titles_*` e `audit_*`, restaurados na mesma aba por Voltar/Avançar. Aplicar/Limpar reiniciam somente a seção correspondente; cada lista descarta respostas antigas por geração própria. Apenas parâmetros validados e nomes da API são enviados ao backend. `public/js/admin-list-state.js`, `public/js/admin.js` |
 | Apagamento de dados pessoais | Operacional | Super-admin remove identidade Firebase, perfil, foto e referências estáveis após desativação. `api/routes/users.js` |
-| Auditoria administrativa | Operacional | API e interface registram, paginam e exibem ator, ação, alvo, request ID e horário para super-admin. `api/route-utils.js`, `api/routes/users.js`, `public/js/admin.js` |
+| Auditoria administrativa | Operacional | Super-admin filtra por código exato da ação e período civil inclusivo de São Paulo, com total filtrado. Exibe nome atual do ator via `LEFT JOIN` (não snapshot histórico), fallback “Sistema ou conta removida”, ação técnica, alvo, request ID e horário em `America/Sao_Paulo`. Período invertido é recusado na UI e API; códigos desconhecidos são preservados como texto. `api/route-utils.js`, `api/routes/users.js`, `public/js/admin.js` |
 
 ## Navegação, UX e Acessibilidade
 
@@ -183,6 +192,7 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Stack Docker Compose | Operacional | PostgreSQL, migrations, API, Nginx, cron e Auth Emulator opcional no perfil local. `docker-compose.yml`, `firebase-emulator/Dockerfile` |
+| Runtime e limites da verificação | Parcial | Manifests e imagens atuais usam Node 24. A rodada de correções foi verificada nesse runtime; não comprova compatibilidade integral com Node 18 solicitada pela instrução preexistente em `AGENTS.md`. Essa divergência não foi resolvida alterando engines ou instruções. `package.json`, `api/Dockerfile`, `cron/Dockerfile`, `docs/operations/local-development.md` |
 | Persistência | Operacional | Volumes nomeados para PostgreSQL e uploads. `docker-compose.yml` |
 | Migrations | Operacional | SQL numerado, ledger, advisory lock e transação; schema fresco e upgrades acompanham a migration mais recente. `api/db/migrate.js`, `api/db/migrations/`, `api/db/schema.sql` |
 | Liveness e readiness | Operacional | `/api/health` verifica processo e `/api/ready` consulta o banco. `api/index.js` |
@@ -223,8 +233,9 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 
 O núcleo implementado cobre autenticação fechada, perfil, conteúdos internos,
 catálogos, lembretes por email, administração granular, auditoria, retenção e
-operação em Docker Compose. As limitações mais relevantes estão na
-paginação de algumas visões comuns, controles reduzidos para históricos e
-filtros, ausência de WhatsApp, validação assistiva ainda não executada em
-dispositivos e dependências operacionais externas para TLS, alertas e backups
-off-host.
+operação em Docker Compose. As listas administrativas descritas acima já têm
+filtros e paginação server-side. Permanecem limites como a divergência de tamanho
+do PDF na edição simples, a ausência de WhatsApp, a validação assistiva em
+dispositivos físicos e as dependências operacionais externas para TLS, alertas e
+backups off-host. O aceite final dos lotes de correção não decorre deste
+inventário: é registrado pela sessão principal após revisão e homologação.

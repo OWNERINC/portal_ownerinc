@@ -5,7 +5,8 @@ Etapa do plano autorizado; implementar depois do lote 4B com o mesmo worker.
 ## Escopo de edição
 
 `public/js/cms.js`, `public/cms.html`, `public/js/knowledge.js`,
-`public/knowledge.html` e ajuda textual pertinente em `public/admin.html`.
+`public/knowledge.html`. Refinamento do despacho: `public/admin.html` ficou fora
+deste lote, pois o 4B já concluiu a ajuda do CSV e estava congelado para revisão.
 `docs/product/feature-inventory.md`, `docs/architecture/data-flow.md`,
 `docs/operations/local-development.md` se necessário, e novo
 `docs/reviews/2026-09-29-portal-corrections-batch-5.md`.
@@ -17,7 +18,8 @@ Plano, ledger de aceitação e artefatos/scrips temporários são da sessão pri
 
 1. Tradução somente de apresentação no CMS: revisões draft/published/scheduled/
    archived como Rascunho/Publicado/Agendado/Arquivado, preservando enum, payload,
-   URLs, filtros, classes e ações. Inspector → Configuração e publicação.
+   URLs, filtros, classes e ações. Inspector → Configuração e publicação;
+   rótulo de área Knowledge → Base de Conhecimento, conservando `knowledge`.
    Código desconhecido deve ter fallback seguro de texto, sem inventar estado.
 2. Ajuda contextual honesta na Base de Conhecimento: editor simples mantém
    título/categoria/anexo; para artigo legado, texto simples continua editável.
@@ -40,7 +42,7 @@ Plano, ledger de aceitação e artefatos/scrips temporários são da sessão pri
      arquivo de aceitação da sessão principal é a fonte dos resultados reais.
    - Runtime atual Node 24; esta rodada não prova compatibilidade integral Node
      18 exigida pela instrução preexistente. Não alterar manifests/engines/AGENTS.
-5. Relatório deste lote referencia histórico F01–F08 e os achados F09/F10 da
+5. Relatório deste lote referencia histórico F01–F08 e os achados F09/F10/F11 da
    homologação, mas não reescreve a auditoria histórica. Não declarar o plano
    inteiro concluído enquanto falta revisão/aceite final da sessão principal.
 

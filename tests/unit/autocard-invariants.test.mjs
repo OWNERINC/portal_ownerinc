@@ -816,8 +816,11 @@ function employeeMobileLayoutBounds(harness, styles) {
   const startLabelHeight = cssLineHeight(startLabel['line-height'], startLabelSize, globalLineHeight);
   const startValueHeight = cssLineHeight(startValue['line-height'], startValueSize, globalLineHeight);
   const footerHeight = Math.max(Number.parseFloat(footer['min-height']), footerSize * globalLineHeight + footerPadding.top);
+  const kickerMarkup = markup.match(/class="card-kicker"[^>]*>([\s\S]*?)<\/div>/)?.[1] || '';
+  const kickerIconHeight = Math.max(0, ...[...kickerMarkup.matchAll(/height:\s*([\d.]+)px/g)].map(match => Number(match[1])));
+  const kickerHeight = Math.max(kickerIconHeight, cssLineHeight(kicker['line-height'], kickerSize, globalLineHeight));
   const fixedHeight = copyPadding.top + copyPadding.bottom
-    + cssLineHeight(kicker['line-height'], kickerSize, globalLineHeight)
+    + kickerHeight
     + Number(title['-webkit-line-clamp']) * cssLineHeight(title['line-height'], titleSize, globalLineHeight) + titleMargin.top + titleMargin.bottom
     + cssLineHeight(subtitle['line-height'], subtitleSize, globalLineHeight) + subtitleMargin.bottom
     + startPadding.top + startPadding.bottom + Number(start.gap.replace('px', '')) + startLabelHeight + startValueHeight + startMargin.top + startMargin.bottom
@@ -826,7 +829,7 @@ function employeeMobileLayoutBounds(harness, styles) {
   const bodyHeight = copyHeight - fixedHeight - bodyMargin.top - bodyMargin.bottom;
 
   assert.ok(bodyHeight > 0, `employee body budget must remain positive: ${bodyHeight}`);
-  return { card, copyHeight, fixedHeight, bodyHeight };
+  return { card, copyHeight, fixedHeight, bodyHeight, kickerHeight };
 }
 
 async function createAutoCardCropHarness() {
@@ -940,7 +943,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   harness.selectTemplate('novo_funcionario', { mediaId: 'employee-media', mediaCrop: { x: 0.2, y: 0.8, zoom: 2 } });
   harness.flushMutations();
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /<img[^>]+src="undefined"|\/api\/autocard\/media/);
-  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><i data-lucide="user-plus"/);
+  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><i data-lucide="user"/);
 
   const employeeUrl = await harness.resolve(5);
   harness.flushMutations();
@@ -1775,8 +1778,39 @@ test('AutoCard employee mobile layout bounds long names and preserves the footer
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenOverflow), /employee description must be the clipping boundary/);
   const brokenFlex = styles.replace('flex:1 1 60%;min-width:0;min-height:0;', 'flex:0 0 60%;min-width:0;min-height:0;');
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenFlex), /employee copy must receive remaining height/);
-  const brokenSpace = styles.replace('.employee-copy{padding:10px 14px 12px}', '.employee-copy{padding:80px 14px 80px}');
+  const brokenSpace = styles.replace(/\.employee-copy\{padding:[^}]+\}/, '.employee-copy{padding:80px 14px 80px}');
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenSpace), /employee body budget must remain positive/);
+});
+
+test('employee mobile two-line title has an unshrunk slot and enough copy budget for the full short body', async () => {
+  const styles = await readFile('public/autocard/styles.css', 'utf8');
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('novo_funcionario');
+  const fields = { titulo: 'Árvore Colaborador Silva de Almeida', subtitulo: 'Equipe local', data: '29/09', corpo: 'Conteúdo sintético para conferir a exportação.' };
+  for (const [field, value] of Object.entries(fields)) h.setField(field, value);
+  h.flushMutations();
+  for (const width of [316, 320, 420]) {
+    h.setCardRect(width, width);
+    // 316 px is the copy canvas budget at a 390 px viewport after existing
+    // page/preview/frame padding. This is CSS arithmetic, not font measurement.
+    const bounds = employeeMobileLayoutBounds(h, styles);
+    assert.equal(bounds.kickerHeight, 18, 'include the real icon box, not just the 10.8 px label line');
+    const body = cssDeclarations(styles, '.employee-copy .body');
+    const bodyLineHeight = cssLineHeight(body['line-height'], Number(body['font-size'].replace('px', '')), 1.5);
+    assert.ok(bounds.bodyHeight >= Math.ceil(bodyLineHeight), `short body needs a full line, available ${bounds.bodyHeight}`);
+    for (const value of Object.values(fields)) assert.ok(h.cardCanvas.innerHTML.includes(value));
+  }
+  const mobileRule = styles.match(/@container \(max-width:500px\)\{([\s\S]*?)\n\}/)[1];
+  assert.equal(cssDeclarations(mobileRule, '.employee-copy h2')['flex-shrink'], '0');
+  assert.equal(cssDeclarations(styles, '.employee-photo')['flex-basis'], '38%', 'photo/crop geometry is not traded for copy space');
+  const oldPadding = styles.replace('.employee-copy{padding:8px 14px}', '.employee-copy{padding:10px 14px 12px}');
+  h.setCardRect(316, 316);
+  assert.ok(employeeMobileLayoutBounds(h, oldPadding).bodyHeight < 13.5, 'negative control catches the previous insufficient short-body budget');
+  h.setRenderedTextMetrics({ clientHeight: 37, scrollHeight: 40 });
+  await h.exportCard(); assert.equal(h.downloadClicks(), 0, 'the reported 37/40 clipping remains blocked');
+  h.setRenderedTextMetrics({ clientHeight: 40, scrollHeight: 40 });
+  await h.exportCard(); assert.equal(h.downloadClicks(), 1);
+  assert.equal(h.captures.at(-1).options.width * h.captures.at(-1).options.scale, 1080);
 });
 
 test('employee heading line-height survives the container cascade without changing clamp or canvas geometry', async () => {

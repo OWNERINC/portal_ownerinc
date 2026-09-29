@@ -311,3 +311,124 @@ resolve nem substitui os achados residuais já descritos no lote 2.
 
 Sem bloqueio de implementação identificado no escopo delimitado. Aceitação
 visual, persistência real e parecer fresh continuam pendentes do primário.
+
+---
+
+## Adendo R3 — default autorizado e orçamento móvel employee (29/09/2026)
+
+Rodada delimitada por `.openchamber/reviews/batch-3-r3-specification.md`, sobre
+HEAD **`3cf25b1`** da branch `fix/portal-functional-audit-20260929`. As entregas
+anteriores deste relatório permanecem como baseline, sem reescrita. O primário
+informou 683 testes/CI aprovados no baseline e novo parecer **fix-first** para
+F11; este adendo não declara aprovação nova nem encerramento do lote 3.
+
+### Arquivos desta rodada
+
+- `public/autocard/app.js`
+- `public/autocard/styles.css`
+- `tests/unit/autocard-invariants.test.mjs`
+- `tests/unit/autocard-default-contract.test.mjs` — novo
+- `tests/helpers/autocard-contract-harness.mjs` — novo
+- `docs/reviews/2026-09-29-portal-corrections-batch-3.md` — somente este adendo
+
+API, `auth.js`, Cards Pós, catálogos de **38 ícones / 16 ilustrações**, scripts
+de QA, specs, plano e aceitação não foram editados. Lotes 4B e 5 não foram
+iniciados; nenhum commit, push ou operação no PR foi feito por este implementador.
+
+### F11 — default de Novo Funcionário
+
+- Trocado somente `defaultIcon:'user-plus'` por **`defaultIcon:'user'`**: o ícone
+  de pessoa já está autorizado e mantém significado pertinente ao colaborador.
+  `user-plus` continua disponível como ilustração; nenhuma allowlist foi ampliada.
+- A regressão nova obtém o JSON do caller montado e o envia ao módulo completo
+  e inalterado `api/routes/autocard.js` em Express local. São reais `parseCard`,
+  UUID, allowlists, política, helpers de auditoria, parsing e respostas HTTP.
+  Identidade e resultados do banco são doubles explícitos; não há conexão ao
+  PostgreSQL/Firebase nem leitura de ambiente/credenciais ou mídia em disco.
+- Cada um dos quatro modelos ativos conserva seu default durante **POST → GET
+  para reabrir → PUT → GET**, com 201/200, contrato completo e identidade do card
+  preservados. Não há substituição do ícone pelo teste para obter sucesso.
+- Cobertos também seleção manual de `users`, ilustração `user-plus`, reabertura
+  com ícone existente, mídia UUID/crop/variante preservados, e 401/403 antes do
+  acesso ao banco. O default antigo `user-plus` como ícone continua retornando
+  **400 em POST e PUT**, sem SQL ou conexão, como controle negativo.
+- O store do harness apenas projeta parâmetros e responde consultas previstas;
+  não valida SQL, transações ou persistência em PostgreSQL. A composição do
+  header com auth real continua coberta pela suíte F09 inalterada e executada.
+
+### Orçamento móvel employee
+
+- Na regra existente de container até 500 px, o padding de `.employee-copy`
+  passa de `10px 14px 12px` para **`8px 14px`**, recuperando **6 px verticais**.
+  O título recebe **`flex-shrink:0`** para não reduzir a caixa de duas linhas
+  quando o conteúdo disputa espaço. Não há redução de fonte, novo truncamento
+  ou ocultação de texto para liberar exportação.
+- Mantidos `line-height:1.1`, clamp de duas/três linhas, margens do título,
+  rodapé, dimensões do canvas, proporção da foto (38% no container compacto),
+  crop e PNG de 1080 px. Regras fora desse container não foram alteradas.
+  O único delta em JavaScript de produção nesta rodada é o default do ícone;
+  **detector de overflow e fluxo de exportação permanecem byte a byte iguais**.
+- Corrigida uma lacuna da regressão de orçamento: o kicker contém um ícone de
+  **18 px**, maior que a linha textual de 10,8 px antes considerada sozinha.
+  Para canvas controlado de 316 px e título de duas linhas, o orçamento anterior
+  deixava **9,52 px** para o corpo; agora deixa **15,52 px**, suficientes para uma
+  linha de 13,5 px no cálculo CSS. Há controle negativo com o padding anterior.
+- A fixture usa o texto exato da reprodução (`Árvore Colaborador Silva de
+  Almeida`, `Equipe local`, `29/09` e o corpo curto informado), verifica os
+  textos completos e os budgets de 316/320/420 px. Medidas controladas 37/40
+  continuam bloqueando exportação; 40/40 permitem captura de 1080 px. Os testes
+  anteriores de corte de **1 px**, conteúdo longo, mídia, gerações e revisão
+  permanecem ativos.
+
+**Limite:** o cálculo de 316 px deriva do orçamento CSS do viewport 390 px, não
+de medição feita por este implementador. DOM, fontes e canvas dos testes são
+controlados. A captura primária `qa-employee-mobile-clipping-20260929.png` e o
+37/40 após 60 frames são baseline do defeito, não evidência pós-correção.
+Chromium/Novelin, altura real de todos os textos e PNG sem overrides ainda
+precisam da aceitação independente do primário.
+
+### Verificações e resultados
+
+```sh
+node --test tests/unit/autocard-default-contract.test.mjs tests/unit/card-save-headers.test.mjs tests/unit/autocard-invariants.test.mjs tests/unit/autocard-asset-search.test.mjs tests/unit/auth-stability.test.mjs tests/unit/persistent-navigation.test.mjs tests/unit/navigation-review-regressions.test.mjs tests/unit/frontend-invariants.test.mjs
+npm run verify
+node scripts/generate-public-shell.mjs --check
+node --check tests/helpers/autocard-contract-harness.mjs
+node --check tests/unit/autocard-default-contract.test.mjs
+node --check tests/unit/autocard-invariants.test.mjs
+git diff --check
+```
+
+| Check | Resultado |
+| --- | --- |
+| Foco defaults + headers + overflow/invariantes + autenticação/navegação | **150 passaram**, zero falhas/cancelamentos/skips. |
+| `npm run verify` | Exit 0; **691 passaram**, zero falhas/cancelamentos/skips; sintaxe, scanner local, nomenclatura e Compose aprovados. |
+| Gerador `--check`, três verificações de sintaxe e `git diff --check` | Exit 0. |
+
+Há **8 novos testes líquidos** sobre os 683 do baseline: sete de contrato e um
+de orçamento móvel. Antes das alterações de produção, a rodada de 61 testes
+teve 59 passes e duas falhas esperadas: HTTP 400 no default de Novo Funcionário
+e orçamento de 9,52 px menor que uma linha do corpo. A primeira rodada pós-fix
+teve 78/79: uma asserção antiga ainda esperava o glyph `user-plus`; ela foi
+atualizada para `user`, mantendo todas as verificações de mídia/crop. As rodadas
+finais acima passaram. O warning preexistente `MODULE_TYPELESS_PACKAGE_JSON`
+continua; nenhuma mudança de manifests/runtime foi feita.
+
+Ambiente de verificação: Node **24.15.0**, npm **11.12.1**, Windows. Sem nova
+dependência nem declaração de suporte geral da aplicação a Node 18. Compose foi
+somente `config --quiet` com `.env.example`; não houve operação sobre serviços
+em execução. O HTTP dos testes é loopback efêmero com doubles de dados, não a
+stack de QA. Não houve novo `npm audit`, deploy, acesso a credenciais ou delegação.
+
+### Próximo responsável e limites
+
+- Primário: inspecionar diff, solicitar **review novo** e repetir a gravação dos
+  quatro defaults contra a API/banco reais, sem trocar manualmente o ícone para
+  contornar o F11.
+- Primário: em 390 × 844 e desktop, aguardar fontes/foto e estabilização de 60
+  frames; medir o título de duas linhas, corpo e rodapé e recuperar o PNG real
+  **sem overrides**. Conferir que títulos curtos/acentos funcionam e texto longo
+  realmente cortado continua impedido. Nenhum export real foi recuperado nesta
+  rodada pelo implementador.
+- Sem bloqueio de implementação identificado. Aceitação do lote 3, início de
+  4B/5 e atualização do PR #42 continuam sob despacho/execução do primário.

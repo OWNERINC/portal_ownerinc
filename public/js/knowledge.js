@@ -31,6 +31,8 @@ const pdfStateInput = document.getElementById('f-pdf-state');
 const pdfStatus = document.getElementById('f-pdf-status');
 const pdfRemove = document.getElementById('f-pdf-remove');
 const legacyContentInput = document.getElementById('f-content');
+const legacyContentHelp = document.getElementById('f-content-help');
+const cmsHelp = document.getElementById('article-cms-help');
 let articles = [];
 let categories = [];
 let articlesRequest = 0;
@@ -369,6 +371,20 @@ function syncLegacyContentField() {
   legacyContentInput.placeholder = editingCmsManaged
     ? 'O corpo é gerenciado pelo Editor CMS.'
     : 'Conteúdo em texto simples…';
+  if (legacyContentHelp) legacyContentHelp.textContent = editingCmsManaged
+    ? 'Este artigo é gerenciado pelo Editor CMS. O corpo fica desabilitado aqui para preservar os blocos e as revisões.'
+    : 'Artigos sem gerenciamento pelo CMS mantêm o conteúdo em texto simples editável neste campo.';
+  if (cmsHelp) {
+    const canOpenCms = user.role === 'admin'
+      && (user.permissions?.manageKnowledge === true || user.permissions?.superAdmin === true);
+    cmsHelp.hidden = !editingCmsManaged || !canOpenCms;
+    if (cmsHelp.hidden) clear(cmsHelp);
+    else if (!cmsHelp.hasChildNodes()) cmsHelp.append(
+      document.createTextNode('Para editar o corpo e os blocos, consultar revisões, publicar ou agendar, use o '),
+      element('a', { id: 'article-cms-link', href: './cms.html', text: 'Editor CMS' }),
+      document.createTextNode('. Selecione a área Base de Conhecimento e o documento existente.'),
+    );
+  }
 }
 
 function updatePdfField() {
