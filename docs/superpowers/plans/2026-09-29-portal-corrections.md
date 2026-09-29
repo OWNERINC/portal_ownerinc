@@ -102,6 +102,12 @@ testes de Owner News, layout/feedback Cards Pós e busca/exportação AutoCard.
 - [ ] F10 adicional, reproduzido na homologação: corrigir o corte de 1 px no título
   do Novo Funcionário com ajuste tipográfico localizado em
   `public/autocard/styles.css`, mantendo o bloqueio de overflow verdadeiro.
+- [ ] Aceitação móvel adicional: título de duas linhas do Novo Funcionário em
+  390 × 844 ainda apresenta corte após estabilizar; ajustar o orçamento de layout
+  mantendo a geometria e o bloqueio de corte real.
+- [ ] F11 adicional: ícone padrão `user-plus` do Novo Funcionário é recusado como
+  ícone pela API; usar default válido sem alterar os catálogos canônicos e
+  regressão com o validador real.
 
 ```sh
 npm run verify

@@ -115,8 +115,9 @@ cancelamentos e pulados; Compose aprovado.
   passa após estabilizar; uma medição inicial de altura zero foi transitória.
   A correção do corte desktop de 1 px não comprova o aceite móvel. Evidência:
   [captura móvel](../../.openchamber/screenshots/qa-employee-mobile-clipping-20260929.png).
-- Revisão independente nova do diff do lote 3 acionada; o PR permanece em rascunho
-  e esse lote não está aceito enquanto a pendência móvel não for resolvida.
+- Revisão independente nova: **fix-first**. Confirmou a correção de concorrência,
+  mas identificou o F11 descrito abaixo. O PR permanece em rascunho e o lote 3
+  não está aceito enquanto o ícone padrão e a pendência móvel não forem resolvidos.
 
 ## Lote 4A — contratos de leitura da API aceitos
 
@@ -202,6 +203,25 @@ Não se deve relaxar a detecção de overflow real para resolver o sintoma.
 Os PNGs dos outros três modelos foram recuperados sem override. Os PDFs dos
 dois modelos Cards Pós com foto também foram recuperados nas medidas corretas;
 a conferência visual final e a persistência das ferramentas continuam pendentes.
+
+### Achado adicional F11 — ícone padrão inválido no Novo Funcionário
+
+O revisor novo rastreou `defaultIcon: 'user-plus'` no template
+`novo_funcionario` de `public/autocard/app.js`. Esse ID existe na allowlist de
+ilustrações, mas não na de ícones em `api/routes/autocard.js`. O save envia o
+valor no campo `icon` e a API rejeita o payload.
+
+A sessão principal confirmou no Chromium/API real: selecionar Novo Funcionário,
+preencher título, conservar o ícone padrão e salvar com nome válido retorna
+**HTTP 400**, mesmo com um único `Content-Type: application/json` após F09.
+Nenhum registro foi criado. Script temporário:
+`portal-correcoes-default-icon-check.cjs`.
+
+O problema é preexistente. Os percursos anteriores que selecionaram outro ícone
+válido não cobriam o default, e o teste de composição de header usa um parser
+Express real, mas não o validador completo de cards. Correção pendente: escolher
+um default persistido autorizado pela API, preservar os catálogos 38/16 e cobrir
+o fluxo padrão contra o validador real.
 
 ### Importação CSV — aceitação parcial local
 
