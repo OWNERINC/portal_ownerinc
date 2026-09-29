@@ -424,10 +424,11 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     window,
   });
   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
+  const catalogSource = (await readFile('public/autocard/asset-catalog.js', 'utf8')).replace(/^export /gm, '');
   const paginationSource = pagination.replace(/^export /gm, '');
   const appSource = app.replace(/^import[^\n]+\n/gm, '');
   const mountedApp = mountSource(appSource, 'globalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, openSavedCard, showTab, syncOverflow, canLeave, generation: () => documentGeneration };');
-  vm.runInContext(`${cropSource}\n${paginationSource}\n(()=>{${mountedApp}})();\n(()=>{${mountSource(employee)}})();\n(()=>{${mountSource(variant)}})();`, context);
+  vm.runInContext(`${cropSource}\n${catalogSource}\n${paginationSource}\n(()=>{${mountedApp}})();\n(()=>{${mountSource(employee)}})();\n(()=>{${mountSource(variant)}})();`, context);
   const cardCanvas = elements.get('cardCanvas');
   const nativeQuerySelectorAll = cardCanvas.querySelectorAll.bind(cardCanvas);
   const renderedTextNodes = [];
@@ -815,8 +816,11 @@ function employeeMobileLayoutBounds(harness, styles) {
   const startLabelHeight = cssLineHeight(startLabel['line-height'], startLabelSize, globalLineHeight);
   const startValueHeight = cssLineHeight(startValue['line-height'], startValueSize, globalLineHeight);
   const footerHeight = Math.max(Number.parseFloat(footer['min-height']), footerSize * globalLineHeight + footerPadding.top);
+  const kickerMarkup = markup.match(/class="card-kicker"[^>]*>([\s\S]*?)<\/div>/)?.[1] || '';
+  const kickerIconHeight = Math.max(0, ...[...kickerMarkup.matchAll(/height:\s*([\d.]+)px/g)].map(match => Number(match[1])));
+  const kickerHeight = Math.max(kickerIconHeight, cssLineHeight(kicker['line-height'], kickerSize, globalLineHeight));
   const fixedHeight = copyPadding.top + copyPadding.bottom
-    + cssLineHeight(kicker['line-height'], kickerSize, globalLineHeight)
+    + kickerHeight
     + Number(title['-webkit-line-clamp']) * cssLineHeight(title['line-height'], titleSize, globalLineHeight) + titleMargin.top + titleMargin.bottom
     + cssLineHeight(subtitle['line-height'], subtitleSize, globalLineHeight) + subtitleMargin.bottom
     + startPadding.top + startPadding.bottom + Number(start.gap.replace('px', '')) + startLabelHeight + startValueHeight + startMargin.top + startMargin.bottom
@@ -825,7 +829,7 @@ function employeeMobileLayoutBounds(harness, styles) {
   const bodyHeight = copyHeight - fixedHeight - bodyMargin.top - bodyMargin.bottom;
 
   assert.ok(bodyHeight > 0, `employee body budget must remain positive: ${bodyHeight}`);
-  return { card, copyHeight, fixedHeight, bodyHeight };
+  return { card, copyHeight, fixedHeight, bodyHeight, kickerHeight };
 }
 
 async function createAutoCardCropHarness() {
@@ -939,7 +943,7 @@ test('AutoCard media lifecycle revokes stale and hidden blobs and keeps variants
   harness.selectTemplate('novo_funcionario', { mediaId: 'employee-media', mediaCrop: { x: 0.2, y: 0.8, zoom: 2 } });
   harness.flushMutations();
   assert.doesNotMatch(harness.cardCanvas.innerHTML, /<img[^>]+src="undefined"|\/api\/autocard\/media/);
-  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><i data-lucide="user-plus"/);
+  assert.match(harness.cardCanvas.innerHTML, /employee-photo"><i data-lucide="user"/);
 
   const employeeUrl = await harness.resolve(5);
   harness.flushMutations();
@@ -1174,6 +1178,21 @@ test('AutoCard capture failures show feedback, release the button and allow retr
   assert.equal(h.downloadClicks(), 1);
 });
 
+test('AutoCard PNG feedback does not turn an earlier optional-media rejection into an export failure', async () => {
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('aniversariante');
+  await h.chooseFile({ name: 'large.png', type: 'image/png', size: 4 * 1024 * 1024 });
+  assert.equal(h.mediaStatus(), 'error');
+  assert.equal(h.state().mediaId, null);
+  const mediaMessage = h.mediaStatusText();
+  await h.exportCard();
+  assert.equal(h.downloadClicks(), 1);
+  assert.match(h.toast().textContent, /PNG gerado; download solicitado ao navegador/);
+  assert.equal(h.mediaStatusText(), mediaMessage);
+  assert.equal(h.mediaStatus(), 'error');
+  assert.equal(h.exportButtonDisabled(), false);
+});
+
 test('AutoCard validation revokes the local URL on both image load and failure', async () => {
   for (const success of [true, false]) {
     const h = await createAutoCardLifecycleHarness({ deferLocalImages: true });
@@ -1304,6 +1323,11 @@ test('AutoCard commits replacement media only after its blob loads and restores 
   assert.equal(failed.state().mediaUrl, failedOldUrl);
   assert.equal(failed.mediaStatus(), 'error');
   assert.match(failed.cardCanvas.innerHTML, new RegExp(`src="${failedOldUrl}"`));
+  const mediaMessage = failed.mediaStatusText();
+  await failed.exportCard();
+  assert.equal(failed.downloadClicks(), 0, 'retained media in an error state keeps its existing export fence');
+  assert.doesNotMatch(failed.toast().textContent, /PNG gerado|Não foi possível exportar/);
+  assert.equal(failed.mediaStatusText(), mediaMessage);
 });
 
 test('AutoCard snapshots media confirmed during replacement validation', async () => {
@@ -1754,8 +1778,77 @@ test('AutoCard employee mobile layout bounds long names and preserves the footer
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenOverflow), /employee description must be the clipping boundary/);
   const brokenFlex = styles.replace('flex:1 1 60%;min-width:0;min-height:0;', 'flex:0 0 60%;min-width:0;min-height:0;');
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenFlex), /employee copy must receive remaining height/);
-  const brokenSpace = styles.replace('.employee-copy{padding:10px 14px 12px}', '.employee-copy{padding:80px 14px 80px}');
+  const brokenSpace = styles.replace(/\.employee-copy\{padding:[^}]+\}/, '.employee-copy{padding:80px 14px 80px}');
   assert.throws(() => employeeMobileLayoutBounds(harness, brokenSpace), /employee body budget must remain positive/);
+});
+
+test('employee mobile two-line title has an unshrunk slot and enough copy budget for the full short body', async () => {
+  const styles = await readFile('public/autocard/styles.css', 'utf8');
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('novo_funcionario');
+  const fields = { titulo: 'Árvore Colaborador Silva de Almeida', subtitulo: 'Equipe local', data: '29/09', corpo: 'Conteúdo sintético para conferir a exportação.' };
+  for (const [field, value] of Object.entries(fields)) h.setField(field, value);
+  h.flushMutations();
+  for (const width of [316, 320, 420]) {
+    h.setCardRect(width, width);
+    // 316 px is the copy canvas budget at a 390 px viewport after existing
+    // page/preview/frame padding. This is CSS arithmetic, not font measurement.
+    const bounds = employeeMobileLayoutBounds(h, styles);
+    assert.equal(bounds.kickerHeight, 18, 'include the real icon box, not just the 10.8 px label line');
+    const body = cssDeclarations(styles, '.employee-copy .body');
+    const bodyLineHeight = cssLineHeight(body['line-height'], Number(body['font-size'].replace('px', '')), 1.5);
+    assert.ok(bounds.bodyHeight >= Math.ceil(bodyLineHeight), `short body needs a full line, available ${bounds.bodyHeight}`);
+    for (const value of Object.values(fields)) assert.ok(h.cardCanvas.innerHTML.includes(value));
+  }
+  const mobileRule = styles.match(/@container \(max-width:500px\)\{([\s\S]*?)\n\}/)[1];
+  assert.equal(cssDeclarations(mobileRule, '.employee-copy h2')['flex-shrink'], '0');
+  assert.equal(cssDeclarations(styles, '.employee-photo')['flex-basis'], '38%', 'photo/crop geometry is not traded for copy space');
+  const oldPadding = styles.replace('.employee-copy{padding:8px 14px}', '.employee-copy{padding:10px 14px 12px}');
+  h.setCardRect(316, 316);
+  assert.ok(employeeMobileLayoutBounds(h, oldPadding).bodyHeight < 13.5, 'negative control catches the previous insufficient short-body budget');
+  h.setRenderedTextMetrics({ clientHeight: 37, scrollHeight: 40 });
+  await h.exportCard(); assert.equal(h.downloadClicks(), 0, 'the reported 37/40 clipping remains blocked');
+  h.setRenderedTextMetrics({ clientHeight: 40, scrollHeight: 40 });
+  await h.exportCard(); assert.equal(h.downloadClicks(), 1);
+  assert.equal(h.captures.at(-1).options.width * h.captures.at(-1).options.scale, 1080);
+});
+
+test('employee heading line-height survives the container cascade without changing clamp or canvas geometry', async () => {
+  const styles = await readFile('public/autocard/styles.css', 'utf8');
+  const rules = [...styles.matchAll(/\.employee-copy h2\s*\{([^}]+)\}/g)].map(match => match[1]);
+  assert.deepEqual(rules.flatMap(rule => [...rule.matchAll(/(?:^|;)line-height:([^;]+)/g)].map(match => match[1])), ['1.1']);
+  assert.equal(cssDeclarations(styles, '.employee-copy h2')['line-height'], '1.1');
+  assert.ok(rules.some(rule => rule.includes('-webkit-line-clamp:3;overflow:hidden')));
+  assert.ok(rules.some(rule => rule.includes('-webkit-line-clamp:2')));
+  assert.match(styles, /@container \(max-width:500px\)/);
+  assert.match(styles, /\.autocard-page #cardCanvas\s*\{[^}]*aspect-ratio:\s*1;/);
+});
+
+test('employee export preserves short, multiline and accented titles but still blocks even one measured pixel of clipping', async () => {
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('novo_funcionario');
+  for (const width of [420, 280]) {
+    h.setCardRect(width, width);
+    for (const title of ['QA local 20260929', 'Nome em\nduas linhas', 'João Gonçalves — Criação']) {
+      h.setField('titulo', title); h.flushMutations();
+      assert.ok(h.cardCanvas.innerHTML.includes(title));
+      // DOM dimensions are controlled here; real Novelin/Chromium text metrics
+      // and exported files remain a separate browser acceptance requirement.
+      h.setRenderedTextMetrics({ clientHeight: 24, scrollHeight: 24 });
+      const downloads = h.downloadClicks();
+      await h.exportCard();
+      assert.equal(h.downloadClicks(), downloads + 1);
+      assert.equal(h.captures.at(-1).options.width * h.captures.at(-1).options.scale, 1080);
+      h.setRenderedTextMetrics({ clientHeight: 23, scrollHeight: 24 });
+      await h.exportCard();
+      assert.equal(h.downloadClicks(), downloads + 1, 'one clipped pixel remains a real export blocker');
+      assert.equal(h.exportButtonDisabled(), true);
+    }
+    h.setField('titulo', 'Título realmente longo e cortado '.repeat(12)); h.flushMutations();
+    h.setRenderedTextMetrics({ clientHeight: 48, scrollHeight: 192 });
+    const downloads = h.downloadClicks(); await h.exportCard(); assert.equal(h.downloadClicks(), downloads);
+    assert.match(h.contentOverflowText(), /texto cortado/);
+  }
 });
 
 test('AutoCard birthday variant registers resize observation and remeasures media', async () => {

@@ -1,0 +1,290 @@
+{
+  "date": "2026-09-29",
+  "scope": "Primary-session Chromium acceptance against the authorized localhost stack, PostgreSQL and Firebase Auth Emulator; synthetic fixtures only.",
+  "boundary": "These are recorded browser results, not independently rerun reviewer checks or production acceptance. Full commands, interpretation and limits are in 2026-09-29-portal-corrections-acceptance.md.",
+  "runs": [
+    {
+      "source": "portal-correcoes-tool-r3-results/results.json",
+      "sourceSha256": "e06bc51c4f1159478d8a0806d27f838a8fe6c126f817568ff433a79a3ea98564",
+      "result": {
+        "environment": "http://localhost:8080",
+        "exportsOnly": false,
+        "results": [
+          {
+            "template": "comunicado",
+            "width": 1080,
+            "height": 1080,
+            "canonicalIcon": "triangle-alert"
+          },
+          "comunicado: POST/reopen/PUT/read passed with one JSON header, unchanged template-default icon and persisted media",
+          {
+            "template": "vaga",
+            "width": 1080,
+            "height": 1080,
+            "canonicalIcon": "briefcase-business"
+          },
+          "Vacancy overflow remains blocked above four requirements",
+          "vaga: POST/reopen/PUT/read passed with one JSON header, unchanged template-default icon and persisted media",
+          {
+            "template": "aniversariante",
+            "width": 1080,
+            "height": 1080,
+            "canonicalIcon": "cake"
+          },
+          "aniversariante: POST/reopen/PUT/read passed with one JSON header, unchanged template-default icon and persisted media",
+          {
+            "template": "novo_funcionario",
+            "width": 1080,
+            "height": 1080,
+            "canonicalIcon": "user"
+          },
+          {
+            "employeeViewport": {
+              "width": 1440,
+              "height": 900
+            },
+            "title": "QA local 20260929",
+            "metrics": {
+              "client": [
+                392,
+                24
+              ],
+              "scroll": [
+                392,
+                24
+              ],
+              "text": "QA local 20260929"
+            },
+            "export": [
+              1080,
+              1080
+            ]
+          },
+          {
+            "employeeViewport": {
+              "width": 1440,
+              "height": 900
+            },
+            "title": "Árvore Colaborador Silva de Almeida",
+            "metrics": {
+              "client": [
+                392,
+                24
+              ],
+              "scroll": [
+                392,
+                24
+              ],
+              "text": "Árvore Colaborador Silva de Almeida"
+            },
+            "export": [
+              1080,
+              1080
+            ]
+          },
+          {
+            "employeeViewport": {
+              "width": 390,
+              "height": 844
+            },
+            "title": "QA local 20260929",
+            "metrics": {
+              "client": [
+                288,
+                20
+              ],
+              "scroll": [
+                288,
+                20
+              ],
+              "text": "QA local 20260929"
+            },
+            "export": [
+              1080,
+              1080
+            ]
+          },
+          {
+            "employeeViewport": {
+              "width": 390,
+              "height": 844
+            },
+            "title": "Árvore Colaborador Silva de Almeida",
+            "metrics": {
+              "client": [
+                288,
+                40
+              ],
+              "scroll": [
+                288,
+                40
+              ],
+              "text": "Árvore Colaborador Silva de Almeida"
+            },
+            "export": [
+              1080,
+              1080
+            ]
+          },
+          "Employee short/accented wrapped headings have no measured clipping at desktop and 390px; no DOM overrides",
+          "novo_funcionario: POST/reopen/PUT/read passed with one JSON header, unchanged template-default icon and persisted media",
+          "Convidado: POST/reopen/PUT/read passed with one JSON header and preserved content/media",
+          {
+            "model": "Convidado",
+            "photoUpload": true,
+            "pdfWidth": 108,
+            "pdfHeight": 175.1
+          },
+          "Owner: POST/reopen/PUT/read passed with one JSON header and preserved content/media",
+          {
+            "model": "Owner",
+            "photoUpload": true,
+            "pdfWidth": 108,
+            "pdfHeight": 250.68
+          },
+          "Real duplicate is serialized across IDs through refresh; real delete refreshes history and retains success feedback"
+        ],
+        "saved": [
+          {
+            "area": "autocard",
+            "id": "523933c1-371b-4c14-bcab-b6e230595dd9",
+            "name": "QA 20260929 comunicado"
+          },
+          {
+            "area": "autocard",
+            "id": "21269eb1-a914-471d-86e8-942e5b945aa8",
+            "name": "QA 20260929 vaga"
+          },
+          {
+            "area": "autocard",
+            "id": "98b83789-eba8-4afe-aff9-b872b771e742",
+            "name": "QA 20260929 aniversariante"
+          },
+          {
+            "area": "autocard",
+            "id": "f4cf1c50-d3e9-41ad-a945-1afde4fec000",
+            "name": "QA 20260929 novo_funcionario"
+          },
+          {
+            "area": "pos-cards",
+            "id": "7f531b59-994a-43fb-bef1-f4dbc47235f5",
+            "name": "QA 20260929 Convidado"
+          },
+          {
+            "area": "pos-cards",
+            "id": "86194f6a-ce08-476f-8216-6bee5a0f5d5a",
+            "name": "QA 20260929 Owner"
+          },
+          {
+            "area": "pos-cards",
+            "id": "e50d4b18-b987-47ba-839c-7e3eb391bbcf",
+            "name": "QA 20260929 Convidado revisado v2"
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "source": "portal-correcoes-admin-results/results.json",
+      "sourceSha256": "3853b401b69d224ee7cc0a411392cdc9fccc02e466a6868b0597187a6a92d4ce",
+      "result": {
+        "environment": "http://localhost:8080",
+        "results": [
+          "Users filters precede pagination; same-tab Back/Forward restores rows; inactive assignment preserved beyond 100 cargos",
+          {
+            "combinedFilters": {
+              "role": "viewer",
+              "state": "disabled"
+            },
+            "returned": 1
+          },
+          {
+            "combinedFilters": {
+              "role": "admin",
+              "state": "active"
+            },
+            "returned": 1
+          },
+          {
+            "combinedFilters": {
+              "job_title_id": "bc51a51c-ade9-4da9-a8f1-ef4cb4223971"
+            },
+            "returned": 1
+          },
+          "Delayed older success and 503 cannot replace newer user results",
+          "105 filtered cargos across three pages; inactive table filter leaves complete active invitation options intact",
+          "Self status action explained/disabled; audit civil-day and actor fallback shown; CSV accessible label and real duplicate/inactive validation pass",
+          "manageUsers without superAdmin cannot edit/disable protected super-admin and has no audit UI",
+          "390px filters remain within the document width; tables keep their own scrolling"
+        ],
+        "errors": []
+      }
+    },
+    {
+      "source": "portal-correcoes-admin-results/mutations-results.json",
+      "sourceSha256": "060462c06cfd3c7a000b37c5ccb61a9936a83117f7d401c488e0b324150020ce",
+      "result": {
+        "environment": "http://localhost:8080",
+        "results": [
+          "Synthetic cargo created/renamed/deactivated through native UI; complete invitation options refreshed after each write; Enter applied cargo search",
+          "Second-page 503 never exposes a partial editable invitation; retry opens complete catalog; ArrowRight/Home retain native tab navigation"
+        ],
+        "errors": []
+      }
+    },
+    {
+      "source": "portal-correcoes-editorial-results/results.json",
+      "sourceSha256": "510fa76576d56abcd154f733221f344cbc04b1383c5e34c6866b89fe166e69c1",
+      "result": {
+        "environment": "http://localhost:8080",
+        "results": [
+          "Managed article explains CMS ownership; simple metadata save preserves content/blocks and category was restored",
+          {
+            "history": [
+              "v2 · Publicado",
+              "v1 · Rascunho"
+            ],
+            "guard": "Cancel preserves dirty Knowledge editor; accept navigates to canonical CMS without unsupported deep links"
+          },
+          "Legacy article retains editable simple body and contextual guidance",
+          "Viewer has no editor/CMS action"
+        ],
+        "errors": []
+      }
+    },
+    {
+      "source": "portal-correcoes-navigation-final-results.json",
+      "sourceSha256": "52427918379c40da4be1988437a60daa74d13afcb230f6c0699bb0045cf073ef",
+      "result": {
+        "environment": "http://localhost:8080",
+        "desktopAreaChanges": 20,
+        "mobileAreaChanges": 4,
+        "documentLoads": 0,
+        "dialogs": [
+          {
+            "type": "confirm",
+            "message": "Há alterações dos Cards Pós que ainda não foram salvas. Sair mesmo assim?",
+            "url": "http://localhost:8080/cards-pos.html",
+            "target": {
+              "round": 0,
+              "area": "dashboard"
+            },
+            "accepted": true
+          },
+          {
+            "type": "confirm",
+            "message": "Há alterações dos Cards Pós que ainda não foram salvas. Sair mesmo assim?",
+            "url": "http://localhost:8080/cards-pos.html",
+            "target": {
+              "round": 1,
+              "area": "dashboard"
+            },
+            "accepted": true
+          }
+        ],
+        "errors": [],
+        "responses": []
+      }
+    }
+  ]
+}

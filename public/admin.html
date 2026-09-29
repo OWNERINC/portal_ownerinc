@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./css/admin.css">
   <script src="./js/auth-shell.js"></script>
 </head>
 <body>
@@ -54,6 +55,7 @@
       <div class="page-header"><h1>Painel Administrativo</h1></div>
 
       <div class="admin-tabs" id="admin-tabs" role="tablist" aria-label="Áreas administrativas"></div>
+      <div id="job-title-options-feedback" class="form-help" role="status" aria-live="polite"></div>
 
       <!-- Solicitações de cadastro -->
       <section id="section-registrations" class="admin-section" role="tabpanel" aria-labelledby="tab-registrations" hidden>
@@ -81,8 +83,8 @@
           <div class="card-title">Importar usuários em lote</div>
           <p class="card-copy">CSV UTF-8 com até 500 linhas e cabeçalhos: name,email,job_title,contract_type,pj_due_day,phone. Todos serão leitores; cargos precisam estar ativos e o dia só vale para PJ.</p>
           <a class="btn btn-ghost btn-sm" href="./modelo-convites-usuarios.csv" download>Baixar modelo CSV</a>
-          <p class="card-copy"><strong>Antes de importar:</strong> substitua ou remova as duas linhas de exemplo do modelo.</p>
-          <ul class="card-copy">
+          <p id="bulk-csv-examples" class="card-copy"><strong>Antes de importar:</strong> substitua ou remova as duas linhas de exemplo do modelo.</p>
+          <ul id="bulk-csv-columns" class="card-copy">
             <li><code>name</code>: obrigatório, até 120 caracteres.</li>
             <li><code>email</code>: obrigatório, válido e não repetido no arquivo ou no Portal.</li>
             <li><code>job_title</code>: nome exato de um cargo ativo cadastrado no Portal.</li>
@@ -90,12 +92,20 @@
             <li><code>pj_due_day</code>: deixe vazio para CLT; para PJ, informe um dia de 1 a 31.</li>
             <li><code>phone</code>: opcional, até 40 caracteres.</li>
           </ul>
-          <p class="card-copy">Mantenha o formato CSV UTF-8, os cabeçalhos na mesma ordem e o limite de 500 pessoas.</p>
-          <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv">
+          <p id="bulk-csv-help" class="card-copy">Mantenha o formato CSV UTF-8, os cabeçalhos na mesma ordem e o limite de 500 pessoas. Pré-visualize e confira as linhas antes de confirmar a importação.</p>
+          <label for="bulk-csv" class="form-label">Arquivo CSV de convites</label>
+          <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv" aria-describedby="bulk-csv-help bulk-csv-columns bulk-csv-examples">
           <div id="bulk-import-feedback" class="form-feedback" role="alert" aria-live="polite"></div>
           <div id="bulk-preview" hidden style="margin-top:12px"></div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button id="bulk-preview-button" class="btn btn-ghost" type="button">Pré-visualizar</button><button id="bulk-confirm-button" class="btn btn-primary" type="button" disabled>Confirmar importação</button><button id="bulk-retry-button" class="btn btn-ghost" type="button" hidden>Tentar falhas novamente</button></div>
         </div>
+        <form id="users-filters" class="filter-bar admin-filters" novalidate>
+          <div class="form-group"><label class="form-label" for="users-q">Nome ou e-mail</label><input id="users-q" class="form-input" type="search" maxlength="200" aria-describedby="users-q-error"><span id="users-q-error" class="form-feedback" role="alert"></span></div>
+          <div class="form-group"><label class="form-label" for="users-role">Perfil</label><select id="users-role" class="form-select" aria-describedby="users-role-error"><option value="">Todos</option><option value="viewer">Leitor</option><option value="admin">Administrador</option></select><span id="users-role-error" class="form-feedback" role="alert"></span></div>
+          <div class="form-group"><label class="form-label" for="users-state">Estado da conta</label><select id="users-state" class="form-select" aria-describedby="users-state-error"><option value="">Todos</option><option value="active">Ativo</option><option value="disabled">Desativado</option><option value="enable_pending">Habilitação pendente</option></select><span id="users-state-error" class="form-feedback" role="alert"></span></div>
+          <div class="form-group"><label class="form-label" for="users-job-title-id">Cargo</label><select id="users-job-title-id" class="form-select" aria-describedby="users-job-title-id-error"><option value="">Todos</option></select><span id="users-job-title-id-error" class="form-feedback" role="alert"></span></div>
+          <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="users-clear" class="btn btn-ghost" type="button">Limpar</button></div>
+        </form>
         <div class="table-wrapper">
           <table>
             <caption>Usuários autorizados no Portal</caption>
@@ -110,11 +120,18 @@
         <div id="users-pagination" class="pagination" aria-label="Paginação de usuários"></div>
         <div id="audit-panel" class="admin-subsection" hidden>
           <div class="section-header"><h3>Atividade administrativa recente</h3></div>
+          <p id="audit-dates-help" class="form-help">Período por dias civis de São Paulo, incluindo as datas inicial e final. Nome do ator é o nome atual, não um registro histórico.</p>
+          <form id="audit-filters" class="filter-bar admin-filters" novalidate>
+            <div class="form-group"><label class="form-label" for="audit-action">Código exato da ação</label><input id="audit-action" class="form-input" maxlength="120" placeholder="Ex.: user.update" aria-describedby="audit-action-error"><span id="audit-action-error" class="form-feedback" role="alert"></span></div>
+            <div class="form-group"><label class="form-label" for="audit-from">De</label><input id="audit-from" class="form-input" type="date" min="0001-01-01" max="9999-12-31" aria-describedby="audit-dates-help audit-from-error"><span id="audit-from-error" class="form-feedback" role="alert"></span></div>
+            <div class="form-group"><label class="form-label" for="audit-to">Até</label><input id="audit-to" class="form-input" type="date" min="0001-01-01" max="9999-12-31" aria-describedby="audit-dates-help audit-to-error"><span id="audit-to-error" class="form-feedback" role="alert"></span></div>
+            <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="audit-clear" class="btn btn-ghost" type="button">Limpar</button></div>
+          </form>
           <div class="table-wrapper">
             <table>
                <caption>Eventos administrativos</caption>
-              <thead><tr><th scope="col">Data</th><th scope="col">Ator</th><th scope="col">Ação</th><th scope="col">Alvo</th></tr></thead>
-              <tbody id="audit-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
+              <thead><tr><th scope="col">Data (São Paulo)</th><th scope="col">Ator atual</th><th scope="col">Ação</th><th scope="col">Alvo</th><th scope="col">Request ID</th></tr></thead>
+              <tbody id="audit-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
             </table>
           </div>
           <div id="audit-pagination" class="pagination" aria-label="Paginação da auditoria"></div>
@@ -149,6 +166,11 @@
             </div>
           </form>
         </div>
+        <form id="titles-filters" class="filter-bar admin-filters" novalidate>
+          <div class="form-group"><label class="form-label" for="titles-q">Nome do cargo</label><input id="titles-q" class="form-input" type="search" maxlength="200" aria-describedby="titles-q-error"><span id="titles-q-error" class="form-feedback" role="alert"></span></div>
+          <div class="form-group"><label class="form-label" for="titles-active">Situação do cargo</label><select id="titles-active" class="form-select" aria-describedby="titles-active-error"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select><span id="titles-active-error" class="form-feedback" role="alert"></span></div>
+          <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="titles-clear" class="btn btn-ghost" type="button">Limpar</button></div>
+        </form>
         <div class="table-wrapper">
           <table>
             <caption>Cargos disponíveis para os usuários</caption>
@@ -156,6 +178,7 @@
             <tbody id="job-titles-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
           </table>
         </div>
+        <div id="job-titles-pagination" class="pagination" aria-label="Paginação de cargos"></div>
       </section>
 
       <!-- Academy -->
@@ -267,9 +290,10 @@
     </div>
     <div class="form-group">
       <label class="form-label" for="u-job-title">Cargo</label>
-      <select class="form-select" id="u-job-title" name="job_title_id">
+      <select class="form-select" id="u-job-title" name="job_title_id" aria-describedby="user-job-title-help">
         <option value="">Sem cargo definido</option>
       </select>
+      <p id="user-job-title-help" class="form-help" hidden></p>
     </div>
      <p id="user-form-help" class="form-help">Convite administrativo: a pessoa receberá um e-mail para criar a primeira senha e, depois, acessar o Portal.</p>
     <div class="form-group">

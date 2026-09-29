@@ -89,18 +89,33 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
   return element('article', { className: 'dashboard-story-card' }, children);
 }
 
-function renderHero(announcement) {
+function renderHero(announcement, state = announcement ? 'populated' : 'empty') {
+  const hero = document.querySelector('.dashboard-hero');
+  if (hero) hero.dataset.state = state;
+  setBusy(hero, state === 'loading');
+  const section = document.getElementById('dashboard-news-section');
+  if (section) section.hidden = state !== 'populated';
   const title = document.getElementById('dashboard-hero-title');
   const eyebrow = document.getElementById('dashboard-hero-eyebrow');
   const description = document.getElementById('dashboard-hero-description');
   const meta = document.getElementById('dashboard-hero-meta');
   if (title) title.textContent = announcement?.title || 'Owner News';
   if (eyebrow) eyebrow.textContent = `Owner News · ${announcement?.category || 'Ownerinc'}`;
-  if (description) description.textContent = announcement ? excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.') : 'Nenhuma publicação no Owner News.';
+  if (description) description.textContent = announcement
+    ? excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.')
+    : state === 'loading' ? 'Carregando publicações…'
+      : state === 'error' ? 'Não foi possível carregar o Owner News.' : 'Nenhuma publicação no Owner News.';
   if (meta) meta.textContent = announcement ? `Publicado ${formatDate(announcement.published_at)}` : '';
   const link = document.querySelector('.dashboard-hero-copy a');
-  if (link) link.href = announcement ? `./announcements.html?id=${encodeURIComponent(announcement.id)}` : './announcements.html';
+  if (link) {
+    link.hidden = state === 'loading' || state === 'error';
+    link.href = announcement ? `./announcements.html?id=${encodeURIComponent(announcement.id)}` : '#quick-links';
+    link.textContent = announcement ? 'Ler publicação' : 'Acessar áreas';
+  }
+  const retry = document.getElementById('dashboard-hero-retry');
+  if (retry) retry.hidden = state !== 'error';
   const image = document.querySelector('.dashboard-hero > img');
+  if (image) image.hidden = state !== 'populated';
   loadNewsImage(image, announcement);
 }
 
@@ -131,16 +146,23 @@ function loadNewsImage(image, announcement) {
 }
 page.listen(window, 'pagehide', () => { ++announcementsRequest; releaseNewsImages(); });
 page.listen(window, 'pageshow', event => { if (event.persisted) loadAnnouncements(); });
+const heroRetry = document.getElementById('dashboard-hero-retry');
+if (heroRetry) page.listen(heroRetry, 'click', () => {
+  if (document.querySelector('.dashboard-hero')?.dataset.state === 'error') loadAnnouncements();
+});
 async function loadAnnouncements() {
   if (!announcementsPreview) return;
   const requestToken = ++announcementsRequest;
+  releaseNewsImages();
+  clear(announcementsPreview);
+  renderHero(null, 'loading');
   setBusy(announcementsPreview, true);
   try {
     const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
     if (requestToken !== announcementsRequest) return;
     releaseNewsImages();
     renderHero(announcements[0]);
-    if (!announcements.length) return showState(announcementsPreview, 'Nenhuma publicação no Owner News.');
+    if (!announcements.length) return;
     clear(announcementsPreview);
     announcements.forEach(announcement => {
       const card = storyCard({
@@ -156,7 +178,7 @@ async function loadAnnouncements() {
       loadNewsImage(card.querySelector('img'), announcement);
     });
   } catch {
-    if (requestToken === announcementsRequest) showState(announcementsPreview, 'Não foi possível carregar o Owner News.', loadAnnouncements);
+    if (requestToken === announcementsRequest) renderHero(null, 'error');
   } finally {
     if (requestToken === announcementsRequest) setBusy(announcementsPreview, false);
   }

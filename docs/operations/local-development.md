@@ -41,6 +41,12 @@ vínculos permanecem armazenados, mas todas as rotas de produto voltam a 404.
 
 ## Serviços Node isolados
 
+O runtime atual dos manifests e imagens da API/cron é **Node 24**. Execute os
+checks com esse runtime para reproduzir esta rodada. `AGENTS.md` ainda solicita
+compatibilidade Node 18; a verificação em Node 24 não comprova compatibilidade
+integral com Node 18, e essa divergência preexistente não foi resolvida alterando
+engines, dependências ou instruções no lote de linguagem/documentação.
+
 A API e o cron podem ser executados em seus diretórios com `npm install` e
 `npm start`. Use `API_DATABASE_URL` como `DATABASE_URL` da API,
 `CRON_DATABASE_URL` como `DATABASE_URL` do cron e execute `npm run db:migrate`
@@ -50,3 +56,16 @@ na raiz com `MIGRATION_DATABASE_URL` e as duas senhas de roles definidas.
 
 Execute `npm run verify`. O comando não inicia containers nem altera
 dados.
+
+O verificador reúne sintaxe, testes, nomenclatura DHO, scanner de segurança e
+validação read-only da configuração Compose quando disponível. Esse scanner
+não é `npm audit`, e os testes com
+doubles não substituem migrations, persistência ou jornadas reais no navegador.
+Para conferir o shell gerado sem escrever arquivos, use
+`node scripts/generate-public-shell.mjs --check`; confira também `git diff --check`.
+
+Resultados de homologação e aceites das correções de setembro estão no
+[registro da sessão principal](../reviews/2026-09-29-portal-corrections-acceptance.md).
+Uma fixture local aprovada não comprova produção, dados/cargos oficiais,
+recebimento externo de e-mail ou uso em dispositivo físico. Operações Docker
+que afetem serviços em execução continuam exigindo autorização explícita.

@@ -1,6 +1,7 @@
 import { can, fetchAPI, fetchAPIPage } from './auth.js';
 import { canLeavePageUI, clear, closeDialog, element, openDialog, safeHttpUrl, setDialogCloseGuard, protectForm } from './ui.js';
 import { createBulkPreviewState } from './bulk-preview-state.js';
+import { ADMIN_LIST_FIELDS, readAdminListURL, writeAdminListURL, validateAdminFilters, adminListQuery } from './admin-list-state.js';
 
 const requests = { fetchAPI, fetchAPIPage };
 export function mount(page) {
@@ -29,11 +30,17 @@ let editingCourseId = null;
 let editingBenefitId = null;
 let solidesLinks = [];
 let jobTitles = [];
+let jobTitleOptions = [];
+let catalogVersion = 0;
+let catalogPending = null;
+let catalogReady = false;
+let catalogEditor = null;
+let editingUser = null;
+const lists = Object.fromEntries(Object.keys(ADMIN_LIST_FIELDS).map(key => [key, { filters: {}, page: 1, request: 0 }]));
 let registrations = [];
 let editingJobTitleId = null;
 let reviewingRegistration = null;
 let registrationReviewAction = 'approve';
-const AUDIT_PAGE_SIZE = 50;
 let bulkPreviewRows = [];
 const bulkPreviewState = createBulkPreviewState();
 let bulkJobId = null;
@@ -84,14 +91,190 @@ function serverPagination(key, total, paginationId, load) {
   );
 }
 
+const filterId = (key, field) => `${key}-${field.replace(/_/g, '-')}`;
+function syncFilterControls(key) {
+  for (const field of ADMIN_LIST_FIELDS[key]) {
+    const id = filterId(key, field), input = document.getElementById(id);
+    if (field === 'job_title_id') fillTitleSelect(input, lists[key].filters[field] || '', 'Todos', true, true);
+    else input.value = lists[key].filters[field] || '';
+    input.removeAttribute('aria-invalid');
+    document.getElementById(`${id}-error`).textContent = '';
+  }
+}
+
+function restoreListURL() {
+  const url = new URL(location.href);
+  for (const key of Object.keys(lists)) {
+    Object.assign(lists[key], readAdminListURL(key, location.search));
+    lists[key].request++;
+    syncFilterControls(key);
+    writeAdminListURL(url, key, lists[key]);
+  }
+  if (url.href !== location.href) history.replaceState({}, '', url);
+}
+
+function writeListURL(key, push = true) {
+  const url = writeAdminListURL(new URL(location.href), key, lists[key]);
+  if (url.href !== location.href) history[push ? 'pushState' : 'replaceState']({}, '', url);
+}
+
+const listLoaders = { users: loadUsers, titles: loadJobTitles, audit: loadAudit };
+function bindFilters(key) {
+  page.listen(document.getElementById(`${key}-filters`), 'submit', event => {
+    event.preventDefault();
+    if (!page.active) return;
+    const raw = Object.fromEntries(ADMIN_LIST_FIELDS[key].map(field => [field, document.getElementById(filterId(key, field)).value]));
+    const { values, errors } = validateAdminFilters(key, raw);
+    for (const field of ADMIN_LIST_FIELDS[key]) {
+      const id = filterId(key, field), input = document.getElementById(id);
+      // Date inputs may sanitize an impossible typed date to an empty value.
+      if (input.validity?.badInput) errors[field] = 'Informe uma data real.';
+      input.setAttribute('aria-invalid', String(Boolean(errors[field])));
+      document.getElementById(`${id}-error`).textContent = errors[field] || '';
+    }
+    if (Object.keys(errors).length) { document.getElementById(filterId(key, Object.keys(errors)[0])).focus(); return; }
+    lists[key].filters = values; lists[key].page = 1;
+    syncFilterControls(key); writeListURL(key); void listLoaders[key]();
+  });
+  page.listen(document.getElementById(`${key}-clear`), 'click', () => {
+    if (!page.active) return;
+    lists[key].filters = {}; lists[key].page = 1;
+    syncFilterControls(key); writeListURL(key); void listLoaders[key]();
+  });
+}
+
+// Each list has its own generation. Detached retry/pagination/row controls
+// retain their generation too, so even programmatic old clicks are harmless.
+async function loadAdminList(key, endpoint, tbodyId, columns, label, render) {
+  if (!page.active || !canManageUsers() || (key === 'audit' && !isSuperAdmin(me))) return;
+  const state = lists[key], request = ++state.request;
+  const current = () => page.active && request === state.request;
+  const tbody = document.getElementById(tbodyId);
+  tableState(tbodyId, columns, `Carregando ${label}…`);
+  tbody.setAttribute('aria-busy', 'true');
+  try {
+    let result = await fetchAPIPage(`${endpoint}?${adminListQuery(key, state)}`);
+    if (!current()) return;
+    const lastPage = Math.min(20001, Math.max(1, Math.ceil((result.total ?? result.data.length) / 50)));
+    if (!result.data.length && state.page > lastPage) {
+      state.page = lastPage; writeListURL(key, false);
+      // One bounded recovery; a continuously shrinking dataset cannot loop.
+      result = await fetchAPIPage(`${endpoint}?${adminListQuery(key, state)}`);
+      if (!current()) return;
+    }
+    if (!result.data.length) tableState(tbodyId, columns, 'Nenhum resultado para estes filtros.');
+    else render(result.data, current);
+    const total = result.total ?? result.data.length;
+    const count = Math.min(20001, Math.max(1, Math.ceil(total / 50)));
+    if (!result.data.length && state.page > count) { state.page = count; writeListURL(key, false); }
+    const selectedPage = state.page;
+    const changePage = next => {
+      if (!current() || next < 1 || next > count) return;
+      state.page = next; writeListURL(key); void listLoaders[key]();
+    };
+    clear(document.getElementById(tbodyId.replace(/-tbody$/, '-pagination'))).append(
+      element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', disabled: selectedPage <= 1, on: { click: () => changePage(selectedPage - 1) } }),
+      element('span', { text: `Página ${selectedPage} de ${count} · ${total} resultados` }),
+      element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', disabled: selectedPage >= count, on: { click: () => changePage(selectedPage + 1) } }),
+    );
+  } catch {
+    if (current()) tableState(tbodyId, columns, `Não foi possível carregar ${label}.`, () => { if (current()) void listLoaders[key](); });
+  } finally {
+    if (current()) tbody.setAttribute('aria-busy', 'false');
+  }
+}
+
+function isSuperAdmin(user) { return user?.role === 'admin' && user.permissions?.superAdmin === true; }
+function canManageUsers() { return me.role === 'admin' && (isSuperAdmin(me) || me.permissions?.manageUsers === true); }
+
+function fillTitleSelect(select, selectedId, emptyLabel, all = false, preserveUnknown = false) {
+  const knownLabel = [...select.options].find(option => option.value === selectedId)?.textContent;
+  clear(select).append(element('option', { value: '', text: emptyLabel }));
+  jobTitleOptions.filter(title => all || title.active === true || (editingUserId && title.id === editingUser?.job_title_id && select.id === 'u-job-title')).forEach(title => select.append(
+    element('option', { value: title.id, text: title.active ? title.name : `${title.name} (inativo)` })
+  ));
+  if (selectedId && preserveUnknown && ![...select.options].some(option => option.value === selectedId)) {
+    select.append(element('option', { value: selectedId, text: knownLabel || (editingUser?.job_title_id === selectedId ? editingUser.job_title : '') || `Cargo selecionado (${selectedId})` }));
+  }
+  select.value = selectedId || '';
+}
+
+function updateUserTitleHelp() {
+  const id = document.getElementById('u-job-title').value;
+  const title = jobTitleOptions.find(item => item.id === id);
+  const inactive = title ? title.active === false : id && id === editingUser?.job_title_id && editingUser.job_title_active === false;
+  const help = document.getElementById('user-job-title-help');
+  help.hidden = !inactive;
+  help.textContent = inactive ? 'Cargo inativo: o vínculo permanece, mas o acesso derivado está indisponível até uma atribuição ou ativação autorizada. A conta não foi desativada por isso.' : '';
+}
+
+function renderCatalogOptions() {
+  renderJobTitleOptions(document.getElementById('u-job-title').value);
+  const registration = document.getElementById('registration-job-title');
+  fillTitleSelect(registration, registration.value, 'Selecione um cargo');
+  const filter = document.getElementById('users-job-title-id');
+  fillTitleSelect(filter, filter.value, 'Todos', true, true);
+}
+
+function loadJobTitleOptions() {
+  if (!page.active || !canManageUsers()) return Promise.reject(new Error('Unavailable catalog'));
+  if (catalogReady) return Promise.resolve();
+  if (catalogPending) return catalogPending;
+  const version = ++catalogVersion;
+  const current = () => page.active && version === catalogVersion;
+  const feedback = document.getElementById('job-title-options-feedback');
+  feedback.textContent = 'Carregando todos os cargos para filtros e formulários…';
+  const pending = (async () => {
+    try {
+      const complete = new Map();
+      let offset = 0, total = 1;
+      while (offset < total) {
+        const result = await fetchAPIPage(`/api/job-titles?all=true&limit=100&offset=${offset}`);
+        if (!current()) throw new DOMException('Obsolete catalog', 'AbortError');
+        total = result.total ?? result.data.length;
+        if (!result.data.length && offset < total) throw new Error('Incomplete catalog');
+        result.data.forEach(title => complete.set(title.id, title));
+        offset += result.data.length;
+        if (offset > 1000000 && offset < total) throw new Error('Catalog exceeds pagination limit');
+      }
+      if (complete.size < total) throw new Error('Incomplete catalog');
+      jobTitleOptions = [...complete.values()]; catalogReady = true;
+      renderCatalogOptions(); clear(feedback);
+    } catch (error) {
+      if (current()) {
+        feedback.textContent = 'Não foi possível carregar todos os cargos. Nenhuma opção parcial foi aplicada. ';
+        feedback.append(element('button', { type: 'button', className: 'btn btn-ghost btn-sm', text: 'Tentar novamente', on: { click: () => {
+          if (!current()) return;
+          if (catalogEditor) requestCatalogEditor(catalogEditor.open);
+          else void loadJobTitleOptions().catch(() => {});
+        } } }));
+      }
+      throw error;
+    } finally { if (current()) catalogPending = null; }
+  })();
+  catalogPending = pending;
+  return pending;
+}
+
+function requestCatalogEditor(open) {
+  const intent = { open, tab: activeTab };
+  catalogEditor = intent;
+  void loadJobTitleOptions().then(() => {
+    if (!page.active || catalogEditor !== intent || activeTab !== intent.tab) return;
+    catalogEditor = null; open();
+  }).catch(() => {});
+}
+
+async function refreshJobTitles() {
+  catalogVersion++; catalogReady = false; catalogPending = null;
+  await Promise.all([loadJobTitles(), loadJobTitleOptions().catch(() => {})]);
+}
+
 function renderJobTitleOptions(selectedId = '') {
   const select = document.getElementById('u-job-title');
   if (!select) return;
-  clear(select).append(element('option', { value: '', text: 'Sem cargo definido' }));
-  jobTitles.filter(title => title.active || title.id === selectedId).forEach(title => select.append(
-    element('option', { value: title.id, text: title.active ? title.name : `${title.name} (inativo)` })
-  ));
-  select.value = selectedId || '';
+  fillTitleSelect(select, selectedId, 'Sem cargo definido', false, Boolean(editingUserId && selectedId === editingUser?.job_title_id));
+  updateUserTitleHelp();
 }
 
 function showJobTitleEditor(title = null) {
@@ -111,7 +294,7 @@ function hideJobTitleEditor() {
   markJobTitleClean();
 }
 
-function renderJobTitles() {
+function renderJobTitles(current) {
   const tbody = clear(document.getElementById('job-titles-tbody'));
   if (!jobTitles.length) return tableState('job-titles-tbody', 4, 'Nenhum cargo cadastrado.');
   jobTitles.forEach(title => tbody.append(element('tr', {}, [
@@ -119,22 +302,14 @@ function renderJobTitles() {
     cell(title.user_count || 0),
     cell(title.active ? 'Ativo' : 'Inativo', `badge ${title.active ? 'badge-green' : 'badge-gray'}`),
     actions(
-      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar cargo: ${title.name}`, on: { click: () => showJobTitleEditor(title) } }),
-      element('button', { className: title.active ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm', type: 'button', text: title.active ? 'Desativar' : 'Ativar', 'aria-label': `${title.active ? 'Desativar' : 'Ativar'} cargo: ${title.name}`, on: { click: () => toggleJobTitle(title) } }),
+      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar cargo: ${title.name}`, on: { click: () => { if (current()) showJobTitleEditor(title); } } }),
+      element('button', { className: title.active ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm', type: 'button', text: title.active ? 'Desativar' : 'Ativar', 'aria-label': `${title.active ? 'Desativar' : 'Ativar'} cargo: ${title.name}`, on: { click: () => { if (current()) void toggleJobTitle(title); } } }),
     ),
   ])));
 }
 
 async function loadJobTitles() {
-  tableState('job-titles-tbody', 4, 'Carregando cargos…');
-  try {
-    const result = await fetchAPIPage('/api/job-titles?all=true&limit=100&offset=0');
-    jobTitles = result.data;
-    renderJobTitles();
-    renderJobTitleOptions(document.getElementById('u-job-title')?.value || '');
-  } catch {
-    tableState('job-titles-tbody', 4, 'Não foi possível carregar os cargos.', loadJobTitles);
-  }
+  return loadAdminList('titles', '/api/job-titles', 'job-titles-tbody', 4, 'os cargos', (data, current) => { jobTitles = data; renderJobTitles(current); });
 }
 
 async function discoverAdminFeatures() {
@@ -158,7 +333,7 @@ async function toggleJobTitle(title) {
       method: 'PUT', body: JSON.stringify({ name: title.name, active: !title.active }),
     });
     showToast(title.active ? 'Cargo desativado.' : 'Cargo ativado.');
-    await loadJobTitles();
+    await refreshJobTitles();
   } catch (error) {
     showToast(`Não foi possível atualizar o cargo: ${error.message}`);
   }
@@ -339,36 +514,45 @@ async function runSolidesProbe() {
 }
 
 async function loadUsers() {
-  tableState('users-tbody', 8, 'Carregando usuários…');
-  try {
-    pages.users ||= 0;
-    const result = await fetchAPIPage(`/api/users?limit=50&offset=${pages.users * 50}`);
-    users = result.data;
-    if (!users.length) return tableState('users-tbody', 8, 'Nenhum usuário cadastrado.');
+  return loadAdminList('users', '/api/users', 'users-tbody', 8, 'os usuários', (data, current) => {
+    users = data;
     const tbody = clear(document.getElementById('users-tbody'));
-    users.forEach(user => {
+    users.forEach((user, index) => {
         const isPJ = user.contract_type === 'pj' || user.is_pj;
-        const disabled = user.state === 'disabled' || user.permissions?.accountDisabled === true;
+        const disabled = user.state === 'disabled' || user.permissions?.accountDisabled === true || user.permissions?.accountDisabled === 'true';
         const enablePending = !disabled && (user.state === 'enable_pending' || user.firebase_enable_pending === true);
         const stateLabel = disabled ? 'Desativado' : enablePending ? 'Habilitação pendente' : 'Ativo';
+        const policy = userActions(user), helpId = `user-actions-${lists.users.request}-${index}`;
+        const jobCell = cell(user.job_title || '—');
+        if (user.job_title_active === false) jobCell.append(element('p', { className: 'form-help', text: 'Cargo inativo: vínculo mantido, acesso derivado indisponível até atribuição ou ativação autorizada. Não desativa a conta.' }));
+        const rowActions = actions(
+          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', disabled: !policy.edit, 'aria-describedby': helpId, 'aria-label': `Editar usuário: ${user.name || user.email}`, on: { click: () => { if (current() && policy.edit) editUser(user); } } }),
+          element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', disabled: !policy.status, 'aria-describedby': helpId, 'aria-label': `${disabled ? 'Reativar' : 'Desativar'} usuário: ${user.name || user.email}`, on: { click: () => { if (current() && policy.status) void (disabled ? reactivateUser(user.uid) : deleteUser(user.uid)); } } }),
+          ...(isSuperAdmin(me) ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', disabled: !policy.erase, 'aria-describedby': helpId, 'aria-label': `Anonimizar usuário: ${user.name || user.email}`, on: { click: () => { if (current() && policy.erase) void eraseUserData(user.uid); } } })] : []),
+          element('p', { id: helpId, className: 'form-help', text: policy.reason, hidden: !policy.reason }),
+        );
         tbody.append(element('tr', {}, [
           cell(user.name || '—'), cell(user.email || '—'),
           cell(user.role === 'admin' ? 'Administrador' : 'Leitor', `badge ${user.role === 'admin' ? 'badge-gold' : 'badge-gray'}`),
-          cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), cell(user.job_title || '—'), cell(isPJ ? user.pj_due_day || '—' : '—'),
+          cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), jobCell, cell(isPJ ? user.pj_due_day || '—' : '—'),
           cell(stateLabel, `badge ${disabled || enablePending ? 'badge-gray' : 'badge-green'}`),
-          actions(
-            element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar usuário: ${user.name || user.email}`, on: { click: () => editUser(user) } }),
-            element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', 'aria-label': `${disabled ? 'Reativar' : 'Desativar'} usuário: ${user.name || user.email}`, on: { click: () => disabled ? reactivateUser(user.uid) : deleteUser(user.uid) } }),
-            ...(disabled && can(me, 'superAdmin') && !user.email.endsWith('@invalid.local')
-               ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', 'aria-label': `Anonimizar usuário: ${user.name || user.email}`, on: { click: () => eraseUserData(user.uid) } })]
-              : []),
-          ),
+          rowActions,
         ]));
     });
-    serverPagination('users', result.total || users.length, 'users-pagination', loadUsers);
-  } catch {
-    tableState('users-tbody', 8, 'Não foi possível carregar os usuários.', loadUsers);
-  }
+  });
+}
+
+function userActions(user) {
+  const own = user.uid === me.uid, protectedTarget = isSuperAdmin(user);
+  const edit = canManageUsers() && (!protectedTarget || isSuperAdmin(me));
+  const status = edit && !own;
+  const erase = status && isSuperAdmin(me) && !protectedTarget && user.permissions?.accountDisabled === true && !user.email?.endsWith('@invalid.local');
+  const reason = !edit ? 'Somente um superadministrador pode editar ou alterar o estado deste superadministrador.'
+    : own ? 'Você pode editar seus dados permitidos, mas não desativar, reativar ou anonimizar a própria conta.'
+      : protectedTarget ? 'O servidor protege o último superadministrador. Dados de superadministradores não podem ser anonimizados.'
+        : isSuperAdmin(me) && !erase ? 'Anonimização indisponível: a desativação precisa estar confirmada pelo servidor e os dados ainda não podem ter sido anonimizados.'
+          : '';
+  return { edit, status, erase, reason };
 }
 
 async function loadRegistrations() {
@@ -394,13 +578,16 @@ async function loadRegistrations() {
 }
 
 async function openRegistrationReview(registration, action) {
+  if (!page.active) return;
+  if (action === 'approve' && !catalogReady) {
+    requestCatalogEditor(() => openRegistrationReview(registration, action));
+    return;
+  }
+  catalogEditor = null;
   reviewingRegistration = registration;
   registrationReviewAction = action;
-  if (!jobTitles.length) await loadJobTitles();
-  if (!page.active) return;
   const titleSelect = document.getElementById('registration-job-title');
-  clear(titleSelect).append(element('option', { value: '', text: 'Selecione um cargo' }));
-  jobTitles.filter(title => title.active).forEach(title => titleSelect.append(element('option', { value: title.id, text: title.name })));
+  fillTitleSelect(titleSelect, '', 'Selecione um cargo');
   document.getElementById('modal-registration-title').textContent = action === 'approve' ? 'Aprovar cadastro' : 'Rejeitar cadastro';
   document.getElementById('registration-summary').textContent = `${registration.name} · ${registration.email}`;
   document.getElementById('registration-contract-group').hidden = action !== 'approve';
@@ -538,32 +725,20 @@ page.listen(document.getElementById('bulk-retry-button'), 'click', async () => {
 });
 
 async function loadAudit() {
-  const panel = document.getElementById('audit-panel');
-  const tbody = document.getElementById('audit-tbody');
-  panel.hidden = false;
-  try {
-    pages.audit ||= 0;
-    const result = await fetchAPIPage(`/api/users/audit?limit=${AUDIT_PAGE_SIZE}&offset=${pages.audit * AUDIT_PAGE_SIZE}`);
-    const events = result.data;
-    clear(tbody);
-    if (!events.length) {
-      clear(document.getElementById('audit-pagination'));
-      tbody.append(element('tr', {}, element('td', { colspan: '4', className: 'empty-state', text: 'Nenhum evento administrativo registrado.' })));
-      return;
-    }
-    const format = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  if (!isSuperAdmin(me)) return;
+  document.getElementById('audit-panel').hidden = false;
+  return loadAdminList('audit', '/api/users/audit', 'audit-tbody', 5, 'a auditoria', events => {
+    const tbody = clear(document.getElementById('audit-tbody'));
+    const format = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
+    const labels = { 'user.list': 'Consulta de usuários', 'user.create': 'Convite de usuário', 'user.update': 'Usuário atualizado', 'user.disable': 'Conta desativada', 'user.reactivate': 'Conta reativada', 'user.erase_personal_data': 'Dados pessoais anonimizados', 'job_title.create': 'Cargo criado', 'job_title.update': 'Cargo atualizado', 'registration.approve': 'Cadastro aprovado', 'registration.reject': 'Cadastro rejeitado' };
     events.forEach(event => tbody.append(element('tr', {}, [
       cell(format.format(new Date(event.created_at))),
-      cell(event.actor_uid || 'Sistema'),
-      cell(event.action || '—'),
+      cell(event.actor_name ?? 'Sistema ou conta removida'),
+      cell(`${Object.hasOwn(labels, event.action) ? labels[event.action] : 'Ação administrativa'} · ${event.action || '—'}`),
       cell([event.target_type, event.target_id].filter(Boolean).join(': ') || '—'),
+      cell(event.request_id || '—'),
     ])));
-    serverPagination('audit', result.total ?? events.length, 'audit-pagination', loadAudit);
-  } catch {
-    const state = element('td', { colspan: '4', className: 'empty-state', role: 'alert', text: 'Não foi possível carregar a auditoria. ' });
-    state.append(element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: loadAudit } }));
-    clear(tbody).append(element('tr', {}, state));
-  }
+  });
 }
 
 function resetPermissions() {
@@ -590,28 +765,33 @@ function setUserFields(user = {}) {
   document.getElementById('modal-user-save').textContent = editingUserId ? 'Salvar' : 'Enviar convite';
   document.getElementById('user-form-feedback').textContent = '';
   document.getElementById('u-job-title').required = !editingUserId;
-  const mayEditPrivileges = can(me, 'superAdmin') && user.uid !== me.uid;
+  const mayEditPrivileges = isSuperAdmin(me) && user.uid !== me.uid;
   document.getElementById('u-role').disabled = !mayEditPrivileges;
   resetPermissions();
   const permissions = user.permissions || {};
   const permissionMap = { 'p-super': 'superAdmin', 'p-users': 'manageUsers', 'p-knowledge': 'manageKnowledge', 'p-reminders': 'manageReminders', 'p-academy': 'manageAcademy', 'p-benefits': 'manageBenefits', 'p-solides': 'manageSolides' };
-  Object.entries(permissionMap).forEach(([id, permission]) => { document.getElementById(id).checked = !!permissions[permission]; });
+  Object.entries(permissionMap).forEach(([id, permission]) => { document.getElementById(id).checked = permissions[permission] === true; });
   document.getElementById('permissions-group').hidden = !(document.getElementById('u-role').value === 'admin' && mayEditPrivileges);
 }
 
 function newUser() {
-  editingUserId = null;
-  document.getElementById('user-form').reset();
-  document.getElementById('modal-user-title').textContent = 'Convidar usuário';
-  setUserFields();
-  openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
+  requestCatalogEditor(() => {
+    editingUser = null; editingUserId = null;
+    document.getElementById('user-form').reset();
+    document.getElementById('modal-user-title').textContent = 'Convidar usuário';
+    setUserFields();
+    openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
+  });
 }
 
 function editUser(user) {
-  editingUserId = user.uid;
-  document.getElementById('modal-user-title').textContent = 'Editar usuário';
-  setUserFields(user);
-  openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
+  if (!userActions(user).edit) return;
+  requestCatalogEditor(() => {
+    editingUser = user; editingUserId = user.uid;
+    document.getElementById('modal-user-title').textContent = 'Editar usuário';
+    setUserFields(user);
+    openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
+  });
 }
 
 async function deleteUser(uid) {
@@ -648,7 +828,7 @@ async function eraseUserData(uid) {
 
 document.getElementById('user-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (!event.currentTarget.reportValidity()) return;
+  if (!page.active || !catalogReady || !canManageUsers() || (editingUser && !userActions(editingUser).edit) || !event.currentTarget.reportValidity()) return;
   const contract = document.getElementById('u-contract').value;
   const role = document.getElementById('u-role').value;
   const data = {
@@ -661,7 +841,7 @@ document.getElementById('user-form').addEventListener('submit', async event => {
   if (!editingUserId) {
     data.email = document.getElementById('u-email').value.trim();
   }
-  if (can(me, 'superAdmin') && editingUserId !== me.uid) {
+  if (isSuperAdmin(me) && editingUserId !== me.uid) {
     data.role = role;
     data.permissions = role === 'admin' ? {
       superAdmin: document.getElementById('p-super').checked,
@@ -837,7 +1017,8 @@ document.getElementById('registration-contract').addEventListener('change', even
   document.getElementById('registration-pj-day').required = isPJ;
   if (!isPJ) document.getElementById('registration-pj-day').value = '';
 });
-document.getElementById('u-role').addEventListener('change', event => { document.getElementById('permissions-group').hidden = !(event.target.value === 'admin' && can(me, 'superAdmin')); });
+document.getElementById('u-role').addEventListener('change', event => { document.getElementById('permissions-group').hidden = !(event.target.value === 'admin' && isSuperAdmin(me) && editingUserId !== me.uid); });
+page.listen(document.getElementById('u-job-title'), 'change', updateUserTitleHelp);
 document.getElementById('p-super').addEventListener('change', event => {
   ['p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-solides'].forEach(id => { document.getElementById(id).checked = event.target.checked; document.getElementById(id).disabled = event.target.checked; });
 });
@@ -888,7 +1069,7 @@ document.getElementById('job-title-form').addEventListener('submit', async event
     });
     hideJobTitleEditor();
     showToast(editing ? 'Cargo atualizado.' : 'Cargo criado.');
-    await loadJobTitles();
+    await refreshJobTitles();
   } catch (error) {
     showToast(error.status === 409 ? 'Esse cargo já existe.' : `Não foi possível salvar o cargo: ${error.message}`);
   } finally {
@@ -897,7 +1078,7 @@ document.getElementById('job-title-form').addEventListener('submit', async event
 });
 document.getElementById('registration-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (!event.currentTarget.reportValidity() || !reviewingRegistration) return;
+  if (!page.active || (registrationReviewAction === 'approve' && !catalogReady) || !event.currentTarget.reportValidity() || !reviewingRegistration) return;
   const save = document.getElementById('modal-registration-save');
   const feedback = document.getElementById('registration-form-feedback');
   save.disabled = true;
@@ -936,11 +1117,22 @@ document.getElementById('btn-new-benefit').addEventListener('click', () => benef
   document.getElementById(`${modalId}-cancel`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
 });
 page.listen(window, 'popstate', () => {
+  catalogEditor = null;
+  restoreListURL();
   const requested = new URLSearchParams(location.search).get('tab');
+  const previousTab = activeTab;
   if (document.getElementById(`tab-${requested}`)) switchTab(requested);
+  else buildTabs();
+  if (activeTab === previousTab) {
+    if (activeTab === 'users') { void loadUsers(); if (isSuperAdmin(me)) void loadAudit(); }
+    if (activeTab === 'job-titles') void loadJobTitles();
+  }
 });
+restoreListURL();
+Object.keys(lists).forEach(bindFilters);
+page.listen(document.getElementById('admin-tabs'), 'click', () => { catalogEditor = null; });
 buildTabs();
-if (can(me, 'manageUsers') && activeTab !== 'job-titles') void loadJobTitles();
+if (can(me, 'manageUsers')) void loadJobTitleOptions().catch(() => {});
 void discoverAdminFeatures().then(() => { if (page.active) buildTabs(); });
 try {
   const savedJobId = localStorage.getItem(`${BULK_JOB_STORAGE_KEY_PREFIX}${me.uid}`);

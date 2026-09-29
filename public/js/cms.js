@@ -4,6 +4,13 @@ import { renderPagination } from './pagination.js';
 import { createBlockEditor, createBlockSettings, serializeBlocks } from './cms-block-editor.js';
 import { renderBlocks } from './cms-block-renderer.js';
 
+const REVISION_STATUS_LABELS = new Map([
+  ['draft', 'Rascunho'],
+  ['published', 'Publicado'],
+  ['scheduled', 'Agendado'],
+  ['archived', 'Arquivado'],
+]);
+
 const requests = { fetchAPI, fetchAPIPage };
 const renderContent = renderBlocks;
 export function mount(page) {
@@ -14,7 +21,7 @@ const setTimeout = page.timeout;
 const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
 
 const TYPES = [
-  ['knowledge', 'Knowledge', 'manageKnowledge'],
+  ['knowledge', 'Base de Conhecimento', 'manageKnowledge'],
   ['academy', 'Academy', 'manageAcademy'],
   ['benefit', 'Benefícios', 'manageBenefits'],
   ['announcement', 'Owner News', 'manageKnowledge'],
@@ -198,6 +205,34 @@ function statusBadge(doc) {
   return element('span', { className: `badge ${className}`, text: label });
 }
 
+// Call only after navigation guards accept the transition. Mutation ownership
+// (saving, saveInFlight, actionBusy and uploads) must never be cleared here.
+function resetSelection() {
+  ++editorGeneration;
+  ++historyRequestToken;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  saveQueued = false;
+  dirty = false;
+  newDocumentDirty = false;
+  editVersion = 0;
+  selectedDocument = null;
+  documentView = null;
+  editor = null;
+  historyOffset = 0;
+  showState(editorRoot, 'Selecione um documento na coluna ao lado.');
+  // Removing preview children alone does not release the renderer's assets.
+  renderBlocks(previewRoot, [], { fallbackText: 'A prévia aparecerá aqui.' });
+  delete blockSettings.dataset.selectedIndex;
+  showState(blockSettings, 'Selecione um bloco para editar suas configurações.');
+  historyNode.replaceChildren(element('li', { className: 'empty-state', text: 'Selecione um documento.' }));
+  clear(historyPagination);
+  scheduleForm.reset();
+  setError('');
+  setSaveState('Selecione um documento');
+  updateInspector();
+}
+
 function renderTypeNav() {
   clear(contentTypes);
   TYPES.forEach(([type, label]) => contentTypes.append(element('button', {
@@ -205,30 +240,18 @@ function renderTypeNav() {
     'aria-current': String(type === selectedType),
     ...(navigationBusy() ? { disabled: '' } : {}),
     on: { click: () => {
-      if (navigationBusy()) return;
+      if (!page.active || navigationBusy()) return;
       selectionToken += 1;
-      clearTimeout(saveTimer);
-      saveTimer = null;
-      saveQueued = false;
-       dirty = false;
-       newDocumentDirty = false;
-       editVersion = 0;
-       documentOffset = 0;
-       documentTotal = 0;
-       selectedType = type;
-       documentsByType.set(type, []);
-       selectedDocument = null;
-      documentView = null;
+      resetSelection();
+      documentOffset = 0;
+      documentTotal = 0;
+      selectedType = type;
+      documentsByType.set(type, []);
       newDocumentForm.hidden = true;
-      editor = null;
-      showState(editorRoot, 'Selecione um documento na coluna ao lado.');
-      showState(previewRoot, 'A prévia aparecerá aqui.');
-      showState(blockSettings, 'Selecione um bloco para editar suas configurações.');
-       renderTypeNav();
-       renderDocumentList();
-       updateInspector();
-       if (!newDocumentForm.hidden) void loadSources();
-       loadDocuments();
+      renderTypeNav();
+      renderDocumentList();
+      if (!newDocumentForm.hidden) void loadSources();
+      loadDocuments();
     } },
   })));
 }
@@ -285,13 +308,16 @@ function updateInspector() {
 }
 
 async function loadRevisionHistory(documentId = selectedDocument) {
-  if (!documentId) return;
+  if (!page.active || !documentView || !documentId || documentId !== selectedDocument) return;
   const requestToken = selectionToken;
   const historyToken = ++historyRequestToken;
+  const currentHistory = () => page.active && requestToken === selectionToken
+    && documentId === selectedDocument && historyToken === historyRequestToken;
   historyNode.replaceChildren(element('li', { className: 'empty-state', text: 'Carregando histórico…' }));
+  clear(historyPagination);
   try {
     const result = await fetchAPIPage(`/api/cms/documents/${encodeURIComponent(documentId)}/revisions?limit=${HISTORY_PAGE_SIZE}&offset=${historyOffset}`);
-    if (requestToken !== selectionToken || documentId !== selectedDocument || historyToken !== historyRequestToken) return;
+    if (!page.active || requestToken !== selectionToken || documentId !== selectedDocument || historyToken !== historyRequestToken) return;
     const revisions = result.data || [];
     clear(historyNode);
     if (!revisions.length) {
@@ -300,7 +326,7 @@ async function loadRevisionHistory(documentId = selectedDocument) {
       return;
     }
     revisions.forEach(revision => historyNode.append(element('li', {}, [
-      element('strong', { text: `v${revision.version} · ${revision.status}` }),
+      element('strong', { text: `v${revision.version} · ${REVISION_STATUS_LABELS.get(revision.status) ?? revision.status}` }),
       element('span', { text: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(revision.created_at)) }),
     ])));
     clear(historyPagination);
@@ -308,13 +334,19 @@ async function loadRevisionHistory(documentId = selectedDocument) {
     if (total > HISTORY_PAGE_SIZE) {
       const finalHistoryOffset = Math.max(0, Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE);
       historyPagination.append(
-        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Anterior', disabled: historyOffset === 0, on: { click: () => { historyOffset = Math.max(0, historyOffset - HISTORY_PAGE_SIZE); loadRevisionHistory(); } } }),
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Anterior', disabled: historyOffset === 0, on: { click: () => {
+          if (!currentHistory() || mutationBusy() || creatingDocument) return;
+          historyOffset = Math.max(0, historyOffset - HISTORY_PAGE_SIZE); loadRevisionHistory(documentId);
+        } } }),
         element('span', { text: `Página ${Math.floor(historyOffset / HISTORY_PAGE_SIZE) + 1} de ${Math.ceil(total / HISTORY_PAGE_SIZE)}` }),
-        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Próxima', disabled: historyOffset + HISTORY_PAGE_SIZE >= total, on: { click: () => { historyOffset = Math.min(finalHistoryOffset, historyOffset + HISTORY_PAGE_SIZE); loadRevisionHistory(); } } }),
+        element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Próxima', disabled: historyOffset + HISTORY_PAGE_SIZE >= total, on: { click: () => {
+          if (!currentHistory() || mutationBusy() || creatingDocument) return;
+          historyOffset = Math.min(finalHistoryOffset, historyOffset + HISTORY_PAGE_SIZE); loadRevisionHistory(documentId);
+        } } }),
       );
     }
   } catch {
-    if (requestToken === selectionToken && documentId === selectedDocument && historyToken === historyRequestToken) {
+    if (page.active && requestToken === selectionToken && documentId === selectedDocument && historyToken === historyRequestToken) {
       historyNode.replaceChildren(element('li', { className: 'empty-state', text: 'Não foi possível carregar o histórico.' }));
       clear(historyPagination);
     }
@@ -347,8 +379,10 @@ function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersi
     root: editorRoot,
     initialBlocks: blocks,
     onSelect(index, block) {
+      if (!currentEditor()) return;
       const selection = ++blockSelectionToken;
       if (!block) {
+        delete blockSettings.dataset.selectedIndex;
         showState(blockSettings, 'Selecione um bloco para editar suas configurações.');
         return;
       }
@@ -435,30 +469,26 @@ async function loadSources() {
 }
 
 async function loadDocument(id) {
-  if (navigationBusy()) return false;
+  if (!page.active || navigationBusy()) return false;
   if (!newDocumentForm.hidden && !newDocumentDirty) {
     newDocumentForm.reset();
     newDocumentForm.hidden = true;
   }
   const requestAssetUploadVersion = assetUploadVersion;
   const requestToken = ++selectionToken;
+  resetSelection();
   selectedDocument = id;
-  documentView = null;
   loading = true;
-  updateInspector();
+  showState(editorRoot, 'Carregando documento…');
+  renderDocumentList();
   syncBusyState();
   setSaveState('Carregando…');
   try {
     const view = await fetchAPI(`/api/cms/documents/${encodeURIComponent(id)}`);
-    if (requestToken !== selectionToken || selectedDocument !== id
+    if (!page.active || requestToken !== selectionToken || selectedDocument !== id
       || requestAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return false;
-    dirty = false;
-    newDocumentDirty = false;
-    editVersion = 0;
-    saveQueued = false;
     documentView = view;
     syncListedDocument(view.document);
-    historyOffset = 0;
     const blocks = view.draft?.blocks || view.schedule?.revision?.blocks || view.published?.blocks || [];
     if (!renderEditor(blocks, requestAssetUploadVersion)) return false;
     updateInspector();
@@ -468,10 +498,13 @@ async function loadDocument(id) {
     setError('');
     return true;
   } catch {
-    if (requestToken !== selectionToken || selectedDocument !== id
+    if (!page.active || requestToken !== selectionToken || selectedDocument !== id
       || requestAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return false;
-    editor = null;
-    showState(editorRoot, 'Não foi possível abrir este documento.', () => loadDocument(id));
+    resetSelection();
+    selectedDocument = id;
+    showState(editorRoot, 'Não foi possível abrir este documento.', () => {
+      if (page.active && requestToken === selectionToken && selectedDocument === id) loadDocument(id);
+    });
     showState(blockSettings, 'Selecione um documento para editar suas configurações.');
     setError('Não foi possível abrir este documento. Tente novamente.');
     setSaveState('Erro ao carregar');
@@ -771,6 +804,7 @@ unpublishButton.addEventListener('click', unpublishDocument);
 scheduleForm.addEventListener('submit', scheduleDocument);
 unscheduleButton.addEventListener('click', unscheduleDocument);
 
+resetSelection();
 if (!TYPES.length) {
   newDocumentButton.disabled = true;
   setError('Você não possui permissão para editar nenhuma área do CMS.');

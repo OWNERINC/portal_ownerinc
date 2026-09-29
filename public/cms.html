@@ -46,7 +46,7 @@
 
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><span class="topbar-title">Editor CMS</span><div class="topbar-actions"><span id="save-state" class="cms-save-state" role="status" aria-live="polite">Carregando…</span></div></header>
+    <header class="topbar"><span class="topbar-title">Editor CMS</span><div class="topbar-actions"><span id="save-state" class="cms-save-state" role="status" aria-live="polite">Selecione um documento</span></div></header>
     <!-- /generated:portal-topbar -->
     <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
       <div class="page-header">
@@ -84,7 +84,7 @@
         </section>
 
         <details class="cms-inspector" open>
-          <summary>Inspector e publicação</summary>
+          <summary>Configuração e publicação</summary>
           <div class="cms-inspector-body">
             <section class="cms-inspector-section" aria-labelledby="inspector-block-heading">
               <h3 id="inspector-block-heading">Configuração do bloco</h3>
@@ -101,13 +101,14 @@
               <div id="revision-history-pagination" class="pagination" aria-live="polite"></div>
             </section>
             <div class="cms-publish-controls">
-              <button id="save-draft" class="btn btn-primary" type="button" disabled>Salvar rascunho</button>
-              <button id="publish-document" class="btn btn-ghost" type="button" disabled>Publicar</button>
+              <p id="cms-publication-help" class="form-help">Salvar rascunho e o salvamento automático guardam uma revisão de trabalho; não publicam o conteúdo. Use Publicar para disponibilizar a revisão aos leitores, ou Agendar para programar a publicação.</p>
+              <button id="save-draft" class="btn btn-primary" type="button" aria-describedby="cms-publication-help" disabled>Salvar rascunho</button>
+              <button id="publish-document" class="btn btn-ghost" type="button" aria-describedby="cms-publication-help" disabled>Publicar</button>
               <button id="unpublish-document" class="btn btn-ghost" type="button" disabled>Despublicar</button>
             </div>
             <form id="schedule-form" class="cms-schedule-form" name="cms-schedule" autocomplete="off">
-              <label class="cms-field"><span class="form-label">Publicar em (horário local)</span><input id="scheduled-at" class="form-input" name="scheduled_at" autocomplete="off" type="datetime-local" required></label>
-              <button id="schedule-document" class="btn btn-ghost" type="submit" disabled>Agendar</button>
+              <label class="cms-field" for="scheduled-at"><span class="form-label">Publicar em (horário local)</span><input id="scheduled-at" class="form-input" name="scheduled_at" autocomplete="off" type="datetime-local" aria-describedby="cms-publication-help" required></label>
+              <button id="schedule-document" class="btn btn-ghost" type="submit" aria-describedby="cms-publication-help" disabled>Agendar</button>
               <button id="unschedule-document" class="btn btn-ghost" type="button" disabled>Cancelar agendamento</button>
             </form>
           </div>

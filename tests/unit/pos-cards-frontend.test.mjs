@@ -221,13 +221,15 @@ test('editing a Cards Pós invitation preserves its saved history name by defaul
 test('Cards Pós history ignores stale search responses', () => {
   assert.match(app, /let historyRequest = 0/);
   assert.match(app, /const requestToken = \+\+historyRequest/);
-  assert.match(app, /if \(requestToken !== historyRequest\) return/);
+  assert.match(app, /const isCurrent = \(\) => page\.active && requestToken === historyRequest/);
+  assert.match(app, /if \(!isCurrent\(\)\) return false/);
 });
 
 test('Cards Pós history exposes pagination for more than one page of saved cards', () => {
   assert.match(html, /id="historyPagination"/);
-  assert.match(app, /fetchAPIPage\(`\/api\/pos-cards\/cards\?search=\$\{search\}&limit=\$\{HISTORY_PAGE_SIZE\}&offset=\$\{historyOffset\}`\)/);
-  assert.match(app, /renderHistoryPagination\(result\.total/);
+  assert.match(app, /fetchAPIPage\(`\/api\/pos-cards\/cards\?search=\$\{search\}&limit=\$\{HISTORY_PAGE_SIZE\}&offset=\$\{query\.offset\}`\)/);
+  assert.match(app, /const total = result\.total \?\? cards\.length/);
+  assert.match(app, /renderHistoryPagination\(total, requestToken\)/);
 });
 
 function guestHarness(width = 600, overrides = {}) {

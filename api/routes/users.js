@@ -10,7 +10,8 @@ const {
   removesLastActiveSuperAdmin,
 } = require('../middleware/policy');
 const { hasOwn, normalizeContract, validateProfile, validateUser } = require('../middleware/validation');
-const { firebaseUid, parseListQuery } = require('../route-utils');
+const { firebaseUid, oneOf, parseListQuery, text, uuid } = require('../route-utils');
+const { civilDate, literalSubstring } = require('../admin-list-filters');
 const {
   compensateCreatedInvitedUser, createInvitedUser, enableActiveUser, lockFirebaseIdentity,
 } = require('../services/user-invitation');
@@ -18,6 +19,15 @@ const {
 
 const forbidden = (req, res) => res.status(403).json({ error: 'Permission denied.', requestId: req.id });
 const invalid = (req, res) => res.status(400).json({ error: 'Invalid request.', requestId: req.id });
+
+const listQuery = {
+  q: text(200), role: oneOf('viewer', 'admin'),
+  state: oneOf('active', 'disabled', 'enable_pending'), job_title_id: uuid,
+};
+const auditQuery = { action: text(120, true), from: civilDate, to: civilDate };
+// The same CASE drives projection and filtering, including absent JSON keys.
+const userState = `CASE WHEN u.permissions->>'accountDisabled' = 'true' THEN 'disabled'
+  WHEN u.firebase_enable_pending IS TRUE THEN 'enable_pending' ELSE 'active' END`;
 
 async function audit(client, req, action, targetId, details = {}) {
   await client.query(
@@ -106,13 +116,31 @@ router.get('/me', authMiddleware, (req, res) => res.json(req.user));
 
 router.get('/audit', authMiddleware, async (req, res, next) => {
   if (!isSuperAdmin(req.user)) return forbidden(req, res);
-  const page = parseListQuery(req.query);
-  if (!page) return invalid(req, res);
+  const page = parseListQuery(req.query, auditQuery);
+  if (!page || (req.query.from && req.query.to && req.query.from > req.query.to)) return invalid(req, res);
+  const params = [];
+  const conditions = [];
+  if (req.query.action !== undefined) {
+    params.push(req.query.action);
+    conditions.push(`a.action = $${params.length}`);
+  }
+  if (req.query.from) {
+    params.push(req.query.from);
+    conditions.push(`a.created_at >= ($${params.length}::date::timestamp AT TIME ZONE 'America/Sao_Paulo')`);
+  }
+  if (req.query.to) {
+    params.push(req.query.to);
+    conditions.push(`a.created_at < (($${params.length}::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo')`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   try {
     const [events, count] = await Promise.all([
-      pool.query(`SELECT id, actor_uid, action, target_type, target_id, request_id, details, created_at
-        FROM audit_log ORDER BY created_at DESC, id LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
-      pool.query('SELECT COUNT(*)::integer AS total FROM audit_log'),
+      pool.query(`SELECT a.id, a.actor_uid, a.action, a.target_type, a.target_id, a.request_id, a.details, a.created_at,
+          ua.name AS actor_name
+        FROM audit_log a LEFT JOIN users ua ON ua.uid = a.actor_uid ${where}
+        ORDER BY a.created_at DESC, a.id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, page.limit, page.offset]),
+      pool.query(`SELECT COUNT(*)::integer AS total FROM audit_log a ${where}`, params),
     ]);
     res.setHeader('X-Total-Count', count.rows[0].total);
     res.json(events.rows);
@@ -141,21 +169,37 @@ router.put('/me', authMiddleware, async (req, res, next) => {
 
 router.get('/', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageUsers')) return forbidden(req, res);
-  const page = parseListQuery(req.query);
+  const page = parseListQuery(req.query, listQuery);
   if (!page) return invalid(req, res);
+  const params = [];
+  const conditions = [];
+  if (req.query.q?.trim()) {
+    params.push(literalSubstring(req.query.q));
+    conditions.push(`(u.name ILIKE $${params.length} ESCAPE E'\\\\' OR u.email ILIKE $${params.length} ESCAPE E'\\\\')`);
+  }
+  for (const field of ['role', 'job_title_id']) {
+    if (req.query[field] === undefined) continue;
+    params.push(req.query[field]);
+    conditions.push(`u.${field} = $${params.length}`);
+  }
+  if (req.query.state !== undefined) {
+    params.push(req.query.state);
+    conditions.push(`(${userState}) = $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   let client;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
        const [{ rows }, count] = await Promise.all([
        client.query(`SELECT u.uid, u.email, u.name, u.phone, u.role, u.contract_type, u.is_pj, u.pj_due_day,
-           u.job_title_id, jt.name AS job_title, u.permissions, u.firebase_enable_pending,
-           CASE WHEN u.permissions->>'accountDisabled' = 'true' THEN 'disabled'
-                WHEN u.firebase_enable_pending THEN 'enable_pending' ELSE 'active' END AS state,
+           u.job_title_id, jt.name AS job_title, jt.active AS job_title_active, u.permissions, u.firebase_enable_pending,
+           ${userState} AS state,
            u.created_at
          FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
-         ORDER BY u.name, u.uid LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
-      client.query('SELECT COUNT(*)::integer AS total FROM users'),
+         ${where} ORDER BY u.name, u.uid LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+       [...params, page.limit, page.offset]),
+      client.query(`SELECT COUNT(*)::integer AS total FROM users u ${where}`, params),
     ]);
     await audit(client, req, 'user.list', null, { limit: page.limit, offset: page.offset, resultCount: rows.length });
     await client.query('COMMIT');

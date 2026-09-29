@@ -10,7 +10,7 @@ const { fetchAPI, fetchAPIPage } = pageScope.bindAPI(requests);
 const showToast = pageScope.toast;
 const location = pageScope.location;
 const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: pageScope.signal });
-pageScope.cleanup(() => { ++remindersRequest; ++deliveriesRequest; ++reminderDetailRequest; });
+pageScope.cleanup(() => { ++remindersRequest; ++deliveriesRequest; ++cronRequest; ++reminderDetailRequest; });
 const canManage = can(user, 'manageReminders');
 if (canManage) {
   document.getElementById('btn-new-reminder').style.display = '';
@@ -34,8 +34,6 @@ let editingId = null;
 let page = 0;
 let totalReminders = 0;
 let remindersRequest = 0;
-let deliveriesPage = 0;
-let deliveriesTotal = 0;
 const PAGE_SIZE = 50;
 const DELIVERY_PAGE_SIZE = 20;
 const TIME_ZONE = 'America/Sao_Paulo';
@@ -43,6 +41,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const UID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const REMINDER_HASH_PATTERN = /^#reminder-([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 let deliveriesRequest = 0;
+let cronRequest = 0;
 let reminderDetailRequest = 0;
 
 function reminderContentHref(reminder) {
@@ -229,40 +228,38 @@ async function loadReminders(reset = false) {
   }
 }
 
-async function loadDeliveryManager() {
-  if (!canManage) return;
+async function loadDeliveryManager(filters = readDeliveryFilters(), requestPage = 0) {
+  if (!canManage || !pageScope.active) return;
   const requestToken = ++deliveriesRequest;
-  const requestPage = deliveriesPage;
+  const currentRequest = () => pageScope.active && requestToken === deliveriesRequest;
   const deliveriesBody = document.getElementById('deliveries-tbody');
+  const deliveryPagination = document.getElementById('deliveries-pagination');
+  const state = (message, retry) => {
+    if (deliveryPagination) clear(deliveryPagination);
+    const cell = element('td', { colspan: '7', className: 'empty-state', role: retry ? 'alert' : 'status', text: message });
+    if (retry) cell.append(element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: retry } }));
+    clear(deliveriesBody).append(element('tr', {}, cell));
+  };
+  // Invalidate the old query and its controls even when the new filters are invalid.
+  if (!validateDeliveryFilters(filters)) {
+    state('Revise os filtros indicados para consultar o histórico.');
+    return;
+  }
+  state('Carregando histórico…');
   try {
     const params = new URLSearchParams({ limit: String(DELIVERY_PAGE_SIZE), offset: String(requestPage * DELIVERY_PAGE_SIZE) });
-    const filters = {
-      status: document.getElementById('delivery-status').value,
-      channel: document.getElementById('delivery-channel').value,
-      reminder_id: document.getElementById('delivery-reminder').value.trim(),
-      user_uid: document.getElementById('delivery-user').value.trim(),
-      scheduled_from: document.getElementById('delivery-from').value,
-      scheduled_to: document.getElementById('delivery-to').value,
-    };
     Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
-    const [{ data: deliveries, total }, cron] = await Promise.all([
-      fetchAPIPage(`/api/reminders/deliveries?${params}`),
-      fetchAPI('/api/reminders/cron-status'),
-    ]);
-    if (requestToken !== deliveriesRequest) return;
+    const { data: deliveries, total } = await fetchAPIPage(`/api/reminders/deliveries?${params}`);
+    if (!currentRequest()) return;
     const loaded = deliveries || [];
     const loadedTotal = total ?? loaded.length;
     if (!loaded.length && requestPage > 0) {
       const lastPage = Math.max(0, Math.ceil(loadedTotal / DELIVERY_PAGE_SIZE) - 1);
       const fallbackPage = Math.min(requestPage - 1, lastPage);
       if (fallbackPage !== requestPage) {
-        deliveriesPage = fallbackPage;
-        return loadDeliveryManager();
+        return loadDeliveryManager(filters, fallbackPage);
       }
     }
-    if (requestToken !== deliveriesRequest) return;
-    deliveriesPage = requestPage;
-    deliveriesTotal = loadedTotal;
     clear(deliveriesBody);
     if (!loaded.length) {
       deliveriesBody.append(element('tr', {}, element('td', { colspan: '7', className: 'empty-state', text: 'Nenhuma entrega registrada.' })));
@@ -285,22 +282,88 @@ async function loadDeliveryManager() {
         ]));
       });
     }
-    const deliveryPaginationElement = document.getElementById('deliveries-pagination');
-    if (deliveryPaginationElement) clear(deliveryPaginationElement);
-    const deliveryPagination = deliveryPaginationElement;
-    const pageCount = Math.max(1, Math.ceil(deliveriesTotal / DELIVERY_PAGE_SIZE));
+    const pageCount = Math.max(1, Math.ceil(loadedTotal / DELIVERY_PAGE_SIZE));
+    const changePage = nextPage => {
+      if (!currentRequest() || nextPage < 0 || nextPage >= pageCount) return;
+      loadDeliveryManager(filters, nextPage);
+    };
     if (deliveryPagination && pageCount > 1) {
       deliveryPagination.append(
-        element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', ...(deliveriesPage === 0 ? { disabled: '' } : {}), on: { click: () => { deliveriesPage -= 1; loadDeliveryManager(); } } }),
-        element('span', { text: `Página ${deliveriesPage + 1} de ${pageCount}` }),
-        element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', ...(deliveriesPage >= pageCount - 1 ? { disabled: '' } : {}), on: { click: () => { deliveriesPage += 1; loadDeliveryManager(); } } }),
+        element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', disabled: requestPage === 0, on: { click: () => changePage(requestPage - 1) } }),
+        element('span', { text: `Página ${requestPage + 1} de ${pageCount}` }),
+        element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', disabled: requestPage >= pageCount - 1, on: { click: () => changePage(requestPage + 1) } }),
       );
     }
-    const health = document.getElementById('cron-health');
-    if (!health) return;
+  } catch {
+    if (!currentRequest()) return;
+    state('Não foi possível carregar o histórico. ', () => {
+      if (currentRequest()) loadDeliveryManager(filters, requestPage);
+    });
+  }
+}
+
+function readDeliveryFilters() {
+  const dateValue = id => {
+    const input = document.getElementById(id);
+    return input.validity?.badInput ? 'invalid' : input.value;
+  };
+  return {
+    status: document.getElementById('delivery-status').value,
+    channel: document.getElementById('delivery-channel').value,
+    reminder_id: document.getElementById('delivery-reminder').value.trim(),
+    user_uid: document.getElementById('delivery-user').value.trim(),
+    scheduled_from: dateValue('delivery-from'),
+    scheduled_to: dateValue('delivery-to'),
+  };
+}
+
+function validateDeliveryFilters(filters) {
+  const validDate = value => {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(parsed.valueOf())
+      && parsed.toISOString().slice(0, 10) === value;
+  };
+  const errors = {
+    'delivery-reminder': filters.reminder_id && !UUID_PATTERN.test(filters.reminder_id) ? 'Informe um UUID válido de lembrete (versões 1 a 5).' : '',
+    'delivery-user': filters.user_uid && !UID_PATTERN.test(filters.user_uid) ? 'Use um UID de até 128 letras, números ou os caracteres . _ : -.' : '',
+    'delivery-from': filters.scheduled_from && !validDate(filters.scheduled_from) ? 'Informe uma data inicial válida (AAAA-MM-DD).' : '',
+    'delivery-to': filters.scheduled_to && !validDate(filters.scheduled_to) ? 'Informe uma data final válida (AAAA-MM-DD).' : '',
+  };
+  if (!errors['delivery-from'] && !errors['delivery-to'] && filters.scheduled_from && filters.scheduled_to
+    && filters.scheduled_from > filters.scheduled_to) {
+    errors['delivery-from'] = 'A data inicial deve ser anterior ou igual à data final.';
+    errors['delivery-to'] = 'A data final deve ser posterior ou igual à data inicial.';
+  }
+  let firstInvalid;
+  Object.entries(errors).forEach(([id, message]) => {
+    const input = document.getElementById(id);
+    const error = document.getElementById(`${id}-error`);
+    input.setAttribute('aria-invalid', String(!!message));
+    if (error) { error.textContent = message; error.hidden = !message; }
+    if (message && !firstInvalid) firstInvalid = input;
+  });
+  firstInvalid?.focus();
+  return !firstInvalid;
+}
+
+async function loadCronHealth() {
+  if (!canManage || !pageScope.active) return;
+  const requestToken = ++cronRequest;
+  const currentRequest = () => pageScope.active && requestToken === cronRequest;
+  const health = document.getElementById('cron-health');
+  const actions = document.getElementById('cron-health-actions');
+  if (!health) return;
+  if (actions) clear(actions);
+  health.textContent = 'Consultando saúde do cron…';
+  health.className = 'badge badge-gray';
+  health.title = '';
+  try {
+    const cron = await fetchAPI('/api/reminders/cron-status');
+    if (!currentRequest()) return;
     if (!cron) {
       health.textContent = 'Cron sem heartbeat';
       health.className = 'badge badge-gray';
+      health.title = '';
     } else {
       const heartbeat = new Date(cron.heartbeat_at);
       const stale = Number.isNaN(heartbeat.valueOf()) || Date.now() - heartbeat.valueOf() > 26 * 60 * 60 * 1000;
@@ -318,12 +381,14 @@ async function loadDeliveryManager() {
         || `Execução: ${cron.execution_status || 'concluída'} · Entrega: ${cron.delivery_status || 'sem dados'} · Último sucesso: ${formatTimestamp(cron.last_success_at)}`;
     }
   } catch {
-    if (requestToken !== deliveriesRequest) return;
-    const state = element('td', { colspan: '7', className: 'empty-state', role: 'alert', text: 'Não foi possível carregar o histórico. ' });
-    state.append(element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: loadDeliveryManager } }));
-    clear(deliveriesBody).append(element('tr', {}, state));
-    const health = document.getElementById('cron-health');
-    if (health) health.textContent = 'Cron indisponível';
+    if (!currentRequest()) return;
+    health.textContent = 'Não foi possível consultar a saúde do cron.';
+    health.className = 'badge badge-gray';
+    health.title = 'Falha na consulta; o estado da execução não foi confirmado.';
+    if (actions) actions.append(element('button', {
+      className: 'btn btn-ghost btn-sm', type: 'button', text: 'Consultar cron novamente',
+      on: { click: () => { if (currentRequest()) loadCronHealth(); } },
+    }));
   }
 }
 
@@ -417,15 +482,20 @@ document.getElementById('btn-new-reminder').addEventListener('click', newReminde
 document.getElementById('modal-reminder-close').addEventListener('click', () => closeDialog(modal));
 document.getElementById('modal-reminder-cancel').addEventListener('click', () => closeDialog(modal));
 document.getElementById('r-target').addEventListener('change', syncTargetFields);
-document.getElementById('delivery-filters').addEventListener('submit', event => { event.preventDefault(); deliveriesPage = 0; loadDeliveryManager(); });
-document.getElementById('delivery-clear').addEventListener('click', () => {
-  document.getElementById('delivery-filters').reset();
-  deliveriesPage = 0;
+pageScope.listen(document.getElementById('delivery-filters'), 'submit', event => {
+  event.preventDefault();
   loadDeliveryManager();
+  loadCronHealth();
+});
+pageScope.listen(document.getElementById('delivery-clear'), 'click', () => {
+  document.getElementById('delivery-filters').reset();
+  loadDeliveryManager();
+  loadCronHealth();
 });
 syncTargetFields();
 pageScope.listen(window, 'hashchange', loadReminderDetail);
 loadReminders(true);
 loadDeliveryManager();
+loadCronHealth();
 loadReminderDetail();
 }

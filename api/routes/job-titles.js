@@ -3,13 +3,15 @@ const pool = require('../db');
 const { authMiddleware, can } = require('../middleware/auth');
 const { normalizeJobTitlePages } = require('../middleware/policy');
 const { boolean, containsLegacyJobTitleToken, forbidden, invalid, parseListQuery, text, uuid, validBody, withAudit } = require('../route-utils');
+const { literalSubstring } = require('../admin-list-filters');
 
 const router = express.Router();
 const pageAccess = (value) => value === undefined || (value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).every((key) => ['autocard', 'posCards'].includes(key) && typeof value[key] === 'boolean'));
 const jobTitleName = (value) => text(120, true)(value) && !containsLegacyJobTitleToken(value);
 const schema = { name: jobTitleName, active: boolean, page_access: pageAccess };
-const listQuery = { all: (value) => ['true', 'false'].includes(value), active: (value) => value === 'true' };
+const queryBoolean = (value) => ['true', 'false'].includes(value);
+const listQuery = { q: text(200), all: queryBoolean, active: queryBoolean };
 
 function canManage(req, res) {
   if (!can(req.user, 'manageUsers')) {
@@ -23,13 +25,25 @@ router.get('/', authMiddleware, async (req, res, next) => {
   if (!canManage(req, res)) return;
   const page = parseListQuery(req.query, listQuery);
   if (!page) return invalid(req, res);
-  const where = req.query.all === 'true' ? '' : 'WHERE jt.active = TRUE';
+  const params = [];
+  const conditions = [];
+  if (req.query.q?.trim()) {
+    params.push(literalSubstring(req.query.q));
+    conditions.push(`jt.name ILIKE $${params.length} ESCAPE E'\\\\'`);
+  }
+  const active = req.query.active ?? (req.query.all === 'true' ? undefined : 'true');
+  if (active !== undefined) {
+    params.push(active === 'true');
+    conditions.push(`jt.active = $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   try {
     const [{ rows: [{ count }] }, { rows }] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::integer AS count FROM job_titles jt ${where}`),
+      pool.query(`SELECT COUNT(*)::integer AS count FROM job_titles jt ${where}`, params),
        pool.query(`SELECT jt.id, jt.name, jt.active, jt.page_access, jt.created_at, jt.updated_at, COUNT(u.uid)::integer AS user_count
          FROM job_titles jt LEFT JOIN users u ON u.job_title_id = jt.id ${where}
-        GROUP BY jt.id ORDER BY lower(jt.name), jt.id LIMIT $1 OFFSET $2`, [page.limit, page.offset]),
+        GROUP BY jt.id ORDER BY lower(jt.name), jt.id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, page.limit, page.offset]),
     ]);
     res.set('X-Total-Count', String(count)).json(rows);
   } catch (error) {

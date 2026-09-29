@@ -369,7 +369,7 @@ test('CMS actions use the existing API contracts and keep generic failure states
   assert.match(cmsHtml, /horário local/);
   assert.match(cms, /documents\/\$\{encodeURIComponent\(documentId\)\}\/revisions/);
   assert.match(cms, /requestToken !== selectionToken \|\| documentId !== selectedDocument/);
-  assert.match(cms, /if \(requestToken === selectionToken && documentId === selectedDocument && historyToken === historyRequestToken\)/);
+  assert.match(cms, /if \(page.active && requestToken === selectionToken && documentId === selectedDocument && historyToken === historyRequestToken\)/);
   assert.match(cms, /const type = selectedType/);
   assert.match(cms, /const DOCUMENT_PAGE_SIZE = 50/);
   assert.match(cms, /result\.total/);
@@ -458,12 +458,13 @@ test('CMS list loading and creation failures keep cached state coherent', () => 
   const loaderEnd = cms.indexOf('async function loadSources');
   const createStart = cms.indexOf("newDocumentForm.addEventListener('submit'");
   const createEnd = cms.indexOf('saveDraftButton.addEventListener', createStart);
-  const loadDocumentStart = cms.indexOf('async function loadDocument');
+  const loadDocumentStart = cms.indexOf('async function loadDocument(');
   const loadDocumentEnd = cms.indexOf('async function saveDraft', loadDocumentStart);
   const loader = cms.slice(loaderStart, loaderEnd);
   const create = cms.slice(createStart, createEnd);
   const loadDocument = cms.slice(loadDocumentStart, loadDocumentEnd);
   const typeNav = cms.slice(cms.indexOf('function renderTypeNav'), cms.indexOf('function renderDocumentList'));
+  const resetSelection = cms.slice(cms.indexOf('function resetSelection('), cms.indexOf('function renderTypeNav'));
   const unscheduleStart = cms.indexOf('async function unscheduleDocument');
   const unscheduleEnd = cms.indexOf('newDocumentButton.addEventListener', unscheduleStart);
   const unschedule = cms.slice(unscheduleStart, unscheduleEnd);
@@ -483,7 +484,10 @@ test('CMS list loading and creation failures keep cached state coherent', () => 
   assert.match(pageChange, /documentOffset = offset;\s*loadDocuments\(\)/);
   assert.match(pageChange, /if \(navigationBusy\(\)\) return;/);
   assert.doesNotMatch(pageChange, /selectionToken/);
-  assert.match(typeNav, /clearTimeout\(saveTimer\);\s*saveTimer = null;\s*saveQueued = false/);
+  assert.match(typeNav, /if \(!page.active \|\| navigationBusy\(\)\) return;\s*selectionToken \+= 1;\s*resetSelection\(\)/);
+  assert.match(resetSelection, /clearTimeout\(saveTimer\);\s*saveTimer = null;\s*saveQueued = false/);
+  assert.match(resetSelection, /editor = null/);
+  assert.doesNotMatch(resetSelection, /(?:saving|saveInFlight|actionBusy|assetUploading)\s*=/);
   assert.match(create, /if \(mutationBusy\(\) \|\| editorInteractionBusy\(\)\) return/);
   assert.match(create, /if \(editorSavePending\(\)\) \{[\s\S]*Salve as alterações do editor/);
   const creationGuard = create.indexOf('if (editorSavePending())');
@@ -506,7 +510,7 @@ test('CMS list loading and creation failures keep cached state coherent', () => 
   assert.ok(loadIdentityGuard >= 0 && loadMutation > loadIdentityGuard);
   const loadCatch = loadDocument.indexOf('} catch {');
   const loadCatchGuard = loadDocument.indexOf('assetUploading > 0) return false;', loadCatch);
-  const loadEditorClear = loadDocument.indexOf('editor = null;', loadCatch);
+  const loadEditorClear = loadDocument.indexOf('resetSelection();', loadCatch);
   assert.ok(loadCatch >= 0 && loadCatchGuard > loadCatch && loadEditorClear > loadCatchGuard);
   assert.match(loadDocument, /renderEditor\(blocks, requestAssetUploadVersion\)/);
   assert.match(unschedule, /const requestAssetUploadVersion = assetUploadVersion/);
@@ -516,8 +520,8 @@ test('CMS list loading and creation failures keep cached state coherent', () => 
   const unscheduleIdentityGuard = unschedule.indexOf('assetUploading > 0) return;');
   assert.ok(unscheduleIdentityGuard >= 0 && unscheduleMutation > unscheduleIdentityGuard && unscheduleEditorRender > unscheduleMutation);
   assert.match(loadDocument, /if \(!newDocumentForm\.hidden && !newDocumentDirty\) \{[\s\S]*newDocumentForm\.reset\(\);[\s\S]*newDocumentForm\.hidden = true;/);
-  assert.match(loadDocument, /if \(navigationBusy\(\)\) return false/);
-  assert.match(loadDocument, /showState\(editorRoot, 'Não foi possível abrir este documento\.', \(\) => loadDocument\(id\)\)/);
+  assert.match(loadDocument, /if \(!page.active \|\| navigationBusy\(\)\) return false/);
+  assert.match(loadDocument, /showState\(editorRoot, 'Não foi possível abrir este documento\.', \(\) => \{\s*if \(page.active && requestToken === selectionToken && selectedDocument === id\) loadDocument\(id\)/);
   assert.match(loadDocument, /return true;/);
   assert.match(loadDocument, /return false;/);
   assert.match(create, /const loaded = await loadDocument\(result\.document\.id\);[\s\S]*if \(!loaded\) \{[\s\S]*Documento criado, mas não foi possível abrir/);

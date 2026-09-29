@@ -49,8 +49,9 @@ test('scoped routes delegate failures and privileged changes to the audit helper
 
 test('privileged user listing is strict, paginated, counted, and audited', async () => {
   const users = await readFile('api/routes/users.js', 'utf8');
-  assert.match(users, /parseListQuery\(req\.query\)/);
-  assert.match(users, /LIMIT \$1 OFFSET \$2/);
+  assert.match(users, /parseListQuery\(req\.query, listQuery\)/);
+  assert.match(users, /parseListQuery\(req\.query, auditQuery\)/);
+  assert.match(users, /LIMIT \$\$\{params\.length \+ 1\} OFFSET \$\$\{params\.length \+ 2\}/);
   assert.match(users, /X-Total-Count/);
   assert.match(users, /user\.list/);
   assert.match(users, /sendInvitation/);
@@ -60,7 +61,8 @@ test('privileged user listing is strict, paginated, counted, and audited', async
   assert.match(jobTitles, /manageUsers/);
   assert.match(jobTitles, /job_title\.create/);
   assert.match(jobTitles, /job_title\.update/);
-  assert.match(jobTitles, /active = TRUE/);
+  assert.match(jobTitles, /params\.push\(active === 'true'\)/);
+  assert.match(jobTitles, /jt\.active = \$\$\{params\.length\}/);
 });
 
 test('admin invitations expose actionable Firebase identity conflicts', async () => {

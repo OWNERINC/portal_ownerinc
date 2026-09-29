@@ -1,3 +1,11 @@
 .admin-users-table td { padding-block: 8px; }
 .admin-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .admin-row-actions summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.admin-filters { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
+.admin-filters .form-group { flex: 1 1 180px; min-width: 0; margin-bottom: 0; }
+.admin-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; align-self: center; }
+.admin-filters .form-feedback:empty, #job-title-options-feedback:empty { display: none; }
+.admin-section .table-actions .form-help { white-space: normal; min-width: 180px; }
+@media (max-width: 600px) {
+  .admin-filters .form-group { flex-basis: 100%; }
+}

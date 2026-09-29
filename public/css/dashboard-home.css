@@ -309,7 +309,7 @@
   line-height: 1.35;
 }
 
-.dashboard-home :where(a):focus-visible,
+.dashboard-home :where(a, button):focus-visible,
 .dashboard-home:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
@@ -410,3 +410,15 @@
     scroll-snap-type: none;
   }
 }
+
+/* No publication to read: keep the heading and useful areas above the fold. */
+.dashboard-home [hidden] { display: none; }
+.dashboard-hero:not([data-state="populated"]) { min-height: 0; }
+.dashboard-hero:not([data-state="populated"])::after { display: none; }
+.dashboard-hero:not([data-state="populated"]) .dashboard-hero-copy {
+  width: 100%;
+  min-height: 0;
+  padding: 24px;
+}
+.dashboard-hero:not([data-state="populated"]) h1 { font-size: 32px; }
+.dashboard-hero:not([data-state="populated"]) .dashboard-hero-meta { display: none; }
