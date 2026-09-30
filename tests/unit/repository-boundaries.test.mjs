@@ -1,6 +1,12 @@
+import { execFile } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 test('database is not exposed by Docker Compose', async () => {
   const compose = await readFile('docker-compose.yml', 'utf8');
@@ -35,4 +41,20 @@ test('uploads and the separate agent remain outside version control', async () =
 
   assert.match(ignore, /^uploads\/$/m);
   assert.match(ignore, /^ownerinc-novo-agente\/$/m);
+});
+
+test('review snapshots remain local and outside the active repository surface', async () => {
+  const ignore = await readFile('.gitignore', 'utf8');
+  assert.match(ignore, /^\.openchamber\/reviews\/\*\.diff$/m);
+  assert.match(ignore, /^\.openchamber\/reviews\/\*-inputs-\*\.json$/m);
+
+  const { stdout } = await execFileAsync(
+    'git',
+    ['ls-files', '-z', '--', '.openchamber/reviews'],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+
+  const trackedReviewSnapshots = stdout.split('\0').filter(Boolean).filter((file) =>
+    file.endsWith('.diff') || /-inputs-[^/]+\.json$/.test(file));
+  assert.deepEqual(trackedReviewSnapshots, [], 'review snapshots must not be tracked by Git');
 });
