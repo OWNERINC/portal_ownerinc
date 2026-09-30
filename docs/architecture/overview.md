@@ -166,6 +166,29 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   no feedback harness (`mount: false`, `modules`), cobrindo descarte/tardios,
   perfil/inline, datas, segurança, legado e renderer comum.
 
+### Catálogo editorial do leitor (E6)
+
+- `announcements.js` mantém a montagem/lifecycle e o detalhe atual. A lista usa
+  `fetchAPIPage` com `kind=article`, 24 itens e total de `X-Total-Count`; categoria
+  limpa offset, paginação e Back preservam filtro, e página fora do intervalo
+  recupera offset zero. Respostas de consultas antigas não substituem a atual.
+- Abertura publicada (`/announcements/home`), destaque global (`kind=article`,
+  limit 1) e categorias com contagens carregam independentemente. Abertura tem
+  precedência sobre título/resumo global; sem ambos, usa a copy contratada.
+  Falhas mantêm conteúdo disponível e oferecem retry no componente afetado.
+- `owner-news/catalog.js` rende cards semânticos com link envolvendo capa/título,
+  ID estável, metadados e oito proporções determinadas por offset + índice.
+  O mosaico CSS substitui explicitamente o grid legado: colunas de 230px,
+  duas colunas até 560px e uma abaixo de 359px. Sem capa, usa marca editorial.
+  Ctrl/Cmd+click mantém comportamento nativo. Capa passa somente type/asset_id/alt
+  ao renderer privado; cleanup por card libera blobs atuais e tardios.
+- `composeNewsFeed` é o ponto de composição puro para futura enquete: insere
+  depois do terceiro artigo somente na primeira página sem categoria, sem
+  alterar dados, total ou offset. E6 não monta enquete nem overlay de leitura.
+- Dashboard prioriza `editorial.summary` sobre trecho legado. O feedback harness
+  monta os módulos reais de Owner News com location e histórico em memória;
+  testes cobrem concorrência, fallback, retry, foco, links e descarte de mídia.
+
 ### Edição editorial no CMS (E4)
 
 - Owner News oferece subáreas Matérias e Página inicial. As demais áreas conservam

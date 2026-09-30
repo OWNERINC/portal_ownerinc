@@ -102,7 +102,7 @@ function renderHero(announcement, state = announcement ? 'populated' : 'empty') 
   if (title) title.textContent = announcement?.title || 'Owner News';
   if (eyebrow) eyebrow.textContent = `Owner News · ${announcement?.category || 'Ownerinc'}`;
   if (description) description.textContent = announcement
-    ? excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.')
+    ? announcement.editorial?.summary || excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.')
     : state === 'loading' ? 'Carregando publicações…'
       : state === 'error' ? 'Não foi possível carregar o Owner News.' : 'Nenhuma publicação no Owner News.';
   if (meta) meta.textContent = announcement ? `Publicado ${formatDate(announcement.published_at)}` : '';
@@ -168,7 +168,7 @@ async function loadAnnouncements() {
       const card = storyCard({
       title: announcement.title,
       category: announcement.category || 'Comunicado',
-      description: excerpt(announcement.content_blocks, ''),
+      description: announcement.editorial?.summary || excerpt(announcement.content_blocks, ''),
       href: `./announcements.html?id=${encodeURIComponent(announcement.id)}`,
       image: './assets/logo-branco.svg',
       alt: 'Owner News',

@@ -83,7 +83,7 @@ class FixtureNode extends Node {
 
 // Entire production mounts and their local modules run with the real lifecycle.
 // Only DOM, browser rendering/export libraries and external transports are doubles.
-export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [] } = {}) {
+export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [], url = `https://portal.test/${name}.html` } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
@@ -94,12 +94,27 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   parseInto(doc, html);
   doc.documentElement = doc.querySelector('html'); doc.body = doc.querySelector('body'); doc.activeElement = doc.body;
   const window = new FixtureNode('window', doc);
-  Object.assign(window, { history: {}, matchMedia: () => ({ matches: false }), innerHeight: 900, scrollY: 0, confirm: () => true });
+  let currentURL = new URL(url), cursor = 0;
+  const entries = [{ url: currentURL.href, state: null }];
+  const location = {};
+  for (const key of ['href', 'origin', 'pathname', 'search', 'hash']) Object.defineProperty(location, key, { get: () => currentURL[key] });
+  const popstate = (next, state) => {
+    currentURL = new URL(next, currentURL);
+    entries[cursor] = { url: currentURL.href, state };
+    window.dispatchEvent(new TestEvent('popstate', { state }));
+  };
+  const history = {
+    get state() { return entries[cursor].state; }, get length() { return entries.length; },
+    pushState(state, _, next) { currentURL = new URL(next, currentURL); entries.splice(++cursor); entries.push({ url: currentURL.href, state }); },
+    replaceState(state, _, next) { currentURL = new URL(next, currentURL); entries[cursor] = { url: currentURL.href, state }; },
+    back() { if (cursor > 0) { --cursor; popstate(entries[cursor].url, entries[cursor].state); } },
+  };
+  Object.assign(window, { history, location, matchMedia: () => ({ matches: false }), innerHeight: 900, scrollY: 0, confirm: () => true });
   const requests = [], revoked = [], frames = new Map(), timers = new Map(), observers = [], captures = [];
   let resourceId = 0;
   const transport = kind => (path, options = {}) => { const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise; };
   const context = vm.createContext({
-    document: doc, window, console, AbortController, DOMException, URLSearchParams, TextEncoder, structuredClone,
+    document: doc, window, fixtureLocation: location, console, AbortController, DOMException, URLSearchParams, TextEncoder, structuredClone,
     Event: TestEvent, URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
     setTimeout(fn) { const id = ++resourceId; timers.set(id, fn); return id; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++resourceId; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
@@ -115,7 +130,14 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
     vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
-  await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState');
+  await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard');
+  if (name === 'announcements' && mount) {
+    await load('public/js/pagination.js', 'readOffset, renderPagination, setPaginationBusy');
+    await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
+    await load('public/js/owner-news/model.js', 'getNewsPresentation, normalizeEditorial, estimateNewsReadTime');
+    await load('public/js/owner-news/catalog.js', 'renderNewsCard, composeNewsFeed, renderNewsCategories, renderNewsOpening');
+    await load('public/js/owner-news/reader-view.js', 'renderNewsArticle');
+  }
   if (name === 'dashboard') await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   if (name === 'autocard') {
     await load('public/autocard/crop.js', 'DEFAULT_MEDIA_CROP, cropRenderStyle, cropStyle, dragMediaCrop, normalizeMediaCrop');
@@ -132,14 +154,14 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   }
   for (const module of modules) await load(module.path, module.exports);
   if (mount) {
-    const path = name === 'dashboard' ? 'public/js/dashboard.js' : `public/${name}/app.js`;
+    const path = ['dashboard', 'announcements'].includes(name) ? `public/js/${name}.js` : `public/${name}/app.js`;
     let source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
     const end = source.lastIndexOf('}');
     source = `${source.slice(0, end)}\n${expose}\n${source.slice(end)}`;
-    vm.runInContext(`${source}\nglobalThis.page = createPageLifecycle(); mount(page);`, context, { filename: path });
-  } else vm.runInContext('globalThis.page = createPageLifecycle();', context);
+    vm.runInContext(`${source}\nglobalThis.page = createPageLifecycle(); page.location = fixtureLocation; mount(page);`, context, { filename: path });
+  } else vm.runInContext('globalThis.page = createPageLifecycle(); page.location = fixtureLocation;', context);
   return {
-    doc, window, context, html, requests, revoked, frames, timers, observers, captures, page: context.page,
+    doc, window, context, html, requests, revoked, frames, timers, observers, captures, page: context.page, popstate,
     node: id => doc.getElementById(id),
     latest: fragment => [...requests].reverse().find(item => item.path.includes(fragment)),
     input(id, value) { const node = doc.getElementById(id); node.value = value; node.dispatchEvent(new TestEvent('input', { bubbles: true })); },

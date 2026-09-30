@@ -594,7 +594,7 @@ test('direct and keyboard block selection update every aria-pressed state immedi
   assert.match(editor, /selectBlock\(index\);\s*return;/);
 });
 
-test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', () => {
+test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', async () => {
   for (const source of [knowledge, academy, benefits, announcements]) {
     assert.match(source, /content_blocks/);
     assert.match(source, /renderBlocks/);
@@ -604,5 +604,6 @@ test('published CMS blocks integrate with legacy fallbacks and dashboard announc
   assert.match(dashboard, /\/api\/announcements\?limit=3&offset=0/);
   assert.match(dashboard, /announcements-preview/);
   assert.match(announcements, /\/api\/announcements\/\$\{encodeURIComponent\(announcementId\)\}/);
-  assert.match(announcements, /href: `\?id=\$\{encodeURIComponent\(announcement\.id\)\}`/);
+  const catalog = await readFile('public/js/owner-news/catalog.js', 'utf8');
+  assert.match(catalog, /href: `\.\/announcements\.html\?id=\$\{encodeURIComponent\(article\.id\)\}`/);
 });

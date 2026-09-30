@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { mountSource, activePageDouble } from '../helpers/page-mount.mjs';
+import { createFeedbackHarness, drain } from '../helpers/frontend-feedback-harness.mjs';
 
 const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cmsCss, profile, dashboard, knowledge, academy, announcements, renderer, nginx] = await Promise.all([
   readFile('public/js/ui.js', 'utf8'),
@@ -300,92 +301,6 @@ function loadAcademyHarness() {
     .replace(/\nloadCourses\(\);\n}\s*$/, '\n}');
   vm.runInNewContext(mountSource(source, 'globalThis.loadCourses = loadCourses;'), context, { filename: 'academy.js' });
   return { context, document, nodes, container, filters, pagination, location, requests };
-}
-
-function loadAnnouncementsHarness() {
-  const document = createTestDocument();
-  const nodes = new Map();
-  const list = register(document, createTestNode(document, 'div', 'announcements-list'), nodes);
-  const pagination = register(document, createTestNode(document, 'div', 'announcements-pagination'), nodes);
-  document.body.append(list, pagination);
-  document.getElementById = id => nodes.get(id) || null;
-  const location = { href: 'https://portal.test/announcements.html' };
-  Object.defineProperty(location, 'search', { get() { return new URL(this.href).search; } });
-  const history = {
-    replaceState(_, __, href) { location.href = String(href); },
-    pushState(_, __, href) { location.href = String(href); },
-  };
-  const requests = [];
-  let activeRequest;
-  const context = {
-    document,
-    window: { listeners: new Map(), addEventListener(type, handler) { this.listeners.set(type, handler); } },
-    location,
-    history,
-    URL,
-    URLSearchParams,
-    Map,
-    Set,
-    Number,
-    String,
-    Array,
-    console,
-    fetchAPIPage: () => {
-      activeRequest = { page: deferred() };
-      requests.push(activeRequest);
-      return activeRequest.page.promise;
-    },
-    fetchAPI: async () => ({}),
-    requireAuth: async () => ({}),
-    clear(node) { node.replaceChildren(); return node; },
-    setBusy(node, busy) { node?.setAttribute('aria-busy', String(busy)); },
-    setPaginationBusy(node, busy) {
-      node.setAttribute('aria-busy', String(busy));
-      node.querySelectorAll('button').forEach(button => { button.disabled = busy || button.dataset.paginationBoundaryDisabled === 'true'; });
-    },
-    element(tag, options = {}, children = []) {
-      const node = createTestNode(document, tag);
-      Object.entries(options).forEach(([key, value]) => {
-        if (key === 'className') node.className = value;
-        else if (key === 'text') node.textContent = value;
-        else if (key === 'on') Object.entries(value).forEach(([event, handler]) => node.addEventListener(event, handler));
-        else if (value !== undefined && value !== null) node.setAttribute(key, value);
-      });
-      node.append(...(Array.isArray(children) ? children : [children]));
-      return node;
-    },
-    showState(node, message) {
-      const state = context.element('div', { role: 'status', text: message });
-      context.clear(node).append(state);
-      return state;
-    },
-    readOffset(search, limit) {
-      const value = Number(search.get('offset') || 0);
-      return Number.isInteger(value) && value >= 0 ? Math.floor(value / limit) * limit : 0;
-    },
-    renderBlocks() {},
-    cleanupRenderedBlocks() {},
-    blocksToText: blocks => (blocks || []).map(block => block.text || '').join('\n'),
-    renderPagination(node, total, offset, limit, onPage) {
-      context.paginationCallback = onPage;
-      context.clear(node);
-      if (total <= limit) return;
-      const previous = context.element('button', { text: 'Anterior' });
-      previous.disabled = offset === 0;
-      previous.dataset.paginationBoundaryDisabled = String(previous.disabled);
-      const next = context.element('button', { text: 'Próxima' });
-      next.disabled = offset + limit >= total;
-      next.dataset.paginationBoundaryDisabled = String(next.disabled);
-      node.append(previous, next);
-    },
-  };
-  const source = announcements
-    .replace(/^import[^\n]+\n/gm, '')
-    .replace(/const user = await requireAuth\(\);\nif \(!user\) throw new Error\('Authentication required'\);\n/, '')
-    .replace(/\nloadAnnouncements\(\);\nloadHighlight\(\);\nloadCategories\(\);\n}\s*$/, '\n}');
-  vm.runInNewContext(mountSource(source, 'globalThis.loadAnnouncements = loadAnnouncements;'), context, { filename: 'announcements.js' });
-  assert.equal(requests.length, 0, 'page loads are explicitly driven and awaited by each test');
-  return { context, document, list, pagination, location, requests };
 }
 
 function loadKnowledgeHarness({ canManage = false } = {}) {
@@ -959,52 +874,36 @@ test('Academy focuses the replacement retry button after a repeated retry error'
   assert.equal(replacement.inert, false);
 });
 
-test('Announcements preserves pagination focus and boundary buttons after a deferred page load', async () => {
-  const harness = loadAnnouncementsHarness();
-  const firstLoad = harness.context.loadAnnouncements();
-  harness.requests[0].page.resolve({
+test('Announcements preserves pagination focus and boundary buttons after a deferred page load', async t => {
+  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
+  h.requests.find(r => r.kind === 'list').resolve({
     data: [{ id: 'announcement-1', title: 'Primeiro', category: 'Geral', content_blocks: [] }],
-    total: 20,
+    total: 48,
   });
-  await firstLoad;
-
-  const oldNext = harness.pagination.querySelectorAll('button')[1];
+  await drain();
+  const pagination = h.node('announcements-pagination');
+  const oldNext = pagination.querySelectorAll('button')[1];
   oldNext.focus();
-  harness.context.paginationCallback(10);
-  assert.match(harness.location.href, /offset=10/);
-  assert.equal(harness.requests.length, 2);
-   harness.requests[1].page.resolve({
-     data: [{ id: 'announcement-2', title: 'Segundo', category: 'Geral', content_blocks: [] }],
-     total: 15,
-   });
-   await new Promise(resolve => setImmediate(resolve));
-
-   const buttons = harness.pagination.querySelectorAll('button');
-   assert.equal(harness.document.activeElement.textContent, 'Segundo');
-   assert.deepEqual(buttons.map(button => button.disabled), [false, true]);
+  oldNext.click();
+  assert.match(h.page.location.href, /offset=24/);
+  assert.equal(h.requests.filter(r => r.kind === 'list').length, 2);
+  h.requests.filter(r => r.kind === 'list').at(-1).resolve({
+    data: [{ id: 'announcement-2', title: 'Segundo', category: 'Geral', content_blocks: [] }], total: 30,
+  }); await drain();
+  assert.match(h.doc.activeElement.textContent, /Segundo/);
+  assert.deepEqual(pagination.querySelectorAll('button').map(button => button.disabled), [false, true]);
 });
 
-test('Announcements restores pagination focus to the list or empty state when controls disappear', async () => {
-  const single = loadAnnouncementsHarness();
-  const first = single.context.loadAnnouncements();
-  single.requests[0].page.resolve({ data: [{ id: 'one', title: 'Primeiro', content_blocks: [] }], total: 20 });
-  await first;
-   single.pagination.querySelectorAll('button').find(button => !button.disabled).focus();
-  const second = single.context.loadAnnouncements();
-  single.requests[1].page.resolve({ data: [{ id: 'last', title: 'Último', content_blocks: [] }], total: 1 });
-  await second;
-  assert.equal(single.document.activeElement.tagName, 'A');
-  assert.equal(single.document.activeElement.textContent, 'Último');
-
-  const empty = loadAnnouncementsHarness();
-  const initial = empty.context.loadAnnouncements();
-  empty.requests[0].page.resolve({ data: [{ id: 'one', title: 'Primeiro', content_blocks: [] }], total: 20 });
-  await initial;
-   empty.pagination.querySelectorAll('button').find(button => !button.disabled).focus();
-  const emptyPage = empty.context.loadAnnouncements();
-  empty.requests[1].page.resolve({ data: [], total: 0 });
-  await emptyPage;
-  assert.match(empty.document.activeElement.textContent, /Nenhuma publicação nesta editoria/);
+test('Announcements restores pagination focus to the list or empty state when controls disappear', async t => {
+  for (const empty of [false, true]) {
+    const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
+    h.requests.find(r => r.kind === 'list').resolve({ data: [{ id: 'one', title: 'Primeiro', content_blocks: [] }], total: 48 }); await drain();
+    h.node('announcements-pagination').querySelectorAll('button').find(button => !button.disabled).focus();
+    h.popstate('/announcements.html', null);
+    h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: empty ? [] : [{ id: 'last', title: 'Último', content_blocks: [] }], total: empty ? 0 : 1 }); await drain();
+    assert.match(h.doc.activeElement.textContent, empty ? /Nenhuma publicação nesta editoria/ : /Último/);
+    if (!empty) assert.equal(h.doc.activeElement.tagName, 'A');
+  }
 });
 
 test('Knowledge preserves legacy fallback, hides list pagination in detail, and does not steal moved focus', async () => {
