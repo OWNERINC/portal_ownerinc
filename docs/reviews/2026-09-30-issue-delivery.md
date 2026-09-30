@@ -2,10 +2,10 @@
 
 ## Escopo e método
 
-Este documento registra a homologação anterior à publicação da
+Este documento registra a homologação anterior e posterior à publicação da
 [PR #45](https://github.com/OWNERINC/portal_ownerinc/pull/45). O resultado final
-do deploy, digests efetivos e aceite por issue serão acrescentados à PR e às
-issues vinculadas após a execução, mantendo identificável a ordem das evidências.
+do deploy, digests efetivos e aceite por issue estão registrados abaixo e nas
+issues vinculadas, mantendo identificável a ordem das evidências.
 
 Plano aprovado para entrega até 15h de Brasília, a partir da revisão
 `3abc068b04d3bc785998dae05742a5bd230eee4d`, em worktree isolada.
@@ -28,7 +28,7 @@ credenciais, tokens, dumps e snapshots de revisão não são versionados.
 | PNG móvel do AutoCard fiel à prévia | `d64fffa` | 72 testes e 6 cenários em Chromium 153/html2canvas 1.4.1, com 12 PNGs reais |
 | Backup diário e renovação TLS | `7803699` | 44 casos Linux e 10 probes adicionais independentes; quatro unidades systemd e calendários válidos |
 | Origem correta do recorte no avatar | `a35a530` | Reteste independente: 12 cenários, 265 assertions e 15 testes automatizados; geometria/pixels aprovados |
-| Headers de segurança dos assets | `c40fea6`, `89fb497` | Reteste independente: 10 GETs/60 verificações de headers, 21 testes e nginx -t aprovados |
+| Headers de segurança dos assets | `c40fea6`, `89fb497` | Reteste independente: 10 GETs/60 verificações de headers, 21 testes e nginx -t aprovados; 20/20 assets publicados conferidos |
 | Nomes, foco e seleções acessíveis | `c862971` | Reteste independente: 84 testes, 50 leituras AX, 12 amostras de pixels; três pares de PNGs byte-idênticos |
 | Arraste contínuo da foto | `d275fc4` | Oito cenários aprovados independentemente; seis medições suplementares classificadas por comparação antes/depois |
 
@@ -36,9 +36,10 @@ Verificação final executada pela sessão primária em `d275fc4`: `npm run veri
 aprovado, **862 testes passaram, zero falhas e dois skips exclusivos de Linux no
 Windows**. Esses dois caminhos foram executados na suíte Linux de timers. Auditoria
 de dependências de produção: **zero vulnerabilidades** em API e cron.
-CI da revisão `c862971`: [36747008747](https://github.com/OWNERINC/portal_ownerinc/actions/runs/36747008747)
-aprovado, incluindo migrations reais, build, scans e SBOM. O CI do head final
-precede a publicação.
+CI da revisão final: [36748329056](https://github.com/OWNERINC/portal_ownerinc/actions/runs/36748329056),
+tentativa 2 aprovada, incluindo migrations reais, build, scans e SBOM. A
+publicação terminou às **14:18:51 de Brasília** na revisão
+`a1414d89cbfcee7f2beeaefef21911cff1c1bfce`.
 
 O helper S3 também foi executado por outro agente com **AWS CLI 2.37.6 real** e
 endpoint S3-compatible SeaweedFS 4.48, em rede Docker descartável. Upload pelo
@@ -154,12 +155,12 @@ originais da #38 não foram fornecidos; os novos cenários não reproduziram PDF
 ### Email e sessões
 
 Quatro mensagens aceitas por Resend com TLS 1.3 validado e **recebimento das quatro
-confirmado pelo usuário**: dois lembretes, um alerta e uma recuperação. O retry
-injetou 421 antes da rede; contagens de 1/2 tentativas e reexecuções sem duplicatas.
-Esses envios usaram a imagem antiga efetivamente em produção, Nodemailer 9.0.5.
-Após descobrir o desvio, a imagem pretendida 3abc passou 11 checks PostgreSQL sem
-novo envio externo. Outro agente repetiu 11 checks no candidato 10.0.13; o envio
-externo da revisão final ainda será validado após publicação.
+confirmado pelo usuário**: dois lembretes, um alerta e uma recuperação. O lote
+final foi enviado pela imagem nativa publicada, Nodemailer 10.0.13, exclusivamente
+para `gabriel.garcia@ownerinc.com.br`, entre 14:21:32 e 14:21:38. O retry injetou
+421 antes da rede; contagens de 1/2 tentativas e reexecuções sem duplicatas.
+Revisão independente confirmou 111/111 assertions, 19/19 hashes, quatro envelopes,
+IDs distintos e nenhum envio adicional. O orçamento final foi 4/4.
 
 Revogação real do QA: o mesmo token retornou 200 antes, 401 durante desativação e 401
 após reativação, ainda com 3.594s antes da expiração. Auditoria confirmou ator,
@@ -186,10 +187,10 @@ e arquivos reais nos dois namespaces: referência antiga e órfã recente preser
 por backup comprovados. Contagem ENOENT foi distinguida de remoção física.
 
 Produção: hashes do módulo/DB correspondentes, grants e volume RW verificados;
-46 auditorias, com as cinco últimas executadas às 03:30 de Brasília sem falhas. A inspeção
-revelou que o cron antigo não registrava o heartbeat de retenção da versão atual.
-A atualização do receiver/cron e a conferência desse heartbeat estão pendentes
-da publicação final.
+cron nativo em `CRON_BOOTSTRAP_ONLY=false`, três workers com heartbeats concluídos
+com sucesso às 14:20:48/14:21:00, retenção em janela de sete dias, zero remoções
+e zero falhas nas auditorias finais. A primeira execução real do cron final ocorreu
+após a publicação; não houve exclusão ampla de dados de produção.
 
 ## Infraestrutura e configuração — #4 e #5
 
@@ -197,15 +198,20 @@ Dois agentes confirmaram TLS 1.2/1.3, recusa de 1.0/1.1, redirect 301, readiness
 origem Portal aceita e origem não autorizada 403. Cadeia real NPM→Nginx→API,
 firewall/bindings inspecionados; API/PostgreSQL/web interno sem portas publicadas.
 Cabeçalhos de segurança presentes no HTML/API; a herança JS/CSS foi corrigida e
-validada independentemente em Nginx Linux, aguardando confirmação após publicação.
+validada independentemente em Nginx Linux e nos 20 assets publicados.
 
-- Certificado Portal válido até 15/10. Dry-run Certbot exclusivo do Portal passou
-  em 11.38s, HTTP-01 validado, desafio removido e certificado vivo inalterado.
-- Usuário autorizou timer de renovação e reload gracioso após renovação, sem parar
-  o proxy compartilhado. Instalação/validação operacional seguem pendentes.
-- Último backup de produção pré-release tinha manifesto íntegro. Agenda diária
-  local implementada e revisada, com exclusão mútua pelo lock de deploy; instalação
-  e primeira execução operacional previstas após a publicação.
+- Certificado Portal foi renovado às 14:20:31 e passou a vencer em 29/12/2026
+  16:21:58 UTC, fingerprint `7B:FF:AD:0D:AE:BB:2E:09:EA:A7:28:55:A0:22:28:0B:B4:36:A3:03:83:42:0E:9E:EB:E4:3F:FB:EF:6E:9D:9F`.
+- O hook automático falhou porque backup e renovação foram iniciados em paralelo
+  e o upstream estava pausado. O erro foi preservado; após a retomada, `nginx -t`
+  passou e o reload gracioso manual foi confirmado no journal às 14:21:11, sem
+  restart do proxy compartilhado, com novo certificado servido via TLS 1.3.
+- Timer de renovação exclusivo instalado e habilitado; próxima ocorrência
+  observada para 30/09 21:14:02 Brasília. Operações manuais devem ser sequenciais
+  e conferir o journal do hook.
+- Último backup de produção pré-release e primeira cópia diária têm manifestos
+  íntegros. Agenda diária local habilitada, lock compartilhado e retenção 14 dias;
+  primeira execução 14:20:21–14:20:47 validou dump/uploads.
 - Usuário confirmou que **S3 ainda não está configurado**. Bucket, provedor e
   credenciais são dependência externa; o AWS CLI também não está instalado na
   VPS. Backup local não satisfaz essa cópia.
@@ -213,6 +219,41 @@ validada independentemente em Nginx Linux, aguardando confirmação após public
   protegido às 12:18:49 de Brasília; será ativado na recriação controlada do cron.
 - Não havia backlog de convites/reconciliação/cleanup na inspeção às 12:20:20;
   marcador de lembretes já era 30/09.
+
+## Pós-publicação — revisão final
+
+O deploy da revisão `a1414d89cbfcee7f2beeaefef21911cff1c1bfce` passou na tentativa
+2 do workflow. API e cron nativos conferiram os digests imutáveis publicados e
+Nodemailer 10.0.13; o smoke HTTPS posterior ao backup/reload passou. A revisão
+operacional independente obteve **29/29 checks**, incluindo nove hashes de assets,
+seis headers de segurança exatamente uma vez em JS/CSS 200/404, unidades systemd,
+backups, digests, grants, workers e certificado.
+
+O reteste final de navegador em Edge 154/Windows conferiu 20/20 assets, perfil,
+AutoCard, Owner News e estado da QA. Perfil: upload, oito movimentos de arraste,
+save/reopen/reload, gaps zero, dez probes RGBA iguais, remoção 404 e fingerprint
+original restaurado. AutoCard: foto própria, desktop/mobile 1080×1080, scrollbar
+móvel de 15px, preview/clone delta 0, footer/logo completos e PNGs plain/
+instrumented byte-idênticos. Owner News: PDF original de 25 páginas, 6.180.100
+bytes, SHA `3af623eca820f912d25fc8283cf111be18a18be6ae758773e54c7402fab3132e`.
+Card, mídia e foto temporários retornaram 404; nenhum órfão novo foi criado.
+
+A comparação estrita de todo o diálogo continua registrada sem ser mascarada:
+MAE bruto 2,638774/255 e referência pixel-snapped 1,373686/255 não satisfazem o
+limiar histórico `<1`/`<3%`; avatar 0,899516/255 satisfaz. A revisão independente
+reproduziu o resultado e comparou a fonte CSS dirigida à captura em 58.088 pixels
+internos: MAE 0,0000057384/255, erro máximo de canal 1 e zero divergências acima
+de 18. A diferença é explicada por alinhamento fracionário e rasterização
+CSS/Canvas; não houve waiver numérico nem reivindicação de identidade do PNG
+inteiro. O incidente de `Page.handleJavaScriptDialog` foi uma corrida do harness
+com dois controladores, não defeito do Portal.
+
+Issues fechadas com aceite demonstrado: **#1, #5, #6, #11, #36 e #37**.
+Permanecem abertas: **#2** (NVDA/VoiceOver/Safari físico e zoom nativo 400%),
+**#3** (S3 e retorno visual após expiração natural), **#4** (S3 externo,
+lifecycle/criptografia/off-host/RPO) e **#38** (card/PDF e ambiente originais).
+Os textos e critérios foram atualizados no GitHub apenas após conferir que os dez
+corpos originais permaneciam inalterados.
 
 ## Acessibilidade física e fechamento
 
