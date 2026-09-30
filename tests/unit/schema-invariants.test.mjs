@@ -5,7 +5,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -15,9 +15,54 @@ test('migrations are numbered, ordered, and tracked by a ledger', async () => {
 
   const schema = await readFile('api/db/schema.sql', 'utf8');
   const ledger = [...schema.matchAll(/\('([0-9]{3}_[a-z0-9_]+)'\)/g)].map((match) => match[1]);
-  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state']) {
+  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state', '033_academy_learning']) {
     assert.equal(ledger.includes(migration), false, `${migration} must run after the bootstrap schema`);
   }
+});
+
+test('Academy schema preserves legacy delivery and API-only learning storage', async () => {
+  const [schema, migration, provision, verification, integration] = await Promise.all([
+    readFile('api/db/schema.sql', 'utf8'),
+    readFile('api/db/migrations/033_academy_learning.sql', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+    readFile('scripts/test-migrations.mjs', 'utf8'),
+  ]);
+  for (const source of [schema, migration]) {
+    for (const table of ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress']) {
+      assert.ok(source.includes(`CREATE TABLE IF NOT EXISTS ${table} (`));
+      assert.ok(provision.includes(table));
+    }
+    assert.match(source, /delivery_mode TEXT NOT NULL DEFAULT 'external'/);
+    assert.match(source, /audience TEXT NOT NULL DEFAULT 'all'/);
+    assert.match(source, /learning_group TEXT NOT NULL DEFAULT 'initial'/);
+    assert.match(source, /academy_delivery_url_check CHECK/);
+    assert.match(source, /job_title_id UUID NOT NULL REFERENCES job_titles\(id\) ON DELETE RESTRICT/);
+    assert.match(source, /user_uid TEXT NOT NULL REFERENCES users\(uid\) ON DELETE CASCADE/);
+    assert.match(source, /PRIMARY KEY\s*\(user_uid, lesson_id, media_version\)/);
+    assert.match(source, /academy_lesson_media_check CHECK/);
+    assert.match(source, /position_seconds BETWEEN 0 AND 86400/);
+    assert.match(source, /NOT completed AND completed_at IS NULL/);
+  }
+  assert.match(migration, /ALTER TABLE academy ALTER COLUMN url DROP NOT NULL/);
+  assert.match(migration, /ALTER TABLE cms_documents ADD CONSTRAINT cms_documents_content_type_check CHECK/);
+  assert.match(migration, /'academy_lesson'/);
+  assert.doesNotMatch(schema, /CREATE TABLE IF NOT EXISTS cms_documents/);
+  const tablesStart = 'CREATE TABLE IF NOT EXISTS academy_course_job_titles';
+  assert.equal(
+    schema.slice(schema.indexOf(tablesStart), schema.indexOf('CREATE TABLE IF NOT EXISTS benefits')).trim(),
+    migration.slice(migration.indexOf(tablesStart), migration.indexOf('ALTER TABLE cms_documents')).trim(),
+    'Fresh Academy relations and indexes must match the incremental migration',
+  );
+  assert.doesNotMatch(provision, /GRANT[^;]*academy_(?:course_job_titles|modules|lessons|lesson_progress)[^;]*TO portal_cron/);
+  for (const source of [verification, integration]) {
+    assert.match(source, /'033_academy_learning'/);
+    assert.match(source, /has_table_privilege\('portal_api',[^\n]*'SELECT'\)/);
+    assert.match(source, /academyTables/);
+    assert.match(source, /has_table_privilege\('portal_cron', \$1, \$2\)/);
+  }
+  assert.match(integration, /Setup modes require an empty disposable database/);
+  assert.match(integration, /ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows/);
 });
 
 test('DHO naming check follows migration filenames and scans generated HTML recursively', async () => {

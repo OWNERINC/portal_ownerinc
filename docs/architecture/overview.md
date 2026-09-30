@@ -25,6 +25,51 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 - O frontend continua estático enquanto essa solução atender ao produto.
 - Serviços só devem ser separados ou reescritos quando existir pressão real.
 
+## Persistência da Academy
+
+A migration `033_academy_learning` mantém `academy` como origem dos cursos e
+preserva os externos existentes (`delivery_mode=external`, `audience=all`,
+`learning_group=initial`). Cursos internos usam `url=NULL`; os externos continuam
+exigindo URL HTTP(S). A formação visual (`initial`/`role`) é independente do público.
+
+- `academy_course_job_titles`: associação curso/cargo; cargo referenciado não pode
+  ser excluído, e a associação é removida com o curso.
+- `academy_modules` → `academy_lessons`: currículo com ordenação e publicação
+  explícita (módulos e aulas inativos por padrão). A aula exige uma fonte YouTube
+  ou arquivo HTTPS, mutuamente exclusivas.
+- `academy_lesson_progress`: chave `(user_uid, lesson_id, media_version)`, posição
+  de 0 a 86400 segundos e conclusão com timestamp consistente. Exclusão do usuário
+  ou da aula remove o progresso; exclusão do curso remove a árvore por cascata.
+- `cms_documents` aceita `academy_lesson`, além dos tipos anteriores.
+
+Somente `portal_api` recebe CRUD nas quatro novas tabelas. O cron mantém seu
+acesso às revisões CMS para retenção, sem acesso ao progresso. O `schema.sql`
+inclui a estrutura Academy, mas **não registra 033 como aplicada**: no bootstrap,
+a migration 015 ainda precisa criar o CMS antes de 033 ampliar seu CHECK.
+As regras editoriais, elegibilidade e atualização de versão de mídia pertencem
+à camada de aplicação; essa migration entrega a estrutura relacional.
+
+### Verificação descartável
+
+`npm run test:migrations` mantém os requisitos `MIGRATION_TEST_DISPOSABLE=true`,
+`MIGRATION_DATABASE_URL` e as senhas dos papéis de teste (`PORTAL_API_DB_PASSWORD`
+e `PORTAL_CRON_DB_PASSWORD`, pelo menos 16 caracteres). Nunca apontar para produção.
+Para validar os dois caminhos, usar duas bases vazias descartáveis previamente
+autorizadas, uma para cada execução:
+
+- `MIGRATION_TEST_SETUP=upgrade`: prepara migrations até 032, insere um curso
+  legado e executa o migrator normal, incluindo 033.
+- `MIGRATION_TEST_SETUP=bootstrap`: aplica `schema.sql`, confirma CMS e ledger
+  033 ausentes, insere o curso legado e executa as migrations pendentes.
+
+Ambos recusam bases com tabelas em `public`, sem apagar tabelas para preparar o
+teste. Sem `MIGRATION_TEST_SETUP`, permanece o fluxo usual de migrations sobre a
+base descartável fornecida. As verificações cobrem repetição sem reaplicar ledger,
+defaults, restrições de mídia, isolamento do progresso por usuário/versão,
+cascatas, FK de cargo, tipos CMS e privilégios reais. Os fixtures de comportamento
+Academy são revertidos por transação. Nesta entrega, a execução PostgreSQL dos
+dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
+
 ## Navegação persistente do frontend
 
 - `public/js/router-bootstrap.js` inicia os links diretos e o router nativo de

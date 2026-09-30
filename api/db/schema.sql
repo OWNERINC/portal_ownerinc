@@ -200,16 +200,83 @@ CREATE TABLE IF NOT EXISTS academy (
   title        TEXT        NOT NULL,
   category     TEXT        NOT NULL DEFAULT '',
   description  TEXT        NOT NULL DEFAULT '',
-  url          TEXT        NOT NULL CHECK (url ~ '^https?://'),
+  url          TEXT        CHECK (url ~ '^https?://'),
+  delivery_mode TEXT NOT NULL DEFAULT 'external' CHECK (delivery_mode IN ('external', 'internal')),
+  audience TEXT NOT NULL DEFAULT 'all' CHECK (audience IN ('all', 'job_titles')),
+  learning_group TEXT NOT NULL DEFAULT 'initial' CHECK (learning_group IN ('initial', 'role')),
+  icon_key TEXT NOT NULL DEFAULT 'icon-01'
+    CHECK (icon_key IN ('icon-01','icon-02','icon-03','icon-04','icon-05','icon-06')),
+  instructor_name TEXT NOT NULL DEFAULT '' CHECK (char_length(instructor_name) <= 120),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "order"      INTEGER     NOT NULL DEFAULT 0,
   active       BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT academy_delivery_url_check CHECK (
+    (delivery_mode='external' AND url IS NOT NULL AND url ~ '^https?://')
+    OR (delivery_mode='internal' AND url IS NULL)
+  ),
   CONSTRAINT academy_content_lengths CHECK (
     char_length(title) <= 200 AND char_length(category) <= 100
     AND char_length(description) <= 5000 AND char_length(url) <= 2048
     AND "order" BETWEEN -100000 AND 100000
   )
 );
+
+CREATE TABLE IF NOT EXISTS academy_course_job_titles (
+  course_id UUID NOT NULL REFERENCES academy(id) ON DELETE CASCADE,
+  job_title_id UUID NOT NULL REFERENCES job_titles(id) ON DELETE RESTRICT,
+  PRIMARY KEY (course_id, job_title_id)
+);
+CREATE INDEX IF NOT EXISTS academy_course_job_titles_job_idx
+  ON academy_course_job_titles(job_title_id, course_id);
+
+CREATE TABLE IF NOT EXISTS academy_modules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id UUID NOT NULL REFERENCES academy(id) ON DELETE CASCADE,
+  title TEXT NOT NULL CHECK (char_length(btrim(title)) BETWEEN 1 AND 200),
+  "order" INTEGER NOT NULL DEFAULT 0 CHECK ("order" BETWEEN -100000 AND 100000),
+  active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS academy_modules_course_idx ON academy_modules(course_id, "order", id);
+
+CREATE TABLE IF NOT EXISTS academy_lessons (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  module_id UUID NOT NULL REFERENCES academy_modules(id) ON DELETE CASCADE,
+  title TEXT NOT NULL CHECK (char_length(btrim(title)) BETWEEN 1 AND 200),
+  description TEXT NOT NULL DEFAULT '' CHECK (char_length(description)<=5000),
+  "order" INTEGER NOT NULL DEFAULT 0 CHECK ("order" BETWEEN -100000 AND 100000),
+  active BOOLEAN NOT NULL DEFAULT FALSE,
+  media_type TEXT NOT NULL CHECK (media_type IN ('youtube','file')),
+  youtube_video_id TEXT,
+  media_url TEXT,
+  media_version INTEGER NOT NULL DEFAULT 1 CHECK (media_version>0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT academy_lesson_media_check CHECK (
+    (media_type='youtube' AND youtube_video_id IS NOT NULL
+      AND youtube_video_id ~ '^[A-Za-z0-9_-]{11}$' AND media_url IS NULL)
+    OR (media_type='file' AND youtube_video_id IS NULL AND media_url IS NOT NULL
+      AND media_url ~ '^https://' AND char_length(media_url)<=2048)
+  )
+);
+CREATE INDEX IF NOT EXISTS academy_lessons_module_idx ON academy_lessons(module_id, "order", id);
+
+CREATE TABLE IF NOT EXISTS academy_lesson_progress (
+  user_uid TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  lesson_id UUID NOT NULL REFERENCES academy_lessons(id) ON DELETE CASCADE,
+  media_version INTEGER NOT NULL CHECK (media_version>0),
+  position_seconds INTEGER NOT NULL DEFAULT 0 CHECK (position_seconds BETWEEN 0 AND 86400),
+  completed BOOLEAN NOT NULL DEFAULT FALSE,
+  completed_at TIMESTAMPTZ,
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version>0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_uid, lesson_id, media_version),
+  CHECK ((completed AND completed_at IS NOT NULL)
+    OR (NOT completed AND completed_at IS NULL))
+);
+CREATE INDEX IF NOT EXISTS academy_progress_recent_idx ON academy_lesson_progress(user_uid, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS benefits (
   id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -325,6 +392,8 @@ CREATE INDEX IF NOT EXISTS solides_employee_links_status_idx
   ON solides_employee_links (status, updated_at DESC);
 
 -- The legacy catalog seed is superseded by migration 030 on fresh databases.
+-- Migration 033 must remain pending: migration 015 creates CMS tables first,
+-- then 033 expands their content type constraint to include Academy lessons.
 INSERT INTO schema_migrations (version) VALUES
   ('001_initial_schema'),
   ('002_reliable_notifications'),

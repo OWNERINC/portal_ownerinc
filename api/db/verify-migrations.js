@@ -32,6 +32,7 @@ const expectedVersions = [
   '030_dho_job_title_catalog',
   '031_contract_invariants',
   '032_user_import_identity',
+  '033_academy_learning',
 ];
 
 async function verifyMigrations() {
@@ -301,6 +302,34 @@ async function verifyMigrations() {
        || result.rows[0].cron_cms_assets_privileges !== true
        || result.rows[0].cron_audit_privileges !== true) {
        throw new Error('Migration ledger, DHO job title, pending registration, profile photo crop, AutoCard, Pos-Cards, CMS, or Ombudsman removal schema/runtime checks are incomplete');
+    }
+    const academyTables = ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress'];
+    for (const table of academyTables) {
+      for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+        const access = await pool.query(`SELECT
+          has_table_privilege('portal_api', $1, $2) AS api_allowed,
+          has_table_privilege('portal_cron', $1, $2) AS cron_allowed`, [`public.${table}`, privilege]);
+        if (access.rows[0].api_allowed !== true || access.rows[0].cron_allowed !== false) {
+          throw new Error(`Unexpected Academy runtime privilege: ${table} ${privilege}`);
+        }
+      }
+    }
+    const academy = await pool.query(`SELECT
+      EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'academy'
+          AND column_name = 'url' AND is_nullable = 'YES') AS nullable_url,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.academy'::regclass
+          AND conname = 'academy_delivery_url_check') AS delivery_check,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.academy_lessons'::regclass
+          AND conname = 'academy_lesson_media_check') AS media_check,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.cms_documents'::regclass
+          AND conname = 'cms_documents_content_type_check'
+          AND pg_get_constraintdef(oid) LIKE '%academy_lesson%') AS cms_lessons`);
+    if (!Object.values(academy.rows[0]).every((value) => value === true)) {
+      throw new Error('Academy delivery, media or CMS schema checks are incomplete');
     }
     console.log('migration verification: current schema ok');
   } finally {
