@@ -166,6 +166,33 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   no feedback harness (`mount: false`, `modules`), cobrindo descarte/tardios,
   perfil/inline, datas, segurança, legado e renderer comum.
 
+### Edição editorial no CMS (E4)
+
+- Owner News oferece subáreas Matérias e Página inicial. As demais áreas conservam
+  a paleta padrão; apenas announcement recebe quote/profile e os controles de
+  diagramação, tipografia, capa, legenda/crédito e PDF complementar.
+- `cms-editorial.js` mantém Resumo, Autoria, Origem, Data da fonte e Formato na
+  mesma fotografia de save dos blocos. O CMS seleciona uma única revisão de
+  trabalho (draft, scheduled, published), inclusive quando editorial é null.
+  Legado só recebe EditorialV1 pelo botão “Preparar matéria editorial”; autoria
+  permanece vazia. Edições durante save entram na fila existente de autosave.
+- Publicar/agendar validam os campos editoriais e usam o revision_id retornado
+  pelo save. Os opcionais vazios dos blocos são removidos por
+  `normalizeEditorBlocks`; defaults ausentes de revisões legadas não são gravados.
+- A prévia announcement usa `renderNewsArticle` e `estimateNewsReadTime`, com
+  `cms.css` e `owner-news.css`. O cleanup anterior é executado antes de reutilizar
+  o root e na saída. Upload pendente conserva a prévia e bloqueia gravação,
+  publicação e navegação. O container estreito da prévia empilha a diagramação.
+- `cms-home.js` usa `GET /api/cms/owner-news/home`, `PUT .../home/draft` e
+  `POST .../home/publish`, sempre via page.bindAPI. Publicar requer rascunho salvo
+  sem alterações locais, com expected_version atualizado. Conflito 409 mantém
+  os valores locais e oferece recarregar com consentimento de descarte. A troca
+  de subárea/área e page.beforeLeave respeitam dirty e mutações; dispose cancela
+  o loader e invalida respostas/listeners antigos.
+- `tests/unit/cms-news-editor.test.mjs` monta os módulos reais e controla somente
+  DOM/transportes: isolamento, autosave, publicação, capa/reordenação, upload,
+  prévia privada, abertura/conflito e descarte. Fixtures são sintéticas.
+
 ### Persistência editorial (E2)
 
 - Migration `033_owner_news_editorial` acrescenta `cms_revisions.editorial` JSONB

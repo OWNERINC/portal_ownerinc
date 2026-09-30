@@ -163,7 +163,7 @@ test('CMS asset uploads propagate busy state and release it before success chang
   assert.ok(release >= 0 && successChange > release);
   assert.match(editor, /function fieldsFor\(block, onChange, onUploadBusy, canApplyUpload, page\)/);
   assert.match(editor, /assetUpload\('imagem',[\s\S]*onUploadBusy, canApplyUpload, page\)/);
-  assert.match(editor, /createBlockSettings\(block, onChange, onUploadBusy, canApplyUpload, page\)/);
+  assert.match(editor, /createBlockSettings\(block, onChange, onUploadBusy, canApplyUpload, page, \{ editorial = false \} = \{\}\)/);
   assert.match(cms, /let assetUploading = 0/);
   assert.match(cms, /let assetUploadVersion = 0/);
   assert.match(cms, /let editorGeneration = 0/);
@@ -178,7 +178,7 @@ test('CMS asset uploads propagate busy state and release it before success chang
   assert.match(cms, /let blockSelectionToken = 0/);
   assert.match(cms, /const selection = \+\+blockSelectionToken/);
   assert.match(cms, /currentEditor\(\) \&\& blockSelectionToken === selection/);
-  assert.match(cms, /createBlockSettings\(block, \(\) => \{[\s\S]*setAssetUploading, canApplyUpload, page\)/);
+  assert.match(cms, /createBlockSettings\(block, \(\) => \{[\s\S]*setAssetUploading, canApplyUpload, page, \{ editorial: selectedType === 'announcement' \}\)/);
 });
 
 test('CMS assetUpload handles deferred success, failure, and stale responses behaviorally', async () => {
@@ -485,7 +485,7 @@ test('CMS list loading and creation failures keep cached state coherent', () => 
   assert.match(pageChange, /documentOffset = offset;\s*loadDocuments\(\)/);
   assert.match(pageChange, /if \(navigationBusy\(\)\) return;/);
   assert.doesNotMatch(pageChange, /selectionToken/);
-  assert.match(typeNav, /if \(!page.active \|\| navigationBusy\(\)\) return;\s*selectionToken \+= 1;\s*resetSelection\(\)/);
+  assert.match(typeNav, /if \(!page.active \|\| navigationBusy\(\)\) return;[\s\S]*if \(homeEditor && !homeEditor.canLeave\(\)\) return;[\s\S]*selectionToken \+= 1;\s*resetSelection\(\)/);
   assert.match(resetSelection, /clearTimeout\(saveTimer\);\s*saveTimer = null;\s*saveQueued = false/);
   assert.match(resetSelection, /editor = null/);
   assert.doesNotMatch(resetSelection, /(?:saving|saveInFlight|actionBusy|assetUploading)\s*=/);

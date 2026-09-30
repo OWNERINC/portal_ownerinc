@@ -116,11 +116,15 @@ export async function createMountedHarness(name = 'cms', { user = { permissions:
   }
   await loadModule('public/js/ui.js', ['clear', 'element', 'showState', 'safeHttpUrl', 'openDialog', 'closeDialog', 'setDialogCloseGuard']);
   await loadModule('public/js/page-lifecycle.js', ['createPageLifecycle']);
-  await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'validateBlocks', 'BLOCK_TYPES']);
+  await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'cleanupRenderedBlocks', 'validateBlocks', 'BLOCK_TYPES']);
   if (name === 'cms') {
     await loadModule('public/js/pagination.js', ['renderPagination']);
     await loadModule('public/js/cms-editor-values.js', ['normalizeEditorBlocks']);
-    await loadModule('public/js/cms-block-editor.js', ['createBlockEditor', 'createBlockSettings', 'serializeBlocks']);
+    await loadModule('public/js/cms-block-editor.js', ['createBlockEditor', 'createBlockSettings', 'serializeBlocks', 'STANDARD_BLOCK_TYPES']);
+    await loadModule('public/js/owner-news/model.js', ['normalizeEditorial', 'getNewsPresentation', 'estimateNewsReadTime']);
+    await loadModule('public/js/owner-news/reader-view.js', ['renderNewsArticle']);
+    await loadModule('public/js/owner-news/cms-editorial.js', ['createEditorialFields', 'editorialPublicationError']);
+    await loadModule('public/js/owner-news/cms-home.js', ['mountNewsHomeEditor']);
     const createEditor = context.createBlockEditor;
     context.createBlockEditor = options => { editorCallbacks.push(options); return createEditor(options); };
   }

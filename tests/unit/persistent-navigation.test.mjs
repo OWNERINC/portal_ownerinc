@@ -206,6 +206,7 @@ test('CMS guard blocks in-flight work, confirms only unsaved edits, and disposal
     page: { beforeLeave(fn) { guard = fn; }, cleanup(fn) { dispose = fn; } },
     saving: false, actionBusy: false, creatingDocument: false, assetUploading: 0, saveInFlight: null,
     dirty: false, newDocumentDirty: false, saveQueued: false, saveTimer: 42,
+    homeEditor: null, editorialFields: null, previewCleanup: null,
     selectionToken: 0, documentsRequestToken: 0, historyRequestToken: 0, creationRequestToken: 0, editorGeneration: 0,
     showToast() {}, clearTimeout(id) { cancelled.push(id); },
     window: { confirm() { confirms++; return false; } },
