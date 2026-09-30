@@ -9,6 +9,37 @@ import { createAcademyHttp, createAcademyIntegration, requireDisposableAcademyDa
 
 requireDisposableAcademyDatabase();
 
+test('progress isolates authenticated UID, serializes CAS races, preserves manual completion and filters continue', async t => {
+  const h = await createAcademyIntegration(t);
+  const path = `/api/academy/lessons/${h.ids.closerLesson}/progress`;
+  const input = { media_version: 1, expected_version: 0, position_seconds: 30 };
+  const put = (body, user = 'closer') => h.request.put(path).set('x-fixture-user', user).send(body);
+  const continuing = (user = 'closer') => h.request.get('/api/academy/continue?limit=3').set('x-fixture-user', user).expect(200);
+  await put({ ...input, user_uid: 'other-person' }).expect(400);
+  await put(input, 'capture').expect(404);
+  assert.deepEqual((await continuing()).body, []);
+  const race = await Promise.all([put(input), put(input)]);
+  assert.deepEqual(race.map(row => row.status).sort(), [200, 409]);
+  assert.equal(race.find(row => row.status === 200).body.version, 1);
+  assert.equal(race.find(row => row.status === 409).body.reason, 'progress_conflict');
+  assert.equal((await continuing()).body[0].id, h.ids.closerCourse);
+  assert.deepEqual((await continuing('capture')).body, []);
+  const complete = await put({ ...input, expected_version: 1, completed: true }).expect(200);
+  assert.equal(complete.body.completed, true);
+  const preserved = await put({ ...input, expected_version: 2, position_seconds: 5 }).expect(200);
+  assert.equal(preserved.body.completed_at, complete.body.completed_at);
+  assert.deepEqual((await continuing()).body, []);
+  await put({ ...input, expected_version: 3, completed: false }).expect(200);
+  assert.equal((await continuing()).body.length, 1);
+  await h.client.query('UPDATE academy_lessons SET media_version=2 WHERE id=$1', [h.ids.closerLesson]);
+  assert.equal((await put({ ...input, expected_version: 4 }).expect(409)).body.reason, 'media_changed');
+  assert.deepEqual((await continuing()).body, []);
+  await put({ ...input, media_version: 2 }).expect(200);
+  await h.client.query('UPDATE academy SET active=FALSE WHERE id=$1', [h.ids.closerCourse]);
+  await put({ ...input, media_version: 2, expected_version: 1 }).expect(404);
+  assert.deepEqual((await continuing()).body, []);
+});
+
 test('transactional management validates audience, conversion, child publication and normalized media versions', async t => {
   const h = await createAcademyIntegration(t);
   const send = (method, path, body, user = 'manager') => h.request[method](`/api/academy${path}`)

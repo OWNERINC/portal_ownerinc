@@ -158,15 +158,45 @@ progresso. Arquivos e assets compartilhados ficam com a retenção existente.
 Os testes locais executam domínio e HTTP reais com seams de DB; o script de
 integração inclui corridas nos limites, ordenação, rollback e arquivos compartilhados.
 
-`api/academy/progress.js` contém apenas `readProgress` e `summarizeProgress`.
+`api/academy/progress.js` contém `readProgress`, `summarizeProgress` e `saveProgress`.
 A leitura parametriza usuário autenticado, aula e versão; ausência retorna
 posição zero, incompleto e versão de progresso zero. O chamador deve autorizar
 a leitura e fornecer o UID autenticado. O resumo recebe aulas já visíveis e
 ordenadas pelo catálogo; ignora versões antigas, arredonda percentual para baixo
-e retoma a incompleta com atividade mais recente (ou a primeira incompleta).
+e retoma a última aula acessada se incompleta; se concluída, a próxima incompleta
+na ordem (voltando à primeira incompleta se necessário). IDs são distintos.
 Sem progresso atual ou com todas concluídas, não há aula de retomada. Posição
 do vídeo não implica conclusão. `AcademyError(status, reason)` fornece erro
 tipado para as rotas HTTP de leitura e gestão.
+
+`PUT /api/academy/lessons/:id/progress` aceita somente `media_version`,
+`expected_version`, `position_seconds` (inteiro 0..86400) e `completed` opcional.
+UID vem da autenticação. Uma única conexão transacional autoriza com locks
+CMS → curso → módulo → aula antes da escrita compare-and-swap. Primeira escrita
+usa versão esperada zero; colisões retornam `409 progress_conflict`, mídia antiga
+retorna `409 media_changed`. Omissão de `completed` preserva conclusão/data;
+`false` explícito limpa a data. Nunca há conclusão automática pelo tempo assistido.
+`GET /api/academy/continue?limit=3` lista cursos iniciados e incompletos por última
+atividade autorizada da mídia atual, independente da primeira página do catálogo.
+O limite aceita 1..100. Curso/aula sem publicação válida não entra no cálculo.
+Somente o PUT no pathname exato de progresso tem limite 120/15 min/UID; demais
+mutações mantêm 60/15 min e limites globais continuam vigentes.
+
+`public/academy/progress-controller.js` recebe o `fetchAPI` original e um signal
+da visita/sessão. `record(seconds)` coalesce posições, salva alterações em 30 s;
+`flush()` aguarda a fila em voo (usar em pausa e antes da troca interna de aula).
+`complete()` retorna Promise da confirmação explícita: o consumidor desabilita
+o botão enquanto aguarda e atualiza conclusão apenas no sucesso. Falha rejeita
+essa ação, que exige novo clique, sem publicar conclusão otimista. Escritas têm
+AbortSignal local e no máximo um request simultâneo. Falhas transitórias mantêm
+posição pendente com backoff 5/15/30 s, 429 aguarda 60 s; `flush` não fura backoff.
+`onStatus(status, detail)` publica saved/saving/pending/conflict/unavailable;
+409 encerra escritas da visita e exige recarga; 401/403/404 ou abort da sessão
+encerram escritas, cabendo à camada de acesso parar playback e limpar materiais
+ao receber unavailable. `dispose` cancela timers/requests e suprime callbacks
+tardios. O consumidor deve descartar a visita no logout/troca de identidade.
+Não há fila/token em storage. Fechamento abrupto pode perder o intervalo ainda
+não confirmado. Integração de player/views pertence à etapa seguinte.
 
 ### Verificação descartável
 

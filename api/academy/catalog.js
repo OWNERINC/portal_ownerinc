@@ -146,4 +146,17 @@ async function listLessonSources(pool, query = {}) {
   return { items: rows, total: Number(count) };
 }
 
-module.exports = { listCourses, listCategories, getCourseView, getLessonView, listLessonSources };
+async function listContinueCourses(pool, user, limit = 3) {
+  const rows = await candidates(pool, user);
+  const data = await curriculum(pool, user, rows.filter(course => course.delivery_mode === 'internal'));
+  return data.courses.map(course => {
+    const lessons = new Map(courseLessons(course, data, true).map(lesson => [lesson.id, lesson.media_version]));
+    const current = data.progress.filter(row => lessons.get(row.lesson_id) === row.media_version);
+    return { course: summary(course, data, false), activity: current.length
+      ? Math.max(...current.map(row => new Date(row.updated_at).getTime())) : null };
+  }).filter(row => row.activity !== null && row.course.resume_lesson_id)
+    .sort((a, b) => b.activity - a.activity || a.course.id.localeCompare(b.course.id))
+    .slice(0, limit).map(row => row.course);
+}
+
+module.exports = { listCourses, listCategories, getCourseView, getLessonView, listLessonSources, listContinueCourses };

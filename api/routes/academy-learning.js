@@ -4,7 +4,8 @@ const { uuid, invalid, forbidden, parseListQuery, withAudit } = require('../rout
 const mutations = require('../academy/mutations');
 const { hasOnlyFields } = require('../academy/validation');
 const { AcademyError } = require('../academy/errors');
-const { getCourseView, getLessonView, listLessonSources } = require('../academy/catalog');
+const { getCourseView, getLessonView, listLessonSources, listContinueCourses } = require('../academy/catalog');
+const { saveProgress } = require('../academy/progress');
 
 function academyFailure(error, req, res, next) {
   if (!(error instanceof AcademyError)) return next(error);
@@ -13,6 +14,19 @@ function academyFailure(error, req, res, next) {
 
 function createAcademyLearningRouter({ pool, authenticate: authMiddleware }) {
   const router = express.Router();
+  router.put('/lessons/:id/progress', authMiddleware, async (req, res, next) => {
+    if (!uuid(req.params.id)) return invalid(req, res);
+    try { res.json(await saveProgress(pool, req.user, req.params.id, req.body)); }
+    catch (error) { academyFailure(error, req, res, next); }
+  });
+  router.get('/continue', authMiddleware, async (req, res, next) => {
+    const limit = req.query.limit === undefined ? 3 : Number(req.query.limit);
+    if (Object.keys(req.query).some(key => key !== 'limit')
+      || (req.query.limit !== undefined && !/^\d+$/.test(req.query.limit))
+      || !Number.isInteger(limit) || limit < 1 || limit > 100) return invalid(req, res);
+    try { res.json(await listContinueCourses(pool, req.user, limit)); }
+    catch (error) { academyFailure(error, req, res, next); }
+  });
   const writes = [
     ['put', '/:id/modules/order', 'reorderModules', 'academy_module', 'order'],
     ['put', '/modules/:id/lessons/order', 'reorderLessons', 'academy_lesson', 'order'],

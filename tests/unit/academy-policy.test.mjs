@@ -191,7 +191,7 @@ test('resumo ignora aulas ocultas e versões antigas e usa apenas aulas fornecid
   assert.equal(summarizeProgress(lessons, [{ lesson_id: 'a', media_version: 1 }]).resume_lesson_id, null);
 });
 
-test('retomada prioriza incompleta recente, desempata por ordem e conclusão é manual', () => {
+test('retomada segue a última atividade e a próxima incompleta na ordem; conclusão é manual', () => {
   const lessons = ['a', 'b', 'c'].map(id => ({ id, media_version: 1 }));
   const rows = [
     { lesson_id: 'a', media_version: 1, completed: false, updated_at: '2026-09-30T10:00:00Z' },
@@ -200,9 +200,11 @@ test('retomada prioriza incompleta recente, desempata por ordem e conclusão é 
   ];
   const before = structuredClone({ lessons, rows });
   assert.deepEqual(summarizeProgress(lessons, rows), {
-    total_lessons: 3, completed_lessons: 1, progress_percent: 33, resume_lesson_id: 'b',
+    total_lessons: 3, completed_lessons: 1, progress_percent: 33, resume_lesson_id: 'a',
   });
   assert.deepEqual({ lessons, rows }, before);
+  assert.equal(summarizeProgress(lessons, rows.map(row => row.lesson_id === 'b'
+    ? { ...row, updated_at: '2026-09-30T13:00:00Z' } : row)).resume_lesson_id, 'b');
   assert.equal(summarizeProgress(lessons, rows.map(row => ({ ...row, updated_at: rows[0].updated_at }))).resume_lesson_id, 'a');
   assert.deepEqual(summarizeProgress(lessons, rows.map(row => ({ ...row, completed: true }))), {
     total_lessons: 3, completed_lessons: 3, progress_percent: 100, resume_lesson_id: null,

@@ -90,6 +90,29 @@ function fixture() {
     publish(type, source_id, blocks) { documents.push({ id: randomUUID(), type, source_id, blocks }); } };
 }
 
+test('continue is independent of catalog pagination and filters current authorized incomplete curriculum', async t => {
+  const f = fixture();
+  const { request } = await createAcademyHttp(t, f.pool, f.users);
+  const get = (path = '/continue?limit=1', user = 'closer') => request.get(`/api/academy${path}`).set('x-fixture-user', user);
+  assert.deepEqual((await get().expect(200)).body, []);
+  for (const [i, lesson] of f.lessons.entries()) f.progress.push({ user_uid: 'closer', lesson_id: lesson.id,
+    media_version: 1, completed: false, updated_at: `2026-09-${10 + i}` });
+  assert.equal((await get('?limit=1')).body[0].id, f.courses[1].id);
+  assert.equal((await get().expect(200)).body[0].id, f.courses[2].id);
+  assert.deepEqual((await get('/continue', 'capture')).body, []);
+  for (const row of f.progress.filter(row => f.lessons.slice(4).some(l => l.id === row.lesson_id))) row.completed = true;
+  assert.equal((await get()).body[0].id, f.courses[1].id);
+  f.lessons[2].media_version = 2; f.lessons[3].media_version = 2;
+  assert.deepEqual((await get()).body, []);
+  f.lessons[2].media_version = 1;
+  f.publish('academy_lesson', f.lessons[2].id, null);
+  assert.deepEqual((await get()).body, []);
+  f.documents.length = 0;
+  f.courses[1].active = false;
+  assert.deepEqual((await get()).body, []);
+  for (const query of ['limit=0', 'limit=101', 'limit=1.5', 'all=true', 'limit=1&limit=2']) await get(`/continue?${query}`).expect(400);
+});
+
 test('HTTP authorization precedes pagination, counts and categories; groups are immediately available', async t => {
   const f = fixture();
   const { request } = await createAcademyHttp(t, f.pool, f.users);
