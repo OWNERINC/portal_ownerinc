@@ -57,6 +57,10 @@ centralizando as iniciais quando nao ha foto. Fotos horizontais e verticais,
 inclusive com recorte deslocado e zoom, devem cobrir o frame e mostrar a mesma
 regiao na previa e no avatar apos salvar ou reabrir, sem alterar a imagem salva.
 
+O arraste da previa usa exclusivamente os eventos de ponteiro do recorte; a imagem
+desabilita o drag-and-drop nativo com `draggable="false"`, evitando que ele cancele
+o gesto antes do deslocamento completo. O ajuste por teclado permanece disponivel.
+
 ### Convite administrativo
 
 O fluxo sera exposto como `Convidar usuario` e usara os campos atuais de
