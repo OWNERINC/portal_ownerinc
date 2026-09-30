@@ -407,8 +407,13 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     fetchAPIAsset,
     html2canvas: async (element, options) => {
       events.push('capture');
-      captures.push({ element, options });
+      const clonedElement = createAutoCardElement(element.id);
+      Object.assign(clonedElement.style, element.style, { values: { ...element.style.values } });
+      clonedElement.innerHTML = element.innerHTML;
+      const clonedDocument = { getElementById: id => id === element.id ? clonedElement : null };
+      captures.push({ element, options, clonedElement });
       if (captureError) throw captureError;
+      await options.onclone?.(clonedDocument, clonedElement);
       return { toDataURL: () => 'data:image/png;base64,test' };
     },
     setTimeout(callback) {
@@ -1163,6 +1168,55 @@ test('AutoCard export executes rendered geometry and blocks undecodable images',
   assert.equal(harness.downloadClicks(), 1);
   assert.equal(harness.exportButtonDisabled(), false);
   assert.match(harness.toast().textContent, /A imagem ainda não está pronta para exportação/);
+});
+
+test('AutoCard locks only the cloned card to the exact rendered bounds before PNG capture', async () => {
+  for (const [width, height] of [[301, 301], [420, 420], [360, 540], [301.328125, 452.671875]]) {
+    const h = await createAutoCardLifecycleHarness();
+    h.selectTemplate('novo_funcionario', { mediaId: 'photo' });
+    await h.resolveAsset(0);
+    h.setCardRect(width, height);
+    Object.assign(h.cardCanvas.style, { width: '100%', height: 'auto', overflow: 'hidden' });
+    h.cardCanvas.style.setProperty('--media-height', '132px');
+    const originalStyle = JSON.stringify(h.cardCanvas.style);
+    const originalMarkup = h.cardCanvas.innerHTML;
+    const originalImageStyle = h.renderedMediaStyle();
+
+    await h.exportCard();
+
+    const { element, options, clonedElement } = h.captures[0];
+    assert.equal(typeof options.onclone, 'function');
+    assert.equal(element, h.cardCanvas);
+    assert.notEqual(clonedElement, element, 'html2canvas must receive a distinct cloned node');
+    assert.equal(clonedElement.style.width, `${width}px`);
+    assert.equal(clonedElement.style.height, `${height}px`);
+    assert.deepEqual(clonedElement.style, { ...element.style, width: `${width}px`, height: `${height}px` });
+    assert.equal(clonedElement.innerHTML, originalMarkup, 'clone content/crop must not be rewritten');
+    assert.equal(JSON.stringify(element.style), originalStyle, 'capture must not resize the live preview');
+    assert.equal(element.innerHTML, originalMarkup);
+    assert.equal(h.renderedMediaStyle(), originalImageStyle);
+    assert.equal(options.width, width);
+    assert.equal(options.height, height);
+    assert.equal(options.scale, 1080 / width);
+    assert.ok(Math.abs(options.height * options.scale - 1080 * height / width) < 1e-9);
+    if (width === 360) assert.equal(options.height * options.scale, 1620);
+    assert.equal(h.downloadClicks(), 1);
+    assert.equal(h.exportButtonDisabled(), false);
+  }
+});
+
+test('AutoCard still blocks the employee body with 26px available and 27px of content', async () => {
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('novo_funcionario');
+  h.setCardRect(301, 301);
+  h.setField('corpo', 'Imagem sintetica para validar foto, persistencia e exportacao.');
+  h.setRenderedTextMetrics({ clientHeight: 26, scrollHeight: 27 });
+  await h.exportCard();
+  assert.equal(h.state().values.corpo.length, 62);
+  assert.equal(h.captures.length, 0);
+  assert.equal(h.downloadClicks(), 0);
+  assert.equal(h.exportButtonDisabled(), true);
+  assert.match(h.contentOverflowText(), /texto cortado/);
 });
 
 test('AutoCard capture failures show feedback, release the button and allow retry', async () => {

@@ -153,7 +153,13 @@ async function exportCard(){
     if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;
     if(!recheck()){toast(exportBlockedMessage());return}
     const rect=canvas.getBoundingClientRect();const width=rect.width;const height=rect.height;const scale=1080/width;
-    const rendered=await page.wait(html2canvas(canvas,{scale,width,height,backgroundColor:null}));
+    const rendered=await page.wait(html2canvas(canvas,{scale,width,height,backgroundColor:null,
+      onclone(_document,clonedCanvas){
+        // The clone may lose the page scrollbar; keep the measured preview geometry.
+        clonedCanvas.style.width=`${width}px`;
+        clonedCanvas.style.height=`${height}px`;
+      }
+    }));
     if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;
     if(!recheck()){toast(exportBlockedMessage());return}
     const link=document.createElement('a');link.download=`card-ownerinc-${current.template}.png`;link.href=rendered.toDataURL('image/png');
