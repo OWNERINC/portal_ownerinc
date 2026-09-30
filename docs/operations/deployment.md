@@ -115,6 +115,48 @@ operacional inicial: backup diário e antes de release, RPO máximo de 24 horas 
 RTO de 4 horas. Agende `scripts/backup.sh` no host, monitore falhas e execute
 uma restauração trimestral em ambiente descartável.
 
+O envio executa `aws s3 cp --recursive` somente depois de validar
+`manifest.sha256`. Sem `AWS_ENDPOINT_URL`, o AWS CLI usa seu endpoint padrão;
+com essa variável, o helper passa `--endpoint-url` explicitamente. O helper é
+invocado via Bash, inclusive quando o archive da release foi extraído com modo
+`0644`. Mantenha caminhos e prefixos com espaços entre aspas.
+
+Falha no envio faz `backup.sh` retornar código `3`, sem apagar o backup local
+verificado; no backup normal, os serviços já foram reiniciados antes do envio.
+Corrija a configuração externa e reenvie a mesma cópia, sem gerar outro dump:
+
+```sh
+S3_BUCKET=ownerinc-portal-backups S3_PREFIX=portal-ownerinc \
+bash scripts/backup-s3.sh "/opt/ownerinc-portal/shared/backups/AAAAMMDDTHHMMSSZ"
+```
+
+## Restauração
+
+Execute somente no ambiente alvo aprovado, com as mesmas variáveis `COMPOSE_*`
+do backup e o manifesto imutável `.image-env` da release:
+
+```sh
+PROJECT_ROOT="$PWD" \
+PRE_RESTORE_BACKUP_DIR=/opt/ownerinc-portal/shared/pre-restore \
+bash scripts/restore.sh "/opt/ownerinc-portal/shared/backups/AAAAMMDDTHHMMSSZ" --confirm RESTORE
+```
+
+Depois de validar os hashes da cópia de entrada, o restore cria um backup de
+proteção **somente local**, com `BACKUP_UPLOAD_S3=false` mesmo que o ambiente
+herde `BACKUP_UPLOAD_S3=true`. Esse backup deixa os serviços parados para a
+restauração; indisponibilidade de S3 não deve interromper essa transição. Envie
+a cópia de proteção separadamente se necessário.
+
+Falhas na criação ou retenção do backup de proteção acionam sua limpeza e a
+tentativa de reiniciar somente os serviços antes ativos, sem iniciar a
+restauração. Os traps de erro também cobrem falhas dentro das funções Compose.
+Depois que a restauração começa, uma falha aciona a parada de Nginx, API e cron:
+inspecione os dados ou restaure o backup de proteção antes de reiniciar. Se o
+próprio Docker falhar na parada ou no reinício, confira o estado dos serviços
+manualmente; o retorno não zero não comprova recuperação. O sucesso exige
+migrations, verificação e smoke; use `RESTORE_BASE_URL` se o proxy não publicar
+uma porta diretamente acessível.
+
 ## Validação
 
 - `docker compose ps` mostra PostgreSQL e API saudáveis.
