@@ -140,6 +140,150 @@ S3_BUCKET=ownerinc-portal-backups S3_PREFIX=portal-ownerinc \
 bash scripts/backup-s3.sh "/opt/ownerinc-portal/shared/backups/AAAAMMDDTHHMMSSZ"
 ```
 
+## Agendas systemd do Portal em produção
+
+Os arquivos em `ops/` entregam as agendas, **não as instalam nem as habilitam**.
+Instalar somente após revisão, testes independentes e publicação da revisão
+aprovada. Esta seção usa o layout do receptor de produção
+`/opt/ownerinc/apps/portal-ownerinc-real`, não o layout legado `shared/` acima.
+Requer Bash, GNU coreutils (`realpath`, `sha256sum`), `flock` do util-linux,
+Docker/Compose e systemd no host. Não altera o receptor, o cron ou o proxy.
+
+### Backup diário local
+
+- `ownerinc-portal-backup.timer`: **06:00 UTC / 03:00 Brasília**, precisão de
+  um minuto, `Persistent=true`. Pode executar ao reativar após um horário perdido;
+  isso não recompõe os backups dos dias perdidos nem comprova RPO de 24 horas.
+- `backup-from-timer.sh` espera até **300 segundos** pelo mesmo
+  `runtime/deploy.lock` do receptor. Falha de aquisição retorna **75** e falha o
+  serviço, sem anunciar backup. O receptor usa tentativa não bloqueante: um deploy
+  durante o backup também pode falhar por lock ocupado e exigir nova tentativa.
+- Sob esse lock, lê exatamente uma linha de `current-release`: caminho absoluto
+  `releases/<sha40 minúsculo>` sob o root. Rejeita caminhos não canônicos,
+  traversal, symlinks, arquivos ausentes e configurações incompletas antes de
+  invocar Docker. A release, seu helper e os diretórios/configurações devem ser
+  controlados pelo operador, sem escrita por usuários não confiáveis.
+- Executa **o `scripts/backup.sh` da release corrente**, inclusive quando está
+  em modo `0644`, com `ownerinc-portal-prod`, perfil `notifications` e runtime
+  `/opt/ownerinc/secrets/portal-ownerinc/production.runtime.conf`. Prefere
+  `compose.ownerinc-vps.yaml` da release; na ausência dele, usa
+  `runtime/compose.production.yaml`, como o receptor. Exige `.image-env`, mas não
+  usa `source`/`eval`: o helper extrai e valida os digests API/cron.
+- Destino exclusivo: `/opt/ownerinc/backups/portal-ownerinc/daily`, modo `0700`;
+  umask `0077`, arquivos novos `0600`. Retenção existente de **14 dias**
+  (`find -mtime +14`, em dias completos) somente dentro desse destino. Backups
+  pré-release não entram nessa limpeza. O helper pausa brevemente apenas nginx,
+  cron e API que estavam ativos e tenta reiniciá-los; `LEAVE_STOPPED=false` é
+  imposto mesmo se o ambiente herdar outro valor.
+- `BACKUP_UPLOAD_S3=false` é explícito e não sobrescrevível nessa agenda.
+  **Não há S3 configurado; backup no mesmo host não é cópia externa** e não atende
+  ao critério S3/recuperação da perda da VPS. Configurar cópia externa exige uma
+  decisão separada, não apenas definir `S3_BUCKET` no ambiente desse serviço.
+- Sucesso só é registrado como `Local backup verified` após conferir os dois
+  artefatos não vazios, as duas entradas do manifesto e seus hashes, ainda sob
+  lock. Falha do helper preserva seu status; falha de verificação retorna `1`
+  e conserva a cópia para inspeção. O stdout de sucesso antecipado do helper é
+  retido. Nenhum ambiente de credenciais é impresso pelo wrapper.
+
+Para ensaios isolados, há somente quatro overrides de ambiente confiável:
+`PORTAL_ROOT`, `PORTAL_ENV_FILE`, `PORTAL_BACKUP_DIR` (diretórios/arquivo existentes,
+absolutos e canônicos; backup não pode conter nem estar sob o root da aplicação)
+e `PORTAL_LOCK_WAIT_SECONDS` (inteiro de 1 a 900). Produção usa os defaults;
+eventual drop-in deve ser root-owned, sem escrita por grupo/outros. Não existe
+arquivo shell de configuração a ser carregado. Projeto, retenção, política S3 e
+alvo TLS não são knobs. Nunca aponte uma fixture para volumes/paths de produção.
+
+### Renovação HTTPS exclusiva do Portal
+
+`ownerinc-portal-certificate-renewal.timer` verifica às **00:00 e 12:00 UTC**,
+com atraso aleatório de até **30 minutos** e `Persistent=true`. O script executa
+somente este comando autorizado dentro do ingress compartilhado:
+
+```sh
+docker exec root-app-1 /opt/certbot/bin/certbot renew --non-interactive \
+  --cert-name portal.ownerinc.com.br --no-random-sleep-on-renew \
+  --no-directory-hooks --deploy-hook '/usr/sbin/nginx -t && /usr/sbin/nginx -s reload'
+```
+
+Não usa `--force-renewal`, dry-run periódico, outras lineages, restart/stop do
+container ou reload incondicional. O hook de deploy pertence ao Certbot e só
+ocorre após renovação bem-sucedida; `nginx -t` precisa passar antes do reload
+gracioso. Hooks em diretórios estão desabilitados; o operador deve preservar a
+ausência de hooks adicionais perigosos na configuração do Certbot/lineage.
+Stdout/stderr e status reais do Certbot chegam ao journal/systemd. Um ciclo sem
+certificado devido **não comprova renovação nem execução do reload**. Inspecione
+também erros de hooks no journal; status zero, sozinho, não é evidência de reload.
+
+### Instalação e aceite pelo operador autorizado
+
+Antes de instalar, confrontar root, ponteiro, override e lock com o **receptor
+efetivamente instalado**, confirmar os digests da release aprovada e ausência de
+outra agenda equivalente. Não substituir configurações do proxy ou de outros
+produtos. Os diretórios e arquivos ancestrais precisam continuar protegidos contra
+escrita não confiável; o runtime com credenciais permanece em `0600`.
+
+Na VPS, em Bash como root, a partir da release corrente **já revisada e publicada**:
+
+```sh
+set -euo pipefail
+root=/opt/ownerinc/apps/portal-ownerinc-real
+release=$(cat "$root/current-release")
+[[ ${release#"$root/releases/"} =~ ^[0-9a-f]{40}$ ]]
+[[ $(realpath -e -- "$release") == "$release" ]]
+cd -- "$release"
+install -d -o root -g root -m 0700 /opt/ownerinc/backups/portal-ownerinc/daily
+install -d -o root -g root -m 0755 /usr/local/libexec
+install -o root -g root -m 0755 ops/backup-from-timer.sh /usr/local/libexec/ownerinc-portal-backup
+install -o root -g root -m 0755 ops/renew-portal-certificate.sh /usr/local/libexec/ownerinc-portal-renew-certificate
+for unit in ownerinc-portal-backup.service ownerinc-portal-backup.timer \
+  ownerinc-portal-certificate-renewal.service ownerinc-portal-certificate-renewal.timer; do
+  install -o root -g root -m 0644 "ops/$unit" "/etc/systemd/system/$unit"
+done
+systemd-analyze verify /etc/systemd/system/ownerinc-portal-backup.{service,timer} \
+  /etc/systemd/system/ownerinc-portal-certificate-renewal.{service,timer}
+systemctl daemon-reload
+```
+
+As unidades executam como root, não reiniciam automaticamente e têm limites de
+inicialização de uma hora (backup, com cinco minutos para parar) e 30 minutos
+(Certbot). **Antes de habilitar**, em janela autorizada sem ensaio duplicado,
+executar cada serviço e avaliar seu resultado:
+
+```sh
+systemctl start ownerinc-portal-backup.service
+systemctl show ownerinc-portal-backup.service -p Result -p ExecMainStatus
+journalctl -u ownerinc-portal-backup.service -n 50 --no-pager
+BASE_URL=https://portal.ownerinc.com.br bash scripts/smoke.sh
+systemctl start ownerinc-portal-certificate-renewal.service
+systemctl show ownerinc-portal-certificate-renewal.service -p Result -p ExecMainStatus
+journalctl -u ownerinc-portal-certificate-renewal.service -n 50 --no-pager
+```
+
+Conferir hashes do destino exato informado, retorno de API/cron/Nginx ao estado
+anterior saudável e HTTPS externo. Esse start do serviço TLS **pode renovar** se
+estiver devido; requer a autorização operacional, não é um teste simulado.
+Separar evidência de “não devido”, renovação e reload efetivamente observados.
+Após aceite, habilitar somente os timers e registrar o próximo disparo:
+
+```sh
+systemctl enable --now ownerinc-portal-backup.timer ownerinc-portal-certificate-renewal.timer
+systemctl list-timers --all 'ownerinc-portal-*'
+systemctl is-enabled ownerinc-portal-backup.timer ownerinc-portal-certificate-renewal.timer
+```
+
+Monitorar journal/`Result` e idade da última cópia verificada. Lock ocupado,
+timeout, disco cheio, Docker indisponível ou erro de reinício exigem intervenção;
+status não zero não comprova recuperação dos serviços. Não remover o lock para
+“destravar”. Para suspender novas execuções, usar `systemctl disable --now` nos
+dois **timers**; isso não interrompe um serviço já em andamento. Não parar
+cegamente um backup que pode estar com os serviços pausados.
+
+O alerta SMTP do cron é independente desses timers. O destino autorizado
+`gabriel.garcia@ownerinc.com.br` só entra no worker após recriação controlada do
+cron pela operação; estes arquivos não fazem essa ativação nem adicionam envio
+de email para falhas systemd. Não afirmar que ciclos futuros ou alertas de timer
+foram validados pela simples instalação.
+
 ## Restauração
 
 Execute somente no ambiente alvo aprovado, com as mesmas variáveis `COMPOSE_*`
