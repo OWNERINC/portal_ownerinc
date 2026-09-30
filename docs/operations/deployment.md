@@ -318,6 +318,23 @@ uma porta diretamente acessível.
 - PostgreSQL e API não possuem portas publicadas; Nginx fica em loopback por padrão.
 - Login, perfil e upload funcionam, e logs não expõem chaves ou dados pessoais.
 
+### Headers dos arquivos estáticos
+
+Em Nginx Linux descartável, monte `nginx/nginx.conf` e `public/` somente para
+leitura, publique apenas em loopback e execute `nginx -t`. Sem acessar upstreams,
+faça GET de `/index.html`, `/js/router-bootstrap.js`, `/css/tokens.css` e de
+arquivos `.js` e `.css` inexistentes (404). Confirme em cada resposta uma única
+ocorrência dos seis headers do servidor, com os valores exatos da configuração:
+`Content-Security-Policy`, `Referrer-Policy`, `Strict-Transport-Security`,
+`X-Content-Type-Options`, `X-Frame-Options` e `Permissions-Policy`.
+
+JS/CSS existentes devem manter uma única ocorrência de `Cache-Control: no-cache`,
+gerada por `expires -1`. Não adicione `add_header` local nessa location: ele
+suprime a herança dos headers do servidor. Em 404, a ausência de `Cache-Control`
+é esperada porque `expires` não se aplica a esse status; os seis headers de
+segurança continuam presentes por `always`. Após publicação autorizada, repita
+os GETs pelo domínio HTTPS para verificar também a borda real.
+
 O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sintaxe/Compose, constrói e escaneia as imagens com Trivy, rejeita vulnerabilidades `high` ou `critical`, publica SBOMs SPDX e envia imagens imutáveis ao GHCR em pushes na `main`.
 `npm run test:migrations` exige `MIGRATION_TEST_DISPOSABLE=true` e não pode ser
 executado com `NODE_ENV=production`; ele modifica um banco de teste durante a
