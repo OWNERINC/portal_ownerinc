@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 
@@ -8,7 +10,7 @@ const require = createRequire(new URL('../../api/package.json', import.meta.url)
 const express = require('express');
 const supertest = require('supertest');
 
-export async function createAcademyHttp(t, pool, users) {
+export async function createAcademyHttp(t, pool, users, uploadDirectory) {
   const filename = new URL('../../api/routes/academy.js', import.meta.url);
   const localRequire = createRequire(filename);
   const module = { exports: {} };
@@ -27,6 +29,15 @@ export async function createAcademyHttp(t, pool, users) {
   const app = express();
   app.use(express.json());
   app.use('/api/academy', module.exports);
+  for (const [name, mount] of [['cms', '/api/cms'], ['cms-assets', '/api/cms/assets']]) {
+    const routeFile = new URL(`../../api/routes/${name}.js`, import.meta.url);
+    const routeRequire = createRequire(routeFile);
+    const routeModule = { exports: {} };
+    new Function('require', 'module', 'exports', 'process', await readFile(routeFile, 'utf8'))(
+      name => dependencies.has(name) ? dependencies.get(name) : routeRequire(name), routeModule, routeModule.exports,
+      { env: { ...process.env, UPLOAD_DIR: uploadDirectory } });
+    app.use(mount, routeModule.exports);
+  }
   app.use((error, req, res, next) => { // eslint-disable-line no-unused-vars
     res.status(500).json({ error: 'Internal error', requestId: req.id });
   });
@@ -50,6 +61,25 @@ export async function createAcademyIntegration(t) {
   const { Pool } = require('pg');
   const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
   const client = await pool.connect();
+  const uploadDirectory = await mkdtemp(path.join(tmpdir(), 'academy-integration-'));
+  t.after(() => rm(uploadDirectory, { recursive: true, force: true }));
+  await mkdir(path.join(uploadDirectory, 'cms-private'));
+  // A minimal, real one-page PDF with correct xref offsets.
+  let pdfText = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const [index, body] of [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> >>',
+  ].entries()) {
+    offsets.push(Buffer.byteLength(pdfText));
+    pdfText += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(pdfText);
+  pdfText += `xref\n0 4\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const pdf = Buffer.from(pdfText);
+  const storageKey = randomUUID();
+  await writeFile(path.join(uploadDirectory, 'cms-private', storageKey), pdf);
   const ids = Object.fromEntries(['allCourse', 'closerCourse', 'captureCourse', 'closerLesson', 'captureLesson',
     'module', 'captureModule', 'pdfAsset', 'closerJob', 'captureJob'].map(key => [key, randomUUID()]));
   const users = Object.fromEntries(['closer', 'capture', 'manager', 'adminWithoutPermission', 'noJob'].map(key => [key, {
@@ -93,6 +123,6 @@ export async function createAcademyIntegration(t) {
   await client.query(`INSERT INTO academy_lessons(id,module_id,title,active,media_type,youtube_video_id)
     VALUES ($1,$2,'Closer lesson',TRUE,'youtube','dQw4w9WgXcQ'),($3,$4,'Capture lesson',TRUE,'youtube','dQw4w9WgXcQ')`,
   [ids.closerLesson, ids.module, ids.captureLesson, ids.captureModule]);
-  await client.query(`INSERT INTO cms_assets(id,original_name,mime_type,byte_size) VALUES ($1,'academy.pdf','application/pdf',128)`, [ids.pdfAsset]);
-  return { pool, client, users, ids, ...await createAcademyHttp(t, pool, users) };
+  await client.query(`INSERT INTO cms_assets(id,storage_key,original_name,mime_type,byte_size) VALUES ($1,$2,'academy.pdf','application/pdf',$3)`, [ids.pdfAsset, storageKey, pdf.length]);
+  return { pool, client, users, ids, pdf, uploadDirectory, ...await createAcademyHttp(t, pool, users, uploadDirectory) };
 }

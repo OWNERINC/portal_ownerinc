@@ -197,10 +197,13 @@ test('CMS uploads stay private, audited and readable only through matching activ
   const endpoint = `/api/cms/assets/${uploaded.body.id}`;
   boundedError(await h.request.get(endpoint), 401, 'Authentication required.');
   boundedError(await h.request.get(endpoint).set('Authorization', READER), 403, 'Permission denied.');
-  const published = { content_type: 'reminder', revision_id: 'revision-a', published_revision_id: 'revision-a', status: 'published', block_type: 'image', reminder_active: true, reminder_target_users: 'all' };
+  const published = { content_type: 'reminder', revision_id: 'revision-a', published_revision_id: 'revision-a', status: 'published',
+    blocks: [{ type: 'image', asset_id: uploaded.body.id, alt: 'Fixture' }],
+    block_type: 'image', reminder_active: true, reminder_target_users: 'all' };
   for (const changes of [
     { status: 'draft' }, { published_revision_id: 'another-revision' },
     { reminder_active: false }, { reminder_target_users: ['somebody-else'] }, { block_type: 'pdf' },
+    { blocks: [{ type: 'invalid' }] },
   ]) {
     h.state.references = [{ ...published, ...changes }];
     boundedError(await h.request.get(endpoint).set('Authorization', READER), 403, 'Permission denied.');

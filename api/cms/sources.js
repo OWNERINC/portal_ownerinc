@@ -3,6 +3,7 @@ const { lockCmsAssets } = require('./locks');
 const SOURCE_TABLES = {
   knowledge: 'knowledge_base',
   academy: 'academy',
+  academy_lesson: 'academy_lessons',
   benefit: 'benefits',
   reminder: 'reminders',
 };

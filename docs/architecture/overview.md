@@ -64,9 +64,10 @@ do currículo visível. Curso, módulo e aula precisam estar ativos; documento C
 existente sem publicação válida impede fallback legado. `all=true` é preview
 explícito com `manageAcademy`, inclusive nas categorias. A lista de fontes
 `GET /api/academy/lessons?all=true` é exclusiva de gestores e inclui aulas inativas
-para edição CMS. A integração de edição/entrega de assets `academy_lesson` é uma
-etapa própria; o leitor local já valida suas revisões com o helper compartilhado,
-sem modificar as listas de tipos do CMS.
+para edição CMS. O tipo `academy_lesson` está registrado nas permissões, fontes,
+rotas e leitor do CMS, com `manageAcademy` e origem `academy_lessons`. O leitor
+genérico considera a atividade da aula, do módulo e do curso nas duas projeções;
+o catálogo continua validando a publicação e audiência do curso no client bloqueado.
 
 `authorizeLessonInTransaction(db,user,lessonId)` usa somente o client recebido,
 com lock CMS `7193029` seguido de curso → módulo → aula, rechecando ancestrais,
@@ -251,3 +252,13 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   deixa o row/arquivo de asset sem circulação para a retenção limpar com
   segurança. Links de asset continuam autenticados e a audiência/estado ativo
   da fonte é aplicado antes da entrega.
+- Assets de `academy` e `academy_lesson` herdam os cargos do curso; aulas exigem
+  também módulo/aula ativos e apresentação do curso publicada e válida quando
+  há documento CMS. A revisão referenciadora completa e a apresentação são
+  validadas em batch no mesmo client sob lock `7193029`, sem transação aninhada.
+  Gestores com `manageAcademy` mantêm prévia de draft/published/scheduled.
+  Um arquivo compartilhado é legível se ao menos uma referência for autorizada;
+  `uploaded_by` não concede acesso. Asset existente sem referência autorizada
+  retorna `403`; inexistente retorna `404`. Rascunhos e revisões arquivadas de
+  aula conservam referências para a retenção existente; excluir a fonte elimina
+  documentos/revisões e deixa o arquivo para a janela normal de retenção.

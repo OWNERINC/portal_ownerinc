@@ -1,8 +1,74 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createRequire } from 'node:module';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { enforceCmsAssetRetention } from '../cron/cms-asset-retention.js';
 import { createAcademyHttp, createAcademyIntegration, requireDisposableAcademyDatabase } from '../tests/helpers/academy-integration.mjs';
 
 requireDisposableAcademyDatabase();
+
+test('lesson PDF uses real CMS publication, inherits course access, and survives draft retention', async t => {
+  const h = await createAcademyIntegration(t);
+  const manager = req => req.set('x-fixture-user', 'manager');
+  const assetUrl = `/api/cms/assets/${h.ids.pdfAsset}`;
+  const get = (user = 'closer', status = 200) => h.request.get(assetUrl).set('x-fixture-user', user).expect(status);
+  const create = async (type, source) => (await manager(h.request.post('/api/cms/documents'))
+    .send({ type, source_id: source, title: 'Material Academy' }).expect(201)).body.document.id;
+  const draft = (id, blocks) => manager(h.request.put(`/api/cms/documents/${id}/draft`)).send({ blocks }).expect(200);
+  const publish = id => manager(h.request.post(`/api/cms/documents/${id}/publish`)).send({}).expect(200);
+  const unpublish = id => manager(h.request.post(`/api/cms/documents/${id}/unpublish`)).send({}).expect(200);
+  const blocks = [{ type: 'pdf', asset_id: h.ids.pdfAsset, title: 'Material' }];
+  const lesson = await create('academy_lesson', h.ids.closerLesson);
+  await draft(lesson, blocks);
+  await get('closer', 403);
+  await get('manager');
+  await h.client.query("UPDATE cms_assets SET created_at=NOW()-INTERVAL '40 days' WHERE id=$1", [h.ids.pdfAsset]);
+  await enforceCmsAssetRetention(h.pool, { UPLOAD_DIR: h.uploadDirectory, CMS_ASSET_ORPHAN_RETENTION_DAYS: '30' });
+  await get('manager');
+  await publish(lesson);
+  await get('capture', 403);
+  const delivered = await get();
+  assert.equal(delivered.headers['content-type'], 'application/pdf');
+  assert.deepEqual(delivered.body, h.pdf);
+  await h.client.query('UPDATE academy_modules SET active=FALSE WHERE id=$1', [h.ids.module]);
+  await get('closer', 403);
+  await h.client.query('UPDATE academy_modules SET active=TRUE WHERE id=$1', [h.ids.module]);
+  const course = await create('academy', h.ids.closerCourse);
+  await get('closer', 403);
+  await draft(course, blocks); await publish(course);
+  await get('capture', 403); await get();
+  await unpublish(course); await get('closer', 403);
+  await draft(course, []); await publish(course); await get();
+  // Corrupt a sibling block to prove full referencing revision validation.
+  await h.client.query(`UPDATE cms_revisions SET blocks=$2::jsonb WHERE id=(
+    SELECT published_revision_id FROM cms_documents WHERE id=$1)`, [lesson, JSON.stringify([...blocks, { type: 'invalid' }])]);
+  await get('closer', 403);
+  await h.client.query(`UPDATE cms_revisions SET blocks=$2::jsonb WHERE id=(
+    SELECT published_revision_id FROM cms_documents WHERE id=$1)`, [lesson, JSON.stringify(blocks)]);
+  await unpublish(lesson); await get('closer', 403);
+  await draft(lesson, blocks); await publish(lesson);
+  const publicCourse = await create('academy', h.ids.allCourse);
+  await draft(publicCourse, blocks); await publish(publicCourse);
+  await get('capture'); // one authorized reference is enough
+  await unpublish(publicCourse);
+  const { deleteCmsSource } = createRequire(import.meta.url)('../api/cms/sources');
+  await h.client.query('BEGIN');
+  try {
+    await deleteCmsSource(h.client, 'academy_lesson', h.ids.closerLesson);
+    await h.client.query('COMMIT');
+  } catch (error) { await h.client.query('ROLLBACK'); throw error; }
+  assert.equal((await h.client.query('SELECT id FROM cms_documents WHERE id=$1', [lesson])).rowCount, 0);
+  assert.equal((await h.client.query('SELECT id FROM cms_revisions WHERE document_id=$1', [lesson])).rowCount, 0);
+  await get('closer', 403);
+  const asset = (await h.client.query('SELECT storage_key FROM cms_assets WHERE id=$1', [h.ids.pdfAsset])).rows[0];
+  assert.deepEqual(await readFile(path.join(h.uploadDirectory, 'cms-private', asset.storage_key)), h.pdf);
+  // Archived/shared revisions still retain files; remove all fixture references
+  // before exercising the existing orphan cleanup.
+  await h.client.query('DELETE FROM cms_documents WHERE id=ANY($1::uuid[])', [[course, publicCourse]]);
+  await enforceCmsAssetRetention(h.pool, { UPLOAD_DIR: h.uploadDirectory, CMS_ASSET_ORPHAN_RETENTION_DAYS: '30' });
+  await get('closer', 404);
+});
 
 test('catalog, counts, curriculum, detail and explicit preview respect audience', async t => {
   const h = await createAcademyIntegration(t);
