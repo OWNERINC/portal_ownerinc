@@ -49,6 +49,51 @@ a migration 015 ainda precisa criar o CMS antes de 033 ampliar seu CHECK.
 As regras editoriais, elegibilidade e atualização de versão de mídia pertencem
 à camada de aplicação; essa migration entrega a estrutura relacional.
 
+### Políticas, validação e leitura de progresso
+
+`api/academy/access.js` separa cargo profissional de `role`: audiência restrita
+exige `job_title_active === true` e associação ao cargo atual. Mesmo um gestor
+precisa dessa audiência na leitura normal; somente `{ preview: true }` usa
+`can(user, 'manageAcademy')` para ler curso inativo ou fora da audiência.
+`canReadCourse` verifica atividade e audiência, não publicação editorial CMS.
+
+`api/academy/validation.js` expõe validators puros que retornam objeto normalizado
+ou `null`. O payload de curso aceita apenas `title`, `category`, `description`,
+`url`, `order`, `active`, `delivery_mode`, `audience`, `learning_group`, `icon_key`,
+`instructor_name` e `job_title_ids`. Na atualização, fornecer `current` com os
+metadados atuais e `job_title_ids` carregados da associação; campos omitidos são
+preservados. Novos cursos são inativos. Internos usam URL nula; externos exigem
+HTTP(S), mantendo compatibilidade com URLs legadas. Conversão explícita para
+interno sem `url` limpa a URL externa anterior.
+
+O payload de aula aceita `title`, `description`, `order`, `active` e
+`media: { type: 'youtube'|'file', url }`; título e mídia são obrigatórios.
+A saída mantém `media`, normalizada para `{type:'youtube',video_id}` ou
+`{type:'file',url}`. Aulas são inativas por padrão. Identificadores de usuário,
+entidade e `media_version` não são editáveis nesses payloads. YouTube aceita
+somente os hosts e formatos previstos, HTTPS sem credenciais/porta não padrão,
+com ID de 11 caracteres. Arquivos exigem HTTPS sem credenciais e caminho
+terminado em MP4/WebM, permitindo query; URLs têm limite de 2048 caracteres.
+Nenhuma mídia é consultada pelo servidor durante a validação.
+
+Limites: título 200, categoria 100, descrição 5000, instrutor 120 caracteres;
+ordem inteira de -100000 a 100000; até 100 UUIDs de cargo distintos (normalizados
+em minúsculas), com ao menos um para público restrito. A camada transacional
+de gestão deverá verificar existência/atividade de novas associações, preservar
+seleções inativas existentes, limites de 100 módulos/500 aulas e a existência
+de aula pública reproduzível antes de ativar um curso interno. Essas verificações
+dependem de banco/catálogo e não são inferidas pelo validator puro.
+
+`api/academy/progress.js` contém apenas `readProgress` e `summarizeProgress`.
+A leitura parametriza usuário autenticado, aula e versão; ausência retorna
+posição zero, incompleto e versão de progresso zero. O chamador deve autorizar
+a leitura e fornecer o UID autenticado. O resumo recebe aulas já visíveis e
+ordenadas pelo catálogo; ignora versões antigas, arredonda percentual para baixo
+e retoma a incompleta com atividade mais recente (ou a primeira incompleta).
+Sem progresso atual ou com todas concluídas, não há aula de retomada. Posição
+do vídeo não implica conclusão. `AcademyError(status, reason)` fornece erro
+tipado para a futura camada HTTP. Esses helpers ainda não alteram as rotas legadas.
+
 ### Verificação descartável
 
 `npm run test:migrations` mantém os requisitos `MIGRATION_TEST_DISPOSABLE=true`,
