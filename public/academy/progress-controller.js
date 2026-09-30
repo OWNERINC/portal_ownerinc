@@ -3,7 +3,7 @@ export function createProgressController({ lessonId, initial, request, signal,
   setTimer = setTimeout, clearTimer = clearTimeout, now = Date.now, onStatus = () => {} }) {
   let confirmed = { ...initial };
   let position = initial.position_seconds;
-  let completion = false;
+  let completion = null;
   let disposed = false;
   let stopped = null;
   let timer = null;
@@ -23,6 +23,8 @@ export function createProgressController({ lessonId, initial, request, signal,
     disposed = true;
     cancelTimer();
     local.abort();
+    completion?.reject(abortError());
+    completion = null;
     signal?.removeEventListener('abort', dispose);
   }
   const abortError = () => new DOMException('Sincronização cancelada.', 'AbortError');
@@ -37,14 +39,19 @@ export function createProgressController({ lessonId, initial, request, signal,
         });
         if (disposed) throw abortError();
         confirmed = result;
-        if (sent.completed) completion = false;
+        if (sent.completed) {
+          // Confirm the explicit action here, independently of later position writes.
+          completion?.resolve(result);
+          completion = null;
+        }
         failures = 0;
         retryAt = 0;
         publish(dirty() ? 'pending' : 'saved', confirmed);
       } catch (error) {
         if (disposed) throw abortError();
         // A failed explicit action must be retried explicitly by its button.
-        completion = false;
+        completion?.reject(error);
+        completion = null;
         if (error.status === 409) {
           stopped = error;
           publish('conflict', error);
@@ -89,8 +96,18 @@ export function createProgressController({ lessonId, initial, request, signal,
   function complete() {
     if (disposed || stopped) return flush();
     if (retryAt > now()) return flush();
-    completion = true;
-    return flush();
+    if (completion) return completion.promise;
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    completion = { promise, resolve, reject };
+    // The drain continues for positions, but its later failure cannot undo this action.
+    flush().catch(error => {
+      if (completion?.promise === promise) {
+        completion = null;
+        reject(error);
+      }
+    });
+    return promise;
   }
   signal?.addEventListener('abort', dispose, { once: true });
   if (signal?.aborted) dispose();

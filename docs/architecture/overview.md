@@ -185,7 +185,8 @@ mutações mantêm 60/15 min e limites globais continuam vigentes.
 `public/academy/progress-controller.js` recebe o `fetchAPI` original e um signal
 da visita/sessão. `record(seconds)` coalesce posições, salva alterações em 30 s;
 `flush()` aguarda a fila em voo (usar em pausa e antes da troca interna de aula).
-`complete()` retorna Promise da confirmação explícita: o consumidor desabilita
+`complete()` retorna Promise da própria escrita de conclusão, sem aguardar
+posições posteriores (cuja falha não desfaz essa confirmação): o consumidor desabilita
 o botão enquanto aguarda e atualiza conclusão apenas no sucesso. Falha rejeita
 essa ação, que exige novo clique, sem publicar conclusão otimista. Escritas têm
 AbortSignal local e no máximo um request simultâneo. Falhas transitórias mantêm

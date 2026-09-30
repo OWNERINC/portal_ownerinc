@@ -14,6 +14,7 @@ const initial = { lesson_id: 'lesson', media_version: 1, version: 0, position_se
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 function browser() {
   let time = 0, id = 0;
+  let server = { ...initial };
   const timers = new Map(), calls = [], statuses = [];
   const session = new AbortController();
   const controller = createProgressController({ lessonId: 'lesson', initial, signal: session.signal,
@@ -24,8 +25,11 @@ function browser() {
     } });
   return { controller, calls, statuses, timers, session,
     async tick(ms) { time += ms; for (const [id, timer] of [...timers]) if (timer.at <= time) { timers.delete(id); timer.fn(); } await settle(); },
-    async success(index = calls.length - 1) { const call = calls[index]; call.resolve({ ...initial, ...call.body,
-      version: call.body.expected_version + 1, completed: call.body.completed || false }); await settle(); },
+    async success(index = calls.length - 1) {
+      const call = calls[index];
+      server = { ...server, ...call.body, version: call.body.expected_version + 1 };
+      call.resolve({ ...server }); await settle();
+    },
     async fail(status, index = calls.length - 1) { calls[index].reject(Object.assign(new Error('failure'), { status })); await settle(); },
   };
 }
@@ -106,6 +110,46 @@ test('completion immediately after a clean flush still persists, and dispose bef
   await h.success(); await first; await complete;
   const unmounted = browser(); unmounted.controller.record(50); unmounted.controller.dispose();
   await unmounted.tick(30000); assert.equal(unmounted.calls.length, 0);
+});
+
+test('manual completion resolves at its own confirmation despite a later position failure and retry', async () => {
+  const h = browser();
+  let outcome;
+  const complete = h.controller.complete().then(result => { outcome = { result }; }, error => { outcome = { error }; });
+  h.controller.record(1); h.controller.record(2);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].body.completed, true);
+  await h.success(0);
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(h.calls[1].body, { media_version: 1, expected_version: 1, position_seconds: 2 });
+  assert.equal(outcome?.result?.completed, true, 'manual action must settle before the later position request');
+  assert.equal(outcome.result.version, 1);
+  assert.equal(outcome.result.position_seconds, 0);
+  await h.fail(503, 1); await complete;
+  assert.equal(outcome.error, undefined);
+  assert.equal(h.statuses.at(-1)[0], 'pending');
+  h.controller.record(3);
+  await h.tick(4999); assert.equal(h.calls.length, 2);
+  await h.tick(1); assert.equal(h.calls.length, 3);
+  assert.deepEqual(h.calls[2].body, { media_version: 1, expected_version: 1, position_seconds: 3 });
+  await h.success(2);
+  const [status, progress] = h.statuses.at(-1);
+  assert.equal(status, 'saved'); assert.equal(progress.completed, true);
+  assert.equal(progress.version, 2); assert.equal(progress.position_seconds, 3);
+});
+
+test('disposing pending manual completion rejects promptly and ignores its late confirmation', async () => {
+  const h = browser();
+  const complete = h.controller.complete();
+  assert.equal(h.controller.complete(), complete, 'duplicate manual actions share their own confirmation');
+  const rejected = assert.rejects(complete, { name: 'AbortError' });
+  h.controller.dispose();
+  await rejected;
+  const count = h.statuses.length;
+  assert.equal(h.calls[0].options.signal.aborted, true);
+  await h.success();
+  assert.equal(h.statuses.length, count);
+  assert.equal(h.calls.length, 1); assert.equal(h.timers.size, 0);
 });
 
 test('failed completion rejects without publishing completed state or retrying the manual action', async () => {
