@@ -71,6 +71,11 @@ sem modificar as listas de tipos do CMS.
 `authorizeLessonInTransaction(db,user,lessonId)` usa somente o client recebido,
 com lock CMS `7193029` seguido de curso → módulo → aula, rechecando ancestrais,
 audiência e blocos publicados. Nunca chama leitores que abrem conexões do pool.
+O currículo também lê e bloqueia a hierarquia em lote nessa ordem, dentro da fase
+protegida pelo CMS: revalida cursos/audiência/publicação e busca módulos/aulas
+atuais antes de projetar mídia, vizinhos ou contagens. Somente fontes existentes
+e autorizadas sem documento podem usar descrição legada; snapshots anteriores ao
+lock não são convertidos em conteúdo legado após exclusão ou mudança de vínculo.
 
 O harness `tests/helpers/academy-integration.mjs` monta as rotas reais e substitui
 apenas pool/autenticação externa, sem alterar cache global. Para integração real,

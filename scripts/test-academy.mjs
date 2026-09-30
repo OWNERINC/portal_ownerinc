@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAcademyIntegration, requireDisposableAcademyDatabase } from '../tests/helpers/academy-integration.mjs';
+import { createAcademyHttp, createAcademyIntegration, requireDisposableAcademyDatabase } from '../tests/helpers/academy-integration.mjs';
 
 requireDisposableAcademyDatabase();
 
@@ -41,4 +41,47 @@ test('catalog, counts, curriculum, detail and explicit preview respect audience'
   assert.deepEqual((await get('/categories')).body, ['Cultura']);
   await get(`/${h.ids.closerCourse}`, 'closer', 404);
   await get(`/${h.ids.closerCourse}?all=true`, 'manager');
+});
+
+test('deleted unpublished lesson cannot become legacy content across the CMS lock boundary', async t => {
+  const h = await createAcademyIntegration(t);
+  await h.client.query("INSERT INTO cms_documents(content_type,source_id,title) VALUES ('academy_lesson',$1,'Draft')", [h.ids.closerLesson]);
+  let locks = 0;
+  let deleted = false;
+  // Gate the real client's lock acquisition, not business logic or SQL results.
+  // The first two locks are the shared course reader; the third is curriculum.
+  const gatedPool = {
+    query: h.pool.query.bind(h.pool),
+    async connect() {
+      const db = await h.pool.connect();
+      return {
+        async query(sql, values) {
+          if (/pg_advisory_xact_lock/.test(sql) && ++locks === 3) {
+            await h.client.query('BEGIN');
+            try {
+              await h.client.query('SELECT pg_advisory_xact_lock(7193029)');
+              await h.client.query('SELECT id FROM academy WHERE id=$1 FOR UPDATE', [h.ids.closerCourse]);
+              await h.client.query('SELECT id FROM academy_modules WHERE id=$1 FOR UPDATE', [h.ids.module]);
+              await h.client.query('SELECT id FROM academy_lessons WHERE id=$1 FOR UPDATE', [h.ids.closerLesson]);
+              await h.client.query("DELETE FROM cms_documents WHERE content_type='academy_lesson' AND source_id=$1", [h.ids.closerLesson]);
+              await h.client.query('DELETE FROM academy_lessons WHERE id=$1', [h.ids.closerLesson]);
+              await h.client.query('COMMIT');
+              deleted = true;
+            } catch (error) {
+              await h.client.query('ROLLBACK');
+              throw error;
+            }
+          }
+          return db.query(sql, values);
+        },
+        release: () => db.release(),
+      };
+    },
+  };
+  const { request } = await createAcademyHttp(t, gatedPool, h.users);
+  await request.get(`/api/academy/lessons/${h.ids.closerLesson}`).set('x-fixture-user', 'closer').expect(404);
+  assert.equal(deleted, true, 'fixture mutation must run at the curriculum lock boundary');
+  const course = await request.get(`/api/academy/${h.ids.closerCourse}`).set('x-fixture-user', 'closer').expect(200);
+  assert.equal(course.body.course.total_lessons, 0);
+  assert.deepEqual(course.body.modules[0].lessons, []);
 });

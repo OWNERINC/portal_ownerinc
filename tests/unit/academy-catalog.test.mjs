@@ -25,6 +25,8 @@ function fixture() {
   const assets = [];
   const calls = [];
   let connections = 0;
+  let cmsLocks = 0;
+  let beforeCurriculumLock;
   const users = {
     closer: { uid: 'closer', role: 'viewer', job_title_id: closerJob, job_title_active: true, permissions: {} },
     capture: { uid: 'capture', role: 'viewer', job_title_id: captureJob, job_title_active: true, permissions: {} },
@@ -36,6 +38,9 @@ function fixture() {
     async connect() { connections++; return { query: pool.query, release() { connections--; } }; },
     async query(sql, values = []) {
       calls.push({ sql, values });
+      if (/pg_advisory_xact_lock/.test(sql) && ++cmsLocks === 3 && beforeCurriculumLock) {
+        beforeCurriculumLock();
+      }
       let rows;
       if (/^(BEGIN|COMMIT|ROLLBACK)$|pg_advisory_xact_lock/.test(sql)) rows = [];
       else if (/scheduled.status = 'scheduled'/.test(sql)) rows = [];
@@ -62,8 +67,10 @@ function fixture() {
         const lesson = lessons.find(row => row.id === values[0].toLowerCase());
         const module = modules.find(row => row.id === lesson?.module_id);
         rows = module ? [{ course_id: module.course_id, module_id: module.id }] : [];
-      } else if (/FROM academy WHERE id=/.test(sql)) rows = courses.filter(row => row.id === values[0]);
-      else if (/FROM academy_course_job_titles/.test(sql)) rows = courses.find(row => row.id === values[0])?.allowed_job_title_ids.map(job_title_id => ({ job_title_id })) || [];
+      } else if (/FROM academy\s+WHERE id=/.test(sql)) rows = courses.filter(row => Array.isArray(values[0]) ? values[0].includes(row.id) : row.id === values[0]);
+      else if (/FROM academy_course_job_titles/.test(sql)) rows = courses
+        .filter(row => Array.isArray(values[0]) ? values[0].includes(row.id) : row.id === values[0])
+        .flatMap(row => row.allowed_job_title_ids.map(job_title_id => ({ course_id: row.id, job_title_id })));
       else if (/FROM academy_modules/.test(sql)) rows = modules.filter(row => Array.isArray(values[0])
         ? values[0].includes(row.course_id) && (!/AND active = TRUE/.test(sql) || row.active)
         : row.id === values[0] && row.course_id === values[1]);
@@ -79,6 +86,7 @@ function fixture() {
     },
   };
   return { pool, users, courses, modules, lessons, documents, progress, assets, calls, connections: () => connections,
+    beforeCurriculumLock(callback) { beforeCurriculumLock = callback; },
     publish(type, source_id, blocks) { documents.push({ id: randomUUID(), type, source_id, blocks }); } };
 }
 
@@ -112,6 +120,69 @@ test('HTTP authorization precedes pagination, counts and categories; groups are 
   await get('/lessons/not-a-uuid').expect(400);
   assert.equal(f.connections(), 0);
   assert.ok(f.calls.some(call => call.values[0] === true && call.values[1] === f.users.closer.job_title_id));
+});
+
+test('curriculum revalidates sources and ancestors after waiting for the CMS lock', async t => {
+  const changes = {
+    'unpublished source and document deleted': f => {
+      f.lessons.splice(4, 1);
+      f.documents.length = 0;
+    },
+    'lesson deactivated': f => { f.lessons[4].active = false; },
+    'module deactivated': f => { f.modules[2].active = false; },
+    'course deactivated': f => { f.courses[2].active = false; },
+    'course audience revoked': f => { f.courses[2].allowed_job_title_ids = []; },
+    'module moved to ineligible course': f => { f.modules[2].course_id = f.courses[0].id; },
+    'lesson moved to ineligible module': f => { f.lessons[4].module_id = f.modules[0].id; },
+    'course deleted': f => { f.courses.splice(2, 1); },
+  };
+  for (const [name, change] of Object.entries(changes)) await t.test(name, async t => {
+    const f = fixture();
+    const lessonId = f.lessons[4].id;
+    let interleaved = false;
+    if (name.startsWith('unpublished')) f.publish('academy_lesson', lessonId, null);
+    f.beforeCurriculumLock(() => { change(f); interleaved = true; });
+    const { request } = await createAcademyHttp(t, f.pool, f.users);
+    await request.get(`/api/academy/lessons/${lessonId}`).set('x-fixture-user', 'closer').expect(404);
+    assert.equal(interleaved, true);
+    assert.equal(f.connections(), 0);
+  });
+  for (const target of ['course', 'catalog', 'neighbor']) await t.test(`deleted unpublished source excluded from ${target}`, async t => {
+    const f = fixture();
+    const [first, second] = f.lessons.slice(4);
+    let interleaved = false;
+    f.publish('academy_lesson', first.id, null);
+    f.beforeCurriculumLock(() => { changes['unpublished source and document deleted'](f); interleaved = true; });
+    const { request } = await createAcademyHttp(t, f.pool, f.users);
+    const path = target === 'course' ? `/${f.courses[2].id}` : target === 'catalog' ? '' : `/lessons/${second.id}`;
+    const result = await request.get(`/api/academy${path}`).set('x-fixture-user', 'closer').expect(200);
+    assert.equal(interleaved, true);
+    if (target === 'neighbor') assert.equal(result.body.previous_lesson_id, null);
+    else {
+      const course = target === 'course' ? result.body.course : result.body.find(row => row.id === f.courses[2].id);
+      assert.equal(course.total_lessons, 1);
+      if (target === 'course') assert.deepEqual(result.body.modules[0].lessons.map(row => row.id), [second.id]);
+    }
+  });
+});
+
+test('curriculum reads batches on its transaction client in CMS → course → module → lesson lock order', async t => {
+  const f = fixture();
+  const { request } = await createAcademyHttp(t, f.pool, f.users);
+  await request.get('/api/academy').set('x-fixture-user', 'closer').expect(200);
+  const hierarchyReads = f.calls.filter(call => /FROM academy(?:_modules|_lessons)?\s+WHERE/.test(call.sql));
+  assert.equal(hierarchyReads.length, 3, 'one query per hierarchy level, regardless of card count');
+  for (const call of hierarchyReads) {
+    assert.match(call.sql, /FOR UPDATE/);
+    assert.match(call.sql, /ANY\(\$1::uuid\[\]\)/);
+  }
+  const firstRowLock = f.calls.indexOf(hierarchyReads[0]);
+  const priorLocks = f.calls.slice(0, firstRowLock).filter(call => /pg_advisory_xact_lock/.test(call.sql));
+  assert.equal(priorLocks.length, 3);
+  assert.match(hierarchyReads[0].sql, /FROM academy\s/);
+  assert.match(hierarchyReads[1].sql, /FROM academy_modules/);
+  assert.match(hierarchyReads[2].sql, /FROM academy_lessons/);
+  assert.equal(f.connections(), 0);
 });
 
 test('curriculum, neighbors and progress use visible current-version lessons and ancestor publication', async t => {

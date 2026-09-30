@@ -35,30 +35,42 @@ async function candidates(pool, user, query = {}) {
 }
 
 async function curriculum(pool, user, courses, preview = false) {
-  if (!courses.length) return { modules: [], lessons: [], progress: [] };
+  const empty = { courses, modules: [], lessons: [], progress: [] };
   const ids = courses.filter(course => course.delivery_mode === 'internal').map(course => course.id);
-  if (!ids.length) return { modules: [], lessons: [], progress: [] };
-  const { rows: modules } = await pool.query(`SELECT * FROM academy_modules
-    WHERE course_id=ANY($1::uuid[]) ${preview ? '' : 'AND active = TRUE'} ORDER BY "order", id`, [ids]);
-  const moduleIds = modules.map(module => module.id);
-  if (!moduleIds.length) return { modules, lessons: [], progress: [] };
-  const { rows } = await pool.query(`SELECT * FROM academy_lessons WHERE module_id=ANY($1::uuid[])
-    ${preview ? '' : 'AND active = TRUE'} ORDER BY "order", id`, [moduleIds]);
+  if (!ids.length) return empty;
   const db = await pool.connect();
-  let lessons;
   try {
     await db.query('BEGIN');
     await lockCmsAssets(db);
-    lessons = await readPublishedSources(db, 'academy_lesson', rows);
+    // Read current hierarchy only after acquiring CMS, then lock each level in
+    // parent-first order. Missing sources must never become legacy snapshots.
+    const { rows: current } = await db.query(`SELECT * FROM academy
+      WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`, [ids]);
+    const { rows: audience } = await db.query(`SELECT course_id, job_title_id
+      FROM academy_course_job_titles WHERE course_id=ANY($1::uuid[])`, [ids]);
+    const eligible = current.map(course => ({ ...course, allowed_job_title_ids: audience
+      .filter(row => row.course_id === course.id).map(row => row.job_title_id) }))
+      .filter(course => canReadCourse(user, course, course.allowed_job_title_ids, { preview }));
+    const published = await readPublishedSources(db, 'academy', eligible);
+    const visible = preview ? published : published.filter(isPublicCmsRow);
+    const currentById = new Map(visible.map(course => [course.id, course]));
+    const checkedCourses = courses.flatMap(course => ids.includes(course.id)
+      ? (currentById.has(course.id) ? [currentById.get(course.id)] : []) : [course]);
+    const internalIds = visible.filter(course => course.delivery_mode === 'internal').map(course => course.id);
+    const { rows: modules } = await db.query(`SELECT * FROM academy_modules
+      WHERE course_id=ANY($1::uuid[]) ${preview ? '' : 'AND active = TRUE'} ORDER BY "order", id FOR UPDATE`, [internalIds]);
+    const { rows } = await db.query(`SELECT * FROM academy_lessons WHERE module_id=ANY($1::uuid[])
+      ${preview ? '' : 'AND active = TRUE'} ORDER BY "order", id FOR UPDATE`, [modules.map(module => module.id)]);
+    const publishedLessons = await readPublishedSources(db, 'academy_lesson', rows);
+    const lessons = preview ? publishedLessons : publishedLessons.filter(isPublicCmsRow);
+    const { rows: progress } = lessons.length ? await db.query(`SELECT * FROM academy_lesson_progress
+      WHERE user_uid=$1 AND lesson_id=ANY($2::uuid[])`, [user.uid, lessons.map(lesson => lesson.id)]) : { rows: [] };
     await db.query('COMMIT');
+    return { courses: checkedCourses, modules, lessons, progress };
   } catch (error) {
     await db.query('ROLLBACK').catch(() => {});
     throw error;
   } finally { db.release(); }
-  if (!preview) lessons = lessons.filter(isPublicCmsRow);
-  const { rows: progress } = lessons.length ? await pool.query(`SELECT * FROM academy_lesson_progress
-    WHERE user_uid=$1 AND lesson_id=ANY($2::uuid[])`, [user.uid, lessons.map(lesson => lesson.id)]) : { rows: [] };
-  return { modules, lessons, progress };
 }
 
 function courseLessons(course, data, publicOnly = false) {
@@ -83,7 +95,8 @@ async function listCourses(pool, user, query = {}) {
   const rows = await candidates(pool, user, query);
   const selected = rows.slice(query.offset || 0, (query.offset || 0) + (query.limit || 50));
   const data = await curriculum(pool, user, selected, query.preview);
-  return { items: selected.map(course => summary(course, data, query.preview)), total: rows.length };
+  return { items: data.courses.map(course => summary(course, data, query.preview)),
+    total: rows.length - (selected.length - data.courses.length) };
 }
 
 async function listCategories(pool, user, { preview = false } = {}) {
@@ -92,9 +105,10 @@ async function listCategories(pool, user, { preview = false } = {}) {
 }
 
 async function getCourseView(pool, user, courseId, { preview = false } = {}) {
-  const [course] = await candidates(pool, user, { id: courseId, preview });
+  const candidatesForId = await candidates(pool, user, { id: courseId, preview });
+  const data = await curriculum(pool, user, candidatesForId, preview);
+  const [course] = data.courses;
   if (!course) return null;
-  const data = await curriculum(pool, user, [course], preview);
   return { course: summary(course, data, preview), content_blocks: course.content_blocks || null,
     ...(preview ? { allowed_job_title_ids: course.allowed_job_title_ids } : {}),
     modules: data.modules.map(module => ({ ...module, lessons: data.lessons
@@ -109,6 +123,7 @@ async function getLessonView(pool, user, lessonId, { preview = false } = {}) {
   const [course] = await candidates(pool, user, { id: rows[0].course_id, preview });
   if (!course) return null;
   const data = await curriculum(pool, user, [course], preview);
+  if (!data.courses.length) return null;
   const ordered = courseLessons(course, data);
   const index = ordered.findIndex(lesson => lesson.id === lessonId.toLowerCase());
   if (index < 0) return null;

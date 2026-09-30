@@ -3,7 +3,9 @@ const { lockCmsAssets } = require('../cms/locks');
 const { validatePublishedBlocks, validatePublishedBlocksBatch, promoteDueScheduled } = require('../cms/reader');
 
 // Local source reader until Task 5 registers academy_lesson in the shared CMS.
-// Caller owns the transaction and CMS lock; never open another pool connection.
+// Caller owns the transaction and CMS lock and supplies freshly read, row-locked
+// sources with authorized ancestors (never pre-lock snapshots). Missing documents
+// mean legacy content only for those extant sources. Never open a pool connection.
 async function readPublishedSources(db, type, rows) {
   if (!rows.length) return [];
   const ids = rows.map(row => row.id);
