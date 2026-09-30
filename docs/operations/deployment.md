@@ -38,6 +38,16 @@ BASE_URL=https://portal.ownerinc.com.br bash scripts/smoke.sh
 Após o smoke, confirme upload autenticado e exportação em Cards Pós e AutoCard,
 além do upload de perfil. O smoke não realiza essas mutações.
 
+O gate estático do AutoCard segue o contrato atual de navegação: shell em
+`/autocard.html`, módulo `/js/router-bootstrap.js` que importa e chama
+`startRouter`, mapa de `/js/router.js` para `/autocard/entry.js` e exportação
+`mount` dessa entry. O smoke baixa os três módulos e recusa recurso ausente,
+HTML genérico ou transferência HTTP incompleta; mantém também a raiz e o
+redirect legado `/autocard/`. Mudanças nesse contrato devem atualizar o smoke
+e seu teste HTTP com os arquivos do checkout, não adicionar tags antigas ao
+frontend. Essas checagens de entrega não executam JavaScript nem percorrem
+todas as dependências: não substituem a validação autenticada no navegador.
+
 O envio de email usa o Resend por SMTP. A chave de API da Resend deve ser
 armazenada somente em `/opt/ownerinc-portal/shared/.env`, como o valor de
 `SMTP_PASSWORD`; nunca a versione ou envie ao GitHub. O endereço definido em
@@ -168,6 +178,15 @@ O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sinta
 `npm run test:migrations` exige `MIGRATION_TEST_DISPOSABLE=true` e não pode ser
 executado com `NODE_ENV=production`; ele modifica um banco de teste durante a
 validação de migrations históricas.
+
+Esse teste executa migrations duas vezes (incluindo provisionamento de roles e
+grants) e chama o mesmo `verifyMigrations` usado em deploy/restore, antes das
+fixtures históricas. Em PostgreSQL 16, também exige que o verificador recuse
+constraints CLT/PJ enfraquecidas ou não validadas e colunas incompatíveis em
+`pending_registrations`/`firebase_cleanup_queue`. Cada mutação negativa é
+restaurada no banco descartável antes da revalidação positiva. A comparação da
+constraint usa a expressão canônica do PostgreSQL (`>= 1` e `<= 31`, não o texto
+`BETWEEN` da migration), preservando os predicados e agrupamentos completos.
 
 O receptor de produção passa `--profile notifications` em todos os comandos
 Compose compartilhados, incluindo `up`, migrations one-shot e rollback, para
