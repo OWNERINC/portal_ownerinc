@@ -40,7 +40,8 @@ function normalizeMedia(body) {
   }
   if (body.type === 'file') {
     const url = httpsUrl(body.url);
-    return url && /\.(mp4|webm)$/i.test(url.pathname) ? { type: 'file', url: url.href } : null;
+    return url && url.href.length <= 2048 && /\.(mp4|webm)$/i.test(url.pathname)
+      ? { type: 'file', url: url.href } : null;
   }
   return null;
 }

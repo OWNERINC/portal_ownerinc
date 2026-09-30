@@ -78,6 +78,25 @@ test('arquivo direto HTTPS aceita MP4/WebM e query; não aceita outros tipos', (
     { type: 'youtube', video_id: 'M7lc1UVf-VE' }]) assert.equal(normalizeMedia(value), null);
 });
 
+test('arquivo direto limita também URL normalizada após expansão Unicode', () => {
+  const expanded = `https://media.example/${'é'.repeat(400)}.mp4`;
+  assert.ok(expanded.length < 2048);
+  assert.ok(new URL(expanded).href.length > 2048);
+  assert.equal(normalizeMedia({ type: 'file', url: expanded }), null);
+  assert.equal(validateLessonInput({ ...lesson, media: { type: 'file', url: expanded } }), null);
+
+  const prefix = 'https://media.example/é';
+  const boundary = `${prefix}${'a'.repeat(2048 - new URL(prefix).href.length - '.mp4'.length)}.mp4`;
+  assert.equal(new URL(boundary).href.length, 2048);
+  assert.deepEqual(normalizeMedia({ type: 'file', url: boundary }), { type: 'file', url: new URL(boundary).href });
+  assert.ok(validateLessonInput({ ...lesson, media: { type: 'file', url: boundary } }));
+  const overBoundary = boundary.replace('.mp4', 'a.mp4');
+  assert.ok(overBoundary.length < 2048);
+  assert.equal(new URL(overBoundary).href.length, 2049);
+  assert.equal(normalizeMedia({ type: 'file', url: overBoundary }), null);
+  assert.equal(validateLessonInput({ ...lesson, media: { type: 'file', url: overBoundary } }), null);
+});
+
 test('curso novo interno tem defaults explícitos e externo mantém URL HTTP(S)', () => {
   assert.deepEqual(validateCourseInput(internal), {
     title: 'Formação', category: '', description: '', url: null, order: 0, active: false,
