@@ -129,7 +129,42 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   créditos, metadados e títulos de PDF. `blocksToText` também projeta quote/profile.
   `getNewsPresentation` separa somente capa e PDF explicitamente marcados; imagem
   legada continua no corpo. Autoria vem dos metadados, com fallback `Owner News`.
-  Renderização visual dos novos tipos e integração CMS são etapas posteriores.
+  A composição editorial está disponível em `reader-view.js` (E5); a integração
+  dos controles CMS e da navegação do leitor ocorre nas etapas seguintes.
+
+### Renderização editorial (E5)
+
+- `renderNewsArticle(root, article, { signal, preview = false })` em
+  `public/js/owner-news/reader-view.js` retorna um cleanup idempotente. O root
+  pertence ao chamador, que deve executar o cleanup anterior antes de reutilizá-lo.
+  O modo preview usa h2; o leitor usa h1 e rebaixa headings h1 do corpo para h2.
+- Blocos são validados antes de compor classes/containers; todo texto usa DOM
+  seguro. Capa aparece uma vez, com legenda/crédito adjacentes. A primeira imagem
+  legada continua no body do model para consumidores existentes; somente o novo
+  reader evita repeti-la após usá-la no hero. Editorial normalizado fornece resumo,
+  autoria (fallback Owner News), fonte e data civil sem deslocamento. Publicação
+  no Portal usa America/Sao_Paulo; conteúdo sem texto não inventa minutos de leitura.
+- O renderer comum conserva `renderBlocks`/`cleanupRenderedBlocks` e acrescenta
+  quote (`blockquote`/`cite`), profile (`section`, retrato privado e texto), e
+  `figure`/`figcaption` para imagem com legenda/crédito. Imagens legadas sem esses
+  campos mantêm sua estrutura. Os assets continuam em `/api/cms/assets/:id` com
+  autenticação; não há URLs públicas de mídia editorial.
+- Cada composição rastreia containers e usa AbortController próprio. Cleanup e
+  abort da página cancelam fetches/listeners, revogam blobs e limpam o root; uma
+  resposta tardia também é revogada. PDF complementar é carregado apenas no
+  primeiro toggle aberto e não pode ser iniciado após o descarte.
+- `owner-news.css` contém os tokens locais, hero com/sem capa, introdução 3:1,
+  grid de 12 colunas e presets content/wide/full/left/right; abaixo de 760px,
+  corpo e introdução usam uma coluna. Georgia compõe texto serif; Manrope compõe
+  sans; DM Mono compõe metadados (mínimo 11px). Controles têm mínimo 44px.
+  As fontes oficiais sem alterações e licenças OFL estão em `public/assets/fonts/`:
+  `Manrope-Variable.ttf` / `Manrope-OFL.txt`, de
+  `https://github.com/google/fonts/tree/main/ofl/manrope`, e
+  `DMMono-Regular.ttf` / `DMMono-OFL.txt`, de
+  `https://github.com/google/fonts/tree/main/ofl/dmmono` (obtidas em 30/09/2026).
+- `tests/unit/owner-news-reader.test.mjs` monta os módulos reais com lifecycle real
+  no feedback harness (`mount: false`, `modules`), cobrindo descarte/tardios,
+  perfil/inline, datas, segurança, legado e renderer comum.
 
 ### Persistência editorial (E2)
 

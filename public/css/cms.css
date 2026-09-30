@@ -109,6 +109,15 @@
 .cms-page .badge-red { background: #f5dfdb; color: #8f382b; }
 
 .cms-block { margin: 0 0 14px; line-height: 1.65; overflow-wrap: anywhere; word-break: normal; }
+.cms-quote { padding-left: 20px; border-left: 2px solid var(--border); }
+.cms-quote p { margin: 0 0 12px; }
+.cms-quote cite { font-size: 14px; font-style: normal; }
+.cms-profile { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; }
+.cms-profile > div { flex: 1 1 200px; min-width: 0; }
+.cms-profile-image { width: 160px; max-width: 100%; height: auto; border-radius: 8px; }
+.cms-profile-role { color: var(--text-secondary); }
+.cms-figure { margin-inline: 0; }
+.cms-figure figcaption { font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
 .cms-heading { font-family: var(--font-display); line-height: 1.2; }
 .cms-list { padding-left: 22px; }
 .cms-callout { border-left: 3px solid var(--cms-accent); padding: 12px 14px; background: var(--cms-paper-deep); }

@@ -83,7 +83,7 @@ class FixtureNode extends Node {
 
 // Entire production mounts and their local modules run with the real lifecycle.
 // Only DOM, browser rendering/export libraries and external transports are doubles.
-export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve() } = {}) {
+export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [] } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
@@ -130,11 +130,14 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
     await load('public/cards-pos/field-registry.js', 'collectEditableFields');
     await load('public/cards-pos/inline-editor.js', 'createInlineEditor');
   }
-  const path = name === 'dashboard' ? 'public/js/dashboard.js' : `public/${name}/app.js`;
-  let source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-  const end = source.lastIndexOf('}');
-  source = `${source.slice(0, end)}\n${expose}\n${source.slice(end)}`;
-  vm.runInContext(`${source}\nglobalThis.page = createPageLifecycle(); mount(page);`, context, { filename: path });
+  for (const module of modules) await load(module.path, module.exports);
+  if (mount) {
+    const path = name === 'dashboard' ? 'public/js/dashboard.js' : `public/${name}/app.js`;
+    let source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+    const end = source.lastIndexOf('}');
+    source = `${source.slice(0, end)}\n${expose}\n${source.slice(end)}`;
+    vm.runInContext(`${source}\nglobalThis.page = createPageLifecycle(); mount(page);`, context, { filename: path });
+  } else vm.runInContext('globalThis.page = createPageLifecycle();', context);
   return {
     doc, window, context, html, requests, revoked, frames, timers, observers, captures, page: context.page,
     node: id => doc.getElementById(id),

@@ -314,9 +314,31 @@ export function renderBlocks(container, blocks, { fallbackText = '', signal } = 
     if (block.type === 'callout') container.append(element('aside', { className: `cms-block cms-callout cms-callout-${block.tone}` }, [
       ...(block.title ? [element('strong', { text: block.title })] : []), element('p', { text: block.text }),
     ]));
+    if (block.type === 'quote') {
+      const quote = element('blockquote', { className: 'cms-block cms-quote' }, [element('p', { text: block.text })]);
+      if (block.attribution) quote.append(element('cite', { text: block.attribution }));
+      container.append(quote);
+    }
+    if (block.type === 'profile') {
+      const profile = element('section', { className: 'cms-block cms-profile' });
+      if (block.asset_id) {
+        const image = element('img', { className: 'cms-profile-image', alt: block.alt, loading: 'lazy' });
+        profile.append(image);
+        loadPrivateAsset(image, block.asset_id, 'o retrato', state);
+      }
+      const copy = element('div', {}, [element('strong', { text: block.name })]);
+      if (block.role) copy.append(element('p', { className: 'cms-profile-role', text: block.role }));
+      if (block.text) copy.append(element('p', { text: block.text }));
+      profile.append(copy);
+      container.append(profile);
+    }
     if (block.type === 'image') {
       const image = element('img', { className: 'cms-block cms-image', alt: block.alt, loading: 'lazy' });
-      container.append(image);
+      if (block.caption || block.credit) {
+        container.append(element('figure', { className: 'cms-block cms-figure' }, [image,
+          element('figcaption', { text: [block.caption, block.credit].filter(Boolean).join(' · ') }),
+        ]));
+      } else container.append(image);
       loadPrivateAsset(image, block.asset_id, 'a imagem', state);
     }
     if (block.type === 'divider') container.append(element('hr', { className: 'cms-block cms-divider' }));
