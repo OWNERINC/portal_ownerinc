@@ -51,6 +51,37 @@ As regras editoriais, elegibilidade e atualização de versão de mídia pertenc
 
 ### Políticas, validação e leitura de progresso
 
+O catálogo em `api/academy/catalog.js` aplica audiência e publicação válida antes
+de total, categorias e paginação. `GET /api/academy` mantém array e
+`X-Total-Count`, aceita `group=initial|role` e acrescenta capa/contagens/progresso
+sem remover os campos legados. Metadados do currículo e progresso são carregados
+em lote para a página selecionada. Formação inicial e por cargo não possuem
+pré-requisitos entre si. Categorias refletem o mesmo conjunto público autorizado.
+
+`GET /api/academy/:id` entrega curso e currículo; `GET /api/academy/lessons/:id`
+entrega mídia, descrição/material publicado, progresso da versão atual e vizinhos
+do currículo visível. Curso, módulo e aula precisam estar ativos; documento CMS
+existente sem publicação válida impede fallback legado. `all=true` é preview
+explícito com `manageAcademy`, inclusive nas categorias. A lista de fontes
+`GET /api/academy/lessons?all=true` é exclusiva de gestores e inclui aulas inativas
+para edição CMS. A integração de edição/entrega de assets `academy_lesson` é uma
+etapa própria; o leitor local já valida suas revisões com o helper compartilhado,
+sem modificar as listas de tipos do CMS.
+
+`authorizeLessonInTransaction(db,user,lessonId)` usa somente o client recebido,
+com lock CMS `7193029` seguido de curso → módulo → aula, rechecando ancestrais,
+audiência e blocos publicados. Nunca chama leitores que abrem conexões do pool.
+
+O harness `tests/helpers/academy-integration.mjs` monta as rotas reais e substitui
+apenas pool/autenticação externa, sem alterar cache global. Para integração real,
+use um banco **descartável já migrado até 033 e com Academy vazio**, configure
+`MIGRATION_DATABASE_URL`, `MIGRATION_TEST_DISPOSABLE=true` e execute
+`node --test scripts/test-academy.mjs`. Fixtures têm UUIDs próprios, são serializadas
+por advisory lock de teste e removidas por ID no teardown. O script recusa execução
+sem opt-in ou em produção. Não inicia serviços nem aplica migrations. Testes HTTP
+com doubles de SQL e política/CMS reais rodam em `npm run verify`; integração com
+PostgreSQL permanece uma verificação separada, dependente do ambiente autorizado.
+
 `api/academy/access.js` separa cargo profissional de `role`: audiência restrita
 exige `job_title_active === true` e associação ao cargo atual. Mesmo um gestor
 precisa dessa audiência na leitura normal; somente `{ preview: true }` usa

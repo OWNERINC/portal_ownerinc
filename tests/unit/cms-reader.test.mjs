@@ -312,7 +312,7 @@ test('validated body projection never falls back to legacy text for managed cont
 test('area mappings preserve legacy rows and add content_blocks only when published', async () => {
   const routeFiles = {
     knowledge: 'api/routes/knowledge.js',
-    academy: 'api/routes/academy.js',
+    academy: 'api/academy/catalog.js',
     benefit: 'api/routes/benefits.js',
     reminder: 'api/routes/reminders.js',
   };

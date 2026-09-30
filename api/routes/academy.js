@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db');
-const { addPublishedBlocks, isPublicCmsRow } = require('../cms/reader');
+const { listCourses, listCategories } = require('../academy/catalog');
+const { createAcademyLearningRouter, academyFailure } = require('./academy-learning');
 const { deleteCmsSource } = require('../cms/sources');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
@@ -20,56 +21,28 @@ router.get('/categories', authMiddleware, async (req, res, next) => {
   if (all !== undefined && !['true', 'false'].includes(all)) return invalid(req, res);
   if (all === 'true' && !can(req.user, 'manageAcademy')) return forbidden(req, res);
   const viewAll = mayViewAll(req.user, 'manageAcademy', all);
-  const where = viewAll ? '' : 'WHERE active = TRUE';
   try {
-    if (!viewAll) {
-      const { rows } = await pool.query(
-        `SELECT id, category FROM academy ${where} AND btrim(category) <> '' ORDER BY category, id`,
-      );
-      const visible = (await addPublishedBlocks(pool, rows, 'academy')).filter(isPublicCmsRow);
-      return res.json([...new Set(visible.map(({ category }) => category.trim()))]);
-    }
-    const { rows } = await pool.query(
-      `SELECT DISTINCT btrim(category) AS category
-       FROM academy ${where} ${where ? 'AND' : 'WHERE'} btrim(category) <> ''
-       ORDER BY category`,
-    );
-    res.json(rows.map(({ category }) => category));
+    res.json(await listCategories(pool, req.user, { preview: viewAll }));
   } catch (error) {
-    next(error);
+    academyFailure(error, req, res, next);
   }
 });
 
 router.get('/', authMiddleware, async (req, res, next) => {
-  const page = parseListQuery(req.query, { ...listQuery, category: value => value.length <= 100 });
+  const page = parseListQuery(req.query, { ...listQuery, category: value => value.length <= 100,
+    group: value => ['initial', 'role'].includes(value) });
   if (!page) return invalid(req, res);
   if (req.query.all === 'true' && !can(req.user, 'manageAcademy')) return forbidden(req, res);
-  const conditions = [];
   const viewAll = mayViewAll(req.user, 'manageAcademy', req.query.all);
-  if (!viewAll) conditions.push('active = TRUE');
-  if (req.query.active === 'true') conditions.push('active = TRUE');
-  if (req.query.category) conditions.push('btrim(academy.category) = $1');
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const filterValues = req.query.category ? [req.query.category] : [];
   try {
-    if (!viewAll) {
-      const { rows } = await pool.query(
-        `SELECT * FROM academy ${where} ORDER BY "order", id`,
-        filterValues,
-      );
-      const visible = (await addPublishedBlocks(pool, rows, 'academy')).filter(isPublicCmsRow);
-      return res.set('X-Total-Count', String(visible.length))
-        .json(visible.slice(page.offset, page.offset + page.limit));
-    }
-    const [{ rows: [{ count }] }, { rows }] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::integer AS count FROM academy ${where}`, filterValues),
-      pool.query(`SELECT * FROM academy ${where} ORDER BY "order", id LIMIT $${filterValues.length + 1} OFFSET $${filterValues.length + 2}`, [...filterValues, page.limit, page.offset]),
-    ]);
-    res.set('X-Total-Count', String(count)).json((await addPublishedBlocks(pool, rows, 'academy')).filter(Boolean));
+    const { items, total } = await listCourses(pool, req.user, { ...req.query, ...page, preview: viewAll });
+    res.set('X-Total-Count', String(total)).json(items);
   } catch (error) {
-    next(error);
+    academyFailure(error, req, res, next);
   }
 });
+
+router.use(createAcademyLearningRouter({ pool, authenticate: authMiddleware }));
 
 router.post('/', authMiddleware, async (req, res, next) => {
   if (!can(req.user, 'manageAcademy')) return forbidden(req, res);

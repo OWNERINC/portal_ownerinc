@@ -193,7 +193,9 @@ test('public content routes provide server-side filters and category metadata', 
   assert.match(knowledge, /syncKnowledgePdf/);
   assert.doesNotMatch(knowledge, /DELETE FROM cms_documents/);
   assert.match(academy, /router\.get\('\/categories'/);
-  assert.match(academy, /btrim\(academy\.category\) = \$1/);
+  assert.match(academy, /listCourses\(pool, req.user/);
+  const catalog = await readFile('api/academy/catalog.js', 'utf8');
+  assert.match(catalog, /btrim\(a\.category\) = \$\{parameter\(query.category\)\}/);
   assert.match(benefits, /router\.get\('\/categories'/);
   assert.match(benefits, /btrim\(benefits\.category\) = \$1/);
 });

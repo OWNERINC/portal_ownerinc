@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createAcademyIntegration, requireDisposableAcademyDatabase } from '../tests/helpers/academy-integration.mjs';
+
+requireDisposableAcademyDatabase();
+
+test('catalog, counts, curriculum, detail and explicit preview respect audience', async t => {
+  const h = await createAcademyIntegration(t);
+  const get = (path, user = 'closer', status = 200) => h.request.get(`/api/academy${path}`).set('x-fixture-user', user).expect(status);
+  const first = await get('?limit=1&offset=0');
+  assert.equal(first.headers['x-total-count'], '2');
+  assert.deepEqual(first.body.map(row => row.id), [h.ids.allCourse]);
+  const last = await get('?limit=1&offset=1');
+  assert.equal(last.body[0].id, h.ids.closerCourse);
+  assert.deepEqual((await get('?limit=1&offset=2')).body, []);
+  assert.deepEqual((await get('/categories')).body, ['Cultura', 'Vendas']);
+  assert.deepEqual((await get('')).body.map(row => row.learning_group), ['initial', 'role']);
+  assert.equal((await get('', 'noJob')).body.length, 1);
+  await get(`/${h.ids.captureCourse}`, 'closer', 404);
+  await get(`/lessons/${h.ids.captureLesson}`, 'closer', 404);
+  await get('?all=true', 'adminWithoutPermission', 403);
+  await get('/categories?all=true', 'adminWithoutPermission', 403);
+  await get('/lessons?all=true', 'adminWithoutPermission', 403);
+  assert.equal((await get('/lessons?all=true', 'manager')).body.length, 2);
+  assert.equal((await get(`/${h.ids.closerCourse}`)).body.modules[0].lessons[0].id, h.ids.closerLesson);
+  assert.equal((await get(`/lessons/${h.ids.closerLesson}`)).body.progress.version, 0);
+  const document = (await h.client.query("INSERT INTO cms_documents(content_type,source_id,title) VALUES ('academy_lesson',$1,'Lesson') RETURNING id", [h.ids.closerLesson])).rows[0];
+  const blocks = [{ type: 'pdf', asset_id: h.ids.pdfAsset, title: 'Material' }];
+  const revision = (await h.client.query("INSERT INTO cms_revisions(document_id,version,status,blocks) VALUES ($1,1,'published',$2::jsonb) RETURNING id", [document.id, JSON.stringify(blocks)])).rows[0];
+  await h.client.query('UPDATE cms_documents SET published_revision_id=$2 WHERE id=$1', [document.id, revision.id]);
+  assert.deepEqual((await get(`/lessons/${h.ids.closerLesson}`)).body.content_blocks, blocks);
+  await h.client.query('UPDATE academy_modules SET active=FALSE WHERE id=$1', [h.ids.module]);
+  await get(`/lessons/${h.ids.closerLesson}`, 'closer', 404);
+  assert.equal((await get(`/${h.ids.closerCourse}`)).body.course.progress_percent, 0);
+  await get(`/lessons/${h.ids.closerLesson}?all=true`, 'manager');
+  await h.client.query('UPDATE academy_modules SET active=TRUE WHERE id=$1', [h.ids.module]);
+  await h.client.query('UPDATE cms_documents SET published_revision_id=NULL WHERE id=$1', [document.id]);
+  await get(`/lessons/${h.ids.closerLesson}`, 'closer', 404);
+  await h.client.query("INSERT INTO cms_documents(content_type,source_id,title) VALUES ('academy',$1,'Unpublished')", [h.ids.closerCourse]);
+  assert.equal((await get('')).headers['x-total-count'], '1');
+  assert.deepEqual((await get('/categories')).body, ['Cultura']);
+  await get(`/${h.ids.closerCourse}`, 'closer', 404);
+  await get(`/${h.ids.closerCourse}?all=true`, 'manager');
+});
