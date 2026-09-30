@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 backup=${1:-}
 [[ ${2:-} == --confirm && ${3:-} == RESTORE ]] || {
@@ -37,7 +37,9 @@ compose() {
   docker compose "${args[@]}" "$@"
 }
 
-BACKUP_DIR=${PRE_RESTORE_BACKUP_DIR:-"$(dirname "$backup")/pre-restore"} LEAVE_STOPPED=true \
+# The protection copy is local: an inherited upload must not interrupt the
+# handoff while services are stopped and before the restore failure trap exists.
+BACKUP_DIR=${PRE_RESTORE_BACKUP_DIR:-"$(dirname "$backup")/pre-restore"} LEAVE_STOPPED=true BACKUP_UPLOAD_S3=false \
   bash "$(dirname "$0")/backup.sh" "$root"
 
 restart() { compose up -d --no-build; }

@@ -5,6 +5,12 @@ homologação com serviços e infraestrutura reais. Marque cada item com data,
 responsável e evidência; não marque uma validação externa usando apenas
 `npm run verify`.
 
+> **Homologação de 30/09/2026:** consulte o
+> [relatório de entrega por critério](../reviews/2026-09-30-issue-delivery.md).
+> Ele registra os ensaios Linux de restore/rollback, uploads autenticados,
+> revogação, SMTP, retenção e seus limites. Os registros históricos abaixo não
+> substituem a identificação da revisão, ambiente e evidência atual.
+
 ## Environment Variables
 
 - [ ] `.env` existe somente no ambiente operacional e possui modo `0600`.
@@ -181,12 +187,12 @@ responsável e evidência; não marque uma validação externa usando apenas
 > restore integral, rollback, S3 ou todas as jornadas autenticadas. Consulte o
 > [acompanhamento atualizado](../reports/2026-09-28-issue-remediation.md).
 
-- O último código publicado e validado no domínio live permanece no commit
-  `fd45dc1`; o workflow CI/deploy correspondente foi o `31436331884`.
-- A branch local contém commits posteriores de hardening do AutoCard e ainda
-  não foi enviada nem publicada novamente.
-- Push, novo CI/deploy e validação manual no browser/live do hardening permanecem
-  pendentes.
+- No registro histórico desta seção, o código publicado era `fd45dc1`, com
+  workflow `31436331884`. As publicações posteriores estão no acompanhamento
+  de 28/09 e no relatório de 30/09 vinculados acima.
+- Os commits de hardening e a publicação pendentes naquele registro devem ser
+  confrontados com as revisões e os resultados posteriores, sem extrapolar o
+  alcance das evidências antigas.
 - O projeto Firebase oficial permanece `ownerinc-portal-interno-prod`.
 - A produção não deve ser declarada plenamente pronta enquanto os itens
   externos pendentes abaixo não tiverem responsável e evidência registrados.

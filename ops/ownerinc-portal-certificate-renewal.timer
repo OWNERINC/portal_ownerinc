@@ -1,0 +1,12 @@
+[Unit]
+Description=Twice-daily Portal Ownerinc HTTPS renewal check
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00 UTC
+RandomizedDelaySec=30min
+AccuracySec=1min
+Persistent=true
+Unit=ownerinc-portal-certificate-renewal.service
+
+[Install]
+WantedBy=timers.target

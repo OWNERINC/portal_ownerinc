@@ -17,5 +17,5 @@ aws_args=(s3 cp --recursive "$backup_dir/" "$target")
 if [[ -n ${AWS_ENDPOINT_URL:-} ]]; then
   aws_args=(--endpoint-url "$AWS_ENDPOINT_URL" "${aws_args[@]}")
 fi
-"${aws_args[@]}"
+aws "${aws_args[@]}"
 printf 'Backup uploaded: %s\n' "$target"
