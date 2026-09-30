@@ -41,6 +41,11 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
 .autocard-toolbar p{margin:4px 0 0;color:#c9c0b4;font-size:13px}
 .autocard-toolbar nav{display:flex;gap:4px;align-self:flex-end}
 .autocard-toolbar .tab{border-radius:8px 8px 0 0}
+/* Change only focus color: light controls/dialogs need dark ink, dark areas keep gold. */
+.autocard-content :where(button,input,textarea,[tabindex]):focus-visible,
+#assetDialog :where(button,input,textarea,[tabindex]):focus-visible{outline-color:var(--focus)}
+.autocard-toolbar :where(button,input,textarea,[tabindex]):focus-visible,
+.gallery :where(button,input,textarea,[tabindex]):focus-visible{outline-color:#b4a28e}
 .portal-wrapper .topbar{height:var(--topbar-height);background:var(--surface);border-bottom:1px solid var(--border);padding:0 var(--space-8);position:sticky;top:0;z-index:50;box-shadow:none}
 .autocard-page .gallery{min-height:0}
 .autocard-page .editor,.autocard-page .preview-area{min-width:0}
@@ -60,7 +65,7 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
 .crop-zoom{display:flex;align-items:center;gap:12px;font-size:13px;font-weight:700}
 .crop-zoom input{width:100%;min-width:0;min-height:44px;accent-color:var(--ink)}
 .crop-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
-#cropDialog :where(button,input):focus-visible,.crop-frame:focus-visible{outline:3px solid #b99a61;outline-offset:3px}
+#cropDialog :where(button,input):focus-visible,.crop-frame:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
 @media(max-width:500px){#cropDialog{width:calc(100vw - 20px);max-height:calc(100dvh - 20px)}.crop-dialog-form{max-height:calc(100dvh - 20px);padding:18px}.crop-frame{max-height:54dvh}.crop-actions{flex-direction:column}.crop-actions button{width:100%}.crop-zoom{align-items:stretch;flex-direction:column;gap:6px}}
 @media(prefers-reduced-motion:reduce){#cropDialog *,#cropDialog *::before,#cropDialog *::after{animation:none!important;transition:none!important}}
 .card-media-frame{width:100%;height:var(--media-height);flex:0 0 var(--media-height);overflow:hidden;position:relative}

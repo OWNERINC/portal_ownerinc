@@ -193,6 +193,24 @@ visual amplo.
 
 ## Matriz de Validação
 
+### Contratos complementares — 30 de setembro de 2026
+
+- O link `.sidebar-brand` dos 12 HTML canônicos mantém o nome acessível
+  `Ownerinc` com o menu expandido ou recolhido, sem alterar a expansão por Enter.
+- No AutoCard, os botões nativos de navegação, variação e tamanho de mídia
+  expõem `aria-pressed`: criar/claro/médio são os valores iniciais. Selecionar
+  ou abrir um card salvo sincroniza o estado com a classe ativa; cancelar a
+  confirmação de navegação preserva o estado anterior e o rascunho. Não são tabs
+  ARIA e não introduzem navegação roving por setas.
+- O foco usa `--focus` nas superfícies claras e nos dialogs (que ficam fora
+  de `.autocard-content`), mantendo o dourado claro na toolbar/gallery escuras
+  e o foco próprio do sidebar. Espessura de 3 px e offsets existentes (+2 px,
+  −3 px em assets/cards salvos e +3 px no recorte) permanecem; cores do card e
+  PNG não mudam. Validar contraste contra pixels adjacentes reais, não apenas
+  contra o token de fundo. AX automatizada não substitui leitor de tela manual.
+
+### Cobertura manual a validar
+
 - Desktop: Chrome, Edge e Firefox em 1024x768 e 1440x900.
 - Mobile: Safari iOS 390x844, Chrome Android 360x800 e viewport 320x568.
 - Tablet: 768x1024 em portrait e landscape.
