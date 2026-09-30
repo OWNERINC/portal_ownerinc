@@ -1,0 +1,1537 @@
+diff --git a/public/admin.html b/public/admin.html
+index e9be7a6..50bf6cf 100644
+--- a/public/admin.html
++++ b/public/admin.html
+@@ -8,6 +8,7 @@
+   <link rel="stylesheet" href="./css/tokens.css">
+   <link rel="stylesheet" href="./css/layout.css">
+   <link rel="stylesheet" href="./css/components.css">
++  <link rel="stylesheet" href="./css/admin.css">
+   <script src="./js/auth-shell.js"></script>
+ </head>
+ <body>
+@@ -54,6 +55,7 @@
+       <div class="page-header"><h1>Painel Administrativo</h1></div>
+ 
+       <div class="admin-tabs" id="admin-tabs" role="tablist" aria-label="Áreas administrativas"></div>
++      <div id="job-title-options-feedback" class="form-help" role="status" aria-live="polite"></div>
+ 
+       <!-- Solicitações de cadastro -->
+       <section id="section-registrations" class="admin-section" role="tabpanel" aria-labelledby="tab-registrations" hidden>
+@@ -81,8 +83,8 @@
+           <div class="card-title">Importar usuários em lote</div>
+           <p class="card-copy">CSV UTF-8 com até 500 linhas e cabeçalhos: name,email,job_title,contract_type,pj_due_day,phone. Todos serão leitores; cargos precisam estar ativos e o dia só vale para PJ.</p>
+           <a class="btn btn-ghost btn-sm" href="./modelo-convites-usuarios.csv" download>Baixar modelo CSV</a>
+-          <p class="card-copy"><strong>Antes de importar:</strong> substitua ou remova as duas linhas de exemplo do modelo.</p>
+-          <ul class="card-copy">
++          <p id="bulk-csv-examples" class="card-copy"><strong>Antes de importar:</strong> substitua ou remova as duas linhas de exemplo do modelo.</p>
++          <ul id="bulk-csv-columns" class="card-copy">
+             <li><code>name</code>: obrigatório, até 120 caracteres.</li>
+             <li><code>email</code>: obrigatório, válido e não repetido no arquivo ou no Portal.</li>
+             <li><code>job_title</code>: nome exato de um cargo ativo cadastrado no Portal.</li>
+@@ -90,12 +92,20 @@
+             <li><code>pj_due_day</code>: deixe vazio para CLT; para PJ, informe um dia de 1 a 31.</li>
+             <li><code>phone</code>: opcional, até 40 caracteres.</li>
+           </ul>
+-          <p class="card-copy">Mantenha o formato CSV UTF-8, os cabeçalhos na mesma ordem e o limite de 500 pessoas.</p>
+-          <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv">
++          <p id="bulk-csv-help" class="card-copy">Mantenha o formato CSV UTF-8, os cabeçalhos na mesma ordem e o limite de 500 pessoas. Pré-visualize e confira as linhas antes de confirmar a importação.</p>
++          <label for="bulk-csv" class="form-label">Arquivo CSV de convites</label>
++          <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv" aria-describedby="bulk-csv-help bulk-csv-columns bulk-csv-examples">
+           <div id="bulk-import-feedback" class="form-feedback" role="alert" aria-live="polite"></div>
+           <div id="bulk-preview" hidden style="margin-top:12px"></div>
+           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button id="bulk-preview-button" class="btn btn-ghost" type="button">Pré-visualizar</button><button id="bulk-confirm-button" class="btn btn-primary" type="button" disabled>Confirmar importação</button><button id="bulk-retry-button" class="btn btn-ghost" type="button" hidden>Tentar falhas novamente</button></div>
+         </div>
++        <form id="users-filters" class="filter-bar admin-filters" novalidate>
++          <div class="form-group"><label class="form-label" for="users-q">Nome ou e-mail</label><input id="users-q" class="form-input" type="search" maxlength="200" aria-describedby="users-q-error"><span id="users-q-error" class="form-feedback" role="alert"></span></div>
++          <div class="form-group"><label class="form-label" for="users-role">Perfil</label><select id="users-role" class="form-select" aria-describedby="users-role-error"><option value="">Todos</option><option value="viewer">Leitor</option><option value="admin">Administrador</option></select><span id="users-role-error" class="form-feedback" role="alert"></span></div>
++          <div class="form-group"><label class="form-label" for="users-state">Estado da conta</label><select id="users-state" class="form-select" aria-describedby="users-state-error"><option value="">Todos</option><option value="active">Ativo</option><option value="disabled">Desativado</option><option value="enable_pending">Habilitação pendente</option></select><span id="users-state-error" class="form-feedback" role="alert"></span></div>
++          <div class="form-group"><label class="form-label" for="users-job-title-id">Cargo</label><select id="users-job-title-id" class="form-select" aria-describedby="users-job-title-id-error"><option value="">Todos</option></select><span id="users-job-title-id-error" class="form-feedback" role="alert"></span></div>
++          <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="users-clear" class="btn btn-ghost" type="button">Limpar</button></div>
++        </form>
+         <div class="table-wrapper">
+           <table>
+             <caption>Usuários autorizados no Portal</caption>
+@@ -110,11 +120,18 @@
+         <div id="users-pagination" class="pagination" aria-label="Paginação de usuários"></div>
+         <div id="audit-panel" class="admin-subsection" hidden>
+           <div class="section-header"><h3>Atividade administrativa recente</h3></div>
++          <p id="audit-dates-help" class="form-help">Período por dias civis de São Paulo, incluindo as datas inicial e final. Nome do ator é o nome atual, não um registro histórico.</p>
++          <form id="audit-filters" class="filter-bar admin-filters" novalidate>
++            <div class="form-group"><label class="form-label" for="audit-action">Código exato da ação</label><input id="audit-action" class="form-input" maxlength="120" placeholder="Ex.: user.update" aria-describedby="audit-action-error"><span id="audit-action-error" class="form-feedback" role="alert"></span></div>
++            <div class="form-group"><label class="form-label" for="audit-from">De</label><input id="audit-from" class="form-input" type="date" min="0001-01-01" max="9999-12-31" aria-describedby="audit-dates-help audit-from-error"><span id="audit-from-error" class="form-feedback" role="alert"></span></div>
++            <div class="form-group"><label class="form-label" for="audit-to">Até</label><input id="audit-to" class="form-input" type="date" min="0001-01-01" max="9999-12-31" aria-describedby="audit-dates-help audit-to-error"><span id="audit-to-error" class="form-feedback" role="alert"></span></div>
++            <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="audit-clear" class="btn btn-ghost" type="button">Limpar</button></div>
++          </form>
+           <div class="table-wrapper">
+             <table>
+                <caption>Eventos administrativos</caption>
+-              <thead><tr><th scope="col">Data</th><th scope="col">Ator</th><th scope="col">Ação</th><th scope="col">Alvo</th></tr></thead>
+-              <tbody id="audit-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
++              <thead><tr><th scope="col">Data (São Paulo)</th><th scope="col">Ator atual</th><th scope="col">Ação</th><th scope="col">Alvo</th><th scope="col">Request ID</th></tr></thead>
++              <tbody id="audit-tbody"><tr><td colspan="5" class="empty-state">Carregando…</td></tr></tbody>
+             </table>
+           </div>
+           <div id="audit-pagination" class="pagination" aria-label="Paginação da auditoria"></div>
+@@ -149,6 +166,11 @@
+             </div>
+           </form>
+         </div>
++        <form id="titles-filters" class="filter-bar admin-filters" novalidate>
++          <div class="form-group"><label class="form-label" for="titles-q">Nome do cargo</label><input id="titles-q" class="form-input" type="search" maxlength="200" aria-describedby="titles-q-error"><span id="titles-q-error" class="form-feedback" role="alert"></span></div>
++          <div class="form-group"><label class="form-label" for="titles-active">Situação do cargo</label><select id="titles-active" class="form-select" aria-describedby="titles-active-error"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select><span id="titles-active-error" class="form-feedback" role="alert"></span></div>
++          <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="titles-clear" class="btn btn-ghost" type="button">Limpar</button></div>
++        </form>
+         <div class="table-wrapper">
+           <table>
+             <caption>Cargos disponíveis para os usuários</caption>
+@@ -156,6 +178,7 @@
+             <tbody id="job-titles-tbody"><tr><td colspan="4" class="empty-state">Carregando…</td></tr></tbody>
+           </table>
+         </div>
++        <div id="job-titles-pagination" class="pagination" aria-label="Paginação de cargos"></div>
+       </section>
+ 
+       <!-- Academy -->
+@@ -267,9 +290,10 @@
+     </div>
+     <div class="form-group">
+       <label class="form-label" for="u-job-title">Cargo</label>
+-      <select class="form-select" id="u-job-title" name="job_title_id">
++      <select class="form-select" id="u-job-title" name="job_title_id" aria-describedby="user-job-title-help">
+         <option value="">Sem cargo definido</option>
+       </select>
++      <p id="user-job-title-help" class="form-help" hidden></p>
+     </div>
+      <p id="user-form-help" class="form-help">Convite administrativo: a pessoa receberá um e-mail para criar a primeira senha e, depois, acessar o Portal.</p>
+     <div class="form-group">
+diff --git a/public/css/admin.css b/public/css/admin.css
+index b8b0c79..5a19f66 100644
+--- a/public/css/admin.css
++++ b/public/css/admin.css
+@@ -1,3 +1,11 @@
+ .admin-users-table td { padding-block: 8px; }
+ .admin-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+ .admin-row-actions summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
++.admin-filters { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
++.admin-filters .form-group { flex: 1 1 180px; min-width: 0; margin-bottom: 0; }
++.admin-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; align-self: center; }
++.admin-filters .form-feedback:empty, #job-title-options-feedback:empty { display: none; }
++.admin-section .table-actions .form-help { white-space: normal; min-width: 180px; }
++@media (max-width: 600px) {
++  .admin-filters .form-group { flex-basis: 100%; }
++}
+diff --git a/public/js/admin.js b/public/js/admin.js
+index 1f55912..c0dcd75 100644
+--- a/public/js/admin.js
++++ b/public/js/admin.js
+@@ -1,6 +1,7 @@
+ import { can, fetchAPI, fetchAPIPage } from './auth.js';
+ import { canLeavePageUI, clear, closeDialog, element, openDialog, safeHttpUrl, setDialogCloseGuard, protectForm } from './ui.js';
+ import { createBulkPreviewState } from './bulk-preview-state.js';
++import { ADMIN_LIST_FIELDS, readAdminListURL, writeAdminListURL, validateAdminFilters, adminListQuery } from './admin-list-state.js';
+ 
+ const requests = { fetchAPI, fetchAPIPage };
+ export function mount(page) {
+@@ -29,11 +30,17 @@ let editingCourseId = null;
+ let editingBenefitId = null;
+ let solidesLinks = [];
+ let jobTitles = [];
++let jobTitleOptions = [];
++let catalogVersion = 0;
++let catalogPending = null;
++let catalogReady = false;
++let catalogEditor = null;
++let editingUser = null;
++const lists = Object.fromEntries(Object.keys(ADMIN_LIST_FIELDS).map(key => [key, { filters: {}, page: 1, request: 0 }]));
+ let registrations = [];
+ let editingJobTitleId = null;
+ let reviewingRegistration = null;
+ let registrationReviewAction = 'approve';
+-const AUDIT_PAGE_SIZE = 50;
+ let bulkPreviewRows = [];
+ const bulkPreviewState = createBulkPreviewState();
+ let bulkJobId = null;
+@@ -84,16 +91,192 @@ function serverPagination(key, total, paginationId, load) {
+   );
+ }
+ 
+-function renderJobTitleOptions(selectedId = '') {
+-  const select = document.getElementById('u-job-title');
+-  if (!select) return;
+-  clear(select).append(element('option', { value: '', text: 'Sem cargo definido' }));
+-  jobTitles.filter(title => title.active || title.id === selectedId).forEach(title => select.append(
++const filterId = (key, field) => `${key}-${field.replace(/_/g, '-')}`;
++function syncFilterControls(key) {
++  for (const field of ADMIN_LIST_FIELDS[key]) {
++    const id = filterId(key, field), input = document.getElementById(id);
++    if (field === 'job_title_id') fillTitleSelect(input, lists[key].filters[field] || '', 'Todos', true, true);
++    else input.value = lists[key].filters[field] || '';
++    input.removeAttribute('aria-invalid');
++    document.getElementById(`${id}-error`).textContent = '';
++  }
++}
++
++function restoreListURL() {
++  const url = new URL(location.href);
++  for (const key of Object.keys(lists)) {
++    Object.assign(lists[key], readAdminListURL(key, location.search));
++    lists[key].request++;
++    syncFilterControls(key);
++    writeAdminListURL(url, key, lists[key]);
++  }
++  if (url.href !== location.href) history.replaceState({}, '', url);
++}
++
++function writeListURL(key, push = true) {
++  const url = writeAdminListURL(new URL(location.href), key, lists[key]);
++  if (url.href !== location.href) history[push ? 'pushState' : 'replaceState']({}, '', url);
++}
++
++const listLoaders = { users: loadUsers, titles: loadJobTitles, audit: loadAudit };
++function bindFilters(key) {
++  page.listen(document.getElementById(`${key}-filters`), 'submit', event => {
++    event.preventDefault();
++    if (!page.active) return;
++    const raw = Object.fromEntries(ADMIN_LIST_FIELDS[key].map(field => [field, document.getElementById(filterId(key, field)).value]));
++    const { values, errors } = validateAdminFilters(key, raw);
++    for (const field of ADMIN_LIST_FIELDS[key]) {
++      const id = filterId(key, field), input = document.getElementById(id);
++      // Date inputs may sanitize an impossible typed date to an empty value.
++      if (input.validity?.badInput) errors[field] = 'Informe uma data real.';
++      input.setAttribute('aria-invalid', String(Boolean(errors[field])));
++      document.getElementById(`${id}-error`).textContent = errors[field] || '';
++    }
++    if (Object.keys(errors).length) { document.getElementById(filterId(key, Object.keys(errors)[0])).focus(); return; }
++    lists[key].filters = values; lists[key].page = 1;
++    syncFilterControls(key); writeListURL(key); void listLoaders[key]();
++  });
++  page.listen(document.getElementById(`${key}-clear`), 'click', () => {
++    if (!page.active) return;
++    lists[key].filters = {}; lists[key].page = 1;
++    syncFilterControls(key); writeListURL(key); void listLoaders[key]();
++  });
++}
++
++// Each list has its own generation. Detached retry/pagination/row controls
++// retain their generation too, so even programmatic old clicks are harmless.
++async function loadAdminList(key, endpoint, tbodyId, columns, label, render) {
++  if (!page.active || !canManageUsers() || (key === 'audit' && !isSuperAdmin(me))) return;
++  const state = lists[key], request = ++state.request;
++  const current = () => page.active && request === state.request;
++  const tbody = document.getElementById(tbodyId);
++  tableState(tbodyId, columns, `Carregando ${label}…`);
++  tbody.setAttribute('aria-busy', 'true');
++  try {
++    let result = await fetchAPIPage(`${endpoint}?${adminListQuery(key, state)}`);
++    if (!current()) return;
++    const lastPage = Math.min(20001, Math.max(1, Math.ceil((result.total ?? result.data.length) / 50)));
++    if (!result.data.length && state.page > lastPage) {
++      state.page = lastPage; writeListURL(key, false);
++      // One bounded recovery; a continuously shrinking dataset cannot loop.
++      result = await fetchAPIPage(`${endpoint}?${adminListQuery(key, state)}`);
++      if (!current()) return;
++    }
++    if (!result.data.length) tableState(tbodyId, columns, 'Nenhum resultado para estes filtros.');
++    else render(result.data, current);
++    const total = result.total ?? result.data.length;
++    const count = Math.min(20001, Math.max(1, Math.ceil(total / 50)));
++    if (!result.data.length && state.page > count) { state.page = count; writeListURL(key, false); }
++    const selectedPage = state.page;
++    const changePage = next => {
++      if (!current() || next < 1 || next > count) return;
++      state.page = next; writeListURL(key); void listLoaders[key]();
++    };
++    clear(document.getElementById(tbodyId.replace(/-tbody$/, '-pagination'))).append(
++      element('button', { className: 'btn btn-ghost', type: 'button', text: 'Anterior', disabled: selectedPage <= 1, on: { click: () => changePage(selectedPage - 1) } }),
++      element('span', { text: `Página ${selectedPage} de ${count} · ${total} resultados` }),
++      element('button', { className: 'btn btn-ghost', type: 'button', text: 'Próxima', disabled: selectedPage >= count, on: { click: () => changePage(selectedPage + 1) } }),
++    );
++  } catch {
++    if (current()) tableState(tbodyId, columns, `Não foi possível carregar ${label}.`, () => { if (current()) void listLoaders[key](); });
++  } finally {
++    if (current()) tbody.setAttribute('aria-busy', 'false');
++  }
++}
++
++function isSuperAdmin(user) { return user?.role === 'admin' && user.permissions?.superAdmin === true; }
++function canManageUsers() { return me.role === 'admin' && (isSuperAdmin(me) || me.permissions?.manageUsers === true); }
++
++function fillTitleSelect(select, selectedId, emptyLabel, all = false, preserveUnknown = false) {
++  const knownLabel = [...select.options].find(option => option.value === selectedId)?.textContent;
++  clear(select).append(element('option', { value: '', text: emptyLabel }));
++  jobTitleOptions.filter(title => all || title.active === true || (editingUserId && title.id === editingUser?.job_title_id && select.id === 'u-job-title')).forEach(title => select.append(
+     element('option', { value: title.id, text: title.active ? title.name : `${title.name} (inativo)` })
+   ));
++  if (selectedId && preserveUnknown && ![...select.options].some(option => option.value === selectedId)) {
++    select.append(element('option', { value: selectedId, text: knownLabel || (editingUser?.job_title_id === selectedId ? editingUser.job_title : '') || `Cargo selecionado (${selectedId})` }));
++  }
+   select.value = selectedId || '';
+ }
+ 
++function updateUserTitleHelp() {
++  const id = document.getElementById('u-job-title').value;
++  const title = jobTitleOptions.find(item => item.id === id);
++  const inactive = title ? title.active === false : id && id === editingUser?.job_title_id && editingUser.job_title_active === false;
++  const help = document.getElementById('user-job-title-help');
++  help.hidden = !inactive;
++  help.textContent = inactive ? 'Cargo inativo: o vínculo permanece, mas o acesso derivado está indisponível até uma atribuição ou ativação autorizada. A conta não foi desativada por isso.' : '';
++}
++
++function renderCatalogOptions() {
++  renderJobTitleOptions(document.getElementById('u-job-title').value);
++  const registration = document.getElementById('registration-job-title');
++  fillTitleSelect(registration, registration.value, 'Selecione um cargo');
++  const filter = document.getElementById('users-job-title-id');
++  fillTitleSelect(filter, filter.value, 'Todos', true, true);
++}
++
++function loadJobTitleOptions() {
++  if (!page.active || !canManageUsers()) return Promise.reject(new Error('Unavailable catalog'));
++  if (catalogReady) return Promise.resolve();
++  if (catalogPending) return catalogPending;
++  const version = ++catalogVersion;
++  const current = () => page.active && version === catalogVersion;
++  const feedback = document.getElementById('job-title-options-feedback');
++  feedback.textContent = 'Carregando todos os cargos para filtros e formulários…';
++  const pending = (async () => {
++    try {
++      const complete = new Map();
++      let offset = 0, total = 1;
++      while (offset < total) {
++        const result = await fetchAPIPage(`/api/job-titles?all=true&limit=100&offset=${offset}`);
++        if (!current()) throw new DOMException('Obsolete catalog', 'AbortError');
++        total = result.total ?? result.data.length;
++        if (!result.data.length && offset < total) throw new Error('Incomplete catalog');
++        result.data.forEach(title => complete.set(title.id, title));
++        offset += result.data.length;
++        if (offset > 1000000 && offset < total) throw new Error('Catalog exceeds pagination limit');
++      }
++      if (complete.size < total) throw new Error('Incomplete catalog');
++      jobTitleOptions = [...complete.values()]; catalogReady = true;
++      renderCatalogOptions(); clear(feedback);
++    } catch (error) {
++      if (current()) {
++        feedback.textContent = 'Não foi possível carregar todos os cargos. Nenhuma opção parcial foi aplicada. ';
++        feedback.append(element('button', { type: 'button', className: 'btn btn-ghost btn-sm', text: 'Tentar novamente', on: { click: () => {
++          if (!current()) return;
++          if (catalogEditor) requestCatalogEditor(catalogEditor.open);
++          else void loadJobTitleOptions().catch(() => {});
++        } } }));
++      }
++      throw error;
++    } finally { if (current()) catalogPending = null; }
++  })();
++  catalogPending = pending;
++  return pending;
++}
++
++function requestCatalogEditor(open) {
++  const intent = { open, tab: activeTab };
++  catalogEditor = intent;
++  void loadJobTitleOptions().then(() => {
++    if (!page.active || catalogEditor !== intent || activeTab !== intent.tab) return;
++    catalogEditor = null; open();
++  }).catch(() => {});
++}
++
++async function refreshJobTitles() {
++  catalogVersion++; catalogReady = false; catalogPending = null;
++  await Promise.all([loadJobTitles(), loadJobTitleOptions().catch(() => {})]);
++}
++
++function renderJobTitleOptions(selectedId = '') {
++  const select = document.getElementById('u-job-title');
++  if (!select) return;
++  fillTitleSelect(select, selectedId, 'Sem cargo definido', false, Boolean(editingUserId && selectedId === editingUser?.job_title_id));
++  updateUserTitleHelp();
++}
++
+ function showJobTitleEditor(title = null) {
+   editingJobTitleId = title?.id || null;
+   document.getElementById('job-title-name').value = title?.name || '';
+@@ -111,7 +294,7 @@ function hideJobTitleEditor() {
+   markJobTitleClean();
+ }
+ 
+-function renderJobTitles() {
++function renderJobTitles(current) {
+   const tbody = clear(document.getElementById('job-titles-tbody'));
+   if (!jobTitles.length) return tableState('job-titles-tbody', 4, 'Nenhum cargo cadastrado.');
+   jobTitles.forEach(title => tbody.append(element('tr', {}, [
+@@ -119,22 +302,14 @@ function renderJobTitles() {
+     cell(title.user_count || 0),
+     cell(title.active ? 'Ativo' : 'Inativo', `badge ${title.active ? 'badge-green' : 'badge-gray'}`),
+     actions(
+-      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar cargo: ${title.name}`, on: { click: () => showJobTitleEditor(title) } }),
+-      element('button', { className: title.active ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm', type: 'button', text: title.active ? 'Desativar' : 'Ativar', 'aria-label': `${title.active ? 'Desativar' : 'Ativar'} cargo: ${title.name}`, on: { click: () => toggleJobTitle(title) } }),
++      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar cargo: ${title.name}`, on: { click: () => { if (current()) showJobTitleEditor(title); } } }),
++      element('button', { className: title.active ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm', type: 'button', text: title.active ? 'Desativar' : 'Ativar', 'aria-label': `${title.active ? 'Desativar' : 'Ativar'} cargo: ${title.name}`, on: { click: () => { if (current()) void toggleJobTitle(title); } } }),
+     ),
+   ])));
+ }
+ 
+ async function loadJobTitles() {
+-  tableState('job-titles-tbody', 4, 'Carregando cargos…');
+-  try {
+-    const result = await fetchAPIPage('/api/job-titles?all=true&limit=100&offset=0');
+-    jobTitles = result.data;
+-    renderJobTitles();
+-    renderJobTitleOptions(document.getElementById('u-job-title')?.value || '');
+-  } catch {
+-    tableState('job-titles-tbody', 4, 'Não foi possível carregar os cargos.', loadJobTitles);
+-  }
++  return loadAdminList('titles', '/api/job-titles', 'job-titles-tbody', 4, 'os cargos', (data, current) => { jobTitles = data; renderJobTitles(current); });
+ }
+ 
+ async function discoverAdminFeatures() {
+@@ -158,7 +333,7 @@ async function toggleJobTitle(title) {
+       method: 'PUT', body: JSON.stringify({ name: title.name, active: !title.active }),
+     });
+     showToast(title.active ? 'Cargo desativado.' : 'Cargo ativado.');
+-    await loadJobTitles();
++    await refreshJobTitles();
+   } catch (error) {
+     showToast(`Não foi possível atualizar o cargo: ${error.message}`);
+   }
+@@ -339,36 +514,45 @@ async function runSolidesProbe() {
+ }
+ 
+ async function loadUsers() {
+-  tableState('users-tbody', 8, 'Carregando usuários…');
+-  try {
+-    pages.users ||= 0;
+-    const result = await fetchAPIPage(`/api/users?limit=50&offset=${pages.users * 50}`);
+-    users = result.data;
+-    if (!users.length) return tableState('users-tbody', 8, 'Nenhum usuário cadastrado.');
++  return loadAdminList('users', '/api/users', 'users-tbody', 8, 'os usuários', (data, current) => {
++    users = data;
+     const tbody = clear(document.getElementById('users-tbody'));
+-    users.forEach(user => {
++    users.forEach((user, index) => {
+         const isPJ = user.contract_type === 'pj' || user.is_pj;
+-        const disabled = user.state === 'disabled' || user.permissions?.accountDisabled === true;
++        const disabled = user.state === 'disabled' || user.permissions?.accountDisabled === true || user.permissions?.accountDisabled === 'true';
+         const enablePending = !disabled && (user.state === 'enable_pending' || user.firebase_enable_pending === true);
+         const stateLabel = disabled ? 'Desativado' : enablePending ? 'Habilitação pendente' : 'Ativo';
++        const policy = userActions(user), helpId = `user-actions-${lists.users.request}-${index}`;
++        const jobCell = cell(user.job_title || '—');
++        if (user.job_title_active === false) jobCell.append(element('p', { className: 'form-help', text: 'Cargo inativo: vínculo mantido, acesso derivado indisponível até atribuição ou ativação autorizada. Não desativa a conta.' }));
++        const rowActions = actions(
++          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', disabled: !policy.edit, 'aria-describedby': helpId, 'aria-label': `Editar usuário: ${user.name || user.email}`, on: { click: () => { if (current() && policy.edit) editUser(user); } } }),
++          element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', disabled: !policy.status, 'aria-describedby': helpId, 'aria-label': `${disabled ? 'Reativar' : 'Desativar'} usuário: ${user.name || user.email}`, on: { click: () => { if (current() && policy.status) void (disabled ? reactivateUser(user.uid) : deleteUser(user.uid)); } } }),
++          ...(isSuperAdmin(me) ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', disabled: !policy.erase, 'aria-describedby': helpId, 'aria-label': `Anonimizar usuário: ${user.name || user.email}`, on: { click: () => { if (current() && policy.erase) void eraseUserData(user.uid); } } })] : []),
++          element('p', { id: helpId, className: 'form-help', text: policy.reason, hidden: !policy.reason }),
++        );
+         tbody.append(element('tr', {}, [
+           cell(user.name || '—'), cell(user.email || '—'),
+           cell(user.role === 'admin' ? 'Administrador' : 'Leitor', `badge ${user.role === 'admin' ? 'badge-gold' : 'badge-gray'}`),
+-          cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), cell(user.job_title || '—'), cell(isPJ ? user.pj_due_day || '—' : '—'),
++          cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), jobCell, cell(isPJ ? user.pj_due_day || '—' : '—'),
+           cell(stateLabel, `badge ${disabled || enablePending ? 'badge-gray' : 'badge-green'}`),
+-          actions(
+-            element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar usuário: ${user.name || user.email}`, on: { click: () => editUser(user) } }),
+-            element('button', { className: disabled ? 'btn btn-ghost btn-sm' : 'btn btn-danger btn-sm', type: 'button', text: disabled ? 'Reativar' : 'Desativar', 'aria-label': `${disabled ? 'Reativar' : 'Desativar'} usuário: ${user.name || user.email}`, on: { click: () => disabled ? reactivateUser(user.uid) : deleteUser(user.uid) } }),
+-            ...(disabled && can(me, 'superAdmin') && !user.email.endsWith('@invalid.local')
+-               ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', 'aria-label': `Anonimizar usuário: ${user.name || user.email}`, on: { click: () => eraseUserData(user.uid) } })]
+-              : []),
+-          ),
++          rowActions,
+         ]));
+     });
+-    serverPagination('users', result.total || users.length, 'users-pagination', loadUsers);
+-  } catch {
+-    tableState('users-tbody', 8, 'Não foi possível carregar os usuários.', loadUsers);
+-  }
++  });
++}
++
++function userActions(user) {
++  const own = user.uid === me.uid, protectedTarget = isSuperAdmin(user);
++  const edit = canManageUsers() && (!protectedTarget || isSuperAdmin(me));
++  const status = edit && !own;
++  const erase = status && isSuperAdmin(me) && !protectedTarget && user.permissions?.accountDisabled === true && !user.email?.endsWith('@invalid.local');
++  const reason = !edit ? 'Somente um superadministrador pode editar ou alterar o estado deste superadministrador.'
++    : own ? 'Você pode editar seus dados permitidos, mas não desativar, reativar ou anonimizar a própria conta.'
++      : protectedTarget ? 'O servidor protege o último superadministrador. Dados de superadministradores não podem ser anonimizados.'
++        : isSuperAdmin(me) && !erase ? 'Anonimização indisponível: a desativação precisa estar confirmada pelo servidor e os dados ainda não podem ter sido anonimizados.'
++          : '';
++  return { edit, status, erase, reason };
+ }
+ 
+ async function loadRegistrations() {
+@@ -394,13 +578,16 @@ async function loadRegistrations() {
+ }
+ 
+ async function openRegistrationReview(registration, action) {
++  if (!page.active) return;
++  if (action === 'approve' && !catalogReady) {
++    requestCatalogEditor(() => openRegistrationReview(registration, action));
++    return;
++  }
++  catalogEditor = null;
+   reviewingRegistration = registration;
+   registrationReviewAction = action;
+-  if (!jobTitles.length) await loadJobTitles();
+-  if (!page.active) return;
+   const titleSelect = document.getElementById('registration-job-title');
+-  clear(titleSelect).append(element('option', { value: '', text: 'Selecione um cargo' }));
+-  jobTitles.filter(title => title.active).forEach(title => titleSelect.append(element('option', { value: title.id, text: title.name })));
++  fillTitleSelect(titleSelect, '', 'Selecione um cargo');
+   document.getElementById('modal-registration-title').textContent = action === 'approve' ? 'Aprovar cadastro' : 'Rejeitar cadastro';
+   document.getElementById('registration-summary').textContent = `${registration.name} · ${registration.email}`;
+   document.getElementById('registration-contract-group').hidden = action !== 'approve';
+@@ -538,32 +725,20 @@ page.listen(document.getElementById('bulk-retry-button'), 'click', async () => {
+ });
+ 
+ async function loadAudit() {
+-  const panel = document.getElementById('audit-panel');
+-  const tbody = document.getElementById('audit-tbody');
+-  panel.hidden = false;
+-  try {
+-    pages.audit ||= 0;
+-    const result = await fetchAPIPage(`/api/users/audit?limit=${AUDIT_PAGE_SIZE}&offset=${pages.audit * AUDIT_PAGE_SIZE}`);
+-    const events = result.data;
+-    clear(tbody);
+-    if (!events.length) {
+-      clear(document.getElementById('audit-pagination'));
+-      tbody.append(element('tr', {}, element('td', { colspan: '4', className: 'empty-state', text: 'Nenhum evento administrativo registrado.' })));
+-      return;
+-    }
+-    const format = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
++  if (!isSuperAdmin(me)) return;
++  document.getElementById('audit-panel').hidden = false;
++  return loadAdminList('audit', '/api/users/audit', 'audit-tbody', 5, 'a auditoria', events => {
++    const tbody = clear(document.getElementById('audit-tbody'));
++    const format = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
++    const labels = { 'user.list': 'Consulta de usuários', 'user.create': 'Convite de usuário', 'user.update': 'Usuário atualizado', 'user.disable': 'Conta desativada', 'user.reactivate': 'Conta reativada', 'user.erase_personal_data': 'Dados pessoais anonimizados', 'job_title.create': 'Cargo criado', 'job_title.update': 'Cargo atualizado', 'registration.approve': 'Cadastro aprovado', 'registration.reject': 'Cadastro rejeitado' };
+     events.forEach(event => tbody.append(element('tr', {}, [
+       cell(format.format(new Date(event.created_at))),
+-      cell(event.actor_uid || 'Sistema'),
+-      cell(event.action || '—'),
++      cell(event.actor_name ?? 'Sistema ou conta removida'),
++      cell(`${Object.hasOwn(labels, event.action) ? labels[event.action] : 'Ação administrativa'} · ${event.action || '—'}`),
+       cell([event.target_type, event.target_id].filter(Boolean).join(': ') || '—'),
++      cell(event.request_id || '—'),
+     ])));
+-    serverPagination('audit', result.total ?? events.length, 'audit-pagination', loadAudit);
+-  } catch {
+-    const state = element('td', { colspan: '4', className: 'empty-state', role: 'alert', text: 'Não foi possível carregar a auditoria. ' });
+-    state.append(element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: loadAudit } }));
+-    clear(tbody).append(element('tr', {}, state));
+-  }
++  });
+ }
+ 
+ function resetPermissions() {
+@@ -590,28 +765,33 @@ function setUserFields(user = {}) {
+   document.getElementById('modal-user-save').textContent = editingUserId ? 'Salvar' : 'Enviar convite';
+   document.getElementById('user-form-feedback').textContent = '';
+   document.getElementById('u-job-title').required = !editingUserId;
+-  const mayEditPrivileges = can(me, 'superAdmin') && user.uid !== me.uid;
++  const mayEditPrivileges = isSuperAdmin(me) && user.uid !== me.uid;
+   document.getElementById('u-role').disabled = !mayEditPrivileges;
+   resetPermissions();
+   const permissions = user.permissions || {};
+   const permissionMap = { 'p-super': 'superAdmin', 'p-users': 'manageUsers', 'p-knowledge': 'manageKnowledge', 'p-reminders': 'manageReminders', 'p-academy': 'manageAcademy', 'p-benefits': 'manageBenefits', 'p-solides': 'manageSolides' };
+-  Object.entries(permissionMap).forEach(([id, permission]) => { document.getElementById(id).checked = !!permissions[permission]; });
++  Object.entries(permissionMap).forEach(([id, permission]) => { document.getElementById(id).checked = permissions[permission] === true; });
+   document.getElementById('permissions-group').hidden = !(document.getElementById('u-role').value === 'admin' && mayEditPrivileges);
+ }
+ 
+ function newUser() {
+-  editingUserId = null;
+-  document.getElementById('user-form').reset();
+-  document.getElementById('modal-user-title').textContent = 'Convidar usuário';
+-  setUserFields();
+-  openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
++  requestCatalogEditor(() => {
++    editingUser = null; editingUserId = null;
++    document.getElementById('user-form').reset();
++    document.getElementById('modal-user-title').textContent = 'Convidar usuário';
++    setUserFields();
++    openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
++  });
+ }
+ 
+ function editUser(user) {
+-  editingUserId = user.uid;
+-  document.getElementById('modal-user-title').textContent = 'Editar usuário';
+-  setUserFields(user);
+-  openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
++  if (!userActions(user).edit) return;
++  requestCatalogEditor(() => {
++    editingUser = user; editingUserId = user.uid;
++    document.getElementById('modal-user-title').textContent = 'Editar usuário';
++    setUserFields(user);
++    openDialog(document.getElementById('modal-user'), document.getElementById('u-name'));
++  });
+ }
+ 
+ async function deleteUser(uid) {
+@@ -648,7 +828,7 @@ async function eraseUserData(uid) {
+ 
+ document.getElementById('user-form').addEventListener('submit', async event => {
+   event.preventDefault();
+-  if (!event.currentTarget.reportValidity()) return;
++  if (!page.active || !catalogReady || !canManageUsers() || (editingUser && !userActions(editingUser).edit) || !event.currentTarget.reportValidity()) return;
+   const contract = document.getElementById('u-contract').value;
+   const role = document.getElementById('u-role').value;
+   const data = {
+@@ -661,7 +841,7 @@ document.getElementById('user-form').addEventListener('submit', async event => {
+   if (!editingUserId) {
+     data.email = document.getElementById('u-email').value.trim();
+   }
+-  if (can(me, 'superAdmin') && editingUserId !== me.uid) {
++  if (isSuperAdmin(me) && editingUserId !== me.uid) {
+     data.role = role;
+     data.permissions = role === 'admin' ? {
+       superAdmin: document.getElementById('p-super').checked,
+@@ -837,7 +1017,8 @@ document.getElementById('registration-contract').addEventListener('change', even
+   document.getElementById('registration-pj-day').required = isPJ;
+   if (!isPJ) document.getElementById('registration-pj-day').value = '';
+ });
+-document.getElementById('u-role').addEventListener('change', event => { document.getElementById('permissions-group').hidden = !(event.target.value === 'admin' && can(me, 'superAdmin')); });
++document.getElementById('u-role').addEventListener('change', event => { document.getElementById('permissions-group').hidden = !(event.target.value === 'admin' && isSuperAdmin(me) && editingUserId !== me.uid); });
++page.listen(document.getElementById('u-job-title'), 'change', updateUserTitleHelp);
+ document.getElementById('p-super').addEventListener('change', event => {
+   ['p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-solides'].forEach(id => { document.getElementById(id).checked = event.target.checked; document.getElementById(id).disabled = event.target.checked; });
+ });
+@@ -888,7 +1069,7 @@ document.getElementById('job-title-form').addEventListener('submit', async event
+     });
+     hideJobTitleEditor();
+     showToast(editing ? 'Cargo atualizado.' : 'Cargo criado.');
+-    await loadJobTitles();
++    await refreshJobTitles();
+   } catch (error) {
+     showToast(error.status === 409 ? 'Esse cargo já existe.' : `Não foi possível salvar o cargo: ${error.message}`);
+   } finally {
+@@ -897,7 +1078,7 @@ document.getElementById('job-title-form').addEventListener('submit', async event
+ });
+ document.getElementById('registration-form').addEventListener('submit', async event => {
+   event.preventDefault();
+-  if (!event.currentTarget.reportValidity() || !reviewingRegistration) return;
++  if (!page.active || (registrationReviewAction === 'approve' && !catalogReady) || !event.currentTarget.reportValidity() || !reviewingRegistration) return;
+   const save = document.getElementById('modal-registration-save');
+   const feedback = document.getElementById('registration-form-feedback');
+   save.disabled = true;
+@@ -936,11 +1117,22 @@ document.getElementById('btn-new-benefit').addEventListener('click', () => benef
+   document.getElementById(`${modalId}-cancel`).addEventListener('click', () => closeDialog(document.getElementById(modalId)));
+ });
+ page.listen(window, 'popstate', () => {
++  catalogEditor = null;
++  restoreListURL();
+   const requested = new URLSearchParams(location.search).get('tab');
++  const previousTab = activeTab;
+   if (document.getElementById(`tab-${requested}`)) switchTab(requested);
++  else buildTabs();
++  if (activeTab === previousTab) {
++    if (activeTab === 'users') { void loadUsers(); if (isSuperAdmin(me)) void loadAudit(); }
++    if (activeTab === 'job-titles') void loadJobTitles();
++  }
+ });
++restoreListURL();
++Object.keys(lists).forEach(bindFilters);
++page.listen(document.getElementById('admin-tabs'), 'click', () => { catalogEditor = null; });
+ buildTabs();
+-if (can(me, 'manageUsers') && activeTab !== 'job-titles') void loadJobTitles();
++if (can(me, 'manageUsers')) void loadJobTitleOptions().catch(() => {});
+ void discoverAdminFeatures().then(() => { if (page.active) buildTabs(); });
+ try {
+   const savedJobId = localStorage.getItem(`${BULK_JOB_STORAGE_KEY_PREFIX}${me.uid}`);
+diff --git a/tests/unit/frontend-invariants.test.mjs b/tests/unit/frontend-invariants.test.mjs
+index 7073717..7d3e7aa 100644
+--- a/tests/unit/frontend-invariants.test.mjs
++++ b/tests/unit/frontend-invariants.test.mjs
+@@ -255,9 +255,9 @@ test('Sólides administration loads every eligible CLT page', async () => {
+ 
+ test('admin job titles come from the API instead of an inline catalog', async () => {
+   const script = await readFile('public/js/admin.js', 'utf8');
+-  assert.match(script, /fetchAPIPage\('\/api\/job-titles\?all=true&limit=100&offset=0'\)/);
+-  assert.match(script, /jobTitles = result\.data/);
+-  assert.match(script, /jobTitles\.filter\(title => title\.active \|\| title\.id === selectedId\)/);
++  assert.match(script, /fetchAPIPage\(`\/api\/job-titles\?all=true&limit=100&offset=\$\{offset\}`\)/);
++  assert.match(script, /jobTitleOptions = \[\.\.\.complete\.values\(\)\]/);
++  assert.match(script, /jobTitleOptions\.filter\(title => all \|\| title\.active === true/);
+   assert.match(script, /text: title\.active \? title\.name : `\$\{title\.name\} \(inativo\)`/);
+   assert.doesNotMatch(script, /(?:const|let|var)\s+\w*(?:catalog|titles?)\w*\s*=\s*\[\s*(?!\])/i);
+   for (const title of [
+@@ -430,8 +430,8 @@ test('admin exposes paginated audit without removed sector controls', async () =
+   assert.match(html, /id="audit-pagination"/);
+   assert.match(html, /Cargo ativo para atribuição e acesso atual/);
+   assert.match(html, /páginas marcadas ficam disponíveis para usuários com este cargo enquanto ele estiver ativo/);
+-  assert.match(script, /fetchAPIPage\(`\/api\/users\/audit\?limit=\$\{AUDIT_PAGE_SIZE\}/);
+-  assert.match(script, /serverPagination\('audit'/);
++  assert.match(script, /loadAdminList\('audit', '\/api\/users\/audit'/);
++  assert.match(script, /timeZone: 'America\/Sao_Paulo'/);
+   assert.doesNotMatch(html, /ombudsman|Ouvidoria|viewOmbudsman/i);
+   assert.doesNotMatch(script, /ombudsman|Ouvidoria|viewOmbudsman/i);
+ });
+diff --git a/public/js/admin-list-state.js b/public/js/admin-list-state.js
+new file mode 100644
+index 0000000..b2fec93
+--- /dev/null
++++ b/public/js/admin-list-state.js
+@@ -0,0 +1,66 @@
++// The UI owns these names; only the validated field names below reach the API.
++export const ADMIN_LIST_FIELDS = {
++  users: ['q', 'role', 'state', 'job_title_id'],
++  titles: ['q', 'active'],
++  audit: ['action', 'from', 'to'],
++};
++const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
++
++function civilDate(value) {
++  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
++  const [year, month, day] = value.split('-').map(Number);
++  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
++  return year >= 1 && year <= 9999 && month >= 1 && month <= 12
++    && day >= 1 && day <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
++}
++
++export function validateAdminFilters(key, input) {
++  const values = {}, errors = {};
++  for (const field of ADMIN_LIST_FIELDS[key]) {
++    const value = typeof input[field] === 'string' ? input[field].trim() : '';
++    if (!value) continue;
++    let error = '';
++    if (field === 'q' && value.length > 200) error = 'Use até 200 caracteres.';
++    if (field === 'action' && value.length > 120) error = 'Use até 120 caracteres para o código exato.';
++    if (field === 'role' && !['viewer', 'admin'].includes(value)) error = 'Selecione um perfil válido.';
++    if (field === 'state' && !['active', 'disabled', 'enable_pending'].includes(value)) error = 'Selecione um estado válido.';
++    if (field === 'active' && !['true', 'false'].includes(value)) error = 'Selecione uma situação válida.';
++    if (field === 'job_title_id' && !uuid.test(value)) error = 'Selecione um cargo válido.';
++    if (['from', 'to'].includes(field) && !civilDate(value)) error = 'Informe uma data real entre 0001 e 9999.';
++    if (error) errors[field] = error;
++    else values[field] = value;
++  }
++  if (values.from && values.to && values.from > values.to) {
++    errors.to = 'A data final deve ser igual ou posterior à inicial.';
++    delete values.from; delete values.to;
++  }
++  return { values, errors };
++}
++
++export function readAdminListURL(key, search) {
++  const params = new URLSearchParams(search), raw = {};
++  for (const field of ADMIN_LIST_FIELDS[key]) {
++    const name = `${key}_${field}`;
++    // Repeated/structured parameters are discarded rather than choosing one.
++    if (params.getAll(name).length === 1 && ![...params.keys()].some(item => item.startsWith(`${name}[`))) raw[field] = params.get(name);
++  }
++  const rawPage = params.getAll(`${key}_page`);
++  const page = rawPage.length === 1 && /^[1-9]\d*$/.test(rawPage[0]) ? Number(rawPage[0]) : 1;
++  return { filters: validateAdminFilters(key, raw).values, page: Number.isSafeInteger(page) && page <= 20001 ? page : 1 };
++}
++
++export function writeAdminListURL(url, key, state) {
++  // Mutate only this namespace, retaining tab, other filters and router URL.
++  for (const name of [...url.searchParams.keys()]) {
++    if (name.startsWith(`${key}_`)) url.searchParams.delete(name);
++  }
++  for (const field of ADMIN_LIST_FIELDS[key]) if (state.filters[field]) url.searchParams.set(`${key}_${field}`, state.filters[field]);
++  if (state.page > 1) url.searchParams.set(`${key}_page`, String(state.page));
++  return url;
++}
++
++export function adminListQuery(key, state) {
++  const params = new URLSearchParams({ ...(key === 'titles' ? { all: 'true' } : {}), limit: '50', offset: String((state.page - 1) * 50) });
++  for (const field of ADMIN_LIST_FIELDS[key]) if (state.filters[field]) params.set(field, state.filters[field]);
++  return params.toString();
++}
+diff --git a/tests/helpers/admin-ui-harness.mjs b/tests/helpers/admin-ui-harness.mjs
+new file mode 100644
+index 0000000..4add4f5
+--- /dev/null
++++ b/tests/helpers/admin-ui-harness.mjs
+@@ -0,0 +1,102 @@
++import { readFile } from 'node:fs/promises';
++import vm from 'node:vm';
++import { createRouterHarness, Node, TestEvent, deferred, drain } from './router-harness.mjs';
++
++export { TestEvent, drain };
++const booleans = new Set(['hidden', 'disabled', 'checked', 'selected', 'inert', 'required', 'readonly']);
++const decode = text => text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
++function parse(root, html) {
++  const stack = [root], voids = new Set(['input', 'meta', 'link', 'img', 'br', 'hr']);
++  for (const token of html.match(/<!--[^]*?-->|<![^>]*>|<[^>]+>|[^<]+/g) || []) {
++    if (token.startsWith('<!')) continue;
++    if (token.startsWith('</')) { stack.pop(); continue; }
++    if (token.startsWith('<')) {
++      const [, tag, attrs] = /^<([\w-]+)([^]*?)\/?\s*>$/.exec(token);
++      const node = root.ownerDocument.createElement(tag);
++      for (const attr of attrs.matchAll(/([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) node.setAttribute(attr[1], decode(attr[2] ?? attr[3] ?? attr[4] ?? ''));
++      stack.at(-1).append(node);
++      if (!voids.has(tag)) stack.push(node);
++    } else if (token.trim()) stack.at(-1).append(root.ownerDocument.createTextNode(decode(token)));
++  }
++}
++
++// Only DOM/form mechanics are doubles. Parse all admin.html, run the entire
++// admin mount, its helper, bulk ticket, UI, lifecycle and real router/history.
++class AdminNode extends Node {
++  constructor(tag, doc) { super(tag, doc); this.hidden = false; this.disabled = false; this.checked = false; this.required = false; }
++  get textContent() { return (this._text || '') + this.children.map(node => node.textContent || '').join(''); }
++  set textContent(value) { this.replaceChildren(); this._text = String(value); }
++  replaceChildren(...nodes) { this._text = ''; super.replaceChildren(...nodes); }
++  get options() { return this.querySelectorAll('option'); }
++  get value() {
++    if (this.tagName === 'SELECT') {
++      const option = this._value === undefined ? this.options.find(item => item.selected) || this.options[0] : this.options.find(item => item.value === this._value);
++      return option?.value || '';
++    }
++    return this._value ?? this.getAttribute('value') ?? '';
++  }
++  set value(value) { this._value = String(value); }
++  setAttribute(key, value) { super.setAttribute(key, value); if (booleans.has(key)) this[key] = true; }
++  removeAttribute(key) { super.removeAttribute(key); if (booleans.has(key)) this[key] = false; }
++  dispatchEvent(event) {
++    event.target ||= this; event.currentTarget = this;
++    const result = super.dispatchEvent(event);
++    if (event.bubbles && !event.stopped) this.parentNode?.dispatchEvent(event);
++    return result;
++  }
++  click() { if (!this.disabled) this.dispatchEvent(new TestEvent('click', { bubbles: true })); }
++  reset() { this.querySelectorAll('input, select, textarea').forEach(node => { node._value = undefined; node.checked = node.hasAttribute('checked'); }); }
++  reportValidity() { return this.querySelectorAll('input, select, textarea').every(node => node.disabled || !node.required || Boolean(node.value)); }
++  setCustomValidity(message) { this.validationMessage = message; }
++}
++
++export const manager = { uid: 'user-1', role: 'admin', permissions: { manageUsers: true } };
++export const superadmin = { uid: 'user-1', role: 'admin', permissions: { superAdmin: true } };
++export const titleId = number => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
++export const titleFixtures = (count = 105) => Array.from({ length: count }, (_, i) => ({ id: titleId(i + 1), name: `Cargo ${i + 1}`, active: i !== 103, user_count: i }));
++
++export async function createAdminUIHarness(t, { search = '?tab=users', user = manager } = {}) {
++  const h = await createRouterHarness({ initialURL: `https://portal.test/admin.html${search}`, user, autoStart: false, realUI: true });
++  const { doc, context, window } = h;
++  doc.createElement = tag => new AdminNode(tag, doc);
++  doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
++  const root = doc.createElement('document');
++  const html = await readFile('public/admin.html', 'utf8'); parse(root, html);
++  doc.documentElement = root.querySelector('html'); doc.head = root.querySelector('head'); doc.body = root.querySelector('body'); doc.activeElement = doc.body;
++  doc.documentElement.dataset.authSnapshot = 'true';
++  const requests = [], confirms = [];
++  const transport = kind => (path, options = {}) => { const request = { kind, path, options, ...deferred() }; requests.push(request); return request.promise; };
++  Object.assign(context, { fetchAPI: transport('api'), fetchAPIPage: transport('list'), localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, confirm: message => { confirms.push(message); return true; } });
++  context.FormData = class {
++    constructor(form) { this.form = form; }
++    entries() { return this.form.querySelectorAll('[name]').filter(node => !node.disabled && (node.type !== 'checkbox' || node.checked)).map(node => [node.name, node.value]); }
++  };
++  async function load(path, exports) {
++    const source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
++    vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
++  }
++  await load('public/js/bulk-preview-state.js', 'createBulkPreviewState');
++  await load('public/js/admin-list-state.js', 'ADMIN_LIST_FIELDS, readAdminListURL, writeAdminListURL, validateAdminFilters, adminListQuery');
++  await load('public/js/admin.js', 'adminMount: mount');
++  context.onMount = (name, page) => { if (name === './admin.js') context.adminMount(page); };
++  await h.router.startRouter(); await drain();
++  t.after(() => { h.scope?.dispose(); context.disposePageUI(); });
++  const node = id => doc.getElementById(id);
++  return {
++    ...h, html, requests, confirms, node, page: h.scope,
++    latest: prefix => [...requests].reverse().find(request => request.path.startsWith(prefix)),
++    async resolve(request, data = [], total = data.length) { request.resolve({ data, total }); await drain(); },
++    async reject(request) { request.reject(new Error('Controlled failure')); await drain(); },
++    async submit(id, fields = {}) { for (const [field, value] of Object.entries(fields)) node(field).value = value; node(id).dispatchEvent(new TestEvent('submit')); await drain(); },
++    async click(id) { node(id).click(); await drain(); },
++    async catalog(titles = titleFixtures()) {
++      for (let offset = 0; offset < titles.length || offset === 0; offset += 100) {
++        const request = [...requests].reverse().find(item => item.path === `/api/job-titles?all=true&limit=100&offset=${offset}`);
++        if (!request) throw new Error(`Catalog page ${offset} was not requested`);
++        request.resolve({ data: titles.slice(offset, offset + 100), total: titles.length }); await drain();
++      }
++    },
++    async back() { h.history.go(-1); await drain(); },
++    async forward() { h.history.go(1); await drain(); },
++  };
++}
+diff --git a/tests/unit/admin-ui-filters.test.mjs b/tests/unit/admin-ui-filters.test.mjs
+new file mode 100644
+index 0000000..674d468
+--- /dev/null
++++ b/tests/unit/admin-ui-filters.test.mjs
+@@ -0,0 +1,232 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { createAdminUIHarness, drain, manager, superadmin, titleFixtures, titleId, TestEvent } from '../helpers/admin-ui-harness.mjs';
++
++const account = (overrides = {}) => ({ uid: 'target', name: 'Pessoa de teste', email: 'person@example.test', role: 'viewer', permissions: {}, ...overrides });
++const event = (overrides = {}) => ({ created_at: '2026-09-29T01:30:00Z', actor_name: 'Nome atual', action: 'user.update', target_type: 'user', target_id: 'target', request_id: 'request-fixture', ...overrides });
++const query = request => Object.fromEntries(new URL(request.path, 'https://portal.test').searchParams);
++const button = (root, text) => [...root.querySelectorAll('button')].find(node => node.textContent === text);
++const listCases = [
++  { key: 'users', tab: 'users', endpoint: '/api/users?', tbody: 'users-tbody', pager: 'users-pagination', data: name => [account({ name })] },
++  { key: 'titles', tab: 'job-titles', endpoint: '/api/job-titles?all=true&limit=50', tbody: 'job-titles-tbody', pager: 'job-titles-pagination', data: name => [{ id: titleId(1), name, active: true }] },
++  { key: 'audit', tab: 'users', endpoint: '/api/users/audit?', tbody: 'audit-tbody', pager: 'audit-pagination', data: name => [event({ actor_name: name })] },
++];
++
++test('real admin markup mounts through the router with direct namespaced filters and independent totals', async t => {
++  const h = await createAdminUIHarness(t, { user: superadmin, search: `?tab=users&users_q=50%25_%5C&users_role=admin&users_state=disabled&users_job_title_id=${titleId(104)}&users_page=2&titles_q=Outro&titles_active=false&titles_page=3&audit_action=new.action&audit_from=2018-11-04&audit_to=2018-11-04&audit_page=2#main-content` });
++  assert.ok(h.page?.active);
++  assert.deepEqual(query(h.latest('/api/users?')), { limit: '50', offset: '50', q: '50%_\\', role: 'admin', state: 'disabled', job_title_id: titleId(104) });
++  assert.deepEqual(query(h.latest('/api/users/audit?')), { limit: '50', offset: '50', action: 'new.action', from: '2018-11-04', to: '2018-11-04' });
++  assert.equal(h.node('users-job-title-id').value, titleId(104), 'URL ID exists even before catalog resolution');
++  await h.resolve(h.latest('/api/users?'), [account()], 55);
++  assert.match(h.node('users-pagination').textContent, /Página 2 de 2 · 55 resultados/);
++  await h.resolve(h.latest('/api/users/audit?'), [event()], 151);
++  assert.match(h.node('audit-pagination').textContent, /Página 2 de 4 · 151 resultados/);
++  await h.catalog();
++  assert.equal(h.node('users-job-title-id').value, titleId(104));
++  assert.match(h.node('users-job-title-id').textContent, /Cargo 104 \(inativo\)/);
++  await h.click('tab-job-titles');
++  assert.deepEqual(query(h.latest('/api/job-titles?all=true&limit=50')), { all: 'true', limit: '50', offset: '100', q: 'Outro', active: 'false' });
++  assert.equal(h.node('titles-q').value, 'Outro');
++  assert.equal(h.location.hash, '#main-content');
++  assert.equal(typeof h.history.state.portalNavigation, 'number');
++});
++
++for (const [id, value, expected] of [
++  ['users-q', '  %_\\nome  ', { q: '%_\\nome' }], ['users-role', 'viewer', { role: 'viewer' }],
++  ['users-state', 'enable_pending', { state: 'enable_pending' }], ['users-job-title-id', titleId(105), { job_title_id: titleId(105) }],
++]) test(`isolated ${id} applies server-side and omits empty filters`, async t => {
++  const h = await createAdminUIHarness(t); await h.catalog();
++  await h.submit('users-filters', { [id]: value });
++  assert.deepEqual(query(h.latest('/api/users?')), { limit: '50', offset: '0', ...expected });
++  assert.equal(h.node(id).getAttribute('aria-invalid'), null);
++  assert.equal(h.node('users-filters').querySelectorAll('button').some(item => item.disabled), false);
++});
++
++for (const c of listCases) {
++  test(`${c.key}: apply/reset/page/back/forward restore same-tab controls and only their namespace`, async t => {
++    const h = await createAdminUIHarness(t, { user: superadmin, search: `?tab=${c.tab}&users_page=2&titles_page=2&audit_page=2` });
++    const field = `${c.key}-${c.key === 'audit' ? 'action' : 'q'}`;
++    await h.submit(`${c.key}-filters`, { [field]: 'literal_%' });
++    assert.equal(query(h.latest(c.endpoint)).offset, '0');
++    for (const other of listCases.filter(item => item.key !== c.key)) assert.equal(new URL(h.location.href).searchParams.get(`${other.key}_page`), '2');
++    await h.resolve(h.latest(c.endpoint), c.data('Página um'), 105);
++    button(h.node(c.pager), 'Próxima').click(); await drain();
++    assert.equal(query(h.latest(c.endpoint)).offset, '50');
++    await h.resolve(h.latest(c.endpoint), c.data('Página dois'), 105);
++    await h.click(`${c.key}-clear`);
++    assert.equal(h.node(field).value, '');
++    assert.equal(query(h.latest(c.endpoint)).offset, '0');
++    await h.back();
++    assert.equal(h.node(field).value, 'literal_%');
++    assert.equal(query(h.latest(c.endpoint)).offset, '50');
++    await h.resolve(h.latest(c.endpoint), c.data('Restaurado'), 105);
++    assert.match(h.node(c.tbody).textContent, /Restaurado/);
++    await h.back(); assert.equal(query(h.latest(c.endpoint)).offset, '0');
++    await h.forward(); assert.equal(query(h.latest(c.endpoint)).offset, '50');
++    assert.equal(h.mounts.length, 1, 'same-tab traversal never remounts the panel');
++    assert.equal(typeof h.history.state.portalNavigation, 'number');
++  });
++
++  for (const late of ['success', 'error']) test(`${c.key}: late ${late}, old pagination/retry and disposal cannot overwrite the current list`, async t => {
++    const h = await createAdminUIHarness(t, { user: superadmin, search: `?tab=${c.tab}` });
++    const first = h.latest(c.endpoint);
++    await h.resolve(first, c.data('Original'), 105);
++    const oldNext = button(h.node(c.pager), 'Próxima');
++    const oldRow = button(h.node(c.tbody), 'Editar');
++    const field = `${c.key}-${c.key === 'audit' ? 'action' : 'q'}`;
++    await h.submit(`${c.key}-filters`, { [field]: 'antigo' }); const old = h.latest(c.endpoint);
++    assert.equal(h.node(c.tbody).querySelectorAll('button').length, 0, 'old actions removed during fetch');
++    assert.equal(h.node(c.tbody).getAttribute('aria-busy'), 'true');
++    await h.submit(`${c.key}-filters`, { [field]: 'atual' }); const current = h.latest(c.endpoint);
++    const count = h.requests.length; oldNext.click(); oldRow?.click(); await drain();
++    assert.equal(h.requests.length, count);
++    if (late === 'success') await h.resolve(old, c.data('Obsoleto'), 999);
++    else await h.reject(old);
++    assert.equal(h.node(c.tbody).getAttribute('aria-busy'), 'true', 'old finally cannot release current loading');
++    await h.reject(current);
++    const retry = button(h.node(c.tbody), 'Tentar novamente'); assert.ok(retry);
++    retry.click(); await drain(); const retried = h.latest(c.endpoint);
++    await h.resolve(retried, c.data('Atual'), 51);
++    const after = h.requests.length; retry.click(); oldNext.click(); await drain(); assert.equal(h.requests.length, after);
++    assert.match(h.node(c.tbody).textContent, /Atual/);
++    assert.match(h.node(c.pager).textContent, /51 resultados/);
++    await h.submit(`${c.key}-filters`, { [field]: 'antigo2' }); const older = h.latest(c.endpoint);
++    await h.submit(`${c.key}-filters`, { [field]: 'atual2' });
++    await h.resolve(h.latest(c.endpoint), c.data('Mais recente'), 25);
++    if (late === 'success') await h.resolve(older, c.data('Obsoleto tardio'), 999);
++    else await h.reject(older);
++    assert.match(h.node(c.tbody).textContent, /Mais recente/);
++    assert.doesNotMatch(h.node(c.tbody).textContent, /Obsoleto|Não foi possível/);
++    assert.match(h.node(c.pager).textContent, /25 resultados/);
++    await h.submit(`${c.key}-filters`, { [field]: 'descarte' }); const disposed = h.latest(c.endpoint);
++    const text = h.node(c.tbody).textContent; h.page.dispose();
++    await h.resolve(disposed, c.data('Não renderizar'), 1);
++    assert.equal(h.node(c.tbody).textContent, text);
++  });
++
++  test(`${c.key}: an empty removed page recovers the last valid page exactly once`, async t => {
++    const h = await createAdminUIHarness(t, { user: superadmin, search: `?tab=${c.tab}&${c.key}_page=9` });
++    await h.resolve(h.latest(c.endpoint), [], 55);
++    assert.equal(query(h.latest(c.endpoint)).offset, '50');
++    await h.resolve(h.latest(c.endpoint), [], 0);
++    assert.equal(h.requests.filter(item => item.path.startsWith(c.endpoint)).length, 2);
++    assert.match(h.node(c.tbody).textContent, /Nenhum resultado/);
++    assert.equal(new URL(h.location.href).searchParams.get(`${c.key}_page`), null);
++    assert.match(h.node(c.pager).textContent, /Página 1 de 1/);
++  });
++}
++
++test('malformed direct query is normalized without duplicate, structured or out-of-range API parameters', async t => {
++  const h = await createAdminUIHarness(t, { user: superadmin, search: '?tab=users&users_q=a&users_q=b&users_role[]=admin&users_state=invalid&users_job_title_id=oops&users_page=Infinity&titles_page=-2&titles_active=x&audit_action[]=x&audit_from=2026-02-30&audit_to=0000-01-01&audit_page=20002&unrelated=keep' });
++  assert.deepEqual(query(h.latest('/api/users?')), { limit: '50', offset: '0' });
++  assert.deepEqual(query(h.latest('/api/users/audit?')), { limit: '50', offset: '0' });
++  assert.equal(h.location.search, '?tab=users&unrelated=keep');
++  assert.equal(h.node('users-role').value, '');
++});
++
++test('audit validates actual civil dates and order, accepts unknown exact actions and renders safe current actors in São Paulo', async t => {
++  const h = await createAdminUIHarness(t, { user: superadmin });
++  const count = h.requests.length;
++  for (const fields of [
++    { 'audit-from': '2026-02-30', 'audit-to': '' },
++    { 'audit-from': '1900-02-29', 'audit-to': '' },
++    { 'audit-from': '0000-01-01', 'audit-to': '' },
++    { 'audit-from': '2026-09-30', 'audit-to': '2026-09-29' },
++  ]) {
++    await h.submit('audit-filters', fields);
++    assert.equal(h.requests.length, count);
++    assert.ok(h.node('audit-from-error').textContent || h.node('audit-to-error').textContent);
++  }
++  await h.submit('audit-filters', { 'audit-action': 'new.unrecognized_action', 'audit-from': '2000-02-29', 'audit-to': '2000-02-29' });
++  assert.deepEqual(query(h.latest('/api/users/audit?')), { limit: '50', offset: '0', action: 'new.unrecognized_action', from: '2000-02-29', to: '2000-02-29' });
++  await h.resolve(h.latest('/api/users/audit?'), [event({ actor_name: '<img src=x onerror=alert(1)>', action: 'new.unrecognized_action' }), event({ actor_name: null }), event({ action: 'constructor', created_at: '2018-11-04T03:30:00Z' })]);
++  const text = h.node('audit-tbody').textContent;
++  assert.match(text, /28\/09\/2026.*22:30/);
++  assert.match(text, /<img src=x onerror=alert\(1\)>/);
++  assert.match(text, /Sistema ou conta removida/);
++  assert.match(text, /Ação administrativa · new.unrecognized_action/);
++  assert.match(text, /Usuário atualizado · user.update/);
++  assert.match(text, /Ação administrativa · constructor/);
++  assert.match(text, /04\/11\/2018.*01:30/);
++  assert.match(text, /request-fixture/);
++  assert.equal(h.node('audit-tbody').querySelector('img'), null);
++});
++
++test('CSV field label and descriptions cover UTF-8, columns, examples, limit and preview without changing the preview ticket', async t => {
++  const h = await createAdminUIHarness(t);
++  assert.equal(h.doc.querySelector('label[for="bulk-csv"]').textContent, 'Arquivo CSV de convites');
++  const help = h.node('bulk-csv').getAttribute('aria-describedby').split(' ').map(id => h.node(id).textContent).join(' ');
++  for (const word of ['UTF-8', '500', 'Pré-visualize', 'name', 'email', 'job_title', 'contract_type', 'pj_due_day', 'phone', 'remova as duas linhas']) assert.ok(help.includes(word), word);
++  h.node('bulk-csv').files = [{ text: async () => 'name,email' }];
++  h.node('bulk-csv').dispatchEvent(new TestEvent('change'));
++  await h.click('bulk-preview-button'); const old = h.latest('/api/users/bulk/preview');
++  h.node('bulk-csv').files = [{ text: async () => 'different' }]; h.node('bulk-csv').dispatchEvent(new TestEvent('change'));
++  old.resolve({ total: 1, ready: 1, rows: [{ row_number: 1, name: 'Obsoleto', status: 'ready' }] }); await drain();
++  assert.equal(h.node('bulk-confirm-button').disabled, true);
++  assert.equal(h.node('bulk-preview').hidden, true);
++});
++
++test('invalid and overlong form values have associated errors and never issue a request', async t => {
++  const h = await createAdminUIHarness(t, { user: superadmin });
++  for (const [key, field, value] of [['users', 'q', 'x'.repeat(201)], ['titles', 'q', 'x'.repeat(201)], ['audit', 'action', 'x'.repeat(121)]]) {
++    const count = h.requests.length;
++    await h.submit(`${key}-filters`, { [`${key}-${field}`]: value });
++    const input = h.node(`${key}-${field}`);
++    assert.equal(h.requests.length, count);
++    assert.equal(input.getAttribute('aria-invalid'), 'true');
++    assert.equal(input.getAttribute('aria-describedby'), `${key}-${field}-error`);
++    assert.ok(h.node(`${key}-${field}-error`).textContent);
++    assert.equal(h.doc.activeElement, input);
++  }
++  h.node('audit-action').value = '';
++  h.node('audit-from').validity = { badInput: true };
++  const count = h.requests.length; await h.submit('audit-filters');
++  assert.equal(h.requests.length, count);
++  assert.equal(h.node('audit-from').getAttribute('aria-invalid'), 'true');
++});
++
++test('zero totals, stable removed-page recovery and reload preserve the server count and selected URL', async t => {
++  const h = await createAdminUIHarness(t, { search: '?tab=users&users_q=teste&users_page=8' });
++  await h.resolve(h.latest('/api/users?'), [], 55);
++  assert.equal(query(h.latest('/api/users?')).offset, '50');
++  await h.resolve(h.latest('/api/users?'), [account()], 55);
++  assert.match(h.node('users-pagination').textContent, /Página 2 de 2 · 55 resultados/);
++  const reloaded = await createAdminUIHarness(t, { search: h.location.search });
++  assert.deepEqual(query(reloaded.latest('/api/users?')), query(h.latest('/api/users?')));
++  assert.equal(reloaded.node('users-q').value, 'teste');
++  await reloaded.resolve(reloaded.latest('/api/users?'), [], 0);
++  await reloaded.resolve(reloaded.latest('/api/users?'), [], 0);
++  assert.match(reloaded.node('users-pagination').textContent, /Página 1 de 1 · 0 resultados/);
++});
++
++test('users and audit requests remain independent while both filters are changed and settled in reverse order', async t => {
++  const h = await createAdminUIHarness(t, { user: superadmin });
++  await h.submit('users-filters', { 'users-q': 'User query', 'users-role': 'admin', 'users-state': 'active' });
++  const users = h.latest('/api/users?');
++  await h.submit('audit-filters', { 'audit-action': 'job_title.update', 'audit-from': '0001-01-01', 'audit-to': '9999-12-31' });
++  const audit = h.latest('/api/users/audit?');
++  await h.resolve(audit, [event()], 102);
++  await h.resolve(users, [account({ name: 'User query result' })], 58);
++  assert.match(h.node('users-tbody').textContent, /User query result/);
++  assert.match(h.node('audit-tbody').textContent, /Nome atual/);
++  assert.match(h.node('users-pagination').textContent, /58 resultados/);
++  assert.match(h.node('audit-pagination').textContent, /102 resultados/);
++  assert.equal(new URL(h.location.href).searchParams.get('users_q'), 'User query');
++  assert.equal(new URL(h.location.href).searchParams.get('audit_action'), 'job_title.update');
++});
++
++test('same-path links without a tab or with an invalid tab still reload the normalized selected section', async t => {
++  const h = await createAdminUIHarness(t);
++  await h.resolve(h.latest('/api/users?'), [account({ name: 'Antes' })]);
++  // Use the real router's link listener, not a synthetic pop callback.
++  for (const tab of ['', '&tab=not-allowed']) {
++    const anchor = h.doc.createElement('a'); anchor.setAttribute('href', `https://portal.test/admin.html?users_q=Depois${tab}`);
++    h.doc.dispatchEvent(new TestEvent('click', { target: anchor })); await drain();
++    assert.equal(query(h.latest('/api/users?')).q, 'Depois');
++    assert.equal(h.node('users-q').value, 'Depois');
++    assert.equal(new URL(h.location.href).searchParams.get('tab'), 'users');
++    await h.resolve(h.latest('/api/users?'), [account({ name: 'Depois' })]);
++    assert.match(h.node('users-tbody').textContent, /Depois/);
++  }
++});
+diff --git a/tests/unit/admin-ui-catalog-policy.test.mjs b/tests/unit/admin-ui-catalog-policy.test.mjs
+new file mode 100644
+index 0000000..6875cf0
+--- /dev/null
++++ b/tests/unit/admin-ui-catalog-policy.test.mjs
+@@ -0,0 +1,274 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { createAdminUIHarness, drain, manager, superadmin, titleFixtures, titleId, TestEvent } from '../helpers/admin-ui-harness.mjs';
++
++const account = (overrides = {}) => ({ uid: 'target', name: 'Pessoa de teste', email: 'person@example.test', role: 'viewer', permissions: {}, ...overrides });
++const button = (root, label) => [...root.querySelectorAll('button')].find(node => node.textContent === label);
++const options = (h, id) => [...h.node(id).options].map(item => ({ value: item.value, label: item.textContent }));
++const catalogRequests = h => h.requests.filter(item => item.path.startsWith('/api/job-titles?all=true&limit=100'));
++
++test('invitation waits for the complete 105-title catalog, deduplicates loaders and retries without publishing a partial page', async t => {
++  const h = await createAdminUIHarness(t); const titles = titleFixtures();
++  await h.click('btn-new-user'); await h.click('btn-new-user');
++  assert.equal(catalogRequests(h).length, 1);
++  assert.equal(h.node('modal-user').classList.contains('hidden'), true);
++  await h.resolve(catalogRequests(h)[0], titles.slice(0, 100), 105);
++  assert.equal(options(h, 'u-job-title').length, 1);
++  assert.equal(options(h, 'users-job-title-id').length, 1);
++  assert.equal(h.node('modal-user').classList.contains('hidden'), true);
++  await h.reject(catalogRequests(h).at(-1));
++  assert.match(h.node('job-title-options-feedback').textContent, /Nenhuma opção parcial/);
++  const retry = button(h.node('job-title-options-feedback'), 'Tentar novamente'); retry.click(); await drain();
++  await h.catalog(titles);
++  assert.equal(h.node('modal-user').classList.contains('hidden'), false);
++  assert.equal(options(h, 'u-job-title').length, 105, '104 active titles plus empty selection');
++  assert.ok(options(h, 'u-job-title').some(item => item.value === titleId(105)));
++  assert.ok(!options(h, 'u-job-title').some(item => item.value === titleId(104)));
++  assert.equal(options(h, 'users-job-title-id').length, 106, 'filter also includes inactive titles');
++  assert.equal(h.node('u-role').disabled, true);
++  const count = h.requests.length; retry.click(); await drain(); assert.equal(h.requests.length, count);
++  await h.submit('user-form', { 'u-name': 'Convidado sintético', 'u-email': 'invite@example.test', 'u-job-title': titleId(105), 'u-contract': 'clt' });
++  const invitation = h.latest('/api/users'); assert.equal(invitation.options.method, 'POST');
++  assert.equal(JSON.parse(invitation.options.body).job_title_id, titleId(105));
++  assert.equal('permissions' in JSON.parse(invitation.options.body), false);
++  assert.equal(h.page.busy, true);
++  assert.equal(h.page.canLeave(), false, 'real lifecycle still fences pending writes');
++});
++
++test('editing waits for options and includes the assigned inactive title without treating the account as disabled', async t => {
++  const h = await createAdminUIHarness(t);
++  await h.resolve(h.latest('/api/users?'), [account({ job_title_id: titleId(104), job_title: 'Cargo 104', job_title_active: false })]);
++  const row = h.node('users-tbody').querySelector('tr');
++  assert.match(row.textContent, /Cargo inativo: vínculo mantido/);
++  assert.match(row.textContent, /Ativo/);
++  button(row, 'Editar').click(); await drain();
++  assert.equal(h.node('modal-user').classList.contains('hidden'), true);
++  await h.catalog();
++  assert.equal(h.node('modal-user').classList.contains('hidden'), false);
++  assert.equal(h.node('u-job-title').value, titleId(104));
++  assert.equal(options(h, 'u-job-title').length, 106);
++  assert.match(h.node('user-job-title-help').textContent, /vínculo permanece.*conta não foi desativada/);
++  await h.submit('user-form', { 'u-name': 'Nome alterado' });
++  const request = h.latest('/api/users/target'); assert.equal(request.options.method, 'PUT');
++  assert.equal(JSON.parse(request.options.body).job_title_id, titleId(104));
++  assert.equal('role' in JSON.parse(request.options.body), false);
++});
++
++test('known missing assignment ID and label survive catalog reconciliation without silently changing the user', async t => {
++  const h = await createAdminUIHarness(t);
++  await h.resolve(h.latest('/api/users?'), [account({ job_title_id: titleId(999), job_title: 'Cargo legado conhecido', job_title_active: false })]);
++  button(h.node('users-tbody'), 'Editar').click(); await drain(); await h.catalog();
++  assert.equal(h.node('u-job-title').value, titleId(999));
++  assert.ok(options(h, 'u-job-title').some(item => item.value === titleId(999) && item.label === 'Cargo legado conhecido'));
++});
++
++test('approval has every active option beyond page one; rejection does not depend on title lookup', async t => {
++  const h = await createAdminUIHarness(t, { search: '?tab=registrations' });
++  const registration = { id: titleId(501), name: 'Novo cadastro', email: 'registration@example.test', state: 'confirmed', created_at: '2026-09-29T12:00:00Z' };
++  await h.resolve(h.latest('/api/registrations?'), [registration]);
++  button(h.node('registrations-tbody'), 'Rejeitar').click(); await drain();
++  assert.equal(h.node('modal-registration').classList.contains('hidden'), false);
++  await h.click('modal-registration-cancel');
++  button(h.node('registrations-tbody'), 'Analisar').click(); await drain();
++  assert.equal(h.node('modal-registration').classList.contains('hidden'), true);
++  assert.equal(catalogRequests(h).length, 1);
++  await h.catalog();
++  assert.equal(h.node('modal-registration').classList.contains('hidden'), false);
++  assert.equal(options(h, 'registration-job-title').length, 105);
++  assert.ok(options(h, 'registration-job-title').some(item => item.value === titleId(105)));
++  assert.ok(!options(h, 'registration-job-title').some(item => item.value === titleId(104)));
++  await h.submit('registration-form', { 'registration-job-title': titleId(105) });
++  const request = h.latest(`/api/registrations/${registration.id}/approve`);
++  assert.equal(JSON.parse(request.options.body).job_title_id, titleId(105));
++  assert.equal(h.page.busy, true);
++});
++
++test('filtered/paginated title table never feeds forms or changes their selected options', async t => {
++  const h = await createAdminUIHarness(t); await h.catalog();
++  await h.click('btn-new-user');
++  h.node('u-job-title').value = titleId(105);
++  await h.click('modal-user-cancel');
++  h.node('registration-job-title').value = titleId(101);
++  h.node('users-job-title-id').value = titleId(104);
++  const before = ['u-job-title', 'registration-job-title', 'users-job-title-id'].map(id => ({ id, options: options(h, id), value: h.node(id).value }));
++  await h.click('tab-job-titles');
++  await h.submit('titles-filters', { 'titles-q': 'Somente um', 'titles-active': 'false' });
++  await h.resolve(h.latest('/api/job-titles?all=true&limit=50'), [{ id: titleId(104), name: 'Tabela filtrada', active: false }], 55);
++  button(h.node('job-titles-pagination'), 'Próxima').click(); await drain();
++  assert.match(h.latest('/api/job-titles?all=true&limit=50').path, /offset=50/);
++  await h.resolve(h.latest('/api/job-titles?all=true&limit=50'), [{ id: titleId(999), name: 'Página isolada', active: false }], 55);
++  for (const saved of before) { assert.deepEqual(options(h, saved.id), saved.options); assert.equal(h.node(saved.id).value, saved.value); }
++  assert.equal(catalogRequests(h).length, 2);
++});
++
++for (const mutation of ['create', 'edit', 'toggle']) test(`title ${mutation} invalidates the complete catalog independently and preserves valid selections`, async t => {
++  const h = await createAdminUIHarness(t, { search: '?tab=job-titles&titles_q=literal&titles_page=2' });
++  const titles = titleFixtures(); await h.catalog(titles);
++  h.node('users-job-title-id').value = titleId(104);
++  h.node('u-job-title').value = titleId(105);
++  h.node('registration-job-title').value = titleId(102);
++  await h.resolve(h.latest('/api/job-titles?all=true&limit=50'), [titles[104]], 55);
++  if (mutation === 'toggle') button(h.node('job-titles-tbody'), 'Desativar').click();
++  else {
++    if (mutation === 'edit') button(h.node('job-titles-tbody'), 'Editar').click();
++    else await h.click('btn-new-job-title');
++    await h.submit('job-title-form', { 'job-title-name': 'Cargo atualizado' });
++  }
++  await drain();
++  const write = [...h.requests].reverse().find(item => item.options.method);
++  assert.equal(write.options.method, mutation === 'create' ? 'POST' : 'PUT');
++  write.resolve({ id: titleId(106) }); await drain();
++  assert.equal(catalogRequests(h).length, 3);
++  assert.match(h.latest('/api/job-titles?all=true&limit=50').path, /offset=50&q=literal/);
++  const updated = [...titles, { id: titleId(106), name: 'Cargo novo', active: true }];
++  await h.catalog(updated);
++  assert.equal(options(h, 'users-job-title-id').length, 107);
++  assert.equal(h.node('users-job-title-id').value, titleId(104));
++  assert.equal(h.node('u-job-title').value, titleId(105));
++  assert.equal(h.node('registration-job-title').value, titleId(102));
++  assert.ok(options(h, 'u-job-title').some(item => item.value === titleId(106)));
++});
++
++for (const late of ['success', 'failure']) test(`old catalog ${late} cannot publish options, errors or release a newer generation`, async t => {
++  const h = await createAdminUIHarness(t, { search: '?tab=job-titles' });
++  const old = catalogRequests(h)[0];
++  await h.click('btn-new-job-title'); await h.submit('job-title-form', { 'job-title-name': 'Nova geração' });
++  h.latest('/api/job-titles').resolve({ id: titleId(1) }); await drain();
++  const newer = catalogRequests(h).at(-1); assert.notEqual(newer, old);
++  if (late === 'success') await h.resolve(old, [{ id: titleId(999), name: 'Obsoleto', active: true }]);
++  else await h.reject(old);
++  assert.match(h.node('job-title-options-feedback').textContent, /Carregando todos/);
++  await h.click('tab-users'); await h.click('btn-new-user');
++  assert.equal(catalogRequests(h).length, 2, 'old finally did not release the new pending promise');
++  await h.catalog();
++  assert.doesNotMatch(h.node('users-job-title-id').textContent, /Obsoleto/);
++  assert.equal(h.node('modal-user').classList.contains('hidden'), false);
++});
++
++test('catalog failure/disposal never opens a partial editor and a tab switch cancels pending editor intent', async t => {
++  const h = await createAdminUIHarness(t); await h.click('btn-new-user');
++  await h.click('tab-job-titles'); await h.catalog();
++  assert.equal(h.node('modal-user').classList.contains('hidden'), true);
++  const other = await createAdminUIHarness(t); await other.click('btn-new-user');
++  const pending = catalogRequests(other)[0], old = other.node('job-title-options-feedback').textContent;
++  other.page.dispose(); await other.reject(pending);
++  assert.equal(other.node('job-title-options-feedback').textContent, old);
++  assert.equal(other.node('modal-user').classList.contains('hidden'), true);
++  assert.equal(options(other, 'u-job-title').length, 1);
++});
++
++for (const [label, user] of [['manager', manager], ['superadmin', superadmin], ['string super flag', { ...manager, permissions: { manageUsers: true, superAdmin: 'true' } }]]) {
++  test(`${label}: action matrix matches own/protected/disabled boolean policy and keeps the server authoritative`, async t => {
++    const h = await createAdminUIHarness(t, { user }); await h.catalog();
++    const targets = [
++      account({ uid: user.uid, name: 'Própria conta', role: user.role, permissions: user.permissions }),
++      account({ uid: 'super', name: 'Super protegido', role: 'admin', permissions: { superAdmin: true, accountDisabled: true } }),
++      account({ uid: 'plain', name: 'Conta ativa' }),
++      account({ uid: 'disabled', name: 'Conta desativada', permissions: { accountDisabled: true }, firebase_enable_pending: true }),
++      account({ uid: 'string-disabled', name: 'Flag textual', permissions: { accountDisabled: 'true' }, firebase_enable_pending: true }),
++      account({ uid: 'string-super', name: 'Não é super', role: 'admin', permissions: { superAdmin: 'true', accountDisabled: true } }),
++      account({ uid: 'pending', name: 'Conta pendente', firebase_enable_pending: true }),
++      account({ uid: 'viewer-flag', name: 'Leitor não super', role: 'viewer', permissions: { superAdmin: true, accountDisabled: true } }),
++    ];
++    await h.resolve(h.latest('/api/users?'), targets);
++    const rows = h.node('users-tbody').querySelectorAll('tr');
++    const isSuper = user.permissions.superAdmin === true;
++    for (const [i, row] of rows.entries()) {
++      const edit = button(row, 'Editar'), status = button(row, i === 1 || i === 3 || i === 4 || i === 5 || i === 7 ? 'Reativar' : 'Desativar'), erase = button(row, 'Anonimizar');
++      assert.equal(edit.disabled, i === 1 && !isSuper);
++      assert.equal(status.disabled, i === 0 || (i === 1 && !isSuper));
++      if (isSuper) assert.equal(erase.disabled, ![3, 5, 7].includes(i));
++      else assert.equal(erase, undefined);
++      if (edit.disabled || status.disabled) {
++        const explanation = h.node(status.getAttribute('aria-describedby'));
++        assert.ok(explanation.textContent.includes(i === 0 ? 'própria conta' : 'Somente um superadministrador'));
++        const count = h.requests.length;
++        (edit.disabled ? edit : status).dispatchEvent(new TestEvent('click'));
++        await drain(); assert.equal(h.requests.length, count);
++      }
++    }
++    assert.match(rows[3].textContent, /Desativado/); assert.doesNotMatch(rows[3].textContent, /Habilitação pendente/);
++    assert.match(rows[4].textContent, /Desativado/); assert.doesNotMatch(rows[4].textContent, /Habilitação pendente/);
++    assert.match(rows[6].textContent, /Habilitação pendente/);
++    assert.equal(h.requests.some(item => item.path.startsWith('/api/users/audit')), isSuper);
++    button(rows[0], 'Editar').click(); await drain();
++    assert.equal(h.node('modal-user').classList.contains('hidden'), false);
++    assert.equal(h.node('u-role').disabled, true, 'own privilege fields remain locked');
++    await h.submit('user-form', { 'u-name': 'Nome próprio alterado', 'u-contract': 'clt' });
++    const selfWrite = h.latest(`/api/users/${user.uid}`);
++    assert.equal('permissions' in JSON.parse(selfWrite.options.body), false);
++    assert.equal('role' in JSON.parse(selfWrite.options.body), false);
++    selfWrite.resolve({}); await drain();
++    await h.resolve(h.latest('/api/users?'), targets);
++    if (isSuper) {
++      const protectedRow = h.node('users-tbody').querySelectorAll('tr')[1];
++      button(protectedRow, 'Reativar').click(); await drain();
++      assert.equal(h.latest('/api/users/super/reactivate').options.method, 'PUT', 'no last-super inference from filtered counts');
++      h.latest('/api/users/super/reactivate').resolve({}); await drain();
++      await h.resolve(h.latest('/api/users?'), targets);
++      button(h.node('users-tbody').querySelectorAll('tr')[3], 'Anonimizar').click(); await drain();
++      assert.equal(h.latest('/api/users/disabled/personal-data').options.method, 'DELETE');
++      assert.match(h.confirms.at(-1), /Apagar permanentemente.*histórico operacional/);
++    }
++  });
++}
++
++test('without manageUsers no sensitive list/catalog requests are issued even for truthy string permissions', async t => {
++  for (const permissions of [{}, { manageAcademy: true }, { manageUsers: 'true', superAdmin: 'true' }]) {
++    const h = await createAdminUIHarness(t, { user: { ...manager, permissions } });
++    await h.submit('users-filters', { 'users-q': 'not-authorized' });
++    await h.submit('audit-filters', { 'audit-action': 'user.update' });
++    assert.equal(h.requests.some(item => item.path.startsWith('/api/users') || item.path.startsWith('/api/job-titles')), false);
++    assert.equal(h.node('audit-panel').hidden, true);
++  }
++});
++
++test('real full mount preserves deferred Sólides intent, newer tab selection and other list loaders', async t => {
++  for (const newer of [false, true]) {
++    const user = { ...manager, permissions: { manageUsers: true, manageAcademy: true, manageBenefits: true, manageSolides: true } };
++    const h = await createAdminUIHarness(t, { search: '?tab=solides&users_q=mantido', user });
++    assert.equal(new URL(h.location.href).searchParams.get('tab'), 'solides');
++    const discovery = h.latest('/api/solides/admin/status');
++    if (newer) await h.click('tab-academy');
++    discovery.resolve({ stage: 'fixture', links: { total: 0, verified: 0, conflicts: 0 }, pilotUsers: 0 }); await drain();
++    assert.equal(new URL(h.location.href).searchParams.get('tab'), newer ? 'academy' : 'solides');
++    assert.equal(h.node(newer ? 'section-academy' : 'section-solides').hidden, false);
++    assert.equal(new URL(h.location.href).searchParams.get('users_q'), 'mantido');
++    await h.click('tab-benefits'); assert.ok(h.latest('/api/benefits?all=true&limit=50'));
++    await h.click('tab-registrations'); assert.ok(h.latest('/api/registrations?status=pending&limit=50'));
++  }
++});
++
++test('catalog completion preserves an explicit unsubmitted Todos selection instead of restoring the applied cargo', async t => {
++  const h = await createAdminUIHarness(t, { search: `?tab=users&users_job_title_id=${titleId(104)}` });
++  assert.equal(h.node('users-job-title-id').value, titleId(104));
++  h.node('users-job-title-id').value = '';
++  await h.catalog();
++  assert.equal(h.node('users-job-title-id').value, '');
++  assert.equal(new URL(h.location.href).searchParams.get('users_job_title_id'), titleId(104), 'unsubmitted controls do not change applied filters');
++});
++
++test('an unexpectedly empty second catalog page is an incomplete load, never a successful partial catalog', async t => {
++  const h = await createAdminUIHarness(t); await h.click('btn-new-user');
++  await h.resolve(catalogRequests(h)[0], titleFixtures(100), 105);
++  await h.resolve(catalogRequests(h).at(-1), [], 105);
++  assert.match(h.node('job-title-options-feedback').textContent, /Nenhuma opção parcial/);
++  assert.equal(options(h, 'u-job-title').length, 1);
++  assert.equal(h.node('modal-user').classList.contains('hidden'), true);
++});
++
++test('a title becoming inactive is removed from invitation and approval but retained for its existing assigned editor', async t => {
++  const h = await createAdminUIHarness(t); const titles = titleFixtures(); await h.catalog(titles);
++  await h.resolve(h.latest('/api/users?'), [account({ job_title_id: titleId(105), job_title: 'Cargo 105', job_title_active: true })]);
++  button(h.node('users-tbody'), 'Editar').click(); await drain(); await h.click('modal-user-cancel');
++  h.node('registration-job-title').value = titleId(105);
++  await h.click('tab-job-titles'); await h.resolve(h.latest('/api/job-titles?all=true&limit=50'), [titles[104]]);
++  button(h.node('job-titles-tbody'), 'Desativar').click(); await drain();
++  h.latest(`/api/job-titles/${titleId(105)}`).resolve({}); await drain();
++  await h.catalog(titles.map(title => title.id === titleId(105) ? { ...title, active: false } : title));
++  assert.equal(h.node('u-job-title').value, titleId(105), 'existing assignment remains');
++  assert.equal(h.node('registration-job-title').value, '', 'new approval cannot assign inactive title');
++  assert.match(h.node('user-job-title-help').textContent, /Cargo inativo/);
++  await h.click('tab-users'); await h.click('btn-new-user');
++  assert.ok(!options(h, 'u-job-title').some(item => item.value === titleId(105)));
++});
+diff --git a/docs/reviews/2026-09-29-portal-corrections-batch-4b.md b/docs/reviews/2026-09-29-portal-corrections-batch-4b.md
+new file mode 100644
+index 0000000..4c943af
+--- /dev/null
++++ b/docs/reviews/2026-09-29-portal-corrections-batch-4b.md
+@@ -0,0 +1,164 @@
++# Correções do Portal — lote 4B (interface administrativa)
++
++Data: 29/09/2026. Implementação delimitada por
++`.openchamber/reviews/batch-4b-specification.md`, sobre o contrato 4A congelado.
++Base recebida: HEAD `3cf25b1`, branch `fix/portal-functional-audit-20260929`,
++com R3 no working tree e **691 testes**. Este relatório registra a entrega do
++implementador, não substitui inspeção, review novo ou aceitação do primário.
++
++## Arquivos deste lote
++
++- `public/js/admin.js`
++- `public/admin.html`
++- `public/css/admin.css` — somente encaixe dos filtros/ajuda.
++- `public/js/admin-list-state.js` — novo; campos, validação civil e tradução URL/API.
++- `tests/helpers/admin-ui-harness.mjs` — novo.
++- `tests/unit/admin-ui-filters.test.mjs` — novo.
++- `tests/unit/admin-ui-catalog-policy.test.mjs` — novo.
++- `tests/unit/frontend-invariants.test.mjs` — atualização das duas expectativas
++  estáticas afetadas pela separação do catálogo e pela nova consulta de auditoria.
++- `docs/reviews/2026-09-29-portal-corrections-batch-4b.md` — este documento.
++
++Não foram editados API, pacotes, gerador, auth, router, lifecycle, UI compartilhada,
++CMS/Knowledge, AutoCard, Cards Pós, outros relatórios, plano, aceitação, specs ou
++QA temporário. Alterações concorrentes nos documentos/evidências primários foram
++observadas e preservadas. **Lote 5 não iniciado**; sem commit, push, PR, deploy,
++delegação, acesso a credenciais, conexão ao banco ou operação de serviços.
++
++## Comportamento entregue
++
++### Filtros, URL e concorrência
++
++- Formulários com IDs contratados, labels, `maxlength`, mensagens por campo,
++  Aplicar e Limpar. Consultas usam exclusivamente os campos aceitos pelo 4A,
++  sem filtrar apenas a página local. `%`, `_` e `\` seguem como texto literal
++  para a API, responsável pelo escape SQL existente.
++- Estado independente `users_*`, `titles_*`, `audit_*`, com páginas base 1.
++  Aplicar/Limpar reinicia apenas a própria seção; paginação e filtros usam
++  `page.history`, preservando `tab`, outras seções e metadados do router.
++  Acesso direto, reload, Back/Forward e links same-path restauram os controles
++  e consultam novamente mesmo sem trocar de aba.
++- URL inválida é normalizada com `replaceState`: filtros repetidos/estruturados,
++  enums/UUID inválidos, datas irreais/invertidas e páginas fora de 1–20001 não
++  são encaminhados à API. O teto corresponde ao offset máximo 1.000.000 do 4A.
++  Submissão inválida mostra erro associado ao campo e não dispara consulta.
++- Usuários, tabela de cargos e auditoria têm tokens próprios; catálogo completo
++  possui uma quarta geração independente. Durante a troca, a tabela anterior
++  e a paginação são removidas, mas os filtros seguem disponíveis. Sucessos,
++  erros, `finally`, retries, paginadores e ações de linha antigos conferem a
++  geração e o lifecycle antes de agir.
++- `X-Total-Count` alimenta as três paginações de 50 itens, inclusive total zero.
++  `job-titles-pagination` é independente do catálogo. Página removida busca a
++  última válida uma vez; nova contração durante essa recuperação ajusta URL e
++  controles sem loop. Aplicar novamente atualiza uma lista ainda em mudança.
++- Tabela de cargos mantém `all=true` por padrão e envia `active` apenas quando
++  explícito, preservando a precedência já estabelecida no backend.
++
++### Catálogo completo de cargos
++
++- `jobTitles` da tabela não alimenta convites/edição/aprovação. O loader separado
++  percorre `all=true&limit=100&offset=N` até completar o total, compartilha a
++  Promise pendente e publica o catálogo somente após o sucesso integral.
++  Página intermediária vazia/incompleta é falha, não sucesso parcial.
++- Convite e aprovação oferecem todos os ativos, incluindo a segunda página;
++  edição também conserva o cargo inativo atualmente atribuído. O filtro de
++  usuários inclui inativos. ID/rótulo conhecido permanece disponível durante
++  reconciliação, sem limpar silenciosamente uma atribuição existente.
++- Editores aguardam o catálogo antes de abrir. Falha informa que não houve
++  publicação parcial e oferece retry; a intenção mais recente pode ser retomada.
++  Troca de aba e descarte impedem abertura tardia do editor.
++- Criar/editar/ativar/desativar cargo invalida e recarrega catálogo e tabela
++  separadamente. Seleções ainda válidas permanecem; convite/aprovação deixam de
++  oferecer cargo que ficou inativo, sem alterar a atribuição existente no usuário.
++  Filtrar/paginar a tabela não altera opções ou seleções dos formulários.
++- Catálogo que termina depois de uma escolha não submetida de “Todos” não
++  restaura indevidamente o filtro aplicado anterior.
++
++### Ações, auditoria e orientação
++
++- A própria conta continua editável nos campos permitidos, sem alteração de
++  seus privilégios; desativar/reativar/anonimizar ficam indisponíveis com motivo.
++- Superadministrador-alvo exige `role=admin` e `superAdmin === true` para sua
++  proteção. Gestor sem super-admin não pode editar nem alterar seu estado.
++  Strings não concedem privilégio. Super-admin pode agir sobre outro conforme
++  a API; nenhuma contagem global é inferida de uma página filtrada.
++- Anonimização mantém a confirmação e exige outro alvo, não super-admin,
++  `accountDisabled === true` booleano e ainda não anonimizado. Exibição de
++  estado reconhece também `accountDisabled: "true"`, com precedência disabled
++  → enable_pending → active; isso não relaxa o requisito do handler de escrita.
++- Cargo inativo tem aviso na linha e no editor: vínculo mantido, acesso derivado
++  indisponível até atribuição/ativação autorizada; não é desativação da conta.
++- Auditoria permanece exclusiva de super-admin. Datas civis são validadas sem
++  conversão pelo timezone do navegador; timestamps usam `America/Sao_Paulo`.
++  Mostra `actor_name` atual como texto seguro, fallback `Sistema ou conta removida`,
++  tradução de ações conhecidas junto ao código, alvo e request ID. Código novo
++  ou desconhecido continua consultável/legível, inclusive nomes de propriedades
++  como `constructor`; não há snapshot de identidade nem novo log de filtros.
++- CSV tem label associado e `aria-describedby` para UTF-8, colunas, 500 pessoas,
++  remoção dos exemplos e preview. Parser, ticket, confirmação, polling e storage
++  por UID não foram alterados; nenhuma promessa nova de entrega de e-mail.
++
++## Regressões e limites da evidência
++
++O harness lê **todo `public/admin.html`** e executa o módulo Admin completo, o
++helper de listas, bulk ticket, UI, lifecycle e **router reais**, inclusive
++metadados e Back/Forward. DOM/formulários e transportes são doubles explícitos.
++Não há substituição dos loaders/handlers por cópias extraídas para os testes novos.
++
++As **43 regressões novas** cobrem filtros isolados/combinados, totais, reset,
++URL direta/reload e same-tab history, consulta simultânea independente, sucesso
++e erro em ambas as ordens de resolução, retries/paginadores/ações obsoletos,
++recuperação vazia, descarte, 105/106 cargos, falha na segunda página, catálogo
++sem publicação parcial, convite/edição/aprovação, seleção inativa, mutações de
++cargos, permissões próprias/protegidas/strings, nomes seguros, datas inválidas,
++ação desconhecida, horário histórico de São Paulo, CSV e descoberta Sólides.
++
++**Não são** medições Chromium, testes de reflow/acessibilidade nativos, execução
++SQL ou persistência Firebase/PostgreSQL. `Intl` é real no Node; inputs, foco e
++histórico de navegador têm DOM controlado. A aceitação visual/teclado, filtros
++com os 55 usuários/105 cargos reais e ações/mutações reais continua com o primário.
++
++## Verificações executadas
++
++```sh
++node --test tests/unit/admin-ui-filters.test.mjs tests/unit/admin-ui-catalog-policy.test.mjs tests/unit/admin-list-filters.test.mjs tests/unit/auth-stability.test.mjs tests/unit/frontend-invariants.test.mjs tests/unit/governance-routes.test.mjs tests/unit/operations-invariants.test.mjs tests/unit/navigation-review-regressions.test.mjs tests/unit/persistent-navigation.test.mjs tests/unit/bulk-user-import.test.mjs
++npm run verify
++node scripts/generate-public-shell.mjs --check
++node --check public/js/admin.js
++node --check public/js/admin-list-state.js
++node --check tests/helpers/admin-ui-harness.mjs
++node --check tests/unit/admin-ui-filters.test.mjs
++node --check tests/unit/admin-ui-catalog-policy.test.mjs
++git diff --check
++```
++
++| Check final | Resultado real |
++| --- | --- |
++| Foco ampliado listado acima | **195 passaram**, zero falhas/cancelamentos/skips. |
++| `npm run verify` | **734 passaram**, zero falhas/cancelamentos/skips; exit 0 em sintaxe, testes, scanner local, nomenclatura e Compose. |
++| Gerador `--check`, cinco syntax checks e whitespace | Exit 0. |
++| Preservação R3 | **21 hashes** iguais ao snapshot `batch-3-r3-ff14c66-20260929.diff`. |
++| Preservação fora do lote | Diff vazio contra HEAD em API, auth/router/lifecycle/UI, CMS/Knowledge, bulk state, scripts, Nginx, cron e manifest raiz. |
++| Regiões não relacionadas do Admin | Bulk preview/job/storage/handlers, tabs/Sólides, Academy e Benefícios comparados byte a byte com HEAD: iguais. |
++
++Na primeira execução das suítes preexistentes, 91/95 passaram; quatro asserções
++de fonte ainda esperavam o loader antigo/boot. A ordem de boot foi preservada e
++somente as duas expectativas afetadas por contratos novos foram atualizadas.
++Um teste adicional de link same-path inicialmente não criava o atributo `href`
++no double e não acionava o router; a fixture foi corrigida. Todas as execuções
++finais acima passaram. A primeira verificação completa teve 733 passes; a
++regressão adicional de same-path resultou no total final **734 = 691 + 43**.
++
++Ambiente: Node **24.15.0**, npm **11.12.1**, Windows. Sintaxe nova compatível com
++Node 18, sem declarar validação integral nesse runtime. Warning preexistente
++`MODULE_TYPELESS_PACKAGE_JSON` permanece. Compose no verify é somente
++`config --quiet` com `.env.example`, sem alterar serviços. `verify: security`
++é o scanner local do repositório, não novo `npm audit`.
++
++## Handoff
++
++Sem bloqueio de implementação identificado no escopo. Primário deve inspecionar
++o diff, obter review fresh e executar sua aceitação Chromium/stack real,
++incluindo reflow, teclado, datas nativas, navegação, catálogo completo e políticas
++de escrita. O script primário `portal-correcoes-admin-browser.cjs` não foi editado
++nem executado por este implementador. Aguardar novo despacho antes do lote 5.

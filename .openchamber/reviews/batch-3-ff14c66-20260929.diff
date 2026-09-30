@@ -1,0 +1,1512 @@
+diff --git a/public/autocard.html b/public/autocard.html
+index 9297023..b7662da 100644
+--- a/public/autocard.html
++++ b/public/autocard.html
+@@ -95,7 +95,7 @@
+   </div>
+ </div>
+ 
+-<dialog id="assetDialog" aria-labelledby="assetTitle"><form method="dialog"><div class="dialog-heading"><h2 id="assetTitle">Biblioteca</h2><button value="cancel" aria-label="Fechar biblioteca" class="close-button">×</button></div><input id="assetSearch" aria-label="Buscar na biblioteca" type="search" placeholder="Buscar..."><div id="assetGrid" class="asset-grid"></div></form></dialog>
++<dialog id="assetDialog" aria-labelledby="assetTitle"><form method="dialog"><div class="dialog-heading"><h2 id="assetTitle">Biblioteca</h2><button value="cancel" aria-label="Fechar biblioteca" class="close-button">×</button></div><input id="assetSearch" aria-label="Buscar na biblioteca" aria-describedby="assetSearchStatus" type="search" placeholder="Buscar em português ou pelo nome original"><p id="assetSearchStatus" role="status"></p><button id="assetSearchClear" class="secondary-button" type="button" hidden>Limpar busca</button><div id="assetGrid" class="asset-grid"></div></form></dialog>
+ <dialog id="cropDialog" aria-labelledby="cropTitle">
+    <form method="dialog" class="crop-dialog-form">
+      <div class="dialog-heading">
+diff --git a/public/autocard/app.js b/public/autocard/app.js
+index c476d04..653ab70 100644
+--- a/public/autocard/app.js
++++ b/public/autocard/app.js
+@@ -1,6 +1,7 @@
+ import { fetchAPI, fetchAPIAsset, fetchAPIPage } from '../js/auth.js';
+ import { renderPagination, setPaginationBusy } from '../js/pagination.js';
+ import { DEFAULT_MEDIA_CROP, cropRenderStyle, cropStyle, dragMediaCrop, normalizeMediaCrop } from './crop.js';
++import { searchAssets } from './asset-catalog.js';
+ 
+ const requests = { fetchAPI, fetchAPIAsset, fetchAPIPage };
+ export function mount(page) {
+@@ -19,8 +20,6 @@ const templates = {
+   institucional:{label:'Institucional / Diversos',badge:'Diversos',group:'Cards internos',defaultIcon:'info',layout:'default',media:true,fields:[['titulo','Título',40,'Ex: Nossa cultura'],['corpo','Corpo do texto',200,'Conteúdo livre...']]},
+ };
+ const activeTemplateKeys=['comunicado','vaga','aniversariante','novo_funcionario'];
+-const icons=['triangle-alert','info','megaphone','bell','shield-check','file-text','mail','phone','user','users','heart','star','gift','wallet','coffee','utensils','car-front','circle-check','search','briefcase-business','bar-chart-3','settings','package','party-popper','trophy','cake','calendar-days','clock','map-pin','house','wrench','bed-double','trees','sparkles','send','message-circle','share-2','target'];
+-const illustrations=['hard-hat','shield-check','user-plus','users','cake','trophy','rabbit','utensils','car-front','house','syringe','piggy-bank','trees','ghost','party-popper','drama'];
+ let current={template:null,values:{},icon:null,illustration:null,mode:'light',mediaSize:'medium',mediaId:null,mediaUrl: null,mediaCrop:{...DEFAULT_MEDIA_CROP},mediaStatus:'idle',editingId:null,fromHistory:false};
+ let assetMode='icon';
+ let mediaVersion=0;
+@@ -31,6 +30,7 @@ let cropResizeObserver=null;
+ let cropResizeTargets=new Set();
+ let documentGeneration = 0;
+ let editRevision = 0;
++let exportInProgress = false;
+ let savedSnapshot = null;
+ let pendingMediaOperation = null;
+ let pendingMediaLoad = null;
+@@ -65,7 +65,7 @@ function exportHasOverflow(){const status=$('contentOverflow');return status?.da
+ function overflowLines(value){return String(value??'').split(/\r?\n/).map(line=>line.trim()).filter(Boolean)}
+ function hasMeasuredOverflow(element){return [['scrollHeight','clientHeight'],['scrollWidth','clientWidth']].some(([scroll,client])=>{const scrollSize=element?.[scroll],clientSize=element?.[client];return Number.isFinite(scrollSize)&&Number.isFinite(clientSize)&&scrollSize>0&&scrollSize>clientSize})}
+ function renderedTextOverflow(canvas){const selector='.card-shell,.card-shell .card-pad,.card-shell h2,.card-shell .sub,.card-shell .body,.card-shell .highlight,.card-shell .requirements,.card-shell .requirements span,.card-shell .vacancy-description,.card-shell .vacancy-description p,.card-shell .vacancy-overflow,.card-shell .vacancy-apply,.card-shell .employee-copy,.card-shell .employee-start,.card-shell .card-footer';if(!selector||!canvas?.querySelectorAll)return false;return [...canvas.querySelectorAll(selector)].some(hasMeasuredOverflow)}
+-function syncOverflow(){const status=$('contentOverflow'),button=$('exportButton'),canvas=$('cardCanvas'),requirements=current.template==='vaga'?overflowLines(current.values?.requisitos):[],benefits=current.template==='vaga'?overflowLines(current.values?.beneficios):[],extraRequirements=Math.max(0,requirements.length-4),extraBenefits=Math.max(0,benefits.length-4),rect=canvas?.getBoundingClientRect?.(),validBounds=Boolean(rect&&Number.isFinite(rect.width)&&Number.isFinite(rect.height)&&rect.width>0&&rect.height>0),messages=[];if(extraRequirements||extraBenefits){const items=[];if(extraRequirements)items.push(`${extraRequirements} ${extraRequirements===1?'requisito':'requisitos'}`);if(extraBenefits)items.push(`${extraBenefits} ${extraBenefits===1?'benefício':'benefícios'}`);messages.push(`Reduza ${items.join(' e ')} além do limite visual antes de exportar.`)}if(renderedTextOverflow(canvas))messages.push('Ajuste o texto cortado no preview antes de exportar.');if(!validBounds)messages.push('Aguarde o preview obter dimensões válidas antes de exportar.');const overflow=messages.length>0;if(status){status.textContent=messages.join(' ');status.setAttribute('aria-live','polite');status.setAttribute('data-overflow',String(overflow));status.hidden=!overflow}if(button)button.disabled=overflow;return overflow}
++function syncOverflow(){const status=$('contentOverflow'),button=$('exportButton'),canvas=$('cardCanvas'),requirements=current.template==='vaga'?overflowLines(current.values?.requisitos):[],benefits=current.template==='vaga'?overflowLines(current.values?.beneficios):[],extraRequirements=Math.max(0,requirements.length-4),extraBenefits=Math.max(0,benefits.length-4),rect=canvas?.getBoundingClientRect?.(),validBounds=Boolean(rect&&Number.isFinite(rect.width)&&Number.isFinite(rect.height)&&rect.width>0&&rect.height>0),messages=[];if(extraRequirements||extraBenefits){const items=[];if(extraRequirements)items.push(`${extraRequirements} ${extraRequirements===1?'requisito':'requisitos'}`);if(extraBenefits)items.push(`${extraBenefits} ${extraBenefits===1?'benefício':'benefícios'}`);messages.push(`Reduza ${items.join(' e ')} além do limite visual antes de exportar.`)}if(renderedTextOverflow(canvas))messages.push('Ajuste o texto cortado no preview antes de exportar.');if(!validBounds)messages.push('Aguarde o preview obter dimensões válidas antes de exportar.');const overflow=messages.length>0;if(status){status.textContent=messages.join(' ');status.setAttribute('aria-live','polite');status.setAttribute('data-overflow',String(overflow));status.hidden=!overflow}if(button)button.disabled=overflow||exportInProgress;return overflow}
+ function exportStillCurrent(generation,revision){const canvas=$('cardCanvas'),rect=canvas?.getBoundingClientRect?.();return generation===documentGeneration&&revision===editRevision&&exportMediaReady()&&!exportHasOverflow()&&Boolean(rect&&rect.width>0&&rect.height>0)}
+ function exportBlockedMessage(){if(!exportMediaReady())return 'Aguarde a imagem terminar de carregar antes de exportar.';if(exportHasOverflow())return $('contentOverflow')?.textContent||'Corrija o excesso de conteúdo antes de exportar.';return 'O card ainda não possui dimensões válidas para exportação.'}
+ function finishMediaOperation(operation,reload=true){if(pendingMediaOperation!==operation)return false;const previous=operation.previous,pendingLoad=previous.pendingLoad;if(pendingMediaLoad===pendingLoad){pendingMediaLoad=null;revokePendingMediaUrl(pendingLoad)}current.mediaId=previous.mediaId;current.mediaUrl=previous.mediaUrl;current.mediaCrop={...previous.mediaCrop};pendingMediaOperation=null;$('cropButton')?.classList.toggle('hidden',!current.mediaUrl);operation.mediaRestorePending=Boolean(current.mediaId&&!current.mediaUrl);if(operation.mediaRestorePending&&reload){const version=++mediaVersion;setMediaStatus('loading');loadMedia(current.mediaId,version,false)}else if(!operation.mediaRestorePending)setMediaStatus(previous.mediaStatus|| (current.mediaUrl?'ready':'idle'));return true}
+@@ -114,7 +114,7 @@ function mediaHeight(){return {small:88,medium:132,large:176}[current.mediaSize]
+ function renderCard(){if(!current.template)return;const t=templates[current.template],v=current.values, dark=current.mode==='dark', theme=dark?{bg:'#171716',header:'#282722',text:'#fff',subtext:'#d6bd8b',accent:'#c9a86a',muted:'#302e28'}:{bg:'#f6f1e9',header:'#1d1d1b',text:'#171716',subtext:'#746653',accent:'#b99a61',muted:'#e8e0d4'};const title=esc(v.titulo)||'Título';let body='';if(t.layout==='alert')body=`<div class="card-shell alert" style="background:${theme.bg};color:${theme.text}"><div class="accent-bar" style="background:${theme.accent}"></div><div class="card-pad"><div class="card-kicker" style="color:${theme.subtext}">${icon(current.icon,18)} COMUNICADO OFICIAL</div><h2>${title}</h2><p class="sub" style="color:${theme.subtext}">${esc(v.subtitulo)}</p><div class="highlight" style="background:${theme.muted}">${esc(v.regraPrincipal)}</div><p class="body">${esc(v.corpo)}</p>${footer(theme)}</div></div>`;else if(t.layout==='event')body=`<div class="card-shell" style="background:${theme.bg};color:${theme.text}">${current.mediaId?mediaHtml(t,theme):''}<div class="card-pad"><div class="date-box" style="background:${theme.header};color:${theme.accent}">${esc((v.data||'--').slice(0,5))}</div><div class="card-kicker" style="color:${theme.subtext}">${icon(current.icon,16)} EVENTO</div><h2>${title}</h2><p class="sub" style="color:${theme.subtext}">${esc(v.subtitulo)}</p><p class="body">${esc(v.corpo)}</p>${footer(theme)}</div></div>`;else if(t.layout==='birthday')body=`<div class="card-shell birthday" style="background:${theme.header};color:#fff"><div class="card-kicker" style="color:${theme.accent}">ANIVERSARIANTE <span>${esc(v.data)}</span></div><div class="birthday-photo">${current.mediaUrl?`<img src="${current.mediaUrl}" style="${cropStyle(current.mediaCrop)}" alt="">`:icon(current.icon,58)}</div><h2>${title}</h2><p class="sub" style="color:${theme.accent}">${esc(v.subtitulo)}</p>${footer(theme)}</div>`;else if(t.layout==='vacancy')body=`<div class="card-shell" style="background:${theme.bg};color:${theme.text}"><div class="card-pad"><div class="card-kicker" style="color:${theme.subtext}">${icon(current.icon,18)} VAGA</div><h2>${title}</h2><p class="sub" style="color:${theme.subtext}">${esc(v.subtitulo)}</p><div class="requirements">${(v.corpo||'Adicione requisitos').split('\n').filter(Boolean).slice(0,6).map(x=>`<span style="background:${theme.muted}">${esc(x)}</span>`).join('')}</div>${footer(theme,v.data)}</div></div>`;else body=`<div class="card-shell" style="background:${theme.bg};color:${theme.text}">${t.media?mediaHtml(t,theme):''}<div class="card-pad"><div class="card-kicker" style="color:${theme.subtext}">${icon(current.icon,18)} ${esc(t.badge).toUpperCase()}</div><h2>${title}</h2><p class="sub" style="color:${theme.subtext}">${esc(v.subtitulo)}</p><p class="body">${esc(v.corpo)}</p>${footer(theme,v.data)}</div></div>`;$('cardCanvas').innerHTML=body;$('cardCanvas').style.setProperty('--media-height',`${mediaHeight()}px`);applyMediaCropStyle();activateIcons()}
+ function footer(theme,value=''){const logo=theme.bg==='#171716'?'/assets/ownerinc-wordmark-white.webp':'/assets/ownerinc-wordmark-black.webp';return `<div class="card-footer" style="border-color:${theme.muted};color:${theme.subtext}"><span>${esc(value)}</span><img src="${logo}" alt="Ownerinc" style="filter:none"></div>`}
+ function openAssets(mode){assetMode=mode;$('assetTitle').textContent=mode==='icon'?'Biblioteca de ícones':'Biblioteca de ilustrações';$('assetSearch').value='';renderAssets();$('assetDialog').showModal()}
+-function renderAssets(){const list=assetMode==='icon'?icons:illustrations;const search=$('assetSearch').value.toLowerCase();$('assetGrid').innerHTML=list.filter(x=>x.includes(search)).map(x=>`<button aria-label="Selecionar ${x}" title="${x}" class="${(assetMode==='icon'?current.icon:current.illustration)===x?'selected':''}" data-asset="${x}">${icon(x,26)}</button>`).join('');document.querySelectorAll('[data-asset]').forEach(b=>b.onclick=()=>{if(assetMode==='icon'){if(current.icon!==b.dataset.asset){current.icon=b.dataset.asset;editRevision+=1}}else if(current.illustration!==b.dataset.asset){current.illustration=b.dataset.asset;editRevision+=1}$('assetDialog').close();updateControls();renderCard()});activateIcons()}
++function renderAssets(){const list=searchAssets(assetMode,$('assetSearch').value);$('assetGrid').innerHTML=list.map(({id,title})=>`<button type="button" aria-label="Selecionar ${esc(title)}" title="${esc(title)} (${id})" class="${(assetMode==='icon'?current.icon:current.illustration)===id?'selected':''}" data-asset="${id}">${icon(id,26)}</button>`).join('');const feedback=$('assetSearchStatus');if(feedback)feedback.textContent=list.length?'':`Nenhum${assetMode==='icon'?' ícone encontrado':'a ilustração encontrada'} para esta busca.`;const clear=$('assetSearchClear');if(clear){clear.hidden=!$('assetSearch').value;clear.onclick=()=>{$('assetSearch').value='';renderAssets();$('assetSearch').focus()}}document.querySelectorAll('[data-asset]').forEach(b=>b.onclick=()=>{if(assetMode==='icon'){if(current.icon!==b.dataset.asset){current.icon=b.dataset.asset;editRevision+=1}}else if(current.illustration!==b.dataset.asset){current.illustration=b.dataset.asset;editRevision+=1}$('assetDialog').close();updateControls();renderCard()});activateIcons()}
+ async function api(path,options={}){try{return await fetchAPI(path,options)}catch(error){throw new Error(error.message||'Não foi possível concluir a operação.')}}
+ async function upload(file){const startedGeneration=documentGeneration,startedRevision=editRevision,startedVersion=mediaVersion,startedMediaId=current.mediaId,operation={generation:startedGeneration,version:startedVersion,mediaId:null,previous:mediaSnapshot(),startedRevision};pendingMediaOperation=operation;const previewUrl=page.objectURL(file);const dimensions=await page.image(previewUrl).then(image=>[image.naturalWidth,image.naturalHeight]).catch(()=>null).finally(()=>revokeMediaUrl(previewUrl));const sameDocumentMedia=startedGeneration===documentGeneration&&startedVersion===mediaVersion&&current.mediaId===startedMediaId;if(sameDocumentMedia)operation.previous=mediaSnapshot();if(!sameDocumentMedia||startedRevision!==editRevision||pendingMediaOperation!==operation){if(pendingMediaOperation===operation)cancelMediaOperation(operation);return}if(!dimensions||dimensions.some(value=>value<500)){failMediaOperation(operation,'Não foi possível carregar a imagem.','Use uma imagem com pelo menos 500 × 500 px.');return}if(file.size>3*1024*1024){failMediaOperation(operation,'Não foi possível carregar a imagem.','A imagem deve ter no máximo 3 MB.');return}revokePendingMediaUrl(pendingMediaLoad);pendingMediaLoad=null;operation.revision=++editRevision;const uploadVersion=++mediaVersion;operation.version=uploadVersion;setMediaStatus('uploading');try{const data=await api('/api/autocard/media',{method:'POST',headers:{'content-type':file.type},body:file});if(startedGeneration!==documentGeneration||editRevision!==operation.revision||uploadVersion!==mediaVersion||pendingMediaOperation!==operation){if(pendingMediaOperation===operation)cancelMediaOperation(operation);return}if(!data?.id)throw new Error('upload inválido');operation.mediaId=data.id;const version=++mediaVersion;operation.version=version;setMediaStatus('loading');loadMedia(data.id,version,true)}catch(error){if(startedGeneration!==documentGeneration||editRevision!==operation.revision||pendingMediaOperation!==operation){if(pendingMediaOperation===operation)cancelMediaOperation(operation);return}failMediaOperation(operation,'Não foi possível enviar a imagem.',`Não foi possível enviar a imagem: ${error.message||'tente novamente.'}`)}}
+ async function saveCard(){const startedGeneration=documentGeneration,startedRevision=editRevision,name=prompt('Nome do card:',current.values.titulo||'Card sem título');if(name===null)return;const normalizedName=name.trim();if(!normalizedName||normalizedName.length>120){toast('O nome do card deve ter entre 1 e 120 caracteres.');return}const button=$('saveButton');button.disabled=true;button.textContent='Salvando…';pendingSaveCount+=1;try{const payload={name:normalizedName,template:current.template,values:{...current.values},icon:current.icon,illustration:current.illustration,mode:current.mode,variant:variantForMode(current.mode),mediaSize:current.mediaSize,mediaId:current.mediaId,mediaCrop:current.mediaCrop};const saved=current.editingId?await api(`/api/autocard/cards/${current.editingId}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}):await api('/api/autocard/cards',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});if(startedGeneration!==documentGeneration)return;current.editingId=saved.id;if(startedRevision===editRevision)savedSnapshot=snapshotPayload();toast('Card salvo no histórico compartilhado.')}catch(error){if(startedGeneration===documentGeneration)throw error}finally{pendingSaveCount=Math.max(0,pendingSaveCount-1);button.disabled=false;button.textContent='Salvar'}}
+@@ -125,6 +125,42 @@ async function loadSaved(offset = savedOffset){const {search,filter,key}=savedQu
+ function showTab(tab){const active=document.querySelector('.tab.active')?.dataset.tab;if(active===tab)return true;if(!allowNavigation())return false;invalidateMediaForNavigation();document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));$('createView').classList.toggle('hidden',tab!=='create');$('savedView').classList.toggle('hidden',tab!=='saved');if(tab==='saved')loadSaved().catch(e=>toast(e.message));else if(current.mediaId)reloadCurrentMedia();return true}
+ function buildFilters(){const filters=[['','Todos'],...activeTemplateKeys.map(key=>[key,templates[key].badge])];$('savedFilters').innerHTML=filters.map(([key,label],index)=>`<button class="filter${index===0?' active':''}" data-template="${key}">${label}</button>`).join('');document.querySelectorAll('.filter').forEach(button=>button.onclick=()=>{document.querySelectorAll('.filter').forEach(item=>item.classList.remove('active'));button.classList.add('active');reloadSaved()})}
+ function handleBeforeUnload(event){if(navigationConfirmed||!isDirty())return;event.preventDefault?.();event.returnValue=''}
+-async function exportCard(){const startedGeneration=documentGeneration,startedRevision=editRevision,button=$('exportButton');if(!button)return;const wasDisabled=button.disabled,recheck=()=>{if(!page.active)return false;syncOverflow();const ready=exportStillCurrent(startedGeneration,startedRevision);if(ready)button.disabled=true;return ready};if(!recheck()){toast(exportBlockedMessage());return}button.disabled=true;try{if(document.fonts?.ready){if(!recheck()){toast(exportBlockedMessage());return}try{await page.wait(document.fonts.ready)}catch{}if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;if(!recheck()){toast(exportBlockedMessage());return}}if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;if(!recheck()){toast(exportBlockedMessage());return}const canvas=$('cardCanvas'),images=[...canvas.querySelectorAll('img')];for(const img of images){if(typeof img.decode==='function'){if(!recheck()){toast(exportBlockedMessage());return}try{await page.wait(img.decode())}catch{if(startedGeneration===documentGeneration&&startedRevision===editRevision)toast('A imagem ainda não está pronta para exportação.');return}if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;if(!recheck()){toast(exportBlockedMessage());return}}else if(!img.complete){toast('A imagem ainda não está pronta para exportação.');return}}if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;if(!recheck()){toast(exportBlockedMessage());return}const rect=canvas.getBoundingClientRect();const width=rect.width;const height=rect.height;const scale=1080/width;const rendered=await page.wait(html2canvas(canvas,{scale,width,height,backgroundColor:null}));if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;if(!recheck()){toast(exportBlockedMessage());return}const link=document.createElement('a');link.download=`card-ownerinc-${current.template}.png`;link.href=rendered.toDataURL('image/png');link.click()}catch(error){if(startedGeneration===documentGeneration&&startedRevision===editRevision)toast('Não foi possível exportar o card.')}finally{if(page.active){const overflow=syncOverflow();if(!overflow)button.disabled=wasDisabled}}}
++async function exportCard(){
++  const startedGeneration=documentGeneration,startedRevision=editRevision,button=$('exportButton');
++  if(!button||exportInProgress||!page.active)return;
++  const wasDisabled=button.disabled,previousText=button.textContent;
++  const recheck=()=>{if(!page.active)return false;syncOverflow();const ready=exportStillCurrent(startedGeneration,startedRevision);if(ready)button.disabled=true;return ready};
++  if(!recheck()){toast(exportBlockedMessage());return}
++  exportInProgress=true;button.disabled=true;button.textContent='Gerando PNG…';toast('Gerando PNG…');
++  try{
++    if(document.fonts?.ready){
++      if(!recheck()){toast(exportBlockedMessage());return}
++      try{await page.wait(document.fonts.ready)}catch{}
++      if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;
++      if(!recheck()){toast(exportBlockedMessage());return}
++    }
++    if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;
++    if(!recheck()){toast(exportBlockedMessage());return}
++    const canvas=$('cardCanvas'),images=[...canvas.querySelectorAll('img')];
++    for(const img of images){
++      if(typeof img.decode==='function'){
++        if(!recheck()){toast(exportBlockedMessage());return}
++        try{await page.wait(img.decode())}catch{if(startedGeneration===documentGeneration&&startedRevision===editRevision)toast('A imagem ainda não está pronta para exportação.');return}
++        if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;
++        if(!recheck()){toast(exportBlockedMessage());return}
++      }else if(!img.complete){toast('A imagem ainda não está pronta para exportação.');return}
++    }
++    if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;
++    if(!recheck()){toast(exportBlockedMessage());return}
++    const rect=canvas.getBoundingClientRect();const width=rect.width;const height=rect.height;const scale=1080/width;
++    const rendered=await page.wait(html2canvas(canvas,{scale,width,height,backgroundColor:null}));
++    if(startedGeneration!==documentGeneration||startedRevision!==editRevision)return;
++    if(!recheck()){toast(exportBlockedMessage());return}
++    const link=document.createElement('a');link.download=`card-ownerinc-${current.template}.png`;link.href=rendered.toDataURL('image/png');
++    if(!recheck())return;
++    link.click();toast('PNG gerado; download solicitado ao navegador.');
++  }catch(error){if(startedGeneration===documentGeneration&&startedRevision===editRevision)toast('Não foi possível exportar o card.')}
++  finally{exportInProgress=false;if(page.active){button.textContent=previousText;const overflow=syncOverflow();if(!overflow)button.disabled=wasDisabled}}
++}
+ page.listen(window,'beforeunload',handleBeforeUnload);document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('backButton').onclick=()=>{if(current.fromHistory)showTab('saved');else if(allowNavigation()){invalidateMediaForNavigation();$('editorView').classList.add('hidden');$('templateGallery').classList.remove('hidden')}};$('iconButton').onclick=()=>openAssets('icon');$('illustrationButton').onclick=()=>openAssets('illustration');$('assetSearch').oninput=renderAssets;$('savedSearch').oninput=reloadSaved;$('saveButton').onclick=()=>{if(!page.busy&&!pendingSaveCount)saveCard().catch(e=>toast(e.message))};$('exportButton').onclick=()=>exportCard();$('imageButton').onclick=()=>{const input=$('imageInput');input.value='';input.click()};$('imageInput').onchange=e=>{const input=e.target;const file=input.files?.[0];try{if(file)upload(file).catch(e=>toast(e.message))}finally{input.value=''}};document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{if(current.mode!==b.dataset.mode){current.mode=b.dataset.mode;editRevision+=1}updateControls();renderCard()});document.querySelectorAll('[data-size]').forEach(b=>b.onclick=()=>{if(current.mediaSize!==b.dataset.size){current.mediaSize=b.dataset.size;editRevision+=1}updateControls();renderCard()});$('helpButton').onclick=()=>toast('Escolha um modelo, preencha os campos e salve ou exporte o card.');buildFilters();renderGallery();setupCropEditor();
+ }
+diff --git a/public/cards-pos.html b/public/cards-pos.html
+index e81eb64..b2a103f 100644
+--- a/public/cards-pos.html
++++ b/public/cards-pos.html
+@@ -177,7 +177,7 @@
+            <div id="historyList" class="history-list"></div>
+            <p id="history-status" class="status" role="status" aria-live="polite"></p>
+           <div id="historyPagination" class="pagination" aria-live="polite"></div>
+-          <p id="historyEmpty" class="empty-state hidden" role="status" aria-live="polite">Nenhum convite salvo ainda.</p>
++          <div id="historyEmpty" class="history-actions hidden"></div>
+         </section>
+       </div>
+     </main>
+diff --git a/public/cards-pos/app.js b/public/cards-pos/app.js
+index eab03af..1f0df95 100644
+--- a/public/cards-pos/app.js
++++ b/public/cards-pos/app.js
+@@ -80,6 +80,7 @@ if (typeof draftStore !== 'undefined') for (const key of ['mediaId', 'mediaUrl',
+ });
+ let historyRequest = 0;
+ let historyOffset = 0;
++let historyPending = false;
+ let mediaOperationToken = 0;
+ let activeMediaPromise = null;
+ const mediaFeedback = new Map();
+@@ -651,13 +652,17 @@ async function saveWithName(name) {
+   }
+ }
+ 
+-function renderHistory(cards) {
+-  $('historyList').innerHTML = cards.map((card) => `<article class="history-item"><div><strong>${esc(card.name)}</strong><small>${card.template === 'convite_owner' ? 'Owner' : 'Convidado'} · Atualizado em ${esc(new Date(card.updatedAt).toLocaleDateString('pt-BR'))}</small></div><div class="history-actions"><button type="button" data-edit="${esc(card.id)}">Editar</button><button type="button" data-copy="${esc(card.id)}">Duplicar</button><button type="button" data-delete="${esc(card.id)}">Excluir</button></div></article>`).join('');
+-  $('historyEmpty').classList.toggle('hidden', cards.length > 0);
+-  $('history-status').textContent = `${cards.length} item(ns) carregados.`;
++function setHistoryStatus(message, error = false) {
++  const status = $('history-status');
++  status.textContent = message;
++  status.classList.toggle('is-error', error);
++}
++
++function renderHistory(cards, requestToken) {
++  $('historyList').innerHTML = cards.map((card) => `<article class="history-item"><div><strong>${esc(card.name)}</strong><small>${card.template === 'convite_owner' ? 'Owner' : 'Convidado'} · Atualizado em ${esc(new Date(card.updatedAt).toLocaleDateString('pt-BR'))}</small></div><div class="history-actions"><button type="button" data-history-request="${requestToken}" data-edit="${esc(card.id)}">Editar</button><button type="button" data-history-request="${requestToken}" data-copy="${esc(card.id)}">Duplicar</button><button type="button" data-history-request="${requestToken}" data-delete="${esc(card.id)}">Excluir</button></div></article>`).join('');
+ }
+ 
+-function renderHistoryPagination(total) {
++function renderHistoryPagination(total, requestToken) {
+   const pagination = $('historyPagination');
+   pagination.replaceChildren();
+   if (total <= HISTORY_PAGE_SIZE) return;
+@@ -668,6 +673,7 @@ function renderHistoryPagination(total) {
+     button.textContent = label;
+     button.disabled = disabled;
+     button.dataset.historyOffset = String(offset);
++    button.dataset.historyRequest = String(requestToken);
+     return button;
+   };
+   const page = Math.floor(historyOffset / HISTORY_PAGE_SIZE) + 1;
+@@ -680,26 +686,58 @@ function renderHistoryPagination(total) {
+   );
+ }
+ 
+-async function loadHistory() {
++async function loadHistory(query = { search: $('historySearch').value.trim(), offset: historyOffset }) {
++  if (!page.active) return false;
+   const requestToken = ++historyRequest;
++  const isCurrent = () => page.active && requestToken === historyRequest;
++  historyOffset = query.offset;
++  historyPending = true;
++  const list = $('historyList');
++  list.replaceChildren();
++  list.setAttribute('aria-busy', 'true');
++  $('historyPagination').replaceChildren();
+   const empty = $('historyEmpty');
+-  empty.textContent = 'Carregando convites...';
+-  empty.classList.remove('hidden');
++  empty.replaceChildren();
++  empty.classList.add('hidden');
++  setHistoryStatus('Carregando convites...');
++  const action = (label, callback) => {
++    const button = document.createElement('button');
++    button.type = 'button';
++    button.className = 'btn btn-ghost';
++    button.textContent = label;
++    page.listen(button, 'click', () => { if (isCurrent() && !historyPending) callback(); });
++    empty.classList.remove('hidden');
++    empty.append(button);
++  };
+   try {
+-    const search = encodeURIComponent($('historySearch').value);
+-    const result = await fetchAPIPage(`/api/pos-cards/cards?search=${search}&limit=${HISTORY_PAGE_SIZE}&offset=${historyOffset}`);
+-    if (requestToken !== historyRequest) return;
++    const search = encodeURIComponent(query.search);
++    const result = await fetchAPIPage(`/api/pos-cards/cards?search=${search}&limit=${HISTORY_PAGE_SIZE}&offset=${query.offset}`);
++    if (!isCurrent()) return false;
+     const cards = result.data || [];
+-    renderHistory(cards);
+-    renderHistoryPagination(result.total ?? cards.length);
+-    empty.textContent = 'Nenhum convite salvo ainda.';
+-    setStatus(cards.length ? `${cards.length} convite(s) encontrado(s).` : 'Nenhum convite salvo ainda.');
++    const total = result.total ?? cards.length;
++    const lastOffset = Math.max(0, Math.ceil(total / HISTORY_PAGE_SIZE) - 1) * HISTORY_PAGE_SIZE;
++    if (!cards.length && query.offset > lastOffset) return loadHistory({ ...query, offset: lastOffset });
++    renderHistory(cards, requestToken);
++    renderHistoryPagination(total, requestToken);
++    if (cards.length) setHistoryStatus(`${cards.length} convite(s) encontrado(s).`);
++    else if (total > 0) {
++      setHistoryStatus('Nenhum convite nesta página. Atualize o histórico.');
++      action('Tentar novamente', () => loadHistory(query));
++    } else if (query.search) {
++      setHistoryStatus('Nenhum convite encontrado para esta busca.');
++      action('Limpar busca', () => { $('historySearch').value = ''; historyOffset = 0; loadHistory(); $('historySearch').focus(); });
++    } else {
++      setHistoryStatus('Nenhum convite salvo ainda.');
++      action('Criar convite', () => showView('editor'));
++    }
++    return requestToken;
+   } catch (error) {
+-    if (requestToken !== historyRequest) return;
+-    $('historyList').replaceChildren();
+-    $('historyPagination').replaceChildren();
+-    empty.textContent = 'Não foi possível carregar o histórico.';
+-    setStatus(error.message, true);
++    if (!isCurrent()) return false;
++    setHistoryStatus('Não foi possível carregar o histórico.', true);
++    action('Tentar novamente', () => loadHistory(query));
++    return false;
++  } finally {
++    if (isCurrent()) { historyPending = false; list.setAttribute('aria-busy', 'false'); }
+   }
+ }
+ 
+@@ -733,28 +771,32 @@ async function editCard(id) {
+ 
+ async function duplicateCard(id) {
+   if (exportInProgress) return;
++  const requestToken = historyRequest;
+   setStatus('Duplicando convite...');
+   try {
+     await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
++    if (!page.active || requestToken !== historyRequest) return;
+     historyOffset = 0;
+-    await loadHistory();
+-    setStatus('Convite duplicado.');
++    const loadedRequest = await loadHistory();
++    if (loadedRequest === historyRequest) setStatus('Convite duplicado.');
+   } catch (error) {
+-    setStatus(error.message, true);
++    if (requestToken === historyRequest) setStatus(error.message, true);
+   }
+ }
+ 
+ async function deleteCard(id) {
+   if (exportInProgress) return;
+   if (!window.confirm('Excluir este convite?')) return;
++  const requestToken = historyRequest;
+   setStatus('Excluindo convite...');
+   try {
+     await fetchAPI(`/api/pos-cards/cards/${encodeURIComponent(id)}`, { method: 'DELETE' });
++    if (!page.active || requestToken !== historyRequest) return;
+     historyOffset = 0;
+-    await loadHistory();
+-    setStatus('Convite excluído.');
++    const loadedRequest = await loadHistory();
++    if (loadedRequest === historyRequest) setStatus('Convite excluído.');
+   } catch (error) {
+-    setStatus(error.message, true);
++    if (requestToken === historyRequest) setStatus(error.message, true);
+   }
+ }
+ 
+@@ -773,7 +815,7 @@ function showView(view) {
+   $('editorView').classList.toggle('hidden', view !== 'editor');
+   $('historyView').classList.toggle('hidden', view !== 'history');
+   document.body.classList.toggle('cards-pos-editing', view === 'editor');
+-  if (view === 'editor') layoutUpdate?.();
++  if (view === 'editor') { ++historyRequest; historyPending = false; layoutUpdate?.(); }
+   if (view === 'history') loadHistory();
+ }
+ 
+@@ -840,14 +882,14 @@ function init() {
+   page.listen($('historySearch'), 'input', () => { historyOffset = 0; loadHistory(); });
+   page.listen($('historyList'), 'click', (event) => {
+     const button = event.target.closest('button');
+-    if (!button) return;
++    if (!button || historyPending || button.dataset.historyRequest !== String(historyRequest) || !$('historyList').contains(button)) return;
+     if (button.dataset.edit) editCard(button.dataset.edit);
+     if (button.dataset.copy) duplicateCard(button.dataset.copy);
+     if (button.dataset.delete) deleteCard(button.dataset.delete);
+   });
+   page.listen($('historyPagination'), 'click', event => {
+     const button = event.target.closest('button[data-history-offset]');
+-    if (!button || button.disabled) return;
++    if (!button || button.disabled || historyPending || button.dataset.historyRequest !== String(historyRequest) || !$('historyPagination').contains(button)) return;
+     historyOffset = Number(button.dataset.historyOffset);
+     loadHistory();
+   });
+diff --git a/public/cards-pos/preview-layout.js b/public/cards-pos/preview-layout.js
+index 65fd4b9..837e053 100644
+--- a/public/cards-pos/preview-layout.js
++++ b/public/cards-pos/preview-layout.js
+@@ -1,14 +1,34 @@
+ import { fitPreview } from './card-geometry.js';
+ export function observePreviewLayout({ container, frame, wrapper, toolbar, mode = 'fit', page } = {}) {
++  let disposed = false;
++  let pendingFrame = null;
++  let result;
++  let writtenHeight;
++  const written = new Map();
++  const write = (name, value) => {
++    if (!wrapper?.style || written.get(name) === value) return;
++    wrapper.style.setProperty(name, value);
++    written.set(name, value);
++  };
++  // Explicit updates remain synchronous for model/mode switches and a return
++  // from the hidden history view. Only observer/viewport notifications queue.
+   const update = () => {
++    if (disposed || page?.active === false) return result;
+     // Mobile is a scrolling page: reserve one screen for the preview before
+     // the form. Document-relative top stays stable while the user scrolls.
+     if (container?.style && window.matchMedia) {
+       if (window.matchMedia('(max-width: 900px)').matches) {
+         const top = container.getBoundingClientRect().top + window.scrollY;
+         const height = window.visualViewport?.height || window.innerHeight;
+-        container.style.height = `${Math.max(180, height - top - 16)}px`;
+-      } else container.style.removeProperty('height');
++        const value = `${Math.max(180, height - top - 16)}px`;
++        if (writtenHeight !== value) {
++          if (container.style.height !== value) container.style.height = value;
++          writtenHeight = value;
++        }
++      } else {
++        if (container.style.height) container.style.removeProperty('height');
++        writtenHeight = '';
++      }
+     }
+     const styles = typeof getComputedStyle === 'function' && container ? getComputedStyle(container) : {};
+     const padding = name => parseFloat(styles[name]) || 0;
+@@ -16,17 +36,30 @@ export function observePreviewLayout({ container, frame, wrapper, toolbar, mode
+       width: Math.max(0, (container?.clientWidth || 0) - padding('paddingLeft') - padding('paddingRight')),
+       height: Math.max(0, (container?.clientHeight || 0) - padding('paddingTop') - padding('paddingBottom')),
+     };
+-    const result = fitPreview(typeof frame === 'function' ? frame() : frame, available, typeof mode === 'function' ? mode() : mode);
+-    wrapper?.style.setProperty('--preview-width', `${result.width}px`);
+-    wrapper?.style.setProperty('--preview-height', `${result.height}px`);
++    result = fitPreview(typeof frame === 'function' ? frame() : frame, available, typeof mode === 'function' ? mode() : mode);
++    // Cache our values rather than comparing browser-rounded CSS serialization.
++    write('--preview-width', `${result.width}px`);
++    write('--preview-height', `${result.height}px`);
+     return result;
+   };
+-  const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null;
++  const schedule = () => {
++    if (disposed || page?.active === false || pendingFrame !== null) return;
++    pendingFrame = (page?.frame || requestAnimationFrame)(() => {
++      pendingFrame = null;
++      update();
++    });
++  };
++  const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+   if (container) observer?.observe(container);
+   if (toolbar) observer?.observe(toolbar);
+-  page?.listen(window, 'resize', update);
+-  if (window.visualViewport) page?.listen(window.visualViewport, 'resize', update);
++  page?.listen(window, 'resize', schedule);
++  if (window.visualViewport) page?.listen(window.visualViewport, 'resize', schedule);
+   update();
+-  page?.cleanup(() => observer?.disconnect());
++  page?.cleanup(() => {
++    disposed = true;
++    observer?.disconnect();
++    if (pendingFrame !== null) cancelAnimationFrame(pendingFrame);
++    pendingFrame = null;
++  });
+   return update;
+ }
+diff --git a/public/css/dashboard-home.css b/public/css/dashboard-home.css
+index ac59c82..9925ba9 100644
+--- a/public/css/dashboard-home.css
++++ b/public/css/dashboard-home.css
+@@ -309,7 +309,7 @@
+   line-height: 1.35;
+ }
+ 
+-.dashboard-home :where(a):focus-visible,
++.dashboard-home :where(a, button):focus-visible,
+ .dashboard-home:focus-visible {
+   outline: 3px solid var(--focus);
+   outline-offset: 3px;
+@@ -410,3 +410,15 @@
+     scroll-snap-type: none;
+   }
+ }
++
++/* No publication to read: keep the heading and useful areas above the fold. */
++.dashboard-home [hidden] { display: none; }
++.dashboard-hero:not([data-state="populated"]) { min-height: 0; }
++.dashboard-hero:not([data-state="populated"])::after { display: none; }
++.dashboard-hero:not([data-state="populated"]) .dashboard-hero-copy {
++  width: 100%;
++  min-height: 0;
++  padding: 24px;
++}
++.dashboard-hero:not([data-state="populated"]) h1 { font-size: 32px; }
++.dashboard-hero:not([data-state="populated"]) .dashboard-hero-meta { display: none; }
+diff --git a/public/dashboard.html b/public/dashboard.html
+index 60ca3f2..7971b38 100644
+--- a/public/dashboard.html
++++ b/public/dashboard.html
+@@ -54,18 +54,19 @@
+     <header class="topbar"><span class="topbar-title">Dashboard</span></header>
+     <!-- /generated:portal-topbar -->
+     <main class="page-body dashboard-home" id="main-content" tabindex="-1" data-route-pending>
+-      <section class="dashboard-hero" aria-labelledby="dashboard-hero-title">
+-        <img src="./assets/logo-branco.svg" alt="Owner News" width="1600" height="700">
++      <section class="dashboard-hero" data-state="loading" aria-busy="true" aria-labelledby="dashboard-hero-title">
++        <img src="./assets/logo-branco.svg" alt="Owner News" width="1600" height="700" hidden>
+         <div class="dashboard-hero-copy">
+           <p id="dashboard-hero-eyebrow" class="dashboard-eyebrow">Owner News</p>
+-          <h1 id="dashboard-hero-title">Histórias da Ownerinc.</h1>
+-          <p id="dashboard-hero-description" class="dashboard-hero-description">Acompanhe as publicações da nossa equipe.</p>
+-          <a class="dashboard-button dashboard-button-primary" href="./announcements.html">Ler publicação</a>
++          <h1 id="dashboard-hero-title">Owner News</h1>
++          <p id="dashboard-hero-description" class="dashboard-hero-description" role="status">Carregando publicações…</p>
++          <a class="dashboard-button dashboard-button-primary" href="#quick-links" hidden>Acessar áreas</a>
++          <button id="dashboard-hero-retry" class="dashboard-button dashboard-button-primary" type="button" hidden>Tentar novamente</button>
+           <p id="dashboard-hero-meta" class="dashboard-hero-meta"></p>
+         </div>
+       </section>
+ 
+-      <section class="dashboard-section" aria-labelledby="announcements-heading">
++      <section id="dashboard-news-section" class="dashboard-section" aria-labelledby="announcements-heading" hidden>
+         <div class="dashboard-section-heading">
+           <div>
+             <p class="dashboard-section-kicker">Últimas publicações</p>
+@@ -73,7 +74,7 @@
+           </div>
+           <a class="dashboard-section-link" href="./announcements.html">Ver todos</a>
+         </div>
+-        <div id="announcements-preview" class="dashboard-story-rail" aria-live="polite"><p class="empty-state">Carregando publicações…</p></div>
++        <div id="announcements-preview" class="dashboard-story-rail" aria-live="polite"></div>
+       </section>
+ 
+       <section class="dashboard-section" aria-labelledby="areas-heading">
+diff --git a/public/js/dashboard.js b/public/js/dashboard.js
+index cac1cf6..f695253 100644
+--- a/public/js/dashboard.js
++++ b/public/js/dashboard.js
+@@ -89,18 +89,33 @@ function storyCard({ title, category, description, blocks, href, newTab, image,
+   return element('article', { className: 'dashboard-story-card' }, children);
+ }
+ 
+-function renderHero(announcement) {
++function renderHero(announcement, state = announcement ? 'populated' : 'empty') {
++  const hero = document.querySelector('.dashboard-hero');
++  if (hero) hero.dataset.state = state;
++  setBusy(hero, state === 'loading');
++  const section = document.getElementById('dashboard-news-section');
++  if (section) section.hidden = state !== 'populated';
+   const title = document.getElementById('dashboard-hero-title');
+   const eyebrow = document.getElementById('dashboard-hero-eyebrow');
+   const description = document.getElementById('dashboard-hero-description');
+   const meta = document.getElementById('dashboard-hero-meta');
+   if (title) title.textContent = announcement?.title || 'Owner News';
+   if (eyebrow) eyebrow.textContent = `Owner News · ${announcement?.category || 'Ownerinc'}`;
+-  if (description) description.textContent = announcement ? excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.') : 'Nenhuma publicação no Owner News.';
++  if (description) description.textContent = announcement
++    ? excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.')
++    : state === 'loading' ? 'Carregando publicações…'
++      : state === 'error' ? 'Não foi possível carregar o Owner News.' : 'Nenhuma publicação no Owner News.';
+   if (meta) meta.textContent = announcement ? `Publicado ${formatDate(announcement.published_at)}` : '';
+   const link = document.querySelector('.dashboard-hero-copy a');
+-  if (link) link.href = announcement ? `./announcements.html?id=${encodeURIComponent(announcement.id)}` : './announcements.html';
++  if (link) {
++    link.hidden = state === 'loading' || state === 'error';
++    link.href = announcement ? `./announcements.html?id=${encodeURIComponent(announcement.id)}` : '#quick-links';
++    link.textContent = announcement ? 'Ler publicação' : 'Acessar áreas';
++  }
++  const retry = document.getElementById('dashboard-hero-retry');
++  if (retry) retry.hidden = state !== 'error';
+   const image = document.querySelector('.dashboard-hero > img');
++  if (image) image.hidden = state !== 'populated';
+   loadNewsImage(image, announcement);
+ }
+ 
+@@ -131,16 +146,23 @@ function loadNewsImage(image, announcement) {
+ }
+ page.listen(window, 'pagehide', () => { ++announcementsRequest; releaseNewsImages(); });
+ page.listen(window, 'pageshow', event => { if (event.persisted) loadAnnouncements(); });
++const heroRetry = document.getElementById('dashboard-hero-retry');
++if (heroRetry) page.listen(heroRetry, 'click', () => {
++  if (document.querySelector('.dashboard-hero')?.dataset.state === 'error') loadAnnouncements();
++});
+ async function loadAnnouncements() {
+   if (!announcementsPreview) return;
+   const requestToken = ++announcementsRequest;
++  releaseNewsImages();
++  clear(announcementsPreview);
++  renderHero(null, 'loading');
+   setBusy(announcementsPreview, true);
+   try {
+     const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
+     if (requestToken !== announcementsRequest) return;
+     releaseNewsImages();
+     renderHero(announcements[0]);
+-    if (!announcements.length) return showState(announcementsPreview, 'Nenhuma publicação no Owner News.');
++    if (!announcements.length) return;
+     clear(announcementsPreview);
+     announcements.forEach(announcement => {
+       const card = storyCard({
+@@ -156,7 +178,7 @@ async function loadAnnouncements() {
+       loadNewsImage(card.querySelector('img'), announcement);
+     });
+   } catch {
+-    if (requestToken === announcementsRequest) showState(announcementsPreview, 'Não foi possível carregar o Owner News.', loadAnnouncements);
++    if (requestToken === announcementsRequest) renderHero(null, 'error');
+   } finally {
+     if (requestToken === announcementsRequest) setBusy(announcementsPreview, false);
+   }
+diff --git a/tests/unit/autocard-invariants.test.mjs b/tests/unit/autocard-invariants.test.mjs
+index 9ab8f8e..c65b119 100644
+--- a/tests/unit/autocard-invariants.test.mjs
++++ b/tests/unit/autocard-invariants.test.mjs
+@@ -424,10 +424,11 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
+     window,
+   });
+   const cropSource = (await readFile('public/autocard/crop.js', 'utf8')).replace(/^export /gm, '');
++  const catalogSource = (await readFile('public/autocard/asset-catalog.js', 'utf8')).replace(/^export /gm, '');
+   const paginationSource = pagination.replace(/^export /gm, '');
+   const appSource = app.replace(/^import[^\n]+\n/gm, '');
+   const mountedApp = mountSource(appSource, 'globalThis.__autocardTest = { current: () => current, cropDraft: () => cropDraft, selectTemplate, renderCard, exportCard, saveCard, loadSaved, openSavedCard, showTab, syncOverflow, canLeave, generation: () => documentGeneration };');
+-  vm.runInContext(`${cropSource}\n${paginationSource}\n(()=>{${mountedApp}})();\n(()=>{${mountSource(employee)}})();\n(()=>{${mountSource(variant)}})();`, context);
++  vm.runInContext(`${cropSource}\n${catalogSource}\n${paginationSource}\n(()=>{${mountedApp}})();\n(()=>{${mountSource(employee)}})();\n(()=>{${mountSource(variant)}})();`, context);
+   const cardCanvas = elements.get('cardCanvas');
+   const nativeQuerySelectorAll = cardCanvas.querySelectorAll.bind(cardCanvas);
+   const renderedTextNodes = [];
+@@ -1174,6 +1175,21 @@ test('AutoCard capture failures show feedback, release the button and allow retr
+   assert.equal(h.downloadClicks(), 1);
+ });
+ 
++test('AutoCard PNG feedback does not turn an earlier optional-media rejection into an export failure', async () => {
++  const h = await createAutoCardLifecycleHarness();
++  h.selectTemplate('aniversariante');
++  await h.chooseFile({ name: 'large.png', type: 'image/png', size: 4 * 1024 * 1024 });
++  assert.equal(h.mediaStatus(), 'error');
++  assert.equal(h.state().mediaId, null);
++  const mediaMessage = h.mediaStatusText();
++  await h.exportCard();
++  assert.equal(h.downloadClicks(), 1);
++  assert.match(h.toast().textContent, /PNG gerado; download solicitado ao navegador/);
++  assert.equal(h.mediaStatusText(), mediaMessage);
++  assert.equal(h.mediaStatus(), 'error');
++  assert.equal(h.exportButtonDisabled(), false);
++});
++
+ test('AutoCard validation revokes the local URL on both image load and failure', async () => {
+   for (const success of [true, false]) {
+     const h = await createAutoCardLifecycleHarness({ deferLocalImages: true });
+@@ -1304,6 +1320,11 @@ test('AutoCard commits replacement media only after its blob loads and restores
+   assert.equal(failed.state().mediaUrl, failedOldUrl);
+   assert.equal(failed.mediaStatus(), 'error');
+   assert.match(failed.cardCanvas.innerHTML, new RegExp(`src="${failedOldUrl}"`));
++  const mediaMessage = failed.mediaStatusText();
++  await failed.exportCard();
++  assert.equal(failed.downloadClicks(), 0, 'retained media in an error state keeps its existing export fence');
++  assert.doesNotMatch(failed.toast().textContent, /PNG gerado|Não foi possível exportar/);
++  assert.equal(failed.mediaStatusText(), mediaMessage);
+ });
+ 
+ test('AutoCard snapshots media confirmed during replacement validation', async () => {
+diff --git a/tests/unit/owner-news-frontend.test.mjs b/tests/unit/owner-news-frontend.test.mjs
+index aa244c7..aefdef1 100644
+--- a/tests/unit/owner-news-frontend.test.mjs
++++ b/tests/unit/owner-news-frontend.test.mjs
+@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
+ import { readFile } from 'node:fs/promises';
+ import test from 'node:test';
+ import vm from 'node:vm';
++import { createFeedbackHarness, TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
+ 
+ const news = await readFile('public/js/announcements.js', 'utf8');
+ const dashboard = await readFile('public/js/dashboard.js', 'utf8');
+@@ -106,34 +107,76 @@ test('dashboard protected covers revoke stale and retained object URLs', async (
+   assert.equal(paths.length, 1);
+ });
+ 
+-test('dashboard clears a withdrawn hero on an empty refresh and restores it for a new publication', async () => {
+-  const title = {};
+-  const link = {};
+-  const results = [[{ id: 'old', title: 'Old story' }], [], [{ id: 'new', title: 'New story' }]];
+-  const context = vm.createContext({
+-    announcementsPreview: node('div'), announcementsRequest: 0,
+-    document: {
+-      querySelector: selector => selector === '.dashboard-hero-copy a' ? link : null,
+-      getElementById: id => id === 'dashboard-hero-title' ? title : null,
+-    },
+-    fetchAPI: async () => results.shift(),
+-    setBusy() {}, releaseNewsImages() {}, loadNewsImage() {},
+-    clear: target => { target.children = []; },
+-    showState: (target, text) => { target.children = [text]; },
+-    storyCard: () => ({ querySelector() { return null; } }),
+-    excerpt: () => '', formatDate: () => '', encodeURIComponent,
+-  });
+-  vm.runInContext(section(dashboard, 'function renderHero(', 'const announcementsPreview'), context);
+-  vm.runInContext(section(dashboard, 'async function loadAnnouncements(', 'const remindersContainer'), context);
+-  await context.loadAnnouncements();
+-  assert.equal(title.textContent, 'Old story');
+-  await context.loadAnnouncements();
+-  assert.equal(title.textContent, 'Owner News');
+-  assert.equal(link.href, './announcements.html');
+-  assert.match(context.announcementsPreview.children[0], /Nenhuma publicação/);
+-  await context.loadAnnouncements();
+-  assert.equal(title.textContent, 'New story');
++test('dashboard clears a withdrawn hero on an empty refresh and restores it for a new publication', async t => {
++  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
++  const hero = h.doc.querySelector('.dashboard-hero'), link = h.doc.querySelector('.dashboard-hero-copy a');
++  const cover = h.doc.querySelector('.dashboard-hero > img');
++  assert.equal(hero.dataset.state, 'loading');
++  assert.equal(link.hidden, true);
++  assert.match(h.node('dashboard-hero-description').textContent, /Carregando/);
++  const story = { id: 'old', title: 'Old story', published_at: '2026-09-29T12:00:00Z', content_blocks: [{ type: 'image', asset_id: 'asset-a', alt: 'Capa' }] };
++  h.latest('/api/announcements?').resolve([story]); await drain();
++  assert.equal(hero.dataset.state, 'populated');
++  assert.equal(h.node('dashboard-hero-title').textContent, 'Old story');
++  assert.equal(link.href, './announcements.html?id=old');
++  assert.equal(link.hidden, false); assert.equal(cover.hidden, false);
++  assert.equal(h.node('dashboard-news-section').hidden, false);
++  const assets = h.requests.filter(item => item.kind === 'asset');
++  assets[0].resolve('blob:hero'); assets[1].resolve('blob:rail'); await drain();
++  assert.equal(cover.src, 'blob:hero');
++  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
++  assert.equal(hero.dataset.state, 'loading');
++  assert.ok(h.revoked.includes('blob:hero') && h.revoked.includes('blob:rail'));
++  h.latest('/api/announcements?').resolve([]); await drain();
++  assert.equal(hero.dataset.state, 'empty');
++  assert.equal(h.node('dashboard-hero-title').textContent, 'Owner News');
++  assert.equal(link.href, '#quick-links'); assert.equal(link.textContent, 'Acessar áreas');
++  assert.equal(link.hidden, false); assert.equal(cover.hidden, true);
++  assert.equal(cover.src, './assets/logo-branco.svg');
++  assert.equal(h.node('dashboard-news-section').hidden, true);
++  assert.equal(h.node('announcements-preview').children.length, 0);
++  assert.equal(h.doc.querySelectorAll('h1').length, 1);
++  assert.equal(h.node('quick-links').querySelectorAll('a').length, 3);
++  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
++  h.latest('/api/announcements?').resolve([{ ...story, id: 'new', title: 'New story', content_blocks: [] }]); await drain();
++  assert.equal(hero.dataset.state, 'populated');
++  assert.equal(h.node('dashboard-hero-title').textContent, 'New story');
+   assert.equal(link.href, './announcements.html?id=new');
++  assert.equal(cover.hidden, false); assert.equal(h.node('dashboard-news-section').hidden, false);
++  assert.equal(h.node('announcements-preview').children.length, 1);
++});
++
++test('dashboard initial markup is loading, empty styles are compact and a query error offers a scoped retry', async t => {
++  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
++  const css = await readFile('public/css/dashboard-home.css', 'utf8');
++  assert.match(h.html, /data-state="loading" aria-busy="true"/);
++  assert.doesNotMatch(h.html, />Ler publicação</);
++  assert.match(css, /\.dashboard-hero:not\(\[data-state="populated"\]\) \{ min-height: 0; \}/);
++  assert.match(css, /\.dashboard-hero:not\(\[data-state="populated"\]\) \.dashboard-hero-copy \{\s*width: 100%;\s*min-height: 0;\s*padding: 24px;/);
++  h.latest('/api/announcements?').reject(new Error('offline')); await drain();
++  const hero = h.doc.querySelector('.dashboard-hero'), retry = h.node('dashboard-hero-retry');
++  assert.equal(hero.dataset.state, 'error'); assert.equal(retry.hidden, false);
++  assert.match(h.node('dashboard-hero-description').textContent, /Não foi possível/);
++  assert.doesNotMatch(h.node('dashboard-hero-description').textContent, /Nenhuma/);
++  assert.equal(h.doc.querySelector('.dashboard-hero-copy a').hidden, true);
++  retry.click(); const count = h.requests.length; retry.click();
++  assert.equal(h.requests.length, count, 'a hidden retry cannot start another loading query');
++  assert.equal(hero.dataset.state, 'loading'); assert.equal(retry.hidden, true);
++  h.latest('/api/announcements?').resolve([]); await drain();
++  assert.equal(hero.dataset.state, 'empty'); assert.equal(hero.getAttribute('aria-busy'), 'false');
++});
++
++for (const outcome of ['success', 'failure']) test(`dashboard ignores stale ${outcome} and disposes pending private covers`, async t => {
++  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
++  const old = h.latest('/api/announcements?');
++  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
++  h.latest('/api/announcements?').resolve([{ id: 'new', title: 'Current', content_blocks: [{ type: 'image', asset_id: 'asset-a', alt: 'Capa' }] }]); await drain();
++  if (outcome === 'success') old.resolve([]); else old.reject(new Error('old error'));
++  await drain(); assert.equal(h.node('dashboard-hero-title').textContent, 'Current');
++  const assets = h.requests.filter(item => item.kind === 'asset');
++  h.page.dispose(); assets.forEach((item, i) => item.resolve(`blob:late-${i}`)); await drain();
++  assert.ok(h.revoked.includes('blob:late-0'));
++  assert.notEqual(h.doc.querySelector('.dashboard-hero > img').src, 'blob:late-0');
+ });
+ 
+ test('reader filters before pagination, ignores stale pages and preserves category on next page', async () => {
+diff --git a/tests/unit/pos-cards-frontend.test.mjs b/tests/unit/pos-cards-frontend.test.mjs
+index bc3a3aa..e6cd1a1 100644
+--- a/tests/unit/pos-cards-frontend.test.mjs
++++ b/tests/unit/pos-cards-frontend.test.mjs
+@@ -221,13 +221,15 @@ test('editing a Cards Pós invitation preserves its saved history name by defaul
+ test('Cards Pós history ignores stale search responses', () => {
+   assert.match(app, /let historyRequest = 0/);
+   assert.match(app, /const requestToken = \+\+historyRequest/);
+-  assert.match(app, /if \(requestToken !== historyRequest\) return/);
++  assert.match(app, /const isCurrent = \(\) => page\.active && requestToken === historyRequest/);
++  assert.match(app, /if \(!isCurrent\(\)\) return false/);
+ });
+ 
+ test('Cards Pós history exposes pagination for more than one page of saved cards', () => {
+   assert.match(html, /id="historyPagination"/);
+-  assert.match(app, /fetchAPIPage\(`\/api\/pos-cards\/cards\?search=\$\{search\}&limit=\$\{HISTORY_PAGE_SIZE\}&offset=\$\{historyOffset\}`\)/);
+-  assert.match(app, /renderHistoryPagination\(result\.total/);
++  assert.match(app, /fetchAPIPage\(`\/api\/pos-cards\/cards\?search=\$\{search\}&limit=\$\{HISTORY_PAGE_SIZE\}&offset=\$\{query\.offset\}`\)/);
++  assert.match(app, /const total = result\.total \?\? cards\.length/);
++  assert.match(app, /renderHistoryPagination\(total, requestToken\)/);
+ });
+ 
+ function guestHarness(width = 600, overrides = {}) {
+diff --git a/tests/unit/pos-cards-layout.test.mjs b/tests/unit/pos-cards-layout.test.mjs
+index a72fa36..8eb7ed2 100644
+--- a/tests/unit/pos-cards-layout.test.mjs
++++ b/tests/unit/pos-cards-layout.test.mjs
+@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
+ import test from 'node:test';
+ import { readFile } from 'node:fs/promises';
+ import { pathToFileURL } from 'node:url';
++import { createFeedbackHarness, deferred, drain } from '../helpers/frontend-feedback-harness.mjs';
+ 
+ const source = await readFile('public/cards-pos/card-geometry.js', 'utf8');
+ const { CARD_GEOMETRY, fitPreview } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+@@ -25,49 +26,134 @@ test('whole-art mode fits both dimensions at every viewport without changing pri
+   assert.equal(fitPreview(CARD_GEOMETRY.convite_owner, { width: 0, height: 0 }).scale, 0);
+ });
+ 
+-test('preview uses the padded content box, updates after model/toolbar/viewport resize, and disconnects', async t => {
++async function layoutHarness(t) {
+   const { observePreviewLayout } = await import(pathToFileURL('public/cards-pos/preview-layout.js').href);
+-  const previous = { ResizeObserver: globalThis.ResizeObserver, window: globalThis.window, getComputedStyle: globalThis.getComputedStyle };
++  const lifecycleSource = await readFile('public/js/page-lifecycle.js', 'utf8');
++  const { createPageLifecycle } = await import('data:text/javascript;base64,' + Buffer.from(lifecycleSource).toString('base64'));
++  const previous = Object.fromEntries(['ResizeObserver', 'window', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame'].map(key => [key, globalThis[key]]));
++  let page;
+   t.after(() => {
++    page?.dispose();
+     for (const [key, value] of Object.entries(previous)) {
+       if (value === undefined) delete globalThis[key]; else globalThis[key] = value;
+     }
+   });
+-  const observed = [], listeners = [], cleanups = [], properties = new Map();
+-  let disconnected = false, resized, mobile = false, mode = 'fit', frame = CARD_GEOMETRY.convite_owner;
+-  globalThis.ResizeObserver = class { constructor(callback) { resized = callback; } observe(node) { observed.push(node); } disconnect() { disconnected = true; } };
+-  globalThis.window = { innerHeight: 800, scrollY: 0, matchMedia: () => ({ matches: mobile }), visualViewport: { height: 800 } };
++  const observed = [], properties = new Map(), frames = new Map(), writes = [];
++  const state = { disconnected: false, mobile: false, mode: 'fit', frame: CARD_GEOMETRY.convite_owner, height: 400, notifyOnWrite: false };
++  let resized, frameId = 0, height = '';
++  globalThis.ResizeObserver = class { constructor(callback) { resized = callback; } observe(node) { observed.push(node); } disconnect() { state.disconnected = true; } };
++  globalThis.window = Object.assign(new EventTarget(), { history: {}, innerHeight: 800, scrollY: 0, matchMedia: () => ({ matches: state.mobile }), visualViewport: Object.assign(new EventTarget(), { height: 800 }) });
++  globalThis.requestAnimationFrame = callback => { const id = ++frameId; frames.set(id, callback); return id; };
++  globalThis.cancelAnimationFrame = id => frames.delete(id);
+   globalThis.getComputedStyle = () => ({ paddingLeft: '24px', paddingRight: '24px', paddingTop: '24px', paddingBottom: '24px' });
+   const container = {
+     clientWidth: 500,
+-    get clientHeight() { return parseFloat(this.style.height) || 400; },
++    get clientHeight() { return parseFloat(this.style.height) || state.height; },
+     getBoundingClientRect: () => ({ top: 240 - window.scrollY }),
+-    style: { height: '', removeProperty(key) { this[key] = ''; } },
++    style: { get height() { return height; }, set height(value) { height = state.roundSerialization && value ? `${Number(parseFloat(value).toFixed(3))}px` : value; writes.push(['height', value]); }, removeProperty(key) { this[key] = ''; } },
+   };
+   const toolbar = {};
+-  const update = observePreviewLayout({ container, toolbar, frame: () => frame, mode: () => mode,
+-    wrapper: { style: { setProperty: (key, value) => properties.set(key, parseFloat(value)) } },
+-    page: { listen: (...args) => listeners.push(args), cleanup: fn => cleanups.push(fn) },
++  page = createPageLifecycle();
++  const update = observePreviewLayout({ container, toolbar, frame: () => state.frame, mode: () => state.mode,
++    wrapper: { style: { setProperty(key, value) { properties.set(key, parseFloat(value)); writes.push([key, value]); if (state.notifyOnWrite) resized(); } } }, page,
+   });
++  return { state, observed, properties, frames, writes, container, toolbar, update, page, resized: () => resized(),
++    flush() { const pending = [...frames]; frames.clear(); pending.forEach(([, fn]) => fn()); } };
++}
++
++test('preview uses the padded content box, updates after model/toolbar/viewport resize, and disconnects', async t => {
++  const h = await layoutHarness(t);
++  const { state, observed, properties, container, toolbar, update } = h;
+   assert.deepEqual(observed, [container, toolbar]);
+   assert.ok(properties.get('--preview-height') <= 352);
+   assert.ok(properties.get('--preview-width') <= 452);
+-  mode = 'width'; resized();
++  state.mode = 'width'; h.resized();
++  assert.ok(properties.get('--preview-height') <= 352, 'observer must not write synchronously');
++  h.flush();
+   assert.ok(Math.abs(properties.get('--preview-width') - 452) < 0.001);
+   assert.ok(properties.get('--preview-height') > 352);
+-  mode = 'fit'; mobile = true; update();
++  state.mode = 'fit'; state.mobile = true; const result = update();
++  assert.equal(result.height, properties.get('--preview-height'), 'explicit updater still returns measured geometry');
+   assert.equal(container.style.height, '544px');
+   assert.ok(properties.get('--preview-height') <= 496);
+   // Page scroll must not continually resize the art while reading/editing.
+   window.scrollY = 120; update();
+   assert.equal(container.style.height, '544px');
+   window.visualViewport.height = 500;
+-  listeners.find(([target]) => target === window.visualViewport)[2]();
++  window.visualViewport.dispatchEvent(new Event('resize')); h.flush();
+   assert.equal(container.style.height, '244px');
+   assert.ok(properties.get('--preview-height') <= 196);
+-  mobile = false; frame = CARD_GEOMETRY.convite_owntime; update();
++  state.mobile = false; state.frame = CARD_GEOMETRY.convite_owntime; update();
+   assert.equal(container.style.height, '');
+   assert.ok(properties.get('--preview-height') <= 352);
+-  cleanups.forEach(fn => fn());
+-  assert.equal(disconnected, true);
++  h.page.dispose();
++  assert.equal(state.disconnected, true);
++});
++
++test('observer notifications coalesce and feedback from style writes converges to zero further writes', async t => {
++  const h = await layoutHarness(t);
++  h.state.mode = 'width'; h.state.notifyOnWrite = true;
++  const baseline = h.writes.length;
++  for (let i = 0; i < 100; i++) h.resized();
++  assert.equal(h.frames.size, 1); assert.equal(h.writes.length, baseline);
++  h.flush(); assert.equal(h.frames.size, 1, 'one resulting size notification, not recursive synchronous writes');
++  const changed = h.writes.length; assert.ok(changed > baseline);
++  h.flush(); assert.equal(h.frames.size, 0); assert.equal(h.writes.length, changed);
++  for (let frame = 0; frame < 60; frame++) { h.resized(); h.flush(); }
++  assert.equal(h.writes.length, changed, '60 unchanged measurements must not rewrite CSS');
++  h.state.mobile = true; h.update(); const mobileWrites = h.writes.length;
++  h.update(); window.scrollY = 120; h.update();
++  assert.equal(h.writes.length, mobileWrites, 'stable document-relative top does not resize while scrolling');
++});
++
++test('hidden preview returns at both model ratios and disposal cancels and invalidates queued callbacks', async t => {
++  const h = await layoutHarness(t);
++  h.container.clientWidth = 0; h.state.height = 0; h.update();
++  assert.equal(h.properties.get('--preview-width'), 0);
++  for (const frame of Object.values(CARD_GEOMETRY)) {
++    for (const mode of ['fit', 'width']) {
++      h.state.frame = frame; h.state.mode = mode;
++      h.container.clientWidth = 360; h.state.height = 520;
++      h.resized(); h.flush();
++      const width = h.properties.get('--preview-width'), height = h.properties.get('--preview-height');
++      assert.ok(Math.abs(width / height - frame.width / frame.height) < 0.00001);
++      assert.ok(width <= 312); if (mode === 'fit') assert.ok(height <= 472);
++    }
++  }
++  window.dispatchEvent(new Event('resize'));
++  const retainedCallback = [...h.frames.values()][0]; assert.equal(h.frames.size, 1);
++  h.page.dispose(); assert.equal(h.frames.size, 0); assert.equal(h.state.disconnected, true);
++  const count = h.writes.length;
++  h.container.clientWidth = 900; retainedCallback(); h.resized(); h.update();
++  assert.equal(h.frames.size, 0); assert.equal(h.writes.length, count);
++});
++
++test('fractional mobile measurements do not repeat writes when CSS serialization rounds the assigned height', async t => {
++  const h = await layoutHarness(t);
++  h.state.mobile = true; h.state.roundSerialization = true;
++  window.visualViewport.height = 800.123456;
++  h.update(); const count = h.writes.length;
++  for (let frame = 0; frame < 60; frame++) { h.resized(); h.flush(); }
++  assert.equal(h.writes.length, count);
++  assert.equal(h.container.style.height, '544.123px');
++  h.state.mobile = false; h.update(); assert.equal(h.container.style.height, '');
++  h.state.mobile = true; h.update(); assert.equal(h.container.style.height, '544.123px');
++});
++
++test('mounted Cards Pós recalculates after fonts and restores the preview when returning from hidden history', async t => {
++  const fonts = deferred();
++  const h = await createFeedbackHarness('cards-pos', { fonts: fonts.promise }); t.after(() => h.page.dispose());
++  const container = h.doc.querySelector('.preview-stage'), wrapper = h.doc.querySelector('.preview-artboard');
++  const before = wrapper.style.getPropertyValue('--preview-width');
++  container.clientWidth = 180;
++  fonts.resolve(); await drain();
++  assert.notEqual(wrapper.style.getPropertyValue('--preview-width'), before);
++  assert.equal(parseFloat(wrapper.style.getPropertyValue('--preview-width')), 180);
++  h.doc.querySelector('[data-view="history"]').click();
++  container.clientWidth = 0; container.clientHeight = 0;
++  h.observers.forEach(observer => observer.callback()); await h.flushFrames();
++  assert.equal(wrapper.style.getPropertyValue('--preview-width'), '0px');
++  container.clientWidth = 420; container.clientHeight = 420;
++  h.doc.querySelector('[data-view="editor"]').click();
++  assert.equal(wrapper.style.getPropertyValue('--preview-width'), before);
+ });
+diff --git a/public/autocard/asset-catalog.js b/public/autocard/asset-catalog.js
+new file mode 100644
+index 0000000..38fef39
+--- /dev/null
++++ b/public/autocard/asset-catalog.js
+@@ -0,0 +1,60 @@
++// Presentation/search metadata only. IDs and ordering mirror the existing API
++// allowlists; persisted cards and Lucide rendering continue to use those IDs.
++const metadata = {
++  'triangle-alert': ['Alerta', 'aviso atenção cuidado regra'],
++  info: ['Informação', 'ajuda orientação comunicado'],
++  megaphone: ['Megafone', 'anúncio divulgação comunicado'],
++  bell: ['Sino', 'notificação lembrete aviso'],
++  'shield-check': ['Escudo de proteção', 'segurança verificação aprovado'],
++  'file-text': ['Documento de texto', 'arquivo formulário regra'],
++  mail: ['Envelope', 'email correio mensagem'],
++  phone: ['Telefone', 'ligação contato'],
++  user: ['Pessoa', 'usuário colaborador perfil'],
++  users: ['Equipe', 'pessoas usuários colaboradores grupo'],
++  heart: ['Coração', 'amor saúde cuidado'],
++  star: ['Estrela', 'destaque favorito'],
++  gift: ['Presente', 'benefício aniversário'],
++  wallet: ['Carteira', 'dinheiro pagamento benefício'],
++  coffee: ['Café', 'pausa bebida'],
++  utensils: ['Talheres', 'alimentação refeição restaurante almoço'],
++  'car-front': ['Carro', 'transporte veículo estacionamento'],
++  'circle-check': ['Confirmação', 'aprovado concluído verificação'],
++  search: ['Lupa', 'buscar pesquisa procura'],
++  'briefcase-business': ['Maleta de trabalho', 'vaga emprego negócios carreira'],
++  'bar-chart-3': ['Gráfico de barras', 'resultados estatísticas indicadores'],
++  settings: ['Engrenagem', 'configurações ajustes'],
++  package: ['Pacote', 'caixa entrega encomenda'],
++  'party-popper': ['Festa', 'celebração comemoração aniversário'],
++  trophy: ['Troféu', 'prêmio conquista reconhecimento'],
++  cake: ['Bolo de aniversário', 'aniversariante comemoração festa'],
++  'calendar-days': ['Calendário', 'data evento agenda treinamento'],
++  clock: ['Relógio', 'hora tempo prazo'],
++  'map-pin': ['Localização', 'endereço mapa lugar'],
++  house: ['Casa', 'moradia hospedagem lar'],
++  wrench: ['Chave de manutenção', 'ferramenta reparo conserto'],
++  'bed-double': ['Cama de casal', 'quarto descanso hospedagem'],
++  trees: ['Árvores', 'natureza meio ambiente sustentabilidade'],
++  sparkles: ['Brilhos', 'novidade celebração destaque'],
++  send: ['Envio', 'enviar mensagem avião de papel'],
++  'message-circle': ['Conversa', 'mensagem diálogo comentário'],
++  'share-2': ['Compartilhar', 'compartilhamento rede conexão'],
++  target: ['Alvo', 'meta objetivo foco'],
++  'hard-hat': ['Capacete', 'obra construção segurança epi'],
++  'user-plus': ['Nova pessoa', 'contratação novo funcionário boas-vindas'],
++  rabbit: ['Coelho', 'páscoa animal'],
++  syringe: ['Seringa', 'vacina vacinação saúde'],
++  'piggy-bank': ['Cofrinho', 'poupança economia dinheiro'],
++  ghost: ['Fantasma', 'halloween dia das bruxas'],
++  drama: ['Máscaras de teatro', 'cultura arte espetáculo'],
++};
++const catalog = ids => Object.freeze(ids.map(id => Object.freeze({ id, title: metadata[id][0], aliases: metadata[id][1] })));
++export const ICON_ASSETS = catalog(['triangle-alert','info','megaphone','bell','shield-check','file-text','mail','phone','user','users','heart','star','gift','wallet','coffee','utensils','car-front','circle-check','search','briefcase-business','bar-chart-3','settings','package','party-popper','trophy','cake','calendar-days','clock','map-pin','house','wrench','bed-double','trees','sparkles','send','message-circle','share-2','target']);
++export const ILLUSTRATION_ASSETS = catalog(['hard-hat','shield-check','user-plus','users','cake','trophy','rabbit','utensils','car-front','house','syringe','piggy-bank','trees','ghost','party-popper','drama']);
++export function normalizeAssetSearch(value) {
++  return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
++}
++export function searchAssets(mode, query) {
++  const list = mode === 'icon' ? ICON_ASSETS : ILLUSTRATION_ASSETS;
++  const search = normalizeAssetSearch(query);
++  return list.filter(asset => normalizeAssetSearch(`${asset.id} ${asset.title} ${asset.aliases}`).includes(search));
++}
+diff --git a/tests/helpers/frontend-feedback-harness.mjs b/tests/helpers/frontend-feedback-harness.mjs
+new file mode 100644
+index 0000000..4740199
+--- /dev/null
++++ b/tests/helpers/frontend-feedback-harness.mjs
+@@ -0,0 +1,145 @@
++import { readFile } from 'node:fs/promises';
++import vm from 'node:vm';
++import { Node, TestEvent, deferred, drain } from './router-harness.mjs';
++
++export { TestEvent, deferred, drain };
++const booleans = new Set(['hidden', 'disabled', 'checked', 'selected', 'inert', 'open']);
++const decode = text => text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
++function parseInto(root, html) {
++  const stack = [root];
++  const voids = new Set(['area', 'base', 'br', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'wbr']);
++  for (const token of html.match(/<!--[^]*?-->|<![^>]*>|<[^>]+>|[^<]+/g) || []) {
++    if (token.startsWith('<!')) continue;
++    if (token.startsWith('</')) { if (stack.length > 1) stack.pop(); continue; }
++    if (token.startsWith('<')) {
++      const match = /^<([\w-]+)([^]*?)\/?\s*>$/.exec(token);
++      if (!match) continue;
++      const [, tag, attributes] = match;
++      const node = root.ownerDocument.createElement(tag);
++      for (const attr of attributes.matchAll(/([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) node.setAttribute(attr[1], decode(attr[2] ?? attr[3] ?? attr[4] ?? ''));
++      stack.at(-1).append(node);
++      if (!voids.has(tag) && !token.endsWith('/>')) stack.push(node);
++    } else if (token.trim()) {
++      const node = root.ownerDocument.createElement('#text');
++      node.textContent = decode(token); stack.at(-1).append(node);
++    }
++  }
++}
++class FixtureNode extends Node {
++  constructor(tag, owner) {
++    super(tag, owner);
++    this.hidden = false; this.disabled = false; this.open = false;
++    this.clientWidth = 420; this.clientHeight = 420; this.scrollWidth = 0; this.scrollHeight = 0;
++    this.naturalWidth = 800; this.naturalHeight = 800; this.complete = true;
++    this.style = { setProperty(name, value) { this[name] = String(value); }, getPropertyValue(name) { return this[name] || ''; }, removeProperty(name) { delete this[name]; } };
++  }
++  get nodeType() { return this.tagName === '#TEXT' ? 3 : 1; }
++  get textContent() { return (this._text || '') + this.children.map(node => node.textContent).join(''); }
++  set textContent(value) { this.replaceChildren(); this._text = String(value); }
++  get innerHTML() { return this._markup ?? this.textContent; }
++  set innerHTML(value) { this.replaceChildren(); this._markup = String(value); parseInto(this, this._markup); }
++  get value() { return this._value ?? this.getAttribute('value') ?? (this.tagName === 'TEXTAREA' ? this.textContent : ''); }
++  set value(value) { this._value = String(value); }
++  get firstChild() { return this.children[0] || null; }
++  get firstElementChild() { return this.children.find(node => node.nodeType === 1) || null; }
++  get parentElement() { return this.parentNode; }
++  setAttribute(name, value) {
++    if (name === 'style') { this.attrs[name] = String(value); return; }
++    super.setAttribute(name, value);
++    if (booleans.has(name)) this[name] = true;
++  }
++  removeAttribute(name) { super.removeAttribute(name); if (booleans.has(name)) this[name] = false; }
++  getAttribute(name) {
++    if (name.startsWith('data-')) return this.dataset[name.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase())] ?? null;
++    return super.getAttribute(name);
++  }
++  hasAttribute(name) { return this.getAttribute(name) !== null; }
++  matches(selector) {
++    if (selector.includes(',')) return selector.split(',').some(part => this.matches(part.trim()));
++    if (selector.includes(' > ')) { const [parent, child] = selector.split(' > '); return this.matches(child) && this.parentNode?.matches(parent); }
++    if (/^\.[\w-]+\.[\w-]+$/.test(selector)) return selector.slice(1).split('.').every(name => this.classList.contains(name));
++    return super.matches(selector);
++  }
++  contains(node) { return node === this || this.children.some(child => child.contains(node)); }
++  replaceChildren(...nodes) { this._text = ''; this._markup = undefined; super.replaceChildren(...nodes); }
++  replaceWith(node) { this.parentNode?.insertBefore(node, this); this.remove(); }
++  getBoundingClientRect() { return { width: this.clientWidth, height: this.clientHeight, top: 0, left: 0 }; }
++  decode() { return Promise.resolve(); }
++  showModal() { this.open = true; }
++  close() { this.open = false; this.dispatchEvent(new TestEvent('close')); }
++  dispatchEvent(event) {
++    event.target ||= this; event.currentTarget = this;
++    this[`on${event.type}`]?.(event);
++    const result = super.dispatchEvent(event);
++    if (event.bubbles && !event.stopped) this.parentNode?.dispatchEvent(event);
++    return result;
++  }
++  click() {
++    if (this.disabled) return;
++    if (this.tagName === 'A' && this.download) this.ownerDocument.downloads.push({ name: this.download, href: this.href });
++    this.dispatchEvent(new TestEvent('click', { bubbles: true }));
++  }
++}
++
++// Entire production mounts and their local modules run with the real lifecycle.
++// Only DOM, browser rendering/export libraries and external transports are doubles.
++export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve() } = {}) {
++  const html = await readFile(`public/${name}.html`, 'utf8');
++  const doc = new FixtureNode('document'); doc.ownerDocument = doc;
++  doc.createElement = tag => new FixtureNode(tag, doc);
++  doc.createElementNS = (_, tag) => doc.createElement(tag);
++  doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
++  doc.getElementById = id => doc.querySelector(`#${id}`);
++  doc.downloads = []; doc.fonts = { ready: fonts };
++  parseInto(doc, html);
++  doc.documentElement = doc.querySelector('html'); doc.body = doc.querySelector('body'); doc.activeElement = doc.body;
++  const window = new FixtureNode('window', doc);
++  Object.assign(window, { history: {}, matchMedia: () => ({ matches: false }), innerHeight: 900, scrollY: 0, confirm: () => true });
++  const requests = [], revoked = [], frames = new Map(), timers = new Map(), observers = [], captures = [];
++  let resourceId = 0;
++  const transport = kind => (path, options = {}) => { const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise; };
++  const context = vm.createContext({
++    document: doc, window, console, AbortController, DOMException, URLSearchParams, TextEncoder, structuredClone,
++    Event: TestEvent, URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
++    setTimeout(fn) { const id = ++resourceId; timers.set(id, fn); return id; }, clearTimeout(id) { timers.delete(id); },
++    requestAnimationFrame(fn) { const id = ++resourceId; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
++    getComputedStyle: () => ({ paddingLeft: '0', paddingRight: '0', paddingTop: '0', paddingBottom: '0' }),
++    MutationObserver: class { observe() {} disconnect() {} },
++    ResizeObserver: class { constructor(callback) { this.callback = callback; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } },
++    fetchAPI: transport('api'), fetchAPIPage: transport('list'), fetchAPIAsset: transport('asset'),
++    prompt: () => 'Card de teste', confirm: () => true,
++    html2canvas: (canvas, options) => { const item = { canvas, options, ...deferred() }; captures.push(item); return item.promise; },
++  });
++  async function load(path, exports) {
++    const source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
++    vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
++  }
++  await load('public/js/page-lifecycle.js', 'createPageLifecycle');
++  await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState');
++  if (name === 'dashboard') await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
++  if (name === 'autocard') {
++    await load('public/autocard/crop.js', 'DEFAULT_MEDIA_CROP, cropRenderStyle, cropStyle, dragMediaCrop, normalizeMediaCrop');
++    await load('public/autocard/asset-catalog.js', 'searchAssets');
++    await load('public/js/pagination.js', 'renderPagination, setPaginationBusy');
++  }
++  if (name === 'cards-pos') {
++    await load('public/cards-pos/card-geometry.js', 'MODULE_CARD_GEOMETRY: CARD_GEOMETRY, fitPreview');
++    await load('public/cards-pos/preview-layout.js', 'observePreviewLayout');
++    await load('public/cards-pos/draft-state.js', 'createDraftState');
++    await load('public/cards-pos/rich-text.js', 'attachRichInput, normalizeRichHtml, moduleRichTextLength: richTextLength, moduleRichTextToPlainText: richTextToPlainText');
++    await load('public/cards-pos/field-registry.js', 'collectEditableFields');
++    await load('public/cards-pos/inline-editor.js', 'createInlineEditor');
++  }
++  const path = name === 'dashboard' ? 'public/js/dashboard.js' : `public/${name}/app.js`;
++  let source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
++  const end = source.lastIndexOf('}');
++  source = `${source.slice(0, end)}\n${expose}\n${source.slice(end)}`;
++  vm.runInContext(`${source}\nglobalThis.page = createPageLifecycle(); mount(page);`, context, { filename: path });
++  return {
++    doc, window, context, html, requests, revoked, frames, timers, observers, captures, page: context.page,
++    node: id => doc.getElementById(id),
++    latest: fragment => [...requests].reverse().find(item => item.path.includes(fragment)),
++    input(id, value) { const node = doc.getElementById(id); node.value = value; node.dispatchEvent(new TestEvent('input', { bubbles: true })); },
++    async flushFrames() { const pending = [...frames]; frames.clear(); pending.forEach(([, fn]) => fn()); await drain(); },
++  };
++}
+diff --git a/tests/unit/autocard-asset-search.test.mjs b/tests/unit/autocard-asset-search.test.mjs
+new file mode 100644
+index 0000000..e007267
+--- /dev/null
++++ b/tests/unit/autocard-asset-search.test.mjs
+@@ -0,0 +1,106 @@
++import assert from 'node:assert/strict';
++import { readFile } from 'node:fs/promises';
++import test from 'node:test';
++import { createFeedbackHarness, deferred, drain } from '../helpers/frontend-feedback-harness.mjs';
++
++const source = await readFile('public/autocard/asset-catalog.js', 'utf8');
++const { ICON_ASSETS, ILLUSTRATION_ASSETS, searchAssets } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
++const expose = 'globalThis.probe = { selectTemplate, exportCard, saveCard, revision: () => editRevision, current: () => current };';
++async function mounted(t, options) { const h = await createFeedbackHarness('autocard', { expose, ...options }); t.after(() => h.page.dispose()); return h; }
++
++test('presentation catalogs preserve every canonical ID/order and give each item Portuguese search metadata', async () => {
++  const api = await readFile('api/routes/autocard.js', 'utf8');
++  for (const [mode, name, assets, count] of [['icon', 'icons', ICON_ASSETS, 38], ['illustration', 'illustrations', ILLUSTRATION_ASSETS, 16]]) {
++    const ids = [...api.match(new RegExp(`const ${name} = new Set\\(\\[([^\\]]+)\\]\\)`))[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
++    assert.deepEqual(assets.map(item => item.id), ids); assert.equal(assets.length, count);
++    for (const item of assets) {
++      assert.ok(item.title && item.aliases); assert.notEqual(item.title, item.id);
++      assert.ok(searchAssets(mode, item.id).some(match => match.id === item.id));
++      assert.ok(searchAssets(mode, item.title).some(match => match.id === item.id));
++    }
++    for (const query of [' aniversário ', 'ANIVERSARIO', 'cake']) assert.ok(searchAssets(mode, query).some(item => item.id === 'cake'));
++    assert.equal(searchAssets(mode, 'inexistente-xyz').length, 0);
++  }
++  for (const query of ['alerta', ' ALERT ', 'triangle-alert']) assert.ok(searchAssets('icon', query).some(item => item.id === 'triangle-alert'));
++  for (const query of ['páscoa', 'PASCOA', 'rabbit']) assert.equal(searchAssets('illustration', query)[0].id, 'rabbit');
++});
++
++test('mounted libraries explain no matches, clear/reopen search and persist IDs without editing on same selection', async t => {
++  const h = await mounted(t); h.context.probe.selectTemplate('aniversariante');
++  for (const [button, field, count] of [['iconButton', 'icon', 38], ['illustrationButton', 'illustration', 16]]) {
++    h.node(button).click();
++    assert.equal(h.node('assetGrid').querySelectorAll('button').length, count);
++    h.input('assetSearch', 'inexistente');
++    assert.equal(h.node('assetGrid').children.length, 0);
++    assert.match(h.node('assetSearchStatus').textContent, /Nenhum.*para esta busca/);
++    assert.equal(h.node('assetSearchStatus').getAttribute('role'), 'status');
++    assert.equal(h.node('assetSearchClear').hidden, false);
++    h.node('assetSearchClear').click();
++    assert.equal(h.node('assetSearch').value, '');
++    assert.equal(h.doc.activeElement, h.node('assetSearch'));
++    assert.equal(h.node('assetGrid').children.length, count);
++    assert.equal(h.node('assetSearchStatus').textContent, '');
++    h.input('assetSearch', 'ANIVERSÁRIO');
++    const cake = h.doc.querySelector('[data-asset="cake"]');
++    assert.match(cake.getAttribute('aria-label'), /Bolo de aniversário/);
++    assert.equal(cake.type, 'button');
++    const before = h.context.probe.revision(), previous = h.context.probe.current()[field];
++    cake.click(); assert.equal(h.context.probe.current()[field], 'cake');
++    assert.equal(h.context.probe.revision(), before + (previous === 'cake' ? 0 : 1));
++    assert.equal(h.node('assetDialog').open, false);
++    h.node(button).click(); assert.equal(h.node('assetSearch').value, '');
++    const revision = h.context.probe.revision(); h.doc.querySelector('[data-asset="cake"]').click();
++    assert.equal(h.context.probe.revision(), revision);
++  }
++  h.node('iconButton').click(); h.input('assetSearch', 'alerta');
++  const revision = h.context.probe.revision();
++  h.doc.querySelector('[data-asset="triangle-alert"]').click();
++  assert.equal(h.context.probe.revision(), revision + 1);
++  const saving = h.context.probe.saveCard();
++  const request = h.latest('/api/autocard/cards');
++  const payload = JSON.parse(request.options.body);
++  assert.equal(payload.icon, 'triangle-alert'); assert.equal(payload.illustration, 'cake');
++  request.resolve({ id: 'saved' }); await saving;
++});
++
++test('PNG reports generation then download requested only after current capture clicks, restoring its button', async t => {
++  const fonts = deferred(); const h = await mounted(t, { fonts: fonts.promise });
++  h.context.probe.selectTemplate('comunicado');
++  const exportPromise = h.context.probe.exportCard();
++  assert.equal(h.node('exportButton').textContent, 'Gerando PNG…');
++  assert.equal(h.node('exportButton').disabled, true);
++  assert.equal(h.node('toast').textContent, 'Gerando PNG…');
++  await h.context.probe.exportCard(); assert.equal(h.captures.length, 0, 'duplicate invocation cannot start capture');
++  fonts.resolve(); await drain();
++  assert.equal(h.captures.length, 1); assert.equal(h.doc.downloads.length, 0);
++  assert.equal(h.captures[0].options.width * h.captures[0].options.scale, 1080);
++  h.captures[0].resolve({ toDataURL: () => 'data:image/png;base64,synthetic' }); await exportPromise;
++  assert.equal(h.doc.downloads.length, 1);
++  assert.equal(h.node('toast').textContent, 'PNG gerado; download solicitado ao navegador.');
++  assert.equal(h.node('exportButton').textContent, 'Exportar PNG'); assert.equal(h.node('exportButton').disabled, false);
++});
++
++for (const change of ['edit', 'document', 'dispose', 'capture failure', 'decode failure', 'overflow']) {
++  test(`PNG never announces success after ${change} and leaves independent media feedback intact`, async t => {
++    const h = await mounted(t); h.context.probe.selectTemplate('comunicado');
++    h.node('mediaStatus').textContent = 'Falha anterior de mídia; imagem preservada.';
++    if (change === 'decode failure') h.node('cardCanvas').querySelector('img').decode = () => Promise.reject(new Error('bad image'));
++    const exporting = h.context.probe.exportCard(); await drain();
++    if (change !== 'decode failure') {
++      assert.equal(h.captures.length, 1);
++      if (change === 'edit') h.input('field-titulo', 'Edição posterior');
++      if (change === 'document') h.context.probe.selectTemplate('vaga');
++      if (change === 'dispose') h.page.dispose();
++      if (change === 'overflow') h.node('cardCanvas').querySelector('.card-shell').scrollHeight = 900;
++      if (change === 'capture failure') h.captures[0].reject(new Error('capture failed'));
++      else h.captures[0].resolve({ toDataURL: () => 'data:image/png;base64,old' });
++    }
++    await exporting;
++    assert.equal(h.doc.downloads.length, 0); assert.doesNotMatch(h.node('toast').textContent, /PNG gerado/);
++    if (change !== 'dispose') {
++      assert.equal(h.node('exportButton').textContent, 'Exportar PNG');
++      assert.equal(h.node('exportButton').disabled, change === 'overflow');
++    }
++    if (!['document', 'dispose'].includes(change)) assert.equal(h.node('mediaStatus').textContent, 'Falha anterior de mídia; imagem preservada.');
++  });
++}
+diff --git a/tests/unit/pos-cards-history.test.mjs b/tests/unit/pos-cards-history.test.mjs
+new file mode 100644
+index 0000000..8e16468
+--- /dev/null
++++ b/tests/unit/pos-cards-history.test.mjs
+@@ -0,0 +1,125 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { createFeedbackHarness, TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
++
++const card = (id = 'card-a') => ({ id, name: `Convite ${id}`, template: 'convite_owner', updatedAt: '2026-09-29T12:00:00Z' });
++async function mounted(t) {
++  const h = await createFeedbackHarness('cards-pos'); t.after(() => h.page.dispose());
++  h.node('status').textContent = 'Mensagem do editor.';
++  h.node('mediaStatus').textContent = 'Falha da foto anterior.';
++  h.doc.querySelector('[data-view="history"]').click();
++  return h;
++}
++const query = h => h.latest('/api/pos-cards/cards?');
++async function resolve(h, data, total = data.length) { query(h).resolve({ data, total }); await drain(); }
++const action = (h, label, container = 'historyEmpty') => h.node(container).querySelectorAll('button').find(button => button.textContent === label);
++
++test('history has one live state, distinguishes an empty library from no matches, and clears search at offset zero', async t => {
++  const h = await mounted(t);
++  assert.equal(h.node('history-status').textContent, 'Carregando convites...');
++  assert.equal(h.node('historyEmpty').textContent, '');
++  assert.equal(h.node('historyList').getAttribute('aria-busy'), 'true');
++  await resolve(h, []);
++  assert.equal(h.node('history-status').textContent, 'Nenhum convite salvo ainda.');
++  assert.equal(h.node('historyView').querySelectorAll('[role="status"]').length, 1);
++  assert.equal(h.node('historyEmpty').textContent, 'Criar convite');
++  h.input('historySearch', 'Gramado'); await resolve(h, []);
++  assert.equal(h.node('history-status').textContent, 'Nenhum convite encontrado para esta busca.');
++  const clear = action(h, 'Limpar busca'); assert.ok(clear);
++  clear.click(); assert.equal(h.node('historySearch').value, '');
++  const url = new URL(query(h).path, 'https://portal.test');
++  assert.equal(url.searchParams.get('search'), ''); assert.equal(url.searchParams.get('offset'), '0');
++  assert.equal(h.doc.activeElement, h.node('historySearch'));
++  await resolve(h, [card()]);
++  assert.equal(h.node('history-status').textContent, '1 convite(s) encontrado(s).');
++  assert.equal(h.node('historyEmpty').classList.contains('hidden'), true);
++  assert.equal(h.node('status').textContent, 'Mensagem do editor.');
++  assert.equal(h.node('mediaStatus').textContent, 'Falha da foto anterior.');
++  const count = h.requests.length; clear.click(); assert.equal(h.requests.length, count);
++});
++
++for (const outcome of ['success', 'failure']) test(`history ignores stale ${outcome}, old row actions and pagination while another query loads`, async t => {
++  const h = await mounted(t); await resolve(h, [card()], 120);
++  const row = h.node('historyList').querySelector('[data-delete]');
++  const next = action(h, 'Próxima', 'historyPagination');
++  h.input('historySearch', 'old'); const old = query(h);
++  assert.equal(h.node('historyList').children.length, 0); assert.equal(h.node('historyPagination').children.length, 0);
++  h.node('historyList').dispatchEvent(new TestEvent('click', { target: row }));
++  h.node('historyPagination').dispatchEvent(new TestEvent('click', { target: next }));
++  assert.equal(h.requests.filter(item => item.options.method).length, 0);
++  h.input('historySearch', 'new'); const current = query(h);
++  if (outcome === 'success') old.resolve({ data: [card('old')], total: 80 }); else old.reject(new Error('old failure'));
++  await drain(); assert.equal(h.node('history-status').textContent, 'Carregando convites...');
++  assert.equal(h.node('historyList').getAttribute('aria-busy'), 'true');
++  current.resolve({ data: [card('new')], total: 1 }); await drain();
++  assert.match(h.node('historyList').textContent, /Convite new/);
++  assert.doesNotMatch(h.node('historyList').textContent, /Convite old/);
++  assert.equal(h.node('history-status').classList.contains('is-error'), false);
++});
++
++test('history failure retries its submitted snapshot and a detached retry cannot restart a later query', async t => {
++  const h = await mounted(t); await resolve(h, []);
++  h.input('historySearch', 'Gramado & serra'); const failedPath = query(h).path;
++  query(h).reject(new Error('private upstream details')); await drain();
++  assert.equal(h.node('history-status').textContent, 'Não foi possível carregar o histórico.');
++  const retry = action(h, 'Tentar novamente'); assert.ok(retry);
++  h.node('historySearch').value = 'not submitted'; retry.click();
++  assert.equal(query(h).path, failedPath);
++  await resolve(h, [card()]); const count = h.requests.length; retry.click(); assert.equal(h.requests.length, count);
++  assert.equal(h.node('status').textContent, 'Mensagem do editor.');
++  assert.equal(h.node('mediaStatus').textContent, 'Falha da foto anterior.');
++});
++
++test('a disappearing last page recovers the same query before announcing an empty catalog', async t => {
++  const h = await mounted(t); await resolve(h, [card()], 101);
++  h.input('historySearch', 'Gramado'); await resolve(h, [card()], 101);
++  action(h, 'Próxima', 'historyPagination').click(); await resolve(h, [card('page-2')], 101);
++  action(h, 'Próxima', 'historyPagination').click();
++  assert.match(query(h).path, /offset=100$/);
++  await resolve(h, [], 51);
++  assert.match(query(h).path, /search=Gramado&limit=50&offset=50$/);
++  assert.equal(h.node('history-status').textContent, 'Carregando convites...');
++  await resolve(h, [card('last')], 51);
++  assert.match(h.node('historyList').textContent, /Convite last/);
++  assert.match(h.node('historyPagination').textContent, /Página 2 de 2/);
++  // A total of zero on a nonzero page must also recheck page zero.
++  h.input('historySearch', 'Gramado'); await resolve(h, [card()], 51);
++  action(h, 'Próxima', 'historyPagination').click(); await resolve(h, [], 0);
++  assert.match(query(h).path, /offset=0$/); assert.doesNotMatch(h.node('history-status').textContent, /Nenhum/);
++  await resolve(h, [], 0); assert.match(h.node('history-status').textContent, /para esta busca/);
++});
++
++for (const mutation of ['copy', 'delete']) test(`${mutation} still announces action feedback, and a refresh error is not overwritten by success`, async t => {
++  const h = await mounted(t); await resolve(h, [card()]);
++  h.node('historyList').querySelector(`[data-${mutation}]`).click();
++  assert.match(h.node('history-status').textContent, mutation === 'copy' ? /Duplicando/ : /Excluindo/);
++  h.requests.at(-1).resolve(mutation === 'copy' ? card('copy') : null); await drain();
++  await resolve(h, [card('after')]);
++  assert.equal(h.node('history-status').textContent, mutation === 'copy' ? 'Convite duplicado.' : 'Convite excluído.');
++  assert.equal(h.node('mediaStatus').textContent, 'Falha da foto anterior.');
++  h.node('historyList').querySelector(`[data-${mutation}]`).click();
++  h.requests.at(-1).resolve(null); await drain(); query(h).reject(new Error('offline')); await drain();
++  assert.equal(h.node('history-status').textContent, 'Não foi possível carregar o histórico.');
++  assert.ok(action(h, 'Tentar novamente'));
++});
++
++test('late mutation feedback cannot overwrite a newer history query', async t => {
++  const h = await mounted(t); await resolve(h, [card()]);
++  h.node('historyList').querySelector('[data-copy]').click(); const pending = h.requests.at(-1);
++  h.input('historySearch', 'new'); await resolve(h, []); const count = h.requests.length;
++  pending.resolve(card('copy')); await drain();
++  assert.equal(h.requests.length, count); assert.match(h.node('history-status').textContent, /para esta busca/);
++});
++
++test('history leave/disposal invalidates late responses without overwriting editor feedback', async t => {
++  const h = await mounted(t); const pending = query(h);
++  h.doc.querySelector('[data-view="editor"]').click();
++  pending.reject(new Error('late')); await drain();
++  assert.equal(h.node('status').textContent, 'Mensagem do editor.');
++  h.doc.querySelector('[data-view="history"]').click(); const disposed = query(h);
++  const before = h.node('history-status').textContent;
++  h.page.dispose(); assert.equal(disposed.options.signal.aborted, true);
++  disposed.resolve({ data: [card('late')], total: 1 }); await drain();
++  assert.equal(h.node('history-status').textContent, before);
++  assert.equal(h.node('historyList').children.length, 0);
++});
+diff --git a/docs/reviews/2026-09-29-portal-corrections-batch-3.md b/docs/reviews/2026-09-29-portal-corrections-batch-3.md
+new file mode 100644
+index 0000000..31a8624
+--- /dev/null
++++ b/docs/reviews/2026-09-29-portal-corrections-batch-3.md
+@@ -0,0 +1,171 @@
++# Correções do Portal — lote 3 (F03/F05/F06/F07 e feedback PNG)
++
++Data: 29/09/2026. Implementação localizada no frontend e nas regressões
++autorizadas. Base de verificação recebida após o lote 2: **590 testes**.
++Entrega ainda sujeita à inspeção, revisão independente e aceitação local pela
++sessão principal; este documento não substitui o registro de aceitação.
++
++## Arquivos deste lote
++
++Frontend:
++
++- `public/js/dashboard.js`
++- `public/dashboard.html`
++- `public/css/dashboard-home.css`
++- `public/autocard/app.js`
++- `public/autocard/asset-catalog.js` — novo
++- `public/autocard.html`
++- `public/cards-pos/preview-layout.js`
++- `public/cards-pos/app.js`
++- `public/cards-pos.html`
++
++Testes e documentação:
++
++- `tests/helpers/frontend-feedback-harness.mjs` — novo
++- `tests/unit/owner-news-frontend.test.mjs`
++- `tests/unit/autocard-invariants.test.mjs`
++- `tests/unit/autocard-asset-search.test.mjs` — novo
++- `tests/unit/pos-cards-layout.test.mjs`
++- `tests/unit/pos-cards-frontend.test.mjs`
++- `tests/unit/pos-cards-history.test.mjs` — novo
++- `docs/reviews/2026-09-29-portal-corrections-batch-3.md` — novo
++
++Não houve alteração de API, cron, manifests, engines, deploy, geometria de
++impressão, templates, crop, bibliotecas ou arte. Os estilos próprios do AutoCard
++e dos Cards Pós não precisaram mudar. Preservados os diffs/relatórios dos lotes
++1 e 2, auditoria histórica, `.openchamber/`, plano e aceitação da sessão
++principal. Sem delegação, commit, push, deploy, inspeção de credenciais ou
++operação em serviços em execução. Compose foi usado apenas pelo check de
++configuração em modo de leitura da verificação existente.
++
++## Comportamento implementado
++
++### F03 — Dashboard
++
++- HTML inicial e montagem representam carregamento, sem anunciar uma publicação
++  inexistente. O destaque tem estados `loading`, `empty`, `error` e `populated`.
++- Uma resposta vazia mantém o mesmo `h1` visível, reduz a altura do destaque,
++  oculta a seção redundante de notícias e oferece **Acessar áreas** em
++  `#quick-links`. Não há link inventado para o CMS ou personalização de saudação.
++- Falha de consulta informa que o Owner News não pôde carregar e oferece retry
++  próprio, sem confundir erro com catálogo vazio.
++- Publicações restauram destaque completo, capa, ID real no link e rail. O
++  ciclo publicado → retirado/vazio → nova publicação é exercitado, mantendo
++  descarte de blobs privados, tokens de consulta, loaders e segurança de texto.
++
++### F06 — Biblioteca do AutoCard
++
++- Extraídos apenas IDs e metadados de apresentação/busca. As listas originais
++  das linhas 22/23 continham **38 ícones e 16 ilustrações**, não 22/23 itens.
++  IDs e ordem continuam iguais às allowlists inalteradas da API.
++- Cada item tem título descritivo e aliases em português; a pesquisa normaliza
++  maiúsculas, espaços nas extremidades e diacríticos, preservando busca pelo ID
++  inglês. `alerta`/`alert` encontram `triangle-alert`; `aniversário`,
++  `aniversario` e `cake` encontram o bolo nas duas bibliotecas.
++- Busca sem resultados tem status acessível e **Limpar busca**, com foco de
++  volta ao campo. Reabrir a biblioteca limpa o filtro. Selecionar o mesmo asset
++  não incrementa `editRevision`; trocar incrementa. O payload continua usando
++  apenas os IDs canônicos, sem trocar Lucide ou desenhos.
++
++### Feedback PNG
++
++- Botão/status informam **Gerando PNG…**. Após a captura ainda atual e o clique
++  de download, o status informa **PNG gerado; download solicitado ao navegador.**
++  Isso não afirma que o navegador concluiu a gravação do arquivo.
++- Exportações concorrentes são bloqueadas, inclusive quando callbacks de
++  overflow atualizam o botão durante a espera. Texto/disabled são restaurados
++  em página ativa, respeitando overflow que apareça durante a operação.
++- Permanecem as barreiras de geração/revisão, mídia, dimensões, fontes, decode,
++  overflow e rechecagem após captura; escala continua `1080 / width`. Edição,
++  troca de documento, erro ou descarte não produzem anúncio de sucesso.
++- Feedback de mídia é independente: rejeição de mídia opcional sem imagem
++  confirmada não se transforma em falha de exportação; imagem retida com estado
++  de erro continua sujeita à barreira de exportação anterior.
++
++### F05 — Layout da prévia dos Cards Pós
++
++- ResizeObserver e eventos de resize/visualViewport são coalescidos em um frame
++  pertencente ao lifecycle. O updater explícito permanece síncrono e retorna
++  a geometria, preservando chamadas de modelo, modo, fontes e retorno do histórico.
++- Valores idênticos não são reescritos. O cache também evita repetir a altura
++  móvel quando a serialização CSS arredonda uma medida fracionária.
++- Descarte desconecta o observer, cancela frame pendente e invalida callbacks
++  retidos; eles não escrevem em uma página descartada. O topo relativo ao
++  documento continua estável durante scroll móvel.
++- Permanecem Convidado **1448 × 2347 px / 108 × 175,1 mm** e Owner
++  **1448 × 3361 px / 108 × 250,68 mm**. Não foi alterado `card-geometry.js`,
++  conteúdo seguro, estado de rascunhos, mídia ou cálculo de impressão/exportação.
++
++Trata-se de endurecimento preventivo, não de causa-raiz isolada. A sessão
++principal informou que seu baseline Chromium de 24 combinações de modelo,
++modo e viewport já não reproduzia o erro e estava estável após 60 frames. Os
++testes deste lote verificam coalescimento, contagem de escritas e convergência
++com medidas controladas; não substituem uma nova medição no navegador.
++
++### F07 — Histórico dos Cards Pós
++
++- Estado da consulta centralizado em `history-status`, sem segunda mensagem
++  vazia: biblioteca vazia oferece criar convite; busca sem correspondência
++  oferece limpar; erro oferece retry da consulta que falhou.
++- Limpar reinicia o offset. Uma página que ficou fora do total é consultada
++  novamente no último offset válido, inclusive zero, antes de anunciar vazio.
++- Linhas/paginação antigas saem durante a consulta. Controles carregam o token
++  da resposta e verificam pertencimento à lista atual. Sucessos e erros antigos,
++  retries destacados e callbacks após saída/descarte não retomam controle.
++- Mensagens do editor/foto não são reescritas por carregamento de lista.
++  `setStatus` continua espelhando ações de duplicar/excluir no histórico; uma
++  falha de refresh não é substituída por sucesso e ações antigas não sobrescrevem
++  uma consulta mais recente.
++
++## Regressões e resultados reais
++
++O helper novo monta os módulos completos com lifecycle real. DOM, medidas,
++transporte HTTP, ResizeObserver e `html2canvas` são doubles explícitos; não há
++requisição à stack, persistência real ou PNG/PDF recuperado por esses testes.
++O harness anterior do AutoCard passou a carregar o catálogo importado. Os
++testes de layout agora disparam frames, mantendo verificações de proporção,
++fit/width, ambos os modelos, viewport visual, scroll, fontes, histórico oculto,
++descarte e ausência de escritas repetidas por 60 frames controlados.
++
++Ambiente: Windows, Node **24.15.0**, npm **11.12.1**.
++
++```sh
++node --test tests/unit/owner-news-frontend.test.mjs tests/unit/autocard-invariants.test.mjs tests/unit/autocard-asset-search.test.mjs tests/unit/pos-cards-layout.test.mjs tests/unit/pos-cards-frontend.test.mjs tests/unit/pos-cards-history.test.mjs tests/unit/frontend-invariants.test.mjs tests/unit/home-preview.test.mjs
++npm run verify
++node scripts/generate-public-shell.mjs --check
++git diff --check
++```
++
++| Verificação | Resultado |
++| --- | --- |
++| Suítes focadas acima | **137 passaram**, zero falhas/cancelamentos/skips. |
++| `npm run verify` final | Exit 0; **616 passaram**, zero falhas/cancelamentos/skips; sintaxe, scanner local de segurança, nomenclatura e Compose passaram. |
++| Gerador `--check` | Exit 0; nenhum arquivo gerado alterado por este lote. |
++| `node --check` do helper e dos dois novos arquivos de testes | Exit 0 nos três arquivos. |
++| `git diff --check` | Exit 0. |
++
++Há **26 testes adicionais líquidos** em relação aos 590 recebidos. As primeiras
++execuções focadas apontaram expectativas antigas de estado/sincronia e lacunas
++dos doubles de DOM/cleanup; foram corrigidas com regressões comportamentais,
++sem remover asserções de segurança/geometria. A rodada integral intermediária
++passou com 613; os três casos finais de mídia/fontes/altura fracionária elevaram
++o total para 616. Permanece o aviso preexistente `MODULE_TYPELESS_PACKAGE_JSON`
++dos módulos Cards Pós; manifests não foram alterados incidentalmente.
++
++## Limites e próximos responsáveis
++
++- Inspeção do diff e revisão independente ainda pertencem à sessão principal.
++- A posição real do primeiro atalho em **390 × 844**, renderização/teclado,
++  sequência de resize/ampliação e erros do navegador precisam de aceitação
++  Chromium pela sessão principal. CSS e DOM unitários não medem o fold real.
++- Recuperar PNG de 1080 px e os dois PDFs reais, conferir conteúdo/dimensões e
++  persistência com API/banco locais também permanece com a sessão principal.
++  Nenhuma dessas saídas foi recuperada por este implementador.
++- Não há verificação de produção, imagem Linux atualizada ou dispositivo físico.
++  A sintaxe acrescentada é compatível com Node 18, mas a execução foi em Node 24;
++  não se estabelece suporte geral da aplicação a Node 18.
++- Não houve nova auditoria npm neste lote sem mudanças de dependências.
++  `verify: security` é o scanner local, não `npm audit`; o risco residual de seis
++  entradas moderadas descrito no relatório do lote 2 não foi declarado resolvido.
++
++Nenhum bloqueio de implementação identificado dentro do escopo autorizado.
