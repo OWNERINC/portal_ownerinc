@@ -7,6 +7,8 @@ const LABELS = {
   heading: 'Título', paragraph: 'Parágrafo', list: 'Lista', callout: 'Destaque', image: 'Imagem',
   divider: 'Separador', link: 'Link', pdf: 'PDF', video: 'Vídeo',
 };
+// Validator support can precede authoring controls; quote/profile arrive in E4.
+const AUTHORING_BLOCK_TYPES = BLOCK_TYPES.filter(type => Object.hasOwn(LABELS, type));
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function input(label, value, onInput, { tag = 'input', type = 'text', options = [], ...attributes } = {}) {
@@ -166,7 +168,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
 
   function renderToolbar() {
     const toolbar = element('div', { className: 'cms-editor-toolbar', role: 'toolbar', 'aria-label': 'Adicionar bloco' });
-    BLOCK_TYPES.forEach(type => toolbar.append(element('button', {
+    AUTHORING_BLOCK_TYPES.forEach(type => toolbar.append(element('button', {
       className: 'btn btn-ghost btn-sm', type: 'button', text: `+ ${LABELS[type]}`,
       on: { click: () => { blocks.push(defaultBlock(type)); render(); changed(); } },
     })));
