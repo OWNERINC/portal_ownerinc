@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:,">
+  <title>Ownerinc Academy — vetores e movimento</title>
+  <style>
+    .academy-reference {
+      margin: 0;
+      background: #F6FAF5;
+      color: #141414;
+      font: 300 16px/1.5 Helvetica, Arial, sans-serif;
+    }
+    .academy-reference * { box-sizing: border-box; }
+    .academy-reference main { max-width: 1200px; margin: auto; padding: 32px 24px; }
+    .academy-reference h1 { font-size: 28px; line-height: 1.2; margin: 0 0 16px; }
+    .academy-reference h2 { font-size: 20px; margin: 32px 0 16px; }
+    .academy-reference p { max-width: 80ch; }
+    .academy-reference a { color: inherit; text-underline-offset: 3px; }
+    .academy-reference button {
+      font: inherit;
+      font-weight: 700;
+      color: #141414;
+      background: #F6FAF5;
+      border: 1px solid #141414;
+      border-radius: 4px;
+      padding: 10px 16px;
+      min-height: 44px;
+      cursor: pointer;
+      transition: background-color 180ms ease-out;
+    }
+    .academy-reference button:hover,
+    .academy-reference button:focus-visible { background: #97C21E; }
+    .academy-reference :focus-visible { outline: 2px solid #141414; outline-offset: 4px; }
+    .academy-reference button:disabled { opacity: .5; cursor: wait; }
+    .academy-reference .controls { display: flex; flex-wrap: wrap; gap: 12px; }
+    .academy-reference .gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+    .academy-reference figure { margin: 0; min-width: 0; border-top: 1px solid #141414; }
+    .academy-reference figcaption { padding: 12px 0; }
+    .academy-reference .samples { display: grid; grid-template-columns: 1fr 1fr; }
+    .academy-reference .sample { min-height: 160px; padding: 24px; display: grid; place-items: center; }
+    .academy-reference .light { background: #F6FAF5; color: #141414; }
+    .academy-reference .dark { background: #141414; color: #97C21E; }
+    .academy-reference .logo .samples { grid-template-columns: 1fr; }
+    .academy-reference svg { display: block; width: 100%; height: 96px; overflow: visible; }
+    .academy-reference svg [data-part] { transform-box: fill-box; transform-origin: center; }
+    .academy-reference .asset-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px 0; }
+    .academy-reference dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 24px; }
+    .academy-reference dt { font-weight: 700; }
+    .academy-reference dd { margin: 0; }
+    .academy-reference #status { min-height: 24px; }
+    @media (max-width: 850px) { .academy-reference .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 560px) {
+      .academy-reference main { padding: 24px 16px; }
+      .academy-reference .gallery { grid-template-columns: 1fr; }
+      .academy-reference dl { grid-template-columns: 1fr; gap: 4px; }
+      .academy-reference dd { margin-bottom: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .academy-reference button { transition: none; } }
+  </style>
+</head>
+<body class="academy-reference">
+  <main>
+    <h1>Ownerinc Academy — vetores e movimento</h1>
+    <p>Prancha de revisão dos nove vetores originais. Compare proporções e recortes nos fundos claro e escuro. Cada reprodução retorna à composição original.</p>
+    <div class="controls">
+      <button type="button" id="entrance" disabled>Reproduzir entrada</button>
+      <button type="button" id="completion" disabled>Reproduzir conclusão</button>
+    </div>
+    <p id="status" role="status">Carregando vetores…</p>
+    <noscript><p>Ative JavaScript para a prancha interativa. Os arquivos estão listados no <a href="../../public/assets/academy/manifest.json">manifesto de assets</a>.</p></noscript>
+    <section aria-labelledby="vectors-title">
+      <h2 id="vectors-title">Símbolo, ícones e logotipos</h2>
+      <div class="gallery" id="gallery"></div>
+    </section>
+    <section aria-labelledby="motion-title">
+      <h2 id="motion-title">Referência de movimento</h2>
+      <dl>
+        <dt>Entrada · 600 ms</dt><dd>As duas peças se aproximam com defasagem de 70 ms. Símbolo e logotipos entram como uma unidade.</dd>
+        <dt>Foco e hover · 180 ms</dt><dd>Passe o ponteiro pela amostra ou leve o foco ao botão de reprodução para uma ênfase breve.</dd>
+        <dt>Conclusão · 450 ms</dt><dd>Uma expansão discreta confirma a conclusão e retorna à escala original.</dd>
+        <dt>Movimento reduzido</dt><dd>A preferência do sistema cancela animações em andamento e apresenta imediatamente o estado final.</dd>
+      </dl>
+      <p>Paleta: #97C21E, #F6FAF5, #141414. Tipografia: Helvetica, Arial, sans-serif.</p>
+      <p><a href="academy-experience.md">Documentação da identidade e do movimento</a> · <a href="../../public/assets/academy/manifest.json">Manifesto de origem</a></p>
+    </section>
+  </main>
+  <script type="module">
+    const gallery = document.querySelector('#gallery');
+    const status = document.querySelector('#status');
+    const entrance = document.querySelector('#entrance');
+    const completion = document.querySelector('#completion');
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    const active = new Set();
+    const assetBase = new URL('../../public/assets/academy/', location.href);
+
+    function stop(scope = gallery) {
+      for (const animation of active) {
+        if (scope.contains(animation.effect.target)) {
+          animation.cancel();
+          active.delete(animation);
+        }
+      }
+    }
+
+    function play(scope, kind) {
+      stop(scope);
+      if (reducedMotion.matches) return;
+      for (const svg of scope.querySelectorAll('svg')) {
+        // Preserve the original path transforms: animate only their parent groups.
+        // A wordmark is one unit, rather than a staggered sequence of letters.
+        const parts = svg.closest('figure').dataset.key.startsWith('icon-')
+          ? [...svg.querySelectorAll('[data-part]')]
+          : [svg];
+        parts.forEach((part, index) => {
+          const direction = index % 2 ? 1 : -1;
+          const frames = kind === 'entrance'
+            ? [
+                { opacity: 0, transform: `translate(${direction * 6}px, 4px) rotate(${direction * 3}deg) scale(.96)` },
+                { opacity: 1, transform: 'none' }
+              ]
+            : [
+                { transform: 'none' },
+                { transform: `scale(${kind === 'completion' ? 1.035 : 1.015})` },
+                { transform: 'none' }
+              ];
+          const animation = part.animate(frames, {
+            duration: kind === 'entrance' ? 600 : kind === 'completion' ? 450 : 180,
+            delay: kind === 'entrance' ? index * 70 : 0,
+            easing: kind === 'entrance' ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'ease-in-out',
+            fill: 'backwards'
+          });
+          active.add(animation);
+          animation.onfinish = animation.oncancel = () => active.delete(animation);
+        });
+      }
+    }
+
+    function motionStatus() {
+      status.textContent = reducedMotion.matches
+        ? 'Nove vetores carregados. Movimento reduzido ativo: estado final imediato.'
+        : 'Nove vetores carregados. Use os botões para reproduzir o movimento.';
+    }
+
+    async function loadGallery() {
+      const response = await fetch(new URL('manifest.json', assetBase));
+      if (!response.ok) throw new Error('Manifesto indisponível');
+      const manifest = await response.json();
+      const figures = await Promise.all(manifest.assets.map(async asset => {
+        const url = new URL(asset.file, assetBase);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Vetor indisponível: ${asset.key}`);
+        const source = new DOMParser().parseFromString(await response.text(), 'image/svg+xml');
+        if (source.querySelector('parsererror') || source.documentElement.localName !== 'svg') {
+          throw new Error(`SVG inválido: ${asset.key}`);
+        }
+        const figure = document.createElement('figure');
+        figure.dataset.key = asset.key;
+        figure.classList.toggle('logo', asset.key.startsWith('logo-'));
+        const caption = document.createElement('figcaption');
+        caption.textContent = `${asset.key} · ${asset.parts} ${asset.parts === 1 ? 'parte' : 'partes'}`;
+        figure.append(caption);
+        const samples = document.createElement('div');
+        samples.className = 'samples';
+        const backgrounds = asset.key === 'logo-dark' ? ['light'] : asset.key === 'logo-light' ? ['dark'] : ['light', 'dark'];
+        for (const background of backgrounds) {
+          const sample = document.createElement('div');
+          sample.className = `sample ${background}`;
+          const svg = document.importNode(source.documentElement, true);
+          svg.setAttribute('role', 'img');
+          svg.setAttribute('aria-label', `${asset.key}, fundo ${background === 'light' ? 'claro' : 'escuro'}`);
+          sample.append(svg);
+          samples.append(sample);
+        }
+        figure.append(samples);
+        const actions = document.createElement('div');
+        actions.className = 'asset-actions';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Reproduzir';
+        button.setAttribute('aria-label', `Reproduzir entrada de ${asset.key}`);
+        button.addEventListener('click', () => play(figure, 'entrance'));
+        button.addEventListener('focus', () => play(figure, 'focus'));
+        samples.addEventListener('pointerenter', () => play(figure, 'hover'));
+        const link = document.createElement('a');
+        link.href = url.href;
+        link.textContent = 'Abrir SVG';
+        link.setAttribute('aria-label', `Abrir SVG de ${asset.key}`);
+        actions.append(button, link);
+        figure.append(actions);
+        return figure;
+      }));
+      gallery.replaceChildren(...figures);
+      entrance.disabled = completion.disabled = false;
+      motionStatus();
+      reducedMotion.addEventListener('change', () => {
+        stop();
+        motionStatus();
+      });
+    }
+
+    entrance.addEventListener('click', () => play(gallery, 'entrance'));
+    completion.addEventListener('click', () => play(gallery, 'completion'));
+    loadGallery().catch(error => {
+      status.textContent = 'Não foi possível carregar a prancha. Sirva a raiz do repositório por HTTP e recarregue a página.';
+      console.error(error);
+    });
+  </script>
+</body>
+</html>
