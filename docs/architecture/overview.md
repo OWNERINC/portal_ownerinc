@@ -102,6 +102,37 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
 
 ## CMS e conteúdo publicado
 
+### Contrato editorial Owner News (E1)
+
+- `api/owner-news/editorial.js` valida o contrato puro da revisão; sua integração
+  à persistência/publicação pertence à etapa seguinte. `editorial: null` representa
+  legado; objetos inválidos e `undefined` são rejeitados por `validateNewsRevision`.
+  `EditorialV1` contém apenas `version: 1`, `kind: article|edition`, `summary`
+  (até 1.000 caracteres), `author` e `source_label` (até 200 cada) e `source_date`
+  (`null` ou data civil válida `YYYY-MM-DD`, preservada sem conversão de fuso).
+- Publicar artigo exige resumo e corpo em paragraph/list/quote/profile; publicar
+  edição exige PDF. A revisão normalizada inteira (`blocks` + `editorial`) cabe
+  em 5 MiB UTF-8; o transporte CMS continua em 6 MiB.
+- Os validadores backend e frontend aceitam `layout` opcional
+  (`content|wide|full|left|right`) e `typography` (`serif|sans`) apenas em
+  paragraph/list/callout/quote/profile, sem materializar defaults novos no legado.
+  `quote` exige texto até 5.000 e admite attribution até 200; `profile` exige name
+  até 200 e admite role até 200, text até 5.000 e imagem por `asset_id` plano com
+  alt obrigatório até 300. Alt sem asset é inválido. O CMS remove opcionais textuais
+  vazios antes de validar; a API rejeita opcionais explicitamente vazios.
+- Imagem admite caption até 1.000, credit até 300 e `usage: cover|body`; PDF admite
+  `usage: edition|attachment`. Há no máximo uma capa explícita e um PDF de edição
+  por revisão. Não há mídia aninhada nem HTML/estilo arbitrário.
+- `public/js/owner-news/model.js` espelha normalização e estimativa de leitura
+  (200 palavras/minuto, arredondando para cima; edição ou texto vazio retorna null).
+  A estimativa inclui heading/paragraph/list/callout/quote/profile e ignora mídia,
+  créditos, metadados e títulos de PDF. `blocksToText` também projeta quote/profile.
+  `getNewsPresentation` separa somente capa e PDF explicitamente marcados; imagem
+  legada continua no corpo. Autoria vem dos metadados, com fallback `Owner News`.
+  Renderização visual dos novos tipos e integração CMS são etapas posteriores.
+
+### Publicação e ciclo de vida existentes
+
 - Uma fonte sem `cms_documents` continua usando o corpo legado. Quando existe
   documento CMS, o corpo público é exclusivamente a revisão `published` com
   blocos e assets validados; documento sem publicação válida não reativa o texto

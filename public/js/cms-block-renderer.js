@@ -1,7 +1,7 @@
 import { fetchAPIAsset } from './auth.js';
 import { clear, element, safeHttpUrl } from './ui.js';
 
-export const BLOCK_TYPES = ['heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video'];
+export const BLOCK_TYPES = ['heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video', 'quote', 'profile'];
 const BLOCK_TYPE_SET = new Set(BLOCK_TYPES);
 // Keep the editor aligned with the server's 5 MiB normalized block limit.
 const MAX_CMS_PAYLOAD_BYTES = 5 * 1024 * 1024;
@@ -66,7 +66,7 @@ function isRecord(value) {
 function safeText(value, max, multiline = true) {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
-  if (!normalized || normalized.length > max || /<\/?[a-z][^>]*>|\bon[a-z]+\s*=|javascript\s*:/i.test(normalized)) return null;
+  if (!normalized || normalized.length > max || /<\/?[a-z][^>]*>|<\s*(script|style|iframe|object|embed)\b|\bon[a-z]+\s*=|javascript\s*:/i.test(normalized)) return null;
   if (!multiline && /[\r\n]/.test(normalized)) return null;
   return normalized;
 }
@@ -84,7 +84,7 @@ function exactKeys(block, keys) {
   return Object.keys(block).every(key => keys.has(key));
 }
 
-function normalizeBlock(block) {
+function normalizeBaseBlock(block) {
   if (!isRecord(block) || !BLOCK_TYPE_SET.has(block.type)) return null;
   switch (block.type) {
     case 'heading': {
@@ -111,6 +111,33 @@ function normalizeBlock(block) {
       const tone = block.tone === undefined ? 'info' : block.tone;
       return text && (title !== null) && ['info', 'warning', 'success'].includes(tone)
         ? { type: 'callout', tone, ...(title ? { title } : {}), text } : null;
+    }
+    case 'quote': {
+      if (!exactKeys(block, new Set(['type', 'text', 'attribution']))) return null;
+      const text = safeText(block.text, 5000);
+      const attribution = 'attribution' in block ? safeText(block.attribution, 200, false) : undefined;
+      return text && attribution !== null
+        ? { type: 'quote', text, ...(attribution ? { attribution } : {}) } : null;
+    }
+    case 'profile': {
+      if (!exactKeys(block, new Set(['type', 'name', 'role', 'text', 'asset_id', 'alt']))) return null;
+      const name = safeText(block.name, 200, false);
+      if (!name) return null;
+      const result = { type: 'profile', name };
+      for (const field of ['role', 'text']) {
+        if (!(field in block)) continue;
+        const value = safeText(block[field], field === 'role' ? 200 : 5000, field === 'text');
+        if (!value) return null;
+        result[field] = value;
+      }
+      if ('asset_id' in block) {
+        const id = safeAssetId(block.asset_id);
+        const alt = safeText(block.alt, 300, false);
+        if (!id || !alt) return null;
+        result.asset_id = id;
+        result.alt = alt;
+      } else if ('alt' in block) return null;
+      return result;
     }
     case 'image': {
       if (!exactKeys(block, new Set(['type', 'asset_id', 'alt']))) return null;
@@ -146,6 +173,42 @@ function normalizeBlock(block) {
   }
 }
 
+const LAYOUTS = new Set(['content', 'wide', 'full', 'left', 'right']);
+const TYPOGRAPHIC_TYPES = new Set(['paragraph', 'list', 'callout', 'quote', 'profile']);
+
+function normalizeBlock(block) {
+  if (!isRecord(block)) return null;
+  const core = { ...block };
+  const extra = {};
+  if ('layout' in core) {
+    if (!LAYOUTS.has(core.layout)) return null;
+    extra.layout = core.layout;
+    delete core.layout;
+  }
+  if ('typography' in core) {
+    if (!TYPOGRAPHIC_TYPES.has(core.type) || !['serif', 'sans'].includes(core.typography)) return null;
+    extra.typography = core.typography;
+    delete core.typography;
+  }
+  if (core.type === 'image') {
+    for (const field of ['caption', 'credit']) {
+      if (!(field in core)) continue;
+      const value = safeText(core[field], field === 'caption' ? 1000 : 300);
+      if (!value) return null;
+      extra[field] = value;
+      delete core[field];
+    }
+  }
+  if ('usage' in core && ['image', 'pdf'].includes(core.type)) {
+    const allowed = core.type === 'image' ? ['cover', 'body'] : ['edition', 'attachment'];
+    if (!allowed.includes(core.usage)) return null;
+    extra.usage = core.usage;
+    delete core.usage;
+  }
+  const result = normalizeBaseBlock(core);
+  return result ? { ...result, ...extra } : null;
+}
+
 export function validateBlocks(value) {
   if (!Array.isArray(value) || value.length > 100) return null;
   const blocks = value.map(normalizeBlock);
@@ -158,7 +221,7 @@ export function blocksToText(blocks) {
   const normalized = validateBlocks(blocks);
   if (!normalized) return '';
   return normalized.map(block => {
-    if (block.type === 'heading' || block.type === 'paragraph') return block.text;
+    if (['heading', 'paragraph', 'quote', 'profile'].includes(block.type)) return block.text;
     if (block.type === 'list') return block.items.map(item => `${block.ordered ? '1.' : '-'} ${item}`).join('\n');
     if (block.type === 'callout') return block.title ? `${block.title}: ${block.text}` : block.text;
     if (block.type === 'link') return `${block.label}: ${block.url}`;

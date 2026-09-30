@@ -327,6 +327,7 @@ test('reminder reloads ignore deferred responses that finish out of order', asyn
 });
 
 test('safe renderer validates the allowlist and never uses raw HTML sinks', () => {
+  for (const type of ['quote', 'profile']) assert.match(renderer, new RegExp(`['"]${type}['"]`));
   assert.match(renderer, /export const BLOCK_TYPES/);
   assert.match(renderer, /export function validateBlocks/);
   assert.match(renderer, /MAX_CMS_PAYLOAD_BYTES = 5 \* 1024 \* 1024/);
