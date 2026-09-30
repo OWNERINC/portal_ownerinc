@@ -50,6 +50,13 @@ sucesso, falha de API e validacao nativa. Upload, substituicao e remocao de
 foto terao estados explicitos de carregamento, sucesso e erro, sem perder o
 foco do controle acionado.
 
+O avatar e a previa de ajuste usam o canto superior esquerdo da area interna
+do frame como origem do recorte salvo. A imagem do avatar fica fora do fluxo
+flex, sem somar centralizacao ao deslocamento do recorte; o container continua
+centralizando as iniciais quando nao ha foto. Fotos horizontais e verticais,
+inclusive com recorte deslocado e zoom, devem cobrir o frame e mostrar a mesma
+regiao na previa e no avatar apos salvar ou reabrir, sem alterar a imagem salva.
+
 ### Convite administrativo
 
 O fluxo sera exposto como `Convidar usuario` e usara os campos atuais de
