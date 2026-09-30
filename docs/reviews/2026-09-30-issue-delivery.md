@@ -30,7 +30,7 @@ credenciais, tokens, dumps e snapshots de revisão não são versionados.
 | Origem correta do recorte no avatar | `a35a530` | Reteste independente: 12 cenários, 265 assertions e 15 testes automatizados; geometria/pixels aprovados |
 | Headers de segurança dos assets | `c40fea6`, `89fb497` | Reteste independente: 10 GETs/60 verificações de headers, 21 testes e nginx -t aprovados |
 | Nomes, foco e seleções acessíveis | `c862971` | Reteste independente: 84 testes, 50 leituras AX, 12 amostras de pixels; três pares de PNGs byte-idênticos |
-| Arraste contínuo da foto | `d275fc4` | Oito cenários de interação aprovados; seis medições subpixel suplementares em revisão independente |
+| Arraste contínuo da foto | `d275fc4` | Oito cenários aprovados independentemente; seis medições suplementares classificadas por comparação antes/depois |
 
 Verificação final executada pela sessão primária em `d275fc4`: `npm run verify`
 aprovado, **862 testes passaram, zero falhas e dois skips exclusivos de Linux no
@@ -136,8 +136,11 @@ Produção HTTPS em Edge 154, com código servido conferido por SHA-256:
   cálculo completo, limites, captura, release e teclado. Seis assertions adicionais
   exigindo residual geométrico inferior a 0,001px falharam com 0,003–0,013px;
   pixels passaram. A comparação independente do mesmo crop nas duas revisões
-  deve determinar se é quantização preexistente antes do aceite; não foi ocultada
-  nem tratada como aprovada apenas por ser pequena.
+  confirmou geometria igual e PNGs byte-idênticos nas seis superfícies. As medidas
+  correspondem a `floor(ideal × 64) / 64`, sem centro de pixel de conteúdo
+  descoberto: quantização preexistente do Chromium, não regressão do atributo.
+  O agregado bruto de 250 pass/6 fail foi preservado; a classificação e os hashes
+  sustentam o aceite, sem alterar tolerância ou código de geometria.
 
 Cards sintéticos foram excluídos por seus IDs. Os seis órfãos criados por falhas
 de GET após POST foram registrados privadamente e ficaram para a retenção normal.
