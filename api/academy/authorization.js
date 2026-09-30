@@ -49,4 +49,4 @@ async function authorizeLessonInTransaction(db, user, lessonId) {
   return { course, module, lesson };
 }
 
-module.exports = { authorizeLessonInTransaction, readPublishedSources };
+module.exports = { authorizeLessonInTransaction, readPublishedSources, hasPublication };

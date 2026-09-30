@@ -3,10 +3,135 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { enforceCmsAssetRetention } from '../cron/cms-asset-retention.js';
 import { createAcademyHttp, createAcademyIntegration, requireDisposableAcademyDatabase } from '../tests/helpers/academy-integration.mjs';
 
 requireDisposableAcademyDatabase();
+
+test('transactional management validates audience, conversion, child publication and normalized media versions', async t => {
+  const h = await createAcademyIntegration(t);
+  const send = (method, path, body, user = 'manager') => h.request[method](`/api/academy${path}`)
+    .set('x-fixture-user', user).send(body);
+  const input = { title: 'Integração Ownerinc', category: 'Cultura', description: 'Comece por aqui',
+    delivery_mode: 'internal', audience: 'all', allowed_job_title_ids: [], learning_group: 'initial',
+    icon_key: 'icon-01', instructor_name: 'Equipe Ownerinc', url: null, order: 1, active: false };
+  const created = (await send('post', '', input).expect(201)).body;
+  h.trackCourse(created.id);
+  assert.equal(created.url, null);
+  await send('put', `/${created.id}`, { ...input, audience: 'job_titles', allowed_job_title_ids: [] }).expect(400);
+  assert.equal((await h.client.query('SELECT audience FROM academy WHERE id=$1', [created.id])).rows[0].audience, 'all');
+  for (const extra of [{ id: created.id }, { created_at: '2026-09-30' }, { unexpected: true }]) {
+    await send('put', `/${created.id}`, { ...input, ...extra }).expect(400);
+  }
+  for (const allowed_job_title_ids of [[randomUUID()], Array.from({ length: 101 }, () => randomUUID())]) {
+    await send('put', `/${created.id}`, { audience: 'job_titles', allowed_job_title_ids }).expect(400);
+  }
+  await h.client.query('UPDATE job_titles SET active=FALSE WHERE id=$1', [h.ids.closerJob]);
+  await send('put', `/${created.id}`, { audience: 'job_titles', allowed_job_title_ids: [h.ids.closerJob] }).expect(400);
+  await h.client.query('UPDATE job_titles SET active=TRUE WHERE id=$1', [h.ids.closerJob]);
+  await send('put', `/${created.id}`, { audience: 'job_titles', allowed_job_title_ids: [h.ids.closerJob] }).expect(200);
+  await h.client.query('UPDATE job_titles SET active=FALSE WHERE id=$1', [h.ids.closerJob]);
+  assert.deepEqual((await send('put', `/${created.id}`, { title: 'Selection retained' }).expect(200)).body.allowed_job_title_ids, [h.ids.closerJob]);
+  await send('post', '', input, 'adminWithoutPermission').expect(403);
+  await send('post', `/${created.id}/modules`, { title: 'Blocked' }, 'adminWithoutPermission').expect(403);
+  await send('put', `/${created.id}`, { active: true }).expect(400);
+  const module = (await send('post', `/${created.id}/modules`, { title: 'Módulo', active: true }).expect(201)).body;
+  const media = { type: 'youtube', url: 'https://youtu.be/dQw4w9WgXcQ' };
+  const lesson = (await send('post', `/modules/${module.id}/lessons`, { title: 'Aula', media }).expect(201)).body;
+  await send('put', `/${created.id}`, { active: true }).expect(400);
+  await send('put', `/lessons/${lesson.id}`, { active: true }).expect(200);
+  const doc = (await h.client.query("INSERT INTO cms_documents(content_type,source_id,title) VALUES ('academy_lesson',$1,'Draft') RETURNING id", [lesson.id])).rows[0];
+  await send('put', `/${created.id}`, { active: true }).expect(400);
+  const revision = (await h.client.query("INSERT INTO cms_revisions(document_id,version,status,blocks) VALUES ($1,1,'published',$2::jsonb) RETURNING id",
+    [doc.id, JSON.stringify([{ type: 'pdf', asset_id: randomUUID(), title: 'Missing' }])])).rows[0];
+  await h.client.query('UPDATE cms_documents SET published_revision_id=$2 WHERE id=$1', [doc.id, revision.id]);
+  await send('put', `/${created.id}`, { active: true }).expect(400);
+  await h.client.query("UPDATE cms_revisions SET blocks='[]'::jsonb WHERE id=$1", [revision.id]);
+  await send('put', `/${created.id}`, { active: true }).expect(200);
+  for (const [value, version] of [
+    [{ title: 'Renamed' }, 1], [{ media: { type: 'youtube', url: 'https://youtube.com/embed/dQw4w9WgXcQ' } }, 1],
+    [{ media: { type: 'file', url: 'https://example.test/lesson.mp4' } }, 2],
+  ]) assert.equal((await send('put', `/lessons/${lesson.id}`, value).expect(200)).body.media_version, version);
+  const external = (await send('post', '', { title: 'External', url: 'https://example.test/course', active: true }).expect(201)).body;
+  h.trackCourse(external.id);
+  const presentation = (await h.client.query("INSERT INTO cms_documents(content_type,source_id,title) VALUES ('academy',$1,'Presentation') RETURNING id", [external.id])).rows[0];
+  await send('put', `/${external.id}`, { delivery_mode: 'internal' }).expect(400);
+  const converted = (await send('put', `/${external.id}`, { delivery_mode: 'internal', url: external.url, active: false }).expect(200)).body;
+  assert.equal(converted.id, external.id); assert.equal(converted.url, null);
+  assert.equal((await h.client.query('SELECT source_id FROM cms_documents WHERE id=$1', [presentation.id])).rows[0].source_id, external.id);
+});
+
+test('real concurrent hierarchy limits and complete parent-bound reorder include inactive descendants', async t => {
+  const h = await createAcademyIntegration(t);
+  const send = (method, path, body) => h.request[method](`/api/academy${path}`).set('x-fixture-user', 'manager').send(body);
+  await h.client.query(`INSERT INTO academy_modules(course_id,title) SELECT $1,'Inactive' FROM generate_series(1,98)`, [h.ids.closerCourse]);
+  const attempts = await Promise.all([1, 2].map(() => send('post', `/${h.ids.closerCourse}/modules`, { title: 'Limit race' })));
+  assert.deepEqual(attempts.map(row => row.status).sort(), [201, 400]);
+  assert.equal(attempts.find(row => row.status === 400).body.reason, 'module_limit');
+  assert.equal((await h.client.query('SELECT COUNT(*)::integer AS count FROM academy_modules WHERE course_id=$1', [h.ids.closerCourse])).rows[0].count, 100);
+  const secondModule = attempts.find(row => row.status === 201).body.id;
+  await h.client.query(`INSERT INTO academy_lessons(module_id,title,media_type,youtube_video_id)
+    SELECT $1,'Inactive','youtube','dQw4w9WgXcQ' FROM generate_series(1,498)`, [h.ids.module]);
+  const lessons = await Promise.all([h.ids.module, secondModule].map(id => send('post', `/modules/${id}/lessons`,
+    { title: 'Limit race', media: { type: 'youtube', url: 'https://youtu.be/dQw4w9WgXcQ' } })));
+  assert.deepEqual(lessons.map(row => row.status).sort(), [201, 400]);
+  assert.equal(lessons.find(row => row.status === 400).body.reason, 'lesson_limit');
+  for (const [table, parent, parentId, route, foreign] of [
+    ['academy_modules', 'course_id', h.ids.closerCourse, `/${h.ids.closerCourse}/modules/order`, h.ids.captureModule],
+    ['academy_lessons', 'module_id', h.ids.module, `/modules/${h.ids.module}/lessons/order`, h.ids.captureLesson],
+  ]) {
+    const before = (await h.client.query(`SELECT id,"order" FROM ${table} WHERE ${parent}=$1 ORDER BY id`, [parentId])).rows;
+    const ids = before.map(row => row.id);
+    for (const invalidIds of [ids.slice(1), [...ids.slice(1), foreign], [...ids.slice(1), ids[1].toUpperCase()]]) {
+      const invalid = await send('put', route, { ids: invalidIds }).expect(400);
+      assert.equal(invalid.body.reason, 'invalid_order');
+      assert.deepEqual((await h.client.query(`SELECT id,"order" FROM ${table} WHERE ${parent}=$1 ORDER BY id`, [parentId])).rows, before);
+    }
+    await send('put', route, { ids: ids.reverse() }).expect(200);
+    assert.deepEqual((await h.client.query(`SELECT id FROM ${table} WHERE ${parent}=$1 ORDER BY "order"`, [parentId])).rows.map(row => row.id), ids);
+  }
+});
+
+test('real audit rollback preserves the tree and successful deletion removes CMS revisions/progress but retains shared files', async t => {
+  const h = await createAcademyIntegration(t);
+  const documentIds = [];
+  for (const [type, source] of [['academy', h.ids.closerCourse], ['academy_lesson', h.ids.closerLesson], ['academy', h.ids.allCourse]]) {
+    const document = (await h.request.post('/api/cms/documents').set('x-fixture-user', 'manager')
+      .send({ type, source_id: source, title: 'Shared file' }).expect(201)).body.document.id;
+    documentIds.push(document);
+    await h.request.put(`/api/cms/documents/${document}/draft`).set('x-fixture-user', 'manager')
+      .send({ blocks: [{ type: 'pdf', asset_id: h.ids.pdfAsset, title: 'Shared' }] }).expect(200);
+    await h.request.post(`/api/cms/documents/${document}/publish`).set('x-fixture-user', 'manager').send({}).expect(200);
+  }
+  await h.client.query('INSERT INTO academy_lesson_progress(user_uid,lesson_id,media_version) VALUES ($1,$2,1)', [h.users.closer.uid, h.ids.closerLesson]);
+  let failedAudits = 0;
+  const failingPool = { async connect() {
+    const db = await h.pool.connect();
+    return { release: () => db.release(), query(sql, values) {
+      if (/INSERT INTO audit_log/.test(sql)) { failedAudits++; throw new Error('controlled audit failure'); }
+      return db.query(sql, values);
+    } };
+  } };
+  const { request } = await createAcademyHttp(t, failingPool, h.users);
+  const before = (await h.client.query('SELECT * FROM academy WHERE id=$1', [h.ids.closerCourse])).rows;
+  await request.put(`/api/academy/${h.ids.closerCourse}`).set('x-fixture-user', 'manager')
+    .send({ title: 'Rollback', allowed_job_title_ids: [h.ids.captureJob] }).expect(500);
+  assert.deepEqual((await h.client.query('SELECT * FROM academy WHERE id=$1', [h.ids.closerCourse])).rows, before);
+  assert.deepEqual((await h.client.query('SELECT job_title_id FROM academy_course_job_titles WHERE course_id=$1', [h.ids.closerCourse])).rows,
+    [{ job_title_id: h.ids.closerJob }]);
+  await request.delete(`/api/academy/${h.ids.closerCourse}`).set('x-fixture-user', 'manager').expect(500);
+  assert.equal(failedAudits, 2);
+  assert.equal((await h.client.query('SELECT id FROM cms_documents WHERE id=ANY($1::uuid[])', [documentIds])).rowCount, 3);
+  assert.equal((await h.client.query('SELECT lesson_id FROM academy_lesson_progress WHERE lesson_id=$1', [h.ids.closerLesson])).rowCount, 1);
+  await h.request.delete(`/api/academy/${h.ids.closerCourse}`).set('x-fixture-user', 'manager').expect(200);
+  assert.equal((await h.client.query('SELECT id FROM cms_documents WHERE id=ANY($1::uuid[])', [documentIds.slice(0, 2)])).rowCount, 0);
+  assert.equal((await h.client.query('SELECT id FROM cms_revisions WHERE document_id=ANY($1::uuid[])', [documentIds.slice(0, 2)])).rowCount, 0);
+  assert.equal((await h.client.query('SELECT lesson_id FROM academy_lesson_progress WHERE lesson_id=$1', [h.ids.closerLesson])).rowCount, 0);
+  const asset = (await h.client.query('SELECT storage_key FROM cms_assets WHERE id=$1', [h.ids.pdfAsset])).rows[0];
+  assert.deepEqual(await readFile(path.join(h.uploadDirectory, 'cms-private', asset.storage_key)), h.pdf);
+  await h.request.get(`/api/cms/assets/${h.ids.pdfAsset}`).set('x-fixture-user', 'capture').expect(200);
+});
 
 test('lesson PDF uses real CMS publication, inherits course access, and survives draft retention', async t => {
   const h = await createAcademyIntegration(t);

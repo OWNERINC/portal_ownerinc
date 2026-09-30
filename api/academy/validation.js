@@ -61,6 +61,12 @@ const courseSchema = {
 };
 
 function validateCourseInput(body, current) {
+  if (!hasOnlyFields(body, { ...courseSchema, allowed_job_title_ids: jobTitleIds })) return null;
+  if (body && Object.hasOwn(body, 'allowed_job_title_ids')) {
+    if (Object.hasOwn(body, 'job_title_ids')) return null;
+    body = { ...body, job_title_ids: body.allowed_job_title_ids };
+    delete body.allowed_job_title_ids;
+  }
   if (!hasOnlyFields(body, courseSchema)) return null;
   const course = {
     title: '', category: '', description: '', url: null, order: 0, active: false,
@@ -92,4 +98,4 @@ function validateLessonInput(body) {
   };
 }
 
-module.exports = { parseYouTubeId, normalizeMedia, validateCourseInput, validateLessonInput };
+module.exports = { hasOnlyFields, parseYouTubeId, normalizeMedia, validateCourseInput, validateLessonInput };

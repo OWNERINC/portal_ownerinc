@@ -82,6 +82,7 @@ export async function createAcademyIntegration(t) {
   await writeFile(path.join(uploadDirectory, 'cms-private', storageKey), pdf);
   const ids = Object.fromEntries(['allCourse', 'closerCourse', 'captureCourse', 'closerLesson', 'captureLesson',
     'module', 'captureModule', 'pdfAsset', 'closerJob', 'captureJob'].map(key => [key, randomUUID()]));
+  const courseIds = [ids.allCourse, ids.closerCourse, ids.captureCourse];
   const users = Object.fromEntries(['closer', 'capture', 'manager', 'adminWithoutPermission', 'noJob'].map(key => [key, {
     uid: `academy-${key}-${randomUUID()}`, email: `${randomUUID()}@example.test`, name: key,
     role: ['manager', 'adminWithoutPermission'].includes(key) ? 'admin' : 'viewer',
@@ -94,8 +95,11 @@ export async function createAcademyIntegration(t) {
   await client.query('SELECT pg_advisory_lock(7193030)');
   t.after(async () => {
     try {
-      await client.query('DELETE FROM cms_documents WHERE source_id=ANY($1::uuid[])', [[ids.allCourse, ids.closerCourse, ids.captureCourse, ids.closerLesson, ids.captureLesson]]);
-      await client.query('DELETE FROM academy WHERE id=ANY($1::uuid[])', [[ids.allCourse, ids.closerCourse, ids.captureCourse]]);
+      await client.query(`DELETE FROM cms_documents WHERE source_id=ANY($1::uuid[]) OR
+        (content_type='academy_lesson' AND source_id IN (SELECT l.id FROM academy_lessons l
+        JOIN academy_modules m ON m.id=l.module_id WHERE m.course_id=ANY($2::uuid[])))`,
+      [[...courseIds, ids.closerLesson, ids.captureLesson], courseIds]);
+      await client.query('DELETE FROM academy WHERE id=ANY($1::uuid[])', [courseIds]);
       await client.query('DELETE FROM cms_assets WHERE id=$1', [ids.pdfAsset]);
       await client.query('DELETE FROM users WHERE uid=ANY($1::text[])', [Object.values(users).map(user => user.uid)]);
       await client.query('DELETE FROM job_titles WHERE id=ANY($1::uuid[])', [[ids.closerJob, ids.captureJob]]);
@@ -124,5 +128,6 @@ export async function createAcademyIntegration(t) {
     VALUES ($1,$2,'Closer lesson',TRUE,'youtube','dQw4w9WgXcQ'),($3,$4,'Capture lesson',TRUE,'youtube','dQw4w9WgXcQ')`,
   [ids.closerLesson, ids.module, ids.captureLesson, ids.captureModule]);
   await client.query(`INSERT INTO cms_assets(id,storage_key,original_name,mime_type,byte_size) VALUES ($1,$2,'academy.pdf','application/pdf',$3)`, [ids.pdfAsset, storageKey, pdf.length]);
-  return { pool, client, users, ids, pdf, uploadDirectory, ...await createAcademyHttp(t, pool, users, uploadDirectory) };
+  return { pool, client, users, ids, pdf, uploadDirectory, trackCourse(id) { courseIds.push(id); },
+    ...await createAcademyHttp(t, pool, users, uploadDirectory) };
 }

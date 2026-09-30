@@ -17,15 +17,20 @@ test('lesson draft retains its real file; source deletion removes CMS references
   const file = path.join(uploadDirectory, 'cms-private', 'lesson-material');
   await writeFile(file, '%PDF-1.4\n%%EOF');
   const asset = { id: 'asset', storage_key: 'lesson-material' };
-  let revisions = [{ content_type: 'academy_lesson', source_id: 'lesson', status: 'draft', blocks: [{ asset_id: 'asset' }] }];
+  const lessonId = '00000000-0000-4000-8000-000000000001';
+  let revisions = [{ content_type: 'academy_lesson', source_id: lessonId, status: 'draft', blocks: [{ asset_id: 'asset' }] }];
   let deleted = false;
   const calls = [];
   const client = {
     async query(sql, params) {
       calls.push(sql);
+      if (sql.includes('SELECT m.course_id')) return { rows: [{ course_id: 'course', module_id: 'module' }] };
+      if (sql.includes('SELECT * FROM academy WHERE')) return { rows: [{ id: 'course' }] };
+      if (sql.includes('SELECT * FROM academy_modules')) return { rows: [{ id: 'module' }] };
+      if (sql.includes('SELECT * FROM academy_lessons')) return { rows: [{ id: lessonId }] };
       if (sql.includes('DELETE FROM academy_lessons')) return { rows: [{ id: params[0] }] };
       if (sql.includes('DELETE FROM cms_documents')) {
-        revisions = revisions.filter(row => row.content_type !== params[0] || row.source_id !== params[1]);
+        revisions = revisions.filter(row => !params[0].includes(row.source_id));
         return { rows: [] };
       }
       if (sql.includes('SELECT a.id')) {
@@ -43,7 +48,7 @@ test('lesson draft retains its real file; source deletion removes CMS references
   assert.equal((await enforceCmsAssetRetention(pool, env)).deletedFiles, 0);
   assert.match(await readFile(file, 'utf8'), /^%PDF/);
   calls.length = 0;
-  assert.deepEqual(await deleteCmsSource(client, 'academy_lesson', 'lesson'), { id: 'lesson' });
+  assert.deepEqual(await deleteCmsSource(client, 'academy_lesson', lessonId), { id: lessonId });
   assert.match(calls[0], /pg_advisory_xact_lock/);
   assert.equal(revisions.length, 0);
   assert.equal(deleted, false);

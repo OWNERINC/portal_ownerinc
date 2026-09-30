@@ -9,6 +9,10 @@ const SOURCE_TABLES = {
 };
 
 async function deleteCmsSource(db, contentType, sourceId) {
+  if (contentType === 'academy' || contentType === 'academy_lesson') {
+    const { deleteCourseTree, deleteLesson } = require('../academy/mutations');
+    return contentType === 'academy' ? deleteCourseTree(db, sourceId) : deleteLesson(db, sourceId);
+  }
   const sourceTable = SOURCE_TABLES[contentType];
   if (!sourceTable) throw new Error(`Unsupported CMS source: ${contentType}`);
 

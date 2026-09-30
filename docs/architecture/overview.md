@@ -97,11 +97,13 @@ precisa dessa audiência na leitura normal; somente `{ preview: true }` usa
 `api/academy/validation.js` expõe validators puros que retornam objeto normalizado
 ou `null`. O payload de curso aceita apenas `title`, `category`, `description`,
 `url`, `order`, `active`, `delivery_mode`, `audience`, `learning_group`, `icon_key`,
-`instructor_name` e `job_title_ids`. Na atualização, fornecer `current` com os
+`instructor_name` e `allowed_job_title_ids` (alias legado `job_title_ids`, nunca os
+dois simultaneamente). Na atualização, fornecer `current` com os
 metadados atuais e `job_title_ids` carregados da associação; campos omitidos são
 preservados. Novos cursos são inativos. Internos usam URL nula; externos exigem
 HTTP(S), mantendo compatibilidade com URLs legadas. Conversão explícita para
-interno sem `url` limpa a URL externa anterior.
+interno limpa a URL externa anterior na mutação, inclusive quando o editor reenviar
+o link antigo; preserva ID e documento CMS.
 
 O payload de aula aceita `title`, `description`, `order`, `active` e
 `media: { type: 'youtube'|'file', url }`; título e mídia são obrigatórios.
@@ -116,10 +118,41 @@ Nenhuma mídia é consultada pelo servidor durante a validação.
 Limites: título 200, categoria 100, descrição 5000, instrutor 120 caracteres;
 ordem inteira de -100000 a 100000; até 100 UUIDs de cargo distintos (normalizados
 em minúsculas), com ao menos um para público restrito. A camada transacional
-de gestão deverá verificar existência/atividade de novas associações, preservar
+de gestão verifica existência/atividade de novas associações, preserva
 seleções inativas existentes, limites de 100 módulos/500 aulas e a existência
 de aula pública reproduzível antes de ativar um curso interno. Essas verificações
 dependem de banco/catálogo e não são inferidas pelo validator puro.
+
+### Gestão transacional de cursos e currículo
+
+`api/academy/mutations.js` recebe exclusivamente o client de `withAudit`, sem abrir
+conexões ou transações aninhadas. Todas as escritas entram pelo lock CMS `7193029`
+e bloqueiam curso → módulo → aula, nessa ordem. Contagens incluem inativos e são
+checadas sob lock do curso; cargos novos exigem existência/atividade com `FOR SHARE`.
+A ativação de curso interno exige módulo e aula ativos, mídia válida e publicação
+válida da aula (incluindo assets); sem documento CMS, vale o conteúdo simples legado.
+A publicação da apresentação do curso continua sendo uma operação editorial CMS.
+
+POST/PUT/DELETE de cursos e as rotas abaixo exigem `manageAcademy` e registram
+auditoria na mesma transação; falha de auditoria reverte a mutação inteira:
+
+- `POST /api/academy/:id/modules`; `PUT/DELETE /api/academy/modules/:id`.
+- `POST /api/academy/modules/:id/lessons`; `PUT/DELETE /api/academy/lessons/:id`.
+- `PUT /api/academy/:id/modules/order` e
+  `PUT /api/academy/modules/:id/lessons/order`, payload `{ids: UUID[]}`.
+
+PUT preserva campos omitidos; identificadores, datas e campos extras são rejeitados.
+Reordenação exige conjunto completo do pai sem duplicatas; falha retorna
+`400 invalid_order` antes de alterar ordens. A posição persistida começa em 1.
+Mudar a origem normalizada do vídeo incrementa `media_version`; editar título,
+ordem ou outra representação do mesmo ID YouTube não incrementa.
+
+Exclusão remove primeiro os documentos CMS das aulas descendentes e, no caso do
+curso, sua apresentação, antes da origem. Cascatas removem revisões/currículo/
+progresso. Arquivos e assets compartilhados ficam com a retenção existente.
+`deleteCmsSource` encaminha Academy/aulas para essas mesmas operações completas.
+Os testes locais executam domínio e HTTP reais com seams de DB; o script de
+integração inclui corridas nos limites, ordenação, rollback e arquivos compartilhados.
 
 `api/academy/progress.js` contém apenas `readProgress` e `summarizeProgress`.
 A leitura parametriza usuário autenticado, aula e versão; ausência retorna
@@ -129,7 +162,7 @@ ordenadas pelo catálogo; ignora versões antigas, arredonda percentual para bai
 e retoma a incompleta com atividade mais recente (ou a primeira incompleta).
 Sem progresso atual ou com todas concluídas, não há aula de retomada. Posição
 do vídeo não implica conclusão. `AcademyError(status, reason)` fornece erro
-tipado para a futura camada HTTP. Esses helpers ainda não alteram as rotas legadas.
+tipado para as rotas HTTP de leitura e gestão.
 
 ### Verificação descartável
 
