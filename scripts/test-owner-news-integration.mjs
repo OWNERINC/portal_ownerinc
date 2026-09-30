@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { cmsApp } from '../tests/helpers/cms-app.mjs';
+import { ownerNewsApp } from '../tests/helpers/owner-news-app.mjs';
 
 const require = createRequire(new URL('../api/package.json', import.meta.url));
 require('dotenv').config({ path: new URL('../.env', import.meta.url) });
@@ -25,6 +26,7 @@ const oldEditorial = { version: 1, kind: 'article', summary: 'Publicada', author
 const newEditorial = { ...oldEditorial, summary: 'Rascunho', author: 'Autora B' };
 const blocks = [{ type: 'paragraph', text: 'Texto de trabalho.' }];
 const request = supertest(cmsApp(pool, { uid, role: 'admin', permissions: { manageKnowledge: true } }));
+let homeSnapshot;
 async function documentFixture() {
   const { rows } = await client.query("INSERT INTO cms_documents (content_type, title) VALUES ('announcement', 'Fixture sintética E2') RETURNING id");
   documentIds.push(rows[0].id);
@@ -133,10 +135,77 @@ try {
     "UPDATE owner_news_home SET published='null'::jsonb",
   ]) await assert.rejects(client.query(sql), error => error.code === '23514');
   console.log('owner-news integration: home singleton/version/object constraints ok');
+  homeSnapshot = (await client.query('SELECT * FROM owner_news_home WHERE singleton=TRUE')).rows[0];
+  const news = supertest(ownerNewsApp(pool, uid));
+  const adminHome = (method, path) => news[method](`/api/cms/owner-news/home${path}`).set('Authorization', 'Bearer admin');
+  const publicHome = () => news.get('/api/announcements/home').set('Authorization', 'Bearer employee');
+  const content = { version: 1, eyebrow: 'FIXTURE E3', headline: 'Abertura\nsintética', summary: 'Resumo sintético.' };
+  const initial = await adminHome('get', '').expect(200);
+  const before = await publicHome().expect(200);
+  const concurrent = await Promise.all([0, 1].map(() => adminHome('put', '/draft')
+    .send({ expected_version: initial.body.version, content })));
+  assert.deepEqual(concurrent.map(res => res.status).sort(), [200, 409]);
+  const saved = concurrent.find(res => res.status === 200).body;
+  assert.deepEqual((await publicHome().expect(200)).body, before.body);
+  await adminHome('post', '/publish').send({ expected_version: initial.body.version }).expect(409);
+  const publications = await Promise.all([0, 1].map(() => adminHome('post', '/publish')
+    .send({ expected_version: saved.version })));
+  assert.deepEqual(publications.map(res => res.status).sort(), [200, 409]);
+  const published = publications.find(res => res.status === 200).body;
+  assert.equal(published.draft, null);
+  assert.deepEqual((await publicHome().expect(200)).body, { content });
+  assert.equal((await adminHome('post', '/publish').send({ expected_version: published.version }).expect(409)).body.reason, 'draft_required');
+  await adminHome('put', '/draft').send({ expected_version: published.version, content }).expect(200);
+  await client.query('UPDATE owner_news_home SET draft=$1::jsonb WHERE singleton=TRUE', [JSON.stringify({ ...content, summary: '<b>Inválido</b>' })]);
+  await adminHome('post', '/publish').send({ expected_version: published.version + 1 }).expect(400);
+  assert.deepEqual((await publicHome().expect(200)).body, { content });
+  const audit = await client.query("SELECT action FROM audit_log WHERE actor_uid=$1 AND target_type='owner_news_home'", [uid]);
+  assert.equal(audit.rows.length, 3);
+  // A failed audit insert must roll the successful draft UPDATE back as well.
+  const failedAuditPool = { async connect() {
+    const db = await pool.connect();
+    return { release: () => db.release(), query: (sql, values) => {
+      if (sql.includes('INSERT INTO audit_log')) return Promise.reject(new Error('synthetic audit failure'));
+      return db.query(sql, values);
+    } };
+  } };
+  await supertest(ownerNewsApp(failedAuditPool, uid)).put('/api/cms/owner-news/home/draft')
+    .set('Authorization', 'Bearer admin').send({ expected_version: published.version + 1, content }).expect(500);
+  const afterFailure = await adminHome('get', '').expect(200);
+  assert.equal(afterFailure.body.version, published.version + 1);
+  assert.equal(afterFailure.body.draft.summary, '<b>Inválido</b>');
+  console.log('owner-news integration: real home routes, concurrent CAS save/publish, draft isolation, lock validation and audit rollback ok');
+
+  const category = `Fixture E3 & ${uid}`;
+  const feedIds = [];
+  for (let i = 0; i < 27; i += 1) {
+    const docId = await documentFixture();
+    feedIds.push(docId);
+    const revId = await revision(docId, 1, 'published', oldEditorial);
+    await client.query(`UPDATE cms_documents SET published_revision_id=$2, category=$3,
+      published_at=$4, updated_at=$4 WHERE id=$1`, [docId, revId, category, new Date(Date.UTC(2026, 8, 30 - i))]);
+  }
+  const feed = path => news.get(`/api/announcements${path}`).set('Authorization', 'Bearer employee');
+  const list = await feed(`?kind=article&limit=1&category=${encodeURIComponent(category)}`).expect(200);
+  assert.equal(list.headers['x-total-count'], '27');
+  assert.equal(list.body[0].id, feedIds[0]);
+  assert.equal(list.body[0].read_time_minutes, 1);
+  const nav = await feed(`/${feedIds[25].toUpperCase()}/navigation?category=${encodeURIComponent(category)}`).expect(200);
+  assert.equal(nav.body.previous.id, feedIds[24]);
+  assert.equal(nav.body.next.id, feedIds[26]);
+  const categories = await feed('/categories?kind=article&with_counts=true').expect(200);
+  assert.equal(categories.body.categories.find(row => row.name === category).count, 27);
+  assert.equal((await feed(`/${feedIds[0].toUpperCase()}`).expect(200)).body.id, feedIds[0]);
+  console.log('owner-news integration: PostgreSQL feed/counts/category encoding/full navigation and uppercase UUIDs ok');
   console.log('owner-news integration: ok');
 } finally {
   try {
     await client.query('ROLLBACK');
+    if (homeSnapshot) await client.query(`UPDATE owner_news_home SET version=$1, draft=$2::jsonb, published=$3::jsonb,
+      published_at=$4, updated_by=$5, updated_at=$6 WHERE singleton=TRUE`, [homeSnapshot.version,
+      homeSnapshot.draft === null ? null : JSON.stringify(homeSnapshot.draft),
+      homeSnapshot.published === null ? null : JSON.stringify(homeSnapshot.published),
+      homeSnapshot.published_at, homeSnapshot.updated_by, homeSnapshot.updated_at]);
     await client.query('DELETE FROM audit_log WHERE actor_uid=$1 OR target_id=ANY($2::text[])', [uid, documentIds]);
     await client.query('DELETE FROM cms_documents WHERE id=ANY($1::uuid[])', [documentIds]);
     await client.query('DELETE FROM cms_assets WHERE id=ANY($1::uuid[])', [assetIds]);

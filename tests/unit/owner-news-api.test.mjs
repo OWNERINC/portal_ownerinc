@@ -12,7 +12,7 @@ const routePath = fileURLToPath(new URL('../../api/routes/announcements.js', imp
 const routeSource = await readFile(routePath, 'utf8');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-function poolFor() {
+function poolFor(extended = false) {
   const rows = [
     { category: 'Other' },
     { category: 'News', blocks: [{ type: 'unknown' }] },
@@ -28,6 +28,13 @@ function poolFor() {
     published_at: new Date(Date.UTC(2026, 8, 22 - index)).toISOString(),
     status: 'published', blocks: [{ type: 'paragraph', text: `Body ${index + 1}` }], ...row,
   }));
+  if (extended) rows.push(...[
+    { category: 'People & Culture', editorial: { version: 1, kind: 'article', summary: 'Resumo.', author: '', source_label: '', source_date: null } },
+    { category: 'Edition', blocks: [{ type: 'pdf', asset_id: id(101), title: 'Edição' }] },
+    { category: 'Invalid editorial', editorial: { version: 99 } },
+    ...Array.from({ length: 26 }, () => ({ category: 'People & Culture' })),
+  ].map((row, index) => ({ id: id(index + 10), title: `Article ${index + 10}`, published_revision_id: id(index + 1000),
+    status: 'published', blocks: [{ type: 'paragraph', text: 'Texto sintético.' }], published_at: null, ...row })));
   const calls = [];
   return {
     calls,
@@ -85,7 +92,7 @@ test('category filtering precedes pagination and total count over validated stab
     .set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(result.headers['x-total-count'], '2');
   assert.deepEqual(result.body.map(row => row.id), [id(8)]);
-  assert.deepEqual(Object.keys(result.body[0]).sort(), ['category', 'content_blocks', 'editorial', 'id', 'published_at', 'title']);
+  assert.deepEqual(Object.keys(result.body[0]).sort(), ['category', 'content_blocks', 'editorial', 'id', 'published_at', 'read_time_minutes', 'title']);
   assert.equal(result.body[0].editorial, null);
   const empty = await api.get('/api/announcements?category=Absent').set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(empty.headers['x-total-count'], '0');
@@ -109,7 +116,7 @@ test('categories returns unique nonempty strings from the same validated stable 
 test('all announcement routes authenticate before accessing published content', async () => {
   const pool = poolFor();
   const api = appFor(pool);
-  for (const path of ['', '/categories', `/${id(5)}`]) {
+  for (const path of ['', '/categories', '/home', `/${id(5)}`, `/${id(5)}/navigation`]) {
     await api.get(`/api/announcements${path}`).expect(401);
   }
   assert.equal(pool.calls.length, 0);
@@ -135,9 +142,48 @@ test('detail preserves the published response format and hides draft or invalid 
   const result = await api.get(`/api/announcements/${id(5)}`).set('Authorization', 'Bearer test-user').expect(200);
   assert.deepEqual(result.body, {
     id: id(5), title: 'Article 5', category: 'News', published_at: '2026-09-18T00:00:00.000Z',
-    content_blocks: [{ type: 'paragraph', text: 'Body 5' }], editorial: null,
+    content_blocks: [{ type: 'paragraph', text: 'Body 5' }], editorial: null, read_time_minutes: 1,
   });
   for (const n of [2, 3, 4, 6, 7]) {
     await api.get(`/api/announcements/${id(n)}`).set('Authorization', 'Bearer test-user').expect(404);
   }
+});
+
+test('kind filters before pagination; counts and navigation share complete stable publications', async () => {
+  const api = appFor(poolFor(true));
+  const get = path => api.get(`/api/announcements${path}`).set('Authorization', 'Bearer test-user');
+  const articles = await get('?kind=article&limit=1&offset=0').expect(200);
+  assert.equal(articles.headers['x-total-count'], '31');
+  assert.equal(articles.body[0].read_time_minutes, 1);
+  const editions = await get('?kind=edition').expect(200);
+  assert.deepEqual(editions.body.map(row => row.id), [id(11)]);
+  assert.equal(editions.body[0].read_time_minutes, null);
+  await get(`/${id(11)}`).expect(200);
+  assert.deepEqual((await get(`/${id(11)}/navigation`).expect(200)).body, { previous: null, next: null });
+  const counts = await get('/categories?kind=article&with_counts=true').expect(200);
+  assert.deepEqual(counts.body, { total: 31, categories: [
+    { name: 'News', count: 2 }, { name: 'Other', count: 1 }, { name: 'People & Culture', count: 27 },
+  ] });
+  assert.deepEqual((await get(`/${id(1)}/navigation`).expect(200)).body,
+    { previous: null, next: { id: id(5), title: 'Article 5' } });
+  assert.deepEqual((await get(`/${id(5)}/navigation`).expect(200)).body,
+    { previous: { id: id(1), title: 'Article 1' }, next: { id: id(8), title: 'Article 8' } });
+  assert.deepEqual((await get(`/${id(38)}/navigation?category=People%20%26%20Culture`).expect(200)).body,
+    { previous: { id: id(37), title: 'Article 37' }, next: null });
+  assert.deepEqual((await get(`/${id(10)}/navigation?category=People%20%26%20Culture`).expect(200)).body,
+    { previous: null, next: { id: id(13), title: 'Article 13' } });
+  for (const n of [2, 4, 6, 12, 99]) await get(`/${id(n)}/navigation`).expect(404);
+  await get('/invalid/navigation').expect(400);
+});
+
+test('all new query contracts reject unknown, duplicate and invalid values before DB', async () => {
+  const pool = poolFor(true);
+  const api = appFor(pool);
+  for (const path of ['?kind=unknown', '?kind=article&kind=edition', '/categories?unexpected=x',
+    '/categories?with_counts=1', '/categories?kind=article&kind=edition', '/categories?with_counts=true&with_counts=false',
+    `/${id(1)}/navigation?limit=1`, `/${id(1)}/navigation?category=A&category=B`, '/home?draft=true',
+    `/${id(1)}?unknown=true`]) {
+    await api.get(`/api/announcements${path}`).set('Authorization', 'Bearer test-user').expect(400);
+  }
+  assert.equal(pool.calls.length, 0);
 });
