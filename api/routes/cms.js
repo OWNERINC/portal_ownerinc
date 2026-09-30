@@ -3,6 +3,7 @@ const pool = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
 const { validateBlocks } = require('../cms/blocks');
+const { validateNewsRevision } = require('../owner-news/editorial');
 const {
   CmsRouteError, resolveDraftRevisionId, unscheduleRevisionState, withdrawalState,
 } = require('../cms/revisions');
@@ -21,6 +22,7 @@ const SOURCE_TABLES = {
   reminder: 'reminders',
 };
 const ASSET_MIMES = {
+  profile: new Set(['image/jpeg', 'image/png', 'image/webp']),
   image: new Set(['image/jpeg', 'image/png', 'image/webp']),
   pdf: new Set(['application/pdf']),
   video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
@@ -40,7 +42,10 @@ function documentBody(value) {
 }
 
 function revisionBody(value) {
-  return validBody(value, { blocks: (blocks) => validateBlocks(blocks) !== null }, ['blocks']);
+  return validBody(value, {
+    blocks: (blocks) => validateBlocks(blocks) !== null,
+    editorial: () => true, // Validated against the locked working revision below.
+  }, ['blocks']);
 }
 
 function emptyBody(value) {
@@ -92,7 +97,7 @@ async function documentView(db, document) {
     document.scheduled_revision_id,
   ].filter(Boolean);
   const { rows } = revisionIds.length ? await db.query(
-       `SELECT id, document_id, version, status, blocks, created_by, created_at
+       `SELECT id, document_id, version, status, blocks, editorial, created_by, created_at
        FROM cms_revisions
       WHERE document_id = $1 AND id = ANY($2::uuid[])`,
     [document.id, revisionIds],
@@ -143,9 +148,9 @@ async function validateAssetReferences(db, blocks) {
 
 function sendCmsError(error, req, res, next) {
   if (!(error instanceof CmsRouteError)) return next(error);
-  if (error.status === 404) return res.status(404).json({ error: 'CMS document not found.', requestId: req.id });
-  if (error.status === 409) return res.status(409).json({ error: 'CMS revision cannot be changed.', requestId: req.id });
-  return invalid(req, res);
+  if (error.status === 404) return res.status(404).json({ error: 'CMS document not found.', reason: error.code, requestId: req.id });
+  if (error.status === 409) return res.status(409).json({ error: 'CMS revision cannot be changed.', reason: error.code, requestId: req.id });
+  return res.status(400).json({ error: 'Invalid request.', reason: error.code, requestId: req.id });
 }
 
 router.get('/documents', authMiddleware, async (req, res, next) => {
@@ -233,10 +238,12 @@ router.post('/documents', authMiddleware, async (req, res, next) => {
       );
       const document = documents[0];
       const { rows: revisions } = await db.query(
-        `INSERT INTO cms_revisions (document_id, version, status, blocks, created_by)
-         VALUES ($1, 1, 'draft', $2::jsonb, $3)
-         RETURNING id, document_id, version, status, blocks, created_by, created_at`,
-        [document.id, JSON.stringify([]), req.user.uid],
+        `INSERT INTO cms_revisions (document_id, version, status, blocks, editorial, created_by)
+         VALUES ($1, 1, 'draft', $2::jsonb, $3::jsonb, $4)
+         RETURNING id, document_id, version, status, blocks, editorial, created_by, created_at`,
+        [document.id, JSON.stringify([]), document.content_type === 'announcement'
+          ? JSON.stringify({ version: 1, kind: 'article', summary: '', author: '', source_label: '', source_date: null })
+          : null, req.user.uid],
       );
       const { rows: updated } = await db.query(
         `UPDATE cms_documents SET draft_revision_id = $2, updated_at = NOW()
@@ -278,7 +285,7 @@ router.get('/documents/:id/revisions', authMiddleware, async (req, res, next) =>
     const limitIndex = values.length + 1;
     const offsetIndex = values.length + 2;
     const { rows } = await pool.query(
-      `SELECT id, document_id, version, status, created_by, created_at
+      `SELECT id, document_id, version, status, editorial, created_by, created_at
          FROM cms_revisions
         WHERE document_id = $1${statusClause}
         ORDER BY version DESC
@@ -294,22 +301,38 @@ router.get('/documents/:id/revisions', authMiddleware, async (req, res, next) =>
 
 router.put('/documents/:id/draft', authMiddleware, async (req, res, next) => {
   if (!uuid(req.params.id) || !revisionBody(req.body)) return invalid(req, res);
-  const blocks = validateBlocks(req.body.blocks);
   try {
     const result = await withAudit(pool, req, 'cms.revision.draft', 'cms_revision', async (db) => {
       await lockCmsMutation(db);
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
+      const currentId = document.draft_revision_id || document.scheduled_revision_id || document.published_revision_id;
+      const { rows: current } = currentId ? await db.query(
+        `SELECT id, editorial FROM cms_revisions WHERE id = $1 AND document_id = $2 FOR UPDATE`,
+        [currentId, document.id],
+      ) : { rows: [] };
+      const requestedEditorial = Object.hasOwn(req.body, 'editorial')
+        ? req.body.editorial : current[0]?.editorial ?? null;
+      if (req.body.editorial === null && current[0]?.editorial != null) {
+        throw new CmsRouteError(400, 'editorial_required');
+      }
+      const nextRevision = document.content_type === 'announcement'
+        ? validateNewsRevision(req.body.blocks, requestedEditorial)
+        : { blocks: validateBlocks(req.body.blocks), editorial: null };
+      if (!nextRevision?.blocks || (document.content_type !== 'announcement' && requestedEditorial !== null)) {
+        throw new CmsRouteError(400, 'invalid_revision');
+      }
+      const { blocks, editorial } = nextRevision;
       await validateAssetReferences(db, blocks);
       const { rows: versions } = await db.query(
         'SELECT COALESCE(MAX(version), 0) + 1 AS version FROM cms_revisions WHERE document_id = $1',
         [document.id],
       );
       const { rows } = await db.query(
-        `INSERT INTO cms_revisions (document_id, version, status, blocks, created_by)
-         VALUES ($1, $2, 'draft', $3::jsonb, $4)
-         RETURNING id, document_id, version, status, blocks, created_by, created_at`,
-        [document.id, versions[0].version, JSON.stringify(blocks), req.user.uid],
+        `INSERT INTO cms_revisions (document_id, version, status, blocks, editorial, created_by)
+         VALUES ($1, $2, 'draft', $3::jsonb, $4::jsonb, $5)
+         RETURNING id, document_id, version, status, blocks, editorial, created_by, created_at`,
+        [document.id, versions[0].version, JSON.stringify(blocks), editorial === null ? null : JSON.stringify(editorial), req.user.uid],
       );
       await db.query(
         `UPDATE cms_documents SET draft_revision_id = $2, updated_by = $3, updated_at = NOW()
@@ -333,9 +356,9 @@ router.post('/documents/:id/publish', authMiddleware, async (req, res, next) => 
       await lockCmsMutation(db);
       const document = await findDocument(db, req.user, req.params.id, true);
       if (!document) return null;
-       const revisionId = resolveDraftRevisionId(document, body.revision_id);
+      const revisionId = resolveDraftRevisionId(document, body.revision_id);
       const { rows: revisions } = await db.query(
-        `SELECT id, document_id, version, status, blocks, created_by, created_at
+        `SELECT id, document_id, version, status, blocks, editorial, created_by, created_at
            FROM cms_revisions
           WHERE id = $1 AND document_id = $2
           FOR UPDATE`,
@@ -343,7 +366,9 @@ router.post('/documents/:id/publish', authMiddleware, async (req, res, next) => 
       );
       const revision = revisions[0];
       if (!revision || revision.status !== 'draft') throw new CmsRouteError(409, 'draft_required');
-      const blocks = validateBlocks(revision.blocks);
+      const blocks = document.content_type === 'announcement'
+        ? validateNewsRevision(revision.blocks, revision.editorial ?? null, { publishing: true })?.blocks
+        : validateBlocks(revision.blocks);
       if (!blocks) throw new CmsRouteError(409, 'draft_required');
       await validateAssetReferences(db, blocks);
       if (document.published_revision_id) {
@@ -382,7 +407,7 @@ router.post('/documents/:id/schedule', authMiddleware, async (req, res, next) =>
       if (!document) return null;
       const revisionId = resolveDraftRevisionId(document, req.body.revision_id);
       const { rows: revisions } = await db.query(
-        `SELECT id, document_id, version, status, blocks, created_by, created_at
+        `SELECT id, document_id, version, status, blocks, editorial, created_by, created_at
            FROM cms_revisions
           WHERE id = $1 AND document_id = $2
           FOR UPDATE`,
@@ -390,7 +415,9 @@ router.post('/documents/:id/schedule', authMiddleware, async (req, res, next) =>
       );
       const revision = revisions[0];
       if (!revision || revision.status !== 'draft') throw new CmsRouteError(409, 'draft_required');
-      const blocks = validateBlocks(revision.blocks);
+      const blocks = document.content_type === 'announcement'
+        ? validateNewsRevision(revision.blocks, revision.editorial ?? null, { publishing: true })?.blocks
+        : validateBlocks(revision.blocks);
       if (!blocks) throw new CmsRouteError(409, 'draft_required');
       await validateAssetReferences(db, blocks);
       if (document.scheduled_revision_id && document.scheduled_revision_id !== revision.id) {
@@ -490,7 +517,7 @@ router.delete('/documents/:id/schedule', authMiddleware, async (req, res, next) 
         [document.id, state.draftRevisionId, req.user.uid],
       );
       const { rows: drafts } = await db.query(
-        `SELECT id, document_id, version, status, blocks, created_by, created_at
+        `SELECT id, document_id, version, status, blocks, editorial, created_by, created_at
            FROM cms_revisions WHERE id = $1`,
         [state.draftRevisionId],
       );

@@ -42,6 +42,7 @@ const expectedVersions = [
   '030_dho_job_title_catalog',
   '031_contract_invariants',
   '032_user_import_identity',
+  '033_owner_news_editorial',
 ];
 
 await migrate();
@@ -95,6 +96,15 @@ try {
 
   const versions = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
   assert.deepEqual(versions.rows.map(({ version }) => version), expectedVersions);
+  const home = await pool.query('SELECT singleton, version, draft, published FROM owner_news_home');
+  assert.deepEqual(home.rows, [{ singleton: true, version: 1, draft: null, published: null }]);
+  const homePrivileges = await pool.query(`SELECT
+    (has_table_privilege('portal_api', 'owner_news_home', 'SELECT')
+      AND has_table_privilege('portal_api', 'owner_news_home', 'INSERT')
+      AND has_table_privilege('portal_api', 'owner_news_home', 'UPDATE')) AS api,
+    has_table_privilege('portal_api', 'owner_news_home', 'DELETE') AS api_delete,
+    has_table_privilege('portal_cron', 'owner_news_home', 'SELECT, INSERT, UPDATE, DELETE') AS cron`);
+  assert.deepEqual(homePrivileges.rows, [{ api: true, api_delete: false, cron: false }]);
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
     'Analista de Pós-Vendas', 'Analista de DHO Sênior',

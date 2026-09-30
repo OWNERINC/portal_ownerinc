@@ -1,5 +1,6 @@
 const { blocksToText, validateBlocks } = require('./blocks');
 const { lockCmsAssets } = require('./locks');
+const { validateNewsRevision } = require('../owner-news/editorial');
 
 const CONTENT_TYPES = new Set(['knowledge', 'academy', 'benefit', 'announcement', 'reminder']);
 const SOURCE_TABLES = {
@@ -19,6 +20,7 @@ const SOURCE_STATES = {
   inactive: Symbol('inactive_source'),
 };
 const ASSET_MIMES = {
+  profile: new Set(['image/jpeg', 'image/png', 'image/webp']),
   image: new Set(['image/jpeg', 'image/png', 'image/webp']),
   pdf: new Set(['application/pdf']),
   video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
@@ -134,8 +136,8 @@ async function promoteDueScheduled(db, now = new Date(), contentType = null, sou
     conditions.push(`d.source_id = ANY($${values.length}::uuid[])`);
   }
   const { rows } = await db.query(
-    `SELECT d.id, d.published_revision_id, d.scheduled_revision_id
-             , scheduled.blocks AS scheduled_blocks
+    `SELECT d.id, d.published_revision_id, d.scheduled_revision_id, d.content_type
+             , scheduled.blocks AS scheduled_blocks, scheduled.editorial AS scheduled_editorial
        FROM cms_documents d
        JOIN cms_revisions scheduled ON scheduled.id = d.scheduled_revision_id
       WHERE ${conditions.join(' AND ')}
@@ -146,6 +148,10 @@ async function promoteDueScheduled(db, now = new Date(), contentType = null, sou
   let promoted = 0;
   for (const [index, document] of rows.entries()) {
     const validation = validations[index];
+    if (!validation.reason && document.content_type === 'announcement'
+      && !validateNewsRevision(document.scheduled_blocks, document.scheduled_editorial ?? null, { publishing: true })) {
+      validation.reason = 'invalid_editorial';
+    }
     if (validation.reason) await retireInvalidScheduled(db, document, validation.reason);
     else {
       await promoteDocument(db, document, now);
@@ -340,7 +346,7 @@ async function stablePublishedAnnouncements(pool) {
   const visible = await withTransaction(pool, async (db) => {
     const { rows } = await db.query(
       `SELECT d.id, d.title, d.category, d.published_at,
-              r.id AS published_revision_id, r.blocks
+              r.id AS published_revision_id, r.blocks, r.editorial
          FROM cms_documents d
          JOIN cms_revisions r
            ON r.id = d.published_revision_id AND r.status = 'published'
@@ -349,8 +355,9 @@ async function stablePublishedAnnouncements(pool) {
     );
     const validations = await validatePublishedBlocksBatch(db, rows.map(row => row.blocks));
     const visible = rows.flatMap((row, index) => validations[index].blocks === null
+      || !validateNewsRevision(row.blocks, row.editorial ?? null, { publishing: true })
       ? []
-      : [{ ...row, blocks: validations[index].blocks }]);
+      : [{ ...row, editorial: row.editorial ?? null, blocks: validations[index].blocks }]);
     return visible;
   });
   const stableIds = await recheckPublishedAnnouncements(pool, visible.map(row => ({
@@ -381,7 +388,7 @@ async function getPublishedAnnouncement(pool, id) {
   const result = await withTransaction(pool, async (db) => {
     const { rows } = await db.query(
       `SELECT d.id, d.title, d.category, d.published_at,
-              r.id AS published_revision_id, r.blocks
+              r.id AS published_revision_id, r.blocks, r.editorial
          FROM cms_documents d
          JOIN cms_revisions r
            ON r.id = d.published_revision_id AND r.status = 'published'
@@ -390,6 +397,7 @@ async function getPublishedAnnouncement(pool, id) {
     );
     const row = rows[0];
     if (!row) return null;
+    if (!validateNewsRevision(row.blocks, row.editorial ?? null, { publishing: true })) return null;
     const validation = await validatePublishedBlocks(db, row.blocks);
     if (validation.blocks === null) return null;
     return { row, blocks: validation.blocks };
@@ -401,7 +409,7 @@ async function getPublishedAnnouncement(pool, id) {
   }]);
   if (!stableIds.has(String(result.row.id).toLowerCase())) return null;
   const { blocks: _rawBlocks, published_revision_id: _publishedRevisionId, ...announcement } = result.row;
-  return { ...announcement, content_blocks: result.blocks };
+  return { ...announcement, editorial: announcement.editorial ?? null, content_blocks: result.blocks };
 }
 
 module.exports = {

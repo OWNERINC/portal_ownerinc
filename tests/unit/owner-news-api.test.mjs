@@ -85,7 +85,8 @@ test('category filtering precedes pagination and total count over validated stab
     .set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(result.headers['x-total-count'], '2');
   assert.deepEqual(result.body.map(row => row.id), [id(8)]);
-  assert.deepEqual(Object.keys(result.body[0]).sort(), ['category', 'content_blocks', 'id', 'published_at', 'title']);
+  assert.deepEqual(Object.keys(result.body[0]).sort(), ['category', 'content_blocks', 'editorial', 'id', 'published_at', 'title']);
+  assert.equal(result.body[0].editorial, null);
   const empty = await api.get('/api/announcements?category=Absent').set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(empty.headers['x-total-count'], '0');
   assert.deepEqual(empty.body, []);
@@ -134,7 +135,7 @@ test('detail preserves the published response format and hides draft or invalid 
   const result = await api.get(`/api/announcements/${id(5)}`).set('Authorization', 'Bearer test-user').expect(200);
   assert.deepEqual(result.body, {
     id: id(5), title: 'Article 5', category: 'News', published_at: '2026-09-18T00:00:00.000Z',
-    content_blocks: [{ type: 'paragraph', text: 'Body 5' }],
+    content_blocks: [{ type: 'paragraph', text: 'Body 5' }], editorial: null,
   });
   for (const n of [2, 3, 4, 6, 7]) {
     await api.get(`/api/announcements/${id(n)}`).set('Authorization', 'Bearer test-user').expect(404);

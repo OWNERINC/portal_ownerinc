@@ -3,6 +3,8 @@ import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { cmsApp } from '../helpers/cms-app.mjs';
 
 const require = createRequire(import.meta.url);
 const apiRequire = createRequire(new URL('../../api/package.json', import.meta.url));
@@ -351,7 +353,7 @@ test('CMS draft saves share the asset-retention advisory lock', () => {
 });
 
 test('CMS revision history returns metadata without replaying block payloads', () => {
-  const historyQuery = cms.match(/SELECT id, document_id, version, status, created_by, created_at[\s\S]*?ORDER BY version DESC/);
+  const historyQuery = cms.match(/SELECT id, document_id, version, status, editorial, created_by, created_at[\s\S]*?ORDER BY version DESC/);
   assert.ok(historyQuery);
   assert.doesNotMatch(historyQuery[0], /blocks/);
 });
@@ -663,4 +665,104 @@ test('withAudit treats a missing update as a committed no-op', async () => {
   assert.equal(result, null);
   assert.equal(calls.some(sql => /INSERT INTO audit_log/.test(sql)), false);
   assert.equal(calls.at(-1), 'COMMIT');
+});
+
+function revisionSeam(editorial = null, contentType = 'announcement') {
+  const initial = { id: randomUUID(), version: 1, status: 'published', blocks: [{ type: 'paragraph', text: 'Publicada' }], editorial };
+  const document = { id: randomUUID(), content_type: contentType, published_revision_id: initial.id };
+  initial.document_id = document.id;
+  const revisions = new Map([[initial.id, initial]]);
+  const calls = [];
+  const client = {
+    release() {},
+    async query(sql, values = []) {
+      calls.push({ sql, values });
+      if (sql.includes('FROM cms_documents')) return { rows: [{ ...document }] };
+      if (sql.includes('FROM cms_assets')) return { rows: [{ id: values[0][0], mime_type: 'application/pdf' }] };
+      if (sql.includes('MAX(version)')) return { rows: [{ version: revisions.size + 1 }] };
+      if (sql.includes('INSERT INTO cms_revisions')) {
+        const row = { id: randomUUID(), document_id: document.id, version: values[1], status: 'draft', blocks: JSON.parse(values[2]),
+          editorial: sql.includes('blocks, editorial') ? (values[3] === null ? null : JSON.parse(values[3])) : undefined };
+        revisions.set(row.id, row);
+        return { rows: [{ ...row }] };
+      }
+      if (sql.includes('SELECT') && sql.includes('FROM cms_revisions')) return { rows: revisions.has(values[0]) ? [{ ...revisions.get(values[0]) }] : [] };
+      if (sql.includes('UPDATE cms_revisions SET status')) {
+        revisions.get(values[0]).status = sql.match(/status = '([^']+)'/)[1];
+      }
+      if (sql.includes('UPDATE cms_documents')) {
+        if (sql.includes('SET published_revision_id = $2')) Object.assign(document, { published_revision_id: values[1], draft_revision_id: null, scheduled_revision_id: null });
+        else if (sql.includes('SET scheduled_revision_id = $2')) Object.assign(document, { scheduled_revision_id: values[1], scheduled_at: values[2], draft_revision_id: null });
+        else if (sql.includes('SET scheduled_revision_id = NULL')) Object.assign(document, { scheduled_revision_id: null, scheduled_at: null, draft_revision_id: values[1] });
+        else if (sql.includes('SET draft_revision_id = $2')) document.draft_revision_id = values[1];
+        return { rows: [{ ...document }] };
+      }
+      return { rows: [] };
+    },
+  };
+  const pool = { query: (...args) => client.query(...args), connect: async () => client };
+  return { request: supertest(cmsApp(pool)), document, revisions, calls, initial };
+}
+
+const newsEditorial = { version: 1, kind: 'article', summary: 'Chamada', author: 'Autora A', source_label: '', source_date: null };
+const newsBlocks = [{ type: 'paragraph', text: 'Texto novo' }];
+
+test('editorial draft isolation, atomic publication and cancellation preserve revision metadata', async () => {
+  const seam = revisionSeam(newsEditorial);
+  const url = `/api/cms/documents/${seam.document.id}`;
+  const draft = await seam.request.put(`${url}/draft`).send({ blocks: newsBlocks, editorial: { ...newsEditorial, author: 'Autora B' } });
+  assert.equal(draft.status, 200);
+  assert.equal(draft.body.revision.editorial.author, 'Autora B');
+  assert.equal(seam.revisions.get(seam.document.published_revision_id).editorial.author, 'Autora A');
+  const published = await seam.request.post(`${url}/publish`).send({});
+  assert.equal(published.status, 200);
+  assert.deepEqual(published.body.revision.blocks, newsBlocks);
+  assert.equal(published.body.revision.editorial.author, 'Autora B');
+  await seam.request.put(`${url}/draft`).send({ blocks: newsBlocks, editorial: { ...newsEditorial, author: 'Agendada' } }).expect(200);
+  await seam.request.post(`${url}/schedule`).send({ scheduled_at: new Date(Date.now() + 60000).toISOString() }).expect(200);
+  const inherited = await seam.request.put(`${url}/draft`).send({ blocks: newsBlocks }).expect(200);
+  assert.equal(inherited.body.revision.editorial.author, 'Agendada');
+  const later = await seam.request.put(`${url}/draft`).send({ blocks: newsBlocks, editorial: { ...newsEditorial, author: 'Posterior' } }).expect(200);
+  const canceled = await seam.request.delete(`${url}/schedule`).expect(200);
+  assert.equal(canceled.body.draft.id, later.body.revision.id);
+  assert.equal(canceled.body.draft.editorial.author, 'Posterior');
+  assert.equal(seam.revisions.get(seam.document.published_revision_id).editorial.author, 'Autora B');
+});
+
+test('draft editorial omission preserves native metadata and legacy uses SQL NULL', async () => {
+  for (const editorial of [null, undefined, newsEditorial]) {
+    const seam = revisionSeam(editorial);
+    if (editorial === undefined) delete seam.initial.editorial;
+    const url = `/api/cms/documents/${seam.document.id}/draft`;
+    const saved = await seam.request.put(url).send({ blocks: newsBlocks }).expect(200);
+    assert.deepEqual(saved.body.revision.editorial, editorial ?? null);
+    const explicit = await seam.request.put(url).send({ blocks: newsBlocks, editorial: null });
+    assert.equal(explicit.status, editorial == null ? 200 : 400);
+    if (editorial != null) assert.equal(explicit.body.reason, 'editorial_required');
+    if (editorial == null) {
+      for (const call of seam.calls.filter(call => call.sql.includes('INSERT INTO cms_revisions'))) assert.equal(call.values[3], null);
+    }
+  }
+});
+
+test('draft rejects foreign editorial, unknown fields and PDF profile assets; publish validates editorial', async () => {
+  const other = revisionSeam(null, 'knowledge');
+  await other.request.put(`/api/cms/documents/${other.document.id}/draft`).send({ blocks: newsBlocks, editorial: newsEditorial }).expect(400);
+  const seam = revisionSeam(newsEditorial);
+  const url = `/api/cms/documents/${seam.document.id}`;
+  await seam.request.put(`${url}/draft`).send({ blocks: newsBlocks, unknown: true }).expect(400);
+  await seam.request.put(`${url}/draft`).send({ blocks: [{ type: 'profile', name: 'Pessoa', asset_id: randomUUID(), alt: 'Retrato' }] }).expect(400);
+  await seam.request.put(`${url}/draft`).send({ blocks: newsBlocks, editorial: { ...newsEditorial, summary: '' } }).expect(200);
+  await seam.request.post(`${url}/publish`).send({}).expect(409);
+  await seam.request.post(`${url}/schedule`).send({ scheduled_at: new Date(Date.now() + 60000).toISOString() }).expect(409);
+});
+
+test('published profile media is readable by collaborators, draft and wrong MIME are not', () => {
+  const mimes = assets.slice(assets.indexOf('const ASSET_MIMES'), assets.indexOf('const upload ='));
+  const helpers = assets.slice(assets.indexOf('function audienceFor'), assets.indexOf('function isMalformedMultipart'));
+  const readable = new Function('canManageCms', `${mimes}\n${helpers}\nreturn referenceIsReadable;`)(() => false);
+  const row = { content_type: 'announcement', status: 'published', block_type: 'profile', published_revision_id: 'revision', revision_id: 'revision' };
+  assert.equal(readable(row, {}, { mime_type: 'image/png' }), true);
+  assert.equal(readable({ ...row, status: 'draft' }, {}, { mime_type: 'image/png' }), false);
+  assert.equal(readable(row, {}, { mime_type: 'application/pdf' }), false);
 });

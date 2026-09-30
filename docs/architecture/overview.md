@@ -102,10 +102,10 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
 
 ## CMS e conteúdo publicado
 
-### Contrato editorial Owner News (E1)
+### Contrato editorial Owner News (E1–E2)
 
-- `api/owner-news/editorial.js` valida o contrato puro da revisão; sua integração
-  à persistência/publicação pertence à etapa seguinte. `editorial: null` representa
+- `api/owner-news/editorial.js` valida o contrato da revisão na gravação,
+  publicação, agendamento, promoção e leitura. `editorial: null` representa
   legado; objetos inválidos e `undefined` são rejeitados por `validateNewsRevision`.
   `EditorialV1` contém apenas `version: 1`, `kind: article|edition`, `summary`
   (até 1.000 caracteres), `author` e `source_label` (até 200 cada) e `source_date`
@@ -130,6 +130,35 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   `getNewsPresentation` separa somente capa e PDF explicitamente marcados; imagem
   legada continua no corpo. Autoria vem dos metadados, com fallback `Owner News`.
   Renderização visual dos novos tipos e integração CMS são etapas posteriores.
+
+### Persistência editorial (E2)
+
+- Migration `033_owner_news_editorial` acrescenta `cms_revisions.editorial` JSONB
+  opcional, limitado a objeto ou **SQL NULL**. Revisões legadas permanecem nulas;
+  nenhuma mídia fica no JSON editorial. Toda resposta de revisão inclui editorial.
+- `PUT /api/cms/documents/:id/draft` aceita somente `{ blocks, editorial? }`.
+  Editorial omitido herda a revisão de trabalho (draft, scheduled, published, nessa
+  ordem), consultada sob o lock do documento. `null` explícito não apaga metadados
+  nativos. Outras áreas aceitam somente ausência/null. Novos anúncios começam com
+  EditorialV1 vazio; precisam de metadados/corpo válidos antes de publicar.
+- Texto e metadados pertencem à mesma revisão imutável. Salvar draft não muda a
+  publicação; cancelar ou promover scheduled conserva um draft posterior.
+  Publicações editoriais inválidas são excluídas antes da contagem/paginação;
+  scheduled inválido segue o caminho existente de arquivamento com auditoria.
+- `profile.asset_id` aceita JPEG/PNG/WebP nos três validadores de referências
+  (CMS, leitor e autorização de assets). O asset plano participa da retenção
+  existente. O limite efetivo de schema/leitura permanece **50 MiB**, inclusive
+  para PDF; o limite de upload PDF de 100 MiB não altera esse contrato.
+- A imagem cron copia também `api/owner-news/editorial.js`, dependência do leitor
+  compartilhado. A migration cria o singleton `owner_news_home` com draft/published
+  opcionais e grant SELECT/INSERT/UPDATE apenas para `portal_api`; o serviço e as
+  rotas da home pertencem à próxima etapa.
+- Verificação real em banco local descartável: `scripts/test-migrations.mjs`
+  executa o runner duas vezes; `scripts/test-owner-news-integration.mjs` verifica
+  handlers Express, publicação, SQL NULL, agendamento, perfil e constraints com
+  fixtures sintéticas removidas em `finally`. Exigem `NODE_ENV=development`,
+  `MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_DATABASE_URL` e senhas dos papéis
+  pelo mecanismo privado local.
 
 ### Publicação e ciclo de vida existentes
 

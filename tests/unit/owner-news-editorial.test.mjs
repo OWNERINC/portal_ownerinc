@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const server = require('../../api/owner-news/editorial');
@@ -133,4 +135,24 @@ test('presentation only removes explicit cover and companion and never infers au
   assert.equal(legacy.summary, 'Por Pessoa');
   assert.equal(browser.getNewsPresentation({ content_blocks: [image], editorial: { ...meta, author: '' } }).cover, null);
   assert.equal(browser.getNewsPresentation({}).author, 'Owner News');
+});
+
+test('cron Docker COPY packages the complete CMS reader dependency graph', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'owner-news-cron-'));
+  try {
+    const dockerfile = await readFile('cron/Dockerfile', 'utf8');
+    // Materialize API COPY instructions independently of the source checkout.
+    for (const [, source, destination] of dockerfile.matchAll(/^COPY --chown=node:node (api\/\S+) (\/api\/\S+)$/gm)) {
+      const files = source.endsWith('/') ? ['blocks.js', 'locks.js', 'reader.js', 'revisions.js', 'permissions.js'] : [null];
+      for (const file of files) {
+        const target = path.join(directory, destination, file || '');
+        await mkdir(path.dirname(target), { recursive: true });
+        await copyFile(file ? path.join(source, file) : source, target);
+      }
+    }
+    const reader = require(path.join(directory, 'api/cms/reader.js'));
+    assert.deepEqual(await reader.validatePublishedBlocks({ query() { throw new Error('No asset query expected'); } }, [paragraph]), { blocks: [paragraph], reason: null });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
