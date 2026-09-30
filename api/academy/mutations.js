@@ -4,6 +4,7 @@ const { boolean, integer, text, uuid, validBody } = require('../route-utils');
 const { AcademyError } = require('./errors');
 const { hasOnlyFields, normalizeMedia, validateCourseInput, validateLessonInput } = require('./validation');
 const { hasPublication } = require('./authorization');
+const { promoteDueScheduled } = require('../cms/reader');
 
 const fail = (reason = 'invalid_input') => { throw new AcademyError(400, reason); };
 const moduleSchema = { title: text(200, true), order: integer(-100000, 100000), active: boolean };
@@ -50,6 +51,12 @@ function storedMedia(lesson) {
 async function canActivate(db, courseId) {
   const { rows: modules } = await db.query('SELECT * FROM academy_modules WHERE course_id=$1 ORDER BY id FOR UPDATE', [courseId]);
   const { rows: lessons } = await db.query('SELECT * FROM academy_lessons WHERE module_id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [modules.map(row => row.id)]);
+  // Match public readers: reconcile due schedules on this already locked client,
+  // retaining CMS validation/invalid-schedule retirement and atomic audit rollback.
+  const now = new Date();
+  await promoteDueScheduled(db, now, 'academy', [courseId]);
+  await promoteDueScheduled(db, now, 'academy_lesson', lessons.map(row => row.id));
+  if (!await hasPublication(db, 'academy', courseId)) return false;
   const activeModules = new Set(modules.filter(row => row.active).map(row => row.id));
   for (const lesson of lessons) {
     if (lesson.active && activeModules.has(lesson.module_id) && normalizeMedia(storedMedia(lesson))

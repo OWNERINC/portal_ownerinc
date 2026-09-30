@@ -64,8 +64,30 @@ export function mutationFixture() {
             rows = state.lessons.filter(row => /module_id=ANY/.test(sql) ? values[0].includes(row.module_id)
               : /WHERE module_id/.test(sql) ? row.module_id === values[0]
               : row.id === values[0] && row.module_id === values[1]);
+          } else if (/scheduled.status = 'scheduled'/.test(sql)) {
+            rows = state.documents.filter(row => row.type === values[1] && values[2].includes(row.source_id)
+              && row.scheduled_at && new Date(row.scheduled_at) <= values[0])
+              .flatMap(row => {
+                const revision = state.revisions.find(r => r.id === row.scheduled_revision_id && r.status === 'scheduled');
+                return revision ? [{ ...row, scheduled_blocks: revision.blocks }] : [];
+              });
+          } else if (/UPDATE cms_revisions SET status/.test(sql)) {
+            const revision = state.revisions.find(row => row.id === values[0]);
+            const expected = /AND status = 'published'/.test(sql) ? 'published' : 'scheduled';
+            if (revision?.status === expected) revision.status = /SET status = 'published'/.test(sql) ? 'published' : 'archived';
+          } else if (/UPDATE cms_documents/.test(sql)) {
+            const document = state.documents.find(row => row.id === values[0]);
+            if (/SET published_revision_id/.test(sql)) {
+              document.published_revision_id = values[1];
+              document.published_at = values[2];
+            }
+            document.scheduled_revision_id = null;
+            document.scheduled_at = null;
           } else if (/FROM cms_documents d/.test(sql)) {
             rows = state.documents.filter(row => row.type === values[0] && row.source_id === values[1]);
+            rows = rows.map(row => Object.hasOwn(row, 'published_revision_id') ? { ...row,
+              blocks: state.revisions.find(r => r.id === row.published_revision_id && r.status === 'published')?.blocks ?? null,
+            } : row);
           } else if (/FROM cms_assets/.test(sql)) rows = state.assets.filter(row => values[0].includes(row.id));
           else if (/^INSERT INTO academy \(/.test(sql)) {
             const keys = [...sql.split('VALUES')[0].matchAll(/"(\w+)"/g)].map(match => match[1]);

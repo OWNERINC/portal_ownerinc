@@ -130,8 +130,12 @@ conexões ou transações aninhadas. Todas as escritas entram pelo lock CMS `719
 e bloqueiam curso → módulo → aula, nessa ordem. Contagens incluem inativos e são
 checadas sob lock do curso; cargos novos exigem existência/atividade com `FOR SHARE`.
 A ativação de curso interno exige módulo e aula ativos, mídia válida e publicação
-válida da aula (incluindo assets); sem documento CMS, vale o conteúdo simples legado.
-A publicação da apresentação do curso continua sendo uma operação editorial CMS.
+válida do curso e da aula (incluindo assets); sem documento CMS, vale o conteúdo
+simples legado. Agendamentos vencidos do curso e das aulas são processados pelo
+promotor CMS no mesmo client antes da checagem, inclusive retirada de agendamentos
+inválidos sem substituir uma publicação anterior válida. Rascunhos não são
+publicados automaticamente. Rejeição da ativação ou falha de auditoria reverte
+toda a transação, inclusive promoções/retiradas realizadas durante a checagem.
 
 POST/PUT/DELETE de cursos e as rotas abaixo exigem `manageAcademy` e registram
 auditoria na mesma transação; falha de auditoria reverte a mutação inteira:

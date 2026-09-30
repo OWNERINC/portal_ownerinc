@@ -98,6 +98,106 @@ test('conversion clears URL and keeps ID/CMS; activation requires an active play
   assert.match(lockCalls[3].sql, /FROM academy_lessons/);
 });
 
+test('activation requires valid parent publication and preserves no-document fallback', async () => {
+  for (const blocks of [null, [{ type: 'invalid' }], [{ type: 'pdf', asset_id: randomUUID(), title: 'Missing' }], []]) {
+    const f = mutationFixture();
+    const course = f.course();
+    f.lesson(f.module(course.id).id);
+    f.state.documents.push({ id: randomUUID(), type: 'academy', source_id: course.id, blocks });
+    const activate = () => run(f, mutations.saveCourse, f.users.manager, course.id, { active: true });
+    if (Array.isArray(blocks) && blocks.length === 0) assert.equal((await activate()).active, true);
+    else {
+      await assert.rejects(activate(), bad('course_not_playable'));
+      assert.equal(f.state.courses[0].active, false);
+      assert.equal(writes(f).length, 0);
+      f.state.documents = [];
+      assert.equal((await activate()).active, true);
+    }
+  }
+});
+
+function schedule(f, type, source_id, { blocks = [], future = false, published = false } = {}) {
+  const document = { id: randomUUID(), type, source_id, published_revision_id: null,
+    scheduled_revision_id: randomUUID(), scheduled_at: new Date(Date.now() + (future ? 86400000 : -86400000)) };
+  if (published) {
+    document.published_revision_id = randomUUID();
+    f.state.revisions.push({ id: document.published_revision_id, document_id: document.id, status: 'published', blocks: [] });
+  }
+  f.state.documents.push(document);
+  f.state.revisions.push({ id: document.scheduled_revision_id, document_id: document.id, status: 'scheduled', blocks });
+  return structuredClone(document);
+}
+
+test('activation processes due first course and lesson publications without a GET on its single client', async () => {
+  const f = mutationFixture();
+  const course = f.course(), lesson = f.lesson(f.module(course.id).id);
+  const parent = schedule(f, 'academy', course.id);
+  const child = schedule(f, 'academy_lesson', lesson.id);
+  const unrelated = schedule(f, 'academy', randomUUID());
+  assert.equal((await run(f, mutations.saveCourse, f.users.manager, course.id, { active: true })).active, true);
+  for (const document of [parent, child]) {
+    const current = f.state.documents.find(row => row.id === document.id);
+    assert.equal(current.published_revision_id, document.scheduled_revision_id);
+    assert.equal(current.scheduled_revision_id, null);
+    assert.equal(f.state.revisions.find(row => row.id === document.scheduled_revision_id).status, 'published');
+  }
+  assert.deepEqual(f.state.documents.find(row => row.id === unrelated.id), unrelated);
+  assert.equal(f.calls.filter(call => call.sql === 'BEGIN').length, 1);
+  assert.equal(f.calls.filter(call => call.sql === 'COMMIT').length, 1);
+  assert.equal(new Set(f.calls.map(call => call.clientId)).size, 1);
+  assert.equal(f.calls.filter(call => /cms.document.promote/.test(call.sql)).length, 2);
+});
+
+test('future and invalid first schedules cannot activate; rejected activation rolls back CMS processing', async () => {
+  for (const type of ['academy', 'academy_lesson']) {
+    for (const options of [{ future: true }, { blocks: [{ type: 'invalid' }] },
+      { blocks: [{ type: 'pdf', asset_id: randomUUID(), title: 'Missing' }] }]) {
+      const f = mutationFixture();
+      const course = f.course(), lesson = f.lesson(f.module(course.id).id);
+      schedule(f, type, type === 'academy' ? course.id : lesson.id, options);
+      const before = structuredClone(f.state);
+      await assert.rejects(run(f, mutations.saveCourse, f.users.manager, course.id, { active: true }), bad('course_not_playable'));
+      assert.deepEqual(f.state, before);
+      assert.equal(f.calls.some(call => /^UPDATE academy SET/.test(call.sql)), false);
+      assert.equal(f.calls.filter(call => /cms.document.schedule_invalid/.test(call.sql)).length, options.future ? 0 : 1);
+    }
+  }
+});
+
+test('invalid due replacements retire without replacing valid publication; valid replacement archives prior revision', async () => {
+  for (const type of ['academy', 'academy_lesson']) {
+    for (const invalid of [true, false]) {
+      const f = mutationFixture();
+      const course = f.course(), lesson = f.lesson(f.module(course.id).id);
+      const document = schedule(f, type, type === 'academy' ? course.id : lesson.id,
+        { published: true, blocks: invalid ? [{ type: 'pdf', asset_id: randomUUID(), title: 'Missing' }] : [] });
+      assert.equal((await run(f, mutations.saveCourse, f.users.manager, course.id, { active: true })).active, true);
+      const current = f.state.documents[0];
+      assert.equal(current.scheduled_revision_id, null);
+      assert.equal(current.published_revision_id, invalid ? document.published_revision_id : document.scheduled_revision_id);
+      assert.equal(f.state.revisions.find(row => row.id === document.scheduled_revision_id).status, invalid ? 'archived' : 'published');
+      assert.equal(f.state.revisions.find(row => row.id === document.published_revision_id).status, invalid ? 'published' : 'archived');
+      assert.equal(f.calls.filter(call => /cms.document.schedule_invalid/.test(call.sql)).length, invalid ? 1 : 0);
+    }
+  }
+});
+
+test('due promotion is atomic with later playability rejection and CMS audit failure', async () => {
+  for (const auditFailure of [false, true]) {
+    const f = mutationFixture();
+    const course = f.course(), lesson = f.lesson(f.module(course.id).id);
+    schedule(f, 'academy', course.id);
+    schedule(f, 'academy_lesson', lesson.id, { future: true });
+    const before = structuredClone(f.state);
+    f.failAudit(auditFailure);
+    await assert.rejects(run(f, mutations.saveCourse, f.users.manager, course.id, { active: true }),
+      auditFailure ? /audit unavailable/ : bad('course_not_playable'));
+    assert.equal(f.calls.some(call => /UPDATE cms_documents SET published_revision_id/.test(call.sql)), true);
+    assert.deepEqual(f.state, before);
+    assert.equal(f.calls.filter(call => call.sql === 'ROLLBACK').length, 1);
+  }
+});
+
 test('curriculum HTTP edits whitelist metadata and increments version only for normalized origin changes', async t => {
   const f = mutationFixture();
   const course = f.course();
