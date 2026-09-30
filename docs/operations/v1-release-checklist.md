@@ -197,6 +197,36 @@ responsável e evidência; não marque uma validação externa usando apenas
 - A produção não deve ser declarada plenamente pronta enquanto os itens
   externos pendentes abaixo não tiverem responsável e evidência registrados.
 
+## Registro operacional de 30/09/2026
+
+Este bloco complementa os itens históricos acima sem transformar ensaios locais
+em aceite externo. A revisão publicada foi
+`a1414d89cbfcee7f2beeaefef21911cff1c1bfce`; CI/deploy tentativa 2 passou em
+`36748329056` às 14:18:51 Brasília.
+
+- API e cron nativos conferiram os RepoDigests do manifesto, ambos com Nodemailer
+  10.0.13; cron normal, três workers com heartbeats de sucesso e smoke público OK.
+- Backup pré-release e primeira cópia diária foram verificados por
+  `sha256sum --check`. A agenda diária está habilitada para 03:00 Brasília,
+  retenção local de 14 dias e lock compartilhado. S3/off-host, lifecycle,
+  criptografia e RPO de 24h permanecem pendentes.
+- Os três snapshots históricos manuais encontrados na retenção foram preservados
+  em `manual-archive/production`, fora das raízes `production` e `daily`, com
+  hashes/metadados/inodes verificados e revisão até 14/10/2026.
+- A renovação real do certificado Portal ocorreu às 14:20:31. O hook automático
+  de reload falhou porque coincidiu com a pausa do backup; depois da retomada,
+  `nginx -t` e reload gracioso foram confirmados pelo journal e pelo certificado
+  público novo. O proxy compartilhado não foi reiniciado. Próximas operações
+  manuais devem evitar sobreposição backup/deploy/TLS e conferir o hook.
+- Retenção de mídia final: janela de sete dias, grants e volume RW corretos,
+  zero remoções/falhas na auditoria observada. Fixtures separadas comprovaram
+  remoção de elegíveis, preservação de referências, retry e recuperação.
+
+Continuam sem aceite externo: NVDA/VoiceOver, Safari físico e zoom nativo 400%;
+S3 e restore off-host; e o relato #38 sem card/PDF e ambiente originais. Consulte
+o [relatório consolidado de entrega](../reviews/2026-09-30-issue-delivery.md) e
+as issues para os hashes, request IDs sanitizados e limites de cada evidência.
+
 ## CMS Release Follow-up
 
 - [x] Cron image build context includes the shared CMS reader and block validator
