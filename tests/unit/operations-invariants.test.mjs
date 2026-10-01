@@ -45,6 +45,30 @@ test('API and cron require shared Resend SMTP configuration', async () => {
   assert.match(verify, /\['scripts', 'ops'\]/);
 });
 
+test('API and cron lock Nodemailer to the approved safe policy', async () => {
+  const minimum = [10, 0, 13];
+  const atLeastMinimum = (version) => {
+    const parsed = String(version).match(/(\d+)\.(\d+)\.(\d+)/);
+    assert.ok(parsed, `expected a semantic Nodemailer version, got ${version}`);
+    const parts = parsed.slice(1).map(Number);
+    let index = 0;
+    while (index < minimum.length && parts[index] === minimum[index]) index += 1;
+    return index === minimum.length || parts[index] > minimum[index];
+  };
+
+  for (const service of ['api', 'cron']) {
+    const manifest = JSON.parse(await read(`${service}/package.json`));
+    const lockfile = JSON.parse(await read(`${service}/package-lock.json`));
+    const declared = manifest.dependencies.nodemailer;
+    const lockedRoot = lockfile.packages[''].dependencies.nodemailer;
+    const resolved = lockfile.packages['node_modules/nodemailer'].version;
+
+    assert.ok(atLeastMinimum(declared), `${service} manifest permits Nodemailer below 10.0.13`);
+    assert.ok(atLeastMinimum(lockedRoot), `${service} lock root permits Nodemailer below 10.0.13`);
+    assert.ok(atLeastMinimum(resolved), `${service} lockfile resolves Nodemailer below 10.0.13`);
+  }
+});
+
 test('local simulation isolates Firebase and keeps bootstrap SQL typed', async () => {
   const [compose, emulator, bootstrap] = await Promise.all([
     read('docker-compose.yml'), read('firebase-emulator/Dockerfile'), read('api/db/bootstrap-admin.js'),
