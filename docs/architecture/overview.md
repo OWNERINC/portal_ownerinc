@@ -37,7 +37,13 @@ incluída no embed YouTube e aplicada após `loadedmetadata` no HTML5.
 
 O loader YouTube é compartilhado por documento, injeta `iframe_api` dinamicamente,
 preserva/restaura o callback global anterior e limita cada tentativa a 15 segundos.
-Falhas removem script/cache para retry explícito criando um novo player. Abort de
+Falhas removem script/cache para retry explícito criando um novo player.
+No timeout, se o bootstrap próprio terminou mas
+o segundo script `www-widgetapi.js` não inicializou o Player, o adapter remove
+apenas esse widget observado e repete sua URL oficial no próximo retry explícito,
+sem reiniciar o bootstrap nem alterar `YT.loading` ou sua fila de callbacks.
+Preserva namespace/configuração e providers preexistentes, substituídos ou
+já prontos; não realiza tentativas automáticas. Abort de
 um consumidor rejeita sua Promise imediatamente sem cancelar outros consumidores.
 Cada player também limita a espera de readiness/metadados a 15 segundos. Abort,
 erro e `destroy()` limpam instância, timers, DOM e listeners; callbacks tardios

@@ -1,4 +1,5 @@
 const loaders = new WeakMap();
+const widgetRetries = new WeakMap();
 const TIMEOUT = 15000;
 const abortError = () => new DOMException('Aula cancelada.', 'AbortError');
 const position = value => Number.isFinite(value) ? Math.min(86400, Math.max(0, value)) : 0;
@@ -6,25 +7,55 @@ const position = value => Number.isFinite(value) ? Math.min(86400, Math.max(0, v
 /** Shared per document; abort belongs to the consumer, never to this loader. */
 export function loadYouTubeAPI(doc = document) {
   const win = doc.defaultView;
-  if (win.YT?.Player) return Promise.resolve(win.YT);
+  if (win.YT?.Player) { widgetRetries.delete(doc); return Promise.resolve(win.YT); }
   if (loaders.has(doc)) return loaders.get(doc);
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   loaders.set(doc, promise);
   const script = doc.createElement('script');
   const previous = win.onYouTubeIframeAPIReady;
+  const providerBefore = win.YT;
+  const widgetBefore = doc.getElementById('www-widgetapi-script');
+  const retry = widgetRetries.get(doc);
+  const retryWidget = retry && retry.provider === providerBefore && !providerBefore.loaded
+    && providerBefore.loading === 1 && !widgetBefore;
+  widgetRetries.delete(doc);
+  let partialProvider, ownedWidget;
   let settled = false;
   let timer;
+  function bootstrapLoaded() {
+    // iframe_api sets YT.loading=1 before fetching www-widgetapi.js. Only
+    // recover a namespace initialized by our bootstrap, never an external one.
+    const provider = win.YT;
+    const widget = doc.getElementById('www-widgetapi-script');
+    if (!providerBefore
+        && !widgetBefore && widget
+        && /^https:\/\/(www\.youtube\.com|s\.ytimg\.com)\/.*\/www-widgetapi\.js(?:\?|$)/.test(widget.src)
+        && provider?.loading === 1
+        && !provider.loaded && !provider.Player) {
+      partialProvider = provider;
+      ownedWidget = widget;
+    }
+  }
   function finish(error) {
     if (settled) return;
     settled = true;
     win.clearTimeout(timer);
     script.removeEventListener('error', failed);
+    script.removeEventListener('load', bootstrapLoaded);
     if (win.onYouTubeIframeAPIReady === ready) {
       if (previous === undefined) delete win.onYouTubeIframeAPIReady;
       else win.onYouTubeIframeAPIReady = previous;
     }
     if (error) {
+      if (partialProvider && win.YT === partialProvider && !partialProvider.Player
+          && !partialProvider.loaded && partialProvider.loading === 1
+          && doc.getElementById('www-widgetapi-script') === ownedWidget) {
+        // Re-fetch only this observed dependency on the next explicit attempt.
+        // Re-running iframe_api with loading=0 would overwrite YT.ready's queue.
+        widgetRetries.set(doc, { provider: partialProvider, src: ownedWidget.src });
+        ownedWidget.remove();
+      }
       loaders.delete(doc);
       script.remove();
       reject(error);
@@ -39,9 +70,15 @@ export function loadYouTubeAPI(doc = document) {
   }
   function failed() { finish(new Error('Não foi possível carregar o YouTube. Tente novamente.')); }
   win.onYouTubeIframeAPIReady = ready;
-  script.src = 'https://www.youtube.com/iframe_api';
+  if (retryWidget) {
+    partialProvider = retry.provider;
+    ownedWidget = script;
+    script.id = 'www-widgetapi-script';
+    script.src = retry.src;
+  } else script.src = 'https://www.youtube.com/iframe_api';
   script.async = true;
   script.addEventListener('error', failed);
+  script.addEventListener('load', bootstrapLoaded);
   timer = win.setTimeout(() => finish(new Error('O YouTube demorou para responder. Tente novamente.')), TIMEOUT);
   try { doc.head.append(script); } catch (error) { finish(error); }
   return promise;

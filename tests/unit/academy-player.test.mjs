@@ -30,6 +30,7 @@ function fixture() {
   doc.hidden = false;
   doc.createElement = tag => new Element(tag, doc);
   doc.head = doc.createElement('head');
+  doc.getElementById = id => doc.head.children.find(element => element.id === id) || null;
   doc.defaultView = {
     location: { origin: 'https://portal.example:8443' },
     setTimeout: (fn, ms) => schedule(fn, ms, 0), clearTimeout: id => timers.delete(id),
@@ -68,6 +69,157 @@ function fixture() {
 const youtube = { type: 'youtube', video_id: 'abcdefghijk' };
 const file = { type: 'file', url: 'https://media.example/aula.webm?token=test' };
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
+
+// Model the official iframe_api bootstrap's consequential behavior: it sets
+// loading before requesting a second script, whose failure does not clear it.
+function bootstrapFixture(f) {
+  const win = f.doc.defaultView;
+  const requests = { bootstrap: 0, widget: 0 };
+  function execute() {
+    const script = f.doc.head.children.at(-1);
+    if (script.src === 'https://www.youtube.com/iframe_api') {
+      requests.bootstrap++;
+      if (!win.YT) win.YT = { loading: 0, loaded: 0 };
+      if (!win.YT.loading) {
+        win.YT.loading = 1;
+        const queue = [];
+        win.YT.ready = callback => { if (win.YT.loaded) callback(); else queue.push(callback); };
+        win.onYTReady = () => { win.YT.loaded = 1; queue.forEach(callback => callback()); };
+        const widget = f.doc.createElement('script');
+        widget.id = 'www-widgetapi-script';
+        widget.src = 'https://www.youtube.com/s/player/test/www-widgetapi.vflset/www-widgetapi.js';
+        widget.async = true;
+        f.doc.head.append(widget);
+        requests.widget++;
+      }
+    } else {
+      assert.equal(script.id, 'www-widgetapi-script');
+      requests.widget++;
+    }
+    script.fire('load');
+    return f.doc.getElementById('www-widgetapi-script');
+  }
+  function complete() {
+    win.YT.Player = class {};
+    win.YT.loaded = 1;
+    win.onYTReady?.();
+    win.onYouTubeIframeAPIReady?.();
+  }
+  return { execute, complete, requests };
+}
+
+test('official bootstrap retries a failed secondary widget without replacing its namespace', async () => {
+  const f = fixture(), bootstrap = bootstrapFixture(f), win = f.doc.defaultView;
+  let callbacks = 0;
+  const previous = () => callbacks++;
+  win.onYouTubeIframeAPIReady = previous;
+  const first = loadYouTubeAPI(f.doc), failed = assert.rejects(first, /demorou/);
+  const staleCallback = win.onYouTubeIframeAPIReady;
+  const failedWidget = bootstrap.execute(), namespace = win.YT;
+  const readyQueue = namespace.ready;
+  let queuedCalls = 0;
+  namespace.ready(() => queuedCalls++);
+  failedWidget.fire('error');
+  assert.equal(namespace.loading, 1);
+  f.tick(15000); await failed;
+  const retry = loadYouTubeAPI(f.doc);
+  const retryWidget = bootstrap.execute();
+  assert.deepEqual(bootstrap.requests, { bootstrap: 1, widget: 2 });
+  assert.notEqual(retryWidget, failedWidget);
+  assert.equal(failedWidget.parent, null);
+  assert.equal(win.YT, namespace); assert.equal(namespace.ready, readyQueue);
+  const currentCallback = win.onYouTubeIframeAPIReady;
+  staleCallback(); assert.equal(win.onYouTubeIframeAPIReady, currentCallback);
+  bootstrap.complete(); assert.equal(await retry, namespace);
+  assert.equal(queuedCalls, 1);
+  assert.equal(callbacks, 1); assert.equal(win.onYouTubeIframeAPIReady, previous);
+  assert.equal(f.timers.size, 0);
+});
+
+test('secondary recovery remains bounded across repeated failures and consumer abort does not reset shared state', async () => {
+  const f = fixture(), bootstrap = bootstrapFixture(f), controller = new AbortController();
+  const consumer = createLessonPlayer({ host: f.host(), media: youtube, signal: controller.signal });
+  const aborted = assert.rejects(consumer, { name: 'AbortError' });
+  const shared = loadYouTubeAPI(f.doc), failed = assert.rejects(shared, /demorou/);
+  const widget = bootstrap.execute();
+  controller.abort(); await aborted;
+  assert.equal(f.doc.defaultView.YT.loading, 1); assert.ok(widget.parent);
+  f.tick(15000); await failed;
+  assert.equal(f.timers.size, 0); assert.equal(bootstrap.requests.widget, 1);
+  const second = loadYouTubeAPI(f.doc), failedAgain = assert.rejects(second, /demorou/);
+  bootstrap.execute(); f.tick(15000); await failedAgain;
+  f.tick(60000); assert.deepEqual(bootstrap.requests, { bootstrap: 1, widget: 2 });
+  assert.equal(f.timers.size, 0);
+  const third = loadYouTubeAPI(f.doc); bootstrap.execute(); bootstrap.complete(); await third;
+  assert.deepEqual(bootstrap.requests, { bootstrap: 1, widget: 3 });
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+for (const state of ['pre-existing partial', 'replacement partial', 'ready before timeout']) test(`secondary recovery preserves ${state} provider`, async () => {
+  const f = fixture(), bootstrap = bootstrapFixture(f), win = f.doc.defaultView;
+  if (state === 'pre-existing partial') win.YT = { loading: 1, loaded: 0, ready() {} };
+  const pending = loadYouTubeAPI(f.doc), failed = assert.rejects(pending, /demorou/);
+  const widget = bootstrap.execute();
+  if (state === 'replacement partial') win.YT = { loading: 1, loaded: 0, ready() {} };
+  if (state === 'ready before timeout') { win.YT.Player = class {}; win.YT.loaded = 1; }
+  const namespace = win.YT, snapshot = { ...namespace };
+  f.tick(15000); await failed;
+  assert.equal(win.YT, namespace); assert.deepEqual(win.YT, snapshot);
+  if (widget) assert.ok(widget.parent);
+  if (state === 'ready before timeout') {
+    assert.equal(await loadYouTubeAPI(f.doc), namespace);
+    assert.deepEqual(bootstrap.requests, { bootstrap: 1, widget: 1 });
+  }
+  assert.equal(f.timers.size, 0);
+});
+
+test('late widget completion after timeout is reused without another bootstrap or state reset', async () => {
+  const f = fixture(), bootstrap = bootstrapFixture(f);
+  const pending = loadYouTubeAPI(f.doc), failed = assert.rejects(pending, /demorou/);
+  bootstrap.execute(); f.tick(15000); await failed;
+  bootstrap.complete();
+  const namespace = f.doc.defaultView.YT;
+  assert.equal(await loadYouTubeAPI(f.doc), namespace);
+  assert.deepEqual(bootstrap.requests, { bootstrap: 1, widget: 1 });
+  assert.equal(f.timers.size, 0);
+});
+
+test('secondary recovery does not remove a pre-existing widget element', async () => {
+  const f = fixture(), bootstrap = bootstrapFixture(f);
+  const external = f.doc.createElement('script');
+  external.id = 'www-widgetapi-script'; external.src = 'https://www.youtube.com/s/player/external/www-widgetapi.js';
+  f.doc.head.append(external);
+  const pending = loadYouTubeAPI(f.doc), failed = assert.rejects(pending, /demorou/);
+  bootstrap.execute(); f.tick(15000); await failed;
+  assert.ok(external.parent); assert.equal(f.doc.defaultView.YT.loading, 1);
+  assert.equal(f.timers.size, 0);
+});
+
+test('secondary retry script error cleans up and a later explicit retry still succeeds', async () => {
+  const f = fixture(), bootstrap = bootstrapFixture(f);
+  const first = loadYouTubeAPI(f.doc), timedOut = assert.rejects(first, /demorou/);
+  const widget = bootstrap.execute(); f.tick(15000); await timedOut;
+  const second = loadYouTubeAPI(f.doc), failed = assert.rejects(second, /carregar/);
+  const retryScript = bootstrap.execute();
+  assert.equal(retryScript.src, widget.src);
+  retryScript.fire('error'); await failed;
+  assert.equal(retryScript.count(), 0); assert.equal(retryScript.parent, null); assert.equal(f.timers.size, 0);
+  const third = loadYouTubeAPI(f.doc); bootstrap.execute(); bootstrap.complete(); await third;
+  assert.deepEqual(bootstrap.requests, { bootstrap: 1, widget: 3 });
+});
+
+test('external namespace replacing a failed bootstrap is not used for widget recovery', async () => {
+  const f = fixture(), bootstrap = bootstrapFixture(f);
+  const first = loadYouTubeAPI(f.doc), timedOut = assert.rejects(first, /demorou/);
+  bootstrap.execute(); f.tick(15000); await timedOut;
+  const external = { loading: 1, loaded: 0, ready() {} };
+  f.doc.defaultView.YT = external;
+  const retry = loadYouTubeAPI(f.doc), failed = assert.rejects(retry, /demorou/);
+  assert.equal(f.doc.head.children.at(-1).src, 'https://www.youtube.com/iframe_api');
+  bootstrap.execute(); f.tick(15000); await failed;
+  assert.equal(f.doc.defaultView.YT, external); assert.equal(external.loading, 1);
+  assert.deepEqual(bootstrap.requests, { bootstrap: 2, widget: 1 });
+});
 
 test('shared loader, existing callback preserved and two sequential lessons use one script', async () => {
   const f = fixture(); let called = 0;
