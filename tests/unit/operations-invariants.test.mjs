@@ -46,15 +46,8 @@ test('API and cron require shared Resend SMTP configuration', async () => {
 });
 
 test('API and cron lock Nodemailer to the approved safe policy', async () => {
-  const minimum = [10, 0, 13];
-  const atLeastMinimum = (version) => {
-    const parsed = String(version).match(/(\d+)\.(\d+)\.(\d+)/);
-    assert.ok(parsed, `expected a semantic Nodemailer version, got ${version}`);
-    const parts = parsed.slice(1).map(Number);
-    let index = 0;
-    while (index < minimum.length && parts[index] === minimum[index]) index += 1;
-    return index === minimum.length || parts[index] > minimum[index];
-  };
+  const expectedRange = '^10.0.13';
+  const expectedResolvedVersion = '10.0.13';
 
   for (const service of ['api', 'cron']) {
     const manifest = JSON.parse(await read(`${service}/package.json`));
@@ -63,9 +56,9 @@ test('API and cron lock Nodemailer to the approved safe policy', async () => {
     const lockedRoot = lockfile.packages[''].dependencies.nodemailer;
     const resolved = lockfile.packages['node_modules/nodemailer'].version;
 
-    assert.ok(atLeastMinimum(declared), `${service} manifest permits Nodemailer below 10.0.13`);
-    assert.ok(atLeastMinimum(lockedRoot), `${service} lock root permits Nodemailer below 10.0.13`);
-    assert.ok(atLeastMinimum(resolved), `${service} lockfile resolves Nodemailer below 10.0.13`);
+    assert.equal(declared, expectedRange, `${service} manifest must declare Nodemailer as ${expectedRange}`);
+    assert.equal(lockedRoot, expectedRange, `${service} lockfile root must declare Nodemailer as ${expectedRange}`);
+    assert.equal(resolved, expectedResolvedVersion, `${service} lockfile must resolve Nodemailer as ${expectedResolvedVersion}`);
   }
 });
 

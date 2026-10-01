@@ -98,3 +98,21 @@ No secrets were passed to or printed from these image checks.
   summary still reports development/full-tree vulnerabilities; they were not
   silently broadened into this issue and should be triaged separately if they
   remain relevant to CI policy.
+
+## Reviewer correction evidence
+
+- Reviewer finding at fix base `3ec426a`: the prior invariant compared only the
+  first numeric triplet and did not require the exact resolved version.
+- Corrected only `tests/unit/operations-invariants.test.mjs`; manifests,
+  lockfiles, SMTP/configuration, and CI files were not changed.
+- The invariant now requires, for both `api` and `cron`, exact equality of the
+  manifest dependency and lockfile root dependency to `^10.0.13`, and exact
+  equality of the resolved lockfile package version to `10.0.13`.
+- `node --test --test-name-pattern="API and cron lock Nodemailer" tests/unit/operations-invariants.test.mjs`
+  — **passed**, 1/1 matching test.
+- `npm run verify` — **passed**, exit 0; 901/901 tests passed.
+- `npm run security` — **passed**, both production-scoped audits reported
+  `found 0 vulnerabilities`.
+- `git diff --check` — **passed**, no output.
+- No remote CI run, Trivy/image scan, production verification, push, deploy, or
+  credential use was performed for this correction.
