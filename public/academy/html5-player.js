@@ -1,6 +1,6 @@
 const position = value => Number.isFinite(value) ? Math.min(86400, Math.max(0, value)) : 0;
 
-export function createHTML5Player({ host, media, startSeconds = 0, signal, onPosition, onEnded, onError }) {
+export function createHTML5Player({ host, media, startSeconds = 0, signal, onPosition, onPause, onEnded, onError }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new DOMException('Aula cancelada.', 'AbortError')); return; }
     const url = new URL(media.url);
@@ -57,7 +57,7 @@ export function createHTML5Player({ host, media, startSeconds = 0, signal, onPos
     });
     listen(video, 'playing', () => { playing = true; visibility(); });
     listen(video, 'waiting', () => { playing = false; stop(); });
-    listen(video, 'pause', () => { playing = false; stop(); emit(); });
+    listen(video, 'pause', () => { playing = false; stop(); emit(); if (ready && !destroyed) onPause?.(); });
     listen(video, 'seeked', emit);
     listen(video, 'ended', () => { playing = false; stop(); emit(); onEnded?.(); });
     listen(video, 'error', () => fail(new Error('Não foi possível reproduzir este vídeo. Tente novamente.')));

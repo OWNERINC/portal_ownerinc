@@ -5,7 +5,7 @@ import { Node, TestEvent, deferred, drain } from './router-harness.mjs';
 export { TestEvent, deferred, drain };
 const booleans = new Set(['hidden', 'disabled', 'checked', 'selected', 'inert', 'open']);
 const decode = text => text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-function parseInto(root, html) {
+export function parseInto(root, html) {
   const stack = [root];
   const voids = new Set(['area', 'base', 'br', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'wbr']);
   for (const token of html.match(/<!--[^]*?-->|<![^>]*>|<[^>]+>|[^<]+/g) || []) {
@@ -25,7 +25,7 @@ function parseInto(root, html) {
     }
   }
 }
-class FixtureNode extends Node {
+export class FixtureNode extends Node {
   constructor(tag, owner) {
     super(tag, owner);
     this.hidden = false; this.disabled = false; this.open = false;

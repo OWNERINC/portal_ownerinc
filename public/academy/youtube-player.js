@@ -98,7 +98,7 @@ function observe(promise, signal) {
   });
 }
 
-export async function createYouTubePlayer({ host, media, startSeconds = 0, signal, onPosition, onEnded, onError }) {
+export async function createYouTubePlayer({ host, media, startSeconds = 0, signal, onPosition, onPause, onEnded, onError }) {
   const doc = host.ownerDocument;
   const win = doc.defaultView;
   if (!/^[A-Za-z0-9_-]{11}$/.test(media.video_id)) throw new TypeError('Vídeo do YouTube inválido.');
@@ -179,6 +179,7 @@ export async function createYouTubePlayer({ host, media, startSeconds = 0, signa
             playing = event.data === 1;
             visibility();
             if (event.data === 2 || event.data === 0) emit();
+            if (event.data === 2) onPause?.();
             if (event.data === 0) onEnded?.();
           },
           onError(event) {

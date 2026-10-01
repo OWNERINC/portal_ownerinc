@@ -28,7 +28,7 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 ## Players de aulas da Academy
 
 `public/academy/player.js` exporta
-`createLessonPlayer({ host, media, startSeconds, signal, onPosition, onEnded, onError })`,
+`createLessonPlayer({ host, media, startSeconds, signal, onPosition, onPause, onEnded, onError })`,
 uma Promise de `{ getPosition(), pause(), seek(seconds), destroy() }`. O container
 é exclusivo da aula; o chamador define `host` com `aria-label` igual ao título da
 aula para rotular o iframe/vídeo. A mídia segue o objeto normalizado da API.
@@ -50,12 +50,57 @@ erro e `destroy()` limpam instância, timers, DOM e listeners; callbacks tardios
 não reativam uma aula descartada. `destroy()` é idempotente.
 
 `onPosition(number)` emite posição a cada segundo enquanto reproduzindo e visível,
-e ao pausar/terminar; HTML5 também emite após seek. `onEnded()` apenas notifica,
+e ao pausar/terminar; HTML5 também emite após seek. `onPause()` opcional notifica
+após a emissão da posição para permitir flush pelo chamador. `onEnded()` apenas notifica,
 sem concluir ou persistir progresso. `onError(Error)` entrega mensagem em português
 e, no YouTube, código do provedor (incluindo 101/150). Falhas antes de readiness
 também rejeitam a Promise; cancelamentos rejeitam com `AbortError` sem `onError`.
 A sala chamadora é responsável por apresentar mensagem/retry e conectar o
 controller de progresso; os adapters não montam a interface da sala.
+
+### Catálogo, curso e sala no shell persistente
+
+`public/js/academy.js` monta `mountAcademy(page)` de `public/academy/app.js` em
+`academy-root`, sem reconstruir o shell. `createAcademyAPI(page)` expõe
+`list(query)`, `categories()`, `continueCourses()`, `course(id, preview)` e
+`lesson(id, preview)`; leituras usam `page.bindAPI`. Cada transição cria um
+lifecycle descartável. Aula acrescenta escopo filho para CMS, player e progresso.
+
+O catálogo consulta `group=initial` e `group=role` separadamente, cada um com
+limite 20, categoria e offset. `initial_category`, `initial_offset`,
+`role_category` e `role_offset` guardam os dois filtros na URL. Links legados
+`group=initial&category=...&offset=20` são aceitos e convertidos ao alterar o grupo.
+`/continue?limit=3` é independente da paginação. Página esvaziada oferece retorno
+ao início do próprio grupo. A marca permanece em estados vazios e de erro.
+
+Detalhes usam `?course=ID`, aulas `?course=ID&lesson=ID`. Navegações explícitas
+chamam `page.history.pushState` e renderizam localmente; Back/Forward fazem o
+mesmo sem recarregar documento. `history.state.academyCatalog` conserva a URL
+de retorno, preservando os demais metadados do router. `preview=1` exige
+`manageAcademy` e usa `all=true`; a prévia não grava progresso. A rota `manage=1`
+está reservada à gestão, com barreira de permissão, sem editor nesta etapa.
+
+A aula confere currículo e parent IDs antes de criar mídia. O título rotula
+o host do player; somente textos de status são live regions. O currículo usa
+disclosure nativo e empilha abaixo de 1000px. Foco vai ao h1 após navegação
+explícita, nunca por gravação. Troca interna pausa, registra, aguarda flush e
+descarta player/escopo antes da próxima instância. Falha no flush mantém a
+última posição confirmada e informa a possível perda da posição recente.
+Saída para outra área cancela recursos; não promete salvar no fechamento abrupto.
+
+Gravações automáticas usam o fetch original e sinal do controller, sem busy global.
+Só a ação manual passa pelo guard de mutação do Portal e bloqueia saída enquanto
+pendente. Conclusão e próxima aula aparecem apenas após ack de conclusão da
+própria aula/versão. 409 pede recarregar; perda definitiva de acesso em gravação
+ou revalidação de foco remove mídia, materiais e ações. Erro de rede na
+revalidação informa a falha sem confundi-la com revogação de autorização.
+
+`tests/helpers/academy-frontend.mjs` executa os módulos reais com seams de
+DOM/transportes/player/timers. A prancha documental
+`docs/design/academy-frontend-preview.html` carrega HTML/CSS e vistas reais,
+com fixtures explicitamente rotuladas via import map (sem backend/Firebase).
+Ela permite revisão visual estática, não comprova reprodução nem integração
+de autenticação, PostgreSQL, CSP ou Nginx reais.
 
 A CSP adiciona somente `https://www.youtube.com` e `https://s.ytimg.com` em
 `script-src`, e YouTube/YouTube nocookie em `frame-src`. O embed usa nocookie,

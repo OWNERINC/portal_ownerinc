@@ -292,8 +292,8 @@ test('abort during player readiness and late ready are cleaned up', async () => 
 });
 
 test('YouTube position polling stops on pause, buffering, visibility and destroy; end only notifies', async () => {
-  const f = fixture(); f.install(); const positions = []; let ended = 0;
-  const pending = createLessonPlayer({ host: f.host(), media: youtube, onPosition: p => positions.push(p), onEnded: () => ended++ });
+  const f = fixture(); f.install(); const positions = [], pauses = []; let ended = 0;
+  const pending = createLessonPlayer({ host: f.host(), media: youtube, onPosition: p => positions.push(p), onPause: () => pauses.push(positions.at(-1)), onEnded: () => ended++ });
   await flush(); const player = f.instances[0]; player.ready(); const handle = await pending;
   player.time = 18; player.state(1); f.tick(1000); assert.deepEqual(positions, [18]);
   f.doc.hidden = true; f.doc.fire('visibilitychange'); f.tick(5000); assert.equal(positions.length, 1);
@@ -301,6 +301,7 @@ test('YouTube position polling stops on pause, buffering, visibility and destroy
   player.state(3); f.tick(1000); assert.equal(positions.length, 2);
   handle.seek(79); assert.deepEqual(player.seeks, [[79, true]]);
   player.state(1); handle.pause(); const count = positions.length; f.tick(3000); assert.equal(positions.length, count);
+  assert.deepEqual(pauses, [79], 'pause callback follows its position event');
   player.state(0); assert.equal(ended, 1); handle.destroy(); player.state(0); assert.equal(ended, 1);
   assert.equal(f.timers.size, 0); assert.equal(f.doc.count(), 0);
 });
@@ -326,8 +327,8 @@ test('YouTube readiness timeout destroys player and allows another lesson', asyn
 });
 
 test('HTML5 metadata restores actual saved position without play, exposes same handle and cleans resources', async () => {
-  const f = fixture(), host = f.host(), positions = []; let ended = 0;
-  const pending = createLessonPlayer({ host, media: file, startSeconds: 123, onPosition: p => positions.push(p), onEnded: () => ended++ });
+  const f = fixture(), host = f.host(), positions = [], pauses = []; let ended = 0;
+  const pending = createLessonPlayer({ host, media: file, startSeconds: 123, onPosition: p => positions.push(p), onPause: () => pauses.push(positions.at(-1)), onEnded: () => ended++ });
   const video = host.children[0]; assert.equal(video.autoplay, false); assert.equal(video.controls, true); assert.equal(video.preload, 'metadata');
   video.fire('loadedmetadata'); const handle = await pending;
   assert.equal(video.currentTime, 123); assert.equal(video.paused, true);
@@ -339,6 +340,7 @@ test('HTML5 metadata restores actual saved position without play, exposes same h
   video.fire('playing');
   handle.seek(156); video.fire('seeked'); assert.equal(handle.getPosition(), 156);
   handle.pause(); const count = positions.length; f.tick(1000); assert.equal(positions.length, count);
+  assert.deepEqual(pauses, [156], 'pause callback follows its position event');
   video.ended = true; video.fire('ended'); assert.equal(ended, 1);
   handle.destroy(); handle.destroy(); video.fire('ended'); assert.equal(ended, 1);
   assert.equal(host.children.length, 0); assert.equal(video.src, ''); assert.equal(video.loaded, true);
