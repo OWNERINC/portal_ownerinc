@@ -4,6 +4,7 @@ const CMS_PERMISSIONS = {
   knowledge: 'manageKnowledge',
   announcement: 'manageKnowledge',
   academy: 'manageAcademy',
+  academy_lesson: 'manageAcademy',
   benefit: 'manageBenefits',
   reminder: 'manageReminders',
 };

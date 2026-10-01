@@ -28,6 +28,7 @@ const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ..
 const TYPES = [
   ['knowledge', 'Base de Conhecimento', 'manageKnowledge'],
   ['academy', 'Academy', 'manageAcademy'],
+  ['academy_lesson', 'Academy — Aulas', 'manageAcademy'],
   ['benefit', 'Benefícios', 'manageBenefits'],
   ['announcement', 'Owner News', 'manageKnowledge'],
   ['reminder', 'Lembretes', 'manageReminders'],
@@ -37,6 +38,7 @@ const TYPE_LABELS = Object.fromEntries(TYPES.map(([type, label]) => [type, label
 const SOURCE_ENDPOINTS = {
   knowledge: '/api/knowledge?limit=100&offset=0',
   academy: '/api/academy?all=true&limit=100&offset=0',
+  academy_lesson: '/api/academy/lessons?all=true&limit=100&offset=0',
   benefit: '/api/benefits?all=true&limit=100&offset=0',
   reminder: '/api/reminders?all=true&limit=100&offset=0',
 };
@@ -101,14 +103,17 @@ let editorGeneration = 0;
 let creationRequestToken = 0;
 let navigationConfirmed = false;
 let historyOffset = 0;
-let historyRequestToken = 0;
+  let historyRequestToken = 0;
 let documentsRequestToken = 0;
 const HISTORY_PAGE_SIZE = 50;
-const DOCUMENT_PAGE_SIZE = 50;
+  const DOCUMENT_PAGE_SIZE = 50;
 const documentsByType = new Map();
 const sourcesByType = new Map();
 let documentOffset = 0;
-let documentTotal = 0;
+  let documentTotal = 0;
+  const requestedType = new URL(page.location.href).searchParams.get('type');
+  const requestedDocument = new URL(page.location.href).searchParams.get('document');
+  const requestedTypeAllowed = !requestedType || TYPES.some(([type]) => type === requestedType);
 page.beforeLeave(() => {
   if (homeEditor && !homeEditor.canLeave()) return false;
   if (saving || actionBusy || creatingDocument || assetUploading || saveInFlight) {
@@ -568,6 +573,7 @@ async function loadDocument(id) {
   const requestAssetUploadVersion = assetUploadVersion;
   const requestToken = ++selectionToken;
   resetSelection();
+  if (requestedType && requestedTypeAllowed) selectedType = requestedType;
   selectedDocument = id;
   loading = true;
   showState(editorRoot, 'Carregando documento…');
@@ -907,15 +913,26 @@ scheduleForm.addEventListener('submit', scheduleDocument);
 unscheduleButton.addEventListener('click', unscheduleDocument);
 
 resetSelection();
-if (!TYPES.length) {
+  if (!TYPES.length || !requestedTypeAllowed) {
   newDocumentButton.disabled = true;
-  setError('Você não possui permissão para editar nenhuma área do CMS.');
+    setError(!requestedTypeAllowed ? 'O tipo de documento solicitado não é permitido para este editor.' : 'Você não possui permissão para editar nenhuma área do CMS.');
   setSaveState('Acesso restrito');
   showState(documentList, 'Nenhuma permissão editorial configurada.');
-} else {
+  } else {
   renderTypeNav();
   renderDocumentList();
-  loadDocuments();
+    loadDocuments().then(async () => {
+      if (!requestedDocument || !page.active) return;
+      let doc = (documentsByType.get(selectedType) || []).find(item => item.id === requestedDocument);
+      if (!doc) {
+        try { doc = (await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestedDocument)}`)).document; } catch { doc = null; }
+      }
+      if (!doc || doc.content_type !== selectedType) {
+        setError('O documento solicitado não pertence ao tipo selecionado ou não existe.');
+        return;
+      }
+      loadDocument(doc.id);
+    });
   updateInspector();
 }
 }

@@ -124,7 +124,7 @@ for (const action of ['publish', 'schedule']) {
 test('CMS translated area still follows permission filtering', async t => {
   const h = await createMountedHarness('cms', { user: { role: 'admin', permissions: { manageAcademy: true } } });
   t.after(() => h.page.dispose());
-  assert.deepEqual(h.node('content-types').querySelectorAll('button').map(node => node.textContent), ['Academy']);
+  assert.deepEqual(h.node('content-types').querySelectorAll('button').map(node => node.textContent), ['Academy', 'Academy — Aulas']);
   assert.equal(h.latest('/documents?').path, '/api/cms/documents?type=academy&limit=50&offset=0');
 });
 

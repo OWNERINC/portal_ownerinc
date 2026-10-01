@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -390,7 +391,7 @@ test('protected assets validate signatures, use UUID storage keys, audit uploads
   assert.match(assets, /CROSS JOIN LATERAL jsonb_array_elements\(r\.blocks\)/);
   assert.match(assets, /r\.status IN \('draft', 'published', 'scheduled'\)/);
   assert.match(assets, /published_revision_id === row\.revision_id/);
-  assert.match(assets, /academy_active === true/);
+  assert.match(assets, /canReadCourse\(user/);
   assert.match(assets, /benefit_active === true/);
   assert.match(assets, /reminderIsVisible\(row, user\)/);
   assert.doesNotMatch(assets, /asset\.uploaded_by === user\.uid/);
@@ -761,8 +762,130 @@ test('published profile media is readable by collaborators, draft and wrong MIME
   const mimes = assets.slice(assets.indexOf('const ASSET_MIMES'), assets.indexOf('const upload ='));
   const helpers = assets.slice(assets.indexOf('function audienceFor'), assets.indexOf('function isMalformedMultipart'));
   const readable = new Function('canManageCms', `${mimes}\n${helpers}\nreturn referenceIsReadable;`)(() => false);
-  const row = { content_type: 'announcement', status: 'published', block_type: 'profile', published_revision_id: 'revision', revision_id: 'revision' };
+  const row = { content_type: 'announcement', status: 'published', block_type: 'profile', published_revision_id: 'revision', revision_id: 'revision', publication_valid: true };
   assert.equal(readable(row, {}, { mime_type: 'image/png' }), true);
   assert.equal(readable({ ...row, status: 'draft' }, {}, { mime_type: 'image/png' }), false);
   assert.equal(readable(row, {}, { mime_type: 'application/pdf' }), false);
+});
+
+function loadCmsRoute(name, pool, user, directory) {
+  const filename = new URL(`../../api/routes/${name}.js`, import.meta.url);
+  const localRequire = createRequire(filename);
+  const module = { exports: {} };
+  const dependencies = new Map([
+    ['../db', pool],
+    ['../middleware/auth', { authMiddleware(req, res, next) { req.user = user; req.id = 'cms-test'; next(); } }],
+  ]);
+  return readFile(filename, 'utf8').then(source => {
+    new Function('require', 'module', 'exports', 'process', source)(
+      name => dependencies.has(name) ? dependencies.get(name) : localRequire(name),
+      module, module.exports, { env: { ...process.env, UPLOAD_DIR: directory } });
+    return module.exports;
+  });
+}
+
+test('lesson CMS creation enforces manageAcademy and verifies the lesson source under the CMS lock', async () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const user = { uid: 'manager', role: 'admin', permissions: {} };
+  const calls = [];
+  let sourceExists = true;
+  const client = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.includes('FROM academy_lessons')) return { rows: sourceExists ? [{ id }] : [] };
+      if (sql.includes('INSERT INTO cms_documents')) {
+        assert.equal(params[0], 'academy_lesson');
+        return { rows: [{ id, content_type: params[0] }] };
+      }
+      if (sql.includes('INSERT INTO cms_revisions')) return { rows: [{ id, status: 'draft' }] };
+      if (sql.includes('UPDATE cms_documents')) return { rows: [{ id, content_type: 'academy_lesson' }] };
+      return { rows: [] };
+    }, release() {},
+  };
+  const app = express();
+  app.use(express.json());
+  app.use('/cms', await loadCmsRoute('cms', { connect: async () => client }, user));
+  const post = () => supertest(app).post('/cms/documents').send({ type: 'academy_lesson', source_id: id, title: 'Aula' });
+  await post().expect(403);
+  assert.equal(calls.length, 0);
+  user.permissions.manageAcademy = true;
+  await post().expect(201);
+  assert.ok(calls.findIndex(call => call.sql.includes('pg_advisory_xact_lock'))
+    < calls.findIndex(call => call.sql.includes('FROM academy_lessons')));
+  sourceExists = false;
+  await post().expect(404);
+});
+
+test('real asset route inherits Academy access and validates complete publications on its single locked client', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'academy-assets-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, 'cms-private'));
+  const pdf = Buffer.from('%PDF-1.4\n%%EOF\n');
+  await writeFile(path.join(directory, 'cms-private', 'material'), pdf);
+  const asset = { id: '11111111-1111-4111-8111-111111111111', storage_key: 'material',
+    original_name: 'material.pdf', mime_type: 'application/pdf', byte_size: pdf.length };
+  const missingId = '22222222-2222-4222-8222-222222222222';
+  const blocks = [{ type: 'pdf', asset_id: asset.id, title: 'Material' }];
+  const row = { content_type: 'academy_lesson', status: 'published', revision_id: 'revision',
+    published_revision_id: 'revision', blocks, block_type: 'pdf', academy_active: true,
+    academy_audience: 'job_titles', academy_job_title_ids: ['closer'], lesson_active: true, module_active: true,
+    course_document_id: 'course-document', course_blocks: [] };
+  let references = [row];
+  const user = { uid: 'uploader', role: 'admin', permissions: {}, job_title_id: 'capture', job_title_active: true };
+  let connections = 0;
+  let locked = false;
+  let validations = 0;
+  const client = {
+    async query(sql, params) {
+      if (sql === 'BEGIN') { assert.equal(locked, false); return { rows: [] }; }
+      if (sql.includes('pg_advisory_xact_lock')) { locked = true; return { rows: [] }; }
+      assert.equal(locked, true, 'all authorization reads run after CMS lock');
+      if (sql === 'COMMIT' || sql === 'ROLLBACK') { locked = false; return { rows: [] }; }
+      if (sql.includes('FROM cms_documents d')) return { rows: references.map(value => ({ ...value })) };
+      if (sql.includes('id = ANY')) {
+        validations += 1;
+        return { rows: params[0].includes(asset.id) ? [asset] : [] };
+      }
+      if (sql.includes('FROM cms_assets')) return { rows: params[0] === asset.id ? [asset] : [] };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }, release() { assert.equal(locked, false); },
+  };
+  const pool = { async connect() { assert.equal(locked, false, 'no nested pool transaction'); connections += 1; return client; } };
+  const app = express();
+  app.use('/assets', await loadCmsRoute('cms-assets', pool, user, directory));
+  const get = async (status, id = asset.id) => {
+    const before = connections;
+    const result = await supertest(app).get(`/assets/${id}`).expect(status);
+    assert.equal(connections, before + 1);
+    return result;
+  };
+  await get(403); // wrong cargo, even admin/uploader
+  user.job_title_id = 'closer';
+  assert.deepEqual((await get(200)).body, pdf);
+  assert.ok(validations > 0, 'real batch validator queried assets');
+  for (const field of ['academy_active', 'module_active', 'lesson_active']) {
+    row[field] = false; await get(403); row[field] = true;
+  }
+  user.job_title_active = false; await get(403); user.job_title_active = true;
+  row.course_blocks = null; await get(403);
+  row.course_blocks = [{ type: 'pdf', asset_id: missingId }]; await get(403);
+  row.course_blocks = [];
+  row.blocks = [...blocks, { type: 'pdf', asset_id: missingId }]; await get(403);
+  row.blocks = [...blocks, { type: 'invalid' }]; await get(403);
+  row.blocks = blocks;
+  row.published_revision_id = null; await get(403);
+  row.status = 'draft';
+  user.permissions.manageAcademy = true; await get(200);
+  row.status = 'scheduled'; await get(200);
+  row.status = 'archived'; await get(403);
+  user.permissions = {};
+  row.status = 'published'; row.published_revision_id = 'revision';
+  row.content_type = 'academy'; user.job_title_id = 'capture'; await get(403);
+  user.job_title_id = 'closer'; await get(200);
+  row.content_type = 'academy_lesson'; row.course_blocks = null;
+  references = [row, { content_type: 'knowledge', status: 'published', revision_id: 'public',
+    published_revision_id: 'public', blocks, block_type: 'pdf' }];
+  await get(200); // one authorized shared reference suffices
+  references = []; await get(403);
+  await get(404, missingId);
 });

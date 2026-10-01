@@ -903,7 +903,7 @@ async function loadCourses() {
         cell(course.title || '—'), cell(course.category || '—', 'badge badge-gray'),
         cell(course.active ? 'Ativo' : 'Inativo', `badge ${course.active ? 'badge-green' : 'badge-gray'}`),
         actions(
-          element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar curso: ${course.title}`, on: { click: () => editCourse(course) } }),
+          element('a', { className: 'btn btn-ghost btn-sm', href: `./academy.html?manage=1&course=${encodeURIComponent(course.id)}`, text: course.delivery_mode === 'internal' ? 'Gerenciar curso' : 'Editar curso externo', 'aria-label': `Gerenciar curso: ${course.title}` }),
           element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir curso: ${course.title}`, on: { click: () => deleteCourse(course.id) } }),
         ),
       ])));
@@ -1109,7 +1109,7 @@ document.getElementById('registration-form').addEventListener('submit', async ev
     save.disabled = false;
   }
 });
-document.getElementById('btn-new-course').addEventListener('click', () => courseDialog());
+document.getElementById('btn-new-course').addEventListener('click', () => { window.location.href = './academy.html?manage=1&new=1'; });
 document.getElementById('btn-new-benefit').addEventListener('click', () => benefitDialog());
 [['user', 'modal-user'], ['registration', 'modal-registration'], ['course', 'modal-course'], ['benefit', 'modal-benefit']].forEach(([name, modalId]) => {
   setDialogCloseGuard(document.getElementById(modalId), () => !page.busy);

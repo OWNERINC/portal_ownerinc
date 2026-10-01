@@ -295,8 +295,8 @@ test('public CMS lists, categories, counts, and details exclude unpublished docu
   const legacyId = '00000000-0000-4000-8000-000000000001';
   const hiddenId = '00000000-0000-4000-8000-000000000002';
   contentRows.academy.push(
-    { id: legacyId, category: 'Legacy', active: true },
-    { id: hiddenId, category: 'Hidden', active: true },
+    { id: legacyId, category: 'Legacy', active: true, audience: 'all', delivery_mode: 'external' },
+    { id: hiddenId, category: 'Hidden', active: true, audience: 'all', delivery_mode: 'external' },
   );
   contentRows.benefits.push(
     { id: legacyId, category: 'Legacy', active: true },
@@ -349,7 +349,7 @@ test('public CMS lists, categories, counts, and details exclude unpublished docu
 test('category filters trim persisted whitespace for Knowledge, Academy, and Benefits', async () => {
   const id = '00000000-0000-4000-8000-000000000003';
   contentRows.knowledge.push({ id, category: ' Finance ', title: 'Knowledge', content: 'Body' });
-  contentRows.academy.push({ id, category: ' Finance ', title: 'Academy', active: true });
+  contentRows.academy.push({ id, category: ' Finance ', title: 'Academy', active: true, audience: 'all', delivery_mode: 'external' });
   contentRows.benefits.push({ id, category: ' Finance ', company: 'Benefits', active: true });
 
   for (const [path, table] of [
@@ -362,7 +362,7 @@ test('category filters trim persisted whitespace for Knowledge, Academy, and Ben
     assert.equal(response.status, 200, path);
     const read = calls.find(({ sql }) => new RegExp(`FROM ${table}\\b`).test(sql) && /btrim\(/.test(sql));
     assert.ok(read, `${path} must trim its category filter`);
-    assert.deepEqual(read.params, ['Finance']);
+    assert.deepEqual(read.params, table === 'academy' ? [false, null, 'Finance'] : ['Finance']);
   }
 });
 

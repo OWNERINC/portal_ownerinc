@@ -271,7 +271,7 @@ test('admin job titles come from the API instead of an inline catalog', async ()
 test('public content pages expose server pagination and category filters', async () => {
   const [knowledge, academy, benefits, pagination] = await Promise.all([
     readFile('public/js/knowledge.js', 'utf8'),
-    readFile('public/js/academy.js', 'utf8'),
+    readFile('public/academy/catalog-view.js', 'utf8'),
     readFile('public/js/benefits.js', 'utf8'),
     readFile('public/js/pagination.js', 'utf8'),
   ]);
@@ -280,14 +280,10 @@ test('public content pages expose server pagination and category filters', async
   assert.match(knowledge, /const requestToken = \+\+articlesRequest/);
   assert.match(knowledge, /if \(requestToken !== articlesRequest\) return/);
   assert.match(knowledge, /renderPagination\(articlesPagination/);
-  assert.match(academy, /fetchAPIPage\(`\/api\/academy\?\$\{request\}`\)/);
-  assert.match(academy, /academy-filters/);
-  assert.match(academy, /let coursesRequest = 0/);
-  assert.match(academy, /if \(requestToken !== coursesRequest\) return/);
-  assert.match(academy, /if \(!courses\.length && offset > 0\)/);
-  assert.match(academy, /updateUrl\(category, 0\)/);
-  assert.match(academy, /return loadCourses\(\)/);
-  assert.match(academy, /if \(!courses\.length\) \{[\s\S]*clear\(pagination\)/);
+  assert.match(academy, /api\.list\(\{ group, category, offset/);
+  assert.match(academy, /api\.continueCourses\(\)/);
+  assert.match(academy, /if \(!live\(\)\) return/);
+  assert.match(academy, /Ver todos os cursos deste grupo/);
   assert.match(benefits, /fetchAPIPage\(`\/api\/benefits\?\$\{request\}`\)/);
   assert.match(benefits, /benefits-filters/);
   assert.match(benefits, /let benefitsRequest = 0/);
@@ -297,8 +293,8 @@ test('public content pages expose server pagination and category filters', async
   assert.match(benefits, /return loadBenefits\(\)/);
   assert.match(benefits, /if \(!benefits\.length\) \{[\s\S]*clear\(pagination\)/);
   assert.match(pagination, /function renderPagination/);
-  assert.match(academy, /setPaginationBusy\(pagination, true\)/);
-  assert.match(academy, /setPaginationBusy\(pagination, false\)/);
+  assert.match(academy, /cards\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(academy, /cards\.setAttribute\('aria-busy', 'false'\)/);
   assert.match(knowledge, /setPaginationBusy\(articlesPagination, true\)/);
   assert.match(knowledge, /setPaginationBusy\(articlesPagination, false\)/);
 });
@@ -514,6 +510,9 @@ test('authenticated shell is generated from one static build source', async () =
   for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);
+    const brands = html.match(/<a\b[^>]*\bclass="sidebar-brand"[^>]*>/g) || [];
+    assert.equal(brands.length, 1, `${page}: expected one brand anchor`);
+    assert.match(brands[0], /\baria-label="Ownerinc"/, `${page}: brand name must survive the collapsed logo`);
     assert.match(html, /<!-- generated:portal-topbar -->[\s\S]*<!-- \/generated:portal-topbar -->/, `${page}: topbar is not generated`);
     assert.doesNotMatch(html, /data-lucide=/, `${page}: shell contains runtime icon placeholders`);
   }

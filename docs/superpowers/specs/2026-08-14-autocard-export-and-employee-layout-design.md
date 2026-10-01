@@ -18,8 +18,9 @@ This change covers:
 - the AutoCard footer copy and logo asset;
 - focused regression checks for export geometry and employee layout contracts.
 
-The AutoCard remains a square `1080 × 1080 px` export. Other templates keep
-their current visual composition unless they use the shared export behavior.
+Current square previews produce `1080 × 1080 px` exports; the shared export
+preserves the rendered aspect ratio rather than forcing a square. Other
+templates keep their current visual composition.
 
 ## Employee Card Layout
 
@@ -68,6 +69,11 @@ rectangle instead of forcing `height` to equal `width`.
 - Use a target width of `1080px` and derive target height from the rendered
   aspect ratio.
 - Pass the rendered CSS width and height to `html2canvas`.
+- In `onclone`, set only the cloned card's inline width and height to those
+  measured CSS dimensions, without rounding. The clone can lose the original
+  page's scrollbar gutter and otherwise reflow wider than the capture area,
+  clipping the footer and changing the photo framing. Do not resize the live
+  preview or rewrite the cloned content.
 - Set the capture scale from the target width divided by rendered CSS width.
 - Keep PNG output lossless and preserve the original image crop and aspect
   ratio.
@@ -93,6 +99,11 @@ Add focused checks for:
 
 - export options using both rendered width and rendered height;
 - target scale based on the rendered width;
+- the real `onclone` callback on a distinct node, preserving fractional bounds
+  and non-square captures (for example `360 × 540` exports at `1080 × 1620`);
+- mobile capture with a classic scrollbar and desktop capture, comparing the
+  original and post-callback clone geometry plus the actual PNG footer, logo,
+  photo boundary and right inset;
 - font readiness and image decode sequencing;
 - employee card stacked layout and full-width content panel;
 - safe wrapping for long collaborator names;
@@ -100,6 +111,10 @@ Add focused checks for:
 - exact `Bem-vindo(a)` copy;
 - wordmark-only light/dark asset paths;
 - no stretching rules on the employee image or footer logo.
+
+The clone geometry fix does not change overflow tolerance: a body reporting
+`clientHeight=26` and `scrollHeight=27` still blocks export. Generation, revision,
+lifecycle, font and image readiness guards also remain unchanged.
 
 Run `npm test`, `npm run verify`, the focused AutoCard tests, and
 `git diff --check` before publication.

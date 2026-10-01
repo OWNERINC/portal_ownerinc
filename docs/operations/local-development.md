@@ -66,7 +66,7 @@ Para conferir o shell gerado sem escrever arquivos, use
 
 ### Persistência de enquetes Owner News
 
-A migration `034_owner_news_polls` cria enquetes, opções e votos. A API recebe
+A migration `035_owner_news_polls` cria enquetes, opções e votos. A API recebe
 SELECT/INSERT/UPDATE/DELETE nas três tabelas após o REVOKE do provisionamento;
 o cron não recebe acesso. O banco garante uma enquete aberta por vez, posições
 únicas de 0 a 5 por enquete e um voto por usuário/enquete. A FK composta impede

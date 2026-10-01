@@ -299,7 +299,7 @@ function loadAcademyHarness() {
     .replace(/^import[^\n]+\n/gm, '')
     .replace(/const user = await requireAuth\(\);\nif \(!user\) throw new Error\('Authentication required'\);\n/, '')
     .replace(/\nloadCourses\(\);\n}\s*$/, '\n}');
-  vm.runInNewContext(mountSource(source, 'globalThis.loadCourses = loadCourses;'), context, { filename: 'academy.js' });
+   vm.runInNewContext(mountSource(source, 'globalThis.loadCourses = loadCourses;'), context, { filename: 'academy.js' });
   return { context, document, nodes, container, filters, pagination, location, requests };
 }
 
@@ -703,19 +703,17 @@ test('CSP-safe typography and contrast tokens do not depend on remote font loadi
 });
 
 test('requests keep current content pending and reject stale filtered responses', () => {
-  for (const [source, token] of [[dashboard, 'announcementsRequest'], [dashboard, 'remindersRequest'], [dashboard, 'academyRequest'], [knowledge, 'articlesRequest'], [academy, 'coursesRequest'], [announcements, 'announcementsRequest']]) {
+  for (const [source, token] of [[dashboard, 'announcementsRequest'], [dashboard, 'remindersRequest'], [dashboard, 'academyRequest'], [knowledge, 'articlesRequest'], [announcements, 'announcementsRequest']]) {
     assert.match(source, new RegExp(`let ${token} = 0`));
     assert.match(source, /setBusy\(/);
     assert.match(source, /finally/);
     assert.match(source, /requestToken !==/);
   }
   assert.doesNotMatch(knowledge.slice(knowledge.indexOf('async function loadArticles'), knowledge.indexOf('\n\nfunction newArticle')), /showState\(listNode, 'Carregando artigos/);
-  assert.doesNotMatch(academy.slice(academy.indexOf('async function loadCourses'), academy.indexOf('\n\nwindow.addEventListener')), /showState\(container, 'Carregando cursos/);
   assert.match(knowledge, /if \(!articles\.length && offset > 0\)/);
-  assert.match(academy, /if \(!courses\.length && offset > 0\)/);
   assert.match(announcements, /if \(!announcements\.length && offset > 0\)/);
   assert.match(knowledge, /function normalizeCategories/);
-  assert.match(academy, /function normalizeCategories/);
+  assert.match(academy, /mountAcademy\(page\)/);
   assert.match(profile, /const initialFocus = document\.activeElement/);
   assert.match(profile, /const focusLost =/);
   assert.match(profile, /profileFormSnapshot/);
@@ -724,7 +722,7 @@ test('requests keep current content pending and reject stale filtered responses'
 });
 
 test('focus fallback helpers reject inert targets and inert ancestors', () => {
-  for (const source of [knowledge, academy, announcements]) {
+  for (const source of [knowledge, announcements]) {
     assert.match(source, /function hasInertAncestor/);
     assert.match(source, /!node\.inert && !hasInertAncestor\(node\)/);
   }
@@ -732,9 +730,10 @@ test('focus fallback helpers reject inert targets and inert ancestors', () => {
   assert.match(ui, /!node\.disabled && !node\.inert && !hasUnavailableAncestor\(node\)/);
 });
 
-test('catalog cards and dashboard stories never put CMS links inside another anchor', () => {
+test('catalog cards and dashboard stories never put CMS links inside another anchor', async () => {
   assert.match(dashboard, /return element\('article', \{ className: 'dashboard-story-card'/);
-  assert.match(academy, /const card = element\('article', \{ className: 'card link-card'/);
+  const academyCards = await readFile('public/academy/view-utils.js', 'utf8');
+  assert.match(academyCards, /element\('article', \{ className: 'academy-course-card'/);
   assert.doesNotMatch(dashboard, /element\(href \? 'a'/);
   assert.match(renderer, /Abrir PDF em nova aba/);
   assert.match(renderer, /A acessibilidade do arquivo depende do documento PDF original/);
@@ -769,109 +768,46 @@ test('initial navigation keeps Benefits and Sólides out while Academy remains a
   const pages = generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '';
   assert.doesNotMatch(pages, /benefits|solides/i);
   assert.doesNotMatch(dashboardHtml, /benefits\.html|Benefícios|solides\.html|Sólides/);
-  assert.match(academyHtml, /Filtrar cursos por categoria/);
+  assert.match(academyHtml, /id="academy-root" aria-busy="true"/);
   assert.match(benefitsHtml, /id="benefits-content"/);
 });
 
-test('Academy ignores stale filter and pagination handlers while a newer request is pending', async () => {
-  const harness = loadAcademyHarness();
-  const firstLoad = harness.context.loadCourses();
-  harness.requests[0].page.resolve({ data: [{ active: true, title: 'Curso', category: 'Geral', url: 'https://example.test' }], total: 40 });
-  harness.requests[0].categories.resolve(['todos', 'Geral']);
-  await firstLoad;
-
-  const oldFilter = harness.filters.children.find(button => button.dataset.category === 'todos');
-  const oldPagination = harness.context.paginationCallback;
-  const oldUrl = harness.location.href;
-  const secondLoad = harness.context.loadCourses();
-  assert.equal(oldFilter.disabled, true);
-  oldFilter.dispatch('click');
-  oldPagination(20);
-  assert.equal(harness.location.href, oldUrl);
-
-  harness.requests[1].page.resolve({ data: [{ active: true, title: 'Curso atual', category: 'Geral', url: 'https://example.test' }], total: 40 });
-  harness.requests[1].categories.resolve(['todos', 'Geral']);
-  await secondLoad;
-  assert.equal(harness.filters.children.find(button => button.dataset.category === 'todos').textContent, 'todos (categoria)');
+// Academy now uses its production module graph, rather than a copied rendering harness.
+test('Academy category names, stale controls and pagination focus survive a smaller/empty page', async () => {
+  const { academyHarness, course, drain, TestEvent } = await import('../helpers/academy-frontend.mjs');
+  for (const data of [[course()], []]) {
+    const h = await academyHarness();
+    await h.resolve('group=initial', { data: [course()], total: 40 });
+    await h.resolve('/categories', ['todos', 'Cultura']);
+    const filter = h.doc.getElementById('academy-filter-initial');
+    assert.match(filter.textContent, /todos \(categoria\)/);
+    const next = h.button('Próxima'); next.focus(); next.click(); await drain();
+    const url = h.location.href;
+    next.click(); filter.value = 'todos'; filter.dispatchEvent(new TestEvent('change')); await drain();
+    assert.equal(h.location.href, url);
+    await h.resolve('group=initial', { data, total: data.length ? 21 : 0 });
+    assert.equal(h.doc.activeElement.tagName, 'H1');
+    assert.equal(h.doc.activeElement.isConnected, true);
+    assert.equal(h.button('Próxima'), undefined);
+    h.page.dispose();
+  }
 });
 
-test('Academy restores pagination focus to the category fallback when a page becomes single or empty', async () => {
-  const loadPage = async (harness, result) => {
-    const request = harness.context.loadCourses();
-    const pending = harness.requests.at(-1);
-    pending.page.resolve(result);
-    pending.categories.resolve(['todos', 'Geral']);
-    await request;
-  };
-
-  const single = loadAcademyHarness();
-  await loadPage(single, { data: [{ active: true, title: 'Curso', category: 'Geral', url: 'https://example.test' }], total: 40 });
-   single.pagination.querySelectorAll('button').find(button => !button.disabled).focus();
-  await loadPage(single, { data: [{ active: true, title: 'Último curso', category: 'Geral', url: 'https://example.test' }], total: 1 });
-  assert.equal(single.document.activeElement.closest('#academy-filters'), single.filters);
-
-  const empty = loadAcademyHarness();
-  await loadPage(empty, { data: [{ active: true, title: 'Curso', category: 'Geral', url: 'https://example.test' }], total: 40 });
-   empty.pagination.querySelectorAll('button').find(button => !button.disabled).focus();
-  await loadPage(empty, { data: [], total: 0 });
-  assert.equal(empty.document.activeElement.closest('#academy-filters'), empty.filters);
-});
-
-test('Academy falls back when a total change makes the equivalent pagination button disabled', async () => {
-  const harness = loadAcademyHarness();
-  const first = harness.context.loadCourses();
-  harness.requests[0].page.resolve({ data: [{ active: true, title: 'Primeiro', category: 'Geral', url: 'https://example.test' }], total: 40 });
-  harness.requests[0].categories.resolve(['Geral']);
-  await first;
-
-  const next = harness.pagination.querySelectorAll('button').find(button => button.textContent === 'Próxima');
-  next.focus();
-  harness.context.paginationCallback(20);
-  const second = harness.requests[1];
-  second.page.resolve({ data: [{ active: true, title: 'Último', category: 'Geral', url: 'https://example.test' }], total: 35 });
-  second.categories.resolve(['Geral']);
-  await new Promise(resolve => setImmediate(resolve));
-
-  assert.equal(harness.document.activeElement.closest('#academy-filters'), harness.filters);
-  assert.equal(harness.pagination.querySelectorAll('button').find(button => button.textContent === 'Próxima').disabled, true);
-});
-
-test('Academy focuses the retry button after an initial load error', async () => {
-  const harness = loadAcademyHarness();
-  const request = harness.context.loadCourses();
-  harness.requests[0].page.reject(new Error('network'));
-  harness.requests[0].categories.resolve([]);
-  await request;
-
-  const state = harness.container.children[0];
-  const retry = state.children[0];
-  assert.equal(harness.document.activeElement, retry);
-  assert.equal(retry.disabled, false);
-  assert.equal(retry.hidden, false);
-  assert.equal(retry.inert, false);
-});
-
-test('Academy focuses the replacement retry button after a repeated retry error', async () => {
-  const harness = loadAcademyHarness();
-  const first = harness.context.loadCourses();
-  harness.requests[0].page.reject(new Error('network'));
-  harness.requests[0].categories.resolve([]);
-  await first;
-
-  const oldRetry = harness.container.children[0].children[0];
-  oldRetry.focus();
-  oldRetry.isConnected = false;
-  oldRetry.dispatch('click');
-  harness.requests[1].page.reject(new Error('network again'));
-  harness.requests[1].categories.resolve([]);
-  await new Promise(resolve => setImmediate(resolve));
-
-  const replacement = harness.container.children[0].children[0];
-  assert.notEqual(replacement, oldRetry);
-  assert.equal(harness.document.activeElement, replacement);
-  assert.equal(replacement.disabled, false);
-  assert.equal(replacement.hidden, false);
-  assert.equal(replacement.inert, false);
+test('Academy initial/repeated error focuses usable retry, then successful retry returns focus to its filter', async () => {
+  const { academyHarness, course, drain } = await import('../helpers/academy-frontend.mjs');
+  const h = await academyHarness();
+  h.latest('group=initial').reject(new Error('network')); await drain();
+  const first = h.button('Tentar novamente');
+  assert.equal(h.doc.activeElement, first);
+  first.click(); await drain();
+  h.latest('group=initial').reject(new Error('network again')); await drain();
+  const replacement = h.button('Tentar novamente');
+  assert.notEqual(replacement, first); assert.equal(h.doc.activeElement, replacement);
+  assert.equal(replacement.disabled, false); assert.equal(replacement.hidden, false);
+  replacement.click(); await drain();
+  await h.resolve('group=initial', { data: [course()], total: 1 });
+  assert.equal(h.doc.activeElement, h.doc.getElementById('academy-filter-initial'));
+  h.page.dispose();
 });
 
 test('Announcements preserves pagination focus and boundary buttons after a deferred page load', async t => {

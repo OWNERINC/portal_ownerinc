@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Portal Ownerinc local backup at 06:00 UTC (03:00 Brasilia)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+AccuracySec=1min
+Persistent=true
+Unit=ownerinc-portal-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -38,7 +38,14 @@ test('pagination is capped and all-content visibility requires the matching mana
 test('scoped routes delegate failures and privileged changes to the audit helper', async () => {
   for (const name of ['knowledge', 'reminders', 'academy', 'benefits', 'job-titles']) {
     const source = await readFile(`api/routes/${name}.js`, 'utf8');
-    assert.match(source, /next\(error\)/, `${name} must use generic error handling`);
+    if (name === 'academy') {
+      assert.match(source, /academyFailure\(error, req, res, next\)/);
+      const { academyFailure } = require('../../api/routes/academy-learning');
+      const failure = new Error('database unavailable');
+      let forwarded;
+      academyFailure(failure, {}, {}, error => { forwarded = error; });
+      assert.equal(forwarded, failure, 'unexpected Academy failures reach the generic error handler');
+    } else assert.match(source, /next\(error\)/, `${name} must use generic error handling`);
   }
   for (const name of ['knowledge', 'reminders', 'academy', 'benefits', 'job-titles']) {
     const source = await readFile(`api/routes/${name}.js`, 'utf8');
@@ -193,7 +200,9 @@ test('public content routes provide server-side filters and category metadata', 
   assert.match(knowledge, /syncKnowledgePdf/);
   assert.doesNotMatch(knowledge, /DELETE FROM cms_documents/);
   assert.match(academy, /router\.get\('\/categories'/);
-  assert.match(academy, /btrim\(academy\.category\) = \$1/);
+  assert.match(academy, /listCourses\(pool, req.user/);
+  const catalog = await readFile('api/academy/catalog.js', 'utf8');
+  assert.match(catalog, /btrim\(a\.category\) = \$\{parameter\(query.category\)\}/);
   assert.match(benefits, /router\.get\('\/categories'/);
   assert.match(benefits, /btrim\(benefits\.category\) = \$1/);
 });

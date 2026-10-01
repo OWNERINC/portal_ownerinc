@@ -241,14 +241,16 @@ async function loadAcademy() {
     if (!courses.length) return showState(academySection, 'Nenhum curso disponível no momento.');
     clear(academySection);
     courses.forEach((course, index) => {
-      const href = safeHttpUrl(course.url) || './academy.html';
+      const href = course.delivery_mode === 'internal'
+        ? `./academy.html?course=${encodeURIComponent(course.id)}`
+        : safeHttpUrl(course.url) || './academy.html';
       academySection.append(storyCard({
         title: course.title,
         category: course.category || 'Desenvolvimento',
         description: course.description || '',
         blocks: course.content_blocks,
         href,
-        newTab: Boolean(safeHttpUrl(course.url)),
+        newTab: course.delivery_mode !== 'internal' && Boolean(safeHttpUrl(course.url)),
         image: editorialImages[index % editorialImages.length][0],
         alt: editorialImages[index % editorialImages.length][1],
       }));

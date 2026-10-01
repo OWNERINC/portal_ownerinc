@@ -7,6 +7,8 @@ const pool = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
 const { lockCmsAssets } = require('../cms/locks');
+const { validatePublishedBlocksBatch } = require('../cms/reader');
+const { canReadCourse } = require('../academy/access');
 const { forbidden, invalid, uuid, withAudit } = require('../route-utils');
 
 const router = express.Router();
@@ -14,7 +16,7 @@ const uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads';
 const privateDirectory = path.join(uploadDirectory, 'cms-private');
 const MAX_ASSET_SIZE = 50 * 1024 * 1024;
 const MAX_PDF_SIZE = 100 * 1024 * 1024;
-const CONTENT_TYPES = ['knowledge', 'academy', 'benefit', 'announcement', 'reminder'];
+const CONTENT_TYPES = ['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder'];
 const ASSET_MIMES = {
   profile: new Set(['image/jpeg', 'image/png', 'image/webp']),
   image: new Set(['image/jpeg', 'image/png', 'image/webp']),
@@ -74,7 +76,11 @@ function reminderIsVisible(row, user) {
 
 function publishedIsVisible(row, user) {
   if (row.content_type === 'knowledge' || row.content_type === 'announcement') return true;
-  if (row.content_type === 'academy') return row.academy_active === true;
+  if (row.content_type === 'academy' || row.content_type === 'academy_lesson') {
+    return canReadCourse(user, { active: row.academy_active, audience: row.academy_audience }, row.academy_job_title_ids)
+      && (row.content_type === 'academy' || (row.lesson_active === true
+        && row.module_active === true && row.course_publication_valid === true));
+  }
   if (row.content_type === 'benefit') return row.benefit_active === true;
   if (row.content_type === 'reminder') return reminderIsVisible(row, user);
   return false;
@@ -85,6 +91,7 @@ function referenceIsReadable(row, user, asset) {
   if (canManageCms(user, row.content_type) && ['draft', 'published', 'scheduled'].includes(row.status)) return true;
   return row.status === 'published'
     && row.published_revision_id === row.revision_id
+    && row.publication_valid === true
     && publishedIsVisible(row, user);
 }
 
@@ -269,23 +276,59 @@ async function deleteUnreferencedAsset(req, assetId, {
 
 async function canReadAsset(db, user, asset) {
   const { rows } = await db.query(
-    `SELECT d.content_type, d.published_revision_id, r.id AS revision_id, r.status,
+    `SELECT d.content_type, d.published_revision_id, r.id AS revision_id, r.status, r.blocks,
             block->>'type' AS block_type,
             academy.active AS academy_active,
+            academy.audience AS academy_audience,
+            ARRAY(SELECT audience.job_title_id FROM academy_course_job_titles audience
+                  WHERE audience.course_id = academy.id) AS academy_job_title_ids,
+            lesson.active AS lesson_active, module.active AS module_active,
+            course_document.id AS course_document_id, course_revision.blocks AS course_blocks,
             benefits.active AS benefit_active,
             reminders.active AS reminder_active,
             reminders.target_users AS reminder_target_users
        FROM cms_documents d
        JOIN cms_revisions r ON r.document_id = d.id
        CROSS JOIN LATERAL jsonb_array_elements(r.blocks) block
-       LEFT JOIN academy ON d.content_type = 'academy' AND academy.id = d.source_id
+       LEFT JOIN academy_lessons lesson ON d.content_type = 'academy_lesson' AND lesson.id = d.source_id
+       LEFT JOIN academy_modules module ON module.id = lesson.module_id
+       LEFT JOIN academy ON (d.content_type = 'academy' AND academy.id = d.source_id)
+                         OR (d.content_type = 'academy_lesson' AND academy.id = module.course_id)
+       LEFT JOIN cms_documents course_document ON d.content_type = 'academy_lesson'
+         AND course_document.content_type = 'academy' AND course_document.source_id = academy.id
+       LEFT JOIN cms_revisions course_revision ON course_revision.id = course_document.published_revision_id
+         AND course_revision.document_id = course_document.id AND course_revision.status = 'published'
        LEFT JOIN benefits ON d.content_type = 'benefit' AND benefits.id = d.source_id
        LEFT JOIN reminders ON d.content_type = 'reminder' AND reminders.id = d.source_id
          WHERE lower(block->>'asset_id') = lower($1::text)
         AND r.status IN ('draft', 'published', 'scheduled')`,
     [asset.id],
   );
-  return rows.some((row) => referenceIsReadable(row, user, asset));
+  // The caller owns the CMS lock and transaction. Validate full publications on
+  // that client; a valid PDF alone cannot make an invalid document readable.
+  const values = [];
+  const indexes = new Map();
+  const addPublication = (key, blocks) => {
+    if (!indexes.has(key)) {
+      indexes.set(key, values.length);
+      values.push(blocks);
+    }
+    return indexes.get(key);
+  };
+  const references = rows.map(row => ({
+    row,
+    publication: row.status === 'published' && row.published_revision_id === row.revision_id
+      ? addPublication(`revision:${row.revision_id}`, row.blocks) : null,
+    course: row.course_document_id
+      ? addPublication(`course:${row.course_document_id}`, row.course_blocks) : null,
+  }));
+  const validations = await validatePublishedBlocksBatch(db, values);
+  // Shared files remain readable when any one reference is authorized.
+  return references.some(({ row, publication, course }) => referenceIsReadable({
+    ...row,
+    publication_valid: publication !== null && validations[publication].blocks !== null,
+    course_publication_valid: course === null || validations[course].blocks !== null,
+  }, user, asset));
 }
 
 function uploadMiddleware(req, res, next) {

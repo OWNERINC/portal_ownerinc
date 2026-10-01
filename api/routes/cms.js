@@ -13,11 +13,12 @@ const {
 
 const router = express.Router();
 const CMS_ASSET_RETENTION_LOCK = 7193029;
-const CONTENT_TYPES = ['knowledge', 'academy', 'benefit', 'announcement', 'reminder'];
+const CONTENT_TYPES = ['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder'];
 const REVISION_STATUSES = ['draft', 'published', 'scheduled', 'archived'];
 const SOURCE_TABLES = {
   knowledge: 'knowledge_base',
   academy: 'academy',
+  academy_lesson: 'academy_lessons',
   benefit: 'benefits',
   reminder: 'reminders',
 };

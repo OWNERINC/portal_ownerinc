@@ -161,6 +161,24 @@ test('history preserves page-local query/filter state, scroll, and focus across 
   assert.equal(h.location.pathname, '/academy.html');
 });
 
+test('Academy catalog return metadata coexists with the real router history index across areas', async () => {
+  const h = await createRouterHarness();
+  const catalog = 'https://portal.test/academy.html?initial_offset=20&role_category=Vendas';
+  await h.router.navigate(catalog);
+  const scope = h.scope;
+  scope.history.pushState({ ...h.history.state, academyCatalog: catalog }, '', '/academy.html?course=one');
+  scope.history.pushState({ ...h.history.state }, '', '/academy.html?course=one&lesson=first');
+  await h.router.navigate('/knowledge.html');
+  h.history.go(-1); await drain();
+  assert.equal(h.location.search, '?course=one&lesson=first');
+  assert.equal(h.history.state.academyCatalog, catalog);
+  const mounts = h.mounts.length;
+  h.history.go(-1); await drain();
+  assert.equal(h.location.search, '?course=one');
+  assert.equal(h.history.state.academyCatalog, catalog);
+  assert.equal(h.mounts.length, mounts, 'local history keeps the mounted shell');
+});
+
 test('cancelled dirty dialogs retain the page and history entry; confirmation is checked after preparation', async () => {
   const h = await createRouterHarness();
   await h.router.navigate('/cms.html');

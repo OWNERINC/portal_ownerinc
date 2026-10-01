@@ -5,6 +5,8 @@ const { can, canUseAutoCard, canUsePosCards } = require('./policy');
 const { rateLimit } = require('./security');
 
 const writeLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => req.user.uid });
+const progressLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 120, key: (req) => req.user.uid });
+const progressPath = /^\/api\/academy\/lessons\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/progress$/i;
 
 if (!getApps().length) {
   const emulator = process.env.NODE_ENV === 'development' && process.env.FIREBASE_AUTH_EMULATOR_HOST;
@@ -62,7 +64,10 @@ async function authMiddleware(req, res, next) {
      req.user = user;
     req.user.autocard_access = canUseAutoCard(req.user);
     req.user.pos_cards_access = canUsePosCards(req.user);
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return writeLimit(req, res, next);
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      const pathname = (req.originalUrl || '').split('?')[0];
+      return (req.method === 'PUT' && progressPath.test(pathname) ? progressLimit : writeLimit)(req, res, next);
+    }
     next();
   } catch (err) {
     next(err);

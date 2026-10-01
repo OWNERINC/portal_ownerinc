@@ -1,0 +1,16 @@
+[Unit]
+Description=Renew only the Portal Ownerinc HTTPS certificate
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/bin/bash /usr/local/libexec/ownerinc-portal-renew-certificate
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true

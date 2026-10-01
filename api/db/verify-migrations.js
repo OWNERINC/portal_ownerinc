@@ -32,6 +32,9 @@ const expectedVersions = [
   '030_dho_job_title_catalog',
   '031_contract_invariants',
   '032_user_import_identity',
+  '033_academy_learning',
+  '034_owner_news_editorial',
+  '035_owner_news_polls',
 ];
 
 async function verifyMigrations() {
@@ -62,11 +65,11 @@ async function verifyMigrations() {
        EXISTS (SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'schema_migrations'
           AND column_name = 'applied_at' AND data_type = 'timestamp with time zone' AND is_nullable = 'NO') AS schema_migrations_applied_at,
-        (SELECT ARRAY_AGG(column_name ORDER BY ordinal_position)
+        (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
          FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'pending_registrations')
            = ARRAY['id', 'firebase_uid', 'email', 'name', 'status', 'created_at', 'reviewed_at', 'reviewed_by', 'rejection_reason', 'firebase_cleanup_pending']::text[] AS pending_registrations_columns,
-       (SELECT ARRAY_AGG(column_name ORDER BY ordinal_position)
+       (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
         FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'firebase_cleanup_queue')
           = ARRAY['firebase_uid', 'reason', 'created_at', 'last_attempt_at', 'attempts', 'last_error']::text[] AS firebase_cleanup_queue_columns,
@@ -103,9 +106,12 @@ async function verifyMigrations() {
          WHERE conrelid = 'public.users'::regclass
            AND conname = 'users_contract_consistency'
            AND contype = 'c'
-           AND pg_get_constraintdef(oid) LIKE '%pj_due_day BETWEEN 1 AND 31%'
-           AND pg_get_constraintdef(oid) LIKE '%is_pj IS TRUE%'
-           AND pg_get_constraintdef(oid) LIKE '%is_pj IS FALSE%') AS user_contract_invariants,
+           AND convalidated
+           -- PostgreSQL deparses BETWEEN into >= / <=. Match the complete
+           -- migration 031 predicate, including grouping (no OR TRUE bypass).
+           AND pg_get_constraintdef(oid) = 'CHECK ((((contract_type = ''pj''::text) AND (is_pj IS TRUE)'
+             || ' AND ((pj_due_day >= 1) AND (pj_due_day <= 31)))'
+             || ' OR ((contract_type = ''clt''::text) AND (is_pj IS FALSE) AND (pj_due_day IS NULL))))') AS user_contract_invariants,
        (SELECT COUNT(*) = 0 FROM users
         WHERE contract_type IS NULL OR is_pj IS NULL
            OR contract_type NOT IN ('clt', 'pj')
@@ -301,6 +307,34 @@ async function verifyMigrations() {
        || result.rows[0].cron_cms_assets_privileges !== true
        || result.rows[0].cron_audit_privileges !== true) {
        throw new Error('Migration ledger, DHO job title, pending registration, profile photo crop, AutoCard, Pos-Cards, CMS, or Ombudsman removal schema/runtime checks are incomplete');
+    }
+    const academyTables = ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress'];
+    for (const table of academyTables) {
+      for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+        const access = await pool.query(`SELECT
+          has_table_privilege('portal_api', $1, $2) AS api_allowed,
+          has_table_privilege('portal_cron', $1, $2) AS cron_allowed`, [`public.${table}`, privilege]);
+        if (access.rows[0].api_allowed !== true || access.rows[0].cron_allowed !== false) {
+          throw new Error(`Unexpected Academy runtime privilege: ${table} ${privilege}`);
+        }
+      }
+    }
+    const academy = await pool.query(`SELECT
+      EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'academy'
+          AND column_name = 'url' AND is_nullable = 'YES') AS nullable_url,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.academy'::regclass
+          AND conname = 'academy_delivery_url_check') AS delivery_check,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.academy_lessons'::regclass
+          AND conname = 'academy_lesson_media_check') AS media_check,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.cms_documents'::regclass
+          AND conname = 'cms_documents_content_type_check'
+          AND pg_get_constraintdef(oid) LIKE '%academy_lesson%') AS cms_lessons`);
+    if (!Object.values(academy.rows[0]).every((value) => value === true)) {
+      throw new Error('Academy delivery, media or CMS schema checks are incomplete');
     }
     console.log('migration verification: current schema ok');
   } finally {
