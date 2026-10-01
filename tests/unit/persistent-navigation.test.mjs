@@ -13,11 +13,15 @@ test('Owner News reconciles the real router forced close before async Back/Forwa
   overlay.append(new Node('button', h.doc, { id: 'news-reader-close' })); h.doc.body.append(overlay);
   const catalog = h.doc.getElementById('main-content');
   const card = new Node('article', h.doc, { id: 'news-card-first' });
-  const link = new Node('a', h.doc, { href: '?id=first', id: 'original-link' }); card.append(link); catalog.append(card);
+  const link = new Node('a', h.doc, { href: './announcements.html?id=first' }); card.append(link); catalog.append(card);
   link.focus(); h.window.scrollY = 640;
   h.scope.history.replaceState({ retained: 'yes' }, '', h.location.href);
   const routes = [];
-  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async route => routes.push(route) });
+  const catalogReady = deferred();
+  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async route => {
+    routes.push(route);
+    await Promise.allSettled([route.id ? Promise.resolve() : catalogReady.promise, Promise.resolve()]);
+  } });
   await navigation.open('first'); await navigation.jump('second');
   assert.equal(h.entries.length, 3);
   assert.equal(h.history.state.retained, 'yes');
@@ -25,6 +29,8 @@ test('Owner News reconciles the real router forced close before async Back/Forwa
   assert.match(h.location.search, /id=second/, 'native traversal is asynchronous');
   await drain();
   assert.equal(h.location.search, '?category=Cultura&offset=24');
+  assert.equal(h.doc.activeElement, catalog, 'router restores main for an ID-less origin while local onRoute is pending');
+  catalogReady.resolve(); await drain();
   assert.equal(h.doc.activeElement, link);
   assert.equal(h.window.scrollY, 640);
   assert.equal(h.doc.getElementById('main-content'), catalog);
@@ -41,6 +47,37 @@ test('Owner News reconciles the real router forced close before async Back/Forwa
   await h.router.navigate('/dashboard.html');
   assert.equal(overlay.isConnected, false);
   assert.equal(h.doc.body.classList.contains('modal-open'), false);
+});
+
+for (const action of ['missing-card', 'pointerdown', 'keydown']) test(`Owner News async return handles ${action} after router focus restoration`, async () => {
+  const h = await createRouterHarness({ realUI: true });
+  await h.router.navigate('/announcements.html?category=Cultura&offset=24');
+  const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+  vm.runInContext(`${source}\nglobalThis.createNewsNavigation = createNewsNavigation;`, h.context);
+  const overlay = new Node('div', h.doc, { id: 'news-reader-overlay', class: 'hidden', 'data-page-overlay': '' });
+  overlay.append(new Node('button', h.doc, { id: 'news-reader-close' })); h.doc.body.append(overlay);
+  const catalog = h.doc.getElementById('main-content');
+  const heading = new Node('h2', h.doc, { id: 'news-catalog-title', tabindex: '-1' });
+  const card = new Node('article', h.doc, { id: 'news-card-first' });
+  const link = new Node('a', h.doc, { href: './announcements.html?id=first' }); card.append(link);
+  const other = new Node('button', h.doc, { id: 'another-control' }); catalog.append(heading, card, other);
+  link.focus(); h.window.scrollY = 640;
+  const ready = deferred();
+  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async route => {
+    await Promise.allSettled([route.id ? Promise.resolve() : ready.promise, Promise.resolve()]);
+  } });
+  await navigation.open('first');
+  if (action === 'missing-card') card.remove();
+  navigation.close(); await drain();
+  assert.equal(h.doc.activeElement, catalog);
+  if (action !== 'missing-card') {
+    h.window.dispatchEvent(new TestEvent(action, { target: other, key: 'Tab' }));
+    other.focus(); h.window.scrollY = 120;
+  }
+  ready.resolve(); await drain();
+  assert.equal(h.doc.activeElement, action === 'missing-card' ? heading : other);
+  assert.equal(h.window.scrollY, action === 'missing-card' ? 640 : 120);
+  h.scope.dispose();
 });
 
 test('all shell destinations mount repeatedly with one document, sidebar, topbar, main and cached modules', async () => {

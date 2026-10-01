@@ -35,12 +35,13 @@ export function createNewsNavigation({ page, overlay, onRoute }) {
       // Reconcile the DOM even for the same article ID (including Forward).
       if (overlay.classList.contains('hidden')) openDialog(overlay, document.getElementById('news-reader-close'));
     } else if (!overlay.classList.contains('hidden')) closeDialog(overlay, true);
-    const focusAtStart = document.activeElement;
     const interactionAtStart = interaction;
     await onRoute({ id, category: query.get('category') || '', offset: query.get('offset') || '0' });
     if (disposed || !page.active || token !== version || !returning) return;
     returnState = null;
-    if (interaction !== interactionAtStart || (document.activeElement !== focusAtStart && document.activeElement?.isConnected)) return;
+    // The router may focus main while onRoute settles for an ID-less card link.
+    // Only subsequent user input, not automatic focus movement, cancels our return.
+    if (interaction !== interactionAtStart) return;
     const target = (saved && document.getElementById(saved.cardId)?.querySelector('a')) || document.getElementById('news-catalog-title');
     target?.focus({ preventScroll: true });
     if (saved) window.scrollTo(0, saved.catalogY);

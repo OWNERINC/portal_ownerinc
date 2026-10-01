@@ -23,7 +23,7 @@
 .news-reader-brand { font-weight: 800; }
 .news-article-cover:has(.cms-asset-error:not([hidden])) { position: relative; height: auto; }
 .news-article-cover .cms-asset-error { padding: 16px 24px; }
-.news-reader-navigation-status:not(:empty) { padding: 0 16px; }
+#news-reader-navigation-status:not(:empty) { padding: 0 16px; }
 @media (max-width: 560px) { .news-reader-brand { display: none; } .news-reader-toolbar { padding: 8px; } }
 .news-article-heading h1, .news-article-heading h2 { color: inherit; font-family: var(--news-sans); font-size: clamp(34px, 5vw, 76px); line-height: 1.06; font-weight: 800; letter-spacing: -.045em; margin: 16px 0 0; max-width: 22ch; text-wrap: pretty; }
 .news-article .news-eyebrow { font-family: var(--news-mono); font-size: 12px; line-height: 1.5; margin: 0; }
