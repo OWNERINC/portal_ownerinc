@@ -101,7 +101,7 @@ test('ordinary module save reloads and renders the authoritative title/status', 
   assert.equal(h.root.querySelectorAll('input').find(node => node.getAttribute('aria-label') === 'Módulo ativo Módulo do servidor').checked, true);
 });
 
-test('ordinary lesson save reloads server media/title and ignores a late response after dispose', async () => {
+test('ordinary lesson save reloads title/media/status/order and ignores a late refresh after dispose', async () => {
   const h = await curriculumHarness();
   const lessonInput = h.root.querySelectorAll('input').find(node => node.value === 'Aula original');
   lessonInput.value = 'Aula atualizada';
@@ -109,9 +109,17 @@ test('ordinary lesson save reloads server media/title and ignores a late respons
   const save = h.requests.find(request => request.path.includes('/lessons/lesson-a') && request.options.method === 'PUT');
   assert.ok(save); save.resolve({ id: 'lesson-a', title: 'Aula atualizada' }); await drain();
   const reload = h.requests.at(-1); assert.match(reload.path, /\/api\/academy\/course-a\?all=true/);
-  reload.resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Módulo original', order: 1, active: false, lessons: [{ id: 'lesson-a', title: 'Aula do servidor', order: 7, active: true, media_type: 'file', media_url: 'https://media.test/new.webm', description: '' }] }] }); await drain();
-  assert.equal(h.root.querySelectorAll('input').find(node => node.getAttribute('aria-label') === 'Título da aula Aula do servidor').value, 'Aula do servidor');
-  const stale = h.requests.at(-1); button(h.root, 'Salvar aula').click(); await drain();
-  const staleSave = h.requests.at(-1); h.handle.dispose(); staleSave.resolve({ id: 'lesson-a' }); await drain();
+  reload.resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Módulo original', order: 1, active: false, lessons: [
+    { id: 'lesson-a', title: 'Aula do servidor', order: 7, active: true, media_type: 'file', media_url: 'https://media.test/new.webm', description: '' },
+    { id: 'lesson-b', title: 'Outra aula', order: 8, active: false, media_type: 'youtube', youtube_video_id: 'dQw4w9WgXcQ', description: '' },
+  ] }] }); await drain();
+  const refreshedInputs = h.root.querySelectorAll('input');
+  assert.equal(refreshedInputs.find(node => node.getAttribute('aria-label') === 'Título da aula Aula do servidor').value, 'Aula do servidor');
+  assert.equal(refreshedInputs.find(node => node.getAttribute('aria-label') === 'Vídeo da aula Aula do servidor').value, 'https://media.test/new.webm');
+  assert.equal(refreshedInputs.find(node => node.getAttribute('aria-label') === 'Aula ativa Aula do servidor').checked, true);
+  const lessonTitles = refreshedInputs.filter(node => node.getAttribute('aria-label')?.startsWith('Título da aula')).map(node => node.value);
+  assert.deepEqual(lessonTitles, ['Aula do servidor', 'Outra aula']);
+  const lateRefresh = h.requests.at(-1);
+  h.handle.dispose(); lateRefresh.resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Estado tardio', order: 9, active: true, lessons: [] }] }); await drain();
   assert.equal(h.root.children.length, 0);
 });
