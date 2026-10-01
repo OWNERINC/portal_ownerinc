@@ -55,6 +55,26 @@ test('group pagination/filter URLs are independent; stale controls cannot mutate
   assert.equal(h.location.searchParams.get('initial_offset'), '0');
   h.page.dispose();
 });
+test('catalog restores the initiating filter focus after remount, but never steals focus moved elsewhere', async () => {
+  const h = await academyHarness();
+  await h.resolve('group=initial', { data: [course()], total: 21 });
+  await h.resolve('group=role', { data: [course()], total: 1 });
+  await h.resolve('/categories', ['Cultura']);
+  const select = h.doc.querySelector('#academy-filter-initial');
+  select.focus(); select.value = 'Cultura'; select.dispatchEvent(new TestEvent('change')); await drain();
+  await h.resolve('group=initial', { data: [course()], total: 41 });
+  await h.resolve('group=role', { data: [course()], total: 1 });
+  await h.resolve('/categories', ['Cultura']);
+  assert.equal(h.doc.activeElement, h.doc.querySelector('#academy-filter-initial'));
+
+  const next = h.button('Próxima'); next.focus(); next.click(); await drain();
+  const other = h.doc.querySelector('#academy-filter-role'); other.focus();
+  await h.resolve('group=initial', { data: [course()], total: 41 });
+  await h.resolve('group=role', { data: [course()], total: 1 });
+  await h.resolve('/categories', ['Cultura']);
+  assert.equal(h.doc.activeElement, other, 'focus moved by the user must not be stolen by the response');
+  h.page.dispose();
+});
 test('catalog return metadata survives detail and Back/Forward within the shell', async () => {
   const h = await academyHarness({ url: 'https://portal.test/academy.html?group=initial&category=Cultura&offset=20' });
   const sidebar = h.doc.querySelector('.sidebar');

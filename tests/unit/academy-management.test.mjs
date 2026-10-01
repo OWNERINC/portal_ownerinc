@@ -85,6 +85,7 @@ test('materials are single-flight per lesson and curriculum refreshes authoritat
   assert.match(curriculum, /const result = await save\(`\/api\/academy\/lessons/);
   assert.match(curriculum, /const result = await save\(`\/api\/academy\/modules/);
   assert.match(curriculum, /if \(result && !disposed\) await reload\(\)/);
+  assert.match(curriculum, /media: \{ type: 'youtube', url: '' \}/, 'new lessons start without a fabricated video URL');
 });
 
 test('ordinary module save reloads and renders the authoritative title/status', async () => {
@@ -119,7 +120,13 @@ test('ordinary lesson save reloads title/media/status/order and ignores a late r
   assert.equal(refreshedInputs.find(node => node.getAttribute('aria-label') === 'Aula ativa Aula do servidor').checked, true);
   const lessonTitles = refreshedInputs.filter(node => node.getAttribute('aria-label')?.startsWith('Título da aula')).map(node => node.value);
   assert.deepEqual(lessonTitles, ['Aula do servidor', 'Outra aula']);
+  const refreshedSave = h.root.querySelectorAll('button').find(node => node.textContent === 'Salvar aula');
+  refreshedSave.click(); await drain();
+  const secondSave = h.requests.find(request => request.path.includes('/lessons/lesson-a') && request.options.method === 'PUT' && request !== save);
+  assert.ok(secondSave, 'the second mutation should start a second authoritative reload');
+  secondSave.resolve({ id: 'lesson-a', title: 'Aula atualizada novamente' }); await drain();
   const lateRefresh = h.requests.at(-1);
+  assert.match(lateRefresh.path, /\/api\/academy\/course-a\?all=true/);
   h.handle.dispose(); lateRefresh.resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Estado tardio', order: 9, active: true, lessons: [] }] }); await drain();
   assert.equal(h.root.children.length, 0);
 });

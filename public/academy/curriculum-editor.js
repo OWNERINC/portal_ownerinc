@@ -62,7 +62,7 @@ export function createCurriculumEditor({ root, page, courseId, initialCourse = n
       const moduleDown = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Descer módulo', 'aria-label': `Mover módulo ${module.title} para baixo` });
       moduleUp.addEventListener('click', () => void moveModule(-1)); moduleDown.addEventListener('click', () => void moveModule(1));
       const addLesson = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Adicionar aula' });
-      addLesson.addEventListener('click', async () => { const title = window.prompt('Nome da aula'); if (title?.trim()) { await save(`/api/academy/modules/${encodeURIComponent(module.id)}/lessons`, 'POST', { title: title.trim(), description: '', order: (module.lessons || []).length, active: false, media: { type: 'youtube', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } }); await reload(); } });
+      addLesson.addEventListener('click', async () => { const title = window.prompt('Nome da aula'); if (title?.trim()) { await save(`/api/academy/modules/${encodeURIComponent(module.id)}/lessons`, 'POST', { title: title.trim(), description: '', order: (module.lessons || []).length, active: false, media: { type: 'youtube', url: '' } }); await reload(); } });
       const lessons = element('ol', { className: 'academy-manager-list' }, (module.lessons || []).map(lessonRow));
       list.append(element('article', { className: 'academy-module-editor' }, [element('div', { className: 'academy-manager-row' }, [heading, active, saveModule, moduleUp, moduleDown, addLesson]), lessons]));
     }

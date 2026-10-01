@@ -75,7 +75,7 @@ export function mountAcademy(page) {
       } else if (preview && !can(page.user, 'manageAcademy')) {
         throw Object.assign(new Error(unavailable), { status: 404 });
       } else if (!courseId && !lessonId) {
-        view = catalogView({ root, page: scope, api, navigate, entryMotion: catalogEntryPending });
+        view = catalogView({ root, page: scope, focusPage: page, api, navigate, entryMotion: catalogEntryPending });
         catalogEntryPending = false;
       } else {
         root.replaceChildren(heading(lessonId ? 'Carregando aula…' : 'Carregando curso…'),
@@ -103,7 +103,10 @@ export function mountAcademy(page) {
     } finally {
       if (live()) {
         root.setAttribute('aria-busy', 'false');
-        if (focus) root.querySelector('h1')?.focus();
+        // Catalog navigation owns focus restoration when a filter or pager initiated
+        // the route change. Focusing the heading here would hide that intent and
+        // make the async catalog response look like a user focus change.
+        if (focus && !page.academyCatalogFocus) root.querySelector('h1')?.focus();
       }
     }
   }

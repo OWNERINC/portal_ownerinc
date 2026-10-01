@@ -1,7 +1,7 @@
 # Academy — matriz final de aceite
 
 **Data:** 1º de outubro de 2026
-**Base revisada:** `a981c9e`
+**Baseline do artefato revisado:** `5e4b40e` (último commit funcional/documental antes desta onda; os commits desta onda estão registrados no relatório de correção final).
 **Resultado:** **DONE_WITH_CONCERNS** — evidência local PASS; homologação de
 serviços e navegador autenticado PENDENTE.
 
@@ -26,7 +26,7 @@ composição/código, não substitutos dessas verificações.
 | Player/lifecycle | YouTube/HTML5 adapters reais no harness, sem autoplay, retry limitado, erros 101/150, abort e destroy idempotente. | Task 8 report; `tests/unit/academy-player.test.mjs` |
 | Marca/acessibilidade estrutural | SVG allowlist, namespace CSS Academy, reduced motion, alvos/labels e estados renderizados foram inspecionados localmente. | Task 11 report; brand/motion tests; prancha documental |
 | Compatibilidade | Shell persistente, Dashboard com links Academy, legado externo e integração CMS preservados por testes existentes. | Tasks 9–11; `persistent-navigation.test.mjs`, `cms-contracts.test.mjs` |
-| Checks reproduzíveis | `npm run verify`: 917/917 pass antes desta documentação; `node scripts/generate-public-shell.mjs --check`: PASS; `git diff --check`: PASS nas entregas anteriores. | Task 11 report e logs SDD |
+| Checks reproduzíveis | Baseline anterior: `npm run verify` 917/917; os resultados desta onda, incluindo o novo total, estão no relatório de correção final; `node scripts/generate-public-shell.mjs --check` e `git diff --check` permanecem exigidos. | Task 11 report, logs SDD e `final-fix-report.md` |
 
 ## Matriz de cenários
 
@@ -44,7 +44,7 @@ composição/código, não substitutos dessas verificações.
 | Reordenar preserva progresso por ID | PENDENTE | Implementação/testes locais PASS; banco real pendente. |
 | Substituir vídeo reseta nova versão | PENDENTE | Contrato/testes locais PASS; persistência real pendente. |
 | Desativar/despublicar bloqueia catálogo/aula/asset | PENDENTE | Regras e fixtures locais PASS; leitura autorizada real pendente. |
-| YouTube 100/101/150/153 e script bloqueado | PENDENTE | Adapters/doubles cobrem estados; provider/CSP/Nginx reais não foram exercitados. |
+| YouTube 101/150/2 e script bloqueado | PENDENTE | Adapters/doubles locais cobrem 101/150/2; não há double local para 100/153 nesta entrega, e provider/CSP/Nginx reais não foram exercitados. |
 | Back/Forward sem player órfão | PASS local / PENDENTE runtime | Router/lifecycle PASS em testes e prancha; navegador autenticado real pendente. |
 | Mobile, teclado, reduced motion | PASS estrutural / PENDENTE físico | Código, testes e inspeção local PASS; dispositivo/leitor de tela não validado. |
 | Curso legado até conversão explícita | PASS local / PENDENTE runtime | Compatibilidade de payload/links coberta; migração em ambiente real pendente. |

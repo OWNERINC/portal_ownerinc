@@ -48,6 +48,22 @@ test('motion uses approved timing, cancels on abort, and renders reduced motion 
   assert.equal(reducedNode.style.transform, 'none');
 });
 
+test('motion marks each part once and does not animate after disposal', async () => {
+  const animations = [];
+  const first = { style: {}, dataset: {}, animate() { const animation = { cancel() {}, finished: Promise.resolve() }; animations.push(animation); return animation; } };
+  const second = { style: {}, dataset: {}, animate() { const animation = { cancel() {}, finished: Promise.resolve() }; animations.push(animation); return animation; } };
+  const root = { querySelectorAll() { return [first, second]; } };
+  const context = { window: { matchMedia() { return { matches: false, addEventListener() {}, removeEventListener() {} }; } } };
+  await load('public/academy/motion.js', 'mountAcademyMotion', context);
+  const dispose = context.mountAcademyMotion(root);
+  assert.equal(animations.length, 2);
+  root.querySelectorAll = () => [first, second];
+  dispose();
+  assert.equal(animations.length, 2);
+  assert.equal(first.style.opacity, '1');
+  assert.equal(second.style.opacity, '1');
+});
+
 test('brand clones remove IDs and preserve explicit ARIA semantics', async () => {
   const part = { removeAttribute() {}, setAttribute() {} };
   const source = {
@@ -84,5 +100,7 @@ test('view integration protects CMS covers and prevents filter remount entry rep
   assert.match(view, /data-brand-fallback/);
   assert.match(app, /catalogEntryPending/);
   assert.match(catalog, /reducedMotion: !entryMotion/);
+  assert.match(catalog, /academyCatalogFocus/);
+  assert.match(catalog, /aria-busy/);
   assert.match(view, /if \(course\.cover_asset_id\)/);
 });
