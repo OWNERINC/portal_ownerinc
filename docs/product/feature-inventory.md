@@ -1,6 +1,6 @@
 # Inventário da Implementação Funcional
 
-Atualizado em 29 de setembro de 2026.
+Atualizado em 1º de outubro de 2026.
 
 Este documento relaciona as capacidades descritas no `README.md` e no brief do
 produto com o que está efetivamente implementado no código. Roadmap, intenção e
@@ -115,10 +115,12 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Catálogo ativo por categoria | Operacional | Usuários comuns recebem somente itens ativos, com categorias server-side, paginação e filtros restauráveis pela URL; o corpo publicado CMS substitui a descrição legada quando houver documento. `api/routes/academy.js`, `api/cms/reader.js`, `public/js/academy.js` |
-| Links externos | Operacional | Apenas HTTP(S), com `noopener noreferrer`; URL inválida não é oferecida como link. `api/route-utils.js`, `public/js/academy.js` |
-| CRUD, ordenação e ativação | Operacional | Administração paginada, validada e auditada para `manageAcademy`. `api/routes/academy.js`, `public/js/admin.js` |
-| Matrícula, progresso e certificado | Fora do escopo | Academy é um catálogo, não um LMS. |
+| Catálogo por formação e categoria | Operacional local | Usuários comuns recebem somente cursos ativos e elegíveis, com grupos inicial/cargo independentes, categorias server-side, paginação e filtros restauráveis pela URL; total e categorias são calculados após autorização. `api/academy/catalog.js`, `api/academy/access.js`, `public/academy/` |
+| Currículo e mídia | Operacional local | Cursos têm módulos e aulas publicados explicitamente; aulas aceitam YouTube normalizado ou MP4/WebM HTTPS, com versão de mídia. O player tem retry, sem autoplay e limpeza de lifecycle. Reprodução de provedor real permanece pendente. `api/academy/`, `public/academy/player.js` |
+| Materiais e capa CMS | Operacional local | `academy_lesson` integra descrição/materiais; a primeira imagem publicada da apresentação define a capa, com fallback ao vetor original. Documento sem publicação válida não reativa texto legado. `api/cms/`, `public/js/cms.js` |
+| CRUD, ordenação e ativação | Operacional local | Gestão exige `manageAcademy`, usa cargos reais, lock transacional, auditoria, reordenação por ID e validação de publicação/eligibilidade. PostgreSQL real e corridas full-stack permanecem pendentes. `api/academy/mutations.js`, `public/academy/manage-view.js` |
+| Progresso e retomada individual | Operacional local | Posição é salva por UID/aula/versão, com CAS, conflitos 409, conclusão somente manual, continuidade independente do primeiro catálogo e reset quando a mídia muda. A persistência real entre sessões/contas aguarda banco/auth. `api/academy/progress.js`, `public/academy/progress-controller.js` |
+| Matrícula, certificado e relatórios gerenciais | Fora do escopo | Não há matrícula formal, certificado, quiz, gamificação ou relatório de aprendizagem para gestores. A jornada é de acesso elegível e progresso individual. |
 
 ## Benefícios (rota futura fora da navegação inicial)
 
@@ -221,7 +223,7 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 
 - Envio real por WhatsApp.
 - Upload, emissão ou conclusão de nota fiscal PJ.
-- LMS com matrícula, progresso, conclusão e certificado.
+- Matrícula formal, certificados, quizzes, gamificação e relatórios gerenciais de aprendizagem.
 - Cupons, validade, elegibilidade e resgate de benefícios.
 - Confirmação de leitura ou conclusão de lembretes.
 - MFA e login social.

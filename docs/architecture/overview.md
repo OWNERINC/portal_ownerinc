@@ -110,6 +110,12 @@ Testes locais executam os adapters reais com doubles da API, DOM e relógio.
 através do Nginx no marco C, quando houver ambiente autorizado. Testes locais não
 comprovam comportamento do provedor real; nenhum serviço é iniciado por eles.
 
+O aceite consolidado está em
+[`../reviews/2026-09-30-academy-acceptance.md`](../reviews/2026-09-30-academy-acceptance.md).
+Ele distingue testes unitários/estáticos PASS de banco, autenticação, Nginx e
+player real PENDENTES; a prancha de fixtures não é evidência de sessão real ou
+reprodução.
+
 ## Persistência da Academy
 
 A migration `033_academy_learning` mantém `academy` como origem dos cursos e

@@ -1,6 +1,6 @@
 # Roadmap do Portal Ownerinc
 
-Atualizado em 21 de julho de 2026.
+Atualizado em 1º de outubro de 2026.
 
 ## Status de Implementação
 
@@ -18,6 +18,11 @@ Os checks locais passam. Testes com Firebase, SendGrid, VPS, restauração real,
 NVDA e VoiceOver permanecem gates operacionais antes do lançamento, pois exigem
 credenciais, serviços ou dispositivos externos. A integração Sólides permanece
 em `off` até o Gate 0 externo.
+
+A Academy tem implementação local documentada, mas não está marcada como
+homologação full-stack: PostgreSQL/Firebase, sessão autenticada no Nginx,
+reprodução de mídia/provedor e headers efetivos continuam PENDENTES por
+decisão de não subir serviços.
 
 ## Como Usar
 
@@ -255,8 +260,9 @@ Objetivo: publicar sem depender de procedimentos não testados.
 Itens abaixo não bloqueiam a primeira produção e só entram com demanda validada:
 
 - Cupom, validade, elegibilidade e link estruturado em benefits.
-- Progresso/matrícula na Academy; se crescer além de catálogo, avaliar LMS antes
-  de construir um internamente.
+- Matrícula formal, certificados, quizzes, gamificação e relatórios gerenciais da
+  Academy; o progresso individual entregue nesta versão não implica construir um
+  LMS completo.
 - Estado lido/concluído para lembretes.
 - Fluxo real de emissão/registro de nota fiscal PJ.
 - WhatsApp com consentimento, provider oficial, idempotência e custos definidos.
