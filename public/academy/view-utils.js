@@ -1,5 +1,6 @@
 import { element, safeHttpUrl } from '../js/ui.js';
 import { fetchAPIAsset } from '../js/auth.js';
+import { createBrandIcon } from './brand.js';
 
 export const unavailable = 'Este conteúdo não está disponível para seu perfil.';
 export const heading = text => element('h1', { text, tabindex: '-1', id: 'academy-title' });
@@ -12,9 +13,11 @@ export function routeLink(text, params, navigate, options = {}) {
     } },
   });
 }
-export function brand() {
+export function brand(assets = null) {
+  const mark = assets ? createBrandIcon(assets, 'logo-dark', { decorative: false, label: 'Ownerinc Academy' }) : element('img', { src: './assets/academy/logo-dark.svg', alt: '', width: '240', height: '80' });
+  mark.className = 'academy-logo';
   return element('header', { className: 'academy-brand' }, [
-    element('img', { src: './assets/academy/logo-dark.svg', alt: '', width: '240', height: '80' }),
+    mark,
     element('div', {}, [heading('Ownerinc Academy'), element('p', { text: 'Conhecimento que faz parte do seu dia.' })]),
   ]);
 }
@@ -27,9 +30,10 @@ export function errorState(root, error, retry) {
     if (focus) action.focus();
   }
 }
-export function cover(course, page) {
+export function cover(course, page, assets = null) {
   const key = /^icon-0[1-6]$/.test(course.icon_key) ? course.icon_key : 'symbol';
-  const image = element('img', { className: 'academy-cover', src: `./assets/academy/${key}.svg`, alt: '', width: '640', height: '360', loading: 'lazy' });
+  const image = assets ? createBrandIcon(assets, key) : element('img', { className: 'academy-cover', src: `./assets/academy/${key}.svg`, alt: '', width: '640', height: '360', loading: 'lazy' });
+  image.className = 'academy-cover';
   if (course.cover_asset_id) {
     const { fetchAPIAsset: asset } = page.bindAPI({ fetchAPIAsset });
     asset(`/api/cms/assets/${encodeURIComponent(course.cover_asset_id)}`).then(url => {
@@ -38,8 +42,8 @@ export function cover(course, page) {
   }
   return image;
 }
-export function courseCard(course, page, navigate) {
-  return element('article', { className: 'academy-course-card' }, [cover(course, page),
+export function courseCard(course, page, navigate, assets = null) {
+  return element('article', { className: 'academy-course-card', 'data-motion-part': '' }, [cover(course, page, assets),
     element('h3', {}, [routeLink(course.title, { course: course.id }, navigate)]),
     element('p', { text: course.category || 'Formação' }),
     element('p', { text: course.delivery_mode === 'external' ? 'Curso externo' : `${course.completed_lessons || 0} de ${course.total_lessons || 0} aulas concluídas` }),

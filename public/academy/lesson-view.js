@@ -5,6 +5,7 @@ import { renderBlocks } from '../js/cms-block-renderer.js';
 import { createLessonPlayer } from './player.js';
 import { createProgressController } from './progress-controller.js';
 import { heading, button, curriculum, routeLink, unavailable } from './view-utils.js';
+import { mountAcademyMotion, playCompletion } from './motion.js';
 
 export function lessonView({ root, page, api, navigate, LessonView, CourseView, preview = false, ownerPage = page }) {
   const scope = createPageLifecycle({ user: page.user });
@@ -21,6 +22,7 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
   const next = LessonView.next_lesson_id ? routeLink('Próxima aula →',
     { course: CourseView.course.id, lesson: LessonView.next_lesson_id, ...(preview ? { preview: '1' } : {}) }, navigate) : null;
   const complete = button(LessonView.progress.completed ? 'Aula concluída' : 'Concluir aula', saveCompletion);
+  complete.setAttribute('data-motion-completion', '');
   complete.disabled = LessonView.progress.completed || preview;
   actions.append(complete);
   if (next) { next.hidden = !LessonView.progress.completed; actions.append(next); }
@@ -54,6 +56,7 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
     },
   });
   scope.cleanup(() => { player?.destroy(); progress.dispose(); });
+  if (typeof mountAcademyMotion === 'function') scope.cleanup(mountAcademyMotion(main, { signal: scope.signal }));
   // Only the explicit action participates in the Portal's mutation/leave guard.
   // Background controller writes retain their own signal and original fetchAPI.
   const manualAPI = ownerPage.bindAPI({ complete: () => progress.complete() });
@@ -73,6 +76,7 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
       const link = details.querySelector('[aria-current="page"]');
       if (link) link.textContent = `${lesson.title} · Concluída`;
       if (next) next.hidden = false;
+      if (typeof playCompletion === 'function') playCompletion(main);
     } catch (error) {
       if (!scope.active) return;
       if ([401, 403, 404].includes(error.status)) { revoke(); return; }

@@ -7,6 +7,7 @@ import { courseView } from './course-view.js';
 import { lessonView } from './lesson-view.js';
 import { mountAcademyManager } from './manage-view.js';
 import { brand, heading, errorState, routeLink, unavailable } from './view-utils.js';
+import { loadBrandAssets, createBrandIcon } from './brand.js';
 
 function canonicalRouteId(value) {
   // Match the API UUID grammar; malformed values remain unchanged for rejection,
@@ -18,7 +19,16 @@ function canonicalRouteId(value) {
 export function mountAcademy(page) {
   const root = document.getElementById('academy-root');
   if (!root) return;
-  let scope = null, view = null, generation = 0;
+  let scope = null, view = null, generation = 0, brandAssets = null;
+  if (typeof fetch === 'function') loadBrandAssets({ signal: page.signal }).then(assets => {
+    brandAssets = assets;
+    const mark = root.querySelector('.academy-brand > img');
+    if (mark) mark.replaceWith(Object.assign(createBrandIcon(assets, 'logo-dark', { decorative: false, label: 'Ownerinc Academy' }), { className: 'academy-logo' }));
+    root.querySelectorAll('.academy-cover[src]').forEach(image => {
+      const key = /icon-0[1-6]/.test(image.getAttribute('src') || '') ? image.getAttribute('src').match(/icon-0[1-6]/)[0] : 'symbol';
+      image.replaceWith(Object.assign(createBrandIcon(assets, key), { className: 'academy-cover' }));
+    });
+  }).catch(() => {});
   function catalogParams() {
     try {
       const url = new URL(window.history.state?.academyCatalog || './academy.html', page.location.href);
@@ -50,6 +60,7 @@ export function mountAcademy(page) {
     scope = createPageLifecycle({ user: page.user });
     const currentScope = scope;
     scope.location = page.location;
+    scope.brandAssets = brandAssets;
     // Keep explicit reads in Portal.ready() while also cancelling each route.
     const api = createAcademyAPI({ bindAPI: page.bindAPI, signal: scope.signal });
     const params = new URL(page.location.href).searchParams;
@@ -60,7 +71,7 @@ export function mountAcademy(page) {
     try {
       if (params.has('manage')) {
         if (!can(page.user, 'manageAcademy')) throw Object.assign(new Error(unavailable), { status: 403 });
-        const managerRoot = element('div'); root.replaceChildren(brand(), managerRoot, routeLink('Voltar aos cursos', {}, navigate));
+        const managerRoot = element('div'); root.replaceChildren(brand(brandAssets), managerRoot, routeLink('Voltar aos cursos', {}, navigate));
         const disposeManager = mountAcademyManager({ root: managerRoot, page: scope, courseId, newCourse: params.get('new') === '1' });
         scope.cleanup(disposeManager);
       } else if (preview && !can(page.user, 'manageAcademy')) {

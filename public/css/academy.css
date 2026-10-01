@@ -10,7 +10,7 @@
 .academy-page :is(a, button, select, summary):focus-visible { outline: 3px solid #141414; outline-offset: 4px; }
 .academy-page h1:focus { outline: none; }
 .academy-brand { display: flex; align-items: center; gap: 32px; border-bottom: 1px solid #cdd4ca; padding: 8px 0 28px; margin-bottom: 32px; }
-.academy-brand > img { width: 210px; height: auto; }
+.academy-brand > img, .academy-brand > .academy-logo { width: 210px; height: auto; display: block; }
 .academy-brand h1 { font-size: 1.15rem; letter-spacing: 0; margin: 0 0 8px; }
 .academy-brand p { margin: 0; }
 .academy-section { margin: 0 0 40px; }
@@ -21,6 +21,8 @@
 .academy-course-card h3 a { display: inline-flex; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
 .academy-course-card p { margin: 4px 0; font-size: .9rem; }
 .academy-cover { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; padding: 36px; background: #97C21E; }
+.academy-cover[data-academy-asset] { color: #141414; }
+.academy-course-card[data-motion-part], .academy-lesson-main [data-motion-completion] { transform-box: fill-box; transform-origin: center; }
 .academy-cover-photo { padding: 0; object-fit: cover; }
 .academy-button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 18px; border: 1px solid #141414; border-radius: 4px; background: #97C21E; color: #141414; font: 700 1rem Helvetica, Arial, sans-serif; cursor: pointer; text-decoration: none; }
 .academy-button:hover { background: #a5ce35; }
@@ -70,8 +72,11 @@ textarea.academy-manager-input { min-height: 90px; }
 @media (max-width: 600px) {
   .academy-page { padding: 20px 16px; }
   .academy-brand { flex-direction: column; align-items: flex-start; gap: 20px; }
-  .academy-brand > img { width: 180px; }
+  .academy-brand > img, .academy-brand > .academy-logo { width: 180px; }
   .academy-course-header { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .academy-page h1 { font-size: 1.65rem; }
   .academy-brand h1 { font-size: 1.05rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .academy-page [data-motion-part], .academy-page [data-motion-completion] { transition: none; }
 }

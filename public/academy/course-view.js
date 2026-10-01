@@ -19,7 +19,7 @@ export function courseView({ root, page, navigate, CourseView, preview = false, 
     else copy.append(element('p', { text: 'Nenhuma aula disponível. Volte aos cursos para continuar aprendendo.' }));
   }
   root.replaceChildren(routeLink('← Voltar aos cursos', catalogParams, navigate),
-    element('section', { className: 'academy-course-header' }, [cover(course, page), copy]));
+    element('section', { className: 'academy-course-header' }, [cover(course, page, page.brandAssets), copy]));
   if (course.delivery_mode === 'internal') root.append(element('h2', { text: 'Conteúdo do curso' }), curriculum(CourseView, navigate, null, preview));
   return { dispose() {} };
 }

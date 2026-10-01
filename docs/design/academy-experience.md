@@ -53,6 +53,14 @@ npm run verify
 A aplicação serve apenas os arquivos finais. Não requer Python no servidor,
 dependências de frontend, imagens rasterizadas ou fontes retiradas do PDF.
 
+Na aplicação, `public/academy/brand.js` carrega exclusivamente os nove arquivos
+do manifesto, valida o SVG antes de inseri-lo inline e clona os vetores sem IDs
+duplicados. As telas mantêm um fallback `<img>` enquanto os arquivos locais são
+carregados; quando disponíveis, marca, capas e ícones passam a usar os grupos
+inline originais. `public/academy/motion.js` limita a entrada e a confirmação a
+`transform`/`opacity`, cancela animações no `AbortSignal` e aplica a composição
+final quando o usuário prefere movimento reduzido.
+
 ## Linguagem visual
 
 - Paleta Academy: **#97C21E**, **#F6FAF5**, **#141414**.
