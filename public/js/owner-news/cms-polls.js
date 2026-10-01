@@ -10,9 +10,10 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
   const api = page.bindAPI({ fetchAPI, fetchAPIPage });
   const controller = new AbortController();
   let disposed = false, busy = false, writing = false, allowed = false, conflict = false;
-  let rows = [], total = 0, offset = 0, selected = null, editing = false, current = null;
+  let rows = [], total = 0, offset = 0, selected = null, editing = false;
   let form, fields = {}, options = [], markClean, message = 'Carregando enquetes…';
-  let listeners = [], optionListeners = [], controls = {}, status, optionRoot;
+  let listeners = [], optionListeners = [], actionListeners = [], controls = {}, status, optionRoot, actionRoot, resultHeading, heading;
+  const focusWatches = new Set();
   const active = () => !disposed && page.active;
   const payload = () => ({ ...Object.fromEntries(Object.entries(fields).map(([key, input]) => [key, input.value.trim()])), options: options.map(input => input.value.trim()) });
   const dirty = () => !!form && !!markClean?.isDirty();
@@ -33,6 +34,37 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
     listen(node, 'click', callback, bucket);
     if (key) controls[key] = node;
     return node;
+  }
+  function replaceAction(text, callback) {
+    actionListeners.forEach(remove => remove()); actionListeners = [];
+    actionRoot.replaceChildren();
+    if (text) actionRoot.append(button(text, callback, null, actionListeners));
+  }
+  function preserveFocus() {
+    const source = document.activeElement;
+    const owned = source?.closest('.cms-poll-manager') === root;
+    const field = Object.keys(fields).find(key => fields[key] === source);
+    const option = options.indexOf(source);
+    const control = Object.keys(controls).find(key => controls[key] === source);
+    let moved = false;
+    const noteActivity = () => { moved = true; };
+    const events = ['focusin', 'pointerdown', 'keydown'];
+    events.forEach(type => document.addEventListener(type, noteActivity));
+    const stop = () => {
+      events.forEach(type => document.removeEventListener(type, noteActivity));
+      focusWatches.delete(stop);
+    };
+    focusWatches.add(stop);
+    return (results = false) => {
+      stop();
+      if (!active() || !owned || moved) return;
+      // Also respect focus moves made without a bubbling browser focus event.
+      const now = document.activeElement;
+      if (now !== source && now !== document.body && now?.isConnected) return;
+      const target = results ? resultHeading : fields[field] || options[option] || controls[control];
+      const fallback = actionRoot.querySelector('button') || resultHeading || heading;
+      (target && !target.disabled && !target.hidden ? target : fallback)?.focus();
+    };
   }
   function canLeave() {
     if (writing) { page.toast('Aguarde a operação do CMS terminar.'); return false; }
@@ -55,8 +87,9 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
     if (busy || !canLeave()) return;
     selected = copy ? null : next;
     editing = copy || next?.status === 'draft' || !next;
-    conflict = false; current = null; message = '';
+    conflict = false; message = '';
     render(copy ? next : null);
+    (fields.title || resultHeading)?.focus();
   }
   function renderOptions(values) {
     optionListeners.forEach(remove => remove()); optionListeners = [];
@@ -87,10 +120,14 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
   function render(copy = null) {
     listeners.forEach(remove => remove()); listeners = [];
     optionListeners.forEach(remove => remove()); optionListeners = [];
+    actionListeners.forEach(remove => remove()); actionListeners = [];
     controls = {}; fields = {}; options = []; form = null; markClean = null; optionRoot = null;
+    resultHeading = null;
     status = element('p', { role: 'status', 'aria-live': 'polite' });
-    root.replaceChildren(element('h2', { text: 'Enquetes' }));
-    if (!allowed) { root.append(status); sync(); return; }
+    heading = element('h2', { text: 'Enquetes', tabindex: '-1' });
+    actionRoot = element('div', { className: 'cms-form-actions' });
+    root.replaceChildren(heading);
+    if (!allowed) { root.append(actionRoot, status); sync(); return; }
     root.append(button('Nova enquete', () => select(null)));
     const list = element('ul', { className: 'cms-poll-list', 'aria-label': 'Enquetes salvas' });
     rows.forEach(poll => list.append(element('li', {}, [button(`${poll.title} · ${labels[poll.status]}`, () => select(poll))])));
@@ -120,7 +157,8 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
       // A copied poll is an unsaved form even though its initial values are valid.
       if (copy) { const clean = markClean; markClean = Object.assign(() => clean(), { isDirty: () => !selected || clean.isDirty() }); }
     } else if (selected) {
-      root.append(element('h3', { text: selected.question }), element('p', { text: selected.description }),
+      resultHeading = element('h3', { text: selected.question, tabindex: '-1' });
+      root.append(resultHeading, element('p', { text: selected.description }),
         element('p', { text: `${labels[selected.status]} · ${selected.total_votes} votos` }));
       const results = element('ul');
       selected.options.forEach(option => results.append(element('li', { text: `${option.label}: ${option.votes} votos (${option.percentage}%)` })));
@@ -128,7 +166,7 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
       if (selected.status === 'open') root.append(button('Encerrar enquete', () => void mutate('close'), 'close'));
       else root.append(button('Criar nova enquete', () => select(selected, true)));
     }
-    root.append(button('Recarregar versão atual', () => void reconcile(), 'reload'), status);
+    root.append(button('Recarregar versão atual', () => void reconcile(), 'reload'), actionRoot, status);
     controls.reload.hidden = !conflict;
     sync();
   }
@@ -137,6 +175,7 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
   }
   async function load(nextOffset = offset) {
     if (!active() || busy || !canLeave()) return;
+    const restoreFocus = preserveFocus();
     busy = true; message = 'Carregando enquetes…'; sync();
     try {
       const result = await api.fetchAPIPage(`${ENDPOINT}?limit=20&offset=${nextOffset}`, { signal: controller.signal });
@@ -146,11 +185,12 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
     } catch (error) {
       if (!active()) return;
       if (error?.status === 403) denied();
-      else { message = 'Não foi possível carregar a lista. Tente novamente.'; if (!allowed) { root.append(button('Tentar novamente', () => void load(nextOffset))); } }
-    } finally { if (active()) { busy = false; sync(); } }
+      else { message = 'Não foi possível carregar a lista. Tente novamente.'; if (!allowed) replaceAction('Tentar novamente', () => void load(nextOffset)); }
+    } finally { if (active()) { busy = false; sync(); } restoreFocus(); }
   }
   async function reconcile() {
     if (!active() || busy || !canLeave() || !selected) return;
+    const restoreFocus = preserveFocus();
     busy = true; message = 'Carregando versão atual…'; sync();
     try {
       // The admin API has a paginated list, but no single-draft GET. Find the
@@ -163,20 +203,23 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
         if (start + 20 >= result.total) break;
       }
       if (!found) throw new Error('missing');
-      selected = found; editing = found.status === 'draft'; conflict = false; current = null;
+      selected = found; editing = found.status === 'draft'; conflict = false;
       rows = rows.map(poll => poll.id === found.id ? found : poll);
       message = 'Versão atual carregada.'; render();
     } catch (error) {
       if (!active()) return;
       if (error?.status === 403) denied();
       else message = 'Não foi possível recarregar. Seus valores continuam na tela. Tente novamente.';
-    } finally { if (active()) { busy = false; sync(); } }
+    } finally { if (active()) { busy = false; sync(); } restoreFocus(); }
   }
   async function mutate(action) {
     if (!active() || busy || !allowed || conflict) return;
     if (action === 'draft' && (!form || !valid() || !form.reportValidity())) return;
     if (action === 'publish' && (!selected || selected.status !== 'draft' || dirty() || !valid())) return;
     if (action === 'close' && selected?.status !== 'open') return;
+    const restoreFocus = preserveFocus();
+    let succeeded = false;
+    replaceAction();
     const creating = action === 'draft' && !selected;
     const body = { ...(action === 'draft' ? payload() : {}), ...(!creating ? { expected_version: selected.version } : {}) };
     busy = true; writing = true; message = 'Salvando…'; sync();
@@ -190,6 +233,7 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
       else rows = rows.map(poll => poll.id === next.id ? next : poll);
       message = action === 'draft' ? 'Rascunho salvo' : action === 'publish' ? 'Enquete publicada' : 'Enquete encerrada';
       render();
+      succeeded = true;
     } catch (error) {
       if (!active()) return;
       if (error?.status === 403) { denied(); return; }
@@ -198,9 +242,9 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
         try {
           const result = await api.fetchAPI('/api/announcements/polls/current', { signal: controller.signal });
           if (!active()) return;
-          current = result.poll;
+          const current = result.poll;
           if (current?.status === 'open') {
-            root.append(button(`Ver enquete aberta: ${current.question}`, () => select(current)));
+            replaceAction(`Ver enquete aberta: ${current.question}`, () => select(current));
           }
         } catch { if (active()) message += ' Não foi possível carregar a enquete atual. Tente publicar novamente.'; }
       } else {
@@ -209,7 +253,7 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
           : 'Não foi possível concluir. Revise os campos e tente novamente; seus valores continuam na tela.';
         if (controls.reload) controls.reload.hidden = !conflict;
       }
-    } finally { if (active()) { busy = false; writing = false; sync(); } }
+    } finally { if (active()) { busy = false; writing = false; sync(); } restoreFocus(succeeded && action !== 'draft'); }
   }
   render(); void load();
   return {
@@ -218,6 +262,8 @@ export function mountNewsPollManager({ root, page, onDirty = () => {} }) {
       if (disposed) return;
       disposed = true; controller.abort(); listeners.forEach(remove => remove()); listeners = [];
       optionListeners.forEach(remove => remove()); optionListeners = [];
+      actionListeners.forEach(remove => remove()); actionListeners = [];
+      focusWatches.forEach(stop => stop());
       root.classList.remove('cms-poll-manager');
       root.replaceChildren(); onDirty(false, false);
     },

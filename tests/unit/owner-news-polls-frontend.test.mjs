@@ -197,3 +197,82 @@ test('published conflict reconciles to closed and page disposal ignores late mut
   pending.resolve(poll()); await drain();
   assert.equal(h.root.children.length, 0);
 });
+
+test('keyboard selection, save and publication restore meaningful focus without stealing newer focus', async t => {
+  const h = await setup(t);
+  const item = button(h.root, 'Enquete sintética · Rascunho');
+  item.focus(); item.click();
+  assert.ok(h.doc.activeElement === h.root.querySelector('[name="title"]'), 'selection focuses first field');
+  const question = h.root.querySelector('[name="question"]');
+  question.focus(); h.input(question, 'Pergunta editada');
+  h.root.querySelector('form').dispatchEvent(new TestEvent('submit'));
+  h.latest('/draft').resolve(poll('draft', 2)); await drain();
+  assert.ok(h.doc.activeElement === h.root.querySelector('[name="question"]'), 'save restores submitted field');
+  const save = button(h.root, 'Salvar rascunho'); save.focus();
+  h.root.querySelector('form').dispatchEvent(new TestEvent('submit'));
+  h.latest('/draft').resolve(poll('draft', 3)); await drain();
+  assert.ok(h.doc.activeElement === button(h.root, 'Salvar rascunho'), 'save restores submit control');
+  const option = h.root.querySelectorAll('[name="option"]')[1]; option.focus();
+  h.root.querySelector('form').dispatchEvent(new TestEvent('submit'));
+  h.latest('/draft').resolve(poll('draft', 4)); await drain();
+  assert.ok(h.doc.activeElement === h.root.querySelectorAll('[name="option"]')[1], 'save preserves option position');
+  const publish = button(h.root, 'Publicar enquete'); publish.focus(); publish.click();
+  h.latest('/publish').resolve(poll('open', 4)); await drain();
+  assert.ok(h.doc.activeElement === h.root.querySelector('h3'), 'publication focuses results');
+  const close = button(h.root, 'Encerrar enquete'); close.focus(); close.click();
+  const elsewhere = button(h.node('owner-news-sections'), 'Matérias');
+  elsewhere.focus(); elsewhere.dispatchEvent(new TestEvent('focusin', { bubbles: true }));
+  h.latest('/close').resolve(poll('closed', 5)); await drain();
+  assert.ok(h.doc.activeElement === elsewhere, 'newer focus is preserved');
+  button(h.root, 'Enquete sintética · Encerrada').click();
+  assert.ok(h.doc.activeElement === h.root.querySelector('h3'), 'closed selection focuses results');
+});
+
+test('repeated list failures replace retry and detach the previous retry binding', async t => {
+  const h = await setup(t);
+  button(h.node('owner-news-sections'), 'Matérias').click();
+  button(h.node('owner-news-sections'), 'Enquetes').click();
+  h.latest('/polls?').reject(new Error('offline')); await drain();
+  const stale = button(h.root, 'Tentar novamente'); stale.focus(); stale.click();
+  h.latest('/polls?').reject(new Error('offline again')); await drain();
+  assert.equal(h.root.querySelectorAll('button').filter(node => node.textContent === 'Tentar novamente').length, 1);
+  assert.ok(h.doc.activeElement === button(h.root, 'Tentar novamente'), 'retry focus follows replacement');
+  const count = h.matching('/polls?').length; stale.dispatchEvent(new TestEvent('click'));
+  assert.equal(h.matching('/polls?').length, count);
+  button(h.root, 'Tentar novamente').click();
+  h.latest('/polls?').resolve({ data: [], total: 0 }); await drain();
+  assert.equal(button(h.root, 'Tentar novamente'), undefined);
+});
+
+test('repeated active conflicts replace their action and capture the displayed poll identity', async t => {
+  const h = await setup(t);
+  button(h.root, 'Enquete sintética · Rascunho').click();
+  async function conflictWith(id, question) {
+    button(h.root, 'Publicar enquete').click();
+    h.latest('/publish').reject(Object.assign(new Error(), { status: 409, reason: 'active_poll_exists' })); await drain();
+    h.latest('/polls/current').resolve({ poll: { ...poll('open', 7), id, question } }); await drain();
+  }
+  await conflictWith('first', 'Primeira aberta');
+  const stale = button(h.root, 'Ver enquete aberta: Primeira aberta');
+  await conflictWith('second', 'Segunda aberta');
+  assert.equal(h.root.querySelectorAll('button').filter(node => node.textContent.startsWith('Ver enquete aberta:')).length, 1);
+  stale.dispatchEvent(new TestEvent('click'));
+  assert.ok(h.root.querySelector('form'), 'detached action cannot select any poll');
+  button(h.root, 'Ver enquete aberta: Segunda aberta').click();
+  assert.equal(h.root.querySelector('h3').textContent, 'Segunda aberta');
+  button(h.root, 'Encerrar enquete').click();
+  assert.match(h.latest('/close').path, /\/second\/close$/);
+});
+
+test('new pointer or keyboard activity cancels pending focus restoration even with body focus', async t => {
+  const h = await setup(t);
+  button(h.root, 'Enquete sintética · Rascunho').click();
+  for (const type of ['pointerdown', 'keydown']) {
+    button(h.root, 'Salvar rascunho').focus();
+    h.root.querySelector('form').dispatchEvent(new TestEvent('submit'));
+    h.doc.activeElement = h.doc.body;
+    h.doc.dispatchEvent(new TestEvent(type));
+    h.latest('/draft').resolve(poll('draft', 9)); await drain();
+    assert.ok(h.doc.activeElement === h.doc.body, `${type} prevents stale focus restoration`);
+  }
+});
