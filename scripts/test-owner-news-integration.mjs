@@ -27,6 +27,102 @@ const newEditorial = { ...oldEditorial, summary: 'Rascunho', author: 'Autora B' 
 const blocks = [{ type: 'paragraph', text: 'Texto de trabalho.' }];
 const request = supertest(cmsApp(pool, { uid, role: 'admin', permissions: { manageKnowledge: true } }));
 let homeSnapshot;
+const pollIds = [];
+const voterUid = `owner-news-voter-${randomUUID()}`;
+async function withTransaction(callback, { rollback = false } = {}) {
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    const result = await callback(db);
+    await db.query(rollback ? 'ROLLBACK' : 'COMMIT');
+    return result;
+  } catch (error) {
+    await db.query('ROLLBACK');
+    throw error;
+  } finally { db.release(); }
+}
+async function checkPollSchema() {
+  const columns = await pool.query(`SELECT column_name FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='owner_news_poll_votes'`);
+  assert.deepEqual(columns.rows.map(row => row.column_name).sort(), ['created_at', 'option_id', 'poll_id', 'user_uid']);
+  await client.query('INSERT INTO users (uid, email, name) VALUES ($1, $2, $3)',
+    [voterUid, `${voterUid}@example.com`, 'Votante sintético P1']);
+  for (let i = 0; i < 2; i += 1) {
+    const { rows: [poll] } = await client.query(`INSERT INTO owner_news_polls
+      (title, question, created_by, updated_by) VALUES ('Fixture P1', 'Pergunta sintética?', $1, $1)
+      RETURNING id, status, version`, [voterUid]);
+    pollIds.push(poll.id);
+    assert.equal(poll.status, 'draft');
+    assert.equal(poll.version, 1);
+  }
+  const [pollId, otherPollId] = pollIds;
+  const { rows: options } = await client.query(`INSERT INTO owner_news_poll_options (poll_id, label, position)
+    VALUES ($1, 'Opção A', 0), ($1, 'Opção B', 1), ($2, 'Outra opção', 0) RETURNING id, poll_id, position`, [pollId, otherPollId]);
+  const optionId = options.find(row => row.poll_id === pollId && row.position === 0).id;
+  const secondOptionId = options.find(row => row.poll_id === pollId && row.position === 1).id;
+  const otherOptionId = options.find(row => row.poll_id === otherPollId).id;
+  const rejectSql = (sql, values, code, constraint) => assert.rejects(
+    withTransaction(db => db.query(sql, values)),
+    error => error.code === code && (!constraint || error.constraint === constraint));
+  const voteSql = 'INSERT INTO owner_news_poll_votes(poll_id, option_id, user_uid) VALUES ($1,$2,$3)';
+  await rejectSql(`${voteSql},($1,$2,$3)`, [pollId, optionId, voterUid], '23505');
+  // Use an unvoted poll so a duplicate primary key cannot mask the composite FK failure.
+  await rejectSql(voteSql, [otherPollId, optionId, voterUid], '23503');
+  await withTransaction(db => db.query(voteSql, [pollId, optionId, voterUid]));
+  assert.equal((await client.query('SELECT COUNT(*)::integer AS count FROM owner_news_poll_votes WHERE poll_id=$1', [pollId])).rows[0].count, 1);
+  for (const choice of [optionId, secondOptionId]) {
+    await rejectSql(voteSql, [pollId, choice, voterUid], '23505', 'owner_news_poll_votes_pkey');
+  }
+  await rejectSql(voteSql, [otherPollId, otherOptionId, `missing-${voterUid}`], '23503');
+  await rejectSql('INSERT INTO owner_news_poll_options(poll_id,label,position) VALUES ($1,\'Duplicada\',0)', [pollId], '23505');
+  for (const [column, value] of [['title', ' '], ['title', 'x'.repeat(81)], ['question', ' '],
+    ['question', 'x'.repeat(241)], ['description', 'x'.repeat(601)], ['closing', 'x'.repeat(201)],
+    ['status', 'scheduled'], ['version', 0]]) {
+    await rejectSql(`UPDATE owner_news_polls SET ${column}=$2 WHERE id=$1`, [pollId, value], '23514');
+  }
+  for (const [column, value] of [['label', ' '], ['label', 'x'.repeat(101)], ['position', -1], ['position', 6]]) {
+    await rejectSql(`UPDATE owner_news_poll_options SET ${column}=$2 WHERE id=$1`, [optionId, value], '23514');
+  }
+  await withTransaction(db => db.query("UPDATE owner_news_polls SET status='open' WHERE id=$1", [pollId]));
+  await rejectSql("UPDATE owner_news_polls SET status='open' WHERE id=$1", [otherPollId], '23505', 'owner_news_one_open_poll');
+  await rejectSql('DELETE FROM owner_news_poll_options WHERE id=$1', [optionId], '23503');
+  console.log('owner-news integration: poll checks, composite vote FK, one vote/user, option positions and one open poll ok');
+
+  let runtimePollId;
+  await withTransaction(async db => {
+    await db.query('SET LOCAL ROLE portal_api');
+    const { rows: [poll] } = await db.query(`INSERT INTO owner_news_polls(title,question)
+      VALUES ('Runtime P1','Pergunta runtime?') RETURNING id`);
+    runtimePollId = poll.id;
+    const { rows: [option] } = await db.query(`INSERT INTO owner_news_poll_options(poll_id,label,position)
+      VALUES ($1,'Runtime',0) RETURNING id`, [poll.id]);
+    await db.query(voteSql, [poll.id, option.id, voterUid]);
+    assert.equal((await db.query('UPDATE owner_news_polls SET version=version+1 WHERE id=$1 RETURNING version', [poll.id])).rows[0].version, 2);
+    assert.equal((await db.query("UPDATE owner_news_poll_options SET label='Alterada' WHERE id=$1", [option.id])).rowCount, 1);
+    assert.equal((await db.query('UPDATE owner_news_poll_votes SET created_at=NOW() WHERE poll_id=$1', [poll.id])).rowCount, 1);
+    const { rows } = await db.query(`SELECT p.version, o.label, v.user_uid FROM owner_news_polls p
+      JOIN owner_news_poll_options o ON o.poll_id=p.id JOIN owner_news_poll_votes v ON v.poll_id=p.id AND v.option_id=o.id
+      WHERE p.id=$1`, [poll.id]);
+    assert.deepEqual(rows, [{ version: 2, label: 'Alterada', user_uid: voterUid }]);
+    assert.equal((await db.query('DELETE FROM owner_news_poll_votes WHERE poll_id=$1', [poll.id])).rowCount, 1);
+    assert.equal((await db.query('DELETE FROM owner_news_poll_options WHERE poll_id=$1', [poll.id])).rowCount, 1);
+    assert.equal((await db.query('DELETE FROM owner_news_polls WHERE id=$1', [poll.id])).rowCount, 1);
+  }, { rollback: true });
+  assert.equal((await client.query('SELECT id FROM owner_news_polls WHERE id=$1', [runtimePollId])).rowCount, 0);
+  console.log('owner-news integration: SET LOCAL ROLE portal_api INSERT/SELECT/UPDATE/DELETE on all poll tables with ROLLBACK ok');
+
+  await withTransaction(db => db.query('DELETE FROM users WHERE uid=$1', [voterUid]));
+  assert.equal((await client.query('SELECT * FROM owner_news_poll_votes WHERE poll_id=$1', [pollId])).rowCount, 0);
+  assert.deepEqual((await client.query('SELECT created_by, updated_by FROM owner_news_polls WHERE id=$1', [pollId])).rows,
+    [{ created_by: null, updated_by: null }]);
+  assert.equal((await client.query('SELECT id FROM owner_news_poll_options WHERE poll_id=$1', [pollId])).rowCount, 2);
+  // Deleting the parent must cascade both options and votes, despite the option FK's NO ACTION policy.
+  await client.query(voteSql, [pollId, optionId, uid]);
+  await withTransaction(db => db.query('DELETE FROM owner_news_polls WHERE id=$1', [pollId]));
+  assert.equal((await client.query('SELECT id FROM owner_news_poll_options WHERE poll_id=$1', [pollId])).rowCount, 0);
+  assert.equal((await client.query('SELECT * FROM owner_news_poll_votes WHERE poll_id=$1', [pollId])).rowCount, 0);
+  console.log('owner-news integration: user deletion removes vote, nulls actors, preserves poll/options; parent deletion cascades ok');
+}
 async function documentFixture() {
   const { rows } = await client.query("INSERT INTO cms_documents (content_type, title) VALUES ('announcement', 'Fixture sintética E2') RETURNING id");
   documentIds.push(rows[0].id);
@@ -40,6 +136,7 @@ async function revision(documentId, version, status, editorial, content = blocks
 }
 try {
   await client.query('INSERT INTO users (uid, email, name) VALUES ($1, $2, $3)', [uid, `${uid}@example.com`, 'Fixture sintética E2']);
+  await checkPollSchema();
   const documentId = await documentFixture();
   const publishedId = await revision(documentId, 1, 'published', oldEditorial, [{ type: 'paragraph', text: 'Texto publicado.' }]);
   await client.query('UPDATE cms_documents SET published_revision_id=$2 WHERE id=$1', [documentId, publishedId]);
@@ -201,6 +298,8 @@ try {
 } finally {
   try {
     await client.query('ROLLBACK');
+    if (pollIds.length) await client.query('DELETE FROM owner_news_polls WHERE id=ANY($1::uuid[])', [pollIds]);
+    await client.query('DELETE FROM users WHERE uid=$1', [voterUid]);
     if (homeSnapshot) await client.query(`UPDATE owner_news_home SET version=$1, draft=$2::jsonb, published=$3::jsonb,
       published_at=$4, updated_by=$5, updated_at=$6 WHERE singleton=TRUE`, [homeSnapshot.version,
       homeSnapshot.draft === null ? null : JSON.stringify(homeSnapshot.draft),

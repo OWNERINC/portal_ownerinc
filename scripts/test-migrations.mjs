@@ -43,6 +43,7 @@ const expectedVersions = [
   '031_contract_invariants',
   '032_user_import_identity',
   '033_owner_news_editorial',
+  '034_owner_news_polls',
 ];
 
 await migrate();
@@ -105,6 +106,14 @@ try {
     has_table_privilege('portal_api', 'owner_news_home', 'DELETE') AS api_delete,
     has_table_privilege('portal_cron', 'owner_news_home', 'SELECT, INSERT, UPDATE, DELETE') AS cron`);
   assert.deepEqual(homePrivileges.rows, [{ api: true, api_delete: false, cron: false }]);
+  for (const table of ['owner_news_polls', 'owner_news_poll_options', 'owner_news_poll_votes']) {
+    for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+      const { rows } = await pool.query(`SELECT
+        has_table_privilege('portal_api', $1, $2) AS api,
+        has_table_privilege('portal_cron', $1, $2) AS cron`, [table, privilege]);
+      assert.deepEqual(rows, [{ api: true, cron: false }], `${table}: ${privilege}`);
+    }
+  }
   const canonicalNames = [
     'Analista Administrativo', 'Analista de Cobrança', 'Analista de Engenharia',
     'Analista de Pós-Vendas', 'Analista de DHO Sênior',
