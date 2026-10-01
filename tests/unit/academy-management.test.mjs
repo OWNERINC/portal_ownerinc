@@ -1,12 +1,47 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 import test from 'node:test';
+import { FixtureNode, TestEvent, parseInto, deferred, drain } from '../helpers/frontend-feedback-harness.mjs';
 
 const [app, manager, course, curriculum, cms, admin] = await Promise.all([
   readFile('public/academy/app.js', 'utf8'), readFile('public/academy/manage-view.js', 'utf8'),
   readFile('public/academy/course-editor.js', 'utf8'), readFile('public/academy/curriculum-editor.js', 'utf8'),
   readFile('public/js/cms.js', 'utf8'), readFile('public/js/admin.js', 'utf8'),
 ]);
+
+async function curriculumHarness() {
+  const doc = new FixtureNode('document'); doc.ownerDocument = doc;
+  doc.createElement = tag => new FixtureNode(tag, doc);
+  doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
+  const window = new FixtureNode('window', doc); window.confirm = () => true;
+  const requests = [];
+  const transport = (path, options = {}) => { const item = { path, options, ...deferred() }; requests.push(item); return item.promise; };
+  const pageController = new AbortController();
+  const page = {
+    signal: pageController.signal,
+    bindAPI() { return { fetchAPI: transport, fetchAPIPage: transport }; },
+    beforeLeave() {},
+  };
+  const context = vm.createContext({ document: doc, window, console, AbortController, DOMException, URLSearchParams, URL, setTimeout, clearTimeout,
+    fetchAPI: transport, fetchAPIPage: transport });
+  const ui = (await readFile('public/js/ui.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+  vm.runInContext(`${ui}\nglobalThis.element = element;`, context);
+  const source = curriculum.replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+  vm.runInContext(`${source}\nglobalThis.createCurriculumEditor = createCurriculumEditor;`, context);
+  const root = doc.createElement('main');
+  const handle = context.createCurriculumEditor({ root, page, courseId: 'course-a', initialCourse: {
+    id: 'course-a', delivery_mode: 'internal', modules: [{ id: 'module-a', title: 'Módulo original', order: 1, active: false,
+      lessons: [{ id: 'lesson-a', title: 'Aula original', order: 1, active: false, media_type: 'youtube', youtube_video_id: 'dQw4w9WgXcQ', description: '' }] }],
+  } });
+  await drain();
+  requests.at(-1).resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Módulo original', order: 1, active: false,
+    lessons: [{ id: 'lesson-a', title: 'Aula original', order: 1, active: false, media_type: 'youtube', youtube_video_id: 'dQw4w9WgXcQ', description: '' }] }] });
+  await drain();
+  return { root, requests, handle, pageController, window };
+}
+
+function button(root, text) { return root.querySelectorAll('button').find(node => node.textContent === text); }
 
 test('Academy management is a permissioned route with dedicated editors and real API links', () => {
   assert.match(app, /mountAcademyManager/);
@@ -50,4 +85,33 @@ test('materials are single-flight per lesson and curriculum refreshes authoritat
   assert.match(curriculum, /const result = await save\(`\/api\/academy\/lessons/);
   assert.match(curriculum, /const result = await save\(`\/api\/academy\/modules/);
   assert.match(curriculum, /if \(result && !disposed\) await reload\(\)/);
+});
+
+test('ordinary module save reloads and renders the authoritative title/status', async () => {
+  const h = await curriculumHarness();
+  const moduleInput = h.root.querySelectorAll('input').find(node => node.value === 'Módulo original');
+  moduleInput.value = 'Módulo atualizado';
+  h.root.querySelectorAll('input').find(node => node.getAttribute('aria-label') === 'Módulo ativo Módulo original').checked = true;
+  button(h.root, 'Salvar módulo').click(); await drain();
+  const save = h.requests.find(request => request.path.includes('/modules/module-a') && request.options.method === 'PUT');
+  assert.ok(save); save.resolve({ id: 'module-a', title: 'Módulo atualizado', active: true }); await drain();
+  const reload = h.requests.at(-1); assert.match(reload.path, /\/api\/academy\/course-a\?all=true/);
+  reload.resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Módulo do servidor', order: 2, active: true, lessons: [] }] }); await drain();
+  assert.equal(h.root.querySelectorAll('input').find(node => node.getAttribute('aria-label') === 'Título do módulo Módulo do servidor').value, 'Módulo do servidor');
+  assert.equal(h.root.querySelectorAll('input').find(node => node.getAttribute('aria-label') === 'Módulo ativo Módulo do servidor').checked, true);
+});
+
+test('ordinary lesson save reloads server media/title and ignores a late response after dispose', async () => {
+  const h = await curriculumHarness();
+  const lessonInput = h.root.querySelectorAll('input').find(node => node.value === 'Aula original');
+  lessonInput.value = 'Aula atualizada';
+  button(h.root, 'Salvar aula').click(); await drain();
+  const save = h.requests.find(request => request.path.includes('/lessons/lesson-a') && request.options.method === 'PUT');
+  assert.ok(save); save.resolve({ id: 'lesson-a', title: 'Aula atualizada' }); await drain();
+  const reload = h.requests.at(-1); assert.match(reload.path, /\/api\/academy\/course-a\?all=true/);
+  reload.resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Módulo original', order: 1, active: false, lessons: [{ id: 'lesson-a', title: 'Aula do servidor', order: 7, active: true, media_type: 'file', media_url: 'https://media.test/new.webm', description: '' }] }] }); await drain();
+  assert.equal(h.root.querySelectorAll('input').find(node => node.getAttribute('aria-label') === 'Título da aula Aula do servidor').value, 'Aula do servidor');
+  const stale = h.requests.at(-1); button(h.root, 'Salvar aula').click(); await drain();
+  const staleSave = h.requests.at(-1); h.handle.dispose(); staleSave.resolve({ id: 'lesson-a' }); await drain();
+  assert.equal(h.root.children.length, 0);
 });
