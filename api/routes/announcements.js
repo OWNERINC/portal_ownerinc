@@ -6,6 +6,7 @@ const { getPublishedAnnouncement, getPublishedAnnouncementNavigation, listPublis
 const { getPublishedHome } = require('../owner-news/home');
 
 const router = express.Router();
+router.use('/polls', require('./owner-news-polls'));
 const kind = oneOf('article', 'edition');
 const invalid = (req, res) => res.status(400).json({ error: 'Requisição inválida.', reason: 'invalid_request', requestId: req.id });
 const notFound = (req, res) => res.status(404).json({ error: 'Publicação não encontrada.', reason: 'not_found', requestId: req.id });

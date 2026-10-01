@@ -6,6 +6,7 @@ const { validBody, withAudit } = require('../route-utils');
 const { HomeError, normalizeHome, validVersion, getHomeAdmin, saveHomeDraft, publishHome } = require('../owner-news/home');
 
 const router = express.Router();
+router.use('/polls', require('./owner-news-polls').admin);
 const messages = {
   invalid_home: 'A abertura editorial é inválida.',
   version_conflict: 'A abertura foi alterada. Recarregue antes de continuar.',

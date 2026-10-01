@@ -15,6 +15,7 @@ const { migrate } = require('../api/db/migrate');
 const { getPublishedAnnouncement, listPublishedAnnouncements, promoteDueScheduledForPool } = require('../api/cms/reader');
 const { lockCmsAssets } = require('../api/cms/locks');
 const { canManageCms } = require('../api/cms/permissions');
+const { createPollDraft, publishPoll, closePoll, readPoll, readCurrentPoll, voteOnPoll } = require('../api/owner-news/polls');
 const supertest = require('supertest');
 await migrate();
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
@@ -29,6 +30,7 @@ const request = supertest(cmsApp(pool, { uid, role: 'admin', permissions: { mana
 let homeSnapshot;
 const pollIds = [];
 const voterUid = `owner-news-voter-${randomUUID()}`;
+const pollUserIds = [];
 async function withTransaction(callback, { rollback = false } = {}) {
   const db = await pool.connect();
   try {
@@ -107,8 +109,11 @@ async function checkPollSchema() {
     assert.equal((await db.query('DELETE FROM owner_news_poll_votes WHERE poll_id=$1', [poll.id])).rowCount, 1);
     assert.equal((await db.query('DELETE FROM owner_news_poll_options WHERE poll_id=$1', [poll.id])).rowCount, 1);
     assert.equal((await db.query('DELETE FROM owner_news_polls WHERE id=$1', [poll.id])).rowCount, 1);
+    // Leave a real mutation pending: deleting the runtime fixture alone cannot prove rollback.
+    await db.query("UPDATE owner_news_polls SET title='Rollback pending' WHERE id=$1", [pollId]);
   }, { rollback: true });
   assert.equal((await client.query('SELECT id FROM owner_news_polls WHERE id=$1', [runtimePollId])).rowCount, 0);
+  assert.equal((await client.query('SELECT title FROM owner_news_polls WHERE id=$1', [pollId])).rows[0].title, 'Fixture P1');
   console.log('owner-news integration: SET LOCAL ROLE portal_api INSERT/SELECT/UPDATE/DELETE on all poll tables with ROLLBACK ok');
 
   await withTransaction(db => db.query('DELETE FROM users WHERE uid=$1', [voterUid]));
@@ -122,6 +127,175 @@ async function checkPollSchema() {
   assert.equal((await client.query('SELECT id FROM owner_news_poll_options WHERE poll_id=$1', [pollId])).rowCount, 0);
   assert.equal((await client.query('SELECT * FROM owner_news_poll_votes WHERE poll_id=$1', [pollId])).rowCount, 0);
   console.log('owner-news integration: user deletion removes vote, nulls actors, preserves poll/options; parent deletion cascades ok');
+}
+async function checkPollServiceAndRoutes() {
+  const content = { title: 'Fixture P2', question: 'Pergunta sintética P2?', description: '', closing: 'Obrigada.', options: ['Cultura', 'Tecnologia'] };
+  const tx = operation => withTransaction(async db => {
+    await db.query('SET LOCAL ROLE portal_api');
+    return operation(db);
+  });
+  const make = async () => {
+    const poll = await tx(db => createPollDraft(db, content, uid));
+    pollIds.push(poll.id);
+    return poll;
+  };
+  for (let index = 0; index < 3; index += 1) {
+    const user = `P2-CaseSensitive-${randomUUID()}`;
+    pollUserIds.push(user);
+    await client.query('INSERT INTO users(uid,email,name) VALUES ($1,$2,$3)', [user, `${user}@example.com`, 'Pessoa sintética P2']);
+  }
+  const [firstUid, secondUid, thirdUid] = pollUserIds;
+  const api = supertest(ownerNewsApp(pool, uid, firstUid));
+  const admin = (method, path = '') => api[method](`/api/cms/owner-news/polls${path}`).set('Authorization', 'Bearer admin');
+  const reader = (method, path) => api[method](`/api/announcements/polls${path}`).set('Authorization', 'Bearer employee');
+  assert.equal(await readCurrentPoll(pool, firstUid), null);
+  assert.deepEqual((await reader('get', '/current').expect(200)).body, { poll: null });
+  const draft = (await admin('post').send(content).expect(201)).body;
+  pollIds.push(draft.id);
+  assert.equal(draft.version, 1);
+  assert.equal(draft.total_votes, 0);
+  assert.ok(draft.options.every(option => option.votes === 0 && option.percentage === 0));
+  await reader('get', `/${draft.id}`).expect(404);
+  await reader('post', `/${draft.id}/votes`).send({ option_id: draft.options[0].id }).expect(404);
+  const saves = await Promise.all([0, 1].map(() => admin('put', `/${draft.id}/draft`).send({ ...content, expected_version: 1 })));
+  assert.deepEqual(saves.map(res => res.status).sort(), [200, 409]);
+  const saved = saves.find(res => res.status === 200).body;
+  assert.equal(saved.version, 2);
+  assert.notEqual(saved.options[0].id, draft.options[0].id);
+  await admin('post', `/${draft.id}/publish`).send({ expected_version: 1 }).expect(409);
+  const published = (await admin('post', `/${draft.id}/publish`).send({ expected_version: 2 }).expect(200)).body;
+  assert.equal(published.status, 'open');
+  assert.equal(published.version, 3);
+  assert.equal((await reader('get', '/current').expect(200)).body.poll.id, published.id);
+  await admin('put', `/${draft.id}/draft`).send({ ...content, expected_version: 3 }).expect(409);
+  const other = await make();
+  const conflict = await admin('post', `/${other.id}/publish`).send({ expected_version: 1 }).expect(409);
+  assert.equal(conflict.body.reason, 'active_poll_exists');
+  assert.equal(conflict.body.requestId, 'owner-news-test');
+  assert.equal((await readPoll(pool, other.id, uid, { includeDraft: true })).version, 1);
+  const listing = await admin('get', '?status=open&limit=1').expect(200);
+  assert.equal(listing.headers['x-total-count'], '1');
+  assert.equal(listing.body[0].id, published.id);
+  const emptyPage = await admin('get', '?status=open&offset=50').expect(200);
+  assert.equal(emptyPage.headers['x-total-count'], '1');
+  assert.deepEqual(emptyPage.body, []);
+  const [optionA, optionB] = published.options.map(option => option.id);
+  await assert.rejects(tx(db => voteOnPoll(db, published.id, other.options[0].id, firstUid)), error => error.status === 400 && error.code === 'invalid_option');
+  assert.equal((await readPoll(pool, published.id, firstUid)).total_votes, 0);
+  const attempts = await Promise.allSettled([
+    tx(db => voteOnPoll(db, published.id, optionA, firstUid)),
+    tx(db => voteOnPoll(db, published.id, optionB, firstUid)),
+  ]);
+  assert.equal(attempts.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(attempts.filter(result => result.status === 'rejected' && result.reason.code === 'already_voted').length, 1);
+  const stored = await pool.query('SELECT option_id,user_uid FROM owner_news_poll_votes WHERE poll_id=$1', [published.id]);
+  assert.equal(stored.rowCount, 1);
+  assert.equal(stored.rows[0].user_uid, firstUid);
+  const choice = stored.rows[0].option_id;
+  const retry = await tx(db => voteOnPoll(db, published.id, choice, firstUid));
+  assert.equal(retry.recorded, false);
+  assert.equal(retry.poll.total_votes, 1);
+  const uppercaseRetry = await reader('post', `/${published.id.toUpperCase()}/votes`).send({ option_id: choice.toUpperCase() }).expect(200);
+  assert.equal(uppercaseRetry.body.viewer_option_id, choice);
+  await reader('post', `/${published.id}/votes`).send({ option_id: choice === optionA ? optionB : optionA }).expect(409);
+  assert.equal((await reader('get', `/${published.id}`).expect(200)).body.viewer_option_id, choice);
+  await reader('post', `/${published.id}/votes`).send({ option_id: optionA, user_uid: secondUid }).expect(400);
+  const second = await tx(db => voteOnPoll(db, published.id, optionB, secondUid));
+  assert.equal(second.recorded, true);
+  assert.equal(second.poll.total_votes, 2);
+  assert.equal(second.poll.viewer_option_id, optionB);
+  assert.equal((await readPoll(pool, published.id, thirdUid)).viewer_option_id, null);
+  assert.deepEqual(Object.keys(second.poll).sort(), ['id', 'title', 'question', 'description', 'closing', 'status', 'version', 'options', 'total_votes', 'viewer_option_id'].sort());
+  assert.ok(second.poll.options.every(option => Object.keys(option).sort().join(',') === 'id,label,percentage,votes'));
+  assert.equal(JSON.stringify(second.poll).includes(firstUid), false);
+  console.log('owner-news integration: P2 routes draft isolation/CAS/freeze/list/conflicts; runtime-role different-choice race, UUID retry, identity and DTO privacy ok');
+
+  // Deterministic lock ordering: hold close's row lock, dispatch a competing vote,
+  // observe its SQL dispatch, then commit close. No sleeps or timing guesses.
+  const closer = await pool.connect();
+  let voteDispatched;
+  const dispatched = new Promise(resolve => { voteDispatched = resolve; });
+  let pendingVote;
+  try {
+    await closer.query('BEGIN');
+    await closer.query('SELECT id FROM owner_news_polls WHERE id=$1 FOR UPDATE', [published.id]);
+    pendingVote = tx(db => voteOnPoll({ query(sql, values) {
+      const pending = db.query(sql, values);
+      if (sql.includes('FOR UPDATE')) voteDispatched();
+      return pending;
+    } }, published.id, optionA, thirdUid));
+    const rejected = assert.rejects(pendingVote, error => error.status === 409 && error.code === 'poll_closed');
+    await dispatched;
+    await closePoll(closer, published.id, 3, uid);
+    await closer.query('COMMIT');
+    await rejected;
+  } finally {
+    await closer.query('ROLLBACK');
+    closer.release();
+    if (pendingVote) await pendingVote.catch(() => {});
+  }
+  assert.equal((await readPoll(pool, published.id, firstUid)).total_votes, 2);
+  const closedRetry = await tx(db => voteOnPoll(db, published.id, choice, firstUid));
+  assert.equal(closedRetry.recorded, false);
+  assert.equal(closedRetry.poll.status, 'closed');
+  await reader('post', `/${published.id}/votes`).send({ option_id: choice.toUpperCase() }).expect(200);
+  await supertest(ownerNewsApp(pool, uid, thirdUid)).post(`/api/announcements/polls/${published.id}/votes`)
+    .set('Authorization', 'Bearer employee').send({ option_id: optionA }).expect(409);
+  await admin('post', `/${published.id}/publish`).send({ expected_version: 4 }).expect(409);
+  await admin('post', `/${published.id}/close`).send({ expected_version: 4 }).expect(409);
+  assert.equal((await readCurrentPoll(pool, thirdUid)).id, published.id);
+  await client.query('DELETE FROM users WHERE uid=$1', [secondUid]);
+  const afterDeletion = await readPoll(pool, published.id, firstUid);
+  assert.equal(afterDeletion.total_votes, 1);
+  assert.equal(afterDeletion.options.find(option => option.id === choice).percentage, 100);
+  assert.equal(afterDeletion.viewer_option_id, choice);
+  console.log('owner-news integration: P2 close-before-new-vote lock, closed retry, no reopening and post-user-deletion aggregates ok');
+
+  // Concurrent publication of DIFFERENT drafts exercises the unique index, not only CAS.
+  const contender = await make();
+  const publications = await Promise.all([other, contender].map(poll => admin('post', `/${poll.id}/publish`).send({ expected_version: 1 })));
+  assert.deepEqual(publications.map(res => res.status).sort(), [200, 409]);
+  assert.equal(publications.find(res => res.status === 409).body.reason, 'active_poll_exists');
+  const open = publications.find(res => res.status === 200).body;
+  assert.equal((await readCurrentPoll(pool, firstUid)).id, open.id);
+  // Concurrent same-choice first votes are successful exactly once.
+  const identical = await Promise.all([0, 1].map(() => tx(db => voteOnPoll(db, open.id, open.options[0].id, thirdUid))));
+  assert.deepEqual(identical.map(result => result.recorded).sort(), [false, true]);
+  assert.equal((await readPoll(pool, open.id, thirdUid)).total_votes, 1);
+  const closed = (await admin('post', `/${open.id}/close`).send({ expected_version: 2 }).expect(200)).body;
+  assert.equal(closed.total_votes, 1);
+  assert.equal((await readCurrentPoll(pool, firstUid)).id, open.id);
+  // Corrupted stored drafts cannot publish even if the schema permits one option.
+  const malformed = await make();
+  await client.query('DELETE FROM owner_news_poll_options WHERE id=$1', [malformed.options[0].id]);
+  await admin('post', `/${malformed.id}/publish`).send({ expected_version: 1 }).expect(400);
+  assert.equal((await readPoll(pool, malformed.id, uid, { includeDraft: true })).status, 'draft');
+
+  // Audit failure must roll back an otherwise valid vote.
+  const auditPoll = await make();
+  await tx(db => publishPoll(db, auditPoll.id, 1, uid));
+  const failedAuditPool = { async connect() {
+    const db = await pool.connect();
+    return { release: () => db.release(), query(sql, values) {
+      if (sql.includes('INSERT INTO audit_log')) return Promise.reject(new Error('synthetic poll audit failure'));
+      return db.query(sql, values);
+    } };
+  } };
+  await supertest(ownerNewsApp(failedAuditPool, uid, firstUid)).post(`/api/announcements/polls/${auditPoll.id}/votes`)
+    .set('Authorization', 'Bearer employee').send({ option_id: auditPoll.options[0].id }).expect(500);
+  assert.equal((await readPoll(pool, auditPoll.id, firstUid)).total_votes, 0);
+  const distinctVoters = await Promise.all([firstUid, thirdUid].map(user =>
+    supertest(ownerNewsApp(pool, uid, user)).post(`/api/announcements/polls/${auditPoll.id}/votes`)
+      .set('Authorization', 'Bearer employee').send({ option_id: auditPoll.options[0].id }).expect(200)));
+  assert.deepEqual(distinctVoters.map(response => response.body.total_votes).sort(), [1, 2]);
+  assert.equal((await readPoll(pool, auditPoll.id, firstUid)).total_votes, 2);
+  const audit = await client.query("SELECT actor_uid,action,details FROM audit_log WHERE target_type='owner_news_poll' AND target_id=ANY($1::text[]) ORDER BY created_at,id", [pollIds]);
+  assert.deepEqual(new Set(audit.rows.map(row => row.action)), new Set(['owner_news.poll.create', 'owner_news.poll.update', 'owner_news.poll.publish', 'owner_news.poll.close', 'owner_news.poll.vote']));
+  const votes = audit.rows.filter(row => row.action === 'owner_news.poll.vote');
+  assert.deepEqual(votes.map(row => row.details), [{ recorded: false }, { recorded: false }, { recorded: true }, { recorded: true }]);
+  assert.deepEqual(votes.slice(0, 2).map(row => row.actor_uid), [firstUid, firstUid]);
+  assert.deepEqual(new Set(votes.slice(2).map(row => row.actor_uid)), new Set([firstUid, thirdUid]));
+  console.log('owner-news integration: P2 concurrent publication, same-choice and distinct-user votes, stored validation, current replacement and atomic private audit ok');
 }
 async function documentFixture() {
   const { rows } = await client.query("INSERT INTO cms_documents (content_type, title) VALUES ('announcement', 'Fixture sintética E2') RETURNING id");
@@ -137,6 +311,7 @@ async function revision(documentId, version, status, editorial, content = blocks
 try {
   await client.query('INSERT INTO users (uid, email, name) VALUES ($1, $2, $3)', [uid, `${uid}@example.com`, 'Fixture sintética E2']);
   await checkPollSchema();
+  await checkPollServiceAndRoutes();
   const documentId = await documentFixture();
   const publishedId = await revision(documentId, 1, 'published', oldEditorial, [{ type: 'paragraph', text: 'Texto publicado.' }]);
   await client.query('UPDATE cms_documents SET published_revision_id=$2 WHERE id=$1', [documentId, publishedId]);
@@ -305,7 +480,8 @@ try {
       homeSnapshot.draft === null ? null : JSON.stringify(homeSnapshot.draft),
       homeSnapshot.published === null ? null : JSON.stringify(homeSnapshot.published),
       homeSnapshot.published_at, homeSnapshot.updated_by, homeSnapshot.updated_at]);
-    await client.query('DELETE FROM audit_log WHERE actor_uid=$1 OR target_id=ANY($2::text[])', [uid, documentIds]);
+    await client.query('DELETE FROM audit_log WHERE actor_uid=$1 OR target_id=ANY($2::text[])', [uid, [...documentIds, ...pollIds]]);
+    await client.query('DELETE FROM users WHERE uid=ANY($1::text[])', [pollUserIds]);
     await client.query('DELETE FROM cms_documents WHERE id=ANY($1::uuid[])', [documentIds]);
     await client.query('DELETE FROM cms_assets WHERE id=ANY($1::uuid[])', [assetIds]);
     await client.query('DELETE FROM users WHERE uid=$1', [uid]);

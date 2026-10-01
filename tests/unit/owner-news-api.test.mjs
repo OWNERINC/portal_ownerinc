@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { createRequire, Module } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -68,21 +69,29 @@ function poolFor(extended = false) {
 }
 
 function appFor(pool) {
-  const routeModule = new Module(routePath);
-  const routeRequire = createRequire(routePath);
-  routeModule.require = name => {
-    if (name === '../db') return pool;
-    if (name === '../middleware/auth') return {
-      authMiddleware(req, res, next) {
-        if (req.get('Authorization') !== 'Bearer test-user') return res.sendStatus(401);
-        next();
-      },
+  function loadRoute(path, source) {
+    const routeModule = new Module(path);
+    const routeRequire = createRequire(path);
+    routeModule.require = name => {
+      if (name === '../db') return pool;
+      if (name === './owner-news-polls') {
+        const childPath = routeRequire.resolve(name);
+        return loadRoute(childPath, readFileSync(childPath, 'utf8'));
+      }
+      if (name === '../middleware/auth') return {
+        authMiddleware(req, res, next) {
+          if (req.get('Authorization') !== 'Bearer test-user') return res.sendStatus(401);
+          req.user = { uid: 'test-user', role: 'employee', permissions: {} };
+          next();
+        },
+      };
+      return routeRequire(name);
     };
-    return routeRequire(name);
-  };
-  routeModule._compile(routeSource, routePath);
+    routeModule._compile(source, path);
+    return routeModule.exports;
+  }
   const app = express();
-  app.use('/api/announcements', routeModule.exports);
+  app.use('/api/announcements', loadRoute(routePath, routeSource));
   return supertest(app);
 }
 

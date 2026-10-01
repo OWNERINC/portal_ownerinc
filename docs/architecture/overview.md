@@ -102,6 +102,40 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
 
 ## CMS e conteúdo publicado
 
+### Enquetes Owner News (P2)
+
+- `api/owner-news/polls.js` implementa rascunho, publicação única, encerramento e
+  votação; mutações recebem o client da transação de `withAudit`, sem transações
+  implícitas. Alterações e votos travam a linha da enquete com `FOR UPDATE`.
+  Administração exige `canManageCms(user, 'announcement')` e versão atual.
+- `GET /api/announcements/polls/current` retorna `{poll}` (ou null); detalhe
+  `GET /api/announcements/polls/:id` oculta rascunhos. Ambos exigem autenticação.
+  Current prioriza open; depois a closed com publicação mais recente e ID no empate.
+- `POST /api/announcements/polls/:id/votes` recebe somente `{option_id}` e usa
+  exclusivamente `req.user.uid`. UUIDs são normalizados para minúsculas; UID
+  preserva caixa. Retry da mesma opção tem sucesso mesmo após encerramento;
+  escolha diferente retorna 409 `already_voted`, novo voto encerrado retorna
+  409 `poll_closed`. O leitor reconcilia a escolha registrada por GET explícito.
+- Administração usa `/api/cms/owner-news/polls`: GET paginado (`limit`, `offset`,
+  `status` opcional; array + `X-Total-Count`), POST cria draft (201), PUT
+  `/:id/draft` atualiza conteúdo + `expected_version`, POST `/:id/publish` e
+  `/:id/close` recebem somente `expected_version`. Conteúdo tem title (80),
+  question (240), description (600), closing (200) e 2–6 opções textuais distintas
+  (100 caracteres cada), sem HTML. Publicação congela conteúdo e opções; closed
+  não reabre. Não há agendamento ou DELETE. Conflitos de versão e de única enquete
+  aberta retornam 409 `version_conflict`/`active_poll_exists`; o último é traduzido
+  somente após rollback da transação que violou o índice único.
+- Cada PollDTO é projetado em uma única consulta SQL: opções ordenadas, contagens
+  reais, percentuais arredondados e somente a escolha do próprio leitor. Não
+  retorna posições internas, autores administrativos ou UIDs de votantes. O total
+  reflete o cascade de exclusão de usuário. Auditoria guarda ação, ator e versão
+  administrativa ou `{recorded}` do voto, nunca a opção escolhida.
+- `tests/unit/owner-news-polls.test.mjs` cobre normalização, estados, transporte,
+  autenticação e permissão real com identidades sintéticas. O script
+  `scripts/test-owner-news-integration.mjs` valida em PostgreSQL descartável os
+  locks, corridas de publicação/voto, idempotência, agregados e rollback da
+  auditoria; serviços de enquete também são exercitados sob `portal_api`.
+
 ### Contrato editorial Owner News (E1–E2)
 
 - `api/owner-news/editorial.js` valida o contrato da revisão na gravação,
