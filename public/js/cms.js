@@ -5,6 +5,7 @@ import { createBlockEditor, createBlockSettings, serializeBlocks, STANDARD_BLOCK
 import { renderBlocks, cleanupRenderedBlocks, BLOCK_TYPES } from './cms-block-renderer.js';
 import { createEditorialFields, editorialPublicationError } from './owner-news/cms-editorial.js';
 import { mountNewsHomeEditor } from './owner-news/cms-home.js';
+import { mountNewsPollManager } from './owner-news/cms-polls.js';
 import { renderNewsArticle } from './owner-news/reader-view.js';
 import { estimateNewsReadTime, normalizeEditorial } from './owner-news/model.js';
 
@@ -189,7 +190,7 @@ function syncBusyState() {
   inspectorRoot.setAttribute('aria-busy', String(editorBusy));
   newDocumentForm.inert = editorBusy;
   newDocumentForm.setAttribute('aria-busy', String(editorBusy));
-  newDocumentButton.disabled = !TYPES.length || navigationBlocked || newsSection === 'home';
+  newDocumentButton.disabled = !TYPES.length || navigationBlocked || newsSection !== 'articles';
   contentTypes.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
   documentList.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
   documentPagination.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
@@ -282,7 +283,7 @@ function renderTypeNav() {
 
 function syncNewsSections() {
   const news = selectedType === 'announcement';
-  const home = news && newsSection === 'home';
+  const home = news && newsSection !== 'articles';
   if (newsSections) {
     newsSections.hidden = !news;
     newsSections.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.newsSection === newsSection)));
@@ -308,6 +309,7 @@ newsSections?.querySelectorAll('button').forEach(button => page.listen(button, '
   newsSection = next;
   syncNewsSections();
   if (next === 'home') homeEditor = mountNewsHomeEditor({ root: newsSettings, page, onDirty(value, busy) { homeDirty = value; homeBusy = busy; } });
+  else if (next === 'polls') homeEditor = mountNewsPollManager({ root: newsSettings, page, onDirty(value, busy) { homeDirty = value; homeBusy = busy; } });
   else { renderDocumentList(); syncBusyState(); }
 }));
 

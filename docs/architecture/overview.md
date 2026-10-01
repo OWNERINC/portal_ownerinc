@@ -293,6 +293,29 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   DOM/transportes: isolamento, autosave, publicação, capa/reordenação, upload,
   prévia privada, abertura/conflito e descarte. Fixtures são sintéticas.
 
+### Gestão de enquetes no CMS (P3)
+
+- Owner News também oferece Enquetes, montada por `cms-polls.js` com
+  `mountNewsPollManager({root,page}) -> {canLeave,dispose}`. O controlador CMS
+  mantém uma única guarda para documentos e subárea ativa; dispose aborta os
+  requests e remove listeners antes de reutilizar o painel.
+- A lista administrativa usa páginas de 20. Rascunhos têm título, pergunta,
+  descrição, encerramento e 2–6 opções distintas, com adicionar/remover/subir/descer.
+  POST cria e PUT salva com expected_version; somente a resposta bem-sucedida
+  redefine a baseline e substitui integralmente o DTO, incluindo IDs das opções.
+- `protectForm` aceita modo `managed` com serialização do payload e comparação
+  `isDirty`: o módulo usa essa mesma baseline na guarda CMS, sem registrar uma
+  segunda confirmação no guard global de UI. O comportamento padrão permanece.
+- Publicar exige rascunho salvo e limpo. Aberta/encerrada mostram apenas textos e
+  totais; aberta pode encerrar, encerrada pode originar nova cópia sem ID/votos.
+  Conflitos preservam as entradas locais. Recarregar pede descarte e consulta a
+  lista administrativa até encontrar o DTO atual (não existe GET de draft por ID).
+  `active_poll_exists` consulta current e oferece navegar à enquete aberta.
+- 403 remove os controles de gestão; falhas transitórias mantêm o conteúdo e
+  permitem retry. O servidor continua sendo a autoridade de permissão e versão.
+  `tests/unit/owner-news-polls-frontend.test.mjs` cobre o módulo real no DOM do
+  harness, com requests controlados e fixtures sintéticas.
+
 ### Persistência editorial (E2)
 
 - Migration `033_owner_news_editorial` acrescenta `cms_revisions.editorial` JSONB

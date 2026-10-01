@@ -186,3 +186,13 @@
 @media (max-width: 700px) {
   .cms-page #owner-news-settings { grid-column: 1 / -1; }
 }
+.cms-poll-manager { padding: 24px; overflow-wrap: anywhere; }
+.cms-poll-manager .cms-form-actions { flex-wrap: wrap; }
+.cms-poll-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; max-width: 720px; margin-top: 24px; }
+.cms-poll-option { display: flex; align-items: end; gap: 12px; margin-bottom: 12px; }
+.cms-poll-option .cms-field { flex: 1; min-width: 0; }
+.cms-poll-list { list-style: none; padding: 0; margin: 16px 0; }
+.cms-poll-list li { border-bottom: 1px solid var(--cms-rule); padding: 8px 0; }
+@media (max-width: 640px) {
+  .cms-poll-option { align-items: stretch; flex-direction: column; }
+}

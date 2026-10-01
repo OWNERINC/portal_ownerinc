@@ -114,7 +114,7 @@ export async function createMountedHarness(name = 'cms', { user = { permissions:
     const source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
     vm.runInContext(`(() => {\n${source}\nObject.assign(globalThis, { ${exports.join(', ')} });\n})();`, context, { filename: path });
   }
-  await loadModule('public/js/ui.js', ['clear', 'element', 'showState', 'safeHttpUrl', 'openDialog', 'closeDialog', 'setDialogCloseGuard']);
+  await loadModule('public/js/ui.js', ['clear', 'element', 'showState', 'safeHttpUrl', 'openDialog', 'closeDialog', 'setDialogCloseGuard', 'protectForm', 'canLeavePageUI']);
   await loadModule('public/js/page-lifecycle.js', ['createPageLifecycle']);
   await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'cleanupRenderedBlocks', 'validateBlocks', 'BLOCK_TYPES']);
   if (name === 'cms') {
@@ -125,6 +125,7 @@ export async function createMountedHarness(name = 'cms', { user = { permissions:
     await loadModule('public/js/owner-news/reader-view.js', ['renderNewsArticle']);
     await loadModule('public/js/owner-news/cms-editorial.js', ['createEditorialFields', 'editorialPublicationError']);
     await loadModule('public/js/owner-news/cms-home.js', ['mountNewsHomeEditor']);
+    await loadModule('public/js/owner-news/cms-polls.js', ['mountNewsPollManager']);
     const createEditor = context.createBlockEditor;
     context.createBlockEditor = options => { editorCallbacks.push(options); return createEditor(options); };
   }

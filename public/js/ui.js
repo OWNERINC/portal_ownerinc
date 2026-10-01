@@ -163,8 +163,15 @@ document.querySelectorAll('.table-wrapper').forEach(wrapper => {
 }
 preparePageUI();
 
-export function protectForm(form, page) {
-  const markClean = () => { if (page?.active !== false) guardedForms.set(form, serializeForm(form)); };
+export function protectForm(form, page, { managed = false, serialize = serializeForm } = {}) {
+  let baseline;
+  const markClean = () => {
+    if (page?.active === false) return;
+    baseline = serialize(form);
+    if (!managed) guardedForms.set(form, baseline);
+  };
+  // Managed subareas use the CMS's single guard, avoiding a second UI prompt.
+  markClean.isDirty = () => serialize(form) !== baseline;
   markClean();
   page?.cleanup(() => guardedForms.delete(form));
   return markClean;
