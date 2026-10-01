@@ -1,6 +1,7 @@
 # Portal Ownerinc
 
-Portal interno da Ownerinc para perfis, base de conhecimento, Academy, Owner News e
+Portal interno da Ownerinc para perfis, base de conhecimento, Academy (catálogo e
+jornada de aprendizagem interna), Owner News e
 lembretes. O catálogo de benefícios permanece disponível como rota futura, fora
 da navegação inicial.
 
@@ -86,3 +87,5 @@ HTML.
 - [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Status final da V1](docs/operations/2026-08-12-v1-final-status.md)
 - [Handoff](docs/session/README.md)
+- [Manual editorial da Academy](docs/operations/academy-content.md)
+- [Matriz de aceite da Academy](docs/reviews/2026-09-30-academy-acceptance.md)

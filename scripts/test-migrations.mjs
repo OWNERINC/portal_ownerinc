@@ -43,20 +43,168 @@ const expectedVersions = [
   '030_dho_job_title_catalog',
   '031_contract_invariants',
   '032_user_import_identity',
+  '033_academy_learning',
 ];
 
-// The real migration runner provisions roles and reapplies runtime grants, even
-// on the second (idempotent) run. Verify before introducing historical fixtures.
-await migrate();
-await migrate();
-await verifyMigrations();
+// Explicit setup modes exercise both installation paths without dropping data.
+// Each requires its own empty, approved disposable database.
+const setupMode = process.env.MIGRATION_TEST_SETUP;
+if (setupMode && !['upgrade', 'bootstrap'].includes(setupMode)) {
+  throw new Error('MIGRATION_TEST_SETUP must be upgrade or bootstrap');
+}
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
 const client = await pool.connect();
 const fixtureUids = [];
 const fixtureTitleIds = [];
+let legacyCourseId;
 let legacyObjectsCreated = false;
 try {
+  if (setupMode) {
+    const existing = await client.query(`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`);
+    assert.equal(existing.rowCount, 0, 'Setup modes require an empty disposable database; no tables are dropped');
+    await client.query('BEGIN');
+    try {
+      if (setupMode === 'bootstrap') {
+        await client.query(await readFile(new URL('../api/db/schema.sql', import.meta.url), 'utf8'));
+        const cms = await client.query("SELECT to_regclass('public.cms_documents') AS documents");
+        assert.equal(cms.rows[0].documents, null);
+      } else {
+        await client.query(`CREATE TABLE schema_migrations (
+          version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        for (const version of expectedVersions.filter((version) => version < '033_academy_learning')) {
+          await client.query(await readFile(new URL(`../api/db/migrations/${version}.sql`, import.meta.url), 'utf8'));
+          await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version]);
+        }
+        const columns = await client.query(`SELECT column_name FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'academy' AND column_name = 'delivery_mode'`);
+        assert.equal(columns.rowCount, 0);
+      }
+      const pending = await client.query("SELECT version FROM schema_migrations WHERE version = '033_academy_learning'");
+      assert.equal(pending.rowCount, 0);
+      const legacy = await client.query(`INSERT INTO academy (title, url, active)
+        VALUES ('Curso legado de teste', 'https://example.com/course', TRUE) RETURNING id`);
+      legacyCourseId = legacy.rows[0].id;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      legacyCourseId = undefined;
+      throw error;
+    }
+  }
+  await migrate();
+  const ledgerBeforeRepeat = await client.query('SELECT version, applied_at FROM schema_migrations ORDER BY version');
+  await migrate();
+  const ledgerAfterRepeat = await client.query('SELECT version, applied_at FROM schema_migrations ORDER BY version');
+  assert.deepEqual(ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows, 'Repeated migrate must not reapply migrations');
+  // The real migration runner provisions roles and reapplies runtime grants,
+  // including on the second idempotent run.
+  await verifyMigrations();
+  if (legacyCourseId) {
+    const legacy = await client.query(`SELECT title, url, active, delivery_mode, audience, learning_group,
+      icon_key, instructor_name, updated_at IS NOT NULL AS has_updated_at FROM academy WHERE id = $1`, [legacyCourseId]);
+    assert.deepEqual(legacy.rows, [{ title: 'Curso legado de teste', url: 'https://example.com/course',
+      active: true, delivery_mode: 'external', audience: 'all', learning_group: 'initial',
+      icon_key: 'icon-01', instructor_name: '', has_updated_at: true }]);
+    console.log(`Academy ${setupMode}: legacy course preserved; migration 033 applied after CMS`);
+  }
+
+  // All behavior fixtures roll back, including on a failed assertion.
+  await client.query('BEGIN');
+  try {
+    const academyTables = ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress'];
+    for (const table of academyTables) {
+      const shape = await client.query('SELECT to_regclass($1) AS relation', [`public.${table}`]);
+      assert.equal(shape.rows[0].relation, table);
+      for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+        const access = await client.query(`SELECT
+          has_table_privilege('portal_api', $1, $2) AS api_allowed,
+          has_table_privilege('portal_cron', $1, $2) AS cron_allowed`, [`public.${table}`, privilege]);
+        assert.deepEqual(access.rows, [{ api_allowed: true, cron_allowed: false }], `${table}: ${privilege}`);
+      }
+    }
+    async function rejectsSql(sql, values, code) {
+      await client.query('SAVEPOINT academy_invalid');
+      try {
+        await assert.rejects(client.query(sql, values), (error) => error.code === code);
+      } finally {
+        await client.query('ROLLBACK TO SAVEPOINT academy_invalid');
+        await client.query('RELEASE SAVEPOINT academy_invalid');
+      }
+    }
+    const defaults = await client.query(`INSERT INTO academy (title, url)
+      VALUES ('Curso externo de teste', 'https://example.com/course')
+      RETURNING delivery_mode, audience, learning_group, icon_key, instructor_name`);
+    assert.deepEqual(defaults.rows, [{ delivery_mode: 'external', audience: 'all', learning_group: 'initial',
+      icon_key: 'icon-01', instructor_name: '' }]);
+    const course = (await client.query(`INSERT INTO academy (title, delivery_mode, audience, active)
+      VALUES ('Curso interno', 'internal', 'job_titles', FALSE) RETURNING id`)).rows[0].id;
+    await rejectsSql("INSERT INTO academy (title) VALUES ('Externo sem URL')", [], '23514');
+    await rejectsSql("INSERT INTO academy (title, delivery_mode, url) VALUES ('Interno com URL', 'internal', 'https://example.com')", [], '23514');
+    const job = (await client.query('INSERT INTO job_titles (name) VALUES ($1) RETURNING id', [`Academy fixture ${randomUUID()}`])).rows[0].id;
+    await client.query('INSERT INTO academy_course_job_titles (course_id, job_title_id) VALUES ($1, $2)', [course, job]);
+    await rejectsSql('DELETE FROM job_titles WHERE id = $1', [job], '23503');
+    await rejectsSql('INSERT INTO academy_course_job_titles (course_id, job_title_id) VALUES ($1, $2)', [course, randomUUID()], '23503');
+    const module = (await client.query(`INSERT INTO academy_modules (course_id, title)
+      VALUES ($1, 'Módulo') RETURNING id, active`, [course])).rows[0];
+    assert.equal(module.active, false);
+    for (const type of ['youtube', 'file']) {
+      await rejectsSql('INSERT INTO academy_lessons (module_id, title, media_type) VALUES ($1, $2, $3)',
+        [module.id, 'Sem mídia', type], '23514');
+    }
+    const lesson = (await client.query(`INSERT INTO academy_lessons (module_id, title, media_type, youtube_video_id)
+      VALUES ($1, 'Aula', 'youtube', 'abcDEF12_-3') RETURNING id, active, media_version`, [module.id])).rows[0];
+    assert.equal(lesson.active, false);
+    assert.equal(lesson.media_version, 1);
+    await client.query(`INSERT INTO academy_lessons (module_id, title, media_type, media_url)
+      VALUES ($1, 'Arquivo', 'file', 'https://example.com/video.mp4')`, [module.id]);
+    for (const [type, video, url] of [
+      ['youtube', 'short', null], ['youtube', 'abcDEF12_-3', 'https://example.com/video.mp4'],
+      ['file', null, 'http://example.com/video.mp4'], ['file', 'abcDEF12_-3', 'https://example.com/video.mp4'],
+    ]) {
+      await rejectsSql(`INSERT INTO academy_lessons (module_id, title, media_type, youtube_video_id, media_url)
+        VALUES ($1, 'Mídia inválida', $2, $3, $4)`, [module.id, type, video, url], '23514');
+    }
+    // The CMS change must preserve all previous content types too.
+    for (const type of ['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder']) {
+      await client.query('INSERT INTO cms_documents (content_type, source_id, title) VALUES ($1, $2, $3)',
+        [type, lesson.id, 'Documento de teste']);
+    }
+    await rejectsSql("INSERT INTO cms_documents (content_type, title) VALUES ('invalid', 'Tipo inválido')", [], '23514');
+    const uids = [`academy-test-${randomUUID()}`, `academy-test-${randomUUID()}`];
+    for (const uid of uids) {
+      await client.query('INSERT INTO users (uid, email) VALUES ($1, $2)', [uid, `${uid}@example.com`]);
+      await client.query(`INSERT INTO academy_lesson_progress (user_uid, lesson_id, media_version, position_seconds)
+        VALUES ($1, $2, 1, 42)`, [uid, lesson.id]);
+    }
+    await client.query(`INSERT INTO academy_lesson_progress (user_uid, lesson_id, media_version, completed, completed_at)
+      VALUES ($1, $2, 2, TRUE, NOW())`, [uids[0], lesson.id]);
+    const progress = await client.query(`SELECT user_uid, media_version, position_seconds, completed, version
+      FROM academy_lesson_progress WHERE lesson_id = $1 ORDER BY user_uid, media_version`, [lesson.id]);
+    assert.equal(progress.rowCount, 3, 'Progress is distinct per user and media version');
+    assert.deepEqual(progress.rows.find((row) => row.user_uid === uids[1]),
+      { user_uid: uids[1], media_version: 1, position_seconds: 42, completed: false, version: 1 });
+    await rejectsSql('INSERT INTO academy_lesson_progress (user_uid, lesson_id, media_version) VALUES ($1, $2, 1)',
+      [uids[0], lesson.id], '23505');
+    for (const change of ['position_seconds = -1', 'position_seconds = 86401', 'version = 0', 'media_version = 0',
+      'completed = TRUE, completed_at = NULL', 'completed = FALSE, completed_at = NOW()']) {
+      await rejectsSql(`UPDATE academy_lesson_progress SET ${change} WHERE user_uid = $1 AND media_version = 1`, [uids[0]], '23514');
+    }
+    await rejectsSql('INSERT INTO academy_lesson_progress (user_uid, lesson_id, media_version) VALUES ($1, $2, 1)',
+      ['nonexistent-fixture-user', lesson.id], '23503');
+    await client.query('DELETE FROM users WHERE uid = $1', [uids[0]]);
+    assert.equal((await client.query('SELECT * FROM academy_lesson_progress WHERE lesson_id = $1', [lesson.id])).rowCount, 1);
+    await client.query('DELETE FROM academy WHERE id = $1', [course]);
+    for (const [table, column, id] of [
+      ['academy_course_job_titles', 'course_id', course], ['academy_modules', 'course_id', course],
+      ['academy_lessons', 'module_id', module.id], ['academy_lesson_progress', 'lesson_id', lesson.id],
+    ]) {
+      assert.equal((await client.query(`SELECT * FROM ${table} WHERE ${column} = $1`, [id])).rowCount, 0, `${table} cascades`);
+    }
+    assert.equal((await client.query('DELETE FROM job_titles WHERE id = $1', [job])).rowCount, 1);
+  } finally {
+    await client.query('ROLLBACK');
+  }
   const { rows: [{ definition: contractDefinition }] } = await client.query(`
     SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
     WHERE conrelid = 'public.users'::regclass AND conname = 'users_contract_consistency'`);
@@ -532,6 +680,7 @@ try {
   console.log('migration integration: ok');
 } finally {
   try {
+    if (legacyCourseId) await client.query('DELETE FROM academy WHERE id = $1', [legacyCourseId]);
     if (legacyObjectsCreated) {
       await client.query('DROP INDEX IF EXISTS ombudsman_workflow_idx');
       await client.query('DROP TABLE IF EXISTS ombudsman CASCADE');
@@ -542,7 +691,9 @@ try {
     if (fixtureTitleIds.length) {
       await client.query('DELETE FROM job_titles WHERE id = ANY($1::uuid[])', [fixtureTitleIds]);
     }
-     await client.query('CREATE UNIQUE INDEX IF NOT EXISTS job_titles_name_lower_unique ON job_titles (btrim(lower(name)))');
+    if (legacyObjectsCreated) {
+      await client.query('CREATE UNIQUE INDEX IF NOT EXISTS job_titles_name_lower_unique ON job_titles (btrim(lower(name)))');
+    }
   } finally {
     client.release();
     await pool.end();

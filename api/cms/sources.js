@@ -3,11 +3,16 @@ const { lockCmsAssets } = require('./locks');
 const SOURCE_TABLES = {
   knowledge: 'knowledge_base',
   academy: 'academy',
+  academy_lesson: 'academy_lessons',
   benefit: 'benefits',
   reminder: 'reminders',
 };
 
 async function deleteCmsSource(db, contentType, sourceId) {
+  if (contentType === 'academy' || contentType === 'academy_lesson') {
+    const { deleteCourseTree, deleteLesson } = require('../academy/mutations');
+    return contentType === 'academy' ? deleteCourseTree(db, sourceId) : deleteLesson(db, sourceId);
+  }
   const sourceTable = SOURCE_TABLES[contentType];
   if (!sourceTable) throw new Error(`Unsupported CMS source: ${contentType}`);
 

@@ -45,6 +45,8 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT, INSERT, UPDATE, DELETE ON pending_registrations TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON firebase_cleanup_queue TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON knowledge_base, reminders, academy, benefits TO portal_api;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON
+      academy_course_job_titles, academy_modules, academy_lessons, academy_lesson_progress TO portal_api;
     GRANT SELECT ON notifications_log TO portal_api;
     GRANT SELECT ON cron_status TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON solides_employee_links TO portal_api;

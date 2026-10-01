@@ -55,6 +55,28 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Uma falha ao remover o arquivo mantém o registro para nova tentativa e é
   registrada no log operacional.
 
+## Academy e dados de aprendizagem
+
+- Finalidade: disponibilizar formações internas elegíveis por audiência e
+  registrar a posição/conclusão declarada pelo próprio colaborador para retomar
+  uma aula.
+- O progresso é dado individual de aprendizagem: nesta versão fica visível ao
+  próprio colaborador nas telas de catálogo, curso e aula. Não há dashboard ou
+  relatório de progresso para gestores; a prévia editorial não grava progresso.
+- A chave lógica do progresso é usuário + aula + versão da mídia. Trocar cargo
+  não apaga o histórico; a autorização corrente é reavaliada e o acesso pode
+  deixar de existir enquanto o dado permanece vinculado ao titular.
+- Substituir a origem normalizada da mídia cria uma nova versão: a retomada e a
+  conclusão da versão nova começam vazias, enquanto o histórico da versão
+  anterior pode permanecer para auditoria técnica.
+- Excluir usuário, aula, módulo ou curso remove o progresso correspondente por
+  cascata transacional. Exclusão de usuário também segue o fluxo de anonimização
+  e retenções gerais acima; assets CMS compartilhados seguem a retenção de
+  referências.
+- O Portal não usa progresso para decisão trabalhista, avaliação automática ou
+  emissão de certificado. Posição de vídeo não equivale a conclusão: somente a
+  ação manual confirmada pelo servidor registra conclusão.
+
 ## Cards Pós
 
 - Finalidade: criar e manter convites internos de Pós-Vendas no template

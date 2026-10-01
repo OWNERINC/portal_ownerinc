@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <link rel="stylesheet" href="./css/cms.css">
+  <link rel="stylesheet" href="./css/academy.css">
   <script src="./js/auth-shell.js"></script>
 </head>
 <body>
@@ -49,13 +50,11 @@
     <!-- generated:portal-topbar -->
     <header class="topbar"><span class="topbar-title">Academy</span></header>
     <!-- /generated:portal-topbar -->
-    <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
-      <div class="page-header"><h1>Academy</h1><p>Cursos e treinamentos disponíveis para a equipe</p></div>
-      <div id="academy-filters" class="filters" aria-label="Filtrar cursos por categoria"></div>
-      <div id="academy-content" aria-live="polite">
-        <p class="empty-state">Carregando cursos…</p>
+    <main class="page-body academy-page" id="main-content" tabindex="-1" data-route-pending>
+      <div id="academy-root" aria-busy="true">
+        <h1>Ownerinc Academy</h1>
+        <p role="status">Carregando sua área de aprendizado…</p>
       </div>
-      <div id="academy-pagination" class="pagination" aria-live="polite"></div>
     </main>
   </div>
 </div>

@@ -182,8 +182,11 @@ test('public reminder reads promote due CMS schedules before visibility filterin
   assert.match(reminders, /filter\(isPublicCmsRow\)/);
   assert.match(knowledge, /filter\(isPublicCmsRow\)/);
   assert.match(knowledge, /if \(!isPublicCmsRow\(row\)\)/);
-  assert.match(academy, /filter\(isPublicCmsRow\)/);
+  const catalog = await readFile('api/academy/catalog.js', 'utf8');
+  assert.match(catalog, /filter\(isPublicCmsRow\)/);
   assert.match(benefits, /filter\(isPublicCmsRow\)/);
-  assert.match(academy, /X-Total-Count', String\(visible\.length\)/);
+  assert.match(academy, /X-Total-Count', String\(total\)/);
+  assert.match(catalog, /total: rows.length/);
+  assert.ok(catalog.indexOf('const rows = await candidates') < catalog.indexOf('rows.slice'));
   assert.match(benefits, /X-Total-Count', String\(visible\.length\)/);
 });

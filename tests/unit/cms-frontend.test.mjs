@@ -13,7 +13,7 @@ const [cmsHtml, cms, editor, renderer, css, knowledgeCss, knowledgeHtml, admin, 
   readFile('public/knowledge.html', 'utf8'),
   readFile('public/admin.html', 'utf8'),
   readFile('public/js/knowledge.js', 'utf8'),
-  readFile('public/js/academy.js', 'utf8'),
+  readFile('public/academy/course-view.js', 'utf8'),
   readFile('public/js/benefits.js', 'utf8'),
   readFile('public/js/reminders.js', 'utf8'),
   readFile('public/js/announcements.js', 'utf8'),
@@ -593,8 +593,9 @@ test('direct and keyboard block selection update every aria-pressed state immedi
   assert.match(editor, /selectBlock\(index\);\s*return;/);
 });
 
-test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', () => {
-  for (const source of [knowledge, academy, benefits, announcements]) {
+test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', async () => {
+  const academyLesson = await readFile('public/academy/lesson-view.js', 'utf8');
+  for (const source of [knowledge, academy, academyLesson, benefits, announcements]) {
     assert.match(source, /content_blocks/);
     assert.match(source, /renderBlocks/);
   }

@@ -1,11 +1,63 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { cmsAssetRetentionDays } from '../../cron/cms-asset-retention.js';
 
 const retentionSource = await readFile('cron/cms-asset-retention.js', 'utf8');
+
+test('lesson draft retains its real file; source deletion removes CMS references and leaves cleanup to retention', async t => {
+  const { deleteCmsSource } = createRequire(import.meta.url)('../../api/cms/sources');
+  const { enforceCmsAssetRetention } = await import('../../cron/cms-asset-retention.js');
+  const uploadDirectory = await mkdtemp(path.join(os.tmpdir(), 'lesson-retention-'));
+  t.after(() => rm(uploadDirectory, { recursive: true, force: true }));
+  await mkdir(path.join(uploadDirectory, 'cms-private'));
+  const file = path.join(uploadDirectory, 'cms-private', 'lesson-material');
+  await writeFile(file, '%PDF-1.4\n%%EOF');
+  const asset = { id: 'asset', storage_key: 'lesson-material' };
+  const lessonId = '00000000-0000-4000-8000-000000000001';
+  let revisions = [{ content_type: 'academy_lesson', source_id: lessonId, status: 'draft', blocks: [{ asset_id: 'asset' }] }];
+  let deleted = false;
+  const calls = [];
+  const client = {
+    async query(sql, params) {
+      calls.push(sql);
+      if (sql.includes('SELECT m.course_id')) return { rows: [{ course_id: 'course', module_id: 'module' }] };
+      if (sql.includes('SELECT * FROM academy WHERE')) return { rows: [{ id: 'course' }] };
+      if (sql.includes('SELECT * FROM academy_modules')) return { rows: [{ id: 'module' }] };
+      if (sql.includes('SELECT * FROM academy_lessons')) return { rows: [{ id: lessonId }] };
+      if (sql.includes('DELETE FROM academy_lessons')) return { rows: [{ id: params[0] }] };
+      if (sql.includes('DELETE FROM cms_documents')) {
+        revisions = revisions.filter(row => !params[0].includes(row.source_id));
+        return { rows: [] };
+      }
+      if (sql.includes('SELECT a.id')) {
+        assert.match(sql, /jsonb_array_elements\(r.blocks\)/);
+        assert.doesNotMatch(sql, /r.status|content_type/);
+        return { rows: revisions.length ? [] : [asset] };
+      }
+      if (sql.includes('SET deleting_at = NOW()')) return { rows: [asset] };
+      if (sql.includes('DELETE FROM cms_assets')) { deleted = true; return { rowCount: 1 }; }
+      return { rows: [] };
+    }, release() {},
+  };
+  const pool = { connect: async () => client };
+  const env = { UPLOAD_DIR: uploadDirectory };
+  assert.equal((await enforceCmsAssetRetention(pool, env)).deletedFiles, 0);
+  assert.match(await readFile(file, 'utf8'), /^%PDF/);
+  calls.length = 0;
+  assert.deepEqual(await deleteCmsSource(client, 'academy_lesson', lessonId), { id: lessonId });
+  assert.match(calls[0], /pg_advisory_xact_lock/);
+  assert.equal(revisions.length, 0);
+  assert.equal(deleted, false);
+  assert.match(await readFile(file, 'utf8'), /^%PDF/);
+  const result = await enforceCmsAssetRetention(pool, env);
+  assert.equal(result.deletedFiles, 1);
+  assert.equal(result.deletedRows, 1);
+  await assert.rejects(readFile(file), { code: 'ENOENT' });
+});
 
 test('CMS asset retention keeps a bounded configurable orphan window', () => {
   assert.equal(cmsAssetRetentionDays({}), 30);

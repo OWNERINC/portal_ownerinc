@@ -58,6 +58,10 @@ export async function createDependencyHarness(t) {
         const asset = state.assets.get(params[0]);
         return { rows: asset && !asset.deleting_at ? [asset] : [] };
       }
+      if (/FROM cms_assets\s+WHERE id = ANY/.test(sql)) {
+        return { rows: params[0].map(id => state.assets.get(id)).filter(asset => asset
+          && asset.storage_key != null && !asset.deleting_at && asset.byte_size >= 1 && asset.byte_size <= 52428800) };
+      }
       if (/jsonb_array_elements\(r.blocks\)/.test(sql)) return { rows: state.references };
       if (/^(BEGIN|COMMIT|ROLLBACK)$|pg_advisory_xact_lock|INSERT INTO audit_log|UPDATE users SET photo_url/.test(sql)) return { rows: [] };
       throw new Error(`Unmocked SQL in dependency regression: ${sql}`);

@@ -55,7 +55,7 @@ function poolFor({ document, blocks = [], assets = [], sourceExists = true, sour
           }] : [],
         };
       }
-      if (/FROM (knowledge_base|academy|benefits|reminders) s/.test(sql)) {
+      if (/FROM (knowledge_base|academy|academy_lessons|benefits|reminders) s/.test(sql)) {
         const sourceIds = params[1] || [];
         return {
           rows: sourceExists ? sourceIds.map(sourceId => ({
@@ -112,6 +112,26 @@ test('reader returns only a published revision and normalizes its blocks', async
   const promotion = pool.calls.find(({ sql }) => /scheduled\.status = 'scheduled'/.test(sql));
   assert.deepEqual(promotion.params[2], ['source-1', 'source-2']);
   assert.equal(pool.connections, 3);
+});
+
+test('lesson reader suppresses legacy fallback and rechecks ancestor activity', async () => {
+  const source = { id: 'lesson', active: true, description: 'Legacy' };
+  const draft = poolFor({ document: { id: 'document' } });
+  const [unpublished] = await addPublishedBlocks(draft, [source], 'academy_lesson');
+  assert.equal(unpublished.description, '');
+  assert.equal(isPublicCmsRow(unpublished), false);
+  const pool = poolFor({ document: { id: 'document', published_revision_id: 'published' },
+    blocks: [{ type: 'paragraph', text: 'Material' }], recheckSourceActive: false });
+  const [inactive] = await addPublishedBlocks(pool, [source], 'academy_lesson');
+  assert.equal(isPublicCmsRow(inactive), false);
+  const projections = pool.calls.filter(({ sql }) => /FROM academy_lessons s/.test(sql));
+  assert.equal(projections.length, 2);
+  for (const { sql } of projections) assert.match(sql, /s.active AND EXISTS[\s\S]*m.id = s.module_id AND m.active = TRUE AND a.active = TRUE/);
+  const published = poolFor({ document: { id: 'document', published_revision_id: 'published' }, blocks: [] });
+  const [visible] = await addPublishedBlocks(published, [source], 'academy_lesson');
+  assert.equal(visible.description, '');
+  assert.deepEqual(visible.content_blocks, []);
+  assert.equal(isPublicCmsRow(visible), true);
 });
 
 test('draft-only and future scheduled documents block legacy fallback', async () => {
@@ -312,7 +332,7 @@ test('validated body projection never falls back to legacy text for managed cont
 test('area mappings preserve legacy rows and add content_blocks only when published', async () => {
   const routeFiles = {
     knowledge: 'api/routes/knowledge.js',
-    academy: 'api/routes/academy.js',
+    academy: 'api/academy/catalog.js',
     benefit: 'api/routes/benefits.js',
     reminder: 'api/routes/reminders.js',
   };

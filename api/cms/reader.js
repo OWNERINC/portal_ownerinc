@@ -1,15 +1,20 @@
 const { blocksToText, validateBlocks } = require('./blocks');
 const { lockCmsAssets } = require('./locks');
 
-const CONTENT_TYPES = new Set(['knowledge', 'academy', 'benefit', 'announcement', 'reminder']);
+const CONTENT_TYPES = new Set(['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder']);
 const SOURCE_TABLES = {
   knowledge: 'knowledge_base',
   academy: 'academy',
+  academy_lesson: 'academy_lessons',
   benefit: 'benefits',
   reminder: 'reminders',
 };
 const SOURCE_ACTIVE_COLUMNS = {
   academy: 's.active',
+  academy_lesson: `(s.active AND EXISTS (
+    SELECT 1 FROM academy_modules m JOIN academy a ON a.id = m.course_id
+    WHERE m.id = s.module_id AND m.active = TRUE AND a.active = TRUE
+  ))`,
   benefit: 's.active',
   reminder: 's.active',
 };
@@ -299,6 +304,7 @@ async function promoteDueScheduledForPool(pool, now = new Date(), contentType = 
 const LEGACY_BODY_FIELDS = {
   knowledge: ['content'],
   academy: ['description'],
+  academy_lesson: ['description'],
   benefit: ['description', 'instructions'],
   reminder: ['description'],
 };
