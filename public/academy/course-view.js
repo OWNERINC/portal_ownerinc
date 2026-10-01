@@ -1,6 +1,6 @@
 import { element } from '../js/ui.js';
 import { renderBlocks } from '../js/cms-block-renderer.js';
-import { heading, cover, curriculum, routeLink, externalLink } from './view-utils.js';
+import { heading, cover, curriculum, routeLink, externalLink, hydrateBrandAssets } from './view-utils.js';
 
 export function courseView({ root, page, navigate, CourseView, preview = false, catalogParams = {} }) {
   const course = CourseView.course;
@@ -21,5 +21,5 @@ export function courseView({ root, page, navigate, CourseView, preview = false, 
   root.replaceChildren(routeLink('← Voltar aos cursos', catalogParams, navigate),
     element('section', { className: 'academy-course-header' }, [cover(course, page, page.brandAssets), copy]));
   if (course.delivery_mode === 'internal') root.append(element('h2', { text: 'Conteúdo do curso' }), curriculum(CourseView, navigate, null, preview));
-  return { dispose() {} };
+  return { setBrandAssets(assets) { hydrateBrandAssets(root, assets); }, dispose() {} };
 }

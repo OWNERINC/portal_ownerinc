@@ -7,7 +7,7 @@ import { courseView } from './course-view.js';
 import { lessonView } from './lesson-view.js';
 import { mountAcademyManager } from './manage-view.js';
 import { brand, heading, errorState, routeLink, unavailable } from './view-utils.js';
-import { loadBrandAssets, createBrandIcon } from './brand.js';
+import { loadBrandAssets } from './brand.js';
 
 function canonicalRouteId(value) {
   // Match the API UUID grammar; malformed values remain unchanged for rejection,
@@ -19,15 +19,13 @@ function canonicalRouteId(value) {
 export function mountAcademy(page) {
   const root = document.getElementById('academy-root');
   if (!root) return;
-  let scope = null, view = null, generation = 0, brandAssets = null;
+  let scope = null, view = null, generation = 0, brandAssets = null, catalogEntryPending = true;
   if (typeof fetch === 'function') loadBrandAssets({ signal: page.signal }).then(assets => {
     brandAssets = assets;
+    if (!page.active) return;
+    view?.setBrandAssets?.(assets);
     const mark = root.querySelector('.academy-brand > img');
-    if (mark) mark.replaceWith(Object.assign(createBrandIcon(assets, 'logo-dark', { decorative: false, label: 'Ownerinc Academy' }), { className: 'academy-logo' }));
-    root.querySelectorAll('.academy-cover[src]').forEach(image => {
-      const key = /icon-0[1-6]/.test(image.getAttribute('src') || '') ? image.getAttribute('src').match(/icon-0[1-6]/)[0] : 'symbol';
-      image.replaceWith(Object.assign(createBrandIcon(assets, key), { className: 'academy-cover' }));
-    });
+    if (mark) { const next = brand(assets).firstChild; mark.replaceWith(next); }
   }).catch(() => {});
   function catalogParams() {
     try {
@@ -77,7 +75,8 @@ export function mountAcademy(page) {
       } else if (preview && !can(page.user, 'manageAcademy')) {
         throw Object.assign(new Error(unavailable), { status: 404 });
       } else if (!courseId && !lessonId) {
-        view = catalogView({ root, page: scope, api, navigate });
+        view = catalogView({ root, page: scope, api, navigate, entryMotion: catalogEntryPending });
+        catalogEntryPending = false;
       } else {
         root.replaceChildren(heading(lessonId ? 'Carregando aula…' : 'Carregando curso…'),
           element('div', { className: lessonId ? 'academy-player' : 'academy-course-loading' }), element('p', { role: 'status', text: 'Carregando conteúdo…' }));

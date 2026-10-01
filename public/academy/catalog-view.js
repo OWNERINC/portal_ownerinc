@@ -1,11 +1,11 @@
 import { element } from '../js/ui.js';
-import { brand, button, courseCard, errorState } from './view-utils.js';
+import { brand, button, courseCard, errorState, hydrateBrandAssets } from './view-utils.js';
 import { mountAcademyMotion } from './motion.js';
 
-export function catalogView({ root, page, api, navigate }) {
-  let disposed = false, continuingLoading = false, categoriesLoading = false;
+export function catalogView({ root, page, api, navigate, entryMotion = true }) {
+  let disposed = false, continuingLoading = false, categoriesLoading = false, brandAssets = page.brandAssets;
   const query = new URL(page.location.href).searchParams;
-  root.replaceChildren(brand(page.brandAssets));
+  root.replaceChildren(brand(brandAssets));
   const motionDisposers = [];
   const continuing = element('section', { className: 'academy-section' }, [element('h2', { text: 'Continuar aprendendo' })]);
   const continued = element('div', { 'aria-busy': 'true' }, [element('p', { role: 'status', text: 'Carregando cursos em andamento…' })]);
@@ -19,8 +19,8 @@ export function catalogView({ root, page, api, navigate }) {
       const courses = await api.continueCourses();
       if (!live()) return;
       continued.replaceChildren(); continued.className = 'academy-grid';
-      courses.forEach(course => continued.append(courseCard(course, page, navigate, page.brandAssets)));
-      if (!motionDisposers.length && typeof mountAcademyMotion === 'function') motionDisposers.push(mountAcademyMotion(continued, { signal: page.signal }));
+      courses.forEach(course => continued.append(courseCard(course, page, navigate, brandAssets)));
+      if (!motionDisposers.length && typeof mountAcademyMotion === 'function') motionDisposers.push(mountAcademyMotion(continued, { signal: page.signal, reducedMotion: !entryMotion }));
       if (!courses.length) continued.append(element('p', { text: 'Escolha um curso abaixo para começar.' }));
     } catch (error) { if (live()) errorState(continued, error, loadContinue); }
     finally { continuingLoading = false; if (live()) continued.setAttribute('aria-busy', 'false'); }
@@ -60,8 +60,8 @@ export function catalogView({ root, page, api, navigate }) {
         const restoreFocus = cards.contains(document.activeElement);
         cards.replaceChildren();
         const courses = result.data.filter(course => course.active !== false);
-        courses.forEach(course => cards.append(courseCard(course, page, navigate, page.brandAssets)));
-        if (!cards.dataset.motionMounted) { cards.dataset.motionMounted = 'true'; if (typeof mountAcademyMotion === 'function') motionDisposers.push(mountAcademyMotion(cards, { signal: page.signal })); }
+        courses.forEach(course => cards.append(courseCard(course, page, navigate, brandAssets)));
+        if (!cards.dataset.motionMounted) { cards.dataset.motionMounted = 'true'; if (typeof mountAcademyMotion === 'function') motionDisposers.push(mountAcademyMotion(cards, { signal: page.signal, reducedMotion: !entryMotion })); }
         if (!courses.length) {
           cards.append(element('p', { text: 'Nenhum curso disponível nesta seleção.' }));
           if (offset || category) cards.append(button('Ver todos os cursos deste grupo', () => change('', 0)));
@@ -92,5 +92,8 @@ export function catalogView({ root, page, api, navigate }) {
     finally { categoriesLoading = false; }
   }
   loadCategories();
-  return { dispose() { disposed = true; motionDisposers.forEach(dispose => dispose()); } };
+  return {
+    setBrandAssets(assets) { if (!live()) return; brandAssets = assets; hydrateBrandAssets(root, assets); },
+    dispose() { disposed = true; motionDisposers.forEach(dispose => dispose()); },
+  };
 }

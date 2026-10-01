@@ -9,6 +9,7 @@ function parseSvg(text, key) {
   if (!svg || svg.localName !== 'svg' || doc.querySelector('parsererror') || svg.querySelector('script,foreignObject,image,style,use,iframe,link')) return null;
   if ([...svg.querySelectorAll('*')].some(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name) || /^(href|src|xlink:href)$/i.test(attribute.name)))) return null;
   svg.setAttribute('data-academy-asset', key);
+  svg.querySelectorAll('[data-part]').forEach(part => part.setAttribute('data-motion-part', ''));
   return svg;
 }
 

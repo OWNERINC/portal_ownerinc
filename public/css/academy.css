@@ -22,7 +22,7 @@
 .academy-course-card p { margin: 4px 0; font-size: .9rem; }
 .academy-cover { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; padding: 36px; background: #97C21E; }
 .academy-cover[data-academy-asset] { color: #141414; }
-.academy-course-card[data-motion-part], .academy-lesson-main [data-motion-completion] { transform-box: fill-box; transform-origin: center; }
+.academy-cover[data-academy-asset] [data-motion-part], .academy-lesson-main [data-motion-completion] { transform-box: fill-box; transform-origin: center; }
 .academy-cover-photo { padding: 0; object-fit: cover; }
 .academy-button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 18px; border: 1px solid #141414; border-radius: 4px; background: #97C21E; color: #141414; font: 700 1rem Helvetica, Arial, sans-serif; cursor: pointer; text-decoration: none; }
 .academy-button:hover { background: #a5ce35; }

@@ -76,7 +76,7 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
       const link = details.querySelector('[aria-current="page"]');
       if (link) link.textContent = `${lesson.title} · Concluída`;
       if (next) next.hidden = false;
-      if (typeof playCompletion === 'function') playCompletion(main);
+      if (typeof playCompletion === 'function') playCompletion(main, { signal: scope.signal });
     } catch (error) {
       if (!scope.active) return;
       if ([401, 403, 404].includes(error.status)) { revoke(); return; }

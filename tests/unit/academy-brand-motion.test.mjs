@@ -30,7 +30,7 @@ test('brand loader only follows manifest filenames and rejects active SVG conten
 
 test('motion uses approved timing, cancels on abort, and renders reduced motion final state', async () => {
   const animations = [];
-  const node = { style: {}, animate(keyframes, options) { const animation = { keyframes, options, cancel() { this.cancelled = true; }, finished: Promise.resolve() }; animations.push(animation); return animation; } };
+  const node = { style: {}, dataset: {}, animate(keyframes, options) { const animation = { keyframes, options, cancel() { this.cancelled = true; }, finished: Promise.resolve() }; animations.push(animation); return animation; } };
   const root = { querySelectorAll(selector) { return selector === '[data-motion-part]' ? [node] : []; } };
   const controller = new AbortController();
   const context = { window: { matchMedia() { return { matches: false, addEventListener() {}, removeEventListener() {} }; } } };
@@ -41,9 +41,48 @@ test('motion uses approved timing, cancels on abort, and renders reduced motion 
   controller.abort();
   assert.equal(animations[0].cancelled, true);
   dispose();
-  const reducedNode = { style: {}, animate() { throw new Error('não deve animar'); } };
+  const reducedNode = { style: {}, dataset: {}, animate() { throw new Error('não deve animar'); } };
   const reducedRoot = { querySelectorAll() { return [reducedNode]; } };
   context.mountAcademyMotion(reducedRoot, { reducedMotion: true });
   assert.equal(reducedNode.style.opacity, '1');
   assert.equal(reducedNode.style.transform, 'none');
+});
+
+test('brand clones remove IDs and preserve explicit ARIA semantics', async () => {
+  const part = { removeAttribute() {}, setAttribute() {} };
+  const source = {
+    cloneNode() { return { ...this, querySelectorAll() { return [part]; }, removeAttribute() {}, setAttribute(name, value) { this[name] = value; } }; },
+    querySelectorAll() { return []; }, removeAttribute() {}, setAttribute() {},
+  };
+  const context = {};
+  await load('public/academy/brand.js', 'createBrandIcon', context);
+  const decorative = context.createBrandIcon(new Map([['icon-01', source]]), 'icon-01');
+  assert.equal(decorative['aria-hidden'], 'true');
+  const labelled = context.createBrandIcon(new Map([['icon-01', source]]), 'icon-01', { decorative: false, label: 'Ícone' });
+  assert.equal(labelled.role, 'img');
+  assert.equal(labelled['aria-label'], 'Ícone');
+});
+
+test('completion motion is finite and cancelled by the classroom signal', async () => {
+  const animations = [];
+  const node = { style: {}, animate(keyframes, options) { const animation = { keyframes, options, cancel() { this.cancelled = true; }, finished: Promise.resolve() }; animations.push(animation); return animation; } };
+  const media = { matches: false, addEventListener() {}, removeEventListener() {} };
+  const context = { window: { matchMedia() { return media; } } };
+  await load('public/academy/motion.js', 'mountAcademyMotion, playCompletion', context);
+  const signal = new AbortController();
+  context.playCompletion({ querySelector() { return node; } }, { signal: signal.signal });
+  assert.equal(animations[0].options.duration, 450);
+  signal.abort();
+  assert.equal(animations[0].cancelled, true);
+});
+
+test('view integration protects CMS covers and prevents filter remount entry replay', async () => {
+  const view = await readFile('public/academy/view-utils.js', 'utf8');
+  const app = await readFile('public/academy/app.js', 'utf8');
+  const catalog = await readFile('public/academy/catalog-view.js', 'utf8');
+  assert.match(view, /course\.cover_asset_id \?\s*\{ 'data-authoritative-cover': 'true' \}/);
+  assert.match(view, /data-brand-fallback/);
+  assert.match(app, /catalogEntryPending/);
+  assert.match(catalog, /reducedMotion: !entryMotion/);
+  assert.match(view, /if \(course\.cover_asset_id\)/);
 });
