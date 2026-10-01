@@ -4,6 +4,27 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { validateBundle, validateBundleAsset, serializeBundle, bundleHashes, privatePath } from './lib/owner-news-bundle.mjs';
 
+// Exact internal messages only: never interpolate exception text, paths or upstream bodies.
+const SAFE_ERRORS = new Map([
+  ['Bundle exceeds 300 MiB asset budget', ['asset_budget_exceeded', 'o pacote excede o limite de 300 MiB de assets.']],
+  ...['Item needs_review', 'Approved item has unresolved review issues'].map(message =>
+    [message, ['review_required', 'há itens ou ocorrências que exigem revisão editorial.']]),
+  ...['Invalid manifest JSON', 'Invalid bundle schema', 'Invalid source snapshot', 'Invalid source inventory',
+    'Invalid or duplicate decision', 'Missing source decision', 'Invalid pending sources',
+    'Invalid item/action/key', 'Missing source provenance', 'Invalid source provenance',
+    'Inconsistent/duplicate source decision', 'Invalid target snapshot', 'Invalid item metadata',
+    'Invalid editorial revision', 'Invalid CMS editorial revision', 'Unknown asset_key',
+    'Decision missing canonical item', 'Unreferenced bundle asset', 'Duplicate asset_key'].map(message =>
+    [message, ['invalid_manifest', 'o manifesto contém JSON, campos, decisões ou referências inválidos.']]),
+  ['Editorial payload exceeds 5 MiB', ['editorial_payload_exceeded', 'uma revisão excede o limite de 5 MiB.']],
+]);
+
+export function preparationErrorMessage(error) {
+  const [code, message] = SAFE_ERRORS.get(error?.message)
+    || ['preparation_failed', 'confira manifesto, pendências e arquivos privados.'];
+  return `Preparação bloqueada [${code}]: ${message}`;
+}
+
 export async function main(args = process.argv.slice(2)) {
   const opts = {};
   for (let index = 0; index < args.length; index++) {
@@ -13,7 +34,10 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (!opts['--input'] || (!opts['--check'] && !opts['--output']) || opts['--check'] && opts['--output']) throw new Error('Use --input absolute.json (--output absolute-directory | --check) [--allow-pending]');
   const input = await privatePath(opts['--input'], { existing: true });
-  const root = path.dirname(input), inputBytes = await fs.readFile(input), original = JSON.parse(inputBytes.toString('utf8'));
+  const root = path.dirname(input), inputBytes = await fs.readFile(input);
+  let original;
+  try { original = JSON.parse(inputBytes.toString('utf8')); }
+  catch { throw new Error('Invalid manifest JSON'); }
   const bundle = await validateBundle(original, { root, allowPending: Boolean(opts['--allow-pending']) });
   if (!opts['--check']) {
     const output = await privatePath(opts['--output']);
@@ -46,8 +70,8 @@ function report(bundle, check) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  main().then(result => console.log(JSON.stringify(result))).catch(() => {
+  main().then(result => console.log(JSON.stringify(result))).catch(error => {
     // Source text, filesystem paths and upstream error bodies stay private.
-    console.error('Preparação bloqueada: confira manifesto, pendências e arquivos privados.'); process.exitCode = 1;
+    console.error(preparationErrorMessage(error)); process.exitCode = 1;
   });
 }

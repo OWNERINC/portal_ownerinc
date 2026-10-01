@@ -4,11 +4,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { identity, ORIGIN } from '../../scripts/import-owner-news.mjs';
 import { canonicalText, bodyFingerprint, sourceIdentity, convertReferenceArticle,
   prepareBundle, inventorySources, validateBundleAsset, validateBundle, bundleHashes,
   captureReference, captureReferenceMedia, referenceMedia } from '../../scripts/lib/owner-news-bundle.mjs';
 import { main } from '../../scripts/prepare-owner-news-bundle.mjs';
+import * as preparationCli from '../../scripts/prepare-owner-news-bundle.mjs';
 
 const sha = b => createHash('sha256').update(b).digest('hex');
 const article = (id = 'synthetic') => ({ id, status: 'published', title: 'Título sintético', category: 'Teste',
@@ -70,6 +73,54 @@ test('inline images preserve position and missing/unknown source data never sile
   assert.ok(r.blocks.every(b => b.layout === 'wide'));
   const missing = convertReferenceArticle(a, new Map()); assert.ok(missing.issues.includes('unresolved_media'));
   assert.ok(convertReferenceArticle({ ...article(), blocks: [{ type: 'unknown' }] }, new Map()).issues.includes('unsupported_block'));
+});
+
+test('quote inline media requires explicit curation before approval, including HTML precedence', async t => {
+  const root = await temp(t);
+  for (const field of ['html', 'text']) {
+    const a = article();
+    a.blocks = [{ type: 'quote', text: 'Fallback sintético', [field]: '<p>Antes</p><IMG src="/assets/quote.png"><p>Depois</p>', author: 'Pessoa', layout: 'left', style: { font: 'serif' } }];
+    assert.equal(referenceMedia({ store: { articles: [a] } }).length, 1);
+    const b = make([a]);
+    assert.deepEqual(b.items[0].issues, ['quote_inline_media_requires_review']);
+    assert.equal(b.items[0].blocks[0].text, 'Antes\n\nDepois');
+    assert.equal(b.items[0].blocks[0].attribution, 'Pessoa');
+    assert.equal(b.items[0].blocks[0].layout, 'left');
+    assert.equal(b.items[0].blocks[0].typography, 'serif');
+    await validateBundle(b, { root, allowPending: true });
+    await assert.rejects(validateBundle(approved(b), { root, allowPending: true }), /unresolved review issues/);
+    // Synthetic curator resolves the image in the source, then reconverts; no implicit approval.
+    a.blocks[0][field] = '<p>Citação revisada sem mídia.</p>';
+    await validateBundle(approved(make([a])), { root });
+  }
+});
+
+test('CLI exposes controlled budget, pending and invalid-manifest diagnostics without private input', async t => {
+  const root = await temp(t), input = path.join(root, 'synthetic-private-marker.json');
+  const budget = approved(make()); budget.assets = Array.from({ length: 7 }, (_, i) => ({ key: String(i), byte_size: 50 * 1024 * 1024 }));
+  for (const [content, code, detail] of [
+    [JSON.stringify(budget), 'asset_budget_exceeded', '300 MiB'],
+    [JSON.stringify(make()), 'review_required', 'revisão'],
+    ['{"synthetic-private-marker":INVALID}', 'invalid_manifest', 'manifesto'],
+    [JSON.stringify({ schema_version: 999 }), 'invalid_manifest', 'manifesto'],
+  ]) {
+    await fs.writeFile(input, content);
+    await assert.rejects(promisify(execFile)(process.execPath, ['scripts/prepare-owner-news-bundle.mjs', '--input', input, '--check']), error => {
+      assert.equal(error.code, 1); assert.equal(error.stdout, '');
+      assert.ok(error.stderr.includes(`[${code}]`)); assert.ok(error.stderr.includes(detail));
+      assert.ok(!error.stderr.includes(root)); assert.ok(!error.stderr.includes('synthetic-private-marker'));
+      assert.ok(!error.stderr.includes('SyntaxError')); return true;
+    });
+  }
+});
+
+test('CLI diagnostics never echo unknown messages, paths, upstream bodies or arbitrary error codes', () => {
+  for (const error of [new Error('https://private.invalid/upstream private-body'),
+    Object.assign(new Error('ENOENT C:/private/editorial.json'), { code: 'SECRET_CODE' }),
+    new Error('Bundle exceeds 300 MiB asset budget private-body'), null]) {
+    assert.equal(preparationCli.preparationErrorMessage(error),
+      'Preparação bloqueada [preparation_failed]: confira manifesto, pendências e arquivos privados.');
+  }
 });
 
 test('inventário inclui rascunhos, decisões totais e exclusão parcial não apaga fonte', () => {

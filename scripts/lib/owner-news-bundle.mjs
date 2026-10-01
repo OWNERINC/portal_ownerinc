@@ -107,6 +107,7 @@ export function convertReferenceArticle(article, assetsByUrl = new Map()) {
       }
       case 'quote': {
         const out = { type: 'quote', text: richText(block.html || block.text || ''), ...attributes(block, true) };
+        if (/<img\b/i.test(block.html || block.text || '')) issue('quote_inline_media_requires_review');
         optional(out, 'attribution', block.author || block.name); blocks.push(out); break;
       }
       case 'profile': {

@@ -31,6 +31,9 @@ são conferidos pelo `validateNewsRevision` real, com `publishing: true`.
 
 O JSON de saída no terminal informa somente contagens, hashes e estados. Erros da
 CLI não imprimem corpos, URLs privadas ou erros arbitrários de bibliotecas.
+Diagnósticos permitidos identificam `asset_budget_exceeded` (300 MiB),
+`editorial_payload_exceeded` (5 MiB), `review_required` e `invalid_manifest`.
+Mensagens desconhecidas usam `preparation_failed`, sem reproduzir a exceção original.
 `report.json` separa preparação de `drafts_applied`, `publications` e
 `destination_assets_verified`, que ficam em zero nesta etapa.
 
@@ -86,7 +89,10 @@ O contrato `OwnerNewsBundleV1` mantém `schema_version`, `source_snapshot`, `ass
   adicional preserva a chave da matéria de origem antes da reconciliação.
 - `issues` nos itens identifica perdas/transformações que exigem revisão. Mídia
   desconhecida, data inválida, tipo não suportado, fonte tipográfica desconhecida,
-  imagem inline em perfil e colunas longas são sinalizados.
+  imagem inline em perfil/citação e colunas longas são sinalizados. Em citações,
+  `quote_inline_media_requires_review` impede aprovação silenciosa após remoção da
+  tag img pelo sanitizador; a curadoria deve resolver a mídia a partir da fonte
+  preservada antes de aprovar.
 
 `exclude` no recorte parcial **não equivale a retirada de publicação existente**.
 `withdraw` exige decisão explícita de exclusão, identidade de origem importada
