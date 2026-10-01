@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <link rel="stylesheet" href="./css/cms.css">
+  <link rel="stylesheet" href="./css/owner-news.css">
   <script src="./js/auth-shell.js"></script>
 </head>
 <body class="cms-page">
@@ -63,6 +64,11 @@
             <button id="new-document" class="btn btn-primary btn-sm" type="button">Novo</button>
           </div>
           <nav id="content-types" class="cms-content-types" aria-label="Tipos de conteúdo"></nav>
+          <nav id="owner-news-sections" aria-label="Gestão da Owner News" hidden>
+            <button class="btn btn-ghost" type="button" data-news-section="articles" aria-pressed="true">Matérias</button>
+            <button class="btn btn-ghost" type="button" data-news-section="home" aria-pressed="false">Página inicial</button>
+            <button class="btn btn-ghost" type="button" data-news-section="polls" aria-pressed="false">Enquetes</button>
+          </nav>
           <form id="new-document-form" class="cms-new-document" name="cms-document" autocomplete="off" hidden>
             <h3>Novo documento</h3>
             <label class="cms-field"><span class="form-label">Título</span><input id="new-title" class="form-input" name="title" autocomplete="off" type="text" maxlength="200" required></label>
@@ -74,8 +80,10 @@
           <div id="document-pagination" class="pagination" aria-live="polite"></div>
         </aside>
 
+        <section id="owner-news-settings" hidden aria-label="Configuração da Owner News"></section>
         <section class="cms-editor-column" aria-labelledby="editor-heading">
           <div class="cms-column-heading"><div><p class="section-label">Documento</p><h2 id="editor-heading">Selecione um documento</h2></div><span id="editor-status" class="badge badge-gray">Nenhum</span></div>
+          <section id="cms-editorial-fields" aria-label="Metadados da matéria" hidden></section>
           <div id="editor-root" class="cms-editor-root"><p class="empty-state">Escolha uma área e um documento na coluna ao lado.</p></div>
           <section class="cms-preview" aria-labelledby="preview-heading">
             <div class="cms-column-heading"><div><p class="section-label">Leitura</p><h2 id="preview-heading">Prévia segura</h2></div></div>

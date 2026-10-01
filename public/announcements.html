@@ -41,19 +41,34 @@
     <!-- generated:portal-topbar -->
     <header class="topbar"><span class="topbar-title">Owner News</span></header>
     <!-- /generated:portal-topbar -->
-    <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
-      <header class="news-masthead"><h1>Owner News<span aria-hidden="true">.</span></h1><p>Histórias, ideias e notícias da Ownerinc.</p></header>
+    <main class="page-body news-page" id="main-content" tabindex="-1" data-route-pending>
       <div id="news-index">
-        <section id="news-highlight" aria-label="Publicação mais recente" aria-live="polite"></section>
+        <header id="news-highlight" class="news-opening" aria-live="polite"><h1>Owner News</h1></header>
+        <div id="news-opening-status" class="news-loader-status" aria-live="polite"></div>
+        <div id="news-highlight-status" class="news-loader-status" aria-live="polite"></div>
         <nav id="news-categories" class="news-categories" aria-label="Editorias"></nav>
-        <h2 class="news-section-title">Últimas publicações</h2>
+        <div id="news-categories-status" class="news-loader-status" aria-live="polite"></div>
+        <h2 id="news-catalog-title" class="news-section-title" tabindex="-1">Últimas publicações</h2>
       </div>
-      <div id="announcements-list" class="announcements-list news-grid" aria-live="polite"><p class="empty-state">Carregando publicações…</p></div>
+      <div id="news-feed-status" class="news-loader-status" aria-live="polite"></div>
+      <div id="announcements-list" class="announcements-list news-mosaic" aria-live="polite"><p class="empty-state">Carregando publicações…</p></div>
       <div id="announcements-pagination" class="pagination" aria-label="Paginação de publicações"></div>
     </main>
   </div>
 </div>
 <div id="toast" class="toast hidden" aria-live="polite"></div>
+<div id="news-reader-overlay" class="news-reader hidden" data-page-overlay>
+  <section id="news-reader-dialog" role="dialog" aria-modal="true" aria-label="Leitura da Owner News">
+    <header class="news-reader-toolbar">
+      <button id="news-reader-previous" type="button" disabled>← Anterior</button>
+      <span class="news-reader-brand">Owner News</span>
+      <div><button id="news-reader-next" type="button" disabled>Próxima →</button>
+      <button id="news-reader-close" type="button">Voltar ×</button></div>
+    </header>
+    <div id="news-reader-navigation-status" class="news-loader-status" aria-live="polite"></div>
+    <div id="news-reader-content"></div>
+  </section>
+</div>
 <script src="./js/sidebar.js"></script>
 <script type="module" src="./js/router-bootstrap.js"></script>
 </body>

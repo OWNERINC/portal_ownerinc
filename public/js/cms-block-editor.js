@@ -5,8 +5,13 @@ import { normalizeEditorBlocks } from './cms-editor-values.js';
 
 const LABELS = {
   heading: 'Título', paragraph: 'Parágrafo', list: 'Lista', callout: 'Destaque', image: 'Imagem',
-  divider: 'Separador', link: 'Link', pdf: 'PDF', video: 'Vídeo',
+  divider: 'Separador', link: 'Link', pdf: 'PDF', video: 'Vídeo', quote: 'Citação', profile: 'Perfil',
 };
+export const STANDARD_BLOCK_TYPES = BLOCK_TYPES.filter(type => !['quote', 'profile'].includes(type));
+const NEWS_LAYOUT_OPTIONS = [
+  ['content', 'Coluna de leitura'], ['wide', 'Ampliado'], ['full', 'Largura completa'],
+  ['left', 'Meia largura à esquerda'], ['right', 'Meia largura à direita'],
+];
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function input(label, value, onInput, { tag = 'input', type = 'text', options = [], ...attributes } = {}) {
@@ -58,6 +63,8 @@ function assetUpload(label, accept, block, onChange, onUploadBusy = () => {}, ca
 }
 
 function defaultBlock(type) {
+  if (type === 'quote') return { type, text: 'Escreva a citação.' };
+  if (type === 'profile') return { type, name: 'Nome da pessoa' };
   if (type === 'heading') return { type, text: 'Novo título', level: 2 };
   if (type === 'paragraph') return { type, text: 'Escreva o texto do bloco.' };
   if (type === 'list') return { type, items: ['Primeiro item'], ordered: false };
@@ -122,7 +129,7 @@ function fieldsFor(block, onChange, onUploadBusy, canApplyUpload, page) {
 }
 
 function blockSummary(block) {
-  return block.type === 'divider' ? 'Separador visual' : block.text || block.title || block.label || block.url || block.asset_id || 'Configure este bloco no inspector.';
+  return block.type === 'divider' ? 'Separador visual' : block.name || block.text || block.title || block.label || block.url || block.asset_id || 'Configure este bloco no inspector.';
 }
 
 export function serializeBlocks(blocks) {
@@ -130,13 +137,31 @@ export function serializeBlocks(blocks) {
   return validateBlocks(normalized) ? normalized : false;
 }
 
-export function createBlockSettings(block, onChange, onUploadBusy, canApplyUpload, page) {
+export function createBlockSettings(block, onChange, onUploadBusy, canApplyUpload, page, { editorial = false } = {}) {
   const container = element('div', { className: 'cms-inspector-block-fields' });
   container.append(...fieldsFor(block, onChange, onUploadBusy, canApplyUpload, page));
+  if (editorial) {
+    const select = (key, label, options) => input(label, block[key], value => {
+      if (value) block[key] = value;
+      else delete block[key];
+      onChange();
+    }, { name: key, tag: 'select', options: [['', 'Padrão editorial'], ...options] });
+    const text = (key, label, max, multiline = false) => input(label, block[key], value => setField(block, key, value, onChange), {
+      name: key, maxlength: String(max), ...(multiline ? { tag: 'textarea', rows: '4' } : {}),
+    });
+    container.append(select('layout', 'Diagramação', NEWS_LAYOUT_OPTIONS));
+    if (['paragraph', 'list', 'callout', 'quote', 'profile'].includes(block.type)) container.append(select('typography', 'Tipografia', [['serif', 'Serifada'], ['sans', 'Sem serifa']]));
+    if (block.type === 'image') container.append(text('caption', 'Legenda', 1000), text('credit', 'Crédito', 300), select('usage', 'Uso da imagem', [['cover', 'Capa'], ['body', 'Corpo']]));
+    if (block.type === 'pdf') container.append(select('usage', 'Uso do PDF', [['edition', 'Edição complementar'], ['attachment', 'Anexo']]));
+    if (block.type === 'quote') container.append(text('text', 'Citação', 5000, true), text('attribution', 'Atribuição', 200));
+    if (block.type === 'profile') container.append(text('name', 'Nome', 200), text('role', 'Cargo', 200), text('text', 'Biografia', 5000, true),
+      text('asset_id', 'ID do arquivo', 36), text('alt', 'Texto alternativo', 300),
+      assetUpload('imagem', 'image/jpeg,image/png,image/webp', block, onChange, onUploadBusy, canApplyUpload, page));
+  }
   return container;
 }
 
-export function createBlockEditor({ root, initialBlocks = [], onChange = () => {}, onSelect = () => {} }) {
+export function createBlockEditor({ root, initialBlocks = [], onChange = () => {}, onSelect = () => {}, allowedTypes = STANDARD_BLOCK_TYPES }) {
   let blocks = Array.isArray(initialBlocks) ? structuredClone(initialBlocks) : [];
   if (!validateBlocks(blocks)) blocks = [];
   let dragIndex = null;
@@ -166,7 +191,7 @@ export function createBlockEditor({ root, initialBlocks = [], onChange = () => {
 
   function renderToolbar() {
     const toolbar = element('div', { className: 'cms-editor-toolbar', role: 'toolbar', 'aria-label': 'Adicionar bloco' });
-    BLOCK_TYPES.forEach(type => toolbar.append(element('button', {
+    BLOCK_TYPES.filter(type => allowedTypes.includes(type)).forEach(type => toolbar.append(element('button', {
       className: 'btn btn-ghost btn-sm', type: 'button', text: `+ ${LABELS[type]}`,
       on: { click: () => { blocks.push(defaultBlock(type)); render(); changed(); } },
     })));

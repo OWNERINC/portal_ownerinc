@@ -1,93 +1,224 @@
 import { fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, setBusy, showState } from './ui.js';
 import { readOffset, renderPagination, setPaginationBusy } from './pagination.js';
-import { blocksToText, renderBlocks, cleanupRenderedBlocks } from './cms-block-renderer.js';
+import { cleanupRenderedBlocks } from './cms-block-renderer.js';
+import { composeNewsFeed, renderNewsCard, renderNewsCategories, renderNewsOpening } from './owner-news/catalog.js';
+import { createNewsPoll } from './owner-news/poll.js';
+import { getNewsPresentation } from './owner-news/model.js';
+import { renderNewsArticle } from './owner-news/reader-view.js';
+import { createNewsNavigation } from './owner-news/navigation.js';
 
 const requests = { fetchAPI, fetchAPIPage };
-const renderContent = renderBlocks;
 export function mount(page) {
 const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
-const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
 const history = page.history;
 const location = page.location;
-page.cleanup(() => { ++announcementsRequest; ++highlightRequest; ++categoriesRequest; clearContent(list); clearContent(highlight); });
+page.cleanup(() => { ++announcementsRequest; ++highlightRequest; ++homeRequest; ++categoriesRequest; clearContent(list); });
 
 const list = document.getElementById('announcements-list');
 const pagination = document.getElementById('announcements-pagination');
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 24;
 let announcementsRequest = 0;
 const highlight = document.getElementById('news-highlight');
 const categories = document.getElementById('news-categories');
-const index = document.getElementById('news-index');
 let highlightRequest = 0;
 let categoriesRequest = 0;
+let homeRequest = 0;
+let cardDisposers = [];
+let categoryCounts = null;
+let publishedHome = null;
+let latestArticle = null;
+let pollRequest = 0, pollController, pollComponent, pollId, pollAbsent = false;
+const pollSlot = element('div', { className: 'news-poll-slot' });
+const pollStatus = element('div', { className: 'news-poll-loader' });
+pollSlot.append(pollStatus);
+page.cleanup(() => { ++pollRequest; pollController?.abort(); pollComponent?.dispose(); pollSlot.remove(); });
+const homeStatus = document.getElementById('news-opening-status');
+const highlightStatus = document.getElementById('news-highlight-status');
+const feedStatus = document.getElementById('news-feed-status');
+const categoriesStatus = document.getElementById('news-categories-status');
+const fallbackHome = { version: 1, eyebrow: 'OWNER NEWS · DESTAQUE', headline: 'Histórias que\nnos conectam', summary: 'Pessoas, ideias e cultura da Ownerinc.' };
 
-function articleMeta(announcement) {
-  const text = blocksToText(announcement.content_blocks).trim();
-  const minutes = Math.max(1, Math.ceil(text.split(/\s+/).filter(Boolean).length / 200));
-  const date = new Date(announcement.published_at);
-  return [announcement.category || 'Ownerinc', Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo', day: 'numeric', month: 'short', year: 'numeric',
-  }).format(date), `${minutes} min de leitura`].filter(Boolean).join(' · ');
+const overlay = document.getElementById('news-reader-overlay');
+const reader = document.getElementById('news-reader-content');
+const dialog = document.getElementById('news-reader-dialog');
+const neighborStatus = document.getElementById('news-reader-navigation-status');
+const previous = document.getElementById('news-reader-previous');
+const next = document.getElementById('news-reader-next');
+let readerId = null, readerCategory = '', readerRequest = 0, neighborRequest = 0;
+let readerController, disposeArticle;
+let neighbors = {};
+let catalogKey = null, catalogLoading;
+const navigation = createNewsNavigation({ page, overlay, onRoute: async ({ id }) => {
+  const key = catalogRouteKey();
+  if (key !== catalogKey) { catalogLoading = loadAnnouncements(); updateCategories(); }
+  await Promise.allSettled([catalogLoading, loadReader(id)]);
+} });
+page.listen(document.getElementById('news-reader-close'), 'click', navigation.close);
+for (const [button, direction] of [[previous, 'previous'], [next, 'next']]) {
+  page.listen(button, 'click', () => { if (neighbors[direction]?.id) void navigation.jump(neighbors[direction].id); });
+}
+page.cleanup(() => { ++readerRequest; ++neighborRequest; readerController?.abort(); disposeArticle?.(); });
+
+function catalogRouteKey() {
+  const query = new URLSearchParams(location.search);
+  return JSON.stringify([query.get('category') || '', readOffset(query, PAGE_SIZE)]);
 }
 
-function articleCard(announcement, featured = false) {
-  const cover = element('div', { className: 'news-cover' });
-  const image = announcement.content_blocks?.find(block => block.type === 'image');
-  renderBlocks(cover, image ? [image] : [], { fallbackText: 'Owner News' });
-  const firstText = announcement.content_blocks?.find(block => ['paragraph', 'callout'].includes(block.type));
-  const excerpt = (firstText?.text || blocksToText(announcement.content_blocks)).replace(/\s+/g, ' ').trim();
-  return element('article', { className: `news-card${featured ? ' news-feature' : ''}` }, [
-    cover,
-    element('div', {}, [
-      element('p', { className: 'news-meta', text: `${featured ? 'Mais recente · ' : ''}${articleMeta(announcement)}` }),
-      element('h2', {}, [element('a', { href: `?id=${encodeURIComponent(announcement.id)}`, text: announcement.title })]),
-      element('p', { className: 'news-excerpt', text: excerpt.length > 190 ? `${excerpt.slice(0, 187)}…` : excerpt }),
-    ]),
-  ]);
+function readerLabel(ready = false) {
+  if (ready) { dialog.removeAttribute('aria-label'); dialog.setAttribute('aria-labelledby', 'news-reader-title'); }
+  else { dialog.removeAttribute('aria-labelledby'); dialog.setAttribute('aria-label', 'Leitura da Owner News'); }
+}
+
+async function loadNeighbors(id, category, token, signal) {
+  const request = ++neighborRequest;
+  clear(neighborStatus);
+  previous.disabled = true; next.disabled = true; neighbors = {};
+  const query = new URLSearchParams();
+  if (category) query.set('category', category);
+  const current = () => page.active && token === readerRequest && request === neighborRequest && !signal.aborted;
+  try {
+    const value = await fetchAPI(`/api/announcements/${encodeURIComponent(id)}/navigation${query.size ? `?${query}` : ''}`, { signal });
+    if (!current()) return;
+    neighbors = value;
+    previous.disabled = !value.previous?.id; next.disabled = !value.next?.id;
+  } catch {
+    if (current()) showState(neighborStatus, 'Não foi possível carregar anterior e próxima.', () => {
+      if (current()) void loadNeighbors(id, category, token, signal);
+    });
+  }
+}
+
+async function loadReader(id, retry = false) {
+  const category = new URLSearchParams(location.search).get('category') || '';
+  if (id === readerId && category === readerCategory && !retry) return;
+  readerId = id; readerCategory = category;
+  const token = ++readerRequest;
+  readerController?.abort(); disposeArticle?.(); disposeArticle = null;
+  clear(reader); clear(neighborStatus); readerLabel();
+  previous.disabled = true; next.disabled = true; neighbors = {};
+  if (!id) return;
+  readerController = new AbortController();
+  const { signal } = readerController;
+  const current = () => page.active && token === readerRequest && !signal.aborted;
+  showState(reader, 'Carregando matéria…');
+  const detail = (async () => {
+    try {
+      const article = await fetchAPI(`/api/announcements/${encodeURIComponent(id)}`, { signal });
+      if (!current()) return;
+      disposeArticle = renderNewsArticle(reader, article, { signal: page.signal });
+      readerLabel(true);
+    } catch (error) {
+      if (!current()) return;
+      showState(reader, error.status === 404 ? 'Esta matéria não está mais disponível.' : 'Não foi possível carregar a matéria.',
+        error.status === 404 ? undefined : () => { if (current()) void loadReader(id, true); });
+    }
+  })();
+  await Promise.allSettled([detail, loadNeighbors(id, category, token, signal)]);
 }
 
 function clearContent(container) {
+  if (container === list) { cardDisposers.forEach(dispose => dispose()); cardDisposers = []; }
   container?.querySelectorAll('.news-cover, .cms-public-content').forEach(cleanupRenderedBlocks);
   if (container) clear(container);
+}
+
+function updateOpening() {
+  renderNewsOpening(highlight, publishedHome || (latestArticle ? {
+    ...fallbackHome, headline: latestArticle.title, summary: getNewsPresentation(latestArticle).summary,
+  } : fallbackHome));
+}
+
+function positionPoll() {
+  const query = new URLSearchParams(location.search);
+  const cards = [...list.querySelectorAll('.news-card')];
+  const feed = composeNewsFeed(cards, pollAbsent ? null : pollSlot, {
+    offset: readOffset(query, PAGE_SIZE), category: query.get('category') || '',
+  });
+  const index = feed.indexOf(pollSlot);
+  if (index < 0) pollSlot.remove();
+  else {
+    list.classList.add('news-mosaic');
+    const children = [...list.children];
+    const slotIndex = children.indexOf(pollSlot);
+    const after = feed[index + 1] || null;
+    if (slotIndex < 0 || (children[slotIndex + 1] || null) !== after) list.insertBefore(pollSlot, after);
+  }
+}
+
+async function loadPoll() {
+  const token = ++pollRequest;
+  pollController?.abort(); pollController = new AbortController();
+  const current = () => page.active && token === pollRequest && !pollController.signal.aborted;
+  clear(pollStatus);
+  if (!pollComponent) showState(pollStatus, 'Carregando enquete…');
+  setBusy(pollStatus, true); positionPoll();
+  try {
+    const { poll } = await fetchAPI('/api/announcements/polls/current', { signal: pollController.signal });
+    if (!current()) return;
+    pollAbsent = !poll;
+    if (!poll || poll.id !== pollId) {
+      pollComponent?.dispose(); pollComponent?.node.remove(); pollComponent = null; pollId = poll?.id;
+      if (poll) {
+        pollComponent = createNewsPoll({ page, poll });
+        pollSlot.insertBefore(pollComponent.node, pollStatus);
+      }
+    } else pollComponent.update(poll);
+    clear(pollStatus); positionPoll();
+  } catch {
+    if (current()) {
+      pollAbsent = false;
+      showState(pollStatus, 'Não foi possível atualizar a enquete.', () => { if (current()) void loadPoll(); });
+      positionPoll();
+    }
+  } finally { if (current()) setBusy(pollStatus, false); }
+}
+
+async function loadHome() {
+  const token = ++homeRequest;
+  if (homeStatus) clear(homeStatus);
+  try {
+    const home = await fetchAPI('/api/announcements/home');
+    if (token !== homeRequest) return;
+    publishedHome = home?.content ?? null;
+    updateOpening();
+  } catch {
+    if (token === homeRequest) {
+      updateOpening();
+      if (homeStatus) showState(homeStatus, 'Não foi possível atualizar a abertura.', () => { if (page.active && token === homeRequest) loadHome(); });
+    }
+  }
 }
 
 async function loadHighlight() {
   if (!highlight) return;
   const token = ++highlightRequest;
-  setBusy(highlight, true);
+  if (highlightStatus) clear(highlightStatus);
   try {
-    const result = await fetchAPI('/api/announcements?limit=1&offset=0');
+    const result = await fetchAPI('/api/announcements?kind=article&limit=1&offset=0');
     if (token !== highlightRequest) return;
-    clearContent(highlight);
-    if (result[0]) highlight.append(articleCard(result[0], true));
+    latestArticle = result[0] || null;
+    updateOpening();
   } catch {
-    if (token === highlightRequest) showState(highlight, 'Não foi possível carregar o destaque.', loadHighlight);
-  } finally {
-    if (token === highlightRequest) setBusy(highlight, false);
+    if (token === highlightRequest && highlightStatus) showState(highlightStatus, 'Não foi possível atualizar o destaque.', () => { if (page.active && token === highlightRequest) loadHighlight(); });
   }
+}
+
+function updateCategories() {
+  if (categoryCounts) renderNewsCategories(categories, categoryCounts, new URLSearchParams(location.search).get('category') || '');
 }
 
 async function loadCategories() {
   if (!categories) return;
   const token = ++categoriesRequest;
+  if (categoriesStatus) clear(categoriesStatus);
   try {
-    const values = await fetchAPI('/api/announcements/categories');
+    const values = await fetchAPI('/api/announcements/categories?kind=article&with_counts=true');
     if (token !== categoriesRequest) return;
-    const selected = new URLSearchParams(location.search).get('category') || '';
-    const focused = categories.contains(document.activeElement) ? document.activeElement.textContent : null;
-    clear(categories);
-    ['', ...new Set([...values, ...(selected ? [selected] : [])])].forEach(category => {
-      const query = new URLSearchParams();
-      if (category) query.set('category', category);
-      categories.append(element('a', {
-        href: `./announcements.html${query.toString() ? `?${query}` : ''}`,
-        text: category || 'Todas', ...(selected === category ? { 'aria-current': 'page' } : {}),
-      }));
-    });
-    if (focused) [...categories.querySelectorAll('a')].find(link => link.textContent === focused)?.focus();
+    categoryCounts = values;
+    updateCategories();
   } catch {
-    if (token === categoriesRequest) showState(categories, 'Não foi possível carregar as editorias.', loadCategories);
+    if (token === categoriesRequest) showState(categoriesStatus || categories, 'Não foi possível carregar as editorias.', () => { if (page.active && token === categoriesRequest) loadCategories(); });
   }
 }
 
@@ -134,70 +265,57 @@ function restorePaginationFocus(descriptor, state) {
 }
 
 async function loadAnnouncements() {
+  catalogKey = catalogRouteKey();
+  positionPoll();
   const focusAtStart = document.activeElement;
   const requestedFocus = focusDescriptor(focusAtStart);
   const requestToken = ++announcementsRequest;
-  clearContent(list);
-  showState(list, 'Carregando publicações…');
+  if (feedStatus) clear(feedStatus);
+  if (!list.children.length) showState(list, 'Carregando publicações…');
   setBusy(list, true);
   setPaginationBusy(pagination, true);
   try {
     const query = new URLSearchParams(location.search);
-    const announcementId = query.get('id');
-    if (index) index.hidden = Boolean(announcementId);
-    if (announcementId) {
-      const announcement = await fetchAPI(`/api/announcements/${encodeURIComponent(announcementId)}`);
-      if (requestToken !== announcementsRequest) return;
-      clear(list);
-      pagination?.replaceChildren();
-      query.delete('id');
-      const article = element('article', { className: 'news-detail' }, [
-        element('a', { className: 'news-back', href: `./announcements.html${query.toString() ? `?${query}` : ''}`, text: '← Voltar às publicações' }),
-        element('h2', { text: announcement.title }),
-        element('p', { className: 'news-meta', text: articleMeta(announcement) }),
-      ]);
-      const content = element('div', { className: 'cms-public-content' });
-      renderBlocks(content, announcement.content_blocks, { fallbackText: 'Esta publicação não possui conteúdo disponível.' });
-      article.append(content);
-      list.append(article);
-      article.tabIndex = -1;
-      const currentFocus = document.activeElement;
-      if (currentFocus === focusAtStart || currentFocus === document.body || !currentFocus?.isConnected) article.focus();
-      return;
-    }
     const offset = readOffset(query, PAGE_SIZE);
     if (query.get('offset') !== (offset ? String(offset) : '')) {
       const url = new URL(location.href);
       offset ? url.searchParams.set('offset', String(offset)) : url.searchParams.delete('offset');
-      history.replaceState({}, '', url);
+      history.replaceState({ ...window.history.state }, '', url);
     }
     const category = query.get('category');
-    const result = await fetchAPIPage(`/api/announcements?limit=${PAGE_SIZE}&offset=${offset}${category ? `&category=${encodeURIComponent(category)}` : ''}`);
+    const params = new URLSearchParams({ kind: 'article', limit: '24', offset: String(offset) });
+    if (category) params.set('category', category);
+    const result = await fetchAPIPage(`/api/announcements?${params}`);
     if (requestToken !== announcementsRequest) return;
     const announcements = Array.isArray(result.data) ? result.data : [];
     if (!announcements.length && offset > 0) {
       const url = new URL(location.href);
       url.searchParams.delete('offset');
-      history.replaceState({}, '', url);
+      history.replaceState({ ...window.history.state }, '', url);
       return loadAnnouncements();
     }
-    clear(list);
+    clearContent(list);
+    list.classList.add('news-mosaic');
     const state = !announcements.length ? showState(list, 'Nenhuma publicação nesta editoria.') : null;
-    announcements.forEach(announcement => list.append(articleCard(announcement)));
+    announcements.forEach((announcement, articleIndex) => {
+      const card = renderNewsCard(announcement, { index: offset + articleIndex, signal: page.signal });
+      cardDisposers.push(card.dispose);
+      list.append(card.node);
+    });
+    positionPoll();
     renderPagination(pagination, Number(result.total ?? announcements.length), offset, PAGE_SIZE, nextOffset => {
       if (requestToken !== announcementsRequest) return;
       const url = new URL(location.href);
       nextOffset ? url.searchParams.set('offset', String(nextOffset)) : url.searchParams.delete('offset');
-      history.pushState({}, '', url);
-      loadAnnouncements();
+      history.pushState({ ...window.history.state }, '', url);
+      void navigation.sync();
     });
     restorePaginationFocus(requestedFocus, state);
-    if (focusAtStart?.closest?.('.news-detail') && (document.activeElement === document.body || !document.activeElement?.isConnected)) focusFallback(state);
   } catch {
     if (requestToken === announcementsRequest) {
       pagination?.replaceChildren();
-      const state = showState(list, 'Não foi possível carregar a publicação. Verifique sua conexão ou volte às editorias.', loadAnnouncements);
-      if (new URLSearchParams(location.search).has('id')) list.append(element('a', { className: 'news-back', href: './announcements.html', text: '← Voltar às publicações' }));
+      const target = (list.querySelector('.news-card') || pollSlot.parentNode === list) && feedStatus ? feedStatus : list;
+      const state = showState(target, 'Não foi possível carregar a publicação. Verifique sua conexão ou volte às editorias.', () => { if (page.active && requestToken === announcementsRequest) loadAnnouncements(); });
       const current = document.activeElement;
       if (!current?.isConnected || current === document.body) state?.querySelector('button')?.focus();
     }
@@ -209,7 +327,6 @@ async function loadAnnouncements() {
   }
 }
 
-page.listen(window, 'popstate', () => { loadAnnouncements(); loadCategories(); });
 page.listen(document.getElementById('main-content'), 'click', event => {
   const link = event.target.closest('a');
   if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -218,26 +335,29 @@ page.listen(document.getElementById('main-content'), 'click', event => {
   if (url.origin !== location.origin || url.pathname !== location.pathname || url.hash) return;
   event.preventDefault();
   if (url.searchParams.has('id')) {
-    const current = new URLSearchParams(location.search);
-    for (const key of ['category', 'offset']) {
-      if (current.has(key)) url.searchParams.set(key, current.get(key));
-    }
+    void navigation.open(url.searchParams.get('id'));
+    return;
   }
-  history.pushState({}, '', url);
-  loadAnnouncements();
-  loadCategories();
+  history.pushState({ ...window.history.state }, '', url);
+  void navigation.sync();
 });
 page.listen(window, 'pagehide', () => {
   ++announcementsRequest;
   ++highlightRequest;
+  ++homeRequest;
   ++categoriesRequest;
+  ++pollRequest;
+  pollController?.abort();
+  pollComponent?.dispose(); pollComponent?.node.remove(); pollComponent = null; pollId = null;
   clearContent(list);
-  clearContent(highlight);
 });
 page.listen(window, 'pageshow', event => {
-  if (event.persisted) { loadAnnouncements(); loadHighlight(); loadCategories(); }
+  if (event.persisted) { loadAnnouncements(); loadHome(); loadHighlight(); loadCategories(); loadPoll(); }
 });
-loadAnnouncements();
+updateOpening();
+void navigation.sync();
+loadHome();
 loadHighlight();
 loadCategories();
+loadPoll();
 }

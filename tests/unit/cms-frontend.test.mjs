@@ -163,7 +163,7 @@ test('CMS asset uploads propagate busy state and release it before success chang
   assert.ok(release >= 0 && successChange > release);
   assert.match(editor, /function fieldsFor\(block, onChange, onUploadBusy, canApplyUpload, page\)/);
   assert.match(editor, /assetUpload\('imagem',[\s\S]*onUploadBusy, canApplyUpload, page\)/);
-  assert.match(editor, /createBlockSettings\(block, onChange, onUploadBusy, canApplyUpload, page\)/);
+  assert.match(editor, /createBlockSettings\(block, onChange, onUploadBusy, canApplyUpload, page, \{ editorial = false \} = \{\}\)/);
   assert.match(cms, /let assetUploading = 0/);
   assert.match(cms, /let assetUploadVersion = 0/);
   assert.match(cms, /let editorGeneration = 0/);
@@ -178,7 +178,7 @@ test('CMS asset uploads propagate busy state and release it before success chang
   assert.match(cms, /let blockSelectionToken = 0/);
   assert.match(cms, /const selection = \+\+blockSelectionToken/);
   assert.match(cms, /currentEditor\(\) \&\& blockSelectionToken === selection/);
-  assert.match(cms, /createBlockSettings\(block, \(\) => \{[\s\S]*setAssetUploading, canApplyUpload, page\)/);
+  assert.match(cms, /createBlockSettings\(block, \(\) => \{[\s\S]*setAssetUploading, canApplyUpload, page, \{ editorial: selectedType === 'announcement' \}\)/);
 });
 
 test('CMS assetUpload handles deferred success, failure, and stale responses behaviorally', async () => {
@@ -327,6 +327,7 @@ test('reminder reloads ignore deferred responses that finish out of order', asyn
 });
 
 test('safe renderer validates the allowlist and never uses raw HTML sinks', () => {
+  for (const type of ['quote', 'profile']) assert.match(renderer, new RegExp(`['"]${type}['"]`));
   assert.match(renderer, /export const BLOCK_TYPES/);
   assert.match(renderer, /export function validateBlocks/);
   assert.match(renderer, /MAX_CMS_PAYLOAD_BYTES = 5 \* 1024 \* 1024/);
@@ -484,7 +485,7 @@ test('CMS list loading and creation failures keep cached state coherent', () => 
   assert.match(pageChange, /documentOffset = offset;\s*loadDocuments\(\)/);
   assert.match(pageChange, /if \(navigationBusy\(\)\) return;/);
   assert.doesNotMatch(pageChange, /selectionToken/);
-  assert.match(typeNav, /if \(!page.active \|\| navigationBusy\(\)\) return;\s*selectionToken \+= 1;\s*resetSelection\(\)/);
+  assert.match(typeNav, /if \(!page.active \|\| navigationBusy\(\)\) return;[\s\S]*if \(homeEditor && !homeEditor.canLeave\(\)\) return;[\s\S]*selectionToken \+= 1;\s*resetSelection\(\)/);
   assert.match(resetSelection, /clearTimeout\(saveTimer\);\s*saveTimer = null;\s*saveQueued = false/);
   assert.match(resetSelection, /editor = null/);
   assert.doesNotMatch(resetSelection, /(?:saving|saveInFlight|actionBusy|assetUploading)\s*=/);
@@ -593,15 +594,18 @@ test('direct and keyboard block selection update every aria-pressed state immedi
   assert.match(editor, /selectBlock\(index\);\s*return;/);
 });
 
-test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', () => {
-  for (const source of [knowledge, academy, benefits, announcements]) {
+test('published CMS blocks integrate with legacy fallbacks and dashboard announcements', async () => {
+  const reader = await readFile('public/js/owner-news/reader-view.js', 'utf8');
+  for (const source of [knowledge, academy, benefits, reader]) {
     assert.match(source, /content_blocks/);
     assert.match(source, /renderBlocks/);
   }
   assert.match(reminders, /renderBlocks\(content, reminder\.content_blocks/);
   assert.match(announcementsHtml, /id="main-content"/);
-  assert.match(dashboard, /\/api\/announcements\?limit=3&offset=0/);
+  assert.match(dashboard, /\/api\/announcements\?kind=article&limit=3&offset=0/);
   assert.match(dashboard, /announcements-preview/);
-  assert.match(announcements, /\/api\/announcements\/\$\{encodeURIComponent\(announcementId\)\}/);
-  assert.match(announcements, /href: `\?id=\$\{encodeURIComponent\(announcement\.id\)\}`/);
+  assert.match(announcements, /\/api\/announcements\/\$\{encodeURIComponent\(id\)\}/);
+  assert.match(announcements, /renderNewsArticle\(reader, article/);
+  const catalog = await readFile('public/js/owner-news/catalog.js', 'utf8');
+  assert.match(catalog, /href: `\.\/announcements\.html\?id=\$\{encodeURIComponent\(article\.id\)\}`/);
 });

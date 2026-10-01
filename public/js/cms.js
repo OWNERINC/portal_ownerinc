@@ -1,8 +1,13 @@
 import { can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, showState } from './ui.js';
 import { renderPagination } from './pagination.js';
-import { createBlockEditor, createBlockSettings, serializeBlocks } from './cms-block-editor.js';
-import { renderBlocks } from './cms-block-renderer.js';
+import { createBlockEditor, createBlockSettings, serializeBlocks, STANDARD_BLOCK_TYPES } from './cms-block-editor.js';
+import { renderBlocks, cleanupRenderedBlocks, BLOCK_TYPES } from './cms-block-renderer.js';
+import { createEditorialFields, editorialPublicationError } from './owner-news/cms-editorial.js';
+import { mountNewsHomeEditor } from './owner-news/cms-home.js';
+import { mountNewsPollManager } from './owner-news/cms-polls.js';
+import { renderNewsArticle } from './owner-news/reader-view.js';
+import { estimateNewsReadTime, normalizeEditorial } from './owner-news/model.js';
 
 const REVISION_STATUS_LABELS = new Map([
   ['draft', 'Rascunho'],
@@ -63,6 +68,16 @@ const unpublishButton = document.getElementById('unpublish-document');
 const scheduleForm = document.getElementById('schedule-form');
 const scheduleButton = document.getElementById('schedule-document');
 const unscheduleButton = document.getElementById('unschedule-document');
+const editorialRoot = document.getElementById('cms-editorial-fields');
+const newsSections = document.getElementById('owner-news-sections');
+const newsSettings = document.getElementById('owner-news-settings');
+const editorColumn = document.querySelector('.cms-editor-column');
+let editorialFields = null;
+let previewCleanup = null;
+let newsSection = 'articles';
+let homeEditor = null;
+let homeDirty = false;
+let homeBusy = false;
 
 let selectedType = TYPES[0]?.[0] || null;
 let selectedDocument = null;
@@ -95,6 +110,7 @@ const sourcesByType = new Map();
 let documentOffset = 0;
 let documentTotal = 0;
 page.beforeLeave(() => {
+  if (homeEditor && !homeEditor.canLeave()) return false;
   if (saving || actionBusy || creatingDocument || assetUploading || saveInFlight) {
     showToast('Aguarde a operação do CMS terminar.');
     return false;
@@ -103,6 +119,7 @@ page.beforeLeave(() => {
     || window.confirm('Há alterações do CMS que ainda não foram salvas. Sair mesmo assim?');
 });
 page.cleanup(() => {
+  previewCleanup?.(); editorialFields?.dispose(); homeEditor?.dispose();
   ++selectionToken; ++documentsRequestToken; ++historyRequestToken;
   ++creationRequestToken; ++editorGeneration;
   clearTimeout(saveTimer); saveTimer = null; saveQueued = false;
@@ -151,7 +168,7 @@ function navigationBusy() {
 }
 
 function cmsNavigationProtected() {
-  return !navigationConfirmed && (navigationBusy() || saveQueued);
+  return !navigationConfirmed && (navigationBusy() || saveQueued || homeDirty || homeBusy);
 }
 
 page.listen(window, 'beforeunload', event => {
@@ -165,6 +182,7 @@ function syncBusyState() {
   const editorBusy = editorInteractionBusy();
   const navigationBlocked = navigationBusy() || creatingDocument;
   editorRoot.inert = editorBusy;
+  if (editorialRoot) editorialRoot.inert = editorBusy;
   editorRoot.setAttribute('aria-busy', String(editorBusy));
   blockSettings.inert = editorBusy;
   blockSettings.setAttribute('aria-busy', String(editorBusy));
@@ -172,7 +190,7 @@ function syncBusyState() {
   inspectorRoot.setAttribute('aria-busy', String(editorBusy));
   newDocumentForm.inert = editorBusy;
   newDocumentForm.setAttribute('aria-busy', String(editorBusy));
-  newDocumentButton.disabled = !TYPES.length || navigationBlocked;
+  newDocumentButton.disabled = !TYPES.length || navigationBlocked || newsSection !== 'articles';
   contentTypes.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
   documentList.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
   documentPagination.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
@@ -208,6 +226,10 @@ function statusBadge(doc) {
 // Call only after navigation guards accept the transition. Mutation ownership
 // (saving, saveInFlight, actionBusy and uploads) must never be cleared here.
 function resetSelection() {
+  editorialFields?.dispose(); editorialFields = null;
+  if (editorialRoot) editorialRoot.hidden = true;
+  previewCleanup?.(); previewCleanup = null;
+  previewRoot.classList.remove('news-editorial-preview', 'news-article');
   ++editorGeneration;
   ++historyRequestToken;
   clearTimeout(saveTimer);
@@ -234,6 +256,7 @@ function resetSelection() {
 }
 
 function renderTypeNav() {
+  syncNewsSections();
   clear(contentTypes);
   TYPES.forEach(([type, label]) => contentTypes.append(element('button', {
     className: 'cms-content-type', type: 'button', text: label,
@@ -241,6 +264,8 @@ function renderTypeNav() {
     ...(navigationBusy() ? { disabled: '' } : {}),
     on: { click: () => {
       if (!page.active || navigationBusy()) return;
+      if (homeEditor && !homeEditor.canLeave()) return;
+      homeEditor?.dispose(); homeEditor = null; newsSection = 'articles';
       selectionToken += 1;
       resetSelection();
       documentOffset = 0;
@@ -255,6 +280,38 @@ function renderTypeNav() {
     } },
   })));
 }
+
+function syncNewsSections() {
+  const news = selectedType === 'announcement';
+  const home = news && newsSection !== 'articles';
+  if (newsSections) {
+    newsSections.hidden = !news;
+    newsSections.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.newsSection === newsSection)));
+  }
+  if (newsSettings) newsSettings.hidden = !home;
+  if (editorColumn) editorColumn.hidden = home;
+  if (inspectorRoot) inspectorRoot.hidden = home;
+  documentList.hidden = home;
+  documentPagination.hidden = home;
+  newDocumentButton.hidden = home;
+}
+
+newsSections?.querySelectorAll('button').forEach(button => page.listen(button, 'click', () => {
+  const next = button.dataset.newsSection;
+  if (next === newsSection || selectedType !== 'announcement' || !newsSettings) return;
+  if (mutationBusy() || creatingDocument || saveInFlight) { showToast('Aguarde a operação do CMS terminar.'); return; }
+  if (homeEditor && !homeEditor.canLeave()) return;
+  if ((dirty || newDocumentDirty || saveQueued) && !window.confirm('Há alterações do CMS que ainda não foram salvas. Sair mesmo assim?')) return;
+  homeEditor?.dispose(); homeEditor = null;
+  ++selectionToken;
+  resetSelection();
+  newDocumentForm.hidden = true;
+  newsSection = next;
+  syncNewsSections();
+  if (next === 'home') homeEditor = mountNewsHomeEditor({ root: newsSettings, page, onDirty(value, busy) { homeDirty = value; homeBusy = busy; } });
+  else if (next === 'polls') homeEditor = mountNewsPollManager({ root: newsSettings, page, onDirty(value, busy) { homeDirty = value; homeBusy = busy; } });
+  else { renderDocumentList(); syncBusyState(); }
+}));
 
 function renderDocumentList() {
   const docs = documentsByType.get(selectedType) || [];
@@ -295,7 +352,7 @@ function updateInspector() {
   editorStatus.textContent = doc ? status : 'Nenhum';
   selectedTypeNode.textContent = doc ? TYPE_LABELS[doc.content_type] || doc.content_type : '—';
   categoryNode.textContent = doc?.category || '—';
-  publishedNode.textContent = doc?.published_at ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(doc.published_at)) : '—';
+  publishedNode.textContent = doc?.published_at ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(doc.published_at)) : '—';
   const active = !!doc && !editorInteractionBusy();
   const savePending = editorSavePending();
   const saveInProgress = saving || saveInFlight;
@@ -353,6 +410,39 @@ async function loadRevisionHistory(documentId = selectedDocument) {
   }
 }
 
+function renderPreview(blocks, fallbackText) {
+  if (assetUploading > 0) return;
+  previewCleanup?.(); previewCleanup = null;
+  cleanupRenderedBlocks(previewRoot);
+  const news = documentView?.document?.content_type === 'announcement';
+  previewRoot.classList.toggle('news-editorial-preview', news);
+  if (news) {
+    const content = serializeBlocks(blocks);
+    if (!content) { showState(previewRoot, fallbackText); return; }
+    const editorial = editorialFields?.getValue() ?? null;
+    previewCleanup = renderNewsArticle(previewRoot, { ...documentView.document, content_blocks: content, editorial,
+      read_time_minutes: estimateNewsReadTime(content, editorial) }, { preview: true, signal: page.signal });
+  } else renderBlocks(previewRoot, blocks, { fallbackText });
+}
+
+function mountEditorial(value) {
+  editorialFields?.dispose(); editorialFields = null;
+  if (!editorialRoot) return;
+  editorialRoot.hidden = documentView?.document?.content_type !== 'announcement';
+  if (editorialRoot.hidden) return;
+  const token = selectionToken;
+  editorialFields = createEditorialFields({ root: editorialRoot, value, page, onChange() {
+    if (page.active && token === selectionToken && editor) markDirty(editor.getBlocks());
+  } });
+}
+
+function validPublication() {
+  if (documentView?.document?.content_type !== 'announcement') return true;
+  const message = editorialPublicationError(editorialFields?.getValue() ?? null, editor?.getBlocks() || []);
+  if (message) setError(message);
+  return !message;
+}
+
 function markDirty(nextBlocks) {
   if (editorInteractionBusy()) return;
   editVersion += 1;
@@ -362,7 +452,7 @@ function markDirty(nextBlocks) {
   clearTimeout(saveTimer);
   saveTimer = null;
   scheduleAutosave();
-  renderBlocks(previewRoot, nextBlocks, { fallbackText: 'A prévia será exibida após corrigir os blocos.' });
+  renderPreview(nextBlocks, 'A prévia será exibida após corrigir os blocos.');
 }
 
 function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersion) {
@@ -378,6 +468,7 @@ function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersi
   editorInstance = createBlockEditor({
     root: editorRoot,
     initialBlocks: blocks,
+    allowedTypes: selectedType === 'announcement' ? BLOCK_TYPES : STANDARD_BLOCK_TYPES,
     onSelect(index, block) {
       if (!currentEditor()) return;
       const selection = ++blockSelectionToken;
@@ -390,7 +481,7 @@ function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersi
       clear(blockSettings).append(createBlockSettings(block, () => {
         if (!canApplyUpload()) return;
         markDirty(editorInstance.getBlocks());
-      }, setAssetUploading, canApplyUpload, page));
+      }, setAssetUploading, canApplyUpload, page, { editorial: selectedType === 'announcement' }));
       blockSettings.dataset.selectedIndex = String(index);
     },
     onChange(nextBlocks) {
@@ -399,7 +490,7 @@ function renderEditor(blocks = [], expectedAssetUploadVersion = assetUploadVersi
     },
   });
   editor = editorInstance;
-  renderBlocks(previewRoot, blocks, { fallbackText: 'Adicione blocos para visualizar a prévia.' });
+  renderPreview(blocks, 'Adicione blocos para visualizar a prévia.');
   return true;
 }
 
@@ -489,7 +580,9 @@ async function loadDocument(id) {
       || requestAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return false;
     documentView = view;
     syncListedDocument(view.document);
-    const blocks = view.draft?.blocks || view.schedule?.revision?.blocks || view.published?.blocks || [];
+    const working = view.draft || view.schedule?.revision || view.published;
+    const blocks = working?.blocks || [];
+    mountEditorial(working?.editorial ?? null);
     if (!renderEditor(blocks, requestAssetUploadVersion)) return false;
     updateInspector();
     renderDocumentList();
@@ -529,6 +622,12 @@ async function saveDraft() {
   const requestDocument = selectedDocument;
   const requestVersion = editVersion;
   const blocks = serializeBlocks(editor.getBlocks());
+  const editorial = editorialFields?.getValue() ?? null;
+  if (editorial !== null && !normalizeEditorial(editorial)) {
+    setSaveState('Corrija os metadados da matéria');
+    setError('Revise os metadados: use texto sem HTML e uma data da fonte válida.');
+    return null;
+  }
   if (!blocks) {
     setSaveState('Corrija os campos do bloco');
     return null;
@@ -541,7 +640,7 @@ async function saveDraft() {
   let savedResult = null;
   try {
     const result = await fetchAPI(`/api/cms/documents/${encodeURIComponent(requestDocument)}/draft`, {
-      method: 'PUT', body: JSON.stringify({ blocks }),
+      method: 'PUT', body: JSON.stringify({ blocks, ...(selectedType === 'announcement' ? { editorial } : {}) }),
     });
     if (requestToken !== selectionToken || requestDocument !== selectedDocument) return null;
     documentView.document = result.document;
@@ -593,6 +692,7 @@ async function saveBeforeAction() {
 
 async function publishDocument() {
   if (!documentView || editorInteractionBusy() || saving || saveInFlight) return;
+  if (!validPublication()) return;
   const requestToken = selectionToken;
   const requestDocument = selectedDocument;
   clearTimeout(saveTimer);
@@ -653,6 +753,7 @@ async function unpublishDocument() {
 async function scheduleDocument(event) {
   event.preventDefault();
   if (!documentView || editorInteractionBusy() || saving || saveInFlight) return;
+  if (!validPublication()) return;
   const value = document.getElementById('scheduled-at').value;
   if (!value) return;
   const scheduledAt = new Date(value);
@@ -705,6 +806,7 @@ async function unscheduleDocument() {
     documentView.document = result.document;
     documentView.draft = result.draft || null;
     documentView.schedule = null;
+    mountEditorial(documentView.draft?.editorial ?? null);
     if (!renderEditor(documentView.draft?.blocks || [], requestAssetUploadVersion)) return;
     syncListedDocument(result.document);
     updateInspector();

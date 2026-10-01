@@ -77,7 +77,7 @@ function poolFor({ document, blocks = [], assets = [], sourceExists = true, sour
         return {
           rows: published
             ? [{ id: document.id, title: document.title, category: '', published_at: null,
-              published_revision_id: document.published_revision_id, blocks }]
+              published_revision_id: document.published_revision_id, blocks, editorial: document.editorial }]
             : [],
         };
       }
@@ -430,4 +430,25 @@ test('announcement readers return no row when the pointer is not published', asy
   });
   assert.deepEqual((await listPublishedAnnouncements(pool, 50, 0)).rows, []);
   assert.equal(await getPublishedAnnouncement(pool, 'announcement-draft'), null);
+});
+
+test('invalid announcement editorial is excluded before pagination, count and detail', async () => {
+  const pool = poolFor({ document: { id: 'doc', published_revision_id: 'pub', editorial: { version: 99 } }, blocks: [{ type: 'paragraph', text: 'Texto' }] });
+  assert.deepEqual(await listPublishedAnnouncements(pool, 1, 0), { count: 0, rows: [] });
+  assert.equal(await getPublishedAnnouncement(pool, 'doc'), null);
+});
+
+test('invalid scheduled editorial retires the schedule without touching the later draft or publication', async () => {
+  const pool = poolFor({ document: { id: 'doc', content_type: 'announcement', published_revision_id: 'pub', draft_revision_id: 'later', scheduled_revision_id: 'scheduled', scheduled_at: new Date(Date.now() - 60000), scheduled_editorial: { version: 99 } }, blocks: [{ type: 'paragraph', text: 'Texto' }] });
+  await listPublishedAnnouncements(pool, 10, 0);
+  assert.ok(pool.calls.some(({ sql }) => sql.includes('cms.document.schedule_invalid')));
+  assert.equal(pool.calls.some(({ sql }) => sql.includes("SET status = 'published'") || sql.includes('draft_revision_id =')), false);
+});
+
+test('published profile assets require image MIME and the effective 50 MiB bound', async () => {
+  const id = '550e8400-e29b-41d4-a716-446655440000';
+  for (const [mime, size, valid] of [['image/png', 1, true], ['application/pdf', 1, false], ['image/png', 52428801, false]]) {
+    const pool = poolFor({ document: { id: 'doc', published_revision_id: 'pub' }, blocks: [{ type: 'profile', name: 'Pessoa', asset_id: id, alt: 'Retrato' }], assets: [{ id, mime_type: mime, storage_key: 'private', byte_size: size }] });
+    assert.equal(Boolean(await getPublishedAnnouncement(pool, 'doc')), valid);
+  }
 });

@@ -13,6 +13,8 @@ test('validateBlocks accepts and normalizes every CMS block type', () => {
   const blocks = validateBlocks([
     { type: 'heading', text: '  Title  ', level: 2 },
     { type: 'paragraph', text: 'Body' },
+    { type: 'quote', text: 'Quote', attribution: 'Person' },
+    { type: 'profile', name: 'Person', text: 'Biography' },
     { type: 'list', items: ['One', 'Two'], ordered: true },
     { type: 'callout', tone: 'warning', title: 'Attention', text: 'Read this.' },
     { type: 'image', asset_id: assetId.toUpperCase(), alt: 'A chart' },
@@ -25,6 +27,8 @@ test('validateBlocks accepts and normalizes every CMS block type', () => {
   assert.deepEqual(blocks, [
     { type: 'heading', text: 'Title', level: 2 },
     { type: 'paragraph', text: 'Body' },
+    { type: 'quote', text: 'Quote', attribution: 'Person' },
+    { type: 'profile', name: 'Person', text: 'Biography' },
     { type: 'list', items: ['One', 'Two'], ordered: true },
     { type: 'callout', tone: 'warning', title: 'Attention', text: 'Read this.' },
     { type: 'image', asset_id: assetId, alt: 'A chart' },
