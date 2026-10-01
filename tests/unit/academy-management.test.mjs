@@ -38,3 +38,13 @@ test('management editors protect dirty and in-flight navigation', () => {
   assert.match(manager, /error\?\.status === 409/);
   assert.match(manager, /findExisting/);
 });
+
+test('materials are single-flight per lesson and curriculum refreshes authoritative state after mutations', () => {
+  assert.match(manager, /lessonDocumentFlights/);
+  assert.match(manager, /existingFlight/);
+  assert.match(manager, /error\?\.status === 409/);
+  assert.match(curriculum, /documentBusy/);
+  assert.match(curriculum, /course = null; panel\.querySelector/);
+  assert.match(curriculum, /const loaded = await request\.fetchAPI\(`\/api\/academy/);
+  assert.match(curriculum, /loadToken/);
+});
