@@ -64,7 +64,7 @@ Passed:
 - No merge conflict markers remain in tracked source files.
 - `npm ci --prefix api` and `npm ci --prefix cron` — completed; install audit
   output was not used as the release security result.
-- `npm run verify` — passed: 1,107 tests, 1,105 passed, 0 failed, 2 skipped;
+- `npm run verify` — passed: 1,108 tests, 1,106 passed, 0 failed, 2 skipped;
   syntax, security checks, and Compose static checks passed.
 - `npm run security` — passed: API and cron reported 0 vulnerabilities at the
   configured high threshold.
@@ -73,8 +73,10 @@ Passed:
   constraints and indexes, API grants, and complete cron denial on Owner News
   tables. The migration runner also stops on legacy Owner News ledger versions
   instead of renaming or silently marking them applied.
-- CI now runs the Owner News and Academy PostgreSQL integration suites after
-  the disposable migration suite, with the same disposable database variables.
+- CI now retains the default migration run, creates separate disposable
+  `portal_test_upgrade` and `portal_test_bootstrap` databases, exercises both
+  documented `MIGRATION_TEST_SETUP` paths, and then runs the Owner News and
+  Academy PostgreSQL integration suites with the existing test database.
 - Targeted shared-CMS, migration-invariant, Academy, Owner News, and shell
   suites — passed (the final full verify includes them).
 - Academy frontend plus the legacy-area removal invariant test — passed,
@@ -104,9 +106,9 @@ Blocked by the local environment (not silently substituted):
 
 - The required disposable PostgreSQL twice-run/idempotence evidence remains
   outstanding. The migration integration source does assert the ordered
-  ledger, second-run equality, Academy relations/constraints/privileges, and
-  Owner News home/polls grants; it still needs execution in a disposable
-  PostgreSQL environment.
+  ledger, second-run equality, Academy relations/constraints/privileges, Owner
+  News home/polls grants, and both upgrade/bootstrap setup paths; it still needs
+  execution in a disposable PostgreSQL environment or remote CI.
 - The actual production migration ledger has not been inspected. No production
   readiness claim is made until that ledger is externally confirmed and the
   disposable PostgreSQL suites, Docker image/startup checks, and remote CI pass.
