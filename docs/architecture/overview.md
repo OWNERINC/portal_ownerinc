@@ -25,6 +25,40 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 - O frontend continua estático enquanto essa solução atender ao produto.
 - Serviços só devem ser separados ou reescritos quando existir pressão real.
 
+## Players de aulas da Academy
+
+`public/academy/player.js` exporta
+`createLessonPlayer({ host, media, startSeconds, signal, onPosition, onEnded, onError })`,
+uma Promise de `{ getPosition(), pause(), seek(seconds), destroy() }`. O container
+é exclusivo da aula; o chamador define `host` com `aria-label` igual ao título da
+aula para rotular o iframe/vídeo. A mídia segue o objeto normalizado da API.
+Os controles são oficiais/nativos, sem autoplay; a posição salva validada é
+incluída no embed YouTube e aplicada após `loadedmetadata` no HTML5.
+
+O loader YouTube é compartilhado por documento, injeta `iframe_api` dinamicamente,
+preserva/restaura o callback global anterior e limita cada tentativa a 15 segundos.
+Falhas removem script/cache para retry explícito criando um novo player. Abort de
+um consumidor rejeita sua Promise imediatamente sem cancelar outros consumidores.
+Cada player também limita a espera de readiness/metadados a 15 segundos. Abort,
+erro e `destroy()` limpam instância, timers, DOM e listeners; callbacks tardios
+não reativam uma aula descartada. `destroy()` é idempotente.
+
+`onPosition(number)` emite posição a cada segundo enquanto reproduzindo e visível,
+e ao pausar/terminar; HTML5 também emite após seek. `onEnded()` apenas notifica,
+sem concluir ou persistir progresso. `onError(Error)` entrega mensagem em português
+e, no YouTube, código do provedor (incluindo 101/150). Falhas antes de readiness
+também rejeitam a Promise; cancelamentos rejeitam com `AbortError` sem `onError`.
+A sala chamadora é responsável por apresentar mensagem/retry e conectar o
+controller de progresso; os adapters não montam a interface da sala.
+
+A CSP adiciona somente `https://www.youtube.com` e `https://s.ytimg.com` em
+`script-src`, e YouTube/YouTube nocookie em `frame-src`. O embed usa nocookie,
+origin do Portal, título, fullscreen e referrer policy `strict-origin-when-cross-origin`.
+Testes locais executam os adapters reais com doubles da API, DOM e relógio.
+**Pendente:** validar reprodução, retomada, erros de incorporação e headers reais
+através do Nginx no marco C, quando houver ambiente autorizado. Testes locais não
+comprovam comportamento do provedor real; nenhum serviço é iniciado por eles.
+
 ## Persistência da Academy
 
 A migration `033_academy_learning` mantém `academy` como origem dos cursos e
