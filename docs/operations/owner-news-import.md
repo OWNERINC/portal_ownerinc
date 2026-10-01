@@ -1,5 +1,9 @@
 # Importação privada da Owner News
 
+Para o fluxo editorial revisado e o inventário parcial A1, consulte
+[Preparação de pacotes privados](owner-news-bundles.md). O fluxo abaixo documenta
+o importador legado; suas regras de data e publicação não se aplicam ao pacote novo.
+
 O importador lê somente `GET https://owner-news.ownerinc-developers.chatgpt.site/api/cms`
 (`store.articles`) e as mídias referenciadas pelas matérias publicadas. Não salva
 o JSON da origem no repositório. Não inicia Docker nem modifica serviços.
