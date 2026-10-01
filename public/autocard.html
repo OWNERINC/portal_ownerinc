@@ -19,7 +19,7 @@
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
-      <a href="./dashboard.html" class="sidebar-brand">
+      <a href="./dashboard.html" class="sidebar-brand" aria-label="Ownerinc">
         <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
         <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
       </a>
@@ -61,8 +61,8 @@
           </div>
           <button class="quiet-button" id="helpButton" type="button">Como usar</button>
           <nav aria-label="Navegação do AutoCard">
-            <button class="tab active" data-tab="create" type="button">Criar card</button>
-            <button class="tab" data-tab="saved" type="button">Histórico</button>
+            <button class="tab active" data-tab="create" type="button" aria-pressed="true">Criar card</button>
+            <button class="tab" data-tab="saved" type="button" aria-pressed="false">Histórico</button>
           </nav>
         </div>
 
@@ -80,8 +80,8 @@
                 <button id="cropButton" class="secondary-button hidden" type="button" aria-controls="cropDialog">Ajustar enquadramento</button>
               </div>
               <p id="mediaStatus" class="media-status" role="status" aria-live="polite" data-state="idle">Nenhuma imagem selecionada.</p>
-              <div id="mediaSizeControl" class="control hidden"><span>Tamanho da mídia</span><div class="segmented"><button data-size="small" type="button">Pequena</button><button data-size="medium" class="active" type="button">Média</button><button data-size="large" type="button">Grande</button></div></div>
-              <div class="control"><span>Variação visual</span><div class="segmented variant-segmented"><button data-mode="light" type="button">Editorial claro</button><button data-mode="dark" type="button">Noir</button><button data-mode="beige" type="button">Paper beige</button></div></div>
+              <div id="mediaSizeControl" class="control hidden"><span>Tamanho da mídia</span><div class="segmented"><button data-size="small" type="button" aria-pressed="false">Pequena</button><button data-size="medium" class="active" type="button" aria-pressed="true">Média</button><button data-size="large" type="button" aria-pressed="false">Grande</button></div></div>
+              <div class="control"><span>Variação visual</span><div class="segmented variant-segmented"><button data-mode="light" type="button" aria-pressed="true">Editorial claro</button><button data-mode="dark" type="button" aria-pressed="false">Noir</button><button data-mode="beige" type="button" aria-pressed="false">Paper beige</button></div></div>
               <div class="editor-actions bottom"><button id="saveButton" class="secondary-button" type="button">Salvar</button><button id="exportButton" class="primary-button" type="button">Exportar PNG</button></div>
               <p id="contentOverflow" class="content-overflow" role="status" aria-live="polite" data-overflow="false"></p>
             </section>

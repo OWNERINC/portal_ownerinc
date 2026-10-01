@@ -36,6 +36,9 @@
       position: relative;
     }
     .avatar-circle img {
+      position: absolute;
+      left: 0;
+      top: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
@@ -104,7 +107,7 @@
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
-      <a href="./dashboard.html" class="sidebar-brand">
+      <a href="./dashboard.html" class="sidebar-brand" aria-label="Ownerinc">
         <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
         <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
       </a>
@@ -214,7 +217,7 @@
     <button class="btn btn-ghost btn-sm" id="photo-crop-close" type="button" aria-label="Fechar ajuste de foto">Fechar</button>
   </div>
   <div class="photo-crop-frame" id="photo-crop-frame" tabindex="0" role="img" aria-label="Prévia do enquadramento; use as setas ou arraste para ajustar">
-    <img id="photo-crop-img" alt="Prévia do enquadramento da foto de perfil">
+    <img id="photo-crop-img" draggable="false" alt="Prévia do enquadramento da foto de perfil">
   </div>
   <div class="photo-crop-actions">
     <button class="btn btn-ghost btn-sm" id="photo-crop-reset" type="button">Centralizar</button>

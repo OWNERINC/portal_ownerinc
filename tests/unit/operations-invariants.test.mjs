@@ -188,7 +188,10 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /resolver 127\.0\.0\.11 valid=30s/);
   assert.match(nginx, /set \$api_upstream http:\/\/api:3000/);
   assert.match(nginx, /proxy_pass \$api_upstream/);
-  assert.match(nginx, /location ~\* \\\.\(css\|js\)\$ \{[\s\S]*expires -1;[\s\S]*Cache-Control "no-cache"/);
+  const jsCssLocation = nginx.match(/location ~\* \\\.\(css\|js\)\$ \{([^}]*)\}/);
+  assert.ok(jsCssLocation, 'JS/CSS location must exist');
+  assert.match(jsCssLocation[1], /\bexpires\s+-1\s*;/);
+  assert.doesNotMatch(jsCssLocation[1], /\badd_header\b/, 'JS/CSS must inherit server security headers');
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
 });
 

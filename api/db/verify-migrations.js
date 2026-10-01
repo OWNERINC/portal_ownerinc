@@ -63,11 +63,11 @@ async function verifyMigrations() {
        EXISTS (SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'schema_migrations'
           AND column_name = 'applied_at' AND data_type = 'timestamp with time zone' AND is_nullable = 'NO') AS schema_migrations_applied_at,
-        (SELECT ARRAY_AGG(column_name ORDER BY ordinal_position)
+        (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
          FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'pending_registrations')
            = ARRAY['id', 'firebase_uid', 'email', 'name', 'status', 'created_at', 'reviewed_at', 'reviewed_by', 'rejection_reason', 'firebase_cleanup_pending']::text[] AS pending_registrations_columns,
-       (SELECT ARRAY_AGG(column_name ORDER BY ordinal_position)
+       (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
         FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'firebase_cleanup_queue')
           = ARRAY['firebase_uid', 'reason', 'created_at', 'last_attempt_at', 'attempts', 'last_error']::text[] AS firebase_cleanup_queue_columns,
@@ -104,9 +104,12 @@ async function verifyMigrations() {
          WHERE conrelid = 'public.users'::regclass
            AND conname = 'users_contract_consistency'
            AND contype = 'c'
-           AND pg_get_constraintdef(oid) LIKE '%pj_due_day BETWEEN 1 AND 31%'
-           AND pg_get_constraintdef(oid) LIKE '%is_pj IS TRUE%'
-           AND pg_get_constraintdef(oid) LIKE '%is_pj IS FALSE%') AS user_contract_invariants,
+           AND convalidated
+           -- PostgreSQL deparses BETWEEN into >= / <=. Match the complete
+           -- migration 031 predicate, including grouping (no OR TRUE bypass).
+           AND pg_get_constraintdef(oid) = 'CHECK ((((contract_type = ''pj''::text) AND (is_pj IS TRUE)'
+             || ' AND ((pj_due_day >= 1) AND (pj_due_day <= 31)))'
+             || ' OR ((contract_type = ''clt''::text) AND (is_pj IS FALSE) AND (pj_due_day IS NULL))))') AS user_contract_invariants,
        (SELECT COUNT(*) = 0 FROM users
         WHERE contract_type IS NULL OR is_pj IS NULL
            OR contract_type NOT IN ('clt', 'pj')

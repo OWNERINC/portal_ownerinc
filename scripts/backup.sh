@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 root=${1:-$(pwd)}
 : "${BACKUP_DIR:?Set BACKUP_DIR to persistent storage outside the release}"
@@ -59,11 +59,11 @@ compose run --rm --no-deps -T --entrypoint tar api \
 
 (cd "$destination" && sha256sum postgres.dump uploads.tar.gz > manifest.sha256)
 if [[ ${LEAVE_STOPPED:-false} != true ]]; then restore_services; fi
-trap - ERR INT TERM
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+$RETENTION_DAYS" -exec rm -rf -- {} +
+trap - ERR INT TERM
 remote_status=0
 if [[ ${BACKUP_UPLOAD_S3:-false} == true ]]; then
-  if ! "$root/scripts/backup-s3.sh" "$destination"; then
+  if ! bash "$root/scripts/backup-s3.sh" "$destination"; then
     echo "Local backup preserved; S3 upload failed: $destination" >&2
     remote_status=3
   fi

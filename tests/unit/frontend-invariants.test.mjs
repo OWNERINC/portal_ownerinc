@@ -510,6 +510,9 @@ test('authenticated shell is generated from one static build source', async () =
   for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);
+    const brands = html.match(/<a\b[^>]*\bclass="sidebar-brand"[^>]*>/g) || [];
+    assert.equal(brands.length, 1, `${page}: expected one brand anchor`);
+    assert.match(brands[0], /\baria-label="Ownerinc"/, `${page}: brand name must survive the collapsed logo`);
     assert.match(html, /<!-- generated:portal-topbar -->[\s\S]*<!-- \/generated:portal-topbar -->/, `${page}: topbar is not generated`);
     assert.doesNotMatch(html, /data-lucide=/, `${page}: shell contains runtime icon placeholders`);
   }

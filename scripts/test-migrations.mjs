@@ -10,6 +10,7 @@ if (process.env.MIGRATION_TEST_DISPOSABLE !== 'true') throw new Error('MIGRATION
 if (!process.env.MIGRATION_DATABASE_URL) throw new Error('MIGRATION_DATABASE_URL is required');
 const { Pool } = require('pg');
 const { migrate } = require('../api/db/migrate');
+const { verifyMigrations } = require('../api/db/verify-migrations');
 const expectedVersions = [
   '001_initial_schema',
   '002_reliable_notifications',
@@ -96,6 +97,9 @@ try {
   await migrate();
   const ledgerAfterRepeat = await client.query('SELECT version, applied_at FROM schema_migrations ORDER BY version');
   assert.deepEqual(ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows, 'Repeated migrate must not reapply migrations');
+  // The real migration runner provisions roles and reapplies runtime grants,
+  // including on the second idempotent run.
+  await verifyMigrations();
   if (legacyCourseId) {
     const legacy = await client.query(`SELECT title, url, active, delivery_mode, audience, learning_group,
       icon_key, instructor_name, updated_at IS NOT NULL AS has_updated_at FROM academy WHERE id = $1`, [legacyCourseId]);
@@ -201,6 +205,44 @@ try {
   } finally {
     await client.query('ROLLBACK');
   }
+  const { rows: [{ definition: contractDefinition }] } = await client.query(`
+    SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+    WHERE conrelid = 'public.users'::regclass AND conname = 'users_contract_consistency'`);
+  const replaceContract = 'ALTER TABLE users DROP CONSTRAINT users_contract_consistency, ADD CONSTRAINT users_contract_consistency ';
+  const badContracts = [
+    ['name-only constraint', 'CHECK (TRUE)'],
+    ['missing lower bound', contractDefinition.replace('(pj_due_day >= 1) AND ', '')],
+    ['missing upper bound', contractDefinition.replace(' AND (pj_due_day <= 31)', '')],
+    ['missing PJ type', contractDefinition.replace("(contract_type = 'pj'::text) AND ", '')],
+    ['missing PJ flag', contractDefinition.replace('(is_pj IS TRUE) AND ', '')],
+    ['missing CLT type', contractDefinition.replace("(contract_type = 'clt'::text) AND ", '')],
+    ['missing CLT flag', contractDefinition.replace('(is_pj IS FALSE) AND ', '')],
+    ['missing CLT null day', contractDefinition.replace(' AND (pj_due_day IS NULL)', '')],
+    ['all predicates with OR TRUE bypass', `CHECK (${contractDefinition.slice(6)} OR TRUE)`],
+    ['unvalidated constraint', `${contractDefinition} NOT VALID`],
+  ];
+  for (const [label, definition] of badContracts) {
+    assert.notEqual(definition, contractDefinition, `Mutation must change ${label}`);
+    await client.query(replaceContract + definition);
+    try {
+      await assert.rejects(verifyMigrations, /schema\/runtime checks are incomplete/, label);
+      console.log(`migration verification: rejected ${label}`);
+    } finally {
+      // The verifier uses its own connection, so mutations must be committed and
+      // explicitly restored, not hidden inside a transaction it cannot observe.
+      await client.query(replaceContract + contractDefinition);
+    }
+  }
+  for (const table of ['pending_registrations', 'firebase_cleanup_queue']) {
+    await client.query(`ALTER TABLE ${table} ADD COLUMN migration_gate_unexpected TEXT`);
+    try {
+      await assert.rejects(verifyMigrations, /schema\/runtime checks are incomplete/, `${table} shape`);
+      console.log(`migration verification: rejected incompatible ${table} shape`);
+    } finally {
+      await client.query(`ALTER TABLE ${table} DROP COLUMN migration_gate_unexpected`);
+    }
+  }
+  await verifyMigrations();
 
   await client.query(`CREATE TABLE ombudsman (
     id BIGSERIAL PRIMARY KEY,
@@ -634,6 +676,7 @@ try {
     ]),
     /users_contract_consistency/,
   );
+  await verifyMigrations();
   console.log('migration integration: ok');
 } finally {
   try {

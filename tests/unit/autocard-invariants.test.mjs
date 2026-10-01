@@ -195,11 +195,12 @@ function createAutoCardElement(id, { decodeImage = async () => {}, onInnerHTML =
 }
 
 async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAssetImages = false, deferLocalImages = false, deferFonts = false } = {}) {
-  const [app, employee, variant, pagination] = await Promise.all([
+  const [app, employee, variant, pagination, html] = await Promise.all([
     readFile('public/autocard/app.js', 'utf8'),
     readFile('public/autocard/vacancy-enhancements.js', 'utf8'),
     readFile('public/autocard/variant-enhancements.js', 'utf8'),
     readFile('public/js/pagination.js', 'utf8'),
+    readFile('public/autocard.html', 'utf8'),
   ]);
   const elements = new Map();
   const listeners = new Map();
@@ -209,26 +210,18 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
   const apiRequests = [];
   const filterElements = [];
   const historyActions = [];
-  let activeTab = 'create';
-  const tabElements = ['create', 'saved'].map(tab => {
-    const classes = new Set(['tab', ...(tab === activeTab ? ['active'] : [])]);
-    return {
-      dataset: { tab },
-      classList: {
-        add(...names) { names.forEach(name => classes.add(name)); if (names.includes('active')) activeTab = tab; },
-        remove(...names) { names.forEach(name => classes.delete(name)); },
-        toggle(name, force) {
-          const next = force === undefined ? !classes.has(name) : force;
-          if (next) classes.add(name); else classes.delete(name);
-          if (name === 'active' && next) activeTab = tab;
-          return next;
-        },
-        contains(name) { return classes.has(name); },
-      },
-      onclick: null,
-      click() { this.onclick?.(); },
-    };
-  });
+  const controlElements = { tab: [], mode: [], size: [] };
+  for (const match of html.matchAll(/<button\b([^>]*\bdata-(tab|mode|size)="([^"]+)"[^>]*)>/g)) {
+    const [, attributes, group, value] = match;
+    const button = createAutoCardElement(`${group}-${value}`);
+    button.dataset[group] = value;
+    const className = attributes.match(/\bclass="([^"]*)"/)?.[1];
+    if (className) button.classList.add(...className.split(/\s+/));
+    const pressed = attributes.match(/\baria-pressed="([^"]*)"/)?.[1];
+    if (pressed !== undefined) button.setAttribute('aria-pressed', pressed);
+    controlElements[group].push(button);
+  }
+  const tabElements = controlElements.tab;
   const assetUrls = new Set();
   const deferredAssetImages = [];
   const deferredLocalImages = [];
@@ -305,6 +298,8 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     querySelectorAll(selector) {
       if (selector === '.filter') return filterElements;
       if (selector === '.tab') return tabElements;
+      if (selector === '[data-mode]') return controlElements.mode;
+      if (selector === '[data-size]') return controlElements.size;
       for (const action of ['edit', 'copy', 'delete']) {
         if (selector === `[data-${action}]`) return historyActions.filter(button => button.dataset[action]);
       }
@@ -407,8 +402,13 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     fetchAPIAsset,
     html2canvas: async (element, options) => {
       events.push('capture');
-      captures.push({ element, options });
+      const clonedElement = createAutoCardElement(element.id);
+      Object.assign(clonedElement.style, element.style, { values: { ...element.style.values } });
+      clonedElement.innerHTML = element.innerHTML;
+      const clonedDocument = { getElementById: id => id === element.id ? clonedElement : null };
+      captures.push({ element, options, clonedElement });
       if (captureError) throw captureError;
+      await options.onclone?.(clonedDocument, clonedElement);
       return { toDataURL: () => 'data:image/png;base64,test' };
     },
     setTimeout(callback) {
@@ -505,6 +505,12 @@ async function createAutoCardLifecycleHarness({ resizeObserver = false, deferAss
     state: () => context.__autocardTest.current(),
     selectTemplate: (key, card) => context.__autocardTest.selectTemplate(key, card),
     showTab: tab => context.__autocardTest.showTab(tab),
+    controls: group => controlElements[group],
+    clickControl(group, value) {
+      const button = controlElements[group].find(item => item.dataset[group] === value);
+      assert.ok(button, `expected ${group} control ${value}`);
+      button.click();
+    },
     clickBack() {
       elements.get('backButton').click();
     },
@@ -1165,6 +1171,55 @@ test('AutoCard export executes rendered geometry and blocks undecodable images',
   assert.match(harness.toast().textContent, /A imagem ainda não está pronta para exportação/);
 });
 
+test('AutoCard locks only the cloned card to the exact rendered bounds before PNG capture', async () => {
+  for (const [width, height] of [[301, 301], [420, 420], [360, 540], [301.328125, 452.671875]]) {
+    const h = await createAutoCardLifecycleHarness();
+    h.selectTemplate('novo_funcionario', { mediaId: 'photo' });
+    await h.resolveAsset(0);
+    h.setCardRect(width, height);
+    Object.assign(h.cardCanvas.style, { width: '100%', height: 'auto', overflow: 'hidden' });
+    h.cardCanvas.style.setProperty('--media-height', '132px');
+    const originalStyle = JSON.stringify(h.cardCanvas.style);
+    const originalMarkup = h.cardCanvas.innerHTML;
+    const originalImageStyle = h.renderedMediaStyle();
+
+    await h.exportCard();
+
+    const { element, options, clonedElement } = h.captures[0];
+    assert.equal(typeof options.onclone, 'function');
+    assert.equal(element, h.cardCanvas);
+    assert.notEqual(clonedElement, element, 'html2canvas must receive a distinct cloned node');
+    assert.equal(clonedElement.style.width, `${width}px`);
+    assert.equal(clonedElement.style.height, `${height}px`);
+    assert.deepEqual(clonedElement.style, { ...element.style, width: `${width}px`, height: `${height}px` });
+    assert.equal(clonedElement.innerHTML, originalMarkup, 'clone content/crop must not be rewritten');
+    assert.equal(JSON.stringify(element.style), originalStyle, 'capture must not resize the live preview');
+    assert.equal(element.innerHTML, originalMarkup);
+    assert.equal(h.renderedMediaStyle(), originalImageStyle);
+    assert.equal(options.width, width);
+    assert.equal(options.height, height);
+    assert.equal(options.scale, 1080 / width);
+    assert.ok(Math.abs(options.height * options.scale - 1080 * height / width) < 1e-9);
+    if (width === 360) assert.equal(options.height * options.scale, 1620);
+    assert.equal(h.downloadClicks(), 1);
+    assert.equal(h.exportButtonDisabled(), false);
+  }
+});
+
+test('AutoCard still blocks the employee body with 26px available and 27px of content', async () => {
+  const h = await createAutoCardLifecycleHarness();
+  h.selectTemplate('novo_funcionario');
+  h.setCardRect(301, 301);
+  h.setField('corpo', 'Imagem sintetica para validar foto, persistencia e exportacao.');
+  h.setRenderedTextMetrics({ clientHeight: 26, scrollHeight: 27 });
+  await h.exportCard();
+  assert.equal(h.state().values.corpo.length, 62);
+  assert.equal(h.captures.length, 0);
+  assert.equal(h.downloadClicks(), 0);
+  assert.equal(h.exportButtonDisabled(), true);
+  assert.match(h.contentOverflowText(), /texto cortado/);
+});
+
 test('AutoCard capture failures show feedback, release the button and allow retry', async () => {
   const h = await createAutoCardLifecycleHarness();
   h.selectTemplate('comunicado');
@@ -1524,18 +1579,74 @@ test('AutoCard ignores stale history and export responses', async () => {
   assert.doesNotMatch(harness.savedList().innerHTML, /Antigo/);
 });
 
+function assertPressedControl(harness, group, selected, { checkActive = true } = {}) {
+  const buttons = harness.controls(group);
+  assert.equal(buttons.length, group === 'tab' ? 2 : 3);
+  for (const button of buttons) {
+    const expected = button.dataset[group] === selected;
+    assert.equal(button.getAttribute('aria-pressed'), String(expected), `${group}=${button.dataset[group]} pressed`);
+    if (checkActive) assert.equal(button.classList.contains('active'), expected, `${group}=${button.dataset[group]} active`);
+  }
+}
+
+test('AutoCard exposes initial pressed states and synchronizes all three native button groups', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  assertPressedControl(harness, 'tab', 'create');
+  // The hidden editor gains its active mode class when a template is selected.
+  assertPressedControl(harness, 'mode', 'light', { checkActive: false });
+  assertPressedControl(harness, 'size', 'medium');
+  harness.selectTemplate('aniversariante');
+  assertPressedControl(harness, 'mode', 'light');
+  assertPressedControl(harness, 'size', 'medium');
+  for (const mode of ['dark', 'beige', 'light']) {
+    harness.clickControl('mode', mode);
+    assert.equal(harness.state().mode, mode);
+    assertPressedControl(harness, 'mode', mode);
+  }
+  for (const size of ['small', 'large', 'medium']) {
+    harness.clickControl('size', size);
+    assert.equal(harness.state().mediaSize, size);
+    assertPressedControl(harness, 'size', size);
+  }
+  harness.clickControl('tab', 'saved');
+  assertPressedControl(harness, 'tab', 'saved');
+  await harness.resolveAPI(0, { data: [], total: 0 });
+  harness.clickControl('tab', 'create');
+  assertPressedControl(harness, 'tab', 'create');
+});
+
+test('AutoCard cancelled tab navigation preserves pressed states and the dirty draft', async () => {
+  const harness = await createAutoCardLifecycleHarness();
+  harness.selectTemplate('aniversariante');
+  harness.setField('titulo', 'Rascunho preservado');
+  harness.clickControl('mode', 'dark');
+  harness.clickControl('size', 'large');
+  const before = JSON.stringify(harness.state());
+  assert.equal(harness.confirmNavigation(false), false);
+  harness.clickControl('tab', 'saved');
+  assertPressedControl(harness, 'tab', 'create');
+  assertPressedControl(harness, 'mode', 'dark');
+  assertPressedControl(harness, 'size', 'large');
+  assert.equal(JSON.stringify(harness.state()), before);
+  assert.equal(harness.apiRequests.length, 0, 'cancelled tab does not load history');
+});
+
 test('AutoCard history editing enters create before applying a clean or confirmed card', async () => {
   const clean = await createAutoCardLifecycleHarness();
   const saved = clean.showTab('saved');
   assert.equal(saved, true);
+  assertPressedControl(clean, 'tab', 'saved');
   await clean.resolveAPI(0, { data: [], total: 0 });
   const cleanEdit = clean.openSavedCard('clean-card');
   assert.equal(clean.isHidden('createView'), false);
   assert.equal(clean.isHidden('savedView'), true);
-  await clean.resolveAPI(1, { id: 'clean-card', template: 'comunicado', values: { titulo: 'Card limpo' } });
+  assertPressedControl(clean, 'tab', 'create');
+  await clean.resolveAPI(1, { id: 'clean-card', template: 'aniversariante', variant: 'noir', mode: 'light', mediaSize: 'large', values: { titulo: 'Card limpo' } });
   await cleanEdit;
   assert.equal(clean.state().editingId, 'clean-card');
-  assert.equal(clean.state().template, 'comunicado');
+  assert.equal(clean.state().template, 'aniversariante');
+  assertPressedControl(clean, 'mode', 'dark');
+  assertPressedControl(clean, 'size', 'large');
 
   const confirmed = await createAutoCardLifecycleHarness();
   confirmed.selectTemplate('comunicado');
@@ -1544,10 +1655,13 @@ test('AutoCard history editing enters create before applying a clean or confirme
   await confirmed.resolveAPI(0, { data: [], total: 0 });
   const confirmedEdit = confirmed.openSavedCard('confirmed-card');
   assert.equal(confirmed.isHidden('savedView'), true);
-  await confirmed.resolveAPI(1, { id: 'confirmed-card', template: 'vaga', values: { titulo: 'Card confirmado' } });
+  await confirmed.resolveAPI(1, { id: 'confirmed-card', template: 'vaga', mode: 'beige', mediaSize: 'small', values: { titulo: 'Card confirmado' } });
   await confirmedEdit;
   assert.equal(confirmed.state().editingId, 'confirmed-card');
   assert.equal(confirmed.state().template, 'vaga');
+  assertPressedControl(confirmed, 'tab', 'create');
+  assertPressedControl(confirmed, 'mode', 'beige');
+  assertPressedControl(confirmed, 'size', 'small');
 });
 
 test('AutoCard ignores out-of-order history card responses from the same document', async () => {

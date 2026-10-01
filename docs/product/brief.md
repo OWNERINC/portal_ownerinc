@@ -30,7 +30,7 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - PostgreSQL e credenciais de serviços não podem ser expostos publicamente.
 - O frontend acessa somente a API publicada pelo Nginx.
 - Dados pessoais devem respeitar LGPD, acesso mínimo e rastreabilidade.
-- Firebase, SendGrid e futuros canais de mensagem dependem de serviços externos.
+- Firebase, Resend SMTP e futuros canais de mensagem dependem de serviços externos.
 
 ### Limite de aceite da entrega Academy
 
