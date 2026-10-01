@@ -13,7 +13,7 @@ if (process.env.MIGRATION_TEST_DISPOSABLE !== 'true') throw new Error('MIGRATION
 if (!process.env.MIGRATION_DATABASE_URL) throw new Error('MIGRATION_DATABASE_URL is required');
 const { Pool } = require('pg');
 const { migrate } = require('../api/db/migrate');
-const { getPublishedAnnouncement, listPublishedAnnouncements, promoteDueScheduledForPool } = require('../api/cms/reader');
+const { getPublishedAnnouncement, listPublishedAnnouncements, promoteDueScheduledForPool, validatePublishedBlocksBatch } = require('../api/cms/reader');
 const { lockCmsAssets } = require('../api/cms/locks');
 const { canManageCms } = require('../api/cms/permissions');
 const { createPollDraft, publishPoll, closePoll, readPoll, readCurrentPoll, voteOnPoll } = require('../api/owner-news/polls');
@@ -372,12 +372,12 @@ try {
   console.log('owner-news integration: schedule/cancel/promotion preserve later draft; invalid schedule archived ok');
 
   const assetSource = await readFile(new URL('../api/routes/cms-assets.js', import.meta.url), 'utf8');
-  const helpers = new Function('canManageCms', 'lockCmsAssets', `
+  const helpers = new Function('canManageCms', 'lockCmsAssets', 'validatePublishedBlocksBatch', `
     ${assetSource.slice(assetSource.indexOf('const ASSET_MIMES'), assetSource.indexOf('const upload ='))}
     ${assetSource.slice(assetSource.indexOf('function audienceFor'), assetSource.indexOf('function isMalformedMultipart'))}
     ${assetSource.slice(assetSource.indexOf('async function canReadAsset'), assetSource.indexOf('function uploadMiddleware'))}
     ${assetSource.slice(assetSource.indexOf('async function reserveUnreferencedAsset'), assetSource.indexOf('function reservationIsActive'))}
-    return { canReadAsset, reserveUnreferencedAsset };`)(canManageCms, lockCmsAssets);
+    return { canReadAsset, reserveUnreferencedAsset };`)(canManageCms, lockCmsAssets, validatePublishedBlocksBatch);
   for (const mime of ['application/pdf', 'image/png']) {
     const { rows: [asset] } = await client.query("INSERT INTO cms_assets (original_name, mime_type, byte_size) VALUES ('Fixture E2', $1, 1) RETURNING id, mime_type", [mime]);
     assetIds.push(asset.id);
