@@ -7,6 +7,13 @@ import { courseView } from './course-view.js';
 import { lessonView } from './lesson-view.js';
 import { brand, heading, errorState, routeLink, unavailable } from './view-utils.js';
 
+function canonicalRouteId(value) {
+  // Match the API UUID grammar; malformed values remain unchanged for rejection,
+  // rather than being repaired by trimming, removing braces or loose parsing.
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value.toLowerCase() : value;
+}
+
 export function mountAcademy(page) {
   const root = document.getElementById('academy-root');
   if (!root) return;
@@ -45,7 +52,7 @@ export function mountAcademy(page) {
     // Keep explicit reads in Portal.ready() while also cancelling each route.
     const api = createAcademyAPI({ bindAPI: page.bindAPI, signal: scope.signal });
     const params = new URL(page.location.href).searchParams;
-    const courseId = params.get('course'), lessonId = params.get('lesson');
+    const courseId = canonicalRouteId(params.get('course')), lessonId = canonicalRouteId(params.get('lesson'));
     const preview = params.get('preview') === '1';
     const live = () => token === generation && page.active && currentScope.active;
     root.setAttribute('aria-busy', 'true');
@@ -65,13 +72,13 @@ export function mountAcademy(page) {
         if (!live()) return;
         if (lessonId) {
           // Never instantiate media for a mismatched or inaccessible curriculum.
-          if (CourseView.course.id !== courseId || CourseView.course.delivery_mode !== 'internal'
-            || !CourseView.modules.some(module => module.lessons.some(lesson => lesson.id === lessonId))) {
+          if (canonicalRouteId(CourseView.course.id) !== courseId || CourseView.course.delivery_mode !== 'internal'
+            || !CourseView.modules.some(module => module.lessons.some(lesson => canonicalRouteId(lesson.id) === lessonId))) {
             throw Object.assign(new Error(unavailable), { status: 404 });
           }
           const LessonView = await api.lesson(lessonId, preview);
           if (!live()) return;
-          if (LessonView.course_id !== courseId || LessonView.lesson.id !== lessonId) throw Object.assign(new Error(unavailable), { status: 404 });
+          if (canonicalRouteId(LessonView.course_id) !== courseId || canonicalRouteId(LessonView.lesson.id) !== lessonId) throw Object.assign(new Error(unavailable), { status: 404 });
           view = lessonView({ root, page: scope, ownerPage: page, api, navigate, LessonView, CourseView, preview });
         } else view = courseView({ root, page: scope, api, navigate, CourseView, preview, catalogParams: catalogParams() });
       }

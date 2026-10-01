@@ -102,6 +102,52 @@ test('a returned lesson with the wrong parent is also rejected', async () => {
   await h.resolve('/lessons/lesson-a', lessonData('lesson-a', { course_id: 'foreign' }));
   assert.equal(h.players.length, 0); assert.match(h.root.textContent, /não está disponível/); h.page.dispose();
 });
+test('uppercase UUID course and lesson deep links select lowercase API identities without rewriting the URL', async () => {
+  const courseId = 'aabbccdd-1234-4567-89ab-123456abcdef';
+  const lessonId = 'bbccddee-2345-4678-9abc-234567abcdef';
+  for (const withLesson of [false, true]) {
+    const url = `https://portal.test/academy.html?course=${courseId.toUpperCase()}${withLesson ? `&lesson=${lessonId.toUpperCase()}` : ''}`;
+    const h = await academyHarness({ url });
+    const detail = courseData(courseId, { resume_lesson_id: lessonId });
+    detail.modules[0].lessons = [{ id: lessonId, title: 'Boas-vindas', media_version: 1 }];
+    h.requests[0].resolve(detail); await drain();
+    if (withLesson) {
+      const request = h.latest('/lessons/');
+      assert.ok(request, 'a valid uppercase lesson must pass curriculum identity checks');
+      request.resolve(lessonData(lessonId, { course_id: courseId, next_lesson_id: null,
+        lesson: { id: lessonId, title: 'Boas-vindas', media_version: 1 } }));
+      await drain();
+      assert.equal(h.players.length, 1);
+      assert.equal(h.root.querySelector('[aria-current="page"]').getAttribute('data-lesson'), lessonId);
+      assert.equal(h.link('← Voltar ao curso').getAttribute('href'), `./academy.html?course=${courseId}`);
+      assert.equal(request.path, `/api/academy/lessons/${lessonId}`);
+    } else {
+      assert.equal(h.link('Continuar curso').getAttribute('href'), `./academy.html?course=${courseId}&lesson=${lessonId}`);
+    }
+    assert.equal(h.requests[0].path, `/api/academy/${courseId}`);
+    assert.equal(h.location.href, url);
+    assert.equal(h.entries.length, 1);
+    assert.doesNotMatch(h.root.textContent, /não está disponível/);
+    h.page.dispose();
+  }
+});
+
+test('UUID normalization does not repair malformed lesson deep links into valid identities', async () => {
+  const courseId = 'aabbccdd-1234-4567-89ab-123456abcdef';
+  const lessonId = 'bbccddee-2345-4678-9abc-234567abcdef';
+  for (const malformed of [` ${lessonId.toUpperCase()}`, `{${lessonId.toUpperCase()}}`, lessonId.replace('-4678-', '-0678-')]) {
+    const url = `https://portal.test/academy.html?course=${courseId}&lesson=${encodeURIComponent(malformed)}`;
+    const h = await academyHarness({ url });
+    const detail = courseData(courseId);
+    detail.modules[0].lessons = [{ id: lessonId, title: 'Boas-vindas', media_version: 1 }];
+    await h.resolve(`/api/academy/${courseId}`, detail);
+    assert.match(h.root.textContent, /não está disponível/);
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.players.length, 0);
+    assert.equal(h.location.href, url);
+    h.page.dispose();
+  }
+});
 test('management and editorial preview require explicit permission', async () => {
   for (const query of ['manage=1', 'course=course-a&preview=1']) {
     const h = await academyHarness({ url: `https://portal.test/academy.html?${query}` });
