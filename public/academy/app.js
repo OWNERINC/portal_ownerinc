@@ -5,6 +5,7 @@ import { createAcademyAPI } from './api.js';
 import { catalogView } from './catalog-view.js';
 import { courseView } from './course-view.js';
 import { lessonView } from './lesson-view.js';
+import { mountAcademyManager } from './manage-view.js';
 import { brand, heading, errorState, routeLink, unavailable } from './view-utils.js';
 
 function canonicalRouteId(value) {
@@ -58,8 +59,10 @@ export function mountAcademy(page) {
     root.setAttribute('aria-busy', 'true');
     try {
       if (params.has('manage')) {
-        root.replaceChildren(brand(), element('p', { role: 'status', text: can(page.user, 'manageAcademy')
-          ? 'A gestão de cursos estará disponível nesta área.' : unavailable }), routeLink('Voltar aos cursos', {}, navigate));
+        if (!can(page.user, 'manageAcademy')) throw Object.assign(new Error(unavailable), { status: 403 });
+        const managerRoot = element('div'); root.replaceChildren(brand(), managerRoot, routeLink('Voltar aos cursos', {}, navigate));
+        const disposeManager = mountAcademyManager({ root: managerRoot, page: scope, courseId, newCourse: params.get('new') === '1' });
+        scope.cleanup(disposeManager);
       } else if (preview && !can(page.user, 'manageAcademy')) {
         throw Object.assign(new Error(unavailable), { status: 404 });
       } else if (!courseId && !lessonId) {

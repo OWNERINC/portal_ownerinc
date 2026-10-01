@@ -46,6 +46,23 @@
 .academy-save-status { min-height: 26px; font-size: .9rem; }
 .academy-materials { margin-top: 24px; overflow-wrap: anywhere; }
 .academy-course-loading { min-height: 220px; background: #e5eddf; }
+.academy-manager { color: #141414; }
+.academy-manager-list { display: grid; gap: 18px; padding: 0; list-style: none; }
+.academy-manager-course, .academy-module-editor { border: 1px solid #cdd4ca; padding: 18px; background: #F6FAF5; }
+.academy-manager-course h2 { margin: 0 0 8px; }
+.academy-manager-form { display: grid; gap: 14px; max-width: 760px; }
+.academy-manager-field { display: grid; gap: 6px; }
+.academy-manager-field label { font-weight: 700; }
+.academy-manager-input { min-height: 42px; border: 1px solid #70776d; border-radius: 4px; padding: 9px 10px; font: inherit; background: #fff; color: #141414; }
+textarea.academy-manager-input { min-height: 90px; }
+.academy-manager-actions, .academy-manager-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.academy-manager-feedback { color: #9d2c2c; min-height: 24px; }
+.academy-manager-help { font-size: .9rem; }
+.academy-button-secondary { background: transparent; }
+.academy-button-small { min-height: 38px; padding: 7px 12px; font-size: .9rem; }
+.academy-manager-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid #cdd4ca; }
+.academy-manager-item .academy-manager-input { flex: 1 1 180px; }
+.academy-manager-item input[type="checkbox"] { min-width: 22px; min-height: 22px; }
 @media (max-width: 1000px) {
   .academy-classroom { grid-template-columns: minmax(0, 1fr); }
   .academy-curriculum-disclosure { margin-top: 8px; }
