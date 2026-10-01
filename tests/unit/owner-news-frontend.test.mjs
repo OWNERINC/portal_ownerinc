@@ -40,7 +40,7 @@ test('montagem real filtra artigos, ignora categoria obsoleta e pagina/volta', a
   h.node('announcements-pagination').querySelectorAll('button').at(-1).click();
   assert.equal(new URL(h.page.location.href).searchParams.get('offset'), '24');
   h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [syntheticStory('next')], total: 30 }); await drain();
-  h.window.history.back();
+  h.window.history.back(); await drain();
   assert.equal(new URL(h.page.location.href).searchParams.has('offset'), false);
   h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [syntheticStory('back')], total: 30 }); await drain();
   assert.ok(h.node('news-card-back')); assert.equal(h.node('news-card-next'), null);
@@ -55,7 +55,7 @@ test('home independente usa fallback e retry sem apagar feed/categorias', async 
   assert.ok(h.node('news-card-only')); assert.match(h.node('news-highlight').textContent, /Matéria global/);
   const before = h.requests.filter(r => r.kind === 'list').length;
   h.node('news-opening-status').querySelector('button').click();
-  h.latest('/home').resolve({ version: 1, eyebrow: 'EDIÇÃO', headline: 'Abertura\naprovada', summary: 'Resumo da abertura' }); await drain();
+  h.latest('/home').resolve({ content: { version: 1, eyebrow: 'EDIÇÃO', headline: 'Abertura\naprovada', summary: 'Resumo da abertura' } }); await drain();
   assert.match(h.node('news-highlight').textContent, /Abertura\naprovada/);
   assert.equal(h.requests.filter(r => r.kind === 'list').length, before);
   assert.match(h.node('news-categories').textContent, /Cultura.*1/);
@@ -118,7 +118,7 @@ test('abertura publicada precede destaque global e respostas antigas são ignora
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   const oldHome = h.latest('/home'), oldHighlight = h.latest('limit=1&offset=0');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
-  h.latest('/home').resolve({ version: 1, eyebrow: 'EDIÇÃO', headline: 'Abertura atual', summary: 'Resumo aprovado' });
+  h.latest('/home').resolve({ content: { version: 1, eyebrow: 'EDIÇÃO', headline: 'Abertura atual', summary: 'Resumo aprovado' } });
   h.latest('limit=1&offset=0').resolve([syntheticStory('global')]); await drain();
   oldHome.resolve({ headline: 'Obsoleta' }); oldHighlight.resolve([syntheticStory('old')]); await drain();
   assert.match(h.node('news-highlight').textContent, /Abertura atual/);
@@ -159,7 +159,11 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assert.equal(hero.dataset.state, 'loading');
   assert.equal(link.hidden, true);
   assert.match(h.node('dashboard-hero-description').textContent, /Carregando/);
-  const story = { id: 'old', title: 'Old story', editorial: { summary: 'Resumo editorial sintético' }, published_at: '2026-09-29T12:00:00Z', content_blocks: [{ type: 'image', asset_id: 'asset-a', alt: 'Capa' }] };
+  assert.equal(h.latest('/api/announcements?').path, '/api/announcements?kind=article&limit=3&offset=0');
+  const story = { id: 'old', title: 'Old story', editorial: { summary: 'Resumo editorial sintético' }, published_at: '2026-09-29T12:00:00Z', content_blocks: [
+    { type: 'image', asset_id: 'legacy-image', alt: 'Corpo' },
+    { type: 'image', asset_id: 'explicit-cover', alt: 'Capa', usage: 'cover' },
+  ] };
   h.latest('/api/announcements?').resolve([story]); await drain();
   assert.equal(hero.dataset.state, 'populated');
   assert.equal(h.node('dashboard-hero-title').textContent, 'Old story');
@@ -169,6 +173,7 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assert.equal(link.hidden, false); assert.equal(cover.hidden, false);
   assert.equal(h.node('dashboard-news-section').hidden, false);
   const assets = h.requests.filter(item => item.kind === 'asset');
+  assert.ok(assets.every(request => request.path.endsWith('/explicit-cover')));
   assets[0].resolve('blob:hero'); assets[1].resolve('blob:rail'); await drain();
   assert.equal(cover.src, 'blob:hero');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
@@ -226,10 +231,10 @@ for (const outcome of ['success', 'failure']) test(`dashboard ignores stale ${ou
   assert.notEqual(h.doc.querySelector('.dashboard-hero > img').src, 'blob:late-0');
 });
 
-test('reader preserves pagination/category URLs, retry, history and private media cleanup', () => {
+test('reader preserves pagination/category URLs, retry, history and private media cleanup', async () => {
   assert.match(news, /params\.set\('category', category\)/);
   assert.match(news, /history\.pushState/);
-  assert.match(news, /page\.listen\(window, 'popstate'/);
+  assert.match(await readFile('public/js/owner-news/navigation.js', 'utf8'), /page\.listen\(window, 'popstate'/);
   assert.match(news, /requestToken !== announcementsRequest/);
   assert.match(news, /forEach\(cleanupRenderedBlocks\)/);
   assert.match(news, /requestToken === announcementsRequest\) loadAnnouncements\(\)/);
@@ -241,6 +246,7 @@ test('mosaico substitui display grid legado e mantém quebras responsivas', asyn
   assert.match(css, /\.news-mosaic \{ display: block; columns: 230px;/);
   assert.match(css, /max-width: 560px[^\n]*column-count: 2/);
   assert.match(css, /max-width: 359px[^\n]*column-count: 1/);
+  assert.match(css, /\.news-reader\.hidden \{ display: none; \}/);
 });
 
 test('refresh com falha conserva cards e categorias; retries antigos ficam inertes', async t => {
@@ -275,10 +281,10 @@ test('links mantêm Ctrl/Cmd nativos e detalhe atual retorna ao filtro', async t
   }
   link.click();
   assert.equal(new URL(h.page.location.href).searchParams.get('category'), 'Cultura');
-  h.latest('/api/announcements/detail').resolve(syntheticStory('detail', { content_blocks: [{ type: 'paragraph', text: 'Corpo sintético do detalhe.' }] })); await drain();
-  assert.match(h.node('announcements-list').textContent, /Corpo sintético/);
+  h.requests.find(r => r.path === '/api/announcements/detail').resolve(syntheticStory('detail', { content_blocks: [{ type: 'paragraph', text: 'Corpo sintético do detalhe.' }] })); await drain();
+  assert.match(h.node('news-reader-content').textContent, /Corpo sintético/);
   assert.equal(h.node('announcements-pagination').children.length, 0);
-  h.doc.querySelector('.news-back').click();
+  h.node('news-reader-close').click(); await drain();
   assert.equal(new URL(h.page.location.href).searchParams.has('id'), false);
   assert.equal(new URL(h.page.location.href).searchParams.get('category'), 'Cultura');
 });

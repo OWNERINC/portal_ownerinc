@@ -40,7 +40,7 @@ entrega externa de e-mail, conteúdo oficial ou uso em dispositivo físico.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Destaque Owner News | Operacional | Exibe a publicação mais recente, com estados distintos de carregamento, vazio, erro/retry e conteúdo. Sem publicação, mostra estado compacto e “Acessar áreas”; “Ler publicação” só existe com notícia. Não há saudação personalizada por nome/e-mail. `public/js/dashboard.js`, `public/dashboard.html` |
+| Destaque Owner News | Operacional | Consulta `kind=article`, prioriza capa explícita e resumo editorial, e abre leitura sobreposta por URL direta. Preserva estados de carregamento, vazio, erro/retry e conteúdo. Sem matéria, mostra estado compacto e “Acessar áreas”; “Ler publicação” só existe com notícia. `public/js/dashboard.js`, `public/dashboard.html` |
 | Conteúdo por contrato PJ/CLT | Não implementada no Dashboard | Os atalhos atuais não variam por contrato. Não há fluxo de nota fiscal PJ no Dashboard; Sólides permanece desligada na V1. `public/js/dashboard.js` |
 | Próximos lembretes | Operacional | Endpoint autenticado calcula no servidor as ocorrências dos próximos sete dias com regra de fim do mês e audiência individual; o dashboard não depende de uma primeira página arbitrária. `public/js/dashboard.js`, `api/routes/reminders.js` |
 | Links rápidos | Operacional | Atalhos para Base de Conhecimento, Lembretes e Academy, iguais para os contratos PJ/CLT; Sólides permanece fora desses atalhos. `public/js/dashboard.js` |
@@ -48,14 +48,22 @@ entrega externa de e-mail, conteúdo oficial ou uso em dispositivo físico.
 
 ## Owner News
 
-Atualização desta área: 22 de setembro de 2026.
+Atualização desta área: 30 de setembro de 2026.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
 | Publicação editorial contínua | Operacional | Substitui Anúncios na navegação e no CMS, mantendo `announcements.html` e `/api/announcements`. Destaque automático da mais recente, capas privadas, resumo, estimativa de leitura e cards responsivos. `public/js/announcements.js`, `public/css/owner-news.css` |
-| Editorias e leitura | Operacional | Categorias e filtro server-side sobre publicações validadas, contagem antes da paginação, detalhe por ID e navegação Back/Forward. `api/routes/announcements.js`, `api/cms/reader.js` |
-| Publicação administrativa | Operacional | Reutiliza `announcement`, permissão `manageKnowledge`, revisões e agendamento do Editor CMS. Autoria importada preservada no corpo. `public/js/cms.js` |
+| Editorias e leitura | Operacional | Catálogo de artigos com 24 itens, categorias/contagens server-side e abertura publicada. Leitor sobreposto com URL direta, anterior/próxima na mesma entrada, Voltar/Escape e Back/Forward. Conserva DOM, foco do card e rolagem do catálogo. `public/js/owner-news/navigation.js`, `public/js/announcements.js` |
+| Composição e mídia | Operacional | Prévia e reader compartilham resumo, autoria, origem/data civil, capa, blocos tipográficos e PDF complementar. Datas de publicação em São Paulo. Retry separado de detalhe, vizinhos, imagem e PDF; mídia privada cancelada/revogada na troca/saída. Títulos longos permitem crescimento do hero. `public/js/owner-news/reader-view.js`, `public/js/cms-block-renderer.js` |
+| Publicação administrativa | Operacional | Reutiliza `announcement`, permissão `manageKnowledge`, revisões e agendamento do Editor CMS; metadados da mesma revisão e Página inicial com publicação explícita. Legado continua acessível por ID, inclusive PDF sem minutos inventados. `public/js/cms.js` |
 | Migração da referência | Operacional local | Importadas 19 matérias publicadas e 24 mídias privadas no ambiente local autorizado; 24/24 assets retornaram HTTP 200 autenticado. Importador com dry-run, identidade determinística e reconciliação sem sobrescrita. Não aplicado em produção. `scripts/import-owner-news.mjs`, `docs/operations/owner-news-import.md` |
+
+Validação E7: histórico assíncrono com router/ui reais; browser autenticado na
+stack isolada com CSP normal, publicações e assets sintéticos removidos ao final.
+Confirmados retry de mídia sem perder texto, retorno ao mesmo card/posição,
+Dashboard → reader e layout sem overflow horizontal até 320×320. A amostra não
+constitui auditoria completa por tecnologia assistiva. O erro HTTP preexistente
+identificado no browser é `/favicon.ico` (404). Enquete ainda não implementada.
 
 ## AutoCard
 

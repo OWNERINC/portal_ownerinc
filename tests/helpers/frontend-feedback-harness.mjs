@@ -71,7 +71,7 @@ class FixtureNode extends Node {
     event.target ||= this; event.currentTarget = this;
     this[`on${event.type}`]?.(event);
     const result = super.dispatchEvent(event);
-    if (event.bubbles && !event.stopped) this.parentNode?.dispatchEvent(event);
+    if (event.bubbles && !event.stopped && !event.propagationStopped) this.parentNode?.dispatchEvent(event);
     return result;
   }
   click() {
@@ -107,9 +107,11 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
     get state() { return entries[cursor].state; }, get length() { return entries.length; },
     pushState(state, _, next) { currentURL = new URL(next, currentURL); entries.splice(++cursor); entries.push({ url: currentURL.href, state }); },
     replaceState(state, _, next) { currentURL = new URL(next, currentURL); entries[cursor] = { url: currentURL.href, state }; },
-    back() { if (cursor > 0) { --cursor; popstate(entries[cursor].url, entries[cursor].state); } },
+    go(delta) { setImmediate(() => { const next = cursor + delta; if (next >= 0 && next < entries.length) { cursor = next; popstate(entries[cursor].url, entries[cursor].state); } }); },
+    back() { this.go(-1); },
+    forward() { this.go(1); },
   };
-  Object.assign(window, { history, location, matchMedia: () => ({ matches: false }), innerHeight: 900, scrollY: 0, confirm: () => true });
+  Object.assign(window, { history, location, matchMedia: () => ({ matches: false }), innerHeight: 900, scrollY: 0, scrollTo(x, y) { this.scrollY = y; }, confirm: () => true });
   const requests = [], revoked = [], frames = new Map(), timers = new Map(), observers = [], captures = [];
   let resourceId = 0;
   const transport = kind => (path, options = {}) => { const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise; };
@@ -137,6 +139,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
     await load('public/js/owner-news/model.js', 'getNewsPresentation, normalizeEditorial, estimateNewsReadTime');
     await load('public/js/owner-news/catalog.js', 'renderNewsCard, composeNewsFeed, renderNewsCategories, renderNewsOpening');
     await load('public/js/owner-news/reader-view.js', 'renderNewsArticle');
+    await load('public/js/owner-news/navigation.js', 'createNewsNavigation');
   }
   if (name === 'dashboard') await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   if (name === 'autocard') {

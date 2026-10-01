@@ -235,19 +235,47 @@ function assetEndpoint(assetId) {
   return `/api/cms/assets/${encodeURIComponent(assetId)}`;
 }
 
-function loadPrivateAsset(node, assetId, label, state) {
+function retryableAsset(node, assetId, label, state, { status, apply, reset }) {
   const token = state.token;
-  fetchAPIAsset(assetEndpoint(assetId), { signal: state.controller.signal }).then(url => {
-    if (token !== state.token || !node.isConnected) {
-      if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
-      return;
+  const signal = state.controller.signal;
+  let pending = false, currentURL = null, externalStatus = false;
+  const current = () => token === state.token && !signal.aborted && node.isConnected;
+  function release() {
+    reset();
+    if (currentURL) { state.urls.delete(currentURL); URL.revokeObjectURL(currentURL); currentURL = null; }
+  }
+  function fail() {
+    if (!current()) return;
+    release();
+    status.hidden = false;
+    status.replaceChildren(element('span', { text: `Não foi possível carregar ${label}.` }),
+      element('button', { className: 'btn btn-ghost', type: 'button', text: 'Tentar novamente', on: { click: event => { event.preventDefault(); event.stopPropagation(); if (current()) load(); } } }));
+    if (!status.isConnected) {
+      const anchor = node.closest('a');
+      externalStatus = Boolean(anchor);
+      (anchor || node).after(status);
     }
-    state.urls.add(url);
-    node.src = url;
-    node.dataset.loaded = 'true';
-  }).catch(() => {
-    if (token !== state.token || !node.isConnected) return;
-    node.replaceWith(element('span', { className: 'cms-asset-error', role: 'status', text: `Não foi possível carregar ${label}.` }));
+  }
+  function load() {
+    if (pending || token !== state.token || signal.aborted) return;
+    pending = true;
+    status.textContent = 'Carregando mídia…';
+    fetchAPIAsset(assetEndpoint(assetId), { signal }).then(url => {
+      if (!current()) { URL.revokeObjectURL(url); return; }
+      currentURL = url; state.urls.add(url);
+      apply(url); status.hidden = true;
+    }).catch(fail).finally(() => { pending = false; });
+  }
+  node.addEventListener('error', fail, { signal });
+  signal.addEventListener('abort', () => { if (externalStatus) status.remove(); }, { once: true });
+  load();
+}
+
+function loadPrivateAsset(node, assetId, label, state) {
+  retryableAsset(node, assetId, label, state, {
+    status: element('div', { className: 'cms-asset-error', role: 'status' }),
+    apply: url => { node.hidden = false; node.src = url; node.dataset.loaded = 'true'; },
+    reset: () => { node.hidden = true; node.removeAttribute('src'); delete node.dataset.loaded; },
   });
 }
 
@@ -272,21 +300,10 @@ function renderPdf(container, block, state) {
   });
   const wrapper = element('section', { className: 'cms-pdf-block', 'aria-label': block.title }, [frame, status, link, note]);
   container.append(wrapper);
-  const token = state.token;
-  fetchAPIAsset(assetEndpoint(block.asset_id), { signal: state.controller.signal }).then(url => {
-    if (token !== state.token || !wrapper.isConnected) {
-      if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
-      return;
-    }
-    state.urls.add(url);
-    frame.src = url;
-    frame.hidden = false;
-    link.href = url;
-    link.hidden = false;
-    status.hidden = true;
-  }).catch(() => {
-    if (token !== state.token || !wrapper.isConnected) return;
-    status.textContent = 'Não foi possível carregar o PDF.';
+  retryableAsset(frame, block.asset_id, 'o PDF', state, {
+    status,
+    apply: url => { frame.src = url; frame.hidden = false; link.href = url; link.hidden = false; },
+    reset: () => { frame.hidden = true; frame.removeAttribute('src'); link.hidden = true; link.removeAttribute('href'); },
   });
 }
 

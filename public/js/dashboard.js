@@ -132,7 +132,8 @@ function loadNewsImage(image, announcement) {
   const requestToken = announcementsRequest;
   image.src = './assets/logo-branco.svg';
   image.alt = 'Owner News';
-  const cover = announcement?.content_blocks?.find(block => block.type === 'image');
+  const cover = announcement?.content_blocks?.find(block => block.type === 'image' && block.usage === 'cover')
+    || announcement?.content_blocks?.find(block => block.type === 'image');
   if (!cover) return;
   fetchAPIAsset(`/api/cms/assets/${encodeURIComponent(cover.asset_id)}`).then(url => {
     if (requestToken !== announcementsRequest || !image.isConnected) {
@@ -158,7 +159,7 @@ async function loadAnnouncements() {
   renderHero(null, 'loading');
   setBusy(announcementsPreview, true);
   try {
-    const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
+    const announcements = (await fetchAPI('/api/announcements?kind=article&limit=3&offset=0')).slice(0, 3);
     if (requestToken !== announcementsRequest) return;
     releaseNewsImages();
     renderHero(announcements[0]);

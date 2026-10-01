@@ -11,6 +11,7 @@ export const drain = async () => { for (let i = 0; i < 4; i++) await new Promise
 export class TestEvent {
   constructor(type, values = {}) { Object.assign(this, { type, button: 0, defaultPrevented: false }, values); }
   preventDefault() { this.defaultPrevented = true; }
+  stopPropagation() { this.propagationStopped = true; }
   stopImmediatePropagation() { this.stopped = true; }
 }
 
@@ -145,6 +146,9 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
   const entries = [{ url: location.href, state: null }]; let cursor = 0;
   const history = {
     get state() { return entries[cursor].state; },
+    get length() { return entries.length; },
+    back() { this.go(-1); },
+    forward() { this.go(1); },
     pushState(state, _, url) { entries.splice(++cursor); entries.push({ url: new URL(url, location.href).href, state }); location.href = entries[cursor].url; },
     replaceState(state, _, url) { entries[cursor] = { url: new URL(url, location.href).href, state }; location.href = entries[cursor].url; },
     go(delta) {

@@ -4,6 +4,45 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helpers/router-harness.mjs';
 
+test('Owner News reconciles the real router forced close before async Back/Forward and double close', async () => {
+  const h = await createRouterHarness({ realUI: true });
+  await h.router.navigate('/announcements.html?category=Cultura&offset=24');
+  const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+  vm.runInContext(`${source}\nglobalThis.createNewsNavigation = createNewsNavigation;`, h.context);
+  const overlay = new Node('div', h.doc, { id: 'news-reader-overlay', class: 'hidden', 'data-page-overlay': '' });
+  overlay.append(new Node('button', h.doc, { id: 'news-reader-close' })); h.doc.body.append(overlay);
+  const catalog = h.doc.getElementById('main-content');
+  const card = new Node('article', h.doc, { id: 'news-card-first' });
+  const link = new Node('a', h.doc, { href: '?id=first', id: 'original-link' }); card.append(link); catalog.append(card);
+  link.focus(); h.window.scrollY = 640;
+  h.scope.history.replaceState({ retained: 'yes' }, '', h.location.href);
+  const routes = [];
+  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async route => routes.push(route) });
+  await navigation.open('first'); await navigation.jump('second');
+  assert.equal(h.entries.length, 3);
+  assert.equal(h.history.state.retained, 'yes');
+  navigation.close(); navigation.close();
+  assert.match(h.location.search, /id=second/, 'native traversal is asynchronous');
+  await drain();
+  assert.equal(h.location.search, '?category=Cultura&offset=24');
+  assert.equal(h.doc.activeElement, link);
+  assert.equal(h.window.scrollY, 640);
+  assert.equal(h.doc.getElementById('main-content'), catalog);
+  assert.ok(overlay.classList.contains('hidden'));
+  h.history.forward(); await drain();
+  assert.equal(overlay.classList.contains('hidden'), false);
+  assert.equal(routes.at(-1).id, 'second');
+  assert.equal(h.doc.body.classList.contains('modal-open'), true);
+  // Same-ID traversal still forces close in the router; sync must reopen it.
+  h.scope.history.pushState({ ...h.history.state }, '', h.location.href + '&extra=1');
+  h.history.back(); await drain();
+  assert.equal(overlay.classList.contains('hidden'), false);
+  assert.equal(h.doc.activeElement.id, 'news-reader-close');
+  await h.router.navigate('/dashboard.html');
+  assert.equal(overlay.isConnected, false);
+  assert.equal(h.doc.body.classList.contains('modal-open'), false);
+});
+
 test('all shell destinations mount repeatedly with one document, sidebar, topbar, main and cached modules', async () => {
   const h = await createRouterHarness();
   const nodes = ['.sidebar', '.topbar', '.main-content', '#main-content'].map(selector => h.doc.querySelector(selector));

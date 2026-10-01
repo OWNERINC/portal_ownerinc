@@ -1,15 +1,15 @@
 import { fetchAPI, fetchAPIPage } from './auth.js';
-import { clear, element, setBusy, showState } from './ui.js';
+import { clear, setBusy, showState } from './ui.js';
 import { readOffset, renderPagination, setPaginationBusy } from './pagination.js';
-import { blocksToText, renderBlocks, cleanupRenderedBlocks } from './cms-block-renderer.js';
+import { cleanupRenderedBlocks } from './cms-block-renderer.js';
 import { renderNewsCard, renderNewsCategories, renderNewsOpening } from './owner-news/catalog.js';
 import { getNewsPresentation } from './owner-news/model.js';
+import { renderNewsArticle } from './owner-news/reader-view.js';
+import { createNewsNavigation } from './owner-news/navigation.js';
 
 const requests = { fetchAPI, fetchAPIPage };
-const renderContent = renderBlocks;
 export function mount(page) {
 const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
-const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
 const history = page.history;
 const location = page.location;
 page.cleanup(() => { ++announcementsRequest; ++highlightRequest; ++homeRequest; ++categoriesRequest; clearContent(list); });
@@ -20,7 +20,6 @@ const PAGE_SIZE = 24;
 let announcementsRequest = 0;
 const highlight = document.getElementById('news-highlight');
 const categories = document.getElementById('news-categories');
-const index = document.getElementById('news-index');
 let highlightRequest = 0;
 let categoriesRequest = 0;
 let homeRequest = 0;
@@ -34,13 +33,82 @@ const feedStatus = document.getElementById('news-feed-status');
 const categoriesStatus = document.getElementById('news-categories-status');
 const fallbackHome = { version: 1, eyebrow: 'OWNER NEWS · DESTAQUE', headline: 'Histórias que\nnos conectam', summary: 'Pessoas, ideias e cultura da Ownerinc.' };
 
-function articleMeta(announcement) {
-  const text = blocksToText(announcement.content_blocks).trim();
-  const minutes = Math.max(1, Math.ceil(text.split(/\s+/).filter(Boolean).length / 200));
-  const date = new Date(announcement.published_at);
-  return [announcement.category || 'Ownerinc', Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo', day: 'numeric', month: 'short', year: 'numeric',
-  }).format(date), `${minutes} min de leitura`].filter(Boolean).join(' · ');
+const overlay = document.getElementById('news-reader-overlay');
+const reader = document.getElementById('news-reader-content');
+const dialog = document.getElementById('news-reader-dialog');
+const neighborStatus = document.getElementById('news-reader-navigation-status');
+const previous = document.getElementById('news-reader-previous');
+const next = document.getElementById('news-reader-next');
+let readerId = null, readerCategory = '', readerRequest = 0, neighborRequest = 0;
+let readerController, disposeArticle;
+let neighbors = {};
+let catalogKey = null, catalogLoading;
+const navigation = createNewsNavigation({ page, overlay, onRoute: async ({ id }) => {
+  const key = catalogRouteKey();
+  if (key !== catalogKey) { catalogLoading = loadAnnouncements(); updateCategories(); }
+  await Promise.allSettled([catalogLoading, loadReader(id)]);
+} });
+page.listen(document.getElementById('news-reader-close'), 'click', navigation.close);
+for (const [button, direction] of [[previous, 'previous'], [next, 'next']]) {
+  page.listen(button, 'click', () => { if (neighbors[direction]?.id) void navigation.jump(neighbors[direction].id); });
+}
+page.cleanup(() => { ++readerRequest; ++neighborRequest; readerController?.abort(); disposeArticle?.(); });
+
+function catalogRouteKey() {
+  const query = new URLSearchParams(location.search);
+  return JSON.stringify([query.get('category') || '', readOffset(query, PAGE_SIZE)]);
+}
+
+function readerLabel(ready = false) {
+  if (ready) { dialog.removeAttribute('aria-label'); dialog.setAttribute('aria-labelledby', 'news-reader-title'); }
+  else { dialog.removeAttribute('aria-labelledby'); dialog.setAttribute('aria-label', 'Leitura da Owner News'); }
+}
+
+async function loadNeighbors(id, category, token, signal) {
+  const request = ++neighborRequest;
+  clear(neighborStatus);
+  previous.disabled = true; next.disabled = true; neighbors = {};
+  const query = new URLSearchParams();
+  if (category) query.set('category', category);
+  const current = () => page.active && token === readerRequest && request === neighborRequest && !signal.aborted;
+  try {
+    const value = await fetchAPI(`/api/announcements/${encodeURIComponent(id)}/navigation${query.size ? `?${query}` : ''}`, { signal });
+    if (!current()) return;
+    neighbors = value;
+    previous.disabled = !value.previous?.id; next.disabled = !value.next?.id;
+  } catch {
+    if (current()) showState(neighborStatus, 'Não foi possível carregar anterior e próxima.', () => {
+      if (current()) void loadNeighbors(id, category, token, signal);
+    });
+  }
+}
+
+async function loadReader(id, retry = false) {
+  const category = new URLSearchParams(location.search).get('category') || '';
+  if (id === readerId && category === readerCategory && !retry) return;
+  readerId = id; readerCategory = category;
+  const token = ++readerRequest;
+  readerController?.abort(); disposeArticle?.(); disposeArticle = null;
+  clear(reader); clear(neighborStatus); readerLabel();
+  previous.disabled = true; next.disabled = true; neighbors = {};
+  if (!id) return;
+  readerController = new AbortController();
+  const { signal } = readerController;
+  const current = () => page.active && token === readerRequest && !signal.aborted;
+  showState(reader, 'Carregando matéria…');
+  const detail = (async () => {
+    try {
+      const article = await fetchAPI(`/api/announcements/${encodeURIComponent(id)}`, { signal });
+      if (!current()) return;
+      disposeArticle = renderNewsArticle(reader, article, { signal: page.signal });
+      readerLabel(true);
+    } catch (error) {
+      if (!current()) return;
+      showState(reader, error.status === 404 ? 'Esta matéria não está mais disponível.' : 'Não foi possível carregar a matéria.',
+        error.status === 404 ? undefined : () => { if (current()) void loadReader(id, true); });
+    }
+  })();
+  await Promise.allSettled([detail, loadNeighbors(id, category, token, signal)]);
 }
 
 function clearContent(container) {
@@ -61,7 +129,7 @@ async function loadHome() {
   try {
     const home = await fetchAPI('/api/announcements/home');
     if (token !== homeRequest) return;
-    publishedHome = home;
+    publishedHome = home?.content ?? null;
     updateOpening();
   } catch {
     if (token === homeRequest) {
@@ -146,6 +214,7 @@ function restorePaginationFocus(descriptor, state) {
 }
 
 async function loadAnnouncements() {
+  catalogKey = catalogRouteKey();
   const focusAtStart = document.activeElement;
   const requestedFocus = focusDescriptor(focusAtStart);
   const requestToken = ++announcementsRequest;
@@ -155,34 +224,11 @@ async function loadAnnouncements() {
   setPaginationBusy(pagination, true);
   try {
     const query = new URLSearchParams(location.search);
-    const announcementId = query.get('id');
-    if (index) index.hidden = Boolean(announcementId);
-    if (announcementId) {
-      const announcement = await fetchAPI(`/api/announcements/${encodeURIComponent(announcementId)}`);
-      if (requestToken !== announcementsRequest) return;
-      clearContent(list);
-      list.classList.remove('news-mosaic');
-      pagination?.replaceChildren();
-      query.delete('id');
-      const article = element('article', { className: 'news-detail' }, [
-        element('a', { className: 'news-back', href: `./announcements.html${query.toString() ? `?${query}` : ''}`, text: '← Voltar às publicações' }),
-        element('h2', { text: announcement.title }),
-        element('p', { className: 'news-meta', text: articleMeta(announcement) }),
-      ]);
-      const content = element('div', { className: 'cms-public-content' });
-      renderBlocks(content, announcement.content_blocks, { fallbackText: 'Esta publicação não possui conteúdo disponível.' });
-      article.append(content);
-      list.append(article);
-      article.tabIndex = -1;
-      const currentFocus = document.activeElement;
-      if (currentFocus === focusAtStart || currentFocus === document.body || !currentFocus?.isConnected) article.focus();
-      return;
-    }
     const offset = readOffset(query, PAGE_SIZE);
     if (query.get('offset') !== (offset ? String(offset) : '')) {
       const url = new URL(location.href);
       offset ? url.searchParams.set('offset', String(offset)) : url.searchParams.delete('offset');
-      history.replaceState({}, '', url);
+      history.replaceState({ ...window.history.state }, '', url);
     }
     const category = query.get('category');
     const params = new URLSearchParams({ kind: 'article', limit: '24', offset: String(offset) });
@@ -193,7 +239,7 @@ async function loadAnnouncements() {
     if (!announcements.length && offset > 0) {
       const url = new URL(location.href);
       url.searchParams.delete('offset');
-      history.replaceState({}, '', url);
+      history.replaceState({ ...window.history.state }, '', url);
       return loadAnnouncements();
     }
     clearContent(list);
@@ -208,21 +254,15 @@ async function loadAnnouncements() {
       if (requestToken !== announcementsRequest) return;
       const url = new URL(location.href);
       nextOffset ? url.searchParams.set('offset', String(nextOffset)) : url.searchParams.delete('offset');
-      history.pushState({}, '', url);
-      loadAnnouncements();
+      history.pushState({ ...window.history.state }, '', url);
+      void navigation.sync();
     });
     restorePaginationFocus(requestedFocus, state);
-    if (focusAtStart?.closest?.('.news-detail') && (document.activeElement === document.body || !document.activeElement?.isConnected)) focusFallback(state);
   } catch {
     if (requestToken === announcementsRequest) {
       pagination?.replaceChildren();
-      const target = list.querySelector('.news-card, .news-detail') && feedStatus ? feedStatus : list;
+      const target = list.querySelector('.news-card') && feedStatus ? feedStatus : list;
       const state = showState(target, 'Não foi possível carregar a publicação. Verifique sua conexão ou volte às editorias.', () => { if (page.active && requestToken === announcementsRequest) loadAnnouncements(); });
-      const query = new URLSearchParams(location.search);
-      if (query.has('id')) {
-        query.delete('id');
-        state.append(element('a', { className: 'news-back', href: `./announcements.html${query.toString() ? `?${query}` : ''}`, text: '← Voltar às publicações' }));
-      }
       const current = document.activeElement;
       if (!current?.isConnected || current === document.body) state?.querySelector('button')?.focus();
     }
@@ -234,7 +274,6 @@ async function loadAnnouncements() {
   }
 }
 
-page.listen(window, 'popstate', () => { loadAnnouncements(); updateCategories(); });
 page.listen(document.getElementById('main-content'), 'click', event => {
   const link = event.target.closest('a');
   if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -243,14 +282,11 @@ page.listen(document.getElementById('main-content'), 'click', event => {
   if (url.origin !== location.origin || url.pathname !== location.pathname || url.hash) return;
   event.preventDefault();
   if (url.searchParams.has('id')) {
-    const current = new URLSearchParams(location.search);
-    for (const key of ['category', 'offset']) {
-      if (current.has(key)) url.searchParams.set(key, current.get(key));
-    }
+    void navigation.open(url.searchParams.get('id'));
+    return;
   }
-  history.pushState({}, '', url);
-  loadAnnouncements();
-  updateCategories();
+  history.pushState({ ...window.history.state }, '', url);
+  void navigation.sync();
 });
 page.listen(window, 'pagehide', () => {
   ++announcementsRequest;
@@ -263,7 +299,7 @@ page.listen(window, 'pageshow', event => {
   if (event.persisted) { loadAnnouncements(); loadHome(); loadHighlight(); loadCategories(); }
 });
 updateOpening();
-loadAnnouncements();
+void navigation.sync();
 loadHome();
 loadHighlight();
 loadCategories();

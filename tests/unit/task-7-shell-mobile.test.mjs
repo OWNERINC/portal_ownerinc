@@ -899,7 +899,7 @@ test('Announcements restores pagination focus to the list or empty state when co
     const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
     h.requests.find(r => r.kind === 'list').resolve({ data: [{ id: 'one', title: 'Primeiro', content_blocks: [] }], total: 48 }); await drain();
     h.node('announcements-pagination').querySelectorAll('button').find(button => !button.disabled).focus();
-    h.popstate('/announcements.html', null);
+    h.popstate('/announcements.html?category=Outra', null);
     h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: empty ? [] : [{ id: 'last', title: 'Último', content_blocks: [] }], total: empty ? 0 : 1 }); await drain();
     assert.match(h.doc.activeElement.textContent, empty ? /Nenhuma publicação nesta editoria/ : /Último/);
     if (!empty) assert.equal(h.doc.activeElement.tagName, 'A');

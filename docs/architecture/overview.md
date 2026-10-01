@@ -129,8 +129,8 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   créditos, metadados e títulos de PDF. `blocksToText` também projeta quote/profile.
   `getNewsPresentation` separa somente capa e PDF explicitamente marcados; imagem
   legada continua no corpo. Autoria vem dos metadados, com fallback `Owner News`.
-  A composição editorial está disponível em `reader-view.js` (E5); a integração
-  dos controles CMS e da navegação do leitor ocorre nas etapas seguintes.
+  A composição editorial está disponível em `reader-view.js` (E5), compartilhada
+  pela prévia CMS (E4) e pelo leitor sobreposto (E7).
 
 ### Renderização editorial (E5)
 
@@ -152,9 +152,13 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
 - Cada composição rastreia containers e usa AbortController próprio. Cleanup e
   abort da página cancelam fetches/listeners, revogam blobs e limpam o root; uma
   resposta tardia também é revogada. PDF complementar é carregado apenas no
-  primeiro toggle aberto e não pode ser iniciado após o descarte.
+  primeiro toggle aberto e não pode ser iniciado após o descarte. Falhas de mídia
+  oferecem retry local (inclusive no PDF complementar), preservando os demais
+  blocos; URLs com erro e respostas tardias são revogadas. Cleanup invalida também
+  os controles de retry e listeners de erro de imagem/iframe.
 - `owner-news.css` contém os tokens locais, hero com/sem capa, introdução 3:1,
-  grid de 12 colunas e presets content/wide/full/left/right; abaixo de 760px,
+  grid de 12 colunas e presets content/wide/full/left/right; o hero reserva
+  `min(76svh, 860px)` e cresce para acomodar títulos longos; abaixo de 760px,
   corpo e introdução usam uma coluna. Georgia compõe texto serif; Manrope compõe
   sans; DM Mono compõe metadados (mínimo 11px). Controles têm mínimo 44px.
   As fontes oficiais sem alterações e licenças OFL estão em `public/assets/fonts/`:
@@ -168,7 +172,7 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
 
 ### Catálogo editorial do leitor (E6)
 
-- `announcements.js` mantém a montagem/lifecycle e o detalhe atual. A lista usa
+- `announcements.js` mantém a montagem/lifecycle e o catálogo sob o leitor. A lista usa
   `fetchAPIPage` com `kind=article`, 24 itens e total de `X-Total-Count`; categoria
   limpa offset, paginação e Back preservam filtro, e página fora do intervalo
   recupera offset zero. Respostas de consultas antigas não substituem a atual.
@@ -184,10 +188,49 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
   ao renderer privado; cleanup por card libera blobs atuais e tardios.
 - `composeNewsFeed` é o ponto de composição puro para futura enquete: insere
   depois do terceiro artigo somente na primeira página sem categoria, sem
-  alterar dados, total ou offset. E6 não monta enquete nem overlay de leitura.
+  alterar dados, total ou offset. A enquete ainda não é montada.
 - Dashboard prioriza `editorial.summary` sobre trecho legado. O feedback harness
   monta os módulos reais de Owner News com location e histórico em memória;
   testes cobrem concorrência, fallback, retry, foco, links e descarte de mídia.
+
+### Leitor sobreposto e histórico (E7)
+
+- `owner-news/navigation.js` expõe `createNewsNavigation({page, overlay, onRoute})`
+  com open/jump/close/sync/dispose. O overlay pertence ao body, é marcado com
+  `data-page-overlay` e usa diálogo real de `ui.js`: shell inert, teclado,
+  Escape, guarda de fechamento e restauração de foco. Loading/erro usam
+  `aria-label`; a composição pronta fornece h1 `news-reader-title`/aria-labelledby.
+- Abrir card cria uma entrada com `?id` via page.history; anterior/próxima
+  substituem essa entrada. O estado `ownerNews` guarda returnHref interno,
+  cardId e catalogY sem apagar outros campos nem o índice do router. Fechar
+  usa um único Back, protegido contra clique/Escape duplicado. Link direto ou
+  estado de retorno inválido remove id por replaceState. Categoria e offset
+  permanecem na URL; modificadores de clique mantêm o link nativo.
+- No popstate, o router fecha os diálogos antes dos listeners locais. sync
+  reconcilia URL **e visibilidade DOM**, mesmo quando o ID não muda, reabrindo
+  no Forward sem inserir histórico. Nenhuma alteração em router/ui foi necessária.
+  Catálogo/capas não são remontados para troca de matéria; retorno restaura o
+  link do card e sua posição, ou o título do mosaico se o card não existir.
+  A restauração aguarda os loaders e cede a novas interações do usuário.
+- Detalhe e `/announcements/:id/navigation?category=...` carregam em paralelo,
+  com processamento independente e Promise.allSettled. A rota de vizinhos já
+  seleciona artigos e **não aceita kind**. Falha de vizinhos conserva o corpo e
+  tem retry próprio; 404 do detalhe tem mensagem específica e Voltar disponível.
+  AbortController e contadores ignoram respostas obsoletas; cleanup da composição
+  anterior é executado antes de reutilizar o root. O lifecycle acompanha as
+  requisições e descarta listeners, mídia e conteúdo na saída/perda de sessão.
+- Dashboard consulta `kind=article`, prioriza capa explícita e editorial.summary,
+  e abre o reader por URL direta. Home pública é lida do envelope `{ content }`;
+  content null conserva o fallback. Metadados, datas civis, publicação em São
+  Paulo e ausência de estimativa em edição continuam no renderer compartilhado.
+- Evidência local E7: router/lifecycle/ui reais em testes com histórico assíncrono;
+  Edge autenticado sem bypass CSP em localhost:8081/emulator9199; duas matérias
+  sintéticas publicadas via API CMS e removidas após verificar composição,
+  vizinhos e Back/Forward. Retry com falhas 503 sintéticas e assets privados reais;
+  títulos longos em 1440×900, 390×400 e 320×320 sem overflow horizontal.
+  O 404 preexistente foi identificado como `/favicon.ico`; não é declarado
+  navegador inteiramente livre de erros. Enquete e acervo real não fazem parte
+  desta validação; acessibilidade completa de PDFs depende do arquivo original.
 
 ### Edição editorial no CMS (E4)
 
