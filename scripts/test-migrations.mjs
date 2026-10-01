@@ -288,6 +288,12 @@ try {
 
   const versions = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
   assert.deepEqual(versions.rows.map(({ version }) => version), expectedVersions);
+  const ownerNewsRelations = await pool.query(`SELECT
+    to_regclass('public.owner_news_home') AS home,
+    to_regclass('public.owner_news_polls') AS polls,
+    to_regclass('public.owner_news_poll_options') AS options,
+    to_regclass('public.owner_news_poll_votes') AS votes`);
+  assert.deepEqual(ownerNewsRelations.rows, [{ home: 'owner_news_home', polls: 'owner_news_polls', options: 'owner_news_poll_options', votes: 'owner_news_poll_votes' }]);
   const home = await pool.query('SELECT singleton, version, draft, published FROM owner_news_home');
   assert.deepEqual(home.rows, [{ singleton: true, version: 1, draft: null, published: null }]);
   const ownerNewsShape = await pool.query(`SELECT
@@ -307,13 +313,35 @@ try {
       WHERE conrelid = 'public.owner_news_poll_options'::regclass
         AND conname = 'owner_news_poll_options_position_check') AS option_position,
     EXISTS (SELECT 1 FROM pg_constraint
-      WHERE conrelid = 'public.owner_news_poll_votes'::regclass
-        AND conname = 'owner_news_poll_votes_pkey') AS vote_identity,
-    EXISTS (SELECT 1 FROM pg_class WHERE relname = 'owner_news_one_open_poll'
-      AND relkind = 'i') AS one_open_poll_index`);
+       WHERE conrelid = 'public.owner_news_poll_votes'::regclass
+         AND conname = 'owner_news_poll_votes_pkey') AS vote_identity,
+     EXISTS (SELECT 1 FROM pg_constraint
+       WHERE conrelid = 'public.owner_news_poll_votes'::regclass
+         AND contype = 'f' AND confrelid = 'public.owner_news_poll_options'::regclass
+         AND pg_get_constraintdef(oid) LIKE '%FOREIGN KEY (poll_id, option_id)%poll_id, id%') AS vote_composite_fk,
+     EXISTS (SELECT 1 FROM pg_class WHERE relname = 'owner_news_one_open_poll'
+       AND relkind = 'i') AS one_open_poll_index,
+     EXISTS (SELECT 1 FROM pg_class index_rel
+       WHERE index_rel.oid = 'public.owner_news_polls_publication_idx'::regclass
+         AND index_rel.relkind = 'i'
+         AND pg_get_indexdef(index_rel.oid) LIKE '%status%published_at%id%') AS publication_index,
+     (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
+       FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'owner_news_home')
+         = ARRAY['singleton', 'version', 'draft', 'published', 'updated_by', 'updated_at', 'published_at']::text[] AS home_columns,
+     EXISTS (SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'owner_news_home'
+         AND column_name = 'singleton' AND column_default LIKE '%true%') AS home_singleton_default,
+     EXISTS (SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'owner_news_home'
+         AND column_name = 'version' AND column_default LIKE '%1%') AS home_version_default,
+     (SELECT COUNT(*) = 1 AND bool_and(singleton AND version > 0)
+       FROM owner_news_home) AS home_singleton_row`);
   assert.deepEqual(ownerNewsShape.rows, [{ editorial_column: true, editorial_object: true,
     home_singleton: true, poll_status: true, option_position: true,
-    vote_identity: true, one_open_poll_index: true }]);
+    vote_identity: true, vote_composite_fk: true, one_open_poll_index: true,
+    publication_index: true, home_columns: true, home_singleton_default: true,
+    home_version_default: true, home_singleton_row: true }]);
   const homePrivileges = await pool.query(`SELECT
     (has_table_privilege('portal_api', 'owner_news_home', 'SELECT')
       AND has_table_privilege('portal_api', 'owner_news_home', 'INSERT')

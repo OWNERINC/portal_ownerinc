@@ -24,8 +24,9 @@ or main-branch merge was performed.
 - Owner News files were renamed to `034_owner_news_editorial.sql` and
   `035_owner_news_polls.sql`. `api/db/verify-migrations.js`,
   `scripts/test-migrations.mjs`, schema invariants, and normative docs now use
-  the exact order. There are no duplicate numeric migration prefixes or stale
-  source-prefix Owner News ledger references.
+  the exact order. There are no duplicate numeric migration prefixes; the two
+  old source prefixes occur only in the migration runner's explicit
+  compatibility stop, not in the active release ledger.
 
 ## Composed implementation
 
@@ -63,10 +64,17 @@ Passed:
 - No merge conflict markers remain in tracked source files.
 - `npm ci --prefix api` and `npm ci --prefix cron` — completed; install audit
   output was not used as the release security result.
-- `npm run verify` — passed: 1,106 tests, 1,104 passed, 0 failed, 2 skipped;
+- `npm run verify` — passed: 1,107 tests, 1,105 passed, 0 failed, 2 skipped;
   syntax, security checks, and Compose static checks passed.
 - `npm run security` — passed: API and cron reported 0 vulnerabilities at the
   configured high threshold.
+- The release verifier now gates the ordered ledger, all Owner News relations,
+  the CMS editorial JSONB/check, home singleton columns/defaults/row, poll
+  constraints and indexes, API grants, and complete cron denial on Owner News
+  tables. The migration runner also stops on legacy Owner News ledger versions
+  instead of renaming or silently marking them applied.
+- CI now runs the Owner News and Academy PostgreSQL integration suites after
+  the disposable migration suite, with the same disposable database variables.
 - Targeted shared-CMS, migration-invariant, Academy, Owner News, and shell
   suites — passed (the final full verify includes them).
 - Academy frontend plus the legacy-area removal invariant test — passed,
@@ -99,13 +107,17 @@ Blocked by the local environment (not silently substituted):
   ledger, second-run equality, Academy relations/constraints/privileges, and
   Owner News home/polls grants; it still needs execution in a disposable
   PostgreSQL environment.
+- The actual production migration ledger has not been inspected. No production
+  readiness claim is made until that ledger is externally confirmed and the
+  disposable PostgreSQL suites, Docker image/startup checks, and remote CI pass.
 - API/cron image build and runtime startup/module-graph evidence remains
   outstanding until a Docker engine is available. Static verification did
   pass the cron CMS reader dependency invariant.
 - No production database state was inspected or changed. The migration order
   is based on the explicit release assumption and repository evidence above;
   if a production ledger later shows either Owner News migration was already
-  applied under 033/034, release integration must stop for a migration plan
+  applied under 033/034, release integration must stop for an explicit
+  migration plan
   rather than reusing these names.
 - No deploy workflow, production script, secret, or external service was
   altered. No production deployment or external DB validation is claimed.

@@ -18,6 +18,17 @@ async function migrate() {
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
 
+    const legacyOwnerNews = await client.query(
+      `SELECT version FROM schema_migrations
+       WHERE version = ANY($1::text[]) ORDER BY version`,
+      [['033_owner_news_editorial', '034_owner_news_polls']],
+    );
+    if (legacyOwnerNews.rowCount > 0) {
+      throw new Error(
+        `Migration compatibility error: schema_migrations contains legacy Owner News version(s) ${legacyOwnerNews.rows.map(({ version }) => version).join(', ')}. Stop and perform an explicit migration plan before applying release migrations.`,
+      );
+    }
+
     const directory = path.join(__dirname, 'migrations');
     const files = (await readdir(directory)).filter((name) => /^\d+_[a-z0-9_]+\.sql$/.test(name)).sort();
     const { rows } = await client.query('SELECT version FROM schema_migrations');

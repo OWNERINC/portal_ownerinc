@@ -65,6 +65,45 @@ test('Academy schema preserves legacy delivery and API-only learning storage', a
   assert.match(integration, /ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows/);
 });
 
+test('Owner News migration order, release gates, and compatibility guard stay aligned', async () => {
+  const [migration, provision, verification, migrationTest, runner] = await Promise.all([
+    readFile('api/db/migrations/034_owner_news_editorial.sql', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+    readFile('scripts/test-migrations.mjs', 'utf8'),
+    readFile('api/db/migrate.js', 'utf8'),
+  ]);
+  assert.match(verification, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
+  assert.match(migrationTest, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
+  for (const table of ['owner_news_home', 'owner_news_polls', 'owner_news_poll_options', 'owner_news_poll_votes']) {
+    assert.match(verification, new RegExp(`to_regclass\\('public\\.${table}'\\)`));
+    assert.match(migrationTest, new RegExp(table));
+  }
+  for (const check of [
+    'cms_revisions_editorial_object_check', 'owner_news_polls_status_check',
+    'owner_news_poll_votes_pkey', 'owner_news_one_open_poll',
+    'owner_news_polls_publication_idx',
+  ]) {
+    assert.match(verification, new RegExp(check));
+    assert.match(migrationTest, new RegExp(check));
+  }
+  assert.match(verification, /owner_news_poll_votes_composite_fk/);
+  assert.match(migrationTest, /vote_composite_fk/);
+  assert.match(migrationTest, /home_columns/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE ON owner_news_home TO portal_api/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON owner_news_polls, owner_news_poll_options, owner_news_poll_votes TO portal_api/);
+  for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+    assert.match(verification, new RegExp(`has_table_privilege\\('portal_api', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
+    assert.match(verification, new RegExp(`NOT has_table_privilege\\('portal_cron', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
+  }
+  assert.match(migration, /CREATE TABLE owner_news_home/);
+  assert.match(migration, /INSERT INTO owner_news_home\(singleton\) VALUES \(TRUE\)/);
+  assert.match(runner, /033_owner_news_editorial/);
+  assert.match(runner, /034_owner_news_polls/);
+  assert.match(runner, /Migration compatibility error/);
+  assert.match(runner, /explicit migration plan/);
+});
+
 test('DHO naming check follows migration filenames and scans generated HTML recursively', async () => {
   const result = spawnSync(process.execPath, ['scripts/check-dho-naming.mjs'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
