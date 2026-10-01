@@ -2,7 +2,8 @@
 
 `scripts/prepare-owner-news-bundle.mjs` valida e empacota um manifesto privado
 revisado. Não abre conexão com banco, não aplica drafts e não publica. A aplicação
-transacional é uma etapa posterior. O importador antigo e seus guards permanecem
+transacional usa o [importador A2](owner-news-import.md#pacote-revisado--a2), após
+aprovação e reconciliação explícitas. O importador antigo e seus guards permanecem
 independentes; este fluxo reutiliza suas identidades, sanitização e downloads.
 
 ## Execução

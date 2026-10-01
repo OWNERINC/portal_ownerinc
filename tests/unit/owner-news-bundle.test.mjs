@@ -12,6 +12,62 @@ import { canonicalText, bodyFingerprint, sourceIdentity, convertReferenceArticle
   captureReference, captureReferenceMedia, referenceMedia } from '../../scripts/lib/owner-news-bundle.mjs';
 import { main } from '../../scripts/prepare-owner-news-bundle.mjs';
 import * as preparationCli from '../../scripts/prepare-owner-news-bundle.mjs';
+import { planDocumentChange, canonicalJSON, targetSnapshot, BundleImportError } from '../../scripts/lib/owner-news-bundle-import.mjs';
+import { main as importMain, safeImportError } from '../../scripts/import-owner-news-bundle.mjs';
+
+test('A2 snapshot drift blocks even when the package draft still exists', () => {
+  const target = { document_id: identity('document', 'drift'), source_id: null,
+    published_revision_id: null, draft_revision_id: null, scheduled_revision_id: null,
+    scheduled_at: null, published_at: null, title: 'Matéria', category: 'Cultura' };
+  const item = { action: 'upsert', target, title: 'Matéria nova', category: 'Cultura' };
+  const revisionId = identity('revision', 'package');
+  const current = { ...target, content_type: 'announcement' };
+  assert.equal(planDocumentChange(item, current, revisionId), 'draft');
+  assert.throws(() => planDocumentChange(item, { ...current, draft_revision_id: identity('revision', 'other') }, revisionId), /changed/);
+  assert.equal(planDocumentChange(item, { ...current, draft_revision_id: revisionId }, revisionId), 'existing_draft');
+  assert.throws(() => planDocumentChange(item, { ...current, draft_revision_id: revisionId,
+    published_revision_id: identity('revision', 'concurrent') }, revisionId), /changed/);
+  assert.throws(() => planDocumentChange(item, { ...current, scheduled_revision_id: revisionId }, revisionId), /changed/);
+});
+
+test('A2 confirmed published package preserves subsequent draft and schedule', () => {
+  const revisionId = identity('revision', 'package');
+  const item = { action: 'upsert', target: null, title: 'Matéria', category: 'Cultura' };
+  assert.equal(planDocumentChange(item, { content_type: 'announcement', title: item.title,
+    category: item.category, published_revision_id: revisionId,
+    draft_revision_id: identity('revision', 'later'), scheduled_revision_id: identity('revision', 'scheduled') }, revisionId), 'existing_published');
+  assert.throws(() => planDocumentChange(item, { content_type: 'announcement' }, revisionId), /Unmapped/);
+});
+
+test('A2 existing schedule blocks writes even when explicitly in the reviewed snapshot', () => {
+  const current = { document_id: identity('document', 'scheduled'), source_id: null, content_type: 'announcement',
+    published_revision_id: null, draft_revision_id: null, scheduled_revision_id: identity('revision', 'scheduled'),
+    scheduled_at: '2026-10-01T12:00:00.000Z', published_at: null, title: 'A', category: '' };
+  const target = targetSnapshot(current);
+  assert.throws(() => planDocumentChange({ action: 'upsert', target }, current, identity('revision', 'new')), /scheduled/);
+  assert.equal(planDocumentChange({ action: 'withdraw', target }, current), 'withdraw');
+});
+
+test('A2 snapshot and checksum normalization is stable across JSONB property order', () => {
+  assert.equal(canonicalJSON({ title: 'A', category: '', blocks: [{ type: 'paragraph', text: 'A' }] }),
+    canonicalJSON({ blocks: [{ text: 'A', type: 'paragraph' }], category: '', title: 'A' }));
+  assert.notEqual(canonicalJSON({ title: 'A', blocks: [] }), canonicalJSON({ title: 'B', blocks: [] }));
+  const snapshot = targetSnapshot({ id: identity('document', 'snapshot'), title: 'A', category: '',
+    published_at: new Date('2026-09-30T12:00:00Z') });
+  assert.equal(snapshot.published_at, '2026-09-30T12:00:00.000Z');
+  assert.equal(snapshot.source_id, null); assert.equal(Object.keys(snapshot).length, 9);
+});
+
+test('A2 CLI rejects ambiguous flags and reports only controlled errors', async () => {
+  for (const args of [[], ['--bundle', 'relative.json'], ['--publish', '--apply-draft'], ['--wat'], ['--bundle']]) {
+    await assert.rejects(importMain(args, {}), /invalid_arguments/);
+  }
+  const secret = new Error('postgresql://private:secret@host/database Texto privado');
+  secret.code = 'private-secret';
+  assert.deepEqual(safeImportError(secret), { error: 'Importação bloqueada', reason: 'import_failed' });
+  assert.equal(safeImportError(new BundleImportError('commit_outcome_unknown')).reason, 'commit_outcome_unknown');
+  assert.equal(safeImportError(new BundleImportError('private-secret')).reason, 'import_failed');
+});
 
 const sha = b => createHash('sha256').update(b).digest('hex');
 const article = (id = 'synthetic') => ({ id, status: 'published', title: 'Título sintético', category: 'Teste',

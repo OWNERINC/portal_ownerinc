@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { cmsApp } from '../tests/helpers/cms-app.mjs';
 import { ownerNewsApp } from '../tests/helpers/owner-news-app.mjs';
+import { checkBundleImport } from '../tests/helpers/owner-news-bundle-integration.mjs';
 
 const require = createRequire(new URL('../api/package.json', import.meta.url));
 require('dotenv').config({ path: new URL('../.env', import.meta.url) });
@@ -309,6 +310,7 @@ async function revision(documentId, version, status, editorial, content = blocks
   return rows[0].id;
 }
 try {
+  await checkBundleImport(pool);
   await client.query('INSERT INTO users (uid, email, name) VALUES ($1, $2, $3)', [uid, `${uid}@example.com`, 'Fixture sintética E2']);
   await checkPollSchema();
   await checkPollServiceAndRoutes();

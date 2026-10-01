@@ -244,9 +244,9 @@ function validateTarget(item) {
   const target = item.target;
   const fields = ['document_id', 'source_id', 'published_revision_id', 'draft_revision_id', 'scheduled_revision_id', 'scheduled_at', 'published_at', 'title', 'category'];
   if (!target || Object.keys(target).length !== fields.length || fields.some(k => !(k in target))
-    || !UUID.test(target.document_id) || !UUID.test(target.source_id)
+    || !UUID.test(target.document_id) || (target.source_id !== null && !UUID.test(target.source_id))
     || ['published_revision_id', 'draft_revision_id', 'scheduled_revision_id'].some(k => target[k] !== null && !UUID.test(target[k]))
-    || ['scheduled_at', 'published_at'].some(k => target[k] !== null && (typeof target[k] !== 'string' || !Number.isFinite(Date.parse(target[k]))))
+     || ['scheduled_at', 'published_at'].some(k => target[k] !== null && (typeof target[k] !== 'string' || !Number.isFinite(Date.parse(target[k])) || new Date(target[k]).toISOString() !== target[k]))
     || !nonempty(target.title) || typeof target.category !== 'string') fail('Invalid target snapshot');
   if (item.action === 'withdraw' && (!target.published_revision_id || !item.sources.some(s => sourceIdentity(sourceKey(s, item.key)) === target.source_id))) fail('Withdraw requires identified imported target');
 }
