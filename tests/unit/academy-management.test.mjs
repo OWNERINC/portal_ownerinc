@@ -47,4 +47,7 @@ test('materials are single-flight per lesson and curriculum refreshes authoritat
   assert.match(curriculum, /course = null; panel\.querySelector/);
   assert.match(curriculum, /const loaded = await request\.fetchAPI\(`\/api\/academy/);
   assert.match(curriculum, /loadToken/);
+  assert.match(curriculum, /const result = await save\(`\/api\/academy\/lessons/);
+  assert.match(curriculum, /const result = await save\(`\/api\/academy\/modules/);
+  assert.match(curriculum, /if \(result && !disposed\) await reload\(\)/);
 });

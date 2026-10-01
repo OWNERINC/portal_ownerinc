@@ -22,7 +22,7 @@ export function createCurriculumEditor({ root, page, courseId, initialCourse = n
     const active = element('input', { type: 'checkbox', checked: lesson.active, 'aria-label': `Aula ativa ${lesson.title}` });
     const saveButton = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Salvar aula' });
     const material = element('a', { className: 'academy-button academy-button-small', href: '#', text: 'Materiais' });
-    saveButton.addEventListener('click', async () => { markDirty(); await save(`/api/academy/lessons/${encodeURIComponent(lesson.id)}`, 'PUT', { title: title.value.trim(), description: lesson.description || '', order: lesson.order, active: active.checked, media: { type: /youtube\.com|youtu\.be/i.test(media.value) ? 'youtube' : 'file', url: media.value.trim() } }); });
+    saveButton.addEventListener('click', async () => { markDirty(); const result = await save(`/api/academy/lessons/${encodeURIComponent(lesson.id)}`, 'PUT', { title: title.value.trim(), description: lesson.description || '', order: lesson.order, active: active.checked, media: { type: /youtube\.com|youtu\.be/i.test(media.value) ? 'youtube' : 'file', url: media.value.trim() } }); if (result && !disposed) await reload(); });
     let documentBusy = false;
     material.addEventListener('click', async event => { event.preventDefault(); if (disposed || documentBusy) return; documentBusy = true; material.setAttribute('aria-busy', 'true'); material.setAttribute('aria-disabled', 'true');
       try { const id = await ensureLessonDocument(lesson, request, { signal: controller.signal }); if (!disposed && id) window.location.href = `./cms.html?type=academy_lesson&document=${encodeURIComponent(id)}`; } catch (error) { if (!disposed && error?.name !== 'AbortError') feedback.textContent = 'Não foi possível abrir os materiais. Tente novamente.'; } finally { documentBusy = false; material.removeAttribute('aria-busy'); material.removeAttribute('aria-disabled'); }
@@ -50,7 +50,7 @@ export function createCurriculumEditor({ root, page, courseId, initialCourse = n
       const heading = element('input', { className: 'academy-manager-input', value: module.title, maxlength: '200', 'aria-label': `Título do módulo ${module.title}` });
       const active = element('input', { type: 'checkbox', checked: module.active, 'aria-label': `Módulo ativo ${module.title}` });
       const saveModule = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Salvar módulo' });
-      saveModule.addEventListener('click', () => { markDirty(); void save(`/api/academy/modules/${encodeURIComponent(module.id)}`, 'PUT', { title: heading.value.trim(), order: module.order, active: active.checked }); });
+      saveModule.addEventListener('click', async () => { markDirty(); const result = await save(`/api/academy/modules/${encodeURIComponent(module.id)}`, 'PUT', { title: heading.value.trim(), order: module.order, active: active.checked }); if (result && !disposed) await reload(); });
       const moveModule = async delta => {
         const ids = [...(course.modules || [])].sort((a, b) => a.order - b.order).map(item => item.id);
         const index = ids.indexOf(module.id), next = index + delta;
