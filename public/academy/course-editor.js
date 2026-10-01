@@ -31,7 +31,7 @@ export function createCourseEditor({ root, page, course = null, onSaved = () => 
   audience.append(element('option', { value: 'all', text: 'Todos' }), element('option', { value: 'job_titles', text: 'Cargos selecionados' }));
   add('Grupo visual', 'select', course?.learning_group || 'initial').append(element('option', { value: 'initial', text: 'Formação inicial' }), element('option', { value: 'role', text: 'Formação por cargo' }));
   add('Ícone', 'select', course?.icon_key || 'icon-01').append(...Array.from({ length: 6 }, (_, index) => element('option', { value: `icon-0${index + 1}`, text: `Ícone ${index + 1}` })));
-  add('Capa (asset ID, opcional)', 'text', course?.cover_asset_id, { maxlength: '36', placeholder: 'UUID do asset CMS' });
+  form.append(element('p', { className: 'academy-manager-help', text: 'A capa da apresentação é a primeira imagem publicada no CMS do curso.' }));
   add('Instrutor', 'text', course?.instructor_name, { maxlength: '120' });
   add('Ordem', 'number', course?.order ?? 0, { min: '-100000', max: '100000' });
   add('URL externa', 'url', course?.url, { maxlength: '2048' });
@@ -58,7 +58,7 @@ export function createCourseEditor({ root, page, course = null, onSaved = () => 
     try {
       let offset = 0, total = 1, all = [];
       while (offset < total) {
-        const result = await request.fetchAPIPage(`/api/job-titles?all=true&limit=100&offset=${offset}`);
+        const result = await request.fetchAPIPage(`/api/academy/job-titles?limit=100&offset=${offset}`);
         total = result.total ?? result.data.length; all = all.concat(result.data || []);
         if (!(result.data || []).length) break;
         offset += result.data.length;
@@ -90,7 +90,7 @@ export function createCourseEditor({ root, page, course = null, onSaved = () => 
       const saved = await request.fetchAPI(course ? `/api/academy/${encodeURIComponent(course.id)}` : '/api/academy', { method: course ? 'PUT' : 'POST', body: JSON.stringify(body) });
       dirty = false; onSaved(saved);
     } catch (error) {
-      feedback.textContent = error.status === 409 ? 'O curso foi alterado por outra sessão. Recarregue e tente novamente.' : `Não foi possível salvar o curso: ${error.message}`;
+      feedback.textContent = `Não foi possível salvar o curso: ${error.message || 'erro desconhecido'}`;
     } finally { saving = false; save.disabled = false; form.removeAttribute('aria-busy'); }
   });
   cancel.addEventListener('click', () => onSaved(null));

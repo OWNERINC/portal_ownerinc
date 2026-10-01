@@ -1,18 +1,18 @@
 import { fetchAPI, fetchAPIPage } from '../js/auth.js';
 import { element } from '../js/ui.js';
 
-export function createCurriculumEditor({ root, page, courseId, onSaved = () => {}, ensureLessonDocument = async () => null }) {
+export function createCurriculumEditor({ root, page, courseId, initialCourse = null, onSaved = () => {}, ensureLessonDocument = async () => null }) {
   const request = page.bindAPI({ fetchAPI, fetchAPIPage });
-  let dirty = false, saving = false, disposed = false, course = null;
+  let dirty = false, saving = false, disposed = false, course = initialCourse;
+  const controller = new AbortController();
   const panel = element('section', { className: 'academy-curriculum-editor', 'aria-live': 'polite' });
   root.append(panel);
   const feedback = element('p', { className: 'academy-manager-feedback', role: 'alert' });
   panel.append(element('h2', { text: 'Módulos e aulas' }), feedback);
-  const errorText = error => error?.status === 409 ? 'Este conteúdo mudou em outra sessão. Recarregue antes de salvar.' : `Não foi possível salvar: ${error?.message || 'erro desconhecido'}`;
   function markDirty() { dirty = true; }
   async function save(endpoint, method, body) {
     if (saving || disposed) return null;
-    saving = true; feedback.textContent = ''; try { const result = await request.fetchAPI(endpoint, { method, body: JSON.stringify(body) }); dirty = false; onSaved(result); return result; } catch (error) { feedback.textContent = errorText(error); return null; } finally { saving = false; }
+    saving = true; feedback.textContent = ''; try { const result = await request.fetchAPI(endpoint, { method, body: JSON.stringify(body), signal: controller.signal }); if (disposed) return null; dirty = false; onSaved(result); return result; } catch (error) { if (!disposed && error?.name !== 'AbortError') feedback.textContent = `Não foi possível salvar: ${error?.message || 'erro desconhecido'}`; return null; } finally { saving = false; }
   }
   async function reload() { panel.querySelector('.academy-modules')?.remove(); await load(); }
   function lessonRow(lesson) {
@@ -22,7 +22,7 @@ export function createCurriculumEditor({ root, page, courseId, onSaved = () => {
     const saveButton = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Salvar aula' });
     const material = element('a', { className: 'academy-button academy-button-small', href: '#', text: 'Materiais' });
     saveButton.addEventListener('click', async () => { markDirty(); await save(`/api/academy/lessons/${encodeURIComponent(lesson.id)}`, 'PUT', { title: title.value.trim(), description: lesson.description || '', order: lesson.order, active: active.checked, media: { type: /youtube\.com|youtu\.be/i.test(media.value) ? 'youtube' : 'file', url: media.value.trim() } }); });
-    material.addEventListener('click', async event => { event.preventDefault(); const id = await ensureLessonDocument(lesson, request); if (id) window.location.href = `./cms.html?type=academy_lesson&document=${encodeURIComponent(id)}`; });
+    material.addEventListener('click', async event => { event.preventDefault(); if (disposed) return; try { const id = await ensureLessonDocument(lesson, request, { signal: controller.signal }); if (!disposed && id) window.location.href = `./cms.html?type=academy_lesson&document=${encodeURIComponent(id)}`; } catch (error) { if (!disposed && error?.name !== 'AbortError') feedback.textContent = 'Não foi possível abrir os materiais. Tente novamente.'; } });
     const up = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Subir', 'aria-label': `Mover aula ${lesson.title} para cima` });
     const down = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Descer', 'aria-label': `Mover aula ${lesson.title} para baixo` });
     const module = course.modules.find(item => item.lessons?.some(itemLesson => itemLesson.id === lesson.id));
@@ -64,8 +64,8 @@ export function createCurriculumEditor({ root, page, courseId, onSaved = () => {
     }
     panel.append(list);
   }
-  async function load() { try { course = await request.fetchAPI(`/api/academy/${encodeURIComponent(courseId)}?all=true`); render(); } catch (error) { feedback.textContent = errorText(error); } }
+  async function load() { if (course) { render(); return; } try { course = await request.fetchAPI(`/api/academy/${encodeURIComponent(courseId)}?all=true`, { signal: controller.signal }); if (!disposed) render(); } catch (error) { if (!disposed && error?.name !== 'AbortError') feedback.textContent = errorText(error); } }
   void load();
   page.beforeLeave(() => !saving && (!dirty || window.confirm('Há alterações do currículo que ainda não foram salvas. Sair mesmo assim?')));
-  return { isDirty: () => dirty || saving, dispose() { disposed = true; panel.remove(); } };
+  return { isDirty: () => dirty || saving, dispose() { disposed = true; controller.abort(); panel.remove(); } };
 }

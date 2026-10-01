@@ -12,6 +12,22 @@ const {
 const router = express.Router();
 const listQuery = { all: (value) => ['true', 'false'].includes(value), active: (value) => value === 'true' };
 
+// Academy management may read the audience catalogue without granting the
+// broader user-management permission. This is deliberately a separate,
+// Academy-scoped projection; /api/job-titles remains manageUsers-only.
+router.get('/job-titles', authMiddleware, async (req, res, next) => {
+  if (!can(req.user, 'manageAcademy')) return forbidden(req, res);
+  const page = parseListQuery(req.query, {});
+  if (!page) return invalid(req, res);
+  try {
+    const [{ rows: [{ count }] }, { rows }] = await Promise.all([
+      pool.query('SELECT COUNT(*)::integer AS count FROM job_titles'),
+      pool.query('SELECT id, name, active FROM job_titles ORDER BY lower(name), id LIMIT $1 OFFSET $2', [page.limit, page.offset]),
+    ]);
+    res.set('X-Total-Count', String(count)).json(rows);
+  } catch (error) { next(error); }
+});
+
 router.get('/categories', authMiddleware, async (req, res, next) => {
   const all = req.query.all;
   if (all !== undefined && !['true', 'false'].includes(all)) return invalid(req, res);

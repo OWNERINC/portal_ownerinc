@@ -14,9 +14,10 @@ test('Academy management is a permissioned route with dedicated editors and real
   assert.match(manager, /academy_lesson/);
   assert.match(manager, /source_id/);
   assert.match(course, /allowed_job_title_ids/);
-  assert.match(course, /api\/job-titles\?all=true&limit=100/);
+  assert.match(course, /api\/academy\/job-titles\?limit=100/);
   assert.match(curriculum, /modules\/order/);
   assert.match(curriculum, /lessons\/order/);
+  assert.match(curriculum, /controller\.abort/);
   assert.match(curriculum, /cms\.html\?type=academy_lesson&document=/);
   assert.match(admin, /academy\.html\?manage=1&course=/);
 });
@@ -31,6 +32,9 @@ test('CMS lesson type and deep links remain type-scoped', () => {
 test('management editors protect dirty and in-flight navigation', () => {
   assert.match(course, /page\.beforeLeave\(\(\) => !saving/);
   assert.match(curriculum, /page\.beforeLeave\(\(\) => !saving/);
-  assert.match(course, /error\.status === 409/);
-  assert.match(curriculum, /error\?\.status === 409/);
+  assert.match(manager, /curriculum\?\.dispose\(\)/);
+  assert.match(manager, /view\.course \|\| view/);
+  assert.match(manager, /delivery_mode === 'internal'/);
+  assert.match(manager, /error\?\.status === 409/);
+  assert.match(manager, /findExisting/);
 });
