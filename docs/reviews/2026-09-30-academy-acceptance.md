@@ -23,7 +23,7 @@ composição/código, não substitutos dessas verificações.
 | Catálogo | Grupos inicial/cargo e continuidade independentes; autorização precede total/categorias/paginação; deep links e lifecycle têm cobertura. | Task 9 report; `tests/unit/academy-frontend.test.mjs` |
 | Gestão/CMS | `manageAcademy`, cargos reais, CRUD, ordenação, `academy_lesson`, publicação e descarte tardio cobertos localmente. | Task 10 report; `tests/unit/academy-management.test.mjs`, `cms-frontend.test.mjs` |
 | Progresso | UID autenticado é a fonte, posição não conclui, conclusão manual exige ACK, 409 interrompe writes e troca de mídia cria nova versão. | Task 7 report; `tests/unit/academy-progress.test.mjs` |
-| Player/lifecycle | YouTube/HTML5 adapters reais no harness, sem autoplay, retry limitado, erros 101/150, abort e destroy idempotente. | Task 8 report; `tests/unit/academy-player.test.mjs` |
+| Player/lifecycle | YouTube/HTML5 adapters reais no harness, sem autoplay, retry limitado, erros 101/150/2, abort e destroy idempotente. | Task 8 report; `tests/unit/academy-player.test.mjs` |
 | Marca/acessibilidade estrutural | SVG allowlist, namespace CSS Academy, reduced motion, alvos/labels e estados renderizados foram inspecionados localmente. | Task 11 report; brand/motion tests; prancha documental |
 | Compatibilidade | Shell persistente, Dashboard com links Academy, legado externo e integração CMS preservados por testes existentes. | Tasks 9–11; `persistent-navigation.test.mjs`, `cms-contracts.test.mjs` |
 | Checks reproduzíveis | Baseline anterior: `npm run verify` 917/917; os resultados desta onda, incluindo o novo total, estão no relatório de correção final; `node scripts/generate-public-shell.mjs --check` e `git diff --check` permanecem exigidos. | Task 11 report, logs SDD e `final-fix-report.md` |
@@ -70,8 +70,8 @@ composição/código, não substitutos dessas verificações.
 
 | Finding | Ruling Task 12 | Impacto |
 | --- | --- | --- |
-| Task 9: foco após filtro/paginação pode não ser restaurado em `public/academy/catalog-view.js:483-493` | **Aceito como minor deferred; não bloquear aceite local.** Abrir follow-up antes de declarar acessibilidade física completa. | UX de teclado, sem evidência de vazamento/autorização. |
-| Task 10: cobertura específica de dispose durante reload autoritativo tardio | **Parked test gap; não reabrir produção.** Guardas de abort/token/dispose existem; adicionar teste dedicado em manutenção. | Cobertura de teste, não finding funcional confirmado. |
+| Task 9: foco após filtro/paginação pode não ser restaurado em `public/academy/catalog-view.js:483-493` | **Corrigido na onda final `83be5a7`; cobertura de paginação direta continua follow-up minor.** Não bloquear aceite local. | UX de teclado; acessibilidade física continua pendente. |
+| Task 10: cobertura específica de dispose durante reload autoritativo tardio | **Coberto na onda final `83be5a7`; manter como regressão de lifecycle.** Guardas de abort/token/dispose existem. | Cobertura local PASS; ambiente real continua pendente. |
 | Task 11: breadth adicional de motion/ARIA/filter/loop | **Aceito como minor deferred.** A implementação e regressões críticas estão cobertas; ampliar testes antes de futura revisão visual/a11y. | Profundidade de cobertura, sem finding Critical/Important aberto. |
 
 ## Checks desta documentação
