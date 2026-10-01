@@ -64,7 +64,7 @@ export function createCurriculumEditor({ root, page, courseId, initialCourse = n
     }
     panel.append(list);
   }
-  async function load() { if (course) { render(); return; } try { course = await request.fetchAPI(`/api/academy/${encodeURIComponent(courseId)}?all=true`, { signal: controller.signal }); if (!disposed) render(); } catch (error) { if (!disposed && error?.name !== 'AbortError') feedback.textContent = errorText(error); } }
+  async function load() { if (course) { render(); return; } try { course = await request.fetchAPI(`/api/academy/${encodeURIComponent(courseId)}?all=true`, { signal: controller.signal }); if (!disposed) render(); } catch (error) { if (!disposed && error?.name !== 'AbortError') feedback.textContent = `Não foi possível carregar o currículo: ${error?.message || 'erro desconhecido'}`; } }
   void load();
   page.beforeLeave(() => !saving && (!dirty || window.confirm('Há alterações do currículo que ainda não foram salvas. Sair mesmo assim?')));
   return { isDirty: () => dirty || saving, dispose() { disposed = true; controller.abort(); panel.remove(); } };
