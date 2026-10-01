@@ -71,6 +71,11 @@ try {
         await client.query(await readFile(new URL('../api/db/schema.sql', import.meta.url), 'utf8'));
         const cms = await client.query("SELECT to_regclass('public.cms_documents') AS documents");
         assert.equal(cms.rows[0].documents, null);
+        // Bootstrap already has the RH guard; temporarily model legacy rows for migration 030.
+        await client.query('ALTER TABLE job_titles DROP CONSTRAINT IF EXISTS job_titles_name_no_legacy_rh_check');
+        await client.query(`INSERT INTO job_titles (name, active, page_access) VALUES
+          ('Assistente de RH', FALSE, '{"autocard":false,"posCards":false}'::jsonb),
+          ('Coordenador de RH', FALSE, '{"autocard":false,"posCards":false}'::jsonb)`);
       } else {
         await client.query(`CREATE TABLE schema_migrations (
           version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);

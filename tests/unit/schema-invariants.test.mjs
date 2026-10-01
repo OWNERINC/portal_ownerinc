@@ -415,6 +415,8 @@ test('DHO job title migration seeds, merges, and maps the approved names', async
   assert.match(integration, /name: 'Legacy DHO Merge'/);
   assert.match(integration, /assert\.deepEqual\(mergedTitle\.rows, \[\{ active: false, page_access: \{ autocard: true, posCards: true \} \}\]\)/);
   assert.match(integration, /ALTER TABLE job_titles DROP CONSTRAINT IF EXISTS job_titles_name_no_legacy_rh_check/);
+  assert.match(integration, /setupMode === 'bootstrap'[\s\S]*Assistente de RH'[\s\S]*Coordenador de RH'/);
+  assert.match(integration, /Assistente de RH', FALSE, '\{"autocard":false,"posCards":false\}'::jsonb/);
   assert.match(integration, /pg_get_constraintdef\(oid\)/);
   for (const source of [schema, migration]) {
     assert.match(source, /job_titles_name_no_legacy_rh_check/);
