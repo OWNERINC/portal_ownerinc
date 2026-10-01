@@ -138,6 +138,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
     await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
     await load('public/js/owner-news/model.js', 'getNewsPresentation, normalizeEditorial, estimateNewsReadTime');
     await load('public/js/owner-news/catalog.js', 'renderNewsCard, composeNewsFeed, renderNewsCategories, renderNewsOpening');
+    await load('public/js/owner-news/poll.js', 'createNewsPoll');
     await load('public/js/owner-news/reader-view.js', 'renderNewsArticle');
     await load('public/js/owner-news/navigation.js', 'createNewsNavigation');
   }

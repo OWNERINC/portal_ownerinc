@@ -56,6 +56,7 @@ Atualização desta área: 30 de setembro de 2026.
 | Editorias e leitura | Operacional | Catálogo de artigos com 24 itens, categorias/contagens server-side e abertura publicada. Leitor sobreposto com URL direta, anterior/próxima na mesma entrada, Voltar/Escape e Back/Forward. Conserva DOM, foco do card e rolagem do catálogo. `public/js/owner-news/navigation.js`, `public/js/announcements.js` |
 | Composição e mídia | Operacional | Prévia e reader compartilham resumo, autoria, origem/data civil, capa, blocos tipográficos e PDF complementar. Datas de publicação em São Paulo. Retry separado de detalhe, vizinhos, imagem e PDF; mídia privada cancelada/revogada na troca/saída. Títulos longos permitem crescimento do hero. `public/js/owner-news/reader-view.js`, `public/js/cms-block-renderer.js` |
 | Publicação administrativa | Operacional | Reutiliza `announcement`, permissão `manageKnowledge`, revisões e agendamento do Editor CMS; metadados da mesma revisão e Página inicial com publicação explícita. Legado continua acessível por ID, inclusive PDF sem minutos inventados. `public/js/cms.js` |
+| Enquete persistente | Operacional local | Bloco independente após a terceira matéria em Todas/página inicial, sem alterar contagens ou offsets. Uma escolha por usuário autenticado; repetir a mesma opção é idempotente e outra opção recebe 409. Resultados vêm do banco; falha ambígua reconcilia por GET e conserva somente reenvio da mesma escolha. Rascunho com 2–6 opções, publicação explícita congela pergunta/opções, encerramento não reabre e nova publicação substitui a seleção atual. `public/js/owner-news/poll.js`, `api/owner-news/polls.js` |
 | Migração da referência | Operacional local | Importadas 19 matérias publicadas e 24 mídias privadas no ambiente local autorizado; 24/24 assets retornaram HTTP 200 autenticado. Importador com dry-run, identidade determinística e reconciliação sem sobrescrita. Não aplicado em produção. `scripts/import-owner-news.mjs`, `docs/operations/owner-news-import.md` |
 
 Validação E7: histórico assíncrono com router/ui reais; browser autenticado na
@@ -63,7 +64,18 @@ stack isolada com CSP normal, publicações e assets sintéticos removidos ao fi
 Confirmados retry de mídia sem perder texto, retorno ao mesmo card/posição,
 Dashboard → reader e layout sem overflow horizontal até 320×320. A amostra não
 constitui auditoria completa por tecnologia assistiva. O erro HTTP preexistente
-identificado no browser é `/favicon.ico` (404). Enquete ainda não implementada.
+identificado no browser é `/favicon.ico` (404).
+
+Validação P4: harness monta o componente e coordenador reais, com transporte
+injetado, cobrindo clique duplo, 409, commit tardio, retry, foco, paginação e
+descarte. Integração PostgreSQL local confirma concorrência da mesma escolha,
+escolhas distintas e usuários distintos, lock compartilhado entre voto/encerramento
+e agregados após exclusão de usuário. Browser local autenticado, CSP normal:
+voto real com resposta perdida e reconciliação, reload, idempotência, conflito e
+encerramento; artigos sintéticos via transporte para inspeção do mosaico. Seis
+opções/pergunta longa verificadas em 1440, 390, 359 e 320 px, sem overflow;
+duas colunas em 390 px e uma abaixo de 360 px. Fixtures de enquete removidas.
+Não constitui auditoria completa por tecnologia assistiva.
 
 ## AutoCard
 

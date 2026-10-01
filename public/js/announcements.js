@@ -1,8 +1,9 @@
 import { fetchAPI, fetchAPIPage } from './auth.js';
-import { clear, setBusy, showState } from './ui.js';
+import { clear, element, setBusy, showState } from './ui.js';
 import { readOffset, renderPagination, setPaginationBusy } from './pagination.js';
 import { cleanupRenderedBlocks } from './cms-block-renderer.js';
-import { renderNewsCard, renderNewsCategories, renderNewsOpening } from './owner-news/catalog.js';
+import { composeNewsFeed, renderNewsCard, renderNewsCategories, renderNewsOpening } from './owner-news/catalog.js';
+import { createNewsPoll } from './owner-news/poll.js';
 import { getNewsPresentation } from './owner-news/model.js';
 import { renderNewsArticle } from './owner-news/reader-view.js';
 import { createNewsNavigation } from './owner-news/navigation.js';
@@ -27,6 +28,11 @@ let cardDisposers = [];
 let categoryCounts = null;
 let publishedHome = null;
 let latestArticle = null;
+let pollRequest = 0, pollController, pollComponent, pollId, pollAbsent = false;
+const pollSlot = element('div', { className: 'news-poll-slot' });
+const pollStatus = element('div', { className: 'news-poll-loader' });
+pollSlot.append(pollStatus);
+page.cleanup(() => { ++pollRequest; pollController?.abort(); pollComponent?.dispose(); pollSlot.remove(); });
 const homeStatus = document.getElementById('news-opening-status');
 const highlightStatus = document.getElementById('news-highlight-status');
 const feedStatus = document.getElementById('news-feed-status');
@@ -123,6 +129,51 @@ function updateOpening() {
   } : fallbackHome));
 }
 
+function positionPoll() {
+  const query = new URLSearchParams(location.search);
+  const cards = [...list.querySelectorAll('.news-card')];
+  const feed = composeNewsFeed(cards, pollAbsent ? null : pollSlot, {
+    offset: readOffset(query, PAGE_SIZE), category: query.get('category') || '',
+  });
+  const index = feed.indexOf(pollSlot);
+  if (index < 0) pollSlot.remove();
+  else {
+    list.classList.add('news-mosaic');
+    const children = [...list.children];
+    const slotIndex = children.indexOf(pollSlot);
+    const after = feed[index + 1] || null;
+    if (slotIndex < 0 || (children[slotIndex + 1] || null) !== after) list.insertBefore(pollSlot, after);
+  }
+}
+
+async function loadPoll() {
+  const token = ++pollRequest;
+  pollController?.abort(); pollController = new AbortController();
+  const current = () => page.active && token === pollRequest && !pollController.signal.aborted;
+  clear(pollStatus);
+  if (!pollComponent) showState(pollStatus, 'Carregando enquete…');
+  setBusy(pollStatus, true); positionPoll();
+  try {
+    const { poll } = await fetchAPI('/api/announcements/polls/current', { signal: pollController.signal });
+    if (!current()) return;
+    pollAbsent = !poll;
+    if (!poll || poll.id !== pollId) {
+      pollComponent?.dispose(); pollComponent?.node.remove(); pollComponent = null; pollId = poll?.id;
+      if (poll) {
+        pollComponent = createNewsPoll({ page, poll });
+        pollSlot.insertBefore(pollComponent.node, pollStatus);
+      }
+    } else pollComponent.update(poll);
+    clear(pollStatus); positionPoll();
+  } catch {
+    if (current()) {
+      pollAbsent = false;
+      showState(pollStatus, 'Não foi possível atualizar a enquete.', () => { if (current()) void loadPoll(); });
+      positionPoll();
+    }
+  } finally { if (current()) setBusy(pollStatus, false); }
+}
+
 async function loadHome() {
   const token = ++homeRequest;
   if (homeStatus) clear(homeStatus);
@@ -215,6 +266,7 @@ function restorePaginationFocus(descriptor, state) {
 
 async function loadAnnouncements() {
   catalogKey = catalogRouteKey();
+  positionPoll();
   const focusAtStart = document.activeElement;
   const requestedFocus = focusDescriptor(focusAtStart);
   const requestToken = ++announcementsRequest;
@@ -250,6 +302,7 @@ async function loadAnnouncements() {
       cardDisposers.push(card.dispose);
       list.append(card.node);
     });
+    positionPoll();
     renderPagination(pagination, Number(result.total ?? announcements.length), offset, PAGE_SIZE, nextOffset => {
       if (requestToken !== announcementsRequest) return;
       const url = new URL(location.href);
@@ -261,7 +314,7 @@ async function loadAnnouncements() {
   } catch {
     if (requestToken === announcementsRequest) {
       pagination?.replaceChildren();
-      const target = list.querySelector('.news-card') && feedStatus ? feedStatus : list;
+      const target = (list.querySelector('.news-card') || pollSlot.parentNode === list) && feedStatus ? feedStatus : list;
       const state = showState(target, 'Não foi possível carregar a publicação. Verifique sua conexão ou volte às editorias.', () => { if (page.active && requestToken === announcementsRequest) loadAnnouncements(); });
       const current = document.activeElement;
       if (!current?.isConnected || current === document.body) state?.querySelector('button')?.focus();
@@ -293,14 +346,18 @@ page.listen(window, 'pagehide', () => {
   ++highlightRequest;
   ++homeRequest;
   ++categoriesRequest;
+  ++pollRequest;
+  pollController?.abort();
+  pollComponent?.dispose(); pollComponent?.node.remove(); pollComponent = null; pollId = null;
   clearContent(list);
 });
 page.listen(window, 'pageshow', event => {
-  if (event.persisted) { loadAnnouncements(); loadHome(); loadHighlight(); loadCategories(); }
+  if (event.persisted) { loadAnnouncements(); loadHome(); loadHighlight(); loadCategories(); loadPoll(); }
 });
 updateOpening();
 void navigation.sync();
 loadHome();
 loadHighlight();
 loadCategories();
+loadPoll();
 }

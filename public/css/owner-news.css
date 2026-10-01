@@ -70,9 +70,25 @@
 .news-loader-status:empty { display: none; }
 .news-loader-status .empty-state { padding: 12px 0; }
 .news-mosaic { display: block; columns: 230px; column-gap: 18px; }
+.news-page .news-mosaic { display: block; }
 .news-mosaic > article { display: inline-block; width: 100%; margin: 0 0 32px; break-inside: avoid; vertical-align: top; }
 .news-mosaic > .empty-state, .news-mosaic > .state-message { column-span: all; }
 .news-card { min-width: 0; }
+.news-mosaic > .news-poll-slot { display: inline-block; width: 100%; margin: 0 0 32px; break-inside: avoid; vertical-align: top; }
+.news-poll { color: #fff; background: #1d2428; border-radius: 10px; padding: clamp(20px, 2.5vw, 40px); min-height: 360px; overflow-wrap: anywhere; }
+.news-page .news-poll h2 { color: inherit; font-family: var(--news-sans); font-size: clamp(25px, 2.7vw, 46px); line-height: 1; letter-spacing: -.055em; margin: 16px 0; }
+.news-poll p { font-size: 14px; line-height: 1.6; }
+.news-poll-options { display: grid; gap: 8px; }
+.news-poll-option { position: relative; isolation: isolate; display: flex; justify-content: space-between; gap: 12px; min-height: 44px; padding: 12px; border: 1px solid #ffffff40; color: inherit; background: transparent; text-align: left; font: inherit; font-size: 14px; cursor: pointer; }
+.news-poll-option > span:not(.news-poll-option-bar) { min-width: 0; }
+.news-poll-percentage { flex-shrink: 0; white-space: nowrap; }
+.news-poll-option-bar { position: absolute; z-index: -1; inset: 0 auto 0 0; background: #d4b07a35; }
+.news-poll-option[aria-pressed='true'] { border-color: #d4b07a; }
+.news-poll-option:disabled { opacity: 1; cursor: default; }
+.news-poll-verify { min-height: 44px; padding: 8px; border: 1px solid #ffffff40; background: transparent; color: inherit; font: inherit; font-size: 14px; cursor: pointer; }
+.news-poll button:focus-visible, .news-poll [role='status']:focus-visible { outline: 2px solid #d4b07a; outline-offset: 3px; }
+.news-poll-loader:empty { display: none; }
+.news-poll-loader .empty-state { padding: 20px; }
 .news-card > a { display: block; color: inherit; text-decoration: none; }
 .news-card > a:hover h2 { text-decoration: underline; text-underline-offset: 4px; }
 .news-card-cover { aspect-ratio: .78; overflow: hidden; border-radius: 10px; background: var(--news-ink); color: var(--news-paper); display: grid; place-items: center; }
