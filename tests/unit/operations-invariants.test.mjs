@@ -45,6 +45,23 @@ test('API and cron require shared Resend SMTP configuration', async () => {
   assert.match(verify, /\['scripts', 'ops'\]/);
 });
 
+test('API and cron lock Nodemailer to the approved safe policy', async () => {
+  const expectedRange = '^10.0.13';
+  const expectedResolvedVersion = '10.0.13';
+
+  for (const service of ['api', 'cron']) {
+    const manifest = JSON.parse(await read(`${service}/package.json`));
+    const lockfile = JSON.parse(await read(`${service}/package-lock.json`));
+    const declared = manifest.dependencies.nodemailer;
+    const lockedRoot = lockfile.packages[''].dependencies.nodemailer;
+    const resolved = lockfile.packages['node_modules/nodemailer'].version;
+
+    assert.equal(declared, expectedRange, `${service} manifest must declare Nodemailer as ${expectedRange}`);
+    assert.equal(lockedRoot, expectedRange, `${service} lockfile root must declare Nodemailer as ${expectedRange}`);
+    assert.equal(resolved, expectedResolvedVersion, `${service} lockfile must resolve Nodemailer as ${expectedResolvedVersion}`);
+  }
+});
+
 test('local simulation isolates Firebase and keeps bootstrap SQL typed', async () => {
   const [compose, emulator, bootstrap] = await Promise.all([
     read('docker-compose.yml'), read('firebase-emulator/Dockerfile'), read('api/db/bootstrap-admin.js'),
