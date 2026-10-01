@@ -77,6 +77,16 @@ opções/pergunta longa verificadas em 1440, 390, 359 e 320 px, sem overflow;
 duas colunas em 390 px e uma abaixo de 360 px. Fixtures de enquete removidas.
 Não constitui auditoria completa por tecnologia assistiva.
 
+Validação integrada A3: 30 artigos sintéticos importados como draft e publicados
+na stack isolada; PNG lida através do volume real da API com HTTP/MIME/bytes/hash
+conferidos como editor e dois colaboradores, com negação antes de publicar.
+CMS autosave/prévia/publicação/agendamento, enquetes multi-sessão, histórico/foco,
+PDF sintético inline e layouts 1440×900, 1024×768 e 390×844 passaram. Fixtures
+removidas. As cinco candidatas reais continuam `needs_review`, o PDF real está
+adiado e a publicação no destino final permanece pendente. O aceite A3 não
+revalida a importação histórica de 19 matérias citada acima. Evidência e limites:
+[relatório A3](../reports/2026-09-30-owner-news-acceptance.md).
+
 ## AutoCard
 
 | Funcionalidade | Estado | Implementação e evidência |

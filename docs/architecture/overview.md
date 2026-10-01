@@ -268,6 +268,15 @@ As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md)
 
 ### Edição editorial no CMS (E4)
 
+Aceite integrado A3: o importador de pacote foi executado contra o mesmo banco
+e `/app/uploads` montado na API local. Uma PNG sintética teve HTTP 200 com
+MIME/tamanho/SHA-256 idênticos como editor em draft e como editor/dois leitores
+após publicação; leitor comum recebeu 403 no asset privado e 404 no documento
+draft. Isso complementa a verificação de arquivos em disco de A2. Browser real
+também confirmou revisão salva pela ação de publicar/agendar, sessões de voto
+independentes e cleanup do reader. Escopo exclusivamente sintético/local;
+[relatório A3 e limites](../reports/2026-09-30-owner-news-acceptance.md).
+
 - Owner News oferece subáreas Matérias e Página inicial. As demais áreas conservam
   a paleta padrão; apenas announcement recebe quote/profile e os controles de
   diagramação, tipografia, capa, legenda/crédito e PDF complementar.
