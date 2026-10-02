@@ -288,6 +288,6 @@ test('the actual Dashboard opens internal courses in Portal and keeps valid lega
   assert.equal(links[0].getAttribute('target'), null);
   assert.equal(links[1].getAttribute('href'), 'https://training.test/course');
   assert.equal(links[1].getAttribute('target'), '_blank');
-  assert.equal(h.latest('/api/announcements?').path, '/api/announcements?limit=3&offset=0');
+  assert.equal(h.latest('/api/announcements?').path, '/api/announcements?kind=article&limit=3&offset=0');
   h.page.dispose();
 });

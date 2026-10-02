@@ -1,5 +1,154 @@
 # Importação privada da Owner News
 
+Para o fluxo editorial revisado e o inventário parcial A1, consulte
+[Preparação de pacotes privados](owner-news-bundles.md). O fluxo abaixo documenta
+primeiro a aplicação A2; a seção **Importador legado** mantém o fluxo anterior.
+
+## Pacote revisado — A2
+
+`scripts/import-owner-news-bundle.mjs` aplica somente itens `approved`, com
+procedência, decisões completas, EditorialV1 válido e mídias conferidas. As cinco
+candidatas reais de A1 continuam `needs_review`; os 14 registros publicados
+pendentes e o PDF adiado não foram aplicados, publicados ou retirados nesta etapa.
+Uma decisão `exclude` de preparação não retira um documento existente. Retirada
+exige um item separado `action: withdraw`, aprovado, com origem importada
+identificada, decisão de exclusão e snapshot completo.
+
+### Configuração e modos
+
+Requisitos: dependências de `api/`, schema migrado e ator real do banco, habilitado,
+administrador com permissão CMS `manageKnowledge` (ou superAdmin). O processo
+confere banco/papel efetivos, permissões de cada operação e ausência de recovery.
+Use Node 24 para os checks; o código novo usa APIs de Node 18, sem declarar
+compatibilidade das dependências instaladas com esse runtime.
+
+Forneça explicitamente, por ambiente privado:
+
+```sh
+export OWNER_NEWS_TARGET_DATABASE_URL='postgresql://USUARIO:SENHA@127.0.0.1:5432/portal_test'
+export OWNER_NEWS_TARGET_UPLOAD_DIR='/privado/uploads-da-api'
+export OWNER_NEWS_ACTOR_UID='uid-do-administrador'
+node scripts/import-owner-news-bundle.mjs --bundle /privado/pacote/bundle.json
+node scripts/import-owner-news-bundle.mjs --bundle /privado/pacote/bundle.json --apply-draft
+node scripts/import-owner-news-bundle.mjs --bundle /privado/pacote/bundle.json --dry-run
+# Após revisão explícita dos drafts:
+node scripts/import-owner-news-bundle.mjs --bundle /privado/pacote/bundle.json --publish
+```
+
+Não usa `DATABASE_URL`, não carrega `.env`, não inicia serviços. A URL explícita
+não aceita query/fragmento. Os guards locais do importador antigo são preservados.
+O novo CLI admite destino explicitamente configurado; autorização de operação
+local não autoriza executar contra produção. Esta implementação foi exercitada
+somente no PostgreSQL isolado autorizado.
+
+`--bundle` é absoluto, privado e limitado a 32 MiB. A raiz do pacote e uploads
+precisam estar fora de checkouts Git/public, sem symlinks. O diretório de uploads
+deve existir e ser o armazenamento real compartilhado com a API; cabe ao operador
+confirmar o volume/mapeamento. O importador resolve `realpath` e usa somente
+`cms-private/`. Não é feita uma chamada remota para descobrir ou confirmar o
+volume da API.
+
+Dry-run é o padrão: transação read-only/repeatable-read, sem escrita no banco ou
+uploads. `--apply-draft` e `--publish` são exclusivos. Dry-run com conflitos retorna
+contagens/códigos e exit 1. Erros de bibliotecas/DB não são reproduzidos: a CLI
+emite somente códigos controlados, sem conteúdo, credenciais ou connection string.
+
+### Reconciliação e hashes
+
+O destino é encontrado por identidade determinística de documento/origem, compatível
+com a importação anterior (`identity('document', external_id)`), nunca por título.
+Colisão de título com outro documento bloqueia o pacote. Um `target: null` não
+permite sobrescrever uma importação anterior: dry-run detecta o documento e exige
+revisão da fotografia atual. Para obter uma variante privada, no mesmo diretório:
+
+```sh
+node scripts/import-owner-news-bundle.mjs --bundle /privado/pacote/bundle.json \
+  --target-output /privado/pacote/destino.json
+```
+
+A saída é exclusiva (`wx`) e mantém os caminhos relativos das mídias. Apenas
+targets nulos ainda não reconciliados recebem propostas; targets já aprovados e
+expectativas anteriores de drafts aplicados não são rebaseados. Revise a variante
+e execute novo dry-run antes de aplicar. O comando ainda retorna exit 1 pelos
+conflitos do manifesto de entrada. Snapshots incluem os nove campos de target,
+UUIDs canônicos minúsculos e timestamps ISO UTC completos; `source_id: null` é
+preservado em mapeamentos explícitos de upsert. Withdraw requer origem identificada.
+
+`bundle_sha256` cobre os bytes exatos do arquivo de entrada, inclusive espaços/LF;
+`content_sha256` segue a serialização A1 excluindo somente target. Alterar apenas
+target conserva o hash de conteúdo. Cada destino tem seu próprio hash do bundle;
+execute dry-run na variante final para registrá-lo. Publicação exige a auditoria
+de aplicação dos drafts com **os mesmos bytes**, revisão intacta e ponteiros ainda
+compatíveis. Não reformate ou altere o manifesto entre apply-draft e publish.
+
+Revisões são identificadas pelo checksum canônico de título, categoria, blocos e
+EditorialV1 normalizados, após resolver `asset_key` para assets reais. Não persiste
+UUID temporário da validação. Assets novos têm identidade por SHA-256. Reuso é
+restrito às mídias de targets mapeados ou das mesmas fontes importadas, exigindo
+hash/MIME/tamanho/arquivo compatíveis. Mídia privada de outra origem não é reusada
+arbitrariamente. Arquivo existente ausente/corrompido e órfão com mesmo storage key
+bloqueiam; não há reparo ou sobrescrita silenciosa.
+
+### Atomicidade, publicação e recuperação
+
+Cada pacote usa uma transação, advisory lock CMS `7193029`, documentos em ordem
+de UUID, depois revisões/assets. Targets são relidos sob lock. Os mesmos limites
+A1/CMS são aplicados antes da transação: 5 MiB por revisão, 50 MiB por asset,
+300 MiB agregado; imagens decodificadas por sharp. PDF tem assinatura verificada,
+vídeo tem assinatura de container; não há OCR nem validação integral de codecs.
+
+Apply-draft mantém título/categoria/corpo publicados, cria revisão imutável e
+atualiza apenas o ponteiro draft. Withdraw só é planejado nesse modo. Publish
+promove somente drafts preparados, arquiva a publicação anterior e preserva sua
+data; documentos novos recebem o horário de publicação no Portal. Data civil
+editorial fica em `source_date`. Agendamento existente bloqueia upserts que
+escreveriam. Um pacote já publicado, confirmado por corpo/status/identidade, é
+somente leitura e preserva drafts/agendamentos posteriores.
+
+Withdraw arquiva a publicação e o agendamento explicitamente fotografados, limpa
+seus ponteiros/datas e preserva o draft posterior. Auditoria na mesma transação
+registra hashes, fontes, revisões e draft preservado, sem corpo editorial. Retirada
+repetida exige essa prova e os ponteiros/metadados preservados; drift bloqueia.
+
+Arquivos novos usam `wx` e fsync antes do INSERT. Falha antes de enviar COMMIT
+reverte todo o pacote e remove somente arquivos criados pelo run. Se a resposta
+do COMMIT se perde, o resultado é `commit_outcome_unknown`: arquivos são mantidos,
+nenhum sucesso é impresso. Execute dry-run com o mesmo manifesto para reconciliar
+DB e hashes. Se o commit não ocorreu e restaram arquivos órfãos, investigue os
+UUIDs e a ausência de linhas/referências antes de removê-los; não limpe o diretório.
+
+O relatório separa `prepared`, `draftsCreated`, `published`, `withdrawn`, `existing`,
+`assetsCreated`, `assetsReused`, `verifiedPublications` e `verifiedAssets`.
+`verifiedAssets` confirma bytes privados no armazenamento, não um teste HTTP de
+leitura autenticada da API. Esta etapa não declara publicação/leitura real das
+candidatas A1 nem conclusão do acervo/PDF.
+
+### Verificação A2
+
+O teste real de `scripts/test-owner-news-integration.mjs` inclui duas matérias
+sintéticas compartilhando um asset, apply/publish repetidos, CLI dry-run padrão,
+papel `portal_api`, reconciliação legada, snapshot concorrente, schedule, corrupção
+de revisão/arquivo, publicação alterada com draft intacto, retirada auditada,
+preservação de source_id null, rollback por falha de auditoria e COMMIT realmente
+efetivado cuja resposta foi perdida. Fixtures são limpas por IDs/diretório próprios.
+Use apenas banco descartável explicitamente autorizado:
+
+```sh
+node --test tests/unit/owner-news-bundle.test.mjs tests/unit/owner-news-import.test.mjs tests/unit/cms-reader.test.mjs
+node scripts/test-migrations.mjs
+node scripts/test-owner-news-integration.mjs
+npm run verify
+git diff --check
+```
+
+Migrações/integração exigem `MIGRATION_TEST_DISPOSABLE=true` e
+`MIGRATION_DATABASE_URL` explícitos. Na worktree autorizada, as duas execuções usam
+o wrapper privado `run-local-check.mjs` de coordenação; credenciais não entram em Git.
+
+## Importador legado
+
+Suas regras de data e publicação não se aplicam ao pacote novo.
+
 O importador lê somente `GET https://owner-news.ownerinc-developers.chatgpt.site/api/cms`
 (`store.articles`) e as mídias referenciadas pelas matérias publicadas. Não salva
 o JSON da origem no repositório. Não inicia Docker nem modifica serviços.

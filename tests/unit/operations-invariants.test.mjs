@@ -20,6 +20,18 @@ test('compose limits exposure and waits for API readiness', async () => {
   assert.match(compose, /nginx:alpine@sha256:/);
 });
 
+test('CI exercises default, upgrade, and bootstrap migration databases', async () => {
+  const ci = await read('.github/workflows/ci.yml');
+  assert.match(ci, /PGPASSWORD: integration-test-admin-password/);
+  assert.match(ci, /CREATE DATABASE portal_test_upgrade OWNER portal_admin/);
+  assert.match(ci, /CREATE DATABASE portal_test_bootstrap OWNER portal_admin/);
+  assert.match(ci, /MIGRATION_TEST_SETUP: upgrade[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_upgrade[\s\S]*run: npm run test:migrations/);
+  assert.match(ci, /MIGRATION_TEST_SETUP: bootstrap[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_bootstrap[\s\S]*run: npm run test:migrations/);
+  assert.match(ci, /MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test[\s\S]*run: npm run test:migrations/);
+  assert.match(ci, /run: node scripts\/test-owner-news-integration\.mjs/);
+  assert.match(ci, /run: node scripts\/test-academy\.mjs/);
+});
+
 test('API and cron require shared Resend SMTP configuration', async () => {
   const [compose, example, verify] = await Promise.all([
     read('docker-compose.yml'), read('.env.example'), read('scripts/verify.mjs'),
@@ -43,6 +55,23 @@ test('API and cron require shared Resend SMTP configuration', async () => {
   assert.match(verify, /SMTP_PASSWORD=re_\[A-Za-z0-9_-\]\{10,\}/);
   assert.match(verify, /new Set\(\['\.env\.example'/);
   assert.match(verify, /\['scripts', 'ops'\]/);
+});
+
+test('API and cron lock Nodemailer to the approved safe policy', async () => {
+  const expectedRange = '^10.0.13';
+  const expectedResolvedVersion = '10.0.13';
+
+  for (const service of ['api', 'cron']) {
+    const manifest = JSON.parse(await read(`${service}/package.json`));
+    const lockfile = JSON.parse(await read(`${service}/package-lock.json`));
+    const declared = manifest.dependencies.nodemailer;
+    const lockedRoot = lockfile.packages[''].dependencies.nodemailer;
+    const resolved = lockfile.packages['node_modules/nodemailer'].version;
+
+    assert.equal(declared, expectedRange, `${service} manifest must declare Nodemailer as ${expectedRange}`);
+    assert.equal(lockedRoot, expectedRange, `${service} lockfile root must declare Nodemailer as ${expectedRange}`);
+    assert.equal(resolved, expectedResolvedVersion, `${service} lockfile must resolve Nodemailer as ${expectedResolvedVersion}`);
+  }
 });
 
 test('local simulation isolates Firebase and keeps bootstrap SQL typed', async () => {

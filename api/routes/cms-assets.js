@@ -18,6 +18,7 @@ const MAX_ASSET_SIZE = 50 * 1024 * 1024;
 const MAX_PDF_SIZE = 100 * 1024 * 1024;
 const CONTENT_TYPES = ['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder'];
 const ASSET_MIMES = {
+  profile: new Set(['image/jpeg', 'image/png', 'image/webp']),
   image: new Set(['image/jpeg', 'image/png', 'image/webp']),
   pdf: new Set(['application/pdf']),
   video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),

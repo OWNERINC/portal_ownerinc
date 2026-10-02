@@ -6,6 +6,34 @@ import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helper
 
 const viewer = { uid: 'user-1', role: 'viewer', permissions: {} };
 
+test('Owner News direct URL and invalid return state close locally, then session loss disposes its guard', async () => {
+  const h = await createRouterHarness({ realUI: true });
+  await h.router.navigate('/announcements.html?id=direct');
+  const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+  vm.runInContext(`${source}\nglobalThis.createNewsNavigation = createNewsNavigation;`, h.context);
+  const overlay = new Node('div', h.doc, { class: 'hidden', 'data-page-overlay': '' });
+  const close = new Node('button', h.doc, { id: 'news-reader-close' }); overlay.append(close); h.doc.body.append(overlay);
+  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async () => {} });
+  await navigation.sync();
+  h.scope.history.replaceState({ ...h.history.state, retained: true, ownerNews: { returnHref: 'https://outside.test/announcements.html', cardId: 'news-card-direct', catalogY: 0 } }, '', h.location.href);
+  const length = h.entries.length;
+  h.doc.dispatchEvent(new TestEvent('keydown', { key: 'Escape' })); await drain();
+  assert.equal(h.location.search, '');
+  assert.equal(h.history.state.retained, true);
+  assert.equal(h.history.state.ownerNews, undefined);
+  assert.equal(h.entries.length, length);
+  assert.ok(overlay.classList.contains('hidden'));
+  await navigation.open('again');
+  const page = h.scope;
+  delete h.doc.documentElement.dataset.authSnapshot;
+  h.context.auth.currentUser = null; h.notifyAuthChange(); await drain();
+  assert.equal(page.active, false);
+  assert.equal(overlay.isConnected, false);
+  assert.equal(h.doc.body.classList.contains('modal-open'), false);
+  const href = h.location.href; navigation.close();
+  assert.equal(h.location.href, href);
+});
+
 test('navigation keeps the current stylesheet active while destination CSS is loading', async () => {
   const h = await createRouterHarness();
   h.page('/dashboard.html', { styles: ['/current.css'] });

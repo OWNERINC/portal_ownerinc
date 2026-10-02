@@ -5,7 +5,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql', '034_owner_news_editorial.sql', '035_owner_news_polls.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -15,7 +15,7 @@ test('migrations are numbered, ordered, and tracked by a ledger', async () => {
 
   const schema = await readFile('api/db/schema.sql', 'utf8');
   const ledger = [...schema.matchAll(/\('([0-9]{3}_[a-z0-9_]+)'\)/g)].map((match) => match[1]);
-  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state', '033_academy_learning']) {
+  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state', '033_academy_learning', '034_owner_news_editorial', '035_owner_news_polls']) {
     assert.equal(ledger.includes(migration), false, `${migration} must run after the bootstrap schema`);
   }
 });
@@ -63,6 +63,45 @@ test('Academy schema preserves legacy delivery and API-only learning storage', a
   }
   assert.match(integration, /Setup modes require an empty disposable database/);
   assert.match(integration, /ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows/);
+});
+
+test('Owner News migration order, release gates, and compatibility guard stay aligned', async () => {
+  const [migration, provision, verification, migrationTest, runner] = await Promise.all([
+    readFile('api/db/migrations/034_owner_news_editorial.sql', 'utf8'),
+    readFile('api/db/provision.js', 'utf8'),
+    readFile('api/db/verify-migrations.js', 'utf8'),
+    readFile('scripts/test-migrations.mjs', 'utf8'),
+    readFile('api/db/migrate.js', 'utf8'),
+  ]);
+  assert.match(verification, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
+  assert.match(migrationTest, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
+  for (const table of ['owner_news_home', 'owner_news_polls', 'owner_news_poll_options', 'owner_news_poll_votes']) {
+    assert.match(verification, new RegExp(`to_regclass\\('public\\.${table}'\\)`));
+    assert.match(migrationTest, new RegExp(table));
+  }
+  for (const check of [
+    'cms_revisions_editorial_object_check', 'owner_news_polls_status_check',
+    'owner_news_poll_votes_pkey', 'owner_news_one_open_poll',
+    'owner_news_polls_publication_idx',
+  ]) {
+    assert.match(verification, new RegExp(check));
+    assert.match(migrationTest, new RegExp(check));
+  }
+  assert.match(verification, /owner_news_poll_votes_composite_fk/);
+  assert.match(migrationTest, /vote_composite_fk/);
+  assert.match(migrationTest, /home_columns/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE ON owner_news_home TO portal_api/);
+  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON owner_news_polls, owner_news_poll_options, owner_news_poll_votes TO portal_api/);
+  for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+    assert.match(verification, new RegExp(`has_table_privilege\\('portal_api', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
+    assert.match(verification, new RegExp(`NOT has_table_privilege\\('portal_cron', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
+  }
+  assert.match(migration, /CREATE TABLE owner_news_home/);
+  assert.match(migration, /INSERT INTO owner_news_home\(singleton\) VALUES \(TRUE\)/);
+  assert.match(runner, /033_owner_news_editorial/);
+  assert.match(runner, /034_owner_news_polls/);
+  assert.match(runner, /Migration compatibility error/);
+  assert.match(runner, /explicit migration plan/);
 });
 
 test('DHO naming check follows migration filenames and scans generated HTML recursively', async () => {
@@ -376,6 +415,8 @@ test('DHO job title migration seeds, merges, and maps the approved names', async
   assert.match(integration, /name: 'Legacy DHO Merge'/);
   assert.match(integration, /assert\.deepEqual\(mergedTitle\.rows, \[\{ active: false, page_access: \{ autocard: true, posCards: true \} \}\]\)/);
   assert.match(integration, /ALTER TABLE job_titles DROP CONSTRAINT IF EXISTS job_titles_name_no_legacy_rh_check/);
+  assert.match(integration, /setupMode === 'bootstrap'[\s\S]*Assistente de RH'[\s\S]*Coordenador de RH'/);
+  assert.match(integration, /Assistente de RH', FALSE, '\{"autocard":false,"posCards":false\}'::jsonb/);
   assert.match(integration, /pg_get_constraintdef\(oid\)/);
   for (const source of [schema, migration]) {
     assert.match(source, /job_titles_name_no_legacy_rh_check/);

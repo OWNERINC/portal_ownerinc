@@ -4,6 +4,7 @@ COPY cron/package.json cron/package-lock.json ./
 RUN npm ci --omit=dev --omit=optional
 COPY --chown=node:node cron/ ./
 COPY --chown=node:node api/cms/ /api/cms/
+COPY --chown=node:node api/owner-news/editorial.js /api/owner-news/editorial.js
 RUN apk upgrade --no-cache \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 USER node

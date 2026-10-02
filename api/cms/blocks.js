@@ -6,7 +6,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const REMINDER_CONTENT_PATH = '/reminders.html';
 
 const ALLOWED_BLOCK_TYPES = new Set([
-  'heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video',
+  'heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video', 'quote', 'profile',
 ]);
 
 function isRecord(value) {
@@ -50,7 +50,7 @@ function keysAre(block, allowed) {
   return Object.keys(block).every((key) => allowed.has(key));
 }
 
-function normalizeBlock(block) {
+function normalizeBaseBlock(block) {
   if (!isRecord(block) || !ALLOWED_BLOCK_TYPES.has(block.type)) return null;
 
   switch (block.type) {
@@ -82,6 +82,33 @@ function normalizeBlock(block) {
       const tone = block.tone === undefined ? 'info' : block.tone;
       return value && (!hasTitle || title) && ['info', 'warning', 'success'].includes(tone)
         ? { type: 'callout', tone, ...(title ? { title } : {}), text: value } : null;
+    }
+    case 'quote': {
+      if (!keysAre(block, new Set(['type', 'text', 'attribution']))) return null;
+      const value = text(block.text, 5000);
+      const attribution = 'attribution' in block ? text(block.attribution, 200, { multiline: false }) : undefined;
+      return value && attribution !== null
+        ? { type: 'quote', text: value, ...(attribution ? { attribution } : {}) } : null;
+    }
+    case 'profile': {
+      if (!keysAre(block, new Set(['type', 'name', 'role', 'text', 'asset_id', 'alt']))) return null;
+      const name = text(block.name, 200, { multiline: false });
+      if (!name) return null;
+      const result = { type: 'profile', name };
+      for (const field of ['role', 'text']) {
+        if (!(field in block)) continue;
+        const value = text(block[field], field === 'role' ? 200 : 5000, { multiline: field === 'text' });
+        if (!value) return null;
+        result[field] = value;
+      }
+      if ('asset_id' in block) {
+        const id = assetId(block.asset_id);
+        const alt = text(block.alt, 300, { multiline: false });
+        if (!id || !alt) return null;
+        result.asset_id = id;
+        result.alt = alt;
+      } else if ('alt' in block) return null;
+      return result;
     }
     case 'image': {
       if (!keysAre(block, new Set(['type', 'asset_id', 'alt']))) return null;
@@ -122,6 +149,42 @@ function normalizeBlock(block) {
   }
 }
 
+const LAYOUTS = new Set(['content', 'wide', 'full', 'left', 'right']);
+const TYPOGRAPHIC_TYPES = new Set(['paragraph', 'list', 'callout', 'quote', 'profile']);
+
+function normalizeBlock(block) {
+  if (!isRecord(block)) return null;
+  const core = { ...block };
+  const extra = {};
+  if ('layout' in core) {
+    if (!LAYOUTS.has(core.layout)) return null;
+    extra.layout = core.layout;
+    delete core.layout;
+  }
+  if ('typography' in core) {
+    if (!TYPOGRAPHIC_TYPES.has(core.type) || !['serif', 'sans'].includes(core.typography)) return null;
+    extra.typography = core.typography;
+    delete core.typography;
+  }
+  if (core.type === 'image') {
+    for (const field of ['caption', 'credit']) {
+      if (!(field in core)) continue;
+      const value = text(core[field], field === 'caption' ? 1000 : 300);
+      if (!value) return null;
+      extra[field] = value;
+      delete core[field];
+    }
+  }
+  if ('usage' in core && ['image', 'pdf'].includes(core.type)) {
+    const allowed = core.type === 'image' ? ['cover', 'body'] : ['edition', 'attachment'];
+    if (!allowed.includes(core.usage)) return null;
+    extra.usage = core.usage;
+    delete core.usage;
+  }
+  const result = normalizeBaseBlock(core);
+  return result ? { ...result, ...extra } : null;
+}
+
 function validateBlocks(value) {
   if (!Array.isArray(value) || value.length > MAX_BLOCKS) return null;
   const normalized = value.map(normalizeBlock);
@@ -137,6 +200,8 @@ function blocksToText(blocks) {
     switch (block.type) {
       case 'heading':
       case 'paragraph':
+      case 'quote':
+      case 'profile':
         return block.text;
       case 'list':
         return block.items.map((item) => `${block.ordered ? '1.' : '-'} ${item}`).join('\n');

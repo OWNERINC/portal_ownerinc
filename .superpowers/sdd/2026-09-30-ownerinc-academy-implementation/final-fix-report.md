@@ -1,7 +1,7 @@
 # Academy — relatório da onda final de correções
 
-**Data:** 1º de outubro de 2026  
-**Escopo:** correções finais do catálogo, editor de currículo, motion/ARIA e evidência documental.  
+**Data:** 1º de outubro de 2026
+**Escopo:** correções finais do catálogo, editor de currículo, motion/ARIA e evidência documental.
 **Baseline documental:** `5e4b40e`, conforme a matriz de aceite. Os arquivos `task-*-review*.md` locais não foram alterados.
 
 ## Correções entregues

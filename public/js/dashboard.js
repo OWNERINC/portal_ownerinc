@@ -102,7 +102,7 @@ function renderHero(announcement, state = announcement ? 'populated' : 'empty') 
   if (title) title.textContent = announcement?.title || 'Owner News';
   if (eyebrow) eyebrow.textContent = `Owner News · ${announcement?.category || 'Ownerinc'}`;
   if (description) description.textContent = announcement
-    ? excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.')
+    ? announcement.editorial?.summary || excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.')
     : state === 'loading' ? 'Carregando publicações…'
       : state === 'error' ? 'Não foi possível carregar o Owner News.' : 'Nenhuma publicação no Owner News.';
   if (meta) meta.textContent = announcement ? `Publicado ${formatDate(announcement.published_at)}` : '';
@@ -132,7 +132,8 @@ function loadNewsImage(image, announcement) {
   const requestToken = announcementsRequest;
   image.src = './assets/logo-branco.svg';
   image.alt = 'Owner News';
-  const cover = announcement?.content_blocks?.find(block => block.type === 'image');
+  const cover = announcement?.content_blocks?.find(block => block.type === 'image' && block.usage === 'cover')
+    || announcement?.content_blocks?.find(block => block.type === 'image');
   if (!cover) return;
   fetchAPIAsset(`/api/cms/assets/${encodeURIComponent(cover.asset_id)}`).then(url => {
     if (requestToken !== announcementsRequest || !image.isConnected) {
@@ -158,7 +159,7 @@ async function loadAnnouncements() {
   renderHero(null, 'loading');
   setBusy(announcementsPreview, true);
   try {
-    const announcements = (await fetchAPI('/api/announcements?limit=3&offset=0')).slice(0, 3);
+    const announcements = (await fetchAPI('/api/announcements?kind=article&limit=3&offset=0')).slice(0, 3);
     if (requestToken !== announcementsRequest) return;
     releaseNewsImages();
     renderHero(announcements[0]);
@@ -168,7 +169,7 @@ async function loadAnnouncements() {
       const card = storyCard({
       title: announcement.title,
       category: announcement.category || 'Comunicado',
-      description: excerpt(announcement.content_blocks, ''),
+      description: announcement.editorial?.summary || excerpt(announcement.content_blocks, ''),
       href: `./announcements.html?id=${encodeURIComponent(announcement.id)}`,
       image: './assets/logo-branco.svg',
       alt: 'Owner News',

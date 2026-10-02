@@ -33,6 +33,8 @@ const expectedVersions = [
   '031_contract_invariants',
   '032_user_import_identity',
   '033_academy_learning',
+  '034_owner_news_editorial',
+  '035_owner_news_polls',
 ];
 
 async function verifyMigrations() {
@@ -50,9 +52,13 @@ async function verifyMigrations() {
       to_regclass('public.autocard_media') AS autocard_media,
       to_regclass('public.pos_cards') AS pos_cards,
       to_regclass('public.pos_card_media') AS pos_card_media,
-      to_regclass('public.cms_documents') AS cms_documents,
+       to_regclass('public.cms_documents') AS cms_documents,
        to_regclass('public.cms_revisions') AS cms_revisions,
        to_regclass('public.cms_assets') AS cms_assets,
+       to_regclass('public.owner_news_home') AS owner_news_home,
+       to_regclass('public.owner_news_polls') AS owner_news_polls,
+       to_regclass('public.owner_news_poll_options') AS owner_news_poll_options,
+       to_regclass('public.owner_news_poll_votes') AS owner_news_poll_votes,
        to_regclass('public.pending_registrations') AS pending_registrations,
        to_regclass('public.firebase_cleanup_queue') AS firebase_cleanup_queue,
        (SELECT COUNT(*) = 2 FROM information_schema.columns
@@ -127,8 +133,49 @@ async function verifyMigrations() {
          WHERE conrelid = 'public.cms_revisions'::regclass
            AND conname = 'cms_revisions_status_check') AS cms_revision_status_check,
         EXISTS (SELECT 1 FROM pg_constraint
-          WHERE conrelid = 'public.cms_revisions'::regclass
-            AND conname = 'cms_revisions_blocks_check') AS cms_revision_blocks_check,
+           WHERE conrelid = 'public.cms_revisions'::regclass
+             AND conname = 'cms_revisions_blocks_check') AS cms_revision_blocks_check,
+        EXISTS (SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'cms_revisions'
+            AND column_name = 'editorial' AND data_type = 'jsonb') AS owner_news_editorial_column,
+        EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.cms_revisions')
+            AND conname = 'cms_revisions_editorial_object_check'
+            AND contype = 'c' AND convalidated
+            AND pg_get_constraintdef(oid) LIKE '%jsonb_typeof(editorial)%object%') AS owner_news_editorial_object_check,
+        (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
+          FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'owner_news_home')
+            = ARRAY['singleton', 'version', 'draft', 'published', 'updated_by', 'updated_at', 'published_at']::text[] AS owner_news_home_columns,
+        EXISTS (SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'owner_news_home'
+            AND column_name = 'singleton' AND column_default LIKE '%true%') AS owner_news_home_singleton_default,
+        EXISTS (SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'owner_news_home'
+            AND column_name = 'version' AND column_default LIKE '%1%') AS owner_news_home_version_default,
+        (SELECT COUNT(*) = 1 AND bool_and(singleton AND version > 0)
+          FROM owner_news_home) AS owner_news_home_singleton_row,
+        EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.owner_news_polls')
+            AND conname = 'owner_news_polls_status_check' AND contype = 'c' AND convalidated) AS owner_news_polls_status_check,
+        EXISTS (SELECT 1 FROM pg_index i
+          JOIN pg_class index_rel ON index_rel.oid = i.indexrelid
+          WHERE i.indrelid = to_regclass('public.owner_news_polls')
+            AND index_rel.relname = 'owner_news_one_open_poll'
+            AND i.indisunique AND i.indpred IS NOT NULL
+            AND pg_get_indexdef(i.indexrelid) LIKE '%status%open%') AS owner_news_one_open_poll_index,
+        EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.owner_news_poll_votes')
+            AND conname = 'owner_news_poll_votes_pkey' AND contype = 'p'
+            AND pg_get_constraintdef(oid) LIKE 'PRIMARY KEY (poll_id, user_uid)%') AS owner_news_poll_votes_pkey,
+        EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.owner_news_poll_votes')
+            AND contype = 'f' AND confrelid = to_regclass('public.owner_news_poll_options')
+            AND pg_get_constraintdef(oid) LIKE '%FOREIGN KEY (poll_id, option_id)%poll_id, id%') AS owner_news_poll_votes_composite_fk,
+        EXISTS (SELECT 1 FROM pg_class index_rel
+          WHERE index_rel.oid = to_regclass('public.owner_news_polls_publication_idx')
+            AND index_rel.relkind = 'i'
+            AND pg_get_indexdef(index_rel.oid) LIKE '%status%published_at%id%') AS owner_news_polls_publication_index,
         EXISTS (SELECT 1 FROM pg_constraint
           WHERE conrelid = 'public.autocard_media'::regclass
             AND conname = 'autocard_media_storage_key_check'
@@ -199,10 +246,26 @@ async function verifyMigrations() {
          AND has_table_privilege('portal_api', 'public.cms_revisions', 'INSERT')
          AND has_table_privilege('portal_api', 'public.cms_revisions', 'UPDATE')
          AND has_table_privilege('portal_api', 'public.cms_revisions', 'DELETE')) AS api_cms_revisions_privileges,
-       (has_table_privilege('portal_api', 'public.cms_assets', 'SELECT')
-         AND has_table_privilege('portal_api', 'public.cms_assets', 'INSERT')
-         AND has_table_privilege('portal_api', 'public.cms_assets', 'UPDATE')
-         AND has_table_privilege('portal_api', 'public.cms_assets', 'DELETE')) AS api_cms_assets_privileges,
+         (has_table_privilege('portal_api', 'public.cms_assets', 'SELECT')
+          AND has_table_privilege('portal_api', 'public.cms_assets', 'INSERT')
+          AND has_table_privilege('portal_api', 'public.cms_assets', 'UPDATE')
+          AND has_table_privilege('portal_api', 'public.cms_assets', 'DELETE')) AS api_cms_assets_privileges,
+        (has_table_privilege('portal_api', 'public.owner_news_home', 'SELECT')
+          AND has_table_privilege('portal_api', 'public.owner_news_home', 'INSERT')
+          AND has_table_privilege('portal_api', 'public.owner_news_home', 'UPDATE')
+          AND NOT has_table_privilege('portal_api', 'public.owner_news_home', 'DELETE')) AS api_owner_news_home_privileges,
+        (has_table_privilege('portal_api', 'public.owner_news_polls', 'SELECT')
+          AND has_table_privilege('portal_api', 'public.owner_news_polls', 'INSERT')
+          AND has_table_privilege('portal_api', 'public.owner_news_polls', 'UPDATE')
+          AND has_table_privilege('portal_api', 'public.owner_news_polls', 'DELETE')) AS api_owner_news_polls_privileges,
+        (has_table_privilege('portal_api', 'public.owner_news_poll_options', 'SELECT')
+          AND has_table_privilege('portal_api', 'public.owner_news_poll_options', 'INSERT')
+          AND has_table_privilege('portal_api', 'public.owner_news_poll_options', 'UPDATE')
+          AND has_table_privilege('portal_api', 'public.owner_news_poll_options', 'DELETE')) AS api_owner_news_poll_options_privileges,
+        (has_table_privilege('portal_api', 'public.owner_news_poll_votes', 'SELECT')
+          AND has_table_privilege('portal_api', 'public.owner_news_poll_votes', 'INSERT')
+          AND has_table_privilege('portal_api', 'public.owner_news_poll_votes', 'UPDATE')
+          AND has_table_privilege('portal_api', 'public.owner_news_poll_votes', 'DELETE')) AS api_owner_news_poll_votes_privileges,
        has_table_privilege('portal_cron', 'public.autocard_cards', 'SELECT') AS cron_autocard_cards_privileges,
         (has_table_privilege('portal_cron', 'public.autocard_media', 'SELECT')
           AND has_table_privilege('portal_cron', 'public.autocard_media', 'DELETE')) AS cron_autocard_media_privileges,
@@ -232,9 +295,25 @@ async function verifyMigrations() {
           AND has_table_privilege('portal_cron', 'public.cms_documents', 'UPDATE')) AS cron_cms_documents_privileges,
         (has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT')
           AND has_table_privilege('portal_cron', 'public.cms_revisions', 'UPDATE')) AS cron_cms_revisions_privileges,
-        (has_table_privilege('portal_cron', 'public.cms_assets', 'SELECT')
-          AND has_table_privilege('portal_cron', 'public.cms_assets', 'UPDATE')
-          AND has_table_privilege('portal_cron', 'public.cms_assets', 'DELETE')) AS cron_cms_assets_privileges,
+         (has_table_privilege('portal_cron', 'public.cms_assets', 'SELECT')
+           AND has_table_privilege('portal_cron', 'public.cms_assets', 'UPDATE')
+           AND has_table_privilege('portal_cron', 'public.cms_assets', 'DELETE')) AS cron_cms_assets_privileges,
+        (NOT has_table_privilege('portal_cron', 'public.owner_news_home', 'SELECT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_home', 'INSERT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_home', 'UPDATE')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_home', 'DELETE')) AS cron_owner_news_home_denied,
+        (NOT has_table_privilege('portal_cron', 'public.owner_news_polls', 'SELECT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_polls', 'INSERT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_polls', 'UPDATE')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_polls', 'DELETE')) AS cron_owner_news_polls_denied,
+        (NOT has_table_privilege('portal_cron', 'public.owner_news_poll_options', 'SELECT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_poll_options', 'INSERT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_poll_options', 'UPDATE')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_poll_options', 'DELETE')) AS cron_owner_news_poll_options_denied,
+        (NOT has_table_privilege('portal_cron', 'public.owner_news_poll_votes', 'SELECT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_poll_votes', 'INSERT')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_poll_votes', 'UPDATE')
+          AND NOT has_table_privilege('portal_cron', 'public.owner_news_poll_votes', 'DELETE')) AS cron_owner_news_poll_votes_denied,
        (has_table_privilege('portal_cron', 'public.audit_log', 'SELECT')
          AND has_table_privilege('portal_cron', 'public.audit_log', 'INSERT')
          AND has_table_privilege('portal_cron', 'public.audit_log', 'UPDATE')
@@ -246,9 +325,13 @@ async function verifyMigrations() {
       || result.rows[0].autocard_media !== 'autocard_media'
       || result.rows[0].pos_cards !== 'pos_cards'
       || result.rows[0].pos_card_media !== 'pos_card_media'
-      || result.rows[0].cms_documents !== 'cms_documents'
-      || result.rows[0].cms_revisions !== 'cms_revisions'
-        || result.rows[0].cms_assets !== 'cms_assets'
+       || result.rows[0].cms_documents !== 'cms_documents'
+       || result.rows[0].cms_revisions !== 'cms_revisions'
+         || result.rows[0].cms_assets !== 'cms_assets'
+         || result.rows[0].owner_news_home !== 'owner_news_home'
+         || result.rows[0].owner_news_polls !== 'owner_news_polls'
+         || result.rows[0].owner_news_poll_options !== 'owner_news_poll_options'
+         || result.rows[0].owner_news_poll_votes !== 'owner_news_poll_votes'
         || result.rows[0].pending_registrations !== 'pending_registrations'
         || result.rows[0].schema_migrations_shape !== true
         || result.rows[0].schema_migrations_version !== true
@@ -269,7 +352,18 @@ async function verifyMigrations() {
       || result.rows[0].cms_asset_deleting_at !== true
       || result.rows[0].cms_content_type_check !== true
       || result.rows[0].cms_revision_status_check !== true
-      || result.rows[0].cms_revision_blocks_check !== true
+        || result.rows[0].cms_revision_blocks_check !== true
+        || result.rows[0].owner_news_editorial_column !== true
+        || result.rows[0].owner_news_editorial_object_check !== true
+        || result.rows[0].owner_news_home_columns !== true
+        || result.rows[0].owner_news_home_singleton_default !== true
+        || result.rows[0].owner_news_home_version_default !== true
+        || result.rows[0].owner_news_home_singleton_row !== true
+        || result.rows[0].owner_news_polls_status_check !== true
+        || result.rows[0].owner_news_one_open_poll_index !== true
+        || result.rows[0].owner_news_poll_votes_pkey !== true
+        || result.rows[0].owner_news_poll_votes_composite_fk !== true
+        || result.rows[0].owner_news_polls_publication_index !== true
        || result.rows[0].cms_published_revision_fk !== true
        || result.rows[0].cms_draft_revision_fk !== true
        || result.rows[0].cms_scheduled_revision_fk !== true
@@ -289,8 +383,12 @@ async function verifyMigrations() {
       || result.rows[0].api_pos_cards_privileges !== true
       || result.rows[0].api_pos_card_media_privileges !== true
       || result.rows[0].api_cms_documents_privileges !== true
-      || result.rows[0].api_cms_revisions_privileges !== true
-      || result.rows[0].api_cms_assets_privileges !== true
+       || result.rows[0].api_cms_revisions_privileges !== true
+       || result.rows[0].api_cms_assets_privileges !== true
+       || result.rows[0].api_owner_news_home_privileges !== true
+       || result.rows[0].api_owner_news_polls_privileges !== true
+       || result.rows[0].api_owner_news_poll_options_privileges !== true
+       || result.rows[0].api_owner_news_poll_votes_privileges !== true
         || result.rows[0].cron_autocard_cards_privileges !== true
         || result.rows[0].cron_autocard_media_privileges !== true
         || result.rows[0].cron_users_lock_privileges !== true
@@ -301,10 +399,14 @@ async function verifyMigrations() {
        || result.rows[0].cron_pos_cards_privileges !== true
       || result.rows[0].cron_pos_card_media_privileges !== true
        || result.rows[0].cron_cms_documents_privileges !== true
-       || result.rows[0].cron_cms_revisions_privileges !== true
-       || result.rows[0].cron_cms_assets_privileges !== true
-       || result.rows[0].cron_audit_privileges !== true) {
-       throw new Error('Migration ledger, DHO job title, pending registration, profile photo crop, AutoCard, Pos-Cards, CMS, or Ombudsman removal schema/runtime checks are incomplete');
+        || result.rows[0].cron_cms_revisions_privileges !== true
+        || result.rows[0].cron_cms_assets_privileges !== true
+        || result.rows[0].cron_owner_news_home_denied !== true
+        || result.rows[0].cron_owner_news_polls_denied !== true
+        || result.rows[0].cron_owner_news_poll_options_denied !== true
+        || result.rows[0].cron_owner_news_poll_votes_denied !== true
+        || result.rows[0].cron_audit_privileges !== true) {
+        throw new Error('Migration ledger, DHO job title, pending registration, profile photo crop, AutoCard, Pos-Cards, CMS, Owner News, or Ombudsman removal schema/runtime checks are incomplete');
     }
     const academyTables = ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress'];
     for (const table of academyTables) {

@@ -48,6 +48,7 @@ app.use('/api/upload',    require('./routes/upload'));
 app.use('/api/solides',   require('./routes/solides'));
 app.use('/api/cms',       require('./routes/cms'));
 app.use('/api/cms/assets', require('./routes/cms-assets'));
+app.use('/api/cms/owner-news', require('./routes/owner-news-admin'));
 const posCardsRoutes = require('./routes/pos-cards');
 app.use('/api/pos-cards', posCardsRoutes);
 // AutoCard is mounted at its namespaced path and at its legacy asset paths so

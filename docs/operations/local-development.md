@@ -64,6 +64,27 @@ doubles não substituem migrations, persistência ou jornadas reais no navegador
 Para conferir o shell gerado sem escrever arquivos, use
 `node scripts/generate-public-shell.mjs --check`; confira também `git diff --check`.
 
+### Persistência de enquetes Owner News
+
+A migration `035_owner_news_polls` cria enquetes, opções e votos. A API recebe
+SELECT/INSERT/UPDATE/DELETE nas três tabelas após o REVOKE do provisionamento;
+o cron não recebe acesso. O banco garante uma enquete aberta por vez, posições
+únicas de 0 a 5 por enquete e um voto por usuário/enquete. A FK composta impede
+votar em opção de outra enquete. Totais são agregados dos votos, sem contadores
+persistidos. A validação de 2–6 opções ao publicar e o lifecycle de votação
+pertencem à camada de serviço.
+
+Excluir um usuário remove seus votos e torna nulas as referências de autoria,
+preservando enquetes/opções. Excluir uma enquete diretamente no banco remove
+suas opções e votos; excluir isoladamente uma opção votada é bloqueado pela FK.
+Esse schema não oferece uma rota de exclusão.
+
+Em banco **local descartável**, configure `MIGRATION_DATABASE_URL`,
+`MIGRATION_TEST_DISPOSABLE=true` e as senhas das roles; execute
+`npm run test:migrations` e `node scripts/test-owner-news-integration.mjs`.
+Os checks cobrem grants de API/cron, constraints reais, exclusões e operações
+com `SET LOCAL ROLE portal_api` em transação revertida. Fixtures são sintéticas.
+
 Resultados de homologação e aceites das correções de setembro estão no
 [registro da sessão principal](../reviews/2026-09-29-portal-corrections-acceptance.md).
 Uma fixture local aprovada não comprova produção, dados/cargos oficiais,
