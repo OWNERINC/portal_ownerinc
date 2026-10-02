@@ -31,6 +31,8 @@ export type NewsEditorial = null | {
   source_date: string | null
 }
 export type LegacyBlock = Record<string, unknown>
+/** CMS input is validated at runtime; Payload generates the persisted Blocks types. */
+export type NewsContent = (LegacyBlock | RichBlock)[]
 export type NewsDTO = {
   id: string
   title: string
@@ -39,7 +41,7 @@ export type NewsDTO = {
   editorial: NewsEditorial
   content_version: 2
   asset_scope: 'owner-news' | 'owner-news-preview'
-  content_blocks: (LegacyBlock | RichBlock)[]
+  content_blocks: NewsContent
   read_time_minutes: number | null
 }
 export type NewsPage = { rows: NewsDTO[]; count: number }

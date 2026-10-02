@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { registerFirstUserOperation } from 'payload'
+import type { LexicalRichTextAdapter } from '@payloadcms/richtext-lexical'
 import type { DatabaseAdapter, Payload, PayloadRequest } from 'payload'
 import nextConfig from '../../../next.config.mjs'
 
@@ -31,8 +32,34 @@ test('configuração sanitizada preserva a fronteira REST e não inicia o banco'
   assert.equal(adapter.idType, 'uuid')
   assert.equal(adapter.push, false)
   assert.equal(adapter.disableCreateDatabase, true)
-  assert.deepEqual(adapter.prodMigrations, [])
+  // Even an empty prodMigrations array invokes migrate() on production startup.
+  assert.equal(adapter.prodMigrations, undefined)
   assert.equal(adapter.pool, undefined)
+})
+
+test('sanitized editorial config registers real uploads and only convertible Lexical features', async () => {
+  const config = await loadConfig()
+  const articles = config.collections.find(collection => collection.slug === 'news-articles')!
+  const body = articles.fields.find(field => 'name' in field && field.name === 'body')!
+  assert.equal(body.type, 'blocks')
+  if (body.type !== 'blocks') throw new Error('Expected native Blocks')
+  const rich = body.blocks.find(block => block.slug === 'richText')!
+  const content = rich.fields.find(field => 'name' in field && field.name === 'content')!
+  if (content.type !== 'richText') throw new Error('Expected native richText')
+  const editor = content.editor as LexicalRichTextAdapter
+  assert.deepEqual(new Set(editor.editorConfig.resolvedFeatureMap.keys()), new Set([
+    'paragraph', 'heading', 'bold', 'italic', 'underline', 'inlineCode',
+    'orderedList', 'unorderedList', 'link', 'newsFlatLists', 'toolbarFixed',
+  ]))
+  const link = editor.editorConfig.resolvedFeatureMap.get('link')!
+  assert.equal(link.sanitizedServerFeatureProps.disableAutoLinks, true)
+  assert.deepEqual(link.sanitizedServerFeatureProps.enabledCollections, [])
+  for (const block of body.blocks) for (const field of block.fields) {
+    if (field.type === 'upload') {
+      assert.equal(field.relationTo, 'news-media')
+      assert.ok(config.collections.some(collection => collection.slug === field.relationTo && collection.upload))
+    }
+  }
 })
 
 test('admin e CRUD permanecem bloqueados; primeiro usuário nativo falha antes do banco', async () => {

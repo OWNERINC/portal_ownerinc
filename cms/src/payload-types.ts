@@ -68,6 +68,8 @@ export interface Config {
   blocks: {};
   collections: {
     'portal-editors': PortalEditor;
+    'news-articles': NewsArticle;
+    'news-media': NewsMedia;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -76,6 +78,8 @@ export interface Config {
   collectionsJoins: {};
   collectionsSelect: {
     'portal-editors': PortalEditorsSelect<false> | PortalEditorsSelect<true>;
+    'news-articles': NewsArticlesSelect<false> | NewsArticlesSelect<true>;
+    'news-media': NewsMediaSelect<false> | NewsMediaSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -85,8 +89,12 @@ export interface Config {
     defaultIDType: string;
   };
   fallbackLocale: null;
-  globals: {};
-  globalsSelect: {};
+  globals: {
+    'news-home': NewsHome;
+  };
+  globalsSelect: {
+    'news-home': NewsHomeSelect<false> | NewsHomeSelect<true>;
+  };
   locale: null;
   widgets: {
     collections: CollectionsWidget;
@@ -130,6 +138,182 @@ export interface PortalEditor {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-articles".
+ */
+export interface NewsArticle {
+  id: string;
+  title?: string | null;
+  category?: string | null;
+  editorial?: {
+    version: 1;
+    kind: 'article' | 'edition';
+    summary: string;
+    author: string;
+    source_label: string;
+    source_date: string | null;
+  } | null;
+  body?:
+    | (
+        | {
+            content?: {
+              root: {
+                type: string;
+                children: {
+                  type: any;
+                  version: number;
+                  [k: string]: unknown;
+                }[];
+                direction: ('ltr' | 'rtl') | null;
+                format: 'left' | 'start' | 'center' | 'right' | 'end' | 'justify' | '';
+                indent: number;
+                version: number;
+              };
+              [k: string]: unknown;
+            } | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            typography?: ('serif' | 'sans') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'richText';
+          }
+        | {
+            text?: string | null;
+            level?: number | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'heading';
+          }
+        | {
+            text?: string | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            typography?: ('serif' | 'sans') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'paragraph';
+          }
+        | {
+            items?:
+              | {
+                  text?: string | null;
+                  id?: string | null;
+                }[]
+              | null;
+            ordered?: boolean | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            typography?: ('serif' | 'sans') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'list';
+          }
+        | {
+            media?: (string | null) | NewsMedia;
+            alt?: string | null;
+            caption?: string | null;
+            credit?: string | null;
+            usage?: ('cover' | 'body') | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'image';
+          }
+        | {
+            tone?: ('info' | 'warning' | 'success') | null;
+            title?: string | null;
+            text?: string | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            typography?: ('serif' | 'sans') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'callout';
+          }
+        | {
+            text?: string | null;
+            attribution?: string | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            typography?: ('serif' | 'sans') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'quote';
+          }
+        | {
+            name?: string | null;
+            role?: string | null;
+            text?: string | null;
+            media?: (string | null) | NewsMedia;
+            alt?: string | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            typography?: ('serif' | 'sans') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'profile';
+          }
+        | {
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'divider';
+          }
+        | {
+            label?: string | null;
+            url?: string | null;
+            newTab?: boolean | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'link';
+          }
+        | {
+            media?: (string | null) | NewsMedia;
+            title?: string | null;
+            usage?: ('edition' | 'attachment') | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'pdf';
+          }
+        | {
+            media?: (string | null) | NewsMedia;
+            url?: string | null;
+            title?: string | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'video';
+          }
+      )[]
+    | null;
+  publishedAt?: string | null;
+  publicationGeneration?: number | null;
+  legacyDocumentId?: string | null;
+  legacySourceId?: string | null;
+  legacyRevisionId?: string | null;
+  importedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+  _status?: ('draft' | 'published') | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-media".
+ */
+export interface NewsMedia {
+  id: string;
+  sha256?: string | null;
+  legacyAssetId?: string | null;
+  importedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -151,10 +335,19 @@ export interface PayloadKv {
  */
 export interface PayloadLockedDocument {
   id: string;
-  document?: {
-    relationTo: 'portal-editors';
-    value: string | PortalEditor;
-  } | null;
+  document?:
+    | ({
+        relationTo: 'portal-editors';
+        value: string | PortalEditor;
+      } | null)
+    | ({
+        relationTo: 'news-articles';
+        value: string | NewsArticle;
+      } | null)
+    | ({
+        relationTo: 'news-media';
+        value: string | NewsMedia;
+      } | null);
   globalSlug?: string | null;
   user: {
     relationTo: 'portal-editors';
@@ -210,6 +403,171 @@ export interface PortalEditorsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-articles_select".
+ */
+export interface NewsArticlesSelect<T extends boolean = true> {
+  title?: T;
+  category?: T;
+  editorial?: T;
+  body?:
+    | T
+    | {
+        richText?:
+          | T
+          | {
+              content?: T;
+              layout?: T;
+              typography?: T;
+              id?: T;
+              blockName?: T;
+            };
+        heading?:
+          | T
+          | {
+              text?: T;
+              level?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        paragraph?:
+          | T
+          | {
+              text?: T;
+              layout?: T;
+              typography?: T;
+              id?: T;
+              blockName?: T;
+            };
+        list?:
+          | T
+          | {
+              items?:
+                | T
+                | {
+                    text?: T;
+                    id?: T;
+                  };
+              ordered?: T;
+              layout?: T;
+              typography?: T;
+              id?: T;
+              blockName?: T;
+            };
+        image?:
+          | T
+          | {
+              media?: T;
+              alt?: T;
+              caption?: T;
+              credit?: T;
+              usage?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        callout?:
+          | T
+          | {
+              tone?: T;
+              title?: T;
+              text?: T;
+              layout?: T;
+              typography?: T;
+              id?: T;
+              blockName?: T;
+            };
+        quote?:
+          | T
+          | {
+              text?: T;
+              attribution?: T;
+              layout?: T;
+              typography?: T;
+              id?: T;
+              blockName?: T;
+            };
+        profile?:
+          | T
+          | {
+              name?: T;
+              role?: T;
+              text?: T;
+              media?: T;
+              alt?: T;
+              layout?: T;
+              typography?: T;
+              id?: T;
+              blockName?: T;
+            };
+        divider?:
+          | T
+          | {
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        link?:
+          | T
+          | {
+              label?: T;
+              url?: T;
+              newTab?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        pdf?:
+          | T
+          | {
+              media?: T;
+              title?: T;
+              usage?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        video?:
+          | T
+          | {
+              media?: T;
+              url?: T;
+              title?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+      };
+  publishedAt?: T;
+  publicationGeneration?: T;
+  legacyDocumentId?: T;
+  legacySourceId?: T;
+  legacyRevisionId?: T;
+  importedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  _status?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-media_select".
+ */
+export interface NewsMediaSelect<T extends boolean = true> {
+  sha256?: T;
+  legacyAssetId?: T;
+  importedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  url?: T;
+  thumbnailURL?: T;
+  filename?: T;
+  mimeType?: T;
+  filesize?: T;
+  width?: T;
+  height?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv_select".
  */
 export interface PayloadKvSelect<T extends boolean = true> {
@@ -247,6 +605,44 @@ export interface PayloadMigrationsSelect<T extends boolean = true> {
   batch?: T;
   updatedAt?: T;
   createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-home".
+ */
+export interface NewsHome {
+  id: string;
+  eyebrow?: string | null;
+  headline?: string | null;
+  summary?: string | null;
+  publishedAt?: string | null;
+  publicationGeneration?: number | null;
+  legacyDocumentId?: string | null;
+  legacySourceId?: string | null;
+  legacyRevisionId?: string | null;
+  importedAt?: string | null;
+  _status?: ('draft' | 'published') | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-home_select".
+ */
+export interface NewsHomeSelect<T extends boolean = true> {
+  eyebrow?: T;
+  headline?: T;
+  summary?: T;
+  publishedAt?: T;
+  publicationGeneration?: T;
+  legacyDocumentId?: T;
+  legacySourceId?: T;
+  legacyRevisionId?: T;
+  importedAt?: T;
+  _status?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

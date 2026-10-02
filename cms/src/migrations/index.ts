@@ -1,8 +1,9 @@
-import type { MigrateDownArgs, MigrateUpArgs } from '@payloadcms/db-postgres'
+import * as migration_20261002_181423_owner_news_initial from './20261002_181423_owner_news_initial';
 
-// Empty registry: schema migrations are introduced by later tasks via the Payload CLI.
-export const migrations: {
-  name: string
-  up: (args: MigrateUpArgs) => Promise<void>
-  down: (args: MigrateDownArgs) => Promise<void>
-}[] = []
+export const migrations = [
+  {
+    up: migration_20261002_181423_owner_news_initial.up,
+    down: migration_20261002_181423_owner_news_initial.down,
+    name: '20261002_181423_owner_news_initial'
+  },
+];
