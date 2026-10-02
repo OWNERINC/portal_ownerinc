@@ -5,9 +5,11 @@
 **35 casos de banco/HTTP PASS / 2 casos FAIL**, com PostgreSQL, Firebase Auth
 Emulator, Express e Next/Payload reais. A revisão independente confirmou a
 contagem e manteve as duas falhas abertas. A sessão principal acrescentou
-**6 casos delimitados de navegador PASS**; edição interna dos blocos e aceite
-visual responsivo continuam bloqueados/inconclusivos, conforme abaixo.
-Esta rodada não declara aceite integral.
+**6 casos delimitados de navegador PASS**. Uma jornada posterior em Edge isolado
+registrou **7 PASS / 3 FAIL em 10 cenários**, com edição real, persistência e
+capturas; os três novos FAILs são descritos abaixo. As contagens de navegador são
+por execução e possuem cobertura sobreposta, não devem ser somadas como casos
+únicos. Esta rodada não declara aceite integral.
 
 Base validada: `2aacdd548684594a6f770d0b7c61c12a6d4005b1`, branch
 `feat/payload-owner-news`. Não houve correção de código de produto nesta rodada.
@@ -124,10 +126,19 @@ Rich Text/Quote/Image, mas não disponibilizou os controles internos de conteúd
 texto, mídia, alt ou layout. Toggle block, Show All e reload não os expuseram.
 Título/categoria e ações de salvamento permaneceram operacionais.
 
-**Edição/colagem de conteúdo rico não aprovada.** O diagnóstico específico está
-em andamento para distinguir código de produto, proxy descartável e limitações
-da ferramenta. Não atribuir a causa antes dessa confirmação. O editor JSON dos
-metadados também não recebeu aceite de usabilidade nesta inspeção.
+**Edição/colagem não foi verificada por essa inspeção OpenChamber.** O diagnóstico
+posterior em Edge independente, pela mesma origem/proxy e com sessões reais de
+editorA/editorB, renderizou os controles e valores dos dois documentos. Permissões
+reais retornaram `body:true`; não se confirmou indisponibilidade geral causada
+pelo schema/acesso. O Payload monta os campos internos via IntersectionObserver;
+viewport/lazy-render do painel é uma hipótese restante, cuja causa exata continua
+não comprovada. A observação original acima é preservada.
+
+Também foi confirmado que o snapshot acessível do Monaco expõe apenas “Editor
+content”/buffer IME vazio enquanto oito linhas visuais do DOM contêm JSON correto,
+sob `aria-hidden=true`. Isso explica a ausência no snapshot, sem aprovar a
+usabilidade editorial de um formulário JSON. A jornada seguinte verificou gestos
+reais de edição, com limites e falhas próprios.
 
 ### Limites da evidência visual
 
@@ -138,6 +149,101 @@ responsivo é **INCONCLUSIVO**, não PASS. A captura de tela falhou na ferrament
 com `UnknownVizError`; nenhuma imagem foi salva. A evidência acima são interações,
 valores após reload, mensagens nativas e snapshots textuais, sem afirmar aprovação
 visual ou renderização em dispositivo físico.
+
+## Jornada independente de edição — Edge isolado
+
+Execução posterior sobre `86b7e7bec029b312fb72480ffa398cd9fafa51a4`, com produto
+inalterado. Edge **154.0.4258.48** headless/Playwright **1.63.0**, sessão sintética
+nova de editorB na mesma stack. Foram **gestos automatizados reais de navegador**,
+não ensaio manual: inputs, seleção/teclado, Ctrl+B, formulário de link, dropdown de
+lista e clipboard sintético + Ctrl+V. Nenhuma injeção de estado no editor, escrita
+direta por API/SQL ou alteração dos documentos anteriores/abertura/permissões.
+As screenshots foram lidas pelo agente; não representam aparelho físico.
+
+Fixture própria: **`4e742ca5-129c-4391-913b-c1f9ea7b6321`**, título
+`VALIDATION ONLY - Edge native editing 2026-10-02`. Estado final: publicado com
+draft posterior; quatro versões. A versão publicada é
+`5f141ff7-d720-474c-bee7-a5a31de216db`; último autosave
+`379965ec-d320-4ba5-8c51-052fd1684328`. Só o draft contém o marcador
+`LATER DRAFT ONLY - Edge isolation marker.` em um terceiro item da lista.
+
+| Caso | Estado | Evidência |
+|---|---|---|
+| EDGE-01 — criação única por navegação | FAIL | Duas navegações ao formulário nativo create produziram quatro drafts, em dois pares; criação/edição funcionaram, mas a unicidade esperada falhou neste ambiente dev |
+| EDGE-02 — metadados no Monaco | PASS | Clique no editor, Ctrl+A/Ctrl+V, autosave200, GET e linhas visuais após reload confirmaram summary/data/source_label; usabilidade de negócio permanece sem aceite |
+| EDGE-03 — Rich Text/negrito | PASS | Add Body → Rich Text, texto digitado e Ctrl+B; `<strong>`/Lexical `format:1` persistiram por autosave/reload |
+| EDGE-04 — link com checkbox padrão | FAIL | URL HTTPS e label válidos, “Open in new tab” intocado: nó sem `newTab`, autosave400 `invalid_rich_text`; DOM local não persistiu |
+| EDGE-05 — link explícito/lista/colagem | PASS | Checkbox marcado via UI, Unordered List de dois itens e duas linhas coladas; autosave200, reconhecimento nativo, reload e GET preservaram texto/href/formatação |
+| EDGE-06 — publicação inválida | PASS | Summary vazio salvo como draft; Publish changes400 e toast `article_requires_summary_and_body`, continuou Draft; qualidade da mensagem não aprovada |
+| EDGE-07 — publicação válida | PASS | Summary restaurado pela UI; Publish changes200, Status Published e “Updated successfully.”; GET/SQL corroboraram |
+| EDGE-08 — draft posterior isolado | PASS | Marcador digitado/autosalvo/recarregado só no draft; body publicado idêntico ao anterior em GET e SQL somente leitura |
+| EDGE-09 — geometria/foco desktop | PASS delimitado | 1440×900 sem overflow global, campos dentro da largura, Title → Category → Monaco por Tab e foco Lexical por clique; não certifica toda UX |
+| EDGE-10 — geometria narrow | FAIL | Em390×844 documento409px; em320×844 documento365px. Cabeçalho/avatar ultrapassam a viewport; corpo/toolbar cabem. Reproduzido também em carga fresca |
+
+**7 PASS / 3 FAIL / 0 BLOCKED nesta jornada.** Autosave/publicação corroboram
+domínios já presentes nos seis casos primários; não adicioná-los novamente ao
+total de 37 casos de banco/HTTP nem criar um total único somando execuções.
+
+### Novos FAILs preservados, sem correção
+
+1. **Create duplicado no ambiente local:** pares criados às 20:45:04.621/.864 e
+   20:46:26.241/.492 UTC. O Payload instalado executa `payload.create(...draft:true)`
+   no render de `views/Document/index.js:243–275` e depois redireciona. Não houve
+   POST REST de criação pelo oracle. A razão exata da execução dupla e ocorrência
+   em build de produção não foram determinadas. Investigar reexecução/render e
+   idempotência desse caminho; não confundir com UUID de importação.
+   Os três extras foram preservados e rotulados pela UI como `VALIDATION ONLY -
+   create-route artifact 1/2/3 - Edge 2026-10-02`:
+   `2bca4372-f0d7-4615-872a-5ef0748a585f`,
+   `52d0c425-9189-4c24-9956-0cf5855f24cc`,
+   `d6e0990a-4af7-48bc-8d98-b7689ab6cbec`.
+2. **Link nativo default rejeitado:** request real contém
+   `fields:{url:'https://example.com/owner-news-validation',linkType:'custom'}`,
+   sem `newTab`. `cms/src/news/lexical-to-rich.ts:52` exige boolean; checkbox nativo
+   instalado não define default. Reproduzido três vezes. Na terceira, DOM continha
+   `DEFAULT LINK REJECTION PROBE`, mas GET antes/depois permaneceu idêntico e
+   reload removeu o probe. Marcar explicitamente o checkbox gera `newTab:true` e
+   permitiu concluir a jornada; esse cenário não corrige nem anula o FAIL.
+   Direção mínima: alinhar o default nativo/projeção mantendo validação de tipos
+   e HTTPS. Nenhuma alteração de produto foi aplicada.
+3. **Overflow narrow:** account x383.734/right408.734 em 390px; x322.453/right347.453
+   em 320px. Breadcrumb alcança 365.281 em 320px. O avatar fica cortado/fora da tela,
+   inclusive em navegação fresca. Investigar flex/encolhimento de AppHeader e
+   StepNav. O canvas interno enorme do Monaco é recortado pelo scroller e não foi
+   confundido com a largura real do documento.
+
+### Geometria e distinção de evidências
+
+| Viewport | doc client/scroll | Title/Category x/largura/altura | Lexical x/largura |
+|---|---|---|---|
+| 1440×900 | 1440/1440 | 60 / 1320 / 40 | 81 / 1278 |
+| 390×844 | 390/409 | 16 / 358 / 40 | 33 / 324 |
+| 320×844 | 320/365 | 16 / 288 / 40 | 33 / 254 |
+
+Toolbar bold/link 30×30px; Publish 118.328×32 desktop e 109.344×29.688 narrow;
+texto dos inputs 13px/12px, Lexical 16px. Foco Title → Category → Monaco funcionou
+em todos os tamanhos medidos; o JSON ocupa área de 144px com scroll/wrap. Botões da
+toolbar aparecem sem nome no snapshot acessível. São observações limitadas de
+foco/alvos/acessibilidade, não aceite completo. Um seletor inicial clicava a linha
+do Monaco sob decoração/sticky controls; clicar a área visível do editor resolveu
+o oracle, sem forçar eventos nem alterar produto.
+
+DOM e screenshots demonstram renderização/gestos; GETs autenticados com
+`draft=true|false` demonstram estado servido; SELECTs parametrizados em
+`BEGIN READ ONLY`, como `cms_runtime`, confirmaram conteúdo publicado e versão
+latest distintos para esta fixture. Os títulos dos extras estão nas versões
+latest, enquanto suas linhas principais permanecem vazias, comportamento nativo
+de draft. Nenhum INSERT/UPDATE SQL foi usado.
+
+Relatório focado ignorado: `real-validation-edge-editing.md` no workspace de
+coordenação. Capturas/JSON/oracle externo ao checkout em
+`C:/Users/Criação/AppData/Local/Temp/opencode/ownerinc-edge-editing/`, especialmente
+`06-rich-content-reloaded.png`, `07-invalid-publication.png`,
+`10-default-link-dom-not-stored.png`, `11-default-link-reload-old-draft.png`,
+`geometry-1440-body.png`, `geometry-390-body.png`, `geometry-320-body.png` e
+`overflow-390-fresh-top.png`/`overflow-320-fresh-top.png`.
+Sem segredos/cookies/PII nas capturas. Browsers diagnósticos fechados; backend
+preservado para inspeção. Abas da sessão principal não foram operadas.
 
 ## Revisão independente da evidência
 
@@ -156,8 +262,10 @@ como registro fiel, mantendo estas ressalvas para futuras execuções:
 
 ## Pendências explícitas
 
-- Browser: edição/colagem dos blocos, metadados, responsividade e apresentação de
-  todos os erros; os seis casos acima não equivalem a aceite completo da interface.
+- Browser: resolver os três FAILs da jornada Edge e a causa específica dos campos
+  vazios no painel primário; avaliar usabilidade dos metadados, responsividade
+  completa e apresentação dos demais erros. Os PASSs delimitados não equivalem
+  a aceite completo da interface.
 - Task 9: entrada/saída nativa pelo Portal, logout entre produtos e observação
   de troca de conta entre abas. `/editorial-entry.html` continua ausente (404).
 - Task 5: upload/arquivo/PDF/imagem real, assinatura/hash/presença e entrega privada.
@@ -177,6 +285,9 @@ coordenação ignorado `.superpowers/sdd/2026-10-02-payload-owner-news-implement
 - `real-validation-browser.md`: URL, controles sem credenciais, IDs e processos.
 - `real-validation-browser-observations.md`: interações e limites observados pela
   sessão principal; `real-validation-review.md`: revisão independente do backend.
+- `real-validation-browser-diagnosis.md`: renderização independente e distinção
+  DOM/snapshot do Monaco; `real-validation-edge-editing.md`: jornada autoral,
+  casos/FAILs, IDs, bounds, capturas e distinção DOM/HTTP/SQL.
 - `validation-compose.yml`, `validation-setup.mjs`, `validation-server.mjs`,
   `validation-http.mjs`, `validation-extra.mjs`: infraestrutura e testes opt-in
   desta rodada, não instalados como infraestrutura operacional.
@@ -198,6 +309,11 @@ A sessão principal repetiu `npm run verify` após documentar as interações:
 `sh_0fe5447d0001DhDCAzpm9b7k2R.out` (diretório de logs registrado no relatório
 de coordenação). Nenhum código de produto foi alterado para obter esses resultados.
 
+A extensão documental de diagnóstico/Edge reutilizou esse verify recente em
+produto inalterado, conforme escopo autorizado, e executou somente os diff checks;
+não repetiu migrations, suite HTTP ampla ou serviços.
+
 Os logs mantêm os diagnósticos esperados de fixtures negativas e avisos anteriores.
-Esses checks não anulam os dois FAILs reais. A revisão independente do backend
-foi concluída; os bloqueios de interface e as correções ainda impedem aceite integral.
+Esses checks não anulam os dois FAILs anteriores nem os três FAILs locais da jornada
+Edge. A revisão independente do backend foi concluída; as falhas e pendências de
+interface/integração ainda impedem aceite integral.
