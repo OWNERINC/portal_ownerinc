@@ -185,11 +185,22 @@ the server rejects pasted/API nested lists and unknown serialized nodes. Convers
 preserves marks/links/breaks and maps h1 to reader h2. Limits are 100 blocks, 10,000
 nodes across a document, inline depth at most 4, and 5 MiB UTF-8 of normalized
 `{blocks,editorial}`. Links require HTTPS without credentials.
+Legacy import checks the normalized boundary before expanding list strings into
+Payload rows; that larger persistence representation does not have a second 5 MiB
+cap. Document validation includes the editorial metadata in the aggregate limit.
 
 Publication requires title; native articles need summary and meaningful paragraph,
 list, quote or profile body (rich paragraphs/lists included); editions need any PDF.
-Incomplete documents can remain drafts. Duplicate explicit covers/edition PDFs,
-invalid dates and malformed content fail even in drafts. DTOs emit version 2 and
+`validateNewsDraftStorage` lets native draft/autosave hooks retain unfinished block
+fields (empty quote text, null rich content, media or alt not yet selected). It
+validates every supplied field and the full effective PATCH, using a partial
+boundary projection only for shared usage/budget checks; the original native
+data is returned untouched. Supplied unsafe text/URLs, malformed IDs, unknown
+keys/nodes, invalid dates, duplicate usages and excessive budgets still fail.
+Native text and row labels/IDs are also shape/length bounded. Missing fields are
+not padded with invented content. Publication, DTO projection (including preview),
+legacy JSON and trusted legacy imports still require complete block shapes.
+DTOs emit version 2 and
 `owner-news` or `owner-news-preview` asset scope. Reading time uses 200 words/minute,
 excludes attachment names/metadata and is null for editions, empty text, or legacy
 null metadata with any PDF. It never invents authorship.

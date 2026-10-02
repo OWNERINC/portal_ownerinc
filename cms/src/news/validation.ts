@@ -1,7 +1,7 @@
 import type { CollectionBeforeChangeHook, GlobalBeforeChangeHook } from 'payload'
 import type { HomeContent, Inline, LegacyBlock, NewsEditorial, RichBlock, RichNode } from '../contracts/news'
 import { countNode, lexicalToRich, normalizeRichNodes, richBudget } from './lexical-to-rich'
-import { normalizeLegacyBlock, payloadToLegacyBlock } from './legacy-blocks'
+import { normalizeLegacyBlock, payloadToLegacyBlock, projectNativeDraftBlock, validateNativeRowMetadata } from './legacy-blocks'
 import { bytes, imageMimes, invalid, keys, layouts, oneOf, plain, record, typographies, uuid, videoMimes } from './primitives'
 
 export function normalizeEditorial(value: unknown): NewsEditorial {
@@ -21,6 +21,12 @@ export function normalizeEditorial(value: unknown): NewsEditorial {
 }
 
 export function normalizeNewsContent(value: unknown): (LegacyBlock | RichBlock)[] {
+  return projectContent(value, false)
+}
+
+// Incomplete native projections are solely for storage validation and budgeting.
+// DTO/publication/legacy entry points never opt into this path.
+function projectContent(value: unknown, nativeDraft: boolean): (LegacyBlock | RichBlock)[] {
   if (!Array.isArray(value) || value.length > 100) invalid()
   const budget = richBudget()
   const blocks = value.map(value => {
@@ -29,12 +35,16 @@ export function normalizeNewsContent(value: unknown): (LegacyBlock | RichBlock)[
     if (b.blockType === 'richText' || b.type === 'rich_text') {
       const native = b.blockType === 'richText'
       keys(b, native ? ['blockType', 'id', 'blockName', 'content', 'layout', 'typography'] : ['type', 'nodes', 'layout', 'typography'])
-      const result: RichBlock = { type: 'rich_text', nodes: native ? lexicalToRich(b.content, budget) : normalizeRichNodes(b.nodes, budget) }
+      if (native && nativeDraft) validateNativeRowMetadata(b)
+      const result: RichBlock = { type: 'rich_text', nodes: native
+        ? (nativeDraft && b.content == null ? [] : lexicalToRich(b.content, budget))
+        : normalizeRichNodes(b.nodes, budget) }
       if (Object.hasOwn(b, 'layout') && !(native && (b.layout == null || b.layout === ''))) result.layout = oneOf(b.layout, layouts)
       if (Object.hasOwn(b, 'typography') && !(native && (b.typography == null || b.typography === ''))) result.typography = oneOf(b.typography, typographies)
       return result
     }
-    return Object.hasOwn(b, 'blockType') ? payloadToLegacyBlock(b) : normalizeLegacyBlock(b)
+    return Object.hasOwn(b, 'blockType')
+      ? (nativeDraft ? projectNativeDraftBlock(b) : payloadToLegacyBlock(b)) : normalizeLegacyBlock(b)
   })
   bytes(blocks)
   return blocks
@@ -54,11 +64,20 @@ function meaningfulBody(block: LegacyBlock | RichBlock): boolean {
 }
 
 export function normalizeNewsDocument(value: unknown, publishing = false) {
+  return checkNewsDocument(value, publishing, false)
+}
+
+/** Accept safe unfinished native form fields without rewriting or returning a DTO. */
+export function validateNewsDraftStorage(document: unknown): void {
+  checkNewsDocument(document, false, true)
+}
+
+function checkNewsDocument(value: unknown, publishing: boolean, nativeDraft: boolean) {
   const d = record(value)
   const title = plain(d.title, 200, publishing, false)
   const category = plain(d.category, 100, false, false)
   const editorial = normalizeEditorial(d.editorial)
-  const blocks = normalizeNewsContent(d.body)
+  const blocks = projectContent(d.body, nativeDraft)
   if (blocks.filter(b => b.type === 'image' && 'usage' in b && b.usage === 'cover').length > 1 ||
     blocks.filter(b => b.type === 'pdf' && 'usage' in b && b.usage === 'edition').length > 1) invalid('duplicate_news_usage')
   if (publishing && editorial?.kind === 'article' && (!editorial.summary || !blocks.some(meaningfulBody))) invalid('article_requires_summary_and_body')
@@ -98,7 +117,9 @@ export const validateNewsBeforeChange: CollectionBeforeChangeHook = ({ data, ori
     Object.getOwnPropertyDescriptor(context ?? {}, legacyImport)?.value !== true) invalid('new_article_requires_editorial')
   // Null is an imported legacy state, not an escape hatch from native publication rules.
   if (originalDoc?.editorial != null && full.editorial === null) invalid('cannot_clear_news_editorial')
-  normalizeNewsDocument(full, full._status === 'published')
+  if (full._status === 'draft' && Object.getOwnPropertyDescriptor(context ?? {}, legacyImport)?.value !== true) {
+    validateNewsDraftStorage(full)
+  } else normalizeNewsDocument(full, full._status === 'published')
   return data
 }
 

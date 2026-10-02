@@ -14,6 +14,7 @@ import { articleID, editorial, imageID, legacyBlocks, lexical, mediaShapes, pdfI
 
 const require = createRequire(import.meta.url)
 const { validateBlocks } = require('../../../api/cms/blocks.js')
+const { validateNewsRevision } = require('../../../api/owner-news/editorial.js')
 const document = (body: unknown = [{ blockType: 'richText', content: lexical() }]) => ({
   id: articleID, title: 'Título', category: '', editorial, body, _status: 'published', publishedAt: null,
 })
@@ -21,6 +22,10 @@ const runArticleHook = (data: Record<string, unknown>, originalDoc?: Record<stri
   NewsArticles.hooks!.beforeChange![0]({ data, originalDoc } as Parameters<CollectionBeforeChangeHook>[0])
 const runHomeHook = (data: Record<string, unknown>, originalDoc?: Record<string, unknown>) =>
   NewsHome.hooks!.beforeChange![0]({ data, originalDoc } as Parameters<GlobalBeforeChangeHook>[0])
+const runAutosaveHook = (data: Record<string, unknown>, originalDoc: Record<string, unknown>) =>
+  NewsArticles.hooks!.beforeChange![0]({ data, originalDoc, operation: 'update', context: {},
+    req: { query: { draft: 'true', autosave: 'true' } },
+  } as unknown as Parameters<CollectionBeforeChangeHook>[0])
 
 test('bold não vira HTML nem desaparece na projeção', () => {
   assert.deepEqual(lexicalToRich(lexical([textNode('Owner News', 1)])), [
@@ -36,6 +41,120 @@ test('all eleven legacy types round-trip with the same options', () => {
     for (const key of ['layout', 'typography', 'usage', 'caption', 'credit', 'attribution', 'role']) delete minimal[key]
     assert.deepEqual(normalizeNewsContent(legacyToPayloadBlocks([minimal])), [minimal])
   }
+})
+
+test('near-limit legacy list content round-trips despite larger native persistence rows (I2)', async () => {
+  const item = 'é'.repeat(20) + 'x'.repeat(480)
+  const blocks = Array.from({ length: 100 }, () => ({ type: 'list', ordered: false, items: Array(100).fill(item) }))
+  const revision = validateNewsRevision(blocks, null)
+  assert.ok(revision, 'original legacy revision validator accepts this content')
+  assert.equal(Buffer.byteLength(JSON.stringify(revision)), 5234229)
+  assert.deepEqual(normalizeNewsDocument({ ...document(blocks), editorial: null }).blocks, revision.blocks)
+  const native = legacyToPayloadBlocks(blocks)
+  assert.ok(Buffer.byteLength(JSON.stringify(native)) > 5 * 1024 * 1024)
+  assert.deepEqual(normalizeNewsContent(native), revision.blocks)
+  const persisted = { ...document(native), editorial: null, _status: 'draft' }
+  assert.deepEqual(normalizeNewsDocument(persisted).blocks, revision.blocks)
+  assert.deepEqual(await runAutosaveHook({ title: 'Updated' }, persisted), { title: 'Updated' })
+  assert.deepEqual(await runArticleHook({ _status: 'published' }, persisted), { _status: 'published' })
+  const tooLarge = blocks.map(block => ({ ...block, items: block.items.map(() => 'é'.repeat(21) + 'x'.repeat(479)) }))
+  assert.equal(validateNewsRevision(tooLarge, null), null)
+  assert.throws(() => legacyToPayloadBlocks(tooLarge), /news_content_too_large/)
+})
+
+for (const [name, unfinished, complete] of [
+  ['quote', { blockType: 'quote', text: '', attribution: 'Already entered' }, { blockType: 'quote', text: 'Completed quote', attribution: 'Already entered' }],
+  ['richText', { blockType: 'richText', content: null }, { blockType: 'richText', content: lexical([textNode('Completed rich text', 1)]) }],
+  ['image without media/alt', { blockType: 'image', caption: 'Already entered' }, { blockType: 'image', caption: 'Already entered', media: imageID, alt: 'Alt' }],
+  ['image awaiting alt', { blockType: 'image', media: imageID, alt: '' }, { blockType: 'image', media: imageID, alt: 'Alt' }],
+] as const) {
+  test(`native ${name} autosaves losslessly, then completes and publishes via full PATCH (I1)`, async () => {
+    const prior = document()
+    const body = [{ blockType: 'paragraph', text: 'Existing body.' }, { ...unfinished, id: 'native-row', blockName: 'In progress' }]
+    const newDraft = { ...document(body), _status: 'draft' }
+    assert.strictEqual(await NewsArticles.hooks!.beforeChange![0]({ data: newDraft, operation: 'create', context: {},
+      req: { query: { draft: 'true', autosave: 'true' } },
+    } as unknown as Parameters<CollectionBeforeChangeHook>[0]), newDraft)
+    const patch = { _status: 'draft', body }
+    const before = structuredClone(patch)
+    const savedPatch = await runAutosaveHook(patch, prior)
+    assert.strictEqual(savedPatch, patch, 'hook retains native fields instead of saving a lossy boundary projection')
+    assert.deepEqual(patch, before)
+    const savedDraft = { ...prior, ...savedPatch }
+    assert.deepEqual(await runAutosaveHook({ category: 'Category only' }, savedDraft), { category: 'Category only' })
+    await assert.rejects(async () => runAutosaveHook({ _status: 'published' }, savedDraft))
+    assert.throws(() => toNewsDTO(savedDraft, { preview: true }), 'incomplete saved draft is not a complete reading DTO')
+    assert.throws(() => toNewsDTO(savedDraft, { preview: false }))
+    const completedPatch = { body: [body[0], { ...complete, id: 'native-row', blockName: 'In progress' }] }
+    const completedDraft = { ...savedDraft, ...await runAutosaveHook(completedPatch, savedDraft) }
+    assert.deepEqual(await runArticleHook({ _status: 'published' }, completedDraft), { _status: 'published' })
+    assert.equal(toNewsDTO(completedDraft, { preview: false }).content_blocks.length, 2)
+  })
+}
+
+test('all native block forms may be incomplete, while legacy imports and DTOs stay strict (I1)', async () => {
+  const body: Record<string, unknown>[] = newsBlocks.map(block => ({ blockType: block.slug }))
+  body.push({ blockType: 'list', items: [{ id: 'row', text: '' }, { text: null }, {}] })
+  const patch = { _status: 'draft', body }
+  assert.deepEqual(await runAutosaveHook(patch, document()), patch)
+  for (const block of [{ type: 'quote', text: '' }, { type: 'image' }, { type: 'list', items: [] }]) {
+    await assert.rejects(async () => runAutosaveHook({ _status: 'draft', body: [block] }, document()))
+    assert.throws(() => legacyToPayloadBlocks([block]))
+  }
+  const imported = { ...document([{ blockType: 'quote', text: '' }]), editorial: null, _status: 'draft' }
+  await assert.rejects(async () => NewsArticles.hooks!.beforeChange![0]({ data: imported, operation: 'create',
+    context: legacyNewsImportContext,
+  } as unknown as Parameters<CollectionBeforeChangeHook>[0]))
+})
+
+test('incomplete autosaves reject supplied malformed/unsafe fields and validate omitted PATCH state (I1)', async () => {
+  const unsafeBlocks = [
+    { blockType: 'quote', text: '', attribution: '<script>bad</script>' },
+    { blockType: 'quote', text: '', unexpected: true }, { blockType: 'unknown' },
+    { blockType: 'quote', text: {} }, { blockType: 'quote', text: '', id: {} },
+    { blockType: 'quote', text: ' '.repeat(5001) },
+    { blockType: 'quote', text: '', blockName: { text: 'not a label' } },
+    { blockType: 'quote', text: '', blockName: '<script>bad</script>' },
+    { blockType: 'quote', text: '', blockName: 'x'.repeat(201) },
+    { blockType: 'image', media: 'wrong-id', alt: '' }, { blockType: 'image', media: {} },
+    { blockType: 'image', alt: '<svg>bad</svg>' }, { blockType: 'image', alt: 'x'.repeat(301) },
+    { blockType: 'pdf', usage: 'unknown' }, { blockType: 'quote', layout: 'unknown' },
+    { blockType: 'list', items: 'bad' }, { blockType: 'list', items: [null] },
+    { blockType: 'list', items: [{ text: '', html: 'bad' }] }, { blockType: 'list', items: [{ text: 'x'.repeat(501) }] },
+    { blockType: 'list', items: Array.from({ length: 101 }, () => ({ text: '' })) },
+    { blockType: 'heading', level: 7 }, { blockType: 'list', ordered: 'true' },
+    { blockType: 'link', label: '', url: 'javascript:bad' }, { blockType: 'video', url: 'http://example.test/' },
+    { blockType: 'video', media: imageID, url: 'https://example.test/' },
+    { blockType: 'richText', content: {} }, { blockType: 'richText', content: '' },
+    { blockType: 'richText', content: lexical([{ type: 'html', version: 1, html: 'bad' }]) },
+    { blockType: 'richText', content: lexical([{ ...textNode(), style: 'color:red' }]) },
+    { blockType: 'richText', content: lexical([textNode('bad mark', 4)]) },
+  ]
+  for (const block of unsafeBlocks) {
+    await assert.rejects(async () => runAutosaveHook({ _status: 'draft', body: [block] }, document()), JSON.stringify(block))
+    await assert.rejects(async () => runAutosaveHook({ title: 'Only title' }, { ...document([block]), _status: 'draft' }))
+  }
+  const unfinished = { ...document([{ blockType: 'quote', text: '' }]), _status: 'draft' }
+  await assert.rejects(async () => runAutosaveHook({ editorial: { ...editorial, source_date: '2023-02-29' } }, unfinished), /invalid_source_date/)
+  for (const block of [{ blockType: 'image', usage: 'cover' }, { blockType: 'pdf', usage: 'edition' }]) {
+    await assert.rejects(async () => runAutosaveHook({ body: [block, block] }, unfinished), /duplicate_news_usage/)
+  }
+})
+
+test('unfinished native fields cannot bypass aggregate byte, block or shared rich-node budgets (I1)', async () => {
+  const prior = { ...document([{ blockType: 'quote', text: '' }]), _status: 'draft' }
+  await assert.rejects(async () => runAutosaveHook({ body: Array.from({ length: 101 }, () => ({ blockType: 'quote' })) }, prior))
+  const manyNodes = { blockType: 'richText', content: lexical(Array.from({ length: 5000 }, () => textNode(''))) }
+  await assert.rejects(async () => runAutosaveHook({ body: [{ blockType: 'image' }, manyNodes, manyNodes] }, prior), /invalid_rich_text/)
+  const largeRich = { blockType: 'richText', content: lexical([textNode('é'.repeat(1500000))]) }
+  await assert.rejects(async () => runAutosaveHook({ body: [{ blockType: 'quote', text: '' }, largeRich, largeRich] }, prior), /news_content_too_large/)
+  // A complete native draft at the exact normalized aggregate cap stays valid;
+  // adding an incomplete block consumes budget even though it has no body text yet.
+  const normalized = [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [{ type: 'text', text: '', marks: [] }] }] }]
+  const padding = 5 * 1024 * 1024 - Buffer.byteLength(JSON.stringify({ blocks: normalized, editorial }))
+  const native = { blockType: 'richText', content: lexical([textNode('x'.repeat(padding))]) }
+  assert.deepEqual(await runAutosaveHook({ body: [native] }, prior), { body: [native] })
+  await assert.rejects(async () => runAutosaveHook({ body: [native, { blockType: 'quote', text: '' }] }, prior), /news_content_too_large/)
 })
 
 test('publication requires summary and meaningful body for native articles', () => {
