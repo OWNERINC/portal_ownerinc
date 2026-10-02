@@ -1,0 +1,341 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { readFile } from 'node:fs/promises';
+const require = createRequire(import.meta.url);
+const { resolveEditorialSession, issueEditorialSession, checkEditorialActor } = require('../../api/editorial-session/service.js');
+const { loadActivePortalUser } = require('../../api/middleware/active-user.js');
+const { editorialCookieConfig } = require('../../api/editorial-session/origin.js');
+const apiRequire = createRequire(new URL('../../api/package.json', import.meta.url));
+const express = apiRequire('express');
+const request = apiRequire('supertest');
+const { createEditorialSessionRouter } = require('../../api/routes/editorial-session.js');
+const { createEditorialInternalRouter } = require('../../api/routes/editorial-internal.js');
+const { safeResponses } = require('../../api/middleware/security.js');
+const origin = 'https://portal.example.test';
+const env = { PORTAL_PUBLIC_URL: origin, PAYLOAD_TO_PORTAL_SECRET: 'fixture-portal-bridge-secret-'.repeat(2) };
+const now = new Date('2026-10-02T12:00:00.000Z');
+const profile = (uid = 'editor-a', changes = {}) => ({ uid, email: `${uid}@example.test`, name: 'Editor',
+  role: 'admin', permissions: { manageKnowledge: true }, firebase_enable_pending: false, ...changes });
+const hash = cookie => createHash('sha256').update(cookie).digest('hex');
+function fixture() {
+  const users = new Map([['editor-a', profile()], ['editor-b', profile('editor-b')]]);
+  const sessions = new Map();
+  const calls = [];
+  const state = { users, sessions, calls, dbError: false, firebaseError: null, nextCookie: 0, unverified: false };
+  state.db = { async query(sql, values = []) {
+    calls.push({ sql, values });
+    if (state.dbError) throw new Error('private db details');
+    if (sql.includes('INSERT INTO cms_editor_sessions')) {
+      const [key, uid, expiresAt] = values;
+      if (sessions.has(key)) throw new Error('unique');
+      const row = { uid, expiresAt };
+      sessions.set(key, row);
+      return { rows: [row] };
+    }
+    if (sql.includes('UPDATE cms_editor_sessions')) {
+      const row = sessions.get(values[0]);
+      if (!row || row.revoked) return { rowCount: 0 };
+      row.revoked = true;
+      return { rowCount: 1 };
+    }
+    if (sql.includes('FROM cms_editor_sessions')) {
+      const row = sessions.get(values[0]);
+      return { rows: row && !row.revoked && row.expiresAt > now ? [row] : [] };
+    }
+    if (sql.includes('FROM users u')) return { rows: users.has(values[0]) ? [users.get(values[0])] : [] };
+    if (sql.includes('pending_registrations')) return { rows: state.pending ? [{ status: 'pending' }] : [] };
+    if (sql.includes('owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    throw new Error(`Unexpected SQL: ${sql}`);
+  } };
+  state.firebaseAuth = {
+    async verifyIdToken(token, checkRevoked) {
+      assert.equal(checkRevoked, true);
+      if (state.firebaseError) throw state.firebaseError;
+      if (!users.has(token)) throw Object.assign(new Error('private token'), { code: 'auth/invalid-id-token' });
+      return { uid: token, email_verified: !state.unverified };
+    },
+    async createSessionCookie(token, options) {
+      assert.deepEqual(options, { expiresIn: 7200000 });
+      if (state.firebaseError) throw state.firebaseError;
+      return `${token}.${++state.nextCookie}`;
+    },
+    async verifySessionCookie(cookie, checkRevoked) {
+      calls.push({ firebase: 'verifySessionCookie', cookie, checkRevoked });
+      assert.equal(checkRevoked, true);
+      if (state.firebaseError) throw state.firebaseError;
+      return { uid: cookie.split('.')[0], email_verified: !state.unverified };
+    },
+    async getUser(uid) {
+      calls.push({ firebase: 'getUser', uid });
+      if (state.firebaseError) throw state.firebaseError;
+      return { uid, emailVerified: !state.unverified, disabled: state.disabled === true };
+    },
+  };
+  return state;
+}
+async function httpFixture(settings = env) {
+  const state = fixture();
+  // Execute the real Bearer middleware; only Firebase initialization and pg are doubled.
+  const filename = new URL('../../api/middleware/auth.js', import.meta.url);
+  const localRequire = createRequire(filename);
+  const module = { exports: {} };
+  new Function('require', 'module', 'exports', await readFile(filename, 'utf8'))(name => {
+    if (name === 'firebase-admin/app') return { getApps: () => [1] };
+    if (name === 'firebase-admin/auth') return { getAuth: () => state.firebaseAuth };
+    if (name === '../db') return state.db;
+    return localRequire(name);
+  }, module, module.exports);
+  const app = express();
+  app.use(safeResponses);
+  app.use('/api/cms/session', createEditorialSessionRouter({ ...state, ...module.exports, env: settings }));
+  app.use('/api/internal/editorial', createEditorialInternalRouter({ ...state, env: settings }));
+  app.get('/api/legacy', module.exports.authMiddleware, (req, res) => res.json({ uid: req.user.uid }));
+  state.request = request(app);
+  state.login = (uid = 'editor-a', cookie) => {
+    const call = state.request.post('/api/cms/session').set('Origin', origin).set('Authorization', `Bearer ${uid}`);
+    if (cookie) call.set('Cookie', cookie);
+    return call;
+  };
+  state.internal = path => state.request.post(`/api/internal/editorial${path}`).set('Authorization', `Bearer ${env.PAYLOAD_TO_PORTAL_SECRET}`);
+  return state;
+}
+
+test('revalida a revogação Firebase em toda resolução', async () => {
+  let calls = 0;
+  const firebaseAuth = { async verifySessionCookie(cookie, revoked) {
+    assert.equal(revoked, true); calls++;
+    throw Object.assign(new Error('revoked'), { code: 'auth/session-cookie-revoked' });
+  } };
+  const cookie = 'synthetic-cookie';
+  const hash = createHash('sha256').update(cookie).digest('hex');
+  const db = { async query() { return { rows: [{ token_hash: hash,
+    uid: 'editor-a', expiresAt: new Date('2030-01-01') }] }; } };
+  for (let index = 0; index < 2; index++) {
+    await assert.rejects(resolveEditorialSession({ firebaseAuth, db, cookie, now: new Date('2026-10-02') }),
+      error => error.status === 401);
+  }
+  assert.equal(calls, 2);
+});
+
+test('issuance uses the exact lifetime and stores only SHA-256; expiry is ISO and UID mismatch fails closed', async () => {
+  const state = fixture();
+  const result = await issueEditorialSession({ ...state, token: 'editor-a', user: profile(), now });
+  assert.equal(result.expiresAt, '2026-10-02T14:00:00.000Z');
+  assert.deepEqual(state.calls[0].values, [hash(result.cookie), 'editor-a', new Date(result.expiresAt)]);
+  assert.deepEqual(await resolveEditorialSession({ ...state, cookie: result.cookie, now }), {
+    actor: { uid: 'editor-a', email: 'editor-a@example.test', name: 'Editor', canManageNews: true }, expiresAt: result.expiresAt,
+  });
+  state.sessions.get(hash(result.cookie)).uid = 'editor-b';
+  await assert.rejects(resolveEditorialSession({ ...state, cookie: result.cookie, now }), { status: 401 });
+});
+
+test('active profile helper preserves pending/disabled/email/cargo checks without broadening policy', async () => {
+  const state = fixture();
+  state.users.set('editor-a', profile('editor-a', { job_title_active: true, job_title_access: { autocard: true, posCards: false } }));
+  const user = await loadActivePortalUser(state.db, { uid: 'editor-a', email_verified: true });
+  assert.equal(user.autocard_access, true);
+  assert.equal(user.pos_cards_access, false);
+  assert.match(state.calls[0].sql, /LEFT JOIN job_titles/);
+  await assert.rejects(loadActivePortalUser(state.db, { uid: 'editor-a', email_verified: false }), { status: 403, reason: 'email-not-verified' });
+  state.users.clear();
+  state.pending = true;
+  await assert.rejects(loadActivePortalUser(state.db, { uid: 'editor-a', email_verified: true }), { status: 403, reason: 'pending-approval' });
+  state.pending = false;
+  await assert.rejects(loadActivePortalUser(state.db, { uid: 'editor-a', email_verified: true }), { status: 403, message: 'Account is not active.' });
+});
+
+test('expired and absent hashes fail before Firebase, and Firebase invalid/disabled failures retain distinct statuses', async () => {
+  const state = fixture();
+  const cookie = 'editor-a.expired';
+  for (const record of [undefined, { uid: 'editor-a', expiresAt: now }, { uid: 'editor-a', expiresAt: new Date(now.getTime() - 1) }]) {
+    if (record) state.sessions.set(hash(cookie), record);
+    await assert.rejects(resolveEditorialSession({ ...state, cookie, now }), { status: 401 });
+  }
+  assert.ok(!state.calls.some(call => call.firebase));
+  state.sessions.set(hash(cookie), { uid: 'editor-a', expiresAt: new Date('2030-01-01') });
+  for (const [code, status] of [['auth/session-cookie-expired', 401], ['auth/argument-error', 401], ['auth/user-disabled', 403], ['auth/user-not-found', 401]]) {
+    state.firebaseError = { code };
+    await assert.rejects(resolveEditorialSession({ ...state, cookie, now }), { status });
+  }
+});
+
+test('HTTP issuance/read/rotation/logout keep account isolation and never return raw cookies in JSON', async () => {
+  const state = await httpFixture();
+  const first = await state.login();
+  assert.equal(first.status, 201);
+  assert.deepEqual(Object.keys(first.body).sort(), ['expiresAt', 'uid']);
+  assert.equal(first.headers['cache-control'], 'no-store');
+  const cookieA = first.headers['set-cookie'][0].split(';')[0];
+  assert.match(first.headers['set-cookie'][0], /^__Host-ownerinc-editorial=.*; Path=\/; Expires=.*; HttpOnly; Secure; SameSite=Lax$/);
+  const read = await state.request.get('/api/cms/session').set('Cookie', cookieA);
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, first.body);
+  assert.equal(read.headers['set-cookie'], undefined);
+  const second = await state.login('editor-b', cookieA);
+  assert.equal(second.status, 201);
+  const cookieB = second.headers['set-cookie'][0].split(';')[0];
+  assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookieA)).status, 401);
+  assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookieB)).body.uid, 'editor-b');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const logout = await state.request.delete('/api/cms/session').set('Origin', origin).set('Cookie', cookieB);
+    assert.equal(logout.status, 204);
+    assert.match(logout.headers['set-cookie'][0], /Expires=Thu, 01 Jan 1970/);
+  }
+  assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookieB)).status, 401);
+});
+
+for (const [label, overrides, unverified, expected] of [
+  ['viewer', { role: 'viewer' }, false, 403],
+  ['permission missing', { permissions: {} }, false, 403],
+  ['permission string', { permissions: { manageKnowledge: 'true' } }, false, 403],
+  ['superadmin', { permissions: { superAdmin: true } }, false, 201],
+  ['unverified', {}, true, 403],
+  ['disabled boolean', { permissions: { manageKnowledge: true, accountDisabled: true } }, false, 403],
+  ['disabled string', { permissions: { superAdmin: true, accountDisabled: 'true' } }, false, 403],
+  ['enable pending', { firebase_enable_pending: true }, false, 403],
+]) test(`HTTP permission policy: ${label}`, async () => {
+  const state = await httpFixture();
+  state.users.set('editor-a', profile('editor-a', overrides));
+  state.unverified = unverified;
+  const response = await state.login();
+  assert.equal(response.status, expected);
+  if (expected !== 201) assert.equal(response.headers['set-cookie'], undefined);
+});
+
+test('HTTP resolution observes permission removal, Firebase revocation and dependency outages per request', async () => {
+  const state = await httpFixture();
+  const cookie = (await state.login()).headers['set-cookie'][0].split(';')[0];
+  const get = () => state.request.get('/api/cms/session').set('Cookie', cookie);
+  state.users.get('editor-a').permissions = {};
+  assert.equal((await get()).status, 403);
+  state.users.get('editor-a').permissions = { manageKnowledge: true };
+  assert.equal((await get()).status, 200);
+  state.firebaseError = { code: 'auth/session-cookie-revoked' };
+  assert.equal((await get()).status, 401);
+  state.firebaseError = { code: 'auth/internal-error', message: 'private upstream text' };
+  assert.equal((await get()).status, 503);
+  state.firebaseError = null;
+  state.dbError = true;
+  const failed = await get();
+  assert.equal(failed.status, 503);
+  assert.equal(failed.body.reason, 'editorial_unavailable');
+  assert.doesNotMatch(JSON.stringify(failed.body), /private|cookie/);
+});
+
+test('HTTP exact Origin and fetch-site guard every public mutation before effects', async () => {
+  const state = await httpFixture();
+  for (const method of ['post', 'delete']) {
+    for (const supplied of [undefined, 'https://other.example.test', `${origin}/`, 'null']) {
+      let call = state.request[method]('/api/cms/session').set('Authorization', 'Bearer editor-a');
+      if (supplied !== undefined) call = call.set('Origin', supplied);
+      assert.equal((await call).status, 403);
+    }
+    assert.equal((await state.request[method]('/api/cms/session').set('Origin', origin).set('Sec-Fetch-Site', 'cross-site')).status, 403);
+  }
+  assert.equal(state.calls.length, 0);
+});
+
+test('HTTP rejects forged/duplicate/wrong-environment cookies and oversized or malformed bodies', async () => {
+  const state = await httpFixture();
+  for (const cookie of ['__Host-ownerinc-editorial=forged', 'ownerinc-editorial-dev=editor-a.1',
+    '__Host-ownerinc-editorial=a; __Host-ownerinc-editorial=b']) {
+    assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookie)).status, 401);
+  }
+  const huge = await state.login().send({ cookie: 'x'.repeat(16384) });
+  assert.equal(huge.status, 413);
+  assert.equal(huge.headers['set-cookie'], undefined);
+  const invalid = await state.login().set('Content-Type', 'application/json').send('{"private-token":');
+  assert.equal(invalid.status, 400);
+  assert.doesNotMatch(JSON.stringify(invalid.body), /private-token/);
+});
+
+test('HTTP INSERT failure and Firebase dependency failure never set a browser cookie', async () => {
+  const state = await httpFixture();
+  const query = state.db.query;
+  state.db.query = async (sql, params) => {
+    if (sql.includes('INSERT INTO cms_editor_sessions')) throw new Error('private insert error');
+    return query(sql, params);
+  };
+  const failed = await state.login();
+  assert.equal(failed.status, 503);
+  assert.equal(failed.headers['set-cookie'], undefined);
+  state.firebaseError = { code: 'app/network-error' };
+  const firebase = await state.login();
+  assert.equal(firebase.status, 503);
+  assert.equal(firebase.headers['set-cookie'], undefined);
+});
+
+test('HTTP failed revocation does not expire or replace the cookie or claim confirmed logout', async () => {
+  const state = await httpFixture();
+  const cookie = (await state.login()).headers['set-cookie'][0].split(';')[0];
+  const query = state.db.query;
+  state.db.query = async (sql, params) => {
+    if (sql.includes('UPDATE cms_editor_sessions')) throw new Error('private db error');
+    return query(sql, params);
+  };
+  const logout = await state.request.delete('/api/cms/session').set('Origin', origin).set('Cookie', cookie);
+  assert.equal(logout.status, 503);
+  assert.equal(logout.headers['set-cookie'], undefined);
+  const rotation = await state.login('editor-b', cookie);
+  assert.equal(rotation.status, 503);
+  assert.equal(rotation.headers['set-cookie'], undefined);
+  assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookie)).body.uid, 'editor-a');
+});
+
+test('HTTP private endpoints require a dedicated service secret, return exact contracts and never accept body actors', async () => {
+  const state = await httpFixture();
+  const cookie = (await state.login()).headers['set-cookie'][0].split(';')[0].split('=')[1];
+  for (const path of ['/session/resolve', '/session/revoke', '/actor/check']) {
+    for (const secret of ['', 'Bearer wrong', 'Bearer editor-a']) {
+      assert.equal((await state.request.post(`/api/internal/editorial${path}`).set('Authorization', secret).send({ cookie })).status, 401);
+    }
+  }
+  const resolved = await state.internal('/session/resolve').send({ cookie });
+  assert.equal(resolved.status, 200);
+  assert.deepEqual(resolved.body.actor, { uid: 'editor-a', email: 'editor-a@example.test', name: 'Editor', canManageNews: true });
+  assert.equal(typeof resolved.body.expiresAt, 'string');
+  assert.equal((await state.internal('/actor/check').send({ uid: 'editor-a', actor: { canManageNews: true } })).status, 400);
+  assert.equal((await state.internal('/session/resolve').send({ cookie: 'x'.repeat(16384) })).status, 413);
+  assert.equal((await state.request.get('/api/internal/editorial/authority')).status, 401);
+  const authority = await state.request.get('/api/internal/editorial/authority').set('Authorization', `Bearer ${env.PAYLOAD_TO_PORTAL_SECRET}`);
+  assert.deepEqual(authority.body, { mode: 'legacy', epoch: 1 });
+  assert.equal((await state.internal('/session/revoke').send({ cookie })).status, 204);
+  assert.equal((await state.internal('/session/resolve').send({ cookie })).status, 401);
+  // Job actor authorization is independent of browser-session lifetime.
+  assert.equal((await state.internal('/actor/check').send({ uid: 'editor-a' })).status, 200);
+  state.users.get('editor-a').permissions = {};
+  assert.equal((await state.internal('/actor/check').send({ uid: 'editor-a' })).status, 403);
+});
+
+test('job actor check verifies Firebase current identity, email, disabled and current Portal profile', async () => {
+  const state = fixture();
+  assert.equal((await checkEditorialActor({ ...state, uid: 'editor-a' })).canManageNews, true);
+  assert.ok(state.calls.some(call => call.firebase === 'getUser'));
+  state.unverified = true;
+  await assert.rejects(checkEditorialActor({ ...state, uid: 'editor-a' }), { status: 403, reason: 'email-not-verified' });
+  state.unverified = false;
+  state.disabled = true;
+  await assert.rejects(checkEditorialActor({ ...state, uid: 'editor-a' }), { status: 403, reason: 'account-disabled' });
+  state.firebaseError = { code: 'app/network-error' };
+  await assert.rejects(checkEditorialActor({ ...state, uid: 'editor-a' }), { status: 503 });
+});
+
+test('optional CMS configuration is checked at the bridge boundary and legacy Bearer auth still works', async () => {
+  const state = await httpFixture({});
+  assert.equal((await state.request.get('/api/legacy').set('Authorization', 'Bearer editor-a')).status, 200);
+  assert.equal((await state.request.get('/api/cms/session')).status, 503);
+  assert.equal((await state.internal('/actor/check').send({ uid: 'editor-a' })).status, 503);
+});
+
+test('cookie exception is restricted to development plus HTTP loopback', () => {
+  for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+    const config = editorialCookieConfig({ NODE_ENV: 'development', PORTAL_PUBLIC_URL: `http://${host}:8080` });
+    assert.equal(config.name, 'ownerinc-editorial-dev');
+    assert.equal(config.options.secure, false);
+  }
+  for (const settings of [ { NODE_ENV: 'production', PORTAL_PUBLIC_URL: 'http://localhost:8080' },
+    { NODE_ENV: 'development', PORTAL_PUBLIC_URL: 'http://portal.example.test' } ]) assert.throws(() => editorialCookieConfig(settings), { status: 503 });
+  assert.equal(editorialCookieConfig({ NODE_ENV: 'development', PORTAL_PUBLIC_URL: origin }).name, '__Host-ownerinc-editorial');
+});

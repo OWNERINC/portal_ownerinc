@@ -4,6 +4,8 @@ import '@payloadcms/next/css'
 import type { ServerFunctionClient } from 'payload'
 import { handleServerFunctions, RootLayout } from '@payloadcms/next/layouts'
 import React from 'react'
+import { headers } from 'next/headers'
+import { assertEditorialOrigin } from '../../auth/cookie'
 
 import { importMap } from './editorial/admin/importMap.js'
 
@@ -13,6 +15,7 @@ type Args = { children: React.ReactNode }
 
 const serverFunction: ServerFunctionClient = async function (args) {
   'use server'
+  assertEditorialOrigin(await headers(), (await config).serverURL)
   return handleServerFunctions({ ...args, config, importMap })
 }
 

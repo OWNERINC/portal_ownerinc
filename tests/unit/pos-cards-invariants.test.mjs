@@ -30,11 +30,11 @@ test('Pos-Cards policy remains independent from AutoCard policy', () => {
 
 test('auth and frontend propagate the Pos-Cards access field', async () => {
   const [authMiddleware, frontendAuth] = await Promise.all([
-    readFile('api/middleware/auth.js', 'utf8'),
+    readFile('api/middleware/active-user.js', 'utf8'),
     readFile('public/js/auth.js', 'utf8'),
   ]);
 
-  assert.match(authMiddleware, /req\.user\.pos_cards_access\s*=\s*canUsePosCards\(req\.user\)/);
+  assert.match(authMiddleware, /user\.pos_cards_access\s*=\s*canUsePosCards\(user\)/);
   assert.match(frontendAuth, /dataset\.posCardsAccess\s*=\s*String\(user\?\.pos_cards_access === true\)/);
 });
 

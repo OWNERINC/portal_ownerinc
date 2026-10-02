@@ -102,12 +102,23 @@ reexecutar a migration não muda modo, epoch, manifesto, autoria ou sessões.
 O store faz limpeza de até 100 expirados na própria emissão, sem job adicional.
 Os helpers e a ordem de locks estão no
 [contrato de arquitetura](../architecture/overview.md#controle-de-sessão-e-autoridade-editorial-payload).
-Este lote não emite cookies nem ativa a origem Payload nos leitores.
+A Task 3 conecta a emissão/resolução/revogação de cookies, sem ativar a origem
+Payload nos leitores. Veja o
+[contrato de autenticação](../architecture/overview.md#autenticação-editorial-revogável-payload-task-3)
+e o [README do CMS](../../cms/README.md#portal-authentication-boundary).
+Configure `PORTAL_PUBLIC_URL` canônica e `PAYLOAD_TO_PORTAL_SECRET` na API para
+usar a ponte; ausência dessas variáveis afeta somente as rotas editoriais. O
+startup/rotas legadas continuam disponíveis. A página de entrada/saída e a
+sincronização de contas entre abas são dependências explícitas da Task 9.
 
 Checks sem serviços:
 
 ```sh
 node --test tests/unit/editorial-control.test.mjs tests/unit/schema-invariants.test.mjs
+node --test tests/unit/editorial-session.test.mjs
+npm --prefix cms run test:unit
+npm --prefix cms run typecheck
+npm --prefix cms run build
 npm run verify
 git diff --check
 ```

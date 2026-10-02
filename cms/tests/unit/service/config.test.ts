@@ -47,11 +47,12 @@ test('admin e CRUD permanecem bloqueados; primeiro usuário nativo falha antes d
     const access = editors.access[operation]!
     assert.equal(await access({ req }), false)
   }
-  assert.ok(!editors.fields.some(field => 'name' in field && ['email', 'hash', 'salt', 'password'].includes(field.name)))
+  assert.ok(!editors.fields.some(field => 'name' in field && ['hash', 'salt', 'password'].includes(field.name)))
+  assert.ok(editors.fields.some(field => 'name' in field && field.name === 'portalUid' && 'unique' in field && field.unique))
 
   await assert.rejects(registerFirstUserOperation({
     collection: { config: editors, customIDType: 'text' },
-    data: { email: 'fixture@example.test', password: 'fixture-not-a-real-password' },
+    data: { portalUid: 'fixture', email: 'fixture@example.test', password: 'fixture-not-a-real-password' },
     req,
   }), error => error instanceof Error && 'status' in error && error.status === 403)
 })

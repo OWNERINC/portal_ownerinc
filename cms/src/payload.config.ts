@@ -5,12 +5,13 @@ import { fileURLToPath } from 'node:url'
 import { buildConfig } from 'payload'
 import sharp from 'sharp'
 
-import { PortalEditors } from './collections/PortalEditors'
+import { createPortalEditors } from './collections/PortalEditors'
 import { readCmsConfigEnvironment } from './config/environment'
 import { migrations } from './migrations'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
+const PortalEditors = createPortalEditors(environment)
 
 export default buildConfig({
   admin: {

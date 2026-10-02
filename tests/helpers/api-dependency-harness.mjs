@@ -103,7 +103,7 @@ export async function createDependencyHarness(t) {
     ['../db', pool], ['../middleware/auth', auth], ['node:fs/promises', files],
   ]);
   const actualRoutes = new Map();
-  for (const name of ['reminders', 'cms', 'upload', 'cms-assets']) {
+  for (const name of ['reminders', 'cms', 'upload', 'cms-assets', 'editorial-session', 'editorial-internal']) {
     actualRoutes.set(`./routes/${name}`, await loadSource(`routes/${name}.js`, dependencies));
   }
   // Load the real index so JSON sizes, query defaults, request IDs, error
@@ -112,6 +112,7 @@ export async function createDependencyHarness(t) {
   const indexSource = await readFile(path.join(apiRoot, 'index.js'), 'utf8');
   const indexDependencies = new Map([
     ['dotenv', { config() {} }], ['./db', pool],
+    ['./middleware/auth', auth],
     ['./middleware/security', { ...security, validateEnvironment() {}, allowedOrigins: () => [] }],
   ]);
   // Observe only the body's passage through the real bulk JSON parser, without

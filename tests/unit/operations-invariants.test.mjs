@@ -140,7 +140,7 @@ test('job title listing hides inactive titles by default', async () => {
 test('job title access is returned, validated, and preserved on partial updates', async () => {
   const [routes, auth] = await Promise.all([
     read('api/routes/job-titles.js'),
-    read('api/middleware/auth.js'),
+    read('api/middleware/active-user.js'),
   ]);
   assert.match(routes, /jt\.page_access/);
   assert.match(routes, /const pageAccess = \(value\) =>/);

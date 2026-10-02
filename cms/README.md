@@ -1,6 +1,7 @@
 # Owner News — isolated editorial CMS
 
-Task 1 scaffold using Payload 3.90.2, Next.js 16.3.8 and React 19.3.0.
+Isolated service using Payload 3.90.2, Next.js 16.3.8 and React 19.3.0,
+with Portal-backed revocable authentication (Task 3).
 This service requires **Node 24** (`>=24 <25`), an approved architecture exception
 to the repository's Node 18 compatibility rule for shared API/cron code.
 
@@ -47,7 +48,7 @@ Supply these privately to the service (Payload CLI also loads its local `.env`):
 |---|---|
 | `CMS_DATABASE_URL` | PostgreSQL URI with host and database; TLS query options allowed |
 | `PAYLOAD_SECRET` | At least 32 characters |
-| `PORTAL_PUBLIC_URL` | HTTP(S) origin only, without credentials, path, query or fragment |
+| `PORTAL_PUBLIC_URL` | HTTPS origin; HTTP loopback only with `NODE_ENV=development`; no credentials, path, query or fragment |
 | `PORTAL_INTERNAL_URL` | HTTP(S) base URL, without credentials, query or fragment |
 | `PAYLOAD_TO_PORTAL_SECRET` | At least 32 characters, distinct from the reverse secret |
 | `PORTAL_TO_PAYLOAD_SECRET` | At least 32 characters, distinct from the reverse secret |
@@ -59,8 +60,10 @@ Storage paths follow the host OS; the deployment target remains Linux/VPS.
 
 `npm --prefix cms run dev` and `start` use port 3001. Native routes are
 `/editorial/admin` and `/editorial/api/*`, with no Next `basePath` and no mounted
-GraphQL handler. Native authentication and first-user registration are disabled;
-`portal-editors` denies admin/create/read/update/delete until Task 3.
+GraphQL handler. Local passwords, first-user registration, API keys and Payload
+JWT refresh are disabled. `portal-editors` is a private identity projection with
+a unique `portalUid`; only the verified Portal strategy can create it. Its read
+access is scoped to the current editor, and public create/update/delete are denied.
 `/editorial/ready` initializes Payload and performs a bounded identity-collection
 query, returning only `{ "status": "ready" }` (200) or
 `{ "status": "unavailable" }` (503). A real readiness check requires an authorized,
@@ -71,6 +74,45 @@ explicit migration registry is wired as Payload `prodMigrations`; future entries
 can execute during production initialization. Review migrations before authorizing
 runtime operation. No jobs auto-run in this scaffold; the separate `jobs:run`
 command is reserved for the later queue implementation.
+
+## Portal authentication boundary
+
+The API needs `PORTAL_PUBLIC_URL` and `PAYLOAD_TO_PORTAL_SECRET` only when its
+editorial routes are called. Existing Portal startup/routes do not require CMS
+configuration. The two service secrets must be distinct. Use canonical origin
+configuration in both services and generate secrets privately from 32 random bytes.
+
+The native custom strategy reads only `__Host-ownerinc-editorial` (or
+`ownerinc-editorial-dev` for development HTTP loopback). Every request resolves it
+through `POST /api/internal/editorial/session/resolve`, with a dedicated Bearer
+service secret, 5-second timeout, `redirect: 'error'` and `cache: 'no-store'`.
+No authorization cache is shared between requests. The Portal checks the active
+hash, Firebase revocation, UID equality, current account and `manageKnowledge`.
+Runtime `portalActor`/`portalExpiresAt` are never saved as authority.
+
+Payload 3.90.2 catches custom-strategy exceptions. The strategy therefore returns
+controlled failure headers with `user: null`; the native REST wrapper converts
+them to 401/403/503 and removes the internal marker headers. Access checks also
+surface dependency failure rather than redirecting the admin as if revoked.
+All native REST responses use `no-store`; mutations and server actions require
+the exact configured Origin and reject `Sec-Fetch-Site: cross-site`.
+
+Native login/password/first-user pages forward to `/editorial-entry.html`.
+The GET logout page only forwards to `/editorial-entry.html?logout=1`; it has no
+revocation side effect. Native POST logout uses `afterLogout` to revoke the hash
+and clears the cookie only after confirmed success. A failed revoke returns 503.
+
+**Downstream dependency — Task 9:** the static entry/exit page, Portal logout
+integration, retry UI and cross-tab Firebase/editorial UID mismatch observer are
+not delivered here. The entry page must issue `POST /api/cms/session`; the exit
+flow must confirm `DELETE /api/cms/session` before claiming logout. The native
+login/exit redirects are not a complete browser journey until Task 9 exists.
+
+The generated identity fields still require a reviewed Payload schema migration
+in the later schema task; none was generated or executed here. Local auth checks
+run real Express/Payload policies and native Fetch handlers with Firebase, pg,
+internal HTTP and DB-adapter doubles. They are **not real authentication acceptance**.
+PostgreSQL uniqueness/races, Firebase HTTP, Nginx and browser integration remain pending.
 
 ## Dependency review (2026-10-02)
 

@@ -121,6 +121,9 @@ export interface PortalEditorAuthOperations {
  */
 export interface PortalEditor {
   id: string;
+  portalUid: string;
+  email: string;
+  displayName?: string | null;
   updatedAt: string;
   createdAt: string;
   collection: 'portal-editors';
@@ -199,6 +202,9 @@ export interface PayloadMigration {
  * via the `definition` "portal-editors_select".
  */
 export interface PortalEditorsSelect<T extends boolean = true> {
+  portalUid?: T;
+  email?: T;
+  displayName?: T;
   updatedAt?: T;
   createdAt?: T;
 }
