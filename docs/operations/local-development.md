@@ -90,3 +90,44 @@ Resultados de homologação e aceites das correções de setembro estão no
 Uma fixture local aprovada não comprova produção, dados/cargos oficiais,
 recebimento externo de e-mail ou uso em dispositivo físico. Operações Docker
 que afetem serviços em execução continuam exigindo autorização explícita.
+
+### Persistência da sessão editorial e autoridade Payload
+
+A migration `036_payload_editorial_control` é aplicada pelo migrator do Portal,
+inclusive após `schema.sql`. O provisionamento concede CRUD de
+`cms_editor_sessions` apenas a `portal_api`, SELECT/UPDATE de `owner_news_authority`
+à API e somente SELECT da autoridade ao cron. O singleton começa em `legacy`;
+reexecutar a migration não muda modo, epoch, manifesto, autoria ou sessões.
+
+O store faz limpeza de até 100 expirados na própria emissão, sem job adicional.
+Os helpers e a ordem de locks estão no
+[contrato de arquitetura](../architecture/overview.md#controle-de-sessão-e-autoridade-editorial-payload).
+Este lote não emite cookies nem ativa a origem Payload nos leitores.
+
+Checks sem serviços:
+
+```sh
+node --test tests/unit/editorial-control.test.mjs tests/unit/schema-invariants.test.mjs
+npm run verify
+git diff --check
+```
+
+Para os checks reais, fornecer **duas bases vazias descartáveis autorizadas**, uma
+por cenário, `MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_DATABASE_URL` e as senhas
+`PORTAL_API_DB_PASSWORD`/`PORTAL_CRON_DB_PASSWORD` por ambiente privado. Nunca usar
+produção. Em cada base, configurar `MIGRATION_TEST_SETUP=upgrade` ou `bootstrap`
+e executar `npm run test:migrations`. O script recusa bases não vazias nesses
+modos, roda o migrator duas vezes e verifica o ledger e grants reaplicados.
+O upgrade conserva a fixture legada anterior à Academy e aplica também 034–036;
+o bootstrap confirma que 036 e suas tabelas estavam ausentes antes do runner.
+
+Ambos exercitam constraints, datas/defaults, unicidade de hash/singleton,
+expiração inclusiva, revogação idempotente, lote de limpeza, cascata de usuário,
+preservação de autoridade na exclusão do ator e reaplicação direta da migration.
+Executam os helpers sob `SET LOCAL ROLE portal_api`, a leitura sob `portal_cron`,
+e escritas proibidas reais, além de `has_table_privilege`. Fixtures de controle
+editorial e alterações de teste são revertidas por transação.
+
+**Pendente nesta entrega:** executar os dois cenários PostgreSQL; não houve
+autorização para banco ou serviços Docker. PASS unitário/estático não comprova
+constraints, locks concorrentes ou grants em um servidor PostgreSQL real.

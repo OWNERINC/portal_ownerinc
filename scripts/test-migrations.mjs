@@ -11,6 +11,8 @@ if (!process.env.MIGRATION_DATABASE_URL) throw new Error('MIGRATION_DATABASE_URL
 const { Pool } = require('pg');
 const { migrate } = require('../api/db/migrate');
 const { verifyMigrations } = require('../api/db/verify-migrations');
+const { getAuthority, assertNewsWriter } = require('../api/owner-news/authority');
+const { createSessionRecord, findSessionRecord, revokeSessionRecord } = require('../api/editorial-session/store');
 const expectedVersions = [
   '001_initial_schema',
   '002_reliable_notifications',
@@ -46,7 +48,162 @@ const expectedVersions = [
   '033_academy_learning',
   '034_owner_news_editorial',
   '035_owner_news_polls',
+  '036_payload_editorial_control',
 ];
+
+async function verifyEditorialControl(db) {
+  const migration = await readFile(new URL('../api/db/migrations/036_payload_editorial_control.sql', import.meta.url), 'utf8');
+  await db.query('BEGIN');
+  try {
+    async function rejectsOperation(operation, expected) {
+      await db.query('SAVEPOINT editorial_invalid');
+      try {
+        await assert.rejects(operation, expected);
+      } finally {
+        await db.query('ROLLBACK TO SAVEPOINT editorial_invalid');
+        await db.query('RELEASE SAVEPOINT editorial_invalid');
+      }
+    }
+    const rejectsSql = (sql, values, code) => rejectsOperation(() => db.query(sql, values), { code });
+    const initial = (await db.query('SELECT * FROM owner_news_authority')).rows;
+    assert.equal(initial.length, 1);
+    assert.deepEqual(initial[0], { singleton: true, mode: 'legacy', epoch: 1,
+      manifest_sha256: null, changed_by: null, changed_at: initial[0].changed_at });
+    assert.ok(initial[0].changed_at instanceof Date);
+    const index = await db.query(`SELECT pg_get_indexdef(indexrelid) AS definition FROM pg_index
+      WHERE indexrelid='public.cms_editor_sessions_expiry'::regclass AND indisvalid`);
+    assert.match(index.rows[0].definition, /\(expires_at\)/);
+    for (const table of ['cms_editor_sessions', 'owner_news_authority']) {
+      for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+        const { rows } = await db.query(`SELECT
+          has_table_privilege('portal_api', $1, $2) AS api_allowed,
+          has_table_privilege('portal_cron', $1, $2) AS cron_allowed`, [`public.${table}`, privilege]);
+        assert.deepEqual(rows, [{
+          api_allowed: (table === 'cms_editor_sessions' ? ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] : ['SELECT', 'UPDATE']).includes(privilege),
+          cron_allowed: table === 'owner_news_authority' && privilege === 'SELECT',
+        }], `${table}: ${privilege}`);
+      }
+    }
+    const roles = await db.query(`SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication
+      FROM pg_roles WHERE rolname IN ('portal_api','portal_cron') ORDER BY rolname`);
+    assert.deepEqual(roles.rows, ['portal_api', 'portal_cron'].map(rolname => ({
+      rolname, rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false,
+    })));
+    const uid = `editorial-test-${randomUUID()}`;
+    const otherUid = `editorial-test-${randomUUID()}`;
+    const hash = () => randomUUID().replaceAll('-', '') + randomUUID().replaceAll('-', '');
+    const firstHash = hash();
+    const otherHash = hash();
+    const missingHash = hash();
+    const { rows: [{ future }] } = await db.query("SELECT NOW() + INTERVAL '2 hours' AS future");
+    for (const user of [uid, otherUid]) {
+      await db.query('INSERT INTO users(uid,email) VALUES ($1,$2)', [user, `${user}@example.com`]);
+    }
+    await db.query('SET LOCAL ROLE portal_api');
+    assert.deepEqual(await createSessionRecord(db, { hash: firstHash, uid, expiresAt: future }), { uid, expiresAt: future });
+    await createSessionRecord(db, { hash: otherHash, uid: otherUid, expiresAt: future });
+    assert.deepEqual(await findSessionRecord(db, firstHash), { uid, expiresAt: future });
+    assert.equal(await findSessionRecord(db, missingHash), null);
+    const stored = (await db.query('SELECT * FROM cms_editor_sessions WHERE token_hash=$1', [firstHash])).rows[0];
+    assert.deepEqual(Object.keys(stored), ['token_hash', 'user_uid', 'expires_at', 'revoked_at', 'created_at']);
+    assert.equal(stored.revoked_at, null);
+    assert.ok(stored.created_at instanceof Date);
+    await rejectsOperation(() => createSessionRecord(db, { hash: firstHash, uid, expiresAt: future }), { code: '23505' });
+    for (const badHash of ['', 'a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'g'.repeat(64)]) {
+      await rejectsSql('INSERT INTO cms_editor_sessions(token_hash,user_uid,expires_at) VALUES ($1,$2,$3)', [badHash, uid, future], '23514');
+    }
+    for (const values of [[null, uid, future], [hash(), null, future], [hash(), uid, null]]) {
+      await rejectsSql('INSERT INTO cms_editor_sessions(token_hash,user_uid,expires_at) VALUES ($1,$2,$3)', values, '23502');
+    }
+    await rejectsSql('INSERT INTO cms_editor_sessions(token_hash,user_uid,expires_at) VALUES ($1,$2,$3)',
+      [hash(), `missing-${randomUUID()}`, future], '23503');
+    const expiredHash = hash();
+    const boundaryHash = hash();
+    await db.query(`INSERT INTO cms_editor_sessions(token_hash,user_uid,expires_at) VALUES
+      ($1,$3,NOW()-INTERVAL '1 second'), ($2,$3,NOW())`, [expiredHash, boundaryHash, uid]);
+    assert.equal(await findSessionRecord(db, expiredHash), null, 'Past expiry is not a session');
+    assert.equal(await findSessionRecord(db, boundaryHash), null, 'Expiry equal to NOW is not a session');
+    assert.equal(await revokeSessionRecord(db, firstHash), true);
+    assert.equal(await findSessionRecord(db, firstHash), null);
+    // A past sentinel proves a repeated DELETE-style revocation never resets time.
+    await db.query("UPDATE cms_editor_sessions SET revoked_at=NOW()-INTERVAL '1 minute' WHERE token_hash=$1", [firstHash]);
+    const revoked = (await db.query('SELECT revoked_at FROM cms_editor_sessions WHERE token_hash=$1', [firstHash])).rows;
+    assert.equal(await revokeSessionRecord(db, firstHash), false);
+    assert.deepEqual((await db.query('SELECT revoked_at FROM cms_editor_sessions WHERE token_hash=$1', [firstHash])).rows, revoked);
+    assert.equal(await revokeSessionRecord(db, missingHash), false);
+    assert.deepEqual(await findSessionRecord(db, otherHash), { uid: otherUid, expiresAt: future });
+
+    // More than one batch; cleanup must retain both active and unexpired revoked records.
+    const expiredHashes = Array.from({ length: 105 }, hash);
+    await db.query(`INSERT INTO cms_editor_sessions(token_hash,user_uid,expires_at)
+      SELECT token_hash,$2,NOW()-INTERVAL '1 hour' FROM unnest($1::text[]) AS fixture(token_hash)`, [expiredHashes, uid]);
+    const expiredCount = async () => Number((await db.query('SELECT COUNT(*) AS count FROM cms_editor_sessions WHERE expires_at<=NOW()')).rows[0].count);
+    const before = await expiredCount();
+    const newHash = hash();
+    await createSessionRecord(db, { hash: newHash, uid, expiresAt: future });
+    assert.equal(await expiredCount(), before - 100, 'Issuance deletes exactly one bounded batch');
+    assert.equal((await db.query('SELECT token_hash FROM cms_editor_sessions WHERE token_hash=$1', [firstHash])).rowCount, 1);
+    assert.deepEqual(await findSessionRecord(db, otherHash), { uid: otherUid, expiresAt: future });
+
+    for (const [mode, allowedWriter] of [['legacy', 'legacy'], ['frozen', null], ['payload', 'payload'], ['payload_frozen', null]]) {
+      await getAuthority(db, { forUpdate: true });
+      await db.query('UPDATE owner_news_authority SET mode=$1,epoch=epoch+1,changed_by=$2,changed_at=NOW() WHERE singleton=TRUE', [mode, uid]);
+      for (const writer of ['legacy', 'payload']) {
+        if (writer === allowedWriter) assert.equal((await assertNewsWriter(db, writer)).mode, mode);
+        else await rejectsOperation(() => assertNewsWriter(db, writer), { status: 409, code: 'news_read_only' });
+      }
+    }
+    for (const [column, value, code] of [
+      ['mode', 'invalid', '23514'], ['mode', null, '23502'], ['epoch', 0, '23514'], ['epoch', -1, '23514'],
+      ['epoch', null, '23502'], ['singleton', false, '23514'], ['singleton', null, '23502'],
+      ['manifest_sha256', 'A'.repeat(64), '23514'], ['manifest_sha256', 'f'.repeat(63), '23514'],
+      ['manifest_sha256', 'g'.repeat(64), '23514'], ['changed_by', `missing-${randomUUID()}`, '23503'],
+    ]) await rejectsSql(`UPDATE owner_news_authority SET ${column}=$1 WHERE singleton=TRUE`, [value], code);
+    await db.query('UPDATE owner_news_authority SET manifest_sha256=$1 WHERE singleton=TRUE', ['f'.repeat(64)]);
+    await rejectsSql("INSERT INTO owner_news_authority(singleton,mode) VALUES (TRUE,'legacy')", [], '42501');
+    await rejectsSql('DELETE FROM owner_news_authority WHERE singleton=TRUE', [], '42501');
+
+    await db.query('SET LOCAL ROLE portal_cron');
+    assert.equal((await getAuthority(db)).mode, 'payload_frozen');
+    for (const sql of [
+      'SELECT * FROM cms_editor_sessions',
+      "INSERT INTO cms_editor_sessions(token_hash,user_uid,expires_at) VALUES (repeat('0',64),'unused',NOW())",
+      'UPDATE cms_editor_sessions SET revoked_at=NOW() WHERE FALSE',
+      'DELETE FROM cms_editor_sessions WHERE FALSE',
+      "UPDATE owner_news_authority SET mode='legacy' WHERE singleton=TRUE",
+      "INSERT INTO owner_news_authority(singleton,mode) VALUES (TRUE,'legacy')",
+      'DELETE FROM owner_news_authority WHERE singleton=TRUE',
+    ]) await rejectsSql(sql, [], '42501');
+    await rejectsOperation(() => getAuthority(db, { forUpdate: true }), { code: '42501' });
+
+    await db.query('RESET ROLE');
+    await rejectsSql("INSERT INTO owner_news_authority(singleton,mode) VALUES (TRUE,'legacy')", [], '23505');
+    await rejectsSql("INSERT INTO owner_news_authority(singleton,mode) VALUES (FALSE,'legacy')", [], '23514');
+    const authorityBefore = (await db.query('SELECT * FROM owner_news_authority')).rows;
+    const sessionsBefore = (await db.query('SELECT * FROM cms_editor_sessions ORDER BY token_hash')).rows;
+    for (let attempt = 0; attempt < 2; attempt += 1) await db.query(migration);
+    assert.deepEqual((await db.query('SELECT * FROM owner_news_authority')).rows, authorityBefore, 'Reapply preserves mode, epoch, manifest and actor');
+    assert.deepEqual((await db.query('SELECT * FROM cms_editor_sessions ORDER BY token_hash')).rows, sessionsBefore);
+
+    await db.query('SET LOCAL ROLE portal_api');
+    await db.query('DELETE FROM users WHERE uid=$1', [uid]);
+    assert.equal((await db.query('SELECT * FROM cms_editor_sessions WHERE user_uid=$1', [uid])).rowCount, 0);
+    const afterDelete = (await db.query('SELECT * FROM owner_news_authority')).rows[0];
+    assert.deepEqual(afterDelete, { ...authorityBefore[0], changed_by: null });
+    assert.deepEqual(await findSessionRecord(db, otherHash), { uid: otherUid, expiresAt: future });
+    assert.equal((await db.query('DELETE FROM cms_editor_sessions WHERE token_hash=$1', [otherHash])).rowCount, 1);
+    assert.equal(await findSessionRecord(db, otherHash), null);
+    await db.query('RESET ROLE');
+    await db.query('DELETE FROM owner_news_authority');
+    await assert.rejects(getAuthority(db), { status: 503, code: 'news_authority_unavailable' });
+    await assert.rejects(assertNewsWriter(db, 'legacy'), { status: 503, code: 'news_authority_unavailable' });
+    await db.query('ALTER TABLE owner_news_authority RENAME TO editorial_missing_authority');
+    await rejectsOperation(() => getAuthority(db), { code: '42P01' });
+    console.log(`Editorial control ${process.env.MIGRATION_TEST_SETUP || 'migrated'}: constraints, sessions, cleanup, cascade, idempotence and runtime grants ok`);
+  } finally {
+    await db.query('ROLLBACK');
+  }
+}
 
 // Explicit setup modes exercise both installation paths without dropping data.
 // Each requires its own empty, approved disposable database.
@@ -89,6 +246,10 @@ try {
       }
       const pending = await client.query("SELECT version FROM schema_migrations WHERE version = '033_academy_learning'");
       assert.equal(pending.rowCount, 0);
+      const editorialPending = await client.query(`SELECT to_regclass('public.cms_editor_sessions') AS sessions,
+        to_regclass('public.owner_news_authority') AS authority,
+        EXISTS (SELECT 1 FROM schema_migrations WHERE version='036_payload_editorial_control') AS applied`);
+      assert.deepEqual(editorialPending.rows, [{ sessions: null, authority: null, applied: false }]);
       const legacy = await client.query(`INSERT INTO academy (title, url, active)
         VALUES ('Curso legado de teste', 'https://example.com/course', TRUE) RETURNING id`);
       legacyCourseId = legacy.rows[0].id;
@@ -107,6 +268,7 @@ try {
   // The real migration runner provisions roles and reapplies runtime grants,
   // including on the second idempotent run.
   await verifyMigrations();
+  await verifyEditorialControl(client);
   if (legacyCourseId) {
     const legacy = await client.query(`SELECT title, url, active, delivery_mode, audience, learning_group,
       icon_key, instructor_name, updated_at IS NOT NULL AS has_updated_at FROM academy WHERE id = $1`, [legacyCourseId]);

@@ -611,6 +611,51 @@ independentes e cleanup do reader. Escopo exclusivamente sintético/local;
   `tests/unit/owner-news-polls-frontend.test.mjs` cobre o módulo real no DOM do
   harness, com requests controlados e fixtures sintéticas.
 
+### Controle de sessão e autoridade editorial Payload
+
+A migration `036_payload_editorial_control` cria `cms_editor_sessions` e
+`owner_news_authority` no banco do Portal. O bootstrap aplica essa migration pelo
+runner normal; `schema.sql` não a marca como aplicada. A reaplicação preserva as
+sessões e o singleton existente, inicialmente `{mode: 'legacy', epoch: 1}`.
+
+- Sessões guardam somente SHA-256 hexadecimal minúsculo (64 caracteres), UID,
+  expiração, revogação e criação. Excluir o usuário remove suas sessões por cascata.
+  `api/editorial-session/store.js` recebe o client do chamador:
+  `createSessionRecord(db,{hash,uid,expiresAt})` retorna `{uid,expiresAt}`;
+  `findSessionRecord(db,hash)` retorna esse objeto ou `null` para hash ausente,
+  revogado ou expirado (`expires_at <= NOW()`); datas são `Date` do driver `pg`.
+  `revokeSessionRecord(db,hash)` retorna booleano: `true` só na primeira revogação
+  de um registro existente; repetição/ausência retorna `false` sem alterar a data.
+- Cada criação limpa no máximo **100** expirados, ordenados por expiração/hash,
+  com `FOR UPDATE SKIP LOCKED`, na mesma instrução SQL da inserção. O futuro POST
+  de sessão consumirá esse helper. O store não cria cookies nem executa cron.
+- `api/owner-news/authority.js` expõe `writerAllowed(mode,writer)`: apenas
+  `legacy/legacy` e `payload/payload` autorizam; `frozen` e `payload_frozen`
+  bloqueiam ambos. `getAuthority(db,{forUpdate=false})` retorna `{mode,epoch}`,
+  sem cache. Configuração ausente/inválida gera `AuthorityError` com
+  `status=503`, `code='news_authority_unavailable'`; erros SQL, inclusive tabela
+  ausente, propagam. Não há fallback automático para legado.
+- `getAuthority(db,{forUpdate:true})` adquire advisory lock CMS **7193029** e
+  depois a linha singleton `FOR UPDATE`. `assertNewsWriter(db,writer)` usa essa
+  leitura bloqueante, retorna `{mode,epoch}` se permitido e lança
+  `AuthorityError(409,'news_read_only')` caso contrário. O chamador fornece um
+  client dentro de transação (`withAudit` nas mutações auditadas) e só depois
+  bloqueia documentos. Trocas de modo também devem seguir CMS → autoridade →
+  documentos. Nenhum helper abre pool ou transação própria.
+- `portal_api` recebe CRUD de sessões e SELECT/UPDATE da autoridade; não pode
+  inserir/excluir o singleton. `portal_cron` tem somente SELECT da autoridade e
+  nenhum acesso a sessões. Leituras do cron usam `getAuthority(db)`; decisões de
+  escrita no cron devem usar `writerAllowed` sob seu lock CMS existente. A leitura
+  `forUpdate` e `assertNewsWriter` exigem o papel API com UPDATE, não o cron.
+  A referência `changed_by` fica nula ao excluir o usuário, preservando o modo.
+
+Esta etapa entrega persistência/helpers; ainda não conecta rotas ou serviços ao
+controle. Os testes sem banco cobrem contrato, decisões e ordem das chamadas.
+Constraints, grants efetivos e comportamento SQL constam dos cenários descartáveis
+de `scripts/test-migrations.mjs`, com execução **pendente de autorização de banco**.
+Os helpers CommonJS novos usam APIs disponíveis em Node 18; a verificação local
+usa Node 24, conforme o runtime dos manifests existentes.
+
 ### Persistência editorial (E2)
 
 - Migration `034_owner_news_editorial` acrescenta `cms_revisions.editorial` JSONB
