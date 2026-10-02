@@ -14,12 +14,13 @@ app.disable('x-powered-by');
 app.use(requestContext);
 app.use(safeResponses);
 app.use(cors(allowedOrigins(process.env)));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 // Session boundaries own their 16 KiB parser, before the legacy CMS's larger parser.
 // Optional bridge configuration is checked on requests, never during Portal startup.
 const { firebaseAuth, createAuthMiddleware } = require('./middleware/auth');
-app.use('/api/cms/session', require('./routes/editorial-session').createEditorialSessionRouter({ db: pool, firebaseAuth, createAuthMiddleware }));
+// Authenticated service traffic has bounded per-operation quotas inside its router.
 app.use('/api/internal/editorial', require('./routes/editorial-internal').createEditorialInternalRouter({ db: pool, firebaseAuth }));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+app.use('/api/cms/session', require('./routes/editorial-session').createEditorialSessionRouter({ db: pool, firebaseAuth, createAuthMiddleware }));
 // CMS block documents are bounded separately; keep the smaller default for every other JSON API.
 app.use('/api/cms', express.json({ limit: '6mb' }));
 app.use('/api/users/bulk', express.json({ limit: '1mb' }));

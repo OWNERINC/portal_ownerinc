@@ -94,8 +94,30 @@ Payload 3.90.2 catches custom-strategy exceptions. The strategy therefore return
 controlled failure headers with `user: null`; the native REST wrapper converts
 them to 401/403/503 and removes the internal marker headers. Access checks also
 surface dependency failure rather than redirecting the admin as if revoked.
-All native REST responses use `no-store`; mutations and server actions require
-the exact configured Origin and reject `Sec-Fetch-Site: cross-site`.
+All native REST responses use `no-store`. `src/proxy.ts` guards mutations across
+the entire `/editorial/:path*` namespace before Next dispatch, including native
+layout actions such as the language-cookie action and form POSTs without a
+`next-action` header. It requires the exact configured Origin and rejects
+`Sec-Fetch-Site: cross-site`; missing/invalid configuration fails closed. The
+existing REST and custom server-function checks remain in place. The proxy only
+enforces this request boundary; it does not cache authentication or add CSP.
+
+The Portal mounts its private editorial router before the public 300/15-minute
+IP limiter. After service authentication, dedicated **per-process aggregate**
+one-minute buckets allow 3000 resolves, 300 revokes, 600 actor checks and 120
+authority reads. These fixed-key buckets never use forwarded browser IPs or
+body-supplied identity. Invalid service credentials have a separate 60/minute
+rejection budget. Exceeding a lane returns 429 before JSON parsing/DB/Firebase
+work; resolve exhaustion leaves logout/job/authority capacity available. The
+client retains its controlled 503 mapping for upstream throttling. Public limits
+and Bearer per-UID write limits retain their previous behavior. Multi-process
+capacity and real load tuning belong to later operational acceptance.
+
+Later private POST endpoints under `/editorial/api/portal-news/*` must add an
+explicit, service-authenticated request-boundary path when that interface is
+implemented; the current proxy deliberately has no Origin exemption for a future
+namespace. Future Portal internal operations need their own bounded quota before
+their parser/handler. Task 13 must retain this Origin guard when adding CSP.
 
 Native login/password/first-user pages forward to `/editorial-entry.html`.
 The GET logout page only forwards to `/editorial-entry.html?logout=1`; it has no

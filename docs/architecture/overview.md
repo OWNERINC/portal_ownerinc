@@ -693,6 +693,16 @@ comprimento fixo em tempo constante. Não aceita esse segredo como login Payload
 | POST `/actor/check` | `{uid}` | `{actor}` |
 | GET `/authority` | nenhuma | `{mode,epoch}` |
 
+Essa fronteira privada é montada antes do limite público de 300 requests/15 min/IP.
+Depois da autenticação de serviço, aplica quotas agregadas **por processo**, em
+janelas de um minuto: 3000 resoluções, 300 revogações, 600 checagens de ator e
+120 leituras de autoridade. Cada operação tem um bucket de chave constante;
+`X-Forwarded-For` e UIDs do body não definem quotas. Credenciais de serviço recusadas
+têm um bucket separado de 60/min e não gastam a capacidade autenticada. Exceder
+uma quota responde 429 antes do parser/DB/Firebase, sem impedir as outras operações;
+o CMS traduz esse throttle em 503 controlado. As quotas públicas e Bearer por UID
+permanecem vigentes. Dimensionamento real/múltiplos processos ficam no aceite integrado.
+
 `actor` é `{uid,email,name,canManageNews:true}`, montado no servidor; expiração
 é ISO UTC. Jobs checam `firebaseAuth.getUser(uid)` (existência, UID, email verificado,
 disabled) e perfil/permissão atuais, independentemente da sessão do navegador.
@@ -711,6 +721,14 @@ capacidade atual; leitura da projeção é apenas da própria conta; mutações 
 são negadas. Senhas/first-user/API keys são desabilitados; refresh nativo é negado
 para não emitir JWT Payload independente. A fronteira REST preserva 401/403/503
 mesmo com o catch de estratégias do framework 3.90.2, sem alterar seu núcleo.
+
+`cms/src/proxy.ts` aplica Origin exata e rejeição de `Sec-Fetch-Site: cross-site`
+antes do dispatch Next em todo `/editorial/:path*`, inclusive ações nativas do
+layout que não passam pelo `serverFunction` customizado (como a cookie de idioma).
+Todos os métodos mutantes são protegidos, com ou sem header `next-action`; GET,
+HEAD e OPTIONS prosseguem sem mutação pelo proxy. Recusas não emitem Set-Cookie;
+configuração ausente/inválida retorna 503. Permanecem os guards locais REST/action
+e a autorização Portal por request. Esse scaffold não inclui CSP/infra da Task 13.
 
 Login nativo encaminha para `/editorial-entry.html`; GET logout encaminha para
 `/editorial-entry.html?logout=1`, sem mutação. POST logout nativo usa `afterLogout`

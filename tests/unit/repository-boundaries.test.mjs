@@ -33,7 +33,8 @@ test('every API resource route requires authentication', async () => {
       }
       if (file === 'editorial-internal.js') {
         assert.ok(source.indexOf('assertEditorialService(req, env)') < route.index, 'private editorial routes require service authentication first');
-        assert.match(source, /router\.use\(express\.json\(\{ limit: '16kb' \}\)\)/);
+        assert.match(source, /const json = express\.json\(\{ limit: '16kb' \}\)/);
+        if (route[1].startsWith("'/session/") || route[1].startsWith("'/actor/")) assert.match(route[1], /limits\.\w+, json,/);
         continue;
       }
       if (file === 'editorial-session.js') {

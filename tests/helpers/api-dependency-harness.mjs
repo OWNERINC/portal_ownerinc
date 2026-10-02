@@ -30,7 +30,7 @@ async function loadSource(relative, dependencies) {
   return module.exports;
 }
 
-export async function createDependencyHarness(t) {
+export async function createDependencyHarness(t, { publicQuota, editorial } = {}) {
   const state = {
     sql: [], verifiedTokens: [], files: new Map(), writes: [], opens: [], assets: new Map(),
     references: [], connections: 0, releases: 0, incoming: [],
@@ -106,6 +106,13 @@ export async function createDependencyHarness(t) {
   for (const name of ['reminders', 'cms', 'upload', 'cms-assets', 'editorial-session', 'editorial-internal']) {
     actualRoutes.set(`./routes/${name}`, await loadSource(`routes/${name}.js`, dependencies));
   }
+  if (editorial) {
+    const internal = actualRoutes.get('./routes/editorial-internal');
+    actualRoutes.set('./routes/editorial-internal', {
+      ...internal,
+      createEditorialInternalRouter: args => internal.createEditorialInternalRouter({ ...args, ...editorial }),
+    });
+  }
   // Load the real index so JSON sizes, query defaults, request IDs, error
   // responses and private-static denials cannot drift into a copied test app.
   // Unrelated routes are inert: no SMTP, Firebase SDK, PostgreSQL or services.
@@ -113,7 +120,10 @@ export async function createDependencyHarness(t) {
   const indexDependencies = new Map([
     ['dotenv', { config() {} }], ['./db', pool],
     ['./middleware/auth', auth],
-    ['./middleware/security', { ...security, validateEnvironment() {}, allowedOrigins: () => [] }],
+    ['./middleware/security', { ...security, validateEnvironment() {}, allowedOrigins: () => [],
+      // Only the index's public limiter is shrunk. The real limiter and Bearer per-UID budgets stay intact.
+      rateLimit: options => security.rateLimit({ ...options, ...publicQuota }),
+    }],
   ]);
   // Observe only the body's passage through the real bulk JSON parser, without
   // loading the import worker or claiming to test its persistence contract.

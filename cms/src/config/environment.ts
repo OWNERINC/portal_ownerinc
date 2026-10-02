@@ -49,13 +49,18 @@ function secret(env: Environment, name: string): string {
   return value
 }
 
+// The pre-dispatch Origin boundary needs only this setting, never DB or service credentials.
+export function readPortalPublicURL(env: Environment): string {
+  return httpURL(env, 'PORTAL_PUBLIC_URL', true)
+}
+
 export function readCmsEnvironment(env: Environment): CmsEnvironment {
   const database = url(env, 'CMS_DATABASE_URL')
   if (!['postgres:', 'postgresql:'].includes(database.protocol) || !database.hostname ||
     database.pathname.length <= 1 || database.href.includes('#')) invalid('CMS_DATABASE_URL')
 
   const payloadSecret = secret(env, 'PAYLOAD_SECRET')
-  const portalPublicURL = httpURL(env, 'PORTAL_PUBLIC_URL', true)
+  const portalPublicURL = readPortalPublicURL(env)
   const portalInternalURL = httpURL(env, 'PORTAL_INTERNAL_URL')
   const payloadToPortalSecret = secret(env, 'PAYLOAD_TO_PORTAL_SECRET')
   const portalToPayloadSecret = secret(env, 'PORTAL_TO_PAYLOAD_SECRET')
