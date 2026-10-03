@@ -5,8 +5,10 @@
 As **cinco falhas confirmadas receberam correções**, com **34 cenários reais PASS**
 nesta rodada: 10 de sessão, 4 de importação, 5 de criação, 4 de links, 2 de
 publicação/draft e 9 de layout. GETs autenticados e SQL somente leitura corroboram
-IDs, conteúdo, versões e DTO. A revisão independente nova de especificação/código/
-evidência permanece o gate de fechamento. Não é aceite integral do piloto.
+IDs, conteúdo, versões e DTO. A revisão independente foi concluída: **APPROVED**
+em especificação e código, com evidência **ADEQUATE** para os cinco casos locais;
+nenhum achado Critical/Important ou correção bloqueante. Não é aceite integral
+do piloto, da branch ou de produção.
 
 Base: `ca8bfe1279f39f344e6302f241bdedf2833f9b43`, branch `feat/payload-owner-news`.
 O [registro de 02/10](2026-10-02-payload-tasks-1-4-real-validation.md) mantém seus
@@ -141,7 +143,7 @@ terminaram com exit0. O verify inclui sintaxe, segurança e Compose; não é `np
 Os skips são semântica de flock e escape por symlink em Linux. Permanecem os avisos
 preexistentes `MODULE_TYPELESS_PACKAGE_JSON` dos módulos frontend na suíte raiz;
 o build não apresentou erro. Logs e commits estão no relatório completo de
-coordenação para conferência independente antes do fechamento.
+coordenação e foram confrontados com os oracles pela revisão independente.
 
 Somente backend/supervisor/container próprios permanecem disponíveis para essa
 revisão. Browsers isolados foram encerrados; estado secreto continua fora do checkout.
@@ -152,3 +154,40 @@ Permanecem as dependências já registradas: entrada/logout/cross-tab da Task9,
 mídia da Task5, Nginx/CSP/runtimeLinux da Task13, importador operacional/cutover
 posterior, produção Firebase e audit de dependências. Nenhuma é reclassificada
 como entregue por estes reruns delimitados.
+
+## Fechamento documental após revisão independente
+
+O parecer original `real-fixes-review.md`, no workspace ignorado indicado acima,
+avaliou o intervalo `ca8bfe1279f39f344e6302f241bdedf2833f9b43` até
+`4319b4613e86d3eb4bd6da4a9c931dfb0be4060c`. Concluiu **APPROVED para o lote
+delimitado**, sem Critical/Important, reconciliando os34 casos com código, oracles,
+rede, persistência e capturas. O parecer e as falhas históricas foram preservados.
+
+A revisão identificou uma lacuna de retenção: `cms-typecheck.log` não registrava
+explicitamente o exit status, e faltava artefato do diff-check. O complemento
+`final-check-status.json` e seu log `final-checks.log`, no diretório de evidências
+acima, registram comando, horário, revisão e exit status da execução isolada de
+`npm --prefix cms run typecheck`, `git diff --check` da árvore de trabalho e
+`git diff --check ca8bfe1..HEAD` do intervalo revisado. Suítes raiz/CMS, build e
+os34 cenários reais mantêm sua evidência anterior; código de produto inalterado.
+
+### Observações não bloqueantes e limites preservados
+
+- **Rótulos do oracle:** alguns resultados sobrescrevem o identificador do cenário
+  com o UUID do documento. A contagem foi reconciliada; separar `scenarioId` e
+  `documentId` fica para melhoria futura do harness, preservando os artefatos históricos.
+- **Ruído de logs existente:** avisos `MODULE_TYPELESS_PACKAGE_JSON` e mensagens
+  esperadas de testes negativos estão divulgados. Capturar/validar o logging esperado
+  nos testes e tratar avisos de módulos fica para manutenção futura, sem bloqueio
+  deste aceite delimitado.
+- **Garantias não demonstradas:** unicidade do Firebase assinado de produção,
+  recuperação de COMMIT indeterminado e semântica distribuída exactly-once; execução
+  separada em Node18, runtime Linux, aparelho físico/teclado virtual e acessibilidade
+  completa. Inspeção de compatibilidade e testes Node24/Windows/Emulator não ampliam
+  essas garantias. Propriedade de processos em produção e aceite integral do piloto
+  também não foram estabelecidos pela revisão somente leitura.
+
+O fechamento deste lote é documental/de evidência. Serviços, fixtures e estado dos
+navegadores próprios foram preservados; a sessão principal informou apenas a emissão
+e revogação de sua própria sessão OpenChamber, sem alteração de fixture. A conclusão
+final no ledger permanece sob responsabilidade da sessão principal.
