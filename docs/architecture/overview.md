@@ -611,6 +611,142 @@ independentes e cleanup do reader. Escopo exclusivamente sintético/local;
   `tests/unit/owner-news-polls-frontend.test.mjs` cobre o módulo real no DOM do
   harness, com requests controlados e fixtures sintéticas.
 
+### Controle de sessão e autoridade editorial Payload
+
+A migration `036_payload_editorial_control` cria `cms_editor_sessions` e
+`owner_news_authority` no banco do Portal. O bootstrap aplica essa migration pelo
+runner normal; `schema.sql` não a marca como aplicada. A reaplicação preserva as
+sessões e o singleton existente, inicialmente `{mode: 'legacy', epoch: 1}`.
+
+- Sessões guardam somente SHA-256 hexadecimal minúsculo (64 caracteres), UID,
+  expiração, revogação e criação. Excluir o usuário remove suas sessões por cascata.
+  `api/editorial-session/store.js` recebe o client do chamador:
+  `createSessionRecord(db,{hash,uid,expiresAt})` retorna `{uid,expiresAt}`;
+  `findSessionRecord(db,hash)` retorna esse objeto ou `null` para hash ausente,
+  revogado ou expirado (`expires_at <= NOW()`); datas são `Date` do driver `pg`.
+  `revokeSessionRecord(db,hash)` retorna booleano: `true` só na primeira revogação
+  de um registro existente; repetição/ausência retorna `false` sem alterar a data.
+- Cada criação limpa no máximo **100** expirados, ordenados por expiração/hash,
+  com `FOR UPDATE SKIP LOCKED`, na mesma instrução SQL da inserção. O futuro POST
+  de sessão consumirá esse helper. O store não cria cookies nem executa cron.
+- `api/owner-news/authority.js` expõe `writerAllowed(mode,writer)`: apenas
+  `legacy/legacy` e `payload/payload` autorizam; `frozen` e `payload_frozen`
+  bloqueiam ambos. `getAuthority(db,{forUpdate=false})` retorna `{mode,epoch}`,
+  sem cache. Configuração ausente/inválida gera `AuthorityError` com
+  `status=503`, `code='news_authority_unavailable'`; erros SQL, inclusive tabela
+  ausente, propagam. Não há fallback automático para legado.
+- `getAuthority(db,{forUpdate:true})` adquire advisory lock CMS **7193029** e
+  depois a linha singleton `FOR UPDATE`. `assertNewsWriter(db,writer)` usa essa
+  leitura bloqueante, retorna `{mode,epoch}` se permitido e lança
+  `AuthorityError(409,'news_read_only')` caso contrário. O chamador fornece um
+  client dentro de transação (`withAudit` nas mutações auditadas) e só depois
+  bloqueia documentos. Trocas de modo também devem seguir CMS → autoridade →
+  documentos. Nenhum helper abre pool ou transação própria.
+- `portal_api` recebe CRUD de sessões e SELECT/UPDATE da autoridade; não pode
+  inserir/excluir o singleton. `portal_cron` tem somente SELECT da autoridade e
+  nenhum acesso a sessões. Leituras do cron usam `getAuthority(db)`; decisões de
+  escrita no cron devem usar `writerAllowed` sob seu lock CMS existente. A leitura
+  `forUpdate` e `assertNewsWriter` exigem o papel API com UPDATE, não o cron.
+  A referência `changed_by` fica nula ao excluir o usuário, preservando o modo.
+
+Os testes sem banco cobrem contrato, decisões e ordem das chamadas.
+Constraints, grants efetivos e comportamento SQL constam dos cenários descartáveis
+de `scripts/test-migrations.mjs`, com execução **pendente de autorização de banco**.
+Os helpers CommonJS novos usam APIs disponíveis em Node 18; a verificação local
+usa Node 24, conforme o runtime dos manifests existentes.
+
+### Autenticação editorial revogável (Payload Task 3)
+
+`loadActivePortalUser(db,decoded)` centraliza o perfil ativo usado pelo Bearer e
+pela sessão: email verificado, cadastro existente/aprovado, disabled boolean/string,
+`firebase_enable_pending` e join de cargo. Preserva os reasons 403 e os limites
+de escrita existentes (60/15 min; progresso Academy PUT exato, 120/15 min).
+
+As rotas são montadas antes do parser CMS legado e usam JSON de **16 KiB** e
+`Cache-Control: no-store`. Configuração CMS opcional é validada na fronteira da
+requisição, sem impedir o startup da API legada:
+
+- `POST /api/cms/session`: Bearer validado com `verifyIdToken(token,true)`, conta
+  ativa, `can(user,'manageKnowledge')` e Origin exata. Usa uma conexão/transação
+  dedicada; advisory lock `(7193030,hashtext(uid))` serializa emissões entre processos.
+  Aguarda antes da única chamada ao provedor, até 1,1s após a última inserção
+  confirmada do UID (inclusive revogada); `created_at` usa `clock_timestamp()`,
+  não o início da transação. Lock timeout 3s e statement timeout 5s limitam a espera
+  SQL. Chama `createSessionCookie(token,{expiresIn:7200000})`, verifica que o hash
+  difere do anterior e de qualquer hash persistido, revoga o anterior (inclusive
+  na troca de conta) e insere o novo na mesma transação. Só após commit responde
+  **201 `{uid,expiresAt}`** e Set-Cookie. Guarda somente SHA-256; falha controlada
+  reverte a transação, preservando a credencial anterior. Não há retry de mutação,
+  revival/upsert de hash, mudança de duração ou wrapping da cookie. A cookie bruta
+  nunca entra em JSON/logs. A unicidade do Firebase assinado de produção
+  permanece não comprovada; colisão ainda resulta em 503 seguro, não idempotência.
+- `GET /api/cms/session`: somente cookie; responde **200 `{uid,expiresAt}`**, sem
+  emissão/renovação. Resolução usa hash ativo, `verifySessionCookie(cookie,true)`,
+  igualdade do UID validado com o UID armazenado e perfil/permissão atuais.
+- `DELETE /api/cms/session`: sem Bearer, com Origin exata; revoga o hash e expira
+  a cookie após sucesso, **204** inclusive em repetição/ausência. Falha de DB
+  responde 503 e não confirma logout nem expira a cookie.
+- Cookie: `__Host-ownerinc-editorial`, HttpOnly, Secure, SameSite=Lax, Path=/,
+  duas horas. Somente `NODE_ENV=development` + HTTP loopback usa
+  `ownerinc-editorial-dev`, sem Secure. Nenhuma origem ausente, diferente ou
+  `Sec-Fetch-Site: cross-site` autoriza mutação. Nome duplicado é rejeitado.
+
+O prefixo privado `/api/internal/editorial` exige `Authorization: Bearer
+PAYLOAD_TO_PORTAL_SECRET` em todos os endpoints, por comparação de hashes de
+comprimento fixo em tempo constante. Não aceita esse segredo como login Payload:
+
+| Endpoint | Entrada | Saída |
+|---|---|---|
+| POST `/session/resolve` | `{cookie}` | `{actor,expiresAt}` |
+| POST `/session/revoke` | `{cookie}` | 204 idempotente |
+| POST `/actor/check` | `{uid}` | `{actor}` |
+| GET `/authority` | nenhuma | `{mode,epoch}` |
+
+Essa fronteira privada é montada antes do limite público de 300 requests/15 min/IP.
+Depois da autenticação de serviço, aplica quotas agregadas **por processo**, em
+janelas de um minuto: 3000 resoluções, 300 revogações, 600 checagens de ator e
+120 leituras de autoridade. Cada operação tem um bucket de chave constante;
+`X-Forwarded-For` e UIDs do body não definem quotas. Credenciais de serviço recusadas
+têm um bucket separado de 60/min e não gastam a capacidade autenticada. Exceder
+uma quota responde 429 antes do parser/DB/Firebase, sem impedir as outras operações;
+o CMS traduz esse throttle em 503 controlado. As quotas públicas e Bearer por UID
+permanecem vigentes. Dimensionamento real/múltiplos processos ficam no aceite integrado.
+
+`actor` é `{uid,email,name,canManageNews:true}`, montado no servidor; expiração
+é ISO UTC. Jobs checam `firebaseAuth.getUser(uid)` (existência, UID, email verificado,
+disabled) e perfil/permissão atuais, independentemente da sessão do navegador.
+401 indica sessão inválida/expirada/revogada; 403 indica conta ou permissão negada;
+503 `editorial_unavailable` indica dependência/configuração indisponível. Autoridade
+indisponível usa 503 `news_authority_unavailable`. Erros 5xx mantêm a mensagem genérica
+do Portal e apenas reasons permitidos; corpos/token/causas das dependências não são
+repassados. Credencial interna incorreta usa 401 `editorial_service_unauthorized`,
+que o client CMS trata como **503**, não revogação da pessoa.
+
+No CMS, a estratégia customizada revalida por request (timeout 5s, sem retry,
+`redirect:'error'`, `cache:'no-store'`). Só então lê/cria `portal-editors` com
+`overrideAccess:true`, por `portalUid` único, relendo após conflito de unicidade.
+`portalActor` e `portalExpiresAt` são exclusivamente runtime. Admin exige a
+capacidade atual; leitura da projeção é apenas da própria conta; mutações públicas
+são negadas. Senhas/first-user/API keys são desabilitados; refresh nativo é negado
+para não emitir JWT Payload independente. A fronteira REST preserva 401/403/503
+mesmo com o catch de estratégias do framework 3.90.2, sem alterar seu núcleo.
+
+`cms/src/proxy.ts` aplica Origin exata e rejeição de `Sec-Fetch-Site: cross-site`
+antes do dispatch Next em todo `/editorial/:path*`, inclusive ações nativas do
+layout que não passam pelo `serverFunction` customizado (como a cookie de idioma).
+Todos os métodos mutantes são protegidos, com ou sem header `next-action`; GET,
+HEAD e OPTIONS prosseguem sem mutação pelo proxy. Recusas não emitem Set-Cookie;
+configuração ausente/inválida retorna 503. Permanecem os guards locais REST/action
+e a autorização Portal por request. Esse scaffold não inclui CSP/infra da Task 13.
+
+Login nativo encaminha para `/editorial-entry.html`; GET logout encaminha para
+`/editorial-entry.html?logout=1`, sem mutação. POST logout nativo usa `afterLogout`
+para revogação/expiração confirmadas. **Task 9** ainda entrega essa página, entrada
+Bearer, logout do Portal, retry e observação de troca de UID entre abas. Migrations
+dos campos Payload pertencem à tarefa de schema subsequente. Tests HTTP usam os
+handlers/políticas reais com doubles externos; DB/Firebase/browser/Nginx reais
+permanecem pendentes e não são declarados como aceite de autenticação.
+
 ### Persistência editorial (E2)
 
 - Migration `034_owner_news_editorial` acrescenta `cms_revisions.editorial` JSONB

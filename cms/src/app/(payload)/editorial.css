@@ -1,0 +1,50 @@
+/* Keep native header controls reachable as the breadcrumb consumes remaining space. */
+@layer payload {
+  .app-header__wrapper,
+  .app-header__step-nav-wrapper,
+  .app-header__step-nav {
+    min-width: 0;
+  }
+
+  .app-header__step-nav-wrapper {
+    flex: 1 1 0;
+    width: auto;
+  }
+
+  .app-header__step-nav {
+    max-width: 100%;
+  }
+
+  .app-header__step-nav > a,
+  .app-header__step-nav > span {
+    min-width: 0;
+  }
+
+  .app-header__step-nav .step-nav__home {
+    flex-shrink: 0;
+  }
+
+  /* Native mobile navigation is a modal. Keep its grid from pushing the entire
+     editor/header into a zero-width column beyond the viewport when it opens. */
+  @media (max-width: 768px) {
+    .template-default.template-default--nav-hydrated {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .template-default > .nav {
+      position: fixed;
+      inset: var(--app-header-height) 0 0;
+      width: 100%;
+      height: calc(100dvh - var(--app-header-height));
+      z-index: var(--z-modal);
+      background: var(--theme-bg);
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .template-default > .nav--nav-open {
+      visibility: visible;
+      pointer-events: auto;
+    }
+  }
+}

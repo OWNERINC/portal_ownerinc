@@ -35,6 +35,7 @@ const expectedVersions = [
   '033_academy_learning',
   '034_owner_news_editorial',
   '035_owner_news_polls',
+  '036_payload_editorial_control',
 ];
 
 async function verifyMigrations() {
@@ -435,6 +436,55 @@ async function verifyMigrations() {
           AND pg_get_constraintdef(oid) LIKE '%academy_lesson%') AS cms_lessons`);
     if (!Object.values(academy.rows[0]).every((value) => value === true)) {
       throw new Error('Academy delivery, media or CMS schema checks are incomplete');
+    }
+    const editorialControl = await pool.query(`SELECT
+      (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
+        FROM information_schema.columns WHERE table_schema='public' AND table_name='cms_editor_sessions')
+        = ARRAY['token_hash','user_uid','expires_at','revoked_at','created_at']::text[] AS session_columns,
+      (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
+        FROM information_schema.columns WHERE table_schema='public' AND table_name='owner_news_authority')
+        = ARRAY['singleton','mode','epoch','manifest_sha256','changed_by','changed_at']::text[] AS authority_columns,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid=to_regclass('public.cms_editor_sessions') AND contype='p'
+          AND pg_get_constraintdef(oid)='PRIMARY KEY (token_hash)') AS session_identity,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid=to_regclass('public.cms_editor_sessions') AND contype='c' AND convalidated
+          AND conname='cms_editor_sessions_token_hash_check'
+          AND pg_get_constraintdef(oid) LIKE '%^[0-9a-f]{64}$%') AS session_hash,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid=to_regclass('public.cms_editor_sessions') AND contype='f' AND convalidated
+          AND confrelid=to_regclass('public.users') AND confdeltype='c'
+          AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (user_uid) REFERENCES users(uid)%') AS session_user_cascade,
+      EXISTS (SELECT 1 FROM pg_index
+        WHERE indexrelid=to_regclass('public.cms_editor_sessions_expiry') AND indisvalid
+          AND pg_get_indexdef(indexrelid) LIKE '%(expires_at)%') AS session_expiry_index,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid=to_regclass('public.owner_news_authority') AND contype='p'
+          AND pg_get_constraintdef(oid)='PRIMARY KEY (singleton)') AS authority_identity,
+      (SELECT COUNT(*)=4 FROM pg_constraint
+        WHERE conrelid=to_regclass('public.owner_news_authority') AND contype='c' AND convalidated
+          AND conname IN ('owner_news_authority_singleton_check','owner_news_authority_mode_check',
+            'owner_news_authority_epoch_check','owner_news_authority_manifest_sha256_check')) AS authority_constraints,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid=to_regclass('public.owner_news_authority') AND contype='f' AND convalidated
+          AND confrelid=to_regclass('public.users') AND confdeltype='n'
+          AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (changed_by) REFERENCES users(uid)%') AS authority_actor_nullable,
+      (SELECT COUNT(*)=1 AND bool_and(singleton AND epoch>0
+        AND mode IN ('legacy','frozen','payload','payload_frozen')) FROM owner_news_authority) AS authority_configured`);
+    if (!Object.values(editorialControl.rows[0]).every((value) => value === true)) {
+      throw new Error('Editorial control schema/runtime checks are incomplete');
+    }
+    for (const table of ['cms_editor_sessions', 'owner_news_authority']) {
+      for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+        const { rows: [access] } = await pool.query(`SELECT
+          has_table_privilege('portal_api', $1, $2) AS api_allowed,
+          has_table_privilege('portal_cron', $1, $2) AS cron_allowed`, [`public.${table}`, privilege]);
+        const apiAllowed = (table === 'cms_editor_sessions' ? ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] : ['SELECT', 'UPDATE']).includes(privilege);
+        const cronAllowed = table === 'owner_news_authority' && privilege === 'SELECT';
+        if (access.api_allowed !== apiAllowed || access.cron_allowed !== cronAllowed) {
+          throw new Error(`Unexpected editorial control runtime privilege: ${table} ${privilege}`);
+        }
+      }
     }
     console.log('migration verification: current schema ok');
   } finally {

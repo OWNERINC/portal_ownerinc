@@ -31,6 +31,20 @@ test('every API resource route requires authentication', async () => {
         assert.match(route[1], /(?:resetLimit|registrationLimit|registrationPasswordLimit)/, 'public auth route must remain rate limited');
         continue;
       }
+      if (file === 'editorial-internal.js') {
+        assert.ok(source.indexOf('assertEditorialService(req, env)') < route.index, 'private editorial routes require service authentication first');
+        assert.match(source, /const json = express\.json\(\{ limit: '16kb' \}\)/);
+        if (route[1].startsWith("'/session/") || route[1].startsWith("'/actor/")) assert.match(route[1], /limits\.\w+, json,/);
+        continue;
+      }
+      if (file === 'editorial-session.js') {
+        assert.ok(source.indexOf('assertEditorialOrigin(req, req.editorialCookie)') < route.index, 'editorial mutations require the origin guard');
+        assert.match(source, /router\.post\('\/', authenticate,/);
+        assert.match(source, /createAuthMiddleware\(\{ db, firebaseAuth, onTokenError: firebaseError \}\)/);
+        assert.match(source, /router\.get\('\/',[\s\S]*await resolveEditorialSession\(\{ firebaseAuth, db, cookie \}\)/);
+        assert.match(source, /router\.delete\('\/',[\s\S]*await revokeEditorialSession/);
+        continue;
+      }
       if (!globallyProtected) assert.match(route[1], /authMiddleware/, `${file}: unauthenticated route`);
     }
   }
