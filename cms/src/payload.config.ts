@@ -10,12 +10,15 @@ import { createNewsMedia } from './collections/NewsMedia'
 import { NewsHome } from './globals/NewsHome'
 import { newsEditor } from './news/editor'
 import { readCmsConfigEnvironment } from './config/environment'
+import { isLegacyNewsImport } from './news/validation'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
 const PortalEditors = createPortalEditors(environment)
 
-export default buildConfig({
+// Only the separate trusted import process passes the server-only capability.
+// Each call creates a new adapter config; a running runtime adapter is never toggled.
+export const createCmsConfig = (importContext?: unknown) => buildConfig({
   admin: {
     user: PortalEditors.slug,
     importMap: {
@@ -33,6 +36,7 @@ export default buildConfig({
   db: postgresAdapter({
     pool: { connectionString: environment.databaseURL, connectionTimeoutMillis: 5000 },
     idType: 'uuid',
+    allowIDOnCreate: isLegacyNewsImport(importContext),
     push: false,
     disableCreateDatabase: true,
     migrationDir: path.resolve(dirname, 'migrations'),
@@ -44,3 +48,5 @@ export default buildConfig({
   telemetry: false,
   sharp,
 })
+
+export default createCmsConfig()

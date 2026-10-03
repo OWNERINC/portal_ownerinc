@@ -33,6 +33,28 @@ test('bold não vira HTML nem desaparece na projeção', () => {
   ])
 })
 
+test('native unchecked link omission persists with marker and projects false; supplied types and URLs stay strict', async () => {
+  const link = (fields: Record<string, unknown>) => ({ type: 'link', version: 3,
+    fields: { linkType: 'custom', url: 'https://example.test/reference', ...fields }, children: [textNode('Reference')] })
+  for (const fields of [{}, { newTab: false }, { newTab: true }]) {
+    const body = [{ blockType: 'richText', content: lexical([link(fields), textNode(' Persisted marker')]) }]
+    const draft = { ...document(body), _status: 'draft' }
+    assert.strictEqual(await runAutosaveHook(draft, document()), draft)
+    const blocks = toNewsDTO(draft, { preview: true }).content_blocks
+    assert.deepEqual(blocks, [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [
+      { type: 'link', url: 'https://example.test/reference', new_tab: fields.newTab === true,
+        children: [{ type: 'text', text: 'Reference', marks: [] }] },
+      { type: 'text', text: ' Persisted marker', marks: [] },
+    ] }] }])
+  }
+  for (const fields of [{ newTab: null }, { newTab: undefined }, { newTab: 0 }, { newTab: 'false' },
+    { newTab: {} }, { url: 'javascript:alert(1)' }, { url: 'http://example.test' },
+    { url: 'https://user:pass@example.test' }, { linkType: 'internal' }]) {
+    const body = [{ blockType: 'richText', content: lexical([link(fields)]) }]
+    await assert.rejects(async () => runAutosaveHook({ body }, document()), /invalid_rich_text/)
+  }
+})
+
 test('all eleven legacy types round-trip with the same options', () => {
   assert.deepEqual(normalizeNewsContent(legacyToPayloadBlocks(legacyBlocks)), legacyBlocks)
   assert.deepEqual(normalizeNewsContent(legacyBlocks), validateBlocks(legacyBlocks))

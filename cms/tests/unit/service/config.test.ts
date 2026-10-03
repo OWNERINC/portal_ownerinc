@@ -35,6 +35,24 @@ test('configuração sanitizada preserva a fronteira REST e não inicia o banco'
   // Even an empty prodMigrations array invokes migrate() on production startup.
   assert.equal(adapter.prodMigrations, undefined)
   assert.equal(adapter.pool, undefined)
+  assert.equal((adapter as DatabaseAdapter & { allowIDOnCreate: boolean }).allowIDOnCreate, false)
+})
+
+test('only import config capability enables caller IDs on a separate adapter; runtime stays unchanged', async () => {
+  const runtime = await loadConfig()
+  const { createCmsConfig } = await import('../../../src/payload.config')
+  const { default: importConfig } = await import('../../../src/payload.import.config')
+  const imported = await importConfig
+  const fake = await createCmsConfig({ legacyImport: true })
+  for (const [config, expected] of [[runtime, false], [imported, true], [fake, false]] as const) {
+    const adapter = config.db.init({ payload: {} as Payload }) as DatabaseAdapter & { allowIDOnCreate: boolean }
+    assert.equal(adapter.allowIDOnCreate, expected)
+    assert.equal(adapter.push, false)
+    assert.equal(adapter.disableCreateDatabase, true)
+    assert.equal(adapter.prodMigrations, undefined)
+    assert.equal(adapter.pool, undefined)
+  }
+  assert.notEqual(runtime.db, imported.db)
 })
 
 test('sanitized editorial config registers real uploads and only convertible Lexical features', async () => {

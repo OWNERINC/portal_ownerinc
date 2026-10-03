@@ -1,4 +1,4 @@
-import type { CollectionBeforeChangeHook, GlobalBeforeChangeHook } from 'payload'
+import type { CollectionBeforeChangeHook, CollectionBeforeOperationHook, GlobalBeforeChangeHook } from 'payload'
 import type { HomeContent, Inline, LegacyBlock, NewsEditorial, RichBlock, RichNode } from '../contracts/news'
 import { countNode, lexicalToRich, normalizeRichNodes, richBudget } from './lexical-to-rich'
 import { normalizeLegacyBlock, payloadToLegacyBlock, projectNativeDraftBlock, validateNativeRowMetadata } from './legacy-blocks'
@@ -111,13 +111,25 @@ export function effectiveNewsDocument(data: Record<string, unknown>, originalDoc
 // symbol key; preserving imported null must not let a new native article opt out.
 const legacyImport = Symbol('owner-news-legacy-import')
 export const legacyNewsImportContext = Object.freeze({ [legacyImport]: true })
+export const isLegacyNewsImport = (context: unknown): boolean => Boolean(context &&
+  Object.getOwnPropertyDescriptor(context, legacyImport)?.value === true)
+
+export const protectNewsIdentity: CollectionBeforeOperationHook = ({ args, operation, req }) => {
+  if (operation === 'create' && 'data' in args && args.data?.id !== undefined) {
+    if (!isLegacyNewsImport(req.context)) invalid('news_identity_server_only')
+    uuid(args.data.id)
+  }
+  if (operation === 'update' && 'data' in args && args.data?.id !== undefined &&
+    (!('id' in args) || args.data.id !== args.id)) invalid('news_identity_immutable')
+}
+
 export const validateNewsBeforeChange: CollectionBeforeChangeHook = ({ data, originalDoc, operation, context }) => {
   const full = effectiveNewsDocument(data, originalDoc)
   if (operation === 'create' && full.editorial === null &&
-    Object.getOwnPropertyDescriptor(context ?? {}, legacyImport)?.value !== true) invalid('new_article_requires_editorial')
+    !isLegacyNewsImport(context)) invalid('new_article_requires_editorial')
   // Null is an imported legacy state, not an escape hatch from native publication rules.
   if (originalDoc?.editorial != null && full.editorial === null) invalid('cannot_clear_news_editorial')
-  if (full._status === 'draft' && Object.getOwnPropertyDescriptor(context ?? {}, legacyImport)?.value !== true) {
+  if (full._status === 'draft' && !isLegacyNewsImport(context)) {
     validateNewsDraftStorage(full)
   } else normalizeNewsDocument(full, full._status === 'published')
   return data

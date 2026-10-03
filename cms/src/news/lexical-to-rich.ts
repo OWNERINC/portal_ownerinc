@@ -49,8 +49,10 @@ function inlines(values: unknown[], budget: RichBudget, depth = 1, inLink = fals
         if (inLink || (n.id !== undefined && typeof n.id !== 'string')) invalid(error)
         const fields = record(n.fields, error)
         keys(fields, ['url', 'newTab', 'linkType', 'doc'], error)
-        if (fields.linkType !== 'custom' || fields.doc != null || typeof fields.newTab !== 'boolean') invalid(error)
-        return { type: 'link', url: httpsURL(fields.url, error), new_tab: fields.newTab,
+        // Native unchecked links omit newTab. A supplied value must still be boolean.
+        if (fields.linkType !== 'custom' || fields.doc != null ||
+          (Object.hasOwn(fields, 'newTab') && typeof fields.newTab !== 'boolean')) invalid(error)
+        return { type: 'link', url: httpsURL(fields.url, error), new_tab: fields.newTab === true,
           children: inlines(element(n), budget, depth + 1, true) }
       }
       default: invalid(error)
