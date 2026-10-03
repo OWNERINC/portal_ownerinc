@@ -2,6 +2,11 @@
 
 ## Resultado — 02/10/2026
 
+**Seguimento em 03/10/2026:** as cinco falhas deste registro receberam correções e
+reruns delimitados em [Payload — cinco correções](2026-10-03-payload-five-fixes.md).
+Os resultados FAIL abaixo continuam sendo o histórico fiel da execução original;
+não foram retroativamente reclassificados. Revisão independente nova é o gate de fechamento.
+
 **35 casos de banco/HTTP PASS / 2 casos FAIL**, com PostgreSQL, Firebase Auth
 Emulator, Express e Next/Payload reais. A revisão independente confirmou a
 contagem e manteve as duas falhas abertas. A sessão principal acrescentou

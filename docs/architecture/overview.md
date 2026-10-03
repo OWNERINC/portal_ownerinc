@@ -667,10 +667,19 @@ As rotas são montadas antes do parser CMS legado e usam JSON de **16 KiB** e
 requisição, sem impedir o startup da API legada:
 
 - `POST /api/cms/session`: Bearer validado com `verifyIdToken(token,true)`, conta
-  ativa, `can(user,'manageKnowledge')` e Origin exata. Revoga o hash anterior do
-  navegador antes da nova emissão. Chama `createSessionCookie(token,{expiresIn:7200000})`,
-  grava somente SHA-256 e responde **201 `{uid,expiresAt}`**. INSERT com falha
-  impede Set-Cookie; a cookie nunca entra em JSON ou logs da ponte.
+  ativa, `can(user,'manageKnowledge')` e Origin exata. Usa uma conexão/transação
+  dedicada; advisory lock `(7193030,hashtext(uid))` serializa emissões entre processos.
+  Aguarda antes da única chamada ao provedor, até 1,1s após a última inserção
+  confirmada do UID (inclusive revogada); `created_at` usa `clock_timestamp()`,
+  não o início da transação. Lock timeout 3s e statement timeout 5s limitam a espera
+  SQL. Chama `createSessionCookie(token,{expiresIn:7200000})`, verifica que o hash
+  difere do anterior e de qualquer hash persistido, revoga o anterior (inclusive
+  na troca de conta) e insere o novo na mesma transação. Só após commit responde
+  **201 `{uid,expiresAt}`** e Set-Cookie. Guarda somente SHA-256; falha controlada
+  reverte a transação, preservando a credencial anterior. Não há retry de mutação,
+  revival/upsert de hash, mudança de duração ou wrapping da cookie. A cookie bruta
+  nunca entra em JSON/logs. A unicidade do Firebase assinado de produção
+  permanece não comprovada; colisão ainda resulta em 503 seguro, não idempotência.
 - `GET /api/cms/session`: somente cookie; responde **200 `{uid,expiresAt}`**, sem
   emissão/renovação. Resolução usa hash ativo, `verifySessionCookie(cookie,true)`,
   igualdade do UID validado com o UID armazenado e perfil/permissão atuais.

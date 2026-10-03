@@ -111,6 +111,16 @@ usar a ponte; ausência dessas variáveis afeta somente as rotas editoriais. O
 startup/rotas legadas continuam disponíveis. A página de entrada/saída e a
 sincronização de contas entre abas são dependências explícitas da Task 9.
 
+A correção local de 03/10/2026 torna a rotação atômica e serializa a única emissão
+Firebase por UID usando estado compartilhado no PostgreSQL. Não espaçar chamadas
+no teste para ocultar colisões: o oracle deve enviar requisições imediatas/concorrentes
+e conferir hashes distintos, nova cookie200, anterior401 e rollback em falhas.
+Há espera pré-emissão limitada; 503 por colisão/contensão não autoriza retry automático
+nem significa logout confirmado. O import local confiável usa um processo separado
+com `cms/src/payload.import.config.ts` e `createLegacyNewsArticle`; papel restrito,
+`push:false` e migrations apenas CLI. Nunca habilitar a opção de IDs no adapter web
+em execução. Ver [correções e evidência](../reviews/2026-10-03-payload-five-fixes.md).
+
 Checks sem serviços:
 
 ```sh
