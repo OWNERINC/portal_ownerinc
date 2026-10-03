@@ -2,6 +2,7 @@ const { createHash } = require('node:crypto');
 const { ActivePortalUserError, loadActivePortalUser } = require('../middleware/active-user');
 const { can } = require('../middleware/policy');
 const { createSessionRecord, findSessionRecord, revokeSessionRecord } = require('./store');
+const { prepareSessionIssuance, sessionHashExists } = require('./issuance');
 
 const SESSION_DURATION_MS = 7200000;
 class EditorialSessionError extends Error {
@@ -37,17 +38,36 @@ async function activeActor(db, decoded) {
     throw unavailable();
   }
 }
-async function issueEditorialSession({ firebaseAuth, db, token, user, now = new Date() }) {
+async function issueEditorialSession({ firebaseAuth, db, token, user, previous, now }) {
   actorFromUser(user);
-  let cookie;
+  const previousHash = previous ? sessionHash(previous) : null;
+  let client;
+  let releaseError;
   try {
-    cookie = await firebaseAuth.createSessionCookie(token, { expiresIn: SESSION_DURATION_MS });
-  } catch (error) { throw firebaseError(error); }
-  const expiresAt = new Date(now.getTime() + SESSION_DURATION_MS);
-  try {
-    await createSessionRecord(db, { hash: sessionHash(cookie), uid: user.uid, expiresAt });
-  } catch { throw unavailable(); }
-  return { cookie, expiresAt: expiresAt.toISOString() };
+    client = await db.connect();
+    await client.query('BEGIN');
+    await prepareSessionIssuance(client, user.uid);
+    // Compute the two-hour lifetime after waiting, never vary it for uniqueness.
+    const issuedAt = now || new Date();
+    let cookie;
+    try {
+      cookie = await firebaseAuth.createSessionCookie(token, { expiresIn: SESSION_DURATION_MS });
+    } catch (error) { throw firebaseError(error); }
+    const hash = sessionHash(cookie);
+    if (hash === previousHash || await sessionHashExists(client, hash)) throw unavailable();
+    const expiresAt = new Date(issuedAt.getTime() + SESSION_DURATION_MS);
+    // Revocation and replacement are one commit, including account switches.
+    if (previousHash) await revokeSessionRecord(client, previousHash);
+    const record = await createSessionRecord(client, { hash, uid: user.uid, expiresAt });
+    if (!record || record.uid !== user.uid || record.expiresAt?.getTime() !== expiresAt.getTime()) throw unavailable();
+    await client.query('COMMIT');
+    return { cookie, expiresAt: expiresAt.toISOString() };
+  } catch (error) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (rollbackError) { releaseError = rollbackError; }
+    }
+    throw error instanceof EditorialSessionError ? error : unavailable();
+  } finally { if (client) client.release(releaseError); }
 }
 async function resolveEditorialSession({ firebaseAuth, db, cookie, now = new Date() }) {
   const hash = sessionHash(cookie);

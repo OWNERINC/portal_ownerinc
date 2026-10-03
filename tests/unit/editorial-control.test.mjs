@@ -114,7 +114,8 @@ test('session creation stores only hash/UID/expiry and bounds expired cleanup in
     assert.match(sql, /DELETE FROM cms_editor_sessions/);
     assert.match(sql, /expires_at <= NOW\(\)/);
     assert.match(sql, /ORDER BY expires_at, token_hash LIMIT 100 FOR UPDATE SKIP LOCKED/);
-    assert.match(sql, /INSERT INTO cms_editor_sessions\s*\(token_hash, user_uid, expires_at\)/);
+    assert.match(sql, /INSERT INTO cms_editor_sessions\s*\(token_hash, user_uid, expires_at, created_at\)/);
+    assert.match(sql, /clock_timestamp\(\)/, 'issuance spacing uses insertion time, not transaction start');
     assert.doesNotMatch(sql, /ON CONFLICT|BEGIN|COMMIT/);
     assert.deepEqual(values, [hash, record.uid, expiresAt]);
   }, { rows: [record] }]]);

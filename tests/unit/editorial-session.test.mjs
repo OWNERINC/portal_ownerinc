@@ -27,6 +27,9 @@ function fixture() {
   state.db = { async query(sql, values = []) {
     calls.push({ sql, values });
     if (state.dbError) throw new Error('private db details');
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.startsWith('SET LOCAL') ||
+      sql.includes('pg_advisory_xact_lock') || sql.includes('pg_sleep')) return { rows: [] };
+    if (sql.startsWith('SELECT token_hash')) return { rows: sessions.has(values[0]) ? [{ token_hash: values[0] }] : [] };
     if (sql.includes('INSERT INTO cms_editor_sessions')) {
       const [key, uid, expiresAt] = values;
       if (sessions.has(key)) throw new Error('unique');
@@ -49,6 +52,15 @@ function fixture() {
     if (sql.includes('owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
     throw new Error(`Unexpected SQL: ${sql}`);
   } };
+  state.db.connect = async () => {
+    if (state.dbError) throw new Error('private connect failure');
+    let snapshot;
+    return { async query(sql, values) {
+      if (sql === 'BEGIN') snapshot = structuredClone(sessions);
+      if (sql === 'ROLLBACK') { sessions.clear(); for (const [key, value] of snapshot) sessions.set(key, value); }
+      return state.db.query(sql, values);
+    }, release(error) { calls.push({ release: true, error: Boolean(error) }); } };
+  };
   state.firebaseAuth = {
     async verifyIdToken(token, checkRevoked) {
       assert.equal(checkRevoked, true);
@@ -57,9 +69,10 @@ function fixture() {
       return { uid: token, email_verified: !state.unverified };
     },
     async createSessionCookie(token, options) {
+      calls.push({ firebase: 'createSessionCookie' });
       assert.deepEqual(options, { expiresIn: 7200000 });
       if (state.firebaseError) throw state.firebaseError;
-      return `${token}.${++state.nextCookie}`;
+      return state.fixedCookie || `${token}.${++state.nextCookie}`;
     },
     async verifySessionCookie(cookie, checkRevoked) {
       calls.push({ firebase: 'verifySessionCookie', cookie, checkRevoked });
@@ -123,7 +136,10 @@ test('issuance uses the exact lifetime and stores only SHA-256; expiry is ISO an
   const state = fixture();
   const result = await issueEditorialSession({ ...state, token: 'editor-a', user: profile(), now });
   assert.equal(result.expiresAt, '2026-10-02T14:00:00.000Z');
-  assert.deepEqual(state.calls[0].values, [hash(result.cookie), 'editor-a', new Date(result.expiresAt)]);
+  assert.deepEqual(state.calls.find(call => call.sql?.includes('INSERT INTO cms_editor_sessions')).values,
+    [hash(result.cookie), 'editor-a', new Date(result.expiresAt)]);
+  assert.ok(state.calls.findIndex(call => call.sql?.includes('pg_sleep')) < state.calls.findIndex(call => call.firebase));
+  assert.ok(state.calls.findIndex(call => call.sql === 'COMMIT') > state.calls.findIndex(call => call.sql?.includes('INSERT INTO')));
   assert.deepEqual(await resolveEditorialSession({ ...state, cookie: result.cookie, now }), {
     actor: { uid: 'editor-a', email: 'editor-a@example.test', name: 'Editor', canManageNews: true }, expiresAt: result.expiresAt,
   });
@@ -282,6 +298,62 @@ test('HTTP failed revocation does not expire or replace the cookie or claim conf
   assert.equal(rotation.status, 503);
   assert.equal(rotation.headers['set-cookie'], undefined);
   assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookie)).body.uid, 'editor-a');
+});
+
+test('identical provider output gets one attempt and controlled rollback, preserving the usable previous cookie', async () => {
+  const state = await httpFixture();
+  state.fixedCookie = 'editor-a.identical';
+  const first = await state.login();
+  const cookie = first.headers['set-cookie'][0].split(';')[0];
+  for (const previous of [cookie, undefined]) {
+    const response = await state.login('editor-a', previous);
+    assert.equal(response.status, 503);
+    assert.equal(response.headers['set-cookie'], undefined);
+    assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookie)).status, 200);
+    assert.equal(state.sessions.size, 1);
+  }
+  assert.equal(state.calls.filter(call => call.firebase === 'createSessionCookie').length, 3, 'no issuance retry');
+  assert.equal(state.calls.filter(call => call.sql === 'ROLLBACK').length, 2);
+  await state.request.delete('/api/cms/session').set('Origin', origin).set('Cookie', cookie);
+  assert.equal((await state.login()).status, 503);
+  assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookie)).status, 401, 'no revived revoked hash');
+});
+
+for (const failingStep of ['INSERT INTO cms_editor_sessions', 'COMMIT', 'empty RETURNING']) {
+  test(`replacement ${failingStep} failure rolls back old revocation and candidate insert`, async () => {
+    const state = await httpFixture();
+    const cookie = (await state.login()).headers['set-cookie'][0].split(';')[0];
+    const query = state.db.query;
+    state.db.query = async (sql, params) => {
+      if (failingStep === 'empty RETURNING' && sql.includes('INSERT INTO cms_editor_sessions')) return { rows: [] };
+      if (sql.includes(failingStep)) throw new Error('private transaction failure');
+      return query(sql, params);
+    };
+    const failed = await state.login('editor-b', cookie);
+    assert.equal(failed.status, 503);
+    assert.equal(failed.headers['set-cookie'], undefined);
+    assert.equal(state.sessions.size, 1);
+    assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookie)).status, 200);
+    assert.ok(state.calls.some(call => call.sql === 'ROLLBACK'));
+    assert.ok(state.calls.some(call => call.release));
+  });
+}
+
+test('pre-issuance serialization failure never mints and provider failure never revokes', async () => {
+  const state = await httpFixture();
+  const cookie = (await state.login()).headers['set-cookie'][0].split(';')[0];
+  const query = state.db.query;
+  state.db.query = async (sql, params) => {
+    if (sql.includes('pg_advisory_xact_lock')) throw new Error('lock timeout');
+    return query(sql, params);
+  };
+  assert.equal((await state.login('editor-a', cookie)).status, 503);
+  assert.equal(state.calls.filter(call => call.firebase === 'createSessionCookie').length, 1);
+  state.db.query = query;
+  state.firebaseAuth.createSessionCookie = async () => { throw { code: 'auth/internal-error' }; };
+  assert.equal((await state.login('editor-a', cookie)).status, 503);
+  assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookie)).status, 200);
+  assert.equal(state.sessions.size, 1);
 });
 
 test('HTTP private endpoints require a dedicated service secret, return exact contracts and never accept body actors', async () => {

@@ -7,7 +7,8 @@ async function createSessionRecord(db, { hash, uid, expiresAt }) {
     ), removed AS (
       DELETE FROM cms_editor_sessions WHERE token_hash IN (SELECT token_hash FROM expired)
     )
-    INSERT INTO cms_editor_sessions(token_hash, user_uid, expires_at) VALUES ($1, $2, $3)
+    INSERT INTO cms_editor_sessions(token_hash, user_uid, expires_at, created_at)
+    VALUES ($1, $2, $3, clock_timestamp())
     RETURNING user_uid AS uid, expires_at AS "expiresAt"`, [hash, uid, expiresAt]);
   return rows[0];
 }

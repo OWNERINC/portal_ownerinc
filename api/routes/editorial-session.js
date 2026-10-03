@@ -26,10 +26,8 @@ function createEditorialSessionRouter({ db, firebaseAuth, createAuthMiddleware, 
     try {
       const { name, options } = req.editorialCookie;
       const previous = readEditorialCookie(req.get('cookie'), name);
-      // Revocation must succeed before replacing the browser's session, including account switches.
-      await revokeEditorialSession({ db, cookie: previous });
       const { cookie, expiresAt } = await issueEditorialSession({
-        firebaseAuth, db, token: req.get('authorization').slice(7), user: req.user,
+        firebaseAuth, db, token: req.get('authorization').slice(7), user: req.user, previous,
       });
       res.cookie(name, cookie, { ...options, expires: new Date(expiresAt) });
       res.status(201).json({ uid: req.user.uid, expiresAt });
