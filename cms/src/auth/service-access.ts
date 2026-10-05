@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { APIError } from 'payload'
 import type { NewsQuery, PreviewQuery, VerifiedPortalActor } from '../contracts/news'
-import { keys, record, uuid } from '../news/primitives'
+import { keys, oneOf, record, uuid } from '../news/primitives'
 
 export const newsActions = ['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset'] as const
 export type NewsAction = typeof newsActions[number]
@@ -36,7 +36,7 @@ export function readNewsActor(value: unknown): VerifiedPortalActor {
 export function readNewsInput<A extends NewsAction>(action: A, value: unknown): NewsInputs[A] {
   const input = record(value)
   const category = () => { if (Object.hasOwn(input, 'category') && (typeof input.category !== 'string' || input.category.length > 100)) fail() }
-  const kind = () => { if (Object.hasOwn(input, 'kind') && !['article', 'edition'].includes(String(input.kind))) fail() }
+  const kind = () => { if (Object.hasOwn(input, 'kind')) oneOf(input.kind, ['article', 'edition']) }
   switch (action) {
     case 'list':
       keys(input, ['limit', 'offset', 'category', 'kind']); category(); kind()
@@ -48,7 +48,7 @@ export function readNewsInput<A extends NewsAction>(action: A, value: unknown): 
     case 'home': keys(input, []); break
     case 'preview':
       keys(input, ['id', 'versionId', 'source']); input.id = uuid(input.id); input.versionId = uuid(input.versionId)
-      if (!['payload', 'legacy'].includes(String(input.source))) fail()
+      oneOf(input.source, ['payload', 'legacy'])
       break
     case 'asset':
       keys(input, ['id', 'preview', 'range']); input.id = uuid(input.id)

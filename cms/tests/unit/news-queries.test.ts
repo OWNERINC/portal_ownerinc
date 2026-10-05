@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { APIError, type PayloadRequest } from 'payload'
 import { queryPublishedNews, queryNewsCategories, queryNewsDetail, queryNewsNavigation, queryNewsPreview, queryNewsHome } from '../../src/news/queries.js'
-import { hasNewsServiceAccess, newsActions, readNewsInput, readNewsActor } from '../../src/auth/service-access.js'
+import { hasNewsServiceAccess, newsActions, readNewsInput, readNewsActor, type NewsInputs } from '../../src/auth/service-access.js'
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false }
 const editor = { ...actor, canManageNews: true }
@@ -59,4 +59,35 @@ test('exact service POST allowlist is separate from login and refuses browser/cr
   assert.equal(readNewsActor({ ...actor, uid: 'original-usuário', name: 'a'.repeat(201) }).uid, 'original-usuário')
   assert.throws(() => readNewsInput('list', { limit: 101, offset: 0 }))
   assert.throws(() => readNewsInput('home', { draft: true }))
+})
+test('I1 enum validation accepts only primitive exact strings and never coerces objects', () => {
+  for (const kind of ['article', 'edition'] as const) {
+    assert.equal(readNewsInput('list', { limit: 10, offset: 0, kind }).kind, kind)
+    assert.equal(readNewsInput('categories', { withCounts: true, kind }).kind, kind)
+  }
+  assert.deepEqual(readNewsInput('categories', { withCounts: false }), { withCounts: false })
+  for (const source of ['payload', 'legacy'] as const) assert.equal(readNewsInput('preview', { id: id(1), versionId: id(99), source }).source, source)
+  let coerced = 0
+  const object = { toString() { coerced++; return 'article' } }
+  const badKinds: unknown[] = [['article'], ['edition'], [['article']], {}, { value: 'article' }, { toString: 'article' }, new String('article'), object, null, true, 1, undefined, 'ARTICLE', 'article ']
+  for (const kind of badKinds) {
+    assert.throws(() => readNewsInput('list', { limit: 10, offset: 0, kind }), error => error instanceof APIError && error.status === 400)
+    assert.throws(() => readNewsInput('categories', { withCounts: true, kind }), error => error instanceof APIError && error.status === 400)
+  }
+  const badSources: unknown[] = [['legacy'], ['payload'], [['legacy']], {}, { value: 'legacy' }, { toString: 'legacy' }, new String('legacy'), { toString() { coerced++; return 'legacy' } }, null, true, 1, undefined, 'LEGACY', 'legacy ']
+  for (const source of badSources) assert.throws(() => readNewsInput('preview', { id: id(1), versionId: id(99), source }), error => error instanceof APIError && error.status === 400)
+  assert.equal(coerced, 0)
+})
+test('I1 malformed kind/source rejects before any Payload or DB access, including either preview branch', async () => {
+  let payloadAccesses = 0
+  const req = Object.defineProperty({}, 'payload', { get() { payloadAccesses++; throw new Error('content queries forbidden') } }) as PayloadRequest
+  const invalid = (error: unknown) => error instanceof APIError && error.status === 400
+  for (const kind of [['article'], ['edition'], { value: 'article' }, { toString: 'edition' }]) {
+    await assert.rejects(async () => queryPublishedNews(req, { limit: 10, offset: 0, kind } as unknown as NewsInputs['list'], actor), invalid)
+    await assert.rejects(async () => queryNewsCategories(req, { withCounts: true, kind } as unknown as NewsInputs['categories'], actor), invalid)
+  }
+  for (const source of [['legacy'], ['payload'], { value: 'legacy' }, { toString: 'payload' }]) {
+    await assert.rejects(async () => queryNewsPreview(req, { id: id(1), versionId: id(99), source } as unknown as NewsInputs['preview'], editor), invalid)
+  }
+  assert.equal(payloadAccesses, 0, 'invalid enums must not enter transactions, native Versions or legacy history queries')
 })

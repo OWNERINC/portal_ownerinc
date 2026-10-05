@@ -55,6 +55,35 @@ try {
   assert.deepEqual(await okJSON(await post('navigation', { id: fixture.editionId })), { previous: null, next: null })
   assert.equal((await okJSON(await post('home', {}))).content.headline, 'Home A')
   console.log('PASS actual Next POST: current published A/editor, B exact preview, legacy original IDs, invalid exclusion, total, category, navigation, home')
+  const invalidEnums = [
+    ...[['article'], ['edition'], [['article']], {}, { value: 'article' }, { toString: 'article' }].flatMap(kind => [
+      ['list', { limit: 10, offset: 0, kind }], ['categories', { withCounts: true, kind }],
+    ]),
+    ...[['legacy'], ['payload'], [['legacy']], {}, { value: 'legacy' }, { toString: 'legacy' }].map(source =>
+      // Valid native IDs reproduce I1: ['legacy'] must NOT select native Draft B.
+      ['preview', { id: fixture.articleId, versionId: fixture.versionB, source }]),
+  ]
+  // First expose the original wrong-200 bug without a lock masking its result.
+  for (const [action, input] of invalidEnums) {
+    const response = await post(action, input, editor)
+    assert.equal(response.status, 400, `I1 ${action} must reject ${JSON.stringify(input)}`)
+    assert.deepEqual(await response.json(), { error: 'invalid_request' })
+  }
+  await db.query('BEGIN')
+  try {
+    await db.query("SET LOCAL lock_timeout = '1s'")
+    await db.query('SELECT pg_advisory_xact_lock(7194030)')
+    await db.query('LOCK TABLE news_articles, _news_articles_v, legacy_news_revisions IN ACCESS EXCLUSIVE MODE')
+    // The live request cannot complete a content read from either store while
+    // these locks are held. 400s must arrive without waiting for their release.
+    for (const [action, input] of invalidEnums) {
+      const response = await fetch(`${origin}/editorial/api/portal-news/${action}`, { method: 'POST', headers: serviceHeaders,
+        body: JSON.stringify({ actor: editor, input }), redirect: 'error', signal: AbortSignal.timeout(1500) })
+      assert.equal(response.status, 400, `I1 ${action} must validate before content queries`)
+      assert.deepEqual(await response.json(), { error: 'invalid_request' })
+    }
+  } finally { await db.query('ROLLBACK') }
+  console.log('PASS I1 actual Next: 18 array/object enum cases =>400; repeated with both content stores + reference lock held, before queries')
   for (const headers of [{ Authorization: 'Bearer wrong' }, { Authorization: `Bearer ${process.env.PAYLOAD_TO_PORTAL_SECRET}` }, { Origin: 'https://attacker.invalid', 'Sec-Fetch-Site': 'cross-site' }, { Cookie: 'anything=x' }, { Origin: origin }]) assert.equal((await post('home', {}, actor, headers)).status, 403)
   assert.equal((await post('home', { draft: true })).status, 400)
   assert.equal((await post('list', { limit: 101, offset: 0 })).status, 400)

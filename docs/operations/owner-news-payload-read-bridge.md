@@ -25,6 +25,9 @@ migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
   navegador ou headers arbitrários. Actor vem de `req.user` + política atual
   `manageKnowledge`. Prévia exige editor, documento/revisão UUID e
   `source=payload|legacy` (default payload); `version` é obrigatório.
+- No POST privado, `kind` e `source` exigem strings primitivas com enum exato.
+  Arrays, objetos e valores coercíveis retornam 400 antes de consultar conteúdo
+  ou selecionar a fonte de prévia; não há coerção via `String(...)`.
 - Tipos CMS: `src/contracts/news.ts`; API: validação JSON independente de Next e
   Payload em `payload-dto.js`. Formatos nativos nunca atravessam a fronteira.
 
