@@ -1,16 +1,20 @@
-import { renderBlocks, cleanupRenderedBlocks, validateBlocks } from '../cms-block-renderer.js';
+import { renderBlocks, cleanupRenderedBlocks } from '../cms-block-renderer.js';
+import { validateNewsBlocks } from './content-contract.js';
+import { renderRichContent } from './rich-content.js';
+import { validateAssetScope } from './asset-path.mjs';
 import { element } from '../ui.js';
 import { getNewsPresentation, normalizeEditorial, estimateNewsReadTime } from './model.js';
 
 // The caller disposes the previous rendering before reusing its root.
 export function renderNewsArticle(root, article, { signal, preview = false } = {}) {
   // Validate before deriving CSS classes or separating media from their blocks.
-  const blocks = validateBlocks(article.content_blocks || []) || [];
+  const blocks = validateNewsBlocks(article.content_blocks || [], article.content_version);
+  const assetScope = validateAssetScope(article.asset_scope === undefined ? 'legacy' : article.asset_scope);
   const editorial = normalizeEditorial(article.editorial);
   const presentation = getNewsPresentation({ ...article, content_blocks: blocks, editorial });
   const containers = [];
   const controller = new AbortController();
-  const mediaOptions = { signal: controller.signal };
+  const mediaOptions = { signal: controller.signal, assetScope };
   let disposed = false;
   const dispose = () => {
     if (disposed) return;
@@ -23,6 +27,10 @@ export function renderNewsArticle(root, article, { signal, preview = false } = {
   signal?.addEventListener('abort', dispose, { once: true });
   if (signal?.aborted) { dispose(); return dispose; }
   root.replaceChildren();
+  if (!blocks) {
+    root.append(element('p', { role: 'alert', text: 'Conteúdo indisponível. A revisão contém um formato inválido.' }));
+    return dispose;
+  }
   root.classList.add('news-article');
   const hero = element('header', { className: 'news-article-hero' });
   if (presentation.cover) {
@@ -67,7 +75,9 @@ export function renderNewsArticle(root, article, { signal, preview = false } = {
     if (block === presentation.cover) continue;
     const holder = element('div', { className: `news-block news-block--${block.layout || 'content'} news-block--${block.typography || 'serif'}` });
     const shown = block.type === 'heading' && block.level === 1 ? { ...block, level: 2 } : block;
-    body.append(holder); containers.push(holder); renderBlocks(holder, [shown], mediaOptions);
+    body.append(holder); containers.push(holder);
+    if (shown.type === 'rich_text') renderRichContent(holder, shown.nodes);
+    else renderBlocks(holder, [shown], mediaOptions);
   }
   if (presentation.companion) {
     const companion = element('details', { className: 'news-companion' }, [

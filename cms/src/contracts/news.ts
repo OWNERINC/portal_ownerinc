@@ -43,6 +43,8 @@ export type NewsDTO = {
   asset_scope: 'owner-news' | 'owner-news-preview'
   content_blocks: NewsContent
   read_time_minutes: number | null
+  /** Status of the exact saved revision, NOT a claim about current publication. */
+  preview_revision?: { id: string; source: 'payload' | 'legacy'; status: 'draft' | 'published' | 'scheduled' | 'archived' }
 }
 export type NewsPage = { rows: NewsDTO[]; count: number }
 export type NewsQuery = {

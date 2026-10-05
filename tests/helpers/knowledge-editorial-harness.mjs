@@ -48,6 +48,7 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
     vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
   }
   await load('public/js/pagination.js', 'renderPagination, readOffset, setPaginationBusy');
+  await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope');
   await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   await load('public/js/knowledge.js', 'knowledgeMount: mount');
   context.onMount = (name, page) => { if (name === './knowledge.js') context.knowledgeMount(page); };

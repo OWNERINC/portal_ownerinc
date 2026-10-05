@@ -335,6 +335,7 @@ test('the CMS renderer aborts assets and revokes late blobs when the page signal
     safeHttpUrl: value => value,
     fetchAPIAsset(path, { signal }) { requestedSignal = signal; return pending.promise; },
   });
+  vm.runInContext((await readFile('public/js/owner-news/asset-path.mjs', 'utf8')).replace(/^export /gm, ''), context);
   vm.runInContext(source, context);
   const page = new AbortController();
   context.renderBlocks(host, [{ type: 'image', asset_id: '550e8400-e29b-41d4-a716-446655440000', alt: 'Cover' }], { signal: page.signal });

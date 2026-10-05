@@ -1,4 +1,4 @@
-# Owner News — ponte de leitura (Task 7)
+# Owner News — ponte de leitura e prévia salva (Tasks 7–8)
 
 Esta entrega é local e não faz cutover. **Solicitar autorização antes de qualquer
 deploy na VPS.** Não ativar Payload para leitores reais antes das tarefas de
@@ -97,6 +97,90 @@ REST negados; update/delete também negados com overrideAccess. Leitura genéric
 Retenção de mídia varre **tanto relações quanto originalBody independentemente**,
 além de artigos/Versions/snapshots. Não foi só incluída uma allowlist. Referência
 bruta desconhecida falha fechada; uma relação omitida não libera o arquivo.
+
+## Task 8 — leitor e prévia editorial
+
+O Portal entende `rich_text` exclusivamente em `content_version: 2`. O contrato
+`validateNewsBlocks(value, version=1)` preserva os onze tipos legados e rejeita o
+corpo inteiro antes de montar conteúdo/mídia se qualquer nó for inválido. O limite
+é 100 blocos, 5 MiB normalizados, 10.000 nós compartilhados e profundidade inline
+máxima 4; links aninhados são proibidos. `renderRichContent(root,nodes)` usa DOM e
+texto, nunca HTML: parágrafos, headings h2–h6, listas, strong/em/u/code e links HTTPS
+sem credenciais. `newsBlocksToText` inclui rich text no resumo/estimativa, mas não
+conta títulos de arquivos como leitura; edições PDF legadas continuam sem minutos.
+
+`renderBlocks(root,blocks,{signal,assetScope='legacy'})` continua legado para
+Academy/Conhecimento. `cmsAssetEndpoint(id,scope)` em
+`public/js/owner-news/asset-path.mjs` (também exportado pelo renderer) aceita apenas
+UUID e os três enums: `legacy`, `owner-news`, `owner-news-preview`. Reader, perfil,
+capa, vídeo, PDF, catálogo e Dashboard propagam o scope do DTO; não aceitam URL
+arbitrária como raiz. Cancelamento, retry local e revogação de blobs permanecem.
+Task 14 deve incluir `.mjs` públicos na varredura de sintaxe; o novo helper foi
+checado explicitamente nesta entrega.
+
+`/news-preview.html?id=<UUID>&version=<UUID>&source=payload|legacy` é uma página
+estática do shell (router registrado), em aba própria, sem iframe de prévia ou
+alteração de CSP. `source` pode ser omitido (payload); IDs são obrigatórios,
+parâmetros desconhecidos/duplicados são rejeitados. `mountNewsPreview(page)` usa
+`page.bindAPI(fetchAPI)`, consulta a permissão `manageKnowledge`, revalida no foco
+e busca a revisão exata por `/api/announcements/preview/:id`. A autorização real
+permanece na API. Cleanup cancela solicitações, limpa conteúdo e descarta respostas
+tardias, inclusive troca de conta durante JSON/blob (guard do auth existente).
+
+**Extensão compatível opcional do NewsDTO:**
+
+```text
+preview_revision?: {
+  id: UUID da revisão solicitada,
+  source: 'payload' | 'legacy',
+  status: 'draft' | 'published' | 'scheduled' | 'archived'
+}
+```
+
+Somente prévias emitem esse campo. Em Payload, status é `_status` da **Version
+salva** (draft/published); no histórico importado é `originalStatus`; antes do
+cutover legado é `cms_revisions.status`. A API valida id/source contra a consulta
+e recusa metadata em DTO publicado. O banner diz “Conteúdo não publicado” apenas
+para revisão draft, “Revisão salva como publicada” para published, e avisa que a
+prévia pode não ser a publicação atual. `source=legacy` acrescenta “Histórico
+anterior à migração”. DTO antigo sem metadata recebe o rótulo neutro “Revisão
+salva”, nunca uma afirmação fabricada de status.
+
+O controle Payload **Conferir prévia salva** usa a extensão pública
+`admin.components.edit.beforeDocumentControls` e o GET read-only já existente
+`/editorial/api/news-schedule?target=article&documentId=...`. Ele confirma a Version
+persistida e oferece **Abrir prévia editorial em nova aba** (`noopener noreferrer`),
+sem cookie/token no endereço. Não cria/salva rascunho no GET, nem troca ID por data
+ou ID do documento. Campos modificados, inicialização, save/autosave, upload,
+lock/desabilitado ou drawer aberto bloqueiam consulta/link; mudança de formulário
+invalida consulta tardia. Um 409 preserva os inputs e pede nova consulta. Este fluxo
+de duas ações evita popup bloqueado após uma consulta assíncrona.
+
+Task 9 ainda possui entrada/logout/account-watch/brand/polls; Task 10 possui UI de
+histórico; Task 15 possui aceite visual completo. Esta entrega não os antecipa.
+
+### Verificação Task 8
+
+```text
+node --test tests/unit/owner-news-rich-content.test.mjs tests/unit/owner-news-payload-preview.test.mjs tests/unit/owner-news-reader.test.mjs tests/unit/owner-news-editorial.test.mjs tests/unit/owner-news-payload-api.test.mjs
+npm --prefix cms run typecheck
+npm --prefix cms run test:unit
+# Build (PowerShell):
+$env:CMS_BUILD_ONLY='true'; npm --prefix cms run build
+npm run verify
+node --check public/js/owner-news/asset-path.mjs
+git diff --check
+```
+
+O harness opt-in `node cms/tests/integration/run-task8.mjs --prepare-new-task8`
+cria **apenas um banco novo `cms_task8_test`** em 127.0.0.1:55441; recusa se já
+existir, sem resetar bancos anteriores. Usa credenciais privadas locais, sem
+logá-las. `--browser <diretório-privado>` inicia/encerra somente seus processos
+Next 18088 e double interno 18089. Verifica controle nativo, Versions reais,
+autosave pendente, 409, prévia em aba própria, banners draft/published e revisão
+antiga imutável, com screenshots 1440×900/390/320. PostgreSQL/Next/Payload e client
+API são reais; Firebase, introspecção Portal e hospedagem/roteamento Express/Nginx
+do Portal são doubles explícitos. Não comprova login real nem deploy/VPS.
 
 ## Verificação local e limites de evidência
 

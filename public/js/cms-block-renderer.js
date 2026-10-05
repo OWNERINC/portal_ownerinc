@@ -1,5 +1,7 @@
 import { fetchAPIAsset } from './auth.js';
 import { clear, element, safeHttpUrl } from './ui.js';
+import { cmsAssetEndpoint, validateAssetScope } from './owner-news/asset-path.mjs';
+export { cmsAssetEndpoint };
 
 export const BLOCK_TYPES = ['heading', 'paragraph', 'list', 'callout', 'image', 'divider', 'link', 'pdf', 'video', 'quote', 'profile'];
 const BLOCK_TYPE_SET = new Set(BLOCK_TYPES);
@@ -231,10 +233,6 @@ export function blocksToText(blocks) {
   }).filter(Boolean).join('\n\n');
 }
 
-function assetEndpoint(assetId) {
-  return `/api/cms/assets/${encodeURIComponent(assetId)}`;
-}
-
 function retryableAsset(node, assetId, label, state, { status, apply, reset }) {
   const token = state.token;
   const signal = state.controller.signal;
@@ -260,7 +258,7 @@ function retryableAsset(node, assetId, label, state, { status, apply, reset }) {
     if (pending || token !== state.token || signal.aborted) return;
     pending = true;
     status.textContent = 'Carregando mídia…';
-    fetchAPIAsset(assetEndpoint(assetId), { signal }).then(url => {
+    fetchAPIAsset(cmsAssetEndpoint(assetId, state.assetScope), { signal }).then(url => {
       if (!current()) { URL.revokeObjectURL(url); return; }
       currentURL = url; state.urls.add(url);
       apply(url); status.hidden = true;
@@ -307,9 +305,11 @@ function renderPdf(container, block, state) {
   });
 }
 
-export function renderBlocks(container, blocks, { fallbackText = '', signal } = {}) {
+export function renderBlocks(container, blocks, { fallbackText = '', signal, assetScope = 'legacy' } = {}) {
+  validateAssetScope(assetScope);
   cleanupRenderedBlocks(container);
   const state = renderState(container);
+  state.assetScope = assetScope;
   state.controller = new AbortController();
   if (signal) {
     const dispose = () => cleanupRenderedBlocks(container);

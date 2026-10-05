@@ -47,6 +47,20 @@ test('operational failure never becomes an empty page/count; preview parent/sour
   fail(); await assert.rejects(queryPublishedNews(req, { limit: 10, offset: 0 }, actor), e => (e as APIError).status === 503)
   await assert.rejects(queryNewsCategories(req, { withCounts: true }, actor), e => (e as APIError).status === 503)
 })
+
+test('preview metadata reflects the exact saved revision status, not a generic draft label', async () => {
+  const { req } = fixture()
+  for (const status of ['draft', 'published'] as const) {
+    req.payload.findVersions = (async () => ({ docs: [{ id: id(99), parent: id(1), version: document(1, { _status: status }) }] })) as any
+    const dto = await queryNewsPreview(req, { id: id(1), versionId: id(99), source: 'payload' }, editor)
+    assert.deepEqual(dto.preview_revision, { id: id(99), source: 'payload', status })
+  }
+  assert.equal((await queryNewsDetail(req, { id: id(1) }, editor)).preview_revision, undefined)
+  req.payload.find = (async () => ({ docs: [{ legacyDocumentId: id(1), legacyRevisionId: id(99), originalStatus: 'archived',
+    originalTitle: 'History', originalCategory: '', originalBody: [{ type: 'paragraph', text: 'Original' }], originalEditorial: null }] })) as any
+  assert.deepEqual((await queryNewsPreview(req, { id: id(1), versionId: id(99), source: 'legacy' }, editor)).preview_revision,
+    { id: id(99), source: 'legacy', status: 'archived' })
+})
 test('exact service POST allowlist is separate from login and refuses browser/cross-site/other-secret requests', () => {
   const env = { PORTAL_TO_PAYLOAD_SECRET: 'synthetic-private-news-secret-32-chars', PAYLOAD_TO_PORTAL_SECRET: 'synthetic-opposite-direction-secret' }
   const request = (action: string) => ({ url: `https://cms.invalid/editorial/api/portal-news/${action}`, method: 'POST', headers: new Headers({ Authorization: `Bearer ${env.PORTAL_TO_PAYLOAD_SECRET}` }) })

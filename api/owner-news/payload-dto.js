@@ -63,7 +63,14 @@ function readRich(block, budget) {
   return block;
 }
 function readNewsDTO(json) {
-  assert(keys(json, ['id', 'title', 'category', 'published_at', 'editorial', 'content_version', 'asset_scope', 'content_blocks', 'read_time_minutes']));
+  const required = ['id', 'title', 'category', 'published_at', 'editorial', 'content_version', 'asset_scope', 'content_blocks', 'read_time_minutes'];
+  assert(keys(json, [...required, 'preview_revision'], required));
+  if (Object.hasOwn(json, 'preview_revision')) {
+    const revision = json.preview_revision;
+    assert(json.asset_scope === 'owner-news-preview' && keys(revision, ['id', 'source', 'status']) && uuid(revision.id)
+      && ['payload', 'legacy'].includes(revision.source) && ['draft', 'published', 'scheduled', 'archived'].includes(revision.status)
+      && (revision.source !== 'payload' || ['draft', 'published'].includes(revision.status)));
+  }
   assert(uuid(json.id) && text(json.title, 200) && text(json.category, 100) && date(json.published_at));
   assert(plain(json.title) && plain(json.category));
   assert(json.content_version === 2 && ['owner-news', 'owner-news-preview'].includes(json.asset_scope));
@@ -89,7 +96,10 @@ function readNewsPage(json) {
 }
 function readResult(action, json, input) {
   if (action === 'list') { readNewsPage(json); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }
-  else if (action === 'detail' || action === 'preview') { readNewsDTO(json); assert(json.id === input.id && json.asset_scope === (action === 'preview' ? 'owner-news-preview' : 'owner-news')); }
+  else if (action === 'detail' || action === 'preview') {
+    readNewsDTO(json); assert(json.id === input.id && json.asset_scope === (action === 'preview' ? 'owner-news-preview' : 'owner-news'));
+    if (json.preview_revision) assert(json.preview_revision.id === input.versionId && json.preview_revision.source === input.source);
+  }
   else if (action === 'navigation') {
     assert(keys(json, ['previous', 'next']));
     for (const v of Object.values(json)) assert(v === null || (keys(v, ['id', 'title']) && uuid(v.id) && text(v.title, 200)));

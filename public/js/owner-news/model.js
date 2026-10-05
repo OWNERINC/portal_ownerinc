@@ -1,3 +1,5 @@
+import { newsBlocksToText, validateNewsBlocks } from './content-contract.js';
+
 const KEYS = new Set(['version', 'kind', 'summary', 'author', 'source_label', 'source_date']);
 
 // Pure preview rules; api/owner-news/editorial.js remains the publication authority.
@@ -26,22 +28,14 @@ export function announcementKind({ blocks, content_blocks, editorial }) {
   return editorial?.kind || ((blocks || content_blocks || []).some(b => b.type === 'pdf') ? 'edition' : 'article');
 }
 
-function readingText(blocks) {
-  return blocks.flatMap(block => {
-    if (['heading', 'paragraph', 'quote', 'profile', 'callout'].includes(block.type)) return block.text || '';
-    if (block.type === 'list') return block.items;
-    return [];
-  }).join(' ').trim();
-}
-
 export function estimateNewsReadTime(blocks, editorial) {
   if (announcementKind({ blocks, editorial }) === 'edition') return null;
-  const text = readingText(blocks);
+  const text = newsBlocksToText(blocks);
   return text ? Math.max(1, Math.ceil(text.split(/\s+/).length / 200)) : null;
 }
 
 export function getNewsPresentation(article) {
-  const blocks = article.content_blocks || [];
+  const blocks = validateNewsBlocks(article.content_blocks || [], article.content_version) ? article.content_blocks || [] : [];
   const explicitCover = blocks.find(b => b.type === 'image' && b.usage === 'cover') || null;
   const companion = blocks.find(b => b.type === 'pdf' && b.usage === 'edition') || null;
   const meta = article.editorial;
@@ -49,7 +43,7 @@ export function getNewsPresentation(article) {
     cover: explicitCover || (meta ? null : blocks.find(b => b.type === 'image') || null),
     body: blocks.filter(b => b !== explicitCover && b !== companion),
     companion,
-    summary: meta?.summary || blocks.find(b => b.type === 'paragraph')?.text || '',
+    summary: meta?.summary || blocks.find(b => b.type === 'paragraph')?.text || newsBlocksToText(blocks).slice(0, 1000),
     author: meta?.author || 'Owner News',
     sourceLabel: meta?.source_label || '',
     sourceDate: meta?.source_date || null,

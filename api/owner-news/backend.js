@@ -20,7 +20,7 @@ async function legacyTransaction(pool, work) {
 async function legacyPreview(pool, input) {
   if (input.source !== 'legacy') throw missing();
   return legacyTransaction(pool, async db => {
-    const { rows } = await db.query(`SELECT d.id, d.title, d.category, d.published_at, r.blocks, r.editorial
+    const { rows } = await db.query(`SELECT d.id, d.title, d.category, d.published_at, r.blocks, r.editorial, r.status
       FROM cms_documents d JOIN cms_revisions r ON r.document_id=d.id
       WHERE d.id=$1 AND r.id=$2 AND d.content_type='announcement'`, [input.id, input.versionId]);
     const row = rows[0]; if (!row) throw missing();
@@ -28,7 +28,8 @@ async function legacyPreview(pool, input) {
     if (!revision || !(await legacy.validatePublishedBlocks(db, revision.blocks)).blocks) throw missing();
     return { id: row.id, title: row.title, category: row.category, published_at: row.published_at,
       editorial: revision.editorial, content_version: 2, asset_scope: 'owner-news-preview', content_blocks: revision.blocks,
-      read_time_minutes: estimateNewsReadTime(revision.blocks, revision.editorial) };
+      read_time_minutes: estimateNewsReadTime(revision.blocks, revision.editorial),
+      preview_revision: { id: input.versionId, source: 'legacy', status: row.status } };
   });
 }
 async function legacyAsset(pool, input, { signal } = {}) {

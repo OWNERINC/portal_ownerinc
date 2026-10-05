@@ -17,6 +17,7 @@ const generatedPages = [
   ['academy.html', 'academy', 'Academy'],
   ['benefits.html', 'benefits', 'Benefícios'],
   ['announcements.html', 'announcements', 'Owner News'],
+  ['news-preview.html', 'news-preview', 'Prévia editorial'],
   ['profile.html', 'profile', 'Meu Perfil'],
   ['admin.html', 'admin', 'Painel Admin'],
   ['cms.html', 'cms', 'Editor CMS'],

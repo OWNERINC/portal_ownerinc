@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const { createNewsBackend } = require('../../api/owner-news/backend.js');
 const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false };
 const { createPayloadNewsClient } = require('../../api/owner-news/payload-client.js');
-const { readNewsDTO, readNewsPage } = require('../../api/owner-news/payload-dto.js');
+const { readNewsDTO, readNewsPage, readResult } = require('../../api/owner-news/payload-dto.js');
 const apiRequire = createRequire(new URL('../../api/package.json', import.meta.url));
 const express = apiRequire('express'), supertest = apiRequire('supertest');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -171,7 +171,7 @@ test('legacy/frozen preview uses exact original IDs only; public asset never gai
   const directory = await mkdtemp(path.join(process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : os.tmpdir(), 'task7-legacy-'));
   process.env.UPLOAD_DIR = directory;
   const asset = { id: id(8), storage_key: id(8), mime_type: 'application/pdf', byte_size: 10 };
-  const revision = { blocks: [{ type: 'pdf', asset_id: asset.id, title: 'Legacy PDF' }], editorial: null };
+  const revision = { blocks: [{ type: 'pdf', asset_id: asset.id, title: 'Legacy PDF' }], editorial: null, status: 'published' };
   const calls = [];
   const pool = { async query(sql, params) {
     calls.push({ sql, params });
@@ -191,6 +191,7 @@ test('legacy/frozen preview uses exact original IDs only; public asset never gai
     await mkdir(path.join(directory, 'cms-private')); await writeFile(path.join(directory, 'cms-private', asset.storage_key), '%PDF-12345');
     const preview = await backend.preview({ id: id(1), versionId: id(2), source: 'legacy' }, editor);
     assert.equal(preview.id, id(1)); assert.equal(preview.asset_scope, 'owner-news-preview'); assert.equal(preview.read_time_minutes, null);
+    assert.deepEqual(preview.preview_revision, { id: id(2), source: 'legacy', status: 'published' });
     await assert.rejects(backend.preview({ id: id(1), versionId: id(2), source: 'payload' }, editor), e => e.status === 404);
     await assert.rejects(backend.preview({ id: id(3), versionId: id(2), source: 'legacy' }, editor), e => e.status === 404);
     const result = await backend.asset({ id: asset.id, preview: false, range: 'bytes=0-4' }, editor);
@@ -200,4 +201,20 @@ test('legacy/frozen preview uses exact original IDs only; public asset never gai
     await assert.rejects(backend.asset({ id: asset.id, preview: true, range: null }, actor), e => e.status === 403);
     assert.equal(calls.length, before);
   } finally { if (previous === undefined) delete process.env.UPLOAD_DIR; else process.env.UPLOAD_DIR = previous; await rm(directory, { recursive: true, force: true }); }
+});
+
+test('optional preview revision metadata is exact, source-bound and never leaks into published DTOs', () => {
+  const input = { id: id(1), versionId: id(2), source: 'payload' };
+  const preview = { ...dto(), asset_scope: 'owner-news-preview' };
+  assert.equal(readResult('preview', preview, input), preview, 'older compatible DTO has no invented status');
+  for (const status of ['draft', 'published']) {
+    const data = { ...preview, preview_revision: { id: id(2), source: 'payload', status } };
+    assert.equal(readResult('preview', data, input), data);
+  }
+  for (const meta of [null, {}, { id: id(2), source: 'payload', status: 'unknown' },
+    { id: id(2), source: 'payload', status: 'scheduled' }, { id: id(3), source: 'payload', status: 'draft' },
+    { id: id(2), source: 'legacy', status: 'draft' }, { id: id(2), source: 'payload', status: 'draft', secret: 'no' }]) {
+    assert.throws(() => readResult('preview', { ...preview, preview_revision: meta }, input), /news_unavailable/);
+  }
+  assert.throws(() => readNewsDTO({ ...dto(), preview_revision: { id: id(2), source: 'payload', status: 'published' } }), /news_unavailable/);
 });

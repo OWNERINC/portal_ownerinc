@@ -32,7 +32,7 @@ export function renderNewsCard(article, { index = 0, signal } = {}) {
   if (signal?.aborted) dispose();
   else if (presentation.cover) {
     const { asset_id, alt } = presentation.cover;
-    renderBlocks(cover, [{ type: 'image', asset_id, alt }], { signal });
+    renderBlocks(cover, [{ type: 'image', asset_id, alt }], { signal, assetScope: article.asset_scope });
   } else cover.append(element('span', { className: 'news-card-brand', text: 'Owner News', 'aria-hidden': 'true' }));
   return { node, dispose };
 }

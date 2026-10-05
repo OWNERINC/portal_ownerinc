@@ -100,12 +100,15 @@ export function queryNewsPreview(req: PayloadRequest, input: NewsInputs['preview
       const rows = await req.payload.find({ collection: 'legacy-news-revisions', req, overrideAccess: true, depth: 0, limit: 1,
         where: { and: [{ legacyDocumentId: { equals: input.id } }, { legacyRevisionId: { equals: input.versionId } }] } })
       if (!rows.docs[0]) notFound()
-      return (await visible(req, historyDocument(rows.docs[0]), true)) || notFound()
+      const dto = (await visible(req, historyDocument(rows.docs[0]), true)) || notFound()
+      return { ...dto, preview_revision: { id: input.versionId, source: 'legacy', status: rows.docs[0].originalStatus } }
     }
     const rows = await req.payload.findVersions({ collection: 'news-articles', req, overrideAccess: true, depth: 0, limit: 1,
       where: { and: [{ id: { equals: input.versionId } }, { parent: { equals: input.id } }] } })
     const row = rows.docs[0]
     if (!row || row.parent !== input.id) return notFound()
-    return (await visible(req, { ...row.version, id: input.id }, true)) || notFound()
+    const dto = (await visible(req, { ...row.version, id: input.id }, true)) || notFound()
+    if (row.version._status !== 'draft' && row.version._status !== 'published') return notFound()
+    return { ...dto, preview_revision: { id: input.versionId, source: 'payload', status: row.version._status } }
   })
 }
