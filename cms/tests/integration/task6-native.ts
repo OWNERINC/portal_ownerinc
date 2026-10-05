@@ -14,6 +14,7 @@ import { lockCmsReferences, requireCmsTransaction } from '../../src/publication/
 import { assertMediaOrphan } from '../../src/media/references.js'
 import { publicationMutation } from '../../src/publication/internal.js'
 import { legacyNewsImportContext } from '../../src/news/validation.js'
+import { runReviewCases } from './task6-review.js'
 
 const database = new URL(process.env.CMS_DATABASE_URL || 'http://invalid')
 const privateDir = process.env.TASK6_PRIVATE_DIR || ''
@@ -40,7 +41,7 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
   await payload.init({ config, disableOnInit: true })
   const adapter = payload.db as unknown as PostgresAdapter
   const projection = await payload.create({ collection: 'portal-editors', data: { portalUid: actor.uid, email: actor.email, displayName: actor.name } })
-  const user = { ...projection, collection: 'portal-editors' as const, portalActor: actor }
+  const user = { ...projection, collection: 'portal-editors' as const, portalActor: actor, portalExpiresAt: new Date(Date.now() + 3600000).toISOString() }
   await writeFile(path.join(privateDir, 'browser-fixture.json'), JSON.stringify({ actor }))
   const req = () => createLocalReq({ user }, payload)
   const worker = () => createLocalReq({}, payload)
@@ -51,8 +52,8 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
   const schedule = async (id: string, milliseconds = 150) => {
     const version = await saved(id)
     const doc = await payload.findByID({ collection: 'news-articles', id, draft: false })
-    return scheduleRevision(await req(), { target: 'news-articles', documentId: id, versionId: version.id,
-      snapshotHash: snapshotHash(snapshotDocument('news-articles', version.version)), action: 'publish', expectedGeneration: doc.publicationGeneration || 0,
+    return scheduleRevision(await req(), { target: 'article', documentId: id, versionId: version.id,
+      snapshotHash: snapshotHash(snapshotDocument('news-articles', version.version)), operation: 'publish', expectedGeneration: doc.publicationGeneration || 0,
       scheduledAt: new Date(Date.now() + milliseconds).toISOString() })
   }
   const begin = async () => {
@@ -81,6 +82,8 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
   const draft = (id: string) => payload.findByID({ collection: 'news-articles', id, draft: true, depth: 0 })
   const scheduleDoc = (id: string) => payload.findByID({ collection: 'news-schedules', id, depth: 0 })
   try {
+    if (process.env.TASK6_REVIEW_ONLY === 'true') await runReviewCases(t, payload, user, value => { revoked = value })
+    if (process.env.TASK6_REVIEW_ONLY !== 'true') {
     await t.test('restricted role and exact immutable snapshot A publishes while native draft B survives', async () => {
       assert.deepEqual((await adapter.drizzle.execute(sql`SELECT current_database() AS db, current_user AS role`)).rows[0], { db: 'cms_task6_test', role: 'cms_runtime' })
       const a = await article(), source = await saved(a.id), pending = await schedule(a.id)
@@ -247,15 +250,15 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
       await payload.updateGlobal({ slug: 'news-home', req: await req(), draft: true, data: { eyebrow: 'Owner', headline: 'Scheduled home A', summary: 'Summary A' } })
       const source = (await payload.findGlobalVersions({ slug: 'news-home', limit: 1, sort: '-updatedAt' })).docs[0]
       const current = await payload.findGlobal({ slug: 'news-home', draft: false })
-      const pending = await scheduleRevision(await req(), { target: 'news-home', documentId: 'news-home', versionId: source.id,
-        snapshotHash: snapshotHash(snapshotDocument('news-home', source.version)), action: 'publish', expectedGeneration: current.publicationGeneration || 0,
+      const pending = await scheduleRevision(await req(), { target: 'home', documentId: 'news-home', versionId: source.id,
+        snapshotHash: snapshotHash(snapshotDocument('news-home', source.version)), operation: 'publish', expectedGeneration: current.publicationGeneration || 0,
         scheduledAt: new Date(Date.now() + 150).toISOString() })
       await payload.updateGlobal({ slug: 'news-home', req: await req(), draft: true, data: { headline: 'Later home B' } })
       await delay(170); assert.deepEqual(await runScheduledRevision(await worker(), { scheduleId: pending.id }), { state: 'published' })
       assert.equal((await payload.findGlobal({ slug: 'news-home', draft: false })).headline, 'Scheduled home A')
       assert.equal((await payload.findGlobal({ slug: 'news-home', draft: true })).headline, 'Later home B')
-      const withdraw = await scheduleRevision(await req(), { target: 'news-home', documentId: 'news-home', versionId: source.id,
-        snapshotHash: snapshotHash(snapshotDocument('news-home', source.version)), action: 'unpublish', expectedGeneration: pending.generation,
+      const withdraw = await scheduleRevision(await req(), { target: 'home', documentId: 'news-home', versionId: source.id,
+        snapshotHash: snapshotHash(snapshotDocument('news-home', source.version)), operation: 'unpublish', expectedGeneration: pending.generation,
         scheduledAt: new Date(Date.now() + 150).toISOString() })
       await delay(170); assert.deepEqual(await runScheduledRevision(await worker(), { scheduleId: withdraw.id }), { state: 'unpublished' })
       assert.equal((await payload.findGlobal({ slug: 'news-home', draft: false }))._status, 'draft')
@@ -299,8 +302,8 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
     })
     await t.test('unsaved/wrong/mutated saved revisions cannot schedule; replacement uses expected generation and leaves the old snapshot immutable', async () => {
       const a = await article(), b = await article(), source = await saved(a.id), other = await saved(b.id)
-      const input = { target: 'news-articles' as const, documentId: a.id, versionId: source.id,
-        snapshotHash: snapshotHash(snapshotDocument('news-articles', source.version)), action: 'publish' as const, expectedGeneration: 0,
+      const input = { target: 'article' as const, documentId: a.id, versionId: source.id,
+        snapshotHash: snapshotHash(snapshotDocument('news-articles', source.version)), operation: 'publish' as const, expectedGeneration: 0,
         scheduledAt: new Date(Date.now() + 60000).toISOString() }
       await assert.rejects(scheduleRevision(await req(), { ...input, versionId: randomUUID() }))
       await assert.rejects(scheduleRevision(await req(), { ...input, versionId: other.id }), /version_mismatch/)
@@ -331,8 +334,8 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
         const holder = await begin()
         try {
           await (await requireCmsTransaction(payload, holder)).execute(sql`SELECT set_config('owner_news.test_audit_fail', 'on', true)`)
-          await assert.rejects(operation === 'schedule' ? scheduleRevision(holder, { target: 'news-articles', documentId: a.id,
-            versionId: source.id, snapshotHash: snapshotHash(snapshotDocument('news-articles', source.version)), action: 'publish',
+          await assert.rejects(operation === 'schedule' ? scheduleRevision(holder, { target: 'article', documentId: a.id,
+            versionId: source.id, snapshotHash: snapshotHash(snapshotDocument('news-articles', source.version)), operation: 'publish',
             expectedGeneration: 0, scheduledAt: new Date(Date.now() + 60000).toISOString() }) :
             payload.update({ collection: 'news-articles', id: a.id, req: holder, draft: true, data: { title: 'must rollback' } }))
         } finally { await rollback(holder) }
@@ -412,6 +415,7 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
       assert.deepEqual(await live(a.id), before); assert.deepEqual(await audits(a.id), beforeAudit); assert.deepEqual(await saved(a.id), beforeVersion)
       t.diagnostic(`committed schedule=${pending.id}, version=${beforeVersion.id}, audit IDs=${beforeAudit.map(row => row.id).join(',')}; retry unchanged`)
     })
+    }
     const browserArticle = await article('Task6 native browser fixture')
     await writeFile(path.join(privateDir, 'browser-fixture.json'), JSON.stringify({ actor, articleId: browserArticle.id }))
     assert.equal(Object.keys(adapter.sessions).length, 0, 'no live nested/native transactions remain')

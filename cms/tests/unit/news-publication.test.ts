@@ -3,6 +3,8 @@ import test from 'node:test'
 import { canRunSchedule } from '../../src/publication/schedule.js'
 import { snapshotHash } from '../../src/publication/document.js'
 import { scheduleBlocked, scheduleUTC, SCHEDULE_TIMEZONE } from '../../src/admin/schedule-state.js'
+import { APIError, ValidationError } from 'payload'
+import { isNativeContentValidation } from '../../src/publication/validation.js'
 
 test('despublicação invalida uma execução já retirada da fila', () => {
   assert.equal(canRunSchedule({ state: 'pending', generation: 4 }, 5), false)
@@ -27,4 +29,19 @@ test('civil scheduling is America/Sao_Paulo, independent of machine/browser time
   assert.equal(SCHEDULE_TIMEZONE, 'America/Sao_Paulo')
   assert.equal(scheduleUTC('2030-01-02 10:30'), '2030-01-02T13:30:00.000Z')
   for (const value of ['', '2030-02-30 10:30', '2030-13-01 10:30', '2030-01-01 24:00', '2030-01-01T10:30Z']) assert.throws(() => scheduleUTC(value))
+})
+
+test('only native authored-field validation is deterministic; DB-translated constraints/audit/API failures propagate', () => {
+  const native = new ValidationError({ collection: 'news-articles', errors: [{ path: 'body.0.title', message: 'too long' }] })
+  assert.equal(isNativeContentValidation(native, 'news-articles'), true)
+  assert.equal(isNativeContentValidation(native, 'news-home'), false)
+  const home = new ValidationError({ global: 'news-home', errors: [{ path: 'headline', message: 'too long' }] })
+  assert.equal(isNativeContentValidation(home, 'news-home'), true)
+  for (const error of [new Error('connection lost'), new APIError('invalid', 400),
+    new ValidationError({ collection: 'news-audit', errors: [{ path: 'actorUid', message: 'invalid' }] }),
+    new ValidationError({ collection: 'news-articles', errors: [{ path: 'title', message: 'unique', tableName: 'news_articles' }] }),
+    new ValidationError({ collection: 'news-articles', errors: [{ path: 'id', message: 'invalid' }] }),
+    new ValidationError({ collection: 'news-articles', errors: [] })]) {
+    assert.equal(isNativeContentValidation(error, 'news-articles'), false)
+  }
 })

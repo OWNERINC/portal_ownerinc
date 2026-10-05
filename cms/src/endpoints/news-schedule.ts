@@ -2,7 +2,8 @@ import { APIError, type Endpoint, type PayloadRequest } from 'payload'
 import { canManageNews } from '../auth/access'
 import { PortalAuthError } from '../auth/portal-client'
 import { currentDocument, latestRevision, snapshotDocument, snapshotHash } from '../publication/document'
-import { cancelSchedule, scheduleRevision, validateScheduleTarget, type ScheduleInput } from '../publication/schedule'
+import { cancelSchedule, scheduleRevision, scheduleTarget } from '../publication/schedule'
+import type { ScheduleInput } from '../contracts/news'
 import { withCmsTransaction } from '../publication/transaction'
 
 async function handle(req: PayloadRequest, operation: () => Promise<unknown>) {
@@ -17,8 +18,8 @@ async function handle(req: PayloadRequest, operation: () => Promise<unknown>) {
 }
 export const newsScheduleEndpoints: Endpoint[] = [
   { path: '/news-schedule', method: 'get', handler: req => handle(req, async () => {
-    const target = req.searchParams?.get('target'), documentId = req.searchParams?.get('documentId')
-    validateScheduleTarget(target, documentId)
+    const documentId = req.searchParams?.get('documentId')
+    const target = scheduleTarget(req.searchParams?.get('target'), documentId)
     return withCmsTransaction(req.payload, req, async req => {
       const current = await currentDocument(req, target, documentId!)
       const revision = await latestRevision(req, target, documentId!)

@@ -50,6 +50,16 @@ try {
     headers: { Origin: origin }, data: { title: 'Task6 native browser fixture', body: [{ blockType: 'paragraph', text: 'Browser body A' }] },
   })
   assert.equal(resetFixture.status(), 200, 'reset only the owned synthetic browser document')
+  const homeRevision = await context.request.get(`${origin}/editorial/api/news-schedule?target=home&documentId=news-home`)
+  // The review fixture includes a real saved home; ordinary Task6 fixtures do too.
+  assert.equal(homeRevision.status(), 200)
+  const home = await homeRevision.json()
+  const homeSchedule = await context.request.post(`${origin}/editorial/api/news-schedule`, { headers: { Origin: origin }, data: {
+    target: 'home', documentId: 'news-home', versionId: home.versionId, operation: 'publish',
+    expectedGeneration: home.generation, scheduledAt: '2030-01-02T13:30:00.000Z',
+  } })
+  assert.equal(homeSchedule.status(), 200, await homeSchedule.text())
+  console.log('Shared home ScheduleInput without optional hash accepted by real authenticated REST')
   const page = await context.newPage(); page.setDefaultTimeout(30000)
   const errors = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto(`${origin}/editorial/admin/collections/news-articles/${fixture.articleId}`)
@@ -65,14 +75,15 @@ try {
   await dateInput.fill(localDate)
   assert.equal(await submit.isDisabled(), true, 'explicit saved revision confirmation required')
   await confirm.check()
-  const currentResponse = await context.request.get(`${origin}/editorial/api/news-schedule?target=news-articles&documentId=${fixture.articleId}`)
+  const currentResponse = await context.request.get(`${origin}/editorial/api/news-schedule?target=article&documentId=${fixture.articleId}`)
   assert.equal(currentResponse.status(), 200)
   const current = await currentResponse.json()
   const competing = await context.request.post(`${origin}/editorial/api/news-schedule`, { headers: { Origin: origin }, data: {
-    target: 'news-articles', documentId: fixture.articleId, versionId: current.versionId, snapshotHash: current.snapshotHash,
-    expectedGeneration: current.generation, action: 'publish', scheduledAt: '2030-01-02T13:30:00.000Z',
+    target: 'article', documentId: fixture.articleId, versionId: current.versionId,
+    expectedGeneration: current.generation, operation: 'publish', scheduledAt: '2030-01-02T13:30:00.000Z',
   } })
   assert.equal(competing.status(), 200, await competing.text())
+  console.log('Shared article ScheduleInput without optional hash accepted by real authenticated REST')
   const titleBefore = await page.getByLabel('Title', { exact: true }).inputValue()
   const conflict = page.waitForResponse(response => response.url().endsWith('/news-schedule') && response.request().method() === 'POST')
   await submit.click(); assert.equal((await conflict).status(), 409)
@@ -84,7 +95,12 @@ try {
   await page.getByRole('button', { name: 'Conferir revisão salva novamente' }).click()
   await confirm.check()
   const success = page.waitForResponse(response => response.url().endsWith('/news-schedule') && response.request().method() === 'POST')
-  await submit.click(); assert.equal((await success).status(), 200)
+  await submit.click()
+  const successResponse = await success
+  assert.equal(successResponse.status(), 200)
+  const nativeInput = successResponse.request().postDataJSON()
+  assert.equal(nativeInput.target, 'article'); assert.equal(nativeInput.operation, 'publish')
+  assert.match(nativeInput.snapshotHash, /^[a-f0-9]{64}$/u, 'native UI always sends its saved-content hash')
   await page.getByText('Revisão salva agendada.', { exact: false }).waitFor()
   console.log('Real REST generation conflict 409 preserved native title/date; refresh + explicit reconfirm scheduled immutable revision')
   await page.getByRole('button', { name: 'Fechar', exact: true }).click()

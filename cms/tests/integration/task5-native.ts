@@ -44,7 +44,7 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
   const actor = { uid: `task5-synthetic-${randomUUID()}`, email: 'task5@example.invalid', name: 'Synthetic Editor', canManageNews: true }
   const projection = await payload.create({ collection: 'portal-editors', overrideAccess: true,
     data: { portalUid: actor.uid, email: actor.email, displayName: actor.name } })
-  const user = { ...projection, collection: 'portal-editors' as const, portalActor: actor }
+  const user = { ...projection, collection: 'portal-editors' as const, portalActor: actor, portalExpiresAt: new Date(Date.now() + 3600000).toISOString() }
   const req = async () => createLocalReq({ user }, payload)
   const pdf = Buffer.from('%PDF-1.7\nTask5 synthetic only\nxref\n0 1\n0000000000 65535 f\ntrailer\n<< /Size 1 >>\nstartxref\n9\n%%EOF\n')
   const upload = async (bytes: Buffer = pdf, mimetype = 'application/pdf') => payload.create({ collection: 'news-media',

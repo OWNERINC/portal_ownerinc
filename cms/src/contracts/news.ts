@@ -70,4 +70,6 @@ export type ScheduleInput = {
   operation: 'publish' | 'unpublish'
   scheduledAt: string
   expectedGeneration: number
+  /** Optional saved-content confirmation. Native admin always supplies it. */
+  snapshotHash?: string
 }

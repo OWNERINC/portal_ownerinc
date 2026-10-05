@@ -4,6 +4,7 @@ import React, { useState } from 'react'
 import { Button, CheckboxInput, Drawer, TextInput, useDocumentInfo, useForm, useFormBackgroundProcessing,
   useFormInitializing, useFormModified, useFormProcessing, useModal } from '@payloadcms/ui'
 import { scheduleBlocked, scheduleConflictMessage, scheduleUTC, SCHEDULE_TIMEZONE } from './schedule-state'
+import type { ScheduleInput } from '../contracts/news'
 
 type Revision = { versionId: string; snapshotHash: string; title: string; savedAt: string; generation: number;
   pending: { id: string; generation: number; scheduledAt: string; action: string }[] }
@@ -20,8 +21,8 @@ export function ScheduleRevision() {
   const [withdraw, setWithdraw] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  const target = info.globalSlug === 'news-home' ? 'news-home' : 'news-articles'
-  const documentId = target === 'news-home' ? 'news-home' : String(info.id || '')
+  const target = info.globalSlug === 'news-home' ? 'home' : 'article'
+  const documentId = target === 'home' ? 'news-home' : String(info.id || '')
   const blocked = scheduleBlocked({ modified, processing, backgroundProcessing, initializing,
     disabled: form.disabled || Boolean(info.documentIsLocked), uploading: info.uploadStatus === 'uploading',
     otherModalOpen: Object.entries(modalState).some(([key, modal]) => key !== slug && modal.isOpen), busy })
@@ -47,8 +48,8 @@ export function ScheduleRevision() {
       const response = await fetch(endpoint, { method: cancel ? 'DELETE' : 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cancel ? { id: pending.id, expectedGeneration: pending.generation } : {
           target, documentId, versionId: revision.versionId, snapshotHash: revision.snapshotHash,
-          expectedGeneration: revision.generation, scheduledAt, action: withdraw ? 'unpublish' : 'publish',
-        }) })
+          expectedGeneration: revision.generation, scheduledAt: scheduledAt!, operation: withdraw ? 'unpublish' : 'publish',
+        } satisfies ScheduleInput) })
       if (response.status === 409) { setMessage(scheduleConflictMessage); setConfirmed(false); return }
       if (!response.ok) throw new Error('Não foi possível alterar a agenda. Confira os dados e sua permissão.')
       setMessage(cancel ? 'Agenda cancelada. O rascunho foi preservado.' : 'Revisão salva agendada. Edições posteriores não alteram este snapshot.')

@@ -1,7 +1,8 @@
-import { APIError, type PayloadRequest, type RequiredDataFromCollectionSlug } from 'payload'
+import { APIError, ValidationError, type PayloadRequest, type RequiredDataFromCollectionSlug } from 'payload'
 import { sql } from '@payloadcms/db-postgres'
 import { createPortalClient, PortalAuthError } from '../auth/portal-client'
 import { readCmsEnvironment } from '../config/environment'
+import type { ScheduleInput } from '../contracts/news'
 import { uuid } from '../news/primitives'
 import { normalizeNewsContent, normalizeNewsHome, validateNewsPublication } from '../news/validation'
 import { assertMediaReferences } from '../media/references'
@@ -10,19 +11,18 @@ import { appendNewsAudit, publicationActor } from './audit'
 import { asPublicationWorker, publicationMutation } from './internal'
 import { currentDocument, latestRevision, setGeneration, snapshotDocument, snapshotHash, type NewsSnapshot } from './document'
 import { lockPublicationDocument, requireCmsTransaction, withCmsTransaction, withPublicationTransaction, type PublicationTarget } from './transaction'
+import { isNativeContentValidation, validateNativeSnapshot } from './validation'
 
 export function canRunSchedule(schedule: { state: string; generation: number }, generation: number) {
   return schedule.state === 'pending' && schedule.generation === generation
 }
 
-export type ScheduleInput = {
-  target: PublicationTarget; documentId: string; versionId: string; snapshotHash: string
-  scheduledAt: string; expectedGeneration: number; action: 'publish' | 'unpublish'
-}
-export function validateScheduleTarget(target: unknown, id: unknown): asserts target is PublicationTarget {
-  if (target !== 'news-articles' && target !== 'news-home') throw new APIError('invalid_schedule_target', 400, undefined, true)
-  if (target === 'news-articles') uuid(id)
+/** Shared API vocabulary stays independent of Payload collection/global slugs. */
+export function scheduleTarget(target: unknown, id: unknown): PublicationTarget {
+  if (target !== 'article' && target !== 'home') throw new APIError('invalid_schedule_target', 400, undefined, true)
+  if (target === 'article') uuid(id)
   else if (id !== 'news-home') throw new APIError('invalid_schedule_target', 400, undefined, true)
+  return target === 'article' ? 'news-articles' : 'news-home'
 }
 function expectGeneration(actual: number, expected: number) {
   if (!Number.isSafeInteger(expected) || expected < 0 || expected >= Number.MAX_SAFE_INTEGER || actual !== expected) throw new APIError('news_schedule_conflict', 409, undefined, true)
@@ -33,6 +33,7 @@ async function validateSnapshot(req: PayloadRequest, target: PublicationTarget, 
     validateNewsPublication(snapshot)
     await assertMediaReferences(req.payload, normalizeNewsContent(snapshot.body), req)
   }
+  await validateNativeSnapshot(req, target, snapshot)
 }
 async function scheduleRow(req: PayloadRequest, id: string) {
   const db = await requireCmsTransaction(req.payload, req)
@@ -54,8 +55,8 @@ export async function cancelPendingSchedules(req: PayloadRequest, target: Public
       actorUid: publicationActor(req), details: { target, generation: schedule.generation, scheduleId: schedule.id, reason } })
   }
 }
-export async function scheduleRevision(req: PayloadRequest, input: ScheduleInput) {
-  validateScheduleTarget(input.target, input.documentId)
+export async function scheduleRevision(req: PayloadRequest, request: ScheduleInput) {
+  const input = { ...request, target: scheduleTarget(request.target, request.documentId), action: request.operation }
   uuid(input.versionId)
   if (!['publish', 'unpublish'].includes(input.action) || typeof input.scheduledAt !== 'string' ||
     !Number.isFinite(Date.parse(input.scheduledAt)) || new Date(input.scheduledAt).toISOString() !== input.scheduledAt || Date.parse(input.scheduledAt) <= Date.now()) {
@@ -70,7 +71,7 @@ export async function scheduleRevision(req: PayloadRequest, input: ScheduleInput
     if ('parent' in version && version.parent !== input.documentId) throw new APIError('news_schedule_version_mismatch', 409, undefined, true)
     const snapshot = snapshotDocument(input.target, version.version)
     const hash = snapshotHash(snapshot)
-    if (hash !== input.snapshotHash) throw new APIError('news_schedule_conflict', 409, undefined, true)
+    if (input.snapshotHash !== undefined && hash !== input.snapshotHash) throw new APIError('news_schedule_conflict', 409, undefined, true)
     await validateSnapshot(req, input.target, snapshot)
     const generation = input.expectedGeneration + 1
     await cancelPendingSchedules(req, input.target, input.documentId, 'replaced')
@@ -103,9 +104,27 @@ export async function cancelSchedule(req: PayloadRequest, input: { id: string; e
   })
 }
 
-export async function runScheduledRevision(req: PayloadRequest, { scheduleId }: { scheduleId: string }): Promise<{
+type ScheduleResult = {
   state: 'published' | 'unpublished' | 'cancelled' | 'rejected' | 'already_processed'
-}> {
+}
+type RejectionFence = { generation: number; snapshotHash: string; versionId: string; actorUid: string }
+class NativePublicationFailure extends Error {
+  constructor(readonly validation: unknown, readonly fence: RejectionFence) { super('news_native_content_invalid') }
+}
+export async function runScheduledRevision(req: PayloadRequest, { scheduleId }: { scheduleId: string }): Promise<ScheduleResult> {
+  const callerOwnsTransaction = Boolean(req.transactionID)
+  try { return await runScheduleTransaction(req, scheduleId) }
+  catch (error) {
+    if (!(error instanceof NativePublicationFailure)) throw error
+    // A native write has killed the entire transaction. Never continue on that req,
+    // nor independently commit a rejection if the caller owned the rolled-back unit.
+    if (callerOwnsTransaction) throw error.validation
+    // The failed owned unit is already rolled back. Fresh transaction, fresh lock /
+    // authority / actor / state / generation checks; rejection + audit commit together.
+    return runScheduleTransaction(req, scheduleId, error.fence)
+  }
+}
+async function runScheduleTransaction(req: PayloadRequest, scheduleId: string, failed?: RejectionFence): Promise<ScheduleResult> {
   return withCmsTransaction(req.payload, req, async req => {
     const client = createPortalClient(readCmsEnvironment(process.env))
     const authority = await client.getAuthority()
@@ -116,6 +135,7 @@ export async function runScheduledRevision(req: PayloadRequest, { scheduleId }: 
     const current = await currentDocument(req, schedule.target, schedule.documentId)
     return asPublicationWorker(req, schedule.actorUid, async () => {
       const reject = async (reason: 'actor_revoked' | 'invalid_content' | 'invalid_asset' | 'generation_changed') => {
+        await requireCmsTransaction(req.payload, req)
         const state = reason === 'generation_changed' ? 'cancelled' : 'rejected'
         await changeState(req, schedule.id, state)
         await appendNewsAudit(req, { action: state === 'cancelled' ? 'schedule_cancelled' : 'schedule_rejected',
@@ -130,10 +150,21 @@ export async function runScheduledRevision(req: PayloadRequest, { scheduleId }: 
         if (error instanceof PortalAuthError && [401, 403].includes(error.status)) return reject('actor_revoked')
         throw error
       }
+      if (failed) {
+        if (failed.generation !== schedule.generation || failed.snapshotHash !== schedule.snapshotHash ||
+          failed.versionId !== schedule.versionId || failed.actorUid !== schedule.actorUid) {
+          throw new APIError('news_schedule_conflict', 409, undefined, true)
+        }
+        return reject('invalid_content')
+      }
       if (snapshotHash(schedule.snapshot) !== schedule.snapshotHash) return reject('invalid_content')
       try { await validateSnapshot(req, schedule.target, schedule.snapshot as NewsSnapshot) }
       catch (error) {
         if (error instanceof MediaFileUnavailableError) return reject('invalid_asset')
+        if (error instanceof ValidationError) {
+          if (isNativeContentValidation(error, schedule.target)) return reject('invalid_content')
+          throw error
+        }
         if (error instanceof APIError && error.status === 400) return reject('invalid_content')
         throw error
       }
@@ -144,14 +175,22 @@ export async function runScheduledRevision(req: PayloadRequest, { scheduleId }: 
       const state = schedule.action === 'publish' ? 'published' : 'unpublished'
       // Still uncommitted. Withdrawal cancels OTHER pending agendas, not itself.
       await changeState(req, schedule.id, state)
-      if (schedule.target === 'news-articles') {
-        await req.payload.update({ collection: 'news-articles', id: schedule.documentId, req, depth: 0, overrideAccess: true, data: data as RequiredDataFromCollectionSlug<'news-articles'> })
-        if (preserve) await req.payload.update({ collection: 'news-articles', id: schedule.documentId, req, depth: 0, overrideAccess: true, draft: true,
-          data: { ...snapshotDocument(schedule.target, later!.version), _status: 'draft' } })
-      } else {
-        await req.payload.updateGlobal({ slug: 'news-home', req, depth: 0, overrideAccess: true, data })
-        if (preserve) await req.payload.updateGlobal({ slug: 'news-home', req, depth: 0, overrideAccess: true, draft: true,
-          data: { ...snapshotDocument(schedule.target, later!.version), _status: 'draft' } })
+      try {
+        if (schedule.target === 'news-articles') {
+          await req.payload.update({ collection: 'news-articles', id: schedule.documentId, req, depth: 0, overrideAccess: true, data: data as RequiredDataFromCollectionSlug<'news-articles'> })
+          if (preserve) await req.payload.update({ collection: 'news-articles', id: schedule.documentId, req, depth: 0, overrideAccess: true, draft: true,
+            data: { ...snapshotDocument(schedule.target, later!.version), _status: 'draft' } })
+        } else {
+          await req.payload.updateGlobal({ slug: 'news-home', req, depth: 0, overrideAccess: true, data })
+          if (preserve) await req.payload.updateGlobal({ slug: 'news-home', req, depth: 0, overrideAccess: true, draft: true,
+            data: { ...snapshotDocument(schedule.target, later!.version), _status: 'draft' } })
+        }
+      } catch (error) {
+        if (isNativeContentValidation(error, schedule.target)) {
+          throw new NativePublicationFailure(error, { generation: schedule.generation, snapshotHash: schedule.snapshotHash,
+            versionId: schedule.versionId, actorUid: schedule.actorUid })
+        }
+        throw error
       }
       return { state }
     })

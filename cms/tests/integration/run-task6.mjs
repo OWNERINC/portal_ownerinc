@@ -10,7 +10,8 @@ import { describeProcessResult } from './process-result.mjs'
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const { Client } = createRequire(path.join(root, 'api/package.json'))('pg')
 const base = path.join(process.env.LOCALAPPDATA || '', 'Temp', 'opencode')
-if (!process.env.LOCALAPPDATA || process.argv.length !== 3 || process.argv[2] !== '--disposable-task6') throw new Error('Explicit Task6 local disposable opt-in required')
+const reviewOnly = process.argv[3] === '--review-round1'
+if (!process.env.LOCALAPPDATA || process.argv.length !== (reviewOnly ? 4 : 3) || process.argv[2] !== '--disposable-task6') throw new Error('Explicit Task6 local disposable opt-in required')
 const state = JSON.parse(await readFile(path.join(base, 'ownerinc-payload-local-validation-20261002', 'state.json'), 'utf8'))
 const directory = await mkdtemp(path.join(base, 'ownerinc-task6-'))
 const url = (role, database) => `postgresql://${role}:${encodeURIComponent(state.passwords[role])}@127.0.0.1:55441/${database}`
@@ -20,6 +21,7 @@ const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) 
 const secret = () => randomBytes(36).toString('hex')
 const env = { ...inherited, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1',
   TASK6_DISPOSABLE: 'cms_task6_test', TASK6_PRIVATE_DIR: directory,
+  ...(reviewOnly ? { TASK6_REVIEW_ONLY: 'true' } : {}),
   PAYLOAD_SECRET: secret(), PAYLOAD_TO_PORTAL_SECRET: secret(), PORTAL_TO_PAYLOAD_SECRET: secret(),
   PORTAL_PUBLIC_URL: 'http://localhost:18086', PORTAL_INTERNAL_URL: 'http://127.0.0.1:18086',
   CMS_UPLOAD_DIR: path.join(directory, 'uploads') }

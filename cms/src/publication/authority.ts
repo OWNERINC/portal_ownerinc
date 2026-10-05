@@ -11,6 +11,17 @@ export async function assertCmsWriteAuthority(req: PayloadRequest) {
   const preparationImport = isLegacyNewsImport(req.context)
   const requestingWorker = workerActor(req)
   if (!requestingWorker && !canManageNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
+  // Only the private worker/import capabilities are session-independent. Browser
+  // requests must retain verified, canonical expiry metadata AFTER the lock wait.
+  const assertInteractiveSession = () => {
+    if (requestingWorker || preparationImport) return
+    const expiresAt = (req.user as PortalRuntimeUser).portalExpiresAt
+    if (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)) ||
+      new Date(expiresAt).toISOString() !== expiresAt || Date.parse(expiresAt) <= Date.now()) {
+      throw new APIError('editorial_session_expired', 403, undefined, true)
+    }
+  }
+  assertInteractiveSession()
   const client = createPortalClient(readCmsEnvironment(process.env))
   const authority = await client.getAuthority()
   // Capability is in-process only. A frozen cutover still refuses preparation writes.
@@ -18,6 +29,7 @@ export async function assertCmsWriteAuthority(req: PayloadRequest) {
     throw new APIError('cms_authority_read_only', 409, undefined, true)
   }
   await client.checkPortalActor(requestingWorker || (req.user as PortalRuntimeUser).portalActor!.uid)
+  assertInteractiveSession()
   return authority
 }
 

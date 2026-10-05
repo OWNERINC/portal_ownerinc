@@ -53,7 +53,7 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
     },
   } as unknown as Payload
   const request = () => ({ payload, context: {}, query: {}, t: (key: string) => key, user: { id: randomUUID(), collection: 'portal-editors',
-    portalUid: 'test', portalActor: { uid: 'test', canManageNews: true } } } as unknown as PayloadRequest)
+    portalUid: 'test', portalActor: { uid: 'test', canManageNews: true }, portalExpiresAt: new Date(Date.now() + 3600000).toISOString() } } as unknown as PayloadRequest)
   const collection = { config: mediaConfig }
   const file = path.join(directory, 'preserved.pdf')
   await writeFile(file, 'preserve native bytes')

@@ -398,6 +398,11 @@ schedule row locks → media row/file checks. Native collection/global
 `beforeOperation` runs before original-document reads, for REST, native actions
 and Local API writes. The native operation owns its commit; standalone scheduling
 owns only the transaction it starts. Missing/dead sessions still fail closed.
+Interactive writes additionally require the verified runtime `portalExpiresAt` to
+be a canonical, unexpired UTC timestamp **after acquiring the lock**, and again
+after authority/actor resolution. Missing/invalid metadata fails closed. Only the
+private in-process worker/import capabilities are browser-session independent;
+both still revalidate the requesting UID. JSON cannot supply those Symbols.
 
 Manual publish assigns the real first publication instant and retains it on later
 updates. Trusted imports may retain their supplied original date. Draft saves and
@@ -408,11 +413,16 @@ versions. Native document deletion remains forbidden to retain history.
 The `news-schedules` collection stores complete immutable authored content, the
 saved source version ID, canonical SHA-256 (independent of JSONB key order), UTC
 time, requesting UID, generation, action and state. `scheduleRevision(req, input)`
-requires `{target,documentId,versionId,snapshotHash,scheduledAt,expectedGeneration,
-action}`. Targets are `news-articles` or `news-home` (home document ID is
-`news-home`); actions are `publish`/`unpublish`. Scheduling always reads a persisted
-native Version, not caller content. A source autosave changed since confirmation,
-wrong parent, stale generation or unsaved source refuses. Rescheduling creates a
+accepts the approved shared `ScheduleInput` from `contracts/news.ts`:
+`{target,documentId,versionId,operation,scheduledAt,expectedGeneration,snapshotHash?}`.
+Targets are `article` / `home` (home document ID is `news-home`), and operations
+are `publish` / `unpublish`. The boundary adapter maps these to Payload slugs and
+the stored `action`; there is no competing public input type. GET uses the same
+target vocabulary. The native drawer **always** supplies the optional hash from
+its saved-revision confirmation. Shared-contract clients may omit it; every
+snapshot is still loaded and hashed server-side from a persisted native Version,
+never caller content. A supplied hash refuses source autosaves changed since
+confirmation. Wrong parent, stale generation and unsaved source always refuse. Rescheduling creates a
 new immutable row/generation and cancels the prior pending row. Cancellation uses
 `cancelSchedule(req,{id,expectedGeneration})`; it does not overwrite any draft.
 
@@ -439,6 +449,21 @@ content and stored asset bytes. Revoked actors/invalid content or assets reject
 without changing the prior publication. A later draft B is copied back with the
 native draft API **inside the same transaction** after publishing saved A. Retry
 after a committed-but-lost response cannot duplicate publication or audit.
+
+Snapshot preflight runs the public native `beforeChangeTraverseFields` against
+the sanitized authored-field configuration, including raw maxLength and nested
+blocks, on a disposable clone. It neither rewrites the snapshot nor owns/kills a
+transaction. Thus raw title/category padding cannot pass trimmed preflight then
+fail native publication. Existing invalid queued snapshots reject with atomic audit.
+If a later native authored-field `ValidationError` still occurs, Payload rolls
+back the publication transaction. A standalone worker then reacquires a **new**
+transaction/lock, rechecks authority, actor, state and the immutable generation/hash
+fence, and commits rejection + audit together. Audit failure leaves the schedule
+pending for retry and the earlier publication/draft unchanged. Database-translated
+constraint errors, audit validation errors and operational failures are not content
+rejections. A helper nested in a caller-owned transaction propagates the native
+failure/rollback instead of silently committing a new independent unit; retry the
+worker with a fresh request. No code continues on a Payload-killed transaction.
 
 `news-audit` is append-only even for Local API `overrideAccess:true`; editor writes
 are denied. Content hooks and scheduling append `draft_saved`, `published`,
@@ -481,6 +506,8 @@ Only with explicit authorization for the dedicated local database:
 
 ```powershell
 node cms/tests/integration/run-task6.mjs --disposable-task6
+# Focused fresh-review I1–I3 suite instead of the original 17-test suite:
+node cms/tests/integration/run-task6.mjs --disposable-task6 --review-round1
 node cms/tests/integration/run-task6-browser.mjs '<private directory printed above>'
 ```
 
@@ -502,6 +529,14 @@ dedicated Task6 fixture database without reset. Native HTTP/UI prove generation
 390px/mobile rendering. A production `next start` over HTTP loopback is not used:
 the production build correctly requires HTTPS cookies. Production TLS/Portal and
 Linux filesystem acceptance remain later gates.
+
+The review-only suite covers actual shared-contract requests for article/home,
+optional hash conflicts, invalid/missing interactive expiry and controlled expiry
+during a real PostgreSQL lock wait, worker/import session independence, raw native
+maxLength rejection, late native article/global validation rollback, fresh-transaction
+rejection, audit-insert and operational DB faults. The browser additionally sends
+shared-contract article/home requests without a hash and asserts the native UI
+continues to send its confirmed hash. Portal transport remains explicitly doubled.
 
 ## Subsequent real local validation of Tasks 1–4
 
