@@ -127,13 +127,14 @@ test('authenticated requests centralize auth redirects without treating permissi
 });
 
 test('AutoCard navigation consumes backend access instead of a frontend title allowlist', async () => {
-  const [auth, apiAuth] = await Promise.all([
+  const [auth, apiAuth, activeUser] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('api/middleware/auth.js', 'utf8'),
+    readFile('api/middleware/active-user.js', 'utf8'),
   ]);
 
-  assert.match(apiAuth, /const \{ can, canUseAutoCard, canUsePosCards \} = require\('\.\/policy'\)/);
-  assert.match(apiAuth, /req\.user\.autocard_access = canUseAutoCard\(req\.user\)/);
+  assert.match(apiAuth, /await loadActivePortalUser\(db, decoded\)/);
+  assert.match(activeUser, /user\.autocard_access = canUseAutoCard\(user\)/);
   assert.match(auth, /document\.documentElement\.dataset\.autocardAccess = String\(user\?\.autocard_access === true\)/);
   assert.doesNotMatch(auth, /analista de dho|assistente de dho|coordenador de dho|gerente de dho/i);
 });

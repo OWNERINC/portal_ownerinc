@@ -265,6 +265,7 @@ test('authenticated middleware selects 120/UID only for exact progress PUT, reta
     if (name === 'firebase-admin/auth') return { getAuth: () => ({ verifyIdToken: async token => ({ uid: token, email_verified: true }) }) };
     if (name === '../db') return { query: async (_sql, [uid]) => ({ rows: [{ uid }] }) };
     if (name === './policy') return { can() {}, canUseAutoCard() {}, canUsePosCards() {} };
+    if (name === './active-user') return require('../../api/middleware/active-user.js');
     if (name === './security') return { rateLimit: options => (req, _res, next) => { selected.push([options.max, options.windowMs, options.key(req)]); next(); } };
     throw new Error(name);
   } });

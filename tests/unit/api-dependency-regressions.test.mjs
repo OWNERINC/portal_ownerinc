@@ -29,6 +29,19 @@ function uploadAsset(h, buffer = PNG, { field = 'asset', contentType = 'image/pn
   return h.request.post('/api/cms/assets').set('Authorization', MANAGER).attach(field, buffer, { filename, contentType });
 }
 
+test('real index starts without optional CMS env and confines bridge unavailability to editorial routes', async t => {
+  const h = await createDependencyHarness(t);
+  for (const route of ['/api/cms/session', '/api/internal/editorial/authority']) {
+    const response = await h.request.get(route);
+    assert.equal(response.status, 503);
+    assert.equal(response.body.reason, 'editorial_unavailable');
+    assert.equal(response.headers['cache-control'], 'no-store');
+  }
+  assert.equal(h.state.sql.length, 0);
+  assert.equal((await h.request.get('/api/health')).status, 200);
+  assert.equal((await h.request.get('/api/reminders/deliveries?limit=20').set('Authorization', MANAGER)).status, 200);
+});
+
 test('real Express query parsing preserves strict duplicate/nested/malformed filter rejection', async t => {
   const h = await createDependencyHarness(t);
   assert.equal(h.app.get('query parser'), 'extended');
