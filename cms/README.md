@@ -345,10 +345,30 @@ only connects to `127.0.0.1:55441`, creates/resets **cms_task5_test only**, appl
 CLI migrations as `cms_migrator`, runs native operations as `cms_runtime`, and keeps
 synthetic files/logs in a fresh approved `Temp/opencode/ownerinc-task5-*` directory.
 It does not modify `cms_validation`, `portal_upgrade`, sample fixtures or their
-authority; it does not start/restart Docker. Portal authority HTTP is still a
-transport double. The Task 5 attempt encountered **ECONNREFUSED** with the Docker
-Linux daemon unavailable; no real PostgreSQL/native integration pass is claimed.
-Linux symlink behavior also remains an acceptance gate (Windows EPERM prevented
+authority; it does not start/restart Docker. It refuses reset/test if other
+connections exist in the dedicated DB. To diagnose existing synthetic fixtures
+without resetting/migrating, append `--reuse-private-dir <existing ownerinc-task5-* directory>`.
+Diagnostic logs are timestamped; original failure evidence is retained.
+
+The first attempt encountered **ECONNREFUSED**. After the primary restored only
+the approved PostgreSQL container, real migration/native tests exposed an invalid
+test fixture: a restore-success Image block referenced a PDF. The success fixture
+now uses PNG and retains missing alt; a separate regression confirms incompatible
+PDF-as-image restore still fails. The corrected real native suite passes all
+nine subcases (ten tests including parent), with Portal authority HTTP explicitly
+still a **transport double**. This is not full-stack authentication acceptance.
+
+The harness disables only development background type generation. Pinned Payload
+`connectWithReconnect` retains a checked-out listener client; `destroy` clears
+schema caches without ending the pool, and `pool.end()` cannot finish while that
+client is held. The isolated Node24 runner therefore uses `--test-force-exit`
+after tests/hooks, not a forced success status. Tests assert zero live sessions,
+DB transactions/reference locks and pool waiters; the launcher verifies zero
+leftover DB connections after exit. A subprocess regression verifies failures
+still exit 1. TAP and distinct timeout/spawn/signal reporting preserve failures.
+No node_modules or production connection lifecycle is changed.
+
+Linux symlink behavior remains an acceptance gate (Windows EPERM prevented
 creation of the symlink test fixture). See the private Task 5 report for exact runs.
 
 ## Subsequent real local validation of Tasks 1–4

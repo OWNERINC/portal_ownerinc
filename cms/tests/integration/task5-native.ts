@@ -29,10 +29,13 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
     return Response.json(unavailable ? { error: 'unavailable' } : { mode, epoch: 1 }, { status: unavailable ? 503 : 200 })
   }
   const payload = new BasePayload()
-  const config = (await import('../../src/payload.config.js')).default
+  const config = await (await import('../../src/payload.config.js')).default
+  // Generation has its own CLI check. Native-op tests must not spawn an unmanaged
+  // background `payload generate:types` process on development initialization.
+  config.typescript.autoGenerate = false
   await payload.init({ config, disableOnInit: true })
   const adapter = payload.db as unknown as PostgresAdapter
-  const actor = { uid: 'task5-synthetic-editor', email: 'task5@example.invalid', name: 'Synthetic Editor', canManageNews: true }
+  const actor = { uid: `task5-synthetic-${randomUUID()}`, email: 'task5@example.invalid', name: 'Synthetic Editor', canManageNews: true }
   const projection = await payload.create({ collection: 'portal-editors', overrideAccess: true,
     data: { portalUid: actor.uid, email: actor.email, displayName: actor.name } })
   const user = { ...projection, collection: 'portal-editors' as const, portalActor: actor }
@@ -58,7 +61,7 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
   }
   async function waitForBlockedLock() {
     for (let i = 0; i < 50; i++) {
-      const locks = await adapter.drizzle.execute(sql`SELECT count(*)::int AS count FROM pg_locks WHERE locktype = 'advisory' AND objid = 7194030 AND NOT granted`)
+      const locks = await adapter.drizzle.execute(sql`SELECT count(*)::int AS count FROM pg_locks WHERE locktype = 'advisory' AND objid = 7194030 AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
       if (Number(locks.rows[0].count) > 0) return
       await delay(20)
     }
@@ -150,7 +153,8 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
     })
 
     await t.test('concurrent delete waits for incomplete draft reference, then refuses; ALL native history remains protective', async () => {
-      const media = await upload(), document = await article()
+      const image = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#234567' } }).png().toBuffer()
+      const media = await upload(image, 'image/png'), document = await article()
       const holder = await begin()
       await payload.update({ collection: 'news-articles', id: document.id, req: holder, draft: true,
         data: { body: [{ blockType: 'image', media: media.id }] } })
@@ -166,9 +170,32 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
       const lock = await begin()
       const restore = payload.restoreVersion({ collection: 'news-articles', id: previous.id, req: await req(), draft: true })
       restore.catch(() => {})
-      try { await waitForBlockedLock(); await commit(lock); await restore }
+      try {
+        await waitForBlockedLock(); await commit(lock)
+        const restored = await restore
+        const block = restored.body?.[0]
+        assert.equal(block?.blockType, 'image')
+        assert.ok(block && 'media' in block)
+        assert.equal(typeof block.media === 'string' ? block.media : block.media?.id, media.id)
+        assert.ok(!('alt' in block) || !block.alt, 'restore retains the intentionally unfinished alt')
+      }
       finally { if (lock.transactionID) await payload.db.rollbackTransaction((await lock.transactionID)!) }
+      await assert.rejects(payload.delete({ collection: 'news-media', id: media.id, req: await req() }), /media_is_referenced/)
+      assert.deepEqual(await readFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!)), image)
+    })
+
+    await t.test('native restore still rejects an image referencing PDF; rejected restore rolls back without altering bytes', async () => {
+      const media = await upload(), document = await article([{ blockType: 'image', media: media.id }])
+      const versions = await payload.findVersions({ collection: 'news-articles', depth: 0, where: { parent: { equals: document.id } } })
+      const incompatible = versions.docs.find(row => row.version.body?.some(block => block.blockType === 'image'))!
+      assert.ok(incompatible)
+      await payload.update({ collection: 'news-articles', id: document.id, req: await req(), draft: true, data: { body: [] } })
+      await assert.rejects(payload.restoreVersion({ collection: 'news-articles', id: incompatible.id, req: await req(), draft: true }),
+        error => error instanceof Error && error.name === 'ValidationError' && error.message.includes('Media'))
+      const latest = await payload.findByID({ collection: 'news-articles', id: document.id, draft: true, depth: 0 })
+      assert.deepEqual(latest.body, [])
       assert.deepEqual(await readFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!)), pdf)
+      assert.equal(Object.keys(adapter.sessions).length, 0)
     })
 
     await t.test('native publication validates live MIME/files; actual published revision, shared grant, unpublish, Range and missing file', async () => {
@@ -218,6 +245,22 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
     })
   } finally {
     globalThis.fetch = originalFetch
-    await payload.destroy()
+    const leaked = Object.keys(adapter.sessions)
+    try {
+      for (const id of leaked) await payload.db.rollbackTransaction(id)
+      const transactions = await adapter.drizzle.execute(sql`SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%'`)
+      const locks = await adapter.drizzle.execute(sql`SELECT count(*)::int AS count FROM pg_locks WHERE locktype = 'advisory' AND objid = 7194030 AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
+      assert.equal(transactions.rows[0].count, 0, 'database retains an open transaction')
+      assert.equal(locks.rows[0].count, 0, 'database retains the CMS reference lock')
+      assert.equal(adapter.pool.waitingCount, 0)
+      assert.equal(leaked.length, 0, 'native operations leaked a live transaction (cleaned up, but test still fails)')
+      t.diagnostic(`Teardown: no sessions, DB transactions, reference locks or pool waiters; pool clients=${adapter.pool.totalCount}, idle=${adapter.pool.idleCount}`)
+    } finally {
+      await payload.destroy()
+    }
+    // Pinned db-postgres connectWithReconnect permanently checks out its listener
+    // client; drizzle destroy only clears schema caches, and pool.end() hangs.
+    // The isolated runner uses Node's --test-force-exit AFTER all tests/hooks.
+    // It preserves failed test exit codes and checks DB connections have closed.
   }
 })
