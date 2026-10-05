@@ -294,12 +294,14 @@ export interface NewsArticle {
   _status?: ('draft' | 'published') | null;
 }
 /**
+ * Immutable assets. To replace or crop, upload a new asset and change the article reference.
+ *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "news-media".
  */
 export interface NewsMedia {
   id: string;
-  sha256?: string | null;
+  sha256: string;
   legacyAssetId?: string | null;
   importedAt?: string | null;
   updatedAt: string;

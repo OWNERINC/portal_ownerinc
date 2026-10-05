@@ -2,7 +2,6 @@ import { postgresAdapter } from '@payloadcms/db-postgres'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildConfig } from 'payload'
-import sharp from 'sharp'
 
 import { createPortalEditors } from './collections/PortalEditors'
 import { NewsArticles } from './collections/NewsArticles'
@@ -46,7 +45,9 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   graphQL: { disable: true },
   jobs: { autoRun: [] },
   telemetry: false,
-  sharp,
+  upload: { limits: { fileSize: 50 * 1024 * 1024 }, abortOnLimit: true, useTempFiles: false },
+  // No Payload image transformer: even unadjusted WebP is re-encoded when sharp is
+  // configured. The media validator uses sharp directly and stores ORIGINAL bytes.
 })
 
 export default createCmsConfig()

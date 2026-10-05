@@ -246,14 +246,110 @@ null metadata with any PDF. It never invents authorship.
 Home publication requires nonempty eyebrow/headline/summary, with raw length limits
 80/160/600 and line breaks permitted only in the headline, matching the legacy home.
 
-`news-media` is registered **with all CRUD/read access denied** solely to materialize
-valid upload relations/schema. Its declared MIME families are JPEG/PNG/WebP, PDF,
-MP4/WebM/QuickTime; alt/caption/credit live on editorial references. Task 5 must
-implement private-file validation/storage, immutable bytes, lookup and reference
-locks before opening access. `validateNewsMediaShapes` checks synthetic ID/MIME/size
-metadata only (50 MiB); it is not wired as a substitute for live publication checks.
-Authority/write locks, scheduling, actual media acceptance, database migrations,
-runtime role verification and the native browser journey remain later integration gates.
+Task 5 replaces the deny-all media scaffold with the private media boundary below.
+`validateNewsMediaShapes` remains a pure metadata check; actual publication also
+checks file existence, safe storage identity, size and SHA-256 under the CMS lock.
+Scheduling, full publication/audit snapshots, cutover and the integrated native
+browser journey remain later integration gates.
+
+## Private media and reference protection (Task 5)
+
+- Uploads accept JPEG/PNG/WebP, PDF, MP4/WebM/QuickTime, with **50 MiB** maximum
+  both in the multipart parser and raw-buffer validation. Signature/container
+  checks do not establish full PDF/codec validity or malware safety. Sharp decodes
+  images with an **80,000,000-pixel** ceiling, including all WebP frames.
+- Start the CMS through its `cms/` scripts. `CMS_UPLOAD_DIR` must be an absolute
+  private directory outside the checkout (including `public/`). Storage reads use
+  canonical paths, reject symbolic-link files and invalid UUID filenames, open a
+  descriptor with `O_NOFOLLOW` where available, and verify the original SHA-256.
+  The service account must be the only untrusted-write boundary for that directory;
+  this is not a defense against a privileged process concurrently replacing files.
+- The server assigns UUID filenames. All updates, replacement, crop, duplicate,
+  overwrite, remote URL and temp-file inputs are rejected in native
+  **beforeOperation**, including Local API calls with `overrideAccess:true`.
+  Metadata alt/caption/credit stays on the article reference. Create a new asset
+  to replace or crop. `pasteURL:false` also disables the native paste-URL fetcher.
+- Payload's global image transformer is deliberately absent: its WebP path
+  re-encodes even without resize options. Sharp validation is separate and does
+  not save its output. Hashes describe the original uploaded bytes, not a derivative.
+- Native metadata and file routes require the current Portal editor capability.
+  The native file handler always delegates to safe descriptor delivery; it never
+  falls back to Payload's path-based serving. No public static mount is added.
+- `openNewsMedia({payload,id,preview,actor,range,req})` is a **server-only helper**,
+  not an HTTP bridge. The future API reader must pass a freshly verified
+  `VerifiedPortalActor`, never a body-cast actor. Preview requires editor capability;
+  readers need a valid currently published article referencing the asset. Draft or
+  old version alone is not a grant. Shared assets remain readable while any valid
+  current publication references them. The body is a cancelable Web stream; request
+  abort, cancel, EOF or read failure closes the descriptor. PDF/video support one
+  Range (206/416). Headers include private/no-store, nosniff and sanitized disposition.
+
+### Transaction contracts for Tasks 6/11/12
+
+`publication/transaction.ts` exports `CMS_REFERENCE_LOCK` (**7194030**),
+`requireCmsTransaction`, `lockCmsReferences` and `withCmsTransaction`. Native
+operations start their transaction before collection beforeOperation; the hooks
+lock its actual PostgreSQL adapter session **before** authority resolution and the
+native original-document/version snapshot. Missing/dead sessions fail closed;
+the adapter's default-connection fallback is never used by these helpers. Every
+subordinate Local API call receives that live `req`. Native code owns native
+commit/rollback. Standalone helpers own only the transaction they create, and
+descriptor-open precedes release. Lock contention is bounded by a 5-second local
+lock timeout. The legacy Portal lock **7193029** is unchanged.
+
+`assertCmsWriteAuthority` resolves `createPortalClient(environment).getAuthority()`
+on every mutation without caching. Normal article/media writes require `payload`;
+frozen/unavailable/legacy modes fail closed. Read/login/preview are unaffected.
+The existing server-only `legacyNewsImportContext` allows preparation imports in
+`legacy`, but never in either frozen mode. Caller-ID preservation still requires
+the separate import config. This is not the Task 11/12 operational import protocol.
+
+`normalizeNewsDraftReferences` is a bounded incomplete-native projection: selected
+media is retained even without alt/title. `collectMediaIds` consumes only the flat
+normalized projection, not recursive JSON or regex discovery. Orphan deletion
+scans current documents and **all native versions**, in pages of 100 (100,000-row
+maximum per store; exceeding it refuses deletion). New schedule/snapshot/history
+stores must extend the explicit coverage check and protection before orphan
+deletion can succeed. Unknown collections/globals, new article/home top-level
+fields, scheduling configuration or finite history retention fail closed.
+
+Two intentional pilot restrictions prevent native lifecycle escape hatches:
+article physical deletion is refused because Payload deletes all its versions;
+article bulk update is refused because native concurrent document promises can
+roll back their shared session while sibling operations are still running. Use
+single-document edits/unpublish. Task 6 must explicitly handle **global**
+`restoreVersion`, which does not run global beforeChange; this task does not
+extend the home publication/audit lifecycle. Collection article restore is locked
+and runs its normal validation hooks.
+
+The generated media migration makes SHA-256 required. Existing media with null
+hashes must be reconciled with verified private bytes before applying it; the
+migration intentionally does not invent hashes or mutate sample databases.
+Native file writes/unlinks are not PostgreSQL-transactional: a failed create may
+leave an unreferenced file, and a failed orphan-delete commit may leave metadata
+without bytes. There is no automatic cleanup. Missing/corrupt files fail closed.
+
+### Focused local evidence and acceptance boundary
+
+`npm --prefix cms run test:unit` exercises real files, decoding, hashes, Range,
+abort/cancel and pinned native operation lifecycle with **explicit DB/Portal
+transport doubles**. It does not establish PostgreSQL lock semantics or real auth.
+The dedicated native/DB runner is:
+
+```sh
+node cms/tests/integration/run-task5.mjs --disposable-task5
+```
+
+This Windows local-validation helper reads the existing private validation state,
+only connects to `127.0.0.1:55441`, creates/resets **cms_task5_test only**, applies
+CLI migrations as `cms_migrator`, runs native operations as `cms_runtime`, and keeps
+synthetic files/logs in a fresh approved `Temp/opencode/ownerinc-task5-*` directory.
+It does not modify `cms_validation`, `portal_upgrade`, sample fixtures or their
+authority; it does not start/restart Docker. Portal authority HTTP is still a
+transport double. The Task 5 attempt encountered **ECONNREFUSED** with the Docker
+Linux daemon unavailable; no real PostgreSQL/native integration pass is claimed.
+Linux symlink behavior also remains an acceptance gate (Windows EPERM prevented
+creation of the symlink test fixture). See the private Task 5 report for exact runs.
 
 ## Subsequent real local validation of Tasks 1–4
 

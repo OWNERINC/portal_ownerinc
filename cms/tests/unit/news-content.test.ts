@@ -383,7 +383,7 @@ test('reading time includes body text, excludes attribution/name/metadata, infer
   assert.equal(estimateNewsMinutes([{ type: 'profile', name: 'Name', role: 'Role' }], null), null)
 })
 
-test('native configs protect CRUD/history, retain every block, drafts/autosave, and deny all media access', async () => {
+test('native configs protect CRUD/history, retain every block, drafts/autosave, and restrict media to editors', async () => {
   assert.deepEqual(new Set(newsBlocks.map(block => block.slug)), new Set(['richText', ...legacyBlocks.map(block => block.type)]))
   assert.deepEqual(NewsArticles.versions, { maxPerDoc: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } })
   assert.deepEqual(NewsHome.versions, { max: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } })
@@ -396,7 +396,10 @@ test('native configs protect CRUD/history, retain every block, drafts/autosave, 
     assert.equal(await access!({ req: { ...editorReq, user: { ...editorReq.user!, portalUid: 'forged' } } }), false)
   }
   const media = createNewsMedia({ uploadDir: 'C:/synthetic-private-media' })
-  for (const access of Object.values(media.access!)) assert.equal(await access!({ req: editorReq }), false)
+  for (const [operation, access] of Object.entries(media.access!)) {
+    assert.equal(await access!({ req }), false)
+    assert.equal(await access!({ req: editorReq }), operation !== 'update')
+  }
   assert.equal(media.versions, undefined)
   for (const name of ['publishedAt', 'publicationGeneration', 'legacyDocumentId', 'legacySourceId', 'legacyRevisionId', 'importedAt']) {
     const field = NewsArticles.fields.find(field => 'name' in field && field.name === name)!
