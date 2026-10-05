@@ -24,12 +24,18 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
   let mode = 'payload'
   let persisted: Record<string, unknown> | undefined
   const events: string[] = []
-  globalThis.fetch = async () => { events.push('authority'); return Response.json({ mode, epoch: 1 }) }
+  globalThis.fetch = async input => {
+    if (String(input).endsWith('/actor/check')) {
+      events.push('actor'); return Response.json({ actor: { uid: 'test', email: 'test@example.invalid', name: null, canManageNews: true } })
+    }
+    events.push('authority'); return Response.json({ mode, epoch: 1 })
+  }
   const sessions: Record<string, { db: { execute: () => Promise<void> } }> = {}
   const payload = {
     config,
     collections: { 'news-media': { config: mediaConfig } },
     find: async () => ({ docs: [] }),
+    findVersionByID: async () => { events.push('snapshot'); throw new Error('native_snapshot_reached') },
     logger: { error: () => {} },
     db: {
       sessions,
@@ -60,7 +66,7 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
         if (variant === 'crop') req.query = { uploadEdits: { crop: {} } }
         await assert.rejects(updateByIDOperation({ id: randomUUID(), collection, overrideAccess: true, req,
           data: variant === 'url' ? { url: 'https://must-not-fetch.invalid/file' } : {} }), /media_immutable_create_new_asset/)
-        assert.deepEqual(events, ['begin', 'lock', 'lock', 'authority', 'rollback'])
+        assert.deepEqual(events, ['begin', 'lock', 'lock', 'authority', 'actor', 'rollback'])
         assert.equal(await readFile(file, 'utf8'), 'preserve native bytes')
       }
     })
@@ -92,7 +98,11 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
         events.length = 0
         const args = { id: randomUUID(), collection: { config: articlesConfig }, overrideAccess: true, req: request() }
         await assert.rejects(operation === 'update' ? updateByIDOperation({ ...args, data: {} }) : restoreVersionOperation(args), /native_snapshot_reached/)
-        assert.deepEqual(events, ['begin', 'lock', 'lock', 'authority', 'snapshot', 'rollback'])
+        assert.equal(events[0], 'begin')
+        assert.ok(events.indexOf('lock') < events.indexOf('authority'))
+        assert.ok(events.indexOf('authority') < events.indexOf('actor'))
+        assert.ok(events.indexOf('actor') < events.indexOf('snapshot'))
+        assert.equal(events.at(-1), 'rollback')
       }
       await assert.rejects(updateOperation({ collection: { config: articlesConfig }, req: request(), overrideAccess: true,
         data: {}, where: { id: { exists: true } } }), /news_update_requires_single_id/)

@@ -44,3 +44,22 @@ export async function withCmsTransaction<T>(payload: Payload, incoming: PayloadR
     throw error
   } finally { delete req.transactionID }
 }
+
+export type PublicationTarget = 'news-articles' | 'news-home'
+
+/** Global advisory lock -> fresh Portal authority/actor -> row lock. No independent pool. */
+export async function lockPublicationDocument(req: PayloadRequest, target: PublicationTarget, documentId: string) {
+  const db = await requireCmsTransaction(req.payload, req)
+  if (target === 'news-articles') await db.execute(sql`SELECT id FROM news_articles WHERE id = ${documentId}::uuid FOR UPDATE`)
+  else await db.execute(sql`SELECT id FROM news_home FOR UPDATE`)
+}
+
+export async function withPublicationTransaction<T>(req: PayloadRequest, target: PublicationTarget,
+  documentId: string, operation: (req: PayloadRequest) => Promise<T>): Promise<T> {
+  return withCmsTransaction(req.payload, req, async transactionReq => {
+    const { assertCmsWriteAuthority } = await import('./authority')
+    await assertCmsWriteAuthority(transactionReq)
+    await lockPublicationDocument(transactionReq, target, documentId)
+    return operation(transactionReq)
+  })
+}

@@ -1,18 +1,20 @@
-import type { Payload, RequiredDataFromCollectionSlug } from 'payload'
+import type { Payload, PayloadRequest, RequiredDataFromCollectionSlug } from 'payload'
+import { canManageNews } from '../auth/access'
 import { uuid } from './primitives'
 import { legacyNewsImportContext } from './validation'
 
 /** Trusted Local API capability, not an HTTP endpoint or the later bundle importer. */
 export async function createLegacyNewsArticle(payload: Payload,
-  data: RequiredDataFromCollectionSlug<'news-articles'> & { id: string }) {
+  data: RequiredDataFromCollectionSlug<'news-articles'> & { id: string }, incoming?: PayloadRequest) {
   if (!(payload.db as typeof payload.db & { allowIDOnCreate?: boolean }).allowIDOnCreate) {
     throw new Error('legacy_import_requires_separate_import_config')
   }
+  if (!incoming || !canManageNews({ req: incoming })) throw new Error('legacy_import_actor_required')
   const id = uuid(data.id)
   if (data.legacyDocumentId !== undefined && data.legacyDocumentId !== id) throw new Error('legacy_import_identity_mismatch')
   const transactionID = await payload.db.beginTransaction()
   if (!transactionID) throw new Error('legacy_import_requires_transaction')
-  const req = { transactionID }
+  const req = { transactionID, user: incoming.user, context: { ...incoming.context } }
   try {
     const doc = await payload.create({ collection: 'news-articles', overrideAccess: true,
       context: legacyNewsImportContext, req, depth: 0, draft: data._status !== 'published',

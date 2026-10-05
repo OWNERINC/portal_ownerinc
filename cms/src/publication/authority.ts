@@ -1,19 +1,23 @@
 import { APIError, type CollectionBeforeOperationHook, type PayloadRequest } from 'payload'
-import { canManageNews } from '../auth/access'
+import { canManageNews, type PortalRuntimeUser } from '../auth/access'
 import { createPortalClient } from '../auth/portal-client'
 import { readCmsEnvironment } from '../config/environment'
 import { isLegacyNewsImport } from '../news/validation'
 import { lockCmsReferences } from './transaction'
+import { workerActor } from './internal'
 
 export async function assertCmsWriteAuthority(req: PayloadRequest) {
   await lockCmsReferences(req.payload, req)
   const preparationImport = isLegacyNewsImport(req.context)
-  if (!preparationImport && !canManageNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
-  const authority = await createPortalClient(readCmsEnvironment(process.env)).getAuthority()
+  const requestingWorker = workerActor(req)
+  if (!requestingWorker && !canManageNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
+  const client = createPortalClient(readCmsEnvironment(process.env))
+  const authority = await client.getAuthority()
   // Capability is in-process only. A frozen cutover still refuses preparation writes.
   if (authority.mode !== 'payload' && !(preparationImport && authority.mode === 'legacy')) {
     throw new APIError('cms_authority_read_only', 409, undefined, true)
   }
+  await client.checkPortalActor(requestingWorker || (req.user as PortalRuntimeUser).portalActor!.uid)
   return authority
 }
 

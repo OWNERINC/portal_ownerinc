@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import type { CollectionBeforeChangeHook, GlobalBeforeChangeHook, PayloadRequest } from 'payload'
 import { lexicalToRich } from '../../src/news/lexical-to-rich'
 import { legacyToPayloadBlocks } from '../../src/news/legacy-blocks'
-import { legacyNewsImportContext, normalizeEditorial, normalizeNewsContent, normalizeNewsDocument, validateNewsMediaShapes, validateNewsPublication } from '../../src/news/validation'
+import { legacyNewsImportContext, normalizeEditorial, normalizeNewsContent, normalizeNewsDocument, validateNewsMediaShapes, validateNewsPublication, validateNewsBeforeChange, validateNewsHomeBeforeChange } from '../../src/news/validation'
 import { estimateNewsMinutes, newsText, toNewsDTO } from '../../src/news/to-dto'
 import { NewsArticles } from '../../src/collections/NewsArticles'
 import { NewsHome } from '../../src/globals/NewsHome'
@@ -19,11 +19,11 @@ const document = (body: unknown = [{ blockType: 'richText', content: lexical() }
   id: articleID, title: 'Título', category: '', editorial, body, _status: 'published', publishedAt: null,
 })
 const runArticleHook = (data: Record<string, unknown>, originalDoc?: Record<string, unknown>) =>
-  NewsArticles.hooks!.beforeChange![0]({ data, originalDoc } as Parameters<CollectionBeforeChangeHook>[0])
+  validateNewsBeforeChange({ data, originalDoc } as Parameters<CollectionBeforeChangeHook>[0])
 const runHomeHook = (data: Record<string, unknown>, originalDoc?: Record<string, unknown>) =>
-  NewsHome.hooks!.beforeChange![0]({ data, originalDoc } as Parameters<GlobalBeforeChangeHook>[0])
+  validateNewsHomeBeforeChange({ data, originalDoc } as Parameters<GlobalBeforeChangeHook>[0])
 const runAutosaveHook = (data: Record<string, unknown>, originalDoc: Record<string, unknown>) =>
-  NewsArticles.hooks!.beforeChange![0]({ data, originalDoc, operation: 'update', context: {},
+  validateNewsBeforeChange({ data, originalDoc, operation: 'update', context: {},
     req: { query: { draft: 'true', autosave: 'true' } },
   } as unknown as Parameters<CollectionBeforeChangeHook>[0])
 
@@ -94,7 +94,7 @@ for (const [name, unfinished, complete] of [
     const prior = document()
     const body = [{ blockType: 'paragraph', text: 'Existing body.' }, { ...unfinished, id: 'native-row', blockName: 'In progress' }]
     const newDraft = { ...document(body), _status: 'draft' }
-    assert.strictEqual(await NewsArticles.hooks!.beforeChange![0]({ data: newDraft, operation: 'create', context: {},
+    assert.strictEqual(await validateNewsBeforeChange({ data: newDraft, operation: 'create', context: {},
       req: { query: { draft: 'true', autosave: 'true' } },
     } as unknown as Parameters<CollectionBeforeChangeHook>[0]), newDraft)
     const patch = { _status: 'draft', body }
@@ -124,7 +124,7 @@ test('all native block forms may be incomplete, while legacy imports and DTOs st
     assert.throws(() => legacyToPayloadBlocks([block]))
   }
   const imported = { ...document([{ blockType: 'quote', text: '' }]), editorial: null, _status: 'draft' }
-  await assert.rejects(async () => NewsArticles.hooks!.beforeChange![0]({ data: imported, operation: 'create',
+  await assert.rejects(async () => validateNewsBeforeChange({ data: imported, operation: 'create',
     context: legacyNewsImportContext,
   } as unknown as Parameters<CollectionBeforeChangeHook>[0]))
 })
@@ -342,9 +342,9 @@ test('actual collection hook validates the full PATCH, including status-only pub
   await assert.rejects(async () => runArticleHook({ editorial: undefined }, document()))
   assert.deepEqual(await runArticleHook({ _status: 'draft', body: [] }, document()), { _status: 'draft', body: [] })
   const args = { data: { ...document([]), editorial: null }, operation: 'create', context: {} } as unknown as Parameters<CollectionBeforeChangeHook>[0]
-  await assert.rejects(async () => NewsArticles.hooks!.beforeChange![0](args), /new_article_requires_editorial/)
-  await assert.rejects(async () => NewsArticles.hooks!.beforeChange![0]({ ...args, context: { legacyImport: true } }), /new_article_requires_editorial/)
-  const imported = await NewsArticles.hooks!.beforeChange![0]({ ...args, context: legacyNewsImportContext })
+  await assert.rejects(async () => validateNewsBeforeChange(args), /new_article_requires_editorial/)
+  await assert.rejects(async () => validateNewsBeforeChange({ ...args, context: { legacyImport: true } }), /new_article_requires_editorial/)
+  const imported = await validateNewsBeforeChange({ ...args, context: legacyNewsImportContext })
   assert.equal(imported.editorial, null)
 })
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { CollectionBeforeOperationHook, Payload } from 'payload'
+import type { CollectionBeforeOperationHook, Payload, PayloadRequest } from 'payload'
 import { legacyNewsImportContext, protectNewsIdentity } from '../../src/news/validation'
 import { createLegacyNewsArticle } from '../../src/news/import-article'
 import { articleID } from '../fixtures/news'
@@ -22,6 +22,9 @@ test('identity is server-only at create, immutable at update, and JSON cannot fo
 test('import requires isolated adapter and rolls back a returned or persisted identity mismatch', async () => {
   const data = { id: articleID, title: 'Synthetic import', editorial: null, body: [], _status: 'draft' as const }
   await assert.rejects(createLegacyNewsArticle({ db: {} } as Payload, data), /separate_import_config/)
+  await assert.rejects(createLegacyNewsArticle({ db: { allowIDOnCreate: true } } as unknown as Payload, data), /legacy_import_actor_required/)
+  const req = { context: {}, user: { collection: 'portal-editors', portalUid: 'import-requester',
+    portalActor: { uid: 'import-requester', canManageNews: true } } } as unknown as PayloadRequest
   for (const mismatch of ['returned', 'persisted', 'collision']) {
     const calls: string[] = []
     const payload = {
@@ -35,7 +38,7 @@ test('import requires isolated adapter and rolls back a returned or persisted id
       },
       findByID: async () => ({ id: articleID, legacyDocumentId: 'wrong' }),
     } as unknown as Payload
-    await assert.rejects(createLegacyNewsArticle(payload, data))
+    await assert.rejects(createLegacyNewsArticle(payload, data, req))
     assert.deepEqual(calls, ['rollback'])
   }
 })

@@ -25,6 +25,10 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
   let mode = 'payload', authorityCalls = 0, unavailable = false
   const originalFetch = globalThis.fetch
   globalThis.fetch = async (input, init) => {
+    if (String(input) === 'http://127.0.0.1:18085/api/internal/editorial/actor/check') {
+      assert.equal(JSON.parse(String(init?.body)).uid, actor.uid)
+      return Response.json({ actor })
+    }
     assert.equal(String(input), 'http://127.0.0.1:18085/api/internal/editorial/authority')
     assert.equal(init?.redirect, 'error')
     authorityCalls++

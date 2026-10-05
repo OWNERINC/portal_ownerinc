@@ -70,7 +70,10 @@ export interface Config {
     'portal-editors': PortalEditor;
     'news-articles': NewsArticle;
     'news-media': NewsMedia;
+    'news-schedules': NewsSchedule;
+    'news-audit': NewsAudit;
     'payload-kv': PayloadKv;
+    'payload-jobs': PayloadJob;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
     'payload-migrations': PayloadMigration;
@@ -80,7 +83,10 @@ export interface Config {
     'portal-editors': PortalEditorsSelect<false> | PortalEditorsSelect<true>;
     'news-articles': NewsArticlesSelect<false> | NewsArticlesSelect<true>;
     'news-media': NewsMediaSelect<false> | NewsMediaSelect<true>;
+    'news-schedules': NewsSchedulesSelect<false> | NewsSchedulesSelect<true>;
+    'news-audit': NewsAuditSelect<false> | NewsAuditSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
+    'payload-jobs': PayloadJobsSelect<false> | PayloadJobsSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
     'payload-migrations': PayloadMigrationsSelect<false> | PayloadMigrationsSelect<true>;
@@ -101,7 +107,13 @@ export interface Config {
   };
   user: PortalEditor;
   jobs: {
-    tasks: unknown;
+    tasks: {
+      'publish-news-snapshot': TaskPublishNewsSnapshot;
+      inline: {
+        input: unknown;
+        output: unknown;
+      };
+    };
     workflows: unknown;
   };
 }
@@ -316,6 +328,57 @@ export interface NewsMedia {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-schedules".
+ */
+export interface NewsSchedule {
+  id: string;
+  target: 'news-articles' | 'news-home';
+  documentId: string;
+  action: 'publish' | 'unpublish';
+  versionId: string;
+  snapshot:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  snapshotHash: string;
+  scheduledAt: string;
+  actorUid: string;
+  generation: number;
+  state: 'pending' | 'published' | 'unpublished' | 'cancelled' | 'rejected';
+  jobId?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-audit".
+ */
+export interface NewsAudit {
+  id: string;
+  action: 'draft_saved' | 'published' | 'unpublished' | 'scheduled' | 'schedule_cancelled' | 'schedule_rejected';
+  documentId: string;
+  versionId?: string | null;
+  actorUid: string;
+  requestedByUid: string;
+  details:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -330,6 +393,102 @@ export interface PayloadKv {
     | number
     | boolean
     | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "payload-jobs".
+ */
+export interface PayloadJob {
+  id: string;
+  /**
+   * Input data provided to the job
+   */
+  input?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  taskStatus?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  completedAt?: string | null;
+  totalTried?: number | null;
+  /**
+   * If hasError is true this job will not be retried
+   */
+  hasError?: boolean | null;
+  /**
+   * If hasError is true, this is the error that caused it
+   */
+  error?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  /**
+   * Task execution log
+   */
+  log?:
+    | {
+        executedAt: string;
+        completedAt: string;
+        taskSlug: 'inline' | 'publish-news-snapshot';
+        taskID: string;
+        input?:
+          | {
+              [k: string]: unknown;
+            }
+          | unknown[]
+          | string
+          | number
+          | boolean
+          | null;
+        output?:
+          | {
+              [k: string]: unknown;
+            }
+          | unknown[]
+          | string
+          | number
+          | boolean
+          | null;
+        state: 'failed' | 'succeeded';
+        error?:
+          | {
+              [k: string]: unknown;
+            }
+          | unknown[]
+          | string
+          | number
+          | boolean
+          | null;
+        id?: string | null;
+      }[]
+    | null;
+  taskSlug?: ('inline' | 'publish-news-snapshot') | null;
+  queue?: string | null;
+  waitUntil?: string | null;
+  processing?: boolean | null;
+  /**
+   * Used for concurrency control. Jobs with the same key are subject to exclusive/supersedes rules.
+   */
+  concurrencyKey?: string | null;
+  updatedAt: string;
+  createdAt: string;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -349,6 +508,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'news-media';
         value: string | NewsMedia;
+      } | null)
+    | ({
+        relationTo: 'news-schedules';
+        value: string | NewsSchedule;
+      } | null)
+    | ({
+        relationTo: 'news-audit';
+        value: string | NewsAudit;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -570,11 +737,76 @@ export interface NewsMediaSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-schedules_select".
+ */
+export interface NewsSchedulesSelect<T extends boolean = true> {
+  target?: T;
+  documentId?: T;
+  action?: T;
+  versionId?: T;
+  snapshot?: T;
+  snapshotHash?: T;
+  scheduledAt?: T;
+  actorUid?: T;
+  generation?: T;
+  state?: T;
+  jobId?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-audit_select".
+ */
+export interface NewsAuditSelect<T extends boolean = true> {
+  action?: T;
+  documentId?: T;
+  versionId?: T;
+  actorUid?: T;
+  requestedByUid?: T;
+  details?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv_select".
  */
 export interface PayloadKvSelect<T extends boolean = true> {
   key?: T;
   data?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "payload-jobs_select".
+ */
+export interface PayloadJobsSelect<T extends boolean = true> {
+  input?: T;
+  taskStatus?: T;
+  completedAt?: T;
+  totalTried?: T;
+  hasError?: T;
+  error?: T;
+  log?:
+    | T
+    | {
+        executedAt?: T;
+        completedAt?: T;
+        taskSlug?: T;
+        taskID?: T;
+        input?: T;
+        output?: T;
+        state?: T;
+        error?: T;
+        id?: T;
+      };
+  taskSlug?: T;
+  queue?: T;
+  waitUntil?: T;
+  processing?: T;
+  concurrencyKey?: T;
+  updatedAt?: T;
+  createdAt?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -655,6 +887,18 @@ export interface CollectionsWidget {
     [k: string]: unknown;
   };
   width: 'full';
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskPublish-news-snapshot".
+ */
+export interface TaskPublishNewsSnapshot {
+  input: {
+    scheduleId: string;
+  };
+  output: {
+    state: string;
+  };
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

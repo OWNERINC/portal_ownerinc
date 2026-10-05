@@ -1,4 +1,5 @@
 import { APIError, type Field, type Payload, type PayloadRequest } from 'payload'
+import { sql } from '@payloadcms/db-postgres'
 import type { NewsContent } from '../contracts/news'
 import { uuid } from '../news/primitives'
 import { normalizeNewsDocument, normalizeNewsDraftReferences, validateNewsMediaShapes } from '../news/validation'
@@ -18,7 +19,8 @@ export async function assertMediaReferences(payload: Payload, content: NewsConte
   return withCmsTransaction(payload, req, async req => {
     const media = []
     for (const id of collectMediaIds(content)) {
-      await requireCmsTransaction(payload, req)
+      const db = await requireCmsTransaction(payload, req)
+      await db.execute(sql`SELECT id FROM news_media WHERE id = ${id}::uuid FOR SHARE`)
       const asset = await payload.findByID({ collection: 'news-media', id, req, overrideAccess: true, depth: 0, disableErrors: true })
       if (!asset) throw new InvalidMediaReferenceError()
       media.push(asset)
@@ -78,15 +80,21 @@ export async function canReadPublishedMedia(payload: Payload, id: string, req: P
 
 /** Explicit inventory: new schedule/snapshot/history stores MUST extend this protection. */
 export function assertReferenceStoreCoverage(payload: Payload) {
-  const covered = new Set(['portal-editors', 'news-articles', 'news-media', 'payload-preferences',
+  const covered = new Set(['portal-editors', 'news-articles', 'news-media', 'news-schedules', 'news-audit', 'payload-preferences',
     'payload-locked-documents', 'payload-migrations', 'payload-jobs', 'payload-kv'])
   const internal = ['id', 'createdAt', 'updatedAt', '_status']
   const publication = ['publishedAt', 'publicationGeneration', 'legacyDocumentId', 'legacySourceId', 'legacyRevisionId', 'importedAt']
   const onlyFields = (fields: Field[], names: string[]) => fields.every(field => 'name' in field && names.includes(field.name))
   const articles = payload.collections['news-articles'].config
   const home = payload.config.globals.find(global => global.slug === 'news-home')
+  const schedules = payload.collections['news-schedules']?.config
+  const audit = payload.collections['news-audit']?.config
+  const tasks = payload.config.jobs.tasks || []
   if (Object.keys(payload.collections).some(slug => !covered.has(slug)) ||
-    payload.config.globals.some(global => global.slug !== 'news-home') || payload.config.jobs.tasks?.length ||
+    payload.config.globals.some(global => global.slug !== 'news-home') || payload.config.jobs.workflows?.length ||
+    tasks.some(task => task.slug !== 'publish-news-snapshot' || !onlyFields(task.inputSchema || [], ['scheduleId']) || !onlyFields(task.outputSchema || [], ['state'])) ||
+    (schedules && !onlyFields(schedules.fields, [...internal, 'target', 'documentId', 'action', 'versionId', 'snapshot', 'snapshotHash', 'scheduledAt', 'actorUid', 'generation', 'state', 'jobId'])) ||
+    (audit && !onlyFields(audit.fields, [...internal, 'action', 'documentId', 'versionId', 'actorUid', 'requestedByUid', 'details'])) ||
     !onlyFields(articles.fields, [...internal, ...publication, 'title', 'category', 'editorial', 'body']) ||
     (home && !onlyFields(home.fields, [...internal, ...publication, 'eyebrow', 'headline', 'summary'])) ||
     !articles.versions || articles.versions.maxPerDoc !== 0 ||
@@ -99,8 +107,22 @@ export async function assertMediaOrphan(payload: Payload, id: string, req: Paylo
   await lockCmsReferences(payload, req)
   assertReferenceStoreCoverage(payload)
   id = uuid(id)
+  await (await requireCmsTransaction(payload, req)).execute(sql`SELECT id FROM news_media WHERE id = ${id}::uuid FOR UPDATE`)
   const references = async (document: Record<string, unknown>) => collectMediaIds(normalizeNewsDraftReferences(document.body)).has(id)
   if (await scanArticles(payload, req, false, references) || await scanArticles(payload, req, true, references)) {
     throw new APIError('media_is_referenced', 409, undefined, true)
+  }
+  if (payload.collections['news-schedules']) {
+    for (let page = 1; page <= 1000; page++) {
+      await requireCmsTransaction(payload, req)
+      const result = await payload.find({ collection: 'news-schedules', req, overrideAccess: true, depth: 0, limit: 100, page, sort: 'id' })
+      for (const schedule of result.docs) {
+        if (schedule.target === 'news-articles' && await references(schedule.snapshot as Record<string, unknown>)) {
+          throw new APIError('media_is_referenced', 409, undefined, true)
+        }
+      }
+      if (!result.hasNextPage) return
+    }
+    throw new APIError('media_reference_scan_limit', 503, undefined, true)
   }
 }
