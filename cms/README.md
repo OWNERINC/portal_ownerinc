@@ -275,6 +275,9 @@ browser journey remain later integration gates.
 - Native metadata and file routes require the current Portal editor capability.
   The native file handler always delegates to safe descriptor delivery; it never
   falls back to Payload's path-based serving. No public static mount is added.
+  Boolean native read access does not supply a document to upload handlers, so
+  `openNativeNewsMedia` resolves the canonical requested filename under the same
+  live reference transaction as descriptor-open; it never trusts an optional doc.
 - `openNewsMedia({payload,id,preview,actor,range,req})` is a **server-only helper**,
   not an HTTP bridge. The future API reader must pass a freshly verified
   `VerifiedPortalActor`, never a body-cast actor. Preview requires editor capability;
@@ -283,6 +286,11 @@ browser journey remain later integration gates.
   current publication references them. The body is a cancelable Web stream; request
   abort, cancel, EOF or read failure closes the descriptor. PDF/video support one
   Range (206/416). Headers include private/no-store, nosniff and sanitized disposition.
+  A publication with a missing/corrupt sibling file is not a grant, but cannot
+  prevent a different healthy publication from granting the shared asset. Only
+  typed per-file/per-reference failures permit continuing that scan; database,
+  transaction and storage-root failures propagate. If no healthy grant exists and
+  a candidate has a damaged file, the result remains 503 rather than 403.
 
 ### Transaction contracts for Tasks 6/11/12
 
@@ -355,8 +363,14 @@ the approved PostgreSQL container, real migration/native tests exposed an invali
 test fixture: a restore-success Image block referenced a PDF. The success fixture
 now uses PNG and retains missing alt; a separate regression confirms incompatible
 PDF-as-image restore still fails. The corrected real native suite passes all
-nine subcases (ten tests including parent), with Portal authority HTTP explicitly
+eleven subcases (twelve tests including parent), with Portal authority HTTP explicitly
 still a **transport double**. This is not full-stack authentication acceptance.
+Fresh-review regressions exercise the actual pinned `getFileHandler` with boolean
+access/no prefix and prove anonymous/viewer denial, editor bytes/hash/Range,
+lock-before-filename lookup and no native fallback for an orphan physical file.
+Shared-publication regressions cover missing/corrupt sibling files in both sort
+orders, no healthy grant, and an actual PostgreSQL division-by-zero inside the
+live lookup transaction that must propagate rather than authorize from a later row.
 
 The harness disables only development background type generation. Pinned Payload
 `connectWithReconnect` retains a checked-out listener client; `destroy` clears

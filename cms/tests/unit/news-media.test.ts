@@ -6,8 +6,10 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import sharp from 'sharp'
-import type { Payload, PayloadRequest } from 'payload'
-import { collectMediaIds, assertMediaOrphan } from '../../src/media/references.js'
+import { APIError, type Payload, type PayloadRequest, type Where } from 'payload'
+import { collectMediaIds, assertMediaOrphan, canReadPublishedMedia } from '../../src/media/references.js'
+import { createNewsMedia } from '../../src/collections/NewsMedia.js'
+import { getFileHandler } from '../../node_modules/payload/dist/uploads/endpoints/getFile.js'
 import { normalizeNewsDraftReferences } from '../../src/news/validation.js'
 import { mediaRange, openNewsMedia } from '../../src/media/read-file.js'
 import { openStoredMedia } from '../../src/media/storage.js'
@@ -78,6 +80,7 @@ async function fixture() {
   const asset = { id: assetID, filename: `${randomUUID()}.pdf`, mimeType: 'application/pdf', filesize: pdf.length,
     sha256: createHash('sha256').update(pdf).digest('hex') }
   await writeFile(path.join(directory, asset.filename), pdf)
+  const assets = new Map([[assetID, asset]])
   const articles: Record<string, unknown>[] = []
   const versions: Record<string, unknown>[] = []
   const calls: string[] = []
@@ -87,13 +90,79 @@ async function fixture() {
       commitTransaction: async () => { calls.push('commit') }, rollbackTransaction: async () => { calls.push('rollback') } },
     collections: { 'news-media': { config: { upload: { staticDir: directory } } }, 'news-articles': { config: { fields: [], versions: { maxPerDoc: 0 } } } },
     config: { globals: [], jobs: { tasks: [] } },
-    findByID: async ({ id, req }: { id: string; req: PayloadRequest }) => { assert.equal(req.transactionID, 'live'); return id === assetID ? asset : null },
-    find: async ({ req }: { req: PayloadRequest }) => { assert.equal(req.transactionID, 'live'); return { docs: articles, hasNextPage: false } },
+    findByID: async ({ id, req }: { id: string; req: PayloadRequest }) => { assert.equal(req.transactionID, 'live'); return assets.get(id) || null },
+    find: async ({ req, collection, where }: { req: PayloadRequest; collection: string; where?: Where }) => {
+      assert.equal(req.transactionID, 'live')
+      const field = where?.filename
+      const filename = Array.isArray(field) ? undefined : field?.equals
+      return { docs: collection === 'news-media' ? [...assets.values()].filter(asset => asset.filename === filename) : articles, hasNextPage: false }
+    },
     findVersions: async ({ req }: { req: PayloadRequest }) => { assert.equal(req.transactionID, 'live'); return { docs: versions.map(version => ({ version })), hasNextPage: false } },
   } as unknown as Payload
   const req = { transactionID: 'live', payload } as PayloadRequest
-  return { directory, asset, articles, versions, calls, sessions, payload, req, cleanup: () => rm(directory, { force: true, recursive: true }) }
+  return { directory, asset, assets, articles, versions, calls, sessions, payload, req, cleanup: () => rm(directory, { force: true, recursive: true }) }
 }
+
+test('I1 actual native getFileHandler: boolean access without prefix still resolves editor bytes under the lock', async () => {
+  const f = await fixture()
+  try {
+    const config = createNewsMedia({ uploadDir: f.directory })
+    Object.assign(f.payload.collections['news-media'], { config })
+    const req = { ...f.req, routeParams: { collection: 'news-media', filename: f.asset.filename },
+      searchParams: new URLSearchParams(), headers: new Headers(), t: (key: string) => key,
+      user: { id: randomUUID(), collection: 'portal-editors', portalUid: editor.uid, portalActor: editor } } as unknown as PayloadRequest
+    assert.equal(await config.access!.read!({ req }), true)
+    assert.equal(req.searchParams!.get('prefix'), null)
+    for (const user of [null, { ...req.user!, portalActor: actor }]) {
+      const calls = f.calls.length
+      await assert.rejects(async () => getFileHandler({ ...req, user } as PayloadRequest), error => error instanceof APIError && error.status === 403)
+      assert.equal(f.calls.length, calls, 'denied native access must precede transaction/file access')
+    }
+    const response = await getFileHandler(req)
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('Cache-Control'), 'private,no-store')
+    assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff')
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), pdf)
+    req.headers.set('range', 'bytes=0-3')
+    const range = await getFileHandler(req)
+    assert.equal(range.status, 206)
+    assert.equal(range.headers.get('Content-Range'), `bytes 0-3/${pdf.length}`)
+    assert.equal(Buffer.from(await range.arrayBuffer()).toString(), '%PDF')
+    req.routeParams!.filename = `${randomUUID()}.pdf`
+    assert.equal((await getFileHandler(req)).status, 404)
+    assert.ok(f.calls.includes('lock'))
+  } finally { await f.cleanup() }
+})
+
+test('I2 a damaged sibling asset cannot shadow a healthy shared grant in either publication order', async () => {
+  const f = await fixture()
+  try {
+    const y = { ...f.asset, id: randomUUID(), filename: `${randomUUID()}.pdf` }
+    f.assets.set(y.id, y)
+    const base = { title: 'Synthetic edition', category: '', editorial: { version: 1, kind: 'edition', summary: '', author: '', source_label: '', source_date: null }, _status: 'published' }
+    const xBlock = { blockType: 'pdf', media: f.asset.id, title: 'Healthy X' }
+    const damaged = { ...base, body: [xBlock, { blockType: 'pdf', media: y.id, title: 'Damaged Y' }] }
+    const healthy = { ...base, body: [xBlock] }
+    for (const corruption of ['missing', 'corrupt']) {
+      if (corruption === 'corrupt') await writeFile(path.join(f.directory, y.filename), Buffer.alloc(pdf.length))
+      for (const docs of [[damaged, healthy], [healthy, damaged]]) {
+        f.articles.splice(0, f.articles.length, ...docs)
+        const response = await openNewsMedia({ payload: f.payload, id: f.asset.id, actor, req: f.req })
+        assert.equal(response.status, 200, `${corruption}: a healthy grant must win in either order`)
+        assert.deepEqual(Buffer.from(await new Response(response.body).arrayBuffer()), pdf)
+      }
+      f.articles.splice(0, f.articles.length, damaged)
+      assert.equal((await openNewsMedia({ payload: f.payload, id: f.asset.id, actor, req: f.req })).status, 503)
+    }
+    f.articles.splice(0, f.articles.length, damaged, healthy)
+    const dbError = new APIError('media_unavailable', 503, undefined, true)
+    const findByID = f.payload.findByID
+    f.payload.findByID = (async (args: { id: string }) => { if (args.id === y.id) throw dbError; return f.asset }) as typeof findByID
+    await assert.rejects(canReadPublishedMedia(f.payload, f.asset.id, f.req), error => error === dbError)
+    assert.equal((await openNewsMedia({ payload: f.payload, id: f.asset.id, actor, req: f.req })).status, 503)
+    f.payload.findByID = findByID
+  } finally { await f.cleanup() }
+})
 
 test('missing/dead request sessions refuse instead of using default adapter; nested helpers do not commit', async () => {
   const f = await fixture()

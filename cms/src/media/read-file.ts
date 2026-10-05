@@ -1,9 +1,11 @@
 import { APIError, type Payload, type PayloadRequest } from 'payload'
 import type { VerifiedPortalActor } from '../contracts/news'
+import type { NewsMedia } from '../payload-types'
+import { canManageNews, type PortalRuntimeUser } from '../auth/access'
 import { uuid } from '../news/primitives'
 import { requireCmsTransaction, withCmsTransaction } from '../publication/transaction'
 import { canReadPublishedMedia } from './references'
-import { openStoredMedia } from './storage'
+import { isMediaFilename, mediaUnavailable, openStoredMedia } from './storage'
 
 export type MediaResponse = { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null }
 export function mediaRange(range: string | undefined | null, size: number) {
@@ -19,22 +21,41 @@ export function mediaRange(range: string | undefined | null, size: number) {
   return { start, end, partial: true }
 }
 
-/** Server-only helper. The future API bridge must supply a VERIFIED, current actor, never JSON-cast identity. */
-export async function openNewsMedia({ payload, id, preview = false, actor, range, req }: {
-  payload: Payload; id: string; preview?: boolean; actor: VerifiedPortalActor | null;
+type ReadMediaOptions = {
+  payload: Payload; preview?: boolean; actor: VerifiedPortalActor | null;
   range?: string | null; req?: PayloadRequest;
-}): Promise<MediaResponse> {
+}
+
+/** Server-only helper. The future API bridge must supply a VERIFIED, current actor, never JSON-cast identity. */
+export function openNewsMedia({ id, ...options }: ReadMediaOptions & { id: string }): Promise<MediaResponse> {
+  return openMedia(options, req => options.payload.findByID({ collection: 'news-media', id: uuid(id),
+    req, overrideAccess: true, depth: 0, disableErrors: true }))
+}
+
+/** Native boolean access may provide no doc. Resolve canonical filename under the SAME lock as descriptor-open. */
+export function openNativeNewsMedia(req: PayloadRequest, filename: unknown): Promise<MediaResponse> {
+  const actor = canManageNews({ req }) ? (req.user as PortalRuntimeUser).portalActor! : null
+  return openMedia({ payload: req.payload, preview: true, actor, range: req.headers.get('range'), req }, async liveReq => {
+    if (!isMediaFilename(filename)) return null
+    const result = await req.payload.find({ collection: 'news-media', req: liveReq, overrideAccess: true,
+      depth: 0, limit: 2, where: { filename: { equals: filename } } })
+    if (result.docs.length > 1) throw mediaUnavailable()
+    return result.docs[0] || null
+  })
+}
+
+async function openMedia({ payload, preview = false, actor, range, req }: ReadMediaOptions,
+  findMedia: (req: PayloadRequest) => Promise<NewsMedia | null>): Promise<MediaResponse> {
   const headers: Record<string, string> = { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' }
   if (!actor?.uid) return { status: 401, headers, body: null }
   if (preview && !actor.canManageNews) return { status: 403, headers, body: null }
   let handle: Awaited<ReturnType<typeof openStoredMedia>> | undefined
   try {
-    id = uuid(id)
     const result = await withCmsTransaction(payload, req, async req => {
       await requireCmsTransaction(payload, req)
-      const media = await payload.findByID({ collection: 'news-media', id, req, overrideAccess: true, depth: 0, disableErrors: true })
+      const media = await findMedia(req)
       if (!media) return { status: 404, headers, body: null }
-      if (!preview && !await canReadPublishedMedia(payload, id, req)) return { status: 403, headers, body: null }
+      if (!preview && !await canReadPublishedMedia(payload, media.id, req)) return { status: 403, headers, body: null }
       // Authorization AND descriptor-open happen before releasing the reference lock.
       handle = await openStoredMedia(payload, media)
       headers['Content-Type'] = media.mimeType!

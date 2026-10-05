@@ -11,6 +11,13 @@ const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 // retain that runtime root as well as the source-module root used by CLI/tests.
 const runtimeCheckout = path.basename(process.cwd()) === 'cms' ? path.resolve(process.cwd(), '..') : process.cwd()
 export const mediaUnavailable = () => new APIError('media_unavailable', 503, undefined, true)
+/** Only a particular stored asset failed; never used for DB/transaction/storage-root failures. */
+export class MediaFileUnavailableError extends APIError {
+  constructor() { super('media_unavailable', 503, undefined, true) }
+}
+export function isMediaFilename(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(jpg|png|webp|pdf|mp4|webm|mov)$/u.test(value)
+}
 const inside = (parent: string, child: string) => { const relative = path.relative(parent, child); return !relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)) }
 
 export function privateStorageDir(payload: Payload): string {
@@ -31,9 +38,10 @@ export async function assertPrivateStorage(payload: Payload) {
 
 export type StoredMedia = { filename?: string | null; mimeType?: string | null; filesize?: number | null; sha256?: string | null }
 export async function openStoredMedia(payload: Payload, media: StoredMedia) {
+  let directory: string
+  try { directory = await assertPrivateStorage(payload) } catch { throw mediaUnavailable() }
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
-    const directory = await assertPrivateStorage(payload)
     const { filename, mimeType, filesize, sha256 } = media
     if (!filename || !mimeType || !extensions[mimeType] ||
       !new RegExp(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.${extensions[mimeType]}$`, 'u').test(filename) ||
@@ -56,6 +64,6 @@ export async function openStoredMedia(payload: Payload, media: StoredMedia) {
     return handle
   } catch {
     await handle?.close()
-    throw mediaUnavailable()
+    throw new MediaFileUnavailableError()
   }
 }

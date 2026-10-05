@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
-import { BasePayload, createLocalReq, type PayloadRequest, type RequiredDataFromCollectionSlug } from 'payload'
+import { APIError, BasePayload, createLocalReq, type PayloadRequest, type RequiredDataFromCollectionSlug } from 'payload'
 import { sql, type PostgresAdapter } from '@payloadcms/db-postgres'
 import sharp from 'sharp'
 import { openNewsMedia } from '../../src/media/read-file.js'
+import { canReadPublishedMedia } from '../../src/media/references.js'
+import { getFileHandler } from '../../node_modules/payload/dist/uploads/endpoints/getFile.js'
 import { lockCmsReferences, requireCmsTransaction } from '../../src/publication/transaction.js'
 import { legacyNewsImportContext } from '../../src/news/validation.js'
 
@@ -100,6 +102,52 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
       assert.deepEqual((await readdir(process.env.CMS_UPLOAD_DIR!)).sort(), before)
       assert.deepEqual(await readFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!)), pdf)
       assert.equal(Object.keys(adapter.sessions).length, 0, 'native failures must roll back')
+    })
+
+    await t.test('I1 actual native getFileHandler with boolean access/no prefix: auth, locked lookup, bytes/hash, Range and no path fallback', async () => {
+      const media = await upload()
+      const nativeRequest = async (filename = media.filename!, range?: string) => {
+        const request = await req()
+        request.routeParams = { collection: 'news-media', filename }
+        request.searchParams?.delete('prefix')
+        request.headers = new Headers(range ? { range } : {})
+        return request
+      }
+      const request = await nativeRequest()
+      assert.equal(await payload.collections['news-media'].config.access.read({ req: request }), true)
+      assert.equal(request.searchParams!.get('prefix'), null)
+      for (const denied of [null, { ...user, portalActor: { ...actor, canManageNews: false } }]) {
+        const request = await nativeRequest(); request.user = denied
+        await assert.rejects(async () => getFileHandler(request), error => error instanceof APIError && error.status === 403)
+      }
+      const lock = await begin()
+      const pending = Promise.resolve(getFileHandler(request)); pending.catch(() => {})
+      try {
+        await waitForBlockedLock(); await commit(lock)
+        const response = await pending
+        assert.equal(response.status, 200)
+        assert.equal(response.headers.get('Content-Type'), 'application/pdf')
+        assert.equal(response.headers.get('Content-Length'), String(pdf.length))
+        assert.equal(response.headers.get('Cache-Control'), 'private,no-store')
+        assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff')
+        assert.equal(response.headers.get('Content-Disposition'), `inline; filename="${media.filename}"`)
+        const bytes = Buffer.from(await response.arrayBuffer())
+        assert.deepEqual(bytes, pdf)
+        assert.equal(createHash('sha256').update(bytes).digest('hex'), media.sha256)
+      } finally { if (lock.transactionID) await payload.db.rollbackTransaction((await lock.transactionID)!) }
+      const range = await getFileHandler(await nativeRequest(media.filename!, 'bytes=0-3'))
+      assert.equal(range.status, 206)
+      assert.equal(range.headers.get('Content-Range'), `bytes 0-3/${pdf.length}`)
+      assert.equal(Buffer.from(await range.arrayBuffer()).toString(), '%PDF')
+      assert.equal((await getFileHandler(await nativeRequest(media.filename!, 'bytes=9999-'))).status, 416)
+      const orphanFilename = `${randomUUID()}.pdf`
+      await writeFile(path.join(process.env.CMS_UPLOAD_DIR!, orphanFilename), pdf)
+      try { assert.equal((await getFileHandler(await nativeRequest(orphanFilename))).status, 404, 'an actual orphan file must NOT use the native filesystem fallback') }
+      finally { await rm(path.join(process.env.CMS_UPLOAD_DIR!, orphanFilename)) }
+      await rm(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!))
+      try { assert.equal((await getFileHandler(await nativeRequest())).status, 503) }
+      finally { await writeFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!), pdf) }
+      assert.equal(Object.keys(adapter.sessions).length, 0)
     })
 
     await t.test('all normal article/media mutations refuse frozen/legacy/unavailable authority; read/preview remains available', async () => {
@@ -221,6 +269,56 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
       await writeFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!), Buffer.alloc(pdf.length))
       await assert.rejects(payload.update({ collection: 'news-articles', id: other.id, req: await req(), data: { _status: 'published' } }), /media_unavailable/)
       await writeFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!), pdf)
+    })
+
+    await t.test('I2 shared X survives missing/corrupt sibling Y in either publication order; no grant stays 503 and SQL errors propagate', async () => {
+      const x = await upload(), y = await upload()
+      const xBlock = { blockType: 'pdf' as const, media: x.id, title: 'Healthy shared X' }
+      const yBlock = { blockType: 'pdf' as const, media: y.id, title: 'Sibling Y' }
+      const documents = [await article([xBlock]), await article([xBlock])].sort((a, b) => a.id < b.id ? -1 : 1)
+      const viewer = { ...actor, canManageNews: false }
+      const yPath = path.join(process.env.CMS_UPLOAD_DIR!, y.filename!)
+      const readX = async () => openNewsMedia({ payload, id: x.id, actor: viewer, req: await req() })
+      for (const damagedIndex of [0, 1]) {
+        await writeFile(yPath, pdf)
+        const damaged = documents[damagedIndex], healthy = documents[1 - damagedIndex]
+        await payload.update({ collection: 'news-articles', id: damaged.id, req: await req(), data: { _status: 'published', body: [xBlock, yBlock] } })
+        await payload.update({ collection: 'news-articles', id: healthy.id, req: await req(), data: { _status: 'published', body: [xBlock] } })
+        for (const corruption of ['missing', 'corrupt']) {
+          if (corruption === 'missing') await rm(yPath)
+          else await writeFile(yPath, Buffer.alloc(pdf.length))
+          const response = await readX()
+          assert.equal(response.status, 200, `${corruption} sibling, damaged publication index ${damagedIndex}`)
+          assert.deepEqual(Buffer.from(await new Response(response.body).arrayBuffer()), pdf)
+          assert.equal((await openNewsMedia({ payload, id: y.id, actor: viewer, req: await req() })).status, 503)
+          await payload.update({ collection: 'news-articles', id: healthy.id, req: await req(), data: { _status: 'draft' } })
+          assert.equal((await readX()).status, 503, 'without any healthy grant, damaged publication remains 503')
+          await payload.update({ collection: 'news-articles', id: healthy.id, req: await req(), data: { _status: 'published' } })
+        }
+      }
+      // Put the damaged candidate first again, then induce an ACTUAL PostgreSQL
+      // failure in that same live lookup transaction, not a transport/DB error double.
+      await writeFile(yPath, pdf)
+      await payload.update({ collection: 'news-articles', id: documents[0].id, req: await req(), data: { _status: 'published', body: [xBlock, yBlock] } })
+      await payload.update({ collection: 'news-articles', id: documents[1].id, req: await req(), data: { _status: 'published', body: [xBlock] } })
+      const findByID = payload.findByID
+      let sqlFailures = 0
+      payload.findByID = (async (options: Parameters<typeof findByID>[0]) => {
+        if (options.collection === 'news-media' && options.id === y.id) {
+          sqlFailures++
+          const transaction = await requireCmsTransaction(payload, options.req as PayloadRequest)
+          await transaction.execute(sql`SELECT 1 / 0`)
+        }
+        return findByID(options)
+      }) as typeof findByID
+      try {
+        await assert.rejects(canReadPublishedMedia(payload, x.id, await req()), error =>
+          (error as { cause?: { code?: string } }).cause?.code === '22012')
+        assert.equal((await readX()).status, 503, 'a DB error must not be skipped in favor of the later healthy grant')
+        assert.equal(sqlFailures, 2)
+        assert.equal(Object.keys(adapter.sessions).length, 0)
+      } finally { payload.findByID = findByID }
+      const recovered = await readX(); assert.equal(recovered.status, 200); await recovered.body!.cancel()
     })
 
     await t.test('orphan deletion waits for read descriptor-open transaction; stream survives unlink and closes on cancel/abort', async () => {

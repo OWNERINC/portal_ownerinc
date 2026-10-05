@@ -3,7 +3,11 @@ import type { NewsContent } from '../contracts/news'
 import { uuid } from '../news/primitives'
 import { normalizeNewsDocument, normalizeNewsDraftReferences, validateNewsMediaShapes } from '../news/validation'
 import { lockCmsReferences, requireCmsTransaction, withCmsTransaction } from '../publication/transaction'
-import { openStoredMedia } from './storage'
+import { MediaFileUnavailableError, openStoredMedia } from './storage'
+
+class InvalidMediaReferenceError extends APIError {
+  constructor() { super('invalid_media_reference', 400, undefined, true) }
+}
 
 /** Input is the normalized FLAT boundary, never arbitrary JSON or native relations. */
 export function collectMediaIds(content: NewsContent): Set<string> {
@@ -16,12 +20,16 @@ export async function assertMediaReferences(payload: Payload, content: NewsConte
     for (const id of collectMediaIds(content)) {
       await requireCmsTransaction(payload, req)
       const asset = await payload.findByID({ collection: 'news-media', id, req, overrideAccess: true, depth: 0, disableErrors: true })
-      if (!asset) throw new APIError('invalid_media_reference', 400, undefined, true)
+      if (!asset) throw new InvalidMediaReferenceError()
       media.push(asset)
       const handle = await openStoredMedia(payload, asset)
       await handle.close()
     }
-    validateNewsMediaShapes(content, media)
+    try { validateNewsMediaShapes(content, media) }
+    catch (error) {
+      if (error instanceof APIError && error.status === 400) throw new InvalidMediaReferenceError()
+      throw error
+    }
   })
 }
 
@@ -45,16 +53,27 @@ async function scanArticles(payload: Payload, req: PayloadRequest, versions: boo
 
 export async function canReadPublishedMedia(payload: Payload, id: string, req: PayloadRequest): Promise<boolean> {
   id = uuid(id)
-  return withCmsTransaction(payload, req, req => scanArticles(payload, req, false, async document => {
-    if (document._status !== 'published') return false
-    let content: NewsContent
-    try { content = normalizeNewsDocument(document, true).blocks } catch { return false }
-    if (!collectMediaIds(content).has(id)) return false
-    // A malformed, dangling or MIME-incompatible publication is not a reader grant.
-    try { await assertMediaReferences(payload, content, req) }
-    catch (error) { if (error instanceof APIError && error.status === 400) return false; throw error }
-    return true
-  }))
+  return withCmsTransaction(payload, req, async req => {
+    let damagedFile: MediaFileUnavailableError | undefined
+    const authorized = await scanArticles(payload, req, false, async document => {
+      if (document._status !== 'published') return false
+      let content: NewsContent
+      try { content = normalizeNewsDocument(document, true).blocks } catch { return false }
+      if (!collectMediaIds(content).has(id)) return false
+      try { await assertMediaReferences(payload, content, req) }
+      catch (error) {
+        if (error instanceof InvalidMediaReferenceError) return false
+        // A damaged sibling file invalidates this publication, not another valid
+        // grant. Remember 503 if the whole scan finds none. Never catch by status
+        // or message here: DB/transaction/root-storage failures must propagate.
+        if (error instanceof MediaFileUnavailableError) { damagedFile = error; return false }
+        throw error
+      }
+      return true
+    })
+    if (!authorized && damagedFile) throw damagedFile
+    return authorized
+  })
 }
 
 /** Explicit inventory: new schedule/snapshot/history stores MUST extend this protection. */

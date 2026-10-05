@@ -1,9 +1,9 @@
 import type { CollectionConfig } from 'payload'
 import type { CmsEnvironment } from '../config/environment'
 import { mediaMimes } from '../news/primitives'
-import { canManageNews, type PortalRuntimeUser } from '../auth/access'
+import { canManageNews } from '../auth/access'
 import { persistMediaIdentity, protectMediaDelete, protectMediaOperation } from '../media/lifecycle'
-import { openNewsMedia } from '../media/read-file'
+import { openNativeNewsMedia } from '../media/read-file'
 
 export function createNewsMedia(environment: Pick<CmsEnvironment, 'uploadDir'>): CollectionConfig {
   const deny = () => false
@@ -17,10 +17,8 @@ export function createNewsMedia(environment: Pick<CmsEnvironment, 'uploadDir'>):
     upload: {
       staticDir: environment.uploadDir, mimeTypes: mediaMimes, crop: false, focalPoint: false, pasteURL: false,
       // Always answer: never fall through to native path/redirect serving.
-      handlers: [async (req, { doc }) => {
-        const result = await openNewsMedia({ payload: req.payload, id: String(doc.id), preview: true,
-          actor: canManageNews({ req }) ? (req.user as PortalRuntimeUser).portalActor! : null,
-          range: req.headers.get('range'), req })
+      handlers: [async (req, { params }) => {
+        const result = await openNativeNewsMedia(req, params.filename)
         return new Response(result.body, { status: result.status, headers: result.headers })
       }],
     },
