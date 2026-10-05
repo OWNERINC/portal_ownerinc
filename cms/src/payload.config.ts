@@ -14,6 +14,8 @@ import { NewsSchedules } from './collections/NewsSchedules'
 import { NewsAudit } from './collections/NewsAudit'
 import { publishNewsSnapshot } from './jobs/publish-snapshot'
 import { newsScheduleEndpoints } from './endpoints/news-schedule'
+import { portalNewsEndpoints } from './endpoints/portal-news'
+import { LegacyNewsRevisions } from './collections/LegacyNewsRevisions'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
@@ -31,9 +33,9 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   routes: { admin: '/editorial/admin', api: '/editorial/api' },
   serverURL: environment.portalPublicURL,
-  collections: [PortalEditors, NewsArticles, createNewsMedia(environment), NewsSchedules, NewsAudit],
+  collections: [PortalEditors, NewsArticles, createNewsMedia(environment), NewsSchedules, NewsAudit, LegacyNewsRevisions],
   globals: [NewsHome],
-  endpoints: newsScheduleEndpoints,
+  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints],
   editor: newsEditor,
   secret: environment.payloadSecret,
   typescript: { outputFile: path.resolve(dirname, 'payload-types.ts') },

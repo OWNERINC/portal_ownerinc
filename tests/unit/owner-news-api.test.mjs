@@ -39,6 +39,10 @@ function poolFor(extended = false) {
   const calls = [];
   return {
     calls,
+    async query(sql) {
+      assert.match(sql, /owner_news_authority/);
+      return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    },
     async connect() {
       return {
         release() {},

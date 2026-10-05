@@ -45,6 +45,12 @@ test('every API resource route requires authentication', async () => {
         assert.match(source, /router\.delete\('\/',[\s\S]*await revokeEditorialSession/);
         continue;
       }
+      if (file === 'announcements.js') {
+        assert.match(source, /authenticate = authMiddleware/);
+        const guard = source.indexOf('router.use(authenticate)');
+        assert.ok(guard >= 0 && guard < route.index, 'factory routes require the real default auth guard first');
+        continue;
+      }
       if (!globallyProtected) assert.match(route[1], /authMiddleware/, `${file}: unauthenticated route`);
     }
   }

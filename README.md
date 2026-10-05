@@ -83,6 +83,7 @@ HTML.
 - [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)
 - [Fluxo de dados](docs/architecture/data-flow.md)
 - [Importação privada da Owner News](docs/operations/owner-news-import.md)
+- [Ponte de leitura Payload da Owner News](docs/operations/owner-news-payload-read-bridge.md)
 - [Deploy](docs/operations/deployment.md)
 - [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Status final da V1](docs/operations/2026-08-12-v1-final-status.md)

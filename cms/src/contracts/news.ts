@@ -63,6 +63,16 @@ export type PreviewQuery = {
 export type HomeContent = {
   version: 1; eyebrow: string; headline: string; summary: string
 }
+/** Task10/11 handoff: immutable imported history, NOT a native Versions record.
+ * CMS id/createdAt/updatedAt describe ingestion only; never original provenance. */
+export type LegacyNewsRevisionInput = {
+  legacyDocumentId: string; legacyRevisionId: string
+  originalVersion: number; originalCreatedAt: string; originalActorUid: string | null
+  originalStatus: 'draft' | 'published' | 'scheduled' | 'archived'
+  originalTitle: string; originalCategory: string; originalPublishedAt: string | null
+  originalBody: NewsContent; originalEditorial: NewsEditorial
+  contentHash: string; provenanceHash: string; mediaReferences: string[]
+}
 export type ScheduleInput = {
   target: 'article' | 'home'
   documentId: string

@@ -72,6 +72,7 @@ export interface Config {
     'news-media': NewsMedia;
     'news-schedules': NewsSchedule;
     'news-audit': NewsAudit;
+    'legacy-news-revisions': LegacyNewsRevision;
     'payload-kv': PayloadKv;
     'payload-jobs': PayloadJob;
     'payload-locked-documents': PayloadLockedDocument;
@@ -85,6 +86,7 @@ export interface Config {
     'news-media': NewsMediaSelect<false> | NewsMediaSelect<true>;
     'news-schedules': NewsSchedulesSelect<false> | NewsSchedulesSelect<true>;
     'news-audit': NewsAuditSelect<false> | NewsAuditSelect<true>;
+    'legacy-news-revisions': LegacyNewsRevisionsSelect<false> | LegacyNewsRevisionsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-jobs': PayloadJobsSelect<false> | PayloadJobsSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -379,6 +381,45 @@ export interface NewsAudit {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "legacy-news-revisions".
+ */
+export interface LegacyNewsRevision {
+  id: string;
+  legacyDocumentId: string;
+  legacyRevisionId: string;
+  originalVersion: number;
+  originalCreatedAt: string;
+  originalActorUid?: string | null;
+  originalStatus: 'draft' | 'published' | 'scheduled' | 'archived';
+  originalTitle: string;
+  originalCategory?: string | null;
+  originalPublishedAt?: string | null;
+  originalBody:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  originalEditorial?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  contentHash: string;
+  provenanceHash: string;
+  mediaReferences?: (string | NewsMedia)[] | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -516,6 +557,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'news-audit';
         value: string | NewsAudit;
+      } | null)
+    | ({
+        relationTo: 'legacy-news-revisions';
+        value: string | LegacyNewsRevision;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -765,6 +810,28 @@ export interface NewsAuditSelect<T extends boolean = true> {
   actorUid?: T;
   requestedByUid?: T;
   details?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "legacy-news-revisions_select".
+ */
+export interface LegacyNewsRevisionsSelect<T extends boolean = true> {
+  legacyDocumentId?: T;
+  legacyRevisionId?: T;
+  originalVersion?: T;
+  originalCreatedAt?: T;
+  originalActorUid?: T;
+  originalStatus?: T;
+  originalTitle?: T;
+  originalCategory?: T;
+  originalPublishedAt?: T;
+  originalBody?: T;
+  originalEditorial?: T;
+  contentHash?: T;
+  provenanceHash?: T;
+  mediaReferences?: T;
   updatedAt?: T;
   createdAt?: T;
 }

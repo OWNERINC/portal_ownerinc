@@ -5,8 +5,9 @@ import { uuid } from '../news/primitives'
 import { normalizeNewsDocument, normalizeNewsDraftReferences, validateNewsMediaShapes } from '../news/validation'
 import { lockCmsReferences, requireCmsTransaction, withCmsTransaction } from '../publication/transaction'
 import { MediaFileUnavailableError, openStoredMedia } from './storage'
+import { historyFields } from '../collections/LegacyNewsRevisions'
 
-class InvalidMediaReferenceError extends APIError {
+export class InvalidMediaReferenceError extends APIError {
   constructor() { super('invalid_media_reference', 400, undefined, true) }
 }
 
@@ -80,7 +81,7 @@ export async function canReadPublishedMedia(payload: Payload, id: string, req: P
 
 /** Explicit inventory: new schedule/snapshot/history stores MUST extend this protection. */
 export function assertReferenceStoreCoverage(payload: Payload) {
-  const covered = new Set(['portal-editors', 'news-articles', 'news-media', 'news-schedules', 'news-audit', 'payload-preferences',
+  const covered = new Set(['portal-editors', 'news-articles', 'news-media', 'news-schedules', 'news-audit', 'legacy-news-revisions', 'payload-preferences',
     'payload-locked-documents', 'payload-migrations', 'payload-jobs', 'payload-kv'])
   const internal = ['id', 'createdAt', 'updatedAt', '_status']
   const publication = ['publishedAt', 'publicationGeneration', 'legacyDocumentId', 'legacySourceId', 'legacyRevisionId', 'importedAt']
@@ -89,12 +90,14 @@ export function assertReferenceStoreCoverage(payload: Payload) {
   const home = payload.config.globals.find(global => global.slug === 'news-home')
   const schedules = payload.collections['news-schedules']?.config
   const audit = payload.collections['news-audit']?.config
+  const history = payload.collections['legacy-news-revisions']?.config
   const tasks = payload.config.jobs.tasks || []
   if (Object.keys(payload.collections).some(slug => !covered.has(slug)) ||
     payload.config.globals.some(global => global.slug !== 'news-home') || payload.config.jobs.workflows?.length ||
     tasks.some(task => task.slug !== 'publish-news-snapshot' || !onlyFields(task.inputSchema || [], ['scheduleId']) || !onlyFields(task.outputSchema || [], ['state'])) ||
     (schedules && !onlyFields(schedules.fields, [...internal, 'target', 'documentId', 'action', 'versionId', 'snapshot', 'snapshotHash', 'scheduledAt', 'actorUid', 'generation', 'state', 'jobId'])) ||
     (audit && !onlyFields(audit.fields, [...internal, 'action', 'documentId', 'versionId', 'actorUid', 'requestedByUid', 'details'])) ||
+    (history && !onlyFields(history.fields, [...internal, ...historyFields])) ||
     !onlyFields(articles.fields, [...internal, ...publication, 'title', 'category', 'editorial', 'body']) ||
     (home && !onlyFields(home.fields, [...internal, ...publication, 'eyebrow', 'headline', 'summary'])) ||
     !articles.versions || articles.versions.maxPerDoc !== 0 ||
@@ -111,6 +114,20 @@ export async function assertMediaOrphan(payload: Payload, id: string, req: Paylo
   const references = async (document: Record<string, unknown>) => collectMediaIds(normalizeNewsDraftReferences(document.body)).has(id)
   if (await scanArticles(payload, req, false, references) || await scanArticles(payload, req, true, references)) {
     throw new APIError('media_is_referenced', 409, undefined, true)
+  }
+  if (payload.collections['legacy-news-revisions']) {
+    for (let page = 1; page <= 1000; page++) {
+      await requireCmsTransaction(payload, req)
+      const result = await payload.find({ collection: 'legacy-news-revisions', req, overrideAccess: true, depth: 0, limit: 100, page, sort: 'id' })
+      for (const row of result.docs) {
+        // Protect both independently: even a stale relation inventory cannot allow
+        // deleting a raw original-body reference. Unknown blocks fail closed.
+        const related = (row.mediaReferences || []).some(value => (typeof value === 'string' ? value : value.id) === id)
+        if (related || collectMediaIds(normalizeNewsDraftReferences(row.originalBody)).has(id)) throw new APIError('media_is_referenced', 409, undefined, true)
+      }
+      if (!result.hasNextPage) break
+      if (page === 1000) throw new APIError('media_reference_scan_limit', 503, undefined, true)
+    }
   }
   if (payload.collections['news-schedules']) {
     for (let page = 1; page <= 1000; page++) {

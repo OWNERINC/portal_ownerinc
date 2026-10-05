@@ -2,12 +2,14 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { assertEditorialOrigin, editorialCookieSettings } from './auth/cookie'
 import { PortalAuthError } from './auth/portal-client'
 import { readPortalPublicURL } from './config/environment'
+import { hasNewsServiceAccess } from './auth/service-access'
 
 // Native Payload layout actions do not all pass through our serverFunction.
 // Guard the complete editorial namespace before Next dispatches any action,
 // including form POSTs without a next-action header. Authorization stays per request.
 export function proxy(request: NextRequest) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return NextResponse.next()
+  if (hasNewsServiceAccess(request)) return NextResponse.next()
   try {
     const { origin } = editorialCookieSettings(readPortalPublicURL(process.env))
     assertEditorialOrigin(request.headers, origin)

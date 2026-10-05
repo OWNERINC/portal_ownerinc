@@ -1,12 +1,13 @@
 import { PortalAuthError } from './portal-client'
 import { assertEditorialOrigin } from './cookie'
 import { AUTH_STATUS_HEADER, AUTH_REASON_HEADER } from './portal-strategy'
+import { hasNewsServiceAccess } from './service-access'
 
 type Handler<T> = (request: Request, args: T) => Promise<Response>
 export function withEditorialBoundary<T>(handler: Handler<T>, origin: string): Handler<T> {
   return async (request, args) => {
     try {
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) assertEditorialOrigin(request.headers, origin)
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && !hasNewsServiceAccess(request)) assertEditorialOrigin(request.headers, origin)
       const response = await handler(request, args)
       // The native framework catches strategy exceptions; preserve the Portal's failure class.
       const status = Number(response.headers.get(AUTH_STATUS_HEADER))
