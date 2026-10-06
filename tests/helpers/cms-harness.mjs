@@ -77,7 +77,7 @@ export function parseFixture(html) {
 // Mount the complete production module, UI helpers, renderer and lifecycle.
 // Only browser DOM and external transports/timers are doubled. Transports
 // deliberately ignore abort so tests exercise the lifecycle's late-result guard.
-export async function createMountedHarness(name = 'cms', { user = { permissions: { superAdmin: true } } } = {}) {
+export async function createMountedHarness(name = 'cms', { user = { permissions: { superAdmin: true } }, authority = { mode: 'legacy', epoch: 1 } } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = parseFixture(html);
   const requests = [], revoked = [], observers = [], editorCallbacks = [], timers = new Map();
@@ -86,6 +86,7 @@ export async function createMountedHarness(name = 'cms', { user = { permissions:
   const location = new URL(`https://portal.test/${name}.html`);
   window.history = {};
   const request = kind => (path, options = {}) => {
+    if (path === '/api/cms/owner-news/authority') return Promise.resolve(authority);
     const pending = { kind, path, options, ...deferred() };
     requests.push(pending);
     return pending.promise;

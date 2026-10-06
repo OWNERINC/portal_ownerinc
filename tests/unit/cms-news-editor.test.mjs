@@ -5,6 +5,18 @@ import { createMountedHarness, drain, TestEvent } from '../helpers/cms-harness.m
 const button = (root, text) => root.querySelectorAll('button').find(node => node.textContent === text);
 const meta = summary => ({ version: 1, kind: 'article', summary, author: '', source_label: '', source_date: null });
 const doc = { id: 'news-a', title: 'Matéria sintética', content_type: 'announcement', draft_revision_id: 'draft-a' };
+test('Payload authority exposes migration/read-only history without editable legacy blocks or actions', async t => {
+  const h = await createMountedHarness('cms', { authority: { mode: 'payload', epoch: 2 } }); t.after(() => h.page.dispose());
+  h.latest('/documents?').resolve({ data: [], total: 0 }); await drain();
+  button(h.node('content-types'), 'Owner News').click(); h.latest('/documents?').resolve({ data: [doc], total: 1 }); await drain();
+  assert.equal(h.node('owner-news-authority').hidden, false); assert.match(h.node('owner-news-authority').textContent, /migrou|Abrir no Payload/);
+  assert.equal(h.node('new-document').disabled, true);
+  h.node('document-list').querySelector('button').click(); h.latest('/documents/news-a').resolve({ document: doc, draft: { blocks: [{ type: 'paragraph', text: 'Histórico anterior.' }] } }); await drain();
+  assert.match(h.node('editor-root').textContent, /somente leitura/); assert.match(h.node('preview-root').textContent, /Histórico anterior/);
+  assert.equal(h.editorCallbacks.length, 0); assert.equal(h.node('publish-document').disabled, true); assert.equal(h.node('save-draft').disabled, true);
+  assert.equal(h.node('load-history').disabled, false); assert.equal(h.doc.querySelector('.cms-inspector').inert, false);
+  const count = h.requests.length; h.node('save-draft').click(); h.node('publish-document').click(); await drain(); assert.equal(h.requests.length, count);
+});
 async function setup(t, editorial = meta('Resumo do rascunho')) {
   const h = await createMountedHarness();
   t.after(() => h.page.dispose());

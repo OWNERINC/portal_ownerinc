@@ -1,6 +1,8 @@
 const express = require('express');
 const pool = require('../db');
-const { authMiddleware } = require('../middleware/auth');
+// Defer Firebase initialization when the factory receives a verified private
+// authenticator. The default reader/admin routes still use the same middleware.
+const authMiddleware = (...args) => require('../middleware/auth').authMiddleware(...args);
 const { canManageCms } = require('../cms/permissions');
 const { uuid, oneOf, parseListQuery, withAudit } = require('../route-utils');
 const { validVersion } = require('../owner-news/home');
@@ -8,7 +10,6 @@ const { PollError, normalizePollDraft, createPollDraft, updatePollDraft, publish
   readPoll, readCurrentPoll, listPolls, voteOnPoll } = require('../owner-news/polls');
 
 const router = express.Router();
-const admin = express.Router();
 const messages = {
   invalid_request: 'Requisição inválida.', invalid_poll: 'A enquete é inválida.',
   poll_not_found: 'Enquete não encontrada.', invalid_option: 'Opção inválida.',
@@ -63,25 +64,27 @@ router.post('/:id/votes', authMiddleware, async (req, res, next) => {
   } catch (error) { sendError(error, req, res, next); }
 });
 
-admin.get('/', authMiddleware, authorize, async (req, res, next) => {
+function createPollAdminRouter({ authenticate = authMiddleware, db = pool } = {}) {
+const admin = express.Router();
+admin.get('/', authenticate, authorize, async (req, res, next) => {
   try {
     const page = parseListQuery(req.query, { status: oneOf('draft', 'open', 'closed') });
     if (!page) invalid();
-    const result = await listPolls(pool, req.user.uid, { ...page, status: req.query.status });
+    const result = await listPolls(db, req.user.uid, { ...page, status: req.query.status });
     res.set('X-Total-Count', String(result.count)).json(result.rows);
   } catch (error) { sendError(error, req, res, next); }
 });
-admin.post('/', authMiddleware, authorize, async (req, res, next) => {
+admin.post('/', authenticate, authorize, async (req, res, next) => {
   try {
     noQuery(req);
     const content = normalizePollDraft(req.body);
     if (!content) invalid();
-    const result = await withAudit(pool, req, 'owner_news.poll.create', 'owner_news_poll',
+    const result = await withAudit(db, req, 'owner_news.poll.create', 'owner_news_poll',
       db => createPollDraft(db, content, req.user.uid), { targetId: row => row.id, details: row => ({ version: row.version }) });
     res.status(201).json(result);
   } catch (error) { sendError(error, req, res, next); }
 });
-admin.put('/:id/draft', authMiddleware, authorize, async (req, res, next) => {
+admin.put('/:id/draft', authenticate, authorize, async (req, res, next) => {
   try {
     noQuery(req);
     const id = pollId(req);
@@ -90,23 +93,26 @@ admin.put('/:id/draft', authMiddleware, authorize, async (req, res, next) => {
     const { expected_version: version, ...draft } = req.body;
     const content = normalizePollDraft(draft);
     if (!content) invalid();
-    const result = await withAudit(pool, req, 'owner_news.poll.update', 'owner_news_poll',
+    const result = await withAudit(db, req, 'owner_news.poll.update', 'owner_news_poll',
       db => updatePollDraft(db, id, content, version, req.user.uid), { targetId: id, details: row => ({ version: row.version }) });
     res.json(result);
   } catch (error) { sendError(error, req, res, next); }
 });
 for (const [action, operation] of [['publish', publishPoll], ['close', closePoll]]) {
-  admin.post(`/:id/${action}`, authMiddleware, authorize, async (req, res, next) => {
+  admin.post(`/:id/${action}`, authenticate, authorize, async (req, res, next) => {
     try {
       noQuery(req);
       const id = pollId(req);
       if (!exactBody(req.body, ['expected_version']) || !validVersion(req.body.expected_version)) invalid();
-      const result = await withAudit(pool, req, `owner_news.poll.${action}`, 'owner_news_poll',
+      const result = await withAudit(db, req, `owner_news.poll.${action}`, 'owner_news_poll',
         db => operation(db, id, req.body.expected_version, req.user.uid), { targetId: id, details: row => ({ version: row.version }) });
       res.json(result);
     } catch (error) { sendError(error, req, res, next); }
   });
 }
+return admin;
+}
 
 module.exports = router;
-module.exports.admin = admin;
+module.exports.admin = createPollAdminRouter();
+module.exports.createPollAdminRouter = createPollAdminRouter;

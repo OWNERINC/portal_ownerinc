@@ -2,6 +2,7 @@ import { postgresAdapter } from '@payloadcms/db-postgres'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildConfig } from 'payload'
+import { pt } from '@payloadcms/translations/languages/pt'
 
 import { createPortalEditors } from './collections/PortalEditors'
 import { NewsArticles } from './collections/NewsArticles'
@@ -16,6 +17,7 @@ import { publishNewsSnapshot } from './jobs/publish-snapshot'
 import { newsScheduleEndpoints } from './endpoints/news-schedule'
 import { portalNewsEndpoints } from './endpoints/portal-news'
 import { LegacyNewsRevisions } from './collections/LegacyNewsRevisions'
+import { portalPollEndpoints } from './endpoints/portal-polls'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
@@ -26,6 +28,16 @@ const PortalEditors = createPortalEditors(environment)
 export const createCmsConfig = (importContext?: unknown) => buildConfig({
   admin: {
     user: PortalEditors.slug,
+    dateFormat: 'dd/MM/yyyy HH:mm',
+    timezones: { defaultTimezone: 'America/Sao_Paulo', supportedTimezones: [{ label: 'São Paulo', value: 'America/Sao_Paulo' }] },
+    components: {
+      graphics: { Logo: '/admin/Brand#Brand', Icon: '/admin/Brand#BrandIcon' },
+      beforeLogin: ['/admin/PortalLogin#PortalLogin'],
+      afterNavLinks: ['/admin/PortalNavigation#PortalNavigation'],
+      logout: { Button: '/admin/PortalLogout#PortalLogout' },
+      providers: ['/admin/SessionWatch#SessionWatch'],
+      views: { polls: { Component: '/admin/PollsView#PollsView', path: '/polls', exact: true } },
+    },
     importMap: {
       baseDir: dirname,
       importMapFile: path.resolve(dirname, 'app/(payload)/editorial/admin/importMap.js'),
@@ -35,7 +47,8 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   serverURL: environment.portalPublicURL,
   collections: [PortalEditors, NewsArticles, createNewsMedia(environment), NewsSchedules, NewsAudit, LegacyNewsRevisions],
   globals: [NewsHome],
-  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints],
+  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints],
+  i18n: { supportedLanguages: { pt }, fallbackLanguage: 'pt' },
   editor: newsEditor,
   secret: environment.payloadSecret,
   typescript: { outputFile: path.resolve(dirname, 'payload-types.ts') },

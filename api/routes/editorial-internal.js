@@ -4,6 +4,8 @@ const { assertEditorialService } = require('../editorial-session/service-auth');
 const { createEditorialQuotas } = require('../editorial-session/quota');
 const { getAuthority } = require('../owner-news/authority');
 const { editorialErrorHandler } = require('./editorial-session');
+const { editorialCookieConfig, readEditorialCookie } = require('../editorial-session/origin');
+const { loadActivePortalUser, ActivePortalUserError } = require('../middleware/active-user');
 
 function createEditorialInternalRouter({ db, firebaseAuth, env = process.env, quota }) {
   const router = express.Router();
@@ -35,6 +37,20 @@ function createEditorialInternalRouter({ db, firebaseAuth, env = process.env, qu
     try { res.json(await getAuthority(db)); }
     catch { next(new EditorialSessionError(503, 'news_authority_unavailable')); }
   });
+  // The service secret alone never authorizes a browser editor. Resolve the real
+  // revocable cookie on every request, then use the unchanged CMS authorizer.
+  router.use('/polls', limits.resolve, json, require('./owner-news-polls').createPollAdminRouter({ db,
+    authenticate: async (req, res, next) => {
+      try {
+        const cookie = readEditorialCookie(req.get('cookie'), editorialCookieConfig(env).name);
+        const { actor } = await resolveEditorialSession({ firebaseAuth, db, cookie });
+        req.user = await loadActivePortalUser(db, { uid: actor.uid, email_verified: true });
+        next();
+      } catch (error) {
+        next(error instanceof ActivePortalUserError ? new EditorialSessionError(403, error.reason || 'account-inactive') : error);
+      }
+    },
+  }));
   // This private namespace must not fall through into the public-client bucket.
   router.use((req, res) => res.sendStatus(404));
   router.use(editorialErrorHandler);

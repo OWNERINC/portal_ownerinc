@@ -80,6 +80,12 @@ let newsSection = 'articles';
 let homeEditor = null;
 let homeDirty = false;
 let homeBusy = false;
+let newsAuthority = null;
+const newsReadOnly = () => (selectedType === 'announcement' || documentView?.document?.content_type === 'announcement') && newsAuthority?.mode !== 'legacy';
+async function refreshNewsAuthority() {
+  newsAuthority = await fetchAPI('/api/cms/owner-news/authority');
+  syncNewsSections(); syncBusyState();
+}
 
 let selectedType = TYPES[0]?.[0] || null;
 let selectedDocument = null;
@@ -114,6 +120,7 @@ let documentOffset = 0;
   const requestedType = new URL(page.location.href).searchParams.get('type');
   const requestedDocument = new URL(page.location.href).searchParams.get('document');
   const requestedTypeAllowed = !requestedType || TYPES.some(([type]) => type === requestedType);
+if (requestedType && requestedTypeAllowed) selectedType = requestedType;
 page.beforeLeave(() => {
   if (homeEditor && !homeEditor.canLeave()) return false;
   if (saving || actionBusy || creatingDocument || assetUploading || saveInFlight) {
@@ -184,18 +191,18 @@ page.listen(window, 'beforeunload', event => {
 
 function syncBusyState() {
   if (!page.active) return;
-  const editorBusy = editorInteractionBusy();
+  const editorBusy = editorInteractionBusy() || newsReadOnly();
   const navigationBlocked = navigationBusy() || creatingDocument;
   editorRoot.inert = editorBusy;
   if (editorialRoot) editorialRoot.inert = editorBusy;
   editorRoot.setAttribute('aria-busy', String(editorBusy));
   blockSettings.inert = editorBusy;
   blockSettings.setAttribute('aria-busy', String(editorBusy));
-  inspectorRoot.inert = editorBusy;
+  inspectorRoot.inert = editorInteractionBusy();
   inspectorRoot.setAttribute('aria-busy', String(editorBusy));
   newDocumentForm.inert = editorBusy;
   newDocumentForm.setAttribute('aria-busy', String(editorBusy));
-  newDocumentButton.disabled = !TYPES.length || navigationBlocked || newsSection !== 'articles';
+  newDocumentButton.disabled = !TYPES.length || navigationBlocked || newsSection !== 'articles' || newsReadOnly();
   contentTypes.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
   documentList.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
   documentPagination.querySelectorAll('button').forEach(button => { button.disabled = navigationBlocked; });
@@ -288,10 +295,17 @@ function renderTypeNav() {
 
 function syncNewsSections() {
   const news = selectedType === 'announcement';
+  const authority = document.getElementById('owner-news-authority');
+  if (authority) {
+    authority.hidden = !news || newsAuthority?.mode === 'legacy';
+    document.getElementById('owner-news-authority-status').textContent = !newsAuthority ? 'Validando a autoridade editorial…'
+      : newsAuthority.mode.startsWith('payload') ? 'Owner News migrou para o Payload. O histórico anterior está disponível somente para leitura.'
+        : 'Owner News está congelada. O histórico está disponível somente para leitura.';
+  }
   const home = news && newsSection !== 'articles';
   if (newsSections) {
     newsSections.hidden = !news;
-    newsSections.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.newsSection === newsSection)));
+    newsSections.querySelectorAll('button').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.newsSection === newsSection)); button.disabled = newsReadOnly() && button.dataset.newsSection !== 'articles'; });
   }
   if (newsSettings) newsSettings.hidden = !home;
   if (editorColumn) editorColumn.hidden = home;
@@ -302,6 +316,7 @@ function syncNewsSections() {
 }
 
 newsSections?.querySelectorAll('button').forEach(button => page.listen(button, 'click', () => {
+  if (newsReadOnly()) return;
   const next = button.dataset.newsSection;
   if (next === newsSection || selectedType !== 'announcement' || !newsSettings) return;
   if (mutationBusy() || creatingDocument || saveInFlight) { showToast('Aguarde a operação do CMS terminar.'); return; }
@@ -358,7 +373,7 @@ function updateInspector() {
   selectedTypeNode.textContent = doc ? TYPE_LABELS[doc.content_type] || doc.content_type : '—';
   categoryNode.textContent = doc?.category || '—';
   publishedNode.textContent = doc?.published_at ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(doc.published_at)) : '—';
-  const active = !!doc && !editorInteractionBusy();
+  const active = !!doc && !editorInteractionBusy() && !newsReadOnly();
   const savePending = editorSavePending();
   const saveInProgress = saving || saveInFlight;
   saveDraftButton.disabled = !active || saving;
@@ -510,7 +525,10 @@ async function loadDocuments() {
   showState(documentList, 'Carregando documentos…');
   clear(documentPagination);
   try {
-    const result = await fetchAPIPage(`/api/cms/documents?type=${encodeURIComponent(type)}&limit=${DOCUMENT_PAGE_SIZE}&offset=${requestOffset}`);
+    const [result] = await Promise.all([
+      fetchAPIPage(`/api/cms/documents?type=${encodeURIComponent(type)}&limit=${DOCUMENT_PAGE_SIZE}&offset=${requestOffset}`),
+      type === 'announcement' ? refreshNewsAuthority() : null,
+    ]);
     if (requestToken !== documentsRequestToken || selectionRequestToken !== selectionToken
       || type !== selectedType || requestOffset !== documentOffset) return false;
     documentsByType.set(type, result.data || []);
@@ -585,14 +603,21 @@ async function loadDocument(id) {
     if (!page.active || requestToken !== selectionToken || selectedDocument !== id
       || requestAssetUploadVersion !== assetUploadVersion || assetUploading > 0) return false;
     documentView = view;
+    if (view.document.content_type === 'announcement') await refreshNewsAuthority();
+    if (!page.active || requestToken !== selectionToken || selectedDocument !== id) return false;
     syncListedDocument(view.document);
     const working = view.draft || view.schedule?.revision || view.published;
     const blocks = working?.blocks || [];
-    mountEditorial(working?.editorial ?? null);
-    if (!renderEditor(blocks, requestAssetUploadVersion)) return false;
+    if (newsReadOnly()) {
+      showState(editorRoot, 'Este link pertence ao CMS anterior. Documento somente leitura; continue a edição no Payload.');
+      renderPreview(blocks, 'Histórico anterior sem blocos.');
+    } else {
+      mountEditorial(working?.editorial ?? null);
+      if (!renderEditor(blocks, requestAssetUploadVersion)) return false;
+    }
     updateInspector();
     renderDocumentList();
-    setSaveState('Salvo');
+    setSaveState(newsReadOnly() ? 'Histórico somente leitura' : 'Salvo');
     loadRevisionHistory(id);
     setError('');
     return true;
@@ -617,6 +642,7 @@ async function loadDocument(id) {
 }
 
 async function saveDraft() {
+  if (newsReadOnly()) return false;
   if (creatingDocument || assetUploading > 0 || !documentView || !editor) return null;
   clearTimeout(saveTimer);
   saveTimer = null;
@@ -697,6 +723,7 @@ async function saveBeforeAction() {
 }
 
 async function publishDocument() {
+  if (newsReadOnly()) return;
   if (!documentView || editorInteractionBusy() || saving || saveInFlight) return;
   if (!validPublication()) return;
   const requestToken = selectionToken;
@@ -730,6 +757,7 @@ async function publishDocument() {
 }
 
 async function unpublishDocument() {
+  if (newsReadOnly()) return;
   if (!documentView?.document?.published_revision_id || mutationBusy() || creatingDocument || editorSavePending()) return;
   clearTimeout(saveTimer);
   saveTimer = null;
@@ -757,6 +785,7 @@ async function unpublishDocument() {
 }
 
 async function scheduleDocument(event) {
+  if (newsReadOnly()) { event.preventDefault(); return; }
   event.preventDefault();
   if (!documentView || editorInteractionBusy() || saving || saveInFlight) return;
   if (!validPublication()) return;
@@ -797,6 +826,7 @@ async function scheduleDocument(event) {
 }
 
 async function unscheduleDocument() {
+  if (newsReadOnly()) return;
   if (!documentView?.document?.scheduled_revision_id || mutationBusy() || creatingDocument || editorSavePending()) return;
   clearTimeout(saveTimer);
   saveTimer = null;
@@ -828,6 +858,7 @@ async function unscheduleDocument() {
 }
 
 newDocumentButton.addEventListener('click', async () => {
+  if (newsReadOnly()) return;
   if (navigationBusy() || editorInteractionBusy()) return;
   newDocumentForm.hidden = false;
   newDocumentDirty = false;
@@ -849,6 +880,7 @@ document.getElementById('cancel-new-document').addEventListener('click', () => {
 });
 newDocumentForm.addEventListener('submit', async event => {
   event.preventDefault();
+  if (newsReadOnly()) return;
   if (mutationBusy() || editorInteractionBusy()) return;
   if (editorSavePending()) {
     setError('Salve as alterações do editor antes de criar um documento.');
