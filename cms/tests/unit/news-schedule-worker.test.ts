@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import test, { type TestContext } from 'node:test'
 import type { Payload, PayloadRequest } from 'payload'
 import { APIError } from 'payload'
@@ -38,7 +40,7 @@ function fixture(t: TestContext, overrides: Record<string, unknown> = {}) {
     PORTAL_INTERNAL_URL: 'https://portal-internal.invalid',
     PAYLOAD_TO_PORTAL_SECRET: 'synthetic-payload-to-portal-not-production-32chars',
     PORTAL_TO_PAYLOAD_SECRET: 'synthetic-portal-to-payload-not-production-32chars',
-    CMS_UPLOAD_DIR: 'C:\\synthetic-private-media',
+    CMS_UPLOAD_DIR: path.join(tmpdir(), 'synthetic-private-media'),
   }
   for (const [key, value] of Object.entries(env)) {
     const previous = process.env[key]
