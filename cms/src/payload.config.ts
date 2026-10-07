@@ -20,6 +20,7 @@ import { LegacyNewsRevisions } from './collections/LegacyNewsRevisions'
 import { NewsMigrationRuns } from './collections/NewsMigrationRuns'
 import { NewsMigrationItems } from './collections/NewsMigrationItems'
 import { portalPollEndpoints } from './endpoints/portal-polls'
+import { scopePayloadLockAccess } from './auth/native-admin-access'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
@@ -38,7 +39,7 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
       afterNavLinks: ['/admin/PortalNavigation#PortalNavigation'],
       logout: { Button: '/admin/PortalLogout#PortalLogout' },
       providers: ['/admin/SessionWatch#SessionWatch'],
-      views: { polls: { Component: '/admin/PollsView#PollsView', path: '/polls', exact: true } },
+      views: { dashboard: { Component: '/admin/AdminHome#AdminHome' }, polls: { Component: '/admin/PollsView#PollsView', path: '/polls', exact: true } },
     },
     importMap: {
       baseDir: dirname,
@@ -73,6 +74,7 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   telemetry: false,
   upload: { limits: { fileSize: 50 * 1024 * 1024 }, abortOnLimit: true, useTempFiles: false },
+  onInit: payload => scopePayloadLockAccess(payload),
   // No Payload image transformer: even unadjusted WebP is re-encoded when sharp is
   // configured. The media validator uses sharp directly and stores ORIGINAL bytes.
 })

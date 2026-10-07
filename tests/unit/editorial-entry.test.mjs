@@ -15,16 +15,20 @@ function harness({ ready = Promise.resolve() } = {}) {
     createElement: () => ({ children: [], listeners: {}, setAttribute() {}, append(...nodes) { this.children.push(...nodes); }, addEventListener(type, fn) { this.listeners[type] = fn; } }) });
   window.location = { href: 'https://portal.test/cms.html', replace: url => redirects.push(url) };
   const auth = { currentUser: { uid: 'a' }, authStateReady: () => ready };
-  const h = { now: Date.now(), response: () => Response.json({ uid: 'a', expiresAt: new Date(h.now + 7200000).toISOString() }),
+  const adminActor = { version: 2, uid: 'a', email: 'a@example.test', name: null,
+    capabilities: { manageKnowledge: false, manageAcademy: true, manageBenefits: false, manageReminders: false } };
+  const h = { now: Date.now(), response: (url, options = {}) => options.method === 'DELETE' ? new Response(null, { status: 204 })
+    : String(url) === '/api/cms/v2/session' ? Response.json({ actor: adminActor, expiresAt: new Date(h.now + 7200000).toISOString() })
+      : Response.json({ uid: 'a', expiresAt: new Date(h.now + 7200000).toISOString() }),
     change(uid) { auth.currentUser = uid ? { uid } : null; callbacks.forEach(fn => fn()); }, callbacks, states, timers, requests, redirects, signs, document, window, main, auth };
   const context = vm.createContext({ auth, document, window, URL, URLSearchParams, AbortController, DOMException,
     Date: class extends Date { static now() { return h.now; } },
     onAuthStateChanged: (_, fn) => { callbacks.add(fn); return () => callbacks.delete(fn); },
-    fetch: (...args) => { requests.push(args); return Promise.resolve().then(() => h.response(...args)); },
+     fetch: (...args) => { requests.push(args); return Promise.resolve().then(() => h.response(...args)); },
     setTimeout: (fn, ms) => { const id = timers.size + 1; timers.set(id, { fn, ms }); return id; }, clearTimeout: id => timers.delete(id),
     sessionStorage: { getItem() { return null; }, removeItem() {} }, signOut: async () => { signs.push(auth.currentUser?.uid); h.change(null); } });
   vm.runInContext(`${strip(source)}\nglobalThis.watch = watchEditorialSession;`, context);
-  h.start = () => context.watch({ onState: state => states.push(state) });
+  h.start = (version = 1) => context.watch({ version, onState: state => states.push(state) });
   h.loadAuth = () => { vm.runInContext(`${strip(authSource)}\nglobalThis.logout = logout;`, context); return context.logout; };
   return h;
 }
@@ -137,4 +141,19 @@ test('BFCache lifecycle hides before suspension, ignores late validation and rev
   assert.equal(h.requests.length, count + 1); assert.equal(h.states.at(-1).status, 'denied');
   watch.stop(); const stoppedCount = h.requests.length;
   h.window.dispatchEvent(restored); await drain(); assert.equal(h.requests.length, stoppedCount); assert.equal(h.timers.size, 0);
+});
+
+test('generic admin watcher resolves the v2 actor while legacy watcher keeps its v1 endpoint', async () => {
+  const generic = harness(), watch = generic.start(2); await drain();
+  assert.equal(generic.requests[0][0], '/api/cms/v2/session');
+  assert.equal(generic.states.at(-1).status, 'ready', JSON.stringify(generic.states.at(-1)));
+  generic.response = () => Response.json({ uid: 'a', expiresAt: new Date(generic.now + 7200000).toISOString() });
+  await watch.revalidate();
+  assert.equal(generic.states.at(-1).status, 'error', 'a v1-shaped response cannot make a v2 session ready');
+  watch.stop();
+
+  const legacy = harness(), legacyWatch = legacy.start(); await drain();
+  assert.equal(legacy.requests[0][0], '/api/cms/session');
+  assert.equal(legacy.states.at(-1).status, 'ready');
+  legacyWatch.stop();
 });

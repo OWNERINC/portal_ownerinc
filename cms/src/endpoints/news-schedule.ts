@@ -1,5 +1,5 @@
 import { APIError, type Endpoint, type PayloadRequest } from 'payload'
-import { canManageNews } from '../auth/access'
+import { canManageNews, canWriteNews } from '../auth/access'
 import { canReadNewsArea, type NewsAreaReadGate } from '../auth/news-area-access'
 import { PortalAuthError } from '../auth/portal-client'
 import { currentDocument, latestRevision, snapshotDocument, snapshotHash } from '../publication/document'
@@ -38,12 +38,12 @@ export function createNewsScheduleEndpoints(readNewsArea: NewsAreaReadGate = can
     const input = await req.json?.()
     if (!input || typeof input !== 'object') throw new APIError('invalid_schedule', 400, undefined, true)
     return scheduleRevision(req, input as ScheduleInput)
-  }) },
+  }, () => canWriteNews({ req: req as PayloadRequest })) },
   { path: '/news-schedule', method: 'delete', handler: req => handle(req, async () => {
     const input = await req.json?.()
     if (!input || typeof input !== 'object') throw new APIError('invalid_schedule', 400, undefined, true)
     return cancelSchedule(req, input as { id: string; expectedGeneration: number })
-  }) },
+  }, () => canWriteNews({ req: req as PayloadRequest })) },
   ]
 }
 export const newsScheduleEndpoints = createNewsScheduleEndpoints()

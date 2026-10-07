@@ -1,7 +1,7 @@
 import type { CollectionConfig } from 'payload'
 import type { CmsEnvironment } from '../config/environment'
 import { mediaMimes } from '../news/primitives'
-import { canManageNews } from '../auth/access'
+import { canWriteNews } from '../auth/access'
 import { canReadNewsArea, type NewsAreaReadGate } from '../auth/news-area-access'
 import { persistMediaIdentity, protectMediaDelete, protectMediaOperation } from '../media/lifecycle'
 import { openNativeNewsMedia } from '../media/read-file'
@@ -17,7 +17,7 @@ export function createNewsMedia(environment: Pick<CmsEnvironment, 'uploadDir'>, 
     admin: { useAsTitle: 'filename', description: 'Arquivos imutáveis. Para substituir ou recortar, envie um novo arquivo e altere a referência na publicação.' },
     disableDuplicate: true,
     disableBulkDelete: true,
-    access: { create: canManageNews, read: ({ req }) => readNewsArea(req), update: deny, delete: canManageNews },
+    access: { create: canWriteNews, read: ({ req }) => readNewsArea(req), update: deny, delete: canWriteNews },
     hooks: { beforeOperation: [protectMediaOperation], beforeChange: [persistMediaIdentity], beforeDelete: [protectMediaDelete] },
     upload: {
       staticDir: environment.uploadDir, mimeTypes: mediaMimes, crop: false, focalPoint: false, pasteURL: false,

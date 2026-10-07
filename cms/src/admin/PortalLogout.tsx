@@ -12,7 +12,7 @@ export function PortalLogoutView() {
     try {
       const response = await fetch('/api/cms/session', { method: 'DELETE', credentials: 'same-origin', cache: 'no-store' })
       if (!response.ok) throw new Error('revoke')
-      window.location.replace('/editorial-entry.html')
+       window.location.replace('/cms.html')
     } catch { setMessage('Não foi possível confirmar o encerramento. O conteúdo foi ocultado. Tente novamente.') }
     finally { setBusy(false) }
   }

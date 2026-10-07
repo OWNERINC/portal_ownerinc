@@ -15,6 +15,19 @@ const REVISION_STATUS_LABELS = new Map([
   ['scheduled', 'Agendado'],
   ['archived', 'Arquivado'],
 ]);
+const ADMIN_CAPABILITY_KEYS = ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders'];
+function validAdminEntrySession(value, uid) {
+  const actor = value?.actor;
+  if (!actor || typeof actor !== 'object' || Array.isArray(actor) || actor.version !== 2 || actor.uid !== uid ||
+    typeof actor.email !== 'string' || !actor.email || actor.email.length > 320 ||
+    !(actor.name === null || typeof actor.name === 'string') || !actor.capabilities || typeof actor.capabilities !== 'object' || Array.isArray(actor.capabilities)) return false;
+  if (Object.keys(actor).sort().join('|') !== ['capabilities', 'email', 'name', 'uid', 'version'].join('|') ||
+    Object.keys(actor.capabilities).sort().join('|') !== [...ADMIN_CAPABILITY_KEYS].sort().join('|') ||
+    ADMIN_CAPABILITY_KEYS.some(key => typeof actor.capabilities[key] !== 'boolean') ||
+    !ADMIN_CAPABILITY_KEYS.some(key => actor.capabilities[key] === true)) return false;
+  const expiry = Date.parse(value.expiresAt);
+  return Number.isFinite(expiry) && expiry > Date.now() && new Date(expiry).toISOString() === value.expiresAt;
+}
 
 const requests = { fetchAPI, fetchAPIPage };
 const renderContent = renderBlocks;
@@ -74,6 +87,63 @@ const editorialRoot = document.getElementById('cms-editorial-fields');
 const newsSections = document.getElementById('owner-news-sections');
 const newsSettings = document.getElementById('owner-news-settings');
 const editorColumn = document.querySelector('.cms-editor-column');
+const nativeAdminEntry = document.getElementById('native-admin-entry');
+const nativeAdminEntryStatus = document.getElementById('native-admin-entry-status');
+const nativeAdminEntryButton = document.getElementById('native-admin-entry-button');
+let nativeAdminEntryBusy = false;
+const adminEntryAllowed = value => value?.version === 2 && value.adminEntryAllowed === true &&
+  value.runtimeAvailable === true && value.canEnterAdmin === true;
+function updateNativeAdminEntry(availability) {
+  if (!nativeAdminEntry || !nativeAdminEntryStatus || !nativeAdminEntryButton || !TYPES.length) return;
+  nativeAdminEntry.hidden = false;
+  nativeAdminEntryButton.hidden = !adminEntryAllowed(availability);
+  nativeAdminEntryStatus.textContent = adminEntryAllowed(availability)
+    ? 'A sessão do Portal pode abrir o painel administrativo nativo.'
+    : availability?.runtimeAvailable === false
+      ? 'O painel nativo não respondeu à verificação. As áreas disponíveis continuam na central editorial.'
+      : 'A entrada no painel nativo não foi confirmada para esta sessão. As áreas disponíveis continuam na central editorial.';
+}
+async function refreshNativeAdminAvailability() {
+  if (!nativeAdminEntry || !TYPES.length || !page.active) return;
+  nativeAdminEntry.hidden = false;
+  nativeAdminEntryButton.hidden = true;
+  nativeAdminEntryStatus.textContent = 'Confirmando a disponibilidade do painel administrativo…';
+  try {
+    const availability = await fetchAPI('/api/cms/v2/session/availability');
+    if (page.active) updateNativeAdminEntry(availability);
+  } catch {
+    if (page.active) {
+      nativeAdminEntryButton.hidden = true;
+      nativeAdminEntryStatus.textContent = 'Não foi possível confirmar a disponibilidade do painel nativo. As áreas disponíveis continuam na central editorial.';
+    }
+  }
+}
+async function openNativeAdmin() {
+  if (!nativeAdminEntryButton || nativeAdminEntryButton.hidden || nativeAdminEntryBusy || !page.active) return;
+  nativeAdminEntryBusy = true;
+  nativeAdminEntryButton.disabled = true;
+  nativeAdminEntryStatus.textContent = 'Confirmando a sessão do Portal…';
+  try {
+    const availability = await fetchAPI('/api/cms/v2/session/availability');
+    if (!page.active) return;
+    if (!adminEntryAllowed(availability)) {
+      updateNativeAdminEntry(availability);
+      return;
+    }
+    const result = await fetchAPI('/api/cms/v2/session', { method: 'POST', body: '{}' });
+    if (!page.active) return;
+    if (!validAdminEntrySession(result, user.uid)) throw new Error('invalid admin session response');
+    window.location.assign('/editorial/admin');
+  } catch {
+    if (page.active) {
+      nativeAdminEntryButton.hidden = true;
+      nativeAdminEntryStatus.textContent = 'A sessão administrativa não foi confirmada. Volte a verificar antes de abrir o painel.';
+    }
+  } finally {
+    nativeAdminEntryBusy = false;
+    if (page.active) nativeAdminEntryButton.disabled = false;
+  }
+}
 let editorialFields = null;
 let previewCleanup = null;
 let newsSection = 'articles';
@@ -998,8 +1068,10 @@ publishButton.addEventListener('click', publishDocument);
 unpublishButton.addEventListener('click', unpublishDocument);
 scheduleForm.addEventListener('submit', scheduleDocument);
 unscheduleButton.addEventListener('click', unscheduleDocument);
+if (nativeAdminEntryButton) page.listen(nativeAdminEntryButton, 'click', () => { void openNativeAdmin(); });
 
 resetSelection();
+void refreshNativeAdminAvailability();
   if (!TYPES.length || !requestedTypeAllowed) {
   newDocumentButton.disabled = true;
     setError(!requestedTypeAllowed ? 'O tipo de documento solicitado não é permitido para este editor.' : 'Você não possui permissão para editar nenhuma área do CMS.');
