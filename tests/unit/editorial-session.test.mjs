@@ -14,7 +14,7 @@ const { createEditorialSessionRouter } = require('../../api/routes/editorial-ses
 const { createEditorialInternalRouter } = require('../../api/routes/editorial-internal.js');
 const { safeResponses } = require('../../api/middleware/security.js');
 const origin = 'https://portal.example.test';
-const env = { PORTAL_PUBLIC_URL: origin, PAYLOAD_TO_PORTAL_SECRET: 'fixture-portal-bridge-secret-'.repeat(2) };
+const env = { PORTAL_PUBLIC_URL: origin, CMS_INTERNAL_URL: 'https://cms.example.test', PAYLOAD_TO_PORTAL_SECRET: 'fixture-portal-bridge-secret-'.repeat(2) };
 const now = new Date('2026-10-02T12:00:00.000Z');
 const profile = (uid = 'editor-a', changes = {}) => ({ uid, email: `${uid}@example.test`, name: 'Editor',
   role: 'admin', permissions: { manageKnowledge: true }, firebase_enable_pending: false, ...changes });
@@ -23,7 +23,8 @@ function fixture() {
   const users = new Map([['editor-a', profile()], ['editor-b', profile('editor-b')]]);
   const sessions = new Map();
   const calls = [];
-  const state = { users, sessions, calls, dbError: false, firebaseError: null, nextCookie: 0, unverified: false };
+  const state = { users, sessions, calls, dbError: false, firebaseError: null, nextCookie: 0, unverified: false,
+    authorityMode: 'payload', runtimeReady: true, readinessRequests: [] };
   state.db = { async query(sql, values = []) {
     calls.push({ sql, values });
     if (state.dbError) throw new Error('private db details');
@@ -49,7 +50,7 @@ function fixture() {
     }
     if (sql.includes('FROM users u')) return { rows: users.has(values[0]) ? [users.get(values[0])] : [] };
     if (sql.includes('pending_registrations')) return { rows: state.pending ? [{ status: 'pending' }] : [] };
-    if (sql.includes('owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes('owner_news_authority')) return { rows: [{ mode: state.authorityMode, epoch: 1 }] };
     throw new Error(`Unexpected SQL: ${sql}`);
   } };
   state.db.connect = async () => {
@@ -88,7 +89,7 @@ function fixture() {
   };
   return state;
 }
-async function httpFixture(settings = env) {
+async function httpFixture(settings = env, { fetchImpl, readinessTimeoutMs } = {}) {
   const state = fixture();
   // Execute the real Bearer middleware; only Firebase initialization and pg are doubled.
   const filename = new URL('../../api/middleware/auth.js', import.meta.url);
@@ -102,7 +103,12 @@ async function httpFixture(settings = env) {
   }, module, module.exports);
   const app = express();
   app.use(safeResponses);
-  app.use('/api/cms/session', createEditorialSessionRouter({ ...state, ...module.exports, env: settings }));
+  app.use('/api/cms/session', createEditorialSessionRouter({ ...state, ...module.exports, env: settings,
+    fetchImpl: fetchImpl || (async (url, options) => {
+      state.readinessRequests.push({ url, options });
+      if (!state.runtimeReady) return Response.json({ status: 'unavailable' }, { status: 503 });
+      return Response.json({ status: 'ready' });
+    }), readinessTimeoutMs }));
   app.use('/api/internal/editorial', createEditorialInternalRouter({ ...state, env: settings }));
   app.get('/api/legacy', module.exports.authMiddleware, (req, res) => res.json({ uid: req.user.uid }));
   state.request = request(app);
@@ -200,6 +206,85 @@ test('HTTP issuance/read/rotation/logout keep account isolation and never return
     assert.match(logout.headers['set-cookie'][0], /Expires=Thu, 01 Jan 1970/);
   }
   assert.equal((await state.request.get('/api/cms/session').set('Cookie', cookieB)).status, 401);
+});
+
+test('availability is Portal-authenticated and reports source activation separately from Payload runtime readiness', async () => {
+  const state = await httpFixture();
+  assert.equal((await state.request.get('/api/cms/session/availability')).status, 401);
+  const availability = () => state.request.get('/api/cms/session/availability').set('Authorization', 'Bearer editor-a');
+  const active = await availability();
+  assert.equal(active.status, 200);
+  assert.deepEqual(active.body, { mode: 'payload', epoch: 1, activated: true, runtimeReady: true, canEnter: true });
+  assert.equal(active.headers['cache-control'], 'no-store');
+  assert.equal(state.readinessRequests.at(-1).url, 'https://cms.example.test/editorial/ready');
+  assert.equal(state.readinessRequests.at(-1).options.redirect, 'error');
+
+  state.runtimeReady = false;
+  const runtimeDown = await availability();
+  assert.equal(runtimeDown.status, 200);
+  assert.deepEqual(runtimeDown.body, { mode: 'payload', epoch: 1, activated: true, runtimeReady: false, canEnter: false });
+
+  state.authorityMode = 'legacy';
+  const notActivated = await availability();
+  assert.deepEqual(notActivated.body, { mode: 'legacy', epoch: 1, activated: false, runtimeReady: false, canEnter: false });
+
+  state.users.get('editor-a').permissions = {};
+  const denied = await state.request.get('/api/cms/session/availability').set('Authorization', 'Bearer editor-a');
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.reason, 'editorial_permission_denied');
+});
+
+test('readiness probe is fixed-route, response-size bounded and timeout bounded', async () => {
+  let unexpectedCalls = 0;
+  const invalidTarget = await httpFixture({ ...env, CMS_INTERNAL_URL: 'https://cms.example.test/other/path' }, {
+    fetchImpl: async () => { unexpectedCalls += 1; return Response.json({ status: 'ready' }); },
+  });
+  const unavailable = await invalidTarget.request.get('/api/cms/session/availability').set('Authorization', 'Bearer editor-a');
+  assert.equal(unavailable.body.runtimeReady, false);
+  assert.equal(unexpectedCalls, 0, 'the configured service base must be an origin, not an arbitrary route');
+
+  const timed = await httpFixture(env, { readinessTimeoutMs: 100, fetchImpl: (_url, { signal }) => new Promise((resolve, reject) => {
+    if (signal.aborted) reject(new Error('aborted'));
+    else signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }) });
+  const started = Date.now();
+  const timeoutResponse = await timed.request.get('/api/cms/session/availability').set('Authorization', 'Bearer editor-a');
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(timeoutResponse.body.runtimeReady, false);
+
+  const slowAuthority = await httpFixture(env, { readinessTimeoutMs: 10 });
+  const query = slowAuthority.db.query;
+  slowAuthority.db.query = (sql, values) => sql.includes('owner_news_authority') ? new Promise(() => {}) : query(sql, values);
+  const authorityStarted = Date.now();
+  const authorityTimeout = await slowAuthority.request.get('/api/cms/session/availability').set('Authorization', 'Bearer editor-a');
+  assert.ok(Date.now() - authorityStarted < 1000);
+  assert.equal(authorityTimeout.status, 503);
+  assert.equal(authorityTimeout.body.reason, 'editorial_unavailable');
+
+  const oversized = await httpFixture(env, { fetchImpl: async () => new Response(' '.repeat(257), { headers: { 'Content-Type': 'application/json' } }) });
+  const oversizedResponse = await oversized.request.get('/api/cms/session/availability').set('Authorization', 'Bearer editor-a');
+  assert.equal(oversizedResponse.body.runtimeReady, false);
+});
+
+test('session issuance rechecks activation and runtime before creating an editorial cookie', async () => {
+  const state = await httpFixture();
+  state.authorityMode = 'legacy';
+  const notActivated = await state.login();
+  assert.equal(notActivated.status, 409);
+  assert.equal(notActivated.body.reason, 'editorial_not_activated');
+  assert.equal(notActivated.headers['set-cookie'], undefined);
+  assert.equal(state.sessions.size, 0);
+
+  state.authorityMode = 'payload';
+  state.runtimeReady = false;
+  const unavailable = await state.login();
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.body.reason, 'editorial_unavailable');
+  assert.equal(unavailable.headers['set-cookie'], undefined);
+  assert.equal(state.sessions.size, 0);
+
+  state.runtimeReady = true;
+  assert.equal((await state.login()).status, 201);
 });
 
 for (const [label, overrides, unverified, expected] of [
@@ -371,6 +456,7 @@ test('HTTP private endpoints require a dedicated service secret, return exact co
   assert.equal((await state.internal('/actor/check').send({ uid: 'editor-a', actor: { canManageNews: true } })).status, 400);
   assert.equal((await state.internal('/session/resolve').send({ cookie: 'x'.repeat(16384) })).status, 413);
   assert.equal((await state.request.get('/api/internal/editorial/authority')).status, 401);
+  state.authorityMode = 'legacy';
   const authority = await state.request.get('/api/internal/editorial/authority').set('Authorization', `Bearer ${env.PAYLOAD_TO_PORTAL_SECRET}`);
   assert.deepEqual(authority.body, { mode: 'legacy', epoch: 1 });
   assert.equal((await state.internal('/session/revoke').send({ cookie })).status, 204);
@@ -397,7 +483,13 @@ test('job actor check verifies Firebase current identity, email, disabled and cu
 test('optional CMS configuration is checked at the bridge boundary and legacy Bearer auth still works', async () => {
   const state = await httpFixture({});
   assert.equal((await state.request.get('/api/legacy').set('Authorization', 'Bearer editor-a')).status, 200);
+  state.authorityMode = 'legacy';
+  const availability = await state.request.get('/api/cms/session/availability').set('Authorization', 'Bearer editor-a');
+  assert.equal(availability.status, 200, 'legacy authority availability does not require optional Payload bridge or cookie config');
+  assert.deepEqual(availability.body, { mode: 'legacy', epoch: 1, activated: false, runtimeReady: false, canEnter: false });
+  assert.equal(state.readinessRequests.length, 0, 'missing CMS_INTERNAL_URL fails closed without a network request');
   assert.equal((await state.request.get('/api/cms/session')).status, 503);
+  assert.equal((await state.login()).status, 503, 'session issuance still requires its bridge configuration');
   assert.equal((await state.internal('/actor/check').send({ uid: 'editor-a' })).status, 503);
 });
 

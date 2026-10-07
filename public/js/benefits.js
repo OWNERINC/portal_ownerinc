@@ -64,13 +64,13 @@ async function loadBenefits() {
       clear(pagination);
       return showState(container, 'Nenhum benefício disponível no momento.');
     }
-    const categories = benefits.reduce((map, benefit) => {
+    const benefitsByCategory = benefits.reduce((map, benefit) => {
       const category = benefit.category || 'Geral';
       map.set(category, [...(map.get(category) || []), benefit]);
       return map;
     }, new Map());
     clear(container);
-    categories.forEach((items, category) => {
+    benefitsByCategory.forEach((items, category) => {
       const section = element('section', { className: 'content-section' }, [element('h2', { text: category })]);
       const grid = element('div', { className: 'card-grid' });
       items.forEach(benefit => {

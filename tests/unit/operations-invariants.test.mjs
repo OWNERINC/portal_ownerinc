@@ -6,6 +6,18 @@ import test from 'node:test';
 
 const read = (file) => readFile(new URL(`../../${file}`, import.meta.url), 'utf8');
 
+function nginxLocationBlock(source, declaration) {
+  const start = source.indexOf(declaration);
+  const opening = source.indexOf('{', start);
+  if (start < 0 || opening < 0) return null;
+  let depth = 0;
+  for (let index = opening; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}' && --depth === 0) return source.slice(opening + 1, index);
+  }
+  return null;
+}
+
 test('compose limits exposure and waits for API readiness', async () => {
   const compose = await read('docker-compose.yml');
   assert.match(compose, /127\.0\.0\.1.*HTTP_PORT/);
@@ -187,10 +199,19 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location \^~ \/api\/media\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads/);
   assert.match(nginx, /location = \/api\/pos-cards\/media[\s\S]*client_max_body_size 3m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/pos-cards\/media\/[\s\S]*limit_req zone=media_reads/);
-  const cmsAssets = nginx.indexOf('location = /api/cms/assets');
-  const cmsAssetReads = nginx.indexOf('location ^~ /api/cms/assets/');
-  const genericApi = nginx.indexOf('location /api/');
-  assert.ok(cmsAssets >= 0 && cmsAssetReads > cmsAssets && cmsAssetReads < genericApi);
+  const cmsAssetUploadBlock = nginxLocationBlock(nginx, 'location = /api/cms/assets {');
+  const cmsAssetReadBlock = nginxLocationBlock(nginx, 'location ^~ /api/cms/assets/ {');
+  const genericApiBlock = nginxLocationBlock(nginx, 'location ^~ /api/ {');
+  const genericApiPrefix = '/api/';
+  const cmsAssetPrefix = '/api/cms/assets/';
+  assert.ok(cmsAssetUploadBlock && cmsAssetReadBlock && genericApiBlock,
+    'CMS uploads, CMS asset reads, and generic API proxy locations must be distinct');
+  assert.ok(cmsAssetPrefix.startsWith(genericApiPrefix) && cmsAssetPrefix.length > genericApiPrefix.length,
+    'longest-prefix selection must choose the more specific CMS asset read location');
+  assert.match(cmsAssetUploadBlock, /client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads/);
+  assert.match(cmsAssetReadBlock, /client_max_body_size 100k;[\s\S]*limit_req zone=media_reads/);
+  assert.doesNotMatch(genericApiBlock, /client_max_body_size\s+101m|proxy_request_buffering\s+off|limit_req\s+zone=uploads/,
+    'large streaming upload allowances must remain isolated from the generic API location');
   assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/users\/bulk[\s\S]*client_max_body_size 1m;[\s\S]*proxy_pass \$api_upstream/);
@@ -217,10 +238,11 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /resolver 127\.0\.0\.11 valid=30s/);
   assert.match(nginx, /set \$api_upstream http:\/\/api:3000/);
   assert.match(nginx, /proxy_pass \$api_upstream/);
-  const jsCssLocation = nginx.match(/location ~\* \\\.\(css\|js\)\$ \{([^}]*)\}/);
-  assert.ok(jsCssLocation, 'JS/CSS location must exist');
-  assert.match(jsCssLocation[1], /\bexpires\s+-1\s*;/);
-  assert.doesNotMatch(jsCssLocation[1], /\badd_header\b/, 'JS/CSS must inherit server security headers');
+  const jsCssLocation = nginxLocationBlock(nginx, 'location ~* \\.(css|js|mjs)$ {');
+  assert.ok(jsCssLocation, 'JS/MJS/CSS location must exist');
+  assert.match(jsCssLocation, /\bexpires\s+-1\s*;/);
+  assert.match(jsCssLocation, /\bdefault_type\s+application\/javascript\s*;/);
+  assert.doesNotMatch(jsCssLocation, /\badd_header\b/, 'JS/MJS/CSS must inherit server security headers');
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
 });
 

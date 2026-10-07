@@ -21,6 +21,18 @@ const permissions = await readFile('api/cms/permissions.js', 'utf8');
 const blocks = await readFile('api/cms/blocks.js', 'utf8');
 const knowledge = await readFile('api/routes/knowledge.js', 'utf8');
 
+function nginxLocationBlock(source, declaration) {
+  const start = source.indexOf(declaration);
+  const opening = source.indexOf('{', start);
+  if (start < 0 || opening < 0) return null;
+  let depth = 0;
+  for (let index = opening; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}' && --depth === 0) return source.slice(opening + 1, index);
+  }
+  return null;
+}
+
 function deferred() {
   let resolve;
   const promise = new Promise((done) => { resolve = done; });
@@ -618,9 +630,16 @@ test('CMS list totals count all matching documents and Nginx scopes the large up
   const cmsLocation = nginx.indexOf('location = /api/cms/assets');
   const cmsUploadLocation = nginx.indexOf('location = /api/cms/assets/');
   const cmsReadLocation = nginx.indexOf('location ^~ /api/cms/assets/');
-  const genericApi = nginx.indexOf('location /api/');
-  assert.ok(cmsLocation >= 0 && cmsUploadLocation > cmsLocation
-    && cmsReadLocation > cmsUploadLocation && cmsReadLocation < genericApi);
+  const apiPrefix = '/api/';
+  const cmsAssetsPrefix = '/api/cms/assets/';
+  const genericApiLocation = nginxLocationBlock(nginx, 'location ^~ /api/ {');
+  const cmsReadBlock = nginxLocationBlock(nginx, 'location ^~ /api/cms/assets/ {');
+  assert.ok(cmsLocation >= 0 && cmsUploadLocation >= 0 && cmsReadLocation >= 0);
+  assert.ok(cmsAssetsPrefix.startsWith(apiPrefix) && cmsAssetsPrefix.length > apiPrefix.length,
+    'the CMS asset prefix must be more specific than the generic API prefix');
+  assert.ok(genericApiLocation && cmsReadBlock, 'both API prefixes must opt out of extension-regex shadowing');
+  assert.doesNotMatch(genericApiLocation, /client_max_body_size\s+101m|proxy_request_buffering\s+off|limit_req\s+zone=uploads/,
+    'large streaming upload allowances must not leak into the generic API location');
   assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location = \/api\/cms\/assets\/[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);

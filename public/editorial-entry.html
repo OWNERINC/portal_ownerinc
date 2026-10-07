@@ -42,8 +42,9 @@
     <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
       <h1>Owner News</h1>
       <p>Use a mesma conta do Portal para editar no Payload. A sessão editorial dura duas horas e pode ser revogada antes disso.</p>
-      <button id="editorial-enter" class="btn btn-primary" type="button">Abrir no Payload</button>
-      <p id="editorial-entry-status" role="status" aria-live="polite"></p>
+      <button id="editorial-enter" class="btn btn-primary" type="button" disabled hidden>Abrir no Payload</button>
+      <button id="editorial-recheck" class="btn btn-ghost" type="button" hidden>Verificar novamente</button>
+      <p id="editorial-entry-status" role="status" aria-live="polite">Verificando a disponibilidade do painel editorial…</p>
     </main>
   </div>
 </div>

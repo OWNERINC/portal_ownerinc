@@ -240,6 +240,45 @@ test('superseded navigation and transient authentication failure keep the previo
   assert.ok(h.doc.querySelector('.portal-navigation-error').querySelector('button'));
 });
 
+test('route preparation announces loading and failures preserve the old page until the exact retry succeeds', async () => {
+  const h = await createRouterHarness();
+  const main = h.doc.getElementById('main-content');
+  const draft = new Node('input', h.doc, { id: 'unsaved-route-draft', value: 'keep this draft' });
+  main.append(draft);
+  const previous = h.scope;
+  let unavailable = true;
+  h.context.fetchOverride = async url => unavailable
+    ? { ok: false, status: 503, headers: new Map([['content-type', 'text/html']]), text: async () => '' }
+    : { ok: true, headers: new Map([['content-type', 'text/html']]), text: async () => new URL(url).pathname };
+  const destination = '/academy.html?course=onboarding#lesson-two';
+  const pending = h.router.navigate(destination);
+  const loading = h.doc.querySelector('.portal-navigation-loading');
+  assert.ok(loading);
+  assert.equal(loading.getAttribute('role'), 'status');
+  assert.equal(loading.getAttribute('aria-live'), 'polite');
+  assert.equal(loading.textContent, 'Carregando a área solicitada…');
+  assert.equal(main.querySelector('#unsaved-route-draft'), draft);
+  assert.equal(previous.active, true);
+
+  assert.equal(await pending, false);
+  const error = h.doc.querySelector('.portal-navigation-error');
+  assert.equal(error.getAttribute('role'), 'alert');
+  assert.match(error.querySelector('p').textContent, /temporariamente indisponível/);
+  assert.equal(h.location.pathname, '/dashboard.html');
+  assert.equal(main.querySelector('#unsaved-route-draft'), draft);
+  assert.equal(draft.value, 'keep this draft');
+  assert.equal(previous.active, true);
+
+  unavailable = false;
+  error.querySelector('button').click();
+  await drain();
+  await drain();
+  assert.equal(h.requests.at(-1).url, `https://portal.test${destination}`);
+  assert.equal(h.location.pathname, '/academy.html');
+  assert.equal(h.location.search, '?course=onboarding');
+  assert.equal(h.location.hash, '#lesson-two');
+});
+
 test('authorization is server-validated and denied tools never mount, including revoked current areas', async () => {
   const h = await createRouterHarness();
   h.context.user = { uid: 'user-1', role: 'viewer', permissions: {}, autocard_access: false, pos_cards_access: false };
@@ -310,10 +349,11 @@ test('CMS guard blocks in-flight work, confirms only unsaved edits, and disposal
   const context = vm.createContext({
     page: { beforeLeave(fn) { guard = fn; }, cleanup(fn) { dispose = fn; } },
     saving: false, actionBusy: false, creatingDocument: false, assetUploading: 0, saveInFlight: null,
-    dirty: false, newDocumentDirty: false, saveQueued: false, saveTimer: 42,
-    homeEditor: null, editorialFields: null, previewCleanup: null,
-    selectionToken: 0, documentsRequestToken: 0, historyRequestToken: 0, creationRequestToken: 0, editorGeneration: 0,
-    showToast() {}, clearTimeout(id) { cancelled.push(id); },
+     dirty: false, newDocumentDirty: false, saveQueued: false, saveTimer: 42,
+     homeEditor: null, editorialFields: null, previewCleanup: null,
+     selectionToken: 0, documentsRequestToken: 0, historyRequestToken: 0, creationRequestToken: 0, editorGeneration: 0,
+      newsAuthorityRequest: 1,
+     showToast() {}, clearTimeout(id) { cancelled.push(id); },
     window: { confirm() { confirms++; return false; } },
   });
   vm.runInContext(source.slice(source.indexOf('page.beforeLeave('), source.indexOf('function setError(')), context);
@@ -325,10 +365,13 @@ test('CMS guard blocks in-flight work, confirms only unsaved edits, and disposal
   context.dirty = true;
   assert.equal(guard(), false); assert.equal(confirms, 1);
   assert.equal(context.dirty, true, 'a guard never clears the draft');
+  const pendingAuthorityRequest = context.newsAuthorityRequest;
   dispose();
   assert.deepEqual(cancelled, [42]);
   assert.equal(context.saveTimer, null);
   assert.equal(context.selectionToken, 1);
+  assert.equal(context.newsAuthorityRequest, pendingAuthorityRequest + 1,
+    'cleanup invalidates in-flight Owner News authority and availability responses');
 });
 
 test('the CMS renderer aborts assets and revokes late blobs when the page signal ends', async () => {

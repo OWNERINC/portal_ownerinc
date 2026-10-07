@@ -9,7 +9,8 @@ test('Payload authority exposes migration/read-only history without editable leg
   const h = await createMountedHarness('cms', { authority: { mode: 'payload', epoch: 2 } }); t.after(() => h.page.dispose());
   h.latest('/documents?').resolve({ data: [], total: 0 }); await drain();
   button(h.node('content-types'), 'Owner News').click(); h.latest('/documents?').resolve({ data: [doc], total: 1 }); await drain();
-  assert.equal(h.node('owner-news-authority').hidden, false); assert.match(h.node('owner-news-authority').textContent, /migrou|Abrir no Payload/);
+  assert.equal(h.node('owner-news-authority').hidden, false); assert.match(h.node('owner-news-authority').textContent, /usa o Payload/);
+  assert.equal(h.node('owner-news-payload-entry').hidden, true, 'runtime unavailable hides the entry link');
   assert.equal(h.node('new-document').disabled, true);
   h.node('document-list').querySelector('button').click(); h.latest('/documents/news-a').resolve({ document: doc, draft: { blocks: [{ type: 'paragraph', text: 'Histórico anterior.' }] } }); await drain();
   assert.match(h.node('editor-root').textContent, /somente leitura/); assert.match(h.node('preview-root').textContent, /Histórico anterior/);

@@ -5,6 +5,28 @@ const requests = { fetchAPI, fetchAPIPage };
 export function mount(page) {
 const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
 
+function requestErrorMessage(error, fallback) {
+  if (error.status === 401) return 'Sua sessão não está mais válida. Entre novamente para continuar.';
+  if (error.status === 403) return 'Você não possui permissão para consultar estes dados.';
+  if (error.status === 404) return 'A área Sólides está indisponível ou inativa para esta conta. O servidor não informa o motivo.';
+  if (error.status === 503 || error.status >= 500) return 'A integração Sólides está temporariamente indisponível. Tente novamente.';
+  return fallback;
+}
+
+function showCardFailure(container, error, fallback, retry) {
+  container.textContent = requestErrorMessage(error, fallback);
+  const card = container.closest('.card');
+  card?.querySelector('[data-solides-card-retry]')?.remove();
+  if (!card) return;
+  const button = document.createElement('button');
+  button.className = 'btn btn-ghost';
+  button.type = 'button';
+  button.setAttribute('data-solides-card-retry', '');
+  button.textContent = 'Tentar novamente';
+  button.addEventListener('click', retry);
+  card.append(button);
+}
+
 const now = new Date();
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
 const monthStart = `${today.slice(0, 8)}01`;
@@ -28,6 +50,8 @@ function formatMinutes(value) {
 
 async function loadSummary() {
   const todaySummary = document.getElementById('today-summary');
+  todaySummary.closest('.card')?.querySelector('[data-solides-card-retry]')?.remove();
+  todaySummary.textContent = 'Carregando…';
   try {
     const summary = await fetchAPI(`/api/solides/me/summary?date=${today}`);
     const latest = summary.entries.at(-1);
@@ -35,18 +59,20 @@ async function loadSummary() {
       ? `Entrada ${formatDateTime(latest.startAt)} · Saída ${formatDateTime(latest.endAt)}`
       : 'Nenhuma marcação retornada para hoje.';
     document.getElementById('data-freshness').textContent = `Atualizado em ${formatDateTime(summary.dataAsOf)}.`;
-  } catch {
-    todaySummary.textContent = 'Não foi possível consultar o resumo.';
+  } catch (error) {
+    showCardFailure(todaySummary, error, 'Não foi possível consultar o resumo. Verifique sua conexão.', loadSummary);
   }
 }
 
 async function loadBalance() {
   const balance = document.getElementById('hours-balance');
+  balance.closest('.card')?.querySelector('[data-solides-card-retry]')?.remove();
+  balance.textContent = 'Carregando…';
   try {
     const hours = await fetchAPI(`/api/solides/me/hours-balance?from=${monthStart}&to=${today}`);
     balance.textContent = formatMinutes(hours.hoursBalanceInMinutes);
-  } catch {
-    balance.textContent = 'Não disponível';
+  } catch (error) {
+    showCardFailure(balance, error, 'Não foi possível consultar o banco de horas. Verifique sua conexão.', loadBalance);
   }
 }
 
@@ -64,9 +90,9 @@ async function loadSchedule() {
       element('div', { className: 'card-title', text: dayNames[(Number(day.day) + 6) % 7] || `Dia ${day.day}` }),
       element('p', { className: 'card-copy', text: day.shifts.map((shift) => `${shift.start}–${shift.end}`).join(' · ') || 'Sem expediente' }),
     ])));
-  } catch {
-    scheduleSummary.textContent = 'Não disponível';
-    showState(scheduleDays, 'Não foi possível consultar a escala.', loadSchedule);
+  } catch (error) {
+    scheduleSummary.textContent = requestErrorMessage(error, 'Não foi possível consultar a escala.');
+    showState(scheduleDays, requestErrorMessage(error, 'Não foi possível consultar a escala. Verifique sua conexão.'), loadSchedule);
   }
 }
 
@@ -88,8 +114,8 @@ async function loadAdjustments() {
       ]),
       element('p', { className: 'card-copy', text: `${formatDateTime(adjustment.startAt)} até ${formatDateTime(adjustment.endAt)}` }),
     ])));
-  } catch {
-    showState(container, 'Não foi possível carregar férias e ajustes.', loadAdjustments);
+  } catch (error) {
+    showState(container, requestErrorMessage(error, 'Não foi possível carregar férias e ajustes. Verifique sua conexão.'), loadAdjustments);
   }
 }
 
@@ -140,10 +166,10 @@ async function loadHistory(reset = true) {
     historyOffset += historyPageSize;
     renderHistory(historyEntries);
     historyMore.hidden = total === null ? data.entries.length < historyPageSize : historyEntries.length >= total;
-  } catch {
-    if (reset) showState(container, 'Não foi possível carregar o histórico.', () => loadHistory(true));
+  } catch (error) {
+    if (reset) showState(container, requestErrorMessage(error, 'Não foi possível carregar o histórico. Verifique sua conexão.'), () => loadHistory(true));
     else {
-      historyError.textContent = 'Não foi possível carregar mais registros.';
+      historyError.textContent = requestErrorMessage(error, 'Não foi possível carregar mais registros. Verifique sua conexão.');
       historyError.hidden = false;
     }
   } finally {
