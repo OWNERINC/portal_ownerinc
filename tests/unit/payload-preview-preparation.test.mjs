@@ -18,7 +18,13 @@ import {
   securePath,
   validateExternalRoot,
 } from '../../scripts/payload-preview/security.mjs'
-import { renderFirebaseConfig, renderNginxConfig, renderComposeOverride, renderLaunchers } from '../../scripts/payload-preview/render.mjs'
+import {
+  composeEnvironmentKeys,
+  renderFirebaseConfig,
+  renderNginxConfig,
+  renderComposeOverride,
+  renderLaunchers,
+} from '../../scripts/payload-preview/render.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const securityContext = {
@@ -202,11 +208,14 @@ test('prepare creates isolated private artifacts without starting services or pr
   assert.doesNotMatch(generatedNginx, /localhost:9099|127\.0\.0\.1:9099/u)
 
   const override = await fs.readFile(path.join(runDirectory, 'compose.preview.yml'), 'utf8')
+  assert(override.includes('pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-portal_admin} -d ${POSTGRES_DB:-portal}'))
+  assert.match(override, /pg_isready -h 127\.0\.0\.1 -U cms_admin -d ownerinc_cms/u)
   assert.match(override, /127\.0\.0\.1:\$\{AUTH_PORT:\?Set AUTH_PORT\}:9099/u)
   assert.match(override, /127\.0\.0\.1:\$\{HTTP_PORT:\?Set HTTP_PORT\}:80/u)
   assert.match(override, /PREVIEW_RUN_DIR[^\n]*firebase-config\.js/u)
   assert.equal((override.match(/read_only: true/gu) || []).length, 3)
   assert.match(override, /NODE_ENV: development/u)
+  assert.match(override, /cms-migrate:[\s\S]*?NODE_ENV: development/u)
   assert.equal(result.resourceNames.uniqueImageTags.length, 3)
   assert.equal(new Set(result.resourceNames.uniqueImageTags).size, 3)
   assert(result.resourceNames.uniqueImageTags.every(tag => tag.includes('012345abcdef')))
@@ -223,16 +232,40 @@ test('prepare creates isolated private artifacts without starting services or pr
   assert.match(shellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
   assert.match(powershellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
   assert.match(shellLauncher, /--format '\{\{\.Endpoints\.docker\.Host\}\}'/u)
-  assert.match(powershellLauncher, /--format '\{\{\.Endpoints\.docker\.Host\}\}'/u)
+  assert(powershellLauncher.includes("'--format', '{{.Endpoints.docker.Host}}'"))
   assert.doesNotMatch(shellLauncher, /index \.Endpoints|\.Endpoints "docker"/u)
   assert.doesNotMatch(powershellLauncher, /index \.Endpoints|\.Endpoints "docker"/u)
+  assert.match(powershellLauncher, /function Invoke-PreviewDockerProbe[\s\S]*?& docker @DockerArguments 2>\$null \| ForEach-Object[\s\S]*?\$exitCode = \$LASTEXITCODE/u)
+  assert.match(powershellLauncher, /\$lines\.Count -lt 2 -and \$line\.Length -le 256/u)
+  assert.match(powershellLauncher, /\$versionProbe = Invoke-PreviewDockerProbe -DockerArguments @\('compose', 'version', '--short'\)/u)
+  assert.match(powershellLauncher, /\$contextProbe = Invoke-PreviewDockerProbe -DockerArguments @\('context', 'show'\)/u)
+  assert.match(powershellLauncher, /\$endpointProbe = Invoke-PreviewDockerProbe -DockerArguments @\('context', 'inspect', \$context, '--format',/u)
+  assert.doesNotMatch(powershellLauncher, /& docker (?:compose version|context show|context inspect)[^\n]*Select-Object -First 1/u)
+  assert(powershellLauncher.includes("$versionText -notmatch '^v?(\\d+)\\.(\\d+)\\.(\\d+)(?:[-+][0-9A-Za-z.-]+)?$'"))
   assert.match(shellLauncher, /case "\$endpoint" in unix:\/\/\*\|npipe:\/\/\*\)[\s\S]*nonlocal_docker_context/u)
-  assert.match(powershellLauncher, /StartsWith\('unix:\/\/'\) -or \$endpoint\.StartsWith\('npipe:\/\/'\)[\s\S]*nonlocal_docker_context/u)
+  assert(powershellLauncher.includes("if ($endpoint -notmatch '^(unix|npipe)://.+$')"))
+  assert(powershellLauncher.includes("Write-Output 'PREVIEW_BLOCKED nonlocal_docker_context'"))
   assert.doesNotMatch(shellLauncher, /--profile tools|bootstrap-admin|cms-worker|\bcron\b/u)
   assert.doesNotMatch(powershellLauncher, /--profile tools|bootstrap-admin|cms-worker|\bcron\b/u)
   for (const secret of secrets) {
     assert(!shellLauncher.includes(secret))
     assert(!powershellLauncher.includes(secret))
+  }
+
+  const recoveryOverride = path.join(runDirectory, 'recovery-20261007-a', 'compose.preview.recovery.yml')
+  const recoveryLaunchers = renderLaunchers({
+    checkoutRoot: unicodeCheckout,
+    runDirectory,
+    projectName: result.projectName,
+    additionalComposeFiles: [recoveryOverride],
+  })
+  const normalizedOriginalOverride = path.join(runDirectory, 'compose.preview.yml').replace(/\\/gu, '/')
+  const normalizedRecoveryOverride = recoveryOverride.replace(/\\/gu, '/')
+  assert(recoveryLaunchers.shell.includes(`'-f' '${normalizedOriginalOverride}' '-f' '${normalizedRecoveryOverride}'`))
+  assert(recoveryLaunchers.powershell.includes(`'-f', '${normalizedOriginalOverride}', '-f', '${normalizedRecoveryOverride}'`))
+  for (const launcher of [recoveryLaunchers.shell, recoveryLaunchers.powershell]) {
+    assert(launcher.includes(result.envFile.replace(/\\/gu, '/')), 'recovery launcher reuses the existing private env file')
+    assert(launcher.includes(result.projectName), 'recovery launcher preserves the existing Compose project identity')
   }
 
   if (process.platform !== 'win32') {
@@ -254,6 +287,93 @@ test('prepare creates isolated private artifacts without starting services or pr
     probePort: async () => assert.fail('collision check must happen before probing'),
   }), error => error.code === 'run_directory_collision')
   assert.ok(await fs.readFile(result.envFile, 'utf8') === priorEnvText, 'existing environment file remains unchanged')
+})
+
+test('Docker Compose merges preview TCP database healthchecks and CMS migration development mode', async t => {
+  const environment = { ...process.env }
+  for (const key of [
+    ...composeEnvironmentKeys, 'COMPOSE_FILE', 'COMPOSE_PROFILES', 'COMPOSE_ENV_FILES',
+    'COMPOSE_DISABLE_ENV_FILE', 'DOCKER_HOST', 'DOCKER_CONTEXT',
+  ]) delete environment[key]
+
+  const version = spawnSync('docker', ['compose', 'version', '--short'], {
+    encoding: 'utf8', windowsHide: true, timeout: 10_000, env: environment,
+  })
+  if (version.error || version.status !== 0) return t.skip('Docker Compose is unavailable')
+  const parsedVersion = String(version.stdout).trim().match(/^v?(\d+)\.(\d+)\.(\d+)/u)
+  if (!parsedVersion) return t.skip('Docker Compose version is unreadable')
+  const [major, minor, patch] = parsedVersion.slice(1).map(Number)
+  if (major < 2 || (major === 2 && minor < 24) || (major === 2 && minor === 24 && patch < 4)) {
+    return t.skip('Docker Compose 2.24.4 or newer is required for merged-config validation')
+  }
+
+  const tempRoot = await makeTempRoot()
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }))
+  const runDirectory = path.join(tempRoot, 'compose-merge-run')
+  const result = await preparePreview({
+    root: repoRoot,
+    directory: runDirectory,
+    httpPort: 18080,
+    authPort: 19099,
+    securityContext,
+    probePort: async () => {},
+    runIdFactory: () => 'abcdef012345',
+  })
+  const recoveryDirectory = path.join(runDirectory, 'recovery-regression')
+  await fs.mkdir(recoveryDirectory, { mode: 0o700 })
+  const recoveryOverride = path.join(recoveryDirectory, 'compose.preview.recovery.yml')
+  const recoveryFile = await fs.open(recoveryOverride, 'wx', 0o600)
+  try {
+    await recoveryFile.writeFile(renderComposeOverride(), 'utf8')
+  } finally {
+    await recoveryFile.close()
+  }
+  const recoveryLaunchers = renderLaunchers({
+    checkoutRoot: repoRoot,
+    runDirectory,
+    projectName: result.projectName,
+    additionalComposeFiles: [recoveryOverride],
+  })
+  assert(recoveryLaunchers.powershell.includes(`'-f', '${path.join(runDirectory, 'compose.preview.yml').replace(/\\/gu, '/')}', '-f', '${recoveryOverride.replace(/\\/gu, '/')}'`))
+  assert(recoveryLaunchers.powershell.includes(result.envFile.replace(/\\/gu, '/')))
+  assert(recoveryLaunchers.powershell.includes(result.projectName))
+  const configResult = spawnSync('docker', [
+    'compose', '--profile', 'local',
+    '--project-directory', repoRoot,
+    '--env-file', result.envFile,
+    '--project-name', result.projectName,
+    '-f', path.join(repoRoot, 'docker-compose.yml'),
+    '-f', path.join(repoRoot, 'docker-compose.payload.yml'),
+    '-f', path.join(runDirectory, 'compose.preview.yml'),
+    '-f', recoveryOverride,
+    'config', '--format', 'json',
+  ], { encoding: 'utf8', windowsHide: true, timeout: 30_000, env: environment })
+  assert.equal(configResult.error, undefined, 'read-only Compose config command completed')
+  assert.equal(configResult.status, 0, 'read-only Compose config merged the generated preview inputs')
+
+  let config
+  try {
+    config = JSON.parse(configResult.stdout)
+  } catch {
+    assert.fail('read-only Compose config returned non-JSON output')
+  }
+  assert.equal(config.services.postgres.environment.POSTGRES_USER, 'portal_admin')
+  assert.equal(config.services.postgres.environment.POSTGRES_DB, 'portal_test')
+  assert.deepEqual(config.services.postgres.healthcheck.test, [
+    'CMD-SHELL', 'pg_isready -h 127.0.0.1 -U portal_admin -d portal_test',
+  ])
+  assert.equal(config.services['cms-postgres'].environment.POSTGRES_USER, 'cms_admin')
+  assert.equal(config.services['cms-postgres'].environment.POSTGRES_DB, 'ownerinc_cms')
+  assert.deepEqual(config.services['cms-postgres'].healthcheck.test, [
+    'CMD-SHELL', 'pg_isready -h 127.0.0.1 -U cms_admin -d ownerinc_cms',
+  ])
+  assert.equal(config.services.cms.environment.NODE_ENV, 'development')
+  assert.equal(config.services['cms-migrate'].environment.NODE_ENV, 'development')
+  assert.equal(Object.hasOwn(config.services['cms-provision'].environment, 'NODE_ENV'), false,
+    'database-only provisioning remains otherwise unchanged')
+  const payloadCompose = await fs.readFile(path.join(repoRoot, 'docker-compose.payload.yml'), 'utf8')
+  assert.match(payloadCompose, /x-cms-environment:[\s\S]*?NODE_ENV: production/u,
+    'the base Payload overlay keeps its production default')
 })
 
 test('Windows PowerShell 5.1 parses Unicode launcher paths without invoking Docker', async t => {
@@ -320,7 +440,7 @@ test('Windows PowerShell 5.1 preserves the quote-free Docker endpoint template i
   t.after(() => fs.rm(tempRoot, { recursive: true, force: true }))
   const generatedPowerShell = renderLaunchers({ checkoutRoot: repoRoot, runDirectory: path.join(tempRoot, 'run'),
     projectName: 'ownerinc-payload-preview-012345abcdef' }).powershell
-  const endpointTemplate = generatedPowerShell.match(/docker context inspect \$context --format '([^']+)'/)?.[1]
+  const endpointTemplate = generatedPowerShell.match(/'--format', '([^']+)'/)?.[1]
   assert.equal(endpointTemplate, '{{.Endpoints.docker.Host}}')
   const captureFile = path.join(tempRoot, 'native-argv.json')
   const probeFile = path.join(tempRoot, 'native-argv-probe.mjs')
@@ -339,6 +459,49 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   assert.deepEqual(JSON.parse(await fs.readFile(captureFile, 'utf8')),
     ['context', 'inspect', 'desktop-linux', '--format', '{{.Endpoints.docker.Host}}'],
     'the real Node child process receives the exact argument array without PowerShell-only mock dispatch')
+})
+
+test('Windows PowerShell 5.1 drains native output, bounds capture, and preserves exit code', async t => {
+  const executable = availableWindowsPowerShell51()
+  if (!executable) return t.skip('Windows PowerShell 5.1 is unavailable on this host')
+
+  const tempRoot = await makeTempRoot()
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }))
+  const generatedPowerShell = renderLaunchers({ checkoutRoot: repoRoot, runDirectory: path.join(tempRoot, 'run'),
+    projectName: 'ownerinc-payload-preview-012345abcdef' }).powershell
+  const helperStart = generatedPowerShell.indexOf('function Invoke-PreviewDockerProbe')
+  const helperEnd = generatedPowerShell.indexOf('\n$versionProbe =', helperStart)
+  assert(helperStart >= 0 && helperEnd > helperStart, 'renderer exposes the expected native-probe helper in its generated launcher')
+  const helper = generatedPowerShell.slice(helperStart, helperEnd)
+  const nodeInvocation = `& ${quotePowerShell(process.execPath)} @DockerArguments 2>$null`
+  assert(helper.includes('& docker @DockerArguments 2>$null'))
+  const nodeBackedHelper = helper.replace('& docker @DockerArguments 2>$null', nodeInvocation)
+  const probeFile = path.join(tempRoot, 'native-output-probe.mjs')
+  const captureFile = path.join(tempRoot, 'native-output.json')
+  await fs.writeFile(probeFile, [
+    "process.stdout.write('v2.24.4\\n')",
+    "process.stdout.write('unexpected-extra-line\\n')",
+    "process.stdout.write('third-line-is-drained\\n')",
+    'process.exitCode = 23',
+    '',
+  ].join('\n'), 'utf8')
+  const runner = `
+${nodeBackedHelper}
+$probeResult = Invoke-PreviewDockerProbe -DockerArguments @(${quotePowerShell(probeFile)})
+$report = @{ lines = @($probeResult.Lines); exitCode = $probeResult.ExitCode; overflow = $probeResult.Overflow } | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText(${quotePowerShell(captureFile)}, $report, [System.Text.Encoding]::UTF8)
+`
+  const executed = spawnSync(executable, [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+    Buffer.from(runner, 'utf16le').toString('base64'),
+  ], { encoding: 'utf8', windowsHide: true })
+  assert.equal(executed.error, undefined, executed.error?.message)
+  assert.equal(executed.status, 0, `${executed.stdout}\n${executed.stderr}`)
+  const reportText = (await fs.readFile(captureFile, 'utf8')).replace(/^\uFEFF/u, '')
+  const report = JSON.parse(reportText)
+  assert.deepEqual(report.lines, ['v2.24.4', 'unexpected-extra-line'], 'only two output lines are retained')
+  assert.equal(report.overflow, true, 'additional output is drained but flagged')
+  assert.equal(report.exitCode, 23, 'the nonzero native exit is read after the complete output pipeline drains')
 })
 
 test('PowerShell launcher rendering quotes Unicode checkout and run paths as literal strings', () => {

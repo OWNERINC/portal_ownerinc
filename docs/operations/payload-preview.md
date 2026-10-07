@@ -71,7 +71,9 @@ prints paths and a resource summary, never generated credentials. The
 - A per-run Compose override that assigns project-scoped volumes and the default
   network through a unique project name. API, CMS, Firebase Emulator (and the
   unused Cron service) get run-specific image tags instead of shared `latest`
-  tags.
+  tags. The preview override makes both PostgreSQL healthchecks require TCP on
+  `127.0.0.1` with their configured user/database, so the temporary
+  initialization-only Unix socket cannot mark either database healthy early.
 - A copy of the browser Firebase module using only a synthetic
   `demo-<run>` project ID and the selected loopback Auth port. It retains the
   module's `auth` export and pinned SDK imports. Nginx receives a private copy
@@ -90,9 +92,16 @@ prints paths and a resource summary, never generated credentials. The
   selected context with the quote-free `{{.Endpoints.docker.Host}}` template;
   this preserves PowerShell 5.1 native argument serialization while still
   rejecting contexts whose endpoint is not a local `unix://` or `npipe://` pipe.
+  PowerShell drains each native probe to completion, checks its exit status, and
+  accepts only one well-formed output line before proceeding. It retains at most
+  two lines of up to 256 characters while draining, so extra or oversized output
+  is rejected without buffering it all in memory.
 
-The run uses `NODE_ENV=development` for the local HTTP cookie behavior. It does
-not change production settings or production credentials. SMTP targets
+The run uses `NODE_ENV=development` for the local HTTP cookie behavior. The
+preview override applies it to both the CMS runtime and migration one-shot; the
+production Payload Compose overlay remains unchanged. The database-only CMS
+provisioning one-shot is not changed. It does not change production settings or
+production credentials. SMTP targets
 container loopback `127.0.0.1:1` (no SMTP service is started) and uses
 synthetic `.invalid` identities. Sólides is explicitly off. No cron or Payload
 worker is started by the generated launchers.
@@ -124,6 +133,17 @@ this only establishes service readiness and does not authenticate a user.
 Launch-time port use can change after preparation; Docker will reject a port
 that became occupied. No teardown or volume deletion is automated. Do not use
 `docker compose down -v` against a run when its data should be retained.
+
+For a correction to an already-created run, do not rerun `prepare` into that
+directory or overwrite its `compose.env`, original override, project name, or
+image tags. Render a new recovery override and separate launchers under a fresh
+child directory of the same private run, creating each file exclusively and
+preserving the run's restrictive ACL/mode. Pass the existing checkout, run
+directory, and project name to `renderLaunchers`, with the new override in
+`additionalComposeFiles`; the existing env-file path and project-scoped volumes
+then remain unchanged, and the recovery override is appended after the original
+one. Validate the same ordered file set with read-only `docker compose config`
+before any authorized launch. Configuration validation is not service readiness.
 
 ## Gate boundary and evidence
 

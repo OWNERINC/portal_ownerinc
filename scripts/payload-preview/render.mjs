@@ -104,6 +104,12 @@ export function renderComposeEnv(values) {
 export function renderComposeOverride() {
   return `name: \${COMPOSE_PROJECT_NAME:?Set COMPOSE_PROJECT_NAME}
 services:
+  postgres:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \${POSTGRES_USER:-portal_admin} -d \${POSTGRES_DB:-portal}"]
+  cms-postgres:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U cms_admin -d ownerinc_cms"]
   firebase-auth:
     image: \${PREVIEW_FIREBASE_IMAGE:?Set PREVIEW_FIREBASE_IMAGE}
     command:
@@ -143,6 +149,9 @@ services:
   cms:
     environment:
       NODE_ENV: development
+  cms-migrate:
+    environment:
+      NODE_ENV: development
 `
 }
 
@@ -154,7 +163,7 @@ function powershellQuote(value) {
   return `'${value.replace(/'/gu, "''")}'`
 }
 
-function composeArguments({ checkoutRoot, runDirectory, projectName }) {
+function composeArguments({ checkoutRoot, runDirectory, projectName, additionalComposeFiles = [] }) {
   const normalized = value => path.resolve(value).replace(/\\/gu, '/')
   return [
     '--profile', 'local',
@@ -164,6 +173,7 @@ function composeArguments({ checkoutRoot, runDirectory, projectName }) {
     '-f', normalized(path.join(checkoutRoot, 'docker-compose.yml')),
     '-f', normalized(path.join(checkoutRoot, 'docker-compose.payload.yml')),
     '-f', `${normalized(runDirectory)}/compose.preview.yml`,
+    ...additionalComposeFiles.flatMap(filePath => ['-f', normalized(filePath)]),
   ]
 }
 
@@ -182,19 +192,36 @@ case \"$endpoint\" in unix://*|npipe://*) ;; *) echo 'PREVIEW_BLOCKED nonlocal_d
 }
 
 function localComposeGuardPowerShell() {
-  return `$versionText = (& docker compose version --short 2>$null | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0 -or "$versionText" -notmatch '^v?(\\d+)\\.(\\d+)\\.(\\d+)') { Write-Output 'PREVIEW_BLOCKED compose_version_unreadable'; exit 2 }
+  return `function Invoke-PreviewDockerProbe {
+  param([Parameter(Mandatory=$true)][string[]]$DockerArguments)
+  $lines = New-Object 'System.Collections.Generic.List[string]'
+  $overflow = $false
+  & docker @DockerArguments 2>$null | ForEach-Object {
+    $line = [string]$_
+    if ($lines.Count -lt 2 -and $line.Length -le 256) { [void]$lines.Add($line) }
+    else { $overflow = $true }
+  }
+  $exitCode = $LASTEXITCODE
+  return [pscustomobject]@{ Lines = $lines.ToArray(); ExitCode = $exitCode; Overflow = $overflow }
+}
+$versionProbe = Invoke-PreviewDockerProbe -DockerArguments @('compose', 'version', '--short')
+if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Overflow -or $versionProbe.Lines.Count -ne 1) { Write-Output 'PREVIEW_BLOCKED compose_version_unreadable'; exit 2 }
+$versionText = [string]$versionProbe.Lines[0]
+if ($versionText -notmatch '^v?(\\d+)\\.(\\d+)\\.(\\d+)(?:[-+][0-9A-Za-z.-]+)?$') { Write-Output 'PREVIEW_BLOCKED compose_version_unreadable'; exit 2 }
 $composeVersion = [version]("$($Matches[1]).$($Matches[2]).$($Matches[3])")
 if ($composeVersion -lt [version]'2.24.4') { Write-Output 'PREVIEW_BLOCKED compose_2_24_4_required'; exit 2 }
-$context = (& docker context show 2>$null | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0 -or -not $context) { Write-Output 'PREVIEW_BLOCKED local_docker_context_required'; exit 2 }
-$endpoint = (& docker context inspect $context --format '${DOCKER_ENDPOINT_TEMPLATE}' 2>$null | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0 -or -not $endpoint -or -not ($endpoint.StartsWith('unix://') -or $endpoint.StartsWith('npipe://'))) { Write-Output 'PREVIEW_BLOCKED nonlocal_docker_context'; exit 2 }
+$contextProbe = Invoke-PreviewDockerProbe -DockerArguments @('context', 'show')
+if ($contextProbe.ExitCode -ne 0 -or $contextProbe.Overflow -or $contextProbe.Lines.Count -ne 1 -or -not $contextProbe.Lines[0] -or $contextProbe.Lines[0] -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') { Write-Output 'PREVIEW_BLOCKED local_docker_context_required'; exit 2 }
+$context = [string]$contextProbe.Lines[0]
+$endpointProbe = Invoke-PreviewDockerProbe -DockerArguments @('context', 'inspect', $context, '--format', '${DOCKER_ENDPOINT_TEMPLATE}')
+if ($endpointProbe.ExitCode -ne 0 -or $endpointProbe.Overflow -or $endpointProbe.Lines.Count -ne 1 -or -not $endpointProbe.Lines[0]) { Write-Output 'PREVIEW_BLOCKED local_docker_context_required'; exit 2 }
+$endpoint = [string]$endpointProbe.Lines[0]
+if ($endpoint -notmatch '^(unix|npipe)://.+$') { Write-Output 'PREVIEW_BLOCKED nonlocal_docker_context'; exit 2 }
 `
 }
 
-export function renderLaunchers({ checkoutRoot, runDirectory, projectName }) {
-  const args = composeArguments({ checkoutRoot, runDirectory, projectName })
+export function renderLaunchers({ checkoutRoot, runDirectory, projectName, additionalComposeFiles = [] }) {
+  const args = composeArguments({ checkoutRoot, runDirectory, projectName, additionalComposeFiles })
   const shellArgs = args.map(shellQuote).join(' ')
   const powershellArgs = args.map(powershellQuote).join(', ')
   const envKeys = [
