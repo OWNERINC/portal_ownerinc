@@ -1,0 +1,12 @@
+.portal-brand { display: inline-block; }
+.portal-brand img { max-width: 100%; object-fit: contain; }
+.portal-brand-dark { display: none; }
+[data-theme='dark'] .portal-brand-light { display: none; }
+[data-theme='dark'] .portal-brand-dark { display: inline; }
+.portal-navigation { display: flex; flex-direction: column; gap: 12px; margin-block: 20px; }
+.portal-session-status { max-width: 640px; padding: 24px; margin: 32px auto; }
+.portal-polls { max-width: 1000px; padding-block: 24px; }
+.portal-polls fieldset { border: 0; padding: 0; margin-block: 16px; min-width: 0; }
+.portal-polls-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.portal-polls-option { border-bottom: 1px solid var(--theme-elevation-150); margin-bottom: 16px; }
+.portal-polls button:focus-visible, .portal-navigation a:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }

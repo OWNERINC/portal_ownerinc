@@ -17,7 +17,8 @@ test('paleta oferece somente tipos editáveis e preserva contratos editoriais ca
   const { validateBlocks } = require('../../api/cms/blocks');
   const renderer = await readFile('public/js/cms-block-renderer.js', 'utf8');
   const { BLOCK_TYPES } = await import('data:text/javascript;base64,' + Buffer.from(
-    renderer.replace(/^import .*;\r?\n/gm, ''),
+    `import { cmsAssetEndpoint } from '${new URL('../../public/js/owner-news/asset-path.mjs', import.meta.url).href}';\n`
+      + renderer.replace(/^import .*;\r?\n/gm, ''),
   ).toString('base64'));
   const editor = await readFile('public/js/cms-block-editor.js', 'utf8');
   const element = (tag, attributes = {}, children = []) => ({

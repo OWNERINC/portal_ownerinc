@@ -9,6 +9,7 @@ import { validateBundle, validateBundleAsset, sourceIdentity, sourceKey, bundleH
 const require = createRequire(new URL('../../api/package.json', import.meta.url));
 const { validateNewsRevision } = require('./owner-news/editorial.js');
 const { canManageCms } = require('./cms/permissions.js');
+const { assertNewsWriter } = require('./owner-news/authority.js');
 const sha = value => createHash('sha256').update(value).digest('hex');
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const snapshotKeys = ['document_id', 'source_id', 'published_revision_id', 'draft_revision_id', 'scheduled_revision_id', 'scheduled_at', 'published_at', 'title', 'category'];
@@ -214,7 +215,10 @@ export async function applyBundle({ pool, uploadDir, bundle, mode = 'dry-run', a
     await db.query(mode === 'dry-run' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN');
     // Actor row locks are not legal in a read-only transaction; use the same checked query without a lock.
     await checkActor(mode === 'dry-run' ? { query: (sql, args) => db.query(sql.replace(' FOR SHARE', ''), args) } : db, actorUid);
-    if (mode !== 'dry-run') await db.query('SELECT pg_advisory_xact_lock(7193029)');
+    if (mode !== 'dry-run') {
+      await db.query('SELECT pg_advisory_xact_lock(7193029)');
+      await assertNewsWriter(db, 'legacy');
+    }
     let state = await inspectBundleTarget(db, bundle, { uploadDirectory, fileSystem, lock: mode !== 'dry-run', bundleHash: hashes.bundle_sha256 });
     report.databaseChecked = true;
     report.conflicts = state.conflicts.map(c => ({ code: c.code }));

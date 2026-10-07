@@ -1,5 +1,112 @@
 # Importação privada da Owner News
 
+## Exportação privada CMS → Payload — Task10
+
+Este é um formato próprio, `format: owner-news-payload`, `version: 1`; não é o
+pacote editorial A1/A2 descrito abaixo. O produtor é
+`scripts/owner-news-payload/export.mjs`. A exportação não importa, não publica,
+não promove agendas, não inicia jobs e não altera a origem. O modo padrão é
+dry-run, incluindo leitura e verificação dos arquivos, sem criar saída em disco.
+
+Configure explicitamente `OWNER_NEWS_SOURCE_DATABASE_URL`,
+`OWNER_NEWS_SOURCE_UPLOAD_DIR` (raiz que contém `cms-private`) e
+`OWNER_NEWS_SOURCE_ID` (identificador opaco estável da instância). Não há leitura
+automática de `.env` nem fallback para `DATABASE_URL`. A CLI aceita somente
+loopback e nome de banco com segmento dev/development/local/test, sem opções na
+URL. Loopback não autoriza túnel para produção; confirme que é uma origem local.
+
+```sh
+node scripts/owner-news-payload/export.mjs --dry-run
+node scripts/owner-news-payload/export.mjs --write --output /privado/migracao-nova
+```
+
+O diretório de saída deve ser absoluto, novo e fora de qualquer checkout Git ou
+diretório público. Ancestros com symlink/junction e arquivos com hardlink são
+recusados. Arquivos têm criação exclusiva e fsync; uma falha pode deixar saída
+parcial privada, que não será sobrescrita em reexecução. O manifesto é escrito
+por último, após encerramento confirmado da transação read-only. Não remover
+arquivos da origem para repetir uma exportação; escolha nova saída privada.
+
+### Snapshot, identidade e fidelidade
+
+O helper `exportNewsBundle` recebe conexão PostgreSQL dedicada e ociosa. Adquire
+o advisory **session lock 7193029 antes de BEGIN**, depois inicia
+`REPEATABLE READ READ ONLY`. Isso evita fixar o snapshot enquanto aguarda um
+writer anterior. Leitura/cópia local ocorre sob esse lock, que é liberado ao
+terminar. A CLI encerra a conexão inclusive em falha; chamadores do helper devem
+descartar a conexão em erro, não devolvê-la potencialmente bloqueada ao pool.
+O exportador nunca chama helpers de leitura que promovem agendas vencidas.
+
+Datas da origem são selecionadas como strings UTC com microssegundos. Não passam
+por `Date.toISOString()`. Documentos preservam `cms_documents.id` como identidade
+pública; `source_id` continua anulável. Todas as revisões são exportadas, incluindo
+drafts antigos sem ponteiro. Publicação, draft atual e snapshot agendado continuam
+distintos. Drafts podem estar incompletos para publicação, mas blocos/editorial
+precisam satisfazer suas formas seguras; conteúdo desconhecido gera diagnóstico
+explícito, sem descarte ou preenchimento inventado.
+
+Home singleton ausente é erro; singleton existente com draft/publicação nulos é
+home vazio válido. Título/categoria são fotografia do documento na exportação,
+identificados por `metadataBasis`; não são apresentados como fatos próprios de
+cada revisão antiga. Data de publicação por revisão só é conhecida quando seu ID
+é o ponteiro publicado atual; para as demais, permanece null. Autorias realmente
+nulas não ganham ator substituto.
+
+Agendas são registradas como `executionState: suspended`, com instante solicitado
+preservado e `actorUid: null`, `actorEvidence: not_recorded`. A origem não registra
+um solicitante próprio confiável: `updated_by` e criador da revisão não o
+substituem. A exceção `actor_unknown` não elimina a publicação válida do pacote.
+Importação/autoridade devem manter a suspensão e resolver execução/expiração
+explicitamente antes do aceite de cutover.
+
+### Bundle e verificadores compartilhados
+
+`manifest.json` contém origem/autoridade/epoch, documentos, índice de revisões,
+home, agendas, inventário de assets e `sourceFingerprint`. Cada revisão tem arquivo
+`revisions/<documentUUID>/<revisionUUID>.json` com `{blocks, editorial}` original
+validado. Mídias usam `assets/<assetUUID>`, mantendo UUIDs/bytes, inclusive mídias
+compartilhadas com outras áreas. São copiadas, nunca movidas. Metadata arbitrária
+de assets não é exposta: seu hash integral detecta drift; hash persistido dos bytes,
+quando existente, é confrontado com SHA-256 calculado. Hash ausente não é corrupção.
+Para não arredondar números JSON acima de 2^53 pelo parser do `pg`, a origem projeta
+`metadata::text` e `metadata->>'sha256'` em colunas separadas. O hash de metadata usa
+SHA-256 com o domínio UTF-8 `owner-news-payload:asset-metadata:v1` seguido de NUL,
+concatenado ao texto JSONB retornado pelo PostgreSQL. Nenhum JS JSON.parse/reserialize
+fica no caminho dessa impressão digital.
+
+Os limites são 32 MiB de manifesto, 5 MiB por arquivo de revisão e revisão
+normalizada/100 blocos, 50 MiB por arquivo de mídia. Não há teto agregado novo de
+300 MiB. Imagens são decodificadas com teto de 80 milhões de pixels; PDF e vídeos
+têm assinatura verificada, sem alegação de validação integral de PDF/codecs.
+
+`scripts/owner-news-payload/bundle.mjs` exporta:
+
+- `validateBundle`: estrutura, grafo e fingerprint; sozinho não prova os arquivos.
+- `loadBundle`: também lê/verifica todas as revisões e mídias privadas, retornando
+  manifesto, SHA dos bytes exatos, `revisionById` e `assetPaths` internos.
+- `sourceFingerprint`: algoritmo comum para recomputação durante freeze; ordena
+  entidades por identidade e exclui relógio da exportação/localização física.
+- `canonicalJSON`, `snapshotHash`, `historyHashes`: contrato compartilhado, com
+  compatibilidade dos hashes existentes. O campo adicional `metadataBasis` não
+  reescreve hashes históricos.
+
+`manifestSha256` é calculado sobre bytes exatos, inclusive espaços/LF, e fica fora
+do manifesto. Reformatação cria outra identidade de run. O `snapshotHash` da
+agenda no bundle identifica o conteúdo legado original; a importação deve
+preservá-lo como procedência e calcular separadamente o hash da representação
+nativa após conversão, sem tratá-los como intercambiáveis.
+
+Relatórios stdout/stderr mostram apenas modo, contagens, hashes e códigos
+controlados. Nenhum corpo, nome, UID de pessoa, caminho privado ou string de
+conexão é emitido. O resultado do helper contém caminhos para uso interno e não
+deve ser impresso integralmente. Bundle/dados não pertencem ao Git, `public/` ou CI.
+
+O componente `LegacyHistory` oferece histórico paginado somente leitura e prévia
+com `source=legacy`, sem restaurar automaticamente versões. Sua montagem no
+editor e a migration/tipos para `metadataBasis` precisam ser integrados pelo
+coordenador junto das Tasks11/12. Testes unitários/arquivos sintéticos não comprovam
+locks reais, exportação do acervo ou aceite HTTP/browser.
+
 Para o fluxo editorial revisado e o inventário parcial A1, consulte
 [Preparação de pacotes privados](owner-news-bundles.md). O fluxo abaixo documenta
 primeiro a aplicação A2; a seção **Importador legado** mantém o fluxo anterior.

@@ -4,6 +4,7 @@ const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
 const { validateBlocks } = require('../cms/blocks');
 const { validateNewsRevision } = require('../owner-news/editorial');
+const { assertNewsWriter, AuthorityError } = require('../owner-news/authority');
 const {
   CmsRouteError, resolveDraftRevisionId, unscheduleRevisionState, withdrawalState,
 } = require('../cms/revisions');
@@ -77,6 +78,13 @@ function scheduleBody(value) {
 }
 
 async function findDocument(db, user, id, forUpdate = false) {
+  // The mutation caller already owns 7193029. Resolve type without a row lock,
+  // then take authority before document locks (the same order as cutover).
+  if (forUpdate) {
+    const candidate = await findDocument(db, user, id);
+    if (!candidate) return null;
+    if (candidate.content_type === 'announcement') await assertNewsWriter(db, 'legacy');
+  }
   const types = manageableTypes(user);
   if (!types.length) return null;
   const lock = forUpdate ? ' FOR UPDATE' : '';
@@ -148,6 +156,9 @@ async function validateAssetReferences(db, blocks) {
 }
 
 function sendCmsError(error, req, res, next) {
+  if (error instanceof AuthorityError) return res.status(error.status).json({
+    error: 'Owner News is read-only in this editor.', reason: error.code, requestId: req.id,
+  });
   if (!(error instanceof CmsRouteError)) return next(error);
   if (error.status === 404) return res.status(404).json({ error: 'CMS document not found.', reason: error.code, requestId: req.id });
   if (error.status === 409) return res.status(409).json({ error: 'CMS revision cannot be changed.', reason: error.code, requestId: req.id });
@@ -224,6 +235,7 @@ router.post('/documents', authMiddleware, async (req, res, next) => {
   try {
     const result = await withAudit(pool, req, 'cms.document.create', 'cms_document', async (db) => {
       await lockCmsMutation(db);
+      if (req.body.type === 'announcement') await assertNewsWriter(db, 'legacy');
       const sourceTable = SOURCE_TABLES[req.body.type];
       if (sourceTable) {
         const source = await db.query(`SELECT id FROM ${sourceTable} WHERE id = $1 FOR KEY SHARE`, [sourceId]);
@@ -546,6 +558,7 @@ router.delete('/revisions/:id', authMiddleware, async (req, res, next) => {
         [req.params.id, types],
       );
       const candidate = rows[0];
+      if (candidate?.content_type === 'announcement') await assertNewsWriter(db, 'legacy');
       if (candidate) await db.query('SELECT id FROM cms_documents WHERE id = $1 FOR UPDATE', [candidate.document_id]);
       const { rows: lockedRevisions } = candidate ? await db.query(
         `SELECT r.id, r.document_id, r.status, d.content_type

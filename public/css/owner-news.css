@@ -42,6 +42,9 @@
 .news-article-body p, .news-article-body li { font-family: Georgia, 'Times New Roman', serif; font-size: clamp(19px, 1.7vw, 26px); line-height: 1.62; white-space: pre-line; }
 .news-article-body .news-block--sans p, .news-article-body .news-block--sans li { font-family: var(--news-sans); }
 .news-article-body .cms-heading { font-family: var(--news-sans); font-size: clamp(26px, 3vw, 42px); line-height: 1.2; letter-spacing: -.03em; }
+.news-article-body code { font-family: var(--news-mono); font-size: .85em; }
+.news-article-body a { color: inherit; text-decoration: underline; text-underline-offset: .15em; }
+.news-preview-status { padding: 16px 0; border-bottom: 1px solid var(--news-rule); margin-bottom: 24px; }
 .news-article-body .cms-image { width: 100%; max-height: none; aspect-ratio: auto; height: auto; object-fit: contain; border-radius: 10px; }
 .news-article-body .cms-quote { border-color: var(--news-accent); margin-inline: 0; }
 .news-article-body .cms-quote p { font-size: clamp(26px, 3vw, 42px); line-height: 1.3; }

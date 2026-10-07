@@ -8,6 +8,8 @@ export const routes = Object.freeze({
   '/knowledge.html': './knowledge.js',
   '/academy.html': './academy.js',
   '/announcements.html': './announcements.js',
+  '/news-preview.html': './news-preview.js',
+  '/editorial-entry.html': './editorial-entry.js',
   '/reminders.html': './reminders.js',
   '/profile.html': './profile.js',
   '/admin.html': './admin.js',
@@ -40,11 +42,12 @@ export function navigationURL(event, base = location.href) {
   const href = anchor.getAttribute('href');
   if (!href || href.startsWith('#')) return null;
   const url = new URL(href, base);
-  return url.origin === new URL(base).origin && routes[url.pathname] ? url : null;
+  return url.origin === new URL(base).origin && (routes[url.pathname] || url.pathname === '/editorial' || url.pathname.startsWith('/editorial/')) ? url : null;
 }
 
 export function routeAllowed(path, user) {
   if (!user) return false;
+  if (path === '/news-preview.html' || path === '/editorial-entry.html') return can(user, 'manageKnowledge');
   if (path === '/admin.html') return user.role === 'admin';
   if (path === '/cms.html') return user.role === 'admin' && ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders'].some(permission => can(user, permission));
   if (path === '/autocard.html') return user.autocard_access === true;
@@ -403,6 +406,13 @@ export async function startRouter() {
   document.addEventListener('click', async event => {
     const url = navigationURL(event);
     if (!url) return;
+    if (url.pathname === '/editorial' || url.pathname.startsWith('/editorial/')) {
+      event.preventDefault();
+      if (traversal || !canLeave()) return;
+      const leaving = activePage;
+      if (!await commitPageLeaveUI() || activePage !== leaving) return;
+      transition?.abort(); disposeCurrentPage(); window.location.assign(url.href); return;
+    }
     if (url.pathname === activeURL.pathname) {
       if (url.search === activeURL.search && url.hash) return;
       event.preventDefault();

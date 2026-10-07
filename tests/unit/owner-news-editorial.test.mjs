@@ -9,9 +9,14 @@ const require = createRequire(import.meta.url);
 const server = require('../../api/owner-news/editorial');
 const backend = require('../../api/cms/blocks');
 const loadModule = source => import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-const browser = await loadModule(await readFile('public/js/owner-news/model.js', 'utf8'));
-const frontend = await loadModule((await readFile('public/js/cms-block-renderer.js', 'utf8'))
-  .replace(/^import .*;\r?\n/gm, ''));
+const assetModule = new URL('../../public/js/owner-news/asset-path.mjs', import.meta.url).href;
+const rendererSource = `import { cmsAssetEndpoint, validateAssetScope } from '${assetModule}';\n`
+  + (await readFile('public/js/cms-block-renderer.js', 'utf8')).replace(/^import .*;\r?\n/gm, '');
+const contractSource = (await readFile('public/js/owner-news/content-contract.js', 'utf8')).replace(/^import .*;\r?\n/gm, '');
+const moduleURL = source => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
+const contractURL = moduleURL(`import { validateBlocks } from '${moduleURL(rendererSource)}';\n${contractSource}`);
+const browser = await loadModule((await readFile('public/js/owner-news/model.js', 'utf8')).replace('./content-contract.js', contractURL));
+const frontend = await loadModule(rendererSource);
 const { normalizeEditorBlocks } = await loadModule(await readFile('public/js/cms-editor-values.js', 'utf8'));
 const asset = '11111111-1111-4111-8111-111111111111';
 const meta = { version: 1, kind: 'article', summary: 'Chamada.', author: 'Redação',

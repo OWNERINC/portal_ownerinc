@@ -1,3 +1,4 @@
+const { assertNewsWriter } = require('./authority');
 const HOME_KEYS = new Set(['version', 'eyebrow', 'headline', 'summary']);
 
 class HomeError extends Error {
@@ -35,6 +36,7 @@ async function getHomeAdmin(db) {
 async function saveHomeDraft(db, { expected_version, content }, actorUid) {
   const normalized = normalizeHome(content);
   if (!validVersion(expected_version) || !normalized) throw new HomeError(400, 'invalid_home');
+  await assertNewsWriter(db, 'legacy');
   const { rows } = await db.query(`UPDATE owner_news_home SET draft=$2::jsonb, version=version+1,
     updated_by=$3, updated_at=NOW()
     WHERE singleton=TRUE AND version=$1
@@ -45,6 +47,7 @@ async function saveHomeDraft(db, { expected_version, content }, actorUid) {
 
 async function publishHome(db, expectedVersion, actorUid) {
   if (!validVersion(expectedVersion)) throw new HomeError(400, 'invalid_home');
+  await assertNewsWriter(db, 'legacy');
   const { rows: current } = await db.query('SELECT version, draft FROM owner_news_home WHERE singleton=TRUE FOR UPDATE');
   if (!current[0] || current[0].version !== expectedVersion) throw new HomeError(409, 'version_conflict');
   if (current[0].draft === null) throw new HomeError(409, 'draft_required');

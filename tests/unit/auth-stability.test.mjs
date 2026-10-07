@@ -68,6 +68,7 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
     onAuthStateChanged: (_auth, callback) => { listeners.push(callback); return () => {}; },
     signOut: async () => { signouts += 1; changeUser(null); await signOutImpl?.(); },
     updateProfile: async () => {},
+    revokeEditorialSession: async () => {}, // Transport covered by editorial-entry tests.
     fetch: async (...args) => {
       requests.push(args);
       return fetchImpl ? fetchImpl(...args) : response(userDoc(auth.currentUser.uid));
@@ -260,10 +261,11 @@ test('Firebase UID mismatch is removed at module load, before readiness or any p
   assert.equal(h.api.getCachedUserSnapshot().uid, 'b');
 });
 
-test('remote logout without requests clears visible private content and redirects immediately', async () => {
+test('remote logout clears visible content immediately and redirects after editorial revocation', async () => {
   const h = harness();
   await h.api.requireAuth();
   h.changeUser(null);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.main.children.length, 0);
   assert.equal(h.sessionStorage.getItem(snapshotKey), null);
   assert.equal(h.api.getCachedUserSnapshot(), null);

@@ -14,6 +14,9 @@ SSH_PORT=${SSH_PORT:-22}
 [[ $SSH_PORT =~ ^[0-9]+$ ]] || { echo "Invalid SSH_PORT" >&2; exit 2; }
 [[ $API_IMAGE =~ @sha256:[0-9a-f]{64}$ && $API_IMAGE == */ownerinc-portal-api@sha256:* ]] || { echo "Invalid API_IMAGE digest" >&2; exit 2; }
 [[ $CRON_IMAGE =~ @sha256:[0-9a-f]{64}$ && $CRON_IMAGE == */ownerinc-portal-cron@sha256:* ]] || { echo "Invalid CRON_IMAGE digest" >&2; exit 2; }
+if [[ -n ${CMS_IMAGE:-} ]]; then
+  [[ $CMS_IMAGE =~ @sha256:[0-9a-f]{64}$ && $CMS_IMAGE == */ownerinc-portal-cms@sha256:* ]] || { echo 'Invalid CMS_IMAGE digest' >&2; exit 2; }
+fi
 
 worktree=$(git status --porcelain=v1 --untracked-files=all)
 [[ -z $worktree ]] || {
@@ -28,6 +31,7 @@ archive=$(mktemp "${TMPDIR:-/tmp}/ownerinc-portal.XXXXXX.tar.gz")
 archive_tar=$(mktemp "${TMPDIR:-/tmp}/ownerinc-portal.XXXXXX.tar")
 image_env_dir=$(mktemp -d "${TMPDIR:-/tmp}/ownerinc-portal-images.XXXXXX")
 printf 'API_IMAGE=%s\nCRON_IMAGE=%s\n' "$API_IMAGE" "$CRON_IMAGE" >"$image_env_dir/.image-env"
+if [[ -n ${CMS_IMAGE:-} ]]; then printf 'CMS_IMAGE=%s\nRELEASE_FORMAT=payload-v1\n' "$CMS_IMAGE" >>"$image_env_dir/.image-env"; fi
 trap 'rm -f "$archive" "$archive_tar"; rm -rf "$image_env_dir"' EXIT
 
 git archive --format=tar --output="$archive_tar" HEAD -- . ':(exclude)ownerinc-novo-agente/**'

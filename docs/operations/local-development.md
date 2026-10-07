@@ -152,3 +152,19 @@ editorial e alterações de teste são revertidas por transação.
 **Pendente nesta entrega:** executar os dois cenários PostgreSQL; não houve
 autorização para banco ou serviços Docker. PASS unitário/estático não comprova
 constraints, locks concorrentes ou grants em um servidor PostgreSQL real.
+
+### Overlay Payload (Task13)
+
+O arquivo opcional `docker-compose.payload.yml` separa CMSDB, provisionador,
+migrator, web e worker, com volumes próprios e imagem CMS comum. O parser pode
+ser exercitado sem iniciar serviços:
+
+```sh
+docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.payload.yml config --quiet
+```
+
+Placeholders servem somente a esse parse. Runtime requer configuração privada e
+papéis provisionados. O primary coordena leases de build/serviços; não usar a
+amostra ou seus volumes para ensaio de recuperação. CSP/Next produção, grants,
+worker e restore reais continuam dependentes do ensaio autorizado. Contratos e
+bloqueios em [Runtime e recuperação Payload](payload-runtime-recovery.md).

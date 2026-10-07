@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-for (const service of ['api', 'cron']) {
+for (const service of ['api', 'cron', 'cms']) {
   const directory = await mkdtemp(path.join(tmpdir(), `ownerinc-${service}-`));
   try {
     const manifest = JSON.parse(await readFile(`${service}/package.json`, 'utf8'));

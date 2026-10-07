@@ -408,7 +408,12 @@ test('HTML5 runtime failure reports once, destroys media and never ends the less
 test('Nginx permits only required YouTube origins and preserves referrer policy and LF', () => {
   const config = readFileSync(new URL('../../nginx/nginx.conf', import.meta.url), 'utf8');
   assert.ok(!config.includes('\r'));
-  const csp = config.match(/Content-Security-Policy "([^"]+)"/)[1];
+  assert.match(config, /add_header Content-Security-Policy \$portal_csp always;/);
+  const policyMap = config.match(/map \$uri \$portal_csp\s*\{([^}]+)\}/);
+  assert.ok(policyMap, 'Portal CSP map must be present');
+  const defaultPolicy = policyMap[1].match(/\bdefault\s+"([^"]+)";/);
+  assert.ok(defaultPolicy, 'Portal routes must retain the default CSP');
+  const csp = defaultPolicy[1];
   const directives = Object.fromEntries(csp.split(';').map(value => value.trim().split(/\s+/)).map(([key, ...values]) => [key, values]));
   assert.deepEqual(directives['script-src'], ["'self'", 'https://unpkg.com', 'https://www.gstatic.com', 'https://cdnjs.cloudflare.com', 'https://www.youtube.com', 'https://s.ytimg.com']);
   assert.deepEqual(directives['frame-src'], ['https://*.firebaseapp.com', 'blob:', 'https://www.youtube.com', 'https://www.youtube-nocookie.com']);

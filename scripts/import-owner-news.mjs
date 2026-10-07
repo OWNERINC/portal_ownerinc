@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from 'node:util';
 const require = createRequire(new URL('../api/package.json', import.meta.url));
 const { validateBlocks } = require('./cms/blocks.js');
 const { lockCmsAssets } = require('./cms/locks.js');
+const { assertNewsWriter } = require('./owner-news/authority.js');
 export const ORIGIN = 'https://owner-news.ownerinc-developers.chatgpt.site';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const MAX_MEDIA = 50 * 1024 * 1024;
@@ -257,7 +258,10 @@ export async function persist(plan, report, { db, directory, apply }) {
   try {
     await db.connect();
     await db.query(apply ? 'BEGIN' : 'BEGIN READ ONLY');
-    if (apply) await lockCmsAssets(db);
+    if (apply) {
+      await lockCmsAssets(db);
+      await assertNewsWriter(db, 'legacy');
+    }
     const pending = await inspectDatabase(db, plan);
     const pendingIds = new Set(pending.map((document) => document.id));
     const publishedAssetIds = new Set(plan.documents

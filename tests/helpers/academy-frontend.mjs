@@ -48,6 +48,7 @@ export async function academyHarness({ url = 'https://portal.test/academy.html',
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/js/ui.js', 'clear, element, safeHttpUrl');
+  await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope');
   await load('public/js/cms-block-renderer.js', 'renderBlocks');
   await load('public/academy/progress-controller.js', 'createProgressController');
   await load('public/academy/api.js', 'createAcademyAPI');

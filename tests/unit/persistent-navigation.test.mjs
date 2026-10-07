@@ -4,6 +4,17 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helpers/router-harness.mjs';
 
+test('editorial external and shell entry links respect cancelled global leave guards before navigation', async () => {
+  for (const href of ['/editorial/', '/editorial/admin', '/editorial-entry.html']) {
+    const h = await createRouterHarness();
+    h.scope.beforeLeave(() => false);
+    const old = h.scope, link = new Node('a', h.doc, { href }); h.doc.body.append(link);
+    const event = new TestEvent('click', { target: link, button: 0 }); h.doc.dispatchEvent(event); await drain();
+    assert.equal(event.defaultPrevented, true); assert.equal(h.scope, old); assert.equal(old.active, true);
+    assert.equal(h.location.pathname, '/dashboard.html');
+  }
+});
+
 test('Owner News reconciles the real router forced close before async Back/Forward and double close', async () => {
   const h = await createRouterHarness({ realUI: true });
   await h.router.navigate('/announcements.html?category=Cultura&offset=24');
@@ -335,6 +346,7 @@ test('the CMS renderer aborts assets and revokes late blobs when the page signal
     safeHttpUrl: value => value,
     fetchAPIAsset(path, { signal }) { requestedSignal = signal; return pending.promise; },
   });
+  vm.runInContext((await readFile('public/js/owner-news/asset-path.mjs', 'utf8')).replace(/^export /gm, ''), context);
   vm.runInContext(source, context);
   const page = new AbortController();
   context.renderBlocks(host, [{ type: 'image', asset_id: '550e8400-e29b-41d4-a716-446655440000', alt: 'Cover' }], { signal: page.signal });

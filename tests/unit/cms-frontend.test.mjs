@@ -326,7 +326,7 @@ test('reminder reloads ignore deferred responses that finish out of order', asyn
   assert.equal(harness.context.tableStates.length, 4);
 });
 
-test('safe renderer validates the allowlist and never uses raw HTML sinks', () => {
+test('safe renderer validates the allowlist and never uses raw HTML sinks', async () => {
   for (const type of ['quote', 'profile']) assert.match(renderer, new RegExp(`['"]${type}['"]`));
   assert.match(renderer, /export const BLOCK_TYPES/);
   assert.match(renderer, /export function validateBlocks/);
@@ -334,7 +334,9 @@ test('safe renderer validates the allowlist and never uses raw HTML sinks', () =
   assert.match(renderer, /TextEncoder\(\)\.encode\(JSON\.stringify\(blocks\)\)/);
   assert.match(renderer, /textContent/);
   assert.match(renderer, /fetchAPIAsset/);
-  assert.match(renderer, /\/api\/cms\/assets\//);
+  assert.match(renderer, /fetchAPIAsset\(cmsAssetEndpoint\(assetId, state\.assetScope\)/);
+  const { cmsAssetEndpoint } = await import('../../public/js/owner-news/asset-path.mjs');
+  assert.equal(cmsAssetEndpoint('11111111-1111-4111-8111-111111111111'), '/api/cms/assets/11111111-1111-4111-8111-111111111111');
   assert.doesNotMatch(renderer, /innerHTML|outerHTML|insertAdjacentHTML/);
   assert.doesNotMatch(editor, /innerHTML|outerHTML|insertAdjacentHTML/);
 });
@@ -418,7 +420,7 @@ test('autosave coalesces in-flight edits and rejects stale document responses', 
   assert.match(cms, /editorRoot\.setAttribute\('aria-busy', String\(editorBusy\)\)/);
   assert.match(cms, /blockSettings\.inert = editorBusy/);
   assert.match(cms, /blockSettings\.setAttribute\('aria-busy', String\(editorBusy\)\)/);
-  assert.match(cms, /inspectorRoot\.inert = editorBusy/);
+  assert.match(cms, /inspectorRoot\.inert = editorInteractionBusy\(\)/); // History remains readable in migrated mode.
   assert.match(cms, /inspectorRoot\.setAttribute\('aria-busy', String\(editorBusy\)\)/);
   assert.match(cms, /newDocumentForm\.inert = editorBusy/);
   assert.match(cms, /newDocumentForm\.setAttribute\('aria-busy', String\(editorBusy\)\)/);
@@ -432,13 +434,13 @@ test('autosave coalesces in-flight edits and rejects stale document responses', 
   assert.ok(saveInFlightClear >= 0 && saveInFlightSync > saveInFlightClear);
   assert.match(cms, /if \(creatingDocument \|\| assetUploading > 0 \|\| !documentView \|\| !editor\) return null/);
   assert.match(cms, /function scheduleAutosave\(\) \{\s*if \(!dirty \|\| !documentView \|\| !editor \|\| editorInteractionBusy\(\) \|\| saveQueued \|\| saving \|\| saveInFlight \|\| saveTimer !== null\) return;/);
-  assert.match(cms, /async function saveDraft\(\) \{\s*if \(creatingDocument \|\| assetUploading > 0 \|\| !documentView \|\| !editor\) return null;\s*clearTimeout\(saveTimer\);\s*saveTimer = null;\s*if \(saving\)/);
+  assert.match(cms, /async function saveDraft\(\) \{\s*if \(newsReadOnly\(\)\) return false;\s*if \(creatingDocument \|\| assetUploading > 0 \|\| !documentView \|\| !editor\) return null;\s*clearTimeout\(saveTimer\);\s*saveTimer = null;\s*if \(saving\)/);
   assert.match(cms, /async function saveBeforeAction\(\) \{[\s\S]*clearTimeout\(saveTimer\);[\s\S]*return await saveDraft\(\);[\s\S]*clearTimeout\(saveTimer\)/);
   assert.equal((cms.match(/const saved = await saveBeforeAction\(\)/g) || []).length, 2);
   assert.match(cms, /publishButton\.disabled = !active \|\| saveInProgress/);
   assert.match(cms, /scheduleButton\.disabled = !active \|\| saveInProgress/);
-  assert.match(cms, /async function publishDocument\(\) \{\s*if \(!documentView \|\| editorInteractionBusy\(\) \|\| saving \|\| saveInFlight\) return;/);
-  assert.match(cms, /async function scheduleDocument\(event\) \{\s*event\.preventDefault\(\);\s*if \(!documentView \|\| editorInteractionBusy\(\) \|\| saving \|\| saveInFlight\) return;/);
+  assert.match(cms, /async function publishDocument\(\) \{\s*if \(newsReadOnly\(\)\) return;\s*if \(!documentView \|\| editorInteractionBusy\(\) \|\| saving \|\| saveInFlight\) return;/);
+  assert.match(cms, /async function scheduleDocument\(event\) \{\s*if \(newsReadOnly\(\)\) \{ event\.preventDefault\(\); return; \}\s*event\.preventDefault\(\);\s*if \(!documentView \|\| editorInteractionBusy\(\) \|\| saving \|\| saveInFlight\) return;/);
   assert.match(cms, /revision_id: saved\.revision\.id/);
   assert.match(cms, /const active = !!doc \&\& !editorInteractionBusy\(\)/);
   assert.match(cms, /unpublishButton\.disabled = !active \|\| savePending \|\| !doc\.published_revision_id/);

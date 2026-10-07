@@ -9,6 +9,16 @@ backup=${1:-}
 [[ -d $backup && -f $backup/manifest.sha256 ]] || { echo "Invalid backup directory" >&2; exit 2; }
 
 root=${PROJECT_ROOT:-$(pwd)}
+if [[ -f $root/scripts/release-manifest.sh && -f $root/.image-env ]]; then
+  . "$root/scripts/release-manifest.sh"
+  load_release_manifest "$root/.image-env"
+  if [[ $RELEASE_FORMAT == payload-v1 ]]; then
+    exec bash "$root/scripts/payload-operations.sh" restore "$root" "$backup" --confirm RESTORE
+  fi
+fi
+if [[ -e $backup/backup.format || -e $backup/cms-postgres.dump || -e $backup/cms-uploads.tar.gz || -e $backup/operations-proof.json || -e $backup/release.images ]] || { [[ -f $root/.image-env ]] && grep -Eq '^(CMS_IMAGE|RELEASE_FORMAT)=payload-v1|^CMS_IMAGE=' "$root/.image-env"; }; then
+  echo 'Cannot restore CMS data with a legacy release' >&2; exit 2
+fi
 [[ -f $root/.image-env ]] || { echo "Missing immutable image manifest: $root/.image-env" >&2; exit 2; }
 API_IMAGE=$(sed -n 's/^API_IMAGE=//p' "$root/.image-env" | tail -n 1)
 CRON_IMAGE=$(sed -n 's/^CRON_IMAGE=//p' "$root/.image-env" | tail -n 1)

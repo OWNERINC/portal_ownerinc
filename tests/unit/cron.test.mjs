@@ -58,6 +58,7 @@ test('scheduled promotion is transactional, archives before publishing, and audi
   const db = {
     async query(sql, params = []) {
       calls.push({ sql, params });
+      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
       if (/SELECT d\.id, d\.published_revision_id/.test(sql)) {
         return {
           rows: [{

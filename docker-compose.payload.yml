@@ -1,0 +1,99 @@
+# Optional overlay: docker compose -f docker-compose.yml -f docker-compose.payload.yml ...
+# No profiles: omission of this file leaves the original Portal stack independent.
+x-cms-image: &cms-image
+  image: ${CMS_IMAGE:-local/ownerinc-portal-cms:latest}
+  build:
+    context: .
+    dockerfile: cms/Dockerfile
+x-cms-environment: &cms-environment
+  NODE_ENV: production
+  CMS_DATABASE_URL: ${CMS_RUNTIME_DATABASE_URL:?Set CMS_RUNTIME_DATABASE_URL}
+  PAYLOAD_SECRET: ${PAYLOAD_SECRET:?Set PAYLOAD_SECRET}
+  PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:?Set PORTAL_PUBLIC_URL}
+  PORTAL_INTERNAL_URL: http://api:3000
+  PAYLOAD_TO_PORTAL_SECRET: ${PAYLOAD_TO_PORTAL_SECRET:?Set PAYLOAD_TO_PORTAL_SECRET}
+  PORTAL_TO_PAYLOAD_SECRET: ${PORTAL_TO_PAYLOAD_SECRET:?Set PORTAL_TO_PAYLOAD_SECRET}
+  CMS_UPLOAD_DIR: /var/lib/ownerinc-cms/media
+
+services:
+  api:
+    environment:
+      CMS_INTERNAL_URL: http://cms:3001
+      PAYLOAD_TO_PORTAL_SECRET: ${PAYLOAD_TO_PORTAL_SECRET:?Set PAYLOAD_TO_PORTAL_SECRET}
+      PORTAL_TO_PAYLOAD_SECRET: ${PORTAL_TO_PAYLOAD_SECRET:?Set PORTAL_TO_PAYLOAD_SECRET}
+
+  cms-postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_DB: ownerinc_cms
+      POSTGRES_USER: cms_admin
+      POSTGRES_PASSWORD: ${CMS_POSTGRES_PASSWORD:?Set CMS_POSTGRES_PASSWORD}
+    volumes:
+      - cms_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U cms_admin -d ownerinc_cms']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  cms-provision:
+    <<: *cms-image
+    environment:
+      CMS_DATABASE_URL: ${CMS_ADMIN_DATABASE_URL:?Set CMS_ADMIN_DATABASE_URL}
+      CMS_MIGRATOR_PASSWORD: ${CMS_MIGRATOR_PASSWORD:?Set CMS_MIGRATOR_PASSWORD}
+      CMS_RUNTIME_PASSWORD: ${CMS_RUNTIME_PASSWORD:?Set CMS_RUNTIME_PASSWORD}
+    command: [node, --import, tsx, scripts/provision-db.ts, --provision]
+    depends_on:
+      cms-postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  cms-migrate:
+    <<: *cms-image
+    environment:
+      <<: *cms-environment
+      CMS_DATABASE_URL: ${CMS_MIGRATION_DATABASE_URL:?Set CMS_MIGRATION_DATABASE_URL}
+    command: [sh, -ec, 'node --import tsx scripts/provision-db.ts --verify-migrator && npm run migrate && node --import tsx scripts/provision-db.ts --grants']
+    depends_on:
+      cms-provision:
+        condition: service_completed_successfully
+    restart: 'no'
+
+  cms:
+    <<: *cms-image
+    environment: *cms-environment
+    command: [sh, -ec, 'node --import tsx scripts/provision-db.ts --verify-runtime && exec node node_modules/next/dist/bin/next start --port 3001']
+    volumes:
+      - cms_uploads_data:/var/lib/ownerinc-cms/media
+    depends_on:
+      cms-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:3001/editorial/ready").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+  cms-worker:
+    <<: *cms-image
+    environment: *cms-environment
+    command: [sh, -ec, 'node --import tsx scripts/provision-db.ts --verify-runtime && exec node node_modules/payload/bin.js jobs:run --cron "* * * * *" --queue owner-news']
+    volumes:
+      - cms_uploads_data:/var/lib/ownerinc-cms/media
+    depends_on:
+      cms-migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+    stop_grace_period: 120s
+    restart: unless-stopped
+
+volumes:
+  cms_postgres_data:
+  cms_uploads_data:

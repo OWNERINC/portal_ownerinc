@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import config from '@payload-config'
 import { RootPage, generatePageMetadata } from '@payloadcms/next/views'
 import { importMap } from '../importMap.js'
+import { PortalLogoutView } from '../../../../../admin/PortalLogout'
 
 type Args = {
   params: Promise<{ segments: string[] }>
@@ -17,8 +18,8 @@ export const generateMetadata = ({ params, searchParams }: Args): Promise<Metada
 const Page = async ({ params, searchParams }: Args) => {
   const { segments = [] } = await params
   if (['login', 'create-first-user', 'forgot', 'reset'].includes(segments[0])) redirect('/editorial-entry.html')
-  // GET only navigates. Task 9's exit view must confirm DELETE before claiming logout.
-  if (segments[0] === 'logout') redirect('/editorial-entry.html?logout=1')
+  // GET only renders; the browser confirms a same-origin DELETE before leaving.
+  if (segments[0] === 'logout') return <PortalLogoutView />
   return RootPage({ config, params, searchParams, importMap })
 }
 

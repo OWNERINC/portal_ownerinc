@@ -1,0 +1,23 @@
+# Legacy cms-only context exclusions. The supported root-context Docker build
+# uses cms/Dockerfile.dockerignore instead; do not build with context ./cms.
+node_modules
+.next
+.git
+.env
+.env.*
+*.tsbuildinfo
+tests
+uploads
+build-only-no-uploads
+*.log
+env.json
+state.json
+compose.env
+**/.env
+**/.env.*
+**/env.json
+**/state.json
+**/compose.env
+**/*.pem
+**/*.key
+**/*.log

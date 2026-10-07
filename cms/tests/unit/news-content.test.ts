@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import type { CollectionBeforeChangeHook, GlobalBeforeChangeHook, PayloadRequest } from 'payload'
 import { lexicalToRich } from '../../src/news/lexical-to-rich'
 import { legacyToPayloadBlocks } from '../../src/news/legacy-blocks'
-import { legacyNewsImportContext, normalizeEditorial, normalizeNewsContent, normalizeNewsDocument, validateNewsMediaShapes, validateNewsPublication } from '../../src/news/validation'
+import { legacyNewsImportContext, normalizeEditorial, normalizeNewsContent, normalizeNewsDocument, validateNewsMediaShapes, validateNewsPublication, validateNewsBeforeChange, validateNewsHomeBeforeChange } from '../../src/news/validation'
 import { estimateNewsMinutes, newsText, toNewsDTO } from '../../src/news/to-dto'
 import { NewsArticles } from '../../src/collections/NewsArticles'
 import { NewsHome } from '../../src/globals/NewsHome'
@@ -19,11 +19,11 @@ const document = (body: unknown = [{ blockType: 'richText', content: lexical() }
   id: articleID, title: 'Título', category: '', editorial, body, _status: 'published', publishedAt: null,
 })
 const runArticleHook = (data: Record<string, unknown>, originalDoc?: Record<string, unknown>) =>
-  NewsArticles.hooks!.beforeChange![0]({ data, originalDoc } as Parameters<CollectionBeforeChangeHook>[0])
+  validateNewsBeforeChange({ data, originalDoc } as Parameters<CollectionBeforeChangeHook>[0])
 const runHomeHook = (data: Record<string, unknown>, originalDoc?: Record<string, unknown>) =>
-  NewsHome.hooks!.beforeChange![0]({ data, originalDoc } as Parameters<GlobalBeforeChangeHook>[0])
+  validateNewsHomeBeforeChange({ data, originalDoc } as Parameters<GlobalBeforeChangeHook>[0])
 const runAutosaveHook = (data: Record<string, unknown>, originalDoc: Record<string, unknown>) =>
-  NewsArticles.hooks!.beforeChange![0]({ data, originalDoc, operation: 'update', context: {},
+  validateNewsBeforeChange({ data, originalDoc, operation: 'update', context: {},
     req: { query: { draft: 'true', autosave: 'true' } },
   } as unknown as Parameters<CollectionBeforeChangeHook>[0])
 
@@ -94,7 +94,7 @@ for (const [name, unfinished, complete] of [
     const prior = document()
     const body = [{ blockType: 'paragraph', text: 'Existing body.' }, { ...unfinished, id: 'native-row', blockName: 'In progress' }]
     const newDraft = { ...document(body), _status: 'draft' }
-    assert.strictEqual(await NewsArticles.hooks!.beforeChange![0]({ data: newDraft, operation: 'create', context: {},
+    assert.strictEqual(await validateNewsBeforeChange({ data: newDraft, operation: 'create', context: {},
       req: { query: { draft: 'true', autosave: 'true' } },
     } as unknown as Parameters<CollectionBeforeChangeHook>[0]), newDraft)
     const patch = { _status: 'draft', body }
@@ -124,7 +124,7 @@ test('all native block forms may be incomplete, while legacy imports and DTOs st
     assert.throws(() => legacyToPayloadBlocks([block]))
   }
   const imported = { ...document([{ blockType: 'quote', text: '' }]), editorial: null, _status: 'draft' }
-  await assert.rejects(async () => NewsArticles.hooks!.beforeChange![0]({ data: imported, operation: 'create',
+  await assert.rejects(async () => validateNewsBeforeChange({ data: imported, operation: 'create',
     context: legacyNewsImportContext,
   } as unknown as Parameters<CollectionBeforeChangeHook>[0]))
 })
@@ -342,9 +342,9 @@ test('actual collection hook validates the full PATCH, including status-only pub
   await assert.rejects(async () => runArticleHook({ editorial: undefined }, document()))
   assert.deepEqual(await runArticleHook({ _status: 'draft', body: [] }, document()), { _status: 'draft', body: [] })
   const args = { data: { ...document([]), editorial: null }, operation: 'create', context: {} } as unknown as Parameters<CollectionBeforeChangeHook>[0]
-  await assert.rejects(async () => NewsArticles.hooks!.beforeChange![0](args), /new_article_requires_editorial/)
-  await assert.rejects(async () => NewsArticles.hooks!.beforeChange![0]({ ...args, context: { legacyImport: true } }), /new_article_requires_editorial/)
-  const imported = await NewsArticles.hooks!.beforeChange![0]({ ...args, context: legacyNewsImportContext })
+  await assert.rejects(async () => validateNewsBeforeChange(args), /new_article_requires_editorial/)
+  await assert.rejects(async () => validateNewsBeforeChange({ ...args, context: { legacyImport: true } }), /new_article_requires_editorial/)
+  const imported = await validateNewsBeforeChange({ ...args, context: legacyNewsImportContext })
   assert.equal(imported.editorial, null)
 })
 
@@ -383,9 +383,9 @@ test('reading time includes body text, excludes attribution/name/metadata, infer
   assert.equal(estimateNewsMinutes([{ type: 'profile', name: 'Name', role: 'Role' }], null), null)
 })
 
-test('native configs protect CRUD/history, retain every block, drafts/autosave, and deny all media access', async () => {
+test('native configs protect CRUD/history, retain every block, drafts/autosave, and restrict media to editors', async () => {
   assert.deepEqual(new Set(newsBlocks.map(block => block.slug)), new Set(['richText', ...legacyBlocks.map(block => block.type)]))
-  assert.deepEqual(NewsArticles.versions, { maxPerDoc: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } })
+  assert.deepEqual(NewsArticles.versions, { maxPerDoc: 0, drafts: { autosave: { interval: 2000, showSaveDraftButton: true }, schedulePublish: false } })
   assert.deepEqual(NewsHome.versions, { max: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } })
   const req = { user: null } as PayloadRequest
   const editorReq = { user: { id: articleID, collection: 'portal-editors', portalUid: 'uid',
@@ -396,7 +396,10 @@ test('native configs protect CRUD/history, retain every block, drafts/autosave, 
     assert.equal(await access!({ req: { ...editorReq, user: { ...editorReq.user!, portalUid: 'forged' } } }), false)
   }
   const media = createNewsMedia({ uploadDir: 'C:/synthetic-private-media' })
-  for (const access of Object.values(media.access!)) assert.equal(await access!({ req: editorReq }), false)
+  for (const [operation, access] of Object.entries(media.access!)) {
+    assert.equal(await access!({ req }), false)
+    assert.equal(await access!({ req: editorReq }), operation !== 'update')
+  }
   assert.equal(media.versions, undefined)
   for (const name of ['publishedAt', 'publicationGeneration', 'legacyDocumentId', 'legacySourceId', 'legacyRevisionId', 'importedAt']) {
     const field = NewsArticles.fields.find(field => 'name' in field && field.name === name)!

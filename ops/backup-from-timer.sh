@@ -57,6 +57,17 @@ fi
 require_file "$override" 'Compose override'
 chmod 700 "$backup_dir"
 
+export PORTAL_OPERATION_LOCK="$lock" PORTAL_OPERATION_LOCK_HELD="$lock"
+export PAYLOAD_OPERATIONS_GUARD="$root/runtime/payload-operations-guard"
+cms_expected=false
+if grep -Eq '^CMS_IMAGE=|^RELEASE_FORMAT=payload-v1$' "$release/.image-env"; then
+  require_file "$release/scripts/release-manifest.sh" 'CMS manifest verifier'
+  . "$release/scripts/release-manifest.sh"
+  load_release_manifest "$release/.image-env"
+  [[ $RELEASE_FORMAT == payload-v1 ]] || refuse 'partial CMS manifest.'
+  cms_expected=true
+fi
+
 # backup.sh validates/parses the digest manifest without sourcing it. Capture its
 # stdout so "Backup created" is not reported as success before local hash checks.
 if output=$(COMPOSE_PROJECT_NAME=ownerinc-portal-prod \
@@ -75,6 +86,17 @@ if [[ ! $name =~ ^[0-9]{8}T[0-9]{6}Z$ || $output != "Backup created: $backup_dir
   ! canonical_path "$destination"; then
   echo 'Daily backup returned an invalid destination; no verified success recorded.' >&2
   exit 1
+fi
+if [[ $cms_expected == true && ! -e $destination/backup.format ]]; then
+  echo 'CMS daily backup returned legacy artifacts; no verified success recorded.' >&2; exit 1
+fi
+if [[ -e $destination/backup.format ]]; then
+  [[ $cms_expected == true ]] || { echo 'Unexpected CMS backup format for legacy release' >&2; exit 1; }
+  require_file "$release/scripts/release-manifest.sh" 'versioned backup verifier'
+  . "$release/scripts/release-manifest.sh"
+  verify_backup_manifest "$destination" || { echo 'Coordinated backup verification failed.' >&2; exit 1; }
+  printf 'Local backup verified: %s (S3 disabled; coordinated retention requires operator policy)\n' "$destination"
+  exit 0
 fi
 for file in postgres.dump uploads.tar.gz manifest.sha256; do
   if [[ ! -f $destination/$file || ! -s $destination/$file ]] || ! canonical_path "$destination/$file"; then

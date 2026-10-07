@@ -43,6 +43,8 @@ export type NewsDTO = {
   asset_scope: 'owner-news' | 'owner-news-preview'
   content_blocks: NewsContent
   read_time_minutes: number | null
+  /** Status of the exact saved revision, NOT a claim about current publication. */
+  preview_revision?: { id: string; source: 'payload' | 'legacy'; status: 'draft' | 'published' | 'scheduled' | 'archived' }
 }
 export type NewsPage = { rows: NewsDTO[]; count: number }
 export type NewsQuery = {
@@ -63,6 +65,21 @@ export type PreviewQuery = {
 export type HomeContent = {
   version: 1; eyebrow: string; headline: string; summary: string
 }
+/** Task10/11 handoff: immutable imported history, NOT a native Versions record.
+ * CMS id/createdAt/updatedAt describe ingestion only; never original provenance. */
+export type LegacyNewsRevisionInput = {
+  legacyDocumentId: string; legacyRevisionId: string
+  originalVersion: number; originalCreatedAt: string; originalActorUid: string | null
+  originalStatus: 'draft' | 'published' | 'scheduled' | 'archived'
+  originalTitle: string; originalCategory: string; originalPublishedAt: string | null
+  originalBody: NewsContent; originalEditorial: NewsEditorial
+  contentHash: string; provenanceHash: string; mediaReferences: string[]
+  /** Absent on previously imported rows; never inferred retroactively. */
+  metadataBasis?: {
+    title: 'document_snapshot'; category: 'document_snapshot'
+    publishedAt: 'published_pointer' | 'unknown'
+  } | null
+}
 export type ScheduleInput = {
   target: 'article' | 'home'
   documentId: string
@@ -70,4 +87,6 @@ export type ScheduleInput = {
   operation: 'publish' | 'unpublish'
   scheduledAt: string
   expectedGeneration: number
+  /** Optional saved-content confirmation. Native admin always supplies it. */
+  snapshotHash?: string
 }

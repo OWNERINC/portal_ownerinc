@@ -1,6 +1,8 @@
 import { fetchAPI, fetchAPIAsset } from './auth.js';
-import { blocksToText, renderBlocks } from './cms-block-renderer.js';
+import { renderBlocks } from './cms-block-renderer.js';
 import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
+import { cmsAssetEndpoint } from './owner-news/asset-path.mjs';
+import { newsBlocksToText, validateNewsBlocks } from './owner-news/content-contract.js';
 
 const requests = { fetchAPI, fetchAPIAsset };
 const renderContent = renderBlocks;
@@ -52,11 +54,6 @@ function reminderContentHref(reminder) {
   return reminder.content_url === expected ? reminder.content_url : expected;
 }
 
-function excerpt(blocks, fallback) {
-  const firstText = blocks?.find(block => ['paragraph', 'callout'].includes(block.type));
-  return ((firstText?.text || blocksToText(blocks)).replace(/\s+/g, ' ').trim() || fallback).slice(0, 180);
-}
-
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('aria-hidden', 'true');
@@ -102,7 +99,7 @@ function renderHero(announcement, state = announcement ? 'populated' : 'empty') 
   if (title) title.textContent = announcement?.title || 'Owner News';
   if (eyebrow) eyebrow.textContent = `Owner News · ${announcement?.category || 'Ownerinc'}`;
   if (description) description.textContent = announcement
-    ? announcement.editorial?.summary || excerpt(announcement.content_blocks, 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.')
+    ? announcement.editorial?.summary || newsBlocksToText(announcement.content_blocks).replace(/\s+/g, ' ').slice(0, 180) || 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.'
     : state === 'loading' ? 'Carregando publicações…'
       : state === 'error' ? 'Não foi possível carregar o Owner News.' : 'Nenhuma publicação no Owner News.';
   if (meta) meta.textContent = announcement ? `Publicado ${formatDate(announcement.published_at)}` : '';
@@ -132,10 +129,12 @@ function loadNewsImage(image, announcement) {
   const requestToken = announcementsRequest;
   image.src = './assets/logo-branco.svg';
   image.alt = 'Owner News';
-  const cover = announcement?.content_blocks?.find(block => block.type === 'image' && block.usage === 'cover')
-    || announcement?.content_blocks?.find(block => block.type === 'image');
+  const blocks = validateNewsBlocks(announcement?.content_blocks || [], announcement?.content_version) || [];
+  const cover = blocks.find(block => block.type === 'image' && block.usage === 'cover') || blocks.find(block => block.type === 'image');
   if (!cover) return;
-  fetchAPIAsset(`/api/cms/assets/${encodeURIComponent(cover.asset_id)}`).then(url => {
+  let endpoint;
+  try { endpoint = cmsAssetEndpoint(cover.asset_id, announcement.asset_scope); } catch { return; }
+  fetchAPIAsset(endpoint).then(url => {
     if (requestToken !== announcementsRequest || !image.isConnected) {
       URL.revokeObjectURL(url);
       return;
@@ -169,7 +168,7 @@ async function loadAnnouncements() {
       const card = storyCard({
       title: announcement.title,
       category: announcement.category || 'Comunicado',
-      description: announcement.editorial?.summary || excerpt(announcement.content_blocks, ''),
+      description: announcement.editorial?.summary || newsBlocksToText(announcement.content_blocks).replace(/\s+/g, ' ').slice(0, 180),
       href: `./announcements.html?id=${encodeURIComponent(announcement.id)}`,
       image: './assets/logo-branco.svg',
       alt: 'Owner News',

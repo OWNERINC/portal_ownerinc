@@ -13,6 +13,22 @@ ficam no [registro da sessão principal](../reviews/2026-09-29-portal-correction
 Checks automatizados e homologação com fixtures locais não comprovam produção,
 entrega externa de e-mail, conteúdo oficial ou uso em dispositivo físico.
 
+### Piloto Payload — atualização de verificação em 6 de outubro de 2026
+
+O wiring local de CI/checks passa a incluir bootstrap, testes unitários, typecheck,
+audit de produção e SBOM do CMS. A execução consolidada desse wiring ainda aguarda
+integração; não é evidência de CI hospedada verde nem de prontidão de produção.
+O guard portátil de integração está implementado, mas a suíte ponta-a-ponta ainda
+não: o runner padrão retorna código 2, sem declarar aceite. A matriz distingue
+essas lacunas de cenários implementados porém não executados.
+
+O Editor CMS central continua atendendo as seis áreas por capacidade. O piloto
+Payload é Owner News primeiro; prévia clássica embutida e prévia Payload de revisão
+salva em outra aba são jornadas distintas. Campos amigáveis, destinos de retorno e
+navegação pendente dependem do aceite correspondente. O bloqueio de histórico
+Task9 (8 casos RED registrados) permanece aberto até correção e prova revisadas.
+Consulte a [matriz Payload](../reviews/2026-10-02-payload-owner-news-acceptance.md).
+
 ## Legenda
 
 - **Operacional:** fluxo principal implementado; pode depender de serviço externo.

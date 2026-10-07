@@ -1,4 +1,5 @@
 import { auth } from './firebase-config.js';
+import { revokeEditorialSession } from './editorial-session-watch.js';
 import { onAuthStateChanged, signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
@@ -144,7 +145,7 @@ function syncSession() {
   if (previousUid && !wasDenied) {
     // Firebase also reports logout/account changes made in another tab.
     document.querySelector('main')?.replaceChildren();
-    redirectToLogin('session');
+    void finishSessionExit(previousUid, () => redirectToLogin('session'), false);
   }
 }
 
@@ -190,9 +191,24 @@ async function endSession(reason) {
   const uid = sessionUid;
   clearVerifiedRole();
   document.querySelector('main')?.replaceChildren();
-  await signOut(auth).catch(() => {});
-  // Do not redirect a different account that signed in while signOut settled.
-  if (!auth.currentUser || (auth.currentUser.uid === uid && sessionDenied)) redirectToLogin(reason);
+  await finishSessionExit(uid, () => redirectToLogin(reason));
+}
+
+async function finishSessionExit(uid, redirect, signOutPortal = true) {
+  try {
+    await revokeEditorialSession();
+    // No second signOut against an account that changed during DELETE/retry.
+    if (signOutPortal && auth.currentUser?.uid === uid) await signOut(auth);
+    if (!auth.currentUser || auth.currentUser.uid === uid || !signOutPortal) redirect();
+  } catch {
+    const main = document.querySelector('main') || document.body;
+    const status = document.createElement('section'); status.setAttribute('role', 'alert');
+    const text = document.createElement('p');
+    text.textContent = 'Não foi possível confirmar o encerramento da sessão. O conteúdo foi ocultado. Tente novamente.';
+    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Tentar encerrar novamente';
+    retry.addEventListener('click', () => { retry.disabled = true; void finishSessionExit(uid, redirect, signOutPortal); });
+    status.append(text, retry); main.replaceChildren(status);
+  }
 }
 
 async function handleAuthenticationFailure(path, response) {
@@ -375,8 +391,7 @@ export async function logout() {
   const uid = auth.currentUser?.uid;
   clearVerifiedRole();
   document.querySelector('main')?.replaceChildren();
-  await signOut(auth);
-  if (!auth.currentUser || (auth.currentUser.uid === uid && sessionDenied)) window.location.href = './login.html';
+  await finishSessionExit(uid, () => { window.location.href = './login.html'; });
 }
 
 // One subscription for the persistent module, including Firebase's cross-tab

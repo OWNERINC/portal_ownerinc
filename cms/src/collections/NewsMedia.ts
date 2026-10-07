@@ -1,19 +1,35 @@
 import type { CollectionConfig } from 'payload'
 import type { CmsEnvironment } from '../config/environment'
 import { mediaMimes } from '../news/primitives'
+import { canManageNews } from '../auth/access'
+import { persistMediaIdentity, protectMediaDelete, protectMediaOperation } from '../media/lifecycle'
+import { openNativeNewsMedia } from '../media/read-file'
+import { isLegacyNewsImport } from '../news/validation'
 
-/** Schema dependency only. Task 5 must install private-media safeguards before opening access. */
-export function createNewsMedia(environment: Pick<CmsEnvironment, 'uploadDir'>): CollectionConfig {
+export function createNewsMedia(environment: Pick<CmsEnvironment, 'uploadDir'>, importContext?: unknown): CollectionConfig {
   const deny = () => false
+  const stagedImportConfig = isLegacyNewsImport(importContext)
   return {
     slug: 'news-media',
-    admin: { hidden: true, useAsTitle: 'filename' },
-    access: { create: deny, read: deny, update: deny, delete: deny },
-    upload: { staticDir: environment.uploadDir, mimeTypes: mediaMimes, crop: false, focalPoint: false, },
+    labels: { singular: 'Arquivo', plural: 'Mídias' },
+    admin: { useAsTitle: 'filename', description: 'Arquivos imutáveis. Para substituir ou recortar, envie um novo arquivo e altere a referência na publicação.' },
+    disableDuplicate: true,
+    disableBulkDelete: true,
+    access: { create: canManageNews, read: canManageNews, update: deny, delete: canManageNews },
+    hooks: { beforeOperation: [protectMediaOperation], beforeChange: [persistMediaIdentity], beforeDelete: [protectMediaDelete] },
+    upload: {
+      staticDir: environment.uploadDir, mimeTypes: mediaMimes, crop: false, focalPoint: false, pasteURL: false,
+      ...(stagedImportConfig ? { filesRequiredOnCreate: false, disableLocalStorage: true } : {}),
+      // Always answer: never fall through to native path/redirect serving.
+      handlers: [async (req, { params }) => {
+        const result = await openNativeNewsMedia(req, params.filename)
+        return new Response(result.body, { status: result.status, headers: result.headers })
+      }],
+    },
     fields: [
-      { name: 'sha256', type: 'text', minLength: 64, maxLength: 64, index: true, admin: { readOnly: true } },
-      { name: 'legacyAssetId', type: 'text', index: true, admin: { readOnly: true } },
-      { name: 'importedAt', type: 'date', admin: { readOnly: true } },
+      { name: 'sha256', label: 'Integridade SHA-256', type: 'text', required: true, minLength: 64, maxLength: 64, index: true, admin: { readOnly: true } },
+      { name: 'legacyAssetId', label: 'Arquivo anterior', type: 'text', index: true, admin: { readOnly: true } },
+      { name: 'importedAt', label: 'Importado em', type: 'date', admin: { readOnly: true } },
     ],
   }
 }

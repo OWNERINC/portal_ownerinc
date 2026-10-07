@@ -3,6 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { createFeedbackHarness, TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
+import { cmsAssetEndpoint } from '../../public/js/owner-news/asset-path.mjs';
+
+const imageID = '11111111-1111-4111-8111-111111111111';
+const coverID = '22222222-2222-4222-8222-222222222222';
 
 const news = await readFile('public/js/announcements.js', 'utf8');
 const dashboard = await readFile('public/js/dashboard.js', 'utf8');
@@ -126,20 +130,22 @@ test('abertura publicada precede destaque global e respostas antigas são ignora
 });
 
 test('dashboard protected covers revoke stale and retained object URLs', async () => {
+  const h = await createFeedbackHarness('dashboard', { mount: false });
   const pending = deferred();
   const revoked = [];
   const paths = [];
   const context = vm.createContext({
     announcementsRequest: 1, newsImageUrls: new Set(), URL: { revokeObjectURL: url => revoked.push(url) },
     fetchAPIAsset: path => { paths.push(path); return pending.promise; }, encodeURIComponent,
+    validateNewsBlocks: h.context.validateNewsBlocks, cmsAssetEndpoint,
   });
   vm.runInContext(section(dashboard, 'function releaseNewsImages(', "page.listen(window, 'pagehide'"), context);
   const image = { isConnected: true };
-  context.loadNewsImage(image, { content_blocks: [{ type: 'image', asset_id: 'asset-id', alt: 'Fotografia' }] });
+  context.loadNewsImage(image, { content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Fotografia' }] });
   context.announcementsRequest++;
   pending.resolve('blob:stale');
   await pending.promise;
-  assert.equal(paths[0], '/api/cms/assets/asset-id');
+  assert.equal(paths[0], `/api/cms/assets/${imageID}`);
   assert.equal(image.src, './assets/logo-branco.svg');
   assert.deepEqual(revoked, ['blob:stale']);
   context.newsImageUrls.add('blob:current');
@@ -150,6 +156,7 @@ test('dashboard protected covers revoke stale and retained object URLs', async (
   context.loadNewsImage(image);
   assert.equal(image.src, './assets/logo-branco.svg');
   assert.equal(paths.length, 1);
+  h.page.dispose();
 });
 
 test('dashboard clears a withdrawn hero on an empty refresh and restores it for a new publication', async t => {
@@ -161,8 +168,8 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assert.match(h.node('dashboard-hero-description').textContent, /Carregando/);
   assert.equal(h.latest('/api/announcements?').path, '/api/announcements?kind=article&limit=3&offset=0');
   const story = { id: 'old', title: 'Old story', editorial: { summary: 'Resumo editorial sintético' }, published_at: '2026-09-29T12:00:00Z', content_blocks: [
-    { type: 'image', asset_id: 'legacy-image', alt: 'Corpo' },
-    { type: 'image', asset_id: 'explicit-cover', alt: 'Capa', usage: 'cover' },
+    { type: 'image', asset_id: imageID, alt: 'Corpo' },
+    { type: 'image', asset_id: coverID, alt: 'Capa', usage: 'cover' },
   ] };
   h.latest('/api/announcements?').resolve([story]); await drain();
   assert.equal(hero.dataset.state, 'populated');
@@ -173,7 +180,8 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assert.equal(link.hidden, false); assert.equal(cover.hidden, false);
   assert.equal(h.node('dashboard-news-section').hidden, false);
   const assets = h.requests.filter(item => item.kind === 'asset');
-  assert.ok(assets.every(request => request.path.endsWith('/explicit-cover')));
+  assert.equal(assets.length, 2);
+  assert.ok(assets.every(request => request.path.endsWith(`/${coverID}`)));
   assets[0].resolve('blob:hero'); assets[1].resolve('blob:rail'); await drain();
   assert.equal(cover.src, 'blob:hero');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
@@ -222,7 +230,7 @@ for (const outcome of ['success', 'failure']) test(`dashboard ignores stale ${ou
   const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
   const old = h.latest('/api/announcements?');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
-  h.latest('/api/announcements?').resolve([{ id: 'new', title: 'Current', content_blocks: [{ type: 'image', asset_id: 'asset-a', alt: 'Capa' }] }]); await drain();
+  h.latest('/api/announcements?').resolve([{ id: 'new', title: 'Current', content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Capa' }] }]); await drain();
   if (outcome === 'success') old.resolve([]); else old.reject(new Error('old error'));
   await drain(); assert.equal(h.node('dashboard-hero-title').textContent, 'Current');
   const assets = h.requests.filter(item => item.kind === 'asset');

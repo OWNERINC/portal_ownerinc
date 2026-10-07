@@ -16,6 +16,7 @@ function poolFor({ document, blocks = [], assets = [], sourceExists = true, sour
   const client = {
     async query(sql, params = []) {
       calls.push({ sql, params });
+      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
       if (/scheduled\.status = 'scheduled'/.test(sql)) {
         const scheduledAt = document?.scheduled_at && new Date(document.scheduled_at).getTime();
         return scheduledAt && scheduledAt <= Date.now()
@@ -352,12 +353,14 @@ test('area mappings preserve legacy rows and add content_blocks only when publis
 });
 
 test('announcements require authentication and query published revisions only', async () => {
-  const [route, index] = await Promise.all([
+  const [route, index, backend] = await Promise.all([
     readFile('api/routes/announcements.js', 'utf8'),
     readFile('api/index.js', 'utf8'),
+    readFile('api/owner-news/backend.js', 'utf8'),
   ]);
-  assert.match(route, /router\.get\('\/', authMiddleware/);
-  assert.match(route, /listPublishedAnnouncements/);
+  assert.match(route, /authenticate = authMiddleware/);
+  assert.ok(route.indexOf('router.use(authenticate)') < route.indexOf("router.get('/',"));
+  assert.match(backend, /listPublishedAnnouncements/);
   assert.match(index, /app\.use\('\/api\/announcements', require\('\.\/routes\/announcements'\)\)/);
 
   const pool = poolFor({
@@ -377,9 +380,10 @@ test('announcements require authentication and query published revisions only', 
 test('announcement detail is authenticated and published-only', async () => {
   const route = await readFile('api/routes/announcements.js', 'utf8');
   const reader = await readFile('api/cms/reader.js', 'utf8');
-  assert.match(route, /router\.get\('\/:id', authMiddleware/);
+  assert.match(route, /authenticate = authMiddleware/);
+  assert.ok(route.indexOf('router.use(authenticate)') < route.indexOf("router.get('/:id',"));
   assert.match(route, /uuid\(req\.params\.id\)/);
-  assert.match(route, /getPublishedAnnouncement/);
+  assert.match(await readFile('api/owner-news/backend.js', 'utf8'), /getPublishedAnnouncement/);
   assert.match(reader, /JOIN cms_revisions r[\s\S]*ON r\.id = d\.published_revision_id AND r\.status = 'published'[\s\S]*WHERE d\.id = \$1 AND d\.content_type = 'announcement'/);
   assert.doesNotMatch(reader, /getPublishedAnnouncement[\s\S]*draft_revision_id/);
 });

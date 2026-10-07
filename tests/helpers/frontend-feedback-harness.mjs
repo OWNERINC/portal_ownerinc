@@ -83,6 +83,25 @@ export class FixtureNode extends Node {
 
 // Entire production mounts and their local modules run with the real lifecycle.
 // Only DOM, browser rendering/export libraries and external transports are doubles.
+export async function installAuthTransport(h, uid = 'editor-a') {
+  const listeners = [], requests = [], created = [], redirects = [];
+  const account = uid => uid ? { uid, getIdToken: async () => `fixture-${uid}` } : null;
+  const auth = { currentUser: account(uid), authStateReady: async () => {}, app: { name: '[DEFAULT]', options: { apiKey: 'fixture' } } };
+  const values = new Map();
+  const changeUser = uid => { auth.currentUser = account(uid); listeners.forEach(fn => fn(auth.currentUser)); };
+  h.window.location.replace = url => redirects.push(url);
+  h.context.URL.createObjectURL = () => { const url = `blob:auth-${created.length}`; created.push(url); return url; };
+  Object.assign(h.context, { auth,
+    sessionStorage: { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) },
+    onAuthStateChanged: (_auth, fn) => { listeners.push(fn); return () => {}; },
+    signOut: async () => changeUser(null), updateProfile: async () => {}, revokeEditorialSession: async () => {},
+    fetch: (path, options = {}) => { const request = { path, options, ...deferred() }; requests.push(request); return request.promise; },
+  });
+  const source = (await readFile('public/js/auth.js', 'utf8')).replace(/^import[\s\S]*?;\s*/gm, '').replace(/^export /gm, '');
+  vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { fetchAPI, fetchAPIAsset, can }); })();`, h.context);
+  return { requests, changeUser, created, redirects };
+}
+
 export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [], url = `https://portal.test/${name}.html` } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
@@ -133,6 +152,10 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard');
+  await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope');
+  await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
+  await load('public/js/owner-news/content-contract.js', 'validateNewsBlocks, validateRichNodes, newsBlocksToText');
+  await load('public/js/owner-news/rich-content.js', 'renderRichContent');
   if (name === 'announcements' && mount) {
     await load('public/js/pagination.js', 'readOffset, renderPagination, setPaginationBusy');
     await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
@@ -142,7 +165,6 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
     await load('public/js/owner-news/reader-view.js', 'renderNewsArticle');
     await load('public/js/owner-news/navigation.js', 'createNewsNavigation');
   }
-  if (name === 'dashboard') await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   if (name === 'autocard') {
     await load('public/autocard/crop.js', 'DEFAULT_MEDIA_CROP, cropRenderStyle, cropStyle, dragMediaCrop, normalizeMediaCrop');
     await load('public/autocard/asset-catalog.js', 'searchAssets');

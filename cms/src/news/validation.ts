@@ -3,6 +3,8 @@ import type { HomeContent, Inline, LegacyBlock, NewsEditorial, RichBlock, RichNo
 import { countNode, lexicalToRich, normalizeRichNodes, richBudget } from './lexical-to-rich'
 import { normalizeLegacyBlock, payloadToLegacyBlock, projectNativeDraftBlock, validateNativeRowMetadata } from './legacy-blocks'
 import { bytes, imageMimes, invalid, keys, layouts, oneOf, plain, record, typographies, uuid, videoMimes } from './primitives'
+import { assertMediaReferences } from '../media/references'
+import { requireCmsTransaction } from '../publication/transaction'
 
 export function normalizeEditorial(value: unknown): NewsEditorial {
   if (value === null) return null
@@ -20,8 +22,19 @@ export function normalizeEditorial(value: unknown): NewsEditorial {
     author: plain(e.author, 200, false, false), source_label: plain(e.source_label, 200, false, false), source_date: date }
 }
 
+/** Native Payload JSONField supplies serialized editor text to its validator. */
+export function readEditorialFieldValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  return JSON.parse(value)
+}
+
 export function normalizeNewsContent(value: unknown): (LegacyBlock | RichBlock)[] {
   return projectContent(value, false)
+}
+
+/** Bounded native draft projection that retains chosen media even without alt/title. */
+export function normalizeNewsDraftReferences(value: unknown): (LegacyBlock | RichBlock)[] {
+  return projectContent(value, true)
 }
 
 // Incomplete native projections are solely for storage validation and budgeting.
@@ -132,6 +145,13 @@ export const validateNewsBeforeChange: CollectionBeforeChangeHook = ({ data, ori
   if (full._status === 'draft' && !isLegacyNewsImport(context)) {
     validateNewsDraftStorage(full)
   } else normalizeNewsDocument(full, full._status === 'published')
+  return data
+}
+
+export const validateNewsPublicationMedia: CollectionBeforeChangeHook = async ({ data, originalDoc, req }) => {
+  await requireCmsTransaction(req.payload, req)
+  const full = effectiveNewsDocument(data, originalDoc)
+  if (full._status === 'published') await assertMediaReferences(req.payload, normalizeNewsContent(full.body), req)
   return data
 }
 

@@ -16,6 +16,7 @@ const { migrate } = require('../api/db/migrate');
 const { getPublishedAnnouncement, listPublishedAnnouncements, promoteDueScheduledForPool, validatePublishedBlocksBatch } = require('../api/cms/reader');
 const { lockCmsAssets } = require('../api/cms/locks');
 const { canManageCms } = require('../api/cms/permissions');
+const { getAuthority } = require('../api/owner-news/authority');
 const { createPollDraft, publishPoll, closePoll, readPoll, readCurrentPoll, voteOnPoll } = require('../api/owner-news/polls');
 const supertest = require('supertest');
 await migrate();
@@ -372,12 +373,12 @@ try {
   console.log('owner-news integration: schedule/cancel/promotion preserve later draft; invalid schedule archived ok');
 
   const assetSource = await readFile(new URL('../api/routes/cms-assets.js', import.meta.url), 'utf8');
-  const helpers = new Function('canManageCms', 'lockCmsAssets', 'validatePublishedBlocksBatch', `
+  const helpers = new Function('canManageCms', 'lockCmsAssets', 'validatePublishedBlocksBatch', 'getAuthority', `
     ${assetSource.slice(assetSource.indexOf('const ASSET_MIMES'), assetSource.indexOf('const upload ='))}
     ${assetSource.slice(assetSource.indexOf('function audienceFor'), assetSource.indexOf('function isMalformedMultipart'))}
     ${assetSource.slice(assetSource.indexOf('async function canReadAsset'), assetSource.indexOf('function uploadMiddleware'))}
     ${assetSource.slice(assetSource.indexOf('async function reserveUnreferencedAsset'), assetSource.indexOf('function reservationIsActive'))}
-    return { canReadAsset, reserveUnreferencedAsset };`)(canManageCms, lockCmsAssets, validatePublishedBlocksBatch);
+    return { canReadAsset, reserveUnreferencedAsset };`)(canManageCms, lockCmsAssets, validatePublishedBlocksBatch, getAuthority);
   for (const mime of ['application/pdf', 'image/png']) {
     const { rows: [asset] } = await client.query("INSERT INTO cms_assets (original_name, mime_type, byte_size) VALUES ('Fixture E2', $1, 1) RETURNING id, mime_type", [mime]);
     assetIds.push(asset.id);

@@ -145,10 +145,23 @@ flock -n 9 || {
   echo "Another $target deployment is already running." >&2
   exit 3
 }
+export PORTAL_OPERATION_LOCK="$runtime/deploy.lock" PORTAL_OPERATION_LOCK_HELD="$runtime/deploy.lock"
+export PAYLOAD_OPERATIONS_GUARD="$runtime/payload-operations-guard"
+export COMPOSE_PROJECT_NAME="$project"
 
 current=
 if [[ -s $current_file ]]; then
   current=$(<"$current_file")
+fi
+if [[ -n $current ]]; then
+  current_sha=${current#"$releases/"}
+  [[ $current == "$releases/$current_sha" && $current_sha =~ ^[0-9a-f]{40}$ && ! -L $current ]] || { echo 'Invalid current release path' >&2; exit 2; }
+fi
+cms_current=false
+if [[ -n $current && -f $current/.image-env ]] && grep -Eq '^CMS_IMAGE=|^RELEASE_FORMAT=' "$current/.image-env"; then
+  [[ -f $current/scripts/release-manifest.sh ]] || { echo 'Current release has unsupported CMS metadata' >&2; exit 2; }
+  current_format=$(. "$current/scripts/release-manifest.sh"; load_release_manifest "$current/.image-env" || exit $?; printf '%s' "$RELEASE_FORMAT")
+  [[ $current_format != payload-v1 ]] || cms_current=true
 fi
 
 compose_for() {
@@ -156,16 +169,22 @@ compose_for() {
   shift
   local selected_override=$production_override
   local image_environment=()
+  local cms_overlay=()
   if [[ $target == production && -f $selected_release/compose.ownerinc-vps.yaml ]]; then
     selected_override="$selected_release/compose.ownerinc-vps.yaml"
   fi
   if [[ -f $selected_release/.image-env ]]; then
     image_environment=(--env-file "$selected_release/.image-env")
+    if grep -Fxq 'RELEASE_FORMAT=payload-v1' "$selected_release/.image-env"; then
+      [[ -f $selected_release/docker-compose.payload.yml ]] || return 2
+      cms_overlay=(--file "$selected_release/docker-compose.payload.yml")
+    fi
   fi
   docker compose \
     --env-file "$environment" \
     "${image_environment[@]}" \
     --file "$selected_release/docker-compose.yml" \
+    "${cms_overlay[@]}" \
     --file "$selected_override" \
     --project-name "$project" \
     --project-directory "$selected_release" \
@@ -186,6 +205,10 @@ wait_for_healthy_cron() {
 }
 
 if [[ $current == "$releases/$requested_commit" ]]; then
+  if [[ $cms_current == true ]]; then
+    [[ -x $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing Payload operations guard' >&2; exit 2; }
+    "$PAYLOAD_OPERATIONS_GUARD" verify-release "$current"
+  fi
   curl --fail --silent --show-error --max-time 10 \
     "$public_url/api/ready" >/dev/null
   cron_environment=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cron_container" 2>/dev/null || true)
@@ -220,6 +243,7 @@ backup_complete=false
 migration_started=false
 services_stopped=false
 public_started=false
+cms_release=false
 
 cleanup_files() {
   [[ ! -e $archive ]] || unlink "$archive"
@@ -253,6 +277,10 @@ stop_services() {
   stop_container "$web_container" false || status=1
   stop_container "$api_container" false || status=1
   stop_container "$cron_container" false || status=1
+  if [[ $cms_release == true || $cms_current == true ]]; then
+    stop_container "$project-cms-1" false || status=1
+    stop_container "$project-cms-worker-1" false || status=1
+  fi
   return "$status"
 }
 
@@ -290,14 +318,34 @@ for required in docker-compose.yml public/index.html nginx/nginx.conf api/db/mig
 done
 api_image=$(sed -n '1p' "$staging/.ci-images")
 cron_image=$(sed -n '2p' "$staging/.ci-images")
-[[ $api_image == ghcr.io/ownerinc/ownerinc-portal-api@sha256:* ]] || {
+mapfile -t ci_images < "$staging/.ci-images"
+[[ ${#ci_images[@]} == 2 || ${#ci_images[@]} == 3 ]] || { echo 'Invalid image manifest cardinality' >&2; exit 2; }
+[[ $api_image =~ ^ghcr.io/ownerinc/ownerinc-portal-api@sha256:[0-9a-f]{64}$ ]] || {
   echo "Refusing deployment: CI API image digest is invalid." >&2
   exit 2
 }
-[[ $cron_image == ghcr.io/ownerinc/ownerinc-portal-cron@sha256:* ]] || {
+[[ $cron_image =~ ^ghcr.io/ownerinc/ownerinc-portal-cron@sha256:[0-9a-f]{64}$ ]] || {
   echo "Refusing deployment: CI cron image digest is invalid." >&2
   exit 2
 }
+cms_image=
+if [[ ${#ci_images[@]} == 3 ]]; then
+  cms_image=${ci_images[2]}
+  [[ $cms_image =~ ^ghcr.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]] || exit 2
+  for required in docker-compose.payload.yml scripts/payload-operations.sh scripts/release-manifest.sh; do
+    [[ -f $staging/$required ]] || { echo 'Incomplete CMS release archive' >&2; exit 2; }
+  done
+  cms_release=true
+fi
+if [[ $cms_current == true && $cms_release != true ]]; then
+  echo 'Refusing rollback below the Payload application floor' >&2; exit 2
+fi
+printf 'API_IMAGE=%s\nCRON_IMAGE=%s\n' "$api_image" "$cron_image" > "$staging/.image-env"
+if [[ $cms_release == true ]]; then printf 'CMS_IMAGE=%s\nRELEASE_FORMAT=payload-v1\n' "$cms_image" >> "$staging/.image-env"; fi
+if [[ $cms_release == true ]]; then
+  [[ -x $PAYLOAD_OPERATIONS_GUARD && ! -L $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing reviewed Payload operations guard' >&2; exit 2; }
+  "$PAYLOAD_OPERATIONS_GUARD" release-preflight "$staging" "$current"
+fi
 unlink "$staging/.ci-images"
 printf '%s\n' "$requested_commit" >"$staging/.deployed-commit"
 
@@ -307,6 +355,11 @@ docker image inspect "$api_image" >/dev/null
 docker image inspect "$cron_image" >/dev/null
 printf 'API_IMAGE=%s\nCRON_IMAGE=%s\n' "$api_image" "$cron_image" \
   >"$staging/.image-env"
+if [[ $cms_release == true ]]; then
+  docker pull "$cms_image" >/dev/null
+  docker image inspect "$cms_image" >/dev/null
+  printf 'CMS_IMAGE=%s\nRELEASE_FORMAT=payload-v1\n' "$cms_image" >> "$staging/.image-env"
+fi
 
 if [[ -d $release ]]; then
   rm -rf -- "$release"
@@ -324,7 +377,14 @@ rollback() {
     exit 1
   fi
   database_restored=true
-  if [[ $migration_started == true && $backup_complete == true && $public_started != true ]]; then
+  if [[ $cms_release == true || $cms_current == true ]]; then
+    # No partial two-database rollback. The integration guard proves the current
+    # schema/data is compatible with the floor; otherwise keep writers stopped.
+    if ! "$PAYLOAD_OPERATIONS_GUARD" rollback-check "$release" "$current"; then
+      echo 'Payload rollback requires coordinated recovery; writers remain stopped.' >&2
+      exit 1
+    fi
+  elif [[ $migration_started == true && $backup_complete == true && $public_started != true ]]; then
     # The backup predates this release's table, so pg_restore --clean cannot drop it first.
     if ! docker exec "$postgres_container" sh -c \
       'psql -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER" -c "DROP TABLE IF EXISTS public.firebase_cleanup_queue CASCADE; DROP TABLE IF EXISTS public.pending_registrations CASCADE"'; then
@@ -347,7 +407,12 @@ rollback() {
     printf '%s\n' "$current" >"$current_tmp"
     chmod 644 "$current_tmp"
     mv "$current_tmp" "$current_file"
-    compose_for "$current" up -d --remove-orphans
+    if [[ $cms_release == true || $cms_current == true ]]; then
+      "$PAYLOAD_OPERATIONS_GUARD" open-admission "$current"
+      compose_for "$current" up -d
+    else
+      compose_for "$current" up -d --remove-orphans
+    fi
     restored=false
     for _ in {1..30}; do
       if curl --fail --silent --show-error --max-time 5 \
@@ -385,11 +450,27 @@ trap rollback ERR INT TERM
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup="$backup_root/${stamp}-autodeploy-${requested_commit:0:12}"
+if [[ $cms_current == true ]]; then
+  selected_override=$production_override
+  if [[ $target == production && -f $current/compose.ownerinc-vps.yaml ]]; then selected_override="$current/compose.ownerinc-vps.yaml"; fi
+  output=$(COMPOSE_PROJECT_NAME="$project" COMPOSE_ENV_FILE="$environment" COMPOSE_OVERRIDE="$selected_override" \
+    BACKUP_DIR="$backup_root" LEAVE_STOPPED=true BACKUP_UPLOAD_S3=false bash "$current/scripts/backup.sh" "$current")
+  backup=${output#'Backup created: '}
+  [[ $output == "Backup created: $backup_root/"* && -f $backup/backup.format ]] || false
+  . "$release/scripts/release-manifest.sh"
+  verify_backup_manifest "$backup"
+  backup_complete=true
+  services_stopped=true
+else
+if [[ $cms_release == true ]]; then
+  "$PAYLOAD_OPERATIONS_GUARD" close-admission "$release"
+fi
 mkdir "$backup"
 chmod 700 "$backup"
 
 stop_services
 services_stopped=true
+if [[ $cms_release == true ]]; then "$PAYLOAD_OPERATIONS_GUARD" quiescence-proof "$release"; fi
 docker exec "$postgres_container" sh -c \
   'pg_dump --format=custom --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' \
   >"$backup/postgres.dump"
@@ -400,12 +481,19 @@ docker run --rm --read-only \
 (cd "$backup" && sha256sum --check manifest.sha256 >/dev/null)
 chmod 600 "$backup/postgres.dump" "$backup/uploads.tar.gz" "$backup/manifest.sha256"
 backup_complete=true
+fi
 
 migration_started=true
 compose_for "$release" run --rm migrate
 compose_for "$release" run --rm --no-deps \
   -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false \
   migrate node db/verify-migrations.js
+if [[ $cms_release == true ]]; then
+  compose_for "$release" up -d --no-deps cms-postgres
+  compose_for "$release" run --rm cms-provision
+  compose_for "$release" run --rm --no-deps cms-migrate
+  compose_for "$release" up -d --no-deps cms
+fi
 
 # Keep the public proxy stopped while the new API and a side-effect-free cron container are validated.
 export CRON_BOOTSTRAP_ONLY=true
@@ -451,6 +539,10 @@ if [[ $(docker inspect --format '{{.Config.Image}}' "$cron_container") != "$cron
   echo "New cron container is not using the resolved immutable digest." >&2
   false
 fi
+if [[ $cms_release == true ]]; then
+  [[ $(docker inspect --format '{{.Config.Image}}' "$project-cms-1") == "$cms_image" ]] || false
+  "$PAYLOAD_OPERATIONS_GUARD" verify-release "$release"
+fi
 
 compose_for "$release" up -d --no-deps nginx
 public_started=true
@@ -481,7 +573,10 @@ if [[ $mounted_public_hash != "$expected_public_hash" ]]; then
   false
 fi
 
-find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +
+# Preserve coordinated/ambiguous sets until their explicit retention policy exists.
+if [[ $cms_release != true && $cms_current != true ]]; then
+  find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +
+fi
 
 export CRON_BOOTSTRAP_ONLY=false
 if ! compose_for "$release" up -d --force-recreate --no-deps cron; then
@@ -505,6 +600,12 @@ if [[ $cron_started != true ]]; then
   docker stop "$cron_container" >/dev/null 2>&1 || true
   echo "New cron did not become healthy after the release became current." >&2
   false
+fi
+if [[ $cms_release == true ]]; then
+  compose_for "$release" up -d --no-deps cms-worker
+  [[ $(docker inspect --format '{{.Config.Image}}' "$project-cms-worker-1") == "$cms_image" ]] || false
+  "$PAYLOAD_OPERATIONS_GUARD" verify-release "$release"
+  "$PAYLOAD_OPERATIONS_GUARD" open-admission "$release"
 fi
 current_tmp="$runtime/current-release.$$"
 printf '%s\n' "$release" >"$current_tmp"

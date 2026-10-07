@@ -39,8 +39,14 @@ jobs:
           cache-dependency-path: |
            api/package-lock.json
            cron/package-lock.json
+           cms/package-lock.json
       - run: npm run bootstrap
       - run: npm run verify
+      - name: Build CMS with synthetic build-only configuration
+        env:
+          CMS_BUILD_ONLY: "true"
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm --prefix cms run build
       - name: Create migration setup databases
         env:
           PGPASSWORD: integration-test-admin-password

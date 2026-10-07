@@ -39,11 +39,16 @@ function poolFor(extended = false) {
   const calls = [];
   return {
     calls,
+    async query(sql) {
+      assert.match(sql, /owner_news_authority/);
+      return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    },
     async connect() {
       return {
         release() {},
         async query(sql, params = []) {
           calls.push({ sql, params });
+          if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
           if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
           if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
           if (sql.includes('FROM cms_assets')) return { rows: [{ id: id(101), mime_type: 'application/pdf' }] };
