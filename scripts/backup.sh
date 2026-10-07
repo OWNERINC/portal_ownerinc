@@ -3,6 +3,17 @@ set -Eeuo pipefail
 
 root=${1:-$(pwd)}
 : "${BACKUP_DIR:?Set BACKUP_DIR to persistent storage outside the release}"
+# New releases validate the complete manifest; historical legacy releases remain
+# callable by the daily wrapper without this helper in their archive.
+if [[ -f $root/scripts/release-manifest.sh && -f $root/.image-env ]]; then
+  . "$root/scripts/release-manifest.sh"
+  load_release_manifest "$root/.image-env"
+  if [[ $RELEASE_FORMAT == payload-v1 ]]; then
+    exec bash "$root/scripts/payload-operations.sh" backup "$root"
+  fi
+elif [[ -f $root/.image-env ]] && grep -Eq '^(CMS_IMAGE|RELEASE_FORMAT)=' "$root/.image-env"; then
+  echo 'CMS release requires coordinated backup support' >&2; exit 2
+fi
 if [[ -f $root/.image-env ]]; then
   API_IMAGE=$(sed -n 's/^API_IMAGE=//p' "$root/.image-env" | tail -n 1)
   CRON_IMAGE=$(sed -n 's/^CRON_IMAGE=//p' "$root/.image-env" | tail -n 1)

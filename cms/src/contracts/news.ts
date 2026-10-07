@@ -74,6 +74,11 @@ export type LegacyNewsRevisionInput = {
   originalTitle: string; originalCategory: string; originalPublishedAt: string | null
   originalBody: NewsContent; originalEditorial: NewsEditorial
   contentHash: string; provenanceHash: string; mediaReferences: string[]
+  /** Absent on previously imported rows; never inferred retroactively. */
+  metadataBasis?: {
+    title: 'document_snapshot'; category: 'document_snapshot'
+    publishedAt: 'published_pointer' | 'unknown'
+  } | null
 }
 export type ScheduleInput = {
   target: 'article' | 'home'

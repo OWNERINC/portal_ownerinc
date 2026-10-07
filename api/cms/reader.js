@@ -1,5 +1,6 @@
 const { blocksToText, validateBlocks } = require('./blocks');
 const { lockCmsAssets } = require('./locks');
+const { getAuthority, writerAllowed } = require('../owner-news/authority');
 const { validateNewsRevision, announcementKind, estimateNewsReadTime } = require('../owner-news/editorial');
 
 const CONTENT_TYPES = new Set(['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder']);
@@ -132,6 +133,16 @@ async function promoteDueScheduled(db, now = new Date(), contentType = null, sou
   await lockCmsAssets(db);
   const values = [now];
   const conditions = ["scheduled.status = 'scheduled'", 'd.scheduled_at <= $1'];
+  // Cron has SELECT-only authority privileges. The shared advisory lock fences
+  // mode transitions; no authority row UPDATE lock or extra privilege is needed.
+  if (!contentType || contentType === 'announcement') {
+    const authority = await getAuthority(db);
+    if (!writerAllowed(authority.mode, 'legacy')) {
+      if (contentType === 'announcement') return 0;
+      // Exclude before validation too: an invalid frozen agenda must not retire.
+      conditions.push("d.content_type <> 'announcement'");
+    }
+  }
   if (contentType) {
     values.push(contentType);
     conditions.push(`d.content_type = $${values.length}`);

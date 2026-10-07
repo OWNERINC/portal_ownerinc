@@ -49,6 +49,21 @@ npm run verify
 
 O comando valida sintaxe JavaScript, testes, scripts shell, configuração do
 Compose quando Docker estiver disponível e possíveis segredos versionados.
+Inclui também testes unitários e typecheck offline de `cms/`; execute antes
+`npm run bootstrap` para instalar os três pacotes (API, cron e CMS). Os checks
+usam Node 24; o CMS é a exceção aprovada à regra de compatibilidade Node 18 do
+código compartilhado da API/cron. `npm test` executa os testes offline Portal/CMS.
+
+`npm run security` inclui o CMS no audit de dependências de produção e
+`npm run sbom` gera um SPDX por pacote. Esses comandos acessam ferramentas de
+dependências separadamente de `verify`; um scanner de segredos não é um audit.
+
+O runner `npm run test:payload` ainda está em integração: possui guard de alvos
+descartáveis, mas retorna código 2 enquanto a suíte real não estiver implementada.
+`--check-config` valida somente configuração/diretórios e não comprova serviços.
+Preparação de bancos, migrations e runtime é uma etapa separada e autorizada.
+Consulte o [runbook Payload](docs/operations/payload-owner-news.md) e a
+[matriz de aceite](docs/reviews/2026-10-02-payload-owner-news-acceptance.md).
 
 ## Contratos de UI e prevenção de quebras
 

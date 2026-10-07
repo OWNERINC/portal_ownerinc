@@ -77,6 +77,14 @@ Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se nec
 
 ## Fluxo de release
 
+**Extensão Payload em preparação local:** o caminho legacy de duas imagens/dois
+artefatos abaixo permanece compatível. Releases `payload-v1` acrescentam CMS_IMAGE
+e exigem backup coordenado PortalDB/CMSDB/uploads/CMSmedia+staging, lease operacional
+e adapter durável de autoridade/ledger. Sem adapter integrado, operações CMS são
+recusadas. Ver [runtime e recuperação Payload](payload-runtime-recovery.md).
+Arquivos versionados não comprovam receiver/forced-command instalado; instalação,
+deploy e cutover dependem de nova autorização operacional explícita.
+
 1. Execute `npm run verify` e `npm run security`.
 2. Exporte os dois digests aprovados pelo CI e execute `bash deploy.sh` somente após revisar host e revisão.
 3. O servidor cria `releases/<commit>-<timestamp>`, valida o manifesto recebido e baixa somente as imagens por digest.

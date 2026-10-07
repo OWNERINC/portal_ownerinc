@@ -26,6 +26,8 @@ export interface Config {
     'news-schedules': NewsSchedule;
     'news-audit': NewsAudit;
     'legacy-news-revisions': LegacyNewsRevision;
+    'news-migration-runs': NewsMigrationRun;
+    'news-migration-items': NewsMigrationItem;
     'payload-kv': PayloadKv;
     'payload-jobs': PayloadJob;
     'payload-locked-documents': PayloadLockedDocument;
@@ -40,6 +42,8 @@ export interface Config {
     'news-schedules': NewsSchedulesSelect<false> | NewsSchedulesSelect<true>;
     'news-audit': NewsAuditSelect<false> | NewsAuditSelect<true>;
     'legacy-news-revisions': LegacyNewsRevisionsSelect<false> | LegacyNewsRevisionsSelect<true>;
+    'news-migration-runs': NewsMigrationRunsSelect<false> | NewsMigrationRunsSelect<true>;
+    'news-migration-items': NewsMigrationItemsSelect<false> | NewsMigrationItemsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-jobs': PayloadJobsSelect<false> | PayloadJobsSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -261,7 +265,7 @@ export interface NewsArticle {
   _status?: ('draft' | 'published') | null;
 }
 /**
- * Immutable assets. To replace or crop, upload a new asset and change the article reference.
+ * Arquivos imutáveis. Para substituir ou recortar, envie um novo arquivo e altere a referência na publicação.
  *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "news-media".
@@ -290,7 +294,7 @@ export interface NewsSchedule {
   target: 'news-articles' | 'news-home';
   documentId: string;
   action: 'publish' | 'unpublish';
-  versionId: string;
+  versionId?: string | null;
   snapshot:
     | {
         [k: string]: unknown;
@@ -302,10 +306,28 @@ export interface NewsSchedule {
     | null;
   snapshotHash: string;
   scheduledAt: string;
-  actorUid: string;
+  actorUid?: string | null;
   generation: number;
-  state: 'pending' | 'published' | 'unpublished' | 'cancelled' | 'rejected';
+  state: 'pending' | 'published' | 'unpublished' | 'cancelled' | 'rejected' | 'suspended';
   jobId?: string | null;
+  sourceScheduleKey?: string | null;
+  sourceRevisionId?: string | null;
+  importRunId?: string | null;
+  importManifestSha256?: string | null;
+  importAuthorityEpoch?: number | null;
+  originalScheduledAt?: string | null;
+  originalActorEvidence?: 'not_recorded' | null;
+  sourceSnapshot?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  sourceSnapshotHash?: string | null;
+  nativeSnapshotHash?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -368,6 +390,70 @@ export interface LegacyNewsRevision {
   contentHash: string;
   provenanceHash: string;
   mediaReferences?: (string | NewsMedia)[] | null;
+  /**
+   * Distinguishes document snapshot metadata from unknown revision provenance. Does not rewrite existing history hashes.
+   */
+  metadataBasis?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-migration-runs".
+ */
+export interface NewsMigrationRun {
+  id: string;
+  manifestSha256: string;
+  sourceInstance: string;
+  sourceFingerprint: string;
+  authorityEpoch: number;
+  progressState: 'preparing' | 'reconciled' | 'conflict';
+  admissionState: 'open' | 'sealed';
+  commitOutcome: 'acknowledged' | 'unknown';
+  reconciliationSequence?: string | null;
+  reconciliationChainSha256?: string | null;
+  reconciliationSha256?: string | null;
+  destinationFingerprint?: string | null;
+  unresolvedExceptions?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  sealedSequence?: string | null;
+  sealedChainSha256?: string | null;
+  sealedAt?: string | null;
+  activationEpoch?: number | null;
+  drainReceiptSha256?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-migration-items".
+ */
+export interface NewsMigrationItem {
+  id: string;
+  runId: string;
+  manifestSha256: string;
+  entityKind: 'asset' | 'history' | 'document' | 'home' | 'schedule';
+  sourceId: string;
+  expectedHash: string;
+  destinationId?: string | null;
+  observedHash?: string | null;
+  state: 'planned' | 'applied' | 'verified' | 'conflict';
+  commitOutcome: 'acknowledged' | 'unknown';
   updatedAt: string;
   createdAt: string;
 }
@@ -514,6 +600,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'legacy-news-revisions';
         value: string | LegacyNewsRevision;
+      } | null)
+    | ({
+        relationTo: 'news-migration-runs';
+        value: string | NewsMigrationRun;
+      } | null)
+    | ({
+        relationTo: 'news-migration-items';
+        value: string | NewsMigrationItem;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -749,6 +843,16 @@ export interface NewsSchedulesSelect<T extends boolean = true> {
   generation?: T;
   state?: T;
   jobId?: T;
+  sourceScheduleKey?: T;
+  sourceRevisionId?: T;
+  importRunId?: T;
+  importManifestSha256?: T;
+  importAuthorityEpoch?: T;
+  originalScheduledAt?: T;
+  originalActorEvidence?: T;
+  sourceSnapshot?: T;
+  sourceSnapshotHash?: T;
+  nativeSnapshotHash?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -785,6 +889,49 @@ export interface LegacyNewsRevisionsSelect<T extends boolean = true> {
   contentHash?: T;
   provenanceHash?: T;
   mediaReferences?: T;
+  metadataBasis?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-migration-runs_select".
+ */
+export interface NewsMigrationRunsSelect<T extends boolean = true> {
+  manifestSha256?: T;
+  sourceInstance?: T;
+  sourceFingerprint?: T;
+  authorityEpoch?: T;
+  progressState?: T;
+  admissionState?: T;
+  commitOutcome?: T;
+  reconciliationSequence?: T;
+  reconciliationChainSha256?: T;
+  reconciliationSha256?: T;
+  destinationFingerprint?: T;
+  unresolvedExceptions?: T;
+  sealedSequence?: T;
+  sealedChainSha256?: T;
+  sealedAt?: T;
+  activationEpoch?: T;
+  drainReceiptSha256?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "news-migration-items_select".
+ */
+export interface NewsMigrationItemsSelect<T extends boolean = true> {
+  runId?: T;
+  manifestSha256?: T;
+  entityKind?: T;
+  sourceId?: T;
+  expectedHash?: T;
+  destinationId?: T;
+  observedHash?: T;
+  state?: T;
+  commitOutcome?: T;
   updatedAt?: T;
   createdAt?: T;
 }

@@ -11,6 +11,16 @@ release_id=${3:?release id required}
 
 shared="$root/shared"
 previous=$(readlink -f "$root/current" 2>/dev/null || true)
+if [[ -f $release/scripts/release-manifest.sh ]]; then
+  . "$release/scripts/release-manifest.sh"
+  load_release_manifest "$release/.image-env"
+  if [[ $RELEASE_FORMAT == payload-v1 ]]; then
+    exec bash "$release/scripts/payload-release.sh" "$root" "$release" "$release_id"
+  fi
+fi
+if [[ -n $previous && -f $previous/.image-env ]] && grep -Eq '^CMS_IMAGE=|^RELEASE_FORMAT=payload-v1$' "$previous/.image-env"; then
+  echo 'Refusing release below the Payload application floor' >&2; exit 2
+fi
 ln -s "$shared/.env" "$release/.env"
 
 image_registry=$(sed -n 's/^IMAGE_REGISTRY=//p' "$shared/.env" | tail -n 1)

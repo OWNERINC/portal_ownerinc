@@ -17,6 +17,8 @@ import { publishNewsSnapshot } from './jobs/publish-snapshot'
 import { newsScheduleEndpoints } from './endpoints/news-schedule'
 import { portalNewsEndpoints } from './endpoints/portal-news'
 import { LegacyNewsRevisions } from './collections/LegacyNewsRevisions'
+import { NewsMigrationRuns } from './collections/NewsMigrationRuns'
+import { NewsMigrationItems } from './collections/NewsMigrationItems'
 import { portalPollEndpoints } from './endpoints/portal-polls'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -45,7 +47,7 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   routes: { admin: '/editorial/admin', api: '/editorial/api' },
   serverURL: environment.portalPublicURL,
-  collections: [PortalEditors, NewsArticles, createNewsMedia(environment), NewsSchedules, NewsAudit, LegacyNewsRevisions],
+  collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext), NewsSchedules, NewsAudit, LegacyNewsRevisions, NewsMigrationRuns, NewsMigrationItems],
   globals: [NewsHome],
   endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints],
   i18n: { supportedLanguages: { pt }, fallbackLanguage: 'pt' },

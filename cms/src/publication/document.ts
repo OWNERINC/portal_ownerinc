@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto'
 import { APIError, type PayloadRequest, type Where } from 'payload'
 import { sql } from '@payloadcms/db-postgres'
 import { requireCmsTransaction, type PublicationTarget } from './transaction'
+export { snapshotHash } from './snapshot-hash.mjs'
 
 export type NewsSnapshot = Record<string, unknown>
 export function snapshotDocument(target: PublicationTarget, source: object): NewsSnapshot {
@@ -9,12 +9,6 @@ export function snapshotDocument(target: PublicationTarget, source: object): New
   const fields = target === 'news-articles' ? ['title', 'category', 'editorial', 'body'] : ['eyebrow', 'headline', 'summary']
   return JSON.parse(JSON.stringify(Object.fromEntries(fields.map(key => [key, document[key]]))))
 }
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b, 'en')).map(([key, v]) => `${JSON.stringify(key)}:${canonical(v)}`).join(',')}}`
-  return JSON.stringify(value)
-}
-export const snapshotHash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex')
 export async function currentDocument(req: PayloadRequest, target: PublicationTarget, id: string): Promise<NewsSnapshot> {
   await requireCmsTransaction(req.payload, req)
   const doc = target === 'news-articles'

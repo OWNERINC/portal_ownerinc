@@ -7,6 +7,7 @@ import { requireCmsTransaction } from '../publication/transaction'
 import { assertMediaOrphan } from './references'
 import { assertPrivateStorage, openStoredMedia, privateStorageDir } from './storage'
 import { extensions, validateUpload } from './validate-upload'
+import { assertStagedMediaBeforeChange, assertStagedMediaCreate, hasStagedImportMedia } from './import-staged'
 
 const validated = new WeakMap<PayloadRequest, { mime: string; size: number; sha256: string; filename: string }>()
 function refuse(message: string): never { throw new APIError(message, 400, undefined, true) }
@@ -14,6 +15,13 @@ function refuse(message: string): never { throw new APIError(message, 400, undef
 export const protectMediaOperation: CollectionBeforeOperationHook = async ({ args, operation, req }) => {
   if (!['create', 'update', 'delete', 'restoreVersion'].includes(operation)) return
   await assertCmsWriteAuthority(req)
+  if (isLegacyNewsImport(req.context) || hasStagedImportMedia(req)) {
+    if (operation !== 'create') refuse('staged_media_create_only')
+    if (!hasStagedImportMedia(req)) refuse('staged_media_context_required')
+    if (!('data' in args)) refuse('invalid_staged_media_metadata')
+    await assertStagedMediaCreate(req, args as unknown as Record<string, unknown>)
+    return
+  }
   // Deny ALL updates, not just byte fields: native crop/reupload precedes beforeChange.
   if (operation === 'update' || operation === 'restoreVersion') refuse('media_immutable_create_new_asset')
   if (operation === 'delete') {
@@ -24,7 +32,7 @@ export const protectMediaOperation: CollectionBeforeOperationHook = async ({ arg
   }
   if (!('data' in args)) refuse('invalid_media_upload')
   const input = args.data as Record<string, unknown>
-  const allowed = isLegacyNewsImport(req.context) ? ['legacyAssetId', 'importedAt', 'id'] : []
+  const allowed: string[] = []
   if (Object.keys(input).some(key => !allowed.includes(key)) || req.query?.uploadEdits ||
     ('duplicateFromID' in args && args.duplicateFromID) || ('overwriteExistingFiles' in args && args.overwriteExistingFiles)) refuse('media_server_owned_file')
   const file = req.file
@@ -39,6 +47,10 @@ export const protectMediaOperation: CollectionBeforeOperationHook = async ({ arg
 
 export const persistMediaIdentity: CollectionBeforeChangeHook = async ({ data, req }) => {
   await requireCmsTransaction(req.payload, req)
+  if (hasStagedImportMedia(req)) {
+    await assertStagedMediaBeforeChange(req, data as Record<string, unknown>)
+    return data
+  }
   const result = validated.get(req)
   if (!result || data.filename !== result.filename || data.mimeType !== result.mime || data.filesize !== result.size) refuse('media_bytes_changed')
   data.sha256 = result.sha256

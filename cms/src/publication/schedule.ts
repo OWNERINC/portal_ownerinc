@@ -3,6 +3,7 @@ import { sql } from '@payloadcms/db-postgres'
 import { createPortalClient, PortalAuthError } from '../auth/portal-client'
 import { readCmsEnvironment } from '../config/environment'
 import type { ScheduleInput } from '../contracts/news'
+import { isUUID } from '../migration/identity'
 import { uuid } from '../news/primitives'
 import { normalizeNewsContent, normalizeNewsHome, validateNewsPublication } from '../news/validation'
 import { assertMediaReferences } from '../media/references'
@@ -131,28 +132,37 @@ async function runScheduleTransaction(req: PayloadRequest, scheduleId: string, f
     if (authority.mode !== 'payload') throw new APIError('cms_authority_read_only', 409, undefined, true)
     const schedule = await scheduleRow(req, scheduleId)
     if (schedule.state !== 'pending') return { state: 'already_processed' }
+    const actorUid = schedule.actorUid
+    if (typeof actorUid !== 'string' || actorUid.length === 0) {
+      throw new APIError('news_schedule_actor_unknown', 409, undefined, true)
+    }
+    const versionId = schedule.versionId
+    if (typeof versionId !== 'string' || versionId.length === 0) {
+      throw new APIError('news_schedule_version_missing', 409, undefined, true)
+    }
+    if (!isUUID(versionId)) throw new APIError('news_schedule_version_invalid', 409, undefined, true)
     await lockPublicationDocument(req, schedule.target, schedule.documentId)
     const current = await currentDocument(req, schedule.target, schedule.documentId)
-    return asPublicationWorker(req, schedule.actorUid, async () => {
+    return asPublicationWorker(req, actorUid, async () => {
       const reject = async (reason: 'actor_revoked' | 'invalid_content' | 'invalid_asset' | 'generation_changed') => {
         await requireCmsTransaction(req.payload, req)
         const state = reason === 'generation_changed' ? 'cancelled' : 'rejected'
         await changeState(req, schedule.id, state)
         await appendNewsAudit(req, { action: state === 'cancelled' ? 'schedule_cancelled' : 'schedule_rejected',
-          documentId: schedule.documentId, versionId: schedule.versionId, actorUid: schedule.actorUid,
+         documentId: schedule.documentId, versionId, actorUid,
           details: { target: schedule.target, generation: schedule.generation, scheduleId: schedule.id, reason } })
         return { state } as const
       }
       if (!canRunSchedule(schedule, Number(current.publicationGeneration || 0))) return reject('generation_changed')
       if (Date.parse(schedule.scheduledAt) > Date.now()) throw new APIError('news_schedule_not_due', 409, undefined, true)
-      try { await client.checkPortalActor(schedule.actorUid) }
+      try { await client.checkPortalActor(actorUid) }
       catch (error) {
         if (error instanceof PortalAuthError && [401, 403].includes(error.status)) return reject('actor_revoked')
         throw error
       }
       if (failed) {
         if (failed.generation !== schedule.generation || failed.snapshotHash !== schedule.snapshotHash ||
-          failed.versionId !== schedule.versionId || failed.actorUid !== schedule.actorUid) {
+           failed.versionId !== versionId || failed.actorUid !== actorUid) {
           throw new APIError('news_schedule_conflict', 409, undefined, true)
         }
         return reject('invalid_content')
@@ -170,7 +180,7 @@ async function runScheduleTransaction(req: PayloadRequest, scheduleId: string, f
       }
       const later = await latestRevision(req, schedule.target, schedule.documentId)
       const preserve = later?.version._status === 'draft' &&
-        (schedule.action === 'unpublish' || later.id !== schedule.versionId || snapshotHash(snapshotDocument(schedule.target, later.version)) !== schedule.snapshotHash)
+         (schedule.action === 'unpublish' || later.id !== versionId || snapshotHash(snapshotDocument(schedule.target, later.version)) !== schedule.snapshotHash)
       const data = schedule.action === 'publish' ? { ...schedule.snapshot as NewsSnapshot, _status: 'published' as const } : { _status: 'draft' as const }
       const state = schedule.action === 'publish' ? 'published' : 'unpublished'
       // Still uncommitted. Withdrawal cancels OTHER pending agendas, not itself.
@@ -188,7 +198,7 @@ async function runScheduleTransaction(req: PayloadRequest, scheduleId: string, f
       } catch (error) {
         if (isNativeContentValidation(error, schedule.target)) {
           throw new NativePublicationFailure(error, { generation: schedule.generation, snapshotHash: schedule.snapshotHash,
-            versionId: schedule.versionId, actorUid: schedule.actorUid })
+            versionId, actorUid })
         }
         throw error
       }

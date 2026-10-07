@@ -53,7 +53,7 @@
       <div class="page-header">
         <p class="section-label">Operações editoriais</p>
         <h1>Editor CMS</h1>
-        <p>Edite conteúdo estruturado sem HTML livre e publique com segurança.</p>
+        <p>Central editorial das áreas do Portal. Selecione uma área disponível para sua conta para editar, conferir a prévia e publicar conteúdo.</p>
       </div>
 
       <div id="cms-error" class="cms-notice" role="alert" hidden></div>
@@ -74,7 +74,7 @@
             <h3>Novo documento</h3>
             <label class="cms-field"><span class="form-label">Título</span><input id="new-title" class="form-input" name="title" autocomplete="off" type="text" maxlength="200" required></label>
             <label class="cms-field"><span class="form-label">Categoria</span><input id="new-category" class="form-input" name="category" autocomplete="off" type="text" maxlength="100"></label>
-            <label id="new-source-field" class="cms-field"><span class="form-label">Registro vinculado</span><select id="new-source" class="form-select" name="source_id" autocomplete="off" required></select></label>
+            <label id="new-source-field" class="cms-field"><span class="form-label">Registro vinculado</span><select id="new-source" class="form-select" name="source_id" autocomplete="off" aria-describedby="cms-source-help" required></select><span id="cms-source-help" class="form-help">Escolha um registro existente na área. A estrutura e a ativação de cursos, módulos e aulas são gerenciadas na Academy.</span></label>
             <div class="cms-form-actions"><button id="cancel-new-document" class="btn btn-ghost btn-sm" type="button">Cancelar</button><button class="btn btn-primary btn-sm" type="submit">Criar</button></div>
           </form>
           <div id="document-list" class="cms-document-list" aria-live="polite"></div>
@@ -110,7 +110,7 @@
               <div id="revision-history-pagination" class="pagination" aria-live="polite"></div>
             </section>
             <div class="cms-publish-controls">
-              <p id="cms-publication-help" class="form-help">Salvar rascunho e o salvamento automático guardam uma revisão de trabalho; não publicam o conteúdo. Use Publicar para disponibilizar a revisão aos leitores, ou Agendar para programar a publicação.</p>
+              <p id="cms-publication-help" class="form-help">Salvar rascunho e o salvamento automático guardam uma revisão de trabalho; não publicam o conteúdo. Use Publicar para disponibilizar a revisão aos leitores, ou Agendar para programar a publicação. Na Academy, publicar o conteúdo CMS não ativa o curso, módulo ou aula.</p>
               <button id="save-draft" class="btn btn-primary" type="button" aria-describedby="cms-publication-help" disabled>Salvar rascunho</button>
               <button id="publish-document" class="btn btn-ghost" type="button" aria-describedby="cms-publication-help" disabled>Publicar</button>
               <button id="unpublish-document" class="btn btn-ghost" type="button" disabled>Despublicar</button>

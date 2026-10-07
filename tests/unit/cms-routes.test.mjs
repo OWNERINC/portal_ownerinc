@@ -678,6 +678,7 @@ function revisionSeam(editorial = null, contentType = 'announcement') {
     release() {},
     async query(sql, values = []) {
       calls.push({ sql, values });
+      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
       if (sql.includes('FROM cms_documents')) return { rows: [{ ...document }] };
       if (sql.includes('FROM cms_assets')) return { rows: [{ id: values[0][0], mime_type: 'application/pdf' }] };
       if (sql.includes('MAX(version)')) return { rows: [{ version: revisions.size + 1 }] };

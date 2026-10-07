@@ -16,6 +16,7 @@ function poolFor({ document, blocks = [], assets = [], sourceExists = true, sour
   const client = {
     async query(sql, params = []) {
       calls.push({ sql, params });
+      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
       if (/scheduled\.status = 'scheduled'/.test(sql)) {
         const scheduledAt = document?.scheduled_at && new Date(document.scheduled_at).getTime();
         return scheduledAt && scheduledAt <= Date.now()

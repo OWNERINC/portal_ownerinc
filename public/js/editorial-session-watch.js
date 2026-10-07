@@ -15,11 +15,11 @@ export function revokeEditorialSession() {
 }
 
 export function watchEditorialSession({ onState }) {
-  let stopped = false, generation = 0, timer, controller, known = false;
+  let stopped = false, suspended = false, generation = 0, timer, controller, known = false;
   let expectedUid, expectedExpiry, requestTimeout;
   const state = (status, message = '') => { if (!stopped) onState({ status, message }); };
   async function revalidate() {
-    if (stopped) return;
+    if (stopped || suspended) return;
     const version = ++generation;
     clearTimeout(timer); clearTimeout(requestTimeout); controller?.abort(); controller = new AbortController();
     const signal = controller.signal;
@@ -68,9 +68,17 @@ export function watchEditorialSession({ onState }) {
   const unsubscribe = onAuthStateChanged(auth, () => { if (known) void revalidate(); });
   const focus = () => { void revalidate(); };
   const visibility = () => { if (document.visibilityState === 'visible') void revalidate(); };
+  const hide = () => {
+    suspended = true; generation++; controller?.abort(); clearTimeout(timer); clearTimeout(requestTimeout);
+    state('denied', 'Validando a sessão editorial ao retornar…');
+  };
+  const restore = event => { if (event.persisted) { suspended = false; void revalidate(); } };
   window.addEventListener('focus', focus);
+  window.addEventListener('pagehide', hide);
+  window.addEventListener('pageshow', restore);
   document.addEventListener('visibilitychange', visibility);
   void revalidate();
   return { revalidate, stop() { stopped = true; generation++; clearTimeout(timer); clearTimeout(requestTimeout); controller?.abort(); unsubscribe();
-    window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', visibility); } };
+    window.removeEventListener('focus', focus); window.removeEventListener('pagehide', hide); window.removeEventListener('pageshow', restore);
+    document.removeEventListener('visibilitychange', visibility); } };
 }

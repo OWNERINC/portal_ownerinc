@@ -52,7 +52,7 @@ test('Next proxy blocks all native action dispatch paths before cookie mutation 
         assert.equal(response.status, 403)
         assert.equal(response.headers.get('set-cookie'), null)
         assert.deepEqual(response.cookies.getAll(), [])
-        assert.equal(response.headers.get('cache-control'), 'no-store')
+        assert.equal(response.headers.get('cache-control'), 'private, no-store')
       }
     }
   }

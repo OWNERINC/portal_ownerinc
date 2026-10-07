@@ -1,3 +1,4 @@
+import { EditorialMetadata as EditorialMetadata_cac42aee677803d4b04868b872516a25 } from '../../../../admin/EditorialMetadata'
 import { RscEntryLexicalCell as RscEntryLexicalCell_44fe37237e0ebf4470c9990d8cb7b07e } from '@payloadcms/richtext-lexical/rsc'
 import { RscEntryLexicalField as RscEntryLexicalField_44fe37237e0ebf4470c9990d8cb7b07e } from '@payloadcms/richtext-lexical/rsc'
 import { LexicalDiffComponent as LexicalDiffComponent_44fe37237e0ebf4470c9990d8cb7b07e } from '@payloadcms/richtext-lexical/rsc'
@@ -14,6 +15,7 @@ import { FlatListsFeatureClient as FlatListsFeatureClient_a92748ea4cf0faed3d7498
 import { FixedToolbarFeatureClient as FixedToolbarFeatureClient_e70f5e05f09f93e00b997edb1ef0c864 } from '@payloadcms/richtext-lexical/client'
 import { SavedPreview as SavedPreview_d06cf693d6cc4e05f0931ed87efc74dd } from '../../../../admin/SavedPreview'
 import { ScheduleRevision as ScheduleRevision_bc9b5d2ff4dd53b92853be609fa1cd32 } from '../../../../admin/ScheduleRevision'
+import { LegacyHistory as LegacyHistory_b9524fd9ef11400b74290e9e00eccbf3 } from '../../../../admin/LegacyHistory'
 import { CreateArticleView as CreateArticleView_17756cddd938e4258b1deafd868bbe85 } from '../../../../news/CreateArticleView'
 import { PortalLogout as PortalLogout_1f4e782dd69a1a9b22405fd8d14b6453 } from '../../../../admin/PortalLogout'
 import { BrandIcon as BrandIcon_d4751384a7cf3b09ce46117cb8895da1 } from '../../../../admin/Brand'
@@ -26,6 +28,7 @@ import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } f
 
 /** @type import('payload').ImportMap */
 export const importMap = {
+  "/admin/EditorialMetadata#EditorialMetadata": EditorialMetadata_cac42aee677803d4b04868b872516a25,
   "@payloadcms/richtext-lexical/rsc#RscEntryLexicalCell": RscEntryLexicalCell_44fe37237e0ebf4470c9990d8cb7b07e,
   "@payloadcms/richtext-lexical/rsc#RscEntryLexicalField": RscEntryLexicalField_44fe37237e0ebf4470c9990d8cb7b07e,
   "@payloadcms/richtext-lexical/rsc#LexicalDiffComponent": LexicalDiffComponent_44fe37237e0ebf4470c9990d8cb7b07e,
@@ -42,6 +45,7 @@ export const importMap = {
   "@payloadcms/richtext-lexical/client#FixedToolbarFeatureClient": FixedToolbarFeatureClient_e70f5e05f09f93e00b997edb1ef0c864,
   "/admin/SavedPreview#SavedPreview": SavedPreview_d06cf693d6cc4e05f0931ed87efc74dd,
   "/admin/ScheduleRevision#ScheduleRevision": ScheduleRevision_bc9b5d2ff4dd53b92853be609fa1cd32,
+  "/admin/LegacyHistory#LegacyHistory": LegacyHistory_b9524fd9ef11400b74290e9e00eccbf3,
   "/news/CreateArticleView#CreateArticleView": CreateArticleView_17756cddd938e4258b1deafd868bbe85,
   "/admin/PortalLogout#PortalLogout": PortalLogout_1f4e782dd69a1a9b22405fd8d14b6453,
   "/admin/Brand#BrandIcon": BrandIcon_d4751384a7cf3b09ce46117cb8895da1,

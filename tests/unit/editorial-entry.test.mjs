@@ -78,3 +78,18 @@ test('entry only navigates after same-account session ACK', async () => {
   click(); await drain(); assert.equal(guard(), false); assert.deepEqual(assigned, []);
   auth.currentUser = { uid: 'b' }; pending.resolve(Response.json({ uid: 'a' }, { status: 201 })); await drain(); assert.deepEqual(assigned, []);
 });
+
+test('BFCache lifecycle hides before suspension, ignores late validation and revalidates on restoration', async () => {
+  const h = harness(), watch = h.start(); await drain();
+  const late = deferred(); h.response = () => late.promise; void watch.revalidate(); await drain();
+  h.window.dispatchEvent(new Event('pagehide'));
+  assert.equal(h.states.at(-1).status, 'denied');
+  late.resolve(Response.json({ uid: 'a', expiresAt: new Date(h.now + 7200000).toISOString() })); await drain();
+  assert.equal(h.states.at(-1).status, 'denied', 'late ACK cannot reveal cached content');
+  const count = h.requests.length; h.window.dispatchEvent(new Event('focus')); await drain(); assert.equal(h.requests.length, count);
+  h.response = () => Response.json({}, { status: 401 });
+  const restored = Object.assign(new Event('pageshow'), { persisted: true }); h.window.dispatchEvent(restored); await drain();
+  assert.equal(h.requests.length, count + 1); assert.equal(h.states.at(-1).status, 'denied');
+  watch.stop(); const stoppedCount = h.requests.length;
+  h.window.dispatchEvent(restored); await drain(); assert.equal(h.requests.length, stoppedCount); assert.equal(h.timers.size, 0);
+});

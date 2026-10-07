@@ -4,7 +4,7 @@ const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
 const { validBody, withAudit } = require('../route-utils');
 const { HomeError, normalizeHome, validVersion, getHomeAdmin, saveHomeDraft, publishHome } = require('../owner-news/home');
-const { getAuthority } = require('../owner-news/authority');
+const { getAuthority, AuthorityError } = require('../owner-news/authority');
 
 const router = express.Router();
 router.use('/polls', require('./owner-news-polls').admin);
@@ -14,6 +14,9 @@ const messages = {
   draft_required: 'Salve um rascunho antes de publicar.',
 };
 function sendError(error, req, res, next) {
+  if (error instanceof AuthorityError) return res.status(error.status).json({
+    error: 'A Owner News está em modo somente leitura neste editor.', reason: error.code, requestId: req.id,
+  });
   if (!(error instanceof HomeError)) return next(error);
   return res.status(error.status).json({ error: messages[error.code], reason: error.code, requestId: req.id });
 }
@@ -29,7 +32,7 @@ function homeBody(body, schema, required) {
   return validBody(body, schema, required) && Object.keys(body).every(key => Object.hasOwn(schema, key));
 }
 
-// Display metadata only. Task 12 owns legacy server-side write freeze/cutover.
+// Display metadata; the transactional home helpers enforce authority on writes.
 router.get('/authority', authMiddleware, authorize, async (req, res, next) => {
   res.set('Cache-Control', 'no-store');
   try { const { mode, epoch } = await getAuthority(pool); res.json({ mode, epoch }); }

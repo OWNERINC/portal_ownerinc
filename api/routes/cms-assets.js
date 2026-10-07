@@ -7,6 +7,7 @@ const pool = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
 const { lockCmsAssets } = require('../cms/locks');
+const { getAuthority } = require('../owner-news/authority');
 const { validatePublishedBlocksBatch } = require('../cms/reader');
 const { canReadCourse } = require('../academy/access');
 const { forbidden, invalid, uuid, withAudit } = require('../route-utils');
@@ -324,11 +325,18 @@ async function canReadAsset(db, user, asset) {
   }));
   const validations = await validatePublishedBlocksBatch(db, values);
   // Shared files remain readable when any one reference is authorized.
-  return references.some(({ row, publication, course }) => referenceIsReadable({
+  const readable = ({ row, publication, course }) => referenceIsReadable({
     ...row,
     publication_valid: publication !== null && validations[publication].blocks !== null,
     course_publication_valid: course === null || validations[course].blocks !== null,
-  }, user, asset));
+  }, user, asset);
+  // Retention is not a reader grant. A shared Knowledge/Academy grant remains
+  // independent, but old news references cannot revive a Payload withdrawal.
+  if (references.some(ref => ref.row.content_type !== 'announcement' && readable(ref))) return true;
+  const news = references.filter(ref => ref.row.content_type === 'announcement');
+  if (!news.length) return false;
+  const { mode } = await getAuthority(db); // caller owns7193029, including file open
+  return ['legacy', 'frozen'].includes(mode) && news.some(readable);
 }
 
 function uploadMiddleware(req, res, next) {
@@ -435,6 +443,7 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
     db.release();
     released = true;
     res.set({
+      'Cache-Control': 'private,no-store',
       'Content-Length': String(asset.byte_size),
       'Content-Type': asset.mime_type,
       'Content-Disposition': `inline; filename="${asset.original_name.replace(/["\\\r\n]/g, '_')}"`,
@@ -455,3 +464,4 @@ module.exports = router;
 module.exports.detectedMime = detectedMime;
 module.exports.isMalformedMultipart = isMalformedMultipart;
 module.exports.deleteUnreferencedAsset = deleteUnreferencedAsset;
+module.exports.canReadAsset = canReadAsset;

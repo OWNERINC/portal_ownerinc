@@ -16,6 +16,7 @@ function readerPool(rows, assetFixtures = null) {
   const client = {
     async query(sql, params = []) {
       calls.push({ sql, params });
+      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
       if (/FOR UPDATE OF s/.test(sql)) {
         const requested = new Set((params[0] || []).map(String));
         return { rows: rows

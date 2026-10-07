@@ -54,6 +54,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
 }
 
 export function safeImportError(error) {
+  if (error?.code === 'news_read_only' || error?.code === 'news_authority_unavailable') {
+    return { error: 'Importação bloqueada', reason: error.code };
+  }
   const codes = new Set(['invalid_arguments', 'explicit_database_required', 'invalid_database_configuration',
     'explicit_destination_required', 'invalid_manifest', 'review_required', 'invalid_actor', 'invalid_database_role',
     'target_conflict', 'prepared_draft_required', 'prepared_bundle_required', 'verification_failed', 'commit_outcome_unknown']);

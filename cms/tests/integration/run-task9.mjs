@@ -6,20 +6,35 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describeProcessResult } from './process-result.mjs'
+import { task9ParentSpawnBudget } from './task9-time-budget.mjs'
+import { createTask9ChildEnvironment, parseTask9EnvironmentSnapshot, validateTask9PrivateDirectory } from './task9-environment.mjs'
 const root = fileURLToPath(new URL('../../../', import.meta.url)), base = path.join(process.env.LOCALAPPDATA || '', 'Temp', 'opencode'), mode = process.argv[2]
-if (!process.env.LOCALAPPDATA || !['--prepare-new-task9', '--browser', '--http'].includes(mode)) throw new Error('Explicit Task9 opt-in required')
+if (!process.env.LOCALAPPDATA || !['--prepare-new-task9', '--browser', '--http', '--history', '--metadata', '--entry-probe', '--nav-probe', '--destinations'].includes(mode)) throw new Error('Explicit Task9 opt-in required')
+const directory = mode === '--prepare-new-task9' ? await mkdtemp(path.join(base, 'ownerinc-task9-')) : path.resolve(process.argv[3] || '')
+const privateDirectoryValidation = validateTask9PrivateDirectory(directory, process.env.LOCALAPPDATA)
+if (!privateDirectoryValidation.valid) throw new Error(`Explicit Task9 private directory rejected (${privateDirectoryValidation.reasonCodes.join(',')})`)
+let savedSnapshot
+if (mode !== '--prepare-new-task9') {
+  const parsedSnapshot = parseTask9EnvironmentSnapshot(await readFile(path.join(directory, 'env.json'), 'utf8'))
+  if (!parsedSnapshot.valid) throw new Error(`Task9 saved environment rejected (${parsedSnapshot.reasonCodes.join(',')})`)
+  savedSnapshot = parsedSnapshot.snapshotEnvironment
+}
 const { Client } = createRequire(path.join(root, 'api/package.json'))('pg')
 const state = JSON.parse(await readFile(path.join(base, 'ownerinc-payload-local-validation-20261002', 'state.json'), 'utf8'))
 const url = (role, db) => `postgresql://${role}:${encodeURIComponent(state.passwords[role])}@127.0.0.1:55441/${db}`
-const directory = mode === '--prepare-new-task9' ? await mkdtemp(path.join(base, 'ownerinc-task9-')) : path.resolve(process.argv[3] || '')
-if (path.dirname(directory) !== base || !path.basename(directory).startsWith('ownerinc-task9-')) throw new Error('Explicit Task9 private directory required')
-const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot', 'temp', 'tmp', 'userprofile', 'appdata', 'localappdata', 'comspec', 'pathext'].includes(key.toLowerCase())))
 const secret = () => randomBytes(36).toString('hex')
-const env = mode === '--prepare-new-task9' ? { ...inherited, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', TASK9_PRIVATE_DIR: directory,
+const snapshotEnvironment = mode === '--prepare-new-task9' ? { NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', TASK9_PRIVATE_DIR: directory,
   PAYLOAD_SECRET: secret(), PAYLOAD_TO_PORTAL_SECRET: secret(), PORTAL_TO_PAYLOAD_SECRET: secret(),
   PORTAL_PUBLIC_URL: 'http://127.0.0.1:19091', PORTAL_INTERNAL_URL: 'http://127.0.0.1:19091',
   CMS_UPLOAD_DIR: path.join(directory, 'uploads'), CMS_DATABASE_URL: url('cms_runtime', 'cms_task9_test'), TASK9_PORTAL_DATABASE_URL: url('portal_api', 'portal_task9_test'),
-} : JSON.parse(await readFile(path.join(directory, 'env.json'), 'utf8'))
+} : savedSnapshot
+const { environment: env, validation: environmentValidation } = createTask9ChildEnvironment({
+  parentEnvironment: process.env,
+  snapshotEnvironment,
+  directory,
+  webpack: process.argv[4] === '--webpack',
+})
+if (!environmentValidation.valid) throw new Error(`Task9 child environment rejected (${environmentValidation.reasonCodes.join(',')})`)
 const redact = value => {
   for (const secret of [...Object.values(state.passwords), ...Object.entries(env).filter(([key]) => key.includes('SECRET')).map(([, value]) => value)]) value = value.split(secret).join('[redacted]')
   return value.replace(/postgres(?:ql)?:\/\/\S+/gu, '[redacted-db-url]')
@@ -55,6 +70,6 @@ try {
       } finally { await db.end() }
     }
     await run('migrate', ['node_modules/payload/bin.js', 'migrate'], { ...env, CMS_DATABASE_URL: url('cms_migrator', 'cms_task9_test') }, 110000)
-  } else await run(mode.slice(2), ['tests/integration/task9-browser.mjs', mode], env, mode === '--http' ? 210000 : 165000)
+  } else await run(`${mode.slice(2)}-${Date.now()}`, ['tests/integration/task9-browser.mjs', mode], env, task9ParentSpawnBudget(mode))
   console.log(`Task9 private evidence: ${directory}`)
 } catch (error) { console.error(redact(error.message)); console.error(`Task9 private evidence: ${directory}`); process.exitCode = 1 }

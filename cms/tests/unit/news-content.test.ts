@@ -385,7 +385,7 @@ test('reading time includes body text, excludes attribution/name/metadata, infer
 
 test('native configs protect CRUD/history, retain every block, drafts/autosave, and restrict media to editors', async () => {
   assert.deepEqual(new Set(newsBlocks.map(block => block.slug)), new Set(['richText', ...legacyBlocks.map(block => block.type)]))
-  assert.deepEqual(NewsArticles.versions, { maxPerDoc: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } })
+  assert.deepEqual(NewsArticles.versions, { maxPerDoc: 0, drafts: { autosave: { interval: 2000, showSaveDraftButton: true }, schedulePublish: false } })
   assert.deepEqual(NewsHome.versions, { max: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } })
   const req = { user: null } as PayloadRequest
   const editorReq = { user: { id: articleID, collection: 'portal-editors', portalUid: 'uid',

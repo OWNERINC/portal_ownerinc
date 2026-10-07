@@ -120,6 +120,7 @@ test('missing asset rows require repair only when referenced by an existing publ
         async connect() {}, async end() {},
         async query(sql, values) {
           queries.push(sql);
+          if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
           if (sql.includes('SELECT d.*') && values[0] === document.id) return { rows: [{
             id: document.id, source_id: document.sourceId, content_type: 'announcement',
             title: document.title, category: document.category, published_revision_id: document.revisionId,
@@ -154,6 +155,7 @@ test('failed transaction removes only files created by that run; exclusive write
     async connect() {}, async end() {},
     async query(sql) {
       queries.push(sql);
+      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
       if (sql.includes('INSERT INTO cms_revisions')) throw new Error('simulated revision failure');
       return { rows: [] };
     },
@@ -178,6 +180,7 @@ test('ambiguous COMMIT retains private files rather than deleting possibly publi
   const db = {
     async connect() {}, async end() {},
     async query(sql) {
+      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
       if (sql === 'COMMIT') throw new Error('connection lost');
       if (sql.startsWith('UPDATE cms_documents')) published = true;
       if (sql.includes('SELECT d.*') && published) return { rows: [{ id: document.id, source_id: document.sourceId, content_type: 'announcement', title: document.title, category: document.category, published_revision_id: document.revisionId, published_at: document.publishedAt, status: 'published', blocks: document.blocks }] };

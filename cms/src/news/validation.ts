@@ -22,6 +22,12 @@ export function normalizeEditorial(value: unknown): NewsEditorial {
     author: plain(e.author, 200, false, false), source_label: plain(e.source_label, 200, false, false), source_date: date }
 }
 
+/** Native Payload JSONField supplies serialized editor text to its validator. */
+export function readEditorialFieldValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  return JSON.parse(value)
+}
+
 export function normalizeNewsContent(value: unknown): (LegacyBlock | RichBlock)[] {
   return projectContent(value, false)
 }

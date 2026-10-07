@@ -6,13 +6,14 @@ import { beforeHomePublication, prepareHomePublication, afterHomePublication } f
 
 export const NewsHome: GlobalConfig = {
   slug: 'news-home',
+  label: 'Abertura da Owner News',
   admin: { components: { elements: { beforeDocumentControls: ['/admin/ScheduleRevision#ScheduleRevision'] } } },
   access: { read: canManageNews, update: canManageNews, readVersions: canManageNews },
   versions: { max: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } },
   fields: [
-    { name: 'eyebrow', type: 'text', maxLength: 80, defaultValue: '' },
-    { name: 'headline', type: 'textarea', maxLength: 160, defaultValue: '' },
-    { name: 'summary', type: 'text', maxLength: 600, defaultValue: '' },
+    { name: 'eyebrow', label: 'Chamada', type: 'text', maxLength: 80, defaultValue: '' },
+    { name: 'headline', label: 'Título de abertura', type: 'textarea', maxLength: 160, defaultValue: '' },
+    { name: 'summary', label: 'Resumo', type: 'text', maxLength: 600, defaultValue: '' },
     ...publicationFields,
   ],
   hooks: { beforeOperation: [beforeHomePublication], beforeChange: [prepareHomePublication, validateNewsHomeBeforeChange], afterChange: [afterHomePublication] },

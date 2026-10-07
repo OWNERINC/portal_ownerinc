@@ -14,6 +14,7 @@ function poolFor() {
   const calls = [];
   const pool = { calls, corruptDraft(value) { state.draft = value; }, async query(sql, values = []) {
     calls.push({ sql, values });
+    if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
     if (sql.includes('owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
     if (sql === 'BEGIN') { snapshot = structuredClone(state); return { rows: [] }; }
     if (sql === 'ROLLBACK') { state = snapshot; return { rows: [] }; }

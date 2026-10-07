@@ -9,6 +9,8 @@ import sharp from 'sharp'
 import { APIError, type Payload, type PayloadRequest, type Where } from 'payload'
 import { collectMediaIds, assertMediaOrphan, canReadPublishedMedia } from '../../src/media/references.js'
 import { createNewsMedia } from '../../src/collections/NewsMedia.js'
+import { NewsMigrationItems } from '../../src/collections/NewsMigrationItems.js'
+import { NewsMigrationRuns } from '../../src/collections/NewsMigrationRuns.js'
 import { getFileHandler } from '../../node_modules/payload/dist/uploads/endpoints/getFile.js'
 import { normalizeNewsDraftReferences } from '../../src/news/validation.js'
 import { mediaRange, openNewsMedia } from '../../src/media/read-file.js'
@@ -88,7 +90,8 @@ async function fixture() {
   const payload = {
     db: { sessions, beginTransaction: async () => { calls.push('begin'); return 'live' },
       commitTransaction: async () => { calls.push('commit') }, rollbackTransaction: async () => { calls.push('rollback') } },
-    collections: { 'news-media': { config: { upload: { staticDir: directory } } }, 'news-articles': { config: { fields: [], versions: { maxPerDoc: 0 } } } },
+    collections: { 'news-media': { config: { upload: { staticDir: directory } } }, 'news-articles': { config: { fields: [], versions: { maxPerDoc: 0 } } },
+      'news-migration-runs': { config: NewsMigrationRuns }, 'news-migration-items': { config: NewsMigrationItems } },
     config: { globals: [], jobs: { tasks: [] } },
     findByID: async ({ id, req }: { id: string; req: PayloadRequest }) => { assert.equal(req.transactionID, 'live'); return assets.get(id) || null },
     find: async ({ req, collection, where }: { req: PayloadRequest; collection: string; where?: Where }) => {

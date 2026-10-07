@@ -18,6 +18,28 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 - Resend SMTP entrega emails gerados pelo serviço de lembretes.
 - Z-API está prevista, mas permanece desativada.
 
+## Fronteira de verificação do piloto Payload
+
+O piloto migra primeiro a gestão editorial da Owner News. `cms/` é o serviço
+Payload/Next separado; a leitura continua entrando pela API Express. O Editor CMS
+central (`/cms.html`) permanece o hub por capacidade para knowledge, academy,
+academy_lesson, benefit, announcement e reminder. Entidades, ativação, currículo
+e progresso continuam pertencendo aos respectivos domínios; não são migrados por
+este piloto. Descrição, materiais e capa da Academy são conteúdo CMS.
+
+O CMS exige Node 24 como exceção aprovada de arquitetura. Código novo compartilhado
+por API/cron conserva APIs compatíveis com Node 18; executar os checks em Node 24
+não comprova execução integral da stack em Node 18.
+
+`npm run verify` cobre testes offline Portal/CMS e TypeScript sem cache incremental,
+sem iniciar serviços, jobs ou migrations. Build CMS, audit e SBOM são etapas
+separadas. Integração real usa configuração explícita e bancos descartáveis
+distintos; o runner não pode converter ausência de fixtures/runtime em sucesso.
+O guard portátil inicial está implementado; a suíte de aceitação HTTP/Firebase e
+sua preparação ainda precisam ser integradas. Veja o
+[runbook](../operations/payload-owner-news.md) e a
+[matriz](../reviews/2026-10-02-payload-owner-news-acceptance.md).
+
 ## Decisões
 
 - Portal e Brain permanecem em repositórios diferentes.
