@@ -81,10 +81,42 @@ let homeEditor = null;
 let homeDirty = false;
 let homeBusy = false;
 let newsAuthority = null;
-const newsReadOnly = () => (selectedType === 'announcement' || documentView?.document?.content_type === 'announcement') && newsAuthority?.mode !== 'legacy';
+let newsEntryAvailability = null;
+let newsAuthorityRequest = 0;
+const newsReadOnly = () => {
+  if (!(selectedType === 'announcement' || documentView?.document?.content_type === 'announcement')) return false;
+  if (newsAuthority?.mode !== 'legacy') return true;
+  return !!newsEntryAvailability && (newsEntryAvailability.mode !== newsAuthority.mode
+    || newsEntryAvailability.epoch !== newsAuthority.epoch);
+};
 async function refreshNewsAuthority() {
-  newsAuthority = await fetchAPI('/api/cms/owner-news/authority');
+  const requestToken = ++newsAuthorityRequest;
+  newsAuthority = null;
+  newsEntryAvailability = null;
   syncNewsSections(); syncBusyState();
+  const authorityCheck = (async () => {
+    try {
+      const authority = await fetchAPI('/api/cms/owner-news/authority');
+      if (!page.active || requestToken !== newsAuthorityRequest) return;
+      newsAuthority = authority;
+    } catch {
+      if (!page.active || requestToken !== newsAuthorityRequest) return;
+      newsAuthority = null;
+    }
+    syncNewsSections(); syncBusyState();
+  })();
+  void (async () => {
+    try {
+      const availability = await fetchAPI('/api/cms/session/availability');
+      if (!page.active || requestToken !== newsAuthorityRequest) return;
+      newsEntryAvailability = availability;
+    } catch {
+      if (!page.active || requestToken !== newsAuthorityRequest) return;
+      newsEntryAvailability = null;
+    }
+    syncNewsSections(); syncBusyState();
+  })();
+  await authorityCheck;
 }
 
 let selectedType = TYPES[0]?.[0] || null;
@@ -132,6 +164,7 @@ page.beforeLeave(() => {
 });
 page.cleanup(() => {
   previewCleanup?.(); editorialFields?.dispose(); homeEditor?.dispose();
+  ++newsAuthorityRequest;
   ++selectionToken; ++documentsRequestToken; ++historyRequestToken;
   ++creationRequestToken; ++editorGeneration;
   clearTimeout(saveTimer); saveTimer = null; saveQueued = false;
@@ -297,10 +330,32 @@ function syncNewsSections() {
   const news = selectedType === 'announcement';
   const authority = document.getElementById('owner-news-authority');
   if (authority) {
-    authority.hidden = !news || newsAuthority?.mode === 'legacy';
-    document.getElementById('owner-news-authority-status').textContent = !newsAuthority ? 'Validando a autoridade editorial…'
-      : newsAuthority.mode.startsWith('payload') ? 'Owner News migrou para o Payload. O histórico anterior está disponível somente para leitura.'
-        : 'Owner News está congelada. O histórico está disponível somente para leitura.';
+    authority.hidden = !news;
+    const status = document.getElementById('owner-news-authority-status');
+    const payloadEntry = document.getElementById('owner-news-payload-entry');
+    const availabilityMatchesAuthority = newsAuthority && newsEntryAvailability
+      && newsEntryAvailability.mode === newsAuthority.mode && newsEntryAvailability.epoch === newsAuthority.epoch;
+    const payloadSource = newsAuthority?.mode === 'payload' || newsAuthority?.mode === 'payload_frozen';
+    const canEnterPayload = payloadSource && availabilityMatchesAuthority && newsEntryAvailability.canEnter === true;
+    if (payloadEntry) payloadEntry.hidden = !news || !canEnterPayload;
+    if (!newsAuthority) status.textContent = 'Não foi possível confirmar a autoridade Owner News. A edição permanece bloqueada até a autoridade ser confirmada; a entrada Payload está desativada.';
+    else if (!availabilityMatchesAuthority && newsEntryAvailability) status.textContent = 'A autoridade mudou durante a verificação. Recarregue o estado antes de abrir o Payload.';
+    else if (newsAuthority.mode === 'payload_frozen') status.textContent = !newsEntryAvailability
+      ? 'Owner News usa o Payload e está congelada. O histórico anterior é somente leitura; a disponibilidade do painel não foi confirmada.'
+      : newsEntryAvailability.runtimeReady
+        ? 'Owner News usa o Payload e está congelada. O histórico anterior é somente leitura; alterações continuam bloqueadas pela API.'
+        : 'Owner News usa o Payload e está congelada, mas o runtime não respondeu à verificação. A entrada permanece desativada.';
+    else if (newsAuthority.mode === 'payload') status.textContent = !newsEntryAvailability
+      ? 'Owner News usa o Payload. O histórico anterior é somente leitura; a disponibilidade do painel não foi confirmada.'
+      : newsEntryAvailability.runtimeReady
+        ? 'Owner News usa o Payload. O histórico anterior está disponível somente para leitura; o painel respondeu à verificação de prontidão.'
+        : 'Owner News usa o Payload, mas o runtime não respondeu à verificação. A entrada permanece desativada.';
+    else if (newsAuthority.mode === 'frozen') status.textContent = !newsEntryAvailability
+      ? 'Owner News está congelada na fonte anterior. A ativação no Payload não foi confirmada; a disponibilidade do runtime também não.'
+      : 'Owner News está congelada na fonte anterior. A ativação no Payload não foi confirmada.';
+    else if (!newsEntryAvailability) status.textContent = 'Owner News continua na fonte anterior. A edição pelo CMS central permanece disponível; a disponibilidade do Payload não foi confirmada.';
+    else if (newsEntryAvailability.runtimeReady) status.textContent = 'Owner News continua na fonte anterior. O runtime Payload respondeu, mas a fonte ainda não foi ativada; use o CMS central.';
+    else status.textContent = 'Owner News continua na fonte anterior. O Payload não está ativado e seu runtime não respondeu; a edição pelo CMS central permanece disponível.';
   }
   const home = news && newsSection !== 'articles';
   if (newsSections) {

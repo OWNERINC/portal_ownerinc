@@ -28,7 +28,7 @@ let position = 0;
 let transition = null;
 let started = false;
 let traversal = null;
-let errorNode;
+let navigationNotice;
 let pageClasses = [];
 let localHistoryEvent = false;
 let restoration = 0;
@@ -65,7 +65,7 @@ function disposeCurrentPage() {
   });
   document.querySelectorAll('.topbar-actions').forEach(node => { node.replaceChildren(); node.remove(); });
   document.getElementById('main-content').replaceChildren();
-  errorNode?.remove(); errorNode = null;
+  clearNavigationNotice();
 }
 
 function dispatchLocalHistory() {
@@ -103,22 +103,73 @@ const pageHistory = {
   replaceState: (state, title, url) => writeHistory('replaceState', state, title, url),
 };
 
+function clearNavigationNotice() {
+  navigationNotice?.remove();
+  navigationNotice = null;
+}
+
+function placeNavigationNotice(node) {
+  clearNavigationNotice();
+  navigationNotice = node;
+  const topbar = document.querySelector('.topbar');
+  if (topbar) topbar.after(node);
+  else document.getElementById('main-content')?.prepend(node);
+}
+
+function showLoading() {
+  const status = document.createElement('p');
+  status.className = 'empty-state portal-navigation-loading';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  status.setAttribute('aria-atomic', 'true');
+  status.dataset.navigationState = 'loading';
+  status.textContent = 'Carregando a área solicitada…';
+  placeNavigationNotice(status);
+}
+
+function navigationErrorMessage(error, initial) {
+  if (error.navigationKind === 'solides-unlinked') return 'Sua conta ainda não possui um vínculo ativo com a Sólides.';
+  if (error.navigationKind === 'solides-unavailable') return 'A área Sólides está indisponível ou inativa para esta conta. O servidor não informa o motivo.';
+  if (error.status === 401) return 'Sua sessão não está mais válida. Entre novamente para continuar.';
+  if (error.status === 403) return 'Você não possui permissão para acessar esta área.';
+  if (error.status === 404) return 'Esta área não está disponível no momento.';
+  if (error.status === 503 || error.status >= 500) return 'A área está temporariamente indisponível. Tente novamente.';
+  return initial
+    ? 'Não foi possível abrir esta área. Verifique sua conexão e tente novamente.'
+    : 'Não foi possível abrir esta área. Sua página foi preservada; verifique sua conexão e tente novamente.';
+}
+
 function showError(error, retry, initial = false) {
-  errorNode?.remove();
-  errorNode = document.createElement('section');
-  errorNode.className = 'empty-state portal-navigation-error';
-  errorNode.setAttribute('role', 'alert');
+  const notice = document.createElement('section');
+  notice.className = 'empty-state portal-navigation-error';
+  notice.setAttribute('role', 'alert');
+  notice.setAttribute('aria-atomic', 'true');
+  notice.dataset.navigationState = 'error';
   const text = document.createElement('p');
-  text.textContent = error.status === 403 ? 'Você não possui acesso a esta área.'
-    : initial ? 'Não foi possível abrir esta área. Tente novamente.' : 'Não foi possível abrir esta área. Sua página foi preservada.';
+  text.textContent = navigationErrorMessage(error, initial);
   const button = document.createElement('button');
   button.className = 'btn btn-ghost'; button.type = 'button'; button.textContent = 'Tentar novamente';
   button.addEventListener('click', retry);
-  errorNode.append(text, button);
+  notice.append(text, button);
+  placeNavigationNotice(notice);
   const main = document.getElementById('main-content');
   main.removeAttribute('data-route-pending');
-  if (initial) main.replaceChildren(errorNode);
-  else document.querySelector('.topbar').after(errorNode);
+  if (initial) main.replaceChildren(notice);
+}
+
+async function ensureSolidesLinked(signal) {
+  let status;
+  try {
+    status = await fetchAPI('/api/solides/me/status', signal ? { signal } : {});
+  } catch (error) {
+    if (error.status === 404) {
+      throw Object.assign(new Error('Sólides unavailable.'), { status: 404, navigationKind: 'solides-unavailable' });
+    }
+    throw error;
+  }
+  if (status?.linked !== true) {
+    throw Object.assign(new Error('Sólides employee link is not active.'), { navigationKind: 'solides-unlinked' });
+  }
 }
 
 function pageOverlays(doc) {
@@ -223,6 +274,7 @@ function mountPage(module, user, url, saved) {
     if (page.active && activePage === page && !traversal) pageHistory[method](...args);
   }]));
   activePage = page;
+  clearNavigationNotice();
   document.getElementById('main-content').removeAttribute('data-route-pending');
   preparePageUI();
   try { module.mount(page); }
@@ -266,6 +318,7 @@ export async function navigate(destination, { historyPosition = null, initial = 
   const { signal } = controller;
   let committed = false;
   let revoked = false;
+  showLoading();
   try {
     // Observe preparation errors immediately, but never let them bypass an
     // authoritative access change returned by the independent session request.
@@ -287,12 +340,13 @@ export async function navigate(destination, { historyPosition = null, initial = 
     if (auth.currentUser?.uid !== user.uid) return false;
     controller.validatedUid = user.uid;
     if (!routeAllowed(url.pathname, user)) throw Object.assign(new Error('Acesso restrito.'), { status: 403 });
-    if (url.pathname === '/solides.html' && !(await fetchAPI('/api/solides/me/status', { signal })).linked) throw Object.assign(new Error('Acesso restrito.'), { status: 403 });
+    if (url.pathname === '/solides.html') await ensureSolidesLinked(signal);
     const prepared = await preparation;
     if (signal.aborted) return false;
     if (prepared.error) throw prepared.error;
     const [response, module] = prepared.value;
-    if (!response.ok || !response.headers.get('content-type')?.includes('text/html')) throw new Error('Página indisponível.');
+    if (!response.ok) throw Object.assign(new Error('Página indisponível.'), { status: response.status });
+    if (!response.headers.get('content-type')?.includes('text/html')) throw new Error('Página indisponível.');
     if (typeof module.mount !== 'function') throw new Error('Inicialização da página indisponível.');
     const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
     if (!doc.querySelector('main#main-content') || !doc.querySelector('.topbar')) throw new Error('Página inválida.');
@@ -324,6 +378,7 @@ export async function navigate(destination, { historyPosition = null, initial = 
     return false;
   } finally {
     if (transition === controller) {
+      if (navigationNotice?.dataset.navigationState === 'loading') clearNavigationNotice();
       document.querySelector('.main-content').inert = document.body.classList.contains('sidebar-open');
       transition = null;
     }
@@ -362,6 +417,7 @@ async function onPopState(event) {
     if (discard !== true) {
       event.stopImmediatePropagation();
       transition?.abort(); recordPosition();
+      clearNavigationNotice();
       await traverseTo(position);
       if (!await discard || activePage !== leaving) return;
       await traverseTo(index);
@@ -371,12 +427,14 @@ async function onPopState(event) {
       return;
     }
     transition?.abort(); recordPosition(); position = index; activeURL = url;
+    clearNavigationNotice();
     closePageDialogs();
     if (activePage) restorePosition(activePage, url, positions.get(index));
     return; // Page-local query/hash loaders retain their existing semantics.
   }
   event.stopImmediatePropagation();
   transition?.abort();
+  clearNavigationNotice();
   const previous = position;
   await traverseTo(previous);
   if (url.pathname === activeURL.pathname) return; // A rejected page-local edit guard.
@@ -420,7 +478,7 @@ export async function startRouter() {
       if (traversal || !canLeave()) return;
       const leaving = activePage;
       if (!await commitPageLeaveUI() || activePage !== leaving) return;
-      transition?.abort(); closePageDialogs();
+      transition?.abort(); clearNavigationNotice(); closePageDialogs();
       if (url.href !== location.href) pageHistory.pushState({}, '', url);
       dispatchLocalHistory();
       return;
@@ -442,6 +500,7 @@ export async function startRouter() {
     }
   }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-auth-snapshot'] });
   // Initial markup is a public template. Validation precedes any page mount.
+  showLoading();
   const boot = new AbortController(); transition = boot;
   authorizationVersion += 1;
   const initialURL = new URL(activeURL);
@@ -451,10 +510,15 @@ export async function startRouter() {
     if (!user) { window.location.replace(`./login.html?reason=session&next=${encodeURIComponent(initialURL.pathname + initialURL.search + initialURL.hash)}`); return; }
     boot.validatedUid = user.uid;
     if (!routeAllowed(activeURL.pathname, user)) throw Object.assign(new Error('Acesso restrito.'), { status: 403 });
-    if (activeURL.pathname === '/solides.html' && !(await fetchAPI('/api/solides/me/status')).linked) throw Object.assign(new Error('Acesso restrito.'), { status: 403 });
+    if (activeURL.pathname === '/solides.html') await ensureSolidesLinked(boot.signal);
     await prepareScripts(document);
     if (boot.signal.aborted || auth.currentUser?.uid !== user.uid) return;
     mountPage(module, user, activeURL);
   } catch (error) { if (!boot.signal.aborted) showError(error, () => navigate(initialURL, { initial: true }), true); }
-  finally { if (transition === boot) transition = null; }
+  finally {
+    if (transition === boot) {
+      if (navigationNotice?.dataset.navigationState === 'loading') clearNavigationNotice();
+      transition = null;
+    }
+  }
 }

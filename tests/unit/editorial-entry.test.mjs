@@ -67,16 +67,61 @@ test('logout never signs out a new UID while DELETE settles, and failed DELETE e
   const retry = failed.main.children[0].children[1]; failed.change('b'); failed.response = () => new Response(null, { status: 204 }); retry.listeners.click(); await drain();
   assert.deepEqual(failed.signs, []);
 });
-test('entry only navigates after same-account session ACK', async () => {
+async function entryHarness({ availability = { mode: 'payload', epoch: 2, activated: true, runtimeReady: true, canEnter: true }, onAvailability } = {}) {
   const text = await readFile(new URL('../../public/js/editorial-entry.js', import.meta.url), 'utf8');
-  const nodes = { 'editorial-enter': {}, 'editorial-entry-status': {} }, assigned = [], pending = deferred(); let click, guard;
+  const nodes = { 'editorial-enter': { hidden: true, disabled: true }, 'editorial-recheck': { hidden: true, disabled: false }, 'editorial-entry-status': { textContent: '' } };
+  const assigned = [], calls = [], listeners = new Map(), pending = deferred(); let guard;
   const auth = { currentUser: { uid: 'a' } };
   const context = vm.createContext({ document: { getElementById: id => nodes[id] }, auth, window: { location: { assign: url => assigned.push(url) } },
-    waitForEditorialRevocation: async () => {}, authenticatedFetch: async (path, options) => { assert.equal(path, '/api/cms/session'); assert.equal(options.body, '{}'); return pending.promise; } });
+    waitForEditorialRevocation: async () => {}, authenticatedFetch: async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === '/api/cms/session/availability') return (onAvailability ? onAvailability(calls.filter(call => call.path === path).length) : Response.json(availability));
+      if (path === '/api/cms/session' && options.method === 'POST') return pending.promise;
+      throw new Error(`Unexpected request: ${path}`);
+    } });
   vm.runInContext(`${strip(text)}\nglobalThis.mountEntry = mount;`, context);
-  context.mountEntry({ user: { uid: 'a' }, active: true, beforeLeave: fn => { guard = fn; }, listen: (_, __, fn) => { click = fn; } });
-  click(); await drain(); assert.equal(guard(), false); assert.deepEqual(assigned, []);
-  auth.currentUser = { uid: 'b' }; pending.resolve(Response.json({ uid: 'a' }, { status: 201 })); await drain(); assert.deepEqual(assigned, []);
+  context.mountEntry({ user: { uid: 'a' }, active: true, beforeLeave: fn => { guard = fn; }, listen: (node, _, fn) => { listeners.set(node, fn); }, cleanup() {} });
+  await drain();
+  return { nodes, assigned, calls, pending, auth, guard: () => guard(), clickEntry: () => listeners.get(nodes['editorial-enter'])(),
+    clickRecheck: () => listeners.get(nodes['editorial-recheck'])() };
+}
+
+test('entry only navigates after fresh availability and same-account session ACK', async () => {
+  const h = await entryHarness(), pending = h.pending;
+  assert.equal(h.nodes['editorial-enter'].hidden, false);
+  h.clickEntry(); await drain();
+  assert.equal(h.guard(), false);
+  assert.equal(h.calls.filter(call => call.path === '/api/cms/session/availability').length, 2, 'entry performs a fresh check');
+  assert.equal(h.calls.filter(call => call.path === '/api/cms/session').length, 1);
+  assert.equal(h.calls.at(-1).options.body, '{}');
+  assert.deepEqual(h.assigned, []);
+  h.auth.currentUser = { uid: 'b' };
+  pending.resolve(Response.json({ uid: 'a' }, { status: 201 })); await drain();
+  assert.deepEqual(h.assigned, []);
+});
+
+test('entry is withheld when runtime is unavailable even if Payload is the active source', async () => {
+  const h = await entryHarness({ availability: { mode: 'payload', epoch: 2, activated: true, runtimeReady: false, canEnter: false } });
+  assert.equal(h.nodes['editorial-enter'].hidden, true);
+  assert.equal(h.nodes['editorial-recheck'].hidden, false);
+  assert.match(h.nodes['editorial-entry-status'].textContent, /runtime não respondeu/);
+  h.clickEntry(); await drain();
+  assert.equal(h.calls.filter(call => call.path === '/api/cms/session').length, 0);
+});
+
+test('entry distinguishes an unactivated source and rechecks before issuing a session', async () => {
+  const h = await entryHarness({ availability: { mode: 'legacy', epoch: 1, activated: false, runtimeReady: true, canEnter: false } });
+  assert.equal(h.nodes['editorial-enter'].hidden, true);
+  assert.match(h.nodes['editorial-entry-status'].textContent, /ainda não foi ativada/);
+
+  const changing = await entryHarness({ onAvailability: count => Response.json(count === 1
+    ? { mode: 'payload', epoch: 2, activated: true, runtimeReady: true, canEnter: true }
+    : { mode: 'legacy', epoch: 3, activated: false, runtimeReady: true, canEnter: false }) });
+  assert.equal(changing.nodes['editorial-enter'].hidden, false);
+  changing.clickEntry(); await drain();
+  assert.equal(changing.nodes['editorial-enter'].hidden, true);
+  assert.equal(changing.calls.filter(call => call.path === '/api/cms/session').length, 0);
+  assert.match(changing.nodes['editorial-entry-status'].textContent, /ainda não foi ativada/);
 });
 
 test('BFCache lifecycle hides before suspension, ignores late validation and revalidates on restoration', async () => {

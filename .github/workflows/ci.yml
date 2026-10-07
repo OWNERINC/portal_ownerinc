@@ -42,6 +42,35 @@ jobs:
            cms/package-lock.json
       - run: npm run bootstrap
       - run: npm run verify
+      - name: Test route delivery with production Nginx image
+        run: |
+          docker run --rm \
+            --mount "type=bind,source=${PWD},target=/repo,readonly" \
+            --workdir /repo \
+            --entrypoint sh \
+            nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752 \
+            -c 'command -v nginx && apk add --no-cache nodejs && node --test tests/unit/nginx-route-delivery.test.mjs'
+      - name: Install isolated route browser tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/portal-route-browser" --no-save --package-lock=false playwright@1.62.1
+          node "$RUNNER_TEMP/portal-route-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Test route mounts through Nginx in Chromium
+        timeout-minutes: 10
+        run: |
+          container="portal-route-qa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name "$container" \
+            --publish 127.0.0.1::80 \
+            --mount "type=bind,source=${PWD}/public,target=/usr/share/nginx/html,readonly" \
+            --mount "type=bind,source=${PWD}/nginx/nginx.conf,target=/etc/nginx/conf.d/default.conf,readonly" \
+            nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
+          address=$(docker port "$container" 80/tcp)
+          curl --fail --silent --show-error --retry 10 --retry-connrefused \
+            --retry-delay 1 --max-time 5 --retry-max-time 30 \
+            --output /dev/null "http://${address}/index.html"
+          node scripts/test-route-recovery-browser.mjs \
+            --base-url "http://${address}" \
+            --playwright-module "$RUNNER_TEMP/portal-route-browser/node_modules/playwright/index.mjs"
       - name: Build CMS with synthetic build-only configuration
         env:
           CMS_BUILD_ONLY: "true"

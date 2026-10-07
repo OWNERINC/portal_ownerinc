@@ -159,6 +159,30 @@ de duas ações evita popup bloqueado após uma consulta assíncrona.
 Task 9 ainda possui entrada/logout/account-watch/brand/polls; Task 10 possui UI de
 histórico; Task 15 possui aceite visual completo. Esta entrega não os antecipa.
 
+#### Entrada do painel Payload
+
+O CMS central consulta `GET /api/cms/owner-news/authority` para manter a autoridade
+legada independente da disponibilidade opcional do Payload. Também consulta o
+endpoint Portal autenticado `GET /api/cms/session/availability`, que exige a
+permissão atual `manageKnowledge`, mas não exige configuração opcional do bridge ou
+cookie editorial. `editorial-entry.html` usa esse endpoint e revalida ao entrar.
+Sem cache duradouro, a API lê a autoridade Owner News e, separadamente, verifica
+`CMS_INTERNAL_URL` somente em `GET /editorial/ready`, com timeout total de 2 s,
+redirects recusados, corpo limitado a 256 bytes e resposta `status: ready` exata.
+Somente os modos `payload` e `payload_frozen` contam como fonte ativada; a entrada
+só é permitida quando a fonte está ativada **e** o runtime responde.
+`POST /api/cms/session` repete ambas as
+verificações imediatamente antes de emitir a sessão editorial. Isso não muda a
+autoridade nem ativa o runtime. Em `payload_frozen`, a entrada continua possível,
+mas os guards de escrita da API permanecem vigentes.
+
+O probe valida o serviço CMS e sua consulta read-only de prontidão, mas não testa
+Nginx/ingress público, a rota externa `/editorial/admin`, renderização no browser,
+autenticação final no Payload ou produção. Portanto, `canEnter` é uma permissão
+condicional baseada nas duas observações server-side, não prova de aceite nem
+garantia contra falha entre a verificação e a navegação. Diagnóstico de 502 ou
+verificação operacional exige evidência separada e autorização apropriada.
+
 ### Verificação Task 8
 
 ```text
