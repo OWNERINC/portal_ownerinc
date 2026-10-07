@@ -1,6 +1,6 @@
 import { APIError, type CollectionConfig } from 'payload'
 import type { LegacyNewsRevisionInput } from '../contracts/news'
-import { canManageNews } from '../auth/access'
+import { newsAreaReadAccess } from '../auth/news-area-access'
 import { isLegacyNewsImport, normalizeNewsDocument } from '../news/validation'
 import { uuid } from '../news/primitives'
 import { collectMediaIds } from '../media/references'
@@ -27,7 +27,7 @@ export function validateHistoryMetadataBasis(value: unknown, originalPublishedAt
 export const LegacyNewsRevisions: CollectionConfig = {
   slug: 'legacy-news-revisions',
   admin: { hidden: true },
-  access: { read: canManageNews, create: () => false, update: () => false, delete: () => false },
+  access: { read: newsAreaReadAccess, create: () => false, update: () => false, delete: () => false },
   indexes: [{ fields: ['legacyDocumentId', 'legacyRevisionId'], unique: true }],
   hooks: {
     beforeOperation: [async ({ operation, req }) => {

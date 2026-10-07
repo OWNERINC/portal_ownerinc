@@ -1,14 +1,15 @@
 import { APIError, type Endpoint, type PayloadRequest } from 'payload'
 import { canManageNews } from '../auth/access'
+import { canReadNewsArea, type NewsAreaReadGate } from '../auth/news-area-access'
 import { PortalAuthError } from '../auth/portal-client'
 import { currentDocument, latestRevision, snapshotDocument, snapshotHash } from '../publication/document'
 import { cancelSchedule, scheduleRevision, scheduleTarget } from '../publication/schedule'
 import type { ScheduleInput } from '../contracts/news'
 import { withCmsTransaction } from '../publication/transaction'
 
-async function handle(req: PayloadRequest, operation: () => Promise<unknown>) {
+async function handle(req: PayloadRequest, operation: () => Promise<unknown>, authorize: () => boolean | Promise<boolean> = () => canManageNews({ req })) {
   try {
-    if (!canManageNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
+    if (!await authorize()) throw new APIError('editorial_permission_denied', 403, undefined, true)
     return Response.json(await operation(), { headers: { 'Cache-Control': 'private,no-store' } })
   } catch (error) {
     const status = error instanceof APIError || error instanceof PortalAuthError ? error.status : 503
@@ -16,7 +17,8 @@ async function handle(req: PayloadRequest, operation: () => Promise<unknown>) {
       status === 403 ? 'editorial_permission_denied' : 'editorial_unavailable' }, { status, headers: { 'Cache-Control': 'private,no-store' } })
   }
 }
-export const newsScheduleEndpoints: Endpoint[] = [
+export function createNewsScheduleEndpoints(readNewsArea: NewsAreaReadGate = canReadNewsArea): Endpoint[] {
+  return [
   { path: '/news-schedule', method: 'get', handler: req => handle(req, async () => {
     const documentId = req.searchParams?.get('documentId')
     const target = scheduleTarget(req.searchParams?.get('target'), documentId)
@@ -31,7 +33,7 @@ export const newsScheduleEndpoints: Endpoint[] = [
         savedAt: revision.updatedAt, generation: Number(current.publicationGeneration || 0),
         pending: pending.docs.map(({ id, generation, scheduledAt, action }) => ({ id, generation, scheduledAt, action })) }
     })
-  }) },
+  }, () => readNewsArea(req as PayloadRequest)) },
   { path: '/news-schedule', method: 'post', handler: req => handle(req, async () => {
     const input = await req.json?.()
     if (!input || typeof input !== 'object') throw new APIError('invalid_schedule', 400, undefined, true)
@@ -42,4 +44,6 @@ export const newsScheduleEndpoints: Endpoint[] = [
     if (!input || typeof input !== 'object') throw new APIError('invalid_schedule', 400, undefined, true)
     return cancelSchedule(req, input as { id: string; expectedGeneration: number })
   }) },
-]
+  ]
+}
+export const newsScheduleEndpoints = createNewsScheduleEndpoints()

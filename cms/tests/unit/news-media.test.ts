@@ -14,6 +14,7 @@ import { NewsMigrationRuns } from '../../src/collections/NewsMigrationRuns.js'
 import { getFileHandler } from '../../node_modules/payload/dist/uploads/endpoints/getFile.js'
 import { normalizeNewsDraftReferences } from '../../src/news/validation.js'
 import { mediaRange, openNewsMedia } from '../../src/media/read-file.js'
+import { createNewsAreaAccess } from '../../src/auth/news-area-access.js'
 import { openStoredMedia } from '../../src/media/storage.js'
 import { requireCmsTransaction, withCmsTransaction } from '../../src/publication/transaction.js'
 
@@ -86,6 +87,7 @@ async function fixture() {
   const articles: Record<string, unknown>[] = []
   const versions: Record<string, unknown>[] = []
   const calls: string[] = []
+  const dataReads: string[] = []
   const sessions: Record<string, unknown> = { live: { db: { execute: async () => { calls.push('lock') } } } }
   const payload = {
     db: { sessions, beginTransaction: async () => { calls.push('begin'); return 'live' },
@@ -93,8 +95,9 @@ async function fixture() {
     collections: { 'news-media': { config: { upload: { staticDir: directory } } }, 'news-articles': { config: { fields: [], versions: { maxPerDoc: 0 } } },
       'news-migration-runs': { config: NewsMigrationRuns }, 'news-migration-items': { config: NewsMigrationItems } },
     config: { globals: [], jobs: { tasks: [] } },
-    findByID: async ({ id, req }: { id: string; req: PayloadRequest }) => { assert.equal(req.transactionID, 'live'); return assets.get(id) || null },
+    findByID: async ({ id, req }: { id: string; req: PayloadRequest }) => { dataReads.push('findByID'); assert.equal(req.transactionID, 'live'); return assets.get(id) || null },
     find: async ({ req, collection, where }: { req: PayloadRequest; collection: string; where?: Where }) => {
+      dataReads.push(`find:${collection}`)
       assert.equal(req.transactionID, 'live')
       const field = where?.filename
       const filename = Array.isArray(field) ? undefined : field?.equals
@@ -103,14 +106,21 @@ async function fixture() {
     findVersions: async ({ req }: { req: PayloadRequest }) => { assert.equal(req.transactionID, 'live'); return { docs: versions.map(version => ({ version })), hasNextPage: false } },
   } as unknown as Payload
   const req = { transactionID: 'live', payload } as PayloadRequest
-  return { directory, asset, assets, articles, versions, calls, sessions, payload, req, cleanup: () => rm(directory, { force: true, recursive: true }) }
+  return { directory, asset, assets, articles, versions, calls, dataReads, sessions, payload, req, cleanup: () => rm(directory, { force: true, recursive: true }) }
 }
 
 test('I1 actual native getFileHandler: boolean access without prefix still resolves editor bytes under the lock', async () => {
   const f = await fixture()
   try {
-    const config = createNewsMedia({ uploadDir: f.directory })
+    let mode = 'payload', unavailable = false
+    const areaAccess = createNewsAreaAccess(() => ({ getAuthority: async () => {
+      if (unavailable) throw new Error('synthetic authority dependency failure')
+      return { mode, epoch: 1 } as any
+    } }))
+    const config = createNewsMedia({ uploadDir: f.directory }, undefined, areaAccess.canRead)
     Object.assign(f.payload.collections['news-media'], { config })
+    assert.ok(config.upload && typeof config.upload === 'object')
+    const nativeFileHandler = config.upload.handlers![0]!
     const req = { ...f.req, routeParams: { collection: 'news-media', filename: f.asset.filename },
       searchParams: new URLSearchParams(), headers: new Headers(), t: (key: string) => key,
       user: { id: randomUUID(), collection: 'portal-editors', portalUid: editor.uid, portalActor: editor } } as unknown as PayloadRequest
@@ -134,6 +144,39 @@ test('I1 actual native getFileHandler: boolean access without prefix still resol
     req.routeParams!.filename = `${randomUUID()}.pdf`
     assert.equal((await getFileHandler(req)).status, 404)
     assert.ok(f.calls.includes('lock'))
+
+    mode = 'payload_frozen'
+    const readOnlyReq = { ...f.req, routeParams: { collection: 'news-media', filename: f.asset.filename },
+      searchParams: new URLSearchParams(), headers: new Headers({ range: 'bytes=0-3' }), t: (key: string) => key,
+      user: { id: randomUUID(), collection: 'portal-editors', portalUid: editor.uid, portalActor: editor } } as unknown as PayloadRequest
+    const readOnlyResponse = await getFileHandler(readOnlyReq)
+    assert.equal(readOnlyResponse.status, 206, 'payload_frozen remains readable including a range request')
+    assert.equal(Buffer.from(await readOnlyResponse.arrayBuffer()).toString(), '%PDF')
+
+    for (const deniedMode of ['legacy', 'frozen', 'invalid']) {
+      mode = deniedMode
+      const deniedFilename = '../private.pdf'
+      const deniedReq = { ...readOnlyReq, routeParams: { collection: 'news-media', filename: deniedFilename },
+        headers: new Headers({ range: 'bytes=0-3' }) } as PayloadRequest
+      const readsBefore = f.dataReads.length, callsBefore = f.calls.length
+      const direct = await nativeFileHandler(deniedReq, { params: { filename: deniedFilename } } as never)
+      assert.ok(direct instanceof Response)
+      assert.equal(direct.status, deniedMode === 'invalid' ? 503 : 403)
+      assert.equal(direct.body, null)
+      assert.equal(f.dataReads.length, readsBefore, `${deniedMode} must deny before a Payload lookup`)
+      assert.equal(f.calls.length, callsBefore, `${deniedMode} must deny before transaction/lock or file access`)
+    }
+    mode = 'payload'; unavailable = true
+    const unavailableFilename = '../private.pdf'
+    const unavailableReq = { ...readOnlyReq, routeParams: { collection: 'news-media', filename: unavailableFilename },
+      headers: new Headers({ range: 'bytes=0-3' }) } as PayloadRequest
+    const readsBefore = f.dataReads.length, callsBefore = f.calls.length
+    const unavailableResponse = await nativeFileHandler(unavailableReq, { params: { filename: unavailableFilename } } as never)
+    assert.ok(unavailableResponse instanceof Response)
+    assert.equal(unavailableResponse.status, 503)
+    assert.equal(unavailableResponse.body, null)
+    assert.equal(f.dataReads.length, readsBefore)
+    assert.equal(f.calls.length, callsBefore)
   } finally { await f.cleanup() }
 })
 

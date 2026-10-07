@@ -9,6 +9,7 @@ import { estimateNewsMinutes, newsText, toNewsDTO } from '../../src/news/to-dto'
 import { NewsArticles } from '../../src/collections/NewsArticles'
 import { NewsHome } from '../../src/globals/NewsHome'
 import { createNewsMedia } from '../../src/collections/NewsMedia'
+import { createNewsAreaAccess, newsAreaReadAccess } from '../../src/auth/news-area-access'
 import { newsBlocks } from '../../src/news/blocks'
 import { articleID, editorial, imageID, legacyBlocks, lexical, mediaShapes, pdfID, textNode } from '../fixtures/news'
 
@@ -390,12 +391,17 @@ test('native configs protect CRUD/history, retain every block, drafts/autosave, 
   const req = { user: null } as PayloadRequest
   const editorReq = { user: { id: articleID, collection: 'portal-editors', portalUid: 'uid',
     portalActor: { uid: 'uid', canManageNews: true } } } as unknown as PayloadRequest
-  for (const config of [NewsArticles, NewsHome]) for (const access of Object.values(config.access!)) {
+  for (const config of [NewsArticles, NewsHome]) for (const [name, access] of Object.entries(config.access!)) {
     assert.equal(await access!({ req }), false)
+    if (name === 'read' || name === 'readVersions') {
+      assert.strictEqual(access, newsAreaReadAccess, `${config.slug} ${name} uses fresh News authority`)
+      continue
+    }
     assert.equal(await access!({ req: editorReq }), true)
     assert.equal(await access!({ req: { ...editorReq, user: { ...editorReq.user!, portalUid: 'forged' } } }), false)
   }
-  const media = createNewsMedia({ uploadDir: 'C:/synthetic-private-media' })
+  const areaAccess = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode: 'payload', epoch: 1 }) }))
+  const media = createNewsMedia({ uploadDir: 'C:/synthetic-private-media' }, undefined, areaAccess.canRead)
   for (const [operation, access] of Object.entries(media.access!)) {
     assert.equal(await access!({ req }), false)
     assert.equal(await access!({ req: editorReq }), operation !== 'update')

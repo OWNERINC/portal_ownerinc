@@ -1,5 +1,5 @@
 import { APIError, type CollectionConfig } from 'payload'
-import { canManageNews } from '../auth/access'
+import { newsAreaReadAccess } from '../auth/news-area-access'
 import { importEntityKinds } from '../migration/identity'
 import { migrationItemStates } from '../migration/ledger'
 import { assertPreparationIdentity } from '../publication/authority'
@@ -9,7 +9,7 @@ import { assertMigrationItem } from '../migration/ledger'
 export const NewsMigrationItems: CollectionConfig = {
   slug: 'news-migration-items',
   admin: { hidden: true },
-  access: { read: canManageNews, create: () => false, update: () => false, delete: () => false },
+  access: { read: newsAreaReadAccess, create: () => false, update: () => false, delete: () => false },
   indexes: [{ fields: ['manifestSha256', 'entityKind', 'sourceId'], unique: true }],
   hooks: { beforeOperation: [async ({ operation, req, args }) => {
     if (!['create', 'update', 'delete', 'restoreVersion'].includes(operation)) return

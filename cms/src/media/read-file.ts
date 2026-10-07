@@ -1,7 +1,8 @@
 import { APIError, type Payload, type PayloadRequest } from 'payload'
 import type { VerifiedPortalActor } from '../contracts/news'
 import type { NewsMedia } from '../payload-types'
-import { canManageNews, type PortalRuntimeUser } from '../auth/access'
+import { canReadNewsArea, type NewsAreaReadGate } from '../auth/news-area-access'
+import { type PortalRuntimeUser } from '../auth/access'
 import { uuid } from '../news/primitives'
 import { requireCmsTransaction, withCmsTransaction } from '../publication/transaction'
 import { canReadPublishedMedia } from './references'
@@ -33,8 +34,16 @@ export function openNewsMedia({ id, ...options }: ReadMediaOptions & { id: strin
 }
 
 /** Native boolean access may provide no doc. Resolve canonical filename under the SAME lock as descriptor-open. */
-export function openNativeNewsMedia(req: PayloadRequest, filename: unknown): Promise<MediaResponse> {
-  const actor = canManageNews({ req }) ? (req.user as PortalRuntimeUser).portalActor! : null
+export async function openNativeNewsMedia(req: PayloadRequest, filename: unknown,
+  readNewsArea: NewsAreaReadGate = canReadNewsArea): Promise<MediaResponse> {
+  const headers = { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' }
+  try {
+    if (!await readNewsArea(req)) return { status: 403, headers, body: null }
+  } catch (error) {
+    const status = error instanceof APIError && [401, 403, 503].includes(error.status) ? error.status : 503
+    return { status, headers, body: null }
+  }
+  const actor = (req.user as PortalRuntimeUser).portalActor!
   return openMedia({ payload: req.payload, preview: true, actor, range: req.headers.get('range'), req }, async liveReq => {
     if (!isMediaFilename(filename)) return null
     const result = await req.payload.find({ collection: 'news-media', req: liveReq, overrideAccess: true,

@@ -1,5 +1,6 @@
 import type { GlobalConfig } from 'payload'
 import { canManageNews } from '../auth/access'
+import { newsAreaReadAccess } from '../auth/news-area-access'
 import { publicationFields } from '../news/fields'
 import { validateNewsHomeBeforeChange } from '../news/validation'
 import { beforeHomePublication, prepareHomePublication, afterHomePublication } from '../publication/hooks'
@@ -8,7 +9,7 @@ export const NewsHome: GlobalConfig = {
   slug: 'news-home',
   label: 'Abertura da Owner News',
   admin: { components: { elements: { beforeDocumentControls: ['/admin/ScheduleRevision#ScheduleRevision'] } } },
-  access: { read: canManageNews, update: canManageNews, readVersions: canManageNews },
+  access: { read: newsAreaReadAccess, update: canManageNews, readVersions: newsAreaReadAccess },
   versions: { max: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } },
   fields: [
     { name: 'eyebrow', label: 'Chamada', type: 'text', maxLength: 80, defaultValue: '' },
