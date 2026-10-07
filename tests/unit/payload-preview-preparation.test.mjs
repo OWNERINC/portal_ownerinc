@@ -222,6 +222,12 @@ test('prepare creates isolated private artifacts without starting services or pr
   assert(powershellLauncher.includes(runDirectory.replace(/\\/gu, '/')), 'run path is preserved as Unicode')
   assert.match(shellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
   assert.match(powershellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
+  assert.match(shellLauncher, /--format '\{\{\.Endpoints\.docker\.Host\}\}'/u)
+  assert.match(powershellLauncher, /--format '\{\{\.Endpoints\.docker\.Host\}\}'/u)
+  assert.doesNotMatch(shellLauncher, /index \.Endpoints|\.Endpoints "docker"/u)
+  assert.doesNotMatch(powershellLauncher, /index \.Endpoints|\.Endpoints "docker"/u)
+  assert.match(shellLauncher, /case "\$endpoint" in unix:\/\/\*\|npipe:\/\/\*\)[\s\S]*nonlocal_docker_context/u)
+  assert.match(powershellLauncher, /StartsWith\('unix:\/\/'\) -or \$endpoint\.StartsWith\('npipe:\/\/'\)[\s\S]*nonlocal_docker_context/u)
   assert.doesNotMatch(shellLauncher, /--profile tools|bootstrap-admin|cms-worker|\bcron\b/u)
   assert.doesNotMatch(powershellLauncher, /--profile tools|bootstrap-admin|cms-worker|\bcron\b/u)
   for (const secret of secrets) {
@@ -304,6 +310,35 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     assert(args.includes(path.join(runDirectory, 'compose.preview.yml').replace(/\\/gu, '/')))
   }
   assert(calls.every(args => args[0] !== 'compose' || args[1] !== 'down'), 'mock never receives a stop command')
+})
+
+test('Windows PowerShell 5.1 preserves the quote-free Docker endpoint template in native argv', async t => {
+  const executable = availableWindowsPowerShell51()
+  if (!executable) return t.skip('Windows PowerShell 5.1 is unavailable on this host')
+
+  const tempRoot = await makeTempRoot()
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }))
+  const generatedPowerShell = renderLaunchers({ checkoutRoot: repoRoot, runDirectory: path.join(tempRoot, 'run'),
+    projectName: 'ownerinc-payload-preview-012345abcdef' }).powershell
+  const endpointTemplate = generatedPowerShell.match(/docker context inspect \$context --format '([^']+)'/)?.[1]
+  assert.equal(endpointTemplate, '{{.Endpoints.docker.Host}}')
+  const captureFile = path.join(tempRoot, 'native-argv.json')
+  const probeFile = path.join(tempRoot, 'native-argv-probe.mjs')
+  await fs.writeFile(probeFile,
+    "import { writeFileSync } from 'node:fs'\nwriteFileSync(process.argv[2], JSON.stringify(process.argv.slice(3)))\n", 'utf8')
+  const runner = `
+& ${quotePowerShell(process.execPath)} ${quotePowerShell(probeFile)} ${quotePowerShell(captureFile)} context inspect desktop-linux --format ${quotePowerShell(endpointTemplate)}
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+`
+  const executed = spawnSync(executable, [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+    Buffer.from(runner, 'utf16le').toString('base64'),
+  ], { encoding: 'utf8', windowsHide: true })
+  assert.equal(executed.error, undefined, executed.error?.message)
+  assert.equal(executed.status, 0, `${executed.stdout}\n${executed.stderr}`)
+  assert.deepEqual(JSON.parse(await fs.readFile(captureFile, 'utf8')),
+    ['context', 'inspect', 'desktop-linux', '--format', '{{.Endpoints.docker.Host}}'],
+    'the real Node child process receives the exact argument array without PowerShell-only mock dispatch')
 })
 
 test('PowerShell launcher rendering quotes Unicode checkout and run paths as literal strings', () => {

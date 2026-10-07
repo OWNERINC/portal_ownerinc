@@ -86,7 +86,10 @@ prints paths and a resource summary, never generated credentials. The
   `--env-file` to the private generated file. It clears inherited Compose
   interpolation variables to avoid accidental host `.env`/shell values. The
   PowerShell launcher is UTF-8 with a BOM so Windows PowerShell 5.1 preserves
-  Unicode checkout and run-directory paths.
+  Unicode checkout and run-directory paths. Both launcher variants inspect the
+  selected context with the quote-free `{{.Endpoints.docker.Host}}` template;
+  this preserves PowerShell 5.1 native argument serialization while still
+  rejecting contexts whose endpoint is not a local `unix://` or `npipe://` pipe.
 
 The run uses `NODE_ENV=development` for the local HTTP cookie behavior. It does
 not change production settings or production credentials. SMTP targets

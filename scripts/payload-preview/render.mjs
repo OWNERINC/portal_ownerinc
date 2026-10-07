@@ -2,6 +2,7 @@ import path from 'node:path'
 import { fail } from './errors.mjs'
 
 const BASE_AUTH_ORIGINS = "http://127.0.0.1:9099 http://localhost:9099"
+const DOCKER_ENDPOINT_TEMPLATE = '{{.Endpoints.docker.Host}}'
 
 export const composeEnvironmentKeys = [
   'COMPOSE_PROJECT_NAME', 'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'API_IMAGE', 'NODE_ENV',
@@ -175,7 +176,7 @@ if [ \"$major\" -lt 2 ] || { [ \"$major\" -eq 2 ] && [ \"$minor\" -lt 24 ]; } ||
   echo 'PREVIEW_BLOCKED compose_2_24_4_required' >&2; exit 2
 fi
 context=\$(docker context show 2>/dev/null) || { echo 'PREVIEW_BLOCKED local_docker_context_required' >&2; exit 2; }
-endpoint=\$(docker context inspect \"$context\" --format '{{(index .Endpoints \"docker\").Host}}' 2>/dev/null) || { echo 'PREVIEW_BLOCKED local_docker_context_required' >&2; exit 2; }
+endpoint=\$(docker context inspect \"$context\" --format '${DOCKER_ENDPOINT_TEMPLATE}' 2>/dev/null) || { echo 'PREVIEW_BLOCKED local_docker_context_required' >&2; exit 2; }
 case \"$endpoint\" in unix://*|npipe://*) ;; *) echo 'PREVIEW_BLOCKED nonlocal_docker_context' >&2; exit 2 ;; esac
 `
 }
@@ -187,7 +188,7 @@ $composeVersion = [version]("$($Matches[1]).$($Matches[2]).$($Matches[3])")
 if ($composeVersion -lt [version]'2.24.4') { Write-Output 'PREVIEW_BLOCKED compose_2_24_4_required'; exit 2 }
 $context = (& docker context show 2>$null | Select-Object -First 1)
 if ($LASTEXITCODE -ne 0 -or -not $context) { Write-Output 'PREVIEW_BLOCKED local_docker_context_required'; exit 2 }
-$endpoint = (& docker context inspect $context --format '{{(index .Endpoints "docker").Host}}' 2>$null | Select-Object -First 1)
+$endpoint = (& docker context inspect $context --format '${DOCKER_ENDPOINT_TEMPLATE}' 2>$null | Select-Object -First 1)
 if ($LASTEXITCODE -ne 0 -or -not $endpoint -or -not ($endpoint.StartsWith('unix://') -or $endpoint.StartsWith('npipe://'))) { Write-Output 'PREVIEW_BLOCKED nonlocal_docker_context'; exit 2 }
 `
 }
