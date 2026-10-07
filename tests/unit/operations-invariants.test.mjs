@@ -378,7 +378,7 @@ test('CI builds and publishes commit-addressed production images', async () => {
     0,
     'every GitHub Action must be pinned to an immutable commit SHA',
   );
-  assert.match(apiPackage, /"sharp": "\^0\.35\.4"/);
+  assert.match(apiPackage, /"sharp": "\^0\.35\.5"/);
 });
 
 test('green main revisions deploy through a restricted serialized production gate', async () => {

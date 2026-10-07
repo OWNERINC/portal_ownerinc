@@ -14,7 +14,7 @@
     "multer": "^2.4.0",
     "nodemailer": "^10.0.13",
     "pg": "^8.11.0",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "supertest": "^7.1.4"
