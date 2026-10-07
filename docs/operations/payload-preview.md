@@ -150,6 +150,100 @@ then remain unchanged, and the recovery override is appended after the original
 one. Validate the same ordered file set with read-only `docker compose config`
 before any authorized launch. Configuration validation is not service readiness.
 
+### Temporary HTTPS recovery artifacts
+
+Use this separate, **prepare-only** path only for a specifically authorized
+recovery of an existing private preview. It does not edit the original `compose.env`,
+preview override, Firebase module, Nginx configuration, or image tags. It reads
+only `COMPOSE_PROJECT_NAME`, `PREVIEW_RUN_DIR`, `FIREBASE_PROJECT_ID`, `HTTP_PORT`,
+and `AUTH_PORT` from the run's private environment for identity checks; those values
+are never printed. The `--project` value is mandatory, must match the anchored
+`ownerinc-payload-preview-<run-id>` format, and must exactly match the run
+metadata. The output must be a new direct child named
+`recovery-https-<label>`; collisions are rejected. POSIX artifacts are owner-only
+`0700`/`0600`; Windows artifacts use the existing current-user/Local System ACL
+policy. The certificate and key inputs must be absolute, regular, non-symlink
+files outside Git repositories. On POSIX, both source files must also have
+owner-only permissions. The script validates certificate dates, self-signature,
+key correspondence, and SANs for `127.0.0.1` and `localhost`, then copies the
+validated pair into the new private recovery directory.
+
+Create a short-lived local certificate separately, only after the main session
+authorizes that one-shot container action. Do not install OpenSSL or generate a
+key on the host as part of preparation. Use an already-approved OpenSSL
+container image pinned by digest, with network disabled and a newly-created
+private input directory under the existing run. For example, in a POSIX shell
+(replace the image placeholder only with an approved, already-available digest):
+
+```sh
+tls_input="$run_dir/tls-input"
+umask 077
+mkdir -m 700 "$tls_input"
+docker run --rm --network none \
+  --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$tls_input,dst=/out" \
+  '<approved-openssl-image@sha256:...>' \
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+    -keyout /out/localhost.key -out /out/localhost.crt \
+    -subj '/CN=127.0.0.1' \
+    -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+    -addext 'keyUsage=critical,digitalSignature,keyEncipherment' \
+    -addext 'extendedKeyUsage=serverAuth'
+chmod 600 "$tls_input/localhost.key" "$tls_input/localhost.crt"
+```
+
+On Windows, use an equivalently approved disposable image and a bind mount to a
+new directory under the run; ensure that directory inherits/restricts access to
+the current user and Local System before writing the inputs. Do not use a
+publicly trusted certificate, production key, or a certificate for any host
+other than this loopback-only preview.
+
+After inspecting the paths and confirming the selected HTTPS port is free,
+prepare a distinct output child. Preparation performs no Docker calls, reads no
+service state, and launches nothing:
+
+```powershell
+node scripts/prepare-payload-preview-https.mjs prepare `
+  --run-directory 'C:/Users/Public/ownerinc-payload-preview-gate2-20261007-b' `
+  --output-directory 'C:/Users/Public/ownerinc-payload-preview-gate2-20261007-b/recovery-https-20261007-a' `
+  --project 'ownerinc-payload-preview-d755db45c46d' `
+  --https-port 19443 `
+  --certificate 'C:/Users/Public/ownerinc-payload-preview-gate2-20261007-b/tls-input/localhost.crt' `
+  --private-key 'C:/Users/Public/ownerinc-payload-preview-gate2-20261007-b/tls-input/localhost.key'
+```
+
+Choose values that match the actual protected run and a currently free loopback
+port; the illustrative project/run values above are not auto-discovered. Run
+`node scripts/prepare-payload-preview-https.mjs --check` beforehand for the
+offline source-contract check. Generated launchers pin the current checkout,
+original private env file, project name and original `compose.preview.yml`, then
+append only the HTTPS override. They use the existing image tags without
+building, retain the existing project-scoped volumes and credentials, run
+`docker compose config --quiet`, and request only `nginx`, `cms`, and
+`firebase-auth`. The override publishes only `127.0.0.1:<HTTPS-port>:443`, removes
+the host-published Auth Emulator/UI ports, changes the API public URL and CORS
+plus the CMS public origin to the exact HTTPS loopback origin, and sets CMS plus
+migration `NODE_ENV=production` for secure `__Host-` cookie behavior. It adds no HTTP
+redirect. Auth SDK traffic uses the HTTPS origin and Nginx forwards only POSTs
+to the three exact sign-in, account-lookup, and token-refresh emulator paths;
+there is no arbitrary emulator proxy. Nginx clears loopback HSTS state and
+trusts its own TLS scheme rather than an inbound forwarded-protocol value.
+
+If the existing run depends on an earlier recovery/base override (for example,
+an explicitly reviewed runtime-fix YAML), pass its absolute path with
+`--base-override`. That file must already exist inside this same private run; it
+is appended after `compose.preview.yml` and before the HTTPS override. There is
+no filename auto-discovery. Omitting the option assumes the original
+`compose.preview.yml` already contains the required TCP database healthchecks
+and preview migration settings.
+
+Review all generated artifacts and run the launcher only under separate
+authorization: it changes/recreates services in the existing preview project
+when invoked. A successful prepare or Compose configuration check is not
+runtime, cookie, sign-in, Gate 2, or native-admin acceptance. In particular, it
+does not diagnose or claim to fix any prior cookie HTTP 503; that remains a
+separate runtime observation.
+
 ## Gate boundary and evidence
 
 This harness prepares a disposable runtime for **Gate 2 service readiness**, not
