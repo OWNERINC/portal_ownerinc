@@ -196,13 +196,31 @@ function localComposeGuardPowerShell() {
   param([Parameter(Mandatory=$true)][string[]]$DockerArguments)
   $lines = New-Object 'System.Collections.Generic.List[string]'
   $overflow = $false
-  & docker @DockerArguments 2>$null | ForEach-Object {
-    $line = [string]$_
-    if ($lines.Count -lt 2 -and $line.Length -le 256) { [void]$lines.Add($line) }
-    else { $overflow = $true }
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    & docker @DockerArguments 2>$null | ForEach-Object {
+      $line = [string]$_
+      if ($lines.Count -lt 2 -and $line.Length -le 256) { [void]$lines.Add($line) }
+      else { $overflow = $true }
+    }
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
   }
-  $exitCode = $LASTEXITCODE
   return [pscustomobject]@{ Lines = $lines.ToArray(); ExitCode = $exitCode; Overflow = $overflow }
+}
+function Invoke-PreviewDockerCommand {
+  param([Parameter(Mandatory=$true)][string[]]$DockerArguments)
+  $previousErrorActionPreference = $ErrorActionPreference
+  $script:PreviewDockerExitCode = 127
+  try {
+    $ErrorActionPreference = 'Continue'
+    & docker @DockerArguments
+    $script:PreviewDockerExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
 }
 $versionProbe = Invoke-PreviewDockerProbe -DockerArguments @('compose', 'version', '--short')
 if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Overflow -or $versionProbe.Lines.Count -ne 1) { Write-Output 'PREVIEW_BLOCKED compose_version_unreadable'; exit 2 }
@@ -243,12 +261,15 @@ compose up -d --wait --wait-timeout 300 nginx cms firebase-auth
   const powershell = `$ErrorActionPreference = 'Stop'
 ${unsetPowerShell}${localComposeGuardPowerShell()}
 $compose = @(${powershellArgs})
-& docker compose @compose config --quiet
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& docker compose @compose build api cms firebase-auth
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& docker compose @compose up -d --wait --wait-timeout 300 nginx cms firebase-auth
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$configArguments = @('compose') + $compose + @('config', '--quiet')
+Invoke-PreviewDockerCommand -DockerArguments $configArguments
+if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
+$buildArguments = @('compose') + $compose + @('build', 'api', 'cms', 'firebase-auth')
+Invoke-PreviewDockerCommand -DockerArguments $buildArguments
+if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
+$upArguments = @('compose') + $compose + @('up', '-d', '--wait', '--wait-timeout', '300', 'nginx', 'cms', 'firebase-auth')
+Invoke-PreviewDockerCommand -DockerArguments $upArguments
+if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
 `
 
   return { shell, powershell }

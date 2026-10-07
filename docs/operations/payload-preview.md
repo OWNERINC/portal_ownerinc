@@ -95,7 +95,12 @@ prints paths and a resource summary, never generated credentials. The
   PowerShell drains each native probe to completion, checks its exit status, and
   accepts only one well-formed output line before proceeding. It retains at most
   two lines of up to 256 characters while draining, so extra or oversized output
-  is rejected without buffering it all in memory.
+  is rejected without buffering it all in memory. Around native Docker calls,
+  PowerShell temporarily uses `Continue` for `ErrorActionPreference` and restores
+  the prior value in `finally`; this keeps normal CLI stderr from becoming a
+  terminating `NativeCommandError` under Windows PowerShell 5.1. The launcher
+  still checks each captured native exit code, and build/up diagnostics remain
+  available to caller redirection such as `*> launch.log`.
 
 The run uses `NODE_ENV=development` for the local HTTP cookie behavior. The
 preview override applies it to both the CMS runtime and migration one-shot; the

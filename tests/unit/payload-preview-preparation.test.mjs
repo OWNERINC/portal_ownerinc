@@ -230,12 +230,14 @@ test('prepare creates isolated private artifacts without starting services or pr
   assert(powershellLauncher.includes(unicodeCheckout.replace(/\\/gu, '/')), 'checkout path is preserved as Unicode')
   assert(powershellLauncher.includes(runDirectory.replace(/\\/gu, '/')), 'run path is preserved as Unicode')
   assert.match(shellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
-  assert.match(powershellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
+  assert.match(powershellLauncher, /\$configArguments = @\('compose'\) \+ \$compose \+ @\('config', '--quiet'\)[\s\S]*\$buildArguments = @\('compose'\)[\s\S]*'build', 'api', 'cms', 'firebase-auth'[\s\S]*\$upArguments = @\('compose'\)[\s\S]*'up', '-d', '--wait', '--wait-timeout', '300'/u)
   assert.match(shellLauncher, /--format '\{\{\.Endpoints\.docker\.Host\}\}'/u)
   assert(powershellLauncher.includes("'--format', '{{.Endpoints.docker.Host}}'"))
   assert.doesNotMatch(shellLauncher, /index \.Endpoints|\.Endpoints "docker"/u)
   assert.doesNotMatch(powershellLauncher, /index \.Endpoints|\.Endpoints "docker"/u)
-  assert.match(powershellLauncher, /function Invoke-PreviewDockerProbe[\s\S]*?& docker @DockerArguments 2>\$null \| ForEach-Object[\s\S]*?\$exitCode = \$LASTEXITCODE/u)
+  assert.match(powershellLauncher, /function Invoke-PreviewDockerProbe[\s\S]*?\$ErrorActionPreference = 'Continue'[\s\S]*?& docker @DockerArguments 2>\$null \| ForEach-Object[\s\S]*?\$exitCode = \$LASTEXITCODE[\s\S]*?finally[\s\S]*?\$ErrorActionPreference = \$previousErrorActionPreference/u)
+  assert.match(powershellLauncher, /function Invoke-PreviewDockerCommand[\s\S]*?\$ErrorActionPreference = 'Continue'[\s\S]*?& docker @DockerArguments[\s\S]*?\$script:PreviewDockerExitCode = \$LASTEXITCODE[\s\S]*?finally[\s\S]*?\$ErrorActionPreference = \$previousErrorActionPreference/u)
+  assert.doesNotMatch(powershellLauncher, /& docker compose @compose (?:config|build|up)/u)
   assert.match(powershellLauncher, /\$lines\.Count -lt 2 -and \$line\.Length -le 256/u)
   assert.match(powershellLauncher, /\$versionProbe = Invoke-PreviewDockerProbe -DockerArguments @\('compose', 'version', '--short'\)/u)
   assert.match(powershellLauncher, /\$contextProbe = Invoke-PreviewDockerProbe -DockerArguments @\('context', 'show'\)/u)
@@ -502,6 +504,69 @@ $report = @{ lines = @($probeResult.Lines); exitCode = $probeResult.ExitCode; ov
   assert.deepEqual(report.lines, ['v2.24.4', 'unexpected-extra-line'], 'only two output lines are retained')
   assert.equal(report.overflow, true, 'additional output is drained but flagged')
   assert.equal(report.exitCode, 23, 'the nonzero native exit is read after the complete output pipeline drains')
+})
+
+test('Windows PowerShell 5.1 keeps native stderr nonfatal under all-stream launcher redirection', async t => {
+  const executable = availableWindowsPowerShell51()
+  if (!executable) return t.skip('Windows PowerShell 5.1 is unavailable on this host')
+
+  const tempRoot = await makeTempRoot()
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }))
+  const generatedPowerShell = renderLaunchers({ checkoutRoot: repoRoot, runDirectory: path.join(tempRoot, 'run'),
+    projectName: 'ownerinc-payload-preview-012345abcdef' }).powershell
+  const helperStart = generatedPowerShell.indexOf('function Invoke-PreviewDockerCommand')
+  const helperEnd = generatedPowerShell.indexOf('\n$versionProbe =', helperStart)
+  assert(helperStart >= 0 && helperEnd > helperStart, 'renderer exposes the native command helper')
+  const helper = generatedPowerShell.slice(helperStart, helperEnd)
+  const nodeInvocation = `& ${quotePowerShell(process.execPath)} @DockerArguments`
+  assert(helper.includes('& docker @DockerArguments'))
+  const nodeBackedHelper = helper.replace('& docker @DockerArguments', nodeInvocation)
+  const probeFile = path.join(tempRoot, 'native-stderr-probe.mjs')
+  const launcherFile = path.join(tempRoot, 'native-command-launcher.ps1')
+  const successStatusFile = path.join(tempRoot, 'success-status.txt')
+  const failureStatusFile = path.join(tempRoot, 'failure-status.txt')
+  const successLogFile = path.join(tempRoot, 'success-launch.log')
+  const failureLogFile = path.join(tempRoot, 'failure-launch.log')
+  await fs.writeFile(probeFile, [
+    'const mode = process.argv[2]',
+    "process.stdout.write('native-stdout-' + mode + '\\n')",
+    "process.stderr.write('native-stderr-' + mode + '\\n')",
+    "process.exitCode = mode === 'failure' ? 23 : 0",
+    '',
+  ].join('\n'), 'utf8')
+  const launcherSource = `param([string]$Mode, [string]$StatusPath)
+$ErrorActionPreference = 'Stop'
+${nodeBackedHelper}
+$dockerArguments = @(${quotePowerShell(probeFile)}, $Mode)
+Invoke-PreviewDockerCommand -DockerArguments $dockerArguments
+if ($ErrorActionPreference -ne 'Stop') { [System.IO.File]::WriteAllText($StatusPath, 'preference-not-restored'); return }
+[System.IO.File]::WriteAllText($StatusPath, [string]$script:PreviewDockerExitCode, [System.Text.Encoding]::UTF8)
+`
+  await fs.writeFile(launcherFile, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(launcherSource, 'utf8')]))
+  const runner = `
+& ${quotePowerShell(launcherFile)} success ${quotePowerShell(successStatusFile)} *> ${quotePowerShell(successLogFile)}
+& ${quotePowerShell(launcherFile)} failure ${quotePowerShell(failureStatusFile)} *> ${quotePowerShell(failureLogFile)}
+`
+  const executed = spawnSync(executable, [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+    Buffer.from(runner, 'utf16le').toString('base64'),
+  ], { encoding: 'utf8', windowsHide: true })
+  assert.equal(executed.error, undefined, executed.error?.message)
+  assert.equal(executed.status, 0, `${executed.stdout}\n${executed.stderr}`)
+
+  const readStatus = async filePath => (await fs.readFile(filePath, 'utf8')).replace(/^\uFEFF/u, '').trim()
+  const readRedirect = async filePath => {
+    const buffer = await fs.readFile(filePath)
+    if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString('utf16le')
+    if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) return buffer.subarray(3).toString('utf8')
+    return buffer.toString('utf8')
+  }
+  assert.equal(await readStatus(successStatusFile), '0', 'stderr from a successful native process does not abort the launcher')
+  assert.equal(await readStatus(failureStatusFile), '23', 'the actual nonzero native status remains visible to the launcher')
+  const successLog = await readRedirect(successLogFile)
+  const failureLog = await readRedirect(failureLogFile)
+  assert(successLog.includes('native-stdout-success') && successLog.includes('native-stderr-success'))
+  assert(failureLog.includes('native-stdout-failure') && failureLog.includes('native-stderr-failure'))
 })
 
 test('PowerShell launcher rendering quotes Unicode checkout and run paths as literal strings', () => {
