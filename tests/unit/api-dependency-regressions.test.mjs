@@ -31,7 +31,7 @@ function uploadAsset(h, buffer = PNG, { field = 'asset', contentType = 'image/pn
 
 test('real index starts without optional CMS env and confines bridge unavailability to editorial routes', async t => {
   const h = await createDependencyHarness(t);
-  for (const route of ['/api/cms/session', '/api/internal/editorial/authority']) {
+  for (const route of ['/api/cms/session', '/api/cms/v2/session', '/api/internal/editorial/authority']) {
     const response = await h.request.get(route);
     assert.equal(response.status, 503);
     assert.equal(response.body.reason, 'editorial_unavailable');
@@ -40,6 +40,33 @@ test('real index starts without optional CMS env and confines bridge unavailabil
   assert.equal(h.state.sql.length, 0);
   assert.equal((await h.request.get('/api/health')).status, 200);
   assert.equal((await h.request.get('/api/reminders/deliveries?limit=20').set('Authorization', MANAGER)).status, 200);
+});
+
+test('real index mounts v2 admin entry with authenticated availability and safe unavailable session operations', async t => {
+  const h = await createDependencyHarness(t);
+  const anonymous = await h.request.get('/api/cms/v2/session/availability');
+  boundedError(anonymous, 401, 'Authentication required.');
+  assert.equal(h.state.sql.length, 0, 'availability requires Portal authentication before DB access');
+
+  const availability = await h.request.get('/api/cms/v2/session/availability').set('Authorization', MANAGER);
+  assert.equal(availability.status, 200);
+  assert.deepEqual(availability.body, {
+    version: 2, adminEntryAllowed: false, runtimeAvailable: false, canEnterAdmin: true,
+  }, 'missing CMS runtime configuration is represented without enabling admin entry');
+  assert.equal(availability.headers['cache-control'], 'no-store');
+  assert.ok(h.state.sql.every(({ sql }) => /FROM users u/.test(sql)), 'v2 availability does not query News authority');
+
+  for (const response of [
+    await h.request.post('/api/cms/v2/session').set('Authorization', MANAGER),
+    await h.request.get('/api/cms/v2/session'),
+    await h.request.delete('/api/cms/v2/session'),
+    await h.request.post('/api/internal/editorial/admin/session/resolve').send({ cookie: 'synthetic-cookie' }),
+  ]) {
+    assert.equal(response.status, 503, response.text);
+    assert.equal(response.body.reason, 'editorial_unavailable');
+    assert.equal(response.headers['cache-control'], 'no-store');
+    assert.doesNotMatch(response.text, /secret|cookie|stack|node_modules/i);
+  }
 });
 
 test('real Express query parsing preserves strict duplicate/nested/malformed filter rejection', async t => {

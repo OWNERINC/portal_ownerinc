@@ -21,6 +21,7 @@ const { firebaseAuth, createAuthMiddleware } = require('./middleware/auth');
 app.use('/api/internal/editorial', require('./routes/editorial-internal').createEditorialInternalRouter({ db: pool, firebaseAuth }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 app.use('/api/cms/session', require('./routes/editorial-session').createEditorialSessionRouter({ db: pool, firebaseAuth, createAuthMiddleware }));
+app.use('/api/cms/v2/session', require('./routes/editorial-admin-session').createEditorialAdminSessionRouter({ db: pool, firebaseAuth, createAuthMiddleware }));
 // CMS block documents are bounded separately; keep the smaller default for every other JSON API.
 app.use('/api/cms', express.json({ limit: '6mb' }));
 app.use('/api/users/bulk', express.json({ limit: '1mb' }));

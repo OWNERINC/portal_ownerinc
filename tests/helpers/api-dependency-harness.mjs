@@ -103,7 +103,7 @@ export async function createDependencyHarness(t, { publicQuota, editorial } = {}
     ['../db', pool], ['../middleware/auth', auth], ['node:fs/promises', files],
   ]);
   const actualRoutes = new Map();
-  for (const name of ['reminders', 'cms', 'upload', 'cms-assets', 'editorial-session', 'editorial-internal']) {
+  for (const name of ['reminders', 'cms', 'upload', 'cms-assets', 'editorial-session', 'editorial-admin-session', 'editorial-internal']) {
     actualRoutes.set(`./routes/${name}`, await loadSource(`routes/${name}.js`, dependencies));
   }
   if (editorial) {

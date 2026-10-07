@@ -1,8 +1,10 @@
 const { rateLimit } = require('../middleware/security');
 
-// Per API process, one fixed aggregate bucket per operation. Resolution is normal
-// per-request traffic from every editor, not one browser's IP budget. Separate
-// lanes reserve capacity for confirmed logout, job checks and authority reads.
+// Per API process, one fixed aggregate bucket per operation. The resolve lane is
+// deliberately shared by News and general-admin session resolution plus the
+// authenticated poll-admin proxy; it is normal per-request traffic from every
+// editor, not one browser's IP budget. Other lanes reserve confirmed logout,
+// job checks and authority reads.
 const EDITORIAL_QUOTA = Object.freeze({ resolve: 3000, revoke: 300, actor: 600, authority: 120, rejected: 60 });
 function createEditorialQuotas(overrides = {}) {
   const limits = { ...EDITORIAL_QUOTA, ...overrides };

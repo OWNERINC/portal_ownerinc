@@ -34,7 +34,39 @@ test('every API resource route requires authentication', async () => {
       if (file === 'editorial-internal.js') {
         assert.ok(source.indexOf('assertEditorialService(req, env)') < route.index, 'private editorial routes require service authentication first');
         assert.match(source, /const json = express\.json\(\{ limit: '16kb' \}\)/);
-        if (route[1].startsWith("'/session/") || route[1].startsWith("'/actor/")) assert.match(route[1], /limits\.\w+, json,/);
+        if (route[1].startsWith("'/session/") || route[1].startsWith("'/admin/session/") || route[1].startsWith("'/actor/")) {
+          assert.match(route[1], /limits\.\w+, json,/);
+        }
+        continue;
+      }
+      if (file === 'editorial-admin-session.js') {
+        assert.match(source, /createAuthMiddleware\(\{ db, firebaseAuth, onTokenError: firebaseError \}\)/);
+        assert.match(source, /router\.get\('\/availability', authenticate,/,
+          'v2 availability requires the real Portal Bearer middleware');
+        assert.match(source, /router\.post\('\/', authenticate,/,
+          'v2 issuance requires the real Portal Bearer middleware');
+        const bridgeGuard = source.indexOf('bridgeSecret(env)');
+        const bodyParser = source.indexOf('router.use(express.json');
+        assert.ok(bridgeGuard >= 0 && bodyParser > bridgeGuard,
+          'session operations check bridge configuration before parsing requests');
+        const originGuard = source.indexOf('assertEditorialOrigin(req, req.editorialCookie)');
+        const issueRoute = source.indexOf("router.post('/', authenticate,");
+        assert.ok(originGuard >= 0 && issueRoute > originGuard,
+          'v2 public mutations pass the exact-Origin guard before issuance');
+        const cookieGet = source.match(/router\.get\('\/',([^\n]+)/);
+        assert.match(source, /router\.get\('\/', async \(req, res, next\) => \{[\s\S]*readEditorialCookie\(req\.get\('cookie'\), req\.editorialCookie\.name\)[\s\S]*resolveEditorialAdminSession/,
+          'v2 session resolution intentionally authenticates with the shared cookie');
+        assert.ok(cookieGet, 'v2 session resolver route exists');
+        assert.doesNotMatch(cookieGet[1], /\bauthenticate\b/,
+          'cookie resolution intentionally does not require a second ID-token Bearer');
+        const cookieDelete = source.match(/router\.delete\('\/',([^\n]+)/);
+        assert.match(source, /router\.delete\('\/', async \(req, res, next\) => \{[\s\S]*revokeEditorialSession\(\{ db, cookie: readEditorialCookie\(req\.get\('cookie'\), name\) \}\)/,
+          'v2 logout intentionally authenticates/revokes the shared cookie');
+        assert.match(source, /if \(!\['GET', 'HEAD', 'OPTIONS'\]\.includes\(req\.method\)\) assertEditorialOrigin/,
+          'cookie revocation is protected by the same exact-Origin mutation guard');
+        assert.ok(cookieDelete, 'v2 cookie revocation route exists');
+        assert.doesNotMatch(cookieDelete[1], /\bauthenticate\b/,
+          'cookie revocation intentionally uses the session cookie instead of a Bearer token');
         continue;
       }
       if (file === 'editorial-session.js') {
