@@ -1,4 +1,4 @@
-import type { Access, Payload, PayloadRequest } from 'payload'
+import type { Access, Payload, PayloadRequest, Where } from 'payload'
 import { isVerifiedNewsActor, type PortalRuntimeUser } from './access'
 import { canReadNewsArea } from './news-area-access'
 
@@ -7,7 +7,17 @@ const lockOperations = ['create', 'read', 'update', 'delete'] as const
 
 type NewsReadGate = (req: PayloadRequest) => Promise<boolean>
 
-/** Keep Payload's native lock UI for a live News session, not a general admin actor. */
+function noLockRowsWhere(): Where {
+  // Payload 3.90.2's DashboardView always calls find on locked global rows,
+  // even for a custom dashboard. A false read result makes that required find
+  // throw 403. The conjunction cannot match any single lock document ID.
+  return { and: [
+    { id: { equals: '00000000-0000-0000-0000-000000000001' } },
+    { id: { equals: '00000000-0000-0000-0000-000000000002' } },
+  ] }
+}
+
+/** Keep native lock mutations exclusive to a current strict News actor. */
 export function createNativeNewsLockAccess(readNews: NewsReadGate = canReadNewsArea): Access {
   return async ({ req }) => {
     const user = req.user as PortalRuntimeUser | null
@@ -17,11 +27,29 @@ export function createNativeNewsLockAccess(readNews: NewsReadGate = canReadNewsA
 }
 
 /**
+ * DashboardView's built-in global-lock query must succeed before a custom home
+ * component renders. Return an empty result scope instead of a blanket 403 for
+ * actors without current native-News authority; no lock rows or editor identity
+ * can match this predicate. Real reads remain available to a current v1 News actor.
+ */
+export function createNativeNewsLockReadAccess(readNews: NewsReadGate = canReadNewsArea): Access {
+  return async ({ req }) => {
+    const user = req.user as PortalRuntimeUser | null
+    if (user?.collection !== 'portal-editors' || !isVerifiedNewsActor(user)) return noLockRowsWhere()
+    return await readNews(req) ? true : noLockRowsWhere()
+  }
+}
+
+/**
  * Payload 3.90.2 generates this internal collection after sanitizing user config.
  * Its supported onInit hook runs after the collection map is built and before the
  * runtime accepts requests; the map and config list share this exact object.
  */
-export function scopePayloadLockAccess(payload: Payload, access: Access = createNativeNewsLockAccess()): void {
+export function scopePayloadLockAccess(
+  payload: Payload,
+  mutationAccess: Access = createNativeNewsLockAccess(),
+  readAccess: Access = createNativeNewsLockReadAccess(),
+): void {
   const runtimeCollection = payload.collections[LOCKED_DOCUMENTS_SLUG]
   const config = runtimeCollection?.config
   if (!config || config.slug !== LOCKED_DOCUMENTS_SLUG || config.lockDocuments !== false ||
@@ -31,12 +59,13 @@ export function scopePayloadLockAccess(payload: Payload, access: Access = create
   }
 
   // Payload's defaultAccess remains in force for valid News actors. Other Portal
-  // admins cannot list, inspect, create, update, or delete native News locks.
+  // admins can complete Payload's required lock query, but receive no matching
+  // rows; they still cannot create, update, or delete native News locks.
   config.access = {
     ...config.access,
-    create: access,
-    read: access,
-    update: access,
-    delete: access,
+    create: mutationAccess,
+    read: readAccess,
+    update: mutationAccess,
+    delete: mutationAccess,
   }
 }
