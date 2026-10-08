@@ -1,6 +1,7 @@
 import type { AuthStrategy, Payload } from 'payload'
 import { PortalAuthError, type PortalResolution } from './portal-client'
 import type { AdminPortalResolution, VerifiedAdminActor } from '../contracts/admin'
+import type { VerifiedPortalActor } from '../contracts/news'
 import { readEditorialCookie } from './cookie'
 
 export const AUTH_STATUS_HEADER = 'x-ownerinc-auth-status'
@@ -28,6 +29,14 @@ async function projectEditor(payload: Payload, actor: PortalIdentity) {
     if (!winner) throw error
     return winner
   }
+}
+
+/** Strict News-only projection helper for the server-local frozen importer. */
+export async function projectVerifiedNewsEditor(payload: Payload, actor: VerifiedPortalActor) {
+  if (actor.canManageNews !== true || typeof actor.uid !== 'string' || !actor.uid || actor.uid.length > 128 ||
+    typeof actor.email !== 'string' || !actor.email || actor.email.length > 320 ||
+    !(actor.name === null || typeof actor.name === 'string')) throw new PortalAuthError(403)
+  return projectEditor(payload, actor)
 }
 export function createPortalStrategy({ cookieName, resolve }: {
   cookieName: string; resolve: (cookie: string) => Promise<PortalResolution>
