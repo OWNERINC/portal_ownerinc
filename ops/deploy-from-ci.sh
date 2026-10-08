@@ -170,6 +170,7 @@ compose_for() {
   local selected_override=$production_override
   local image_environment=()
   local cms_overlay=()
+  local payload_production_overlay=()
   if [[ $target == production && -f $selected_release/compose.ownerinc-vps.yaml ]]; then
     selected_override="$selected_release/compose.ownerinc-vps.yaml"
   fi
@@ -178,6 +179,13 @@ compose_for() {
     if grep -Fxq 'RELEASE_FORMAT=payload-v1' "$selected_release/.image-env"; then
       [[ -f $selected_release/docker-compose.payload.yml ]] || return 2
       cms_overlay=(--file "$selected_release/docker-compose.payload.yml")
+      # The host-owned hardening/network overlay is required only for production
+      # Payload releases. Keep legacy and staging composition byte-for-byte in
+      # their existing file set; append this after the regular production override.
+      if [[ $target == production ]]; then
+        [[ -f $runtime/compose.payload.production.yaml && ! -L $runtime/compose.payload.production.yaml ]] || return 2
+        payload_production_overlay=(--file "$runtime/compose.payload.production.yaml")
+      fi
     fi
   fi
   docker compose \
@@ -186,6 +194,7 @@ compose_for() {
     --file "$selected_release/docker-compose.yml" \
     "${cms_overlay[@]}" \
     --file "$selected_override" \
+    "${payload_production_overlay[@]}" \
     --project-name "$project" \
     --project-directory "$selected_release" \
     --profile notifications \

@@ -128,7 +128,8 @@ estado de serviços deve ser inspecionado antes de recuperação explícita.
 O adapter `runtime/payload-control` **não é entregue como sucesso simulado**: depende
 dos contratos reais de threads3/4. Ausência bloqueia operações CMS. Guard/adapter
 devem ser instalados de artefatos revisados, com diretórios protegidos e proprietário
-operador/root; nenhum script aqui instala arquivos no host.
+operador/root. O preparador limitado descrito abaixo não instala nem simula
+`runtime/payload-control`.
 
 Verbos invocados com `(ação, releaseAbsoluta, evidênciaOpcional)`: release-preflight,
 close-admission, quiescence-proof, backup-metadata, restore-preflight, prepare-restore,
@@ -147,6 +148,179 @@ verify-restored, verify-release, rollback-check, open-admission.
   exige prova de que autoridade continua legacy e nenhuma escrita ativa foi perdida.
 - verify-release comprova digests de todos os processos e prontidão esperada para
   a fase. Não executar agendamento importado nem criar uma publicação para testar.
+
+## Preparação inicial da infraestrutura de produção — inativa
+
+`ops/prepare-cms-infrastructure.sh` prepara somente o receiver comum, o guard
+revisado, o overlay de rede/limites Payload e a configuração privada CMS. Não é um
+deploy nem um cutover; o arquivo versionado não prova instalação na VPS. O comando
+tem alvos fixos e aceita somente `--check` (padrão, sem mudanças) ou `--apply`; não
+aceita argumento de diretório/host alternativo.
+
+O bundle revisado precisa manter juntos `docker-compose.payload.yml`,
+`ops/prepare-cms-infrastructure.sh`, `ops/prepare-cms-infrastructure-private.py`,
+`ops/deploy-from-ci.sh`, `ops/payload-operations-guard.sh` e
+`ops/compose.payload.production.yaml`. Antes de aplicar, confirme o bundle/commit e
+execute:
+
+```sh
+sudo bash ops/prepare-cms-infrastructure.sh --check
+sudo bash ops/prepare-cms-infrastructure.sh --apply
+```
+
+Requer Linux, Bash, Python 3, `flock`, utilitários GNU (`install`, `sha256sum`,
+`mktemp`, `mv -T`) e o plugin Docker Compose. O preparador exige que o `current-release`
+continue exatamente em `d285029970c82d48cd50cc393a054af4cbfdf1e8`, com `.image-env`
+API/cron de duas linhas, e que o receiver comum instalado continue root:root,
+0755, SHA-256 `30be4941fe15c1c75e16175625685e2f51acc6ceaa52db146d61684cdacce0f7`.
+Mudança de release/receiver, symlink, diretório/file inseguro, URL pública não
+canônica, credenciais parciais/inválidas/duplicadas ou configuração Compose inválida
+aborta antes da escrita.
+
+O Compose é validado com `docker compose config --quiet`, combinando base da release
+atual, `docker-compose.payload.yml` do bundle revisado, o mesmo override de produção
+efetivo que o receiver selecionará (`current-release/compose.ownerinc-vps.yaml` quando
+existir como arquivo regular protegido; caso contrário `runtime/compose.production.yaml`)
+e o overlay Payload novo. Um override release-local existente que seja symlink, não
+regular, hardlinkado ou gravável por grupo/outros é recusado, nunca ignorado em favor
+do fallback. O parser recebe o arquivo de ambiente de produção em modo privado e
+valores sintéticos CMS para a validação; não imprime configuração, URL, segredo ou
+comando SQL. Não há `docker pull`, `up`, `run`, `exec`, migration, database,
+container, service restart, systemd/timer ou mudança de release atual.
+
+Com `--apply`, o preparador abre o `runtime/deploy.lock` existente sem truncar,
+adquirindo `flock` antes de escrever. Preserva esse inode; nunca o remove. A
+substituição atômica do `production.runtime.conf` mantém bytes anteriores, uid/gid e
+modo existentes (neste host, operador uid 1000 e modo 0600); a instalação não muda
+permissões de usuário. Sem nenhuma das nove chaves CMS exigidas, gera senhas admin,
+migrator e runtime e `PAYLOAD_SECRET`/chaves de serviço com 32 bytes aleatórios
+distintos. URLs usam `cms-postgres:5432/ownerinc_cms` e os roles correspondentes.
+Um conjunto existente completo e válido é preservado sem rotação; qualquer conjunto
+parcial, duplicado ou inválido é recusado, sem `source`/`eval` do arquivo e sem
+imprimir valores.
+
+O snapshot imediatamente anterior fica em
+`/opt/ownerinc/backups/portal-ownerinc/production/cms-infrastructure-preparation-<UTC>-<UUID>`
+com diretório 0700. Guarda somente o receiver anterior, o guard anterior quando
+existente, o arquivo de ambiente privado (0600) e `metadata.json` com presença,
+uid/gid/modo; não contém imagem, release, backup diário nem database dump. O caminho
+é impresso antes da primeira instalação, também quando uma etapa posterior falhar.
+
+Instala apenas `/usr/local/libexec/ownerinc-portal-deploy` (root:root 0755) e
+`runtime/payload-operations-guard` (root:root 0755), além de
+`runtime/compose.payload.production.yaml` e `runtime/cms-image-candidate.env`
+(root:root 0644). Não instala um wrapper production novo, não altera `authorized_keys`
+nem permissões/owner do override existente `runtime/compose.production.yaml`.
+O manifesto de candidato contém somente `CMS_IMAGE=` para o digest revisado
+`ghcr.io/ownerinc/ownerinc-portal-cms@sha256:6eaddc9a333ba682508a09a4ae8a6409d9e571abab9ec4a62829c2e9828730b0`; não é copiado para
+`current-release/.image-env`, não adiciona `RELEASE_FORMAT`, nem promove release.
+
+O receiver comum acrescenta o override novo somente para release `payload-v1` em
+produção, depois do override normal, e falha se ele estiver ausente/for symlink.
+Legacy API/cron e staging continuam no conjunto anterior de arquivos Compose. O
+override mantém CMS/PostgreSQL/worker sem portas publicadas e somente na rede
+`ownerinc-portal-backend` interna; Nginx permanece na topologia já configurada. Aplica
+limites de CPU/memória, `no-new-privileges` e logs locais limitados. Não muda
+autoridade, formato de backup, retenção ou agenda diária.
+
+Mesmo após sucesso, a preparação está **inativa**. A saída deixa explícito que
+`runtime/payload-control` continua ausente (ou, se já existir, não é validado nem
+invocado), API v2 compatível e Task15 permanecem pendentes e CMS/worker não foram
+iniciados. Nenhum placeholder `payload-control` é criado. Esses gates requerem revisão
+e autorização separadas antes de qualquer release CMS.
+
+### Rollback manual da preparação inativa
+
+Use o caminho privado impresso pelo instalador como `BACKUP_DIR`. Só faça este
+rollback enquanto o `current-release` ainda aponta para o SHA legacy acima, Payload
+não foi implantado e nenhuma outra operação/alteração de configuração está em curso.
+O comando reabre o mesmo lock, repõe receiver/guard/environment a partir dos backups
+e restaura owner/mode do ambiente conforme `metadata.json`; nunca mexe no lock,
+override preexistente, current-release, manifesto de imagem, banco ou serviços. Se o
+guard anterior estava ausente, o guard revisado recém-instalado é deixado inerte.
+Overlay e manifesto CMS novos também permanecem inertes sob o receiver antigo.
+
+```sh
+BACKUP_DIR='/opt/ownerinc/backups/portal-ownerinc/production/cms-infrastructure-preparation-<UTC>-<UUID>'
+sudo bash -s -- "$BACKUP_DIR" <<'BASH'
+set -Eeuo pipefail
+backup=$1
+root=/opt/ownerinc/apps/portal-ownerinc-real
+runtime="$root/runtime"
+expected="$root/releases/d285029970c82d48cd50cc393a054af4cbfdf1e8"
+[[ $backup =~ ^/opt/ownerinc/backups/portal-ownerinc/production/cms-infrastructure-preparation-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || exit 2
+[[ -d $backup && ! -L $backup && -f $runtime/deploy.lock && ! -L $runtime/deploy.lock ]] || exit 2
+lock_identity=$(stat -Lc '%d:%i:%h' "$runtime/deploy.lock")
+[[ ${lock_identity##*:} == 1 ]] || exit 2
+exec 9<>"$runtime/deploy.lock"
+[[ ! -L $runtime/deploy.lock && /proc/$$/fd/9 -ef $runtime/deploy.lock && $(stat -Lc '%d:%i:%h' /proc/$$/fd/9) == "$lock_identity" ]] || exit 2
+flock -n 9 || { echo 'Another coordinated operation holds the lock.' >&2; exit 3; }
+[[ ! -L $runtime/deploy.lock && /proc/$$/fd/9 -ef $runtime/deploy.lock && $(stat -Lc '%d:%i:%h' /proc/$$/fd/9) == "$lock_identity" ]] || exit 2
+[[ -f $root/current-release && ! -L $root/current-release && $(<"$root/current-release") == "$expected" ]] || exit 2
+python3 - "$backup" <<'PY'
+import json, os, shutil, stat, sys, tempfile
+
+if os.geteuid() != 0:
+    raise SystemExit('Rollback requires root.')
+backup = sys.argv[1]
+backup_info = os.lstat(backup)
+if stat.S_ISLNK(backup_info.st_mode) or not stat.S_ISDIR(backup_info.st_mode) or (backup_info.st_uid, stat.S_IMODE(backup_info.st_mode)) != (0, 0o700):
+    raise SystemExit('Unsafe private rollback directory.')
+metadata_path = os.path.join(backup, 'metadata.json')
+metadata_info = os.lstat(metadata_path)
+if stat.S_ISLNK(metadata_info.st_mode) or not stat.S_ISREG(metadata_info.st_mode) or metadata_info.st_nlink != 1 or (metadata_info.st_uid, stat.S_IMODE(metadata_info.st_mode)) != (0, 0o600):
+    raise SystemExit('Unsafe rollback metadata.')
+with open(metadata_path, encoding='utf-8') as stream:
+    metadata = json.load(stream)
+targets = {
+    'receiver': ('ownerinc-portal-deploy', '/usr/local/libexec/ownerinc-portal-deploy'),
+    'guard': ('payload-operations-guard', '/opt/ownerinc/apps/portal-ownerinc-real/runtime/payload-operations-guard'),
+    'environment': ('production.runtime.conf', '/opt/ownerinc/secrets/portal-ownerinc/production.runtime.conf'),
+}
+if set(metadata) != set(targets):
+    raise SystemExit('Unexpected rollback metadata fields.')
+restore = []
+for key, (backup_name, target) in targets.items():
+    record = metadata[key]
+    if not record['present']:
+        continue
+    if set(record) != {'present', 'uid', 'gid', 'mode'} or not all(type(record[name]) is int and record[name] >= 0 for name in ('uid', 'gid')) or not isinstance(record['mode'], str) or len(record['mode']) != 4 or any(char not in '01234567' for char in record['mode']):
+        raise SystemExit('Invalid rollback metadata record.')
+    source = os.path.join(backup, backup_name)
+    source_info = os.lstat(source)
+    target_info = os.lstat(target)
+    if stat.S_ISLNK(source_info.st_mode) or not stat.S_ISREG(source_info.st_mode) or source_info.st_nlink != 1 or (source_info.st_uid, stat.S_IMODE(source_info.st_mode)) != (0, 0o600):
+        raise SystemExit('Unsafe rollback source.')
+    if stat.S_ISLNK(target_info.st_mode) or not stat.S_ISREG(target_info.st_mode) or target_info.st_nlink != 1:
+        raise SystemExit('Unsafe rollback target.')
+    restore.append((key, source, target, record))
+
+# Validate every source and target before changing any of them.
+for key, source, target, record in restore:
+    fd, temporary = tempfile.mkstemp(prefix='.cms-preparation-rollback.', dir=os.path.dirname(target))
+    try:
+        with os.fdopen(fd, 'wb') as output, open(source, 'rb') as saved:
+            shutil.copyfileobj(saved, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chown(temporary, record['uid'], record['gid'])
+        os.chmod(temporary, int(record['mode'], 8))
+        os.replace(temporary, target)
+        directory_fd = os.open(os.path.dirname(target), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f'Restored {key}; secret values were not displayed.')
+PY
+BASH
+```
+
+This file rollback restores only host preparation files; it is not a release/data
+rollback and must not be used after Payload traffic or authority changes.
 
 ## Restauração e floor
 

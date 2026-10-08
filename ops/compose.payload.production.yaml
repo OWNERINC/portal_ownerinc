@@ -1,0 +1,42 @@
+# Production-only limits and private network for the optional Payload services.
+# The existing production override defines the backend network; this file adds
+# no new network, ingress, published port, volume or authority setting.
+x-cms-production-logs: &cms_production_logs
+  driver: local
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  cms-postgres:
+    cpus: 0.50
+    mem_limit: 768m
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging: *cms_production_logs
+
+  cms-provision:
+    cpus: 0.50
+    mem_limit: 512m
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging: *cms_production_logs
+
+  cms-migrate:
+    cpus: 0.50
+    mem_limit: 768m
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging: *cms_production_logs
+
+  cms:
+    cpus: 1.00
+    mem_limit: 1024m
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging: *cms_production_logs
+
+  cms-worker:
+    cpus: 0.50
+    mem_limit: 512m
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging: *cms_production_logs
