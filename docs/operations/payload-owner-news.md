@@ -1,9 +1,10 @@
 # Payload Owner News — checks e preparação do aceite
 
-Estado desta entrega: wiring offline e guard portátil implementados. A suíte real
-Task15 e a preparação portátil ainda estão incompletas; não há aceite integrado ou
-autorização de produção decorrente deste documento. Resultados por cenário ficam
-na [matriz de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md).
+Estado desta entrega: wiring offline, guard portátil, finalizer one-shot e comando
+de auditoria instalada somente leitura estão implementados. A suíte real Task15 e
+a preparação portátil ainda estão incompletas; nenhum uso local destes comandos
+equivale a aceite integrado ou autorização de produção. Resultados por cenário
+ficam na [matriz de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md).
 
 ## Checks separados
 
@@ -29,6 +30,112 @@ O snapshot histórico de 05/10/2026 registrou CMS 17 pacotes afetados
 (5 high/10 moderate/2 low); não é audit atual. Remediação requer análise atual por
 caminho transitivo, atualização deliberada e repetição dos checks atingidos. Não
 usar ignore global ou force/downgrade automático para produzir verde.
+
+### Auditoria do protocolo Owner News instalado (read-only)
+
+`npm --prefix cms run audit:news-protocol` executa
+`cms/scripts/verify-news-protocol.ts` com `--audit-protocol`. Requer exclusivamente
+`CMS_OBSERVER_DATABASE_URL`, apontada explicitamente como `cms_observer` para o
+database `ownerinc_cms`. Não consulta `.env`, não usa `CMS_ADMIN_DATABASE_URL`,
+`CMS_RUNTIME_DATABASE_URL`, `CMS_DATABASE_URL` ou `DATABASE_URL` como fallback e
+não cria nem altera a role. O parser recusa query/fragmento na URL para impedir
+overrides de sessão.
+
+O usuário deve fornecer uma role já provisionada segundo o contrato
+`buildNewsProtocolObserverProvisioningSQL` em
+`cms/scripts/news-protocol-observer-contract.ts`. Esse builder retorna SQL
+privilegiado, é somente um contrato para revisão/provisionamento explícito e não é
+importado pelo CLI. A role deve ser criada por procedimento separado e aprovado;
+uma role preexistente não é alterada automaticamente.
+
+O audit começa com `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`,
+aplica `SET LOCAL statement_timeout = '5s'` e fixa o `search_path` local como
+`pg_catalog, public`; então valida identidade e catálogo. Não toma advisory lock.
+Entre as relações da aplicação, permite somente
+`SELECT` sobre `payload_migrations` e `owner_news_mutation_head`; leituras padrão
+dos catálogos PostgreSQL e de `information_schema` são necessárias para a própria
+auditoria. Não permite DML nem sequence access, exige ausência de membership e de
+schema CREATE/uso alheio, rejeita grants `PUBLIC` em relações/colunas de aplicação,
+e rejeita execução de funções de protocolo/SECURITY DEFINER. Os queries de
+privilégio nomeiam explicitamente `cms_runtime`; nenhuma troca `SET ROLE` é usada.
+
+O relatório observa o estado instalado, `coverage_version` (0 ou 1), sequência e
+barrier sem ler artigos, mídia, schedules, jobs, históricos ou eventos do ledger.
+Sempre indica `ready=false`, `admissionActivated=false` e certificações de release,
+coverage e drain como falsas. `coverage_version=1` é somente valor observado, não
+certificação de cobertura, seal, destination reconciliation ou cutover. Antes da
+consulta de ownership, exige que `current_user` tenha `SELECT` efetivo em
+`pg_catalog.pg_shdepend`; se faltar acesso, falha sem fallback ou concessão de
+grants. Reutiliza as dependências de ownership PostgreSQL: `cms_observer`
+deve não possuir objeto algum em qualquer `dbid`; `cms_control`/`cms_controller`
+seguem o escopo canônico do finalizer (database atual e objetos compartilhados).
+O literal `pg_authid` é usado somente como OID de `refclassid`; o catálogo de
+autenticação e password presence não são lidos. A identidade física do cluster
+também não é verificada, apenas o nome do database. Não foi executada nesta
+alteração; requer autorização separada e database alvo correto.
+
+O finalizer one-shot é outro comando e tem fronteira mutável distinta:
+`node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
+requer `CMS_ADMIN_DATABASE_URL` e pode instalar ledger/functions/triggers/grants.
+Nunca use esse finalizer para uma inspeção read-only. Leia
+[o runbook de migração](./owner-news-payload-migration.md#finalizer-one-shot-e-auditoria-instalada)
+antes de provisionar ou executar qualquer um deles.
+
+### Harness isolado do audit `cms_observer` no PostgreSQL 16
+
+O runner offline/lease-gated está em
+`cms/tests/integration/news-protocol-observer-audit.mjs`; não integra `npm test`,
+`test:unit` ou `npm run verify`. São duas ações deliberadamente separadas:
+
+```sh
+node cms/tests/integration/news-protocol-observer-audit.mjs --prepare-lease
+node cms/tests/integration/news-protocol-observer-audit.mjs --execute --leasepath "<leasePath impresso na preparação>"
+```
+
+`--prepare-lease` valida a identidade do Docker local, a versão, a imagem
+PostgreSQL 16 já em cache, colisões de namespace e uma porta IPv4 loopback livre;
+depois grava uma lease privada one-shot. Não puxa imagem, cria container/volume,
+conecta ao banco, nem inicia serviço. O parent padrão existente é
+`%LOCALAPPDATA%\Temp\opencode` no Windows e `$HOME` em POSIX. Se esse local não
+for externo a todo checkout Git, não tiver ACL/owner aceitável, ou não existir,
+a preparação falha sem fallback. Um parent alternativo existente pode ser
+fornecido por `OWNERINC_AUDIT_PRIVATE_PARENT`; ele passa pelos mesmos checks
+de caminho absoluto, ausência de symlink/reparse point e fronteira Git, além da
+validação de ACLs/ownership (Windows) ou owner e ausência de escrita por grupo/
+outros (POSIX). Diretórios de lease e arquivos são exclusivos e privados
+(ACL restrita no Windows; `0700`/`0600` em POSIX). Não reutilize lease anterior.
+
+`--execute --leasepath` consome a lease uma vez e cria um container e volume
+PostgreSQL 16 novos no namespace UUID da lease, com label vinculada ao nonce,
+mount único e porta publicada somente em `127.0.0.1`. Usa a imagem em cache por
+ID, `ownerinc_cms`, senhas hex aleatórias distintas e Node 24/dependências CMS
+já instaladas no host; não instala pacotes nem usa imagem CMS antiga, Next, API
+ou Firebase. Aplica apenas as seis
+migrations nativas existentes, valida a ledger, faz bootstrap/verify de
+`cms_controller`, executa o finalizer one-shot em `ownerinc_cms` recém-criado,
+e então provisiona `cms_observer` pelo builder revisado. Não aplica rollback de
+fixture nem migration sintética.
+O segredo inicial de `cms_admin` fica em arquivo bind-mounted privado com
+ACL/owner restritos; `Config.Env` do container contém apenas o caminho do arquivo,
+nunca o valor do segredo.
+
+O cenário comprova no cluster descartável e separado: leitura real de
+`pg_shdepend` pelo observer; auditoria read-only com snapshots de digest dos
+catálogos públicos (metadados apenas), migrations e head antes/depois; `SELECT
+... LIMIT 0` negado com SQLSTATE `42501` para artigos, mídia, schedules, jobs e
+eventos do ledger; e ausência de `EXECUTE` em `owner_news_seal_run` sem invocar
+a função. Nenhum conteúdo de publicação é consultado. Não injeta linhas para
+forçar cobertura, não altera barrier e não conclui cobertura, CRUD, drain,
+certificação ou prontidão. O relatório registra somente hashes/contagens,
+identidades do fixture, fases e códigos sanitizados; URLs e credenciais não são
+exibidos. Container, volume e relatório são preservados, inclusive em falha;
+não há cleanup automático.
+
+Execução é uma mudança local de infraestrutura e exige autorização separada
+para usar Docker e criar o fixture. Ela não é parte desta implementação: nenhum
+comando `--prepare-lease` ou `--execute` foi rodado, e nenhuma integração PG16
+real foi afirmada. O aceite real continua pendente até uma execução autorizada
+em cluster físico novo, sem envolver produção.
 
 ### Preflight offline do harness Task9
 
