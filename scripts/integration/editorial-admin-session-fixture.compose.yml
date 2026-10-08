@@ -1,0 +1,70 @@
+name: ${FIXTURE_PROJECT_NAME:?}
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_DB: portal_fixture
+      POSTGRES_USER: portal_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portal_admin -d portal_fixture"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  firebase-auth:
+    build:
+      context: .
+      dockerfile: firebase-emulator/Dockerfile
+    command: ["firebase", "emulators:start", "--only", "auth", "--project", "${FIREBASE_PROJECT_ID:?}"]
+    ports:
+      - "127.0.0.1::9099"
+    restart: "no"
+
+  readiness:
+    image: node:24.12.0-alpine3.23@sha256:c921b97d4b74f51744057454b306b418cf693865e73b8100559189605f6955b8
+    user: node
+    working_dir: /workspace
+    command: ["node", "/workspace/editorial-admin-session-readiness.mjs"]
+    volumes:
+      - ./scripts/integration/editorial-admin-session-readiness.mjs:/workspace/editorial-admin-session-readiness.mjs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/editorial/ready | grep -q '\"status\":\"ready\"'"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    restart: "no"
+
+  api:
+    image: ${PORTAL_TEST_API_IMAGE:?}
+    environment:
+      NODE_ENV: test
+      MIGRATION_TEST_DISPOSABLE: "true"
+      PORT: "3000"
+      PORTAL_PUBLIC_URL: https://editorial-admin-session.test
+      CORS_ORIGINS: https://editorial-admin-session.test
+      DATABASE_URL: postgresql://portal_api:${PORTAL_API_DB_PASSWORD:?}@postgres:5432/portal_fixture
+      MIGRATION_DATABASE_URL: postgresql://portal_admin:${POSTGRES_PASSWORD:?}@postgres:5432/portal_fixture
+      PORTAL_API_DB_PASSWORD: ${PORTAL_API_DB_PASSWORD:?}
+      PORTAL_CRON_DB_PASSWORD: ${PORTAL_CRON_DB_PASSWORD:?}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?}
+      FIREBASE_AUTH_EMULATOR_HOST: firebase-auth:9099
+      BULK_IMPORT_WORKER_SECRET: ${BULK_IMPORT_WORKER_SECRET:?}
+      PAYLOAD_TO_PORTAL_SECRET: ${PAYLOAD_TO_PORTAL_SECRET:?}
+      PORTAL_TO_PAYLOAD_SECRET: ${PORTAL_TO_PAYLOAD_SECRET:?}
+      CMS_INTERNAL_URL: http://readiness:3100/
+      SOLIDES_RELEASE_STAGE: off
+      RUN_MIGRATIONS: "true"
+      MIGRATION_ONLY: "false"
+    ports:
+      - "127.0.0.1::3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      firebase-auth:
+        condition: service_healthy
+      readiness:
+        condition: service_healthy
+    restart: "no"

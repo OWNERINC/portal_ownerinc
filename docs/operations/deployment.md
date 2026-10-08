@@ -108,6 +108,57 @@ não publica API/cron, não gera o artefato legacy `image-digests` e nunca inici
 permanece: push para `main` ou dispatch na `main` com a opção omitida/desativada.
 Pull requests e refs que não sejam branches não publicam imagens.
 
+#### Candidato completo com aceite da sessão editorial API v2
+
+Para validar o contrato API v2 e publicar, sem implantar, um conjunto candidato
+com API, cron e CMS do mesmo commit, dispare `workflow_dispatch` em um branch:
+
+```sh
+gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref feat/payload-cms-final -f publish_candidate_only=true
+```
+
+`publish_candidate_only` é booleano e começa desativado. Ele é mutuamente
+exclusivo com `cms_image_only`; se ambos forem verdadeiros, o workflow falha
+antes do checkout, build ou publicação. Ambos os modos manuais exigem um ref de
+branch. O caminho de candidato constrói as imagens de produção, executa o teste
+da sessão antes de qualquer push ao GHCR, mantém os três scans Trivy bloqueantes,
+o audit de dependências e a geração de SBOMs, e só então publica API, cron e CMS.
+O artefato separado `payload-release-candidate` contém `candidate.json` com
+`schemaVersion: 1`, o SHA validado do commit, `runId`, `runAttempt` e as três
+referências imutáveis `ghcr.io/ownerinc/ownerinc-portal-{api,cron,cms}@sha256:…`
+obtidas dos pushes daquele run. Não misture digests de execuções diferentes.
+
+O teste usa a imagem API recém-construída, PostgreSQL 16 e o Dockerfile
+versionado do Firebase Auth Emulator em um projeto Compose e bancos descartáveis
+únicos por execução. Ele cria somente uma identidade sintética de projeto
+`demo-*`, provisiona o usuário no banco de fixture e faz chamadas HTTP reais às
+rotas públicas e privadas de sessão v2 usando a conexão normal `portal_api`.
+O segredo e a URL do banco são criados dentro da fixture, não vêm de fallback do
+ambiente do runner e não são impressos. Após sucesso, serviços/volumes e o arquivo
+privado de ambiente são removidos. Em falha, o runner preserva a fixture Compose
+e o arquivo privado (modo `0600`) para diagnóstico local; não executa `down` nem
+remove os volumes. O relatório JSON redigido contém somente o estágio, verificações
+sem valores, nome aleatório do projeto e estado dos recursos — nunca tokens,
+cookies, credenciais ou URLs de banco. O CI anexa apenas esse relatório; a fixture
+e o arquivo privado permanecem somente durante a vida do runner efêmero e somem
+quando o job termina.
+
+Para o contrato de emissão, a fixture CMS responde somente `GET /editorial/ready`.
+Isso permite verificar que o endpoint API de sessão exige
+prontidão e recusa emissão quando ela desaparece; **não** comprova inicialização
+do CMS real, login no navegador, disponibilidade de mídia ou CRUD editorial.
+Os headers HTTP são testados diretamente; isso não é uma alegação de teste de
+navegador.
+
+O modo candidato nunca empacota `.ci-images`, não altera o artefato legacy
+`image-digests` de duas linhas e exclui `deploy-production`, inclusive em um
+dispatch na `main`. O modo `cms_image_only` preserva seu contrato anterior
+(somente CMS); o caminho normal da `main` mantém seu autodeploy de API/cron.
+Antes de tratar um candidato como qualificado, confira no Actions o SHA do run,
+sucesso da integração e dos três scans, as três referências do artefato e o job
+`deploy-production` ignorado. Publicação candidata não significa instalação,
+ativação CMS, troca de autoridade ou autorização de restore em produção.
+
 Essa publicação **não ativa nem implanta o Payload CMS em produção**: não altera o
 artefato legacy `image-digests`, o arquivo `.ci-images` de duas linhas, o manifesto
 da VPS, Compose, banco ou autoridade CMS. Até que adapter/receiver, backup e
