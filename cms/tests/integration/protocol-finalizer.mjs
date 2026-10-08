@@ -1050,10 +1050,17 @@ async function captureNativeState(adminURL, target = null, passwords = null, opt
 }
 
 function inspectTargetBackend(target) {
+  const verifiedBackend = target?.verifiedBackendIdentity
+  if (!verifiedBackend || !Object.isFrozen(verifiedBackend)
+    || verifiedBackend.containerId !== target.containerId
+    || verifiedBackend.backendIPv4 !== target.backendIPv4
+    || verifiedBackend.systemIdentifier !== target.systemIdentifier) {
+    fail('lease_postgres_backend_identity_changed')
+  }
   assertCreatedVolumeIdentity(target)
   const inspected = docker(['inspect', target.containerName], { json: true })[0]
   const backend = validateObserverDockerContainer(observerLeaseFromRaw(target), target.passwordFile, inspected)
-  if (backend.containerId !== target.containerId || backend.backendIPv4 !== target.backendIPv4) {
+  if (backend.containerId !== verifiedBackend.containerId || backend.backendIPv4 !== verifiedBackend.backendIPv4) {
     fail('lease_postgres_backend_identity_changed')
   }
   return backend
@@ -2033,6 +2040,26 @@ export function assertLeaseScenario(rawLease, expectedScenario) {
   return lease
 }
 
+export async function verifyFinalizerClusterAndCreateDatabase(target, createdCluster, passwords, options = {}) {
+  // createCluster returns the inspected Docker identity plus its private mount
+  // path. The shared observer probe intentionally accepts only its exact
+  // two-field backend identity, so map only values produced by that validator.
+  const inspectedBackend = {
+    containerId: createdCluster?.containerId,
+    backendIPv4: createdCluster?.backendIPv4,
+  }
+  const identity = await verifyPostgresAndCreateOwnerCmsDatabase(observerLeaseFromRaw(target), inspectedBackend,
+    passwords, createdCluster?.passwordFile, options)
+  const verifiedBackend = identity.verifiedBackend
+  const boundTarget = Object.freeze({ ...target,
+    containerId: verifiedBackend.containerId,
+    backendIPv4: verifiedBackend.backendIPv4,
+    systemIdentifier: verifiedBackend.systemIdentifier,
+    passwordFile: createdCluster.passwordFile,
+    verifiedBackendIdentity: verifiedBackend })
+  return Object.freeze({ ...identity, boundTarget })
+}
+
 async function execute(rawLease, leasePath, expectedScenario) {
   const lease = assertLeaseScenario(rawLease, expectedScenario)
   const evidenceDir = privateRunDirectory(lease.runId)
@@ -2057,13 +2084,11 @@ async function execute(rawLease, leasePath, expectedScenario) {
     stage = 'create-new-volume-and-container'
     const inspectedBackend = await createCluster(target, evidenceDir, passwords, report)
     stage = 'verify-new-cluster-system-identity-before-application-ddl'
-    const identity = await verifyPostgresAndCreateOwnerCmsDatabase(observerLeaseFromRaw(target), inspectedBackend,
-      passwords, inspectedBackend.passwordFile, { stageResult: async (_name, operation) => operation(),
+    const identity = await verifyFinalizerClusterAndCreateDatabase(target, inspectedBackend, passwords,
+      { stageResult: async (_name, operation) => operation(),
         inspectContainer: (observerLease, passwordFile) => validateObserverDockerContainer(observerLease,
           passwordFile, docker(['inspect', observerLease.containerName], { json: true })[0]) })
-    const boundTarget = { ...target, containerId: identity.verifiedBackend.containerId,
-      backendIPv4: identity.verifiedBackend.backendIPv4,
-      systemIdentifier: identity.verifiedBackend.systemIdentifier, passwordFile: inspectedBackend.passwordFile }
+    const boundTarget = identity.boundTarget
     report.systemIdentifierSha256 = sha256(identity.verifiedBackend.systemIdentifier)
     report.databaseCreated = true
     report.stages.push({ name: 'new-postgres16-immutable-system-identity', result: 'pass',
