@@ -769,6 +769,21 @@ export function createAtomicRollbackEvidenceRecord() {
   }
 }
 
+export function buildFinalizerRollbackFixtureNames(suffix) {
+  if (typeof suffix !== 'string' || !/^[a-f0-9]{12}$/u.test(suffix)) {
+    fail('atomic_rollback_fixture_suffix_invalid')
+  }
+  return Object.freeze({
+    coldInstallRoguePublicFunction: `protocol_finalizer_fixture_${suffix}`,
+    coldInstallCaptureFunction: `protocol_finalizer_ddl_capture_${suffix}`,
+    coldInstallCaptureSequence: `owner_news_finalizer_ddl_seen_${suffix}_seq`,
+    coldInstallEventTrigger: `owner_news_finalizer_ddl_observer_${suffix}`,
+    v1UpgradeCaptureFunction: `protocol_finalizer_v2_ddl_capture_${suffix}`,
+    v1UpgradeCaptureSequence: `owner_news_v2_ddl_seen_${suffix}_seq`,
+    v1UpgradeEventTrigger: `owner_news_v2_ddl_observer_${suffix}`,
+  })
+}
+
 export function recordFinalizerCliEvidence(record, { status, signal = null, timedOut = false, output, secrets = [] }) {
   const safeOutput = redact(output, secrets)
   const parsed = parseFixedFinalizerDiagnostic(safeOutput)
@@ -1413,10 +1428,9 @@ async function protocolIsAbsent(target, passwords) {
 async function proveInstallRollback(lease, passwords, adminURL, logs) {
   const rollbackEvidence = createAtomicRollbackEvidenceRecord()
   logs.push(rollbackEvidence)
-  const functionName = `owner_news_finalizer_fixture_${lease.suffix}`
-  const captureFunction = `owner_news_finalizer_ddl_capture_${lease.suffix}`
-  const captureSequence = `owner_news_finalizer_ddl_seen_${lease.suffix}_seq`
-  const eventTrigger = `owner_news_finalizer_ddl_observer_${lease.suffix}`
+  const { coldInstallRoguePublicFunction: functionName, coldInstallCaptureFunction: captureFunction,
+    coldInstallCaptureSequence: captureSequence, coldInstallEventTrigger: eventTrigger }
+    = buildFinalizerRollbackFixtureNames(lease.suffix)
   const client = await connectTarget(lease, passwords, 'cms_admin')
   try {
     await client.query(`CREATE FUNCTION public.${functionName}() RETURNS integer LANGUAGE sql AS 'SELECT 1'`)
@@ -1620,9 +1634,8 @@ async function proveV1UpgradeRollback(target, passwords, adminURL, logs) {
     allBootstrapInsertGrantsObservedBeforeAbort: false, controlInsertPrivilegesAfter: null,
     controlInsertPrivilegesAbsentAfterRollback: null, coverageVersionUnchanged: null }
   logs.push(evidence)
-  const captureFunction = `owner_news_v2_ddl_capture_${target.suffix}`
-  const captureSequence = `owner_news_v2_ddl_seen_${target.suffix}_seq`
-  const eventTrigger = `owner_news_v2_ddl_observer_${target.suffix}`
+  const { v1UpgradeCaptureFunction: captureFunction, v1UpgradeCaptureSequence: captureSequence,
+    v1UpgradeEventTrigger: eventTrigger } = buildFinalizerRollbackFixtureNames(target.suffix)
   const insertColumnList = BOOTSTRAP_RUN_INSERT_COLUMNS.map(column => `'${column}'`).join(',')
   const client = await connectTarget(target, passwords, 'cms_admin')
   try {

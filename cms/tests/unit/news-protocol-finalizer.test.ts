@@ -31,6 +31,7 @@ import {
   type FinalizerClient,
   type QueryResult,
 } from '../../scripts/finalize-news-protocol'
+import { buildFinalizerRollbackFixtureNames } from '../integration/protocol-finalizer.mjs'
 import {
   controlRolesNativePrivilegesVerificationSQL,
   controlRolesPublicVerificationSQL,
@@ -87,6 +88,7 @@ function renderPg16TriggerDefinitionFromSource(definition: string, functionUnqua
 
 function fakeClient(options: {
   readOnly?: boolean; missingMigration?: boolean; badControlType?: boolean; partial?: boolean; existing?: boolean
+  catalogFunctionNames?: string[]
   protocolVersion?: 1 | 2; protocolInventoryDrift?: 'extra-function' | 'missing-bootstrap-signature' | 'bootstrap-overload'
   wrongBootstrapOwner?: boolean; wrongBootstrapSearchPath?: boolean; observerBootstrapExecute?: boolean
   bootstrapStrictness?: 'strict' | 'missing' | 'null'
@@ -114,6 +116,7 @@ function fakeClient(options: {
 } = {}) {
   const statements: string[] = []
   const jsonbComparisonParams: unknown[][] = []
+  const catalogFunctionRows = (options.catalogFunctionNames ?? []).map(proname => ({ proname }))
   let activeRole = 'cms_admin'
   let protocolVersion = options.protocolVersion ?? (options.existing ? 2 : 0)
   let protocolLedgerExists = protocolVersion > 0
@@ -323,6 +326,35 @@ function fakeClient(options: {
         runtime_bootstrap: false, public_bootstrap: false, observer_bootstrap: options.observerBootstrapExecute === true }] }
       if (sql.includes('AS function_safe')) return { rows: [{ safe: true, function_safe: true }] }
       if (sql.includes('AS safe')) return { rows: [{ safe: true }] }
+      if (sql.includes('AS ledger_relations') && options.catalogFunctionNames !== undefined) {
+        // Materialize pg_proc name rows into the same aggregate consumed by
+        // checkPreconditions, then exercise that production classifier below.
+        const approvedNames = new Set((Array.isArray(values?.[1]) ? values[1] : []) as string[])
+        const approvedFixtureFunctions = catalogFunctionRows.filter(row => approvedNames.has(row.proname)).length
+        const unexpectedFixtureFunctions = catalogFunctionRows.filter(row => row.proname.startsWith('owner_news_')
+          && !approvedNames.has(row.proname)).length
+        const ledgerRelations = options.partial ? 1 : protocolVersion > 0 ? 2 : 0
+        return { rows: [protocolVersion > 0 && !options.partial ? {
+          ledger_relations: ledgerRelations,
+          protocol_functions: (protocolVersion === 2 ? 5 : 4) + approvedFixtureFunctions
+            + (options.protocolInventoryDrift === 'extra-function' ? 1 : 0)
+            + (options.protocolInventoryDrift === 'bootstrap-overload' ? 1 : 0),
+          unexpected_protocol_functions: unexpectedFixtureFunctions
+            + (options.protocolInventoryDrift === 'extra-function' ? 1 : 0),
+          v1_signatures: options.protocolInventoryDrift === 'missing-bootstrap-signature' ? 3 : 4,
+          bootstrap_signature: protocolVersion === 2 && options.protocolInventoryDrift !== 'missing-bootstrap-signature',
+          protocol_triggers: NEWS_MUTATION_TABLES.length * 2 + 2,
+          inventory_triggers: NEWS_MUTATION_TABLES.length * 2 + 2,
+        } : {
+          ledger_relations: ledgerRelations,
+          protocol_functions: approvedFixtureFunctions,
+          unexpected_protocol_functions: unexpectedFixtureFunctions,
+          v1_signatures: 0,
+          bootstrap_signature: false,
+          protocol_triggers: 0,
+          inventory_triggers: 0,
+        }] }
+      }
       if (sql.includes('AS ledger_relations')) return { rows: [options.partial
         ? { ledger_relations: 1, protocol_functions: 0, unexpected_protocol_functions: 0, v1_signatures: 0, bootstrap_signature: false, protocol_triggers: 0, inventory_triggers: 0 }
         : protocolVersion > 0 ? {
@@ -435,7 +467,7 @@ function fakeClient(options: {
       return { rows: [] }
     },
   }
-  return { client, statements, jsonbComparisonParams }
+  return { client, statements, jsonbComparisonParams, catalogFunctionRows }
 }
 
 function configureReadOnlyAuditClient(
@@ -953,6 +985,48 @@ test('read-only diagnosis does not accept a partial protocol inventory as a vali
     && finding.reason === 'partial_protocol_installation_manual_recovery_required'))
   assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL), false)
   assert.equal(statements.some(sql => sql.startsWith('SET LOCAL ROLE')), false)
+})
+
+test('cold-install and V1-upgrade rollback helpers preserve real empty/V1 versus partial inventory classification', async () => {
+  const suffix = '8c72f420c113'
+  const fixtureNames = buildFinalizerRollbackFixtureNames(suffix)
+  const coldFunctionRows = [fixtureNames.coldInstallRoguePublicFunction, fixtureNames.coldInstallCaptureFunction]
+  const coldFixture = fakeClient({ readOnly: true, catalogFunctionNames: coldFunctionRows })
+
+  assert.deepEqual(coldFixture.catalogFunctionRows, coldFunctionRows.map(proname => ({ proname })))
+  assert.ok(coldFunctionRows.every(name => !name.startsWith('owner_news_')))
+  const coldFindings = await diagnoseFinalizerPreconditionsReadOnly(coldFixture.client)
+  assert.deepEqual(coldFindings, [])
+  const inventorySql = coldFixture.statements.find(sql => sql.includes('AS unexpected_protocol_functions'))
+  assert.match(inventorySql ?? '', /p\.proname::text ~ '\^owner_news_'/u)
+
+  const legacyColdFunctionRows = [
+    `owner_news_finalizer_fixture_${suffix}`,
+    `owner_news_finalizer_ddl_capture_${suffix}`,
+  ]
+  const legacyColdFixture = fakeClient({ readOnly: true, catalogFunctionNames: legacyColdFunctionRows })
+  assert.deepEqual(legacyColdFixture.catalogFunctionRows, legacyColdFunctionRows.map(proname => ({ proname })))
+  const legacyColdFindings = await diagnoseFinalizerPreconditionsReadOnly(legacyColdFixture.client)
+  assert.ok(legacyColdFindings.some(finding => finding.phase === 'precondition-protocol-inventory'
+    && finding.reason === 'partial_protocol_installation_manual_recovery_required'))
+  assert.equal(legacyColdFixture.statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(legacyColdFixture.statements.some(sql => sql.startsWith('SET LOCAL ROLE')), false)
+
+  const v1Fixture = fakeClient({ protocolVersion: 1, catalogFunctionNames: [fixtureNames.v1UpgradeCaptureFunction] })
+  assert.deepEqual(v1Fixture.catalogFunctionRows, [{ proname: fixtureNames.v1UpgradeCaptureFunction }])
+  assert.ok(!fixtureNames.v1UpgradeCaptureFunction.startsWith('owner_news_'))
+  const v1Error = await finalizeNewsProtocol(v1Fixture.client).catch(error => error)
+  assert.equal(getFinalizerFailureDiagnostic(v1Error)?.reason, 'protocol_upgrade_required')
+  assert.equal(v1Fixture.statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(v1Fixture.statements.includes(buildNewsMigrationBootstrapRunDDL()), false)
+
+  const legacyV1Fixture = fakeClient({ protocolVersion: 1,
+    catalogFunctionNames: [`owner_news_v2_ddl_capture_${suffix}`] })
+  const legacyV1Error = await finalizeNewsProtocol(legacyV1Fixture.client).catch(error => error)
+  assert.equal(getFinalizerFailureDiagnostic(legacyV1Error)?.reason,
+    'partial_protocol_installation_manual_recovery_required')
+  assert.equal(legacyV1Fixture.statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(legacyV1Fixture.statements.includes(buildNewsMigrationBootstrapRunDDL()), false)
 })
 
 test('diagnostic formatter exposes only allowlisted phase/reason and a strict SQLSTATE', async () => {
