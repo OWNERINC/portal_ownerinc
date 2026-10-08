@@ -99,6 +99,34 @@ SELECT count(*)=2 AND bool_and(
 FROM observed
 `
 
+/** Public-catalog role contract for the least-privileged read-only audit.
+ * Deliberately omits password presence; only a privileged verifier can inspect
+ * that property, and the observer must not inherit such access. */
+export const controlRolesPublicVerificationSQL = `
+WITH expected(role_name, can_login, schema_create) AS (VALUES
+  ('cms_control'::name, false, true),
+  ('cms_controller'::name, true, false)
+), observed AS (
+  SELECT e.*, r.oid, r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole,
+    r.rolinherit, r.rolreplication, r.rolbypassrls
+  FROM expected e LEFT JOIN pg_catalog.pg_roles r ON r.rolname=e.role_name
+)
+SELECT count(*)=2 AND bool_and(
+  oid IS NOT NULL
+  AND rolcanlogin=can_login
+  AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+  AND NOT rolinherit AND NOT rolreplication AND NOT rolbypassrls
+  AND has_database_privilege(role_name, current_database(), 'CONNECT')
+  AND NOT has_database_privilege(role_name, current_database(), 'CREATE')
+  AND NOT has_database_privilege(role_name, current_database(), 'TEMP')
+  AND has_schema_privilege(role_name, 'public', 'USAGE')
+  AND has_schema_privilege(role_name, 'public', 'CREATE')=schema_create
+  AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+    WHERE m.roleid=oid OR m.member=oid)
+) AS safe
+FROM observed
+`
+
 /** Read-only diagnostic projection using the exact password-presence join
  * consumed by the contract. Parameterize the role names; never return hashes. */
 export function controlRolePasswordPresenceSQL(): string {
@@ -270,35 +298,35 @@ export const runtimeProtocolPrivilegesVerifySQL = `
 SELECT COALESCE(bool_and(
   CASE
     WHEN c.relname IN ('owner_news_mutation_head','owner_news_mutation_events') THEN
-      has_table_privilege(current_user,c.oid,'SELECT')
-      AND NOT has_table_privilege(current_user,c.oid,'INSERT')
-      AND NOT has_table_privilege(current_user,c.oid,'UPDATE')
-      AND NOT has_table_privilege(current_user,c.oid,'DELETE')
-      AND NOT has_table_privilege(current_user,c.oid,'TRUNCATE')
-      AND NOT has_table_privilege(current_user,c.oid,'REFERENCES')
-      AND NOT has_table_privilege(current_user,c.oid,'TRIGGER')
+      has_table_privilege('cms_runtime',c.oid,'SELECT')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'INSERT')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'UPDATE')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'DELETE')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'TRUNCATE')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'REFERENCES')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'TRIGGER')
       AND NOT EXISTS (SELECT 1 FROM pg_attribute a
         WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
-          AND (has_column_privilege(current_user,c.oid,a.attnum,'INSERT')
-            OR has_column_privilege(current_user,c.oid,a.attnum,'UPDATE')
-            OR has_column_privilege(current_user,c.oid,a.attnum,'REFERENCES')))
+          AND (has_column_privilege('cms_runtime',c.oid,a.attnum,'INSERT')
+            OR has_column_privilege('cms_runtime',c.oid,a.attnum,'UPDATE')
+            OR has_column_privilege('cms_runtime',c.oid,a.attnum,'REFERENCES')))
     WHEN c.relname='news_migration_runs' THEN
-      has_table_privilege(current_user,c.oid,'SELECT')
-      AND NOT has_table_privilege(current_user,c.oid,'INSERT')
-      AND NOT has_table_privilege(current_user,c.oid,'UPDATE')
-      AND NOT has_table_privilege(current_user,c.oid,'DELETE')
-      AND NOT has_table_privilege(current_user,c.oid,'TRUNCATE')
-      AND NOT has_table_privilege(current_user,c.oid,'REFERENCES')
-      AND NOT has_table_privilege(current_user,c.oid,'TRIGGER')
+      has_table_privilege('cms_runtime',c.oid,'SELECT')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'INSERT')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'UPDATE')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'DELETE')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'TRUNCATE')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'REFERENCES')
+      AND NOT has_table_privilege('cms_runtime',c.oid,'TRIGGER')
       AND NOT EXISTS (SELECT 1 FROM pg_attribute a
         WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
-          AND (has_column_privilege(current_user,c.oid,a.attnum,'INSERT')
-            OR has_column_privilege(current_user,c.oid,a.attnum,'REFERENCES')
+          AND (has_column_privilege('cms_runtime',c.oid,a.attnum,'INSERT')
+            OR has_column_privilege('cms_runtime',c.oid,a.attnum,'REFERENCES')
             OR CASE WHEN a.attname = ANY(ARRAY[
             'progress_state','commit_outcome','reconciliation_sha256',
             'destination_fingerprint','unresolved_exceptions'
-          ]::name[]) THEN NOT has_column_privilege(current_user,c.oid,a.attnum,'UPDATE')
-            ELSE has_column_privilege(current_user,c.oid,a.attnum,'UPDATE') END))
+          ]::name[]) THEN NOT has_column_privilege('cms_runtime',c.oid,a.attnum,'UPDATE')
+            ELSE has_column_privilege('cms_runtime',c.oid,a.attnum,'UPDATE') END))
     ELSE false
   END
 ),true) AS safe
@@ -312,7 +340,7 @@ SELECT NOT EXISTS (
   SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
   WHERE n.nspname='public'
     AND p.proname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_seal_run')
-    AND has_function_privilege(current_user,p.oid,'EXECUTE')
+    AND has_function_privilege('cms_runtime',p.oid,'EXECUTE')
 ) AS safe
 `
 

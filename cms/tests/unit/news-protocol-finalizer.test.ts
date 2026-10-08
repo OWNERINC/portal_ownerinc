@@ -20,16 +20,23 @@ import {
   NATIVE_FOREIGN_KEYS_CATALOG_SQL,
   parseJsonbDefaultLiteral,
   runFinalizer,
+  auditNewsProtocolReadOnly,
   type FinalizerClient,
   type QueryResult,
 } from '../../scripts/finalize-news-protocol'
 import {
   controlRolesNativePrivilegesVerificationSQL,
+  controlRolesPublicVerificationSQL,
   controlRolesOwnershipVerificationSQL,
   controlRolesVerificationSQL,
   runtimeProtocolFunctionsVerifySQL,
   runtimeProtocolPrivilegesVerifySQL,
 } from '../../scripts/provision-db'
+import {
+  newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
+  newsProtocolObserverPrivilegesVerificationSQL,
+  newsProtocolObserverRoleVerificationSQL,
+} from '../../scripts/news-protocol-observer-contract'
 
 const migrations = [
   '20261002_181423_owner_news_initial', '20261005_133515_owner_news_media',
@@ -264,7 +271,9 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
       }
       if (sql === controlRolesVerificationSQL || sql === controlRolesOwnershipVerificationSQL || sql === controlRolesNativePrivilegesVerificationSQL
         ) return { rows: [{ safe: true }] }
-      if (sql === runtimeProtocolFunctionsVerifySQL || sql === runtimeProtocolPrivilegesVerifySQL) return { rows: [{ safe: activeRole === 'cms_runtime' }] }
+      if (sql === runtimeProtocolFunctionsVerifySQL || sql === runtimeProtocolPrivilegesVerifySQL) return { rows: [{ safe: true }] }
+      if (sql.includes('AS runtime_seal')) return { rows: [{ head_read: true, head_write: false, events_read: true,
+        events_write: false, controller_seal: true, runtime_seal: false }] }
       if (sql.includes('AS function_safe')) return { rows: [{ safe: true, function_safe: true }] }
       if (sql.includes('AS safe')) return { rows: [{ safe: true }] }
       if (sql.includes('AS ledger_relations')) return { rows: [options.partial
@@ -331,6 +340,98 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
     },
   }
   return { client, statements, jsonbComparisonParams }
+}
+
+function configureReadOnlyAuditClient(
+  client: FinalizerClient,
+  statements: string[],
+  options: { auditTransactionSafe?: boolean; auditSearchPathSafe?: boolean; observerIdentitySafe?: boolean; observerShdependAccessible?: boolean; observerRoleSafe?: boolean; observerPrivilegesSafe?: boolean; observedCoverage?: 0 | 1; invalidCoverage?: boolean; ownershipDependency?: { owner: 'cms_control' | 'cms_controller'; classid: string; dbid?: number; objid?: number } } = {},
+) {
+  const originalQuery = client.query.bind(client)
+  client.query = async (sql, values) => {
+    if (sql === 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'
+      || sql === "SET LOCAL statement_timeout = '5s'" || sql === 'SET LOCAL search_path = pg_catalog, public'
+      || sql === 'COMMIT' || sql === 'ROLLBACK') {
+      statements.push(sql)
+      return { rows: [] }
+    }
+    if (sql.includes('current_user AS role')) {
+      statements.push(sql)
+      const identitySafe = options.observerIdentitySafe !== false
+      return { rows: [{ role: identitySafe ? 'cms_observer' : 'cms_admin',
+        session_role: identitySafe ? 'cms_observer' : 'cms_admin', db: 'ownerinc_cms',
+        superuser: !identitySafe, read_only: 'on' }] }
+    }
+    if (sql.startsWith("SELECT current_setting('transaction_read_only') AS read_only")) {
+      statements.push(sql)
+      return { rows: [{ read_only: options.auditTransactionSafe === false ? 'off' : 'on',
+        isolation: 'repeatable read', search_path: options.auditSearchPathSafe === false ? 'attacker_schema, public' : 'pg_catalog, public',
+        bounded_timeout: true }] }
+    }
+    if (sql === newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL) {
+      statements.push(sql)
+      return { rows: [{ safe: options.observerShdependAccessible !== false }] }
+    }
+    if (sql === newsProtocolObserverRoleVerificationSQL) {
+      statements.push(sql)
+      return { rows: [{ safe: options.observerRoleSafe !== false }] }
+    }
+    if (sql === newsProtocolObserverPrivilegesVerificationSQL) {
+      statements.push(sql)
+      return { rows: [{ safe: options.observerPrivilegesSafe !== false }] }
+    }
+    if (sql === controlRolesPublicVerificationSQL) {
+      statements.push(sql)
+      return { rows: [{ safe: true }] }
+    }
+    if (sql.includes('AS pgcrypto_extension_member')) {
+      const result = await originalQuery(sql, values)
+      return { rows: result.rows.map(row => ({ ...row,
+        observer_execute: row.expected_pgcrypto_signature === true })) }
+    }
+    if (sql.includes('AS unexpected_control_objects')) {
+      statements.push(sql)
+      const roleOids = { cms_control: 41002, cms_controller: 41003 }
+      const approvedFunctionOids = new Set([42001, 42002, 42003, 42004])
+      const mockedDependencies = [
+        ...[...approvedFunctionOids].map(objid => ({ classid: 'pg_proc', objid,
+          refclassid: 'pg_authid', refobjid: roleOids.cms_control, deptype: 'o', dbid: 16384 })),
+        ...(options.ownershipDependency ? [{
+          classid: options.ownershipDependency.classid,
+          objid: options.ownershipDependency.objid ?? 43001,
+          refclassid: 'pg_authid',
+          refobjid: roleOids[options.ownershipDependency.owner],
+          deptype: 'o',
+          dbid: options.ownershipDependency.dbid ?? 16384,
+        }] : [])]
+      const ownershipRows = mockedDependencies.filter(dependency => dependency.refclassid === 'pg_authid'
+        && dependency.deptype === 'o')
+      const currentControl = ownershipRows.filter(dependency => dependency.refobjid === roleOids.cms_control
+        && dependency.dbid === 16384)
+      const unexpectedControl = currentControl.filter(dependency => dependency.classid !== 'pg_proc'
+        || !approvedFunctionOids.has(dependency.objid)).length
+      const approvedControl = currentControl.filter(dependency => dependency.classid === 'pg_proc'
+        && approvedFunctionOids.has(dependency.objid)).length
+      const controllerOwned = ownershipRows.filter(dependency => dependency.refobjid === roleOids.cms_controller
+        && dependency.dbid === 16384).length
+      const controlSharedOwned = ownershipRows.filter(dependency => dependency.refobjid === roleOids.cms_control
+        && dependency.dbid === 0).length
+      const controllerSharedOwned = ownershipRows.filter(dependency => dependency.refobjid === roleOids.cms_controller
+        && dependency.dbid === 0).length
+      return { rows: [{ unexpected_control_objects: unexpectedControl, approved_control_objects: approvedControl,
+        controller_owned_objects: controllerOwned,
+        controller_shared_owned_objects: controllerSharedOwned, control_shared_owned_objects: controlSharedOwned }] }
+    }
+    if (sql.includes('FROM public.owner_news_mutation_head') && options.observedCoverage === 1) {
+      statements.push(sql)
+      return { rows: [{ sequence: '17', chain_sha256: 'a'.repeat(64), coverage_version: 1, write_barrier: 'frozen' }] }
+    }
+    if (sql.includes('FROM public.owner_news_mutation_head') && options.invalidCoverage) {
+      statements.push(sql)
+      return { rows: [{ sequence: '17', chain_sha256: 'a'.repeat(64), coverage_version: 2, write_barrier: 'open' }] }
+    }
+    return originalQuery(sql, values)
+  }
 }
 
 test('JSONB default parser accepts only a quoted JSONB constant and unescapes SQL apostrophes', () => {
@@ -438,6 +539,169 @@ test('read-only precondition diagnosis identifies a catalog guard and does not e
   assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
 })
 
+test('installed protocol audit reuses native/finalizer catalogs in a repeatable-read observer transaction only', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements)
+
+  const report = await auditNewsProtocolReadOnly(client)
+  assert.deepEqual(report, {
+    status: 'PASS', installed: true, catalogValid: true, targetDatabase: 'ownerinc_cms', observerRole: 'cms_observer',
+    observedCoverageVersion: 0, headSequence: '17', writeBarrier: 'open', ready: false, admissionActivated: false,
+    releaseCertified: false, writeCoverageCertified: false, drainVerified: false,
+    passwordPresenceCheck: 'not_performed_unprivileged', clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check',
+    physicalClusterIdentity: 'not_verified',
+  })
+  assert.equal(statements[0], 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+  assert.equal(statements[1], "SET LOCAL statement_timeout = '5s'")
+  assert.equal(statements[2], 'SET LOCAL search_path = pg_catalog, public')
+  assert.equal(statements.at(-1), 'COMMIT')
+  assert.ok(statements.includes(controlRolesPublicVerificationSQL))
+  assert.ok(statements.includes(newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL))
+  assert.ok(statements.includes(newsProtocolObserverRoleVerificationSQL))
+  assert.ok(statements.includes(newsProtocolObserverPrivilegesVerificationSQL))
+  assert.ok(statements.some(sql => /FROM pg_catalog\.pg_shdepend d/u.test(sql)))
+  assert.ok(statements.some(sql => /FROM pg_shdepend d/u.test(sql)))
+  assert.equal(statements.includes(controlRolesVerificationSQL), false)
+  assert.equal(statements.some(sql => /\b(?:FROM|JOIN)\s+(?:pg_catalog\.)?pg_authid\b/iu.test(sql)), false)
+  assert.equal(statements.some(sql => /\b(?:pg_advisory_xact_lock|SET\s+(?:LOCAL\s+)?ROLE)\b/iu.test(sql)), false)
+  const forbiddenStatements = statements.filter(sql => !/^(?:SELECT|WITH)\b/iu.test(sql.trim())
+    && sql !== 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'
+    && sql !== "SET LOCAL statement_timeout = '5s'" && sql !== 'SET LOCAL search_path = pg_catalog, public'
+    && sql !== 'COMMIT' && sql !== 'ROLLBACK')
+  assert.deepEqual(forbiddenStatements, [])
+  const forbiddenQueryOperations = statements.filter(sql => /\b(?:INSERT\s+INTO|UPDATE\s+public\.|DELETE\s+FROM|TRUNCATE\s+|SET\s+(?:LOCAL\s+)?ROLE|RESET\s+ROLE|pg_advisory_xact_lock|setval\s*\(|nextval\s*\()/iu.test(sql))
+  assert.deepEqual(forbiddenQueryOperations, [])
+  const ownershipQuery = statements.find(sql => sql.includes('AS unexpected_control_objects'))
+  assert.match(ownershipQuery ?? '', /d\.classid='pg_proc'::regclass AND d\.objid = ANY/u)
+  assert.match(ownershipQuery ?? '', /AS approved_control_objects/u)
+  assert.match(ownershipQuery ?? '', /AS control_shared_owned_objects/u)
+  assert.match(ownershipQuery ?? '', /AS controller_shared_owned_objects/u)
+})
+
+test('audit stops and rolls back unless PostgreSQL confirms read-only repeatable-read snapshot and bounded timeout', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { auditTransactionSafe: false })
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'audit_transaction_contract_mismatch')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.some(sql => sql.includes('FROM public.payload_migrations')), false)
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
+test('audit refuses to query protocol catalogs if the transaction search_path is not pinned', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { auditSearchPathSafe: false })
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'audit_transaction_contract_mismatch')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.some(sql => sql.includes('FROM public.payload_migrations')), false)
+})
+
+test('read-only audit reports observed coverage 1 without readiness, activation, seal, or release certification', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { observedCoverage: 1 })
+
+  const report = await auditNewsProtocolReadOnly(client)
+  assert.equal(report.observedCoverageVersion, 1)
+  assert.equal(report.ready, false)
+  assert.equal(report.admissionActivated, false)
+  assert.equal(report.releaseCertified, false)
+  assert.equal(report.writeCoverageCertified, false)
+  assert.equal(report.drainVerified, false)
+  assert.equal(statements.at(-1), 'COMMIT')
+})
+
+test('observer ACL mismatch aborts the read-only audit and rolls back its snapshot', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { observerPrivilegesSafe: false })
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'observer_privilege_contract_mismatch')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
+  assert.equal(statements.some(sql => /^(?:CREATE|ALTER|GRANT|REVOKE|INSERT|UPDATE|DELETE|TRUNCATE|DO)\b/iu.test(sql.trim())), false)
+})
+
+for (const owner of ['cms_control', 'cms_controller'] as const) {
+  for (const [objectClass, dbid] of [
+    ['pg_publication', 16384],
+    ['pg_statistic_ext', 16384],
+    ['pg_ts_dict', 16384],
+    ['pg_event_trigger', 16384],
+    ['pg_publication', 0],
+    ['pg_statistic_ext', 0],
+    ['pg_ts_dict', 0],
+    ['pg_event_trigger', 0],
+  ] as const) {
+    test(`observer audit rejects ${objectClass} ownership by ${owner} (dbid=${dbid}) and rolls back`, async () => {
+      const { client, statements } = fakeClient({ readOnly: true, existing: true })
+      configureReadOnlyAuditClient(client, statements, { ownershipDependency: { owner, classid: objectClass, dbid } })
+      const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+      const ownershipQuery = statements.find(sql => sql.includes('AS unexpected_control_objects'))
+      assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'observer_visible_ownership_mismatch')
+      assert.match(ownershipQuery ?? '', /FROM pg_shdepend d JOIN pg_roles r ON r\.oid=d\.refobjid/u)
+      assert.match(ownershipQuery ?? '', /d\.classid <> 'pg_proc'::regclass OR d\.objid <> ALL/u)
+      assert.match(ownershipQuery ?? '', /d\.dbid=\(SELECT oid FROM pg_database WHERE datname=current_database\(\)\)/u)
+      assert.match(ownershipQuery ?? '', /d\.dbid=0/u)
+      assert.doesNotMatch(ownershipQuery ?? '', /41002|41003|pg_statistic_ext|pg_ts_dict|pg_event_trigger|pg_publication/u)
+      assert.equal(statements.at(-1), 'ROLLBACK')
+      assert.equal(statements.includes('COMMIT'), false)
+      assert.equal(statements.some(sql => /\b(?:FROM|JOIN)\s+(?:pg_catalog\.)?pg_authid\b/iu.test(sql)), false)
+      assert.equal(statements.some(sql => /^(?:CREATE|ALTER|GRANT|REVOKE|INSERT|UPDATE|DELETE|TRUNCATE|SET LOCAL ROLE|RESET ROLE)\b/iu.test(sql.trim())), false)
+    })
+  }
+}
+
+test('observer ownership audit fails closed before reading pg_shdepend when catalog SELECT is unavailable', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { observerShdependAccessible: false })
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'observer_role_contract_mismatch')
+  assert.ok(statements.includes(newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL))
+  assert.equal(statements.includes(newsProtocolObserverRoleVerificationSQL), false)
+  assert.equal(statements.some(sql => /FROM pg_catalog\.pg_shdepend\b/iu.test(sql)), false)
+  assert.equal(statements.some(sql => sql.includes('FROM public.payload_migrations')), false)
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
+  assert.equal(statements.some(sql => /^(?:GRANT|REVOKE|CREATE|ALTER|SET LOCAL ROLE)\b/iu.test(sql.trim())), false)
+})
+
+test('observer role elevation or membership mismatch fails before installed catalog traversal', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { observerRoleSafe: false })
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'observer_role_contract_mismatch')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.some(sql => sql.includes('AS ledger_relations')), false)
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
+test('read-only audit rejects an admin or otherwise mismatched connection identity', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { observerIdentitySafe: false })
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'unsafe_observer_target')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.some(sql => sql.includes('FROM public.payload_migrations')), false)
+})
+
+test('observer audit rejects invalid coverage values without certifying or changing them', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { invalidCoverage: true })
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'ledger_head_invalid_or_coverage_activated')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.some(sql => /\b(?:INSERT|UPDATE|DELETE)\s+public\.owner_news_mutation_head\b/iu.test(sql)), false)
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
 test('read-only diagnosis does not accept a partial protocol inventory as a valid install state', async () => {
   const { client, statements } = fakeClient({ readOnly: true, partial: true })
   const findings = await diagnoseFinalizerPreconditionsReadOnly(client)
@@ -485,6 +749,8 @@ test('finalizer installs atomically only after exact native inventory and role c
   assert.ok(statements.includes(controlRolesNativePrivilegesVerificationSQL))
   assert.ok(statements.includes('SET LOCAL ROLE cms_runtime'))
   assert.ok(statements.includes('RESET ROLE'))
+  assert.match(runtimeProtocolPrivilegesVerifySQL, /has_table_privilege\('cms_runtime'/u)
+  assert.match(runtimeProtocolFunctionsVerifySQL, /has_function_privilege\('cms_runtime'/u)
   assert.ok(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')))
   assert.ok(statements.includes(NEWS_MUTATION_LEDGER_DDL))
   assert.ok(statements.indexOf(NEWS_MUTATION_LEDGER_DDL) < statements.findIndex(sql => sql.includes('FROM public.owner_news_mutation_head')))

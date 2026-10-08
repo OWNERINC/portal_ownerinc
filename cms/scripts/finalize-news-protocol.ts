@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url'
 import nativeSchema from '../src/migrations/20261006_181424_z_owner_news_native.json' with { type: 'json' }
 import {
   controlRolesVerificationSQL,
+  controlRolesPublicVerificationSQL,
   controlRolesOwnershipVerificationSQL,
   controlRolesNativePrivilegesVerificationSQL,
   runtimeProtocolFunctionsVerifySQL,
@@ -11,6 +12,11 @@ import {
 } from './provision-db'
 import { NEWS_MUTATION_LEDGER_DDL, NEWS_MUTATION_TABLES } from '../src/publication/mutation-ledger'
 import { buildNewsMutationTriggersDDL } from '../src/publication/mutation-triggers'
+import {
+  newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
+  newsProtocolObserverPrivilegesVerificationSQL,
+  newsProtocolObserverRoleVerificationSQL,
+} from './news-protocol-observer-contract'
 
 const require = createRequire(import.meta.url)
 const MIGRATIONS = [
@@ -32,11 +38,13 @@ const APPROVED_PROTOCOL_OID_ARRAY_SQL = `ARRAY[${APPROVED_PROTOCOL_SIGNATURES.ma
 
 export const finalizerDiagnosticPhases = [
   'connection-configuration', 'admin-connect', 'transaction-begin', 'transaction-lock',
+  'audit-transaction-begin', 'audit-identity', 'audit-transaction-commit',
   'precondition-identity', 'precondition-migrations', 'precondition-relations', 'precondition-columns',
   'precondition-sequences', 'precondition-enums', 'precondition-constraints', 'precondition-indexes',
   'precondition-foreign-keys', 'precondition-control-columns', 'precondition-control-roles',
   'precondition-protocol-inventory', 'precondition-control-ownership', 'precondition-native-privileges',
-  'precondition-installed-state', 'protocol-head-read', 'protocol-ledger-ddl', 'protocol-trigger-ddl', 'protocol-binding-ddl',
+  'precondition-installed-state', 'precondition-observer-role', 'precondition-observer-privileges',
+  'protocol-head-read', 'protocol-ledger-ddl', 'protocol-trigger-ddl', 'protocol-binding-ddl',
   'protocol-grants', 'verify-installed', 'transaction-commit', 'transaction-rollback',
 ] as const
 export type FinalizerDiagnosticPhase = typeof finalizerDiagnosticPhases[number]
@@ -73,6 +81,9 @@ export type ProtocolInstallationState = 'empty' | 'complete'
 
 const finalizerDiagnosticReasons = new Set([
   'admin_database_url_required', 'unsafe_admin_database_url', 'unsafe_admin_target',
+  'observer_database_url_required', 'unsafe_observer_database_url', 'unsafe_observer_target',
+  'observer_role_contract_mismatch', 'observer_privilege_contract_mismatch',
+  'observer_visible_ownership_mismatch', 'protocol_not_installed', 'audit_transaction_contract_mismatch',
   'native_migration_ledger_mismatch', 'native_relation_inventory_mismatch', 'mutation_relation_inventory_mismatch',
   'native_column_inventory_mismatch', 'native_serial_sequence_binding_or_configuration_mismatch',
   'native_enum_catalog_mismatch', 'native_required_constraint_missing', 'native_snapshot_index_missing_or_mismatched',
@@ -601,7 +612,8 @@ function parseCanonicalTriggerMetadata(key: string, definition: string): Canonic
 async function checkPreconditions(client: FinalizerClient,
   setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {},
   readOnlyDiagnosis = false,
-  collectedFailures?: { phase: FinalizerDiagnosticPhase; reason: string }[]): Promise<ProtocolInstallationState | null> {
+  collectedFailures?: { phase: FinalizerDiagnosticPhase; reason: string }[],
+  observerAudit = false): Promise<ProtocolInstallationState | null> {
   let currentPhase: FinalizerDiagnosticPhase = 'precondition-identity'
   const enter = (phase: FinalizerDiagnosticPhase) => { currentPhase = phase; setPhase(phase) }
   const requireGuard = (condition: boolean, reason: string) => {
@@ -610,12 +622,25 @@ async function checkPreconditions(client: FinalizerClient,
     collectedFailures!.push({ phase: currentPhase, reason: normalizeDiagnosticReason(reason) })
   }
   enter('precondition-identity')
-  const identity = await client.query(`SELECT current_user AS role, current_database() AS db,
-    r.rolsuper AS superuser, current_setting('transaction_read_only') AS read_only
+  const identity = await client.query(`SELECT current_user AS role, session_user AS session_role,
+    current_database() AS db, r.rolsuper AS superuser, current_setting('transaction_read_only') AS read_only
     FROM pg_roles r WHERE r.rolname=current_user`)
   const who = identity.rows[0]
-  requireGuard(who?.role === 'cms_admin' && who.db === 'ownerinc_cms' && who.superuser === true
-    && who.read_only === (readOnlyDiagnosis ? 'on' : 'off'), 'unsafe_admin_target')
+  if (observerAudit) {
+    requireGuard(who?.role === 'cms_observer' && who.session_role === 'cms_observer'
+      && who.db === 'ownerinc_cms' && who.superuser === false && who.read_only === 'on', 'unsafe_observer_target')
+    enter('precondition-observer-role')
+    const ownershipCatalog = await client.query(newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL)
+    requireGuard(ownershipCatalog.rows[0]?.safe === true, 'observer_role_contract_mismatch')
+    const observerRole = await client.query(newsProtocolObserverRoleVerificationSQL)
+    requireGuard(observerRole.rows[0]?.safe === true, 'observer_role_contract_mismatch')
+    enter('precondition-observer-privileges')
+    const observerPrivileges = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
+    requireGuard(observerPrivileges.rows[0]?.safe === true, 'observer_privilege_contract_mismatch')
+  } else {
+    requireGuard(who?.role === 'cms_admin' && who.db === 'ownerinc_cms' && who.superuser === true
+      && who.read_only === (readOnlyDiagnosis ? 'on' : 'off'), 'unsafe_admin_target')
+  }
 
   enter('precondition-migrations')
   const ledger = await client.query('SELECT name FROM public.payload_migrations ORDER BY name')
@@ -744,7 +769,7 @@ async function checkPreconditions(client: FinalizerClient,
   requireGuard(item.rows[0]?.run_id_type === 'varchar', 'native_item_run_id_type_mismatch')
 
   enter('precondition-control-roles')
-  const roles = await client.query(controlRolesVerificationSQL)
+  const roles = await client.query(observerAudit ? controlRolesPublicVerificationSQL : controlRolesVerificationSQL)
   requireGuard(roles.rows[0]?.safe === true, 'control_role_contract_mismatch')
   enter('precondition-protocol-inventory')
   const state = await client.query(`SELECT
@@ -764,13 +789,16 @@ async function checkPreconditions(client: FinalizerClient,
     && Number(stateRow?.inventory_triggers) === NEWS_MUTATION_TABLES.length * 2 + 2
   requireGuard(empty || complete, 'partial_protocol_installation_manual_recovery_required')
   if (!empty && !complete) return null
-  if (complete && readOnlyDiagnosis) {
+  if (complete && readOnlyDiagnosis && !observerAudit) {
     requireGuard(false, 'diagnostic_installed_protocol_deep_check_skipped')
     return null
   }
   if (complete) {
     enter('precondition-installed-state')
-    await verifyInstalled(client, setPhase)
+    await verifyInstalled(client, setPhase, { observerAudit })
+  }
+  else if (observerAudit) {
+    fail('protocol_not_installed')
   }
   else {
     for (const [verifier, phase] of [
@@ -785,9 +813,10 @@ async function checkPreconditions(client: FinalizerClient,
   return empty ? 'empty' : 'complete'
 }
 
-/** Run only the same SELECT-based preinstallation checks in an already-open
- * server-enforced read-only transaction. It deliberately never installs or
- * verifies an existing installation (the latter changes transaction role). */
+/** Run only the SELECT-based precondition diagnosis in an already-open
+ * server-enforced read-only transaction. This diagnostic intentionally skips
+ * deep validation of a complete install; auditNewsProtocolReadOnly reuses that
+ * installed-state verifier under the dedicated observer identity. */
 export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerClient): Promise<readonly FinalizerFailureDiagnostic[]> {
   let phase: FinalizerDiagnosticPhase = 'precondition-identity'
   const findings: { phase: FinalizerDiagnosticPhase; reason: string }[] = []
@@ -811,12 +840,15 @@ export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerCl
 }
 
 async function verifyInstalled(client: FinalizerClient,
-  setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {}): Promise<void> {
+  setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {},
+  options: { observerAudit?: boolean } = {}): Promise<void> {
   setPhase('verify-installed')
   const head = await client.query(`SELECT sequence::text AS sequence, chain_sha256, coverage_version, write_barrier,
     barrier_run_id, barrier_epoch, barrier_receipt_sha256 FROM public.owner_news_mutation_head WHERE singleton=true`)
+  const coverage = head.rows[0]?.coverage_version
   if (head.rows.length !== 1 || !/^(0|[1-9][0-9]*)$/u.test(String(head.rows[0]?.sequence))
-    || !/^[0-9a-f]{64}$/u.test(String(head.rows[0]?.chain_sha256)) || head.rows[0]?.coverage_version !== 0
+    || !/^[0-9a-f]{64}$/u.test(String(head.rows[0]?.chain_sha256))
+    || (coverage !== 0 && !(options.observerAudit && coverage === 1))
     || !['open', 'sealed', 'frozen'].includes(String(head.rows[0]?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
   const fns = await client.query(`SELECT p.proname AS name, p.prosrc AS source, p.prosecdef AS security_definer,
     p.proconfig AS config, r.rolname AS owner, p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS canonical_signature
@@ -916,25 +948,39 @@ async function verifyInstalled(client: FinalizerClient,
     }
   }
 
-  // The shared privilege verifiers deliberately use current_user. Run them as
-  // the runtime principal, not as the admin connection that owns this tx.
-  await client.query('SET LOCAL ROLE cms_runtime')
   let runtimeSafe = false
-  try {
-    const identity = await client.query('SELECT current_user AS role, current_database() AS db')
-    if (identity.rows[0]?.role !== 'cms_runtime' || identity.rows[0]?.db !== 'ownerinc_cms') fail('runtime_verifier_role_switch_failed')
+  if (options.observerAudit) {
+    // Shared ACL queries name cms_runtime explicitly. An observer must not
+    // change transaction identity to perform this installed-state check.
     const privileges = await client.query(runtimeProtocolPrivilegesVerifySQL)
     const functions = await client.query(runtimeProtocolFunctionsVerifySQL)
     runtimeSafe = privileges.rows[0]?.safe === true && functions.rows[0]?.safe === true
-  } finally {
-    // If a verifier query aborts PostgreSQL's transaction, RESET also errors;
-    // the outer transaction rollback restores cms_admin before any recovery.
-    try { await client.query('RESET ROLE') } catch { /* The caller rolls back the aborted tx. */ }
+  } else {
+    // Preserve the one-shot finalizer's existing runtime-principal verification.
+    await client.query('SET LOCAL ROLE cms_runtime')
+    try {
+      const identity = await client.query('SELECT current_user AS role, current_database() AS db')
+      if (identity.rows[0]?.role !== 'cms_runtime' || identity.rows[0]?.db !== 'ownerinc_cms') {
+        fail('runtime_verifier_role_switch_failed')
+      }
+      const privileges = await client.query(runtimeProtocolPrivilegesVerifySQL)
+      const functions = await client.query(runtimeProtocolFunctionsVerifySQL)
+      runtimeSafe = privileges.rows[0]?.safe === true && functions.rows[0]?.safe === true
+    } finally {
+      // If a verifier query aborts PostgreSQL's transaction, RESET also errors;
+      // the outer transaction rollback restores cms_admin before recovery.
+      try { await client.query('RESET ROLE') } catch { /* The caller rolls back the aborted tx. */ }
+    }
   }
   if (!runtimeSafe) fail('runtime_protocol_acl_mismatch')
   const restored = await client.query(`SELECT current_user AS role, current_database() AS db,
     r.rolsuper AS superuser FROM pg_roles r WHERE r.rolname=current_user`)
-  if (restored.rows[0]?.role !== 'cms_admin' || restored.rows[0]?.db !== 'ownerinc_cms' || restored.rows[0]?.superuser !== true) fail('admin_role_restore_failed')
+  const expectedConnectionRole = options.observerAudit ? 'cms_observer' : 'cms_admin'
+  const expectedSuperuser = options.observerAudit ? false : true
+  if (restored.rows[0]?.role !== expectedConnectionRole || restored.rows[0]?.db !== 'ownerinc_cms'
+    || restored.rows[0]?.superuser !== expectedSuperuser) {
+    fail(options.observerAudit ? 'unsafe_observer_target' : 'admin_role_restore_failed')
+  }
 
   const scope = await client.query(`SELECT c.relname AS relation, c.relkind AS kind, a.attname AS column_name,
     has_table_privilege('cms_control',c.oid,'SELECT') AS control_select,
@@ -993,6 +1039,9 @@ async function verifyInstalled(client: FinalizerClient,
     WHERE n.nspname='public' AND c.relkind='S'`)
   if (sequences.rows.some(row => row.control_usage !== false || row.control_select !== false || row.control_update !== false
     || row.controller_usage !== false || row.controller_select !== false || row.controller_update !== false)) fail('control_role_sequence_acl_mismatch')
+  const observerFunctionProjection = options.observerAudit
+    ? `has_function_privilege('cms_observer',p.oid,'EXECUTE') AS observer_execute`
+    : `false AS observer_execute`
   const publicFunctionScope = await client.query(`SELECT p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS approved_function,
     p.oid = to_regprocedure('public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)')::oid AS approved_seal,
     p.oid = to_regprocedure('public.gen_random_uuid()')::oid AS expected_pgcrypto_signature,
@@ -1007,13 +1056,15 @@ async function verifyInstalled(client: FinalizerClient,
       WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE') AS public_execute,
     has_function_privilege('cms_control',p.oid,'EXECUTE') AS control_execute,
     has_function_privilege('cms_controller',p.oid,'EXECUTE') AS controller_execute,
-    has_function_privilege('cms_runtime',p.oid,'EXECUTE') AS runtime_execute
+    has_function_privilege('cms_runtime',p.oid,'EXECUTE') AS runtime_execute,
+    ${observerFunctionProjection}
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'`)
   const approvedFunctionRows = publicFunctionScope.rows.filter(row => row.approved_function === true)
   if (approvedFunctionRows.length !== 4 || publicFunctionScope.rows.some(row => {
     const trustedBaseline = row.expected_pgcrypto_signature === true
       && row.pgcrypto_extension_member === true && row.security_definer === false && row.returns_uuid === true
     if (row.public_execute === true && !trustedBaseline) return true
+    if (options.observerAudit && row.observer_execute !== row.expected_pgcrypto_signature) return true
     return row.runtime_execute !== row.public_execute
       || row.control_execute !== (row.approved_function === true || row.public_execute === true)
       || row.controller_execute !== (row.approved_seal === true || row.public_execute === true)
@@ -1024,9 +1075,13 @@ async function verifyInstalled(client: FinalizerClient,
     has_table_privilege('cms_runtime','public.owner_news_mutation_events','SELECT') AS events_read,
     has_table_privilege('cms_runtime','public.owner_news_mutation_events','INSERT') AS events_write,
     has_function_privilege('cms_controller','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS controller_seal,
-    has_function_privilege('cms_runtime','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS runtime_seal,
-     (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-      WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
+    has_function_privilege('cms_runtime','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS runtime_seal`)
+  const a = acl.rows[0]
+  if (!a?.head_read || a.head_write || !a.events_read || a.events_write || !a.controller_seal || a.runtime_seal) fail('protocol_acl_mismatch')
+
+  const ownership = await client.query(`SELECT
+      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
+        WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
         AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
         AND (d.classid <> 'pg_proc'::regclass OR d.objid <> ALL(${APPROVED_PROTOCOL_OID_ARRAY_SQL}))) AS unexpected_control_objects,
      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
@@ -1038,13 +1093,90 @@ async function verifyInstalled(client: FinalizerClient,
         AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_owned_objects,
      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
       WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control') AS control_shared_owned_objects,
-     (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-      WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_shared_owned_objects`)
-  const a = acl.rows[0]
-  if (!a?.head_read || a.head_write || !a.events_read || a.events_write || !a.controller_seal || a.runtime_seal) fail('protocol_acl_mismatch')
-  if (Number(a.unexpected_control_objects) !== 0 || Number(a.approved_control_objects) !== 4
-    || Number(a.controller_owned_objects) !== 0 || Number(a.control_shared_owned_objects) !== 0
-    || Number(a.controller_shared_owned_objects) !== 0) fail('unexpected_control_owned_objects')
+       (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
+         WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_shared_owned_objects`)
+  const owned = ownership.rows[0]
+  if (Number(owned?.unexpected_control_objects) !== 0 || Number(owned?.approved_control_objects) !== 4
+    || Number(owned?.controller_owned_objects) !== 0 || Number(owned?.control_shared_owned_objects) !== 0
+    || Number(owned?.controller_shared_owned_objects) !== 0) {
+    fail(options.observerAudit ? 'observer_visible_ownership_mismatch' : 'unexpected_control_owned_objects')
+  }
+}
+
+export type NewsProtocolAuditReport = {
+  status: 'PASS'
+  installed: true
+  catalogValid: true
+  targetDatabase: 'ownerinc_cms'
+  observerRole: 'cms_observer'
+  observedCoverageVersion: 0 | 1
+  headSequence: string
+  writeBarrier: 'open' | 'sealed' | 'frozen'
+  ready: false
+  admissionActivated: false
+  releaseCertified: false
+  writeCoverageCertified: false
+  drainVerified: false
+  passwordPresenceCheck: 'not_performed_unprivileged'
+  clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check'
+  physicalClusterIdentity: 'not_verified'
+}
+
+/**
+ * Read-only audit of a fully installed protocol. The caller supplies an
+ * explicitly configured cms_observer connection; this function starts the
+ * server-enforced read-only snapshot before reading catalog state. It does not
+ * install, repair, lock, activate, seal, or certify release/coverage.
+ */
+export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promise<NewsProtocolAuditReport> {
+  let phase: FinalizerDiagnosticPhase = 'audit-transaction-begin'
+  let transactionOpen = false
+  try {
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    transactionOpen = true
+    phase = 'audit-identity'
+    await client.query("SET LOCAL statement_timeout = '5s'")
+    await client.query('SET LOCAL search_path = pg_catalog, public')
+    const transaction = await client.query(`SELECT current_setting('transaction_read_only') AS read_only,
+      current_setting('transaction_isolation') AS isolation,
+      current_setting('search_path') AS search_path,
+      current_setting('statement_timeout')::interval > interval '0 seconds'
+        AND current_setting('statement_timeout')::interval <= interval '5 seconds' AS bounded_timeout`)
+    const tx = transaction.rows[0]
+    if (tx?.read_only !== 'on' || tx.isolation !== 'repeatable read' || tx.search_path !== 'pg_catalog, public'
+      || tx.bounded_timeout !== true) {
+      fail('audit_transaction_contract_mismatch')
+    }
+
+    const protocolState = await checkPreconditions(client, next => { phase = next }, true, undefined, true)
+    if (protocolState !== 'complete') fail('protocol_not_installed')
+
+    const head = await client.query(`SELECT sequence::text AS sequence, coverage_version, write_barrier
+      FROM public.owner_news_mutation_head WHERE singleton=true`)
+    const row = head.rows[0]
+    if (head.rows.length !== 1 || !/^(0|[1-9][0-9]*)$/u.test(String(row?.sequence))
+      || (row?.coverage_version !== 0 && row?.coverage_version !== 1)
+      || !['open', 'sealed', 'frozen'].includes(String(row?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
+
+    phase = 'audit-transaction-commit'
+    await client.query('COMMIT')
+    transactionOpen = false
+    return {
+      status: 'PASS', installed: true, catalogValid: true, targetDatabase: 'ownerinc_cms', observerRole: 'cms_observer',
+      observedCoverageVersion: row.coverage_version as 0 | 1, headSequence: String(row.sequence),
+      writeBarrier: row.write_barrier as NewsProtocolAuditReport['writeBarrier'],
+      ready: false, admissionActivated: false, releaseCertified: false, writeCoverageCertified: false, drainVerified: false,
+      passwordPresenceCheck: 'not_performed_unprivileged',
+      clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check',
+      physicalClusterIdentity: 'not_verified',
+    }
+  } catch (error) {
+    recordFinalizerFailure(error, phase)
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK') } catch { /* Preserve the sanitized primary diagnostic. */ }
+    }
+    throw error
+  }
 }
 
 export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {

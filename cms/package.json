@@ -9,6 +9,7 @@
     "start": "next start --port 3001",
     "typecheck": "tsc --noEmit",
     "test:unit": "node scripts/test.mjs",
+    "audit:news-protocol": "node --import tsx scripts/verify-news-protocol.ts --audit-protocol",
     "generate:types": "payload generate:types",
     "generate:importmap": "payload generate:importmap",
     "migrate": "payload migrate",

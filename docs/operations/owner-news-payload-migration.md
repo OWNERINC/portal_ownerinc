@@ -118,39 +118,79 @@ verificação executa um controller login probe sem imprimir a credencial. CREAT
 ROLE é cluster-global no PostgreSQL; por isso o bootstrap não é embutido em
 migration Payload nem executado pelo migrator. Senhas e URLs não são impressas.
 
-Handoff para o finalizer: `controlRolesVerificationSQL` verifica atributos
-explícitos, login esperado, password presence, zero membership nas duas direções,
-CONNECT e privilégios mínimos de schema. É phase-agnostic e não inspeciona
-ownership, ACLs de protocolo, funções ou readiness; portanto `--verify-control`
-**não** é verificação integral do protocolo. `controlRolesOwnershipVerificationSQL`
-e `controlRolesNativePrivilegesVerificationSQL` são guardas bootstrap-only:
-recusam qualquer ownership inicial e CRUD/sequences em objetos nativos antes de
-criar as roles. `controlRolesBootstrapSQL(password)` cria apenas roles ausentes e
-concede somente os grants de database/schema acima; não altera atributos/password
-de roles existentes. `run('--bootstrap-control')` e `run('--verify-control')`
-exigem admin superuser + alvo explícito. O finalizer ainda não implementado deve
-validar ownership por allowlist estrita (incluindo apenas as funções SECURITY
-DEFINER aprovadas), objetos/ACLs/triggers canônicos e demais invariantes; até essa
-validação existir, a verificação integral fica PENDENTE. Não reutilizar os guards
-bootstrap-only depois que `cms_control` possuir funções de protocolo.
+Handoff do bootstrap: `controlRolesVerificationSQL` verifica atributos explícitos,
+login esperado, password presence, zero membership nas duas direções, CONNECT e
+privilégios mínimos de schema. É phase-agnostic e não inspeciona ownership, ACLs
+de protocolo, funções ou readiness; portanto `--verify-control` **não** é
+verificação integral do protocolo. `controlRolesOwnershipVerificationSQL` e
+`controlRolesNativePrivilegesVerificationSQL` são guardas bootstrap-only: recusam
+ownership inicial e CRUD/sequences em objetos nativos antes de criar as roles.
+`controlRolesBootstrapSQL(password)` cria apenas roles ausentes e concede somente
+os grants de database/schema acima; não altera atributos/password de roles
+existentes. `run('--bootstrap-control')` e `run('--verify-control')` exigem admin
+superuser + alvo explícito. Não reutilizar os guards bootstrap-only depois que
+`cms_control` possuir funções de protocolo.
 
-Isto conclui apenas bootstrap de principals. A migration nativa continua usando
-`cms_migrator` sem `CREATEROLE` ou memberships. Um finalizer admin one-shot separado
-deve ser implementado pelo responsável da integração e importar os builders
-canônicos; ele ainda não existe nesta alteração. Este bootstrap **não** instala
-ledger/functions/triggers, não verifica runtime readiness, não habilita writes e
-nunca promove `coverage_version`: ela deve permanecer **0**, inclusive depois do
-futuro finalizer, até aceite separado de writes nativos/jobs, finalização/drain e
-prova durável verificada pela autoridade primária.
+## Finalizer one-shot e auditoria instalada
 
-As coleções `NewsMigrationRuns`/`NewsMigrationItems` estão definidas, mas não
-registradas/migradas. Seus hooks negam inclusive writes com override até chegar o
-guard real de preparação/controle. Não habilitar as coleções removendo o guard.
-Task12 deve vincular run/manifesto/epoch em frozen, instrumentar a sequência de
-todas as mutações e selar a mesma linha de run antes da ativação Portal.
+O finalizer admin one-shot **está implementado** em
+`cms/scripts/finalize-news-protocol.ts`. A chamada explícita
+`node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
+usa somente `CMS_ADMIN_DATABASE_URL`, validada para `cms_admin` e o database
+`ownerinc_cms`. É uma operação potencialmente mutável: sob transação e advisory
+lock 7194030 instala ledger/functions/triggers/grants se o protocolo estiver
+ausente; se já estiver completo, verifica no lugar; inventário parcial exige
+recuperação manual. Importa os builders canônicos e verifica schema, history,
+ACLs, ownership e triggers. Não executar o finalizer como substituto de auditoria
+read-only.
 
-Faltam o bootstrap protegido, escritor por unidade documental com auditoria,
-reconciliação real de destino, registro nativo de mídia staged e schemas de agenda
-suspensa/materialização pós-ativação. Também são necessárias integração serial de
-config/tipos/migrations e evidência real de rollback externo/COMMIT perdido/Linux.
-Nenhuma migração de banco ou ativação é implícita nesta base.
+A cobertura continua estrita no finalizer: `coverage_version` deve permanecer
+**0** e o retorno `ready` permanece `false`. O finalizer não ativa escritores,
+admission, leitores, readiness ou cutover.
+
+O comando `npm --prefix cms run audit:news-protocol` é a auditoria **somente
+leitura** do protocolo instalado. Exige `CMS_OBSERVER_DATABASE_URL` explicitamente
+com role `cms_observer` e database `ownerinc_cms`; não usa fallback para URL admin,
+runtime, migrator ou `DATABASE_URL`, não carrega `.env` e não provisiona a role.
+O builder de SQL privilegiado para uma provisionação futura e explicitamente
+revisada está em `cms/scripts/news-protocol-observer-contract.ts`; o CLI de auditoria
+nunca o importa nem o executa. Provisionar a role e guardar sua senha é uma ação
+separada; não foi feito nesta alteração.
+
+A auditoria inicia uma transação PostgreSQL `REPEATABLE READ READ ONLY`, limita
+`statement_timeout` local a cinco segundos, fixa `search_path` local para
+`pg_catalog, public` e confere a identidade efetiva, database,
+membership/atributos públicos da role e seus privilégios efetivos. A
+única leitura de dados fora dos catálogos permitida é `payload_migrations` e o
+registro único `owner_news_mutation_head`; não lê artigos, mídia, schedules, jobs,
+histórico ou eventos do ledger. ACLs efetivas também rejeitam grants `PUBLIC` sobre
+relações/colunas da aplicação e execução pública de funções de protocolo (além do
+baseline seguro de `gen_random_uuid`). O relatório observa `coverage_version` (0 ou 1),
+sequência e write barrier, mas sempre mantém `ready=false`,
+`admissionActivated=false`, `releaseCertified=false`,
+`writeCoverageCertified=false` e `drainVerified=false`. Isso não certifica
+coverage, seal, admission, destino, writes ou liberação.
+
+Antes de ler ownership, a auditoria exige `SELECT` efetivo do `current_user` em
+`pg_catalog.pg_shdepend`; se indisponível, falha fechado sem conceder grants nem
+trocar para outra identidade. O contrato exige zero dependências `deptype='o'`
+para `cms_observer` em qualquer `dbid`; para `cms_control`/`cms_controller`, reusa
+sem ampliar o escopo canônico do finalizer (database atual e objetos compartilhados).
+`pg_authid` aparece somente como referência OID em `refclassid`; password presence
+e hashes não são lidos. O database indicado é conferido pelo nome `ownerinc_cms`,
+mas identidade física de cluster não é afirmada. Sem executar uma integração
+separada e autorizada, nenhum estado remoto ou catalog foi observado.
+
+As coleções `NewsMigrationRuns`/`NewsMigrationItems` estão registradas em
+`cms/src/payload.config.ts`, têm definição na configuração nativa e aparecem na
+migration revisada `20261006_181424_z_owner_news_native`. **Não foi confirmado aqui
+se essa migration está aplicada em algum database.** Seus hooks ainda negam writes
+sem as capabilities de preparação/controle; não habilitar escrita removendo o
+guard. Task12 precisa vincular run/manifesto/epoch em frozen, instrumentar todas
+as mutações e selar a mesma linha de run antes de ativação Portal.
+
+Continuam pendentes o escritor por unidade documental com auditoria, reconciliação
+real do destino, registro nativo de mídia staged, schemas de agenda suspensa e
+materialização pós-ativação, integração serial de config/tipos/migrations e
+evidência real de rollback externo/COMMIT perdido/Linux. Nenhuma migration ou
+ativação é implícita nesta base.
