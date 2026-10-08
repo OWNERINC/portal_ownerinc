@@ -898,9 +898,26 @@ function dockerLabelsArgs(lease) {
   return Object.entries(observerAuditDockerLabels(lease)).flatMap(([key, value]) => ['--label', `${key}=${value}`])
 }
 
-function dockerInspectContainer(lease, passwordFile) {
-  const rows = docker(lease.dockerContext, ['inspect', lease.containerName], { json: true })
-  const inspected = rows?.[0]
+export function matchesDockerBindMountPath(inspectedSource, expectedPath, platform = process.platform) {
+  if (typeof inspectedSource !== 'string' || typeof expectedPath !== 'string'
+    || inspectedSource.includes('\0') || expectedPath.includes('\0')) return false
+  if (platform === 'win32') {
+    // Docker Desktop reports Windows host mounts through its Linux VM path;
+    // translate only that exact form before the strict host-path comparison.
+    const desktopMount = /^\/run\/desktop\/mnt\/host\/([a-z])\/(.+)$/u.exec(inspectedSource)
+    if (!desktopMount) return false
+    const components = desktopMount[2].split('/')
+    if (components.some(component => !component || component === '.' || component === '..'
+      || component.includes(':') || component.includes('\\'))) return false
+    const sourcePath = `${desktopMount[1].toUpperCase()}:\\${components.join('\\')}`
+    if (!path.win32.isAbsolute(sourcePath) || !path.win32.isAbsolute(expectedPath)) return false
+    return path.win32.resolve(sourcePath).toLowerCase() === path.win32.resolve(expectedPath).toLowerCase()
+  }
+  if (!path.isAbsolute(inspectedSource) || !path.isAbsolute(expectedPath)) return false
+  return path.resolve(inspectedSource) === path.resolve(expectedPath)
+}
+
+export function validateObserverDockerContainer(lease, passwordFile, inspected, platform = process.platform) {
   const labels = inspected?.Config?.Labels || {}
   const expectedLabels = observerAuditDockerLabels(lease)
   const inspectedMounts = inspected?.Mounts || []
@@ -918,11 +935,16 @@ function dockerInspectContainer(lease, passwordFile) {
     || inspectedMounts.length !== 2
     || mounts.length !== 1 || mounts[0]?.Type !== 'volume' || mounts[0]?.Name !== lease.volumeName
     || secretMounts.length !== 1 || secretMounts[0]?.Type !== 'bind' || secretMounts[0]?.RW !== false
-    || path.resolve(secretMounts[0]?.Source || '').toLowerCase() !== path.resolve(passwordFile).toLowerCase()
+    || !matchesDockerBindMountPath(secretMounts[0]?.Source, passwordFile, platform)
     || environment.some(value => value.startsWith('POSTGRES_PASSWORD='))
     || !Array.isArray(bindings) || bindings.length !== 1 || bindings[0]?.HostIp !== '127.0.0.1'
     || String(bindings[0]?.HostPort) !== String(lease.port)) fail('observer_docker_container_identity_mismatch')
   return Object.freeze(assertDockerBackendIdentity({ containerId: inspected.Id, backendIPv4: ips[0] }))
+}
+
+function dockerInspectContainer(lease, passwordFile) {
+  const rows = docker(lease.dockerContext, ['inspect', lease.containerName], { json: true })
+  return validateObserverDockerContainer(lease, passwordFile, rows?.[0])
 }
 
 function inspectAuthorizedDockerBackend(lease, passwordFile, verifiedBackend) {

@@ -15,6 +15,7 @@ import {
   buildChildEnvironment,
   buildObserverAuditLease,
   createOwnerCmsDatabase,
+  matchesDockerBindMountPath,
   waitForPostgres,
   dispatchHarnessCommand,
   observerAuditDockerLabels,
@@ -23,6 +24,7 @@ import {
   sanitizeDiagnosticOutput,
   validateDockerPreflight,
   validatePrivateBasePath,
+  validateObserverDockerContainer,
   validateWindowsConfiguredPrivateParent,
   validateObserverAuditLease,
   validateObserverLeasePath,
@@ -108,6 +110,32 @@ function windowsExternalParentFixture(parentPath = 'C:\\Users\\Public\\ownerinc-
   return [parentNode, publicNode, usersNode, volumeNode]
 }
 
+function inspectedDockerContainer(targetLease: ReturnType<typeof lease>, passwordFile: string) {
+  const dockerSource = `/run/desktop/mnt/host/${passwordFile.slice(0, 1).toLowerCase()}/`
+    + passwordFile.slice(3).replaceAll('\\', '/')
+  return {
+    Name: `/${targetLease.containerName}`,
+    Id: 'd'.repeat(64),
+    Image: targetLease.imageId,
+    State: { Running: true, Status: 'running' },
+    Config: {
+      Image: targetLease.imageId,
+      Labels: observerAuditDockerLabels(targetLease),
+      Env: ['POSTGRES_USER=cms_admin', 'POSTGRES_DB=postgres',
+        'POSTGRES_PASSWORD_FILE=/run/secrets/cms_admin_password'],
+    },
+    Mounts: [
+      { Type: 'volume', Name: targetLease.volumeName,
+        Source: `/var/lib/docker/volumes/${targetLease.volumeName}/_data`,
+        Destination: '/var/lib/postgresql/data', RW: true },
+      { Type: 'bind', Name: '', Source: dockerSource,
+        Destination: '/run/secrets/cms_admin_password', RW: false },
+    ],
+    HostConfig: { PortBindings: { '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: String(targetLease.port) }] } },
+    NetworkSettings: { Networks: { bridge: { IPAddress: '172.17.0.2' } } },
+  }
+}
+
 test('observer lease schema fixes fresh PostgreSQL resources, and labels bind the nonce without exposing it', () => {
   const prepared = lease()
   assert.equal(validateObserverAuditLease(prepared), prepared)
@@ -142,6 +170,53 @@ test('Docker preflight refuses collisions, nonlocal endpoints, stale images and 
     /observer_lease_loopback_port_unavailable/u)
   assert.throws(() => validateDockerPreflight(prepared, { ...observation, dockerContextOverride: 'remote' }),
     /observer_lease_docker_context_mismatch/u)
+})
+
+test('Docker inspect accepts only the exact-case Windows Desktop bind-path representation', () => {
+  const targetLease = lease()
+  const passwordFile = `C:\\Users\\Public\\private\\${targetLease.runId}\\postgres-admin-password`
+  const inspection = inspectedDockerContainer(targetLease, passwordFile)
+  const backend = validateObserverDockerContainer(targetLease, passwordFile, inspection, 'win32')
+  assert.deepEqual(backend, { containerId: 'd'.repeat(64), backendIPv4: '172.17.0.2' })
+  assert.equal(Object.isFrozen(backend), true)
+  assert.equal(matchesDockerBindMountPath(inspection.Mounts[1].Source, passwordFile, 'win32'), true)
+  assert.equal(matchesDockerBindMountPath(inspection.Mounts[1].Source, passwordFile.toLowerCase(), 'win32'), true)
+  assert.equal(matchesDockerBindMountPath(passwordFile, passwordFile, 'win32'), false)
+  assert.equal(matchesDockerBindMountPath('/run/desktop/mnt/host/c/Users/Public/other/password',
+    passwordFile, 'win32'), false)
+  assert.equal(matchesDockerBindMountPath('/run/desktop/mnt/host/c/Users/Public/private/../password',
+    passwordFile, 'win32'), false)
+  const unrecognizedLinuxPath = '/RUN/desktop/mnt/host/c/Users/Public/private/postgres-admin-password'
+  assert.equal(matchesDockerBindMountPath(unrecognizedLinuxPath,
+    path.win32.resolve('C:\\', unrecognizedLinuxPath), 'win32'), false)
+  const caseVariants = [
+    inspection.Mounts[1].Source.replace('/run/', '/RUN/'),
+    inspection.Mounts[1].Source.replace('/desktop/', '/Desktop/'),
+    inspection.Mounts[1].Source.replace('/mnt/', '/MNT/'),
+    inspection.Mounts[1].Source.replace('/host/c/', '/host/C/'),
+  ]
+  for (const source of caseVariants) {
+    assert.equal(matchesDockerBindMountPath(source, passwordFile, 'win32'), false)
+    const wrongCasePrefix = inspectedDockerContainer(targetLease, passwordFile)
+    wrongCasePrefix.Mounts[1].Source = source
+    assert.throws(() => validateObserverDockerContainer(targetLease, passwordFile, wrongCasePrefix, 'win32'),
+      /observer_docker_container_identity_mismatch/u)
+  }
+
+  const changedBind = inspectedDockerContainer(targetLease, passwordFile)
+  changedBind.Mounts[1].Source = '/run/desktop/mnt/host/c/Users/Public/other/password'
+  assert.throws(() => validateObserverDockerContainer(targetLease, passwordFile, changedBind, 'win32'),
+    /observer_docker_container_identity_mismatch/u)
+
+  const exposedPort = inspectedDockerContainer(targetLease, passwordFile)
+  exposedPort.HostConfig.PortBindings['5432/tcp'][0].HostIp = '0.0.0.0'
+  assert.throws(() => validateObserverDockerContainer(targetLease, passwordFile, exposedPort, 'win32'),
+    /observer_docker_container_identity_mismatch/u)
+
+  const wrongVolume = inspectedDockerContainer(targetLease, passwordFile)
+  wrongVolume.Mounts[0].Name = 'unexpected-volume'
+  assert.throws(() => validateObserverDockerContainer(targetLease, passwordFile, wrongVolume, 'win32'),
+    /observer_docker_container_identity_mismatch/u)
 })
 
 test('child stages use closed environments and observer receives only its explicit connection URL', () => {
