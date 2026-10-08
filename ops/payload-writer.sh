@@ -12,7 +12,11 @@ else
   flock -w "${PORTAL_LOCK_WAIT_SECONDS:-300}" 9 || exit 75
   export PORTAL_OPERATION_LOCK_HELD=$PORTAL_OPERATION_LOCK
 fi
-[[ ! -e $PORTAL_OPERATION_LOCK.admission-closed ]] || { echo 'Payload writer admission is closed' >&2; exit 75; }
+runtime=$(dirname -- "$PORTAL_OPERATION_LOCK")
+state_helper="$runtime/payload-control-state.py"
+[[ -f $state_helper && ! -L $state_helper ]] || { echo 'Payload writer admission state is unavailable' >&2; exit 75; }
+python3 "$state_helper" verify-admission "$runtime" open >/dev/null || exit 75
+[[ ! -e $PORTAL_OPERATION_LOCK.admission-closed && ! -L $PORTAL_OPERATION_LOCK.admission-closed ]] || { echo 'Payload writer admission is closed' >&2; exit 75; }
 # Foreground exec keeps fd9 alive until the writer and its inherited children exit.
 # The caller must not daemonize or close fd9 before all DB/filesystem work ends.
 exec "$@"

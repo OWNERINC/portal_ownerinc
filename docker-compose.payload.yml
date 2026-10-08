@@ -60,6 +60,15 @@ services:
         condition: service_completed_successfully
     restart: 'no'
 
+  # Explicitly invoked read-only native-catalog verifier. It is never part of
+  # `up`; the host adapter runs it only while the shared operation lease is held.
+  cms-preauthority-verify:
+    <<: *cms-image
+    environment:
+      CMS_ADMIN_DATABASE_URL: ${CMS_ADMIN_DATABASE_URL:?Set CMS_ADMIN_DATABASE_URL}
+    command: [node, --import, tsx, scripts/verify-preauthority-catalog.ts]
+    restart: 'no'
+
   cms:
     <<: *cms-image
     environment: *cms-environment

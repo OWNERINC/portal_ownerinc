@@ -27,6 +27,15 @@ services:
     networks: [backend]
     logging: *cms_production_logs
 
+  cms-preauthority-verify:
+    cpus: 0.25
+    mem_limit: 256m
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    networks: [backend]
+    logging: *cms_production_logs
+
   cms:
     cpus: 1.00
     mem_limit: 1024m

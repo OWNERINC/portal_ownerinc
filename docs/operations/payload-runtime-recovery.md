@@ -1,9 +1,11 @@
 # Runtime Payload e recuperação coordenada
 
-Estado: preparação inativa instalada na VPS em 2026-10-08: receiver comum,
-guard, overlay de rede e configuração privada CMS. O adapter `payload-control`
-continua ausente; runtime, banco e worker CMS não foram iniciados nesta preparação.
-Evidência e limites: [preparação da VPS](../reviews/2026-10-08-cms-vps-infrastructure-preparation.md).
+Estado: preparação inativa reportada instalada na VPS em 2026-10-08: receiver
+comum, guard, overlay de rede e configuração privada CMS. A evidência histórica
+da VPS registra `runtime/payload-control` ausente e nenhum runtime, banco ou
+worker CMS iniciado. O adapter e seus helpers existem agora **somente neste
+checkout**: não foram instalados, revisados independentemente nem aceitos em
+runtime. Evidência histórica e limites: [preparação da VPS](../reviews/2026-10-08-cms-vps-infrastructure-preparation.md).
 Não executar deploy, comandos SSH, cutover ou alterações de serviços sem autorização.
 
 ## Stack opcional e credenciais
@@ -110,60 +112,102 @@ o descriptor e conferem inode, sem readquirir recursivamente. O wrapper diário 
 é o coordenador e passa fd9 ao helper. Nunca remover/substituir esse lock.
 
 Import/manutenção externos precisam entrar por `ops/payload-writer.sh`, em foreground,
-antes de conectar ao banco. Seus filhos não podem daemonizar/fechar fd9 cedo. A
-integração desses callers com threads3/4 ainda é necessária. Chamador que ignore
-o protocolo invalida a garantia de quiescência.
+antes de conectar ao banco. O wrapper confere o journal assinado em estado `open`
+e o sentinel após adquirir o lock. Seus filhos não podem daemonizar/fechar fd9 cedo.
+A integração desses callers com threads3/4 ainda é necessária; até lá, não executar
+import/finalizer junto com a instalação fria. Um caller que ignore o lock ainda
+pode abrir uma corrida depois da última observação e invalida a garantia.
 
-`ops/payload-operations-guard.sh` fecha admissão por sentinel no mesmo runtime,
-recusa writers/one-shots extras no projeto e exige adapter durável `runtime/payload-control`.
-Serviços nginx/api/cron/cms/cms-worker são parados e aguardados fora de transações
-DB. Só depois o adapter comprova finalização de jobs, ledger, epoch/manifest/selo,
-reconciliando COMMIT desconhecido. Locks de banco isolados não congelam discos.
+`ops/payload-operations-guard.sh` fecha admissão por sentinel no mesmo runtime e
+recusa containers/one-shots inesperados. Os serviços nginx/api/cron/cms são parados
+e aguardados; `cms-worker` não é iniciado nem retomado, e worker ainda ativo bloqueia
+o preflight. Depois o adapter inspeciona `pg_stat_activity` nos bancos envolvidos
+e recusa conexões de cliente restantes antes do capture/restore. Essas checagens
+não executam finalizer, não inspecionam ledger de cutover/selo e não substituem a
+integração futura dos writers externos. A lease operacional permanece durante
+dumps sequenciais. Falha conserva evidência e admissão fechada; estado de serviços
+deve ser inspecionado antes de recuperação explícita.
 
-Ordem DB do controle: Portal7193029→autoridade→documentos→COMMIT; depois CMS7194030
-com rechecagem e prova. Nenhuma transação Portal aguarda CMS. A lease operacional
-permanece durante dumps sequenciais. Falha conserva evidência e admissão fechada;
-estado de serviços deve ser inspecionado antes de recuperação explícita.
+O controle de banco nesta fase valida Portal schema/autoridade/grants e catálogo
+CMS nativo ausente, sem transação Portal→CMS nem DDL de protocolo. Não alegar
+reconciliação de `COMMIT` desconhecido, aprovação de coverage ou selo de cutover.
 
-## Adapter de controle: dependência de integração bloqueante
+## Adapter de controle: fonte Task 2, aceitação runtime pendente
 
-O adapter `runtime/payload-control` **não é entregue como sucesso simulado**: depende
-dos contratos reais de threads3/4. Ausência bloqueia operações CMS. Guard/adapter
-devem ser instalados de artefatos revisados, com diretórios protegidos e proprietário
-operador/root. O preparador limitado descrito abaixo não instala nem simula
-`runtime/payload-control`.
+`ops/payload-control`, `ops/payload-control-runtime.py` e
+`ops/payload-control-state.py` implementam nesta fonte o controller limitado à
+fase `preauthority`. O guard falha se os artefatos não estiverem instalados no
+runtime. A implementação local ainda não comprova PostgreSQL, Docker, `flock`
+Linux, arquivos de produção ou recuperação real; não instalar nem ativar sem
+revisão e aceitação separadas. A ausência do adapter no host continua sendo o
+estado da evidência histórica da VPS, não uma afirmação sobre este checkout.
 
 Verbos invocados com `(ação, releaseAbsoluta, evidênciaOpcional)`: release-preflight,
 close-admission, quiescence-proof, backup-metadata, restore-preflight, prepare-restore,
 verify-restored, verify-release, rollback-check, open-admission.
 
-- backup-metadata grava JSON privado no path fornecido: formato, identidade do
-  conjunto, autoridade/epoch, manifesto, baseline/lastMutationId/selo, migrations,
-  run e ambiguidades. Não escrever corpos/segredos. Esquema final depende do ledger.
-- restore-preflight/prepare-restore validam floor/schema/digests, storage, inventário
-  e objetos adicionais que `pg_restore --clean` não apagaria; devem recusar alvo
-  incompatível, sem apagar dados por inferência.
-- verify-restored revalida os quatro componentes, bytes/ledger/autoridade, suspensão
-  das agendas e elegibilidade do selo antes de abrir admissão.
-- rollback-check só aceita aplicação compatível com dados/schema atuais, mantendo
-  Payload/autoridade. Manifest CMS→legacy é recusado; primeira instalação legacy
-  exige prova de que autoridade continua legacy e nenhuma escrita ativa foi perdida.
-- verify-release comprova digests de todos os processos e prontidão esperada para
-  a fase. Não executar agendamento importado nem criar uma publicação para testar.
+### Grants do Portal e sessão administrativa v2
 
-## Preparação inicial da infraestrutura de produção — inativa
+Uma leitura PostgreSQL read-only reportada pelo primary confirmou no host a
+migration `036_payload_editorial_control`, as colunas `token_hash`, `user_uid`,
+`expires_at`, `revoked_at`, `created_at`, chave primária em `token_hash` e índice
+de expiração válido. O mesmo relato confirmou que `portal_api` não tem nenhum dos
+sete privilégios de tabela em `cms_editor_sessions`, e `portal_cron` também não
+tem nenhum. Isso é um **floor legado observado**, não prova de grants nem aceite
+de sessão v2.
 
-`ops/prepare-cms-infrastructure.sh` prepara somente o receiver comum, o guard
-revisado, o overlay de rede/limites Payload e a configuração privada CMS. Não é um
-deploy nem um cutover; o arquivo versionado não prova instalação na VPS. O comando
-tem alvos fixos e aceita somente `--check` (padrão, sem mudanças) ou `--apply`; não
-aceita argumento de diretório/host alternativo.
+O preflight frio admite somente esse floor antigo, com todos os sete privilégios
+efetivos ausentes para ambos os papéis; essa exceção existe apenas antes da
+provisão v2, no início da instalação fria. Ela não relaxa os gates pós-provisão.
+Após o backup legado coordenado e ainda sob `runtime/deploy.lock`, o fluxo padrão
+deve executar o `migrate` normal, que chama `grantRuntimeAccess`, seguido de
+`verify-migrations.js`, antes de iniciar a API candidata. O floor pós-provisão
+exige exatamente `SELECT`, `INSERT`, `UPDATE` e `DELETE` para `portal_api` em
+`cms_editor_sessions`, nenhum `TRUNCATE`, `REFERENCES` ou `TRIGGER`, e nenhum dos
+sete para `portal_cron`; o verificador de migration também valida os grants de
+`owner_news_authority`. O controller recusa grants parciais ou o floor antigo em
+gates estritos. Se a provisão/verificação falhar, não iniciar a API v2, manter a
+admissão fechada e preservar o backup para revisão. Não contornar privilégios nem
+concedê-los manualmente fora do fluxo revisado. Se a ordem do deploy exigir um
+estágio direcionado separado, ele deve ocorrer sob o mesmo lock e somente depois
+de um backup real com metadados capturados; essa mudança operacional ainda não
+foi executada no host.
+
+- backup-metadata assina prova JSON canônica privada com fase, authority/epoch,
+  imagens, identidade/OID das bases, migrations verificadas, protocol ausente,
+  fingerprints de dados e hash/tamanho dos dois artefatos legacy ou quatro
+  artefatos Payload. Não grava credenciais nem conteúdo. A prova não é selo de
+  cutover.
+- restore-preflight valida manifesto, prova/assinatura, arquivos e tar seguro,
+  floor/catalog e identidade atual do alvo. `prepare-restore` repete a checagem de
+  intent/alvo e sessões PostgreSQL imediatamente antes de cada etapa destrutiva;
+  não compara identidades de clone com as identidades da origem.
+- verify-restored compara fingerprints de ambas as bases e árvores de arquivos,
+  além de authority, migrations e catálogo CMS esperado, antes de reabrir admissão.
+- rollback-check limita a primeira instalação a rollback de aplicação, condicionado
+  à prova do backup legado e ao Portal ainda em authority legacy/1; não restaura nem
+  apaga volumes/banco CMS, mantém CMS web/worker parados e nunca inicia o worker.
+  O container de banco CMS pode continuar executando, sem acesso público. Após a fase migrada, só aceita o
+  mesmo floor CMS preauthority, sem fallback de dados para legacy.
+- verify-release verifica imagens/processos e o catálogo CMS nativo read-only;
+  não prova a aceitação de browser/sessão v2 nem inicia job, import ou finalizer.
+
+## Preparação inicial da infraestrutura de produção — inativa até nova autorização
+
+`ops/prepare-cms-infrastructure.sh` prepara o receiver, guard, adapter e helpers,
+overlay de rede/limites Payload, configuração CMS e journal/chave privada
+preauthority. Não é deploy nem cutover. O histórico reportado da VPS precede esta
+versão do adapter e não comprova sua instalação. O comando tem alvos fixos e aceita
+somente `--check` (padrão, sem mudanças) ou `--apply`; não aceita argumento de
+diretório/host alternativo.
 
 O bundle revisado precisa manter juntos `docker-compose.payload.yml`,
 `ops/prepare-cms-infrastructure.sh`, `ops/prepare-cms-infrastructure-private.py`,
-`ops/deploy-from-ci.sh`, `ops/payload-operations-guard.sh` e
-`ops/compose.payload.production.yaml`. Antes de aplicar, confirme o bundle/commit e
-execute:
+`ops/deploy-from-ci.sh`, `ops/payload-operations-guard.sh`, `ops/payload-control`,
+`ops/payload-control-runtime.py`, `ops/payload-control-state.py` e
+`ops/compose.payload.production.yaml`. O candidate CMS correspondente também precisa
+conter `cms/scripts/verify-preauthority-catalog.ts` e sua verificação read-only
+compartilhada. Antes de aplicar, confirme o bundle/commit e execute:
 
 ```sh
 sudo bash ops/prepare-cms-infrastructure.sh --check
@@ -214,11 +258,16 @@ existente, o arquivo de ambiente privado (0600) e `metadata.json` com presença,
 uid/gid/modo; não contém imagem, release, backup diário nem database dump. O caminho
 é impresso antes da primeira instalação, também quando uma etapa posterior falhar.
 
-Instala apenas `/usr/local/libexec/ownerinc-portal-deploy` (root:root 0755) e
-`runtime/payload-operations-guard` (root:root 0755), além de
-`runtime/compose.payload.production.yaml` e `runtime/cms-image-candidate.env`
-(root:root 0644). Não instala um wrapper production novo, não altera `authorized_keys`
-nem permissões/owner do override existente `runtime/compose.production.yaml`.
+Instala `/usr/local/libexec/ownerinc-portal-deploy` e
+`runtime/payload-operations-guard` (root:root 0755), o adapter
+`runtime/payload-control` (root:root 0755), os dois helpers Python e
+`runtime/compose.payload.production.yaml` (root:root 0644), além do manifesto
+`runtime/cms-image-candidate.env` (root:root 0644). A chave/journal de controle
+ficam root:root, 0600/0700, fora dos backups de dados. O snapshot anterior continua
+limitado ao receiver, guard e environment; não contém o novo código, overlay, chave,
+journal, imagem ou dump. Não instala um wrapper production novo, não altera
+`authorized_keys` nem permissões/owner do override existente
+`runtime/compose.production.yaml`.
 O manifesto de candidato contém somente `CMS_IMAGE=` para o digest revisado
 `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:6eaddc9a333ba682508a09a4ae8a6409d9e571abab9ec4a62829c2e9828730b0`; não é copiado para
 `current-release/.image-env`, não adiciona `RELEASE_FORMAT`, nem promove release.
@@ -231,11 +280,18 @@ override mantém CMS/PostgreSQL/worker sem portas publicadas e somente na rede
 limites de CPU/memória, `no-new-privileges` e logs locais limitados. Não muda
 autoridade, formato de backup, retenção ou agenda diária.
 
-Mesmo após sucesso, a preparação está **inativa**. A saída deixa explícito que
-`runtime/payload-control` continua ausente (ou, se já existir, não é validado nem
-invocado), API v2 compatível e Task15 permanecem pendentes e CMS/worker não foram
-iniciados. Nenhum placeholder `payload-control` é criado. Esses gates requerem revisão
-e autorização separadas antes de qualquer release CMS.
+Mesmo após sucesso, a preparação está **inativa**: não há pull/up/run, migration,
+deploy ou ativação por timer. O instalador verifica um journal existente ou cria
+estado frio assinado sem conectar a banco; estado parcial/corrompido não é reparado.
+O worker continua explicitamente retido. A API v2 candidata só pode ser iniciada
+depois do backup coordenado, da provisão normal de grants e do verificador estrito
+de migrations. O aceite CI de API/session v2 do Task 1 foi reportado como concluído,
+mas não foi implantado. O helper CMS novo requer um conjunto candidato completo e
+recém-construído que o contenha; o digest de imagem CMS já registrado na evidência
+histórica não comprova esse helper e não deve ser combinado com imagens de outro
+source SHA para alegar um release comum. A aceitação real de recuperação do Task 3
+continua pendente. Nenhum sucesso de
+preparação equivale a deploy ou recuperação comprovada.
 
 ### Rollback manual da preparação inativa
 
@@ -247,6 +303,9 @@ e restaura owner/mode do ambiente conforme `metadata.json`; nunca mexe no lock,
 override preexistente, current-release, manifesto de imagem, banco ou serviços. Se o
 guard anterior estava ausente, o guard revisado recém-instalado é deixado inerte.
 Overlay e manifesto CMS novos também permanecem inertes sob o receiver antigo.
+Se uma versão revisada do preparador já instalou adapter e estado privado, este
+rollback não os restaura nem os remove; não apagar nem substituir manualmente a
+chave/journal e confirmar que o receiver/guard restaurado não os invoca.
 
 ```sh
 BACKUP_DIR='/opt/ownerinc/backups/portal-ownerinc/production/cms-infrastructure-preparation-<UTC>-<UUID>'
@@ -336,7 +395,9 @@ Restore CMS recusa backup legacy; release legacy recusa backup CMS. Hashes e pat
 de tar são conferidos antes de mutação; links/devices/traversal são recusados.
 Gera backup de proteção completo sob a mesma lease, sem reaquisição/S3, restaura
 ambos os bancos e ambos os storages, reaplica grants/migrations e exige prova do
-adapter. CMS restaura ownership `cms_migrator`; runtime permanece sem DDL.
+adapter. CMS restaura ownership `cms_migrator`; runtime permanece sem DDL. Antes de
+reabrir a API, grants estritos de sessão v2 e de autoridade devem passar novamente;
+o floor legado observado não é suficiente para esse gate.
 Em falha, writers ficam parados e proteção é preservada. Não reativar agendas
 importadas vencidas/ator desconhecido sem revalidação/decisão formal.
 

@@ -86,13 +86,14 @@ gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref feat/payload-cms-fi
 - Sign canonical bytes with a private host key; persist atomic state with sequence and previous-state hash. Never restore the host key/state from a data backup or present this proof as a cutover seal.
 - Restore intent binds the current target identities/volumes. A fresh clone legitimately differs from source identities; compare the target with its reserved intent immediately before destructive operations.
 
-- [ ] Add tests rejecting unknown/duplicate proof fields, bad signatures, modified artifacts, changed target identities, unsupported phases and worker admission.
-- [ ] Implement cold preflight that verifies the actual Portal floor/authority and absence of unexpected CMS containers/volumes without connecting to a nonexistent CMS database.
-- [ ] Implement post-migration catalog checks against the expected native schema and six migrations, not an arbitrary live snapshot blessed as canonical.
-- [ ] Align operational Compose invocations with the receiver's regular and Payload production overrides. Explicitly hold the worker in all supported paths.
-- [ ] Implement real quiescence checks after writers stop; maintain admission closure on failure. Portal legacy writers are allowed while live, but none may remain active during capture/restore.
-- [ ] Bind artifact hashes only after capture completes. Before restore, validate manifest, signature, archive paths/types and target lease. Recheck target binding at the destructive boundary, then verify restored database content and storage hashes before reopening.
-- [ ] Run meaningful offline tests and obtain fresh review before enabling actual disposable restore acceptance.
+- [x] Add tests rejecting unknown/duplicate proof fields, bad signatures, modified artifacts, changed target identities/volumes, unsupported phases and worker admission.
+- [x] Implement cold preflight that verifies the actual Portal floor/authority and absence of unexpected CMS containers/volumes without connecting to a nonexistent CMS database.
+- [x] Implement post-migration catalog checks against the expected native schema and six migrations, not an arbitrary live snapshot blessed as canonical.
+- [x] Align operational Compose invocations with the receiver's regular and Payload production overrides. Explicitly hold the worker in all supported paths.
+- [x] Implement real quiescence checks after writers stop; maintain admission closure on failure. Portal legacy writers are allowed while live, but none may remain active during capture/restore.
+- [x] Bind artifact hashes only after capture completes. Before restore, validate manifest, signature, archive paths/types and target lease. Recheck target binding at the destructive boundary, then verify restored database content, sequence state and storage hashes before reopening.
+- [x] Run meaningful offline tests.
+- [ ] Obtain a fresh independent read-only review before enabling actual disposable restore acceptance.
 
 ## Task 3: Disposable four-store recovery acceptance
 

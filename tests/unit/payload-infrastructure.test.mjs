@@ -15,8 +15,8 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
   assert.equal(result.status, 0, 'Compose parse failed (configuration output intentionally withheld)');
   const config = JSON.parse(result.stdout);
   const s = config.services;
-  for (const service of ['cms-postgres', 'cms-provision', 'cms-migrate', 'cms', 'cms-worker']) assert.ok(s[service]);
-  for (const service of ['cms-provision', 'cms-migrate', 'cms', 'cms-worker']) assert.equal(s[service].image, s.cms.image);
+  for (const service of ['cms-postgres', 'cms-provision', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.ok(s[service]);
+  for (const service of ['cms-provision', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.equal(s[service].image, s.cms.image);
   assert.equal(s['cms-postgres'].ports, undefined);
   assert.equal(s.cms.ports, undefined);
   assert.equal(s.cms.build.context.replaceAll('\\', '/'), path.resolve('.').replaceAll('\\', '/'));
@@ -37,13 +37,18 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
   assert.equal(s['cms-postgres'].volumes[0].source, 'cms_postgres_data');
   assert.equal(s.api.environment.CMS_INTERNAL_URL, 'http://cms:3001');
   assert.equal(s.cms.depends_on['cms-migrate'].condition, 'service_completed_successfully');
+  assert.match(s['cms-preauthority-verify'].environment.CMS_ADMIN_DATABASE_URL,
+    /^postgresql:\/\/cms_admin:placeholder-cms-admin-password-not-for-runtime@cms-postgres:5432\/ownerinc_cms$/u);
+  assert.equal(s['cms-preauthority-verify'].environment.CMS_DATABASE_URL, undefined);
+  assert.equal(s['cms-preauthority-verify'].restart, 'no');
 });
 
 test('owned Docker, Nginx and shell artifacts retain LF', async () => {
   for (const file of ['cms/Dockerfile', 'cms/Dockerfile.dockerignore', 'cms/.dockerignore', 'cron/Dockerfile', 'nginx/nginx.conf', 'docker-compose.payload.yml',
     'scripts/payload-operations.sh', 'scripts/payload-release.sh', 'scripts/release-manifest.sh',
     'scripts/backup.sh', 'scripts/restore.sh', 'scripts/release.sh', 'scripts/backup-s3.sh',
-    'ops/deploy-from-ci.sh', 'ops/backup-from-timer.sh', 'ops/payload-operations-guard.sh', 'ops/payload-writer.sh', 'deploy.sh']) {
+    'ops/deploy-from-ci.sh', 'ops/backup-from-timer.sh', 'ops/payload-operations-guard.sh', 'ops/payload-writer.sh',
+    'ops/payload-control', 'deploy.sh']) {
     assert.equal((await readFile(file, 'utf8')).includes('\r'), false, file);
   }
 });
@@ -70,9 +75,43 @@ test('each owned operational script parses independently', t => {
   const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
   for (const file of ['scripts/payload-operations.sh', 'scripts/payload-release.sh', 'scripts/release-manifest.sh',
     'scripts/backup.sh', 'scripts/restore.sh', 'scripts/release.sh', 'scripts/backup-s3.sh',
-    'ops/deploy-from-ci.sh', 'ops/backup-from-timer.sh', 'ops/payload-operations-guard.sh', 'ops/payload-writer.sh', 'deploy.sh']) {
+    'ops/deploy-from-ci.sh', 'ops/backup-from-timer.sh', 'ops/payload-operations-guard.sh', 'ops/payload-writer.sh',
+    'ops/payload-control', 'deploy.sh']) {
     const result = spawnSync(bash, ['-n', file], { encoding: 'utf8', timeout: 5000 });
     if (result.error?.code === 'ENOENT') { t.skip('Bash unavailable'); return; }
     assert.equal(result.status, 0, `${file}: ${result.stderr}`);
   }
+});
+
+test('cold deploy signs its legacy source backup before provisioning and never starts the worker', async () => {
+  const [receiver, operations, manualRelease] = await Promise.all([
+    readFile('ops/deploy-from-ci.sh', 'utf8'),
+    readFile('scripts/payload-operations.sh', 'utf8'),
+    readFile('scripts/payload-release.sh', 'utf8'),
+  ]);
+  const proof = receiver.indexOf('backup-metadata "$release" "$backup/preauthority-proof.json"');
+  const provision = receiver.indexOf('migration_started=true');
+  assert.ok(proof >= 0 && provision > proof, 'cold source proof must be durable before migrations/provisioning');
+  assert.match(receiver, /stop_container "\$project-cms-worker-1" false/);
+  assert.ok(receiver.indexOf('close-admission "$release" ||') < receiver.indexOf('rollback-check "$release"'),
+    'failed deploy rollback must retain the admission fence before recovery checks');
+  assert.match(manualRelease, /compose "\$release" stop --timeout 120 nginx api cron cms cms-worker[\s\S]*?guard close-admission/u);
+  assert.doesNotMatch(receiver, /compose_for[^\n]*up[^\n]*cms-worker/u);
+  assert.doesNotMatch(operations, /(?:compose\s+)?(?:start|up)[^\n]*cms-worker/u);
+  assert.doesNotMatch(manualRelease, /compose[^\n]*up[^\n]*cms-worker/u);
+  const manualOperation = manualRelease.slice(manualRelease.indexOf('backup_dir='));
+  assert.ok(manualOperation.indexOf('backup_output=') < manualOperation.indexOf('guard close-admission'),
+    'the coordinator must run its admission-open release preflight before closing the fence');
+  assert.match(manualRelease, /COMPOSE_ENV_FILE=.*production\.runtime\.conf/u);
+  assert.ok(manualRelease.lastIndexOf('mv -fT "$current_tmp" "$current_file"') < manualRelease.lastIndexOf('guard open-admission'),
+    'manual release must publish the canonical pointer before reopening writer admission');
+  assert.ok(receiver.lastIndexOf('mv "$current_tmp" "$current_file"') < receiver.lastIndexOf('open-admission "$release"'),
+    'CI deploy must publish the canonical pointer before reopening writer admission');
+  assert.match(operations, /compose stop --timeout 120 nginx api cron cms cms-worker/);
+});
+
+test('out-of-band Payload writers require both signed open admission and no closed sentinel', async () => {
+  const writer = await readFile('ops/payload-writer.sh', 'utf8');
+  assert.match(writer, /verify-admission "\$runtime" open/u);
+  assert.match(writer, /! -e \$PORTAL_OPERATION_LOCK\.admission-closed && ! -L/u);
 });

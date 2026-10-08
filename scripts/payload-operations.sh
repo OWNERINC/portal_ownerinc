@@ -33,6 +33,9 @@ compose() {
   if [[ -n ${COMPOSE_ENV_FILE:-} ]]; then args+=(--env-file "$COMPOSE_ENV_FILE"); fi
   args+=(--env-file "$root/.image-env" -f "$root/docker-compose.yml" -f "$root/docker-compose.payload.yml")
   if [[ -n ${COMPOSE_OVERRIDE:-} ]]; then args+=(-f "$COMPOSE_OVERRIDE"); fi
+  payload_override="$(dirname -- "$PORTAL_OPERATION_LOCK")/compose.payload.production.yaml"
+  [[ -f $payload_override && ! -L $payload_override ]] || { echo 'Missing protected Payload production Compose overlay' >&2; return 2; }
+  args+=(-f "$payload_override")
   docker compose "${args[@]}" "$@"
 }
 guard() {
@@ -45,7 +48,9 @@ resume() { if ((${#stopped[@]})); then compose start "${stopped[@]}" >/dev/null;
 stop_writers() {
   local running service
   running=$(compose ps --status running --services)
-  for service in nginx api cron cms cms-worker; do
+  # The worker is never admitted or resumed in preauthority. If it is running,
+  # the guard's inventory proof fails instead of silently treating it as held.
+  for service in nginx api cron cms; do
     if grep -qx "$service" <<<"$running"; then stopped+=("$service"); fi
   done
   # Admission/drain contract covers extra one-shot import/maintenance containers;
@@ -93,6 +98,7 @@ if [[ $action == backup ]]; then
   : "${BACKUP_DIR:?Set BACKUP_DIR}"
   [[ -d $BACKUP_DIR && $BACKUP_DIR == /* && ! -L $BACKUP_DIR ]] || exit 2
   destination="$BACKUP_DIR/$(date -u +%Y%m%dT%H%M%SZ)"
+  guard release-preflight
   stop_writers
   capture "$destination"
   if [[ ${LEAVE_STOPPED:-false} != true ]]; then resume; guard verify-release; guard open-admission; fi
@@ -121,16 +127,21 @@ else
   # targets, including extra objects pg_restore --clean would otherwise retain.
   guard prepare-restore "$backup"
   compose exec -T postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/postgres.dump"
+  guard prepare-restore "$backup"
   # CMS ownership must remain cms_migrator so future DDL uses the same owner.
   compose exec -T cms-postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --role=cms_migrator --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/cms-postgres.dump"
   for service in api cms; do
+    guard prepare-restore "$backup"
     artifact=uploads.tar.gz; storage=/app/uploads
     if [[ $service == cms ]]; then artifact=cms-uploads.tar.gz; storage=/var/lib/ownerinc-cms/media; fi
     compose run --rm --no-deps -T --entrypoint sh "$service" -c 'find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' restore-files "$storage"
+    guard prepare-restore "$backup"
     compose run --rm --no-deps -T --entrypoint tar "$service" -xzf - -C "$storage" < "$backup/$artifact"
   done
+  guard prepare-restore "$backup"
   compose run --rm --no-deps migrate
   compose run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/verify-migrations.js
+  guard prepare-restore "$backup"
   compose run --rm --no-deps cms-migrate
   compose run --rm --no-deps --entrypoint node cms --import tsx scripts/provision-db.ts --verify-runtime
   guard verify-restored "$backup"

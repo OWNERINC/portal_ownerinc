@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Thin installed host entrypoint. The Python controller receives only the
+# explicit guard interface; no environment or secret file is sourced here.
+set -Eeuo pipefail
+umask 077
+[[ $# == 3 ]] || { echo 'Invalid Payload control invocation.' >&2; exit 2; }
+directory=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+runtime="$directory/payload-control-runtime.py"
+[[ -f $runtime && ! -L $runtime && -f $directory/payload-control-state.py && ! -L $directory/payload-control-state.py ]] || {
+  echo 'Payload control helpers are unavailable.' >&2
+  exit 2
+}
+exec python3 "$runtime" "$@"

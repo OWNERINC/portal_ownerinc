@@ -148,6 +148,7 @@ flock -n 9 || {
 export PORTAL_OPERATION_LOCK="$runtime/deploy.lock" PORTAL_OPERATION_LOCK_HELD="$runtime/deploy.lock"
 export PAYLOAD_OPERATIONS_GUARD="$runtime/payload-operations-guard"
 export COMPOSE_PROJECT_NAME="$project"
+export COMPOSE_ENV_FILE="$environment" COMPOSE_OVERRIDE="$production_override"
 
 current=
 if [[ -s $current_file ]]; then
@@ -387,9 +388,18 @@ rollback() {
   fi
   database_restored=true
   if [[ $cms_release == true || $cms_current == true ]]; then
+    # Fence out-of-band writers before deciding whether this first install may
+    # return to the previous application. Failures before backup completion must
+    # still leave the host closed once the HTTP writers have stopped.
+    if [[ ! -e $PORTAL_OPERATION_LOCK.admission-closed && ! -L $PORTAL_OPERATION_LOCK.admission-closed ]]; then
+      "$PAYLOAD_OPERATIONS_GUARD" close-admission "$release" || {
+        echo 'Unable to establish Payload admission fence; writers remain stopped.' >&2
+        exit 1
+      }
+    fi
     # No partial two-database rollback. The integration guard proves the current
     # schema/data is compatible with the floor; otherwise keep writers stopped.
-    if ! "$PAYLOAD_OPERATIONS_GUARD" rollback-check "$release" "$current"; then
+    if ! "$PAYLOAD_OPERATIONS_GUARD" rollback-check "$release" "$backup"; then
       echo 'Payload rollback requires coordinated recovery; writers remain stopped.' >&2
       exit 1
     fi
@@ -418,7 +428,13 @@ rollback() {
     mv "$current_tmp" "$current_file"
     if [[ $cms_release == true || $cms_current == true ]]; then
       "$PAYLOAD_OPERATIONS_GUARD" open-admission "$current"
-      compose_for "$current" up -d
+      if [[ $cms_current == true ]]; then
+        compose_for "$current" up -d --no-deps api cron cms nginx
+      else
+        # First-install recovery may reactivate only the previous legacy Portal
+        # application. CMS volumes/data are not restored, removed, or started.
+        compose_for "$current" up -d --no-deps api cron nginx
+      fi
     else
       compose_for "$current" up -d --remove-orphans
     fi
@@ -489,6 +505,11 @@ docker run --rm --read-only \
 (cd "$backup" && sha256sum postgres.dump uploads.tar.gz >manifest.sha256)
 (cd "$backup" && sha256sum --check manifest.sha256 >/dev/null)
 chmod 600 "$backup/postgres.dump" "$backup/uploads.tar.gz" "$backup/manifest.sha256"
+if [[ $cms_release == true ]]; then
+  # Bind the real legacy-format source set before any Portal/CMS provisioning.
+  # This proof is separate metadata; payload-v1 backup artifacts/manifest stay unchanged.
+  "$PAYLOAD_OPERATIONS_GUARD" backup-metadata "$release" "$backup/preauthority-proof.json"
+fi
 backup_complete=true
 fi
 
@@ -611,15 +632,18 @@ if [[ $cron_started != true ]]; then
   false
 fi
 if [[ $cms_release == true ]]; then
-  compose_for "$release" up -d --no-deps cms-worker
-  [[ $(docker inspect --format '{{.Config.Image}}' "$project-cms-worker-1") == "$cms_image" ]] || false
+  # Preacthority has an explicit permanent worker hold. No deploy path starts it.
   "$PAYLOAD_OPERATIONS_GUARD" verify-release "$release"
-  "$PAYLOAD_OPERATIONS_GUARD" open-admission "$release"
 fi
 current_tmp="$runtime/current-release.$$"
 printf '%s\n' "$release" >"$current_tmp"
 chmod 644 "$current_tmp"
 mv "$current_tmp" "$current_file"
+if [[ $cms_release == true ]]; then
+  # Publish the release pointer while admission is still fenced; a pointer
+  # failure must not leave signed state open to out-of-band writers.
+  "$PAYLOAD_OPERATIONS_GUARD" open-admission "$release"
+fi
 trap - ERR INT TERM
 printf '{"deployment":"ready","commit":"%s","backup":"%s"}\n' \
   "$requested_commit" "$(basename "$backup")"

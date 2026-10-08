@@ -74,7 +74,8 @@ async function fixture(t) {
   await chmod(path.join(paths.runtime, 'payload-operations-guard'), 0o755);
   await writeFile(path.join(paths.bundle, 'docker-compose.payload.yml'), await readFile('docker-compose.payload.yml'));
   await mkdir(path.join(paths.bundle, 'ops'));
-  for (const file of ['deploy-from-ci.sh', 'payload-operations-guard.sh', 'compose.payload.production.yaml', 'prepare-cms-infrastructure-private.py']) {
+  for (const file of ['deploy-from-ci.sh', 'payload-operations-guard.sh', 'payload-control', 'payload-control-runtime.py',
+    'payload-control-state.py', 'compose.payload.production.yaml', 'prepare-cms-infrastructure-private.py']) {
     const source = path.join(repository, 'ops', file);
     await copyFile(source, path.join(paths.bundle, 'ops', file));
   }
@@ -180,7 +181,7 @@ test('apply atomically prepares private credentials and reviewed files without a
   const result = f.run(['--apply']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /prepared \(inactive\)/i);
-  assert.match(result.stdout, /payload-control.*not integrated/i);
+  assert.match(result.stdout, /private host-only signing key and explicit worker hold/i);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /postgresql:\/\/|CMS_(?:POSTGRES|MIGRATOR|RUNTIME)_PASSWORD=/i);
 
   const envPath = path.join(f.paths.secrets, 'production.runtime.conf');
@@ -226,11 +227,15 @@ test('apply atomically prepares private credentials and reviewed files without a
   assert.deepEqual((await readdir(f.paths.libexec)).sort(), ['ownerinc-portal-deploy']);
   assert.deepEqual(await readFile(path.join(f.paths.runtime, 'compose.production.yaml'), 'utf8'), 'services: {}\n');
   assert.deepEqual(await readFile(path.join(f.paths.release, '.image-env'), 'utf8'), `API_IMAGE=${apiImage}\nCRON_IMAGE=${cronImage}\n`);
-  assert.equal(await readdir(f.paths.runtime).then(files => files.includes('payload-control')), false);
+  assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control'), 'utf8'), await readFile('ops/payload-control', 'utf8'));
+  assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control-runtime.py'), 'utf8'), await readFile('ops/payload-control-runtime.py', 'utf8'));
+  assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control-state.py'), 'utf8'), await readFile('ops/payload-control-state.py', 'utf8'));
+  assert.equal((await readdir(path.join(f.paths.runtime, 'payload-control-state'))).includes('current.json'), true);
 
   const backups = await readdir(f.paths.backups);
   assert.equal(backups.length, 1);
   const backup = path.join(f.paths.backups, backups[0]);
+  assert.equal((await readdir(backup)).includes('payload-control.key'), false);
   assert.match(backups[0], /^cms-infrastructure-preparation-/u);
   assert.equal(await readFile(path.join(backup, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
   assert.equal(await readFile(path.join(backup, 'payload-operations-guard'), 'utf8'), 'previous guard\n');

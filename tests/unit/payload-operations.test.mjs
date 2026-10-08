@@ -39,7 +39,8 @@ set -euo pipefail
 printf '%s\\n' "$1" >> "$FIXTURE/guard.calls"
 [[ \${FAIL_GUARD:-} != "$1" ]] || exit 42
 case $1 in
- quiescence-proof) ! grep -Eq '^(nginx|api|cron|cms|cms-worker)$' "$FIXTURE/running";;
+  release-preflight|restore-preflight) ! grep -qx 'cms-worker' "$FIXTURE/running";;
+  quiescence-proof) ! grep -Eq '^(nginx|api|cron|cms|cms-worker)$' "$FIXTURE/running";;
  backup-metadata) printf '{"fixture":true,"epoch":1,"ambiguousPromotions":1}\\n' > "$3";;
 esac
 `;
@@ -50,11 +51,12 @@ async function fixture(t) {
   const root = await mkdtemp(path.join(base, 'payload ops-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const dir of ['release/scripts', 'bin', 'backups', 'protection']) await mkdir(path.join(root, dir), { recursive: true });
+  await writeFile(path.join(root, 'compose.payload.production.yaml'), 'services: {}\n');
   for (const file of ['release-manifest.sh', 'payload-operations.sh', 'backup.sh', 'restore.sh', 'backup-s3.sh']) await copyFile(`scripts/${file}`, path.join(root, 'release/scripts', file));
   await writeFile(path.join(root, 'release/.image-env'), payload);
   await writeFile(path.join(root, 'release/docker-compose.payload.yml'), '# synthetic\n');
   await writeFile(path.join(root, 'release/scripts/smoke.sh'), '#!/bin/sh\nprintf "smoke\\n" >> "$FIXTURE/smoke.calls"\n');
-  await writeFile(path.join(root, 'running'), 'postgres\ncms-postgres\nnginx\napi\ncron\ncms\ncms-worker\n');
+  await writeFile(path.join(root, 'running'), 'postgres\ncms-postgres\nnginx\napi\ncron\ncms\n');
   await writeFile(path.join(root, 'bin/docker'), fakeDocker, { mode: 0o755 });
   await writeFile(path.join(root, 'bin/flock'), '#!/bin/sh\nprintf "lock\\n" >> "$FIXTURE/lock.calls"\n', { mode: 0o755 });
   // Archive listing only; this stub never extracts data or invokes system tar.
@@ -91,7 +93,7 @@ test('release manifest rejects partial CMS, duplicates, mutable digests and extr
   assert.equal((await readdir(f.root)).includes('marker'), false);
 });
 
-test('coordinated backup stops all five writers, captures whole media including staging and verifies seven entries', async t => {
+test('coordinated backup stops live Portal/CMS writers while the worker stays held', async t => {
   const f = await fixture(t);
   const r = f.run('bash release/scripts/backup.sh "$PWD/release"');
   assert.equal(r.status, 0, r.stderr);
@@ -100,13 +102,25 @@ test('coordinated backup stops all five writers, captures whole media including 
   const files = await readdir(backup);
   for (const file of ['postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz', 'operations-proof.json', 'release.images', 'backup.format', 'manifest.sha256']) assert.ok(files.includes(file));
   const calls = await readFile(path.join(f.root, 'calls'), 'utf8');
-  assert.match(calls, /stop --timeout 120 nginx api cron cms cms-worker/);
+  assert.match(calls, /stop --timeout 120 nginx api cron cms/);
+  assert.doesNotMatch(calls, /(?:start|up)[^\n]*cms-worker/);
   assert.match(calls, /--entrypoint tar cms -czf - -C \/var\/lib\/ownerinc-cms\/media \./);
   assert.match(calls, /--entrypoint tar api -czf - -C \/app\/uploads \./);
   assert.match(calls, /--entrypoint tar api -czf - -C \/app\/uploads \./);
   assert.equal((await readFile(path.join(backup, 'manifest.sha256'), 'utf8')).trim().split('\n').length, 7);
-  assert.deepEqual((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n'), ['close-admission', 'quiescence-proof', 'backup-metadata', 'verify-release', 'open-admission']);
+  assert.deepEqual((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n'),
+    ['release-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata', 'verify-release', 'open-admission']);
   assert.equal((await readFile(path.join(f.root, 'lock.calls'), 'utf8')).trim(), 'lock');
+});
+
+test('backup preflight rejects an already-running CMS worker before capture', async t => {
+  const f = await fixture(t);
+  await writeFile(path.join(f.root, 'running'), 'postgres\ncms-postgres\ncms-worker\n');
+  const r = f.run('bash release/scripts/backup.sh "$PWD/release"');
+  assert.notEqual(r.status, 0);
+  assert.match(await readFile(path.join(f.root, 'guard.calls'), 'utf8'), /^release-preflight\n/u);
+  assert.doesNotMatch(await readFile(path.join(f.root, 'calls'), 'utf8').catch(() => ''), /pg_dump|start|up/);
+  assert.match(await readFile(path.join(f.root, 'running'), 'utf8'), /^cms-worker$/mu);
 });
 
 test('failed quiescence cannot produce a dump or reopen admission', async t => {
@@ -156,7 +170,9 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.match(calls, /restore-files \/var\/lib\/ownerinc-cms\/media/);
   assert.match(calls, /--entrypoint tar api -xzf - -C \/app\/uploads/);
   assert.deepEqual((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n'),
-    ['restore-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore', 'verify-restored', 'verify-release', 'verify-release', 'open-admission']);
+    ['restore-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore',
+      'prepare-restore', 'prepare-restore', 'prepare-restore', 'prepare-restore', 'prepare-restore',
+      'prepare-restore', 'prepare-restore', 'verify-restored', 'verify-release', 'verify-release', 'open-admission']);
   assert.equal((await readFile(path.join(f.root, 'smoke.calls'), 'utf8')).trim(), 'smoke');
 });
 

@@ -1,5 +1,7 @@
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import nativeSchema from '../src/migrations/20261006_181424_z_owner_news_native.json' with { type: 'json' }
 import {
   controlRolesVerificationSQL,
@@ -202,9 +204,21 @@ export interface DrizzleColumnSnapshot {
   name: string
   type: string
   notNull: boolean
+  primaryKey?: boolean
   default?: string | number | boolean
 }
-export interface DrizzleIndexSnapshot { name: string; isUnique: boolean; method: string }
+export interface DrizzleIndexColumnSnapshot {
+  expression: string
+  isExpression: boolean
+  asc: boolean
+  nulls: string
+}
+export interface DrizzleIndexSnapshot {
+  name: string
+  isUnique: boolean
+  method: string
+  columns: readonly DrizzleIndexColumnSnapshot[]
+}
 export interface DrizzleForeignKeySnapshot {
   name: string
   tableFrom: string
@@ -270,6 +284,10 @@ function parseNativeSnapshot(value: unknown): DrizzleNativeSnapshot {
       const type = requiredString(rawColumn, 'type')
       if (typeof rawColumn.notNull !== 'boolean') return fail('native_snapshot_invalid')
       const column: DrizzleColumnSnapshot = { name: requiredString(rawColumn, 'name'), type, notNull: rawColumn.notNull }
+      if (Object.hasOwn(rawColumn, 'primaryKey')) {
+        if (typeof rawColumn.primaryKey !== 'boolean') return fail('native_snapshot_invalid')
+        column.primaryKey = rawColumn.primaryKey
+      }
       if (Object.hasOwn(rawColumn, 'default')) {
         const defaultValue = rawColumn.default
         if (typeof defaultValue !== 'string' && typeof defaultValue !== 'number' && typeof defaultValue !== 'boolean') return fail('native_snapshot_invalid')
@@ -281,7 +299,22 @@ function parseNativeSnapshot(value: unknown): DrizzleNativeSnapshot {
     for (const [indexKey, rawIndexValue] of objectEntries(rawTable.indexes ?? {})) {
       const rawIndex = Object.fromEntries(objectEntries(rawIndexValue))
       if (typeof rawIndex.isUnique !== 'boolean') return fail('native_snapshot_invalid')
-      indexes[indexKey] = { name: requiredString(rawIndex, 'name'), method: requiredString(rawIndex, 'method'), isUnique: rawIndex.isUnique }
+      if (!Array.isArray(rawIndex.columns) || rawIndex.columns.length === 0) return fail('native_snapshot_invalid')
+      const columns = rawIndex.columns.map(rawColumn => {
+        const indexColumn = Object.fromEntries(objectEntries(rawColumn))
+        if (typeof indexColumn.isExpression !== 'boolean' || typeof indexColumn.asc !== 'boolean'
+          || typeof indexColumn.nulls !== 'string' || !['first', 'last'].includes(indexColumn.nulls)) {
+          return fail('native_snapshot_invalid')
+        }
+        return {
+          expression: requiredString(indexColumn, 'expression'), isExpression: indexColumn.isExpression,
+          asc: indexColumn.asc, nulls: indexColumn.nulls,
+        }
+      })
+      indexes[indexKey] = {
+        name: requiredString(rawIndex, 'name'), method: requiredString(rawIndex, 'method'),
+        isUnique: rawIndex.isUnique, columns,
+      }
     }
     const foreignKeys: Record<string, DrizzleForeignKeySnapshot> = {}
     for (const [key, rawForeignKeyValue] of objectEntries(rawTable.foreignKeys ?? {})) {
@@ -343,6 +376,303 @@ const NATIVE_REQUIRED_CONSTRAINTS = [
   'news_schedules_import_epoch_check', 'news_schedules_snapshot_hash_check',
   'news_schedules_import_provenance_shape_check', 'legacy_news_revisions_metadata_basis_check',
 ] as const
+
+type SqlToken = { kind: 'word' | 'string' | 'number' | 'operator' | 'punctuation'; value: string }
+type SqlExpression = string | boolean | null | SqlExpression[]
+
+function tokenizeSql(input: string): SqlToken[] {
+  const tokens: SqlToken[] = []
+  for (let index = 0; index < input.length;) {
+    const character = input[index]!
+    if (/\s/u.test(character)) { index += 1; continue }
+    if (character === "'") {
+      index += 1
+      let value = ''
+      let closed = false
+      while (index < input.length) {
+        if (input[index] === "'" && input[index + 1] === "'") { value += "'"; index += 2; continue }
+        if (input[index] === "'") { index += 1; closed = true; break }
+        value += input[index++]!
+      }
+      if (!closed) return fail('native_constraint_definition_unavailable')
+      tokens.push({ kind: 'string', value })
+      continue
+    }
+    if (character === '"') {
+      index += 1
+      let value = ''
+      let closed = false
+      while (index < input.length) {
+        if (input[index] === '"' && input[index + 1] === '"') { value += '"'; index += 2; continue }
+        if (input[index] === '"') { index += 1; closed = true; break }
+        value += input[index++]!
+      }
+      if (!closed) return fail('native_constraint_definition_unavailable')
+      tokens.push({ kind: 'word', value: value === value.toLowerCase() ? value : `quoted:${value}` })
+      continue
+    }
+    const numeric = /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/u.exec(input.slice(index))
+    if (numeric) {
+      tokens.push({ kind: 'number', value: numeric[0] })
+      index += numeric[0].length
+      continue
+    }
+    const word = /^[a-z_][a-z0-9_$]*/iu.exec(input.slice(index))
+    if (word) {
+      tokens.push({ kind: 'word', value: word[0].toLowerCase() })
+      index += word[0].length
+      continue
+    }
+    const operator = ['::', '!~*', '~*', '!~', '>=', '<=', '<>', '!=', '||'].find(value => input.startsWith(value, index))
+    if (operator) {
+      tokens.push({ kind: 'operator', value: operator })
+      index += operator.length
+      continue
+    }
+    if ('(),.'.includes(character)) {
+      tokens.push({ kind: 'punctuation', value: character })
+      index += 1
+      continue
+    }
+    if ('=<>~+-*/%'.includes(character)) {
+      tokens.push({ kind: 'operator', value: character })
+      index += 1
+      continue
+    }
+    return fail('native_constraint_definition_unavailable')
+  }
+  return tokens
+}
+
+function parseSqlExpression(input: string): SqlExpression {
+  const tokens = tokenizeSql(input)
+  let position = 0
+  const peek = (value?: string): boolean => value === undefined
+    ? position < tokens.length : tokens[position]?.value === value
+  const take = (): SqlToken => {
+    const token = tokens[position]
+    if (!token) return fail('native_constraint_definition_unavailable')
+    position += 1
+    return token
+  }
+  const expect = (value: string): void => { if (!peek(value)) fail('native_constraint_definition_unavailable'); position += 1 }
+  const operation = (name: string, ...args: SqlExpression[]): SqlExpression => [name, ...args]
+  const parseOr = (): SqlExpression => {
+    let result = parseAnd()
+    while (peek('or')) { take(); result = operation('or', result, parseAnd()) }
+    return result
+  }
+  const parseAnd = (): SqlExpression => {
+    let result = parseNot()
+    while (peek('and')) { take(); result = operation('and', result, parseNot()) }
+    return result
+  }
+  const parseNot = (): SqlExpression => peek('not') ? (take(), operation('not', parseNot())) : parseComparison()
+  const parseComparison = (): SqlExpression => {
+    const left = parseConcat()
+    if (peek('is')) {
+      take()
+      const negated = peek('not')
+      if (negated) take()
+      if (peek('distinct')) {
+        take()
+        expect('from')
+        return operation(negated ? 'is-not-distinct-from' : 'is-distinct-from', left, parseConcat())
+      }
+      if (peek('null')) { take(); return operation(negated ? 'is-not-null' : 'is-null', left) }
+      if (peek('true') || peek('false') || peek('unknown')) return operation(negated ? 'is-not' : 'is', left, parseConcat())
+      return fail('native_constraint_definition_unavailable')
+    }
+    if (peek('between')) {
+      take()
+      const lower = parseConcat()
+      expect('and')
+      return operation('between', left, lower, parseConcat())
+    }
+    const operator = tokens[position]?.value
+    if (operator && ['=', '<>', '!=', '<', '<=', '>', '>=', '~', '!~', '~*', '!~*'].includes(operator)) {
+      take()
+      return operation(operator === '!=' ? '<>' : operator, left, parseConcat())
+    }
+    return left
+  }
+  const parseConcat = (): SqlExpression => {
+    let result = parseAdd()
+    while (peek('||')) { take(); result = operation('||', result, parseAdd()) }
+    return result
+  }
+  const parseAdd = (): SqlExpression => {
+    let result = parseMultiply()
+    while (peek('+') || peek('-')) { const operator = take().value; result = operation(operator, result, parseMultiply()) }
+    return result
+  }
+  const parseMultiply = (): SqlExpression => {
+    let result = parseUnary()
+    while (peek('*') || peek('/') || peek('%')) { const operator = take().value; result = operation(operator, result, parseUnary()) }
+    return result
+  }
+  const parseUnary = (): SqlExpression => {
+    if (peek('+') || peek('-')) { const operator = take().value; return operation(`unary${operator}`, parseUnary()) }
+    return parsePostfix()
+  }
+  const parsePostfix = (): SqlExpression => {
+    let result = parsePrimary()
+    while (peek('::')) {
+      take()
+      const typeParts = [take().value]
+      if (peek('.')) { take(); typeParts.push(take().value) }
+      if (typeParts.at(-1) === 'character' && peek('varying')) typeParts.push(take().value)
+      const type = typeParts.join('.')
+      const numberLiteral = Array.isArray(result) && result[0] === 'number'
+      const stringLiteral = Array.isArray(result) && result[0] === 'string'
+      const castType = type.replace(/^(?:pg_catalog|public)\./u, '')
+      if (['text', 'varchar', 'character varying'].includes(castType)
+        || castType === 'numeric' && numberLiteral
+        || expectedEnums.some(entry => entry.name === castType) && stringLiteral) continue
+      result = operation(`cast:${castType}`, result)
+    }
+    return result
+  }
+  const parsePrimary = (): SqlExpression => {
+    if (peek('(')) { take(); const result = parseOr(); expect(')'); return result }
+    if (peek('case')) {
+      take()
+      const base = peek('when') ? null : parseOr()
+      const branches: SqlExpression[] = []
+      while (peek('when')) {
+        take()
+        const condition = parseOr()
+        expect('then')
+        branches.push(operation('when', condition, parseOr()))
+      }
+      const otherwise = peek('else') ? (take(), parseOr()) : null
+      expect('end')
+      return operation('case', base, ...branches, operation('else', otherwise))
+    }
+    const token = take()
+    if (token.kind === 'string') return operation('string', token.value)
+    if (token.kind === 'number') return operation('number', token.value)
+    if (token.kind !== 'word') return fail('native_constraint_definition_unavailable')
+    if (token.value === 'null') return null
+    if (token.value === 'true') return true
+    if (token.value === 'false') return false
+    let name = token.value
+    while (peek('.')) { take(); name += `.${take().value}` }
+    if (!peek('(')) return operation('identifier', name)
+    take()
+    const args: SqlExpression[] = []
+    if (!peek(')')) {
+      args.push(parseOr())
+      while (peek(',')) { take(); args.push(parseOr()) }
+    }
+    expect(')')
+    return operation('call', name, ...args)
+  }
+  const expression = parseOr()
+  if (position !== tokens.length) return fail('native_constraint_definition_unavailable')
+  return expression
+}
+
+function extractCheckExpression(definition: string): string {
+  const match = /^\s*CHECK\s*\(/iu.exec(definition)
+  if (!match) return fail('native_constraint_definition_unavailable')
+  const start = match[0].length
+  let depth = 1
+  let quote: "'" | '"' | null = null
+  for (let index = start; index < definition.length; index += 1) {
+    const character = definition[index]!
+    if (quote) {
+      if (character === quote && definition[index + 1] === quote) { index += 1; continue }
+      if (character === quote) quote = null
+      continue
+    }
+    if (character === "'" || character === '"') { quote = character; continue }
+    if (character === '(') depth += 1
+    else if (character === ')' && --depth === 0) {
+      if (definition.slice(index + 1).trim() !== '') return fail('native_constraint_definition_unavailable')
+      return definition.slice(start, index)
+    }
+  }
+  return fail('native_constraint_definition_unavailable')
+}
+
+function extractMigrationCheckExpressions(source: string): ReadonlyMap<string, string> {
+  const result = new Map<string, string>()
+  const matcher = /ADD\s+CONSTRAINT\s+(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))\s+CHECK\s*\(/giu
+  for (const match of source.matchAll(matcher)) {
+    const name = match[1] ?? match[2]
+    const start = match.index! + match[0].length
+    let depth = 1
+    let quote: "'" | '"' | null = null
+    for (let index = start; index < source.length; index += 1) {
+      const character = source[index]!
+      if (quote) {
+        if (character === quote && source[index + 1] === quote) { index += 1; continue }
+        if (character === quote) quote = null
+        continue
+      }
+      if (character === "'" || character === '"') { quote = character; continue }
+      if (character === '(') depth += 1
+      else if (character === ')' && --depth === 0) {
+        if (result.has(name!)) return fail('native_snapshot_invalid')
+        result.set(name!, source.slice(start, index).trim())
+        break
+      }
+    }
+    if (!result.has(name!)) return fail('native_snapshot_invalid')
+  }
+  if (result.size !== NATIVE_REQUIRED_CONSTRAINTS.length
+    || NATIVE_REQUIRED_CONSTRAINTS.some(name => !result.has(name))) return fail('native_snapshot_invalid')
+  return result
+}
+
+let cachedNativeCheckExpressions: ReadonlyMap<string, string> | undefined
+
+function nativeCheckExpressions(): ReadonlyMap<string, string> {
+  if (!cachedNativeCheckExpressions) {
+    cachedNativeCheckExpressions = extractMigrationCheckExpressions(readFileSync(
+      new URL('../src/migrations/20261006_181424_z_owner_news_native.ts', import.meta.url), 'utf8'))
+  }
+  return cachedNativeCheckExpressions
+}
+
+function normalizeDefinitionTokens(definition: string): string {
+  const tokens = tokenizeSql(definition)
+  const normalized: string[] = []
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!
+    if (token.kind === 'word' && token.value === 'public' && tokens[index + 1]?.value === '.') {
+      index += 1
+      continue
+    }
+    if (token.kind === 'word' && token.value === 'match' && tokens[index + 1]?.value === 'simple') {
+      index += 1
+      continue
+    }
+    if (token.kind === 'word' && token.value === 'on' && tokens[index + 1]?.value === 'update'
+      && tokens[index + 2]?.value === 'no' && tokens[index + 3]?.value === 'action') { index += 3; continue }
+    if (token.kind === 'word' && token.value === 'on' && tokens[index + 1]?.value === 'delete'
+      && tokens[index + 2]?.value === 'no' && tokens[index + 3]?.value === 'action') { index += 3; continue }
+    normalized.push(`${token.kind}:${token.value}`)
+  }
+  return JSON.stringify(normalized)
+}
+
+function canonicalIndexDefinition(index: DrizzleIndexSnapshot, table: string): string {
+  const columns = index.columns.map(column => {
+    const expression = column.isExpression ? column.expression : quoteIdentifier(column.expression)
+    const direction = column.asc ? '' : ' DESC'
+    const nulls = column.asc && column.nulls === 'first' || !column.asc && column.nulls === 'last'
+      ? ` NULLS ${column.nulls.toUpperCase()}` : ''
+    return `${expression}${direction}${nulls}`
+  }).join(', ')
+  return `CREATE ${index.isUnique ? 'UNIQUE ' : ''}INDEX ${quoteIdentifier(index.name)} ON public.${quoteIdentifier(table)} USING ${index.method} (${columns})`
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
 const expectedIndexes = Object.values(nativeSchemaSnapshot.tables).flatMap(table => Object.values(table.indexes).map(index => ({
   table: table.name, name: index.name, unique: Boolean(index.isUnique), method: index.method,
 })))
@@ -414,6 +744,318 @@ export type FinalizerClient = {
 }
 
 const jsonTables = Object.keys(nativeSchemaSnapshot.tables).map(name => name.replace(/^public\./u, '')).sort()
+
+type NativeCatalogRelation = { schema: string; name: string; kind: string }
+type NativeCatalogColumn = {
+  schema: string
+  table: string
+  name: string
+  type: string
+  typeSchema: string
+  notNull: boolean
+  defaultExpression: string | null
+  defaultVerified: boolean
+}
+type NativeCatalogIndex = {
+  tableSchema: string
+  table: string
+  schema: string
+  name: string
+  unique: boolean
+  primary: boolean
+  valid: boolean
+  ready: boolean
+  noPredicate: boolean
+  noExpressions: boolean
+  keyCount: number
+  attributeCount: number
+  method: string
+  columns: readonly { expression: string; isExpression: boolean; asc: boolean; nulls: string }[]
+  definition: string
+}
+type NativeCatalogConstraint = {
+  schema: string
+  table: string
+  name: string
+  kind: string
+  validated: boolean
+  deferrable: boolean
+  deferred: boolean
+  definition: string
+}
+type NativeCatalogType = { schema: string; name: string; kind: string; labels: string[] }
+
+const expectedNativeRelations: NativeCatalogRelation[] = [
+  ...jsonTables.map(name => ({ schema: 'public', name, kind: 'r' })),
+  ...expectedSerials.map(({ sequence }) => ({ schema: 'public', name: sequence, kind: 'S' })),
+]
+
+const expectedNativeIndexes: Omit<NativeCatalogIndex, 'valid' | 'ready' | 'noPredicate' | 'noExpressions' | 'keyCount' | 'attributeCount'>[] = [
+  ...Object.entries(nativeSchemaSnapshot.tables).flatMap(([_tableName, table]) => Object.values(table.indexes).map(index => ({
+    tableSchema: 'public', table: table.name, schema: 'public', name: index.name,
+    unique: index.isUnique, primary: false, method: index.method,
+    columns: index.columns, definition: canonicalIndexDefinition(index, table.name),
+  }))),
+  ...Object.entries(nativeSchemaSnapshot.tables).flatMap(([_tableName, table]) => {
+    const primaryColumns = Object.values(table.columns).filter(column => column.primaryKey === true)
+    if (primaryColumns.length === 0) return []
+    if (primaryColumns.length !== 1) return fail('native_snapshot_invalid')
+    const index: DrizzleIndexSnapshot = {
+      name: `${table.name}_pkey`, isUnique: true, method: 'btree',
+      columns: [{ expression: primaryColumns[0]!.name, isExpression: false, asc: true, nulls: 'last' }],
+    }
+    return [{
+      tableSchema: 'public', table: table.name, schema: 'public', name: `${table.name}_pkey`,
+      unique: true, primary: true, method: 'btree',
+      columns: index.columns, definition: canonicalIndexDefinition(index, table.name),
+    }]
+  }),
+]
+
+const requiredCheckTables: Readonly<Record<string, string>> = Object.fromEntries(NATIVE_REQUIRED_CONSTRAINTS.map(name => {
+  if (name === 'news_migration_seal_complete') return [name, 'news_migration_runs']
+  const table = jsonTables.filter(candidate => name.startsWith(`${candidate}_`)
+    || name === `${candidate}_metadata_basis_check`).sort((left, right) => right.length - left.length)[0]
+  if (!table) return fail('native_snapshot_invalid')
+  return [name, table]
+}))
+
+function expectedNativeConstraints(): NativeCatalogConstraint[] {
+  const checkExpressions = nativeCheckExpressions()
+  const constraints: NativeCatalogConstraint[] = [
+  ...Object.values(nativeSchemaSnapshot.tables).flatMap(table => {
+    const primaryColumns = Object.values(table.columns).filter(column => column.primaryKey === true)
+    return primaryColumns.length ? [{
+      schema: 'public', table: table.name, name: `${table.name}_pkey`, kind: 'p',
+      validated: true, deferrable: false, deferred: false,
+      definition: `PRIMARY KEY (${primaryColumns.map(column => quoteIdentifier(column.name)).join(', ')})`,
+    }] : []
+  }),
+  ...expectedForeignKeys.map(foreignKey => ({
+    schema: 'public', table: foreignKey.from, name: foreignKey.name, kind: 'f',
+    validated: true, deferrable: false, deferred: false,
+    definition: `FOREIGN KEY (${foreignKey.fromColumns.map(quoteIdentifier).join(', ')}) REFERENCES public.${quoteIdentifier(foreignKey.to)} (${foreignKey.toColumns.map(quoteIdentifier).join(', ')})`
+      + (foreignKey.delete.toLowerCase() === 'no action' ? '' : ` ON DELETE ${foreignKey.delete}`)
+      + (foreignKey.update.toLowerCase() === 'no action' ? '' : ` ON UPDATE ${foreignKey.update}`),
+  })),
+  ...NATIVE_REQUIRED_CONSTRAINTS.map(name => ({
+    schema: 'public', table: requiredCheckTables[name]!, name, kind: 'c',
+    validated: true, deferrable: false, deferred: false,
+    definition: `CHECK (${checkExpressions.get(name)!})`,
+  })),
+  ]
+  return sortBy(constraints, ['schema', 'table', 'name', 'kind'])
+}
+
+const expectedNativeTypes: NativeCatalogType[] = expectedEnums.map(type => ({
+  schema: type.schema, name: type.name, kind: 'e', labels: [...type.values],
+}))
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+function sortBy<T>(values: T[], fields: readonly (keyof T)[]): T[] {
+  return values.sort((left, right) => {
+    for (const field of fields) {
+      const compared = compareText(String(left[field]), String(right[field]))
+      if (compared !== 0) return compared
+    }
+    return 0
+  })
+}
+
+function compareCatalogInventory<T>(observed: readonly T[], expected: readonly T[], reason: string): void {
+  if (JSON.stringify(observed) !== JSON.stringify(expected)) fail(reason)
+}
+
+sortBy(expectedNativeRelations, ['schema', 'name', 'kind'])
+sortBy(expectedNativeIndexes, ['tableSchema', 'table', 'schema', 'name'])
+sortBy(expectedNativeTypes, ['schema', 'name', 'kind'])
+
+export type PreauthorityNativeCatalogInventory = {
+  relations: NativeCatalogRelation[]
+  columns: NativeCatalogColumn[]
+  indexes: NativeCatalogIndex[]
+  constraints: NativeCatalogConstraint[]
+  types: NativeCatalogType[]
+}
+
+export function preauthorityExpectedNativeCatalogInventory(): PreauthorityNativeCatalogInventory {
+  return {
+    relations: expectedNativeRelations.map(value => ({ ...value })),
+    columns: expectedColumns.map(column => ({
+      schema: 'public', table: column.table, name: column.name, type: column.type,
+      typeSchema: column.enumType ? 'public' : 'pg_catalog', notNull: column.notNull,
+      defaultExpression: column.default === null || column.default === undefined ? null : String(column.default),
+      defaultVerified: true,
+    })).sort((left, right) => compareText(left.schema, right.schema)
+      || compareText(left.table, right.table) || compareText(left.name, right.name)),
+    indexes: expectedNativeIndexes.map(index => ({
+      ...index, valid: true, ready: true, noPredicate: true, noExpressions: true,
+      keyCount: index.columns.length, attributeCount: index.columns.length,
+      columns: index.columns.map(column => ({ ...column })),
+    })),
+    constraints: expectedNativeConstraints().map(item => ({ ...item })),
+    types: expectedNativeTypes.map(value => ({ ...value, labels: [...value.labels] })),
+  }
+}
+
+export function assertPreauthorityNativeCatalogInventory(
+  inventory: PreauthorityNativeCatalogInventory,
+  migrationNames: readonly string[],
+): string {
+  compareCatalogInventory(inventory.relations, expectedNativeRelations, 'preauthority_native_relation_inventory_mismatch')
+  const expected = preauthorityExpectedNativeCatalogInventory()
+  if (inventory.columns.length !== expected.columns.length || inventory.columns.some((actual, index) => {
+    const reviewed = expected.columns[index]
+    return !reviewed || actual.schema !== reviewed.schema || actual.table !== reviewed.table
+      || actual.name !== reviewed.name || actual.type !== reviewed.type || actual.typeSchema !== reviewed.typeSchema
+      || actual.notNull !== reviewed.notNull || !actual.defaultVerified
+  })) fail('preauthority_native_column_inventory_mismatch')
+  if (inventory.indexes.length !== expected.indexes.length || inventory.indexes.some((actual, index) => {
+    const reviewed = expected.indexes[index]
+    return !reviewed || actual.tableSchema !== reviewed.tableSchema || actual.table !== reviewed.table
+      || actual.schema !== reviewed.schema || actual.name !== reviewed.name || actual.unique !== reviewed.unique
+      || actual.primary !== reviewed.primary || !actual.valid || !actual.ready || !actual.noPredicate || !actual.noExpressions
+      || actual.keyCount !== reviewed.keyCount || actual.attributeCount !== reviewed.attributeCount
+      || actual.method !== reviewed.method || JSON.stringify(actual.columns) !== JSON.stringify(reviewed.columns)
+      || normalizeDefinitionTokens(actual.definition) !== normalizeDefinitionTokens(reviewed.definition)
+  })) fail('preauthority_native_index_inventory_mismatch')
+  if (inventory.constraints.length !== expected.constraints.length || inventory.constraints.some((actual, index) => {
+    const reviewed = expected.constraints[index]
+    if (!reviewed || actual.schema !== reviewed.schema || actual.table !== reviewed.table
+      || actual.name !== reviewed.name || actual.kind !== reviewed.kind || !actual.validated
+      || actual.deferrable || actual.deferred) return true
+    if (actual.kind === 'c') {
+      try {
+        return JSON.stringify(parseSqlExpression(extractCheckExpression(actual.definition)))
+          !== JSON.stringify(parseSqlExpression(extractCheckExpression(reviewed.definition)))
+      } catch {
+        return true
+      }
+    }
+    return normalizeDefinitionTokens(actual.definition) !== normalizeDefinitionTokens(reviewed.definition)
+  })) fail('preauthority_native_constraint_inventory_mismatch')
+  compareCatalogInventory(inventory.types, expectedNativeTypes, 'preauthority_native_type_inventory_mismatch')
+  return createHash('sha256').update(JSON.stringify({ migrationNames, ...inventory })).digest('hex')
+}
+
+/** Strict inventory used only for the unsupported protocol-absent phase. The
+ * protocol finalizer itself may accept its canonical v1/v2 objects; those are
+ * deliberately not passed through this preauthority-only allowlist. */
+async function verifyPreauthorityNativeCatalog(client: FinalizerClient, migrationNames: readonly string[]): Promise<string> {
+  const relationsResult = await client.query(`SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+      AND n.nspname NOT LIKE 'pg_temp_%' AND c.relkind IN ('r','p','v','m','f','S','c')
+    ORDER BY n.nspname, c.relname, c.relkind`)
+  const relations = sortBy(relationsResult.rows.map(row => ({
+    schema: String(row.schema), name: String(row.name), kind: String(row.kind),
+  })), ['schema', 'name', 'kind'])
+  compareCatalogInventory(relations, expectedNativeRelations, 'preauthority_native_relation_inventory_mismatch')
+
+  const columnsResult = await client.query(`SELECT namespace.nspname AS schema, relation.relname AS table_name,
+    attribute.attname AS column_name, type.typname AS type_name, type_namespace.nspname AS type_schema,
+    attribute.attnotnull AS not_null, pg_catalog.pg_get_expr(default_value.adbin, default_value.adrelid) AS default_expression
+    FROM pg_catalog.pg_class relation
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+    JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid=relation.oid
+      AND attribute.attnum > 0 AND NOT attribute.attisdropped
+    JOIN pg_catalog.pg_type type ON type.oid=attribute.atttypid
+    JOIN pg_catalog.pg_namespace type_namespace ON type_namespace.oid=type.typnamespace
+    LEFT JOIN pg_catalog.pg_attrdef default_value ON default_value.adrelid=relation.oid AND default_value.adnum=attribute.attnum
+    WHERE namespace.nspname='public' AND relation.relname = ANY($1::text[])
+    ORDER BY namespace.nspname, relation.relname, attribute.attname`, [jsonTables])
+  const expectedColumnByKey = new Map(expectedColumns.map(column => [`${column.table}.${column.name}`, column]))
+  const columns: NativeCatalogColumn[] = []
+  for (const row of columnsResult.rows) {
+    const schema = String(row.schema)
+    const table = String(row.table_name)
+    const name = String(row.column_name)
+    const expected = expectedColumnByKey.get(`${table}.${name}`)
+    if (!expected) return fail('preauthority_native_column_inventory_mismatch')
+    const defaultExpression = row.default_expression === null || row.default_expression === undefined
+      ? null : String(row.default_expression)
+    const defaultVerified = await defaultMatches(client, expected.default, defaultExpression, expected.type,
+      expected.serial ? `${table}_${name}_seq` : undefined)
+    columns.push({
+      schema, table, name, type: String(row.type_name), typeSchema: String(row.type_schema),
+      notNull: row.not_null === true, defaultExpression, defaultVerified,
+    })
+  }
+  sortBy(columns, ['schema', 'table', 'name'])
+
+  const indexesResult = await client.query(`SELECT table_ns.nspname AS table_schema, table_class.relname AS table_name,
+    index_ns.nspname AS index_schema, index_class.relname AS index_name, ix.indisunique AS is_unique,
+    ix.indisprimary AS is_primary, ix.indisvalid AS is_valid, ix.indisready AS is_ready,
+    ix.indpred IS NULL AS no_predicate, ix.indexprs IS NULL AS no_expressions,
+    ix.indnkeyatts AS key_count, ix.indnatts AS attribute_count, access_method.amname AS method,
+    (SELECT COALESCE(json_agg(json_build_object('expression', COALESCE(attribute.attname, ''),
+      'isExpression', key.attnum = 0, 'asc', (key.option_value & 1) = 0,
+      'nulls', CASE WHEN (key.option_value & 2) = 2 THEN 'first' ELSE 'last' END) ORDER BY key.ordinality), '[]'::json)
+      FROM unnest(ix.indkey, ix.indoption) WITH ORDINALITY AS key(attnum, option_value, ordinality)
+      LEFT JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid=table_class.oid AND attribute.attnum=key.attnum
+      WHERE key.ordinality <= ix.indnkeyatts) AS columns,
+    pg_catalog.pg_get_indexdef(index_class.oid) AS definition
+    FROM pg_catalog.pg_index ix
+    JOIN pg_catalog.pg_class table_class ON table_class.oid=ix.indrelid
+    JOIN pg_catalog.pg_namespace table_ns ON table_ns.oid=table_class.relnamespace
+    JOIN pg_catalog.pg_class index_class ON index_class.oid=ix.indexrelid
+    JOIN pg_catalog.pg_namespace index_ns ON index_ns.oid=index_class.relnamespace
+    JOIN pg_catalog.pg_am access_method ON access_method.oid=index_class.relam
+    WHERE table_ns.nspname NOT IN ('pg_catalog','information_schema') AND table_ns.nspname NOT LIKE 'pg_toast%'
+      AND table_ns.nspname NOT LIKE 'pg_temp_%'
+    ORDER BY table_ns.nspname, table_class.relname, index_ns.nspname, index_class.relname`)
+  const indexes: NativeCatalogIndex[] = sortBy(indexesResult.rows.map(row => ({
+    tableSchema: String(row.table_schema), table: String(row.table_name), schema: String(row.index_schema),
+    name: String(row.index_name), unique: row.is_unique === true, primary: row.is_primary === true,
+    valid: row.is_valid === true, ready: row.is_ready === true,
+    noPredicate: row.no_predicate === true, noExpressions: row.no_expressions === true,
+    keyCount: Number(row.key_count), attributeCount: Number(row.attribute_count), method: String(row.method),
+    columns: Array.isArray(row.columns) ? row.columns.map(raw => {
+      const column = Object.fromEntries(objectEntries(raw))
+      return {
+        expression: String(column.expression), isExpression: column.isExpression === true,
+        asc: column.asc === true, nulls: String(column.nulls),
+      }
+    }) : [],
+    definition: String(row.definition),
+  })), ['tableSchema', 'table', 'schema', 'name'])
+
+  const constraintsResult = await client.query(`SELECT namespace.nspname AS schema, relation.relname AS table_name,
+    con.conname AS constraint_name, con.contype AS kind, con.convalidated AS validated,
+    con.condeferrable AS deferrable, con.condeferred AS deferred,
+    pg_catalog.pg_get_constraintdef(con.oid, false) AS definition
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class relation ON relation.oid=con.conrelid
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+    WHERE namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname NOT LIKE 'pg_toast%'
+      AND namespace.nspname NOT LIKE 'pg_temp_%'
+    ORDER BY namespace.nspname, relation.relname, con.conname, con.contype`)
+  const constraints: NativeCatalogConstraint[] = sortBy(constraintsResult.rows.map(row => ({
+    schema: String(row.schema), table: String(row.table_name), name: String(row.constraint_name), kind: String(row.kind),
+    validated: row.validated === true, deferrable: row.deferrable === true, deferred: row.deferred === true,
+    definition: String(row.definition),
+  })), ['schema', 'table', 'name', 'kind'])
+
+  const typesResult = await client.query(`SELECT namespace.nspname AS schema, type.typname AS name, type.typtype AS kind,
+    COALESCE(array_agg(enum.enumlabel ORDER BY enum.enumsortorder) FILTER (WHERE enum.enumlabel IS NOT NULL), ARRAY[]::name[]) AS labels
+    FROM pg_catalog.pg_type type JOIN pg_catalog.pg_namespace namespace ON namespace.oid=type.typnamespace
+    LEFT JOIN pg_catalog.pg_enum enum ON enum.enumtypid=type.oid
+    LEFT JOIN pg_catalog.pg_class composite_relation ON composite_relation.oid=type.typrelid
+    WHERE (type.typrelid=0 AND type.typtype IN ('e','d','r','m')
+        OR type.typtype='c' AND composite_relation.relkind='c')
+      AND namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname NOT LIKE 'pg_toast%'
+      AND namespace.nspname NOT LIKE 'pg_temp_%'
+    GROUP BY namespace.nspname, type.typname, type.typtype
+    ORDER BY namespace.nspname, type.typname, type.typtype`)
+  const types: NativeCatalogType[] = sortBy(typesResult.rows.map(row => ({
+    schema: String(row.schema), name: String(row.name), kind: String(row.kind),
+    labels: Array.isArray(row.labels) ? row.labels.map(String) : [],
+  })), ['schema', 'name', 'kind'])
+  return assertPreauthorityNativeCatalogInventory({ relations, columns, indexes, constraints, types }, migrationNames)
+}
 
 function stripOuterParens(input: string): string {
   let value = input.trim()
@@ -878,6 +1520,32 @@ export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerCl
   } catch (error) {
     recordFinalizerFailure(error, phase)
     throw error
+  }
+}
+
+/**
+ * Read-only native-catalog check for the explicitly unsupported preauthority
+ * phase. This reuses the same canonical migration/snapshot/catalog verifier as
+ * the one-shot finalizer, but it never installs, upgrades, or certifies protocol
+ * coverage. A present or mixed protocol is rejected rather than downgraded.
+ */
+export async function verifyPreauthorityCatalogReadOnly(client: FinalizerClient): Promise<{
+  protocolStatus: 'absent'
+  coverageApplicability: 'not-applicable'
+  migrationNames: readonly string[]
+  migrationFingerprint: string
+  nativeCatalogFingerprint: string
+}> {
+  const state = await checkPreconditions(client, () => {}, true)
+  if (state !== 'empty') fail('preauthority_protocol_not_absent')
+  const migrationFingerprint = createHash('sha256').update(JSON.stringify(MIGRATIONS)).digest('hex')
+  const nativeCatalogFingerprint = await verifyPreauthorityNativeCatalog(client, MIGRATIONS)
+  return {
+    protocolStatus: 'absent',
+    coverageApplicability: 'not-applicable',
+    migrationNames: MIGRATIONS,
+    migrationFingerprint,
+    nativeCatalogFingerprint,
   }
 }
 

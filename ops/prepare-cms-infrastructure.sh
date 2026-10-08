@@ -33,6 +33,11 @@ backup_root=/opt/ownerinc/backups/portal-ownerinc/production
 libexec_dir=/usr/local/libexec
 receiver_target=/usr/local/libexec/ownerinc-portal-deploy
 guard_target="$runtime/payload-operations-guard"
+control_target="$runtime/payload-control"
+control_runtime_target="$runtime/payload-control-runtime.py"
+control_state_helper_target="$runtime/payload-control-state.py"
+control_key_target="$runtime/payload-control.key"
+control_state_dir="$runtime/payload-control-state"
 production_override="$runtime/compose.production.yaml"
 payload_production_target="$runtime/compose.payload.production.yaml"
 candidate_target="$runtime/cms-image-candidate.env"
@@ -40,6 +45,9 @@ lock="$runtime/deploy.lock"
 cms_image='ghcr.io/ownerinc/ownerinc-portal-cms@sha256:6eaddc9a333ba682508a09a4ae8a6409d9e571abab9ec4a62829c2e9828730b0'
 source_receiver="$script_dir/deploy-from-ci.sh"
 source_guard="$script_dir/payload-operations-guard.sh"
+source_control="$script_dir/payload-control"
+source_control_runtime="$script_dir/payload-control-runtime.py"
+source_control_state="$script_dir/payload-control-state.py"
 source_private_helper="$script_dir/prepare-cms-infrastructure-private.py"
 source_payload_overlay="$script_dir/compose.payload.production.yaml"
 payload_compose="$repo_root/docker-compose.payload.yml"
@@ -51,7 +59,7 @@ for command in python3 docker flock install cmp stat mktemp mkdir mv rm date env
   }
 done
 
-for source in "$source_receiver" "$source_guard" "$source_private_helper" \
+for source in "$source_receiver" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_private_helper" \
   "$source_payload_overlay" "$payload_compose"; do
   [[ -f $source && ! -L $source ]] || {
     echo 'Refusing preparation: reviewed source bundle is incomplete or linked.' >&2
@@ -73,15 +81,17 @@ done
 # Operator-owned (uid 1000) parents are valid; group/world-writable parents are not.
 if ! python3 - "$root" "$runtime" "$releases" "$backup_root" "$libexec_dir" "$secrets_dir" \
     "$current_file" "$environment" "$production_override" "$lock" "$receiver_target" \
-    "$guard_target" "$payload_production_target" "$candidate_target" "$source_receiver" \
-    "$source_guard" "$source_payload_overlay" "$payload_compose" "$source_private_helper" <<'PY'
+    "$guard_target" "$control_target" "$control_runtime_target" "$control_state_helper_target" \
+    "$control_key_target" "$payload_production_target" "$candidate_target" "$source_receiver" \
+    "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" \
+    "$source_payload_overlay" "$payload_compose" "$source_private_helper" <<'PY'
 import os
 import stat
 import sys
 
 directories = sys.argv[1:7]
 files = sys.argv[7:]
-optional = {files[5], files[6], files[7]}
+optional = {files[5], files[6], files[7], files[8], files[9], files[10], files[11]}
 
 def reject():
     print('Refusing preparation: unsafe path, symlink, or file permissions.', file=sys.stderr)
@@ -144,6 +154,34 @@ flock -n 9 || {
 if [[ -L $lock || ! /proc/$$/fd/9 -ef $lock ]]; then
   echo 'Refusing preparation: shared lock path changed while leased.' >&2
   exit 2
+fi
+
+control_state_presence=$(python3 - "$control_key_target" "$control_state_dir" <<'PY'
+import os, stat, sys
+key, directory = sys.argv[1:]
+key_exists, dir_exists = os.path.lexists(key), os.path.lexists(directory)
+if key_exists != dir_exists:
+    raise SystemExit(2)
+if not key_exists:
+    print('empty')
+else:
+    key_info, dir_info = os.lstat(key), os.lstat(directory)
+    if stat.S_ISLNK(key_info.st_mode) or not stat.S_ISREG(key_info.st_mode) or key_info.st_nlink != 1 \
+       or (os.name != 'nt' and (key_info.st_uid, stat.S_IMODE(key_info.st_mode)) != (0, 0o600)) \
+       or stat.S_ISLNK(dir_info.st_mode) or not stat.S_ISDIR(dir_info.st_mode) \
+       or (os.name != 'nt' and (dir_info.st_uid, stat.S_IMODE(dir_info.st_mode)) != (0, 0o700)):
+        raise SystemExit(2)
+    print('complete')
+PY
+) || {
+  echo 'Refusing preparation: private Payload control state is partial or unsafe.' >&2
+  exit 2
+}
+if [[ $control_state_presence == complete ]]; then
+  python3 "$source_control_state" verify-state "$runtime" >/dev/null || {
+    echo 'Refusing preparation: existing private Payload control journal failed integrity checks.' >&2
+    exit 2
+  }
 fi
 
 current=$(<"$current_file")
@@ -263,6 +301,20 @@ candidate_matches() {
     printf 'CMS_IMAGE=%s\n' "$cms_image" | cmp -s -- - "$candidate_target"
 }
 candidate_installed() { candidate_matches && root_owned_mode "$candidate_target" 644; }
+control_files_known() {
+  for pair in \
+    "$control_target:$source_control" \
+    "$control_runtime_target:$source_control_runtime" \
+    "$control_state_helper_target:$source_control_state"; do
+    IFS=: read -r target source <<< "$pair"
+    [[ ! -e $target && ! -L $target ]] || file_matches "$target" "$source" || return 1
+  done
+}
+control_files_installed() {
+  file_installed "$control_target" "$source_control" 755 && \
+    file_installed "$control_runtime_target" "$source_control_runtime" 644 && \
+    file_installed "$control_state_helper_target" "$source_control_state" 644
+}
 payload_overlay_is_known() {
   [[ ! -e $payload_production_target && ! -L $payload_production_target ]] || \
     file_matches "$payload_production_target" "$source_payload_overlay"
@@ -271,17 +323,19 @@ candidate_is_known() {
   [[ ! -e $candidate_target && ! -L $candidate_target ]] || candidate_matches
 }
 
-payload_overlay_is_known && candidate_is_known || {
-  echo 'Refusing preparation: an existing runtime CMS overlay or image candidate differs from this reviewed bundle.' >&2
+payload_overlay_is_known && candidate_is_known && control_files_known || {
+  echo 'Refusing preparation: an existing runtime CMS control or overlay differs from this reviewed bundle.' >&2
   exit 2
 }
 
 needs_change=false
 file_installed "$receiver_target" "$source_receiver" 755 || needs_change=true
 file_installed "$guard_target" "$source_guard" 755 || needs_change=true
+control_files_installed || needs_change=true
 file_installed "$payload_production_target" "$source_payload_overlay" 644 || needs_change=true
 candidate_installed || needs_change=true
 [[ $cms_env_state == complete ]] || needs_change=true
+[[ $control_state_presence == complete ]] || needs_change=true
 
 if [[ $mode == check ]]; then
   if [[ $needs_change == true ]]; then
@@ -348,6 +402,15 @@ else
   if ! file_installed "$guard_target" "$source_guard" 755; then
     atomic_install "$source_guard" "$guard_target" 0755
   fi
+  if ! file_installed "$control_target" "$source_control" 755; then
+    atomic_install "$source_control" "$control_target" 0755
+  fi
+  if ! file_installed "$control_runtime_target" "$source_control_runtime" 644; then
+    atomic_install "$source_control_runtime" "$control_runtime_target" 0644
+  fi
+  if ! file_installed "$control_state_helper_target" "$source_control_state" 644; then
+    atomic_install "$source_control_state" "$control_state_helper_target" 0644
+  fi
   if ! file_installed "$payload_production_target" "$source_payload_overlay" 644; then
     atomic_install "$source_payload_overlay" "$payload_production_target" 0644
   fi
@@ -359,14 +422,17 @@ else
     echo "The pre-change receiver, guard and environment remain in $backup_dir for manual recovery." >&2
     exit 2
   fi
+  if [[ $control_state_presence == empty ]]; then
+    if ! python3 "$source_control_state" initialize "$runtime"; then
+      echo 'Refusing preparation: private Payload control state could not be initialized; no production database was touched.' >&2
+      echo 'If initialization partially wrote its private state, preserve it and investigate; automatic repair is forbidden.' >&2
+      exit 2
+    fi
+  fi
 
   echo "Prepared (inactive) files and private environment; prior receiver/guard/environment backup: $backup_dir"
 fi
 
-if [[ -e $runtime/payload-control || -L $runtime/payload-control ]]; then
-  echo 'BLOCKED: runtime/payload-control exists but was not validated, replaced, or invoked.'
-else
-  echo 'BLOCKED: runtime/payload-control adapter is missing/not integrated; no placeholder was created.'
-fi
-echo 'BLOCKED: compatible API v2 and Task15 acceptance evidence remain pending; CMS services and worker were not started.'
+echo 'Installed inactive preauthority control with a private host-only signing key and explicit worker hold; no database or service was changed.'
+echo 'BLOCKED: deployment needs a fresh complete candidate set containing the preauthority catalog verifier and actual Task 3 recovery acceptance; CMS services and worker were not started.'
 echo 'Prepared state is inactive: no Docker pull/up/run, database migration, systemd/timer, authority, wrapper, or authorized_keys change was performed.'
