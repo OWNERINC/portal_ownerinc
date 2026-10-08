@@ -1064,7 +1064,11 @@ async function verifyInstalled(client: FinalizerClient,
     const trustedBaseline = row.expected_pgcrypto_signature === true
       && row.pgcrypto_extension_member === true && row.security_definer === false && row.returns_uuid === true
     if (row.public_execute === true && !trustedBaseline) return true
-    if (options.observerAudit && row.observer_execute !== row.expected_pgcrypto_signature) return true
+    // to_regprocedure() yields SQL NULL when this optional public pgcrypto
+    // signature is absent. The observer's expected privilege is true only for
+    // that exact recognized baseline; coerce the nullable identity result
+    // before comparing the driver's boolean privilege value.
+    if (options.observerAudit && row.observer_execute !== (row.expected_pgcrypto_signature === true)) return true
     return row.runtime_execute !== row.public_execute
       || row.control_execute !== (row.approved_function === true || row.public_execute === true)
       || row.controller_execute !== (row.approved_seal === true || row.public_execute === true)

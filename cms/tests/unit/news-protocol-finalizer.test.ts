@@ -345,7 +345,7 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
 function configureReadOnlyAuditClient(
   client: FinalizerClient,
   statements: string[],
-  options: { auditTransactionSafe?: boolean; auditSearchPathSafe?: boolean; observerIdentitySafe?: boolean; observerShdependAccessible?: boolean; observerRoleSafe?: boolean; observerPrivilegesSafe?: boolean; observedCoverage?: 0 | 1; invalidCoverage?: boolean; ownershipDependency?: { owner: 'cms_control' | 'cms_controller'; classid: string; dbid?: number; objid?: number } } = {},
+  options: { auditTransactionSafe?: boolean; auditSearchPathSafe?: boolean; observerIdentitySafe?: boolean; observerShdependAccessible?: boolean; observerRoleSafe?: boolean; observerPrivilegesSafe?: boolean; observedCoverage?: 0 | 1; invalidCoverage?: boolean; pgcryptoBaselineAbsent?: boolean; observerUnexpectedFunctionExecute?: boolean; ownershipDependency?: { owner: 'cms_control' | 'cms_controller'; classid: string; dbid?: number; objid?: number } } = {},
 ) {
   const originalQuery = client.query.bind(client)
   client.query = async (sql, values) => {
@@ -386,8 +386,12 @@ function configureReadOnlyAuditClient(
     }
     if (sql.includes('AS pgcrypto_extension_member')) {
       const result = await originalQuery(sql, values)
-      return { rows: result.rows.map(row => ({ ...row,
-        observer_execute: row.expected_pgcrypto_signature === true })) }
+      return { rows: result.rows.map((row, index) => {
+        const expectedSignature = options.pgcryptoBaselineAbsent ? null : row.expected_pgcrypto_signature
+        return { ...row, expected_pgcrypto_signature: expectedSignature,
+          observer_execute: options.observerUnexpectedFunctionExecute === true && index === 0
+            ? true : expectedSignature === true }
+      }) }
     }
     if (sql.includes('AS unexpected_control_objects')) {
       statements.push(sql)
@@ -576,6 +580,29 @@ test('installed protocol audit reuses native/finalizer catalogs in a repeatable-
   assert.match(ownershipQuery ?? '', /AS approved_control_objects/u)
   assert.match(ownershipQuery ?? '', /AS control_shared_owned_objects/u)
   assert.match(ownershipQuery ?? '', /AS controller_shared_owned_objects/u)
+})
+
+test('observer audit accepts no public pgcrypto baseline without confusing SQL NULL for effective EXECUTE', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { pgcryptoBaselineAbsent: true })
+
+  const report = await auditNewsProtocolReadOnly(client)
+  assert.equal(report.status, 'PASS')
+  assert.equal(report.observerRole, 'cms_observer')
+  assert.equal(report.ready, false)
+  assert.equal(statements.at(-1), 'COMMIT')
+  assert.equal(statements.some(sql => /^(?:GRANT|REVOKE|CREATE|ALTER|INSERT|UPDATE|DELETE|TRUNCATE)\b/iu.test(sql.trim())), false)
+})
+
+test('observer audit still rejects effective EXECUTE on a public function when the pgcrypto baseline is absent', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements,
+    { pgcryptoBaselineAbsent: true, observerUnexpectedFunctionExecute: true })
+
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'public_function_execute_outside_allowlist')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
 })
 
 test('audit stops and rolls back unless PostgreSQL confirms read-only repeatable-read snapshot and bounded timeout', async () => {
