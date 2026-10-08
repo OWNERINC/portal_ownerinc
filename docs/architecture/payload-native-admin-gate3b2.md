@@ -36,6 +36,8 @@ surface remains the central CMS until a separate integration is approved.
   reattaches only that request's verified actor to the in-memory UI user, allowing
   the custom Enquetes navigation item to be hidden unless `manageKnowledge` is
   current; the actor is not written to the projection.
+- The built-in account avatar uses Payload's local `default` icon rather than
+  Gravatar, preserving the CMS image-CSP and preview network boundary.
 
 ## News read and write distinction
 

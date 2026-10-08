@@ -30,6 +30,7 @@ const PortalEditors = createPortalEditors(environment)
 // Each call creates a new adapter config; a running runtime adapter is never toggled.
 export const createCmsConfig = (importContext?: unknown) => buildConfig({
   admin: {
+    avatar: 'default',
     user: PortalEditors.slug,
     dateFormat: 'dd/MM/yyyy HH:mm',
     timezones: { defaultTimezone: 'America/Sao_Paulo', supportedTimezones: [{ label: 'São Paulo', value: 'America/Sao_Paulo' }] },
