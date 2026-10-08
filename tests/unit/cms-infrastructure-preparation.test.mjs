@@ -111,7 +111,24 @@ async function fixture(t) {
     assert.ok(installer.includes(from), `expected fixed production path ${from}`);
     installer = installer.replaceAll(from, to);
   }
-  installer = installer.replace("(key_info.st_uid != 0 or stat.S_IMODE(key_info.st_mode))", "(key_info.st_uid != os.geteuid() or stat.S_IMODE(key_info.st_mode))");
+  const rootOwnedKeyGate = '(key_info.st_uid, stat.S_IMODE(key_info.st_mode)) != (0, 0o600)';
+  const rootOwnedStateDirectoryGate = '(dir_info.st_uid, stat.S_IMODE(dir_info.st_mode)) != (0, 0o700)';
+  assert.ok(installer.includes(rootOwnedKeyGate), 'production must require the signing key to be root:root 0600');
+  assert.ok(installer.includes(rootOwnedStateDirectoryGate), 'production must require the state directory to be root:root 0700');
+  const nonRootFixtureInstaller = installer
+    .replace(rootOwnedKeyGate, '(key_info.st_uid, stat.S_IMODE(key_info.st_mode)) != (os.geteuid(), 0o600)')
+    .replace(rootOwnedStateDirectoryGate, '(dir_info.st_uid, stat.S_IMODE(dir_info.st_mode)) != (os.geteuid(), 0o700)');
+  assert.notEqual(nonRootFixtureInstaller, installer, 'test adaptation must match the production tuple-based owner gates');
+  assert.ok(nonRootFixtureInstaller.includes('(key_info.st_uid, stat.S_IMODE(key_info.st_mode)) != (os.geteuid(), 0o600)'));
+  assert.ok(nonRootFixtureInstaller.includes('(dir_info.st_uid, stat.S_IMODE(dir_info.st_mode)) != (os.geteuid(), 0o700)'));
+  assert.ok(!nonRootFixtureInstaller.includes(rootOwnedKeyGate));
+  assert.ok(!nonRootFixtureInstaller.includes(rootOwnedStateDirectoryGate));
+  if (process.platform !== 'win32') {
+    // This disposable test copy runs as the GitHub runner, not root. Adapt only
+    // ownership to the fixture's effective UID; retain the production 0600/0700
+    // modes and the source assertions above. Never rewrite the production script.
+    installer = nonRootFixtureInstaller;
+  }
   installer = installer.replace("== '0:700'", '== "$(id -u):700"');
   installer = installer.replace('chown 0:0 -- "$pre_restore_backup_root"', ':');
   installer = installer.replace('expected_installed_receiver=30be4941fe15c1c75e16175625685e2f51acc6ceaa52db146d61684cdacce0f7',
@@ -274,6 +291,19 @@ test('apply atomically prepares private credentials and reviewed files without a
   assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control-state.py'), 'utf8'), await readFile('ops/payload-control-state.py', 'utf8'));
   assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control-inventory.py'), 'utf8'), await readFile('ops/payload-control-inventory.py', 'utf8'));
   const inventory = JSON.parse(await readFile(path.join(f.paths.runtime, 'payload-control-inventory.json'), 'utf8'));
+  if (process.platform !== 'win32') {
+    const privateKeyStat = await stat(path.join(f.paths.runtime, 'payload-control.key'));
+    const stateDirectoryStat = await stat(path.join(f.paths.runtime, 'payload-control-state'));
+    const inventoryStat = await stat(path.join(f.paths.runtime, 'payload-control-inventory.json'));
+    assert.equal(privateKeyStat.mode & 0o777, 0o600, 'fixture key retains the production private mode');
+    assert.equal(stateDirectoryStat.mode & 0o777, 0o700, 'fixture state directory retains the production private mode');
+    assert.equal(inventoryStat.mode & 0o777, 0o600, 'fixture inventory retains the production private mode');
+    if (process.getuid) {
+      assert.equal(privateKeyStat.uid, process.getuid());
+      assert.equal(stateDirectoryStat.uid, process.getuid());
+      assert.equal(inventoryStat.uid, process.getuid());
+    }
+  }
   assert.equal(inventory.project, 'ownerinc-portal-prod');
   assert.deepEqual(inventory.paths.backupRoots.map(bashPath).sort(), [bashPath(f.paths.backups), bashPath(f.paths.dailyBackups)].sort());
   assert.deepEqual(Object.keys(inventory.volumes).sort(), ['cmsPostgres', 'cmsUploads', 'portalPostgres', 'portalUploads']);
