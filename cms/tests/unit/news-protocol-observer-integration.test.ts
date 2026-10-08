@@ -17,6 +17,7 @@ import {
   createOwnerCmsDatabase,
   matchesDockerBindMountPath,
   waitForPostgres,
+  verifyPostgresAndCreateOwnerCmsDatabase,
   dispatchHarnessCommand,
   observerAuditDockerLabels,
   parseHarnessArguments,
@@ -132,13 +133,15 @@ function inspectedDockerContainer(targetLease: ReturnType<typeof lease>, passwor
         Destination: '/run/secrets/cms_admin_password', RW: false },
     ],
     HostConfig: { PortBindings: { '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: String(targetLease.port) }] } },
-    NetworkSettings: { Networks: { bridge: { IPAddress: '172.17.0.2' } } },
+    NetworkSettings: { Networks: { bridge: { IPAddress: '172.19.0.2' } } },
   }
 }
 
 test('observer lease schema fixes fresh PostgreSQL resources, and labels bind the nonce without exposing it', () => {
   const prepared = lease()
   assert.equal(validateObserverAuditLease(prepared), prepared)
+  assert.equal(Object.isFrozen(prepared), true)
+  assert.equal(Object.hasOwn(prepared, 'backendIPv4'), false)
   const labels = observerAuditDockerLabels(prepared)
   assert.equal(labels['com.docker.compose.project'], `ownerinc-payload-observer-audit-${runId.replaceAll('-', '').slice(0, 12)}`)
   assert.equal(labels['ownerinc.payload-observer-audit.run-id'], runId)
@@ -147,6 +150,8 @@ test('observer lease schema fixes fresh PostgreSQL resources, and labels bind th
   assert.equal(prepared.host, '127.0.0.1')
   assert.equal(prepared.imageRef, 'postgres:16-alpine')
   assert.throws(() => validateObserverAuditLease({ ...prepared, database: 'other' }), /observer_lease_shape_invalid/u)
+  assert.throws(() => validateObserverAuditLease({ ...prepared, backendIPv4: '172.19.0.2' }),
+    /observer_lease_shape_invalid/u)
   assert.throws(() => validateObserverAuditLease({ ...prepared, containerName: 'old-fixture' }), /observer_lease_resource_contract_invalid/u)
   assert.throws(() => lease({ dockerEndpoint: 'tcp://127.0.0.1:2375' }), /observer_lease_docker_context_not_local/u)
   assert.throws(() => lease({ imageRef: 'postgres:latest' }), /observer_lease_resource_contract_invalid/u)
@@ -177,7 +182,7 @@ test('Docker inspect accepts only the exact-case Windows Desktop bind-path repre
   const passwordFile = `C:\\Users\\Public\\private\\${targetLease.runId}\\postgres-admin-password`
   const inspection = inspectedDockerContainer(targetLease, passwordFile)
   const backend = validateObserverDockerContainer(targetLease, passwordFile, inspection, 'win32')
-  assert.deepEqual(backend, { containerId: 'd'.repeat(64), backendIPv4: '172.17.0.2' })
+  assert.deepEqual(backend, { containerId: 'd'.repeat(64), backendIPv4: '172.19.0.2' })
   assert.equal(Object.isFrozen(backend), true)
   assert.equal(matchesDockerBindMountPath(inspection.Mounts[1].Source, passwordFile, 'win32'), true)
   assert.equal(matchesDockerBindMountPath(inspection.Mounts[1].Source, passwordFile.toLowerCase(), 'win32'), true)
@@ -363,6 +368,94 @@ test('write paths require the immutable PG16 probe identity before CREATE DATABA
   const validTarget = queryLog()
   await createOwnerCmsDatabase(databaseLease, passwords, verifiedBackend, backend, validTarget.clientRunner)
   assert.equal(validTarget.queries.some(sql => /^CREATE DATABASE\b/u.test(sql)), true)
+})
+
+test('real provisioning prefix preserves the immutable lease through Postgres probe, Docker recheck and CREATE DATABASE', async () => {
+  const targetLease = lease()
+  const leaseKeys = Object.keys(targetLease).sort()
+  const leaseJSON = JSON.stringify(targetLease)
+  const passwordFile = `C:\\Users\\Public\\private\\${targetLease.runId}\\postgres-admin-password`
+  const rawInspection = inspectedDockerContainer(targetLease, passwordFile)
+  const eventOrder: string[] = ['initial-docker-inspection']
+  const backend = validateObserverDockerContainer(targetLease, passwordFile, rawInspection, 'win32')
+  const systemIdentifier = '123456789012345'
+  const stages: string[] = []
+  const probeClient = {
+    connect: async () => { eventOrder.push('postgres-connect') },
+    end: async () => { eventOrder.push('postgres-disconnect') },
+    query: async (sql: string) => {
+      assert.match(sql, /pg_control_system\(\)/u)
+      eventOrder.push('postgres-system-identity-query')
+      return { rows: [{ role: 'cms_admin', database: 'postgres', server_address: '172.19.0.2/32',
+        server_port: 5432, version_num: 160005, superuser: true, system_identifier: systemIdentifier }] }
+    },
+  }
+  const targetQueries: string[] = []
+  const targetClient = {
+    query: async (sql: string) => {
+      targetQueries.push(sql)
+      if (sql.includes('current_user AS role')) return { rows: [{ role: 'cms_admin', session_role: 'cms_admin',
+        database: 'postgres', server_address: '172.19.0.2/32', server_port: 5432,
+        version_num: 160005, superuser: true }] }
+      if (sql.includes('pg_control_system()')) return { rows: [{ system_identifier: systemIdentifier }] }
+      if (sql.includes('pg_catalog.pg_database')) return { rowCount: 0, rows: [] }
+      return { rowCount: 0, rows: [] }
+    },
+  }
+
+  const identities = await verifyPostgresAndCreateOwnerCmsDatabase(targetLease, backend,
+    { cms_admin: 'fixture-only' }, passwordFile, {
+      createClient: options => {
+        assert.match(options.connectionString, /\/postgres$/u)
+        eventOrder.push('probe-client-created')
+        return probeClient
+      },
+      inspectContainer: (inspectedLease, inspectedPasswordFile) => {
+        eventOrder.push('docker-reinspection')
+        assert.equal(inspectedLease, targetLease)
+        assert.equal(Object.hasOwn(inspectedLease, 'backendIPv4'), false)
+        assert.deepEqual(Object.keys(inspectedLease).sort(), leaseKeys)
+        return validateObserverDockerContainer(inspectedLease, inspectedPasswordFile, rawInspection, 'win32')
+      },
+      clientRunner: async (_connectionString, operation) => {
+        eventOrder.push('database-write-client')
+        return operation(targetClient)
+      },
+      stageResult: async (name, operation, summarize = (value: unknown) => value) => {
+        stages.push(`${name}:start`)
+        const result = await operation()
+        summarize(result)
+        stages.push(`${name}:pass`)
+        return result
+      },
+    })
+
+  assert.deepEqual(Object.keys(targetLease).sort(), leaseKeys)
+  assert.equal(JSON.stringify(targetLease), leaseJSON)
+  assert.equal(Object.hasOwn(targetLease, 'backendIPv4'), false)
+  assert.equal(validateObserverAuditLease(targetLease), targetLease)
+  assert.deepEqual(stages, [
+    'verify-new-postgres16-system-identity:start', 'verify-new-postgres16-system-identity:pass',
+    'reconfirm-new-postgres16-docker-identity:start', 'reconfirm-new-postgres16-docker-identity:pass',
+    'create-ownerinc-cms-database:start', 'create-ownerinc-cms-database:pass',
+  ])
+  assert.deepEqual(OBSERVER_AUDIT_STAGES.slice(2, 5), [
+    'verify-new-postgres16-system-identity', 'reconfirm-new-postgres16-docker-identity',
+    'create-ownerinc-cms-database',
+  ])
+  assert.deepEqual(identities.verifiedBackend, { containerId: backend.containerId,
+    backendIPv4: backend.backendIPv4, systemIdentifier })
+  assert.deepEqual(identities.inspectedBackend, { containerId: backend.containerId,
+    backendIPv4: backend.backendIPv4 })
+  assert.ok(eventOrder.indexOf('initial-docker-inspection') < eventOrder.indexOf('probe-client-created'))
+  assert.ok(eventOrder.indexOf('probe-client-created') < eventOrder.indexOf('postgres-system-identity-query'))
+  assert.ok(eventOrder.indexOf('postgres-system-identity-query') < eventOrder.indexOf('docker-reinspection'))
+  assert.ok(eventOrder.indexOf('docker-reinspection') < eventOrder.indexOf('database-write-client'))
+  const identityQueryIndex = targetQueries.findIndex(sql => sql.includes('current_user AS role'))
+  const systemQueryIndex = targetQueries.findIndex(sql => sql.includes('pg_control_system()'))
+  const createDatabaseIndex = targetQueries.findIndex(sql => /^CREATE DATABASE\b/u.test(sql))
+  assert.ok(identityQueryIndex >= 0 && identityQueryIndex < systemQueryIndex)
+  assert.ok(systemQueryIndex < createDatabaseIndex)
 })
 
 test('harness CLI is explicit and execution is never reached by preparation dispatch', async () => {

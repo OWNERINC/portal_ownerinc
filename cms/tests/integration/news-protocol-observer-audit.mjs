@@ -129,7 +129,7 @@ export function validateObserverAuditLease(rawLease) {
     fail('observer_lease_resource_contract_invalid')
   }
   assertLocalDockerContext(rawLease.dockerContext, rawLease.dockerEndpoint)
-  return rawLease
+  return Object.freeze(rawLease)
 }
 
 export function observerAuditDockerLabels(lease) {
@@ -417,6 +417,7 @@ export const OBSERVER_AUDIT_STAGES = Object.freeze([
   'inspect-local-docker-and-cached-image',
   'create-fresh-postgres16-volume-and-container',
   'verify-new-postgres16-system-identity',
+  'reconfirm-new-postgres16-docker-identity',
   'create-ownerinc-cms-database',
   'provision-native-roles',
   'verify-migrator-and-apply-six-native-migrations',
@@ -1043,6 +1044,24 @@ export async function createOwnerCmsDatabase(lease, passwords, verifiedBackend, 
   }, clientRunner)
 }
 
+export async function verifyPostgresAndCreateOwnerCmsDatabase(lease, backend, passwords, passwordFile, {
+  createClient = options => new Client(options),
+  inspectContainer = dockerInspectContainer,
+  clientRunner = withClient,
+  stageResult = async (_name, operation) => operation(),
+} = {}) {
+  const targetLease = validateObserverAuditLease(lease)
+  const verifiedBackend = await stageResult('verify-new-postgres16-system-identity',
+    () => waitForPostgres(targetLease, backend, passwords.cms_admin, createClient))
+  const inspectedBackend = await stageResult('reconfirm-new-postgres16-docker-identity',
+    () => assertAuthorizedDockerBackend(verifiedBackend, inspectContainer(targetLease, passwordFile)),
+    value => ({ containerId: value.containerId, backendIPv4: value.backendIPv4 }))
+  await stageResult('create-ownerinc-cms-database',
+    () => createOwnerCmsDatabase(targetLease, passwords, verifiedBackend, inspectedBackend, clientRunner),
+    () => ({ database: DATABASE }))
+  return Object.freeze({ verifiedBackend, inspectedBackend })
+}
+
 function spawnCmsStage(label, args, purpose, explicit, timeout = 300000) {
   const env = buildChildEnvironment(process.env, purpose, explicit)
   const result = spawnSync(process.execPath, args, { cwd: CMS, env, encoding: 'utf8', timeout, windowsHide: true,
@@ -1109,7 +1128,8 @@ async function provisionNativeRolesAndMigrate(lease, passwords, verifiedBackend,
   })
 
   const migrations = await withClient(migratorURL, async client => {
-    await assertBackendIdentity(client, { role: 'cms_migrator', database: DATABASE, backendIPv4: lease.backendIPv4, superuser: false })
+    await assertBackendIdentity(client, { role: 'cms_migrator', database: DATABASE,
+      backendIPv4: verifiedBackend.backendIPv4, superuser: false })
     const result = await client.query('SELECT name, batch::text AS batch FROM public.payload_migrations ORDER BY name COLLATE "C"')
     const names = result.rows.map(row => row.name)
     if (result.rows.length !== MIGRATIONS.length || JSON.stringify(names) !== JSON.stringify(MIGRATIONS)) {
@@ -1150,7 +1170,7 @@ async function provisionObserverRole(lease, passwords, verifiedBackend, password
 async function snapshotInstalledProtocol(lease, passwords, verifiedBackend) {
   return withClient(makeConnectionString('cms_admin', passwords.cms_admin, DATABASE, lease.port), async client => {
     await assertVerifiedPostgresBackendIdentity(client, { role: 'cms_admin', database: DATABASE,
-      backendIPv4: lease.backendIPv4, superuser: true, verifiedBackend })
+      backendIPv4: verifiedBackend.backendIPv4, superuser: true, verifiedBackend })
     await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
     let transactionOpen = true
     try {
@@ -1269,11 +1289,12 @@ function snapshotsEqual(left, right) {
     && left.headCount === right.headCount && left.headSha256 === right.headSha256
 }
 
-async function proveObserverCanReadOwnershipCatalog(lease, passwords) {
+async function proveObserverCanReadOwnershipCatalog(lease, passwords, verifiedBackend) {
+  assertVerifiedBackendIdentity(verifiedBackend)
   const observerURL = makeConnectionString('cms_observer', passwords.cms_observer, DATABASE, lease.port)
   return withClient(observerURL, async client => {
     await assertBackendIdentity(client, { role: 'cms_observer', database: DATABASE,
-      backendIPv4: lease.backendIPv4, superuser: false })
+      backendIPv4: verifiedBackend.backendIPv4, superuser: false })
     await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
     let open = true
     try {
@@ -1316,13 +1337,14 @@ function expectedObserverAuditOutput(result) {
   }
 }
 
-async function proveObserverReadDenials(lease, passwords) {
+async function proveObserverReadDenials(lease, passwords, verifiedBackend) {
+  assertVerifiedBackendIdentity(verifiedBackend)
   const observerURL = makeConnectionString('cms_observer', passwords.cms_observer, DATABASE, lease.port)
   const denied = []
   for (const relation of FORBIDDEN_RELATIONS) {
     const result = await withClient(observerURL, async client => {
       await assertBackendIdentity(client, { role: 'cms_observer', database: DATABASE,
-        backendIPv4: lease.backendIPv4, superuser: false })
+        backendIPv4: verifiedBackend.backendIPv4, superuser: false })
       await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
       let readDenied = false
       let sqlstate = null
@@ -1343,7 +1365,7 @@ async function proveObserverReadDenials(lease, passwords) {
 
   const sealExecution = await withClient(observerURL, async client => {
     await assertBackendIdentity(client, { role: 'cms_observer', database: DATABASE,
-      backendIPv4: lease.backendIPv4, superuser: false })
+      backendIPv4: verifiedBackend.backendIPv4, superuser: false })
     await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
     try {
       await client.query("SET LOCAL statement_timeout = '5s'")
@@ -1438,15 +1460,16 @@ async function executeLease(leasePath) {
     const backend = await stageResult('create-fresh-postgres16-volume-and-container',
       () => createFreshCluster(lease, runDirectory, passwords, report),
       value => ({ containerId: value.containerId, backendIPv4: value.backendIPv4, volumeCreated: true, containerCreated: true }))
-    const verifiedBackend = await stageResult('verify-new-postgres16-system-identity',
-      () => waitForPostgres(lease, backend, passwords.cms_admin))
-    lease.backendIPv4 = verifiedBackend.backendIPv4
-    report.serverMajorVersion = 16
-    report.systemIdentifierVerified = true
-
-    const inspectedBackend = inspectAuthorizedDockerBackend(lease, passwordFile, verifiedBackend)
-    await stageResult('create-ownerinc-cms-database',
-      () => createOwnerCmsDatabase(lease, passwords, verifiedBackend, inspectedBackend), () => ({ database: DATABASE }))
+    const verificationStageResult = async (name, operation, summarize) => {
+      const result = await stageResult(name, operation, summarize)
+      if (name === 'verify-new-postgres16-system-identity') {
+        report.serverMajorVersion = 16
+        report.systemIdentifierVerified = true
+      }
+      return result
+    }
+    const { verifiedBackend } = await verifyPostgresAndCreateOwnerCmsDatabase(lease, backend, passwords,
+      passwordFile, { stageResult: verificationStageResult })
 
     const migrations = await stageResult('verify-migrator-and-apply-six-native-migrations',
       () => provisionNativeRolesAndMigrate(lease, passwords, verifiedBackend, passwordFile), value => value)
@@ -1471,7 +1494,7 @@ async function executeLease(leasePath) {
     report.observerProvisioning = observerProvisioning
 
     const ownershipVisibility = await stageResult('prove-observer-pg-shdepend-read-visibility',
-      () => proveObserverCanReadOwnershipCatalog(lease, passwords), value => value)
+      () => proveObserverCanReadOwnershipCatalog(lease, passwords, verifiedBackend), value => value)
     report.pgShdependVisibility = ownershipVisibility
 
     const beforeAudit = await stageResult('snapshot-before-audit',
@@ -1494,7 +1517,7 @@ async function executeLease(leasePath) {
     report.auditOnlyStateUnchanged = true
 
     const denialEvidence = await stageResult('prove-observer-denials-with-rolled-back-transactions',
-      () => proveObserverReadDenials(lease, passwords), value => value)
+      () => proveObserverReadDenials(lease, passwords, verifiedBackend), value => value)
     report.denials = denialEvidence
 
     const afterProbes = await stageResult('verify-post-probe-snapshot-unchanged',
