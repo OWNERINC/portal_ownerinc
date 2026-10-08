@@ -1,10 +1,13 @@
 # Payload Owner News — checks e preparação do aceite
 
 Estado desta entrega: wiring offline, guard portátil, finalizer one-shot e comando
-de auditoria instalada somente leitura estão implementados. A suíte real Task15 e
-a preparação portátil ainda estão incompletas; nenhum uso local destes comandos
-equivale a aceite integrado ou autorização de produção. Resultados por cenário
-ficam na [matriz de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md).
+de auditoria instalada somente leitura estão implementados. A fatia observacional
+do protocolo Owner News foi executada com PASS em fixture PostgreSQL 16 isolada;
+o escopo e os limites estão no [relatório da auditoria](../reviews/2026-10-08-owner-news-protocol-observer-audit.md).
+A suíte real Task15 e seu fluxo portátil de preparação/integração ainda estão
+incompletos. Esse PASS delimitado não equivale a prontidão, certificação, aceite
+integrado ou autorização de produção. Resultados por cenário ficam na
+[matriz de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md).
 
 ## Checks separados
 
@@ -76,9 +79,10 @@ grants. Reutiliza as dependências de ownership PostgreSQL: `cms_observer`
 deve não possuir objeto algum em qualquer `dbid`; `cms_control`/`cms_controller`
 seguem o escopo canônico do finalizer (database atual e objetos compartilhados).
 O literal `pg_authid` é usado somente como OID de `refclassid`; o catálogo de
-autenticação e password presence não são lidos. A identidade física do cluster
-também não é verificada, apenas o nome do database. Não foi executada nesta
-alteração; requer autorização separada e database alvo correto.
+autenticação e password presence não são lidos. O CLI sozinho verifica o nome do
+database, não a identidade física do cluster. No harness registrado no relatório
+da auditoria, essa identidade foi confirmada separadamente no fixture PostgreSQL 16;
+isso não estende a verificação de identidade a outros destinos.
 
 O finalizer one-shot é outro comando e tem fronteira mutável distinta:
 `node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
@@ -137,11 +141,14 @@ identidades do fixture, fases e códigos sanitizados; URLs e credenciais não s�
 exibidos. Container, volume e relatório são preservados, inclusive em falha;
 não há cleanup automático.
 
-Execução é uma mudança local de infraestrutura e exige autorização separada
-para usar Docker e criar o fixture. Ela não é parte desta implementação: nenhum
-comando `--prepare-lease` ou `--execute` foi rodado, e nenhuma integração PG16
-real foi afirmada. O aceite real continua pendente até uma execução autorizada
-em cluster físico novo, sem envolver produção.
+O harness cria infraestrutura local descartável e executa migrations, finalizer
+e provisionamento de role no fixture; somente o CLI de auditoria e os probes de
+negação são observacionais/read-only. Uma execução PG16 real foi concluída em
+08/10/2026, run `1e852687-435d-4d09-b56d-7a6b2f375569`; consulte o relatório
+delimitado e o JSON sanitizado ligado acima. Isso fecha apenas a evidência da
+auditoria observacional `cms_observer`, não a suíte Task15, o aceite integrado ou
+qualquer verificação de produção. Runs falhos anteriores e seus artefatos foram
+preservados; não se afirma limpeza nem expiração de seus fixtures.
 
 ### Preflight offline do harness Task9
 

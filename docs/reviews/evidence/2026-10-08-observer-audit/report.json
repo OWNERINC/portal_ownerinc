@@ -1,0 +1,288 @@
+{
+  "status": "PASS",
+  "runId": "1e852687-435d-4d09-b56d-7a6b2f375569",
+  "project": "ownerinc-payload-observer-audit-1e852687435d",
+  "database": "ownerinc_cms",
+  "dockerContext": "desktop-linux",
+  "containerName": "ownerinc-payload-observer-audit-1e852687435d",
+  "volumeName": "ownerinc-payload-observer-audit-pgdata-1e852687435d",
+  "imageRef": "postgres:16.10-bookworm",
+  "imageId": "sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74",
+  "host": "127.0.0.1",
+  "port": 58698,
+  "stages": [
+    {
+      "name": "inspect-local-docker-and-cached-image",
+      "status": "pass",
+      "result": {
+        "cachedImage": true,
+        "context": "desktop-linux"
+      }
+    },
+    {
+      "name": "create-fresh-postgres16-volume-and-container",
+      "status": "pass",
+      "result": {
+        "containerId": "cc9c4da3cb94ff1fb3333446909590061d42f40d974b8297102ef8f415eaf14f",
+        "backendIPv4": "172.17.0.6",
+        "volumeCreated": true,
+        "containerCreated": true
+      }
+    },
+    {
+      "name": "verify-new-postgres16-system-identity",
+      "status": "pass",
+      "result": {
+        "containerId": "cc9c4da3cb94ff1fb3333446909590061d42f40d974b8297102ef8f415eaf14f",
+        "backendIPv4": "172.17.0.6",
+        "systemIdentifier": "7694190393496338470"
+      }
+    },
+    {
+      "name": "reconfirm-new-postgres16-docker-identity",
+      "status": "pass",
+      "result": {
+        "containerId": "cc9c4da3cb94ff1fb3333446909590061d42f40d974b8297102ef8f415eaf14f",
+        "backendIPv4": "172.17.0.6"
+      }
+    },
+    {
+      "name": "create-ownerinc-cms-database",
+      "status": "pass",
+      "result": {
+        "database": "ownerinc_cms"
+      }
+    },
+    {
+      "name": "verify-migrator-and-apply-six-native-migrations",
+      "status": "pass",
+      "result": {
+        "count": 6,
+        "sha256": "52b7ff29dee9b8ec256c9478dc8d828383f9f4fabb5ce65c4ceb1798a165ca49"
+      }
+    },
+    {
+      "name": "install-protocol-with-one-shot-finalizer",
+      "status": "pass",
+      "result": {
+        "installed": true,
+        "ready": false,
+        "coverageVersion": 0
+      }
+    },
+    {
+      "name": "provision-observer-with-reviewed-builder",
+      "status": "pass",
+      "result": {
+        "roleCreated": true,
+        "builder": "buildNewsProtocolObserverProvisioningSQL"
+      }
+    },
+    {
+      "name": "prove-observer-pg-shdepend-read-visibility",
+      "status": "pass",
+      "result": {
+        "selectVisible": true,
+        "observerOwnedObjects": 0,
+        "readOnlyTransaction": true
+      }
+    },
+    {
+      "name": "snapshot-before-audit",
+      "status": "pass",
+      "result": {
+        "migrations": {
+          "count": 6,
+          "sha256": "52b7ff29dee9b8ec256c9478dc8d828383f9f4fabb5ce65c4ceb1798a165ca49"
+        },
+        "catalogs": {
+          "count": 51,
+          "sha256": "6e4d73b4aa23374370c75f48d0fa052f161ed1ccaaea66a5ffda1c8c9c498dd9"
+        },
+        "head": {
+          "count": 1,
+          "sha256": "e547cb12cd60945f0fa37ce35de5c092b063e9dacf4b6fa67460ad63e9169985"
+        }
+      }
+    },
+    {
+      "name": "run-read-only-observer-audit-cli",
+      "status": "pass",
+      "result": {
+        "status": "PASS",
+        "observedCoverageVersion": 0,
+        "headSequence": "0",
+        "writeBarrier": "open",
+        "readinessCertified": false,
+        "admissionActivated": false,
+        "releaseCertified": false,
+        "writeCoverageCertified": false,
+        "drainVerified": false,
+        "clusterSharedOwnershipCheck": "performed_read_only_pg_shdepend_check"
+      }
+    },
+    {
+      "name": "snapshot-after-audit-and-compare",
+      "status": "pass",
+      "result": {
+        "migrations": {
+          "count": 6,
+          "sha256": "52b7ff29dee9b8ec256c9478dc8d828383f9f4fabb5ce65c4ceb1798a165ca49"
+        },
+        "catalogs": {
+          "count": 51,
+          "sha256": "6e4d73b4aa23374370c75f48d0fa052f161ed1ccaaea66a5ffda1c8c9c498dd9"
+        },
+        "head": {
+          "count": 1,
+          "sha256": "e547cb12cd60945f0fa37ce35de5c092b063e9dacf4b6fa67460ad63e9169985"
+        }
+      }
+    },
+    {
+      "name": "prove-observer-denials-with-rolled-back-transactions",
+      "status": "pass",
+      "result": {
+        "deniedRelations": [
+          {
+            "relation": "news_articles",
+            "denied": true,
+            "sqlstate": "42501",
+            "transactionRolledBack": true
+          },
+          {
+            "relation": "news_media",
+            "denied": true,
+            "sqlstate": "42501",
+            "transactionRolledBack": true
+          },
+          {
+            "relation": "news_schedules",
+            "denied": true,
+            "sqlstate": "42501",
+            "transactionRolledBack": true
+          },
+          {
+            "relation": "payload_jobs",
+            "denied": true,
+            "sqlstate": "42501",
+            "transactionRolledBack": true
+          },
+          {
+            "relation": "owner_news_mutation_events",
+            "denied": true,
+            "sqlstate": "42501",
+            "transactionRolledBack": true
+          }
+        ],
+        "sealFunctionExecute": false
+      }
+    },
+    {
+      "name": "verify-post-probe-snapshot-unchanged",
+      "status": "pass",
+      "result": {
+        "migrations": {
+          "count": 6,
+          "sha256": "52b7ff29dee9b8ec256c9478dc8d828383f9f4fabb5ce65c4ceb1798a165ca49"
+        },
+        "catalogs": {
+          "count": 51,
+          "sha256": "6e4d73b4aa23374370c75f48d0fa052f161ed1ccaaea66a5ffda1c8c9c498dd9"
+        },
+        "head": {
+          "count": 1,
+          "sha256": "e547cb12cd60945f0fa37ce35de5c092b063e9dacf4b6fa67460ad63e9169985"
+        }
+      }
+    }
+  ],
+  "volumeCreated": true,
+  "containerCreated": true,
+  "resourceDisposition": "preserved; no automatic container, volume, database, role, or fixture cleanup",
+  "containerId": "cc9c4da3cb94ff1fb3333446909590061d42f40d974b8297102ef8f415eaf14f",
+  "backendIPv4": "172.17.0.6",
+  "serverMajorVersion": 16,
+  "systemIdentifierVerified": true,
+  "migrations": {
+    "count": 6,
+    "sha256": "52b7ff29dee9b8ec256c9478dc8d828383f9f4fabb5ce65c4ceb1798a165ca49"
+  },
+  "finalizer": {
+    "installed": true,
+    "ready": false,
+    "coverageVersion": 0
+  },
+  "baseline": {
+    "migrations": {
+      "count": 6,
+      "sha256": "52b7ff29dee9b8ec256c9478dc8d828383f9f4fabb5ce65c4ceb1798a165ca49"
+    },
+    "catalogs": {
+      "count": 51,
+      "sha256": "0ceb59a43b4d7e7b17d10ed82a841891994081421c3ba7320964f837c0c67b50"
+    },
+    "head": {
+      "count": 1,
+      "sha256": "e547cb12cd60945f0fa37ce35de5c092b063e9dacf4b6fa67460ad63e9169985"
+    }
+  },
+  "observerProvisioning": {
+    "roleCreated": true,
+    "builder": "buildNewsProtocolObserverProvisioningSQL"
+  },
+  "pgShdependVisibility": {
+    "selectVisible": true,
+    "observerOwnedObjects": 0,
+    "readOnlyTransaction": true
+  },
+  "audit": {
+    "status": "PASS",
+    "observedCoverageVersion": 0,
+    "headSequence": "0",
+    "writeBarrier": "open",
+    "readinessCertified": false,
+    "admissionActivated": false,
+    "releaseCertified": false,
+    "writeCoverageCertified": false,
+    "drainVerified": false,
+    "clusterSharedOwnershipCheck": "performed_read_only_pg_shdepend_check"
+  },
+  "auditOnlyStateUnchanged": true,
+  "denials": {
+    "deniedRelations": [
+      {
+        "relation": "news_articles",
+        "denied": true,
+        "sqlstate": "42501",
+        "transactionRolledBack": true
+      },
+      {
+        "relation": "news_media",
+        "denied": true,
+        "sqlstate": "42501",
+        "transactionRolledBack": true
+      },
+      {
+        "relation": "news_schedules",
+        "denied": true,
+        "sqlstate": "42501",
+        "transactionRolledBack": true
+      },
+      {
+        "relation": "payload_jobs",
+        "denied": true,
+        "sqlstate": "42501",
+        "transactionRolledBack": true
+      },
+      {
+        "relation": "owner_news_mutation_events",
+        "denied": true,
+        "sqlstate": "42501",
+        "transactionRolledBack": true
+      }
+    ],
+    "sealFunctionExecute": false
+  },
+  "probesStateUnchanged": true
+}
