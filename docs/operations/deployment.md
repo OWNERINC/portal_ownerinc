@@ -71,7 +71,7 @@ retorno ao normal.
 
 Defina também `PORTAL_API_DB_PASSWORD` e `PORTAL_CRON_DB_PASSWORD` com pelo menos 16 caracteres. O serviço `migrate` cria ou rotaciona essas duas roles, executa migrations sob advisory lock e reaplica os grants antes da API iniciar. `MIGRATION_ONLY=true` faz o container falhar se `RUN_MIGRATIONS=true` não estiver ativo e impede que um comando vazio seja confundido com uma migration bem-sucedida. As credenciais administrativas não entram no container de API em execução. Para reaplicar roles e grants manualmente, sobrescreva o modo one-shot: `docker compose run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/provision.js`.
 
-Defina `IMAGE_REGISTRY=ghcr.io/ownerinc`. O CI publica API e cron com a tag do commit, registra os digests e os transporta no archive de release. A VPS aceita somente os dois digests em `.image-env` e inicia o Compose com referências `@sha256`; ela não resolve tags mutáveis durante o deploy.
+Defina `IMAGE_REGISTRY=ghcr.io/ownerinc`. O CI publica API e cron com a tag do commit, registra os digests e os transporta no archive de release. A VPS aceita somente esses dois digests em `.image-env` e inicia o Compose com referências `@sha256`; ela não resolve tags mutáveis durante o deploy. O CMS tem publicação e artefato de digest separados, ainda sem consumo pelo deploy automático.
 
 Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se necessário, `VPS_PATH` e `SSH_PORT`. `API_IMAGE` e `CRON_IMAGE` devem ser referências completas `@sha256` produzidas pelo CI. O `deploy.sh` recusa alterações rastreadas não commitadas e publica apenas um `git archive` do `HEAD` com o manifesto de imagens; `ownerinc-novo-agente/` é excluído explicitamente.
 
@@ -84,6 +84,22 @@ e adapter durável de autoridade/ledger. Sem adapter integrado, operações CMS 
 recusadas. Ver [runtime e recuperação Payload](payload-runtime-recovery.md).
 Arquivos versionados não comprovam receiver/forced-command instalado; instalação,
 deploy e cutover dependem de nova autorização operacional explícita.
+
+O job `validate` agora também constrói `ownerinc-portal-cms` pelo contexto raiz e
+`cms/Dockerfile`. A validação de empacotamento do runtime já incluída no Dockerfile
+é executada durante o build; o CI aplica ao CMS o mesmo scan Trivy bloqueante de
+`HIGH,CRITICAL` usado para API/cron. Em publicação autorizada na `main`, o CI envia
+a imagem com tag do commit para GHCR e expõe o digest validado em
+`needs.validate.outputs.cms_image`. O artefato separado `cms-image-digest` contém
+`cms-image-digest.txt` (referência completa `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:…`)
+e `cms-image-source.txt` (SHA do commit de origem).
+
+Essa publicação **não ativa nem implanta o Payload CMS em produção**: não altera o
+artefato legacy `image-digests`, o arquivo `.ci-images` de duas linhas, o manifesto
+da VPS, Compose, banco ou autoridade CMS. Até que adapter/receiver, backup e
+ativação coordenados sejam revisados e autorizados separadamente, o deploy
+automático continua limitado a API e cron; não use esse digest como evidência de
+release Payload `payload-v1`.
 
 1. Execute `npm run verify` e `npm run security`.
 2. Exporte os dois digests aprovados pelo CI e execute `bash deploy.sh` somente após revisar host e revisão.
@@ -343,7 +359,7 @@ suprime a herança dos headers do servidor. Em 404, a ausência de `Cache-Contro
 segurança continuam presentes por `always`. Após publicação autorizada, repita
 os GETs pelo domínio HTTPS para verificar também a borda real.
 
-O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sintaxe/Compose, constrói e escaneia as imagens com Trivy, rejeita vulnerabilidades `high` ou `critical`, publica SBOMs SPDX e envia imagens imutáveis ao GHCR em pushes na `main`.
+O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sintaxe/Compose, constrói e escaneia as imagens API, cron e CMS com Trivy, rejeita vulnerabilidades `high` ou `critical`, publica SBOMs SPDX e envia imagens imutáveis ao GHCR em pushes na `main`. O digest CMS tem artefato próprio e não integra o manifesto legacy de produção.
 `npm run test:migrations` exige `MIGRATION_TEST_DISPOSABLE=true` e não pode ser
 executado com `NODE_ENV=production`; ele modifica um banco de teste durante a
 validação de migrations históricas.

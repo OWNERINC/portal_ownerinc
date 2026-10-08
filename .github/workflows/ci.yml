@@ -15,6 +15,7 @@ jobs:
     outputs:
       api_image: ${{ steps.publish.outputs.api_image }}
       cron_image: ${{ steps.publish.outputs.cron_image }}
+      cms_image: ${{ steps.publish.outputs.cms_image }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -128,6 +129,7 @@ jobs:
         run: |
           docker build --tag ownerinc-portal-api:${GITHUB_SHA} api
           docker build --tag ownerinc-portal-cron:${GITHUB_SHA} --file cron/Dockerfile .
+          docker build --tag ownerinc-portal-cms:${GITHUB_SHA} --file cms/Dockerfile .
       - name: Scan API image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -139,6 +141,13 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ownerinc-portal-cron:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+      - name: Scan CMS image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ownerinc-portal-cms:${{ github.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
@@ -165,17 +174,32 @@ jobs:
         run: |
           docker tag ownerinc-portal-api:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
           docker tag ownerinc-portal-cron:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
+          docker tag ownerinc-portal-cms:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
           docker push ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
           docker push ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
+          docker push ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
           docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA} > image-digests.txt
           docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA} >> image-digests.txt
           echo "api_image=$(sed -n '1p' image-digests.txt)" >> "$GITHUB_OUTPUT"
           echo "cron_image=$(sed -n '2p' image-digests.txt)" >> "$GITHUB_OUTPUT"
+          cms_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA})
+          [[ "$cms_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          printf '%s\n' "$cms_image" > cms-image-digest.txt
+          printf '%s\n' "$GITHUB_SHA" > cms-image-source.txt
+          echo "cms_image=$cms_image" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         with:
           name: image-digests
           path: image-digests.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        with:
+          name: cms-image-digest
+          path: |
+            cms-image-digest.txt
+            cms-image-source.txt
 
   deploy-production:
     name: Deploy production

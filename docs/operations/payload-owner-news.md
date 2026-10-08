@@ -263,8 +263,15 @@ Esse diagnóstico é somente instrumentação para uma eventual execução reade
 separadamente autorizada; não é autorização para iniciar runtime.
 
 CI `validate` inclui cache CMS, bootstrap ampliado, verify e build sintético CMS.
-Integração real, migrations CMS repetidas, grants runtime, imagem/scan CMS e o
-contrato de digest/release aguardam integração com infraestrutura/operação.
+O workflow também está configurado para construir a imagem CMS pelo contexto raiz,
+aplicar o scan Trivy bloqueante e, nas execuções autorizadas em `main`, publicar
+no GHCR o digest validado e o SHA de origem no artefato separado `cms-image-digest`.
+Essa configuração ainda exige evidência de execução real da CI; não comprova
+build/scan/publicação executados nem implantação do CMS. O digest CMS não integra
+o manifesto automático legacy de produção, que continua com API e cron.
+Integração real, migrations CMS repetidas, grants runtime e o release operacional
+Payload permanecem gates próprios de infraestrutura/operação; consulte
+[Deployment](deployment.md#fluxo-de-release).
 Os contratos de publish/backup não são definidos uma segunda vez neste documento.
 
 ## Guard portátil implementado
