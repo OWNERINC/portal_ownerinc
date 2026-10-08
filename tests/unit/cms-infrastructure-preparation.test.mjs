@@ -21,6 +21,24 @@ function bashPath(value) {
   return process.platform === 'win32' ? normalized.replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`) : normalized;
 }
 
+function validCmsConfiguration({ includePublicUrl = true } = {}) {
+  const values = {
+    CMS_POSTGRES_PASSWORD: 'a'.repeat(64),
+    CMS_MIGRATOR_PASSWORD: 'b'.repeat(64),
+    CMS_RUNTIME_PASSWORD: 'c'.repeat(64),
+    PAYLOAD_SECRET: 'd'.repeat(64),
+    PAYLOAD_TO_PORTAL_SECRET: 'e'.repeat(64),
+    PORTAL_TO_PAYLOAD_SECRET: 'f'.repeat(64),
+  };
+  Object.assign(values, {
+    CMS_ADMIN_DATABASE_URL: `postgresql://cms_admin:${values.CMS_POSTGRES_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
+    CMS_MIGRATION_DATABASE_URL: `postgresql://cms_migrator:${values.CMS_MIGRATOR_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
+    CMS_RUNTIME_DATABASE_URL: `postgresql://cms_runtime:${values.CMS_RUNTIME_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
+  });
+  const publicUrl = includePublicUrl ? 'PORTAL_PUBLIC_URL=https://portal.ownerinc.com.br\n' : '';
+  return `${publicUrl}${Object.entries(values).map(([key, value]) => `${key === 'CMS_POSTGRES_PASSWORD' ? 'export ' : ''}${key}=${value}`).join('\n')}\n`;
+}
+
 async function fixture(t) {
   const parent = process.platform === 'win32' && process.env.LOCALAPPDATA
     ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : tmpdir();
@@ -46,7 +64,6 @@ async function fixture(t) {
   await writeFile(path.join(paths.runtime, 'compose.production.yaml'), 'services: {}\n');
   await writeFile(path.join(paths.secrets, 'production.runtime.conf'), [
     '# existing production configuration (must stay byte-for-byte intact)',
-    'PORTAL_PUBLIC_URL=https://portal.ownerinc.com.br',
     'PRESERVED_OPERATOR_VALUE=literal-$(touch-never-run-this)',
     '',
   ].join('\n'));
@@ -92,11 +109,14 @@ async function fixture(t) {
   await writeFile(path.join(paths.bundle, 'ops', 'prepare-cms-infrastructure.sh'), installer);
 
   const dockerLog = path.join(root, 'docker.calls');
+  const composeEnvironmentLog = path.join(root, 'compose.environment');
   const flockLog = path.join(root, 'flock.calls');
   const dockerLogShell = bashPath(dockerLog);
+  const composeEnvironmentLogShell = bashPath(composeEnvironmentLog);
   const flockLogShell = bashPath(flockLog);
   const docker = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> '${dockerLogShell}'
+printf 'PORTAL_PUBLIC_URL=%s\\n' "\${PORTAL_PUBLIC_URL:-}" >> '${composeEnvironmentLogShell}'
 [[ $1 == compose ]] || exit 90
 [[ " $* " == *' config --quiet '* ]] || exit 91
 exit 0
@@ -120,7 +140,7 @@ exit 0
       CMS_PREPARATION_TEST_HOST: '1',
     },
   });
-  return { root, paths, run, dockerLog, flockLog };
+  return { root, paths, run, dockerLog, composeEnvironmentLog, flockLog };
 }
 
 test('preparation defaults to a read-only dry check and accepts only fixed host actions', async t => {
@@ -144,6 +164,7 @@ test('preparation defaults to a read-only dry check and accepts only fixed host 
   assert.match(composeCalls, /compose .*config --quiet/);
   assert.ok(composeCalls.includes(`--file ${bashPath(path.join(f.paths.runtime, 'compose.production.yaml'))}`));
   assert.ok(!composeCalls.includes('compose.ownerinc-vps.yaml'));
+  assert.equal(await readFile(f.composeEnvironmentLog, 'utf8'), 'PORTAL_PUBLIC_URL=https://portal.ownerinc.com.br\n');
 
   const arbitraryRoot = f.run(['--root', bashPath(f.root)]);
   assert.equal(arbitraryRoot.status, 2);
@@ -165,11 +186,14 @@ test('apply atomically prepares private credentials and reviewed files without a
   const envPath = path.join(f.paths.secrets, 'production.runtime.conf');
   const environment = await readFile(envPath, 'utf8');
   for (const originalLine of originalEnvironment.toString('utf8').split('\n').slice(0, 3)) assert.ok(environment.includes(originalLine));
+  assert.ok(environment.startsWith(originalEnvironment.toString('utf8')), 'configuration update must preserve the full original byte sequence');
   const envStat = await stat(envPath);
   if (process.platform !== 'win32') assert.equal(envStat.mode & 0o777, 0o600, 'existing environment mode must be preserved');
   const values = Object.fromEntries(environment.split(/\r?\n/u).filter(line => line.includes('=')).map(line => {
     const index = line.indexOf('='); return [line.slice(0, index), line.slice(index + 1)];
   }));
+  assert.equal(values.PORTAL_PUBLIC_URL, 'https://portal.ownerinc.com.br');
+  assert.equal(environment.split(/\r?\n/u).filter(line => line.startsWith('PORTAL_PUBLIC_URL=')).length, 1);
   const required = ['CMS_POSTGRES_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
     'CMS_ADMIN_DATABASE_URL', 'CMS_MIGRATION_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET'];
@@ -231,20 +255,7 @@ test('an existing complete CMS credential set is preserved without secret rotati
   const f = await fixture(t);
   if (f.skip) return t.skip(f.skip);
   const environmentPath = path.join(f.paths.secrets, 'production.runtime.conf');
-  const existing = {
-    CMS_POSTGRES_PASSWORD: 'a'.repeat(64),
-    CMS_MIGRATOR_PASSWORD: 'b'.repeat(64),
-    CMS_RUNTIME_PASSWORD: 'c'.repeat(64),
-    PAYLOAD_SECRET: 'd'.repeat(64),
-    PAYLOAD_TO_PORTAL_SECRET: 'e'.repeat(64),
-    PORTAL_TO_PAYLOAD_SECRET: 'f'.repeat(64),
-  };
-  Object.assign(existing, {
-    CMS_ADMIN_DATABASE_URL: `postgresql://cms_admin:${existing.CMS_POSTGRES_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
-    CMS_MIGRATION_DATABASE_URL: `postgresql://cms_migrator:${existing.CMS_MIGRATOR_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
-    CMS_RUNTIME_DATABASE_URL: `postgresql://cms_runtime:${existing.CMS_RUNTIME_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
-  });
-  const original = `${await readFile(environmentPath, 'utf8')}${Object.entries(existing).map(([key, value]) => `${key === 'CMS_POSTGRES_PASSWORD' ? 'export ' : ''}${key}=${value}`).join('\n')}\n`;
+  const original = `${await readFile(environmentPath, 'utf8')}${validCmsConfiguration()}`;
   await writeFile(environmentPath, original);
   await chmod(environmentPath, 0o600);
 
@@ -256,6 +267,41 @@ test('an existing complete CMS credential set is preserved without secret rotati
   const backups = await readdir(f.paths.backups);
   assert.equal(backups.length, 1);
   assert.equal(await readFile(path.join(f.paths.backups, backups[0], 'production.runtime.conf'), 'utf8'), original);
+});
+
+test('complete existing CMS credentials without a public URL are rejected without changes', async t => {
+  const f = await fixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const environmentPath = path.join(f.paths.secrets, 'production.runtime.conf');
+  const original = `${await readFile(environmentPath, 'utf8')}${validCmsConfiguration({ includePublicUrl: false })}`;
+  await writeFile(environmentPath, original);
+  await chmod(environmentPath, 0o600);
+
+  const result = f.run(['--apply']);
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /existing CMS configuration lacks PORTAL_PUBLIC_URL/i);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /[a-f]{64}|postgresql:\/\//i);
+  assert.equal(await readFile(environmentPath, 'utf8'), original);
+  assert.equal((await readdir(f.paths.backups)).length, 0);
+  assert.equal(await readFile(f.dockerLog, 'utf8').catch(() => ''), '');
+});
+
+test('an explicitly empty or noncanonical public URL is rejected on first CMS preparation', async t => {
+  for (const publicURL of ['', 'https://attacker.invalid']) {
+    const f = await fixture(t);
+    if (f.skip) return t.skip(f.skip);
+    const environmentPath = path.join(f.paths.secrets, 'production.runtime.conf');
+    const original = `${await readFile(environmentPath, 'utf8')}PORTAL_PUBLIC_URL=${publicURL}\n`;
+    await writeFile(environmentPath, original);
+    await chmod(environmentPath, 0o600);
+
+    const result = f.run(['--apply']);
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}${result.stderr}`, /PORTAL_PUBLIC_URL is not canonical/i);
+    assert.equal(await readFile(environmentPath, 'utf8'), original);
+    assert.equal((await readdir(f.paths.backups)).length, 0);
+    assert.equal(await readFile(f.dockerLog, 'utf8').catch(() => ''), '');
+  }
 });
 
 test('Compose validation selects a protected release-local production override when present', async t => {

@@ -216,6 +216,7 @@ fi
 if ! cms_env_state=$(python3 "$source_private_helper" inspect "$environment" 2>&1); then
   case $cms_env_state in
     *partial_cms_credential_set*) echo 'Refusing preparation: partial CMS credential set; no keys were changed.' >&2 ;;
+    *canonical_portal_url_missing*) echo 'Refusing preparation: existing CMS configuration lacks PORTAL_PUBLIC_URL; no keys were changed.' >&2 ;;
     *canonical_portal_url_mismatch*) echo 'Refusing preparation: production PORTAL_PUBLIC_URL is not canonical.' >&2 ;;
     *duplicate_environment_key*) echo 'Refusing preparation: duplicate protected environment key.' >&2 ;;
     *unsafe_environment*) echo 'Refusing preparation: production environment file is unsafe.' >&2 ;;
@@ -229,6 +230,7 @@ validate_compose() {
   # --quiet is mandatory; no rendered Compose config or credential is printed.
   if ! env -i PATH="$PATH" HOME=/root \
     CMS_IMAGE="$cms_image" \
+    PORTAL_PUBLIC_URL=https://portal.ownerinc.com.br \
     CMS_POSTGRES_PASSWORD=check \
     CMS_MIGRATOR_PASSWORD=check \
     CMS_RUNTIME_PASSWORD=check \

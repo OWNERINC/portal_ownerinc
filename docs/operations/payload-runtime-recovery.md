@@ -184,15 +184,21 @@ existir como arquivo regular protegido; caso contrário `runtime/compose.product
 e o overlay Payload novo. Um override release-local existente que seja symlink, não
 regular, hardlinkado ou gravável por grupo/outros é recusado, nunca ignorado em favor
 do fallback. O parser recebe o arquivo de ambiente de produção em modo privado e
-valores sintéticos CMS para a validação; não imprime configuração, URL, segredo ou
-comando SQL. Não há `docker pull`, `up`, `run`, `exec`, migration, database,
+valores sintéticos CMS e `PORTAL_PUBLIC_URL=https://portal.ownerinc.com.br` para a
+validação; não imprime configuração, URL, segredo ou comando SQL. Não há `docker pull`,
+`up`, `run`, `exec`, migration, database,
 container, service restart, systemd/timer ou mudança de release atual.
 
 Com `--apply`, o preparador abre o `runtime/deploy.lock` existente sem truncar,
 adquirindo `flock` antes de escrever. Preserva esse inode; nunca o remove. A
 substituição atômica do `production.runtime.conf` mantém bytes anteriores, uid/gid e
 modo existentes (neste host, operador uid 1000 e modo 0600); a instalação não muda
-permissões de usuário. Sem nenhuma das nove chaves CMS exigidas, gera senhas admin,
+permissões de usuário. O check VPS reportado encontrou `PORTAL_PUBLIC_URL` ausente e
+nenhuma chave CMS: nesse primeiro bootstrap, `--apply` acrescenta a URL canônica junto
+com as nove chaves CMS na mesma substituição atômica, preservando todo o conteúdo
+original. A ausência só é permitida sem qualquer chave CMS; URL explicitamente vazia
+ou diferente e configuração CMS completa sem URL são recusadas, sem reparo implícito.
+Sem nenhuma das nove chaves CMS exigidas, gera senhas admin,
 migrator e runtime e `PAYLOAD_SECRET`/chaves de serviço com 32 bytes aleatórios
 distintos. URLs usam `cms-postgres:5432/ownerinc_cms` e os roles correspondentes.
 Um conjunto existente completo e válido é preservado sem rotação; qualquer conjunto

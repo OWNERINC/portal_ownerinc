@@ -24,6 +24,7 @@ URL_USERS = {
     'CMS_MIGRATION_DATABASE_URL': ('cms_migrator', 'CMS_MIGRATOR_PASSWORD'),
     'CMS_RUNTIME_DATABASE_URL': ('cms_runtime', 'CMS_RUNTIME_PASSWORD'),
 }
+CANONICAL_PORTAL_URL = 'https://portal.ownerinc.com.br'
 
 
 class PreparationError(Exception):
@@ -89,7 +90,13 @@ def read_environment(path):
         values[key] = value
     if duplicates:
         fail('duplicate_environment_key')
-    if values.get('PORTAL_PUBLIC_URL') != 'https://portal.ownerinc.com.br':
+    present = REQUIRED.intersection(values)
+    if 'PORTAL_PUBLIC_URL' not in values:
+        if present == REQUIRED:
+            fail('canonical_portal_url_missing_for_existing_cms_configuration')
+        if present:
+            fail('partial_cms_credential_set')
+    elif values['PORTAL_PUBLIC_URL'] != CANONICAL_PORTAL_URL:
         fail('canonical_portal_url_mismatch')
     return raw, info, values
 
@@ -160,6 +167,8 @@ def update(path):
             f"postgresql://cms_runtime:{generated['CMS_RUNTIME_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
         ),
     }
+    if 'PORTAL_PUBLIC_URL' not in values:
+        entries = {'PORTAL_PUBLIC_URL': CANONICAL_PORTAL_URL, **entries}
     suffix = b'' if not raw or raw.endswith(b'\n') else b'\n'
     suffix += ''.join(f'{key}={value}\n' for key, value in entries.items()).encode('ascii')
     directory = os.path.dirname(os.path.abspath(path))
