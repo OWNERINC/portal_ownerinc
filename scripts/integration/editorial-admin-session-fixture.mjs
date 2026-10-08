@@ -17,6 +17,14 @@ const prohibitedFallbacks = Object.freeze([
   'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
 ]);
 const psqlVariableNames = new Set(['email', 'hash', 'name', 'uid']);
+const firebaseResponseKeyAllowlist = new Set([
+  'kind', 'localId', 'email', 'emailVerified', 'idToken', 'refreshToken', 'expiresIn',
+  'isNewUser', 'users', 'error', 'displayName', 'photoUrl', 'providerUserInfo',
+]);
+const firebaseContractCheckAllowlist = new Set([
+  'signupHasLocalId', 'signInUidMatches', 'freshIdTokenPresent',
+  'lookupHasSingleUser', 'lookupUidMatches', 'lookupEmailVerified',
+]);
 
 export function validateIntegrationInputs(env) {
   if (env.NODE_ENV !== 'test' || env.MIGRATION_TEST_DISPOSABLE !== 'true') {
@@ -37,6 +45,18 @@ export function validateIntegrationInputs(env) {
 
 export function createFixtureProjectName() {
   return `editorial-admin-session-${randomUUID().replaceAll('-', '')}`;
+}
+
+export function safeFirebaseResponseKeys(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
+  return Object.keys(body).filter(key => firebaseResponseKeyAllowlist.has(key)).sort();
+}
+
+export function safeFirebaseContractChecks(checks) {
+  if (!checks || typeof checks !== 'object' || Array.isArray(checks)) return {};
+  return Object.fromEntries(Object.entries(checks)
+    .filter(([key, value]) => firebaseContractCheckAllowlist.has(key) &&
+      (typeof value === 'boolean' || value === null)));
 }
 
 export function buildPsqlInvocation(sql, variables = {}) {
@@ -66,6 +86,59 @@ export function validateExpiredSessionReplacement({
     throw new Error('expired session replacement state mismatch');
   }
   return true;
+}
+
+export function inspectFirebaseIdentityProgress({ signup, accountUpdate, signIn, accountLookup }) {
+  // accounts:update is checked for HTTP success by the caller; its optional
+  // response fields do not prove the persisted verification state or mint a token.
+  void accountUpdate;
+  const checks = {
+    signupHasLocalId: typeof signup?.localId === 'string' && signup.localId.length > 0,
+    signInUidMatches: signIn === undefined ? null : signIn?.localId === signup?.localId,
+    freshIdTokenPresent: signIn === undefined ? null :
+      typeof signIn?.idToken === 'string' && signIn.idToken.length > 0,
+    lookupHasSingleUser: accountLookup === undefined ? null :
+      Array.isArray(accountLookup?.users) && accountLookup.users.length === 1,
+    lookupUidMatches: accountLookup === undefined ? null :
+      Array.isArray(accountLookup?.users) && accountLookup.users.length === 1 &&
+      accountLookup.users[0]?.localId === signup?.localId,
+    lookupEmailVerified: accountLookup === undefined ? null :
+      Array.isArray(accountLookup?.users) && accountLookup.users.length === 1 &&
+      accountLookup.users[0]?.emailVerified === true,
+  };
+  const failed = (diagnosticOperation, failedCheck, contractFailure) => ({
+    ok: false,
+    diagnosticOperation,
+    failedCheck,
+    contractFailure,
+    checks,
+  });
+
+  if (!checks.signupHasLocalId) {
+    return failed('firebase_emulator_signup', 'firebase_emulator_signup_identity_missing', 'signup_identity_missing');
+  }
+  if (signIn !== undefined && !checks.signInUidMatches) {
+    return failed('firebase_emulator_signin', 'firebase_emulator_signin_identity_mismatch', 'signin_identity_mismatch');
+  }
+  if (signIn !== undefined && !checks.freshIdTokenPresent) {
+    return failed('firebase_emulator_signin', 'firebase_emulator_signin_id_token_missing', 'signin_id_token_missing');
+  }
+  if (accountLookup !== undefined && !checks.lookupHasSingleUser) {
+    return failed('firebase_emulator_lookup', 'firebase_emulator_lookup_user_missing', 'lookup_user_missing');
+  }
+  if (accountLookup !== undefined && !checks.lookupUidMatches) {
+    return failed('firebase_emulator_lookup', 'firebase_emulator_lookup_identity_mismatch', 'lookup_identity_mismatch');
+  }
+  if (accountLookup !== undefined && !checks.lookupEmailVerified) {
+    return failed('firebase_emulator_lookup', 'firebase_emulator_lookup_email_unverified', 'lookup_email_unverified');
+  }
+  return {
+    ok: true,
+    checks,
+    ...(signIn !== undefined && accountLookup !== undefined
+      ? { identity: { uid: signup.localId, idToken: signIn.idToken } }
+      : {}),
+  };
 }
 
 export async function finalizeFixture({ failed, fixtureStarted, cleanup, removePrivateFiles }) {

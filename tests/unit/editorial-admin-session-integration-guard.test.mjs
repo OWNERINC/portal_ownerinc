@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   buildPsqlInvocation, finalizeFixture, fixtureComposePath, fixtureOrigin, fixtureReadinessPath,
+  inspectFirebaseIdentityProgress, safeFirebaseContractChecks, safeFirebaseResponseKeys,
   validateExpiredSessionReplacement, validateIntegrationInputs,
 } from '../../scripts/integration/editorial-admin-session-fixture.mjs';
 
@@ -83,6 +84,54 @@ test('fresh issue replaces one expired row: DB count is baseline plus one, disti
     /expired session replacement state mismatch/);
 });
 
+test('verified Auth identity uses the refreshed sign-in token and account lookup, not optional update fields', () => {
+  const signup = { localId: 'synthetic-uid', idToken: 'initial-token' };
+  const signIn = { localId: 'synthetic-uid', idToken: 'refreshed-token' };
+  const accountLookup = { users: [{ localId: 'synthetic-uid', emailVerified: true }] };
+  for (const accountUpdate of [
+    {},
+    { localId: 'synthetic-uid' },
+    { localId: 'synthetic-uid', emailVerified: true },
+  ]) {
+    const result = inspectFirebaseIdentityProgress({ signup, accountUpdate, signIn, accountLookup });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.identity, { uid: 'synthetic-uid', idToken: 'refreshed-token' });
+  }
+
+  const missingRefreshedToken = inspectFirebaseIdentityProgress({
+    signup, accountUpdate: {}, signIn: { localId: signup.localId },
+  });
+  assert.equal(missingRefreshedToken.ok, false);
+  assert.equal(missingRefreshedToken.failedCheck, 'firebase_emulator_signin_id_token_missing');
+  const unverifiedLookup = inspectFirebaseIdentityProgress({
+    signup, accountUpdate: {}, signIn, accountLookup: { users: [{ localId: signup.localId, emailVerified: false }] },
+  });
+  assert.equal(unverifiedLookup.ok, false);
+  assert.equal(unverifiedLookup.failedCheck, 'firebase_emulator_lookup_email_unverified');
+});
+
+test('Firebase diagnostics retain only allowlisted response key names and boolean identity checks', () => {
+  assert.deepEqual(safeFirebaseResponseKeys({
+    email: 'synthetic@example.test',
+    idToken: 'secret-jwt',
+    localId: 'synthetic-uid',
+    access_token: 'secret-access-token',
+    unexpected: 'private response data',
+  }), ['email', 'idToken', 'localId']);
+  assert.deepEqual(safeFirebaseContractChecks({
+    signupHasLocalId: true,
+    lookupEmailVerified: false,
+    freshIdTokenPresent: null,
+    token: 'secret-jwt',
+    email: 'synthetic@example.test',
+    lookupUidMatches: 'yes',
+  }), {
+    signupHasLocalId: true,
+    lookupEmailVerified: false,
+    freshIdTokenPresent: null,
+  });
+});
+
 test('failed integration preserves disposable fixture and private environment; successful run cleans both', async () => {
   let cleanupCalls = 0;
   let removeCalls = 0;
@@ -154,6 +203,18 @@ test('integration runs the built API image against isolated real PostgreSQL and 
   assert.match(runner, /buildPsqlInvocation\(sql, vars\)[\s\S]*input: invocation\.input/);
   assert.match(runner, /fixtureResourceState: resourceState/);
   assert.match(runner, /fixtureProjectName: projectName/);
+  assert.match(runner, /diagnostics: safeDiagnostics/);
+  assert.match(runner, /target\.protocol !== 'http:'[\s\S]*target\.hostname !== '127\.0\.0\.1'[\s\S]*demo-ownerinc-/);
+  assert.match(runner, /Authorization: 'Bearer owner'/);
+  assert.match(runner, /firebase_emulator_update_email_verified'[\s\S]*accounts:update/);
+  assert.match(runner, /firebase_emulator_signin'[\s\S]*accounts:signInWithPassword/);
+  assert.match(runner, /firebase_emulator_lookup'[\s\S]*accounts:lookup[\s\S]*idToken: signIn\.idToken/);
+  assert.match(runner, /responseKeys: \[\][\s\S]*diagnostic\.httpStatus = response\.status/);
+  assert.match(runner, /safeFirebaseResponseKeys\(decoded\)/);
+  assert.match(runner, /return progress\.identity[\s\S]*token: identity\.idToken/,
+    'the newly signed-in token must be the one submitted to the actual API route');
+  assert.doesNotMatch(runner, /verified\.(?:idToken|emailVerified)/,
+    'the update response does not provide the trusted refreshed token or final verification proof');
   assert.match(runner, /expiredHashPresent = await databaseQuery\('verify_expired_session_removed_on_fresh_issue'/);
   assert.match(runner, /persistedFreshState = await databaseQuery\('verify_fresh_session_persisted'/);
 

@@ -7,13 +7,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildPsqlInvocation, createFixtureEnvironment, createFixtureProjectName, finalizeFixture,
-  fixtureComposePath, fixtureOrigin, validateExpiredSessionReplacement, validateIntegrationInputs,
+  fixtureComposePath, fixtureOrigin, inspectFirebaseIdentityProgress,
+  safeFirebaseContractChecks, safeFirebaseResponseKeys,
+  validateExpiredSessionReplacement, validateIntegrationInputs,
 } from './integration/editorial-admin-session-fixture.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const apiBase = 'http://127.0.0.1';
 const reportName = 'editorial-admin-session-report.json';
 const safeChecks = [];
+const safeDiagnostics = [];
+const safeFirebaseOperations = new Set([
+  'firebase_emulator_signup',
+  'firebase_emulator_update_email_verified',
+  'firebase_emulator_signin',
+  'firebase_emulator_lookup',
+]);
 let stage = 'validate_disposable_inputs';
 let fixtureDirectory;
 let fixtureEnvFile;
@@ -110,6 +119,21 @@ async function readResponse(response) {
   try { return text ? JSON.parse(text) : null; } catch { return null; }
 }
 
+function failFirebaseRequest(diagnostic, contractFailure) {
+  diagnostic.contractFailure = contractFailure;
+  stage = `${diagnostic.operation}_${contractFailure}`;
+  throw new Error(stage);
+}
+
+function assertFirebaseProgress(progress, diagnostic) {
+  diagnostic.contractChecks = safeFirebaseContractChecks(progress.checks);
+  if (!progress.ok) {
+    diagnostic.contractFailure = progress.contractFailure;
+    stage = progress.failedCheck;
+    throw new Error(stage);
+  }
+}
+
 function record(check) {
   safeChecks.push(check);
 }
@@ -127,32 +151,73 @@ async function psqlReadIdentity(uid) {
 }
 
 async function createFirebaseIdentity(authOrigin, projectId) {
-  const makeRequest = async (suffix, body) => {
-    const response = await fetch(`${authOrigin}/identitytoolkit.googleapis.com/v1/${suffix}?key=emulator-api-key`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
-    });
-    const decoded = await readResponse(response);
-    if (!response.ok || !decoded) fail('firebase_emulator_identity_setup');
-    return decoded;
+  stage = 'firebase_emulator_target_guard';
+  let target;
+  try { target = new URL(authOrigin); } catch { fail('firebase_emulator_target_guard'); }
+  if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' ||
+    target.origin !== authOrigin || !/^demo-ownerinc-[0-9]+-[0-9]+$/.test(projectId)) {
+    fail('firebase_emulator_target_guard');
+  }
+
+  const makeRequest = async (operation, suffix, body, { ownerAuth = false, requireJson = true } = {}) => {
+    if (!safeFirebaseOperations.has(operation)) fail('firebase_emulator_diagnostic_guard');
+    stage = operation;
+    const diagnostic = { operation, responseKeys: [] };
+    safeDiagnostics.push(diagnostic);
+    let response;
+    try {
+      response = await fetch(`${authOrigin}/identitytoolkit.googleapis.com/v1/${suffix}?key=emulator-api-key`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ownerAuth ? { Authorization: 'Bearer owner' } : {}),
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch {
+      failFirebaseRequest(diagnostic, 'request_failed');
+    }
+    diagnostic.httpStatus = response.status;
+    let decoded;
+    try { decoded = await readResponse(response); }
+    catch { failFirebaseRequest(diagnostic, 'response_read_failed'); }
+    diagnostic.responseKeys = safeFirebaseResponseKeys(decoded);
+    if (!response.ok) failFirebaseRequest(diagnostic, 'http_not_ok');
+    if (requireJson && (!decoded || typeof decoded !== 'object' || Array.isArray(decoded))) {
+      failFirebaseRequest(diagnostic, 'response_body_invalid');
+    }
+    return { decoded, diagnostic };
   };
-  const identity = await makeRequest('accounts:signUp', {
-    email: `editorial-${randomUUID()}@example.test`,
-    password: randomUUID().replaceAll('-', '') + 'A9!',
-    returnSecureToken: true,
-  });
-  const verified = await makeRequest('accounts:update', {
-    idToken: identity.idToken,
-    emailVerified: true,
-    returnSecureToken: true,
-  });
-  assert.equal(verified.localId, identity.localId);
-  assert.equal(verified.emailVerified, true);
-  assert.ok(verified.idToken);
-  assert.ok(projectId.startsWith('demo-'));
-  return { uid: verified.localId, idToken: verified.idToken };
+
+  const email = `editorial-${randomUUID()}@example.test`;
+  const password = randomUUID().replaceAll('-', '') + 'A9!';
+  const { decoded: signup, diagnostic: signupDiagnostic } = await makeRequest(
+    'firebase_emulator_signup', 'accounts:signUp', { email, password, returnSecureToken: true });
+  let progress = inspectFirebaseIdentityProgress({ signup });
+  assertFirebaseProgress(progress, signupDiagnostic);
+
+  // Pinned firebase-tools@15.19.0's setAccountInfoImpl only returns tokens
+  // when an auth-state change has validSince + signInProvider; emailVerified-only
+  // updates do not mint one. Its privileged branch accepts Bearer owner, so keep
+  // that emulator-only credential scoped to the loopback demo-project guard above.
+  const { decoded: accountUpdate } = await makeRequest(
+    'firebase_emulator_update_email_verified', 'accounts:update', {
+      localId: signup.localId,
+      emailVerified: true,
+    }, { ownerAuth: true, requireJson: false });
+
+  const { decoded: signIn, diagnostic: signInDiagnostic } = await makeRequest(
+    'firebase_emulator_signin', 'accounts:signInWithPassword', { email, password, returnSecureToken: true });
+  progress = inspectFirebaseIdentityProgress({ signup, accountUpdate, signIn });
+  assertFirebaseProgress(progress, signInDiagnostic);
+
+  const { decoded: accountLookup, diagnostic: lookupDiagnostic } = await makeRequest(
+    'firebase_emulator_lookup', 'accounts:lookup', { idToken: signIn.idToken });
+  progress = inspectFirebaseIdentityProgress({ signup, accountUpdate, signIn, accountLookup });
+  assertFirebaseProgress(progress, lookupDiagnostic);
+  record('firebase_emulator_identity_lookup_verified_and_refreshed_token_issued');
+  return progress.identity;
 }
 
 async function apiRequest(origin, pathname, { method = 'GET', token, cookie, body, internal = false } = {}) {
@@ -433,6 +498,7 @@ async function writeReport(status, failedCheck = null) {
     component: 'editorial-admin-session-v2',
     status,
     checks: safeChecks,
+    diagnostics: safeDiagnostics,
     failedCheck,
     fixtureProjectName: projectName || null,
     fixtureResourceState: resourceState,
