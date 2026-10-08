@@ -1,7 +1,9 @@
 # Runtime Payload e recuperação coordenada
 
-Estado: artefatos locais da Task13/extensão operacional, sem instalação na VPS.
-Receiver/forced-command efetivamente instalados **não verificados nesta rodada**.
+Estado: preparação inativa instalada na VPS em 2026-10-08: receiver comum,
+guard, overlay de rede e configuração privada CMS. O adapter `payload-control`
+continua ausente; runtime, banco e worker CMS não foram iniciados nesta preparação.
+Evidência e limites: [preparação da VPS](../reviews/2026-10-08-cms-vps-infrastructure-preparation.md).
 Não executar deploy, comandos SSH, cutover ou alterações de serviços sem autorização.
 
 ## Stack opcional e credenciais
