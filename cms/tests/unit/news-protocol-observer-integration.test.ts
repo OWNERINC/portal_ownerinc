@@ -23,13 +23,17 @@ import {
   sanitizeDiagnosticOutput,
   validateDockerPreflight,
   validatePrivateBasePath,
+  validateWindowsConfiguredPrivateParent,
   validateObserverAuditLease,
   validateObserverLeasePath,
 } from '../integration/news-protocol-observer-audit.mjs'
+import { validateWindowsAncestorChain, validateWindowsProfileIdentity } from '../integration/protocol-finalizer.mjs'
 
 const runId = '8c72f420-c113-4a6c-9b8e-437a9dd0c5b7'
 const nonce = 'c'.repeat(64)
 const imageId = `sha256:${'a'.repeat(64)}`
+const windowsUserSid = 'S-1-5-21-100-200-300-1001'
+const windowsFullControlMask = 2032127
 
 function lease(overrides: Record<string, unknown> = {}) {
   return buildObserverAuditLease({ runId, nonce, dockerContext: 'desktop-linux',
@@ -46,6 +50,62 @@ function report(overrides: Record<string, unknown> = {}) {
     clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check', physicalClusterIdentity: 'not_verified',
     ...overrides,
   }
+}
+
+function windowsAce(sid: string, rightsMask: number, overrides: Record<string, unknown> = {}) {
+  const appliesToObject = overrides.appliesToObject !== false
+  const containerInherit = overrides.containerInherit === true
+  const objectInherit = overrides.objectInherit === true
+  return {
+    sid, type: 'Allow', rights: rightsMask === windowsFullControlMask ? 'FullControl' : 'fixture-rights', rightsMask,
+    inherited: false, appliesToObject, inheritOnly: !appliesToObject, containerInherit, objectInherit,
+    noPropagateInherit: false, inheritedToChild: containerInherit || objectInherit, tokenMatch: sid === windowsUserSid,
+    ...overrides,
+  }
+}
+
+function windowsAclNode(pathname: string, depth: number, ownerSid: string, entries: object[], overrides: Record<string, unknown> = {}) {
+  return {
+    path: pathname, depth, reparse: false, ownerSid, daclProtected: true, daclPresent: true, daclNull: false,
+    daclInspectable: true, daclEmpty: false, daclAceCount: entries.length,
+    daclControlFlags: 'DiscretionaryAclPresent, SelfRelative', entries, ...overrides,
+  }
+}
+
+function windowsExternalParentFixture(parentPath = 'C:\\Users\\Public\\ownerinc-observer-private-fixture') {
+  const systemSid = 'S-1-5-18'
+  const administratorsSid = 'S-1-5-32-544'
+  const trustedInstallerSid = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+  const fullControl = (sid: string, inherited = false, appliesToObject = true) => windowsAce(sid,
+    windowsFullControlMask, { inherited, appliesToObject, inheritOnly: !appliesToObject,
+      containerInherit: true, objectInherit: true, inheritedToChild: true })
+  const publicEntries = [
+    fullControl(systemSid), fullControl(administratorsSid),
+    windowsAce('S-1-3-0', windowsFullControlMask, { appliesToObject: false, containerInherit: true,
+      objectInherit: true, inheritedToChild: true }),
+  ]
+  for (const sid of ['S-1-5-3', 'S-1-5-4', 'S-1-5-6']) {
+    publicEntries.push(windowsAce(sid, 1179823))
+    publicEntries.push(windowsAce(sid, 1245695, { appliesToObject: false, containerInherit: true,
+      objectInherit: true, inheritedToChild: true }))
+  }
+  const parentNode = windowsAclNode(parentPath, 0, windowsUserSid,
+    [fullControl(windowsUserSid), fullControl(systemSid)])
+  const publicNode = windowsAclNode('C:\\Users\\Public', 1, systemSid, publicEntries)
+  const usersNode = windowsAclNode('C:\\Users', 2, systemSid, [
+    fullControl(systemSid), fullControl(administratorsSid),
+    windowsAce('S-1-1-0', -1610612736, { appliesToObject: false, containerInherit: true,
+      objectInherit: true, inheritedToChild: true }),
+    windowsAce('S-1-1-0', 1179817),
+    windowsAce('S-1-5-32-545', 1179817),
+  ])
+  const volumeNode = windowsAclNode('C:\\', 3, trustedInstallerSid, [
+    fullControl(systemSid), fullControl(administratorsSid),
+    windowsAce('S-1-5-11', 4),
+    windowsAce('S-1-5-11', -536805376, { appliesToObject: false, containerInherit: true,
+      objectInherit: true, inheritedToChild: true }),
+  ])
+  return [parentNode, publicNode, usersNode, volumeNode]
 }
 
 test('observer lease schema fixes fresh PostgreSQL resources, and labels bind the nonce without exposing it', () => {
@@ -348,6 +408,55 @@ test('strict private path and Git-boundary checks reject alternate, symlinked an
   await assertNoReparseAncestors(path.resolve(root), (async () => safeStat as any) as any)
   await assert.rejects(assertNoReparseAncestors(path.resolve(root), (async (filename: string) =>
     filename === path.dirname(path.resolve(root)) ? { isSymbolicLink: () => true } : safeStat as any) as any),
+  /observer_private_path_missing_or_reparse_point/u)
+})
+
+test('external Windows private parent has a distinct protected-ACL contract from the registered profile', async () => {
+  const parentPath = 'C:\\Users\\Public\\ownerinc-observer-private-fixture'
+  const registeredProfilePath = 'C:\\Users\\OwnerincFixture'
+  const ancestors = windowsExternalParentFixture(parentPath)
+  assert.equal(validateWindowsProfileIdentity({ currentUserSid: windowsUserSid,
+    profilePath: registeredProfilePath, registeredProfilePath }), true)
+  assert.throws(() => validateWindowsProfileIdentity({ currentUserSid: windowsUserSid,
+    profilePath: parentPath, registeredProfilePath }), /private_windows_profile_identity_mismatch/u)
+  assert.throws(() => validateWindowsAncestorChain({ currentUserSid: windowsUserSid,
+    profilePath: parentPath, registeredProfilePath: parentPath, ancestors }), /private_windows_profile_parent_invalid/u)
+  assert.equal(validateWindowsConfiguredPrivateParent({ currentUserSid: windowsUserSid, parentPath, ancestors }), true)
+
+  const unprotectedParent = windowsExternalParentFixture(parentPath)
+  unprotectedParent[0].daclProtected = false
+  assert.throws(() => validateWindowsConfiguredPrivateParent({ currentUserSid: windowsUserSid,
+    parentPath, ancestors: unprotectedParent }), /observer_private_windows_configured_parent_acl_invalid/u)
+
+  const publicDirectoryAsParent = windowsExternalParentFixture(parentPath)[1]
+  publicDirectoryAsParent.depth = 0
+  assert.throws(() => validateWindowsConfiguredPrivateParent({ currentUserSid: windowsUserSid,
+    parentPath: 'C:\\Users\\Public', ancestors: [publicDirectoryAsParent] }),
+  /observer_private_windows_configured_parent_acl_invalid/u)
+
+  const untrustedReplace = windowsExternalParentFixture(parentPath)
+  untrustedReplace[1].entries.push(windowsAce('S-1-1-0', windowsFullControlMask))
+  untrustedReplace[1].daclAceCount = untrustedReplace[1].entries.length
+  assert.throws(() => validateWindowsConfiguredPrivateParent({ currentUserSid: windowsUserSid,
+    parentPath, ancestors: untrustedReplace }), /observer_private_windows_configured_parent_untrusted_write_grant/u)
+
+  const reparseAncestor = windowsExternalParentFixture(parentPath)
+  reparseAncestor[1].reparse = true
+  assert.throws(() => validateWindowsConfiguredPrivateParent({ currentUserSid: windowsUserSid,
+    parentPath, ancestors: reparseAncestor }), /observer_private_windows_configured_parent_acl_invalid/u)
+
+  const candidate = path.resolve(os.tmpdir(), 'observer-audit-external-parent-fixture', runId)
+  const marker = path.join(path.dirname(candidate), '.git')
+  const fakeLstat = async (filename: string): Promise<any> => {
+    if (filename === marker) return { isSymbolicLink: () => false }
+    const error = Object.assign(new Error('missing'), { code: 'ENOENT' })
+    throw error
+  }
+  await assert.rejects(assertOutsideGitWorktrees(candidate, fakeLstat as any),
+    /observer_private_state_inside_git_worktree/u)
+  const symlinkAncestor = path.dirname(candidate)
+  await assert.rejects(assertNoReparseAncestors(candidate, (async (filename: string) =>
+    filename === symlinkAncestor ? { isSymbolicLink: () => true } : { isSymbolicLink: () => false }) as any),
   /observer_private_path_missing_or_reparse_point/u)
 })
 

@@ -15,7 +15,6 @@ import {
   powershellScriptWithUtf8Output,
   validatePrivateAclSnapshot,
   validatePrivatePosixStat,
-  validateWindowsAncestorChain,
   validateWindowsProfileIdentity,
 } from './protocol-finalizer.mjs'
 
@@ -59,6 +58,19 @@ const fail = code => { const error = new Error(code); error.code = code; throw e
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const postgresSystemIdentifierPattern = /^\d{10,20}$/u
 const verifiedBackendIdentities = new WeakSet()
+const WINDOWS_SYSTEM_SID = 'S-1-5-18'
+const WINDOWS_ADMINISTRATORS_SID = 'S-1-5-32-544'
+const WINDOWS_TRUSTED_INSTALLER_SID = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+const WINDOWS_PRIVATE_PARENT_OWNER_SIDS = new Set([
+  WINDOWS_SYSTEM_SID, WINDOWS_ADMINISTRATORS_SID, WINDOWS_TRUSTED_INSTALLER_SID,
+])
+// Mirrored from the finalizer's write/replace classification so external path
+// checks reject delete, replacement, ownership, and ACL mutation grants.
+const WINDOWS_PRIVATE_PARENT_WRITE_MASK = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000
+  | 0x40000 | 0x80000 | 0x10000000 | 0x40000000
+// Only non-inheriting child creation plus directory traversal/read is allowed
+// on an ancestor; the configured parent itself has a protected exact ACL.
+const WINDOWS_PRIVATE_PARENT_SAFE_ADD_MASK = 0x1 | 0x2 | 0x4 | 0x8 | 0x20 | 0x80 | 0x20000 | 0x100000
 
 function suffixFromRunId(runId) { return runId.replaceAll('-', '').slice(0, 12) }
 function projectFromRunId(runId) { return `${PROJECT_PREFIX}-${suffixFromRunId(runId)}` }
@@ -189,6 +201,116 @@ export function validatePrivateBasePath(candidatePath, platform = process.platfo
     fail('observer_private_state_path_invalid')
   }
   return pathApi.resolve(candidatePath)
+}
+
+function normalizedWindowsPrivatePath(candidatePath) {
+  if (typeof candidatePath !== 'string' || !candidatePath || candidatePath.includes('\0')
+    || !path.win32.isAbsolute(candidatePath)) fail('observer_private_windows_configured_parent_invalid')
+  const normalized = path.win32.normalize(path.win32.resolve(candidatePath))
+  const root = path.win32.parse(normalized).root
+  return (normalized.toLowerCase() === root.toLowerCase()
+    ? root : normalized.replace(/\\+$/u, '')).toLowerCase()
+}
+
+function validateWindowsPrivateParentAce(entry) {
+  if (!entry || typeof entry.sid !== 'string' || !/^S-1-[0-9-]+$/u.test(entry.sid)
+    || !['Allow', 'Deny'].includes(entry.type) || !Number.isInteger(entry.rightsMask)
+    || typeof entry.inherited !== 'boolean' || typeof entry.appliesToObject !== 'boolean'
+    || typeof entry.inheritOnly !== 'boolean' || typeof entry.containerInherit !== 'boolean'
+    || typeof entry.objectInherit !== 'boolean' || typeof entry.noPropagateInherit !== 'boolean'
+    || typeof entry.inheritedToChild !== 'boolean' || typeof entry.tokenMatch !== 'boolean'
+    || entry.inheritOnly === entry.appliesToObject
+    || entry.inheritedToChild !== (entry.containerInherit || entry.objectInherit)) {
+    fail('observer_private_windows_configured_parent_acl_invalid')
+  }
+  return entry
+}
+
+function validateWindowsPrivateParentNode(node, expectedDepth) {
+  const entries = node?.entries
+  if (!node || node.depth !== expectedDepth || node.reparse !== false || typeof node.daclProtected !== 'boolean'
+    || !Array.isArray(entries) || entries.length === 0
+    || !Number.isInteger(node.daclAceCount) || node.daclAceCount !== entries.length
+    || node.daclPresent !== true || node.daclNull !== false || node.daclInspectable !== true
+    || node.daclEmpty !== false || typeof node.daclControlFlags !== 'string'
+    || !node.daclControlFlags.split(',').map(flag => flag.trim()).includes('DiscretionaryAclPresent')) {
+    fail('observer_private_windows_configured_parent_acl_invalid')
+  }
+  for (const entry of entries) validateWindowsPrivateParentAce(entry)
+  return entries
+}
+
+export function validateWindowsConfiguredPrivateParent({ currentUserSid, parentPath, ancestors }) {
+  if (typeof currentUserSid !== 'string' || !/^S-1-[0-9-]+$/u.test(currentUserSid)
+    || !Array.isArray(ancestors) || ancestors.length === 0) {
+    fail('observer_private_windows_configured_parent_invalid')
+  }
+  const parent = normalizedWindowsPrivatePath(parentPath)
+  const ordered = [...ancestors].sort((left, right) => left?.depth - right?.depth)
+  const baseNode = ordered[0]
+  const baseEntries = validateWindowsPrivateParentNode(baseNode, 0)
+  if (normalizedWindowsPrivatePath(baseNode.path) !== parent || baseNode.ownerSid !== currentUserSid
+    || baseNode.daclProtected !== true || ![2, 3].includes(baseEntries.length)) {
+    fail('observer_private_windows_configured_parent_acl_invalid')
+  }
+
+  const baseAllowed = new Set([currentUserSid, WINDOWS_SYSTEM_SID, WINDOWS_ADMINISTRATORS_SID])
+  const baseSeen = new Set()
+  for (const entry of baseEntries) {
+    if (!baseAllowed.has(entry.sid) || baseSeen.has(entry.sid) || entry.type !== 'Allow'
+      || entry.rights !== 'FullControl' || entry.rightsMask !== 2032127 || entry.inherited !== false) {
+      fail('observer_private_windows_configured_parent_acl_invalid')
+    }
+    baseSeen.add(entry.sid)
+  }
+  if (!baseSeen.has(currentUserSid) || !baseSeen.has(WINDOWS_SYSTEM_SID)) {
+    fail('observer_private_windows_configured_parent_acl_invalid')
+  }
+
+  const trustedOwners = new Set([currentUserSid, ...WINDOWS_PRIVATE_PARENT_OWNER_SIDS])
+  const trustedPrincipals = trustedOwners
+  for (let index = 0; index < ordered.length; index += 1) {
+    const node = ordered[index]
+    const entries = index === 0 ? baseEntries : validateWindowsPrivateParentNode(node, index)
+    const normalizedNode = normalizedWindowsPrivatePath(node.path)
+    const expectedPath = index === 0
+      ? parent
+      : normalizedWindowsPrivatePath(path.win32.dirname(ordered[index - 1].path))
+    if (normalizedNode !== expectedPath || !trustedOwners.has(node.ownerSid)) {
+      fail('observer_private_windows_configured_parent_ancestry_invalid')
+    }
+
+    const child = index === 0 ? null : ordered[index - 1]
+    for (const rawEntry of entries) {
+      const entry = validateWindowsPrivateParentAce(rawEntry)
+      if (entry.type === 'Deny') {
+        if (entry.tokenMatch && (entry.rightsMask & WINDOWS_PRIVATE_PARENT_WRITE_MASK) !== 0
+          && (entry.appliesToObject || entry.inheritedToChild && child?.daclProtected !== true)) {
+          fail('observer_private_windows_configured_parent_effective_deny')
+        }
+        continue
+      }
+      if (trustedPrincipals.has(entry.sid)
+        || (entry.rightsMask & WINDOWS_PRIVATE_PARENT_WRITE_MASK) === 0) continue
+
+      if (!entry.appliesToObject) {
+        if (entry.inheritedToChild && child?.daclProtected !== true) {
+          fail('observer_private_windows_configured_parent_inherited_write_grant')
+        }
+        continue
+      }
+      const safeAddOnly = index > 0 && entry.containerInherit === false && entry.objectInherit === false
+        && (entry.rightsMask & ~WINDOWS_PRIVATE_PARENT_SAFE_ADD_MASK) === 0
+        && (entry.rightsMask & (0x2 | 0x4)) !== 0
+      if (!safeAddOnly) fail('observer_private_windows_configured_parent_untrusted_write_grant')
+    }
+  }
+
+  const last = ordered.at(-1)
+  if (normalizedWindowsPrivatePath(path.win32.dirname(last.path)) !== normalizedWindowsPrivatePath(last.path)) {
+    fail('observer_private_windows_configured_parent_ancestry_invalid')
+  }
+  return true
 }
 
 export function assertObserverHostRuntime(nodeVersion, dependencyState) {
@@ -496,12 +618,8 @@ async function inspectPrivateBase(privateBase) {
         { OWNERINC_AUDIT_ACL_PATH: privateBase }))
     } catch { fail('observer_private_windows_ancestor_acl_output_invalid') }
     if (snapshot?.currentUserSid !== identity.currentUserSid) fail('observer_private_windows_token_identity_changed')
-    // Reuse the existing strict Windows ancestry validator with the approved
-    // scratch parent as its trust anchor. The actual Windows profile identity
-    // was independently checked above; this validates the chosen location's
-    // ACL chain whether it is profile-local or an approved external parent.
-    validateWindowsAncestorChain({ currentUserSid: identity.currentUserSid,
-      profilePath: privateBase, registeredProfilePath: privateBase, ancestors: snapshot.ancestors })
+    validateWindowsConfiguredPrivateParent({ currentUserSid: identity.currentUserSid,
+      parentPath: privateBase, ancestors: snapshot.ancestors })
   } else if (typeof process.getuid !== 'function' || info.uid !== process.getuid() || (info.mode & 0o022) !== 0) {
     fail('observer_private_parent_owner_or_permissions_invalid')
   }
