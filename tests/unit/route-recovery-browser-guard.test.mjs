@@ -135,6 +135,38 @@ test('editorial availability fixture is a legitimate legacy/unavailable response
   });
 });
 
+test('v2 CMS availability is an exact read fixture and unknown routes remain guarded', () => {
+  const url = 'http://127.0.0.1:8080/api/cms/v2/session/availability';
+  assert.deepEqual(resolveRouteRecoveryAPI({ url, method: 'GET', role: 'admin' }), {
+    kind: 'fixture', status: 200,
+    body: { version: 2, adminEntryAllowed: false, runtimeAvailable: false, canEnterAdmin: true },
+  }, 'the fixture reports superAdmin permission separately and does not claim a live Payload runtime');
+  assert.deepEqual(resolveRouteRecoveryAPI({ url, method: 'GET', role: 'viewer' }), {
+    kind: 'fixture', status: 200,
+    body: { version: 2, adminEntryAllowed: false, runtimeAvailable: false, canEnterAdmin: false },
+  }, 'availability permission must match the existing synthetic Portal role');
+
+  const unknownWrite = resolveRouteRecoveryAPI({
+    url: 'http://127.0.0.1:8080/api/cms/v2/session/availability-extra', method: 'POST', role: 'admin',
+  });
+  assert.deepEqual(unknownWrite, {
+    kind: 'denied-write', status: 405, body: { error: 'route_recovery_read_only' },
+  }, 'a POST to an unrecognized API path is denied before fixture resolution');
+
+  for (const pathname of [
+    '/api/cms/v2/session/availability-extra',
+    '/api/cms/v2/session/availability/extra',
+    '/api/cms/v2/session/availability-v2',
+  ]) {
+    assert.deepEqual(resolveRouteRecoveryAPI({
+      url: `http://127.0.0.1:8080${pathname}`, method: 'GET', role: 'admin',
+    }), {
+      kind: 'unknown-api', status: 404,
+      body: { error: 'route_recovery_fixture_missing', path: pathname },
+    }, `similarly named route must not receive a synthetic 200: ${pathname}`);
+  }
+});
+
 test('static source comparator preserves BOM bytes and rejects a same-length wrong HTML body', () => {
   const local = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('<!doctype html>\n<title>CMS1</title>\n')]);
   const exact = compareStaticResponseBytes(local, Buffer.from(local));
