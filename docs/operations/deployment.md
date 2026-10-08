@@ -94,6 +94,20 @@ a imagem com tag do commit para GHCR e expõe o digest validado em
 `cms-image-digest.txt` (referência completa `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:…`)
 e `cms-image-source.txt` (SHA do commit de origem).
 
+Para publicar somente uma imagem candidata CMS de um branch já enviado ao GitHub,
+dispare o workflow existente `ci.yml` com `cms_image_only=true`:
+
+```sh
+gh workflow run ci.yml --ref feat/payload-cms-final -f cms_image_only=true
+```
+
+Esse modo continua executando a validação completa, construindo e escaneando as
+imagens de API, cron e CMS, mas publica apenas CMS e seu artefato de digest. Ele
+não publica API/cron, não gera o artefato legacy `image-digests` e nunca inicia
+`deploy-production`, inclusive quando o ref selecionado é `main`. O modo normal
+permanece: push para `main` ou dispatch na `main` com a opção omitida/desativada.
+Pull requests e refs que não sejam branches não publicam imagens.
+
 Essa publicação **não ativa nem implanta o Payload CMS em produção**: não altera o
 artefato legacy `image-digests`, o arquivo `.ci-images` de duas linhas, o manifesto
 da VPS, Compose, banco ou autoridade CMS. Até que adapter/receiver, backup e

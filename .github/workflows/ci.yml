@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      cms_image_only:
+        description: Publish only the CMS image from this branch; skip API/cron release and production deployment
+        required: false
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main]
@@ -15,7 +21,7 @@ jobs:
     outputs:
       api_image: ${{ steps.publish.outputs.api_image }}
       cron_image: ${{ steps.publish.outputs.cron_image }}
-      cms_image: ${{ steps.publish.outputs.cms_image }}
+      cms_image: ${{ steps.publish_cms.outputs.cms_image }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -160,7 +166,10 @@ jobs:
           name: sbom-spdx
           path: '*.spdx.json'
       - name: Authenticate to GHCR
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        if: >-
+          ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' && inputs.cms_image_only != true) ||
+          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true)
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           registry: ghcr.io
@@ -168,20 +177,32 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish immutable images
         id: publish
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' && inputs.cms_image_only != true
         env:
           REGISTRY: ghcr.io/ownerinc
         run: |
           docker tag ownerinc-portal-api:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
           docker tag ownerinc-portal-cron:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
-          docker tag ownerinc-portal-cms:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
           docker push ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
           docker push ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
-          docker push ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
           docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA} > image-digests.txt
           docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA} >> image-digests.txt
           echo "api_image=$(sed -n '1p' image-digests.txt)" >> "$GITHUB_OUTPUT"
           echo "cron_image=$(sed -n '2p' image-digests.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish CMS immutable image
+        id: publish_cms
+        if: >-
+          ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' && inputs.cms_image_only != true) ||
+          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true)
+        env:
+          REGISTRY: ghcr.io/ownerinc
+        run: |
+          docker tag ownerinc-portal-cms:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
+          docker push ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
           cms_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA})
           [[ "$cms_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]]
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -189,12 +210,17 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" > cms-image-source.txt
           echo "cms_image=$cms_image" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' && inputs.cms_image_only != true
         with:
           name: image-digests
           path: image-digests.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        if: >-
+          ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' && inputs.cms_image_only != true) ||
+          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true)
         with:
           name: cms-image-digest
           path: |
@@ -204,7 +230,7 @@ jobs:
   deploy-production:
     name: Deploy production
     needs: validate
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 25
