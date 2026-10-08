@@ -13,6 +13,11 @@ import {
 import { NEWS_MUTATION_LEDGER_DDL, NEWS_MUTATION_TABLES } from '../src/publication/mutation-ledger'
 import { buildNewsMutationTriggersDDL } from '../src/publication/mutation-triggers'
 import {
+  buildNewsMigrationBootstrapRunDDL,
+  NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE,
+  NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS,
+} from '../src/publication/bootstrap-run'
+import {
   newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
   newsProtocolObserverPrivilegesVerificationSQL,
   newsProtocolObserverRoleVerificationSQL,
@@ -28,13 +33,21 @@ const MIGRATIONS = [
   '20261006_181424_z_owner_news_native',
 ] as const
 const LOCK_ID = 7194030
-const APPROVED_PROTOCOL_SIGNATURES = [
+const V1_PROTOCOL_SIGNATURES = [
   'public.owner_news_mutation_guard_stmt()',
   'public.owner_news_mutation_capture_row()',
   'public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)',
   'public.owner_news_migration_item_binding_guard()',
 ] as const
-const APPROVED_PROTOCOL_OID_ARRAY_SQL = `ARRAY[${APPROVED_PROTOCOL_SIGNATURES.map(signature => `to_regprocedure('${signature}')::oid`).join(',')}]`
+const V2_PROTOCOL_SIGNATURES = [...V1_PROTOCOL_SIGNATURES, NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE] as const
+const PROTOCOL_FUNCTION_NAMES = [
+  'owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row', 'owner_news_seal_run',
+  'owner_news_migration_item_binding_guard', 'owner_news_bootstrap_run',
+] as const
+function approvedProtocolOidArraySQL(protocolVersion: 1 | 2): string {
+  const signatures = protocolVersion === 1 ? V1_PROTOCOL_SIGNATURES : V2_PROTOCOL_SIGNATURES
+  return `ARRAY[${signatures.map(signature => `to_regprocedure('${signature}')::oid`).join(',')}]`
+}
 
 export const finalizerDiagnosticPhases = [
   'connection-configuration', 'admin-connect', 'transaction-begin', 'transaction-lock',
@@ -45,7 +58,7 @@ export const finalizerDiagnosticPhases = [
   'precondition-protocol-inventory', 'precondition-control-ownership', 'precondition-native-privileges',
   'precondition-installed-state', 'precondition-observer-role', 'precondition-observer-privileges',
   'protocol-head-read', 'protocol-ledger-ddl', 'protocol-trigger-ddl', 'protocol-binding-ddl',
-  'protocol-grants', 'verify-installed', 'transaction-commit', 'transaction-rollback',
+  'protocol-grants', 'protocol-bootstrap-ddl', 'verify-installed', 'transaction-commit', 'transaction-rollback',
 ] as const
 export type FinalizerDiagnosticPhase = typeof finalizerDiagnosticPhases[number]
 export type FinalizerTriggerDiagnosticDetails = {
@@ -77,7 +90,7 @@ export type FinalizerFailureDiagnostic = {
 }
 export type FinalizerCloseDiagnostic = { phase: 'admin-disconnect'; sqlstate: string | null }
 export type FinalizerCloseWarningSink = (diagnostic: FinalizerCloseDiagnostic) => void
-export type ProtocolInstallationState = 'empty' | 'complete'
+export type ProtocolInstallationState = 'empty' | 'v1' | 'v2' | 'partial'
 
 const finalizerDiagnosticReasons = new Set([
   'admin_database_url_required', 'unsafe_admin_database_url', 'unsafe_admin_target',
@@ -89,6 +102,7 @@ const finalizerDiagnosticReasons = new Set([
   'native_enum_catalog_mismatch', 'native_required_constraint_missing', 'native_snapshot_index_missing_or_mismatched',
   'native_snapshot_foreign_key_mismatch', 'native_control_column_types_mismatch', 'native_item_run_id_type_mismatch',
   'control_role_contract_mismatch', 'partial_protocol_installation_manual_recovery_required',
+  'protocol_upgrade_required', 'protocol_upgrade_requires_v1',
   'unsafe_preinstallation_control_state', 'diagnostic_installed_protocol_deep_check_skipped',
   'ledger_head_invalid_or_coverage_activated', 'canonical_function_mismatch', 'canonical_function_inventory_unavailable',
   'trigger_inventory_count_mismatch', 'trigger_key_missing', 'trigger_key_duplicate',
@@ -341,6 +355,7 @@ const CONTROL_RUN_UPDATE_COLUMNS = new Set([
   'admission_state', 'activation_epoch', 'drain_receipt_sha256', 'reconciliation_sequence',
   'reconciliation_chain_sha256', 'sealed_sequence', 'sealed_chain_sha256', 'sealed_at',
 ])
+const CONTROL_RUN_INSERT_COLUMNS = new Set<string>(NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS)
 export const NEWS_MIGRATION_ITEM_BINDING_DDL = `
 CREATE OR REPLACE FUNCTION public.owner_news_migration_item_binding_guard()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
@@ -528,6 +543,18 @@ function functionBodies(ddl: string): Map<string, string> {
   return extractCanonicalFunctionBodies(ddl, [
     'owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row', 'owner_news_seal_run',
   ])
+}
+
+function protocolFunctionBodies(version: 1 | 2): Map<string, string> {
+  const expected = functionBodies(buildNewsMutationTriggersDDL())
+  expected.set('owner_news_migration_item_binding_guard', bindingBody())
+  if (version === 2) {
+    const bootstrapBody = extractCanonicalFunctionBodies(buildNewsMigrationBootstrapRunDDL(), ['owner_news_bootstrap_run'])
+      .get('owner_news_bootstrap_run')
+    if (bootstrapBody === undefined) return fail('canonical_function_inventory_unavailable')
+    expected.set('owner_news_bootstrap_run', bootstrapBody)
+  }
+  return expected
 }
 
 function bindingBody(): string {
@@ -776,26 +803,41 @@ async function checkPreconditions(client: FinalizerClient,
     (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname='public' AND c.relname IN ('owner_news_mutation_head','owner_news_mutation_events')) AS ledger_relations,
     (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-      WHERE n.nspname='public' AND p.proname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_seal_run','owner_news_migration_item_binding_guard')) AS protocol_functions,
+      WHERE n.nspname='public' AND p.proname = ANY($2::name[])) AS protocol_functions,
+    (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname='public' AND p.proname::text ~ '^owner_news_' AND NOT p.proname = ANY($2::name[])) AS unexpected_protocol_functions,
+    (SELECT count(*) FROM unnest($3::text[]) AS signature(value)
+      WHERE pg_catalog.to_regprocedure(signature.value) IS NOT NULL) AS v1_signatures,
+    (pg_catalog.to_regprocedure($4::text) IS NOT NULL) AS bootstrap_signature,
      (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND t.tgname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_migration_item_binding_guard','owner_news_migration_run_binding_guard')) AS protocol_triggers,
+       WHERE n.nspname='public' AND t.tgname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_migration_item_binding_guard','owner_news_migration_run_binding_guard')) AS protocol_triggers,
     (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND c.relname = ANY($1::text[]) AND NOT t.tgisinternal) AS inventory_triggers`, [NEWS_MUTATION_TABLES])
+      WHERE n.nspname='public' AND c.relname = ANY($1::text[]) AND NOT t.tgisinternal) AS inventory_triggers`,
+  [NEWS_MUTATION_TABLES, PROTOCOL_FUNCTION_NAMES, V1_PROTOCOL_SIGNATURES, NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE])
   const stateRow = state.rows[0]
   const empty = Number(stateRow?.ledger_relations) === 0 && Number(stateRow?.protocol_functions) === 0
+    && Number(stateRow?.unexpected_protocol_functions) === 0
+    && Number(stateRow?.v1_signatures) === 0 && stateRow?.bootstrap_signature === false
     && Number(stateRow?.protocol_triggers) === 0 && Number(stateRow?.inventory_triggers) === 0
-  const complete = Number(stateRow?.ledger_relations) === 2 && Number(stateRow?.protocol_functions) === 4
-    && Number(stateRow?.protocol_triggers) === NEWS_MUTATION_TABLES.length * 2 + 2
+  const triggerInventoryComplete = Number(stateRow?.protocol_triggers) === NEWS_MUTATION_TABLES.length * 2 + 2
     && Number(stateRow?.inventory_triggers) === NEWS_MUTATION_TABLES.length * 2 + 2
-  requireGuard(empty || complete, 'partial_protocol_installation_manual_recovery_required')
-  if (!empty && !complete) return null
-  if (complete && readOnlyDiagnosis && !observerAudit) {
+  const v1 = Number(stateRow?.ledger_relations) === 2 && Number(stateRow?.protocol_functions) === 4
+    && Number(stateRow?.unexpected_protocol_functions) === 0
+    && Number(stateRow?.v1_signatures) === V1_PROTOCOL_SIGNATURES.length
+    && stateRow?.bootstrap_signature === false && triggerInventoryComplete
+  const v2 = Number(stateRow?.ledger_relations) === 2 && Number(stateRow?.protocol_functions) === 5
+    && Number(stateRow?.unexpected_protocol_functions) === 0
+    && Number(stateRow?.v1_signatures) === V1_PROTOCOL_SIGNATURES.length
+    && stateRow?.bootstrap_signature === true && triggerInventoryComplete
+  requireGuard(empty || v1 || v2, 'partial_protocol_installation_manual_recovery_required')
+  if (!empty && !v1 && !v2) return 'partial'
+  if ((v1 || v2) && readOnlyDiagnosis && !observerAudit) {
     requireGuard(false, 'diagnostic_installed_protocol_deep_check_skipped')
     return null
   }
-  if (complete) {
+  if (v1 || v2) {
     enter('precondition-installed-state')
-    await verifyInstalled(client, setPhase, { observerAudit })
+    await verifyInstalled(client, setPhase, { observerAudit, protocolVersion: v2 ? 2 : 1 })
   }
   else if (observerAudit) {
     fail('protocol_not_installed')
@@ -810,7 +852,7 @@ async function checkPreconditions(client: FinalizerClient,
       requireGuard(result.rows[0]?.safe === true, 'unsafe_preinstallation_control_state')
     }
   }
-  return empty ? 'empty' : 'complete'
+  return empty ? 'empty' : v2 ? 'v2' : 'v1'
 }
 
 /** Run only the SELECT-based precondition diagnosis in an already-open
@@ -841,25 +883,36 @@ export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerCl
 
 async function verifyInstalled(client: FinalizerClient,
   setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {},
-  options: { observerAudit?: boolean } = {}): Promise<void> {
+  options: { observerAudit?: boolean; protocolVersion: 1 | 2 } = { protocolVersion: 1 }): Promise<void> {
   setPhase('verify-installed')
+  const approvedProtocolOidArray = approvedProtocolOidArraySQL(options.protocolVersion)
   const head = await client.query(`SELECT sequence::text AS sequence, chain_sha256, coverage_version, write_barrier,
     barrier_run_id, barrier_epoch, barrier_receipt_sha256 FROM public.owner_news_mutation_head WHERE singleton=true`)
   const coverage = head.rows[0]?.coverage_version
   if (head.rows.length !== 1 || !/^(0|[1-9][0-9]*)$/u.test(String(head.rows[0]?.sequence))
     || !/^[0-9a-f]{64}$/u.test(String(head.rows[0]?.chain_sha256))
     || (coverage !== 0 && !(options.observerAudit && coverage === 1))
-    || !['open', 'sealed', 'frozen'].includes(String(head.rows[0]?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
+     || !['open', 'sealed', 'frozen'].includes(String(head.rows[0]?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
   const fns = await client.query(`SELECT p.proname AS name, p.prosrc AS source, p.prosecdef AS security_definer,
-    p.proconfig AS config, r.rolname AS owner, p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS canonical_signature
+    p.proconfig AS config, r.rolname AS owner, p.oid = ANY(${approvedProtocolOidArray}) AS canonical_signature,
+    pg_catalog.pg_get_function_result(p.oid) = 'TABLE(id uuid)' AS bootstrap_return_shape,
+    p.proisstrict AS bootstrap_is_strict,
+    p.proargmodes::text[] = ARRAY['i','i','i','i','i','t']::text[] AS bootstrap_argument_modes,
+    p.proargnames = ARRAY['p_run_id','p_manifest_sha256','p_source_instance','p_source_fingerprint',
+      'p_authority_epoch','id']::text[] AS bootstrap_argument_names
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
-    WHERE n.nspname='public' AND p.proname = ANY($1::text[])`, [[...functionBodies(buildNewsMutationTriggersDDL()).keys(), 'owner_news_migration_item_binding_guard']])
-  const expected = functionBodies(buildNewsMutationTriggersDDL())
-  expected.set('owner_news_migration_item_binding_guard', bindingBody())
+    WHERE n.nspname='public' AND p.proname = ANY($1::text[])`, [PROTOCOL_FUNCTION_NAMES])
+  const expected = protocolFunctionBodies(options.protocolVersion)
   if (fns.rows.length !== expected.size || fns.rows.some(row => row.canonical_signature !== true
     || row.security_definer !== (row.name !== 'owner_news_mutation_guard_stmt')
     || row.owner !== 'cms_control' || !Array.isArray(row.config) || !row.config.includes('search_path=pg_catalog, public')
-    || row.source !== expected.get(String(row.name)))) fail(`canonical_function_mismatch:${fns.rows.map(row => `${String(row.name)}:${row.source === expected.get(String(row.name))}`).join(',')}`)
+    || row.source !== expected.get(String(row.name))
+    || row.name === 'owner_news_bootstrap_run' && (row.bootstrap_return_shape !== true
+      || row.bootstrap_is_strict !== false
+      || !catalogTextArrayMatches(row.bootstrap_argument_modes, ['i', 'i', 'i', 'i', 'i', 't'])
+      || !catalogTextArrayMatches(row.bootstrap_argument_names, [
+        'p_run_id', 'p_manifest_sha256', 'p_source_instance', 'p_source_fingerprint', 'p_authority_epoch', 'id',
+      ])))) fail(`canonical_function_mismatch:${fns.rows.map(row => `${String(row.name)}:${row.source === expected.get(String(row.name))}`).join(',')}`)
 
   const triggers = await client.query(`SELECT t.tgname AS name, c.relname AS relation, n.nspname AS relation_schema,
     t.tgenabled AS enabled, t.tgtype::integer AS event_mask,
@@ -867,7 +920,7 @@ async function verifyInstalled(client: FinalizerClient,
     t.tgattr::text AS attribute_vector_text, pg_catalog.pg_typeof(t.tgattr)::text AS attribute_vector_type,
     t.tgnargs::integer AS argument_count, pg_catalog.octet_length(t.tgargs)::integer AS argument_bytes,
     t.tgqual IS NULL AS no_condition,
-    p.proname AS function, p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS function_identity_approved,
+    p.proname AS function, p.oid = ANY(${approvedProtocolOidArray}) AS function_identity_approved,
     pn.nspname AS function_schema, pg_catalog.pg_get_triggerdef(t.oid,false) AS definition
     FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
     JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid
@@ -1024,6 +1077,8 @@ async function verifyInstalled(client: FinalizerClient,
       const allowed = controlAllowed && (relation === 'owner_news_mutation_head' && (privilege === 'select' || privilege === 'update')
         || relation === 'owner_news_mutation_events' && privilege === 'insert'
         || (relation === 'news_migration_runs' || relation === 'news_migration_items') && privilege === 'select'
+        || options.protocolVersion === 2 && relation === 'news_migration_runs'
+          && privilege === 'insert' && CONTROL_RUN_INSERT_COLUMNS.has(column)
         || relation === 'news_migration_runs' && privilege === 'update' && CONTROL_RUN_UPDATE_COLUMNS.has(column))
       if (row[`control_column_${privilege}`] !== allowed || row[`controller_column_${privilege}`] !== false) fail(`control_role_column_acl_mismatch:${relation}:${column}:${privilege}`)
     }
@@ -1042,8 +1097,9 @@ async function verifyInstalled(client: FinalizerClient,
   const observerFunctionProjection = options.observerAudit
     ? `has_function_privilege('cms_observer',p.oid,'EXECUTE') AS observer_execute`
     : `false AS observer_execute`
-  const publicFunctionScope = await client.query(`SELECT p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS approved_function,
+  const publicFunctionScope = await client.query(`SELECT p.oid = ANY(${approvedProtocolOidArray}) AS approved_function,
     p.oid = to_regprocedure('public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)')::oid AS approved_seal,
+    p.oid = to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid AS approved_bootstrap,
     p.oid = to_regprocedure('public.gen_random_uuid()')::oid AS expected_pgcrypto_signature,
     EXISTS (SELECT 1 FROM pg_depend extension_dependency
         JOIN pg_extension extension ON extension.oid=extension_dependency.refobjid
@@ -1060,7 +1116,8 @@ async function verifyInstalled(client: FinalizerClient,
     ${observerFunctionProjection}
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'`)
   const approvedFunctionRows = publicFunctionScope.rows.filter(row => row.approved_function === true)
-  if (approvedFunctionRows.length !== 4 || publicFunctionScope.rows.some(row => {
+  if (approvedFunctionRows.length !== (options.protocolVersion === 2 ? V2_PROTOCOL_SIGNATURES.length : V1_PROTOCOL_SIGNATURES.length)
+    || publicFunctionScope.rows.some(row => {
     const trustedBaseline = row.expected_pgcrypto_signature === true
       && row.pgcrypto_extension_member === true && row.security_definer === false && row.returns_uuid === true
     if (row.public_execute === true && !trustedBaseline) return true
@@ -1071,7 +1128,7 @@ async function verifyInstalled(client: FinalizerClient,
     if (options.observerAudit && row.observer_execute !== (row.expected_pgcrypto_signature === true)) return true
     return row.runtime_execute !== row.public_execute
       || row.control_execute !== (row.approved_function === true || row.public_execute === true)
-      || row.controller_execute !== (row.approved_seal === true || row.public_execute === true)
+      || row.controller_execute !== (row.approved_seal === true || row.approved_bootstrap === true || row.public_execute === true)
   })) fail('public_function_execute_outside_allowlist')
   const acl = await client.query(`SELECT
     has_table_privilege('cms_runtime','public.owner_news_mutation_head','SELECT') AS head_read,
@@ -1079,19 +1136,29 @@ async function verifyInstalled(client: FinalizerClient,
     has_table_privilege('cms_runtime','public.owner_news_mutation_events','SELECT') AS events_read,
     has_table_privilege('cms_runtime','public.owner_news_mutation_events','INSERT') AS events_write,
     has_function_privilege('cms_controller','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS controller_seal,
-    has_function_privilege('cms_runtime','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS runtime_seal`)
+    has_function_privilege('cms_runtime','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS runtime_seal,
+    has_function_privilege('cms_controller',to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid,'EXECUTE') AS controller_bootstrap,
+    has_function_privilege('cms_runtime',to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid,'EXECUTE') AS runtime_bootstrap,
+    EXISTS (SELECT 1 FROM pg_proc bootstrap WHERE bootstrap.oid=to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid
+      AND EXISTS (SELECT 1 FROM aclexplode(COALESCE(bootstrap.proacl,acldefault('f',bootstrap.proowner))) acl
+        WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE')) AS public_bootstrap,
+    ${options.observerAudit
+    ? `has_function_privilege('cms_observer',to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid,'EXECUTE') AS observer_bootstrap`
+    : 'false AS observer_bootstrap'}`)
   const a = acl.rows[0]
   if (!a?.head_read || a.head_write || !a.events_read || a.events_write || !a.controller_seal || a.runtime_seal) fail('protocol_acl_mismatch')
+  if (options.protocolVersion === 2 && (!a.controller_bootstrap || a.runtime_bootstrap || a.public_bootstrap
+    || options.observerAudit && a.observer_bootstrap)) fail('protocol_acl_mismatch')
 
   const ownership = await client.query(`SELECT
       (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
         WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
         AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
-        AND (d.classid <> 'pg_proc'::regclass OR d.objid <> ALL(${APPROVED_PROTOCOL_OID_ARRAY_SQL}))) AS unexpected_control_objects,
+        AND (d.classid <> 'pg_proc'::regclass OR d.objid <> ALL(${approvedProtocolOidArray}))) AS unexpected_control_objects,
      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
       WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
         AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
-        AND d.classid='pg_proc'::regclass AND d.objid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL})) AS approved_control_objects,
+        AND d.classid='pg_proc'::regclass AND d.objid = ANY(${approvedProtocolOidArray})) AS approved_control_objects,
      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
       WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
         AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_owned_objects,
@@ -1100,7 +1167,8 @@ async function verifyInstalled(client: FinalizerClient,
        (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
          WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_shared_owned_objects`)
   const owned = ownership.rows[0]
-  if (Number(owned?.unexpected_control_objects) !== 0 || Number(owned?.approved_control_objects) !== 4
+  if (Number(owned?.unexpected_control_objects) !== 0
+    || Number(owned?.approved_control_objects) !== (options.protocolVersion === 2 ? V2_PROTOCOL_SIGNATURES.length : V1_PROTOCOL_SIGNATURES.length)
     || Number(owned?.controller_owned_objects) !== 0 || Number(owned?.control_shared_owned_objects) !== 0
     || Number(owned?.controller_shared_owned_objects) !== 0) {
     fail(options.observerAudit ? 'observer_visible_ownership_mismatch' : 'unexpected_control_owned_objects')
@@ -1113,6 +1181,7 @@ export type NewsProtocolAuditReport = {
   catalogValid: true
   targetDatabase: 'ownerinc_cms'
   observerRole: 'cms_observer'
+  observedProtocolVersion: 1 | 2
   observedCoverageVersion: 0 | 1
   headSequence: string
   writeBarrier: 'open' | 'sealed' | 'frozen'
@@ -1153,7 +1222,7 @@ export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promis
     }
 
     const protocolState = await checkPreconditions(client, next => { phase = next }, true, undefined, true)
-    if (protocolState !== 'complete') fail('protocol_not_installed')
+    if (protocolState !== 'v1' && protocolState !== 'v2') fail('protocol_not_installed')
 
     const head = await client.query(`SELECT sequence::text AS sequence, coverage_version, write_barrier
       FROM public.owner_news_mutation_head WHERE singleton=true`)
@@ -1167,6 +1236,7 @@ export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promis
     transactionOpen = false
     return {
       status: 'PASS', installed: true, catalogValid: true, targetDatabase: 'ownerinc_cms', observerRole: 'cms_observer',
+      observedProtocolVersion: protocolState === 'v2' ? 2 : 1,
       observedCoverageVersion: row.coverage_version as 0 | 1, headSequence: String(row.sequence),
       writeBarrier: row.write_barrier as NewsProtocolAuditReport['writeBarrier'],
       ready: false, admissionActivated: false, releaseCertified: false, writeCoverageCertified: false, drainVerified: false,
@@ -1183,16 +1253,32 @@ export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promis
   }
 }
 
-export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+type ProtocolFinalizerOperation = 'finalize' | 'upgrade-v1-to-v2'
+
+async function runProtocolFinalizerOperation(client: FinalizerClient, operation: ProtocolFinalizerOperation):
+Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
   let phase: FinalizerDiagnosticPhase = 'transaction-begin'
   let committed = false
   try {
     await client.query('BEGIN')
+    // Canonical DDL contains some unqualified PostgreSQL types and creates the
+    // integration ledger with an unqualified table name. Pin resolution before
+    // any catalog-dependent DDL so caller/database URL settings cannot redirect
+    // object creation or type lookup.
+    await client.query('SET LOCAL search_path = pg_catalog, public')
     phase = 'transaction-lock'
     await client.query(`SELECT pg_catalog.pg_advisory_xact_lock(${LOCK_ID})`)
     const protocolState = await checkPreconditions(client, next => { phase = next })
-    if (protocolState === null) fail('partial_protocol_installation_manual_recovery_required')
-    if (protocolState === 'empty') {
+    if (protocolState === null || protocolState === 'partial') fail('partial_protocol_installation_manual_recovery_required')
+
+    if (operation === 'finalize' && protocolState === 'v1') {
+      fail('protocol_upgrade_required')
+    }
+    if (operation === 'upgrade-v1-to-v2' && protocolState === 'empty') {
+      fail('protocol_upgrade_requires_v1')
+    }
+
+    if (operation === 'finalize' && protocolState === 'empty') {
       phase = 'protocol-ledger-ddl'
       await client.query(NEWS_MUTATION_LEDGER_DDL)
       phase = 'protocol-trigger-ddl'
@@ -1201,12 +1287,18 @@ export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ i
       await client.query(NEWS_MIGRATION_ITEM_BINDING_DDL)
       phase = 'protocol-grants'
       await client.query(grantsSQL)
-      await verifyInstalled(client, next => { phase = next })
+      phase = 'protocol-bootstrap-ddl'
+      await client.query(buildNewsMigrationBootstrapRunDDL())
+      await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
+    } else if (operation === 'upgrade-v1-to-v2' && protocolState === 'v1') {
+      phase = 'protocol-bootstrap-ddl'
+      await client.query(buildNewsMigrationBootstrapRunDDL())
+      await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
     }
     phase = 'transaction-commit'
     await client.query('COMMIT')
     committed = true
-    return { installed: protocolState === 'empty', ready: false, coverageVersion: 0 }
+    return { installed: operation === 'finalize' && protocolState === 'empty', ready: false, coverageVersion: 0 }
   } catch (error) {
     recordFinalizerFailure(error, phase)
     if (!committed) {
@@ -1216,7 +1308,27 @@ export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ i
   }
 }
 
-export async function runFinalizer(env: Record<string, string | undefined> = process.env,
+export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runProtocolFinalizerOperation(client, 'finalize')
+}
+
+export async function upgradeNewsProtocolV1ToV2(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runProtocolFinalizerOperation(client, 'upgrade-v1-to-v2')
+}
+
+export type ProtocolFinalizerCommand = 'finalize' | 'upgrade-v1-to-v2'
+
+/** One exact, single-purpose command flag is required; no default can turn an
+ * ordinary finalizer invocation into an upgrade. */
+export function parseProtocolFinalizerArguments(args: readonly string[]): ProtocolFinalizerCommand | null {
+  if (args.length !== 1) return null
+  if (args[0] === '--finalize-protocol') return 'finalize'
+  if (args[0] === '--upgrade-protocol-v1-to-v2') return 'upgrade-v1-to-v2'
+  return null
+}
+
+async function runAdminProtocolOperation(operation: ProtocolFinalizerOperation,
+  env: Record<string, string | undefined>,
   suppliedClient?: FinalizerClient,
   reportCloseWarning: FinalizerCloseWarningSink = diagnostic => console.error(formatFinalizerCloseDiagnostic(diagnostic))
 ): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
@@ -1235,7 +1347,7 @@ export async function runFinalizer(env: Record<string, string | undefined> = pro
     client = suppliedClient ?? new Client({ connectionString: url!.href, connectionTimeoutMillis: 5000 })
     phase = 'admin-connect'
     await client.connect()
-    result = await finalizeNewsProtocol(client)
+    result = await runProtocolFinalizerOperation(client, operation)
   } catch (error) {
     recordFinalizerFailure(error, phase)
     operationFailed = true
@@ -1260,13 +1372,29 @@ export async function runFinalizer(env: Record<string, string | undefined> = pro
   return result
 }
 
+export async function runFinalizer(env: Record<string, string | undefined> = process.env,
+  suppliedClient?: FinalizerClient,
+  reportCloseWarning?: FinalizerCloseWarningSink
+): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runAdminProtocolOperation('finalize', env, suppliedClient, reportCloseWarning)
+}
+
+export async function runProtocolV1Upgrade(env: Record<string, string | undefined> = process.env,
+  suppliedClient?: FinalizerClient,
+  reportCloseWarning?: FinalizerCloseWarningSink
+): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runAdminProtocolOperation('upgrade-v1-to-v2', env, suppliedClient, reportCloseWarning)
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3 || process.argv[2] !== '--finalize-protocol') {
-    console.error('CMS news protocol finalizer requires --finalize-protocol and CMS_ADMIN_DATABASE_URL')
+  const command = parseProtocolFinalizerArguments(process.argv.slice(2))
+  if (command === null) {
+    console.error('CMS news protocol finalizer requires exactly one of --finalize-protocol or --upgrade-protocol-v1-to-v2 and CMS_ADMIN_DATABASE_URL')
     process.exitCode = 2
   } else {
-    runFinalizer().then(result => {
-      console.log(JSON.stringify({ ...result, message: 'protocol installed/verified; native writes and readiness remain disabled' }))
+    const run = command === 'finalize' ? runFinalizer : runProtocolV1Upgrade
+    run().then(result => {
+      console.log(JSON.stringify({ ...result, message: 'protocol operation complete; native writes and readiness remain disabled' }))
     }).catch(error => {
       console.error('CMS news protocol finalization failed; inspect target privately and use manual recovery for partial state')
       const diagnostic = getFinalizerFailureDiagnostic(error)

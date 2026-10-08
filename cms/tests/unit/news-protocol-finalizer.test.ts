@@ -3,6 +3,11 @@ import test from 'node:test'
 import { NEWS_MUTATION_LEDGER_DDL, NEWS_MUTATION_TABLES } from '../../src/publication/mutation-ledger'
 import { buildNewsMutationTriggersDDL } from '../../src/publication/mutation-triggers'
 import {
+  buildNewsMigrationBootstrapRunDDL,
+  NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE,
+  NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS,
+} from '../../src/publication/bootstrap-run'
+import {
   finalizeNewsProtocol,
   diagnoseFinalizerPreconditionsReadOnly,
   formatFinalizerCloseDiagnostic,
@@ -21,6 +26,8 @@ import {
   parseJsonbDefaultLiteral,
   runFinalizer,
   auditNewsProtocolReadOnly,
+  parseProtocolFinalizerArguments,
+  upgradeNewsProtocolV1ToV2,
   type FinalizerClient,
   type QueryResult,
 } from '../../scripts/finalize-news-protocol'
@@ -78,11 +85,38 @@ function renderPg16TriggerDefinitionFromSource(definition: string, functionUnqua
     + ` FOR EACH ${level} EXECUTE FUNCTION ${functionUnqualified ? '' : 'public.'}${functionName}()`
 }
 
-function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; badControlType?: boolean; partial?: boolean; existing?: boolean; unqualifiedTriggerFunctions?: boolean; unqualifiedTriggerRelation?: boolean; quotedTriggerIdentifiers?: boolean; headRows?: 'empty' | 'multiple' | 'invalid'; tamperFunctionSource?: { name: string; mutation: 'leading-space' | 'trailing-space' | 'interior-space' | 'string-literal' }; badNativeNullability?: boolean; badNativeDefault?: boolean; extraColumnGrant?: boolean; missingConstraint?: boolean; missingIndex?: boolean; missingForeignKey?: boolean; foreignKeyColumnDrift?: 'order' | 'missing' | 'extra'; invalidTrigger?: 'insert-only' | 'wrong-timing' | 'row-level' | 'when' | 'binding' | 'disabled' | 'wrong-function' | 'wrong-function-schema' | 'wrong-function-identity' | 'wrong-event-mask' | 'wrong-column-inventory' | 'wrong-catalog-type' | 'wrong-arguments' | 'duplicate' | 'missing' | 'extra' | 'definition-update-of' | 'definition-duplicate-event' | 'definition-when-literal' | 'definition-case' | 'definition-relation-unqualified' | 'definition-relation-wrong-schema' | 'unqualified-wrong-function-identity' | 'unqualified-wrong-function-schema' | 'unqualified-wrong-function-name'; extraControllerGrant?: boolean; controllerWrongOverload?: boolean; publicDefaultFunction?: boolean; nativePgcryptoBaseline?: boolean; pgcryptoSecurityDefiner?: boolean; pgcryptoNonUuidReturn?: boolean; extraControllerOwnership?: boolean; extraControlWrongNamespaceOwnership?: boolean; unrelatedDatabaseOwnership?: boolean; sharedControlOwnership?: boolean; sharedControllerOwnership?: boolean; wrongProtocolSignature?: boolean; serialDrift?: 'unowned' | 'wrong-column' | 'increment' | 'cycle' | 'range' | 'owner' | 'schema' | 'name-collision'; foreignEnumSchema?: boolean; changedEnumLabels?: boolean; enumLabelDrift?: 'order' | 'missing' | 'extra'; invalidEnumArray?: boolean; jsonbDefaultsMatch?: boolean; failMigrationSqlState?: string; failTriggerSqlState?: string } = {}) {
+function fakeClient(options: {
+  readOnly?: boolean; missingMigration?: boolean; badControlType?: boolean; partial?: boolean; existing?: boolean
+  protocolVersion?: 1 | 2; protocolInventoryDrift?: 'extra-function' | 'missing-bootstrap-signature' | 'bootstrap-overload'
+  wrongBootstrapOwner?: boolean; wrongBootstrapSearchPath?: boolean; observerBootstrapExecute?: boolean
+  bootstrapStrictness?: 'strict' | 'missing' | 'null'
+  unqualifiedTriggerFunctions?: boolean; unqualifiedTriggerRelation?: boolean; quotedTriggerIdentifiers?: boolean
+  headRows?: 'empty' | 'multiple' | 'invalid'
+  tamperFunctionSource?: { name: string; mutation: 'leading-space' | 'trailing-space' | 'interior-space' | 'string-literal' }
+  badNativeNullability?: boolean; badNativeDefault?: boolean; extraColumnGrant?: boolean
+  extraBootstrapColumnGrant?: boolean; missingConstraint?: boolean; missingIndex?: boolean; missingForeignKey?: boolean
+  foreignKeyColumnDrift?: 'order' | 'missing' | 'extra'
+  invalidTrigger?: 'insert-only' | 'wrong-timing' | 'row-level' | 'when' | 'binding' | 'disabled' | 'wrong-function'
+    | 'wrong-function-schema' | 'wrong-function-identity' | 'wrong-event-mask' | 'wrong-column-inventory'
+    | 'wrong-catalog-type' | 'wrong-arguments' | 'duplicate' | 'missing' | 'extra' | 'definition-update-of'
+    | 'definition-duplicate-event' | 'definition-when-literal' | 'definition-case' | 'definition-relation-unqualified'
+    | 'definition-relation-wrong-schema' | 'unqualified-wrong-function-identity' | 'unqualified-wrong-function-schema'
+    | 'unqualified-wrong-function-name'
+  extraControllerGrant?: boolean; controllerWrongOverload?: boolean; publicDefaultFunction?: boolean
+  wrongBootstrapAcl?: 'controller' | 'runtime' | 'public'
+  nativePgcryptoBaseline?: boolean; pgcryptoSecurityDefiner?: boolean; pgcryptoNonUuidReturn?: boolean
+  extraControllerOwnership?: boolean; extraControlWrongNamespaceOwnership?: boolean; unrelatedDatabaseOwnership?: boolean
+  sharedControlOwnership?: boolean; sharedControllerOwnership?: boolean; wrongProtocolSignature?: boolean
+  wrongBootstrapReturnShape?: boolean; wrongBootstrapArgumentNames?: boolean; failBootstrapSqlState?: string
+  serialDrift?: 'unowned' | 'wrong-column' | 'increment' | 'cycle' | 'range' | 'owner' | 'schema' | 'name-collision'
+  foreignEnumSchema?: boolean; changedEnumLabels?: boolean; enumLabelDrift?: 'order' | 'missing' | 'extra'
+  invalidEnumArray?: boolean; jsonbDefaultsMatch?: boolean; failMigrationSqlState?: string; failTriggerSqlState?: string
+} = {}) {
   const statements: string[] = []
   const jsonbComparisonParams: unknown[][] = []
   let activeRole = 'cms_admin'
-  let protocolLedgerExists = Boolean(options.existing)
+  let protocolVersion = options.protocolVersion ?? (options.existing ? 2 : 0)
+  let protocolLedgerExists = protocolVersion > 0
   const catalogDefault = (tableName: string, column: { type: string; name: string; default?: unknown }) => {
     const table = tableName.replace(/^public\./u, '')
     if (column.type === 'serial') return `nextval('${table}_${column.name}_seq'::regclass)`
@@ -169,6 +203,7 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
     ['owner_news_mutation_capture_row', independentDollarBody(triggerDDL, 'owner_news_mutation_capture_row')],
     ['owner_news_seal_run', independentDollarBody(triggerDDL, 'owner_news_seal_run')],
     ['owner_news_migration_item_binding_guard', independentDollarBody(NEWS_MIGRATION_ITEM_BINDING_DDL, 'owner_news_migration_item_binding_guard')],
+    ['owner_news_bootstrap_run', independentDollarBody(buildNewsMigrationBootstrapRunDDL(), 'owner_news_bootstrap_run')],
   ]
   if (options.tamperFunctionSource) {
     const target = bodies.find(([name]) => name === options.tamperFunctionSource!.name)
@@ -178,7 +213,9 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
     target[1] = mutation === 'leading-space' ? ` ${body}`
       : mutation === 'trailing-space' ? `${body} `
         : mutation === 'interior-space' ? body.replace('\n  ', '\n   ')
-          : body.replace("'owner_news_mutation_ledger_unavailable'", "'owner_news_mutation_ledger_unavailablE'")
+          : body.includes("'owner_news_mutation_ledger_unavailable'")
+            ? body.replace("'owner_news_mutation_ledger_unavailable'", "'owner_news_mutation_ledger_unavailablE'")
+            : body.replace("'owner_news_bootstrap_identity_conflict'", "'owner_news_bootstrap_identity_conflicT'")
   }
   const client: FinalizerClient = {
     connect: async () => {}, end: async () => {},
@@ -190,6 +227,15 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
       }
       if (sql === NEWS_MUTATION_LEDGER_DDL) {
         protocolLedgerExists = true
+        return { rows: [] }
+      }
+      if (sql === buildNewsMigrationBootstrapRunDDL()) {
+        if (options.failBootstrapSqlState) {
+          const error = new Error('sensitive bootstrap DDL message must not appear in diagnostic') as Error & { code: string }
+          error.code = options.failBootstrapSqlState
+          throw error
+        }
+        protocolVersion = 2
         return { rows: [] }
       }
       if (sql === buildNewsMutationTriggersDDL() && options.failTriggerSqlState) {
@@ -273,13 +319,23 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
         ) return { rows: [{ safe: true }] }
       if (sql === runtimeProtocolFunctionsVerifySQL || sql === runtimeProtocolPrivilegesVerifySQL) return { rows: [{ safe: true }] }
       if (sql.includes('AS runtime_seal')) return { rows: [{ head_read: true, head_write: false, events_read: true,
-        events_write: false, controller_seal: true, runtime_seal: false }] }
+        events_write: false, controller_seal: true, runtime_seal: false, controller_bootstrap: protocolVersion === 2,
+        runtime_bootstrap: false, public_bootstrap: false, observer_bootstrap: options.observerBootstrapExecute === true }] }
       if (sql.includes('AS function_safe')) return { rows: [{ safe: true, function_safe: true }] }
       if (sql.includes('AS safe')) return { rows: [{ safe: true }] }
       if (sql.includes('AS ledger_relations')) return { rows: [options.partial
-        ? { ledger_relations: 1, protocol_functions: 0, protocol_triggers: 0, inventory_triggers: 0 }
-        : options.existing ? { ledger_relations: 2, protocol_functions: 4, protocol_triggers: NEWS_MUTATION_TABLES.length * 2 + 2, inventory_triggers: NEWS_MUTATION_TABLES.length * 2 + 2 }
-           : { ledger_relations: 0, protocol_functions: 0, protocol_triggers: 0, inventory_triggers: 0 }] }
+        ? { ledger_relations: 1, protocol_functions: 0, unexpected_protocol_functions: 0, v1_signatures: 0, bootstrap_signature: false, protocol_triggers: 0, inventory_triggers: 0 }
+        : protocolVersion > 0 ? {
+          ledger_relations: 2,
+          protocol_functions: (protocolVersion === 2 ? 5 : 4)
+            + (options.protocolInventoryDrift === 'extra-function' ? 1 : 0)
+            + (options.protocolInventoryDrift === 'bootstrap-overload' ? 1 : 0),
+          unexpected_protocol_functions: options.protocolInventoryDrift === 'extra-function' ? 1 : 0,
+          v1_signatures: options.protocolInventoryDrift === 'missing-bootstrap-signature' ? 3 : 4,
+          bootstrap_signature: protocolVersion === 2 && options.protocolInventoryDrift !== 'missing-bootstrap-signature',
+          protocol_triggers: NEWS_MUTATION_TABLES.length * 2 + 2, inventory_triggers: NEWS_MUTATION_TABLES.length * 2 + 2,
+        } : { ledger_relations: 0, protocol_functions: 0, unexpected_protocol_functions: 0, v1_signatures: 0, bootstrap_signature: false,
+          protocol_triggers: 0, inventory_triggers: 0 }] }
       if (sql.includes('FROM public.owner_news_mutation_head')) {
         if (!protocolLedgerExists) {
           const error = new Error('relation does not exist') as Error & { code: string }
@@ -292,7 +348,28 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
         if (options.headRows === 'invalid') return { rows: [{ ...validHead, coverage_version: 1 }] }
         return { rows: [validHead] }
       }
-      if (sql.includes('FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles')) return { rows: bodies.map(([name, body]) => ({ name, source: body, security_definer: name !== 'owner_news_mutation_guard_stmt', config: ['search_path=pg_catalog, public'], owner: 'cms_control', canonical_signature: !(options.wrongProtocolSignature && name === 'owner_news_seal_run') })) }
+      if (sql.includes('FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles')) {
+        const activeBodies = bodies.filter(([name]) => name !== 'owner_news_bootstrap_run' || protocolVersion === 2)
+        const rows = activeBodies.map(([name, body]) => ({ name, source: body,
+          security_definer: name !== 'owner_news_mutation_guard_stmt',
+          config: name === 'owner_news_bootstrap_run' && options.wrongBootstrapSearchPath
+            ? ['search_path=public'] : ['search_path=pg_catalog, public'],
+          owner: name === 'owner_news_bootstrap_run' && options.wrongBootstrapOwner ? 'cms_migrator' : 'cms_control',
+          canonical_signature: !(options.wrongProtocolSignature && name === 'owner_news_seal_run'),
+          bootstrap_return_shape: name === 'owner_news_bootstrap_run' && options.wrongBootstrapReturnShape !== true,
+          ...(name === 'owner_news_bootstrap_run' && options.bootstrapStrictness === 'missing' ? {} : {
+            bootstrap_is_strict: name === 'owner_news_bootstrap_run'
+              ? options.bootstrapStrictness === 'null' ? null : options.bootstrapStrictness === 'strict'
+              : false,
+          }),
+          bootstrap_argument_modes: name === 'owner_news_bootstrap_run' ? ['i', 'i', 'i', 'i', 'i', 't'] : null,
+          bootstrap_argument_names: name === 'owner_news_bootstrap_run' && options.wrongBootstrapArgumentNames !== true
+            ? ['p_run_id', 'p_manifest_sha256', 'p_source_instance', 'p_source_fingerprint', 'p_authority_epoch', 'id'] : null }))
+        if (options.protocolInventoryDrift === 'bootstrap-overload') {
+          rows.push({ ...rows.find(row => row.name === 'owner_news_bootstrap_run')!, source: 'overload-body' })
+        }
+        return { rows }
+      }
       if (sql.includes('FROM pg_trigger t JOIN pg_class')) return { rows: triggerRows }
       if (sql.includes('SELECT c.relname AS relation') && sql.includes("has_table_privilege('cms_control'")) {
         type RelationColumns = readonly [relation: string, columns: readonly string[]]
@@ -303,12 +380,15 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
           const controlSelect = ['news_migration_runs', 'news_migration_items', 'owner_news_mutation_head'].includes(relation)
           const controlInsert = relation === 'owner_news_mutation_events'
           const controlUpdate = relation === 'owner_news_mutation_head'
+          const controlColumnInsert = controlInsert || relation === 'news_migration_runs'
+            && protocolVersion === 2 && NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS.some(name => name === column)
+            || options.extraBootstrapColumnGrant === true && relation === 'news_migration_runs' && column === 'created_at'
           const controlColumnUpdate = controlUpdate
             || relation === 'news_migration_runs' && ['admission_state', 'activation_epoch', 'drain_receipt_sha256', 'reconciliation_sequence', 'reconciliation_chain_sha256', 'sealed_sequence', 'sealed_chain_sha256', 'sealed_at'].includes(column)
           return { relation, kind: 'r', column_name: column,
             control_select: controlSelect, control_insert: controlInsert, control_update: controlUpdate,
             control_delete: false, control_truncate: false, control_references: false, control_trigger: false,
-            control_column_select: controlSelect, control_column_insert: controlInsert, control_column_update: controlColumnUpdate,
+            control_column_select: controlSelect, control_column_insert: controlColumnInsert, control_column_update: controlColumnUpdate,
             control_column_references: false, controller_select: false, controller_insert: false, controller_update: false,
             controller_delete: false, controller_truncate: false, controller_references: false, controller_trigger: false,
             controller_column_select: false, controller_column_insert: false, controller_column_update: false,
@@ -318,20 +398,36 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
         if (options.extraColumnGrant) rows.push({ ...rows[0]!, relation: 'news_articles', column_name: 'id', control_column_update: true })
         return { rows }
       }
-      if (sql.includes('AS pgcrypto_extension_member')) return { rows: [
-        { approved_function: true, approved_seal: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: false, runtime_execute: false },
-        { approved_function: true, approved_seal: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: false, runtime_execute: false },
-        { approved_function: true, approved_seal: true, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: true, runtime_execute: false },
-        { approved_function: true, approved_seal: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: false, runtime_execute: false },
-        ...(options.nativePgcryptoBaseline ? [{ approved_function: false, approved_seal: false, expected_pgcrypto_signature: true, pgcrypto_extension_member: true, security_definer: options.pgcryptoSecurityDefiner ?? false, returns_uuid: !(options.pgcryptoNonUuidReturn ?? false), public_execute: true, control_execute: true, controller_execute: true, runtime_execute: true }] : []),
-        ...(options.publicDefaultFunction ? [{ approved_function: false, approved_seal: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: false, returns_uuid: true, public_execute: true, control_execute: true, controller_execute: true, runtime_execute: true }] : []),
-        ...(options.extraControllerGrant ? [{ approved_function: false, approved_seal: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: false, returns_uuid: false, public_execute: false, control_execute: false, controller_execute: true, runtime_execute: false }] : []),
-        ...(options.controllerWrongOverload ? [{ approved_function: false, approved_seal: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: false, returns_uuid: false, public_execute: false, control_execute: false, controller_execute: true, runtime_execute: false }] : []),
-      ] }
+      if (sql.includes('AS pgcrypto_extension_member')) {
+        const rows = [
+          { approved_function: true, approved_seal: false, approved_bootstrap: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: false, runtime_execute: false },
+          { approved_function: true, approved_seal: false, approved_bootstrap: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: false, runtime_execute: false },
+          { approved_function: true, approved_seal: true, approved_bootstrap: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: true, runtime_execute: false },
+          { approved_function: true, approved_seal: false, approved_bootstrap: false, expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false, public_execute: false, control_execute: true, controller_execute: false, runtime_execute: false },
+        ]
+        if (protocolVersion === 2) rows.push({ approved_function: true, approved_seal: false, approved_bootstrap: true,
+          expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: true, returns_uuid: false,
+          public_execute: options.wrongBootstrapAcl === 'public', control_execute: true,
+          controller_execute: options.wrongBootstrapAcl !== 'controller', runtime_execute: options.wrongBootstrapAcl === 'runtime' })
+        if (options.nativePgcryptoBaseline) rows.push({ approved_function: false, approved_seal: false, approved_bootstrap: false,
+          expected_pgcrypto_signature: true, pgcrypto_extension_member: true, security_definer: options.pgcryptoSecurityDefiner ?? false,
+          returns_uuid: !(options.pgcryptoNonUuidReturn ?? false), public_execute: true, control_execute: true,
+          controller_execute: true, runtime_execute: true })
+        if (options.publicDefaultFunction) rows.push({ approved_function: false, approved_seal: false, approved_bootstrap: false,
+          expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: false, returns_uuid: true,
+          public_execute: true, control_execute: true, controller_execute: true, runtime_execute: true })
+        if (options.extraControllerGrant) rows.push({ approved_function: false, approved_seal: false, approved_bootstrap: false,
+          expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: false, returns_uuid: false,
+          public_execute: false, control_execute: false, controller_execute: true, runtime_execute: false })
+        if (options.controllerWrongOverload) rows.push({ approved_function: false, approved_seal: false, approved_bootstrap: false,
+          expected_pgcrypto_signature: false, pgcrypto_extension_member: false, security_definer: false, returns_uuid: false,
+          public_execute: false, control_execute: false, controller_execute: true, runtime_execute: false })
+        return { rows }
+      }
       if (sql.includes("c.relkind='S'")) return { rows: [] }
       if (sql.includes('AS unexpected_control_objects')) return { rows: [{ head_read: true, head_write: false, events_read: true, events_write: false, controller_seal: true, runtime_seal: false,
         unexpected_control_objects: options.extraControlWrongNamespaceOwnership || options.extraControllerOwnership ? 1 : 0,
-        approved_control_objects: 4,
+        approved_control_objects: protocolVersion === 2 ? 5 : 4,
         controller_owned_objects: options.extraControllerOwnership ? 1 : 0,
         control_shared_owned_objects: options.sharedControlOwnership ? 1 : 0,
         controller_shared_owned_objects: options.sharedControllerOwnership ? 1 : 0,
@@ -345,7 +441,7 @@ function fakeClient(options: { readOnly?: boolean; missingMigration?: boolean; b
 function configureReadOnlyAuditClient(
   client: FinalizerClient,
   statements: string[],
-  options: { auditTransactionSafe?: boolean; auditSearchPathSafe?: boolean; observerIdentitySafe?: boolean; observerShdependAccessible?: boolean; observerRoleSafe?: boolean; observerPrivilegesSafe?: boolean; observedCoverage?: 0 | 1; invalidCoverage?: boolean; pgcryptoBaselineAbsent?: boolean; observerUnexpectedFunctionExecute?: boolean; ownershipDependency?: { owner: 'cms_control' | 'cms_controller'; classid: string; dbid?: number; objid?: number } } = {},
+  options: { protocolVersion?: 1 | 2; auditTransactionSafe?: boolean; auditSearchPathSafe?: boolean; observerIdentitySafe?: boolean; observerShdependAccessible?: boolean; observerRoleSafe?: boolean; observerPrivilegesSafe?: boolean; observedCoverage?: 0 | 1; invalidCoverage?: boolean; pgcryptoBaselineAbsent?: boolean; observerUnexpectedFunctionExecute?: boolean; observerBootstrapExecute?: boolean; ownershipDependency?: { owner: 'cms_control' | 'cms_controller'; classid: string; dbid?: number; objid?: number } } = {},
 ) {
   const originalQuery = client.query.bind(client)
   client.query = async (sql, values) => {
@@ -389,14 +485,16 @@ function configureReadOnlyAuditClient(
       return { rows: result.rows.map((row, index) => {
         const expectedSignature = options.pgcryptoBaselineAbsent ? null : row.expected_pgcrypto_signature
         return { ...row, expected_pgcrypto_signature: expectedSignature,
-          observer_execute: options.observerUnexpectedFunctionExecute === true && index === 0
+          observer_execute: options.observerBootstrapExecute === true && index === 4
+            ? true : options.observerUnexpectedFunctionExecute === true && index === 0
             ? true : expectedSignature === true }
       }) }
     }
     if (sql.includes('AS unexpected_control_objects')) {
       statements.push(sql)
       const roleOids = { cms_control: 41002, cms_controller: 41003 }
-      const approvedFunctionOids = new Set([42001, 42002, 42003, 42004])
+      const approvedFunctionOids = new Set(options.protocolVersion === 1
+        ? [42001, 42002, 42003, 42004] : [42001, 42002, 42003, 42004, 42005])
       const mockedDependencies = [
         ...[...approvedFunctionOids].map(objid => ({ classid: 'pg_proc', objid,
           refclassid: 'pg_authid', refobjid: roleOids.cms_control, deptype: 'o', dbid: 16384 })),
@@ -550,6 +648,7 @@ test('installed protocol audit reuses native/finalizer catalogs in a repeatable-
   const report = await auditNewsProtocolReadOnly(client)
   assert.deepEqual(report, {
     status: 'PASS', installed: true, catalogValid: true, targetDatabase: 'ownerinc_cms', observerRole: 'cms_observer',
+    observedProtocolVersion: 2,
     observedCoverageVersion: 0, headSequence: '17', writeBarrier: 'open', ready: false, admissionActivated: false,
     releaseCertified: false, writeCoverageCertified: false, drainVerified: false,
     passwordPresenceCheck: 'not_performed_unprivileged', clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check',
@@ -559,10 +658,12 @@ test('installed protocol audit reuses native/finalizer catalogs in a repeatable-
   assert.equal(statements[1], "SET LOCAL statement_timeout = '5s'")
   assert.equal(statements[2], 'SET LOCAL search_path = pg_catalog, public')
   assert.equal(statements.at(-1), 'COMMIT')
+  assert.ok(statements.some(sql => sql.includes('p.proisstrict AS bootstrap_is_strict')))
   assert.ok(statements.includes(controlRolesPublicVerificationSQL))
   assert.ok(statements.includes(newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL))
   assert.ok(statements.includes(newsProtocolObserverRoleVerificationSQL))
   assert.ok(statements.includes(newsProtocolObserverPrivilegesVerificationSQL))
+  assert.match(newsProtocolObserverPrivilegesVerificationSQL, /owner_news_bootstrap_run/u)
   assert.ok(statements.some(sql => /FROM pg_catalog\.pg_shdepend d/u.test(sql)))
   assert.ok(statements.some(sql => /FROM pg_shdepend d/u.test(sql)))
   assert.equal(statements.includes(controlRolesVerificationSQL), false)
@@ -580,6 +681,121 @@ test('installed protocol audit reuses native/finalizer catalogs in a repeatable-
   assert.match(ownershipQuery ?? '', /AS approved_control_objects/u)
   assert.match(ownershipQuery ?? '', /AS control_shared_owned_objects/u)
   assert.match(ownershipQuery ?? '', /AS controller_shared_owned_objects/u)
+})
+
+test('observer reports exact V1 separately from coverage and never enters a mutation path', async () => {
+  const { client, statements } = fakeClient({ protocolVersion: 1, readOnly: true, existing: true })
+  configureReadOnlyAuditClient(client, statements, { protocolVersion: 1, observedCoverage: 1 })
+
+  const report = await auditNewsProtocolReadOnly(client)
+  assert.equal(report.observedProtocolVersion, 1)
+  assert.equal(report.observedCoverageVersion, 1)
+  assert.equal(report.ready, false)
+  assert.equal(report.writeCoverageCertified, false)
+  assert.ok(statements.includes('COMMIT'))
+  assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+  assert.equal(statements.some(sql => /^(?:CREATE|ALTER|GRANT|REVOKE|INSERT|UPDATE|DELETE|TRUNCATE)\b/iu.test(sql.trim())), false)
+  assert.equal(statements.some(sql => /\b(?:pg_advisory_xact_lock|SET\s+(?:LOCAL\s+)?ROLE|RESET\s+ROLE)\b/iu.test(sql)), false)
+})
+
+for (const protocolInventoryDrift of ['extra-function', 'missing-bootstrap-signature', 'bootstrap-overload'] as const) {
+  test(`observer rejects V2 ${protocolInventoryDrift} catalog state read-only`, async () => {
+    const { client, statements } = fakeClient({ readOnly: true, protocolVersion: 2, existing: true, protocolInventoryDrift })
+    configureReadOnlyAuditClient(client, statements, { protocolVersion: 2 })
+
+    const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+    assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'partial_protocol_installation_manual_recovery_required')
+    assert.equal(statements.at(-1), 'ROLLBACK')
+    assert.equal(statements.includes('COMMIT'), false)
+    assert.equal(statements.some(sql => /^(?:CREATE|ALTER|GRANT|REVOKE|INSERT|UPDATE|DELETE|TRUNCATE)\b/iu.test(sql.trim())), false)
+  })
+}
+
+test('observer rejects a bootstrap overload mixed into V1 without changing coverage classification', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, protocolVersion: 1, existing: true, protocolInventoryDrift: 'bootstrap-overload' })
+  configureReadOnlyAuditClient(client, statements, { protocolVersion: 1, observedCoverage: 1 })
+
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'partial_protocol_installation_manual_recovery_required')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
+test('observer denies effective EXECUTE on the V2 bootstrap RPC and rolls back its read-only snapshot', async () => {
+  const { client, statements } = fakeClient({ readOnly: true, existing: true, observerBootstrapExecute: true })
+  configureReadOnlyAuditClient(client, statements, { protocolVersion: 2 })
+
+  const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'protocol_acl_mismatch')
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
+for (const bootstrapStrictness of ['strict', 'missing', 'null'] as const) {
+  test(`finalizer V2 verification rejects bootstrap proisstrict=${bootstrapStrictness} catalog metadata without repair`, async () => {
+    const { client, statements } = fakeClient({ protocolVersion: 2, bootstrapStrictness })
+    const error = await finalizeNewsProtocol(client).catch(value => value)
+
+    assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'canonical_function_mismatch')
+    assert.equal(statements.at(-1), 'ROLLBACK')
+    assert.equal(statements.includes('COMMIT'), false)
+    assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+    assert.ok(statements.some(sql => sql.includes('p.proisstrict AS bootstrap_is_strict')))
+  })
+}
+
+for (const bootstrapStrictness of ['strict', 'missing', 'null'] as const) {
+  test(`observer rejects bootstrap proisstrict=${bootstrapStrictness} in its read-only snapshot`, async () => {
+    const { client, statements } = fakeClient({ readOnly: true, protocolVersion: 2, existing: true, bootstrapStrictness })
+    configureReadOnlyAuditClient(client, statements, { protocolVersion: 2 })
+    const error = await auditNewsProtocolReadOnly(client).catch(value => value)
+
+    assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'canonical_function_mismatch')
+    assert.equal(statements.at(-1), 'ROLLBACK')
+    assert.equal(statements.includes('COMMIT'), false)
+    assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+    assert.ok(statements.some(sql => sql.includes('p.proisstrict AS bootstrap_is_strict')))
+  })
+}
+
+test('bootstrap RPC SQL is a controller-bound contract and an offline source assertion, not SQL integration', () => {
+  const ddl = buildNewsMigrationBootstrapRunDDL()
+  const body = independentDollarBody(ddl, 'owner_news_bootstrap_run')
+  assert.equal((ddl.match(/CREATE OR REPLACE FUNCTION public\.owner_news_bootstrap_run\(/gu) || []).length, 1)
+  assert.match(ddl, /RETURNS TABLE\(id uuid\)[\s\S]*?LANGUAGE plpgsql[\s\S]*?CALLED ON NULL INPUT[\s\S]*?SECURITY DEFINER[\s\S]*?SET search_path = pg_catalog, public/u)
+  assert.match(ddl, /REVOKE ALL ON FUNCTION public\.owner_news_bootstrap_run\(uuid,text,text,text,integer\) FROM PUBLIC, cms_runtime/u)
+  assert.match(ddl, /GRANT EXECUTE ON FUNCTION public\.owner_news_bootstrap_run\(uuid,text,text,text,integer\) TO cms_controller/u)
+  assert.match(ddl, /ALTER FUNCTION public\.owner_news_bootstrap_run\(uuid,text,text,text,integer\) OWNER TO cms_control/u)
+  assert.match(ddl, new RegExp(`GRANT INSERT \\(${NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS.join(', ')}\\)[\\s\\S]*?TO cms_control`, 'u'))
+  assert.match(body, /session_user IS DISTINCT FROM 'cms_controller'[\s\S]*?pg_advisory_xact_lock\(7194030\)/u)
+  assert.ok(body.indexOf("session_user IS DISTINCT FROM 'cms_controller'") < body.indexOf('pg_advisory_xact_lock(7194030)'))
+  assert.ok(body.indexOf('pg_advisory_xact_lock(7194030)') < body.indexOf('FROM public.owner_news_mutation_head'))
+  assert.ok(body.indexOf('FROM public.owner_news_mutation_head') < body.indexOf('FROM public.news_migration_runs'))
+  assert.match(body, /INTO STRICT head_sequence,[\s\S]*?WHERE head\.singleton IS TRUE[\s\S]*?FOR UPDATE/u)
+  assert.match(body, /WHEN NO_DATA_FOUND OR TOO_MANY_ROWS[\s\S]*?owner_news_bootstrap_head_unavailable/u)
+  assert.match(body, /head_sequence < 0[\s\S]*?head_chain_sha256 !~ '\^\[0-9a-f\]\{64\}\$'[\s\S]*?head_coverage_version NOT IN \(0, 1\)/u)
+  assert.match(body, /head_write_barrier IS DISTINCT FROM 'open'[\s\S]*?RETURN QUERY SELECT run_by_id\.id AS id/u)
+  assert.match(body, /p_run_id IS NULL[\s\S]*?p_manifest_sha256 !~ '\^\[0-9a-f\]\{64\}\$'[\s\S]*?length\(p_source_instance\) NOT BETWEEN 1 AND 128[\s\S]*?p_authority_epoch >= 2147483647/u)
+  assert.match(body, /p_source_fingerprint IS NULL OR p_source_fingerprint !~ '\^\[0-9a-f\]\{64\}\$'/u)
+  assert.match(body, /run_by_id\.source_instance IS DISTINCT FROM p_source_instance[\s\S]*?run_by_id\.source_fingerprint IS DISTINCT FROM p_source_fingerprint[\s\S]*?run_by_id\.authority_epoch IS DISTINCT FROM p_authority_epoch::numeric/u)
+  assert.match(body, /run_by_id\.id IS DISTINCT FROM p_run_id[\s\S]*?run_by_id\.manifest_sha256 IS DISTINCT FROM p_manifest_sha256/u)
+  assert.match(body, /WHERE runs\.id = p_run_id[\s\S]*?WHERE runs\.manifest_sha256 = p_manifest_sha256/u)
+  assert.match(body, /IF NOT manifest_found[\s\S]*?run_by_id\.id IS DISTINCT FROM run_by_manifest\.id[\s\S]*?owner_news_bootstrap_identity_conflict/u)
+  assert.match(body, /IF manifest_found THEN[\s\S]*?owner_news_bootstrap_identity_conflict/u)
+  assert.match(body, /'preparing',[\s\S]*?'open',[\s\S]*?'acknowledged',[\s\S]*?'\[\]'::jsonb/u)
+  assert.equal((body.match(/INSERT INTO public\.news_migration_runs/gu) || []).length, 1)
+  assert.doesNotMatch(body, /\b(?:INSERT\s+INTO|UPDATE)\s+public\.owner_news_mutation_(?:head|events)\b/iu)
+  assert.doesNotMatch(body, /EXECUTE\s+/iu)
+  assert.equal(NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE, 'public.owner_news_bootstrap_run(uuid,text,text,text,integer)')
+  assert.deepEqual([...NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS], [
+    'id', 'manifest_sha256', 'source_instance', 'source_fingerprint', 'authority_epoch',
+    'progress_state', 'admission_state', 'commit_outcome', 'unresolved_exceptions',
+  ])
+  assert.equal(parseProtocolFinalizerArguments(['--finalize-protocol']), 'finalize')
+  assert.equal(parseProtocolFinalizerArguments(['--upgrade-protocol-v1-to-v2']), 'upgrade-v1-to-v2')
+  assert.equal(parseProtocolFinalizerArguments([]), null)
+  assert.equal(parseProtocolFinalizerArguments(['--finalize-protocol', '--upgrade-protocol-v1-to-v2']), null)
+  assert.equal(parseProtocolFinalizerArguments(['--unknown']), null)
 })
 
 test('observer audit accepts no public pgcrypto baseline without confusing SQL NULL for effective EXECUTE', async () => {
@@ -631,6 +847,7 @@ test('read-only audit reports observed coverage 1 without readiness, activation,
   configureReadOnlyAuditClient(client, statements, { observedCoverage: 1 })
 
   const report = await auditNewsProtocolReadOnly(client)
+  assert.equal(report.observedProtocolVersion, 2)
   assert.equal(report.observedCoverageVersion, 1)
   assert.equal(report.ready, false)
   assert.equal(report.admissionActivated, false)
@@ -770,7 +987,8 @@ test('finalizer installs atomically only after exact native inventory and role c
   const result = await finalizeNewsProtocol(client)
   assert.deepEqual(result, { installed: true, ready: false, coverageVersion: 0 })
   assert.equal(statements[0], 'BEGIN')
-  assert.ok(statements[1]?.includes('pg_advisory_xact_lock(7194030)'))
+  assert.equal(statements[1], 'SET LOCAL search_path = pg_catalog, public')
+  assert.ok(statements[2]?.includes('pg_advisory_xact_lock(7194030)'))
   assert.ok(statements.includes(controlRolesVerificationSQL))
   assert.ok(statements.includes(controlRolesOwnershipVerificationSQL))
   assert.ok(statements.includes(controlRolesNativePrivilegesVerificationSQL))
@@ -778,8 +996,10 @@ test('finalizer installs atomically only after exact native inventory and role c
   assert.ok(statements.includes('RESET ROLE'))
   assert.match(runtimeProtocolPrivilegesVerifySQL, /has_table_privilege\('cms_runtime'/u)
   assert.match(runtimeProtocolFunctionsVerifySQL, /has_function_privilege\('cms_runtime'/u)
+  assert.match(runtimeProtocolFunctionsVerifySQL, /owner_news_bootstrap_run/u)
   assert.ok(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')))
   assert.ok(statements.includes(NEWS_MUTATION_LEDGER_DDL))
+  assert.ok(statements.includes(buildNewsMigrationBootstrapRunDDL()))
   assert.ok(statements.indexOf(NEWS_MUTATION_LEDGER_DDL) < statements.findIndex(sql => sql.includes('FROM public.owner_news_mutation_head')))
   assert.equal(statements.filter(sql => sql.includes('SELECT sequence::text AS sequence')).length, 1)
   assert.ok(statements.includes(NATIVE_ENUM_CATALOG_SQL))
@@ -789,6 +1009,129 @@ test('finalizer installs atomically only after exact native inventory and role c
   assert.ok(statements.some(sql => sql.includes('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cms_runtime')))
   assert.equal(statements.at(-1), 'COMMIT')
   assert.equal(statements.some(sql => /UPDATE\s+public\.owner_news_mutation_head[^;]*coverage_version|SET\s+coverage_version/u.test(sql)), false)
+})
+
+test('ordinary finalizer verifies exact V1 then returns upgrade-required without DDL', async () => {
+  const { client, statements } = fakeClient({ protocolVersion: 1 })
+  const error = await finalizeNewsProtocol(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'protocol_upgrade_required')
+  assert.equal(statements.includes(buildNewsMigrationBootstrapRunDDL()), false)
+  assert.equal(statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(statements.includes(buildNewsMutationTriggersDDL()), false)
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
+test('explicit V1-to-V2 upgrade changes only the bootstrap RPC and exact insert grants', async () => {
+  const { client, statements } = fakeClient({ protocolVersion: 1 })
+  const result = await upgradeNewsProtocolV1ToV2(client)
+
+  assert.deepEqual(result, { installed: false, ready: false, coverageVersion: 0 })
+  assert.equal(statements.filter(sql => sql === buildNewsMigrationBootstrapRunDDL()).length, 1)
+  assert.equal(statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(statements.includes(buildNewsMutationTriggersDDL()), false)
+  assert.equal(statements.includes(NEWS_MIGRATION_ITEM_BINDING_DDL), false)
+  assert.ok(statements.some(sql => sql.includes('protocol_functions') && sql.includes('pg_catalog.to_regprocedure')))
+  assert.equal(statements.at(-1), 'COMMIT')
+  assert.equal(statements.some(sql => /UPDATE\s+public\.owner_news_mutation_head[^;]*coverage_version|SET\s+coverage_version/u.test(sql)), false)
+})
+
+test('exact V2 finalization and explicit upgrade retry verify without protocol DDL', async () => {
+  for (const operation of [finalizeNewsProtocol, upgradeNewsProtocolV1ToV2]) {
+    const { client, statements } = fakeClient({ protocolVersion: 2 })
+    assert.deepEqual(await operation(client), { installed: false, ready: false, coverageVersion: 0 })
+    assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+    assert.ok(statements.some(sql => sql.includes('p.proisstrict AS bootstrap_is_strict')))
+    assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL || sql === buildNewsMutationTriggersDDL()), false)
+    assert.equal(statements.at(-1), 'COMMIT')
+  }
+})
+
+test('explicit upgrade rejects empty protocol without DDL', async () => {
+  const { client, statements } = fakeClient()
+  const error = await upgradeNewsProtocolV1ToV2(client).catch(value => value)
+
+  assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'protocol_upgrade_requires_v1')
+  assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL() || sql === NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
+for (const protocolInventoryDrift of ['extra-function', 'missing-bootstrap-signature', 'bootstrap-overload'] as const) {
+  test(`protocol V2 rejects ${protocolInventoryDrift} inventory before DDL`, async () => {
+    const { client, statements } = fakeClient({ protocolVersion: 2, protocolInventoryDrift })
+    await assert.rejects(finalizeNewsProtocol(client), /partial_protocol_installation_manual_recovery_required/u)
+    assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+    assert.equal(statements.at(-1), 'ROLLBACK')
+  })
+}
+
+test('V2 installed verification rejects wrong bootstrap return or argument identity', async () => {
+  for (const option of [{ wrongBootstrapReturnShape: true }, { wrongBootstrapArgumentNames: true }]) {
+    const { client, statements } = fakeClient({ protocolVersion: 2, ...option })
+    await assert.rejects(finalizeNewsProtocol(client), /canonical_function_mismatch/u)
+    assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+    assert.equal(statements.at(-1), 'ROLLBACK')
+  }
+})
+
+for (const option of [
+  { wrongBootstrapOwner: true },
+  { wrongBootstrapSearchPath: true },
+  { tamperFunctionSource: { name: 'owner_news_bootstrap_run', mutation: 'string-literal' as const } },
+]) {
+  test(`V2 installed verification rejects bootstrap ${Object.keys(option)[0]} drift`, async () => {
+    const { client, statements } = fakeClient({ protocolVersion: 2, ...option })
+    await assert.rejects(finalizeNewsProtocol(client), /canonical_function_mismatch/u)
+    assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+    assert.equal(statements.at(-1), 'ROLLBACK')
+  })
+}
+
+for (const wrongBootstrapAcl of ['controller', 'runtime', 'public'] as const) {
+  test(`V2 installed verification rejects ${wrongBootstrapAcl} bootstrap EXECUTE ACL drift`, async () => {
+    const { client, statements } = fakeClient({ protocolVersion: 2, wrongBootstrapAcl })
+    const error = await finalizeNewsProtocol(client).catch(value => value)
+    assert.ok(['public_function_execute_outside_allowlist', 'protocol_acl_mismatch']
+      .includes(getFinalizerFailureDiagnostic(error)?.reason || ''))
+    assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+    assert.equal(statements.at(-1), 'ROLLBACK')
+  })
+}
+
+test('V2 installed verification rejects column INSERT outside the bootstrap allowlist', async () => {
+  const { client, statements } = fakeClient({ protocolVersion: 2, extraBootstrapColumnGrant: true })
+  await assert.rejects(finalizeNewsProtocol(client), /control_role_column_acl_mismatch/u)
+  assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
+  assert.equal(statements.at(-1), 'ROLLBACK')
+})
+
+test('ordinary finalizer bootstrap DDL failure rolls back the cold install', async () => {
+  const { client, statements } = fakeClient({ failBootstrapSqlState: '42501' })
+  const error = await finalizeNewsProtocol(client).catch(value => value)
+
+  assert.deepEqual(getFinalizerFailureDiagnostic(error), {
+    phase: 'protocol-bootstrap-ddl', reason: 'database_error', sqlstate: '42501',
+  })
+  assert.ok(statements.includes(NEWS_MUTATION_LEDGER_DDL))
+  assert.ok(statements.includes(buildNewsMigrationBootstrapRunDDL()))
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
+})
+
+test('V1 upgrade DDL failure rolls back without replacing native or existing V1 protocol objects', async () => {
+  const { client, statements } = fakeClient({ protocolVersion: 1, failBootstrapSqlState: '42501' })
+  const error = await upgradeNewsProtocolV1ToV2(client).catch(value => value)
+
+  assert.deepEqual(getFinalizerFailureDiagnostic(error), {
+    phase: 'protocol-bootstrap-ddl', reason: 'database_error', sqlstate: '42501',
+  })
+  assert.equal(statements.filter(sql => sql === buildNewsMigrationBootstrapRunDDL()).length, 1)
+  assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL || sql === buildNewsMutationTriggersDDL()
+    || sql === NEWS_MIGRATION_ITEM_BINDING_DDL), false)
+  assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
 })
 
 test('wrong expected migration history aborts and rolls back before any protocol DDL', async () => {

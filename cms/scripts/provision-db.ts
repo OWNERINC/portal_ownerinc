@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE } from '../src/publication/bootstrap-run'
 
 const require = createRequire(import.meta.url)
 type Client = { connect(): Promise<void>; end(): Promise<void>; query(sql: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>; verifyControllerPassword?(): Promise<void> }
@@ -278,7 +279,8 @@ BEGIN
   FOREACH function_signature IN ARRAY ARRAY[
     'public.owner_news_mutation_guard_stmt()',
     'public.owner_news_mutation_capture_row()',
-    'public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)'
+    'public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)',
+    '${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}'
   ] LOOP
     IF to_regprocedure(function_signature) IS NOT NULL THEN
       EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, cms_runtime', to_regprocedure(function_signature));
@@ -339,7 +341,8 @@ export const runtimeProtocolFunctionsVerifySQL = `
 SELECT NOT EXISTS (
   SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
   WHERE n.nspname='public'
-    AND p.proname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_seal_run')
+    AND p.proname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_seal_run',
+      'owner_news_bootstrap_run')
     AND has_function_privilege('cms_runtime',p.oid,'EXECUTE')
 ) AS safe
 `

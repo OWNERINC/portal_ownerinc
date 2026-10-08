@@ -135,7 +135,8 @@ checks AS (
           p.prosecdef
           OR p.proname IN (
             'owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row',
-            'owner_news_seal_run', 'owner_news_migration_item_binding_guard'
+            'owner_news_seal_run', 'owner_news_migration_item_binding_guard',
+            'owner_news_bootstrap_run'
           )
           OR p.oid IS DISTINCT FROM to_regprocedure('public.gen_random_uuid()')::oid
         )

@@ -8,6 +8,8 @@ A suíte real Task15 e seu fluxo portátil de preparação/integração ainda es
 incompletos. Esse PASS delimitado não equivale a prontidão, certificação, aceite
 integrado ou autorização de produção. Resultados por cenário ficam na
 [matriz de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md).
+O PASS observado antes desta atualização não valida o novo RPC V2 nem substitui
+as duas fixtures novas descritas abaixo.
 
 ## Checks separados
 
@@ -68,8 +70,11 @@ O audit exige ausência de membership e de schema CREATE/uso alheio, rejeita gra
 SECURITY DEFINER. Os queries de privilégio nomeiam explicitamente `cms_runtime`;
 nenhuma troca `SET ROLE` é usada.
 
-O relatório observa o estado instalado, `coverage_version` (0 ou 1), sequência e
-barrier sem ler artigos, mídia, schedules, jobs, históricos ou eventos do ledger.
+O relatório observa o estado instalado com `observedProtocolVersion: 1 | 2`,
+derivado da assinatura/identidade exata dos catálogos, e
+`observedCoverageVersion: 0 | 1` como campos independentes. Observa também
+sequência e barrier sem ler artigos, mídia, schedules, jobs, históricos ou eventos
+do ledger.
 Sempre indica `ready=false`, `admissionActivated=false` e certificações de release,
 coverage e drain como falsas. `coverage_version=1` é somente valor observado, não
 certificação de cobertura, seal, destination reconciliation ou cutover. Antes da
@@ -86,10 +91,24 @@ isso não estende a verificação de identidade a outros destinos.
 
 O finalizer one-shot é outro comando e tem fronteira mutável distinta:
 `node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
-requer `CMS_ADMIN_DATABASE_URL` e pode instalar ledger/functions/triggers/grants.
-Nunca use esse finalizer para uma inspeção read-only. Leia
+requer `CMS_ADMIN_DATABASE_URL`; instala protocolo V2 em cold start, verifica V2
+sem DDL e, em V1, falha fechado com `protocol_upgrade_required` sem DDL. Um upgrade
+V1→V2 precisa da escolha explícita e separada
+`node --import tsx cms/scripts/finalize-news-protocol.ts --upgrade-protocol-v1-to-v2`.
+O comando não pré-semeia um run: somente a chamada controller-only ao RPC
+`owner_news_bootstrap_run` cria a primeira linha. Os seis arquivos de migration
+Payload e o snapshot nativo permanecem inalterados; `source_instance` mantém a
+identidade de origem, distinta da identidade física target que um futuro cliente
+deverá verificar. Nunca use esse finalizer para uma inspeção read-only. Leia
 [o runbook de migração](./owner-news-payload-migration.md#finalizer-one-shot-e-auditoria-instalada)
 antes de provisionar ou executar qualquer um deles.
+
+Esta compatibilidade de catálogo e os testes offline não são aceitação de banco.
+Cold install V2 e upgrade V1→V2 precisam de duas novas fixtures PostgreSQL 16 e
+leases one-shot independentes, após autorização separada; não reutilize a fixture
+do observer, leases anteriores, bancos existentes, serviços ou destinos remotos.
+O harness `cms/tests/integration/protocol-finalizer.mjs` ainda aguarda revisão
+fresca e não foi executado para esta alteração.
 
 ### Harness isolado do audit `cms_observer` no PostgreSQL 16
 

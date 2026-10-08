@@ -138,11 +138,69 @@ O finalizer admin one-shot **está implementado** em
 `node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
 usa somente `CMS_ADMIN_DATABASE_URL`, validada para `cms_admin` e o database
 `ownerinc_cms`. É uma operação potencialmente mutável: sob transação e advisory
-lock 7194030 instala ledger/functions/triggers/grants se o protocolo estiver
-ausente; se já estiver completo, verifica no lugar; inventário parcial exige
-recuperação manual. Importa os builders canônicos e verifica schema, history,
-ACLs, ownership e triggers. Não executar o finalizer como substituto de auditoria
-read-only.
+lock 7194030 instala ledger/functions/triggers/grants **e o RPC V2** se o
+protocolo estiver ausente; V2 exato é verificado sem DDL. A versão vem do
+inventário de catálogos (assinaturas, contagem, corpo canônico, owner,
+`SECURITY DEFINER`, `search_path` e ACL efetiva), nunca de `coverage_version`.
+
+O inventário V1 exato contém `owner_news_mutation_guard_stmt()`,
+`owner_news_mutation_capture_row()`,
+`owner_news_seal_run(uuid,text,integer,bigint,text,text,text)` e
+`owner_news_migration_item_binding_guard()`. V2 acrescenta somente
+`owner_news_bootstrap_run(uuid,text,text,text,integer)`. Overloads, assinaturas,
+funções ou estados parciais/mistos fora desses contratos exigem recuperação
+manual; o finalizer não tenta repará-los.
+
+Em V1, a chamada ordinária falha com o diagnóstico estável
+`protocol_upgrade_required` **sem executar DDL**. A atualização é uma operação
+separada e explícita:
+
+```sh
+node --import tsx cms/scripts/finalize-news-protocol.ts --upgrade-protocol-v1-to-v2
+```
+
+Ela revalida profundamente o V1 sob a mesma transação/lock `7194030`, adiciona
+somente a função V2 e seus grants mínimos e verifica o V2 antes do commit. Se
+V2 já estiver instalado, essa operação também é somente verificação. Nenhuma
+dessas operações insere uma linha em `news_migration_runs`; no cold start a
+tabela permanece sem run até uma chamada explícita ao RPC. As seis migrations
+Payload aplicadas e o snapshot nativo permanecem inalterados.
+
+`owner_news_bootstrap_run(run_id uuid, manifest_sha256 text, source_instance
+text, source_fingerprint text, authority_epoch integer) RETURNS TABLE(id uuid)`
+é uma função `SECURITY DEFINER` pertencente a `cms_control`, com `search_path`
+fixo `pg_catalog, public`. Entre roles caller, somente `cms_controller` recebe
+`EXECUTE` explícito; `cms_control` conserva a autoridade inerente a owner. A função
+rejeita qualquer `session_user` diferente de `cms_controller`, inclusive uma
+chamada autenticada por outra role que tente `SET ROLE`. Runtime e controller
+não recebem `INSERT` na tabela. `cms_control` recebe somente `INSERT` nas nove
+colunas nomeadas pela função, além dos privilégios mínimos já existentes para
+consultar/serializar o ledger.
+
+O RPC valida UUID não nulo, hashes SHA-256 hexadecimais minúsculos, identidade
+de origem com 1–128 caracteres e epoch inteiro de 1 até 2147483646. Depois de
+validar a identidade de sessão, toma `7194030`, trava e valida o único head
+com barrier aberto e coverage observado válido (0 ou 1), sem alterar coverage,
+e só então procura os dois identificadores imutáveis: UUID
+do run e hash do manifesto. Colisão cruzada ou divergência de qualquer uma das
+cinco entradas imutáveis é conflito. Retry idêntico retorna o ID sem DML nem
+alteração de timestamps; inclusive esse retry exige barrier aberto. Uma nova
+identidade cria um run em `preparing`/`open`/`acknowledged`, com exceções `[]`,
+deixando reconciliação, selagem, ativação e timestamps sob seus defaults
+nativos. O trigger existente registra exatamente um evento e avança o head;
+RPC não escreve evento/head diretamente. Esse bootstrap não valida/reconcilia
+conteúdo de origem ou destino e não certifica coverage, readiness, drain,
+admission, cutover ou publicação.
+
+`source_instance` continua sendo a identidade **de origem do bundle**, não a
+identidade física PostgreSQL de destino. Um futuro cliente/controller deve
+vincular separadamente o alvo ao system identifier e database OID verificados,
+comitar o RPC controller antes de Payload adquirir `7194030`, e só então abrir
+outra transação Payload usando evidência Portal fresca. Esse helper/caller ainda
+não faz parte desta fatia.
+
+Importa os builders canônicos e verifica schema, history, ACLs, ownership e
+triggers. Não executar o finalizer como substituto de auditoria read-only.
 
 A cobertura continua estrita no finalizer: `coverage_version` deve permanecer
 **0** e o retorno `ready` permanece `false`. O finalizer não ativa escritores,
@@ -165,8 +223,10 @@ membership/atributos públicos da role e seus privilégios efetivos. A
 registro único `owner_news_mutation_head`; não lê artigos, mídia, schedules, jobs,
 histórico ou eventos do ledger. ACLs efetivas também rejeitam grants `PUBLIC` sobre
 relações/colunas da aplicação e execução pública de funções de protocolo (além do
-baseline seguro de `gen_random_uuid`). O relatório observa `coverage_version` (0 ou 1),
-sequência e write barrier, mas sempre mantém `ready=false`,
+baseline seguro de `gen_random_uuid`). O relatório informa
+`observedProtocolVersion: 1 | 2`, derivado do catálogo, separadamente de
+`observedCoverageVersion: 0 | 1`; observar V2 não ativa o protocolo. Também
+informa sequência e write barrier, mas sempre mantém `ready=false`,
 `admissionActivated=false`, `releaseCertified=false`,
 `writeCoverageCertified=false` e `drainVerified=false`. Isso não certifica
 coverage, seal, admission, destino, writes ou liberação.
@@ -180,6 +240,14 @@ sem ampliar o escopo canônico do finalizer (database atual e objetos compartilh
 e hashes não são lidos. O database indicado é conferido pelo nome `ownerinc_cms`,
 mas identidade física de cluster não é afirmada. Sem executar uma integração
 separada e autorizada, nenhum estado remoto ou catalog foi observado.
+
+A implementação do bootstrap e a compatibilidade offline do observer não são
+aceite PostgreSQL. Aceitação de protocolo V2 exige autorização separada e duas
+fixtures/leases novas, independentes: uma para cold install e outra para upgrade
+V1. Não reutilizar fixture/lease do observer, lease anterior, database existente,
+serviço em execução ou destino remoto. O harness de `cms/tests/integration/protocol-finalizer.mjs`
+permanece fora do escopo desta fatia até revisão fresca; nenhuma evidência real
+de RPC/evento/retry/upgrade V2 é afirmada aqui.
 
 As coleções `NewsMigrationRuns`/`NewsMigrationItems` estão registradas em
 `cms/src/payload.config.ts`, têm definição na configuração nativa e aparecem na
