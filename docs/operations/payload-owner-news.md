@@ -107,8 +107,34 @@ Esta compatibilidade de catálogo e os testes offline não são aceitação de b
 Cold install V2 e upgrade V1→V2 precisam de duas novas fixtures PostgreSQL 16 e
 leases one-shot independentes, após autorização separada; não reutilize a fixture
 do observer, leases anteriores, bancos existentes, serviços ou destinos remotos.
-O harness `cms/tests/integration/protocol-finalizer.mjs` ainda aguarda revisão
-fresca e não foi executado para esta alteração.
+Os dois cenários explícitos do harness `cms/tests/integration/protocol-finalizer.mjs`
+estão implementados e têm guards offline. A preparação/execução PostgreSQL não foi
+feita nesta alteração: requer revisão fresca e autorização explícita da sessão
+primária. Com Node 24, dependências CMS já instaladas, Docker local e PostgreSQL 16
+em cache, a sequência autorizada é:
+
+```sh
+node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario fresh-v2
+node cms/tests/integration/protocol-finalizer.mjs --execute --scenario fresh-v2 --lease "<lease privada recém-preparada>"
+node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario upgrade-v1
+node cms/tests/integration/protocol-finalizer.mjs --execute --scenario upgrade-v1 --lease "<outra lease privada recém-preparada>"
+```
+
+Cada `--prepare-lease` somente inspeciona o contexto local, a imagem PostgreSQL 16
+em cache, colisões UUID, porta loopback e parent privado, e grava a lease privada;
+não cria recursos Docker ou databases nem conecta ao PostgreSQL. Cada lease é
+one-shot e amarrada ao cenário. `--execute` cria
+um container/volume e database novos, verifica identidade física antes de DDL,
+preserva a fixture e, depois da claim one-shot, grava relatório em sucesso ou
+falha; não faz cleanup automático.
+`fresh-v2` prova as seis migrations existentes, ausência inicial de runs, cold
+install V2, reentrada sem mudança, observer read-only pré-bootstrap e o contrato
+RPC controller (evento único do trigger, retry sem DML, negações, barreira e ordem
+de locks). `upgrade-v1` constrói o V1 exato com os builders canônicos, prova a
+rejeição ordinária sem mutação e rollback transacional do upgrade, então atualiza
+para V2, verifica reentradas e testa o RPC. Nenhum desses cenários certifica
+Portal/Payload, readiness ou cutover. A revisão offline não substitui os dois
+aceites reais autorizados.
 
 ### Harness isolado do audit `cms_observer` no PostgreSQL 16
 

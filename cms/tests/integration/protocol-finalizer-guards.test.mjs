@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { open, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { buildObserverAuditLease } from './news-protocol-observer-audit.mjs'
 import {
   assertBackendIdentity,
   authorizeDockerPreflight,
@@ -16,6 +17,9 @@ import {
   recordAtomicRollbackComparison,
   recordAtomicRollbackSnapshot,
   recordFinalizerCliEvidence,
+  assertDirectRunInsertDenialEvidence,
+  assertNoBootstrapRunInsertPrivileges,
+  hasSingleBootstrapGrantAbortMarker,
   inspectPreflight,
   isExpectedPublicFunctionRejection,
   leaseDocument,
@@ -42,6 +46,56 @@ test('rollback fixture accepts only the exact sanitized intended finalizer rejec
   assert.equal(isExpectedPublicFunctionRejection(1, `${output}\nreason=public_function_execute_outside_allowlist`), false)
   assert.equal(isExpectedPublicFunctionRejection(1, `${output}\nCMS news protocol diagnostic: phase=verify-installed reason=public_function_execute_outside_allowlist sqlstate=none`), false)
   assert.equal(isExpectedPublicFunctionRejection(1, output.replace('phase=verify-installed ', 'phase=verify-installed secret=private ')), false)
+})
+
+test('V1-to-V2 DDL rollback failure diagnostic is recognized without retaining output', () => {
+  const record = {}
+  recordFinalizerCliEvidence(record, {
+    status: 1, output: [
+      'CMS news protocol finalization failed; inspect target privately and use manual recovery for partial state',
+      'CMS news protocol diagnostic: phase=protocol-bootstrap-ddl reason=database_error sqlstate=P0001',
+    ].join('\n'),
+  })
+  assert.equal(record.finalizerCli.diagnosticStatus, 'parsed')
+  assert.deepEqual(record.finalizerCli.diagnostic, {
+    phase: 'protocol-bootstrap-ddl', reason: 'database_error', sqlstate: 'P0001',
+  })
+  assert.equal(JSON.stringify(record).includes('finalization failed'), false)
+})
+
+test('V1 rollback proof requires absent effective INSERT privileges and denial with unchanged snapshots', () => {
+  assert.equal(assertNoBootstrapRunInsertPrivileges({ tableInsert: false,
+    effectiveColumnInsert: [], explicitColumnInsert: [] }), true)
+  for (const invalid of [
+    { tableInsert: true, effectiveColumnInsert: [], explicitColumnInsert: [] },
+    { tableInsert: false, effectiveColumnInsert: ['id'], explicitColumnInsert: [] },
+    { tableInsert: false, effectiveColumnInsert: [], explicitColumnInsert: ['id'] },
+    { tableInsert: false, effectiveColumnInsert: null, explicitColumnInsert: [] },
+  ]) assert.throws(() => assertNoBootstrapRunInsertPrivileges(invalid),
+    { code: 'cms_control_bootstrap_insert_privileges_persisted' })
+
+  const summary = { headSequence: '0', headChainSha256: 'a'.repeat(64), runRowsSha256: 'b'.repeat(64),
+    eventRowsSha256: 'c'.repeat(64), catalogSha256: 'd'.repeat(64) }
+  assert.equal(assertDirectRunInsertDenialEvidence({ sqlstate: '42501', rollbackSucceeded: true,
+    before: summary, after: { ...summary } }), true)
+  assert.throws(() => assertDirectRunInsertDenialEvidence({ sqlstate: '23505', rollbackSucceeded: true,
+    before: summary, after: summary }), { code: 'direct_run_insert_not_denied_by_privilege' })
+  assert.throws(() => assertDirectRunInsertDenialEvidence({ sqlstate: '42501', rollbackSucceeded: false,
+    before: summary, after: summary }), { code: 'direct_run_insert_denial_changed_protocol_state' })
+  assert.throws(() => assertDirectRunInsertDenialEvidence({ sqlstate: '42501', rollbackSucceeded: true,
+    before: summary, after: { ...summary, eventRowsSha256: 'e'.repeat(64) } }),
+  { code: 'direct_run_insert_denial_changed_protocol_state' })
+})
+
+test('V1 upgrade abort marker requires exactly one nontransactional post-GRANT observation', () => {
+  assert.equal(hasSingleBootstrapGrantAbortMarker({ value: '1', is_called: true }), true)
+  for (const marker of [
+    { value: '0', is_called: false },
+    { value: '1', is_called: false },
+    { value: '2', is_called: true },
+    { value: 'invalid', is_called: true },
+    null,
+  ]) assert.equal(hasSingleBootstrapGrantAbortMarker(marker), false)
 })
 
 function runInjectedFinalizerCli(output, exitCode = 1) {
@@ -173,27 +227,25 @@ test('rollback report shows evidence unavailable when failure occurs before the 
   assert.equal(record.persistedProtocolObjects, null)
 })
 
-const lease = () => ({
-  schemaVersion: 1,
-  project: 'ownerinc-payload-local', dockerContext: 'desktop-linux',
-  dockerEndpoint: 'npipe:////./pipe/dockerDesktopLinuxEngine',
-  runId: '8c72f420-c113-4a6c-9b8e-437a9dd0c5b7',
-  containerName: 'ownerinc-payload-finalizer-8c72f420c113',
-  volumeName: 'ownerinc-payload-finalizer-pgdata-8c72f420c113',
-  host: '127.0.0.1', port: 56391,
-  imageRef: 'postgres:16.4-alpine', imageId: `sha256:${'a'.repeat(64)}`,
+const lease = (overrides = {}) => ({
+  ...buildObserverAuditLease({ runId: '8c72f420-c113-4a6c-9b8e-437a9dd0c5b7', nonce: 'c'.repeat(64),
+    dockerContext: 'desktop-linux', dockerEndpoint: 'npipe:////./pipe/dockerDesktopLinuxEngine',
+    port: 56391, imageRef: 'postgres:16.4-alpine', imageId: `sha256:${'a'.repeat(64)}` }),
+  schemaVersion: 2, scenario: 'fresh-v2', ...overrides,
 })
 
 const validObservation = () => ({
   contextName: 'desktop-linux', contextEndpoint: 'npipe:////./pipe/dockerDesktopLinuxEngine',
+  dockerServerVersion: '27.5.1', projectResourcesExist: false,
   imageId: `sha256:${'a'.repeat(64)}`, imageRefAvailable: true,
   containerExists: false, volumeExists: false,
 })
 
 test('lease guard binds a unique project fixture, pinned cached PostgreSQL 16 image, and nonlegacy loopback port', () => {
   const bound = authorizeDockerPreflight(lease(), validObservation())
-  assert.equal(bound.containerName, 'ownerinc-payload-finalizer-8c72f420c113')
-  assert.equal(bound.volumeName, 'ownerinc-payload-finalizer-pgdata-8c72f420c113')
+  assert.equal(bound.containerName, 'ownerinc-payload-observer-audit-8c72f420c113')
+  assert.equal(bound.volumeName, 'ownerinc-payload-observer-audit-pgdata-8c72f420c113')
+  assert.equal(bound.scenario, 'fresh-v2')
   assert.equal(bound.host, '127.0.0.1')
   assert.notEqual(bound.port, 55441)
   assert.equal(bound.imageId, `sha256:${'a'.repeat(64)}`)
@@ -233,6 +285,10 @@ function mockDockerInfoReaders(observation = validObservation()) {
       if (args[0] === 'context' && args[1] === 'inspect') {
         return [{ Endpoints: { docker: { Host: observation.contextEndpoint } } }]
       }
+      if (args[0] === 'version') return observation.dockerServerVersion
+      if (args[0] === 'ps' || args[0] === 'volume' && args[1] === 'ls') {
+        return observation.projectResourcesExist ? 'resource-collision' : ''
+      }
       throw new Error('unexpected mocked docker inspection')
     },
     dockerOptional(args) {
@@ -259,14 +315,14 @@ test('saved raw lease passes both production preflight guards without normalized
   assert.equal(firstTarget.runId, lease().runId)
   assert.equal(firstTarget.containerName, lease().containerName)
   assert.equal(firstTarget.imageId, lease().imageId)
-  assert.equal(firstReaders.calls.length, 5)
+  assert.equal(firstReaders.calls.length, 8)
 
   // Model a later guarded read from the persisted JSON, not a serialized
   // normalized object; both production helpers must receive the strict raw keys.
   const subsequentRead = JSON.parse(savedRaw)
   const subsequentReaders = mockDockerInfoReaders()
   assert.equal(inspectPreflight(subsequentRead, subsequentReaders).volumeName, lease().volumeName)
-  assert.equal(subsequentReaders.calls.length, 5)
+  assert.equal(subsequentReaders.calls.length, 8)
 
   const normalized = validateLease(firstRead)
   assert.throws(() => inspectPreflight(normalized, mockDockerInfoReaders()), { code: 'lease_identity_invalid' })
@@ -281,6 +337,8 @@ test('saved raw lease passes both production preflight guards without normalized
     { ...firstRead, dockerContext: 'attacker-context' },
     { ...firstRead, dockerEndpoint: 'tcp://remote:2376' },
     { ...firstRead, imageRef: 'postgres:17' },
+    { ...firstRead, scenario: 'observer-audit' },
+    { ...firstRead, schemaVersion: 1 },
   ]
   for (const malformed of malformedRawLeases) {
     const readers = mockDockerInfoReaders()
@@ -300,8 +358,11 @@ test('saved raw lease passes both production preflight guards without normalized
   assert.throws(() => inspectPreflight(firstRead,
     mockDockerInfoReaders({ ...validObservation(), containerExists: true })),
   { code: 'lease_resource_collision_refused' })
+  assert.throws(() => inspectPreflight(firstRead,
+    mockDockerInfoReaders({ ...validObservation(), projectResourcesExist: true })),
+  { code: 'lease_resource_collision_refused' })
   assert.throws(() => validatePrivateLeaseLocation(
-    `C:\\Users\\fixture-owner\\.ownerinc-payload-finalizer-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\\lease.json`,
+    `C:\\Users\\fixture-owner\\.ownerinc-payload-protocol-v2-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\\lease.json`,
     firstRead.runId, 'C:\\Users\\fixture-owner'))
 })
 
@@ -407,7 +468,8 @@ test('failed preflight retains its exclusive claim and writes one new failure re
   assert.deepEqual((await readdir(fixture.runDirectory)).sort(), ['execution.claim.json', 'lease.json', 'report.json'].sort())
   const storedReport = JSON.parse(await readFile(path.join(fixture.runDirectory, 'report.json'), 'utf8'))
   assert.equal(storedReport.status, 'blocked_or_failed_fixture_preserved')
-  assert.deepEqual(storedReport.failure, { stage: 'guarded-preflight', code: 'lease_docker_context_mismatch' })
+  assert.deepEqual(storedReport.failure, { stage: 'guarded-preflight', code: 'lease_docker_context_mismatch',
+    sqlstate: null, stageResult: null })
 })
 
 test('lease schema rejects unknown and prototype-like keys before use', () => {
@@ -612,10 +674,10 @@ test('PowerShell stdout transport preserves non-ASCII profile paths and rejects 
   assert.ok(script.endsWith('Write-Output $env:USERPROFILE'))
 })
 
-test('lease location uses only the unique private profile child and rejects prior Temp lease paths', () => {
+test('lease location uses only the unique external-private-parent child and rejects old lease roots', () => {
   const runId = lease().runId
   const root = 'C:\\Users\\fixture-owner'
-  const newLocation = `C:\\Users\\fixture-owner\\.ownerinc-payload-finalizer-${runId}\\lease.json`
+  const newLocation = `C:\\Users\\fixture-owner\\.ownerinc-payload-protocol-v2-${runId}\\lease.json`
   assert.equal(validatePrivateLeaseLocation(newLocation, runId, root), newLocation)
   assert.throws(() => validatePrivateLeaseLocation(
     `C:\\Users\\fixture-owner\\AppData\\Local\\Temp\\opencode\\ownerinc-payload-finalizer-${runId}\\lease.json`, runId, root))

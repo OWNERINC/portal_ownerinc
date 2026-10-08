@@ -120,27 +120,27 @@ For a newly inserted run, the trigger produces exactly one `news_migration_runs`
 
 ### Task 4: Extend the lease-gated PostgreSQL 16 acceptance harness
 
-**Files:** Modify `cms/tests/integration/protocol-finalizer.mjs`; do not add this runner to `npm test`, `npm run verify`, or automated CI execution.
+**Files:** Modify `cms/tests/integration/protocol-finalizer.mjs` and focused offline guards in `cms/tests/integration/protocol-finalizer-guards.test.mjs` / `cms/tests/unit/news-protocol-v2-integration.test.ts`; do not add this runner to `npm test`, `npm run verify`, or automated CI execution.
 
 **Authorization gate:** Execution requires separate primary-session authorization and two new, independent one-shot leases/fixtures: one fresh fixture for cold install and one fresh fixture for V1 upgrade. Never use the observer fixture, an old lease, an existing target DB, a cached report as acceptance evidence, or an existing service. The implementation worker does not execute these commands without that authorization.
 
-- [ ] Remove `insertCommittedNativeFixture()` and its call before finalization. The native migration ledger should be the only setup state: no cold-start run row is inserted by the harness. Adjust rollback checks to compare the run table's schema/data snapshot even when its starting row count is zero.
-- [ ] Keep each acceptance attempt lease-gated and one-shot. Continue requiring a cached PostgreSQL 16 image, new UUID names/volume/container, loopback-only port publication, separate random secrets, physical system-identifier verification before application DDL, private evidence, and preserved fixtures on success or failure.
-- [ ] Cold-install fixture: apply only the six existing migrations, provision/verify control roles, prove `news_migration_runs` is empty before finalization, run the finalizer, and verify exact V2 plus a pristine head (`coverage_version=0`, barrier open, sequence zero, zero events). Re-enter finalizer and prove no DDL-visible or ledger/head/event change.
-- [ ] V1-upgrade fixture: apply only the six existing migrations and bootstrap roles, install the exact canonical V1 ledger/functions/triggers/grants in the disposable fixture without the RPC, verify the four-signature V1 catalog, capture native schema/data and migration-ledger snapshots, execute finalizer, then prove exact V2 and an otherwise unchanged V1 protocol/head/native snapshot. Re-entry must be verification-only.
-- [ ] Using a real `cms_controller` connection on the V2 fixture, call the RPC with a fresh UUID/manifest/source identity/epoch. Assert exactly one row is returned, exactly one run row is created with fixed initial states, exactly one trigger-generated `news_migration_runs` event is recorded, and head sequence advances exactly once. Assert no manual duplicate event or direct head write occurs.
-- [ ] Repeat the exact same input and assert the same ID is returned with no run-row change, no event, and no head sequence/hash change. Test a closed barrier using an exact retry and assert rejection with zero DML; restore the fixture only by rolling back the test transaction or use an isolated fresh fixture state, never by weakening the barrier check.
-- [ ] Test requested UUID reused with a different manifest/immutable values and requested manifest reused with a different UUID. Both must conflict without row/event/head changes. Verify `cms_runtime`, `cms_observer`, and an unrelated ordinary role are denied RPC execution; verify `cms_controller` cannot directly INSERT into `news_migration_runs` and cannot write ledger tables.
-- [ ] Verify lock ordering with three test connections: hold advisory lock `7194030` inside a transaction on A, start the RPC on B, wait until `pg_stat_activity` shows B waiting on a lock, then have C acquire the head row with `FOR UPDATE NOWAIT`. C must succeed before A releases the advisory lock; then release A and confirm B completes. This proves B did not take the head/run row lock first.
-- [ ] Preserve the existing atomic-install rollback check and add V1-upgrade rollback evidence in the V1 fixture: create a disposable `ddl_command_end` event trigger that recognizes the exact bootstrap function's `ALTER FUNCTION ... OWNER` command after its CREATE/REVOKE/GRANT statements, advances a non-transactional sequence marker, and raises a fixed exception. Run the finalizer expecting failure; prove the marker advanced while the bootstrap function/ACL changes rolled back, the exact V1 catalog remains, and native schema/data plus applied migration history are unchanged. Drop this fixture-only event trigger, then run the successful V1 upgrade. Do not add production SQL failpoints.
-- [ ] Sanitize reports to fixed stage/reason codes, booleans, counts, and hashes; never persist connection strings, passwords, raw SQL errors, source content or article data. Preserve fixture/container/volume and report without automatic cleanup.
-- [ ] Only when explicitly authorized, use the harness's actual prepare/execute interface for **two new independent leases** (one per fixture):
+- [x] Remove `insertCommittedNativeFixture()` and its call before finalization. The native migration ledger is the only cold-start setup state; no harness-created run is preseeded. Rollback snapshots permit an initially empty `news_migration_runs` table.
+- [x] Keep acceptance attempts lease-gated and one-shot. Require a cached PostgreSQL 16 image, UUID-bound resources, loopback-only port publication, distinct random secrets, physical system-identifier verification before application DDL, private evidence, and fixture preservation on success/failure.
+- [x] Cold-install scenario applies only the six existing migrations, provisions/verifies control roles, proves `news_migration_runs` empty before finalization, verifies exact V2 and the pristine head, then proves finalizer re-entry has no catalog/native/ledger/head/event change.
+- [x] V1-upgrade scenario applies the six existing migrations and bootstraps roles, installs canonical V1 builders without the RPC, verifies four signatures, captures native/protocol/migration snapshots, proves ordinary finalization rejects without mutation, then upgrades to exact V2 with only the permitted RPC/column-ACL delta and verification-only re-entry.
+- [x] On each V2 scenario, a real network-authenticated `cms_controller` connection calls the RPC; snapshots prove one returned ID, one created run, one trigger event and one head advance per new identity, fixed initial state, and no manual event/head write.
+- [x] Repeat exact input and compare run/event/head/catalog snapshots for zero DML. Exercise a closed-barrier exact retry and require denial without mutation, retaining the isolated fixture's closed state.
+- [x] Test requested UUID/manifest/source/fingerprint/epoch conflicts without state changes. Verify `cms_runtime`, `cms_observer`, and an unrelated ordinary role cannot execute; verify both `cms_controller` and `cms_runtime` direct run INSERTs using the same valid-shape row are denied with SQLSTATE `42501`, explicitly rolled back, and have equal before/after head/run/event snapshots. Keep controller direct head/event write denials.
+- [x] Verify advisory-lock-before-head-row locking using three test connections, a bounded `pg_stat_activity` wait, `FOR UPDATE NOWAIT`, and cancellation of only the harness's own blocked backend PID on failure.
+- [x] Preserve the existing atomic-install rollback regression and add the V1-upgrade rollback fixture. Its fixture-only `ddl_command_end` event trigger accepts only `TG_TAG='GRANT'` after the exact bootstrap function is owned by `cms_control` and all nine explicit non-grantable column INSERT ACLs are visible; only then does a non-transactional sequence marker advance and the trigger raise. After rollback, independently assert effective/table and explicit column INSERT privileges are absent, the RPC is absent, the exact V1 catalog/head/run/event/migration state and coverage are restored, and native state is unchanged. No production failpoint was added.
+- [x] Sanitize reports to fixed stage/reason codes, booleans, counts, and hashes; do not persist URLs, passwords, raw SQL diagnostics, source content, or article data. Preserve fixture/container/volume and report without automatic cleanup.
+- [ ] Only after fresh review and separate explicit authorization, use the scenario-bound CLI with **two new independent leases** (one per fixture):
 
   ```sh
-  node cms/tests/integration/protocol-finalizer.mjs --prepare-lease
-  node cms/tests/integration/protocol-finalizer.mjs --execute --lease "<new cold-install lease path>"
-  node cms/tests/integration/protocol-finalizer.mjs --prepare-lease
-  node cms/tests/integration/protocol-finalizer.mjs --execute --lease "<new V1-upgrade lease path>"
+  node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario fresh-v2
+  node cms/tests/integration/protocol-finalizer.mjs --execute --scenario fresh-v2 --lease "<new cold-install lease path>"
+  node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario upgrade-v1
+  node cms/tests/integration/protocol-finalizer.mjs --execute --scenario upgrade-v1 --lease "<new V1-upgrade lease path>"
   ```
 
   Expected result is fresh PostgreSQL 16 acceptance evidence for cold install and V1 upgrade. A lease prepare is not acceptance, and a previous observer audit PASS is not evidence for this work.
@@ -155,16 +155,19 @@ For a newly inserted run, the trigger produces exactly one `news_migration_runs`
 - [x] Update the observer section to describe `observedProtocolVersion` separately from `observedCoverageVersion`; preserve observer read-only limits and note protocol V2 does not imply activation or readiness.
 - [x] Record the fresh-PG16 lease procedure and separate authorization boundary. State that cold-install and V1-upgrade acceptance require new fixtures/leases and must not reuse the observer fixture, prior leases, remote databases, or service environments.
 - [x] Review the complete diff for protected migration files, absence of Portal/Payload caller implementation, no controller/runtime table INSERT grants, no finalizer/runtime run preseed, and no secret-bearing integration report fields.
-- [ ] Run from repository root:
+- [x] Run the listed offline checks from repository root (full `npm run verify` is intentionally excluded from this bounded Task 4 handoff):
 
 ```sh
 npm --prefix cms run test:unit
 npm run typecheck:cms
-npm run verify
+node --check cms/tests/integration/protocol-finalizer.mjs
+node --check cms/tests/integration/protocol-finalizer-guards.test.mjs
+node --check cms/tests/integration/news-protocol-observer-audit.mjs
+node scripts/verify.mjs security
 git diff --check
 ```
 
-Expected result: all four commands exit 0. `npm run verify` is the repeatable offline check and must not be replaced with Docker/DB integration. Report the separately authorized PostgreSQL 16 acceptance as pending unless both new fixtures actually execute after explicit authorization.
+Expected result: every listed offline check exits 0. Do not run the PostgreSQL harness during implementation checks. Report PostgreSQL 16 acceptance as pending unless both independent new fixtures actually execute after explicit authorization.
 
 ## Completion Criteria
 
@@ -173,4 +176,4 @@ Expected result: all four commands exit 0. `npm run verify` is the repeatable of
 - The actual RPC creates one run and exactly one trigger-generated event; an exact retry has zero DML; UUID/manifest collisions and unauthorized roles fail without data changes.
 - The observer can report exact V1 or V2 and independently observe coverage while continuing to certify nothing.
 - All six applied Payload migrations and native snapshot files remain unchanged; the Portal/Payload helper remains unimplemented.
-- Offline unit, typecheck, repository verification and diff-whitespace checks pass. Any PostgreSQL 16 evidence is a distinct, separately authorized run against new one-shot fixtures.
+- Scoped offline CMS unit/guard tests, CMS typecheck, harness syntax, secret scan and diff-whitespace checks pass; the full root `npm run verify` is intentionally excluded from this Task 4 handoff. Any PostgreSQL 16 evidence is a distinct, separately authorized run against new one-shot fixtures.

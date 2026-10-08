@@ -213,7 +213,9 @@ runtime, migrator ou `DATABASE_URL`, não carrega `.env` e não provisiona a rol
 O builder de SQL privilegiado para uma provisionação futura e explicitamente
 revisada está em `cms/scripts/news-protocol-observer-contract.ts`; o CLI de auditoria
 nunca o importa nem o executa. Provisionar a role e guardar sua senha é uma ação
-separada; não foi feito nesta alteração.
+separada e o provisionamento persistente/compartilhado não foi feito nesta
+alteração. O harness de integração pode provisionar `cms_observer` somente dentro
+de uma fixture descartável, isolada e explicitamente autorizada.
 
 A auditoria inicia uma transação PostgreSQL `REPEATABLE READ READ ONLY`, limita
 `statement_timeout` local a cinco segundos, fixa `search_path` local para
@@ -245,9 +247,51 @@ A implementação do bootstrap e a compatibilidade offline do observer não são
 aceite PostgreSQL. Aceitação de protocolo V2 exige autorização separada e duas
 fixtures/leases novas, independentes: uma para cold install e outra para upgrade
 V1. Não reutilizar fixture/lease do observer, lease anterior, database existente,
-serviço em execução ou destino remoto. O harness de `cms/tests/integration/protocol-finalizer.mjs`
-permanece fora do escopo desta fatia até revisão fresca; nenhuma evidência real
-de RPC/evento/retry/upgrade V2 é afirmada aqui.
+serviço em execução ou destino remoto. O harness de
+`cms/tests/integration/protocol-finalizer.mjs` contém os cenários explícitos
+`fresh-v2` e `upgrade-v1`, mas sua preparação e execução continuam condicionadas a
+revisão fresca e autorização explícita da sessão primária. Nenhum aceite real
+RPC/evento/retry/upgrade V2 é afirmado aqui.
+
+Com Node 24, dependências CMS previamente instaladas, Docker local e imagem
+PostgreSQL 16 em cache, use somente após essa autorização e prepare uma lease nova
+para cada cenário:
+
+```sh
+node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario fresh-v2
+node cms/tests/integration/protocol-finalizer.mjs --execute --scenario fresh-v2 --lease "<lease privada recém-preparada>"
+node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario upgrade-v1
+node cms/tests/integration/protocol-finalizer.mjs --execute --scenario upgrade-v1 --lease "<outra lease privada recém-preparada>"
+```
+
+`--prepare-lease` inspeciona Docker local/cache, namespace UUID, porta loopback
+e parent privado, e grava a lease em diretório privado; não cria container,
+volume ou database nem conecta ao PostgreSQL. `--execute` consome a lease uma
+vez, cria recursos isolados novos, vincula container/IP/system identifier,
+database, catálogos e snapshots, e preserva os artefatos depois da claim mesmo
+em falha. O relatório contém somente fases/códigos fixos, contagens, booleans e
+hashes; não contém URLs, senhas nem conteúdo de run.
+O cenário cold exige seis migrations nativas, tabela de runs vazia, V2 exato,
+head aberto em sequence zero, zero eventos antes do bootstrap, observer read-only
+e finalizer sem DDL/state change na reentrada. O cenário de upgrade constrói o V1
+exato sem RPC, exige `protocol_upgrade_required` sem mutação, injeta apenas no
+fixture um abort transacional no `ddl_command_end` do `GRANT INSERT` final: o
+marcador não transacional só avança depois que o catálogo mostra o RPC owned por
+`cms_control` e os nove ACLs de coluna INSERT exatos; a prova consulta o catálogo
+no evento `GRANT`, sem depender de linhas de detalhe retornadas por
+`pg_event_trigger_ddl_commands()`. Depois do rollback, o
+harness consulta independentemente os privilégios efetivos e ACLs, ausência do
+RPC, catálogo V1/head/coverage/run/event e estado nativo antes do upgrade
+explícito bem-sucedido. Ambos usam conexões de rede autenticadas para provar
+RPC, evento/retry e negações; `cms_controller` e `cms_runtime` também tentam o
+mesmo INSERT válido em transação e exigem SQLSTATE `42501`, `ROLLBACK` e
+snapshots head/run/event inalterados. A identidade de controller nunca é
+simulada com `SET ROLE`.
+
+Essa implementação/harness e seus guards offline não equivalem à execução da
+aceitação. Até autorização e execução das duas leases independentes, PostgreSQL 16
+continua pendente; não reutilizar o fixture/lease do observer, leases anteriores,
+bancos existentes ou serviços.
 
 As coleções `NewsMigrationRuns`/`NewsMigrationItems` estão registradas em
 `cms/src/payload.config.ts`, têm definição na configuração nativa e aparecem na
