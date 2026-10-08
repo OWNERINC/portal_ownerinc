@@ -47,6 +47,7 @@ O usuário deve fornecer uma role já provisionada segundo o contrato
 privilegiado, é somente um contrato para revisão/provisionamento explícito e não é
 importado pelo CLI. A role deve ser criada por procedimento separado e aprovado;
 uma role preexistente não é alterada automaticamente.
+O builder não altera ACLs públicas dos catálogos PostgreSQL.
 
 O audit começa com `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`,
 aplica `SET LOCAL statement_timeout = '5s'` e fixa o `search_path` local como
@@ -54,10 +55,15 @@ aplica `SET LOCAL statement_timeout = '5s'` e fixa o `search_path` local como
 Entre as relações da aplicação, permite somente
 `SELECT` sobre `payload_migrations` e `owner_news_mutation_head`; leituras padrão
 dos catálogos PostgreSQL e de `information_schema` são necessárias para a própria
-auditoria. Não permite DML nem sequence access, exige ausência de membership e de
-schema CREATE/uso alheio, rejeita grants `PUBLIC` em relações/colunas de aplicação,
-e rejeita execução de funções de protocolo/SECURITY DEFINER. Os queries de
-privilégio nomeiam explicitamente `cms_runtime`; nenhuma troca `SET ROLE` é usada.
+auditoria. Não permite DML persistente nem sequence access. A única exceção é
+`UPDATE` na view canônica `pg_catalog.pg_settings`: no PostgreSQL 16, isso é
+equivalente a `SET` para a sessão, não a uma atualização persistente de linhas.
+Essa exceção é limitada pela identidade OID qualificada e por `relkind='v'`; não
+abrange `INSERT`, `DELETE` ou outros privilégios da view nem objetos de mesmo nome.
+O audit exige ausência de membership e de schema CREATE/uso alheio, rejeita grants
+`PUBLIC` em relações/colunas de aplicação e execução de funções de protocolo/
+SECURITY DEFINER. Os queries de privilégio nomeiam explicitamente `cms_runtime`;
+nenhuma troca `SET ROLE` é usada.
 
 O relatório observa o estado instalado, `coverage_version` (0 ou 1), sequência e
 barrier sem ler artigos, mídia, schedules, jobs, históricos ou eventos do ledger.

@@ -53,11 +53,14 @@ WHERE r.rolname='${OBSERVER_ROLE}'
 `
 
 /**
- * Effective observer privileges over user relations. The only application
+ * Effective observer privileges over persistent relations. The only application
  * relations with SELECT are the migration ledger and protocol head; standard
  * pg_catalog/information_schema reads are required for this audit. No relation
- * DML, sequence access, non-public schema access, or protocol/security-definer
- * execution is allowed. The exact gen_random_uuid baseline is the only
+ * DML is allowed except UPDATE on PostgreSQL's canonical pg_catalog.pg_settings
+ * view, which maps to SET for the current session rather than persistent row
+ * mutation. That exception is tied to its qualified relation OID and view kind.
+ * Sequence access, non-public schema access, and protocol/security-definer
+ * execution remain forbidden. The exact gen_random_uuid baseline is the only
  * invoker-function exception and is also checked by the shared finalizer ACL
  * verifier.
  */
@@ -65,7 +68,8 @@ export const newsProtocolObserverPrivilegesVerificationSQL = `
 WITH relations AS (
   SELECT c.oid, c.relacl, c.relowner, n.nspname, c.relname,
     n.nspname='public' AND c.relname=ANY(ARRAY[${OBSERVER_ALLOWED_TABLES.map(name => `'${name}'`).join(',')}]::name[]) AS allowed_select,
-    n.nspname IN ('pg_catalog','information_schema') AS catalog_read
+    n.nspname IN ('pg_catalog','information_schema') AS catalog_read,
+    c.oid='pg_catalog.pg_settings'::regclass AND n.nspname='pg_catalog' AND c.relkind='v' AS session_settings_view
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
   WHERE c.relkind IN ('r','p','v','m','f')
@@ -73,6 +77,7 @@ WITH relations AS (
 checks AS (
   SELECT
     (SELECT count(*)=2 FROM relations WHERE allowed_select) AS required_tables_present,
+    (SELECT count(*)=1 FROM relations WHERE session_settings_view) AS session_settings_view_present,
     NOT EXISTS (
       SELECT 1 FROM relations r
       WHERE (r.allowed_select AND NOT has_table_privilege('${OBSERVER_ROLE}',r.oid,'SELECT'))
@@ -83,7 +88,7 @@ checks AS (
           WHERE acl.grantee=0
         ))
         OR has_table_privilege('${OBSERVER_ROLE}',r.oid,'INSERT')
-        OR has_table_privilege('${OBSERVER_ROLE}',r.oid,'UPDATE')
+        OR (NOT r.session_settings_view AND has_table_privilege('${OBSERVER_ROLE}',r.oid,'UPDATE'))
         OR has_table_privilege('${OBSERVER_ROLE}',r.oid,'DELETE')
         OR has_table_privilege('${OBSERVER_ROLE}',r.oid,'TRUNCATE')
         OR has_table_privilege('${OBSERVER_ROLE}',r.oid,'REFERENCES')
@@ -93,14 +98,14 @@ checks AS (
           WHERE a.attrelid=r.oid AND a.attnum>0 AND NOT a.attisdropped
             AND (
               has_column_privilege('${OBSERVER_ROLE}',r.oid,a.attnum,'INSERT')
-              OR has_column_privilege('${OBSERVER_ROLE}',r.oid,a.attnum,'UPDATE')
+              OR (NOT r.session_settings_view AND has_column_privilege('${OBSERVER_ROLE}',r.oid,a.attnum,'UPDATE'))
               OR has_column_privilege('${OBSERVER_ROLE}',r.oid,a.attnum,'REFERENCES')
               OR (r.allowed_select AND NOT has_column_privilege('${OBSERVER_ROLE}',r.oid,a.attnum,'SELECT'))
               OR (NOT r.allowed_select AND NOT r.catalog_read
                 AND has_column_privilege('${OBSERVER_ROLE}',r.oid,a.attnum,'SELECT'))
-              OR (NOT r.catalog_read AND EXISTS (
+              OR (NOT r.catalog_read AND a.attacl IS NOT NULL AND EXISTS (
                 SELECT 1 FROM pg_catalog.aclexplode(
-                  COALESCE(a.attacl,ARRAY[]::pg_catalog.aclitem[])) acl
+                  a.attacl) acl
                 WHERE acl.grantee=0
               ))
             )
@@ -136,9 +141,9 @@ checks AS (
         )
     ) AS function_privileges_safe
 )
-SELECT required_tables_present AND relation_privileges_safe
+SELECT required_tables_present AND session_settings_view_present AND relation_privileges_safe
   AND sequence_privileges_safe AND schema_privileges_safe AND function_privileges_safe AS safe,
-  required_tables_present, relation_privileges_safe, sequence_privileges_safe,
+  required_tables_present, session_settings_view_present, relation_privileges_safe, sequence_privileges_safe,
   schema_privileges_safe, function_privileges_safe
 FROM checks
 `

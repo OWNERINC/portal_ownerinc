@@ -13,7 +13,7 @@ import {
 } from '../../scripts/news-protocol-observer-contract'
 import { runNewsProtocolAudit } from '../../scripts/verify-news-protocol'
 
-test('observer provisioning contract creates only a new least-privileged cms_observer', () => {
+test('observer provisioning creates only a least-privileged cms_observer without shared catalog ACL changes', () => {
   const password = `observer-secret-${'x'.repeat(24)}-end`
   const sql = buildNewsProtocolObserverProvisioningSQL(password)
 
@@ -24,7 +24,8 @@ test('observer provisioning contract creates only a new least-privileged cms_obs
   assert.match(sql, /GRANT SELECT ON TABLE public\.payload_migrations, public\.owner_news_mutation_head TO cms_observer/u)
   assert.match(sql, /COMMIT;\n$/u)
   assert.doesNotMatch(sql, /\bALTER ROLE\b|\bSET ROLE\b|\bGRANT\s+cms_/iu)
-  assert.doesNotMatch(sql, /\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\s+ON\b/iu)
+  assert.doesNotMatch(sql, /\bREVOKE\b[\s\S]*\bpg_catalog\.pg_settings\b/iu)
+  assert.doesNotMatch(sql, /\bGRANT\s+(?:INSERT|UPDATE|DELETE|TRUNCATE)\s+ON\b/iu)
   assert.doesNotMatch(sql, /news_articles|news_media|news_schedules|news_mutation_events|owner_news_seal_run/u)
   assert.doesNotMatch(sql, /CMS_(?:ADMIN|RUNTIME)_DATABASE_URL/u)
   assert.ok(sql.includes(password))
@@ -53,16 +54,61 @@ test('observer SQL checks role membership and ownership dependencies without rea
     assert.ok(newsProtocolObserverPrivilegesVerificationSQL.includes(`'${relation}'`))
   }
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /has_table_privilege\('cms_observer'/u)
+  assert.match(newsProtocolObserverPrivilegesVerificationSQL,
+    /OR \(NOT r\.session_settings_view AND has_table_privilege\('cms_observer',r\.oid,'UPDATE'\)\)/u)
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /has_column_privilege\('cms_observer'/u)
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /has_sequence_privilege\('cms_observer'/u)
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /has_function_privilege\('cms_observer'/u)
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /n\.nspname IN \('pg_catalog','information_schema'\) AS catalog_read/u)
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /WHERE has_schema_privilege\('cms_observer',n\.oid,'CREATE'\)/u)
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /aclexplode\([\s\S]*acl\.grantee=0/u)
-  assert.match(newsProtocolObserverPrivilegesVerificationSQL, /COALESCE\(a\.attacl,ARRAY\[\]::pg_catalog\.aclitem\[\]\)/u)
+  assert.match(newsProtocolObserverPrivilegesVerificationSQL,
+    /a\.attacl IS NOT NULL AND EXISTS \([\s\S]*aclexplode\(\s*a\.attacl\)/u)
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /owner_news_seal_run/u)
   assert.doesNotMatch(newsProtocolObserverPrivilegesVerificationSQL,
     /pg_authid|pg_shdepend|SECURITY\s+DEFINER/u)
+})
+
+test('persistent-DML audit exempts only UPDATE on the canonical pg_settings view', () => {
+  type RelationFixture = { oid: string; schema: string; kind: 'v' | 'r'; effectiveUpdate: boolean;
+    publicAcl: string[]; label: string }
+  const relations: RelationFixture[] = [
+    { oid: 'pg_catalog.pg_settings', schema: 'pg_catalog', kind: 'v', effectiveUpdate: true,
+      publicAcl: ['SELECT', 'UPDATE'], label: 'builtin settings view with PG16 initial PUBLIC ACL' },
+    { oid: 'pg_catalog.pg_class', schema: 'pg_catalog', kind: 'r', effectiveUpdate: true,
+      publicAcl: ['UPDATE'], label: 'other catalog relation' },
+    { oid: 'public.pg_settings', schema: 'public', kind: 'v', effectiveUpdate: true,
+      publicAcl: ['UPDATE'], label: 'same-name application view' },
+    { oid: 'public.owner_news_mutation_head', schema: 'public', kind: 'r', effectiveUpdate: true,
+      publicAcl: ['UPDATE'], label: 'allowed-read application table' },
+  ]
+  const isCanonicalSettingsView = (relation: RelationFixture) => relation.oid === 'pg_catalog.pg_settings'
+    && relation.schema === 'pg_catalog' && relation.kind === 'v'
+  const sessionSettingException = (relation: RelationFixture, privilege: string) =>
+    privilege === 'UPDATE' && isCanonicalSettingsView(relation)
+
+  assert.deepEqual(relations[0].publicAcl, ['SELECT', 'UPDATE'])
+  assert.equal(sessionSettingException(relations[0], 'UPDATE'), true)
+  for (const relation of relations) {
+    assert.equal(relation.effectiveUpdate && !sessionSettingException(relation, 'UPDATE'),
+      relation !== relations[0], relation.label)
+  }
+  for (const privilege of ['INSERT', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+    assert.equal(sessionSettingException(relations[0], privilege), false)
+  }
+
+  assert.match(newsProtocolObserverPrivilegesVerificationSQL,
+    /c\.oid='pg_catalog\.pg_settings'::regclass AND n\.nspname='pg_catalog' AND c\.relkind='v' AS session_settings_view/u)
+  assert.match(newsProtocolObserverPrivilegesVerificationSQL,
+    /count\(\*\)=1 FROM relations WHERE session_settings_view\) AS session_settings_view_present/u)
+  assert.match(newsProtocolObserverPrivilegesVerificationSQL,
+    /OR \(NOT r\.session_settings_view AND has_table_privilege\('cms_observer',r\.oid,'UPDATE'\)\)/u)
+  assert.match(newsProtocolObserverPrivilegesVerificationSQL,
+    /OR \(NOT r\.session_settings_view AND has_column_privilege\('cms_observer',r\.oid,a\.attnum,'UPDATE'\)\)/u)
+  for (const privilege of ['INSERT', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+    assert.match(newsProtocolObserverPrivilegesVerificationSQL,
+      new RegExp(`OR has_table_privilege\\('cms_observer',r\\.oid,'${privilege}'\\)`, 'u'))
+  }
 })
 
 for (const [objectClass, dbid] of [
