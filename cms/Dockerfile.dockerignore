@@ -4,6 +4,9 @@
 !cms/
 !cms/package.json
 !cms/package-lock.json
+!cms/go-build/
+!cms/go-build/go.mod
+!cms/go-build/go.sum
 !cms/next.config.mjs
 !cms/tsconfig.json
 !cms/next-env.d.ts

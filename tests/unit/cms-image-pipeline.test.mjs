@@ -130,3 +130,91 @@ test('CI builds, scans, and publishes a separate immutable Payload CMS image art
     assert.deepEqual(policy(context), expected, `${context.event} ${context.ref} cms_image_only=${context.cmsImageOnly}`);
   }
 });
+
+test('CMS image pins Node and rebuilds the matching upstream esbuild source with a patched Go toolchain', async () => {
+  const [dockerfile, dockerignore, packageJsonText, lockText, goMod, goSum, compose, runtimePackaging, apiPackageText, apiLockText] = await Promise.all([
+    read('cms/Dockerfile'), read('cms/Dockerfile.dockerignore'), read('cms/package.json'), read('cms/package-lock.json'),
+    read('cms/go-build/go.mod'), read('cms/go-build/go.sum'), read('docker-compose.payload.yml'),
+    read('cms/scripts/check-runtime-packaging.mjs'), read('api/package.json'), read('api/package-lock.json'),
+  ]);
+  const packageJson = JSON.parse(packageJsonText);
+  const lock = JSON.parse(lockText);
+  const apiPackage = JSON.parse(apiPackageText);
+  const apiLock = JSON.parse(apiLockText);
+  const pinnedBase = /^FROM node:24-alpine3\.23@sha256:9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2 AS /gm;
+  assert.equal((dockerfile.match(pinnedBase) || []).length, 3,
+    'all independent CMS base stages must pin the current Node 24 Alpine registry index digest');
+  assert.equal((dockerfile.match(/apk upgrade --no-cache/g) || []).length, 3,
+    'each independent base filesystem must apply Alpine security updates');
+  assert.equal((dockerfile.match(/npm install --global npm@12\.2\.0/g) || []).length, 3,
+    'keep the required npm CLI while replacing the vulnerable bundled npm version');
+  assert.equal((dockerfile.match(/brace-expansion@5\.0\.11/g) || []).length, 3,
+    'replace npm 12.2.0 bundled brace-expansion in every independent image stage');
+  assert.equal((dockerfile.match(/undici@6\.28\.1/g) || []).length, 3,
+    'replace npm 12.2.0 bundled undici with its Trivy-fixed compatible release');
+  assert.match(dockerfile, /npm ci --omit=dev --omit=optional/,
+    'the embedded API graph must omit optional Firebase/Firestore dependencies');
+  assert.match(dockerfile, /@img\/sharp-linuxmusl-x64@0\.35\.5[\s\S]*@img\/sharp-libvips-linuxmusl-x64@1\.3\.4/,
+    'restore the API lockfile-matched Sharp musl runtime packages explicitly');
+  assert.match(dockerfile, /CMD \["npm", "start"\]/,
+    'npm remains the production startup command');
+  assert.match(dockerfile, /FROM --platform=\$BUILDPLATFORM golang:1\.26\.6-alpine3\.23@sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406 AS esbuild-builder/,
+    'esbuild must be built from a registry-pinned official Go 1.26.6 toolchain');
+  assert.match(dockerfile, /GOPROXY=https:\/\/proxy\.golang\.org GOSUMDB=sum\.golang\.org/,
+    'Go dependencies must use the public proxy and checksum database');
+  assert.match(dockerfile, /go build -mod=readonly -trimpath -buildvcs=false[\s\S]*github\.com\/evanw\/esbuild\/cmd\/esbuild/,
+    'rebuild only the versioned upstream esbuild command with locked Go module sums');
+  assert.match(dockerfile, /go version -m \/out\/esbuild[\s\S]*A2uETn4jrQTcXaT\/shwTDTYBxDjl7fV7nXmUrJxfA2w=/,
+    'the built executable must embed the verified upstream v0.28.2 module sum');
+  assert.equal((dockerfile.match(/COPY --from=esbuild-builder(?: --chown=node:node)? \/out\/esbuild/g) || []).length, 2,
+    'use the rebuilt binary for the Next build and final CMS runtime');
+  assert.match(dockerignore, /!cms\/go-build\/go\.mod[\s\S]*!cms\/go-build\/go\.sum/,
+    'the Docker context must allow only the pinned Go module manifests');
+  assert.match(goMod, /require github\.com\/evanw\/esbuild v0\.28\.2/u);
+  assert.match(goSum, /github\.com\/evanw\/esbuild v0\.28\.2 h1:A2uETn4jrQTcXaT\/shwTDTYBxDjl7fV7nXmUrJxfA2w=/u);
+  assert.match(goSum, /golang\.org\/x\/sys v0\.0\.0-20220715151400-c0bba94af5f8 h1:0A\+M6Uqn\+Eje4kHMK80dtF3JCXC4ykBgQG4Fe06QRhQ=/u);
+  const builder = dockerfile.slice(dockerfile.indexOf('FROM --platform=$BUILDPLATFORM golang:'), dockerfile.indexOf('\n\nFROM sources'));
+  assert.match(builder, /GOTOOLCHAIN=local CGO_ENABLED=0/,
+    'use only the pinned toolchain and build a static Linux executable');
+  assert.match(builder, /test "\$TARGETOS\/\$TARGETARCH" = "linux\/amd64"/,
+    'fail closed instead of copying the x64 replacement into another target architecture');
+  assert.match(builder, /GOOS="\$TARGETOS" GOARCH="\$TARGETARCH" go build -mod=readonly -trimpath -buildvcs=false/,
+    'cross-build the explicit target reproducibly without ambient VCS metadata');
+  assert.doesNotMatch(builder, /(?:-ldflags|(?:^|\s)-s(?:\s|$)|(?:^|\s)-w(?:\s|$))/,
+    'do not strip Go build information used for toolchain and module attestation');
+  assert.match(builder, /test "\$\(\/out\/esbuild --version\)" = "0\.28\.2"/,
+    'the replacement executable must report the same version as the locked JavaScript package');
+  assert.match(builder, /go version -m \/out\/esbuild \| grep -F 'go1\.26\.6'[\s\S]*go version -m \/out\/esbuild \| grep -F 'v0\.28\.2'[\s\S]*go version -m \/out\/esbuild \| grep -F 'h1:A2uETn4jrQTcXaT\/shwTDTYBxDjl7fV7nXmUrJxfA2w='/,
+    'attest the embedded Go toolchain, exact upstream module release, and verified module checksum');
+  assert.match(runtimePackaging, /esbuild\.transformSync\('const answer: number = 42'/,
+    'final image smoke exercises the rebuilt executable through the locked esbuild JavaScript API');
+  assert.match(runtimePackaging, /--import', 'tsx', tsxSmokeFile/,
+    'final image smoke runs a real TypeScript file through the retained TSX runtime and esbuild');
+  assert.match(runtimePackaging, /node_modules\/payload\/bin\.js/,
+    'the final image invokes the Payload CLI needed by migrations');
+  assert.match(runtimePackaging, /payloadCli, 'info'/,
+    'the Payload CLI smoke runs without connecting to a database');
+  assert.match(compose, /npm run migrate/,
+    'the migration service continues to invoke the Payload migration script through npm');
+  assert.equal(packageJson.dependencies.tsx, '4.23.15');
+  assert.equal(packageJson.overrides.tsx, '$tsx', 'all transitive tsx copies must match the direct runtime dependency');
+  assert.equal(packageJson.overrides.esbuild, '0.28.2', 'all esbuild copies must use the current upstream release');
+  assert.equal(apiPackage.overrides['@fastify/busboy'], '3.2.2',
+    'the one actual Firebase Admin production advisory in the embedded API graph uses its fixed version');
+  assert.equal(apiPackage.overrides['@grpc/grpc-js'], '1.14.5');
+  assert.equal(apiPackage.overrides['brace-expansion'], '2.1.6');
+  assert.equal(apiLock.packages['node_modules/@fastify/busboy'].version, '3.2.2');
+  assert.equal(apiLock.packages['node_modules/@grpc/grpc-js'].version, '1.14.5');
+  assert.equal(apiLock.packages['node_modules/brace-expansion'].version, '2.1.6');
+
+  const tsxPackages = Object.entries(lock.packages).filter(([path]) => /(?:^|\/)node_modules\/tsx$/.test(path));
+  assert.ok(tsxPackages.length > 0, 'the package graph must retain the TSX runtime');
+  for (const [path, entry] of tsxPackages) assert.equal(entry.version, '4.23.15', path);
+  const esbuildPackages = Object.entries(lock.packages).filter(([path]) =>
+    /(?:^|\/)node_modules\/(?:esbuild|@esbuild\/[^/]+)$/.test(path));
+  assert.ok(esbuildPackages.some(([path]) => path === 'node_modules/@esbuild/linux-x64' || path.endsWith('/node_modules/@esbuild/linux-x64')),
+    'the lockfile must retain the Linux x64 esbuild binary');
+  assert.equal(esbuildPackages.filter(([path]) => path.startsWith('node_modules/@esbuild/')).length, 26,
+    'retain all esbuild platform packages in the lockfile while unifying their versions');
+  for (const [path, entry] of esbuildPackages) assert.equal(entry.version, '0.28.2', path);
+});

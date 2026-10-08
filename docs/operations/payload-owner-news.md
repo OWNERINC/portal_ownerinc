@@ -274,6 +274,53 @@ Payload permanecem gates próprios de infraestrutura/operação; consulte
 [Deployment](deployment.md#fluxo-de-release).
 Os contratos de publish/backup não são definidos uma segunda vez neste documento.
 
+O CI run `37782865173` falhou somente no scan HIGH/CRITICAL Trivy da imagem CMS;
+os scans API/cron passaram. A correção de imagem usa o índice de registry
+`node:24-alpine3.23@sha256:9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2`,
+que contém Node `24.21.0` e continua em Alpine/musl. `apk upgrade` atualiza
+`libcrypto3`/`libssl3` para `3.5.9-r0`, `musl`/`musl-utils` para `1.2.5-r23`
+e `zlib` para `1.3.2-r1`; npm fica em
+`12.2.0`, cuja engine requer Node `^24.15.0` ou superior e é compatível com essa
+base; como esse release ainda embute `brace-expansion@5.0.9` e `undici@6.28.0`,
+cada estágio substitui somente esses pacotes por upstreams corrigidos `5.0.11` e
+`6.28.1` (CVE-2026-19534), sem remover npm. O build omite
+opcionais apenas no grafo API embutido e restaura Sharp musl `0.35.5`/
+libvips `1.3.4`, versões travadas pelo lockfile API. O grafo API atualiza somente
+os transitivos Firebase Admin `@grpc/grpc-js` `1.14.4`→`1.14.5` e
+`brace-expansion` `2.1.4`→`2.1.6`, e `@fastify/busboy` `3.2.1`→`3.2.2` para
+corrigir CVE-2026-101916, CVE-2026-102276/CVE-2026-102278 e
+GHSA-gxm5-99cw-xjw9; não há upgrade do Firebase Admin. `npm`, CLI Payload, `tsx`,
+startup e migrations continuam parte do runtime; nenhum ignore ou enfraquecimento
+do scanner é permitido. O lockfile CMS unifica todas as cópias de `tsx` em
+`4.23.15` e esbuild em `0.28.2`; o binário oficial esbuild `0.28.2` ainda é
+construído com Go `1.26.5`; os findings do baseline exigiam Go `1.26.6` ou mais
+recente. Para corrigir esse binário sem alterar o grafo JavaScript, o Dockerfile
+usa um estágio separado no índice oficial `golang:1.26.6-alpine3.23` pinado por
+digest (`sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406`).
+O estágio usa `GOPROXY=https://proxy.golang.org` e `GOSUMDB=sum.golang.org`, compila
+somente `github.com/evanw/esbuild/cmd/esbuild` do tag upstream `v0.28.2` e compara
+o `go version -m` ao Go e ao módulo/soma fixados. `cms/go-build/go.sum` registra
+esbuild `h1:A2uETn4jrQTcXaT/shwTDTYBxDjl7fV7nXmUrJxfA2w=` e `golang.org/x/sys`
+`h1:0A+M6Uqn+Eje4kHMK80dtF3JCXC4ykBgQG4Fe06QRhQ=`; a verificação do módulo
+resolveu o tag para o commit upstream `609683d892977362a0f99026cb74b96263d728a9`.
+O binário produzido identifica-se como `go1.26.6`, `linux/amd64`, esbuild `0.28.2`
+com a mesma soma, e seu SHA-256 local é
+`ABDA5EE49A674E2160B5D6FF174804265F29F2237CEA87B1AD21C939CD6AFA73`. Ele substitui
+somente `@esbuild/linux-x64/bin/esbuild`, no estágio de build e na imagem final;
+a plataforma não-x64 falha explicitamente em vez de receber um binário incorreto.
+
+O rebuild descartável `ownerinc-portal-cms-security-check:go-rebuild-20261008`
+concluiu com o ID `sha256:2684b7cd30dc48090fe456cd3f4a6a1144e7ac4f9d8adcc41221c53d200bf143`,
+incluindo Next build, TSX TypeScript real, Payload CLI `info` com configuração
+sintética, Sharp/PG e fechamento de packaging sem serviços. Trivy `0.75.0`
+pinado por digest (`sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa`)
+foi executado com a mesma política CI (`HIGH,CRITICAL`, `ignore-unfixed`, exit 1):
+exit 0, zero findings OS/Node/Go; o relatório agora reconhece
+`app/cms/node_modules/@esbuild/linux-x64/bin/esbuild` como target `gobinary` e
+lista zero vulnerabilidades. O baseline original (76 findings totais, 22 no Go)
+permanece preservado. Este é um scan local do candidato, não um run do GitHub CI:
+CI e publicação GHCR continuam pendentes e não se afirma imagem publicada.
+
 ## Guard portátil implementado
 
 `scripts/test-payload-integration.mjs` não lê `.env`, state/env privados dos antigos
