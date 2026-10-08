@@ -82,7 +82,7 @@ export function validateExpiredSessionReplacement({
   if (!Number.isSafeInteger(baselineCount) || baselineCount < 0 ||
     !Number.isSafeInteger(databaseCount) || databaseCount !== baselineCount + 1 ||
     expiredHashPresent !== false || typeof freshHash !== 'string' || !freshHash ||
-    persistedFreshState !== `${freshHash}|t|t`) {
+    persistedFreshState !== `${freshHash}|true|true`) {
     throw new Error('expired session replacement state mismatch');
   }
   return true;

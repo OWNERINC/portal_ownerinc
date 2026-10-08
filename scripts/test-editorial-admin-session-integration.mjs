@@ -380,7 +380,7 @@ async function runIntegration() {
     hash: tokenHash,
     uid: identity.uid,
   });
-  assert.equal(expiredState, 't|t');
+  assert.equal(expiredState, 'true|true');
   const expiredResolution = await apiRequest(apiOrigin, '/api/cms/v2/session', { cookie: cookieHeader });
   assert.equal(expiredResolution.status, 401);
   const privateExpiredResolution = await apiRequest(apiOrigin, '/api/internal/editorial/admin/session/resolve', {
@@ -459,7 +459,7 @@ async function runIntegration() {
     hash: freshTokenHash,
     uid: identity.uid,
   });
-  assert.equal(revokedState, 't|t');
+  assert.equal(revokedState, 'true|true');
   const stale = await apiRequest(apiOrigin, '/api/cms/v2/session', { cookie: freshCookieHeader });
   assert.equal(stale.status, 401);
   const privateStale = await apiRequest(apiOrigin, '/api/internal/editorial/admin/session/resolve', {

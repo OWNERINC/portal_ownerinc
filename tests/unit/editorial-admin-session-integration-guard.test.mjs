@@ -67,7 +67,7 @@ test('fresh issue replaces one expired row: DB count is baseline plus one, disti
     databaseCount: 5,
     expiredHashPresent: false,
     freshHash: 'fresh-hash',
-    persistedFreshState: 'fresh-hash|t|t',
+    persistedFreshState: 'fresh-hash|true|true',
   };
   assert.equal(validateExpiredSessionReplacement(replacement), true);
 
@@ -82,6 +82,13 @@ test('fresh issue replaces one expired row: DB count is baseline plus one, disti
     /expired session replacement state mismatch/);
   assert.throws(() => validateExpiredSessionReplacement({ ...replacement, persistedFreshState: 'fresh-hash|t|f' }),
     /expired session replacement state mismatch/);
+  assert.throws(() => validateExpiredSessionReplacement({ ...replacement, persistedFreshState: 'fresh-hash|false|true' }),
+    /expired session replacement state mismatch/);
+  assert.throws(() => validateExpiredSessionReplacement({ ...replacement, persistedFreshState: 'fresh-hash|true|false' }),
+    /expired session replacement state mismatch/);
+  assert.throws(() => validateExpiredSessionReplacement({ ...replacement, persistedFreshState: 'fresh-hash|t|t' }),
+    /expired session replacement state mismatch/,
+    'PostgreSQL boolean::text emits true/false; bare boolean output from EXISTS remains t/f');
 });
 
 test('verified Auth identity uses the refreshed sign-in token and account lookup, not optional update fields', () => {
