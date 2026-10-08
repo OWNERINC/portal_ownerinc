@@ -1,0 +1,41 @@
+networks:
+  backend:
+    driver: bridge
+
+services:
+  postgres:
+    networks: [backend]
+
+  migrate:
+    networks: [backend]
+
+  api:
+    networks: [backend]
+
+  cron:
+    networks: [backend]
+    environment:
+      CRON_BOOTSTRAP_ONLY: "true"
+
+  nginx:
+    ports:
+      - "127.0.0.1:${HTTP_PORT:?}:80"
+    networks: [backend]
+
+  cms-postgres:
+    networks: [backend]
+
+  cms-provision:
+    networks: [backend]
+
+  cms-migrate:
+    networks: [backend]
+
+  cms-preauthority-verify:
+    networks: [backend]
+
+  cms:
+    networks: [backend]
+
+  cms-worker:
+    networks: [backend]

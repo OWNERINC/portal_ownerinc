@@ -30,12 +30,16 @@ current_file="$root/current-release"
 environment=/opt/ownerinc/secrets/portal-ownerinc/production.runtime.conf
 secrets_dir=$(dirname -- "$environment")
 backup_root=/opt/ownerinc/backups/portal-ownerinc/production
+daily_backup_root=/opt/ownerinc/backups/portal-ownerinc/daily
+pre_restore_backup_root="$backup_root/restore-protection"
 libexec_dir=/usr/local/libexec
 receiver_target=/usr/local/libexec/ownerinc-portal-deploy
 guard_target="$runtime/payload-operations-guard"
 control_target="$runtime/payload-control"
 control_runtime_target="$runtime/payload-control-runtime.py"
 control_state_helper_target="$runtime/payload-control-state.py"
+control_inventory_helper_target="$runtime/payload-control-inventory.py"
+control_inventory_target="$runtime/payload-control-inventory.json"
 control_key_target="$runtime/payload-control.key"
 control_state_dir="$runtime/payload-control-state"
 production_override="$runtime/compose.production.yaml"
@@ -48,6 +52,7 @@ source_guard="$script_dir/payload-operations-guard.sh"
 source_control="$script_dir/payload-control"
 source_control_runtime="$script_dir/payload-control-runtime.py"
 source_control_state="$script_dir/payload-control-state.py"
+source_control_inventory="$script_dir/payload-control-inventory.py"
 source_private_helper="$script_dir/prepare-cms-infrastructure-private.py"
 source_payload_overlay="$script_dir/compose.payload.production.yaml"
 payload_compose="$repo_root/docker-compose.payload.yml"
@@ -59,7 +64,7 @@ for command in python3 docker flock install cmp stat mktemp mkdir mv rm date env
   }
 done
 
-for source in "$source_receiver" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_private_helper" \
+for source in "$source_receiver" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" "$source_private_helper" \
   "$source_payload_overlay" "$payload_compose"; do
   [[ -f $source && ! -L $source ]] || {
     echo 'Refusing preparation: reviewed source bundle is incomplete or linked.' >&2
@@ -71,6 +76,10 @@ done
   echo 'Refusing preparation: expected production directories are incomplete.' >&2
   exit 2
 }
+[[ -d $daily_backup_root && ! -L $daily_backup_root ]] || {
+  echo 'Refusing preparation: the protected daily backup directory is missing or linked.' >&2
+  exit 2
+}
 [[ -f $current_file && ! -L $current_file && -f $environment && ! -L $environment && \
    -f $production_override && ! -L $production_override && -f $lock && ! -L $lock ]] || {
   echo 'Refusing preparation: an expected production file is missing or linked.' >&2
@@ -79,19 +88,19 @@ done
 
 # Inspect every existing path component without resolving through symlinks.
 # Operator-owned (uid 1000) parents are valid; group/world-writable parents are not.
-if ! python3 - "$root" "$runtime" "$releases" "$backup_root" "$libexec_dir" "$secrets_dir" \
+if ! python3 - "$root" "$runtime" "$releases" "$backup_root" "$daily_backup_root" "$libexec_dir" "$secrets_dir" \
     "$current_file" "$environment" "$production_override" "$lock" "$receiver_target" \
     "$guard_target" "$control_target" "$control_runtime_target" "$control_state_helper_target" \
-    "$control_key_target" "$payload_production_target" "$candidate_target" "$source_receiver" \
-    "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" \
+    "$control_key_target" "$payload_production_target" "$candidate_target" "$control_inventory_target" "$source_receiver" \
+    "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" \
     "$source_payload_overlay" "$payload_compose" "$source_private_helper" <<'PY'
 import os
 import stat
 import sys
 
-directories = sys.argv[1:7]
-files = sys.argv[7:]
-optional = {files[5], files[6], files[7], files[8], files[9], files[10], files[11]}
+directories = sys.argv[1:8]
+files = sys.argv[8:]
+optional = {files[5], files[6], files[7], files[8], files[9], files[10], files[11], files[12]}
 
 def reject():
     print('Refusing preparation: unsafe path, symlink, or file permissions.', file=sys.stderr)
@@ -180,6 +189,25 @@ PY
 if [[ $control_state_presence == complete ]]; then
   python3 "$source_control_state" verify-state "$runtime" >/dev/null || {
     echo 'Refusing preparation: existing private Payload control journal failed integrity checks.' >&2
+    exit 2
+  }
+fi
+
+inventory_args=("$root" "$runtime" "$releases" "$current_file" "$lock" "$daily_backup_root" "$backup_root" \
+  "$pre_restore_backup_root" "$environment" "$production_override" "$payload_production_target")
+if [[ -e $pre_restore_backup_root || -L $pre_restore_backup_root ]]; then
+  [[ -d $pre_restore_backup_root && ! -L $pre_restore_backup_root ]] || {
+    echo 'Refusing preparation: restore-protection inventory path is unsafe.' >&2
+    exit 2
+  }
+  [[ $(stat -c '%u:%a' -- "$pre_restore_backup_root") == '0:700' ]] || {
+    echo 'Refusing preparation: restore-protection inventory path has unsafe owner or mode.' >&2
+    exit 2
+  }
+fi
+if [[ -e $control_inventory_target || -L $control_inventory_target ]]; then
+  python3 "$source_control_inventory" verify-production "$control_inventory_target" "${inventory_args[@]}" >/dev/null || {
+    echo 'Refusing preparation: protected Payload inventory differs from the reviewed production project or paths.' >&2
     exit 2
   }
 fi
@@ -305,7 +333,8 @@ control_files_known() {
   for pair in \
     "$control_target:$source_control" \
     "$control_runtime_target:$source_control_runtime" \
-    "$control_state_helper_target:$source_control_state"; do
+    "$control_state_helper_target:$source_control_state" \
+    "$control_inventory_helper_target:$source_control_inventory"; do
     IFS=: read -r target source <<< "$pair"
     [[ ! -e $target && ! -L $target ]] || file_matches "$target" "$source" || return 1
   done
@@ -313,7 +342,13 @@ control_files_known() {
 control_files_installed() {
   file_installed "$control_target" "$source_control" 755 && \
     file_installed "$control_runtime_target" "$source_control_runtime" 644 && \
-    file_installed "$control_state_helper_target" "$source_control_state" 644
+    file_installed "$control_state_helper_target" "$source_control_state" 644 && \
+    file_installed "$control_inventory_helper_target" "$source_control_inventory" 644
+}
+payload_inventory_matches() {
+  [[ -f $control_inventory_target && ! -L $control_inventory_target ]] && \
+    python3 "$source_control_inventory" verify-production "$control_inventory_target" "${inventory_args[@]}" >/dev/null 2>&1 && \
+    root_owned_mode "$control_inventory_target" 600
 }
 payload_overlay_is_known() {
   [[ ! -e $payload_production_target && ! -L $payload_production_target ]] || \
@@ -323,7 +358,8 @@ candidate_is_known() {
   [[ ! -e $candidate_target && ! -L $candidate_target ]] || candidate_matches
 }
 
-payload_overlay_is_known && candidate_is_known && control_files_known || {
+payload_overlay_is_known && candidate_is_known && control_files_known && \
+  { [[ ! -e $control_inventory_target && ! -L $control_inventory_target ]] || payload_inventory_matches; } || {
   echo 'Refusing preparation: an existing runtime CMS control or overlay differs from this reviewed bundle.' >&2
   exit 2
 }
@@ -336,6 +372,7 @@ file_installed "$payload_production_target" "$source_payload_overlay" 644 || nee
 candidate_installed || needs_change=true
 [[ $cms_env_state == complete ]] || needs_change=true
 [[ $control_state_presence == complete ]] || needs_change=true
+payload_inventory_matches || needs_change=true
 
 if [[ $mode == check ]]; then
   if [[ $needs_change == true ]]; then
@@ -356,6 +393,11 @@ else
     exit 2
   }
   chmod 0700 "$backup_dir"
+  if [[ ! -d $pre_restore_backup_root ]]; then
+    mkdir -m 0700 -- "$pre_restore_backup_root"
+    chown 0:0 -- "$pre_restore_backup_root"
+    chmod 0700 -- "$pre_restore_backup_root"
+  fi
   for entry in "receiver:$receiver_target:ownerinc-portal-deploy" \
     "guard:$guard_target:payload-operations-guard" "environment:$environment:production.runtime.conf"; do
     IFS=: read -r label source destination <<< "$entry"
@@ -411,6 +453,9 @@ else
   if ! file_installed "$control_state_helper_target" "$source_control_state" 644; then
     atomic_install "$source_control_state" "$control_state_helper_target" 0644
   fi
+  if ! file_installed "$control_inventory_helper_target" "$source_control_inventory" 644; then
+    atomic_install "$source_control_inventory" "$control_inventory_helper_target" 0644
+  fi
   if ! file_installed "$payload_production_target" "$source_payload_overlay" 644; then
     atomic_install "$source_payload_overlay" "$payload_production_target" 0644
   fi
@@ -421,6 +466,12 @@ else
     echo 'Refusing preparation: private CMS environment could not be atomically written.' >&2
     echo "The pre-change receiver, guard and environment remain in $backup_dir for manual recovery." >&2
     exit 2
+  fi
+  if [[ ! -e $control_inventory_target ]]; then
+    if ! python3 "$control_inventory_helper_target" create-production "$control_inventory_target" "${inventory_args[@]}"; then
+      echo 'Refusing preparation: protected Payload inventory could not be created.' >&2
+      exit 2
+    fi
   fi
   if [[ $control_state_presence == empty ]]; then
     if ! python3 "$source_control_state" initialize "$runtime"; then

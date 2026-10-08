@@ -134,17 +134,27 @@ reconciliação de `COMMIT` desconhecido, aprovação de coverage ou selo de cut
 
 ## Adapter de controle: fonte Task 2, aceitação runtime pendente
 
-`ops/payload-control`, `ops/payload-control-runtime.py` e
-`ops/payload-control-state.py` implementam nesta fonte o controller limitado à
+`ops/payload-control`, `ops/payload-control-runtime.py`,
+`ops/payload-control-state.py` e `ops/payload-control-inventory.py` implementam nesta fonte o controller limitado à
 fase `preauthority`. O guard falha se os artefatos não estiverem instalados no
 runtime. A implementação local ainda não comprova PostgreSQL, Docker, `flock`
 Linux, arquivos de produção ou recuperação real; não instalar nem ativar sem
 revisão e aceitação separadas. A ausência do adapter no host continua sendo o
 estado da evidência histórica da VPS, não uma afirmação sobre este checkout.
 
+O inventário operacional protegido (`runtime/payload-control-inventory.json`)
+é root:root 0600, validado canonicamente e incluído na identidade assinada do
+estado/provas. Ele fixa projeto, runtime/release/lock, raízes de backup e as
+quatro identidades/labels/mounts Docker. O runtime não aceita troca de projeto,
+override de ambiente/Compose/backup nem endpoint Docker por variável. A instalação
+deriva os caminhos dos defaults do preparador e recusa um inventário existente
+que difira deles. O preparador instala também `runtime/payload-control-inventory.py`;
+não instalar isoladamente os três helpers.
+
 Verbos invocados com `(ação, releaseAbsoluta, evidênciaOpcional)`: release-preflight,
 close-admission, quiescence-proof, backup-metadata, restore-preflight, prepare-restore,
-verify-restored, verify-release, rollback-check, open-admission.
+portal-restore-intermediate, verify-restored, verify-release, rollback-check,
+open-admission.
 
 ### Grants do Portal e sessão administrativa v2
 
@@ -182,6 +192,12 @@ foi executada no host.
   floor/catalog e identidade atual do alvo. `prepare-restore` repete a checagem de
   intent/alvo e sessões PostgreSQL imediatamente antes de cada etapa destrutiva;
   não compara identidades de clone com as identidades da origem.
+- Depois do `pg_restore` Portal, `portal-restore-intermediate` repete proof, lease,
+  identidade, shape/quiescência e exige somente os dois floors de grants completos
+  conhecidos, além do fingerprint Portal restaurado. O coordenador então executa o
+  `migrate`/`verify-migrations` padrão sob o mesmo lock; o próximo `prepare-restore`
+  exige grants v2 estritos antes de tocar o CMS. Falha em reprovisionamento ou no
+  gate estrito conserva admissão fechada e não inicia a próxima destruição.
 - verify-restored compara fingerprints de ambas as bases e árvores de arquivos,
   além de authority, migrations e catálogo CMS esperado, antes de reabrir admissão.
 - rollback-check limita a primeira instalação a rollback de aplicação, condicionado
@@ -191,6 +207,34 @@ foi executada no host.
   mesmo floor CMS preauthority, sem fallback de dados para legacy.
 - verify-release verifica imagens/processos e o catálogo CMS nativo read-only;
   não prova a aceitação de browser/sessão v2 nem inicia job, import ou finalizer.
+
+### Aceitação de recuperação descartável Task 3 — código pronto, CI pendente
+
+`scripts/test-payload-preauthority-recovery.mjs` e os fixtures
+`scripts/integration/payload-preauthority-*` preparam projetos/volumes com nomes
+aleatórios fora do namespace de produção, inventários independentes e registros,
+arquivos e credenciais sintéticos. O alvo recebe confiança explicitamente pelo
+identificador do inventário da origem e pela cópia host-a-host da chave de fixture;
+a chave não integra os conjuntos de backup. O runner chama o coordenador e o adapter
+reais sob lock herdado, testa rejeições pré-destrutivas e compara dumps completos,
+schemas/catálogos, sequências e árvores de arquivos após dois restores, preservando
+o anúncio legado pelo UUID exato da origem (e confirmando ausente o seed do alvo),
+authority `legacy/1`, protocolo ausente e worker parado.
+Somente o overlay descartável define `CRON_BOOTSTRAP_ONLY=true`; o runner confere
+o ambiente efetivo do container cron, aguarda sua healthcheck real e repete snapshots
+com os writers parados. Para a identidade dessas comparações (não para os backups
+assinados), remove somente o par de linhas `\restrict KEY`/`\unrestrict KEY` no
+prologue/rodapé do `pg_dump`; conteúdo de dados, sequências e demais linhas permanece.
+
+O CI segue: build/teste/scans de imagens e dependências → publish dos três digests
+imutáveis do mesmo SHA → recuperação real nesses digests exatos → manifesto de
+candidato qualificado separado, que vincula run/SHA/digests ao SHA-256 do relatório
+redigido. A publicação do candidato e seu manifesto de digests **não** são
+qualificação nem deploy. Relatórios de falha são artifacts redigidos; o fixture
+privado fica somente no host descartável durante a vida do runner. O recovery não
+é iniciado por `npm run verify` e não foi executado nesta entrega porque o Docker
+local não está disponível. Só um relatório real com `status=passed` gera o artifact
+qualificado; até esse run, Task 3 permanece sem aceite runtime.
 
 ## Preparação inicial da infraestrutura de produção — inativa até nova autorização
 
@@ -204,7 +248,8 @@ diretório/host alternativo.
 O bundle revisado precisa manter juntos `docker-compose.payload.yml`,
 `ops/prepare-cms-infrastructure.sh`, `ops/prepare-cms-infrastructure-private.py`,
 `ops/deploy-from-ci.sh`, `ops/payload-operations-guard.sh`, `ops/payload-control`,
-`ops/payload-control-runtime.py`, `ops/payload-control-state.py` e
+`ops/payload-control-runtime.py`, `ops/payload-control-state.py`,
+`ops/payload-control-inventory.py` e
 `ops/compose.payload.production.yaml`. O candidate CMS correspondente também precisa
 conter `cms/scripts/verify-preauthority-catalog.ts` e sua verificação read-only
 compartilhada. Antes de aplicar, confirme o bundle/commit e execute:
@@ -260,7 +305,7 @@ uid/gid/modo; não contém imagem, release, backup diário nem database dump. O 
 
 Instala `/usr/local/libexec/ownerinc-portal-deploy` e
 `runtime/payload-operations-guard` (root:root 0755), o adapter
-`runtime/payload-control` (root:root 0755), os dois helpers Python e
+`runtime/payload-control` (root:root 0755), os três helpers Python e
 `runtime/compose.payload.production.yaml` (root:root 0644), além do manifesto
 `runtime/cms-image-candidate.env` (root:root 0644). A chave/journal de controle
 ficam root:root, 0600/0700, fora dos backups de dados. O snapshot anterior continua
@@ -268,6 +313,11 @@ limitado ao receiver, guard e environment; não contém o novo código, overlay,
 journal, imagem ou dump. Não instala um wrapper production novo, não altera
 `authorized_keys` nem permissões/owner do override existente
 `runtime/compose.production.yaml`.
+O inventário protegido é root:root 0600, contém o projeto de produção e quatro
+volumes (`postgres_data`, `uploads_data`, `cms_postgres_data`, `cms_uploads_data`)
+com seus labels Compose e mounts revisados, mais paths explícitos para release,
+lock, environment, overlays e raízes de backup. O diretório privado de proteção
+pré-restore fica separado da raiz diária.
 O manifesto de candidato contém somente `CMS_IMAGE=` para o digest revisado
 `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:6eaddc9a333ba682508a09a4ae8a6409d9e571abab9ec4a62829c2e9828730b0`; não é copiado para
 `current-release/.image-env`, não adiciona `RELEASE_FORMAT`, nem promove release.
@@ -289,9 +339,10 @@ de migrations. O aceite CI de API/session v2 do Task 1 foi reportado como conclu
 mas não foi implantado. O helper CMS novo requer um conjunto candidato completo e
 recém-construído que o contenha; o digest de imagem CMS já registrado na evidência
 histórica não comprova esse helper e não deve ser combinado com imagens de outro
-source SHA para alegar um release comum. A aceitação real de recuperação do Task 3
-continua pendente. Nenhum sucesso de
-preparação equivale a deploy ou recuperação comprovada.
+source SHA para alegar um release comum. O runner Task 3 e a ordem CI de publicação,
+recuperação e qualificação estão implementados, mas a aceitação real continua
+pendente do run Linux descartável. Nenhum sucesso de preparação equivale a deploy
+ou recuperação comprovada.
 
 ### Rollback manual da preparação inativa
 

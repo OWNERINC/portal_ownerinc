@@ -8,6 +8,7 @@ backup proofs. The key and journal are host state, never backup artifacts.
 
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 import re
@@ -15,6 +16,14 @@ import secrets
 import stat
 import sys
 import tempfile
+
+
+INVENTORY_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'payload-control-inventory.py')
+INVENTORY_SPEC = importlib.util.spec_from_file_location('payload_control_inventory', INVENTORY_PATH)
+if INVENTORY_SPEC is None or INVENTORY_SPEC.loader is None:
+    raise SystemExit(2)
+INVENTORY = importlib.util.module_from_spec(INVENTORY_SPEC)
+INVENTORY_SPEC.loader.exec_module(INVENTORY)
 
 
 HEX_64 = re.compile(r'^[0-9a-f]{64}$')
@@ -113,6 +122,7 @@ def validate_state_body(body):
         'admission', 'sequence', 'previousStateSha256', 'restoreIntent',
         'latestProofSha256', 'legacySourceProofSha256', 'releaseImages',
         'plannedReleaseImages', 'rollbackTargetImages', 'nativeCatalogFingerprint',
+        'inventoryIdentity',
     }, 'unsupported_state_shape')
     if type(body['schemaVersion']) is not int or body['schemaVersion'] != 1 or body['phase'] != 'preauthority':
         fail('unsupported_state_phase')
@@ -137,6 +147,8 @@ def validate_state_body(body):
         value = body[name]
         if value is not None and (not isinstance(value, str) or not HEX_64.fullmatch(value)):
             fail('invalid_state_digest')
+    if not isinstance(body['inventoryIdentity'], str) or not HEX_64.fullmatch(body['inventoryIdentity']):
+        fail('invalid_state_inventory_identity')
     if body['cmsStatus'] == 'cold':
         if body['releaseImages'] is not None or body['nativeCatalogFingerprint'] is not None:
             fail('invalid_cold_state')
@@ -154,11 +166,19 @@ def validate_state_body(body):
         _valid_images(body['rollbackTargetImages'], payload=False)
     intent = body['restoreIntent']
     if intent is not None:
-        _exact_keys(intent, {'proofSha256', 'target', 'releaseImages'}, 'invalid_restore_intent')
+        _exact_keys(intent, {'proofSha256', 'target', 'releaseImages', 'targetFingerprints', 'stage'}, 'invalid_restore_intent')
         if not isinstance(intent['proofSha256'], str) or not HEX_64.fullmatch(intent['proofSha256']):
             fail('invalid_restore_intent')
+        if intent['stage'] not in ('reserved', 'restoring', 'portal_restored', 'portal_grants_restored'):
+            fail('invalid_restore_intent')
         _valid_images(intent['releaseImages'], payload=True)
-        _exact_keys(intent['target'], {'portal', 'cms', 'volumes'}, 'invalid_restore_target')
+        fingerprints = intent['targetFingerprints']
+        _exact_keys(fingerprints, {'portalDatabase', 'cmsDatabase', 'portalUploads', 'cmsUploads'}, 'invalid_restore_target_fingerprints')
+        if any(not isinstance(item, str) or not HEX_64.fullmatch(item) for item in fingerprints.values()):
+            fail('invalid_restore_target_fingerprints')
+        _exact_keys(intent['target'], {'inventoryIdentity', 'portal', 'cms', 'volumes'}, 'invalid_restore_target')
+        if not isinstance(intent['target']['inventoryIdentity'], str) or not HEX_64.fullmatch(intent['target']['inventoryIdentity']):
+            fail('invalid_restore_target')
         for database in ('portal', 'cms'):
             _validate_database_identity(intent['target'][database])
         if intent['target']['portal']['databaseName'] != 'portal' or \
@@ -235,7 +255,7 @@ def _file_info(path, expected_mode=None, private_owner=False):
 
 def _read_file(path, expected_mode=None, private_owner=False):
     before = _file_info(path, expected_mode, private_owner)
-    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
     try:
         descriptor = os.open(path, flags)
         try:
@@ -262,7 +282,7 @@ def _hash_file(path):
     digest = hashlib.sha256()
     size = 0
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
         try:
             opened = os.fstat(descriptor)
             if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino) or opened.st_nlink != 1:
@@ -352,7 +372,7 @@ def read_state(directory):
 
 
 def _write_exclusive(path, raw, mode):
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
     try:
         descriptor = os.open(path, flags, mode)
         with os.fdopen(descriptor, 'wb', closefd=True) as stream:
@@ -404,7 +424,7 @@ def _atomic_replace(path, raw, mode):
                 pass
 
 
-def initialize(directory):
+def initialize(directory, inventory_identity, trusted_key=None):
     info = os.lstat(directory)
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         fail('unsafe_private_state_directory')
@@ -422,7 +442,11 @@ def initialize(directory):
     except OSError:
         fail('private_state_initialization_failed')
     key_path = os.path.join(directory, 'payload-control.key')
-    key = secrets.token_bytes(32)
+    if not isinstance(inventory_identity, str) or not HEX_64.fullmatch(inventory_identity):
+        fail('invalid_state_inventory_identity')
+    key = secrets.token_bytes(32) if trusted_key is None else trusted_key
+    if not isinstance(key, bytes) or len(key) != 32:
+        fail('invalid_private_key')
     body = {
         'schemaVersion': 1, 'phase': 'preauthority', 'cmsStatus': 'cold',
         'authority': {'mode': 'legacy', 'epoch': 1}, 'workerHold': True,
@@ -430,7 +454,7 @@ def initialize(directory):
         'restoreIntent': None, 'latestProofSha256': None,
         'legacySourceProofSha256': None, 'releaseImages': None,
         'plannedReleaseImages': None, 'rollbackTargetImages': None,
-        'nativeCatalogFingerprint': None,
+        'nativeCatalogFingerprint': None, 'inventoryIdentity': inventory_identity,
     }
     envelope = sign_envelope(validate_state_body(body), key)
     raw = canonical(envelope) + b'\n'
@@ -494,11 +518,14 @@ def validate_proof_body(body):
     common = {
         'schemaVersion', 'kind', 'phase', 'authority', 'protocol', 'images',
         'source', 'migrations', 'dataFingerprints', 'artifacts', 'createdAtUtc',
+        'inventoryIdentity',
     }
     if not isinstance(body, dict):
         fail('unsupported_proof_shape')
     if type(body['schemaVersion']) is not int or body['schemaVersion'] != 1 or body['phase'] != 'preauthority':
         fail('unsupported_proof_phase')
+    if not isinstance(body['inventoryIdentity'], str) or not HEX_64.fullmatch(body['inventoryIdentity']):
+        fail('invalid_proof_inventory_identity')
     kind = body['kind']
     if kind not in ('preauthority-legacy-source', 'preauthority-four-store-backup'):
         fail('unsupported_proof_kind')
@@ -599,19 +626,51 @@ def _directory_from_cli(path):
     return resolved
 
 
+def _inventory_for_runtime(directory):
+    path = os.path.join(directory, 'payload-control-inventory.json')
+    try:
+        value = INVENTORY.load(path)
+    except INVENTORY.InventoryError as error:
+        fail(str(error))
+    if value['paths']['runtime'] != directory:
+        fail('inventory_runtime_path_mismatch')
+    return value, INVENTORY.identity(value)
+
+
+def _trusted_source_key(source_directory):
+    source_directory = _directory_from_cli(source_directory)
+    inventory, source_identity = _inventory_for_runtime(source_directory)
+    key = _key_for(source_directory)
+    return inventory, source_identity, key
+
+
 def main(argv):
-    if len(argv) not in (3, 4):
-        print('Usage: payload-control-state.py initialize|verify-state DIRECTORY | verify-admission DIRECTORY open|closed', file=sys.stderr)
+    if len(argv) not in (3, 4, 5):
+        print('Usage: payload-control-state.py initialize|verify-state DIRECTORY | initialize-trusted TARGET_DIRECTORY SOURCE_DIRECTORY SOURCE_INVENTORY_ID | verify-admission DIRECTORY open|closed', file=sys.stderr)
         return 2
     action, directory = argv[1:3]
     try:
         if action == 'initialize' and len(argv) == 3:
             directory = _directory_from_cli(directory)
-            initialize(directory)
+            inventory, inventory_identity = _inventory_for_runtime(directory)
+            initialize(directory, inventory_identity)
             print('private preauthority state initialized')
+        elif action == 'initialize-trusted' and len(argv) == 5:
+            target_directory = _directory_from_cli(directory)
+            source_inventory, source_identity, key = _trusted_source_key(argv[3])
+            if argv[4] != source_identity:
+                fail('trusted_source_identity_mismatch')
+            target_inventory, target_identity = _inventory_for_runtime(target_directory)
+            if source_identity not in target_inventory['trustedSourceInventoryIdentities']:
+                fail('trusted_source_not_authorized')
+            initialize(target_directory, target_identity, trusted_key=key)
+            print('private state initialized with explicitly trusted fixture signing key')
         elif action == 'verify-state' and len(argv) == 3:
             directory = _directory_from_cli(directory)
             _key, _state_dir, body, _parent = read_state(directory)
+            _inventory, inventory_identity = _inventory_for_runtime(directory)
+            if body['inventoryIdentity'] != inventory_identity:
+                fail('state_inventory_identity_mismatch')
             print('preauthority state verified at sequence {}'.format(body['sequence']))
         elif action == 'verify-admission' and len(argv) == 4:
             directory = _directory_from_cli(directory)

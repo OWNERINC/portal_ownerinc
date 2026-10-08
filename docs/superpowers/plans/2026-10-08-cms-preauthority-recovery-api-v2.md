@@ -19,7 +19,7 @@
 - Preserve unrelated draft/spec files and prior failed-run evidence.
 - Linux shell/Docker files use LF. Secrets are generated/stored privately and never printed.
 - The local Docker engine is unavailable; actual Docker acceptance runs in disposable Linux CI infrastructure.
-- Existing user authorization covers implementation, disposable acceptance and subsequent reviewed VPS installation. Primary session owns production changes.
+- Task 3 authorization covers bounded code changes and a real disposable CI acceptance after review. This handoff does not authorize VPS activation, production writes, commit, push, merge, deployment, or PR creation.
 
 ## Task 1: Publish-only candidate and actual API-v2 acceptance
 
@@ -80,11 +80,11 @@ gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref feat/payload-cms-fi
 
 **Interfaces:**
 - Preserve guard CLI `(action, absoluteRelease, optionalEvidencePath)`.
-- Support existing verbs `release-preflight`, `close-admission`, `quiescence-proof`, `backup-metadata`, `restore-preflight`, `prepare-restore`, `verify-restored`, `verify-release`, `rollback-check`, `open-admission` only within the supported preauthority phase.
+- Support verbs `release-preflight`, `close-admission`, `quiescence-proof`, `backup-metadata`, `restore-preflight`, `prepare-restore`, `portal-restore-intermediate`, `verify-restored`, `verify-release`, `rollback-check`, `open-admission` only within the supported preauthority phase.
 - Reject other authority modes, epochs, protocol-present/mixed catalogs and unsupported operations explicitly.
 - Canonical JSON proofs bind phase, release images/SHA, source database system identifiers/OIDs, verified migrations, protocol absence and SHA-256/size of all four backup artifacts. They contain no credentials or content bodies.
 - Sign canonical bytes with a private host key; persist atomic state with sequence and previous-state hash. Never restore the host key/state from a data backup or present this proof as a cutover seal.
-- Restore intent binds the current target identities/volumes. A fresh clone legitimately differs from source identities; compare the target with its reserved intent immediately before destructive operations.
+- Restore intent binds target identities/volumes and the explicit Portal-restored/grants-reverified stages. A fresh clone legitimately differs from source identities; compare the target with its reserved intent immediately before destructive operations.
 
 - [x] Add tests rejecting unknown/duplicate proof fields, bad signatures, modified artifacts, changed target identities/volumes, unsupported phases and worker admission.
 - [x] Implement cold preflight that verifies the actual Portal floor/authority and absence of unexpected CMS containers/volumes without connecting to a nonexistent CMS database.
@@ -93,25 +93,28 @@ gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref feat/payload-cms-fi
 - [x] Implement real quiescence checks after writers stop; maintain admission closure on failure. Portal legacy writers are allowed while live, but none may remain active during capture/restore.
 - [x] Bind artifact hashes only after capture completes. Before restore, validate manifest, signature, archive paths/types and target lease. Recheck target binding at the destructive boundary, then verify restored database content, sequence state and storage hashes before reopening.
 - [x] Run meaningful offline tests.
-- [ ] Obtain a fresh independent read-only review before enabling actual disposable restore acceptance.
+- [x] Obtain a fresh independent read-only review before enabling actual disposable restore acceptance. Review gate closed with accepted Task 2 baseline commit `247fac2`.
 
 ## Task 3: Disposable four-store recovery acceptance
 
 **Files:**
-- Create `scripts/test-payload-preauthority-recovery.mjs` and focused guard tests under `tests/unit/`.
-- Extend CI with an explicit disposable acceptance step; never add service startup to `npm run verify`.
-- Record evidence under `docs/reviews/` with links/hashes, not private artifacts.
+- Create `scripts/test-payload-preauthority-recovery.mjs`, `scripts/integration/payload-preauthority-fixture.mjs`, `scripts/integration/payload-preauthority-fixture.compose.yml`, and `tests/unit/payload-preauthority-recovery-guard.test.mjs`.
+- Modify `ops/payload-control-inventory.py`, `ops/payload-control-runtime.py`, `ops/payload-control-state.py`, `ops/prepare-cms-infrastructure.sh`, `scripts/payload-operations.sh`, and focused tests only to add strict protected-inventory identity, trust-transfer and destructive-boundary support required by the real fixture.
+- Modify `.github/workflows/ci.yml`, `docs/operations/payload-runtime-recovery.md`, and this plan to document candidate publication versus recovery qualification and the actual evidence boundary.
+- Never add service startup to `npm run verify`; preserve unrelated draft/spec files and Task 2 catalog behavior.
 
-**Interfaces:** the harness invokes the actual adapter/coordinator from Task 2 against a unique project, databases and storage volumes, with a separate operation lock and synthetic records. It emits success only after comparing both database contents and both file trees after restore.
+**Interfaces:** the harness accepts only the three immutable GHCR image digests published in the same CI run and a checked-out SHA/run identity. It creates random disposable source/target project names, four project-labeled volumes per host, unique roots/locks, and a 0600 inventory. The source inventory identity is explicitly authorized in target inventory before copying the fixture-only host signing key; that key is not a backup artifact. Production and fixture paths are loaded through the same adapter and strict validations. Success requires actual coordinator/adapter capture/restore plus independent database (including sequence) and file-tree comparisons.
 
-- [ ] Seed distinguishable synthetic Portal data and permitted CMS identity/preference data, plus files in Portal uploads and CMS media/staging paths.
-- [ ] Capture a coordinated four-store backup under the real shared-lock contract.
-- [ ] Restore to independently identified disposable targets, verify both catalogs and data, compare file-tree hashes and confirm worker absence.
-- [ ] Exercise tampered dump/proof/manifest, unsafe archive entries, wrong image references, migration mismatch and target identity changes. Assert rejection before target deletion or `pg_restore` and preserve failure evidence.
-- [ ] Repeat normal capture/restore after a permissible synthetic live edit to show the proof does not accidentally certify an initial empty snapshot only.
-- [ ] Run full `npm run verify`, review the actual diff and real fixture report, and approve only the preauthority scope actually demonstrated.
+- [x] Implement synthetic Portal identity, poll and legacy announcement seed, permitted CMS identity/preferences, and Portal/CMS media and staging files.
+- [x] Implement coordinated four-store backup and target restore through the inherited shared-lock coordinator and real Task 2 adapter.
+- [x] Implement independent native/catalog, data/sequence and file-tree comparisons, requiring `authority=legacy/1`, protocol absence and worker absence.
+- [x] Implement tampered dump/proof/manifest, unsafe archive/schema, wrong immutable image digest, migration mismatch, weak native constraint, extra materialized view and target-volume lease-change cases. The harness asserts rejection before restore, detects unchanged target catalog/data/files, and explicitly cleans fixture-only DDL after evidence is checked.
+- [x] Implement a repeated actual capture/restore after a permitted synthetic live edit.
+- [x] Order candidate CI as build/test/security scans → publish all three same-SHA digests → run recovery on those exact digests → emit a separate qualified manifest only after a passing report. Candidate digest capture is unqualified, the report is redacted, and recovery stays outside `npm run verify`.
+- [ ] Run `npm run verify`, `npm run security`, and `git diff --check`; obtain a fresh read-only review before the real Docker acceptance run.
+- [ ] Run the candidate-dispatch CI recovery after review. Preserve its redacted report artifact and actual run/SHA/image digests; only then add the report hash and outcome to `docs/reviews/` without including private fixture content. Local Docker is unavailable, so no real recovery pass is claimed here.
 
-## Task 4: Install validated control and compatible release on the VPS
+## Task 4: Install validated control and compatible release on the VPS — separate authorization required
 
 **Files:** reviewed adapter/helper artifacts, prepared production overlay, private operational state and the selected release manifest. Update `docs/reviews/2026-10-08-cms-vps-infrastructure-preparation.md` with subsequent evidence without overwriting its historical result.
 

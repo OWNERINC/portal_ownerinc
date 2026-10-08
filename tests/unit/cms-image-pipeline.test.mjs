@@ -50,8 +50,13 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   const scan = namedStep(workflow, 'Scan CMS image');
   const publish = namedStep(workflow, 'Publish immutable images');
   const publishCms = namedStep(workflow, 'Publish CMS immutable image');
-  const candidateManifest = namedStep(workflow, 'Create complete immutable release candidate manifest');
+  const candidateManifest = namedStep(workflow, 'Capture complete immutable release candidate manifest');
+  const recoveryPull = namedStep(workflow, 'Pull exact published candidate image digests for root-owned fixture');
+  const recovery = namedStep(workflow, 'Run disposable four-store preauthority recovery on published digests');
+  const recoveryReport = namedStep(workflow, 'Upload redacted preauthority recovery report');
+  const qualifiedManifest = namedStep(workflow, 'Create recovery-qualified candidate manifest');
   const authenticate = namedStep(workflow, 'Authenticate to GHCR');
+  const apiPublishAt = workflow.indexOf('      - name: Publish immutable images');
   const publishAt = workflow.indexOf('      - name: Publish CMS immutable image');
   const scanAt = workflow.indexOf('      - name: Scan CMS image');
   const buildAt = workflow.indexOf('      - name: Build production images');
@@ -71,6 +76,12 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     'the two manual publication modes must fail closed when selected together');
   assert.ok(buildAt < integrationAt && integrationAt < scanAt && scanAt < publishAt,
     'candidate API-v2 HTTP acceptance must run after image build and before scans/publication');
+  assert.ok(apiPublishAt < publishAt &&
+    publishAt < workflow.indexOf('      - name: Capture complete immutable release candidate manifest') &&
+    workflow.indexOf('      - name: Capture complete immutable release candidate manifest') < workflow.indexOf('      - name: Run disposable four-store preauthority recovery on published digests') &&
+    workflow.indexOf('      - name: Pull exact published candidate image digests for root-owned fixture') < workflow.indexOf('      - name: Run disposable four-store preauthority recovery on published digests') &&
+    workflow.indexOf('      - name: Run disposable four-store preauthority recovery on published digests') < workflow.indexOf('      - name: Create recovery-qualified candidate manifest'),
+    'recovery qualification must follow all same-SHA candidate publication and actual-digest capture');
   assert.equal(condition(integration, 8), candidateExpression);
   assert.match(integration, /NODE_ENV: test[\s\S]*MIGRATION_TEST_DISPOSABLE: "true"[\s\S]*PORTAL_TEST_API_IMAGE: ownerinc-portal-api:\$\{\{ github\.sha \}\}[\s\S]*PORTAL_TEST_FIREBASE_PROJECT_ID: demo-ownerinc-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
     'candidate acceptance must use a commit-matched API image and run-unique Firebase demo project');
@@ -148,6 +159,17 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   assert.equal(condition(candidateUpload, 8), candidateExpression);
   assert.match(candidateUpload, /path: candidate\.json/);
   assert.match(candidateUpload, /retention-days: 30/);
+  assert.equal(condition(recoveryPull, 8), candidateExpression);
+  assert.match(recoveryPull, /docker pull "\$API_IMAGE"[\s\S]*docker pull "\$CRON_IMAGE"[\s\S]*docker pull "\$CMS_IMAGE"/);
+  assert.equal(condition(recovery, 8), candidateExpression);
+  assert.match(recovery, /sudo env[\s\S]*API_IMAGE="\$API_IMAGE"[\s\S]*node scripts\/test-payload-preauthority-recovery\.mjs/);
+  assert.match(recoveryReport, /always\(\)[\s\S]*payload-preauthority-recovery-report[\s\S]*retention-days: 30/);
+  assert.equal(condition(qualifiedManifest, 8), `success() && ${candidateExpression}`);
+  assert.match(qualifiedManifest, /report\.status !== 'passed'[\s\S]*report\.run\.commit !== process\.env\.GITHUB_SHA[\s\S]*recoveryReportSha256/);
+  assert.match(qualifiedManifest, /expectedNegativeCases[\s\S]*targetContentUnchanged[\s\S]*fixtureDdlCleaned/);
+  const qualifiedUpload = containingStep(workflow, 'name: payload-recovery-qualified-candidate');
+  assert.equal(condition(qualifiedUpload, 8), `success() && ${candidateExpression}`);
+  assert.match(qualifiedUpload, /path: qualified-candidate\.json/);
 
   const policy = ({ event, ref, cmsImageOnly = false, publishCandidateOnly = false }) => {
     const conflict = event === 'workflow_dispatch' && cmsImageOnly === true && publishCandidateOnly === true;

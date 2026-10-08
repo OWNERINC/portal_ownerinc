@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 # This coordinator NEVER holds database locks. External import/maintenance
 # coordinators must use the SAME lock before opening transactions. Only the outer
@@ -36,7 +38,10 @@ compose() {
   payload_override="$(dirname -- "$PORTAL_OPERATION_LOCK")/compose.payload.production.yaml"
   [[ -f $payload_override && ! -L $payload_override ]] || { echo 'Missing protected Payload production Compose overlay' >&2; return 2; }
   args+=(-f "$payload_override")
-  docker compose "${args[@]}" "$@"
+  # Compose interpolation must come only from the protected runtime env file and
+  # immutable release manifest; ambient API_IMAGE, database or Docker endpoint
+  # variables must not silently redirect this coordinated operation.
+  env -i PATH="$PATH" HOME="${HOME:-/root}" docker compose "${args[@]}" "$@"
 }
 guard() {
   # The reviewed integration guard must check all authority/epoch/seal/ledger
@@ -127,6 +132,12 @@ else
   # targets, including extra objects pg_restore --clean would otherwise retain.
   guard prepare-restore "$backup"
   compose exec -T postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/postgres.dump"
+  # Portal pg_restore --no-privileges may remove runtime grants. Record and
+  # verify this explicit intermediate floor, then reapply grants through the
+  # normal migration/provision path before the next strict destructive check.
+  guard portal-restore-intermediate "$backup"
+  compose run --rm --no-deps migrate
+  compose run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/verify-migrations.js
   guard prepare-restore "$backup"
   # CMS ownership must remain cms_migrator so future DDL uses the same owner.
   compose exec -T cms-postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --role=cms_migrator --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/cms-postgres.dump"
@@ -139,18 +150,16 @@ else
     compose run --rm --no-deps -T --entrypoint tar "$service" -xzf - -C "$storage" < "$backup/$artifact"
   done
   guard prepare-restore "$backup"
-  compose run --rm --no-deps migrate
-  compose run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/verify-migrations.js
   guard prepare-restore "$backup"
   compose run --rm --no-deps cms-migrate
   compose run --rm --no-deps --entrypoint node cms --import tsx scripts/provision-db.ts --verify-runtime
   guard verify-restored "$backup"
-  # Start web/API only; worker admission remains closed until smoke and ledger
-  # reconciliation. Pending imported agendas are never resumed by this script.
+  # Start API/CMS/Nginx for the readiness smoke with admission still closed.
+  # Resume the originally stopped services only after smoke; cms-worker is never
+  # included, and release verification runs against the complete resumed floor.
   compose up -d --no-deps api cms nginx
   : "${RESTORE_BASE_URL:?Set RESTORE_BASE_URL for the isolated target}"
   BASE_URL=$RESTORE_BASE_URL bash "$root/scripts/smoke.sh"
-  guard verify-release
   resume
   guard verify-release
   guard open-admission

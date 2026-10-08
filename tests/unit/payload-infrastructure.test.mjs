@@ -5,11 +5,12 @@ import path from 'node:path';
 import test from 'node:test';
 
 test('optional Compose overlay renders isolated roles, volumes and one CMS image without starting Docker', t => {
+  const parserEnvironment = Object.fromEntries(['PATH', 'SystemRoot', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)']
+    .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
   const result = spawnSync('docker', ['compose', '--env-file', '.env.example', '-f', 'docker-compose.yml', '-f', 'docker-compose.payload.yml', 'config', '--format', 'json'], {
     encoding: 'utf8', timeout: 20000,
     // Do not inherit real runtime secrets or image settings into the parser.
-    env: Object.fromEntries(['PATH', 'SystemRoot', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)']
-      .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])),
+    env: parserEnvironment,
   });
   if (result.error?.code === 'ENOENT') { t.skip('Docker Compose parser unavailable; no service attempted'); return; }
   assert.equal(result.status, 0, 'Compose parse failed (configuration output intentionally withheld)');
@@ -41,6 +42,15 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
     /^postgresql:\/\/cms_admin:placeholder-cms-admin-password-not-for-runtime@cms-postgres:5432\/ownerinc_cms$/u);
   assert.equal(s['cms-preauthority-verify'].environment.CMS_DATABASE_URL, undefined);
   assert.equal(s['cms-preauthority-verify'].restart, 'no');
+  assert.equal(s.cron.environment.CRON_BOOTSTRAP_ONLY, 'false', 'production Compose must retain the normal cron default');
+
+  const fixtureResult = spawnSync('docker', ['compose', '--env-file', '.env.example', '-f', 'docker-compose.yml',
+    '-f', 'docker-compose.payload.yml', '-f', 'scripts/integration/payload-preauthority-fixture.compose.yml',
+    'config', '--format', 'json'], { encoding: 'utf8', timeout: 20000, env: parserEnvironment });
+  assert.equal(fixtureResult.status, 0, 'disposable fixture Compose parse failed (output intentionally withheld)');
+  const fixtureConfig = JSON.parse(fixtureResult.stdout);
+  assert.equal(fixtureConfig.services.cron.environment.CRON_BOOTSTRAP_ONLY, 'true',
+    'the isolated fixture overlay must forward bootstrap-only mode to the actual cron service');
 });
 
 test('owned Docker, Nginx and shell artifacts retain LF', async () => {
@@ -84,10 +94,12 @@ test('each owned operational script parses independently', t => {
 });
 
 test('cold deploy signs its legacy source backup before provisioning and never starts the worker', async () => {
-  const [receiver, operations, manualRelease] = await Promise.all([
+  const [receiver, operations, manualRelease, guard, runtime] = await Promise.all([
     readFile('ops/deploy-from-ci.sh', 'utf8'),
     readFile('scripts/payload-operations.sh', 'utf8'),
     readFile('scripts/payload-release.sh', 'utf8'),
+    readFile('ops/payload-operations-guard.sh', 'utf8'),
+    readFile('ops/payload-control-runtime.py', 'utf8'),
   ]);
   const proof = receiver.indexOf('backup-metadata "$release" "$backup/preauthority-proof.json"');
   const provision = receiver.indexOf('migration_started=true');
@@ -108,6 +120,12 @@ test('cold deploy signs its legacy source backup before provisioning and never s
   assert.ok(receiver.lastIndexOf('mv "$current_tmp" "$current_file"') < receiver.lastIndexOf('open-admission "$release"'),
     'CI deploy must publish the canonical pointer before reopening writer admission');
   assert.match(operations, /compose stop --timeout 120 nginx api cron cms cms-worker/);
+  assert.match(operations, /^PATH=\/usr\/local\/sbin:\/usr\/local\/bin:\/usr\/sbin:\/usr\/bin:\/sbin:\/bin\nexport PATH/m,
+    'production coordinator must not resolve Docker, lock or archive tools from an operator-controlled PATH');
+  assert.match(operations, /env -i PATH="\$PATH" HOME="\$\{HOME:-\/root\}" docker compose/,
+    'Compose receives only the protected PATH/home and its explicit env-files, not ambient Docker overrides');
+  assert.match(guard, /prepare-restore\|portal-restore-intermediate\|verify-restored/u);
+  assert.match(runtime, /'restore-preflight', 'prepare-restore', 'portal-restore-intermediate'/u);
 });
 
 test('out-of-band Payload writers require both signed open admission and no closed sentinel', async () => {

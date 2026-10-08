@@ -51,6 +51,7 @@ async function fixture(t) {
     release: path.join(root, 'apps', 'portal-ownerinc-real', 'releases', commit),
     secrets: path.join(root, 'secrets', 'portal-ownerinc'),
     backups: path.join(root, 'backups', 'portal-ownerinc', 'production'),
+    dailyBackups: path.join(root, 'backups', 'portal-ownerinc', 'daily'),
     libexec: path.join(root, 'usr', 'local', 'libexec'),
     bundle: path.join(root, 'bundle'),
     bin: path.join(root, 'bin'),
@@ -75,10 +76,22 @@ async function fixture(t) {
   await writeFile(path.join(paths.bundle, 'docker-compose.payload.yml'), await readFile('docker-compose.payload.yml'));
   await mkdir(path.join(paths.bundle, 'ops'));
   for (const file of ['deploy-from-ci.sh', 'payload-operations-guard.sh', 'payload-control', 'payload-control-runtime.py',
-    'payload-control-state.py', 'compose.payload.production.yaml', 'prepare-cms-infrastructure-private.py']) {
+    'payload-control-state.py', 'payload-control-inventory.py', 'compose.payload.production.yaml', 'prepare-cms-infrastructure-private.py']) {
     const source = path.join(repository, 'ops', file);
     await copyFile(source, path.join(paths.bundle, 'ops', file));
   }
+  const inventoryTestHelper = path.join(paths.bundle, 'ops', 'payload-control-inventory-test.py');
+  const stateTestHelper = path.join(paths.bundle, 'ops', 'payload-control-state-test.py');
+  let testInventorySource = await readFile(path.join(paths.bundle, 'ops', 'payload-control-inventory.py'), 'utf8');
+  let testStateSource = await readFile(path.join(paths.bundle, 'ops', 'payload-control-state.py'), 'utf8');
+  if (process.platform !== 'win32') {
+    testInventorySource = testInventorySource
+      .replace('(owner_root and info.st_uid != 0)', 'False')
+      .replace('os.fchown(descriptor, 0, 0)', 'os.fchown(descriptor, os.geteuid(), os.getegid())');
+    testStateSource = testStateSource.replace("'payload-control-inventory.py')", "'payload-control-inventory-test.py')");
+  }
+  await writeFile(inventoryTestHelper, testInventorySource);
+  await writeFile(stateTestHelper, testStateSource);
 
   // The installed program has fixed production paths and no --root switch. Only
   // this disposable test copy maps those constants onto the isolated fake host.
@@ -88,14 +101,19 @@ async function fixture(t) {
     ['/opt/ownerinc/apps/portal-ownerinc-real', bashPath(paths.app)],
     ['/opt/ownerinc/secrets/portal-ownerinc/production.runtime.conf', bashPath(path.join(paths.secrets, 'production.runtime.conf'))],
     ['/opt/ownerinc/backups/portal-ownerinc/production', bashPath(paths.backups)],
+    ['/opt/ownerinc/backups/portal-ownerinc/daily', bashPath(paths.dailyBackups)],
     ['/usr/local/libexec', bashPath(paths.libexec)],
     ['install -o 0 -g 0', 'install'],
     ['chown 0:0 "$temporary"', ':'],
+    ['chown 0:0 -- "$pre_restore_backup_root"', process.platform === 'win32' ? ':' : 'chown 0:0 -- "$pre_restore_backup_root"'],
   ];
   for (const [from, to] of replacements) {
     assert.ok(installer.includes(from), `expected fixed production path ${from}`);
     installer = installer.replaceAll(from, to);
   }
+  installer = installer.replace("(key_info.st_uid != 0 or stat.S_IMODE(key_info.st_mode))", "(key_info.st_uid != os.geteuid() or stat.S_IMODE(key_info.st_mode))");
+  installer = installer.replace("== '0:700'", '== "$(id -u):700"');
+  installer = installer.replace('chown 0:0 -- "$pre_restore_backup_root"', ':');
   installer = installer.replace('expected_installed_receiver=30be4941fe15c1c75e16175625685e2f51acc6ceaa52db146d61684cdacce0f7',
     `expected_installed_receiver=${previousReceiverHash}`);
   const rootOwnedModeGate = 'root_owned_mode() { [[ $(stat -c \'%u:%g:%a\' -- "$1") == "0:0:$2" ]]; }';
@@ -127,7 +145,31 @@ exit 0
   if (process.platform === 'win32') {
     const pythonExe = process.env.PATH.split(path.delimiter).map(directory => path.join(directory, 'python.exe')).find(existsSync);
     if (!pythonExe) return { skip: 'Windows Python runtime unavailable for private configuration fixture' };
-    await writeFile(path.join(paths.bin, 'python3'), `#!/usr/bin/env bash\nexec '${pythonExe.replaceAll('\\', '/')}' "$@"\n`, { mode: 0o755 });
+    await writeFile(path.join(paths.bin, 'python3'), `#!/usr/bin/env bash
+script=$1
+shift
+python_args=()
+for argument in "$@"; do
+  if [[ $argument =~ ^/[A-Za-z]/ ]]; then argument=$(cygpath --windows "$argument"); fi
+  python_args+=("$argument")
+done
+case "$script" in
+  */payload-control-inventory.py) script='${inventoryTestHelper.replaceAll('\\', '/')}' ;;
+  */payload-control-state.py) script='${stateTestHelper.replaceAll('\\', '/')}' ;;
+esac
+exec '${pythonExe.replaceAll('\\', '/')}' "$script" "\${python_args[@]}"
+`, { mode: 0o755 });
+  } else {
+    const pythonExe = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' }).stdout.trim();
+    if (!pythonExe) return { skip: 'Python 3 unavailable for private configuration fixture' };
+    const quotedPython = pythonExe.replaceAll("'", "'\\''");
+    await writeFile(path.join(paths.bin, 'python3'), `#!/usr/bin/env bash
+case "$1" in
+  */payload-control-inventory.py) shift; exec '${quotedPython}' '${inventoryTestHelper.replaceAll("'", "'\\''")}' "$@" ;;
+  */payload-control-state.py) shift; exec '${quotedPython}' '${stateTestHelper.replaceAll("'", "'\\''")}' "$@" ;;
+esac
+exec '${quotedPython}' "$@"
+`, { mode: 0o755 });
   }
 
   const script = path.join(paths.bundle, 'ops', 'prepare-cms-infrastructure.sh');
@@ -230,9 +272,25 @@ test('apply atomically prepares private credentials and reviewed files without a
   assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control'), 'utf8'), await readFile('ops/payload-control', 'utf8'));
   assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control-runtime.py'), 'utf8'), await readFile('ops/payload-control-runtime.py', 'utf8'));
   assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control-state.py'), 'utf8'), await readFile('ops/payload-control-state.py', 'utf8'));
-  assert.equal((await readdir(path.join(f.paths.runtime, 'payload-control-state'))).includes('current.json'), true);
+  assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control-inventory.py'), 'utf8'), await readFile('ops/payload-control-inventory.py', 'utf8'));
+  const inventory = JSON.parse(await readFile(path.join(f.paths.runtime, 'payload-control-inventory.json'), 'utf8'));
+  assert.equal(inventory.project, 'ownerinc-portal-prod');
+  assert.deepEqual(inventory.paths.backupRoots.map(bashPath).sort(), [bashPath(f.paths.backups), bashPath(f.paths.dailyBackups)].sort());
+  assert.deepEqual(Object.keys(inventory.volumes).sort(), ['cmsPostgres', 'cmsUploads', 'portalPostgres', 'portalUploads']);
+  if (process.platform !== 'win32') {
+    assert.equal(await stat(path.join(f.paths.backups, 'restore-protection')).then(info => info.mode & 0o777), 0o700);
+  }
+  let stateEntries;
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+    const result = spawnSync('sudo', ['-n', 'ls', path.join(f.paths.runtime, 'payload-control-state')], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    stateEntries = result.stdout.split(/\r?\n/u);
+  } else {
+    stateEntries = await readdir(path.join(f.paths.runtime, 'payload-control-state'));
+  }
+  assert.equal(stateEntries.includes('current.json'), true);
 
-  const backups = await readdir(f.paths.backups);
+  const backups = (await readdir(f.paths.backups)).filter(name => name.startsWith('cms-infrastructure-preparation-'));
   assert.equal(backups.length, 1);
   const backup = path.join(f.paths.backups, backups[0]);
   assert.equal((await readdir(backup)).includes('payload-control.key'), false);
@@ -250,9 +308,16 @@ test('apply atomically prepares private credentials and reviewed files without a
   assert.doesNotMatch(calls, /\b(?:up|pull|run|exec|start|stop|restart)\b/);
 
   const repeated = f.run(['--apply']);
+  assert.equal((await readFile(path.join(f.paths.runtime, 'payload-control.key'))).length, 32);
+  const stateVerification = spawnSync(bash, [bashPath(path.join(f.paths.bin, 'python3')),
+    bashPath(path.join(f.paths.bundle, 'ops', 'payload-control-state.py')), 'verify-state', bashPath(f.paths.runtime)], {
+    encoding: 'utf8', env: { PATH: `${bashPath(f.paths.bin)}:${process.env.PATH || ''}`, ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) },
+  });
+  assert.equal(stateVerification.status, 0, stateVerification.stderr);
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.match(repeated.stdout, /already prepared/i);
-  assert.equal((await readdir(f.paths.backups)).length, 1, 'idempotent apply must not rotate secrets or create another backup');
+  assert.equal((await readdir(f.paths.backups)).filter(name => name.startsWith('cms-infrastructure-preparation-')).length, 1,
+    'idempotent apply must not rotate secrets or create another backup');
   assert.equal(await readFile(envPath, 'utf8'), environment);
 });
 
@@ -269,7 +334,7 @@ test('an existing complete CMS credential set is preserved without secret rotati
   assert.match(result.stdout, /prepared \(inactive\)/i);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /[a-f]{64}|postgresql:\/\//i);
   assert.equal(await readFile(environmentPath, 'utf8'), original);
-  const backups = await readdir(f.paths.backups);
+  const backups = (await readdir(f.paths.backups)).filter(name => name.startsWith('cms-infrastructure-preparation-'));
   assert.equal(backups.length, 1);
   assert.equal(await readFile(path.join(f.paths.backups, backups[0], 'production.runtime.conf'), 'utf8'), original);
 });

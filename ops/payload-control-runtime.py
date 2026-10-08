@@ -20,8 +20,10 @@ if SPEC is None or SPEC.loader is None:
     raise SystemExit(2)
 STATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(STATE)
+INVENTORY = STATE.INVENTORY
 
-PROJECT = 'ownerinc-portal-prod'
+INVENTORY_FILENAME = 'payload-control-inventory.json'
+_INVENTORY_CACHE = None
 KNOWN_SERVICES = {
     'postgres', 'cms-postgres', 'api', 'cron', 'nginx', 'cms', 'cms-worker',
     'migrate', 'bootstrap-admin', 'cms-provision', 'cms-migrate',
@@ -48,7 +50,8 @@ NEWS_TABLES = [
 SESSION_TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']
 ACTION_SET = {
     'release-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata',
-    'restore-preflight', 'prepare-restore', 'verify-restored', 'verify-release',
+    'restore-preflight', 'prepare-restore', 'portal-restore-intermediate',
+    'verify-restored', 'verify-release',
     'rollback-check', 'open-admission',
 }
 
@@ -59,6 +62,35 @@ class ControlError(Exception):
 
 def fail(code):
     raise ControlError(code)
+
+
+def _inventory(force=False):
+    global _INVENTORY_CACHE
+    if _INVENTORY_CACHE is not None and not force:
+        return _INVENTORY_CACHE
+    path = os.path.join(HERE, INVENTORY_FILENAME)
+    try:
+        document = INVENTORY.load(path)
+        if document['paths']['runtime'] != HERE:
+            fail('inventory_runtime_path_mismatch')
+        value = {'document': document, 'identity': INVENTORY.identity(document)}
+        _INVENTORY_CACHE = value
+        return value
+    except INVENTORY.InventoryError as error:
+        fail(str(error))
+
+
+def _paths():
+    return _inventory()['document']['paths']
+
+
+def _expected_compose_override(release):
+    paths = _paths()
+    release_override = os.path.join(release, 'compose.ownerinc-vps.yaml')
+    if os.path.lexists(release_override):
+        _safe_regular(release_override, owner_root=True)
+        return release_override
+    return paths['composeOverride']
 
 
 def _load_helpers():
@@ -88,7 +120,7 @@ def _safe_regular(path, mode=None, owner_root=False):
 def _read_bytes(path, mode=None, owner_root=False):
     before = _safe_regular(path, mode, owner_root)
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
         try:
             after = os.fstat(descriptor)
             if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino) or after.st_nlink != 1:
@@ -141,15 +173,18 @@ def _manifest(path):
         payload = True
     else:
         fail('invalid_release_manifest')
-    images = {name.lower(): values[name] for name in ('API_IMAGE', 'CRON_IMAGE')}
+    image_names = {'API_IMAGE': 'api', 'CRON_IMAGE': 'cron', 'CMS_IMAGE': 'cms'}
+    images = {image_names[name]: values[name] for name in ('API_IMAGE', 'CRON_IMAGE')}
     if payload:
-        images['cms'] = values['CMS_IMAGE']
+        images[image_names['CMS_IMAGE']] = values['CMS_IMAGE']
     STATE._valid_images(images, payload=payload)
     return images, payload
 
 
 def _release(path, payload=None):
     if not isinstance(path, str) or not os.path.isabs(path) or os.path.realpath(path) != path:
+        fail('invalid_release_path')
+    if os.path.dirname(path) != _paths()['releases']:
         fail('invalid_release_path')
     try:
         info = os.lstat(path)
@@ -166,12 +201,27 @@ def _release(path, payload=None):
     return images, actual_payload
 
 
-def _lock_and_state():
+def _lock_and_state(release):
     _load_helpers()
+    inventory = _inventory(force=True)
+    config = inventory['document']
     lock = os.environ.get('PORTAL_OPERATION_LOCK', '')
     held = os.environ.get('PORTAL_OPERATION_LOCK_HELD', '')
-    if not lock or not os.path.isabs(lock) or lock != held or os.path.realpath(lock) != lock:
+    if lock != config['paths']['lock'] or not lock or lock != held or os.path.realpath(lock) != lock:
         fail('operation_lease_missing')
+    if os.environ.get('COMPOSE_PROJECT_NAME') != config['project']:
+        fail('unsupported_compose_project')
+    paths = config['paths']
+    if os.environ.get('COMPOSE_ENV_FILE') != paths['environmentFile'] or \
+       os.environ.get('COMPOSE_OVERRIDE') != _expected_compose_override(release) or \
+       os.environ.get('PAYLOAD_CONTROL_ENV_FILE') or os.environ.get('PAYLOAD_CONTROL_COMPOSE_OVERRIDE'):
+        fail('control_compose_configuration_mismatch')
+    if os.environ.get('BACKUP_DIR') and os.environ['BACKUP_DIR'] not in paths['backupRoots']:
+        fail('backup_root_override_forbidden')
+    if os.environ.get('PRE_RESTORE_BACKUP_DIR') and os.environ['PRE_RESTORE_BACKUP_DIR'] != paths['preRestoreBackupRoot']:
+        fail('protection_backup_root_override_forbidden')
+    if any(name.startswith('DOCKER_') for name in os.environ):
+        fail('docker_endpoint_override_forbidden')
     _safe_regular(lock, owner_root=True)
     try:
         lock_info = os.stat(lock)
@@ -182,13 +232,15 @@ def _lock_and_state():
         fail('operation_lease_inode_mismatch')
     if os.name != 'nt' and os.geteuid() != 0:
         fail('host_control_requires_root')
-    runtime_dir = os.path.dirname(lock)
-    root = os.path.dirname(runtime_dir)
+    runtime_dir = config['paths']['runtime']
+    root = config['paths']['root']
+    if runtime_dir != HERE or os.path.dirname(runtime_dir) != root:
+        fail('inventory_runtime_path_mismatch')
     return runtime_dir, root
 
 
 def _sentinel(runtime_dir, expected=True):
-    path = os.environ['PORTAL_OPERATION_LOCK'] + '.admission-closed'
+    path = _paths()['admissionClosed']
     if not expected:
         if os.path.lexists(path):
             fail('admission_sentinel_stale')
@@ -200,8 +252,9 @@ def _sentinel(runtime_dir, expected=True):
 
 
 def _container_inventory():
-    project = os.environ.get('COMPOSE_PROJECT_NAME', '')
-    if project != PROJECT:
+    config = _inventory()['document']
+    project = config['project']
+    if os.environ.get('COMPOSE_PROJECT_NAME') != project:
         fail('unsupported_compose_project')
     command = [
         'docker', 'ps', '--all',
@@ -218,7 +271,10 @@ def _container_inventory():
         container_project, service, state, name = parts[1:]
         if name.startswith('/') or not name:
             fail('unknown_project_container')
-        relevant = container_project == project or name.startswith(project + '-') or name.startswith(project + '_')
+        name_claims_project = name.startswith(project + '-') or name.startswith(project + '_')
+        if name_claims_project and container_project != project:
+            fail('unknown_project_container')
+        relevant = container_project == project
         if not relevant:
             continue
         if service not in KNOWN_SERVICES or state not in ('running', 'exited', 'created', 'restarting', 'paused', 'dead'):
@@ -236,7 +292,9 @@ def _all_volume_names():
 
 
 def _project_volumes():
-    project = os.environ.get('COMPOSE_PROJECT_NAME', '')
+    project = _inventory()['document']['project']
+    if os.environ.get('COMPOSE_PROJECT_NAME') != project:
+        fail('unsupported_compose_project')
     all_names = _all_volume_names()
     prefix = project + '_'
     labeled = subprocess.run(
@@ -246,7 +304,10 @@ def _project_volumes():
     if labeled.returncode != 0:
         fail('docker_volume_inventory_unavailable')
     project_names = set(line for line in labeled.stdout.splitlines() if line)
-    return sorted(name for name in all_names if name.startswith(prefix) or name in project_names)
+    for name in all_names:
+        if name.startswith(prefix) and name not in project_names:
+            fail('target_volume_inventory_mismatch')
+    return sorted(project_names)
 
 
 def _check_container_shape(cms_status, quiescent=False):
@@ -272,7 +333,8 @@ def _check_container_shape(cms_status, quiescent=False):
             cms_services = {'cms-postgres', 'cms-provision', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker'}
             if any(c['service'] in cms_services for c in containers):
                 fail('unexpected_cold_cms_container')
-            if any('_cms_' in name or name.endswith('_cms') for name in _project_volumes()):
+            project = _inventory()['document']['project']
+            if any(name.startswith(project + '_cms_') for name in _project_volumes()):
                 fail('unexpected_cold_cms_volume')
     return containers
 
@@ -535,6 +597,10 @@ SELECT json_build_object(
 
 
 def _volume_info(name):
+    by_name = {entry['name']: entry for entry in _inventory()['document']['volumes'].values()}
+    entry = by_name.get(name)
+    if entry is None:
+        fail('target_volume_invalid')
     result = subprocess.run(['docker', 'volume', 'inspect', name], stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, check=False, text=True)
     if result.returncode != 0:
@@ -545,8 +611,11 @@ def _volume_info(name):
     raw = data[0]
     labels = raw.get('Labels') or {}
     project = labels.get('com.docker.compose.project') if isinstance(labels, dict) else None
+    compose_key = labels.get('com.docker.compose.volume') if isinstance(labels, dict) else None
+    inventory_project = _inventory()['document']['project']
     if raw.get('Name') != name or raw.get('Driver') != 'local' or raw.get('Scope') != 'local' or \
-       not isinstance(raw.get('Mountpoint'), str) or not os.path.isabs(raw['Mountpoint']) or project != PROJECT:
+       not isinstance(raw.get('Mountpoint'), str) or not os.path.isabs(raw['Mountpoint']) or \
+       project != inventory_project or compose_key != entry['composeKey']:
         fail('target_volume_invalid')
     safe = {
         'name': raw['Name'], 'driver': raw['Driver'], 'mountpoint': raw['Mountpoint'],
@@ -560,21 +629,52 @@ def _volume_info(name):
 
 
 def _target_binding():
-    prefix = PROJECT + '_'
+    inventory = _inventory(force=True)
+    config = inventory['document']
     existing = _project_volumes()
-    expected = sorted([prefix + 'postgres_data', prefix + 'uploads_data',
-                       prefix + 'cms_postgres_data', prefix + 'cms_uploads_data'])
+    expected = sorted(entry['name'] for entry in config['volumes'].values())
     if existing != expected:
         fail('target_volume_inventory_mismatch')
+    _verify_inventory_mounts(config)
     portal = _database_identity('postgres', 'portal')
     cms = _database_identity('cms-postgres', 'ownerinc_cms')
     volumes = {
-        'portalPostgres': _volume_info(prefix + 'postgres_data'),
-        'portalUploads': _volume_info(prefix + 'uploads_data'),
-        'cmsPostgres': _volume_info(prefix + 'cms_postgres_data'),
-        'cmsUploads': _volume_info(prefix + 'cms_uploads_data'),
+        key: _volume_info(entry['name']) for key, entry in config['volumes'].items()
     }
-    return {'portal': portal, 'cms': cms, 'volumes': volumes}
+    return {'inventoryIdentity': inventory['identity'], 'portal': portal, 'cms': cms, 'volumes': volumes}
+
+
+def _verify_inventory_mounts(config):
+    inspected = {}
+    for container in _container_inventory():
+        result = subprocess.run(
+            ['docker', 'inspect', '--format', '{{json .Config.Labels}}\n{{json .Mounts}}', container['id']],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True,
+        )
+        if result.returncode != 0:
+            fail('target_mount_inspection_failed')
+        lines = result.stdout.splitlines()
+        if len(lines) != 2:
+            fail('target_mount_inspection_failed')
+        labels = _strict_json(lines[0].encode('utf-8'), 'target_mount_inspection_failed')
+        mounts = _strict_json(lines[1].encode('utf-8'), 'target_mount_inspection_failed')
+        if not isinstance(labels, dict) or labels.get('com.docker.compose.project') != config['project'] or \
+           labels.get('com.docker.compose.service') != container['service'] or not isinstance(mounts, list):
+            fail('target_mount_inspection_failed')
+        inspected.setdefault(container['service'], []).append(mounts)
+    for volume in config['volumes'].values():
+        for expected in volume['mounts']:
+            instances = inspected.get(expected['service'], [])
+            if not instances:
+                if expected['required']:
+                    fail('target_service_mount_missing')
+                continue
+            for mounts in instances:
+                matching = [mount for mount in mounts if isinstance(mount, dict) and
+                            mount.get('Destination') == expected['destination']]
+                if len(matching) != 1 or matching[0].get('Type') != 'volume' or \
+                   matching[0].get('Name') != volume['name'] or matching[0].get('RW') is not True:
+                    fail('target_service_mount_mismatch')
 
 
 def _same_target(expected, actual):
@@ -671,26 +771,33 @@ def _archive_tree(path):
 
 
 def _compose_args(release):
-    project = os.environ.get('COMPOSE_PROJECT_NAME', '')
-    if project != PROJECT:
+    inventory = _inventory()['document']
+    project = inventory['project']
+    paths = inventory['paths']
+    if os.environ.get('COMPOSE_PROJECT_NAME') != project:
         fail('unsupported_compose_project')
-    environment = os.environ.get('COMPOSE_ENV_FILE') or os.environ.get('PAYLOAD_CONTROL_ENV_FILE', '')
-    override = os.environ.get('COMPOSE_OVERRIDE') or os.environ.get('PAYLOAD_CONTROL_COMPOSE_OVERRIDE', '')
-    release_override = os.path.join(release, 'compose.ownerinc-vps.yaml')
-    if os.path.lexists(release_override):
-        _safe_regular(release_override, owner_root=True)
-        override = release_override
+    if os.environ.get('PAYLOAD_CONTROL_ENV_FILE') or os.environ.get('PAYLOAD_CONTROL_COMPOSE_OVERRIDE'):
+        fail('operator_compose_override_forbidden')
+    environment = os.environ.get('COMPOSE_ENV_FILE', '')
+    override = os.environ.get('COMPOSE_OVERRIDE', '')
+    if environment != paths['environmentFile']:
+        fail('control_compose_configuration_mismatch')
+    selected_override = _expected_compose_override(release)
+    if override != selected_override:
+        fail('control_compose_configuration_mismatch')
+    override = selected_override
     if not environment or not os.path.isabs(environment) or not override or not os.path.isabs(override):
         fail('control_compose_configuration_missing')
     _safe_regular(environment, owner_root=True)
     _safe_regular(override, owner_root=True)
-    runtime_dir = os.path.dirname(os.environ['PORTAL_OPERATION_LOCK'])
-    payload_override = os.path.join(runtime_dir, 'compose.payload.production.yaml')
+    runtime_dir = paths['runtime']
+    payload_override = paths['payloadOverride']
     _safe_regular(payload_override, owner_root=True)
     _safe_regular(os.path.join(release, 'docker-compose.yml'))
     _safe_regular(os.path.join(release, 'docker-compose.payload.yml'))
     return [
-        'docker', 'compose', '--profile', 'notifications', '--env-file', environment,
+        'env', '-i', 'PATH=' + os.environ.get('PATH', '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'),
+        'HOME=' + os.environ.get('HOME', '/root'), 'docker', 'compose', '--profile', 'notifications', '--env-file', environment,
         '--env-file', os.path.join(release, '.image-env'), '-f', os.path.join(release, 'docker-compose.yml'),
         '-f', os.path.join(release, 'docker-compose.payload.yml'), '-f', override,
         '-f', payload_override, '--project-name', project, '--project-directory', release,
@@ -754,7 +861,7 @@ def _file_hash(path):
     digest = hashlib.sha256()
     size = 0
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
         with os.fdopen(descriptor, 'rb') as stream:
             opened = os.fstat(stream.fileno())
             if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
@@ -774,6 +881,13 @@ def _proof_directory(output, expected_name):
     if not output or not os.path.isabs(output) or os.path.basename(output) != expected_name or os.path.realpath(os.path.dirname(output)) != os.path.dirname(output):
         fail('invalid_proof_output_path')
     parent = os.path.dirname(output)
+    backup_roots = tuple(_paths()['backupRoots']) + (_paths()['preRestoreBackupRoot'],)
+    try:
+        if not any(os.path.commonpath((backup_root, parent)) == backup_root and parent != backup_root
+                   for backup_root in backup_roots):
+            fail('invalid_proof_output_path')
+    except ValueError:
+        fail('invalid_proof_output_path')
     try:
         parent_info = os.lstat(parent)
     except OSError:
@@ -836,6 +950,7 @@ def _proof_body(kind, images, target_images, source, migrations, fingerprints, a
         'schemaVersion': 1,
         'kind': kind,
         'phase': 'preauthority',
+        'inventoryIdentity': _inventory()['identity'],
         'authority': {'mode': 'legacy', 'epoch': 1},
         'protocol': {'status': 'absent', 'coverage': 'not-applicable'},
         'images': images,
@@ -857,9 +972,12 @@ class Runtime:
         self.action = action
         self.release_path = release
         self.evidence = evidence or None
-        self.runtime_dir, self.root = _lock_and_state()
+        self.inventory = _inventory(force=True)
+        self.runtime_dir, self.root = _lock_and_state(release)
         self.key, self.state_dir, self.state, self.state_parent_hash = STATE.read_state(self.runtime_dir)
-        self.closed = os.environ['PORTAL_OPERATION_LOCK'] + '.admission-closed'
+        if self.state['inventoryIdentity'] != self.inventory['identity']:
+            fail('state_inventory_identity_mismatch')
+        self.closed = self.inventory['document']['paths']['admissionClosed']
 
     def _admission_closed(self):
         _sentinel(self.runtime_dir, expected=True)
@@ -881,8 +999,9 @@ class Runtime:
             fail('release_container_image_mismatch')
 
     def _current_release(self):
-        releases = os.path.join(self.root, 'releases')
-        path = os.path.join(self.root, 'current-release')
+        paths = self.inventory['document']['paths']
+        releases = paths['releases']
+        path = paths['currentRelease']
         if os.path.lexists(path):
             raw = _read_bytes(path)
             try:
@@ -914,7 +1033,8 @@ class Runtime:
             if source_payload:
                 fail('cold_source_not_legacy')
             _check_container_shape('cold', quiescent=False)
-            if _project_volumes() != sorted([PROJECT + '_postgres_data', PROJECT + '_uploads_data']):
+            volumes = self.inventory['document']['volumes']
+            if _project_volumes() != sorted([volumes['portalPostgres']['name'], volumes['portalUploads']['name']]):
                 fail('unexpected_cold_volume_inventory')
             self._verify_service_image(source_images, 'api')
             self._verify_service_image(source_images, 'cron')
@@ -1044,9 +1164,20 @@ class Runtime:
         info = os.lstat(directory) if os.path.exists(directory) else None
         if info is None or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or os.path.realpath(directory) != directory:
             fail('unsafe_backup_directory')
+        backup_roots = self.inventory['document']['paths']['backupRoots']
+        try:
+            if not any(os.path.commonpath((backup_root, directory)) == backup_root and directory != backup_root
+                       for backup_root in backup_roots):
+                fail('unsafe_backup_directory')
+        except ValueError:
+            fail('unsafe_backup_directory')
         if os.name != 'nt' and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o700):
             fail('unsafe_backup_directory')
         body, proof_hash = _parse_proof(directory, self.key, payload=True)
+        allowed_inventory_ids = set(self.inventory['document']['trustedSourceInventoryIdentities'])
+        allowed_inventory_ids.add(self.inventory['identity'])
+        if body['inventoryIdentity'] not in allowed_inventory_ids:
+            fail('backup_inventory_identity_untrusted')
         images, payload = _release(self.release_path, payload=True)
         if not payload or images != body['images']:
             fail('backup_release_mismatch')
@@ -1054,6 +1185,8 @@ class Runtime:
         return body, proof_hash
 
     def restore_preflight(self):
+        if os.environ.get('PRE_RESTORE_BACKUP_DIR') != self.inventory['document']['paths']['preRestoreBackupRoot']:
+            fail('protection_backup_root_override_forbidden')
         self._admission_open()
         if self.state['cmsStatus'] != 'migrated' or self.state['releaseImages'] is None:
             fail('restore_requires_migrated_preauthority')
@@ -1067,13 +1200,26 @@ class Runtime:
         target = _target_binding()
         if body['protocol'] != {'status': 'absent', 'coverage': 'not-applicable'}:
             fail('unsupported_protocol_state')
-        intent = {'proofSha256': proof_hash, 'target': target, 'releaseImages': images}
+        target_fingerprints = {
+            'portalDatabase': _data_fingerprint('postgres'),
+            'cmsDatabase': _data_fingerprint('cms-postgres'),
+            'portalUploads': self._storage_tree_fingerprint('api'),
+            'cmsUploads': self._storage_tree_fingerprint('cms'),
+        }
+        intent = {'proofSha256': proof_hash, 'target': target, 'releaseImages': images,
+                  'stage': 'reserved',
+                  'targetFingerprints': target_fingerprints}
         def update(state):
             state['restoreIntent'] = intent
         self.state = STATE.transition(self.runtime_dir, update)
         print('restore preflight passed; current target identities reserved without comparing them to source')
 
-    def _recheck_restore_boundary(self):
+    def _recheck_restore_boundary(self, grant_mode='strict'):
+        current_inventory = _inventory(force=True)
+        if current_inventory['identity'] != self.state['inventoryIdentity'] or \
+           current_inventory['identity'] != self.inventory['identity']:
+            fail('restore_inventory_identity_changed')
+        self.inventory = current_inventory
         self._admission_closed()
         intent = self.state.get('restoreIntent')
         if intent is None:
@@ -1084,18 +1230,54 @@ class Runtime:
         if body['images'] != intent['releaseImages']:
             fail('restore_image_binding_mismatch')
         _check_container_shape('migrated', quiescent=True)
-        _verify_portal(self.release_path, 'strict')
+        _verify_portal(self.release_path, grant_mode)
         actual = _target_binding()
         _same_target(intent['target'], actual)
         _assert_database_quiescent('postgres')
         _assert_database_quiescent('cms-postgres')
+        if intent['stage'] == 'reserved':
+            actual_fingerprints = {
+                'portalDatabase': _data_fingerprint('postgres'),
+                'cmsDatabase': _data_fingerprint('cms-postgres'),
+                'portalUploads': self._storage_tree_fingerprint('api'),
+                'cmsUploads': self._storage_tree_fingerprint('cms'),
+            }
+            if STATE.canonical(actual_fingerprints) != STATE.canonical(intent['targetFingerprints']):
+                fail('restore_target_content_changed')
         return body
 
     def prepare_restore(self):
         self._recheck_restore_boundary()
         _validate_pg_archives(self.evidence, ('postgres', 'cms-postgres'), payload=True)
+        if self.state['restoreIntent']['stage'] == 'reserved':
+            def mark_destructive_boundary(state):
+                state['restoreIntent']['stage'] = 'restoring'
+            self.state = STATE.transition(self.runtime_dir, mark_destructive_boundary)
+        elif self.state['restoreIntent']['stage'] == 'portal_restored':
+            # The preceding bounded Portal restore may have removed the v2 grants.
+            # This strict boundary proves the normal migration/grant step restored
+            # them before the next destructive database operation.
+            def mark_portal_grants_restored(state):
+                state['restoreIntent']['stage'] = 'portal_grants_restored'
+            self.state = STATE.transition(self.runtime_dir, mark_portal_grants_restored)
+
+    def portal_restore_intermediate(self):
+        intent = self.state.get('restoreIntent')
+        if intent is None or intent['stage'] != 'restoring':
+            fail('portal_restore_stage_invalid')
+        body = self._recheck_restore_boundary(grant_mode='recovery')
+        if _data_fingerprint('postgres') != body['dataFingerprints']['portalDatabase']:
+            fail('restored_portal_database_fingerprint_mismatch')
+        def mark_portal_restored(state):
+            if state['restoreIntent'] is None or state['restoreIntent']['stage'] != 'restoring':
+                fail('portal_restore_stage_invalid')
+            state['restoreIntent']['stage'] = 'portal_restored'
+        self.state = STATE.transition(self.runtime_dir, mark_portal_restored)
+        print('Portal restore verified at the bounded grant-recovery floor; strict grant verification is required before further destruction')
 
     def verify_restored(self):
+        if self.state.get('restoreIntent') is None or self.state['restoreIntent']['stage'] != 'portal_grants_restored':
+            fail('portal_restore_grants_not_reverified')
         body = self._recheck_restore_boundary()
         catalog = _verify_cms(self.release_path, catalog=True)
         if not isinstance(catalog, dict) or \
@@ -1241,6 +1423,7 @@ class Runtime:
         if self.action == 'backup-metadata': return self.backup_metadata()
         if self.action == 'restore-preflight': return self.restore_preflight()
         if self.action == 'prepare-restore': return self.prepare_restore()
+        if self.action == 'portal-restore-intermediate': return self.portal_restore_intermediate()
         if self.action == 'verify-restored': return self.verify_restored()
         if self.action == 'verify-release': return self.verify_release()
         if self.action == 'rollback-check': return self.rollback_check()
@@ -1254,6 +1437,9 @@ def main(argv):
         return 2
     action, release, evidence = argv[1:]
     try:
+        if os.name != 'nt':
+            os.environ['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            os.environ['HOME'] = '/root'
         Runtime(action, release, evidence).run()
     except (ControlError, STATE.StateError) as error:
         print(str(error), file=sys.stderr)

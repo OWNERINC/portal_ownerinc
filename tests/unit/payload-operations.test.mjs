@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, copyFile, readFile, writeFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -10,6 +10,7 @@ const legacy = `API_IMAGE=${image('api')}\nCRON_IMAGE=${image('cron')}\n`;
 const payload = `${legacy}CMS_IMAGE=${image('cms')}\nRELEASE_FORMAT=payload-v1\n`;
 const fakeDocker = `#!/usr/bin/env bash
 set -euo pipefail
+FIXTURE="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 printf '%s\\n' "$*" >> "$FIXTURE/calls"
 [[ $1 == compose ]] || exit 90
 shift
@@ -17,12 +18,17 @@ while (($#)); do
   case $1 in --profile|--project-directory|--project-name|--env-file|-f) shift 2;; *) break;; esac
 done
 cmd=$1; shift
+printf 'docker:%s %s\\n' "$cmd" "$*" >> "$FIXTURE/timeline"
 case $cmd in
  ps) cat "$FIXTURE/running";;
  stop) printf 'postgres\\ncms-postgres\\n' > "$FIXTURE/running";;
  start) printf '%s\\n' "$@" >> "$FIXTURE/running";;
  up) printf 'postgres\\ncms-postgres\\nnginx\\napi\\ncms\\n' > "$FIXTURE/running";;
  exec|run)
+    if [[ $cmd == run && " $* " == *' migrate '* ]]; then
+      printf 'migrate\\n' >> "$FIXTURE/migration.attempts"
+      [[ \${FAIL_GRANT_RESTORE:-false} != true ]] || exit 44
+    fi
    if grep -Eq '^(nginx|api|cron|cms|cms-worker)$' "$FIXTURE/running"; then exit 91; fi
    if [[ \${FAIL_DUMP:-false} == true ]]; then exit 92; fi
    if [[ "$*" == *pg_restore* || "$*" == *'-xzf -'* ]]; then
@@ -37,11 +43,17 @@ esac
 const fakeGuard = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$1" >> "$FIXTURE/guard.calls"
+printf 'guard:%s\\n' "$1" >> "$FIXTURE/timeline"
 [[ \${FAIL_GUARD:-} != "$1" ]] || exit 42
 case $1 in
+  close-admission) printf 'closed\\n' > "$FIXTURE/admission";;
+  open-admission) printf 'open\\n' > "$FIXTURE/admission";;
   release-preflight|restore-preflight) ! grep -qx 'cms-worker' "$FIXTURE/running";;
   quiescence-proof) ! grep -Eq '^(nginx|api|cron|cms|cms-worker)$' "$FIXTURE/running";;
- backup-metadata) printf '{"fixture":true,"epoch":1,"ambiguousPromotions":1}\\n' > "$3";;
+  verify-release)
+    for service in api cron cms; do grep -qx "$service" "$FIXTURE/running" || exit 43; done
+    ! grep -qx 'cms-worker' "$FIXTURE/running" ;;
+  backup-metadata) printf '{"fixture":true,"epoch":1,"ambiguousPromotions":1}\\n' > "$3";;
 esac
 `;
 
@@ -52,11 +64,25 @@ async function fixture(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const dir of ['release/scripts', 'bin', 'backups', 'protection']) await mkdir(path.join(root, dir), { recursive: true });
   await writeFile(path.join(root, 'compose.payload.production.yaml'), 'services: {}\n');
-  for (const file of ['release-manifest.sh', 'payload-operations.sh', 'backup.sh', 'restore.sh', 'backup-s3.sh']) await copyFile(`scripts/${file}`, path.join(root, 'release/scripts', file));
+  for (const file of ['release-manifest.sh', 'payload-operations.sh', 'backup.sh', 'restore.sh', 'backup-s3.sh']) {
+    const source = await readFile(`scripts/${file}`, 'utf8');
+    // The coordinator pins PATH on the Linux host. This isolated shell fixture
+    // keeps its local fake docker/flock binaries ahead of host tools.
+    const fixtureSource = file === 'payload-operations.sh'
+      ? source
+        .replace('PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nexport PATH\n', '')
+        .replace('env -i PATH="$PATH" HOME="${HOME:-/root}" docker compose',
+          'env -i PATH="$PATH" HOME="${HOME:-/root}" FAIL_DUMP="${FAIL_DUMP:-false}" FAIL_RESTORE="${FAIL_RESTORE:-false}" FAIL_GRANT_RESTORE="${FAIL_GRANT_RESTORE:-false}" docker compose')
+      : source;
+    if (file === 'payload-operations.sh') assert.notEqual(fixtureSource, source, 'production PATH pin must remain explicit');
+    await writeFile(path.join(root, 'release/scripts', file), fixtureSource);
+  }
   await writeFile(path.join(root, 'release/.image-env'), payload);
   await writeFile(path.join(root, 'release/docker-compose.payload.yml'), '# synthetic\n');
   await writeFile(path.join(root, 'release/scripts/smoke.sh'), '#!/bin/sh\nprintf "smoke\\n" >> "$FIXTURE/smoke.calls"\n');
   await writeFile(path.join(root, 'running'), 'postgres\ncms-postgres\nnginx\napi\ncron\ncms\n');
+  await writeFile(path.join(root, 'admission'), 'open\n');
+  await writeFile(path.join(root, 'timeline'), '');
   await writeFile(path.join(root, 'bin/docker'), fakeDocker, { mode: 0o755 });
   await writeFile(path.join(root, 'bin/flock'), '#!/bin/sh\nprintf "lock\\n" >> "$FIXTURE/lock.calls"\n', { mode: 0o755 });
   // Archive listing only; this stub never extracts data or invokes system tar.
@@ -158,6 +184,7 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   const [name] = await readdir(path.join(f.root, 'backups'));
   await writeFile(path.join(f.root, 'calls'), '');
   await writeFile(path.join(f.root, 'guard.calls'), '');
+  await writeFile(path.join(f.root, 'timeline'), '');
   const r = f.run(`PRE_RESTORE_BACKUP_DIR="$PWD/protection" RESTORE_BASE_URL=http://fixture.invalid PROJECT_ROOT="$PWD/release" bash release/scripts/restore.sh "$PWD/backups/${name}" --confirm RESTORE`);
   assert.equal(r.status, 0, r.stderr);
   assert.equal((await readdir(path.join(f.root, 'protection'))).length, 1);
@@ -169,10 +196,19 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.match(calls, /--entrypoint tar api -xzf - -C \/app\/uploads/);
   assert.match(calls, /restore-files \/var\/lib\/ownerinc-cms\/media/);
   assert.match(calls, /--entrypoint tar api -xzf - -C \/app\/uploads/);
-  assert.deepEqual((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n'),
-    ['restore-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore',
-      'prepare-restore', 'prepare-restore', 'prepare-restore', 'prepare-restore', 'prepare-restore',
-      'prepare-restore', 'prepare-restore', 'verify-restored', 'verify-release', 'verify-release', 'open-admission']);
+  const guardCalls = (await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n');
+  assert.deepEqual(guardCalls, [
+    'restore-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore',
+    'portal-restore-intermediate', 'prepare-restore', 'prepare-restore', 'prepare-restore',
+    'prepare-restore', 'prepare-restore', 'prepare-restore', 'prepare-restore',
+    'verify-restored', 'verify-release', 'open-admission',
+  ]);
+  const timeline = (await readFile(path.join(f.root, 'timeline'), 'utf8')).trim().split('\n');
+  const at = entry => timeline.findIndex(value => value === entry);
+  assert.ok(at('guard:verify-restored') < at('docker:up -d --no-deps api cms nginx'));
+  assert.ok(at('docker:start nginx api cron cms') < at('guard:verify-release'));
+  assert.ok(at('guard:verify-release') < at('guard:open-admission'));
+  assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'open');
   assert.equal((await readFile(path.join(f.root, 'smoke.calls'), 'utf8')).trim(), 'smoke');
 });
 
@@ -186,6 +222,29 @@ test('restore failure preserves protection set and leaves all writers stopped wi
   assert.equal((await readdir(path.join(f.root, 'protection'))).length, 1);
   assert.doesNotMatch(await readFile(path.join(f.root, 'running'), 'utf8'), /^(nginx|api|cron|cms|cms-worker)$/m);
   assert.doesNotMatch(await readFile(path.join(f.root, 'guard.calls'), 'utf8'), /open-admission/);
+});
+
+test('Portal grant restoration failure stops before CMS destruction and keeps writers/admission closed', async t => {
+  const f = await fixture(t);
+  assert.equal(f.run('bash release/scripts/backup.sh "$PWD/release"').status, 0);
+  const [name] = await readdir(path.join(f.root, 'backups'));
+  await writeFile(path.join(f.root, 'calls'), '');
+  await writeFile(path.join(f.root, 'guard.calls'), '');
+  await writeFile(path.join(f.root, 'timeline'), '');
+  const r = f.run(`PRE_RESTORE_BACKUP_DIR="$PWD/protection" RESTORE_BASE_URL=http://fixture.invalid PROJECT_ROOT="$PWD/release" bash release/scripts/restore.sh "backups/${name}" --confirm RESTORE`, {
+    FAIL_GRANT_RESTORE: 'true',
+  });
+  assert.notEqual(r.status, 0);
+  assert.equal((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n').at(-1), 'portal-restore-intermediate');
+  assert.equal((await readFile(path.join(f.root, 'migration.attempts'), 'utf8')).trim(), 'migrate');
+  assert.equal((await readFile(path.join(f.root, 'restores'), 'utf8')).trim().split('\n').length, 1,
+    'only the Portal restore may have run before grant restoration succeeds');
+  const calls = await readFile(path.join(f.root, 'calls'), 'utf8');
+  assert.doesNotMatch(calls, /exec -T cms-postgres sh -c pg_restore/u);
+  assert.doesNotMatch(calls, /restore-files|tar.*-xzf -/u);
+  assert.doesNotMatch(await readFile(path.join(f.root, 'running'), 'utf8'), /^(nginx|api|cron|cms|cms-worker)$/m);
+  assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'closed');
+  assert.doesNotMatch(await readFile(path.join(f.root, 'guard.calls'), 'utf8'), /open-admission/u);
 });
 
 test('real tar listing rejects traversal before extraction and accepts ordinary fixture files', async t => {
