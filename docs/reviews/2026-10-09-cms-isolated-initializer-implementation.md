@@ -272,3 +272,59 @@ Fechamento do patch estável:
   `payload-preauthority-ci-setup.test.mjs` e este documento foram alterados.
   Untracked anteriores preservados; sem commit/push. Checks locais Windows não
   fecham o aceite Linux non-root/root nem autorizam build/recovery/produção.
+
+## Fresh review — nested Node runner após CI 37956660040
+
+No commit integrado `2c69d32`, o run `37956660040` avançou após verify non-root
+PASS até a suíte root: **5 testes, 4 PASS, 1 falha, zero skips**. O log local
+comprova allocator e Git scoped passando em Linux root. O teste de ancestry
+falhou na assertion do subprocesso (linha 58): exit 0, stdout vazio, sem o
+esperado resultado de retry. Ele parou antes das assertions de ancestry/B0;
+essa execução não comprova esses gates nem recovery.
+
+Diagnóstico reproduzido localmente em **Node 24.15.0/Windows**, com o mesmo
+arquivo e nome de teste: herdando `NODE_TEST_CONTEXT=child-v8`, exit 0 e stdout
+vazio, com warning `node:test run() is being called recursively within a test
+file. skipping running files.`. Removendo somente esse marker, o comando com
+reporter TAP executa o teste selecionado: **1 teste/1 PASS/zero skips**. O código
+builtin de `internal/test_runner/runner` confirma o retorno antecipado para
+execução recursiva quando `NODE_TEST_CONTEXT` está definido.
+
+Patch somente de harness unitário/documentação:
+
+- `tests/helpers/payload-nested-test.mjs`: clona o ambiente e remove somente
+  `NODE_TEST_CONTEXT`, sem mutar o caller nem remover variáveis da aplicação.
+  Execução por argv, cwd explícito, timeout 90s e captura máxima 1 MiB; reporter
+  TAP explícito e name pattern ancorado/escaped para o **nome completo exato**.
+- A suíte root usa esse helper, preservando os três branches nativos e o
+  workflow. O aceite exige ausência de erro/sinal, exit 0, evento `ok` com o
+  nome planejado exato, um único plano de 1 teste e counters exatos:
+  tests/pass 1, fail/cancelled/skipped/todo 0. Não aceita stdout vazio,
+  skip ou exit 0 com zero execução planejada.
+- `payload-preauthority-nested-test.test.mjs` executa regressões cross-platform
+  com contexto child-v8 injetado: chama o retry real selecionado; fixture com
+  receipt físico prova execução; falha produz exit 1 e é propagada; skip,
+  nome ausente e stdout vazio são recusados. O nome ausente revelou um detalhe
+  do Node 24: plano vazio `1..0` pode aparecer junto de um PASS do wrapper do
+  arquivo/counter pass 1. Esse falso positivo também é recusado por nome/plano,
+  não apenas pelo contador. A fixture não selecionada nunca executa.
+
+Nenhuma mudança no runtime/política de produção, filesystem seams do teste de
+transições, comparadores, probe ou relatório. O subprocesso corrigido rodou
+localmente sem privilégio Linux; o branch real chmod/chown da CI root ainda
+precisa executar. Evidência Linux já obtida para allocator/Git é preservada,
+sem convertê-la em PASS da suíte root inteira ou de runtime/recovery.
+
+Fechamento local com código estável:
+
+- Focused completo, incluindo nested regressions e pipeline: **86 PASS,
+  6 skips, zero falhas** (92 testes).
+- `npm run verify`: **PASS**, `verify: ok`; Portal **1.696 PASS/10 skips**,
+  CMS **448 PASS/11 skips**, zero falhas.
+- `npm run security`: **zero vulnerabilidades** API/cron/CMS.
+- `git diff --check`: **PASS**, repetido após documentação.
+- Somente helper novo, regressão nova, chamada do teste root e este documento
+  foram alterados. O teste de transições e workflow não mudaram neste patch;
+  untracked anteriores preservados. **Ready-for-fresh-review**, sem alegar
+  Linux root B0/ancestry PASS. Sem CI, commit/push, SSH, produção, delegação
+  ou mutação de serviços/bancos reais nesta sessão.

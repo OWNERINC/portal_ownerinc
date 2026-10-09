@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import * as setup from '../../scripts/integration/payload-preauthority-initialize.mjs';
+import { assertSingleTestPassed, runNestedTest } from '../helpers/payload-nested-test.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const nativeRoot = process.platform === 'linux' && process.getuid?.() === 0 && process.getgid?.() === 0;
@@ -52,11 +53,9 @@ test('native Linux root loader rejects a root leaf below a real uid1001 ancestor
   // Reuse the stage fixture under actual root so its B0 chmod/chown assertions
   // run in the existing native CI gate, without skipping the non-root core test.
   assert.ok(['python3', 'python'].some(command => spawnSync(command, ['--version']).status === 0));
-  const result = spawnSync(process.execPath, ['--test', '--test-name-pattern=^retry adapter uses only',
-    'tests/unit/payload-install-transition.test.mjs'], { cwd: repo, encoding: 'utf8', timeout: 90000 });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(result.stdout, /(?:pass 1|# pass 1)/u);
-  assert.match(result.stdout, /retry adapter uses only/u);
+  const name = 'retry adapter uses only the stage-reviewed grant range and revalidates B0/lease/targets without effects';
+  const result = runNestedTest('tests/unit/payload-install-transition.test.mjs', name, { cwd: repo });
+  assertSingleTestPassed(result, name);
   const root = await mkdtemp('/var/lib/payload-ci-ancestry-test-');
   t.after(() => rm(root, { recursive: true, force: true }));
   await chmod(root, 0o700);
