@@ -350,6 +350,50 @@ normalmente impediria alcançar. Uma tabela temporária real confirmou as exclus
 de `pg_temp_N`/`pg_toast_temp_N`, e o inventário completo voltou a passar após cada
 rollback. Esse teste não substitui o gate Linux PG16.14 nem o restore real.
 
+O CI `37902389682` (fonte `a904954`) avançou pelo catálogo nativo dos três fixtures;
+o relatório registra saúde inicial/restart e snapshots quiescentes `passed` em
+`source`, `target` e `leaseTarget`. Falhou depois em
+`capture_actual_coordinated_backup`, exit 2, sem motivo classificado nem stderr
+privado retido. **Não houve aceite de backup/restore.** Foi encontrado e reproduzido
+em teste shell um defeito concreto: o guard chamava `payload-control` com apenas
+dois argumentos em `close-admission` e `quiescence-proof`, embora o entrypoint
+exija exatamente três. A primeira chamada já retorna
+`Invalid Payload control invocation.`/exit 2 antes do Python; a segunda apresentava
+o mesmo defeito. As duas agora encaminham o terceiro argumento explícito, inclusive
+vazio. Isso é compatível com a falha do run, não confirmação por stderr daquela
+execução, que não foi preservado. Nenhuma regra de lease, admissão, roles, catálogo,
+assinatura ou prova foi relaxada e nenhum estado parcial é reaberto automaticamente.
+
+O coordenador passa a emitir marcadores estáticos `PAYLOAD_COORDINATOR_STEP` e
+`PAYLOAD_COORDINATOR_FAILURE` em **stderr**, sem caminhos, argumentos, SQL ou valores.
+O trap de `EXIT` cobre comandos, validações com `exit` explícito e erros de ambiente;
+registra etapa/status primários antes da tentativa de parar writers no restore
+destrutivo, sem permitir que erro de cleanup os substitua. As etapas distinguem
+manifesto/configuração/lock, todos os guards, inventário/parada de writers, cada
+dump/tar, manifesto de backup, proteção, restauração de cada banco/storage,
+reprovisão/verificação de migrations e readiness/reabertura. Stdout e formatos dos
+artefatos permanecem inalterados.
+
+O relatório usa subpasso fixo `payload_coordinator_backup` ou
+`payload_coordinator_restore`, mais `commandDiagnostic.coordinatorStep` de uma
+allowlist finita. Somente o trecho delimitado da **chamada falha a um guard** pode
+produzir motivo conhecido ou diagnóstico nativo; stderr anterior, Docker, cleanup,
+texto anexado e valores desconhecidos não são promovidos a identificadores. Em
+timeout sem marcador final, conserva somente a última etapa conhecida, nunca um
+motivo inferido. Todo erro inesperado de backup/restore retém até 16 KiB finais
+de stderr no arquivo privado 0600 sob diretório 0700 do fixture; a captura do probe
+assíncrono usa buffer limitado a 64 KiB e também cobre falhas de lançamento/timeout.
+Negativas esperadas só descartam essa evidência após as verificações de ausência
+de mutação e o cleanup do fixture; um processo morto por sinal não conta como
+rejeição esperada. Nenhum stderr bruto integra artifacts públicos.
+
+Os testes locais executam o coordenador/guard/entrypoint shell com Docker e adapter
+sintéticos. No Windows, somente o teste de dispatch substitui a identidade fd9
+indisponível no Git Bash; ele não prova `flock` ou `/proc` Linux. Exercitam falhas
+precoces, motivos conhecidos/desconhecidos, captura privada síncrona/assíncrona e
+falha dupla restore/cleanup mantendo o erro primário. Recuperação real continua
+dependente de nova revisão e do CI Linux descartável autorizado pelo primary.
+
 A parada de `api`, `cron` e `cms` mantém `docker compose stop --timeout 120` por
 writer. O deadline do subprocesso agora cobre o pior caso serial de todos os
 writers selecionados mais 30 s de margem (390 s para os três), sem remover nem

@@ -111,6 +111,27 @@ const controlGuardMessages = new Map([
   ['Unknown Payload guard action', 'guard_action_unknown'],
 ]);
 const controlGuardContext = 'payload-operations-guard';
+const coordinatorContexts = new Set(['payload-coordinator:backup', 'payload-coordinator:restore']);
+const coordinatorGuardSteps = new Set(`
+guard_release_preflight guard_close_admission guard_quiescence_proof guard_backup_metadata
+guard_verify_release guard_open_admission guard_restore_preflight guard_portal_restore_intermediate
+guard_verify_restored guard_prepare_restore_portal guard_prepare_restore_cms
+guard_prepare_restore_api_clear guard_prepare_restore_api_extract
+guard_prepare_restore_cms_clear guard_prepare_restore_cms_extract guard_prepare_restore_cms_migrate
+`.trim().split(/\s+/u));
+export const coordinatorDiagnosticSteps = Object.freeze([
+  ...`initialize validate_invocation release_manifest lock_configuration guard_configuration
+lock_inherited lock_acquire writers_inventory_before stop_writers writers_inventory_after
+writers_stopped_check capture_directory capture_portal_database capture_portal_storage
+capture_cms_database capture_cms_storage capture_release_metadata capture_manifest capture_verify_manifest
+resume_writers backup_destination backup_upload restore_confirmation restore_manifest
+restore_portal_archive restore_cms_archive restore_protection_destination restore_portal_database
+restore_portal_migrate restore_portal_verify_migrations restore_cms_database restore_api_storage_clear
+restore_api_storage_extract restore_cms_storage_clear restore_cms_storage_extract restore_cms_migrate
+restore_cms_verify_runtime restore_start_readiness restore_smoke`.trim().split(/\s+/u),
+  ...coordinatorGuardSteps,
+]);
+const coordinatorSteps = new Set(coordinatorDiagnosticSteps);
 const knownControlErrorIdentifiers = new Set([
   ...controlErrorIdentifiers,
   ...controlAdapterMessages.values(),
@@ -261,7 +282,7 @@ export function extractSqlState(stderr, { sqlCommandContext = false } = {}) {
 }
 
 export function extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext, release } = {}) {
-  if (!controlCommandContexts.has(controlCommandContext)) return null;
+  if (!controlCommandContexts.has(controlCommandContext) && controlCommandContext !== controlGuardContext) return null;
   const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
   const match = text.match(/^([a-z][a-z0-9_]{0,63})\r?\n(PREAUTHORITY_CATALOG_DIAGNOSTIC stage=([a-z_]+) reason=([a-z][a-z0-9_]{0,63}) sqlstate=(none|[0-9A-Z]{5}))\r?\n(?:([^\r\n]+)\r?\n)?$/u);
   if (!match || !nativeCatalogVerifierControlErrors.has(match[1])) return null;
@@ -326,11 +347,42 @@ export function extractControlErrorIdentifier(stderr, { controlCommandContext, r
   const line = text.match(/^([^\r\n]+)\r?\n$/u)?.[1];
   if (!line) return null;
   if (adapterContext) return controlAdapterMessages.get(line) || null;
-  return controlGuardMessages.get(line) || null;
+  return controlGuardMessages.get(line) || controlAdapterMessages.get(line) || null;
+}
+
+export function extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, status, release } = {}) {
+  if (!coordinatorContexts.has(coordinatorCommandContext)) return null;
+  const lines = (Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '')).split(/\r?\n/u);
+  let step = null;
+  let start = 0;
+  for (const [index, line] of lines.entries()) {
+    const progress = line.match(/^PAYLOAD_COORDINATOR_STEP step=([a-z_]+)$/u);
+    if (progress) {
+      if (!coordinatorSteps.has(progress[1])) return null;
+      step = progress[1]; start = index + 1;
+      continue;
+    }
+    const failure = line.match(/^PAYLOAD_COORDINATOR_FAILURE step=([a-z_]+) status=([0-9]{1,3})$/u);
+    if (!failure) continue;
+    if (!step || failure[1] !== step || Number(failure[2]) !== status || status < 1 || status > 255) return null;
+    // Only this failing guard invocation may supply an adapter reason. Never
+    // search Docker/tool output, prior steps or cleanup output for known words.
+    const context = { controlCommandContext: controlGuardContext, release };
+    const body = lines.slice(start, index).join('\n') + '\n';
+    const native = coordinatorGuardSteps.has(step) ? extractNativeCatalogVerifierDiagnostic(body, context) : null;
+    return {
+      coordinatorStep: step,
+      controlErrorIdentifier: coordinatorGuardSteps.has(step) ? extractControlErrorIdentifier(body, context) : null,
+      ...(native ? { nativeCatalogVerifier: native } : {}),
+    };
+  }
+  // A timeout/kill may prevent EXIT from running. Retain a finite last-started
+  // step only; partial output never authorizes a guessed guard reason.
+  return step ? { coordinatorStep: step, controlErrorIdentifier: null } : null;
 }
 
 export function createCommandDiagnostic({
-  substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext, release,
+  substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext, coordinatorCommandContext, release,
 }) {
   const sqlState = extractSqlState(stderr, { sqlCommandContext });
   const nativeCatalogVerifier = extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext, release });
@@ -344,6 +396,7 @@ export function createCommandDiagnostic({
     errorIdentifier: sqlState ? sqlStateIdentifiers[sqlState] : null,
     controlErrorIdentifier: extractControlErrorIdentifier(stderr, { controlCommandContext, release }),
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
+    ...extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, status, release }),
   });
 }
 
@@ -395,6 +448,7 @@ export function sanitizeCommandDiagnostic(diagnostic = {}) {
     controlErrorIdentifier: knownControlErrorIdentifiers.has(diagnostic.controlErrorIdentifier)
       ? diagnostic.controlErrorIdentifier : null,
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
+    ...(coordinatorSteps.has(diagnostic.coordinatorStep) ? { coordinatorStep: diagnostic.coordinatorStep } : {}),
   };
 }
 

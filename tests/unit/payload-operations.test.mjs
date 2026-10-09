@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promis
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
+import { createCommandDiagnostic } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
 
 const image = name => `ghcr.io/ownerinc/ownerinc-portal-${name}@sha256:${'b'.repeat(64)}`;
 const legacy = `API_IMAGE=${image('api')}\nCRON_IMAGE=${image('cron')}\n`;
@@ -12,6 +13,7 @@ const fakeDocker = `#!/usr/bin/env bash
 set -euo pipefail
 FIXTURE="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 printf '%s\\n' "$*" >> "$FIXTURE/calls"
+if [[ $1 == ps ]]; then cat "$FIXTURE/running"; exit 0; fi
 [[ $1 == compose ]] || exit 90
 shift
 while (($#)); do
@@ -21,7 +23,11 @@ cmd=$1; shift
 printf 'docker:%s %s\\n' "$cmd" "$*" >> "$FIXTURE/timeline"
 case $cmd in
  ps) cat "$FIXTURE/running";;
- stop) printf 'postgres\\ncms-postgres\\n' > "$FIXTURE/running";;
+ stop)
+    if [[ \${FAIL_CLEANUP_STOP:-false} == true && -f "$FIXTURE/restores" ]]; then
+      printf 'unsafe_required_owner\\nprivate-cleanup-output\\n' >&2; exit 46
+    fi
+    printf 'postgres\\ncms-postgres\\n' > "$FIXTURE/running";;
  start) printf '%s\\n' "$@" >> "$FIXTURE/running";;
  up) printf 'postgres\\ncms-postgres\\nnginx\\napi\\ncms\\n' > "$FIXTURE/running";;
  exec|run)
@@ -44,7 +50,10 @@ const fakeGuard = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$1" >> "$FIXTURE/guard.calls"
 printf 'guard:%s\\n' "$1" >> "$FIXTURE/timeline"
-[[ \${FAIL_GUARD:-} != "$1" ]] || exit 42
+if [[ \${FAIL_GUARD:-} == "$1" ]]; then
+  if [[ -n \${FAIL_GUARD_STDERR:-} ]]; then printf '%s\\n' "$FAIL_GUARD_STDERR" >&2; fi
+  exit 42
+fi
 case $1 in
   close-admission) printf 'closed\\n' > "$FIXTURE/admission";;
   open-admission) printf 'open\\n' > "$FIXTURE/admission";;
@@ -72,7 +81,7 @@ async function fixture(t) {
       ? source
         .replace('PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nexport PATH\n', '')
         .replace('env -i PATH="$PATH" HOME="${HOME:-/root}" docker compose',
-          'env -i PATH="$PATH" HOME="${HOME:-/root}" FAIL_DUMP="${FAIL_DUMP:-false}" FAIL_RESTORE="${FAIL_RESTORE:-false}" FAIL_GRANT_RESTORE="${FAIL_GRANT_RESTORE:-false}" docker compose')
+          'env -i PATH="$PATH" HOME="${HOME:-/root}" FAIL_DUMP="${FAIL_DUMP:-false}" FAIL_RESTORE="${FAIL_RESTORE:-false}" FAIL_GRANT_RESTORE="${FAIL_GRANT_RESTORE:-false}" FAIL_CLEANUP_STOP="${FAIL_CLEANUP_STOP:-false}" docker compose')
       : source;
     if (file === 'payload-operations.sh') assert.notEqual(fixtureSource, source, 'production PATH pin must remain explicit');
     await writeFile(path.join(root, 'release/scripts', file), fixtureSource);
@@ -257,4 +266,80 @@ tar --transform='s|safe|../outside|' -czf unsafe.tar.gz safe
 verify_storage_archive clean.tar.gz
 if verify_storage_archive unsafe.tar.gz; then exit 96; fi`);
   assert.equal(r.status, 0, r.stderr);
+});
+
+test('real guard dispatch supplies three arguments to the real control entrypoint (adapter and Windows fd probe doubled)', async t => {
+  const f = await fixture(t);
+  const guardSource = await readFile('ops/payload-operations-guard.sh', 'utf8');
+  // Git Bash lacks Linux /proc/PID/fd. Only that identity predicate is replaced
+  // in this unit fixture; this test proves argv dispatch, NOT a Linux lease.
+  const dispatchSource = process.platform === 'win32'
+    ? guardSource.replace('/proc/$$/fd/9 -ef $PORTAL_OPERATION_LOCK', '-f $PORTAL_OPERATION_LOCK') : guardSource;
+  await writeFile(path.join(f.root, 'real-guard'), dispatchSource, { mode: 0o755 });
+  await writeFile(path.join(f.root, 'payload-control'), await readFile('ops/payload-control'), { mode: 0o755 });
+  for (const name of ['payload-control-runtime.py', 'payload-control-state.py']) await writeFile(path.join(f.root, name), '# fixture\n');
+  await writeFile(path.join(f.root, 'bin/python3'), `#!/usr/bin/env bash
+set -euo pipefail
+[[ $# == 4 && -z $4 ]] || exit 97
+printf '%s:%s\\n' "$2" "$#" >> "$FIXTURE/adapter.argv"
+`, { mode: 0o755 });
+  await writeFile(path.join(f.root, 'running'), 'postgres\ncms-postgres\n');
+  const invoke = (script, action) => f.run(`: > "$PORTAL_OPERATION_LOCK"
+exec 9<>"$PORTAL_OPERATION_LOCK"
+export PORTAL_OPERATION_LOCK_HELD="$PORTAL_OPERATION_LOCK" COMPOSE_PROJECT_NAME=fixture
+bash "$PWD/${script}" ${action} "$PWD/release" ''`);
+  for (const action of ['close-admission', 'quiescence-proof']) {
+    const result = invoke('real-guard', action);
+    assert.equal(result.status, 0, result.stderr);
+  }
+  assert.equal(await readFile(path.join(f.root, 'adapter.argv'), 'utf8'), 'close-admission:4\nquiescence-proof:4\n');
+  // Replay the original two-argument calls: the actual entrypoint rejects them
+  // before executing even the synthetic Python adapter, reproducing exit 2.
+  await writeFile(path.join(f.root, 'old-guard'), dispatchSource
+    .replace('"$control" close-admission "$release" "$evidence"', '"$control" close-admission "$release"')
+    .replace('"$control" quiescence-proof "$release" "$evidence"', '"$control" quiescence-proof "$release"'));
+  for (const action of ['close-admission', 'quiescence-proof']) {
+    const result = invoke('old-guard', action);
+    assert.equal(result.status, 2);
+    assert.equal(result.stderr, 'Invalid Payload control invocation.\n');
+  }
+  assert.equal(await readFile(path.join(f.root, 'adapter.argv'), 'utf8'), 'close-admission:4\nquiescence-proof:4\n');
+});
+
+test('coordinator classifies early explicit exits and isolates known guard errors from unknown private output', async t => {
+  const f = await fixture(t);
+  const diagnostic = r => createCommandDiagnostic({ substep: 'payload_coordinator_backup', status: r.status,
+    stderr: r.stderr, coordinatorCommandContext: 'payload-coordinator:backup' });
+  const invalid = f.run('PAYLOAD_OPERATIONS_GUARD="$PWD/missing" bash release/scripts/payload-operations.sh backup "$PWD/release"');
+  assert.equal(invalid.status, 2);
+  assert.equal(diagnostic(invalid).coordinatorStep, 'guard_configuration');
+  for (const [stderr, reason] of [['unsafe_required_owner', 'unsafe_required_owner'], ['private-value-token', null]]) {
+    const result = f.run('bash release/scripts/payload-operations.sh backup "$PWD/release"', {
+      FAIL_GUARD: 'close-admission', FAIL_GUARD_STDERR: stderr,
+    });
+    assert.equal(result.status, 42);
+    const parsed = diagnostic(result);
+    assert.equal(parsed.coordinatorStep, 'guard_close_admission');
+    assert.equal(parsed.controlErrorIdentifier, reason);
+    assert.doesNotMatch(JSON.stringify(parsed), /private-value-token/u);
+  }
+  assert.doesNotMatch(await readFile(path.join(f.root, 'calls'), 'utf8'), /pg_dump|pg_restore| start /u);
+});
+
+test('coordinator preserves primary restore step/status when destructive failure cleanup also fails', async t => {
+  const f = await fixture(t);
+  assert.equal(f.run('bash release/scripts/backup.sh "$PWD/release"').status, 0);
+  const [name] = await readdir(path.join(f.root, 'backups'));
+  const result = f.run(`PRE_RESTORE_BACKUP_DIR="$PWD/protection" RESTORE_BASE_URL=http://fixture.invalid bash release/scripts/payload-operations.sh restore "$PWD/release" "$PWD/backups/${name}" --confirm RESTORE`, {
+    FAIL_RESTORE: 'true', FAIL_CLEANUP_STOP: 'true',
+  });
+  assert.equal(result.status, 43, result.stderr);
+  assert.match(result.stderr, /private-cleanup-output/u);
+  const parsed = createCommandDiagnostic({ substep: 'payload_coordinator_restore', status: result.status,
+    stderr: result.stderr, coordinatorCommandContext: 'payload-coordinator:restore' });
+  assert.equal(parsed.coordinatorStep, 'restore_portal_database');
+  assert.equal(parsed.commandExitCode, 43);
+  assert.equal(parsed.controlErrorIdentifier, null, 'cleanup output cannot impersonate the primary guard');
+  assert.doesNotMatch(JSON.stringify(parsed), /private-cleanup-output/u);
+  assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'closed');
 });

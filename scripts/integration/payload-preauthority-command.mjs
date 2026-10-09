@@ -31,11 +31,56 @@ export function controlCommandOptions(action, release) {
   };
 }
 
+export function coordinatorCommandOptions(action, release) {
+  if (!['backup', 'restore'].includes(action)) throw new Error('unsupported coordinator action');
+  return {
+    release,
+    substep: `payload_coordinator_${action}`,
+    failureCode: `coordinator_${action}_failed`,
+    coordinatorCommandContext: `payload-coordinator:${action}`,
+    preservePrivateErrorEvidence: true,
+  };
+}
+
 export function createLeasedCommandInvocation(lock, command, args = []) {
   return {
     command: 'bash',
     args: ['-c', leaseScript, 'payload-fixture-lease', lock, command, ...args],
   };
+}
+
+export function createBoundedCommandStderr() {
+  let tail = Buffer.alloc(0);
+  return {
+    append(chunk) { tail = Buffer.from(Buffer.concat([tail, Buffer.from(chunk)]).subarray(-64 * 1024)); },
+    buffer() { return Buffer.from(tail); },
+  };
+}
+
+// Shared by synchronous coordinator calls and the asynchronous lease-race probe.
+export function createFixtureCommandFailure(result, options = {}) {
+  const candidateSubstep = options.substep || options.activeSubstep || 'unclassified_command';
+  if (options.preservePrivateErrorEvidence === true && (result.stderr?.length || options.coordinatorCommandContext) &&
+      Array.isArray(options.privateCommandEvidence) && options.privateCommandEvidence.length < 8) {
+    const raw = Buffer.from(result.stderr?.length ? result.stderr : '[no stderr captured]\n');
+    options.privateCommandEvidence.push({
+      substep: /^[a-z][a-z0-9_]{0,63}$/u.test(candidateSubstep) ? candidateSubstep : 'unclassified_command',
+      // Coordinator failures occur after potentially long progress output.
+      // Retain the bounded tail privately; public diagnostics never carry it.
+      stderr: options.coordinatorCommandContext
+        ? Buffer.from(raw.subarray(-16 * 1024)) : Buffer.from(raw.subarray(0, 16 * 1024)),
+    });
+  }
+  return new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
+    substep: candidateSubstep,
+    status: result.status,
+    errorCode: result.error?.code,
+    stderr: result.stderr,
+    sqlCommandContext: options.sqlCommandContext === true,
+    controlCommandContext: options.controlCommandContext,
+    coordinatorCommandContext: options.coordinatorCommandContext,
+    release: options.release,
+  }));
 }
 
 export function runFixtureCommand(command, args = [], options = {}) {
@@ -49,23 +94,7 @@ export function runFixtureCommand(command, args = [], options = {}) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   if (result.error || result.status !== 0) {
-    const candidateSubstep = options.substep || options.activeSubstep || 'unclassified_command';
-    if (options.preservePrivateErrorEvidence === true && result.stderr?.length &&
-        Array.isArray(options.privateCommandEvidence) && options.privateCommandEvidence.length < 8) {
-      options.privateCommandEvidence.push({
-        substep: /^[a-z][a-z0-9_]{0,63}$/u.test(candidateSubstep) ? candidateSubstep : 'unclassified_command',
-        stderr: Buffer.from(result.stderr).subarray(0, 16 * 1024),
-      });
-    }
-    throw new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
-      substep: candidateSubstep,
-      status: result.status,
-      errorCode: result.error?.code,
-      stderr: result.stderr,
-      sqlCommandContext: options.sqlCommandContext === true,
-      controlCommandContext: options.controlCommandContext,
-      release: options.release,
-    }));
+    throw createFixtureCommandFailure(result, options);
   }
   return result.stdout || Buffer.alloc(0);
 }

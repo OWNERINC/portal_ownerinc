@@ -23,7 +23,7 @@ case $action in
     fi
     # Persist the signed denial first. If creating the convenience sentinel
     # fails, the locked writer launcher still rejects the closed journal state.
-    if ! "$control" close-admission "$release"; then
+    if ! "$control" close-admission "$release" "$evidence"; then
       if [[ ! -e $closed && ! -L $closed ]]; then
         ( set -o noclobber; : > "$closed" ) || true
       fi
@@ -45,7 +45,7 @@ case $action in
     done <<< "$running"
     # Preacthority adapter proves the supported writer/container and DB-session
     # quiescence boundary only. It does not run a finalizer or certify a seal.
-    "$control" quiescence-proof "$release" ;;
+    "$control" quiescence-proof "$release" "$evidence" ;;
   open-admission)
     [[ -f $closed && ! -L $closed ]] || exit 2
     "$control" open-admission "$release" "$evidence"

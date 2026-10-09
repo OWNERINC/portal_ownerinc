@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,10 +8,13 @@ import {
   createRecoveryFailureReportFields,
   runSnapshotAndRestart,
 } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
-import { createCommandDiagnostic } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
+import { coordinatorDiagnosticSteps, createCommandDiagnostic } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
 import {
   assertRootOwnerGuardProbe,
   controlCommandOptions,
+  coordinatorCommandOptions,
+  createBoundedCommandStderr,
+  createFixtureCommandFailure,
   createLeasedCommandInvocation,
   FixtureFailure,
   persistPrivateCommandEvidence,
@@ -76,6 +79,98 @@ async function assertExitTwoIsPrivateOnly(t, runCommand) {
 
 test('exit-2 command keeps stderr private while producing a bounded caller report', async t => {
   await assertExitTwoIsPrivateOnly(t, ({ args, ...options }) => runFixtureCommand(process.execPath, args, options));
+});
+
+test('both coordinator actions retain bounded private stderr and finite failing-step metadata through report sanitization', async t => {
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), 'payload-coordinator-diagnostic-'));
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  for (const action of ['backup', 'restore']) {
+    for (const body of ['unsafe_required_owner\n', 'Invalid Payload control invocation.\n', 'private-secret-value\n']) {
+      const options = coordinatorCommandOptions(action, '/synthetic/release');
+      const evidence = [];
+      const stderr = 'PAYLOAD_COORDINATOR_STEP step=guard_close_admission\n' + body
+        + 'PAYLOAD_COORDINATOR_FAILURE step=guard_close_admission status=2\n'
+        + 'private-cleanup-output\n';
+      let failure;
+      try {
+        runFixtureCommand(process.execPath, ['-e', `process.stderr.write(${JSON.stringify('private-earlier-output\n')}.repeat(1500) + ${JSON.stringify(stderr)}, () => process.exit(2))`], {
+          ...options, privateCommandEvidence: evidence,
+        });
+      } catch (error) { failure = error; }
+      assert.ok(failure instanceof FixtureFailure);
+      const report = createRecoveryFailureReportFields({ primaryError: failure });
+      assert.equal(report.failureCode, `coordinator_${action}_failed`);
+      assert.equal(report.failedSubstep, `payload_coordinator_${action}`);
+      assert.equal(report.commandDiagnostic.coordinatorStep, 'guard_close_admission');
+      assert.equal(report.commandDiagnostic.controlErrorIdentifier, body.startsWith('unsafe_') ? 'unsafe_required_owner'
+        : body.startsWith('Invalid') ? 'control_invocation_invalid' : null);
+      assert.doesNotMatch(JSON.stringify(report), /private-|synthetic|stderr|stdout/u);
+      assert.equal(evidence.length, 1);
+      assert.ok(evidence[0].stderr.length <= 16 * 1024);
+      assert.match(evidence[0].stderr.toString(), /private-cleanup-output/u, 'bounded tail preserves late failure evidence');
+      const root = path.join(fixtureRoot, `${action}-${body.startsWith('unsafe_') ? 'known' : body.startsWith('Invalid') ? 'invocation' : 'unknown'}`);
+      assert.equal(await persistPrivateCommandEvidence(root, evidence), true);
+      assert.match(await readFile(path.join(root, 'private-diagnostics', 'command-stderr.txt'), 'utf8'), /private-cleanup-output/u);
+    }
+  }
+  assert.throws(() => coordinatorCommandOptions('unknown', '/synthetic/release'));
+});
+
+test('coordinator parsing never attributes tool, prior-step, malformed or cleanup output to a failing guard', () => {
+  const parse = (stderr, extra = {}) => createCommandDiagnostic({ substep: 'payload_coordinator_restore', status: 2,
+    stderr, coordinatorCommandContext: 'payload-coordinator:restore', ...extra });
+  const frame = (step, body) => `PAYLOAD_COORDINATOR_STEP step=${step}\n${body}PAYLOAD_COORDINATOR_FAILURE step=${step} status=2\n`;
+  for (const stderr of [
+    'unsafe_required_owner\n',
+    frame('restore_portal_database', 'unsafe_required_owner\n'),
+    frame('guard_close_admission', 'unsafe_required_owner\nprivate-trailing-data\n'),
+    frame('guard_close_admission', 'private-before unsafe_required_owner\n'),
+    frame('guard_close_admission', 'unknown_reason\n'),
+    frame('guard_close_admission', '') + 'unsafe_required_owner\n',
+    'PAYLOAD_COORDINATOR_STEP step=guard_release_preflight\nunsafe_required_owner\n' + frame('guard_close_admission', ''),
+  ]) assert.equal(parse(stderr).controlErrorIdentifier, null);
+  assert.equal(parse(frame('guard_close_admission', 'unsafe_required_owner\n'), { coordinatorCommandContext: null }).coordinatorStep, undefined);
+  assert.equal(parse(frame('private_arbitrary_value', 'unsafe_required_owner\n')).coordinatorStep, undefined);
+  assert.equal(parse(frame('guard_close_admission', 'unsafe_required_owner\n'), { status: 43 }).controlErrorIdentifier, null);
+  const timeout = parse('PAYLOAD_COORDINATOR_STEP step=capture_cms_database\nprivate-output', { status: null, errorCode: 'ETIMEDOUT' });
+  assert.equal(timeout.coordinatorStep, 'capture_cms_database');
+  assert.equal(timeout.commandError, 'command_timeout');
+  assert.equal(timeout.controlErrorIdentifier, null);
+  for (const step of coordinatorDiagnosticSteps) {
+    assert.equal(parse(frame(step, '')).coordinatorStep, step, `finite stage ${step} survives an opaque failure`);
+  }
+  const native = parse(frame('guard_backup_metadata', 'native_catalog_verification_failed\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_types reason=preauthority_native_type_inventory_mismatch sqlstate=none\n'));
+  assert.equal(native.nativeCatalogVerifier.stage, 'native_types');
+  assert.equal(native.controlErrorIdentifier, 'native_catalog_verification_failed');
+});
+
+test('asynchronous coordinator capture is bounded, drained before reporting, and retains opaque and launch failures privately', async () => {
+  const capture = createBoundedCommandStderr();
+  const child = spawn(process.execPath, ['-e', String.raw`process.stderr.write('x'.repeat(100000) + '\nPAYLOAD_COORDINATOR_STEP step=restore_cms_database\nprivate-async-error\nPAYLOAD_COORDINATOR_FAILURE step=restore_cms_database status=2\n', () => process.exit(2))`], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  child.stderr.on('data', chunk => capture.append(chunk));
+  await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  assert.equal(child.exitCode, 2);
+  assert.equal(capture.buffer().length, 64 * 1024);
+  const evidence = [];
+  const options = { ...coordinatorCommandOptions('restore', '/synthetic/release'), privateCommandEvidence: evidence };
+  const failure = createFixtureCommandFailure({ status: child.exitCode, stderr: capture.buffer() }, options);
+  const report = createRecoveryFailureReportFields({ primaryError: failure });
+  assert.equal(report.commandDiagnostic.coordinatorStep, 'restore_cms_database');
+  assert.equal(report.commandDiagnostic.controlErrorIdentifier, null);
+  assert.doesNotMatch(JSON.stringify(report), /private-async-error/u);
+  assert.equal(evidence[0].stderr.length, 16 * 1024);
+  assert.match(evidence[0].stderr.toString(), /private-async-error/u);
+  const launch = createFixtureCommandFailure({ status: null, error: { code: 'ENOENT' }, stderr: null }, options);
+  assert.equal(launch.diagnostic.commandError, 'executable_not_found');
+  assert.equal(evidence.length, 2, 'launch failures retain a private bounded absence-of-stderr record');
+  const runner = await readFile('scripts/test-payload-preauthority-recovery.mjs', 'utf8');
+  assert.match(runner, /\.\.\.coordinatorCommandOptions\(action, release\)/u);
+  assert.match(runner, /stdio: \['ignore', 'ignore', 'pipe'\]/u);
+  assert.match(runner, /child\.signalCode \|\| !Number\.isInteger\(child\.exitCode\)/u,
+    'a killed asynchronous coordinator must not count as an expected rejection');
 });
 
 test('redacted recovery report preserves the native verifier stage, reason, and SQLSTATE', () => {

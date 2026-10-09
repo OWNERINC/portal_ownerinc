@@ -18,7 +18,8 @@ import {
   inferReadinessFailureReason,
 } from './integration/payload-preauthority-diagnostics.mjs';
 import {
-  assertRootOwnerGuardProbe, controlCommandOptions, createLeasedCommandInvocation,
+  assertRootOwnerGuardProbe, controlCommandOptions, coordinatorCommandOptions, createLeasedCommandInvocation,
+  createBoundedCommandStderr, createFixtureCommandFailure,
   FixtureFailure, persistPrivateCommandEvidence, runFixtureCommand,
 } from './integration/payload-preauthority-command.mjs';
 import {
@@ -222,7 +223,7 @@ function coordinator(runtime, project, action, release, backup = '') {
   const script = path.join(release, 'scripts', 'payload-operations.sh');
   const args = action === 'backup' ? [script, 'backup', release] : [script, 'restore', release, backup, '--confirm', 'RESTORE'];
   return run('bash', args, { cwd: release, env: fixtureEnv(project, runtime, release), timeout: 15 * 60_000,
-    failureCode: `coordinator_${action}_failed` });
+    ...coordinatorCommandOptions(action, release) });
 }
 
 async function allocatePort() {
@@ -858,6 +859,7 @@ async function negativeRestore(runtime, backupPath, label, expectedChange = null
   let directory = backupPath;
   if (expectedChange) directory = await expectedChange(backupPath);
   const before = snapshot(runtime);
+  const evidenceStart = privateCommandEvidence.length;
   let rejected = false;
   try {
     coordinator(runtime, runtime.project, 'restore', runtime.payloadRelease, directory);
@@ -869,6 +871,8 @@ async function negativeRestore(runtime, backupPath, label, expectedChange = null
   assertUnchanged(before, after, label);
   assertWorkerHeld(runtime);
   negativeCases.push({ name: label, rejected: true, targetContentUnchanged: true });
+  // Discard expected failure output only after every no-mutation assertion.
+  privateCommandEvidence.splice(evidenceStart);
 }
 
 async function createNegativeCopies(runtime, backupPath) {
@@ -934,6 +938,7 @@ async function targetCatalogNegative(runtime, backup, label, sql, cleanupSql) {
   composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
     '--dbname=ownerinc_cms', '--username=cms_admin'], { input: `${sql}\n` });
   const injected = snapshot(runtime);
+  const evidenceStart = privateCommandEvidence.length;
   let rejected = false;
   try {
     coordinator(runtime, runtime.project, 'restore', runtime.payloadRelease, backup);
@@ -949,6 +954,7 @@ async function targetCatalogNegative(runtime, backup, label, sql, cleanupSql) {
   composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
     '--dbname=ownerinc_cms', '--username=cms_admin'], { input: `${cleanupSql}\n` });
   assert.deepEqual(snapshot(runtime), before, `${label} fixture DDL cleanup must restore the original store data`);
+  privateCommandEvidence.splice(evidenceStart);
   negativeCases.push({ name: label, rejected: true, targetContentUnchanged: true, fixtureDdlCleaned: true });
 }
 
@@ -956,40 +962,64 @@ async function targetContentRace(runtime, backup) {
   setStage('negative_target_changed_after_preflight');
   const before = snapshot(runtime);
   const restoreScript = path.join(runtime.payloadRelease, 'scripts', 'payload-operations.sh');
+  const evidenceStart = privateCommandEvidence.length;
+  const stderr = createBoundedCommandStderr();
   const child = spawn('bash', [restoreScript, 'restore', runtime.payloadRelease, backup, '--confirm', 'RESTORE'], {
     cwd: runtime.payloadRelease,
     env: fixtureEnv(runtime.project, runtime, runtime.payloadRelease),
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
+  child.stderr.on('data', chunk => stderr.append(chunk));
+  let processError = null;
+  let closed = false;
+  child.on('error', error => { processError = error; });
+  const settled = new Promise(resolve => child.once('close', () => { closed = true; resolve(); }));
+  const retainFailure = (failureCode, error = processError) => createFixtureCommandFailure({
+    status: child.exitCode, stderr: stderr.buffer(), error,
+  }, { ...coordinatorCommandOptions('restore', runtime.payloadRelease), failureCode, privateCommandEvidence });
   let injected = false;
   const deadline = Date.now() + 10 * 60_000;
-  while (Date.now() < deadline && child.exitCode === null) {
-    if (!injected) {
-      try {
-        await access(runtime.inventory.document.paths.admissionClosed);
-        const extra = `${runtime.project}_lease_race`;
-        run('docker', ['volume', 'create', '--label', `com.docker.compose.project=${runtime.project}`,
-          '--label', 'com.docker.compose.volume=lease_race', extra]);
-        injected = true;
-        runtime.extraVolume = extra;
-      } catch (error) {
-        if (!(error && error.code === 'ENOENT')) throw error;
+  try {
+    while (Date.now() < deadline && !closed) {
+      if (!injected) {
+        try {
+          await access(runtime.inventory.document.paths.admissionClosed);
+          const extra = `${runtime.project}_lease_race`;
+          run('docker', ['volume', 'create', '--label', `com.docker.compose.project=${runtime.project}`,
+            '--label', 'com.docker.compose.volume=lease_race', extra]);
+          injected = true;
+          runtime.extraVolume = extra;
+        } catch (error) {
+          if (!(error && error.code === 'ENOENT')) throw error;
+        }
       }
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
-    await new Promise(resolve => setTimeout(resolve, 100));
+    if (!closed) {
+      child.kill('SIGKILL');
+      child.stderr.destroy(); // A descendant must not hold the diagnostic pipe past the deadline.
+      await settled;
+      throw retainFailure('target_change_restore_timeout', { code: 'ETIMEDOUT' });
+    }
+    if (processError || child.signalCode || !Number.isInteger(child.exitCode)) throw retainFailure('coordinator_restore_failed');
+    if (!injected || child.exitCode === 0) throw retainFailure('target_change_was_not_rejected');
+    retainFailure('coordinator_restore_failed');
+    const after = snapshot(runtime);
+    assertUnchanged(before, after, 'target_volume_inventory_changed_after_reservation');
+    assertWorkerHeld(runtime);
+    run('docker', ['volume', 'rm', runtime.extraVolume]);
+    runtime.extraVolume = null;
+    negativeCases.push({ name: 'target_changed_after_restore_preflight', rejected: true,
+      targetContentUnchanged: true, raceInjectedAfterLeaseReservation: true });
+    privateCommandEvidence.splice(evidenceStart);
+  } catch (error) {
+    // A fixture assertion/injection failure must not abandon an active child or
+    // discard its stderr. Preserve that primary error; record coordinator output
+    // privately after the pipe has closed, including launch/timeout cases.
+    if (!closed) { child.kill('SIGKILL'); child.stderr.destroy(); await settled; }
+    if (privateCommandEvidence.length === evidenceStart) retainFailure('coordinator_restore_failed');
+    throw error;
   }
-  if (child.exitCode === null) {
-    child.kill('SIGKILL');
-    throw new FixtureFailure('target_change_restore_timeout');
-  }
-  if (!injected || child.exitCode === 0) throw new FixtureFailure('target_change_was_not_rejected');
-  const after = snapshot(runtime);
-  assertUnchanged(before, after, 'target_volume_inventory_changed_after_reservation');
-  assertWorkerHeld(runtime);
-  run('docker', ['volume', 'rm', runtime.extraVolume]);
-  runtime.extraVolume = null;
-  negativeCases.push({ name: 'target_changed_after_restore_preflight', rejected: true,
-    targetContentUnchanged: true, raceInjectedAfterLeaseReservation: true });
 }
 
 async function currentPointer(runtime) {
