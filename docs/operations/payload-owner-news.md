@@ -294,22 +294,25 @@ startup e migrations continuam parte do runtime; nenhum ignore ou enfraqueciment
 do scanner é permitido. O lockfile CMS unifica todas as cópias de `tsx` em
 `4.23.15` e esbuild em `0.28.2`; o binário oficial esbuild `0.28.2` ainda é
 construído com Go `1.26.5`; os findings do baseline exigiam Go `1.26.6` ou mais
-recente. Para corrigir esse binário sem alterar o grafo JavaScript, o Dockerfile
-usa um estágio separado no índice oficial `golang:1.26.6-alpine3.23` pinado por
-digest (`sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406`).
+recente. O gate de outubro descrito abaixo elevou esse floor a `1.26.9`, na mesma
+linha Go 1.26. Para corrigir o binário sem alterar o grafo JavaScript, o Dockerfile
+usa um estágio separado no índice oficial `golang:1.26.9-alpine3.23` pinado por
+digest (`sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888`).
 O estágio usa `GOPROXY=https://proxy.golang.org` e `GOSUMDB=sum.golang.org`, compila
 somente `github.com/evanw/esbuild/cmd/esbuild` do tag upstream `v0.28.2` e compara
 o `go version -m` ao Go e ao módulo/soma fixados. `cms/go-build/go.sum` registra
 esbuild `h1:A2uETn4jrQTcXaT/shwTDTYBxDjl7fV7nXmUrJxfA2w=` e `golang.org/x/sys`
 `h1:0A+M6Uqn+Eje4kHMK80dtF3JCXC4ykBgQG4Fe06QRhQ=`; a verificação do módulo
 resolveu o tag para o commit upstream `609683d892977362a0f99026cb74b96263d728a9`.
-O binário produzido identifica-se como `go1.26.6`, `linux/amd64`, esbuild `0.28.2`
-com a mesma soma, e seu SHA-256 local é
-`ABDA5EE49A674E2160B5D6FF174804265F29F2237CEA87B1AD21C939CD6AFA73`. Ele substitui
-somente `@esbuild/linux-x64/bin/esbuild`, no estágio de build e na imagem final;
-a plataforma não-x64 falha explicitamente em vez de receber um binário incorreto.
+O build agora exige `go1.26.9` tanto no compilador quanto em `go version -m` do
+executável, mantendo `linux/amd64`, esbuild `0.28.2` e a mesma soma upstream.
+Substitui somente `@esbuild/linux-x64/bin/esbuild`, no estágio de build e na imagem
+final; a plataforma não-x64 falha explicitamente em vez de receber binário incorreto.
+Como evidência **histórica**, o rebuild anterior com Go `1.26.6` produziu o SHA-256
+local `ABDA5EE49A674E2160B5D6FF174804265F29F2237CEA87B1AD21C939CD6AFA73`.
+Esse hash não é atribuído ao novo build Go `1.26.9`, ainda não executado nesta revisão.
 
-O rebuild descartável `ownerinc-portal-cms-security-check:go-rebuild-20261008`
+O rebuild descartável **anterior**, `ownerinc-portal-cms-security-check:go-rebuild-20261008`,
 concluiu com o ID `sha256:2684b7cd30dc48090fe456cd3f4a6a1144e7ac4f9d8adcc41221c53d200bf143`,
 incluindo Next build, TSX TypeScript real, Payload CLI `info` com configuração
 sintética, Sharp/PG e fechamento de packaging sem serviços. Trivy `0.75.0`
@@ -319,7 +322,38 @@ exit 0, zero findings OS/Node/Go; o relatório agora reconhece
 `app/cms/node_modules/@esbuild/linux-x64/bin/esbuild` como target `gobinary` e
 lista zero vulnerabilidades. O baseline original (76 findings totais, 22 no Go)
 permanece preservado. Este é um scan local do candidato, não um run do GitHub CI:
-CI e publicação GHCR continuam pendentes e não se afirma imagem publicada.
+não comprova o estado atual do scanner nem o novo toolchain.
+
+### Gate de segurança Go de 2026-10-09 — novo scan CI pendente
+
+O CI `37901050226`, commit `6938c62`, parou em **Scan CMS image**, antes da
+recuperação e sem artifact de recovery. Trivy encontrou dois HIGH no target
+`app/cms/node_modules/@esbuild/linux-x64/bin/esbuild`, stdlib `v1.26.6`:
+`CVE-2026-78667` (`net/http`, Range DoS) e `CVE-2026-97031` (`crypto/tls`, ECH DoS).
+O relatório informa correção em `1.26.9` ou `1.27.2`; foi escolhida `1.26.9` para
+manter a mesma linha do compilador. O [release oficial Go 1.26.9](https://go.dev/doc/devel/release#go1.26.9),
+publicado em 2026-10-08, confirma correções de segurança nessas bibliotecas.
+
+Proveniência consultada em 2026-10-09, somente leitura de registry:
+
+```sh
+docker buildx imagetools inspect golang:1.26.9-alpine3.23
+```
+
+- Repositório oficial: `docker.io/library/golang`.
+- Digest do índice OCI: `sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888`.
+- Manifesto `linux/amd64`: `sha256:52c60db0b6661204bf2ed874743bffc80c17eaf95d6ff51d87e205484358d40f`.
+- Revisão upstream anotada: `863ac37dfb5a3fd948626c8b4a818b6bd73b88a8`;
+  o [Dockerfile oficial dessa revisão](https://github.com/docker-library/golang/blob/863ac37dfb5a3fd948626c8b4a818b6bd73b88a8/1.26/alpine3.23/Dockerfile)
+  define `GOLANG_VERSION 1.26.9` e verifica checksum/assinatura do tarball oficial.
+
+O patch altera somente o pin do toolchain, seu floor em `go.mod`, asserts de versão
+e referências/testes correspondentes. Mantém `GOTOOLCHAIN=local`, esbuild upstream
+`v0.28.2`, `go.sum`, `-mod=readonly`, `-trimpath`, `-buildvcs=false` e os metadados
+verificáveis; não adiciona stripping, supressões, ignores nem altera thresholds do
+Trivy. `npm run security` não examina a stdlib desse executável estático Go.
+Inspeção do manifesto e testes offline **não** são build nem scan da imagem nova:
+o gate continua fechado até o scan CI passar, antes de retomar a recuperação Linux.
 
 ## Guard portátil implementado
 

@@ -41,18 +41,18 @@ RUN npm ci --omit=dev --omit=optional \
 
 # Rebuild only esbuild's native executable from its same upstream v0.28.2 Go
 # module. The pinned official patched toolchain avoids shipping its old Go stdlib.
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine3.23@sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406 AS esbuild-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine3.23@sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888 AS esbuild-builder
 ARG TARGETOS TARGETARCH
 ENV GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOTOOLCHAIN=local CGO_ENABLED=0
 WORKDIR /build
 COPY cms/go-build/go.mod cms/go-build/go.sum ./
-RUN test "$(go version | awk '{print $3}')" = "go1.26.6" \
+RUN test "$(go version | awk '{print $3}')" = "go1.26.9" \
  && test "$TARGETOS/$TARGETARCH" = "linux/amd64" \
  && go mod download all \
  && mkdir -p /out \
  && GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -mod=readonly -trimpath -buildvcs=false -o /out/esbuild github.com/evanw/esbuild/cmd/esbuild \
  && test "$(/out/esbuild --version)" = "0.28.2" \
- && go version -m /out/esbuild | grep -F 'go1.26.6' \
+ && go version -m /out/esbuild | grep -F 'go1.26.9' \
  && go version -m /out/esbuild | grep -F 'v0.28.2' \
  && go version -m /out/esbuild | grep -F 'h1:A2uETn4jrQTcXaT/shwTDTYBxDjl7fV7nXmUrJxfA2w='
 
@@ -94,7 +94,7 @@ COPY --from=build --chown=node:node /app/cms/package.json /app/cms/package-lock.
 # Keep the official Payload CLI and its TypeScript loader; do not standalone-prune.
 COPY --from=runtime-dependencies --chown=node:node /app/cms/node_modules ./node_modules
 # Keep the npm esbuild@0.28.2 JavaScript package paired with its verified upstream
-# v0.28.2 executable rebuilt using Go 1.26.6.
+# v0.28.2 executable rebuilt using Go 1.26.9.
 COPY --from=esbuild-builder --chown=node:node /out/esbuild /app/cms/node_modules/@esbuild/linux-x64/bin/esbuild
 COPY --from=build --chown=node:node /app/cms/.next ./.next
 COPY --from=build --chown=node:node /app/cms/src ./src

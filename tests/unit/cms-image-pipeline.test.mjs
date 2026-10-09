@@ -233,8 +233,11 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
     'restore the API lockfile-matched Sharp musl runtime packages explicitly');
   assert.match(dockerfile, /CMD \["npm", "start"\]/,
     'npm remains the production startup command');
-  assert.match(dockerfile, /FROM --platform=\$BUILDPLATFORM golang:1\.26\.6-alpine3\.23@sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406 AS esbuild-builder/,
-    'esbuild must be built from a registry-pinned official Go 1.26.6 toolchain');
+  assert.match(dockerfile, /FROM --platform=\$BUILDPLATFORM golang:1\.26\.9-alpine3\.23@sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888 AS esbuild-builder/,
+    'esbuild must use the registry-pinned official Go 1.26.9 toolchain fixing the October stdlib findings');
+  assert.match(goMod, /^go 1\.26\.9$/mu, 'the module floor must agree with the patched local toolchain');
+  assert.match(dockerfile, /test "\$\(go version \| awk '\{print \$3\}'\)" = "go1\.26\.9"/u,
+    'the build must verify the actual compiler version, not only its image tag');
   assert.match(dockerfile, /GOPROXY=https:\/\/proxy\.golang\.org GOSUMDB=sum\.golang\.org/,
     'Go dependencies must use the public proxy and checksum database');
   assert.match(dockerfile, /go build -mod=readonly -trimpath -buildvcs=false[\s\S]*github\.com\/evanw\/esbuild\/cmd\/esbuild/,
@@ -259,7 +262,7 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
     'do not strip Go build information used for toolchain and module attestation');
   assert.match(builder, /test "\$\(\/out\/esbuild --version\)" = "0\.28\.2"/,
     'the replacement executable must report the same version as the locked JavaScript package');
-  assert.match(builder, /go version -m \/out\/esbuild \| grep -F 'go1\.26\.6'[\s\S]*go version -m \/out\/esbuild \| grep -F 'v0\.28\.2'[\s\S]*go version -m \/out\/esbuild \| grep -F 'h1:A2uETn4jrQTcXaT\/shwTDTYBxDjl7fV7nXmUrJxfA2w='/,
+  assert.match(builder, /go version -m \/out\/esbuild \| grep -F 'go1\.26\.9'[\s\S]*go version -m \/out\/esbuild \| grep -F 'v0\.28\.2'[\s\S]*go version -m \/out\/esbuild \| grep -F 'h1:A2uETn4jrQTcXaT\/shwTDTYBxDjl7fV7nXmUrJxfA2w='/,
     'attest the embedded Go toolchain, exact upstream module release, and verified module checksum');
   assert.match(runtimePackaging, /esbuild\.transformSync\('const answer: number = 42'/,
     'final image smoke exercises the rebuilt executable through the locked esbuild JavaScript API');
