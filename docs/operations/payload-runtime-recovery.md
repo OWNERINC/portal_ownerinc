@@ -1,5 +1,48 @@
 # Runtime Payload e recuperação coordenada
 
+## Evidência Task 3 — negativa de schema vazio (2026-10-09)
+
+O run `37907438863`, commit `196540e`, capturou o backup coordenado real
+(`actualAdapterAndCoordinator=true`) e aprovou seis negativas com conteúdo do alvo
+inalterado: dump/proof/manifest adulterados, archive inseguro, digest incorreto e
+migrations incompatíveis. Falhou em `negative_unexpected_schema`. O report e o log
+redigido não identificam qual assert falhou; `snapshot_cms_media` era apenas o
+último subpasso de `snapshot()`, não evidência de falha de mídia. O restore positivo
+de quatro stores permanece **não aceito**.
+
+Foi reproduzida uma lacuna concreta no verificador: `pg_class INNER JOIN
+pg_namespace` omitia `CREATE SCHEMA fixture_unexpected_schema` sem objetos. O
+teste opcional PGlite executa as seis migrations reais e comprova que a consulta
+anterior e o verificador completo anterior aceitam esse schema vazio. O inventário
+agora parte de `pg_namespace LEFT JOIN pg_class`, mantendo o filtro de kinds no
+JOIN e as exclusões exatas de namespaces internos. Um namespace sem relações gera
+uma entrada nula que não pertence ao catálogo canônico; é rejeitado em
+`native_relations/preauthority_native_relation_inventory_mismatch`. O catálogo
+canônico e seu fingerprint não mudam. Isso explica uma falha possível da negativa,
+mas não recupera o assert ou a sequência executada naquele CI sem stderr privado.
+
+As quatro negativas de catálogo agora exigem exit 2 no guard de preflight e o
+motivo específico esperado (fase/reason nativos, ou `cms_migration_floor_mismatch`
+para ledger). Timeout, falha de lease, erro genérico ou falha tardia não contam
+como rejeição válida. Asserts usam enum finito: baseline/injeção/snapshot,
+`negative_fixture_not_visible`, `negative_restore_not_rejected`,
+`negative_rejection_reason_mismatch`, `negative_contents_changed`, worker hold,
+`negative_ddl_cleanup_error` e snapshot/comparação de cleanup. Não publicam diffs,
+SQL, linhas, hashes ou mensagens arbitrárias; uma falha posterior conserva o
+diagnóstico delimitado da rejeição quando aplicável. Evidência privada do
+coordenador só é descartada após todas as verificações e cleanup bem-sucedidos;
+falhas de DDL também solicitam retenção privada. Cleanup não roda após rejeição
+inesperada ou conteúdo alterado.
+
+Snapshots continuam comparando rows/sequences e schema dos dois bancos, além das
+duas árvores de arquivos; estado operacional assinado não faz parte deles. Não
+foram alterados normalização, ordem de snapshots, locks, grants, assinaturas ou
+protocol/authority gates. O teste PG16.4/WASM confirma criação/rejeição/remoção do
+schema, fingerprint canônico restaurado, ledger sem alteração e estado de
+sequences preservado. Não comprova `pg_dump` Linux, concorrência, lease, imagem
+publicada ou recuperação PG16.14. Nova revisão independente e execução Linux
+autorizada continuam obrigatórias.
+
 Estado: preparação inativa reportada instalada na VPS em 2026-10-08: receiver
 comum, guard, overlay de rede e configuração privada CMS. A evidência histórica
 da VPS registra `runtime/payload-control` ausente e nenhum runtime, banco ou

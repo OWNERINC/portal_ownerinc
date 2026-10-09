@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { runCatalogNegative } from './integration/payload-preauthority-negative.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, chown, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -934,26 +935,15 @@ function sortKeys(value) {
 
 async function targetCatalogNegative(runtime, backup, label, sql, cleanupSql) {
   setStage(`negative_${label}`);
-  const before = snapshot(runtime);
-  composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
-    '--dbname=ownerinc_cms', '--username=cms_admin'], { input: `${sql}\n` });
-  const injected = snapshot(runtime);
   const evidenceStart = privateCommandEvidence.length;
-  let rejected = false;
-  try {
-    coordinator(runtime, runtime.project, 'restore', runtime.payloadRelease, backup);
-  } catch {
-    rejected = true;
-  }
-  assert.equal(rejected, true, `${label} must reject preflight`);
-  assert.notDeepEqual(injected, before, `${label} fixture must visibly alter the target catalog or data`);
-  assertUnchanged(injected, snapshot(runtime), label);
-  assertWorkerHeld(runtime);
-  // This cleanup is explicit test fixture DDL; it runs only after proving that
-  // the attempted restore left target rows/files untouched.
-  composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
-    '--dbname=ownerinc_cms', '--username=cms_admin'], { input: `${cleanupSql}\n` });
-  assert.deepEqual(snapshot(runtime), before, `${label} fixture DDL cleanup must restore the original store data`);
+  const ddl = statement => composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
+    '--dbname=ownerinc_cms', '--username=cms_admin'], { input: `${statement}\n`, preservePrivateErrorEvidence: true });
+  await runCatalogNegative(label, {
+    setSubstep, snapshot: () => snapshot(runtime),
+    inject: () => ddl(sql), cleanup: () => ddl(cleanupSql),
+    restore: () => coordinator(runtime, runtime.project, 'restore', runtime.payloadRelease, backup),
+    assertWorkerHeld: () => assertWorkerHeld(runtime),
+  });
   privateCommandEvidence.splice(evidenceStart);
   negativeCases.push({ name: label, rejected: true, targetContentUnchanged: true, fixtureDdlCleaned: true });
 }

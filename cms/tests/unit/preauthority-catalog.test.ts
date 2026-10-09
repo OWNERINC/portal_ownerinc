@@ -46,6 +46,22 @@ function captureVerifierError(action: () => unknown): Error {
   assert.fail('expected preauthority verifier rejection')
 }
 
+test('empty user namespace rows fail at native_relations instead of disappearing from the inventory', async () => {
+  for (const schema of ['fixture_unexpected_schema', 'pgxtoast_hidden', 'pgxtempyhidden']) {
+    const stages: string[] = []
+    const client: FinalizerClient = {
+      connect: async () => {}, end: async () => {},
+      query: async sql => {
+        assert.match(sql, /FROM pg_catalog\.pg_namespace n LEFT JOIN pg_catalog\.pg_class c/u)
+        return { rows: [...preauthorityExpectedNativeCatalogInventory().relations, { schema, name: null, kind: null }] }
+      },
+    }
+    await assert.rejects(verifyPreauthorityNativeCatalog(client, fixtureMigrations, stage => stages.push(stage)),
+      /preauthority_native_relation_inventory_mismatch/u)
+    assert.deepEqual(stages, ['native_relations'])
+  }
+})
+
 test('all 24 PostgreSQL-rendered native CHECKs pass without accepting same-name weakened predicates', () => {
   const inventory = preauthorityExpectedNativeCatalogInventory()
   const checks = inventory.constraints.filter(item => item.kind === 'c')

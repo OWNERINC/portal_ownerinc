@@ -1217,10 +1217,13 @@ export async function verifyPreauthorityNativeCatalog(
   // LIKE 'pg_temp_%' / 'pg_toast%' treats underscores as wildcards and would
   // hide legal user schemas such as pgxtempyhidden and pgxtoast_hidden.
   const relationsResult = await client.query(`SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind
-    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    FROM pg_catalog.pg_namespace n LEFT JOIN pg_catalog.pg_class c
+      ON n.oid=c.relnamespace AND c.relkind IN ('r','p','v','m','f','S','c')
     WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
-      AND n.nspname !~ '^pg_temp_[0-9]+$' AND c.relkind IN ('r','p','v','m','f','S','c')
+      AND n.nspname !~ '^pg_temp_[0-9]+$'
     ORDER BY n.nspname, c.relname, c.relkind`)
+  // A namespace without relations must not disappear from the inventory: its
+  // null relation entry cannot match the canonical public-only relation set.
   const relations = sortBy(relationsResult.rows.map(row => ({
     schema: String(row.schema), name: String(row.name), kind: String(row.kind),
   })), ['schema', 'name', 'kind'])

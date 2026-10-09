@@ -61,7 +61,34 @@ test('actual PostgreSQL catalog queries reject namespace lookalikes and retain o
       },
     }
     const verify = () => verifyPreauthorityNativeCatalog(client, migrations, stage => { currentStage = stage })
+    for (const name of migrations) await db.query('INSERT INTO payload_migrations (name, batch) VALUES ($1, 1)', [name])
+    const seededLedger = () => db.query('SELECT * FROM payload_migrations ORDER BY name')
+    const ledgerBefore = await seededLedger()
     const canonical = await verify()
+    // Reproduce the recovery fixture's exact committed CREATE/DROP sequence.
+    // Read sequences without nextval: catalog validation must not advance them.
+    const sequenceState = () => db.query('SELECT schemaname, sequencename, last_value FROM pg_sequences ORDER BY schemaname, sequencename')
+    const sequencesBefore = await sequenceState()
+    const relationSql = queries.get('native_relations')!.sql
+    const previousSql = relationSql.replace(
+      "FROM pg_catalog.pg_namespace n LEFT JOIN pg_catalog.pg_class c\n      ON n.oid=c.relnamespace AND c.relkind IN ('r','p','v','m','f','S','c')",
+      'FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace',
+    ).replace("AND n.nspname !~ '^pg_temp_[0-9]+$'", () => "AND n.nspname !~ '^pg_temp_[0-9]+$' AND c.relkind IN ('r','p','v','m','f','S','c')")
+    assert.notEqual(previousSql, relationSql)
+    const previousBaseline = await db.query(previousSql)
+    await db.exec('CREATE SCHEMA fixture_unexpected_schema')
+    assert.deepEqual(await db.query(previousSql), previousBaseline, 'the old inner join silently omits the real empty schema')
+    assert.equal(await verifyPreauthorityNativeCatalog({ ...client, query: (sql, values) =>
+      db.query(sql === relationSql ? previousSql : sql, values, { parsers }) }, migrations, () => {}), canonical,
+    'the previous complete native verifier accepts the injected empty schema')
+    await assert.rejects(verify(), /preauthority_native_relation_inventory_mismatch/u)
+    assert.equal(currentStage, 'native_relations')
+    assert.deepEqual(await sequenceState(), sequencesBefore)
+    assert.deepEqual(await seededLedger(), ledgerBefore)
+    await db.exec('DROP SCHEMA fixture_unexpected_schema')
+    assert.equal(await verify(), canonical)
+    assert.deepEqual(await sequenceState(), sequencesBefore)
+    assert.deepEqual(await seededLedger(), ledgerBefore)
     assert.deepEqual([...queries.keys()], ['native_relations', 'native_columns', 'native_indexes', 'native_constraints', 'native_types'])
     const executeCatalog = async (stage: PreauthorityCatalogDiagnosticStage) => {
       const query = queries.get(stage)!
@@ -106,8 +133,7 @@ test('actual PostgreSQL catalog queries reject namespace lookalikes and retain o
               assert.deepEqual(extra, [{ schema, name: 'fixture_extra', kind: { enum: 'e', domain: 'd', composite: 'c' }[kind],
                 labels: kind === 'enum' ? ['x'] : [] }], 'only the dependent automatic array is excluded')
             }
-            await assert.rejects(verify(), kind === 'table' || kind === 'composite'
-              ? /preauthority_native_relation_inventory_mismatch/u : /preauthority_native_type_inventory_mismatch/u)
+            await assert.rejects(verify(), /preauthority_native_relation_inventory_mismatch/u)
           } finally { await db.exec('ROLLBACK') }
           assert.equal(await verify(), canonical, 'the full real native catalog passes after each rollback')
         })
