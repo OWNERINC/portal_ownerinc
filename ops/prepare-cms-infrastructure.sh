@@ -141,7 +141,7 @@ for path in files:
         reject()
     if path == files[4] and (value.st_uid != 0 or mode != 0o755):
         reject()
-    if path == files[1] and (mode & 0o077 or not mode & 0o400):
+    if path == files[1] and ((value.st_uid, value.st_gid) != (1000, 1000) or mode != 0o600):
         reject()
 PY
 then
@@ -206,6 +206,8 @@ if [[ -e $pre_restore_backup_root || -L $pre_restore_backup_root ]]; then
   }
 fi
 if [[ -e $control_inventory_target || -L $control_inventory_target ]]; then
+  # v1/mismatched inventories are deliberately refused. Inventory identity is
+  # signed host state; never rewrite it or reset the journal to learn an owner.
   python3 "$source_control_inventory" verify-production "$control_inventory_target" "${inventory_args[@]}" >/dev/null || {
     echo 'Refusing preparation: protected Payload inventory differs from the reviewed production project or paths.' >&2
     exit 2

@@ -227,6 +227,28 @@ test('rollback report shows evidence unavailable when failure occurs before the 
   assert.equal(record.persistedProtocolObjects, null)
 })
 
+test('protocol runner retains only closed ledger operation and installer metadata', () => {
+  for (const operation of ['ledger-head-create', 'ledger-head-init', 'ledger-events-create']) {
+    const record = createAtomicRollbackEvidenceRecord()
+    recordFinalizerCliEvidence(record, { status: 1,
+      output: `CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501 operation=${operation} ddl_source=mutation-ledger expected_owner=cms_admin` })
+    assert.equal(record.finalizerCli.diagnosticStatus, 'parsed')
+    assert.deepEqual(record.finalizerCli.diagnostic, { phase: 'protocol-ledger-ddl', reason: 'database_error', sqlstate: '42501',
+      operation, ddlSource: 'mutation-ledger', expectedOwner: 'cms_admin' })
+  }
+  for (const output of [
+    'CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501 operation=private-operation ddl_source=mutation-ledger expected_owner=cms_admin',
+    'CMS news protocol diagnostic: phase=protocol-trigger-ddl reason=database_error sqlstate=42501 operation=ledger-head-create ddl_source=mutation-ledger expected_owner=cms_admin',
+    'CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501 operation=ledger-head-create ddl_source=private-path expected_owner=cms_admin',
+    'CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501 operation=ledger-head-create ddl_source=mutation-ledger expected_owner=private-role',
+  ]) {
+    const record = createAtomicRollbackEvidenceRecord()
+    recordFinalizerCliEvidence(record, { status: 1, output })
+    assert.equal(record.finalizerCli.diagnostic, null)
+    assert.equal(JSON.stringify(record).includes('private'), false)
+  }
+})
+
 const lease = (overrides = {}) => ({
   ...buildObserverAuditLease({ runId: '8c72f420-c113-4a6c-9b8e-437a9dd0c5b7', nonce: 'c'.repeat(64),
     dockerContext: 'desktop-linux', dockerEndpoint: 'npipe:////./pipe/dockerDesktopLinuxEngine',

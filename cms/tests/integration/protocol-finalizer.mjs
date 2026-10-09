@@ -707,6 +707,7 @@ const FINALIZER_DIAGNOSTIC_REASONS = new Set([
   'control_role_sequence_acl_mismatch', 'public_function_execute_outside_allowlist', 'protocol_acl_mismatch',
   'unexpected_control_owned_objects', 'database_error',
 ])
+const FINALIZER_LEDGER_OPERATIONS = new Set(['ledger-head-create', 'ledger-head-init', 'ledger-events-create'])
 const FINALIZER_TRIGGER_DETAIL_KEYS = [
   'trigger_index', 'expected_count', 'observed_count', 'matched_count', 'relation_schema_match', 'enabled_match',
   'function_name_match', 'function_schema_match', 'function_identity_match', 'event_mask', 'expected_event_mask',
@@ -738,26 +739,36 @@ function parseFixedFinalizerDiagnostic(output) {
     return { status: 'unknown_enum', diagnostic: null }
   }
   let triggerDetails = null
+  let ledgerDetails = null
   if (detailText !== undefined) {
-    if (!FINALIZER_TRIGGER_DETAILS_PATTERN.test(detailText)) return { status: 'malformed', diagnostic: null }
-    const values = Object.fromEntries(detailText.split(' ').map(field => {
-      const separator = field.indexOf('=')
-      return [field.slice(0, separator), field.slice(separator + 1)]
-    }))
-    const numericValues = Object.entries(values).filter(([key, value]) =>
-      !['relation_schema_match', 'enabled_match', 'function_name_match', 'function_schema_match',
-        'function_identity_match', 'attribute_type_match', 'attribute_text_shape_match', 'no_condition',
-        'definition_exact', 'definition_normalized'].includes(key) && value !== 'none')
-    if (numericValues.some(([, value]) => !Number.isSafeInteger(Number(value)))) {
-      return { status: 'malformed', diagnostic: null }
+    const ledgerMatch = /^operation=([a-z-]+) ddl_source=mutation-ledger expected_owner=cms_admin$/u.exec(detailText)
+    if (ledgerMatch) {
+      if (phase !== 'protocol-ledger-ddl' || !FINALIZER_LEDGER_OPERATIONS.has(ledgerMatch[1])) {
+        return { status: 'unknown_enum', diagnostic: null }
+      }
+      ledgerDetails = { operation: ledgerMatch[1], ddlSource: 'mutation-ledger', expectedOwner: 'cms_admin' }
+    } else {
+      if (!FINALIZER_TRIGGER_DETAILS_PATTERN.test(detailText)) return { status: 'malformed', diagnostic: null }
+      const values = Object.fromEntries(detailText.split(' ').map(field => {
+        const separator = field.indexOf('=')
+        return [field.slice(0, separator), field.slice(separator + 1)]
+      }))
+      const numericValues = Object.entries(values).filter(([key, value]) =>
+        !['relation_schema_match', 'enabled_match', 'function_name_match', 'function_schema_match',
+          'function_identity_match', 'attribute_type_match', 'attribute_text_shape_match', 'no_condition',
+          'definition_exact', 'definition_normalized'].includes(key) && value !== 'none')
+      if (numericValues.some(([, value]) => !Number.isSafeInteger(Number(value)))) {
+        return { status: 'malformed', diagnostic: null }
+      }
+      triggerDetails = Object.fromEntries(FINALIZER_TRIGGER_DETAIL_KEYS.map(key => {
+        const value = values[key]
+        return [key, value === 'yes' ? true : value === 'no' ? false
+          : value === 'none' ? null : Number(value)]
+      }))
     }
-    triggerDetails = Object.fromEntries(FINALIZER_TRIGGER_DETAIL_KEYS.map(key => {
-      const value = values[key]
-      return [key, value === 'yes' ? true : value === 'no' ? false
-        : value === 'none' ? null : Number(value)]
-    }))
   }
-  return { status: 'parsed', diagnostic: { phase, reason, sqlstate, ...(triggerDetails ? { triggerDetails } : {}) } }
+  return { status: 'parsed', diagnostic: { phase, reason, sqlstate,
+    ...(ledgerDetails || {}), ...(triggerDetails ? { triggerDetails } : {}) } }
 }
 
 export function createAtomicRollbackEvidenceRecord() {
@@ -1537,7 +1548,7 @@ async function installCanonicalV1Fixture(target, passwords, logs) {
   const adminURL = makeConnectionString('cms_admin', passwords.cms_admin, DB, target.port)
   const installer = `
     import { Client } from 'pg'
-    import { NEWS_MUTATION_LEDGER_DDL } from './src/publication/mutation-ledger.ts'
+    import { legacyLedgerDDL } from './tests/fixtures/protocol-ledger-legacy.ts'
     import { buildNewsMutationTriggersDDL } from './src/publication/mutation-triggers.ts'
     import { NEWS_MIGRATION_ITEM_BINDING_DDL } from './scripts/finalize-news-protocol.ts'
     import { grantsSQL } from './scripts/provision-db.ts'
@@ -1547,7 +1558,11 @@ async function installCanonicalV1Fixture(target, passwords, logs) {
       await client.query('BEGIN')
       await client.query('SET LOCAL search_path = pg_catalog, public')
       await client.query('SELECT pg_catalog.pg_advisory_xact_lock(7194030)')
-      await client.query(NEWS_MUTATION_LEDGER_DDL)
+      // Test-only legacy installation context; never derive the V1 ledger from
+      // the corrected builder. Restore the hardened path before any functions.
+      await client.query('SET LOCAL search_path = public')
+      await client.query(legacyLedgerDDL)
+      await client.query('SET LOCAL search_path = pg_catalog, public')
       await client.query(buildNewsMutationTriggersDDL())
       await client.query(NEWS_MIGRATION_ITEM_BINDING_DDL)
       await client.query(grantsSQL)

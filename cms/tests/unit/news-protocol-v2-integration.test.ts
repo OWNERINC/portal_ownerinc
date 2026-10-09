@@ -110,6 +110,22 @@ test('acceptance harness contains no committed synthetic cold-start run seeder a
   assert.equal(path.basename(harnessPath), 'protocol-finalizer.mjs')
 })
 
+test('V1 upgrade fixture installs frozen pre-qualification ledger, not the corrected V2 builder', async () => {
+  const source = await readFile(new URL('../integration/protocol-finalizer.mjs', import.meta.url), 'utf8')
+  const start = source.indexOf('async function installCanonicalV1Fixture')
+  const end = source.indexOf('async function provisionObserverAndProbeRoles', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const installer = source.slice(start, end)
+  assert.match(installer, /import \{ legacyLedgerDDL \} from '\.\/tests\/fixtures\/protocol-ledger-legacy\.ts'/u)
+  assert.doesNotMatch(installer, /NEWS_MUTATION_LEDGER_DDL|NEWS_MUTATION_LEDGER_STATEMENTS/u)
+  const legacySQL = installer.indexOf('await client.query(legacyLedgerDDL)')
+  const publicPath = installer.indexOf("await client.query('SET LOCAL search_path = public')")
+  const hardenedPath = installer.indexOf("await client.query('SET LOCAL search_path = pg_catalog, public')", legacySQL)
+  const functions = installer.indexOf('await client.query(buildNewsMutationTriggersDDL())')
+  assert.ok(publicPath >= 0 && publicPath < legacySQL && legacySQL < hardenedPath && hardenedPath < functions)
+})
+
 test('V1 rollback failpoint observes the final GRANT only after all narrow INSERT ACLs are catalog-visible', async () => {
   const harnessPath = fileURLToPath(new URL('../integration/protocol-finalizer.mjs', import.meta.url))
   const source = await readFile(harnessPath, 'utf8')

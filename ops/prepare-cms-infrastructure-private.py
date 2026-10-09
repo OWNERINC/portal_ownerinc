@@ -2,6 +2,7 @@
 """Private, non-sourcing production environment preparation for Payload."""
 
 import json
+import importlib.util
 import os
 import re
 import secrets
@@ -26,6 +27,13 @@ URL_USERS = {
     'CMS_RUNTIME_DATABASE_URL': ('cms_runtime', 'CMS_RUNTIME_PASSWORD'),
 }
 CANONICAL_PORTAL_URL = 'https://portal.ownerinc.com.br'
+INVENTORY_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'payload-control-inventory.py')
+INVENTORY_SPEC = importlib.util.spec_from_file_location('cms_preparation_inventory', INVENTORY_PATH)
+if INVENTORY_SPEC is None or INVENTORY_SPEC.loader is None:
+    raise SystemExit(2)
+INVENTORY = importlib.util.module_from_spec(INVENTORY_SPEC)
+INVENTORY_SPEC.loader.exec_module(INVENTORY)
+PRODUCTION_ENVIRONMENT_OWNER = INVENTORY.PRODUCTION_ENVIRONMENT_OWNER
 
 
 class PreparationError(Exception):
@@ -40,16 +48,14 @@ def fail(code):
 
 def read_environment(path):
     try:
-        info = os.lstat(path)
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            fail('unsafe_environment_file')
-        mode = stat.S_IMODE(info.st_mode)
-        if os.name != 'nt' and (mode & 0o077 or not mode & 0o400):
-            fail('unsafe_environment_permissions')
+        # Production identity is fixed by the reviewed installer, not learned
+        # from this file or supplied by an environment-owner command-line flag.
+        info = INVENTORY.verify_environment_file(path, PRODUCTION_ENVIRONMENT_OWNER)
         descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         try:
             opened = os.fstat(descriptor)
-            if stat.S_ISLNK(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            if (opened.st_dev, opened.st_ino, opened.st_uid, opened.st_gid, opened.st_mode, opened.st_nlink) != \
+               (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode, info.st_nlink):
                 fail('unsafe_environment_file')
             with os.fdopen(descriptor, 'rb', closefd=False) as stream:
                 raw = stream.read()
@@ -57,6 +63,8 @@ def read_environment(path):
             os.close(descriptor)
     except PreparationError:
         raise
+    except INVENTORY.InventoryError as error:
+        fail(str(error))
     except OSError:
         fail('environment_unavailable')
 
@@ -198,10 +206,10 @@ def update(path):
             stream.write(suffix)
             stream.flush()
             os.fsync(stream.fileno())
-        latest = os.lstat(path)
+        latest = INVENTORY.verify_environment_file(path, PRODUCTION_ENVIRONMENT_OWNER)
         if (
-            stat.S_ISLNK(latest.st_mode)
-            or (latest.st_dev, latest.st_ino) != (before.st_dev, before.st_ino)
+            (latest.st_dev, latest.st_ino, latest.st_uid, latest.st_gid, latest.st_mode, latest.st_nlink) !=
+            (before.st_dev, before.st_ino, before.st_uid, before.st_gid, before.st_mode, before.st_nlink)
         ):
             fail('environment_changed_during_preparation')
         os.replace(temporary, path)
@@ -214,6 +222,8 @@ def update(path):
                 os.close(directory_fd)
     except PreparationError:
         raise
+    except INVENTORY.InventoryError as error:
+        fail(str(error))
     except Exception:
         fail('private_environment_write_failed')
     finally:

@@ -12,6 +12,11 @@ import tempfile
 
 HEX_64 = re.compile(r'^[0-9a-f]{64}$')
 PROJECT = re.compile(r'^[a-z0-9][a-z0-9_-]{0,62}$')
+# These are reviewed identities, never values learned from filesystem metadata
+# or environment/CLI overrides. Disposable non-production inventories use root.
+PRODUCTION_ENVIRONMENT_OWNER = {'uid': 1000, 'gid': 1000}
+ROOT_ENVIRONMENT_OWNER = {'uid': 0, 'gid': 0}
+TRUSTED_DIRECTORY_UIDS = {0, 1000}
 PATH_KEYS = {
     'root', 'runtime', 'releases', 'currentRelease', 'lock', 'admissionClosed',
     'backupRoots', 'preRestoreBackupRoot', 'environmentFile', 'composeOverride',
@@ -61,15 +66,21 @@ def _same_path(left, right):
 
 
 def validate(value):
+    if isinstance(value, dict) and (type(value.get('schemaVersion')) is not int or value['schemaVersion'] != 2):
+        fail('unsupported_inventory_version')
     if not isinstance(value, dict) or set(value) != {
         'schemaVersion', 'project', 'paths', 'volumes', 'trustedSourceInventoryIdentities',
+        'environmentFileOwner',
     }:
         fail('invalid_inventory_shape')
-    if type(value['schemaVersion']) is not int or value['schemaVersion'] != 1:
-        fail('unsupported_inventory_version')
     project = value['project']
     if not isinstance(project, str) or not PROJECT.fullmatch(project):
         fail('invalid_inventory_project')
+    owner = value['environmentFileOwner']
+    expected_owner = PRODUCTION_ENVIRONMENT_OWNER if project == 'ownerinc-portal-prod' else ROOT_ENVIRONMENT_OWNER
+    if not isinstance(owner, dict) or set(owner) != {'uid', 'gid'} or \
+       any(type(owner[name]) is not int for name in ('uid', 'gid')) or owner != expected_owner:
+        fail('invalid_environment_file_owner')
     paths = value['paths']
     if not isinstance(paths, dict) or set(paths) != PATH_KEYS:
         fail('invalid_inventory_paths')
@@ -127,7 +138,52 @@ def identity(value):
     return hashlib.sha256(canonical(validate(value))).hexdigest()
 
 
+def _verify_ancestry(path, trusted_uids, reason):
+    """lstat each ancestor; a realpath-only check would miss unsafe ownership."""
+    if not os.path.isabs(path) or os.path.realpath(path) != path:
+        fail(reason)
+    current = os.path.dirname(path)
+    while True:
+        try:
+            info = os.lstat(current)
+        except OSError:
+            fail(reason)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            fail(reason)
+        if os.name != 'nt':
+            mode = stat.S_IMODE(info.st_mode)
+            if info.st_uid not in trusted_uids or \
+               (mode & 0o022 and not (info.st_uid == 0 and mode & stat.S_ISVTX)):
+                fail(reason)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
+
+def verify_environment_file(path, expected_owner):
+    """Verify an already-approved inventory owner; never discover/return a policy."""
+    if not isinstance(expected_owner, dict) or set(expected_owner) != {'uid', 'gid'} or \
+       any(type(expected_owner[name]) is not int for name in ('uid', 'gid')) or \
+       expected_owner not in (PRODUCTION_ENVIRONMENT_OWNER, ROOT_ENVIRONMENT_OWNER):
+        fail('invalid_environment_file_owner')
+    _verify_ancestry(path, {0, expected_owner['uid']}, 'unsafe_environment_ancestry')
+    try:
+        info = os.lstat(path)
+    except OSError:
+        fail('environment_unavailable')
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        fail('unsafe_environment_file')
+    if os.name != 'nt':
+        if stat.S_IMODE(info.st_mode) != 0o600:
+            fail('unsafe_environment_permissions')
+        if (info.st_uid, info.st_gid) != (expected_owner['uid'], expected_owner['gid']):
+            fail('unsafe_environment_owner')
+    return info
+
+
 def _safe_regular(path, mode=0o600, owner_root=True):
+    _verify_ancestry(path, TRUSTED_DIRECTORY_UIDS, 'unsafe_inventory_ancestry')
     try:
         info = os.lstat(path)
     except OSError:
@@ -142,9 +198,14 @@ def _safe_regular(path, mode=0o600, owner_root=True):
 
 
 def load(path):
-    _safe_regular(path)
+    before = _safe_regular(path)
     try:
-        with open(path, 'rb') as stream:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
+        with os.fdopen(descriptor, 'rb') as stream:
+            opened = os.fstat(stream.fileno())
+            if (before.st_dev, before.st_ino, before.st_uid, before.st_gid, before.st_mode, before.st_nlink) != \
+               (opened.st_dev, opened.st_ino, opened.st_uid, opened.st_gid, opened.st_mode, opened.st_nlink):
+                fail('unsafe_inventory_file')
             raw = stream.read(1024 * 1024 + 1)
         if len(raw) > 1024 * 1024 or not raw.endswith(b'\n') or b'\r' in raw:
             fail('invalid_inventory_file')
@@ -171,8 +232,9 @@ def production_inventory(root, runtime, releases, current, lock, daily_backup, p
                        for service, destination, required in shape['mounts']],
         }
     return validate({
-        'schemaVersion': 1,
+        'schemaVersion': 2,
         'project': project,
+        'environmentFileOwner': dict(PRODUCTION_ENVIRONMENT_OWNER),
         'paths': {
             'root': root, 'runtime': runtime, 'releases': releases,
             'currentRelease': current, 'lock': lock, 'admissionClosed': lock + '.admission-closed',
@@ -189,6 +251,7 @@ def create(path, value):
     parent = os.path.dirname(path)
     if not os.path.isabs(path) or os.path.realpath(parent) != parent or os.path.lexists(path):
         fail('unsafe_inventory_destination')
+    _verify_ancestry(path, TRUSTED_DIRECTORY_UIDS, 'unsafe_inventory_ancestry')
     raw = canonical(validate(value)) + b'\n'
     descriptor, temporary = tempfile.mkstemp(prefix='.payload-inventory.', dir=parent)
     try:
@@ -220,6 +283,7 @@ def main(argv):
             output = argv[2]
             paths = argv[3:]
             value = production_inventory(*paths)
+            verify_environment_file(value['paths']['environmentFile'], value['environmentFileOwner'])
             create(output, value)
             print('protected production inventory created')
         elif len(argv) == 14 and argv[1] == 'verify-production':
@@ -227,6 +291,7 @@ def main(argv):
             expected = production_inventory(*argv[3:])
             if canonical(value) != canonical(expected):
                 fail('production_inventory_mismatch')
+            verify_environment_file(value['paths']['environmentFile'], value['environmentFileOwner'])
             print('protected production inventory verified')
         else:
             print('Invalid inventory helper invocation.', file=sys.stderr)

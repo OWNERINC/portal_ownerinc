@@ -6,21 +6,25 @@ import { lockCmsReferences, requireCmsTransaction } from './transaction'
 /** Integration-only DDL contract. Applied by the migration owner, never runtime.
  * Sequence/events are written EXCLUSIVELY by DB triggers, including native
  * adapter.updateJobs without hooks. Do not append a second application event. */
-export const NEWS_MUTATION_LEDGER_DDL = `
-CREATE TABLE owner_news_mutation_head (
+const createHeadDDL = `
+CREATE TABLE public.owner_news_mutation_head (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   sequence bigint NOT NULL DEFAULT 0 CHECK (sequence >= 0),
   chain_sha256 text NOT NULL CHECK (chain_sha256 ~ '^[0-9a-f]{64}$'),
   coverage_version integer NOT NULL DEFAULT 0 CHECK (coverage_version IN (0,1)),
   write_barrier text NOT NULL DEFAULT 'open' CHECK (write_barrier IN ('open','sealed','frozen')),
-  barrier_run_id uuid REFERENCES news_migration_runs(id) ON DELETE RESTRICT,
+  barrier_run_id uuid REFERENCES public.news_migration_runs(id) ON DELETE RESTRICT,
   barrier_epoch integer CHECK (barrier_epoch > 0),
   barrier_receipt_sha256 text CHECK (barrier_receipt_sha256 ~ '^[0-9a-f]{64}$'),
   CHECK (write_barrier='open' OR (barrier_run_id IS NOT NULL AND barrier_epoch IS NOT NULL AND barrier_receipt_sha256 IS NOT NULL))
 );
-INSERT INTO owner_news_mutation_head(singleton,sequence,chain_sha256,coverage_version)
+`
+const initializeHeadDDL = `
+INSERT INTO public.owner_news_mutation_head(singleton,sequence,chain_sha256,coverage_version)
 VALUES (true,0,repeat('0',64),0);
-CREATE TABLE owner_news_mutation_events (
+`
+const createEventsDDL = `
+CREATE TABLE public.owner_news_mutation_events (
   sequence bigint PRIMARY KEY CHECK (sequence > 0),
   event_id uuid UNIQUE NOT NULL DEFAULT gen_random_uuid(),
   table_name text NOT NULL,
@@ -34,6 +38,17 @@ CREATE TABLE owner_news_mutation_events (
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 `
+
+/** Explicit statement boundaries, never split SQL text. The same canonical SQL
+ * remains available as a batch to existing integration callers. Qualification
+ * selects the application schema without changing defaults or installed bodies. */
+export const NEWS_MUTATION_LEDGER_STATEMENTS = Object.freeze([
+  Object.freeze({ operation: 'ledger-head-create' as const, sql: createHeadDDL }),
+  Object.freeze({ operation: 'ledger-head-init' as const, sql: initializeHeadDDL }),
+  Object.freeze({ operation: 'ledger-events-create' as const, sql: createEventsDDL }),
+])
+export type NewsMutationLedgerOperation = typeof NEWS_MUTATION_LEDGER_STATEMENTS[number]['operation']
+export const NEWS_MUTATION_LEDGER_DDL = NEWS_MUTATION_LEDGER_STATEMENTS.map(statement => statement.sql).join('')
 
 const blocks = ['rich_text', 'heading', 'paragraph', 'list_items', 'list', 'image', 'callout', 'quote', 'profile', 'divider', 'link', 'pdf', 'video']
 /** Required inventory = committed editorial tables + thread3's generated run/item

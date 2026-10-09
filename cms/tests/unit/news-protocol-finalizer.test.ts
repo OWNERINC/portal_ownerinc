@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { NEWS_MUTATION_LEDGER_DDL, NEWS_MUTATION_TABLES } from '../../src/publication/mutation-ledger'
+import { NEWS_MUTATION_LEDGER_STATEMENTS, NEWS_MUTATION_TABLES, type NewsMutationLedgerOperation } from '../../src/publication/mutation-ledger'
 import { buildNewsMutationTriggersDDL } from '../../src/publication/mutation-triggers'
 import {
   buildNewsMigrationBootstrapRunDDL,
@@ -56,6 +56,7 @@ const controlColumns = {
   destination_fingerprint: 'varchar', unresolved_exceptions: 'jsonb', sealed_sequence: 'varchar',
   sealed_chain_sha256: 'varchar', sealed_at: 'timestamptz', activation_epoch: 'numeric', drain_receipt_sha256: 'varchar',
 }
+const ledgerHeadDDL = NEWS_MUTATION_LEDGER_STATEMENTS[0].sql
 
 function independentDollarBody(ddl: string, functionName: string): string {
   const declaration = `CREATE OR REPLACE FUNCTION public.${functionName}(`
@@ -113,6 +114,7 @@ function fakeClient(options: {
   serialDrift?: 'unowned' | 'wrong-column' | 'increment' | 'cycle' | 'range' | 'owner' | 'schema' | 'name-collision'
   foreignEnumSchema?: boolean; changedEnumLabels?: boolean; enumLabelDrift?: 'order' | 'missing' | 'extra'
   invalidEnumArray?: boolean; jsonbDefaultsMatch?: boolean; failMigrationSqlState?: string; failTriggerSqlState?: string
+  failLedgerOperation?: NewsMutationLedgerOperation
 } = {}) {
   const statements: string[] = []
   const jsonbComparisonParams: unknown[][] = []
@@ -228,8 +230,12 @@ function fakeClient(options: {
         jsonbComparisonParams.push(values || [])
         return { rows: [{ matches: options.jsonbDefaultsMatch !== false }] }
       }
-      if (sql === NEWS_MUTATION_LEDGER_DDL) {
-        protocolLedgerExists = true
+      const ledgerStatement = NEWS_MUTATION_LEDGER_STATEMENTS.find(statement => statement.sql === sql)
+      if (ledgerStatement) {
+        if (options.failLedgerOperation === ledgerStatement.operation) {
+          throw Object.assign(new Error('private SQL, path and credential must not appear'), { code: '42501' })
+        }
+        if (ledgerStatement.operation === 'ledger-events-create') protocolLedgerExists = true
         return { rows: [] }
       }
       if (sql === buildNewsMigrationBootstrapRunDDL()) {
@@ -670,7 +676,7 @@ test('read-only precondition diagnosis identifies a catalog guard and does not e
   assert.ok(findings.some(finding => finding.phase === 'precondition-enums' && finding.reason === 'native_enum_catalog_mismatch'))
   assert.ok(findings.some(finding => finding.phase === 'precondition-foreign-keys' && finding.reason === 'native_snapshot_foreign_key_mismatch'))
   assert.equal(statements.some(sql => /^(?:BEGIN|COMMIT|ROLLBACK|SET LOCAL ROLE|RESET ROLE|CREATE|ALTER|GRANT|REVOKE)\b/u.test(sql.trim())), false)
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 test('installed protocol audit reuses native/finalizer catalogs in a repeatable-read observer transaction only', async () => {
@@ -983,7 +989,7 @@ test('read-only diagnosis does not accept a partial protocol inventory as a vali
   const findings = await diagnoseFinalizerPreconditionsReadOnly(client)
   assert.ok(findings.some(finding => finding.phase === 'precondition-protocol-inventory'
     && finding.reason === 'partial_protocol_installation_manual_recovery_required'))
-  assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(statements.some(sql => sql === ledgerHeadDDL), false)
   assert.equal(statements.some(sql => sql.startsWith('SET LOCAL ROLE')), false)
 })
 
@@ -1009,7 +1015,7 @@ test('cold-install and V1-upgrade rollback helpers preserve real empty/V1 versus
   const legacyColdFindings = await diagnoseFinalizerPreconditionsReadOnly(legacyColdFixture.client)
   assert.ok(legacyColdFindings.some(finding => finding.phase === 'precondition-protocol-inventory'
     && finding.reason === 'partial_protocol_installation_manual_recovery_required'))
-  assert.equal(legacyColdFixture.statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(legacyColdFixture.statements.includes(ledgerHeadDDL), false)
   assert.equal(legacyColdFixture.statements.some(sql => sql.startsWith('SET LOCAL ROLE')), false)
 
   const v1Fixture = fakeClient({ protocolVersion: 1, catalogFunctionNames: [fixtureNames.v1UpgradeCaptureFunction] })
@@ -1017,7 +1023,7 @@ test('cold-install and V1-upgrade rollback helpers preserve real empty/V1 versus
   assert.ok(!fixtureNames.v1UpgradeCaptureFunction.startsWith('owner_news_'))
   const v1Error = await finalizeNewsProtocol(v1Fixture.client).catch(error => error)
   assert.equal(getFinalizerFailureDiagnostic(v1Error)?.reason, 'protocol_upgrade_required')
-  assert.equal(v1Fixture.statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(v1Fixture.statements.includes(ledgerHeadDDL), false)
   assert.equal(v1Fixture.statements.includes(buildNewsMigrationBootstrapRunDDL()), false)
 
   const legacyV1Fixture = fakeClient({ protocolVersion: 1,
@@ -1025,7 +1031,7 @@ test('cold-install and V1-upgrade rollback helpers preserve real empty/V1 versus
   const legacyV1Error = await finalizeNewsProtocol(legacyV1Fixture.client).catch(error => error)
   assert.equal(getFinalizerFailureDiagnostic(legacyV1Error)?.reason,
     'partial_protocol_installation_manual_recovery_required')
-  assert.equal(legacyV1Fixture.statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(legacyV1Fixture.statements.includes(ledgerHeadDDL), false)
   assert.equal(legacyV1Fixture.statements.includes(buildNewsMigrationBootstrapRunDDL()), false)
 })
 
@@ -1050,10 +1056,38 @@ test('failure after ledger DDL preserves its SQLSTATE and rolls back without com
   assert.deepEqual(diagnostic, { phase: 'protocol-trigger-ddl', reason: 'database_error', sqlstate: '42501' })
   const formatted = formatFinalizerFailureDiagnostic(diagnostic!)
   assert.equal(formatted.includes('sensitive DDL message'), false)
-  assert.ok(statements.includes(NEWS_MUTATION_LEDGER_DDL))
-  assert.ok(statements.indexOf(NEWS_MUTATION_LEDGER_DDL) < statements.findIndex(sql => sql === buildNewsMutationTriggersDDL()))
+  assert.ok(NEWS_MUTATION_LEDGER_STATEMENTS.every(statement => statements.includes(statement.sql)))
+  assert.ok(statements.indexOf(ledgerHeadDDL) < statements.findIndex(sql => sql === buildNewsMutationTriggersDDL()))
   assert.equal(statements.at(-1), 'ROLLBACK')
   assert.equal(statements.includes('COMMIT'), false)
+})
+
+for (const [index, statement] of NEWS_MUTATION_LEDGER_STATEMENTS.entries()) {
+  test(`ledger ${statement.operation} failure records the exact closed operation and rolls back`, async () => {
+    const { client, statements } = fakeClient({ failLedgerOperation: statement.operation })
+    const error = await finalizeNewsProtocol(client).catch(value => value)
+    const diagnostic = getFinalizerFailureDiagnostic(error)
+    assert.deepEqual(diagnostic, { phase: 'protocol-ledger-ddl', reason: 'database_error', sqlstate: '42501', operation: statement.operation })
+    assert.equal(formatFinalizerFailureDiagnostic(diagnostic!),
+      `CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501 operation=${statement.operation} ddl_source=mutation-ledger expected_owner=cms_admin`)
+    assert.deepEqual(statements.filter(sql => NEWS_MUTATION_LEDGER_STATEMENTS.some(entry => entry.sql === sql)),
+      NEWS_MUTATION_LEDGER_STATEMENTS.slice(0, index + 1).map(entry => entry.sql))
+    assert.equal(statements.includes(buildNewsMutationTriggersDDL()), false)
+    assert.equal(statements.includes('COMMIT'), false)
+    assert.equal(statements.at(-1), 'ROLLBACK')
+    assert.equal(JSON.stringify(diagnostic).includes('private'), false)
+  })
+}
+
+test('ledger operation diagnostics cannot echo injected operation/source/owner or contaminate other phases', () => {
+  const base = { phase: 'protocol-ledger-ddl' as const, reason: 'database_error', sqlstate: '42501' }
+  assert.equal(formatFinalizerFailureDiagnostic({ ...base, operation: 'postgresql://private' as never }),
+    'CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501')
+  assert.equal(formatFinalizerFailureDiagnostic({ ...base, phase: 'protocol-trigger-ddl', operation: 'ledger-head-create' }),
+    'CMS news protocol diagnostic: phase=protocol-trigger-ddl reason=database_error sqlstate=42501')
+  assert.equal(formatFinalizerFailureDiagnostic(Object.assign({ ...base, operation: 'ledger-head-create' as const },
+    { ddlSource: 'private-path', expectedOwner: 'private-role', message: 'private-driver-text' })),
+    'CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501 operation=ledger-head-create ddl_source=mutation-ledger expected_owner=cms_admin')
 })
 
 test('finalizer installs atomically only after exact native inventory and role checks; readiness and coverage stay disabled', async () => {
@@ -1071,10 +1105,11 @@ test('finalizer installs atomically only after exact native inventory and role c
   assert.match(runtimeProtocolPrivilegesVerifySQL, /has_table_privilege\('cms_runtime'/u)
   assert.match(runtimeProtocolFunctionsVerifySQL, /has_function_privilege\('cms_runtime'/u)
   assert.match(runtimeProtocolFunctionsVerifySQL, /owner_news_bootstrap_run/u)
-  assert.ok(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')))
-  assert.ok(statements.includes(NEWS_MUTATION_LEDGER_DDL))
+  assert.ok(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')))
+  const ledgerStart = statements.indexOf(ledgerHeadDDL)
+  assert.deepEqual(statements.slice(ledgerStart, ledgerStart + 3), NEWS_MUTATION_LEDGER_STATEMENTS.map(statement => statement.sql))
   assert.ok(statements.includes(buildNewsMigrationBootstrapRunDDL()))
-  assert.ok(statements.indexOf(NEWS_MUTATION_LEDGER_DDL) < statements.findIndex(sql => sql.includes('FROM public.owner_news_mutation_head')))
+  assert.ok(statements.indexOf(ledgerHeadDDL) < statements.findIndex(sql => sql.includes('FROM public.owner_news_mutation_head')))
   assert.equal(statements.filter(sql => sql.includes('SELECT sequence::text AS sequence')).length, 1)
   assert.ok(statements.includes(NATIVE_ENUM_CATALOG_SQL))
   assert.match(NATIVE_ENUM_CATALOG_SQL, /enumlabel::text ORDER BY e\.enumsortorder\)::text\[\]/u)
@@ -1091,7 +1126,7 @@ test('ordinary finalizer verifies exact V1 then returns upgrade-required without
 
   assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'protocol_upgrade_required')
   assert.equal(statements.includes(buildNewsMigrationBootstrapRunDDL()), false)
-  assert.equal(statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(statements.includes(ledgerHeadDDL), false)
   assert.equal(statements.includes(buildNewsMutationTriggersDDL()), false)
   assert.equal(statements.at(-1), 'ROLLBACK')
   assert.equal(statements.includes('COMMIT'), false)
@@ -1103,7 +1138,7 @@ test('explicit V1-to-V2 upgrade changes only the bootstrap RPC and exact insert 
 
   assert.deepEqual(result, { installed: false, ready: false, coverageVersion: 0 })
   assert.equal(statements.filter(sql => sql === buildNewsMigrationBootstrapRunDDL()).length, 1)
-  assert.equal(statements.includes(NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(statements.includes(ledgerHeadDDL), false)
   assert.equal(statements.includes(buildNewsMutationTriggersDDL()), false)
   assert.equal(statements.includes(NEWS_MIGRATION_ITEM_BINDING_DDL), false)
   assert.ok(statements.some(sql => sql.includes('protocol_functions') && sql.includes('pg_catalog.to_regprocedure')))
@@ -1117,7 +1152,7 @@ test('exact V2 finalization and explicit upgrade retry verify without protocol D
     assert.deepEqual(await operation(client), { installed: false, ready: false, coverageVersion: 0 })
     assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
     assert.ok(statements.some(sql => sql.includes('p.proisstrict AS bootstrap_is_strict')))
-    assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL || sql === buildNewsMutationTriggersDDL()), false)
+    assert.equal(statements.some(sql => NEWS_MUTATION_LEDGER_STATEMENTS.some(statement => statement.sql === sql) || sql === buildNewsMutationTriggersDDL()), false)
     assert.equal(statements.at(-1), 'COMMIT')
   }
 })
@@ -1127,7 +1162,7 @@ test('explicit upgrade rejects empty protocol without DDL', async () => {
   const error = await upgradeNewsProtocolV1ToV2(client).catch(value => value)
 
   assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'protocol_upgrade_requires_v1')
-  assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL() || sql === NEWS_MUTATION_LEDGER_DDL), false)
+  assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL() || sql === ledgerHeadDDL), false)
   assert.equal(statements.at(-1), 'ROLLBACK')
   assert.equal(statements.includes('COMMIT'), false)
 })
@@ -1188,7 +1223,7 @@ test('ordinary finalizer bootstrap DDL failure rolls back the cold install', asy
   assert.deepEqual(getFinalizerFailureDiagnostic(error), {
     phase: 'protocol-bootstrap-ddl', reason: 'database_error', sqlstate: '42501',
   })
-  assert.ok(statements.includes(NEWS_MUTATION_LEDGER_DDL))
+  assert.ok(NEWS_MUTATION_LEDGER_STATEMENTS.every(statement => statements.includes(statement.sql)))
   assert.ok(statements.includes(buildNewsMigrationBootstrapRunDDL()))
   assert.equal(statements.at(-1), 'ROLLBACK')
   assert.equal(statements.includes('COMMIT'), false)
@@ -1202,7 +1237,7 @@ test('V1 upgrade DDL failure rolls back without replacing native or existing V1 
     phase: 'protocol-bootstrap-ddl', reason: 'database_error', sqlstate: '42501',
   })
   assert.equal(statements.filter(sql => sql === buildNewsMigrationBootstrapRunDDL()).length, 1)
-  assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL || sql === buildNewsMutationTriggersDDL()
+  assert.equal(statements.some(sql => sql === ledgerHeadDDL || sql === buildNewsMutationTriggersDDL()
     || sql === NEWS_MIGRATION_ITEM_BINDING_DDL), false)
   assert.equal(statements.at(-1), 'ROLLBACK')
   assert.equal(statements.includes('COMMIT'), false)
@@ -1212,7 +1247,7 @@ test('wrong expected migration history aborts and rolls back before any protocol
   const { client, statements } = fakeClient({ missingMigration: true })
   await assert.rejects(finalizeNewsProtocol(client), /native_migration_ledger_mismatch/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 test('native column drift aborts before DDL and does not repair schema', async () => {
@@ -1226,35 +1261,35 @@ test('nullable native catalog drift fails before protocol DDL', async () => {
   const { client, statements } = fakeClient({ badNativeNullability: true })
   await assert.rejects(finalizeNewsProtocol(client), /native_column_inventory_mismatch/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 test('native default drift fails before protocol DDL', async () => {
   const { client, statements } = fakeClient({ badNativeDefault: true })
   await assert.rejects(finalizeNewsProtocol(client), /native_column_inventory_mismatch/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 test('missing required native custom constraint blocks installation', async () => {
   const { client, statements } = fakeClient({ missingConstraint: true })
   await assert.rejects(finalizeNewsProtocol(client), /native_required_constraint_missing/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 test('missing or mismatched native snapshot index blocks installation', async () => {
   const { client, statements } = fakeClient({ missingIndex: true })
   await assert.rejects(finalizeNewsProtocol(client), /native_snapshot_index_missing_or_mismatched/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 test('native snapshot foreign-key drift blocks installation', async () => {
   const { client, statements } = fakeClient({ missingForeignKey: true })
   await assert.rejects(finalizeNewsProtocol(client), /native_snapshot_foreign_key_mismatch/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 for (const foreignKeyColumnDrift of ['missing', 'extra'] as const) {
@@ -1262,7 +1297,7 @@ for (const foreignKeyColumnDrift of ['missing', 'extra'] as const) {
     const { client, statements } = fakeClient({ foreignKeyColumnDrift })
     await assert.rejects(finalizeNewsProtocol(client), /native_snapshot_foreign_key_mismatch/u)
     assert.equal(statements.at(-1), 'ROLLBACK')
-    assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+    assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
   })
 }
 
@@ -1271,7 +1306,7 @@ for (const enumLabelDrift of ['order', 'missing', 'extra'] as const) {
     const { client, statements } = fakeClient({ enumLabelDrift })
     await assert.rejects(finalizeNewsProtocol(client), /native_enum_catalog_mismatch/u)
     assert.equal(statements.at(-1), 'ROLLBACK')
-    assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+    assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
   })
 }
 
@@ -1478,8 +1513,8 @@ for (const mutation of ['leading-space', 'trailing-space', 'interior-space', 'st
     const { client, statements } = fakeClient({ existing: true,
       tamperFunctionSource: { name: 'owner_news_mutation_guard_stmt', mutation } })
     await assert.rejects(finalizeNewsProtocol(client), /canonical_function_mismatch/u)
-    assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL), false)
-    assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+    assert.equal(statements.some(sql => sql === ledgerHeadDDL), false)
+    assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
     assert.equal(statements.at(-1), 'ROLLBACK')
   })
 }
@@ -1488,7 +1523,7 @@ test('cms_controller ownership of any extra database object blocks re-entry with
   const { client, statements } = fakeClient({ existing: true, extraControllerOwnership: true })
   await assert.rejects(finalizeNewsProtocol(client), /unexpected_control_owned_objects/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
-  assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+  assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
 })
 
 test('cms_controller ownership in an unrelated database does not fail current-database re-entry', async () => {
@@ -1534,7 +1569,7 @@ for (const serialDrift of ['unowned', 'wrong-column', 'increment', 'cycle', 'ran
     const { client, statements } = fakeClient({ serialDrift })
     await assert.rejects(finalizeNewsProtocol(client), /native_serial_sequence_binding_or_configuration_mismatch/u)
     assert.equal(statements.at(-1), 'ROLLBACK')
-    assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+    assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
   })
 }
 
@@ -1549,6 +1584,8 @@ test('partial pre-existing protocol is rejected for manual recovery, never reset
   const { client, statements } = fakeClient({ partial: true })
   await assert.rejects(finalizeNewsProtocol(client), /partial_protocol_installation_manual_recovery_required/u)
   assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.some(sql => NEWS_MUTATION_LEDGER_STATEMENTS.some(statement => statement.sql === sql)), false)
+  assert.equal(statements.some(sql => /^(?:CREATE|ALTER|DROP|GRANT|REVOKE|INSERT|UPDATE|DELETE)\b/u.test(sql.trim())), false)
   assert.equal(statements.some(sql => sql.includes('DROP TABLE') || sql.includes('DELETE FROM')), false)
 })
 
@@ -1556,8 +1593,8 @@ for (const headRows of ['empty', 'multiple', 'invalid'] as const) {
   test(`complete protocol inventory with ${headRows} head rows fails closed without reinstall`, async () => {
     const { client, statements } = fakeClient({ existing: true, headRows })
     await assert.rejects(finalizeNewsProtocol(client), /ledger_head_invalid_or_coverage_activated/u)
-    assert.equal(statements.some(sql => sql === NEWS_MUTATION_LEDGER_DDL), false)
-    assert.equal(statements.some(sql => sql.includes('CREATE TABLE owner_news_mutation_head')), false)
+    assert.equal(statements.some(sql => sql === ledgerHeadDDL), false)
+    assert.equal(statements.some(sql => sql.includes('CREATE TABLE public.owner_news_mutation_head')), false)
     assert.equal(statements.at(-1), 'ROLLBACK')
   })
 }
@@ -1566,7 +1603,9 @@ test('complete installation re-entry verifies in place and preserves existing he
   const { client, statements } = fakeClient({ existing: true })
   const result = await finalizeNewsProtocol(client)
   assert.deepEqual(result, { installed: false, ready: false, coverageVersion: 0 })
-  assert.equal(statements.some(sql => /CREATE TABLE owner_news_mutation_head|INSERT INTO owner_news_mutation_head|DROP TABLE|DELETE FROM public\.owner_news_mutation_events/u.test(sql)), false)
+  assert.equal(statements.some(sql => NEWS_MUTATION_LEDGER_STATEMENTS.some(statement => statement.sql === sql)), false)
+  assert.equal(statements.some(sql => /^(?:CREATE|ALTER|DROP|GRANT|REVOKE|INSERT|UPDATE|DELETE)\b/u.test(sql.trim())), false)
+  assert.equal(statements.some(sql => /CREATE TABLE public\.owner_news_mutation_head|INSERT INTO public\.owner_news_mutation_head|DROP TABLE|DELETE FROM public\.owner_news_mutation_events/u.test(sql)), false)
   assert.equal(statements.filter(sql => sql.includes('SELECT sequence::text AS sequence')).length, 1)
   assert.equal(statements.at(-1), 'COMMIT')
 })

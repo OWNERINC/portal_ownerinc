@@ -1,5 +1,116 @@
 # Runtime Payload e recuperação coordenada
 
+## Evidência Task 3 — comparação independente pós-restore (2026-10-09)
+
+O run `37918102226`, commit `7893d35`, passou novamente pelas onze negativas e
+falhou em `first_actual_restore` com `acceptance_assertion_failed` e subpasso
+residual `snapshot_cms_media`, sem erro do coordenador nem stderr privado. Isso é
+compatível com uma assert posterior ao retorno do coordenador, mas o report não
+identifica o campo divergente. **Não é aceite dos quatro stores.**
+
+A instrumentação distingue agora `restoreAcceptanceProgress.first/second`:
+`coordinatorReturnedSuccessfully` só vira true após retorno normal da chamada;
+`fullSnapshotComparisonPassed` só vira true após igualdade dos seis componentes.
+Autoridade, documento de origem, remoção do documento independente do alvo e
+worker hold têm códigos fixos próprios. A segunda execução também passa a ter
+stage explícito `second_actual_restore` antes de invocar o coordenador.
+
+`restored_snapshot_mismatch` publica apenas a lista finita de componentes
+divergentes (`portalDatabase`, `cmsDatabase`, `portalSchema`, `cmsSchema`,
+`portalUploads`, `cmsUploads`) e seus SHA256 esperado/observado. O esperado é a
+captura independente da origem, não valor bundled ou resultado copiado do
+adapter. Ausência de componente/shape inválido falha fechada. `restore_target_unchanged`
+distingue o caso de o alvo não ter mudado. O mesmo snapshot pós-restore serve às
+duas comparações, evitando uma nova amostragem entre igualdade e mudança do alvo.
+
+Em falha, capturas privadas dos dumps de dados/schema e arquivos tar dos dois
+stores ficam sob `private-snapshots/` (0700, arquivos 0600), separadas do report
+público. São seis labels fixos: alvo antes/depois e origem depois, para primeiro e
+segundo restore; até seis componentes de 1 MiB por label. O manifesto privado
+identifica formato, tamanho original e truncamento. O limite afeta **somente a
+cópia diagnóstica**: hashes lógicos/de arquivos usam a captura completa, nunca o
+prefixo privado truncado. A flag pública
+`privateSnapshotEvidenceRetained` não implica que todos os arquivos estejam
+completos; o manifesto privado registra isso. Nada dessa árvore é adicionado aos
+artifacts públicos. Ela existe apenas durante a vida do runner descartável.
+
+Na continuação desta mesma tarefa, o aceite passou a usar **snapshots lógicos
+independentes** para Portal e CMS. `pg_dump --data-only --column-inserts` e
+`--schema-only` permanecem somente no ramo de evidência privada, sem participar
+do hash de aceite. Como são capturas auxiliares em outra transação, não são a
+fonte autoritativa dos hashes lógicos. Não há rewrite de SQL de dumps.
+
+### Contrato da captura lógica independente
+
+`payload-logical-snapshot.mjs` gera SELECTs em uma transação repeatable-read/read-only
+por banco, com timezone UTC, search_path pg_catalog e formatos de saída fixos.
+`psql -XAtq -v ON_ERROR_STOP=1` executa apenas consultas geradas com `%I`/`%L`
+para identidades descobertas no catálogo. O manifesto de seções e as listas de
+tabelas/sequences são reconciliados; transporte incompleto não gera hash.
+
+- **Schema observado:** namespaces (inclusive vazios), relações, colunas com
+  ordinal lógico denso, tipos/enums/domains/composites, defaults, índices,
+  constraints, funções/procedures, triggers não internos, rules/views/materialized
+  views, policies, herança/partições, parâmetros/ownership lógico de sequences,
+  collations, extended statistics, extensões, casts e security labels. OIDs são
+  resolvidos em identidades; attnum físico e seus buracos não são identidade,
+  mas reordenar colunas visíveis altera o hash. Comentários e opções presentes
+  nos registros também são vinculados. Owners/ACLs não são comparados aqui, como
+  no antigo dump `--no-owner --no-privileges`; os gates próprios de roles/grants
+  continuam obrigatórios. Objetos internos de FK são representados pela própria
+  constraint, não por nomes automáticos de triggers que contêm OIDs.
+- **CHECK:** uma função pura expõe o parser observado sem chamar o verificador
+  nativo. O modo genérico conserva casts e identidades quoted, sem as equivalências
+  de casts restritas ao contrato nativo revisado. Agrupamento redundante de CHECK
+  é canonicalizado; gramática não suportada permanece como texto bruto marcado,
+  não como TRUE/definição esperada. Snapshot de catálogo propositalmente inválido
+  continua possível para comparar as negativas antes/depois.
+- **Dados:** todas as tabelas de usuários, incluindo operacionais, ledger e
+  sessões, partitions e materialized views. `ONLY` evita duplicar dados herdados.
+  PostgreSQL produz um objeto JSONB `coluna -> valor SQL::text ou NULL`, que
+  viaja como texto dentro de uma string e nunca tem seus números convertidos em
+  Number JavaScript. Diferentemente de `to_jsonb(row)` simples, conserva SQL NULL
+  versus JSON null, lexemas de JSON, limites inferiores de arrays e composites
+  nulos; tipos são vinculados pelo schema. Rows são ordenados por bytes,
+  preservam duplicatas e são hasheados com framing de comprimento. Cada tabela
+  tem identidade, contagem conferida e SHA256 próprio; tabelas vazias não somem.
+- **Sequences:** todas as identidades, tipo, início, incremento, limites, cache,
+  cycle, owned-by, `last_value` e `is_called`. Inteiros de 64 bits são texto, nunca
+  Number. Nenhuma chamada a `nextval` é feita. Estado de sequences não é MVCC;
+  continuam necessárias as barreiras de writers e provas de quiescência.
+- **Limites fechados:** 32 MiB de transporte total por banco, 100.000 rows e
+  statement_timeout 120s. Exceder limite/inventário incompleto falha; não há
+  truncamento do material hasheado. Foreign relations/servers, base/range types
+  não cobertos, aggregates, operadores/opclasses/opfamilies de usuário, text-search
+  objects, publicações/subscriptions, event triggers, large objects, transforms e
+  linguagens adicionais falham explicitamente como objetos não suportados.
+  O report conserva um `logicalSnapshotErrorIdentifier` de enum finito somente
+  no contexto explícito da CLI de fingerprint; stderr desconhecido fica privado.
+  Overflow do buffer é `output_limit_exceeded`, nunca sucesso parcial.
+- **Arquivos:** permanece a árvore tar existente: paths ordenados, tipo,
+  permissões, tamanho e SHA256 dos bytes, incluindo `.owner-news-import/staging`.
+  Ordem do tar/mtime/uid/gid já não faziam parte desse contrato; não foi criada
+  nova normalização de arquivos para passar o teste. Paths/bytes/modos extras ou
+  alterados continuam divergindo.
+
+Regressões com PostgreSQL16.4/PGlite executam as seis migrations CMS e as migrations
+Portal, recriam o schema observado preservando rows e estado/tipo/ownership de
+sequences e comparam os hashes completos. O loader pgcrypto é a única instrução
+Portal omitida **no teste WASM**, pois a biblioteca disponível não carrega
+`EVP_bf_cbc`; `gen_random_uuid` nativo existe. A captura real não omite a extensão
+nem suas funções. Testes cobrem ordem física de rows, duplicatas, numerais acima
+de 2^53, NULL, seq last_value/is_called, dados operacionais, schema vazio, CHECK
+enfraquecido, tipo/view/índice/função/trigger/domain extra, ordem de colunas e
+identificadores SQL quoted. Não há aceite de tipos inválidos pelo native guard:
+captura e decisão de segurança são fronteiras distintas.
+
+Isso completa a comparação lógica offline, **não** a recuperação real. Não houve
+pg_dump/pg_restore Linux local, teste de pgcrypto nativo nem confirmação dos dois
+snapshots privados do run anterior. A hipótese de divergência textual foi
+reproduzida e removida da fronteira de aceite, mas o componente que falhou naquele
+run permanece desconhecido. Task 3 depende de revisão independente e CI Linux
+autorizado com os mesmos gates de catálogo assinado, dados, roles e admissão.
+
 ## Evidência Task 3 — fingerprint após restore (2026-10-09)
 
 O run `37912289512`, commit `6ec32bc`, passou pelas onze negativas e chegou ao

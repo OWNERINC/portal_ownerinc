@@ -86,10 +86,21 @@ async function fixture(t) {
   let testInventorySource = await readFile(path.join(paths.bundle, 'ops', 'payload-control-inventory.py'), 'utf8');
   let testStateSource = await readFile(path.join(paths.bundle, 'ops', 'payload-control-state.py'), 'utf8');
   if (process.platform !== 'win32') {
+    // Fixture-only reviewed identity, not a production owner auto-discovery.
+    // The actual installer has fixed 1000:1000 and no identity override switch.
+    assert.ok(testInventorySource.includes("PRODUCTION_ENVIRONMENT_OWNER = {'uid': 1000, 'gid': 1000}"));
     testInventorySource = testInventorySource
+      .replace("PRODUCTION_ENVIRONMENT_OWNER = {'uid': 1000, 'gid': 1000}",
+        "PRODUCTION_ENVIRONMENT_OWNER = {'uid': os.geteuid(), 'gid': os.getegid()}")
+      .replace('TRUSTED_DIRECTORY_UIDS = {0, 1000}', 'TRUSTED_DIRECTORY_UIDS = {0, os.geteuid()}')
       .replace('(owner_root and info.st_uid != 0)', 'False')
       .replace('os.fchown(descriptor, 0, 0)', 'os.fchown(descriptor, os.geteuid(), os.getegid())');
     testStateSource = testStateSource.replace("'payload-control-inventory.py')", "'payload-control-inventory-test.py')");
+    const privateHelperPath = path.join(paths.bundle, 'ops', 'prepare-cms-infrastructure-private.py');
+    const privateSource = await readFile(privateHelperPath, 'utf8');
+    assert.ok(privateSource.includes("'payload-control-inventory.py')"));
+    await writeFile(privateHelperPath, privateSource.replace("'payload-control-inventory.py')",
+      "'payload-control-inventory-test.py')"));
   }
   await writeFile(inventoryTestHelper, testInventorySource);
   await writeFile(stateTestHelper, testStateSource);
@@ -236,6 +247,7 @@ test('apply atomically prepares private credentials and reviewed files without a
   const f = await fixture(t);
   if (f.skip) return t.skip(f.skip);
   const originalEnvironment = await readFile(path.join(f.paths.secrets, 'production.runtime.conf'));
+  const originalEnvironmentStat = await stat(path.join(f.paths.secrets, 'production.runtime.conf'));
   const lockPath = path.join(f.paths.runtime, 'deploy.lock');
   const lockBefore = await readFile(lockPath);
   const result = f.run(['--apply']);
@@ -249,7 +261,11 @@ test('apply atomically prepares private credentials and reviewed files without a
   for (const originalLine of originalEnvironment.toString('utf8').split('\n').slice(0, 3)) assert.ok(environment.includes(originalLine));
   assert.ok(environment.startsWith(originalEnvironment.toString('utf8')), 'configuration update must preserve the full original byte sequence');
   const envStat = await stat(envPath);
-  if (process.platform !== 'win32') assert.equal(envStat.mode & 0o777, 0o600, 'existing environment mode must be preserved');
+  if (process.platform !== 'win32') {
+    assert.equal(envStat.mode & 0o777, 0o600, 'existing environment mode must be preserved');
+    assert.equal(envStat.uid, originalEnvironmentStat.uid, 'existing approved owner must be preserved');
+    assert.equal(envStat.gid, originalEnvironmentStat.gid, 'existing approved group must be preserved');
+  }
   const values = Object.fromEntries(environment.split(/\r?\n/u).filter(line => line.includes('=')).map(line => {
     const index = line.indexOf('='); return [line.slice(0, index), line.slice(index + 1)];
   }));
@@ -306,6 +322,9 @@ test('apply atomically prepares private credentials and reviewed files without a
     }
   }
   assert.equal(inventory.project, 'ownerinc-portal-prod');
+  assert.equal(inventory.schemaVersion, 2);
+  assert.deepEqual(inventory.environmentFileOwner, process.platform === 'win32'
+    ? { uid: 1000, gid: 1000 } : { uid: process.getuid(), gid: process.getgid() });
   assert.deepEqual(inventory.paths.backupRoots.map(bashPath).sort(), [bashPath(f.paths.backups), bashPath(f.paths.dailyBackups)].sort());
   assert.deepEqual(Object.keys(inventory.volumes).sort(), ['cmsPostgres', 'cmsUploads', 'portalPostgres', 'portalUploads']);
   if (process.platform !== 'win32') {
@@ -539,6 +558,28 @@ test('production overlay and receiver wiring preserve the legacy path and stay p
   assert.match(installer, /expected_installed_receiver=30be4941fe15c1c75e16175625685e2f51acc6ceaa52db146d61684cdacce0f7/);
   assert.match(installer, /root_owned_mode\(\) \{ \[\[ \$\(stat -c '%u:%g:%a' -- "\$1"\) == "0:0:\$2" \]\]; \}/);
   assert.match(installer, /value\.st_uid != 0 or mode != 0o755/);
+  assert.match(installer, /\(value\.st_uid, value\.st_gid\) != \(1000, 1000\) or mode != 0o600/);
+  assert.ok(installer.indexOf('cms_env_state=$(python3 "$source_private_helper" inspect') < installer.indexOf('backup_name='),
+    'private owner/ancestry validation must precede the first apply snapshot or install');
+});
+
+test('old inventories are refused before installation without rewriting owner policy or signed state', async t => {
+  const f = await fixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const inventoryPath = path.join(f.paths.runtime, 'payload-control-inventory.json');
+  const oldInventory = '{"schemaVersion":1}\n';
+  await writeFile(inventoryPath, oldInventory, { mode: 0o600 });
+  const receiverBefore = await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'));
+  const envBefore = await readFile(path.join(f.paths.secrets, 'production.runtime.conf'));
+  const result = f.run(['--apply']);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /protected Payload inventory differs/);
+  assert.equal(await readFile(inventoryPath, 'utf8'), oldInventory);
+  assert.deepEqual(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy')), receiverBefore);
+  assert.deepEqual(await readFile(path.join(f.paths.secrets, 'production.runtime.conf')), envBefore);
+  assert.equal((await readdir(f.paths.backups)).length, 0);
+  assert.equal(await readFile(f.dockerLog, 'utf8').catch(() => ''), '');
+  assert.equal(existsSync(path.join(f.paths.runtime, 'payload-control.key')), false);
 });
 
 test('root-owned install mode also requires the root group', async () => {

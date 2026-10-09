@@ -28,6 +28,9 @@ jobs:
       api_image: ${{ steps.publish.outputs.api_image }}
       cron_image: ${{ steps.publish.outputs.cron_image }}
       cms_image: ${{ steps.publish_cms.outputs.cms_image }}
+      candidate_artifact_id: ${{ steps.upload_candidate.outputs.artifact-id }}
+      qualified_artifact_id: ${{ steps.upload_qualified.outputs.artifact-id }}
+      recovery_report_artifact_id: ${{ steps.upload_recovery_report.outputs.artifact-id }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -60,6 +63,11 @@ jobs:
            cms/package-lock.json
       - run: npm run bootstrap
       - run: npm run verify
+      - name: Test preauthority CI setup with native Linux root
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        run: |
+          set -euo pipefail
+          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs
       - name: Test route delivery with production Nginx image
         run: |
           docker run --rm \
@@ -291,11 +299,13 @@ jobs:
             cms-image-digest.txt
             cms-image-source.txt
       - name: Upload unqualified candidate image manifest
+        id: upload_candidate
         if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: payload-release-candidate
           path: candidate.json
+          if-no-files-found: error
           retention-days: 30
       - name: Pull exact published candidate image digests for root-owned fixture
         if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
@@ -326,6 +336,7 @@ jobs:
             PAYLOAD_RECOVERY_REPORT="$RECOVERY_REPORT" \
             node scripts/test-payload-preauthority-recovery.mjs
       - name: Upload redacted preauthority recovery report
+        id: upload_recovery_report
         if: ${{ always() && inputs.publish_candidate_only == true && inputs.cms_image_only != true }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -342,54 +353,16 @@ jobs:
           RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
         run: |
           set -euo pipefail
-          node <<'NODE'
-          const fs = require('node:fs');
-          const crypto = require('node:crypto');
-          const candidate = JSON.parse(fs.readFileSync('candidate.json', 'utf8'));
-          const reportBytes = fs.readFileSync(process.env.RECOVERY_REPORT);
-          const report = JSON.parse(reportBytes.toString('utf8'));
-          const expectedImages = { api: process.env.API_IMAGE, cron: process.env.CRON_IMAGE, cms: process.env.CMS_IMAGE };
-          const expectedChecks = [
-            'disposableSourceAndTargets', 'fixtureCronBootstrapOnly', 'quiescentSnapshotStable',
-            'actualAdapterAndCoordinator', 'fourStoreBackupAndRestore',
-            'exactPortalDatabaseAndSequences', 'exactCmsDatabaseAndMigrations', 'exactPortalUploadsTree',
-            'exactCmsMediaAndStagingTree', 'authorityLegacyEpochOne', 'nativeProtocolAbsent',
-            'workerStopped', 'allNegativeCasesRejectedBeforeRestore', 'repeatedCaptureRestoreAfterLiveEdit',
-          ];
-          const expectedNegativeCases = [
-            'tampered_dump', 'tampered_proof', 'tampered_manifest', 'unsafe_archive',
-            'wrong_image_digest', 'migration_mismatch', 'unexpected_schema', 'weak_native_constraint',
-            'materialized_view', 'migration_ledger_mismatch', 'target_changed_after_restore_preflight',
-          ];
-          if (report.status !== 'passed' || report.run.commit !== process.env.GITHUB_SHA ||
-              report.run.runId !== process.env.GITHUB_RUN_ID || report.run.runAttempt !== process.env.GITHUB_RUN_ATTEMPT ||
-              candidate.commit !== process.env.GITHUB_SHA || candidate.runId !== process.env.GITHUB_RUN_ID ||
-              candidate.runAttempt !== process.env.GITHUB_RUN_ATTEMPT ||
-              JSON.stringify(report.images) !== JSON.stringify(expectedImages) ||
-              JSON.stringify(candidate.images) !== JSON.stringify(expectedImages) ||
-              !report.checks || JSON.stringify(Object.keys(report.checks).sort()) !== JSON.stringify(expectedChecks.sort()) ||
-              !Array.isArray(report.negativeCases) ||
-              JSON.stringify(report.negativeCases.map(item => item.name).sort()) !== JSON.stringify(expectedNegativeCases.sort()) ||
-              report.negativeCases.some(item => item.rejected !== true || item.targetContentUnchanged !== true ||
-                (['unexpected_schema', 'weak_native_constraint', 'materialized_view', 'migration_ledger_mismatch'].includes(item.name) && item.fixtureDdlCleaned !== true)) ||
-              Object.values(report.checks).some(value => value !== true)) {
-            throw new Error('recovery_report_does_not_qualify_candidate');
-          }
-          const qualified = {
-            schemaVersion: 1,
-            commit: candidate.commit,
-            runId: candidate.runId,
-            runAttempt: candidate.runAttempt,
-            images: candidate.images,
-            recoveryReportSha256: crypto.createHash('sha256').update(reportBytes).digest('hex'),
-          };
-          fs.writeFileSync('qualified-candidate.json', `${JSON.stringify(qualified, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-          NODE
+          node scripts/qualify-payload-candidate.mjs \
+            --candidate candidate.json --report "$RECOVERY_REPORT" \
+            --output qualified-candidate.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: upload_qualified
         if: success() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         with:
           name: payload-recovery-qualified-candidate
           path: qualified-candidate.json
+          if-no-files-found: error
           retention-days: 30
 
   deploy-production:

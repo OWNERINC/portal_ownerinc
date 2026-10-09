@@ -217,6 +217,9 @@ wait_for_healthy_cron() {
 if [[ $current == "$releases/$requested_commit" ]]; then
   if [[ $cms_current == true ]]; then
     [[ -x $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing Payload operations guard' >&2; exit 2; }
+    # Do not treat a partial pointer window as already-current success. This
+    # receiver is not yet integrated with the reviewed install/qualification gate.
+    "$PAYLOAD_OPERATIONS_GUARD" install-receiver-preflight "$current"
     "$PAYLOAD_OPERATIONS_GUARD" verify-release "$current"
   fi
   curl --fail --silent --show-error --max-time 10 \
@@ -354,6 +357,9 @@ printf 'API_IMAGE=%s\nCRON_IMAGE=%s\n' "$api_image" "$cron_image" > "$staging/.i
 if [[ $cms_release == true ]]; then printf 'CMS_IMAGE=%s\nRELEASE_FORMAT=payload-v1\n' "$cms_image" >> "$staging/.image-env"; fi
 if [[ $cms_release == true ]]; then
   [[ -x $PAYLOAD_OPERATIONS_GUARD && ! -L $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing reviewed Payload operations guard' >&2; exit 2; }
+  # Hard barrier BEFORE pull/replacement/backup/provision/service effects. No
+  # environment switch can enable an unqualified or half-integrated install.
+  "$PAYLOAD_OPERATIONS_GUARD" install-receiver-preflight "$staging" "$current"
   "$PAYLOAD_OPERATIONS_GUARD" release-preflight "$staging" "$current"
 fi
 unlink "$staging/.ci-images"

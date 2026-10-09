@@ -2,6 +2,7 @@ import {
   closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, realpathSync,
 } from 'node:fs';
 import path from 'node:path';
+import { logicalSnapshotErrorCodes } from './payload-logical-snapshot.mjs';
 
 const safeSubstepPattern = /^[a-z][a-z0-9_]{0,63}$/u;
 
@@ -24,12 +25,14 @@ const sqlStateIdentifiers = Object.freeze({
   '42P01': 'undefined_table',
   '42P07': 'duplicate_table',
   '42703': 'undefined_column',
+  '57014': 'query_canceled',
 });
 
 const processErrorIdentifiers = Object.freeze({
   EACCES: 'permission_denied',
   ENOENT: 'executable_not_found',
   ETIMEDOUT: 'command_timeout',
+  ENOBUFS: 'output_limit_exceeded',
 });
 
 const controlCommandContexts = new Set([
@@ -50,9 +53,9 @@ control_compose_configuration_mismatch control_compose_configuration_missing cur
 database_archive_validation_failed database_container_ambiguous database_fingerprint_failed
 database_fingerprint_unsupported_relation database_identity_mismatch database_inspection_failed
 database_metadata_invalid database_sessions_not_quiescent docker_endpoint_override_forbidden
-docker_inventory_unavailable docker_volume_inventory_unavailable duplicate_inventory_field duplicate_json_field
+docker_inventory_unavailable docker_volume_inventory_unavailable duplicate_inventory_field duplicate_json_field environment_unavailable
 host_control_requires_root invalid_admission_state invalid_cold_state invalid_data_fingerprints
-invalid_database_identity invalid_inventory_backup_paths invalid_inventory_file invalid_inventory_mounts
+invalid_database_identity invalid_environment_file_owner invalid_inventory_backup_paths invalid_inventory_file invalid_inventory_mounts
 invalid_inventory_operational_paths invalid_inventory_path invalid_inventory_paths invalid_inventory_project
 invalid_inventory_shape invalid_inventory_trust invalid_inventory_volume_name invalid_inventory_volumes
 invalid_json_constant invalid_json_value invalid_legacy_proof_migrations invalid_legacy_proof_source
@@ -88,7 +91,9 @@ state_parent_mismatch target_mount_inspection_failed target_service_mount_mismat
 target_volume_invalid target_volume_inventory_mismatch target_volume_unavailable trusted_source_identity_mismatch
 trusted_source_not_authorized unexpected_cold_cms_container unexpected_cold_cms_volume
 unexpected_cold_volume_inventory unexpected_preauthority_news_rows unknown_project_container
-unsafe_admission_sentinel unsafe_backup_artifact unsafe_backup_directory unsafe_inventory_destination
+unsafe_admission_sentinel unsafe_backup_artifact unsafe_backup_directory
+unsafe_environment_ancestry unsafe_environment_file unsafe_environment_owner unsafe_environment_permissions
+unsafe_inventory_ancestry unsafe_inventory_destination
 unsafe_inventory_file unsafe_inventory_permissions unsafe_private_key unsafe_private_state_directory
 unsafe_private_state_file unsafe_private_state_path unsafe_private_state_permissions unsafe_required_owner
 unsafe_required_path unsafe_required_permissions unsafe_storage_archive unsupported_authority_state
@@ -382,10 +387,13 @@ export function extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext
 }
 
 export function createCommandDiagnostic({
-  substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext, coordinatorCommandContext, release,
+  substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext, coordinatorCommandContext,
+  logicalSnapshotCommandContext, release,
 }) {
   const sqlState = extractSqlState(stderr, { sqlCommandContext });
   const nativeCatalogVerifier = extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext, release });
+  const logicalCode = logicalSnapshotCommandContext === 'logical-snapshot-cli'
+    ? String(stderr || '').match(/^(logical_snapshot_[a-z_]+)\r?\n?$/u)?.[1] : null;
   return sanitizeCommandDiagnostic({
     substep: safeSubstepPattern.test(substep || '') ? substep : 'unclassified_command',
     commandExitCode: Number.isInteger(status) ? status : null,
@@ -396,6 +404,7 @@ export function createCommandDiagnostic({
     errorIdentifier: sqlState ? sqlStateIdentifiers[sqlState] : null,
     controlErrorIdentifier: extractControlErrorIdentifier(stderr, { controlCommandContext, release }),
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
+    ...(logicalSnapshotErrorCodes.includes(logicalCode) ? { logicalSnapshotErrorIdentifier: logicalCode } : {}),
     ...extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, status, release }),
   });
 }
@@ -449,6 +458,8 @@ export function sanitizeCommandDiagnostic(diagnostic = {}) {
       ? diagnostic.controlErrorIdentifier : null,
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
     ...(coordinatorSteps.has(diagnostic.coordinatorStep) ? { coordinatorStep: diagnostic.coordinatorStep } : {}),
+    ...(logicalSnapshotErrorCodes.includes(diagnostic.logicalSnapshotErrorIdentifier)
+      ? { logicalSnapshotErrorIdentifier: diagnostic.logicalSnapshotErrorIdentifier } : {}),
   };
 }
 

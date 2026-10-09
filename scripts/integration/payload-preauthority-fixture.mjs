@@ -109,7 +109,8 @@ export function createInventory({ project, root, trustedSourceInventoryIdentitie
     mounts: definition.mounts.map(mount => ({ ...mount })),
   }]));
   const document = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    environmentFileOwner: { uid: 0, gid: 0 },
     project,
     paths: {
       root,

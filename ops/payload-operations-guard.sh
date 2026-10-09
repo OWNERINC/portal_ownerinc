@@ -15,7 +15,7 @@ closed="$PORTAL_OPERATION_LOCK.admission-closed"
    -f $runtime/payload-control-state.py && ! -L $runtime/payload-control-state.py ]] || { echo 'Durable Payload control adapter not integrated' >&2; exit 2; }
 # No environment/credential files are sourced; control receives only paths/action.
 case $action in
-  release-preflight|restore-preflight|rollback-check|prepare-restore|portal-restore-intermediate|verify-restored|verify-release|backup-metadata)
+  release-preflight|restore-preflight|rollback-check|prepare-restore|portal-restore-intermediate|verify-restored|verify-release|backup-metadata|install-retry-check|install-receiver-preflight|initialize-isolated|install-floor-commit)
     "$control" "$action" "$release" "$evidence" ;;
   close-admission)
     if [[ -e $closed || -L $closed ]]; then

@@ -165,11 +165,17 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   assert.match(recovery, /sudo env[\s\S]*API_IMAGE="\$API_IMAGE"[\s\S]*node scripts\/test-payload-preauthority-recovery\.mjs/);
   assert.match(recoveryReport, /always\(\)[\s\S]*payload-preauthority-recovery-report[\s\S]*retention-days: 30/);
   assert.equal(condition(qualifiedManifest, 8), `success() && ${candidateExpression}`);
-  assert.match(qualifiedManifest, /report\.status !== 'passed'[\s\S]*report\.run\.commit !== process\.env\.GITHUB_SHA[\s\S]*recoveryReportSha256/);
-  assert.match(qualifiedManifest, /expectedNegativeCases[\s\S]*targetContentUnchanged[\s\S]*fixtureDdlCleaned/);
+  assert.match(qualifiedManifest, /node scripts\/qualify-payload-candidate\.mjs[\s\S]*--candidate candidate\.json --report "\$RECOVERY_REPORT"[\s\S]*--output qualified-candidate\.json/);
+  assert.doesNotMatch(qualifiedManifest, /node <<|JSON\.parse|const expectedChecks/u,
+    'the workflow must invoke the executable, adversarially tested qualifier rather than duplicating it inline');
   const qualifiedUpload = containingStep(workflow, 'name: payload-recovery-qualified-candidate');
   assert.equal(condition(qualifiedUpload, 8), `success() && ${candidateExpression}`);
   assert.match(qualifiedUpload, /path: qualified-candidate\.json/);
+  assert.match(qualifiedUpload, /if-no-files-found: error/);
+  assert.match(candidateUpload, /if-no-files-found: error/);
+  assert.match(workflow, /candidate_artifact_id: \$\{\{ steps\.upload_candidate\.outputs\.artifact-id \}\}/);
+  assert.match(workflow, /qualified_artifact_id: \$\{\{ steps\.upload_qualified\.outputs\.artifact-id \}\}/);
+  assert.match(workflow, /recovery_report_artifact_id: \$\{\{ steps\.upload_recovery_report\.outputs\.artifact-id \}\}/);
 
   const policy = ({ event, ref, cmsImageOnly = false, publishCandidateOnly = false }) => {
     const conflict = event === 'workflow_dispatch' && cmsImageOnly === true && publishCandidateOnly === true;
@@ -204,6 +210,36 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   for (const [context, expected] of scenarios) {
     assert.deepEqual(policy(context), expected, `${context.event} ${context.ref} cms_image_only=${context.cmsImageOnly}`);
   }
+});
+
+test('candidate CI runs the complete native Linux root setup suite as a mandatory gate before image effects', async () => {
+  const [workflow, setupTests, packager] = await Promise.all([
+    read('.github/workflows/ci.yml'), read('tests/unit/payload-preauthority-ci-setup.test.mjs'),
+    read('scripts/package-payload-candidate.mjs'),
+  ]);
+  const name = 'Test preauthority CI setup with native Linux root';
+  const setup = namedStep(workflow, name);
+  assert.equal(condition(setup, 8),
+    "github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true");
+  assert.match(workflow, /runs-on: ubuntu-latest/u);
+  assert.ok(workflow.indexOf('node-version: 24') < workflow.indexOf(`      - name: ${name}`));
+  assert.equal(setup.split('        run: |\n')[1]?.trim(),
+    'set -euo pipefail\n          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs',
+    'preserve checkout cwd and setup-node PATH; execute only this suite without filtering or suppressing its exit');
+  assert.doesNotMatch(setup, /continue-on-error|always\(|failure\(|\|\||\beval\b|secrets\.|\bcd\b|--test-name-pattern/u);
+  assert.equal(workflow.split(`      - name: ${name}\n`).length - 1, 1);
+  for (const later of ['Build CMS with synthetic build-only configuration', 'Build production images', 'Publish immutable images', 'Publish CMS immutable image',
+    'Run disposable four-store preauthority recovery on published digests', 'Create recovery-qualified candidate manifest']) {
+    assert.ok(workflow.indexOf(`      - name: ${name}`) < workflow.indexOf(`      - name: ${later}`), `${name} must precede ${later}`);
+  }
+  assert.match(setupTests, /const nativeRoot = process\.platform === 'linux' && process\.getuid\?\.\(\) === 0 && process\.getgid\?\.\(\) === 0;/u);
+  assert.equal((setupTests.match(/if \(!nativeRoot\) return t\.skip\(/gu) || []).length, 3,
+    'the sudo Linux invocation makes all three native branches execute and exposes a zero-skipped suite summary');
+  assert.equal((setupTests.match(/t\.skip\(/gu) || []).length, 3,
+    'this dedicated suite must not have another skip path hidden from the Linux/root condition');
+  // A+B requires successful named gates, not an exact count of workflow steps.
+  // This additional mandatory step must not replace or weaken any existing gate.
+  assert.match(packager, /for \(const name of requiredSteps\)[\s\S]*job\.steps\.filter\(step => step\.name === name\)[\s\S]*steps\[0\]\.conclusion !== 'success'/u);
 });
 
 test('CMS image pins Node and rebuilds the matching upstream esbuild source with a patched Go toolchain', async () => {

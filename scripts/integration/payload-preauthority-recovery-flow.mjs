@@ -3,6 +3,7 @@ import {
   createReadinessDiagnostic,
   sanitizeCommandDiagnostic,
 } from './payload-preauthority-diagnostics.mjs';
+import { sanitizeSnapshotMismatch } from './payload-preauthority-snapshot.mjs';
 
 const safeLabel = /^[a-z][a-z0-9_]{0,95}$/u;
 
@@ -28,9 +29,11 @@ function failureSummary(error, fallbackSubstep) {
     ? error.code : 'acceptance_assertion_failed';
   const candidateSubstep = commandDiagnostic?.substep === 'unclassified_command'
     ? knownFallbackSubstep : commandDiagnostic?.substep || knownFallbackSubstep;
+  const snapshotMismatch = sanitizeSnapshotMismatch(error?.snapshotMismatch);
 
   return {
     failureCode: rawCode,
+    ...(snapshotMismatch ? { snapshotMismatch } : {}),
     ...(typeof candidateSubstep === 'string' && safeLabel.test(candidateSubstep)
       ? { failedSubstep: candidateSubstep } : {}),
     ...(normalizedCommandDiagnostic ? { commandDiagnostic: normalizedCommandDiagnostic } : {}),

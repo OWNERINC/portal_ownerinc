@@ -143,6 +143,52 @@ test('control errors require a known adapter context, one exact line and an emit
   }
 });
 
+test('ownership diagnostics are source-grounded finite codes with exact context and no private detail', () => {
+  const identifiers = [
+    'invalid_environment_file_owner', 'environment_unavailable',
+    'unsafe_environment_file', 'unsafe_environment_permissions', 'unsafe_environment_owner',
+    'unsafe_environment_ancestry', 'unsafe_inventory_ancestry',
+  ];
+  const directReasons = new Set([...controlInventory.matchAll(/fail\('([a-z][a-z0-9_]+)'\)/gu)]
+    .map(match => match[1]));
+  const ancestryReasons = new Set([...controlInventory.matchAll(
+    /_verify_ancestry\([^\r\n]+, '([a-z][a-z0-9_]+)'\)/gu,
+  )].map(match => match[1]));
+  assert.match(controlInventory, /def _verify_ancestry\(path, trusted_uids, reason\):[\s\S]*?fail\(reason\)/u);
+  assert.match(controlRuntime, /INVENTORY\.verify_environment_file\(/u);
+  assert.match(controlRuntime, /except INVENTORY\.InventoryError as error:\s+fail\(str\(error\)\)/u);
+  for (const identifier of identifiers) {
+    assert.ok(directReasons.has(identifier) || ancestryReasons.has(identifier),
+      `${identifier} must be an actual fixed reason emitted by the inventory helper`);
+    for (const context of ['payload-control:release-preflight', 'payload-control:verify-release', 'payload-operations-guard']) {
+      const options = { controlCommandContext: context };
+      assert.equal(extractControlErrorIdentifier(`${identifier}\n`, options), identifier);
+      assert.equal(createCommandDiagnostic({
+        substep: 'ownership_preflight', status: 2, stderr: Buffer.from(`${identifier}\r\n`), ...options,
+      }).controlErrorIdentifier, identifier);
+      for (const stderr of [
+        identifier,
+        `${identifier} private-owner-detail\n`,
+        `${identifier}\nprivate-owner-detail\n`,
+        `private-owner-detail\n${identifier}\n`,
+        'unsafe_environment_attacker_value\n',
+      ]) {
+        const diagnostic = createCommandDiagnostic({ substep: 'ownership_preflight', status: 2, stderr, ...options });
+        assert.equal(diagnostic.controlErrorIdentifier, null);
+        assert.doesNotMatch(JSON.stringify(diagnostic), /private-owner-detail|attacker_value/u);
+      }
+    }
+    for (const context of [undefined, 'docker-compose', 'payload-control:backup-metadata', 'logical-snapshot-cli']) {
+      assert.equal(extractControlErrorIdentifier(`${identifier}\n`, { controlCommandContext: context }), null,
+        'a known ownership reason cannot authorize an unknown command context');
+    }
+    assert.equal(sanitizeCommandDiagnostic({ controlErrorIdentifier: identifier }).controlErrorIdentifier, identifier);
+  }
+  assert.equal(sanitizeCommandDiagnostic({
+    controlErrorIdentifier: 'unsafe_environment_attacker_value',
+  }).controlErrorIdentifier, null, 'sanitization must not accept a reason just because it matches the identifier pattern');
+});
+
 test('native catalog verifier metadata distinguishes rejection, launch failure, and opaque process failure', async t => {
   const context = { controlCommandContext: 'payload-control:verify-release' };
   const tempRoot = process.platform === 'win32' && process.env.LOCALAPPDATA

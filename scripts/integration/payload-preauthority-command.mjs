@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createCommandDiagnostic } from './payload-preauthority-diagnostics.mjs';
+import { parseFixtureFailureHold, POST_RESTORE_HOLD_CONTEXT } from './payload-preauthority-snapshot-hold.mjs';
 
 const leaseScript = 'set -Eeuo pipefail; lock=$1; shift; exec 9<>"$lock"; flock -n 9; export PORTAL_OPERATION_LOCK="$lock" PORTAL_OPERATION_LOCK_HELD="$lock"; exec "$@"';
 const controlSubsteps = Object.freeze({
@@ -71,7 +72,7 @@ export function createFixtureCommandFailure(result, options = {}) {
         ? Buffer.from(raw.subarray(-16 * 1024)) : Buffer.from(raw.subarray(0, 16 * 1024)),
     });
   }
-  return new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
+  const failure = new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
     substep: candidateSubstep,
     status: result.status,
     errorCode: result.error?.code,
@@ -79,8 +80,14 @@ export function createFixtureCommandFailure(result, options = {}) {
     sqlCommandContext: options.sqlCommandContext === true,
     controlCommandContext: options.controlCommandContext,
     coordinatorCommandContext: options.coordinatorCommandContext,
+    logicalSnapshotCommandContext: options.logicalSnapshotCommandContext,
     release: options.release,
   }));
+  if (options.fixtureFailureHoldContext === POST_RESTORE_HOLD_CONTEXT) {
+    const outcome = parseFixtureFailureHold(result.stdout, { status: result.status, errorCode: result.error?.code });
+    if (outcome) failure.fixtureFailureHold = outcome;
+  }
+  return failure;
 }
 
 export function runFixtureCommand(command, args = [], options = {}) {
@@ -95,6 +102,10 @@ export function runFixtureCommand(command, args = [], options = {}) {
   });
   if (result.error || result.status !== 0) {
     throw createFixtureCommandFailure(result, options);
+  }
+  if (options.fixtureFailureHoldContext === POST_RESTORE_HOLD_CONTEXT
+      && !parseFixtureFailureHold(result.stdout, { status: result.status })) {
+    throw createFixtureCommandFailure(result, { ...options, failureCode: 'post_restore_fixture_hold_protocol_invalid' });
   }
   return result.stdout || Buffer.alloc(0);
 }

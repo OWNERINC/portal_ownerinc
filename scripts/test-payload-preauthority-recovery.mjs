@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
+import { createPrivateRecoveryRoot, initializePreauthority, legacySourceMaterial,
+  validateRecoveryPrivateAncestry, verifyInitializerCheckout } from './integration/payload-preauthority-initialize.mjs';
 import { runCatalogNegative } from './integration/payload-preauthority-negative.mjs';
+import {
+  assertRecoveryCondition, assertRecoverySnapshots, createPrivateSnapshotEvidence,
+  holdFailedRecoveryFixtures, postRestoreFixtureHoldScript,
+} from './integration/payload-preauthority-snapshot.mjs';
+import { logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './integration/payload-logical-snapshot.mjs';
+import { POST_RESTORE_HOLD_CONTEXT, POST_RESTORE_HOLD_TIMEOUT_MS,
+  parseFixtureFailureHold } from './integration/payload-preauthority-snapshot-hold.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, chown, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, chown, chmod, cp, lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:net';
 import {
   candidateImagesValid, createFixtureProjectNames, createInventory,
@@ -60,6 +69,11 @@ let inventoryIdentities = null;
 let projectNames = null;
 let runtimeRefs = [];
 const privateCommandEvidence = [];
+const privateSnapshotEvidence = createPrivateSnapshotEvidence();
+const restoreAcceptanceProgress = {
+  first: { coordinatorReturnedSuccessfully: false, fullSnapshotComparisonPassed: false },
+  second: { coordinatorReturnedSuccessfully: false, fullSnapshotComparisonPassed: false },
+};
 let failureReportFields = null;
 const recoveryProgress = {
   source: { initialCmsHealthPassed: false, writersRestartedHealthy: false, quiescentSnapshotComparison: 'not_started' },
@@ -307,13 +321,16 @@ function envFileContents({ project, port, credentials }) {
 }
 
 async function createRuntime(project, root, sourceInventoryIdentity = null, sourceRuntime = null) {
+  await validateRecoveryPrivateAncestry(path.dirname(root), true);
+  await mkdir(root, { mode: 0o700 });
+  await validateRecoveryPrivateAncestry(root, true);
   const runtimeDirectory = path.join(root, 'runtime');
   const releases = path.join(root, 'releases');
   await Promise.all([
-    mkdir(runtimeDirectory, { recursive: true, mode: 0o700 }),
-    mkdir(releases, { recursive: true, mode: 0o700 }),
-    mkdir(path.join(root, 'backups'), { recursive: true, mode: 0o700 }),
-    mkdir(path.join(root, 'restore-protection'), { recursive: true, mode: 0o700 }),
+    mkdir(runtimeDirectory, { mode: 0o700 }),
+    mkdir(releases, { mode: 0o700 }),
+    mkdir(path.join(root, 'backups'), { mode: 0o700 }),
+    mkdir(path.join(root, 'restore-protection'), { mode: 0o700 }),
   ]);
   const { document, identity } = createInventory({
     project, root,
@@ -337,11 +354,12 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
   await writeRootFile(document.paths.lock, 'disposable shared operation lease\n');
   await assertFixtureRootUid(document.paths.lock);
 
-  const legacyRelease = path.join(releases, 'legacy-floor');
-  const payloadRelease = path.join(releases, 'payload-candidate');
+  const sourceMaterial = legacySourceMaterial(images);
+  const legacyRelease = path.join(releases, sourceMaterial.releaseId);
+  const payloadRelease = path.join(releases, runIdentity.commit);
   await copyReleaseSources(legacyRelease);
   await copyReleaseSources(payloadRelease);
-  await writeRootFile(path.join(legacyRelease, '.image-env'), `API_IMAGE=${images.api}\nCRON_IMAGE=${images.cron}\n`);
+  await writeRootFile(path.join(legacyRelease, '.image-env'), sourceMaterial.manifest);
   await writeRootFile(path.join(payloadRelease, '.image-env'),
     `API_IMAGE=${images.api}\nCRON_IMAGE=${images.cron}\nCMS_IMAGE=${images.cms}\nRELEASE_FORMAT=payload-v1\n`);
   for (const protectedCmsInput of [
@@ -607,25 +625,22 @@ async function provisionProject(runtime) {
   // sees Portal authority legacy/1 with no session-v2 table grants.
   composeWithLease(runtime, ['exec', '-T', 'postgres', 'sh', '-ceu',
     'psql -Xq -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER" -c "REVOKE ALL PRIVILEGES ON TABLE public.cms_editor_sessions FROM portal_api, portal_cron"']);
-  guard(runtime, runtime.project, 'release-preflight', runtime.payloadRelease);
-  composeWithLease(runtime, ['exec', '-T', 'postgres', 'sh', '-ceu',
-    'psql -Xq -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER" -c "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.cms_editor_sessions TO portal_api; REVOKE TRUNCATE, REFERENCES, TRIGGER ON TABLE public.cms_editor_sessions FROM portal_api, portal_cron"']);
-
-  composeWithLease(runtime, ['up', '--detach', '--no-build', '--pull', 'never', 'cms-postgres']);
-  await awaitService(runtime, 'cms-postgres');
-  composeWithLease(runtime, ['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-provision']);
-  composeWithLease(runtime, ['--profile', 'cms-control-roles', 'run', '--rm', '--no-deps', '--pull', 'never', '-T',
-    'cms-control-roles', 'node', '--import', 'tsx', 'scripts/provision-db.ts', '--bootstrap-control']);
-  composeWithLease(runtime, ['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-migrate']);
-  composeWithLease(runtime, ['up', '--detach', '--no-build', '--pull', 'never', 'cms']);
+  // The actual ops initializer captures/signs B0, advances the shared journal,
+  // binds physical creator receipts and commits the floor under one fd9 lease.
+  // It returns closed/held. Readiness and fixture data happen only afterwards.
+  setSubstep('payload_initialize_isolated');
+  await initializePreauthority({ runtime, runIdentity, images, run, withLease });
+  composeWithLease(runtime, ['up', '--detach', '--no-deps', '--no-recreate', '--no-build', '--pull', 'never', 'api', 'cron', 'cms']);
+  await awaitService(runtime, 'api');
+  await awaitService(runtime, 'cron');
   await awaitService(runtime, 'cms');
   recoveryProgress[runtime.role].initialCmsHealthPassed = true;
+  guard(runtime, runtime.project, 'verify-release', runtime.payloadRelease);
+  withLease(runtime, runtime.project, path.join(runtime.directory, 'payload-operations-guard'),
+    ['open-admission', runtime.payloadRelease, '']);
   await seedProject(runtime);
   setStage(`verify_release_${runtime.role}`);
   guard(runtime, runtime.project, 'verify-release', runtime.payloadRelease);
-  setSubstep('persist_current_release_marker');
-  await writeFile(runtime.inventory.document.paths.currentRelease, `${runtime.payloadRelease}\n`, { mode: 0o600 });
-  await chmod(runtime.inventory.document.paths.currentRelease, 0o600);
   setSubstep(null);
 }
 
@@ -684,9 +699,31 @@ function databaseSchemaDump(runtime, service, database, user) {
   return normalizePgDumpForSnapshot(dump);
 }
 
-function storageFingerprint(runtime, service, location) {
+function logicalDatabaseSnapshot(runtime, service, database, user) {
+  const capture = composeCall(runtime, ['exec', '-T', service, 'psql', '-XAtq', '-v', 'ON_ERROR_STOP=1',
+    '-v', 'VERBOSITY=sqlstate',
+    `--dbname=${database}`, `--username=${user}`], {
+    input: logicalSnapshotScript, maxBuffer: LOGICAL_SNAPSHOT_MAX_BYTES,
+    failureCode: 'logical_snapshot_capture_failed', preservePrivateErrorEvidence: true, sqlCommandContext: true,
+  });
+  const result = run(process.execPath, ['--import',
+    pathToFileURL(path.join(repository, 'cms', 'node_modules', 'tsx', 'dist', 'loader.mjs')).href,
+    path.join(repository, 'scripts', 'integration', 'payload-logical-snapshot-cli.mjs')], {
+    input: capture, maxBuffer: 64 * 1024, failureCode: 'logical_snapshot_fingerprint_failed',
+    preservePrivateErrorEvidence: true, logicalSnapshotCommandContext: 'logical-snapshot-cli',
+  });
+  const value = JSON.parse(text(result));
+  if (!value || Object.keys(value).sort().join(',') !== 'data,schema'
+      || !/^[0-9a-f]{64}$/u.test(value.data) || !/^[0-9a-f]{64}$/u.test(value.schema)) {
+    throw new FixtureFailure('logical_snapshot_invalid_result');
+  }
+  return value;
+}
+
+function storageFingerprint(runtime, service, location, capture = () => {}) {
   const archive = composeCall(runtime, ['run', '--rm', '--no-deps', '--pull', 'never', '-T', '--entrypoint', 'tar',
     service, '-cf', '-', '-C', location, '.']);
+  capture(archive);
   const script = String.raw`
 import importlib.util, sys
 path = sys.argv[1]
@@ -697,19 +734,28 @@ print(module._tar_tree(sys.stdin.buffer, compressed=False))
   return text(run(python, ['-c', script, path.join(runtime.directory, 'payload-control-runtime.py')], { input: archive }));
 }
 
-function snapshot(runtime) {
-  setSubstep('snapshot_portal_database_rows');
-  const portalDatabase = createHash('sha256').update(databaseDump(runtime, 'postgres', 'portal', 'portal_admin')).digest('hex');
-  setSubstep('snapshot_cms_database_rows');
-  const cmsDatabase = createHash('sha256').update(databaseDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin')).digest('hex');
-  setSubstep('snapshot_portal_database_schema');
-  const portalSchema = createHash('sha256').update(databaseSchemaDump(runtime, 'postgres', 'portal', 'portal_admin')).digest('hex');
-  setSubstep('snapshot_cms_database_schema');
-  const cmsSchema = createHash('sha256').update(databaseSchemaDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin')).digest('hex');
+function snapshot(runtime, evidenceLabel = null) {
+  const capture = (component, bytes) => {
+    if (evidenceLabel) privateSnapshotEvidence.capture(evidenceLabel, component, bytes);
+    return bytes;
+  };
+  setSubstep('snapshot_portal_logical_database');
+  const portal = logicalDatabaseSnapshot(runtime, 'postgres', 'portal', 'portal_admin');
+  setSubstep('snapshot_cms_logical_database');
+  const cms = logicalDatabaseSnapshot(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin');
+  const portalDatabase = portal.data; const portalSchema = portal.schema;
+  const cmsDatabase = cms.data; const cmsSchema = cms.schema;
+  if (evidenceLabel) {
+    setSubstep('snapshot_private_dump_evidence');
+    capture('portalDatabase', databaseDump(runtime, 'postgres', 'portal', 'portal_admin'));
+    capture('cmsDatabase', databaseDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin'));
+    capture('portalSchema', databaseSchemaDump(runtime, 'postgres', 'portal', 'portal_admin'));
+    capture('cmsSchema', databaseSchemaDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin'));
+  }
   setSubstep('snapshot_portal_uploads');
-  const portalUploads = storageFingerprint(runtime, 'api', '/app/uploads');
+  const portalUploads = storageFingerprint(runtime, 'api', '/app/uploads', bytes => capture('portalUploads', bytes));
   setSubstep('snapshot_cms_media');
-  const cmsUploads = storageFingerprint(runtime, 'cms', '/var/lib/ownerinc-cms/media');
+  const cmsUploads = storageFingerprint(runtime, 'cms', '/var/lib/ownerinc-cms/media', bytes => capture('cmsUploads', bytes));
   return {
     portalDatabase,
     cmsDatabase,
@@ -748,6 +794,23 @@ async function assertQuiescentSnapshotStable(runtime) {
         setSubstep('snapshot_compare_quiescent');
         assert.deepEqual(second, first,
           'repeated quiescent snapshots must preserve every database row, sequence, catalog and file tree');
+        if (runtime.role === 'source') {
+          // Mandatory Linux prerequisite, not a twelfth restore-negative case.
+          // The child owns one inherited lease for DDL + actual capture + cleanup
+          // + full-store comparison while this callback keeps writers stopped.
+          setSubstep('linux_conversion_prerequisite');
+          const conversion = withLease(runtime, runtime.project, process.execPath, [
+            path.join(repository, 'scripts', 'integration', 'payload-logical-snapshot-conversion-probe.mjs'),
+          ], {
+            input: JSON.stringify({ project: runtime.project, runtimeDirectory: runtime.directory,
+              python, composeArgs: composeArgs(runtime.project, runtime.payloadRelease, runtime, []) }),
+            substep: 'linux_conversion_prerequisite', failureCode: 'linux_conversion_prerequisite_failed',
+            timeout: 15 * 60_000, maxBuffer: 64 * 1024, preservePrivateErrorEvidence: true,
+          });
+          if (conversion.toString('utf8') !== 'PAYLOAD_LINUX_CONVERSION_PREREQUISITE passed\n') {
+            throw new FixtureFailure('linux_conversion_prerequisite_protocol_invalid', { substep: 'linux_conversion_prerequisite' });
+          }
+        }
         recoveryProgress[runtime.role].quiescentSnapshotComparison = 'passed';
       } catch (error) {
         recoveryProgress[runtime.role].quiescentSnapshotComparison = 'failed';
@@ -1055,9 +1118,8 @@ async function runRecovery() {
   });
   assert.equal(candidateImagesValid(inputImages), true, 'only exact immutable GHCR candidate digests are accepted');
   images = inputImages;
-  const runTemp = process.env.RUNNER_TEMP || os.tmpdir();
-  fixtureRoot = await mkdtemp(path.join(runTemp, 'payload-preauthority-recovery-'));
-  await chmod(fixtureRoot, 0o700);
+  await verifyInitializerCheckout({ runIdentity, run });
+  fixtureRoot = await createPrivateRecoveryRoot(runIdentity);
   projectNames = createFixtureProjectNames(runIdentity);
   const leaseProject = projectNames.source.replace(/-source$/u, '-lease');
   projectNames.lease = leaseProject;
@@ -1119,18 +1181,30 @@ async function runRecovery() {
   safeChecks.allNegativeCasesRejectedBeforeRestore = true;
 
   setStage('first_actual_restore');
-  const targetBefore = snapshot(target);
+  const targetBefore = snapshot(target, 'first_target_before');
   coordinator(target, target.project, 'restore', target.payloadRelease, targetBackup);
-  assert.equal(databaseAuthority(target), 'legacy/1');
+  restoreAcceptanceProgress.first.coordinatorReturnedSuccessfully = true;
+  setSubstep('verify_restored_authority');
+  assertRecoveryCondition('restored_authority_mismatch', databaseAuthority(target) === 'legacy/1');
+  setSubstep('verify_source_announcement');
   const sourceAnnouncement = legacyAnnouncement(source, source.legacyAnnouncementId);
-  assert.match(sourceAnnouncement, /synthetic legacy recovery fixture/u);
-  assert.equal(legacyAnnouncement(target, source.legacyAnnouncementId), sourceAnnouncement,
-    'restore must preserve the source legacy announcement by its exact source document identity');
-  assert.equal(legacyAnnouncement(target, target.legacyAnnouncementId), '',
-    'restore must replace, not accidentally match, the independently seeded target announcement');
-  assertWorkerHeld(target);
-  assert.deepEqual(snapshot(target), snapshot(source), 'all four restored stores must exactly match the independent source');
-  assert.notDeepEqual(targetBefore, snapshot(target), 'independently seeded target contents must have changed only through restore');
+  assertRecoveryCondition('source_announcement_invalid', /synthetic legacy recovery fixture/u.test(sourceAnnouncement));
+  setSubstep('verify_restored_source_document');
+  assertRecoveryCondition('restored_source_document_mismatch', legacyAnnouncement(target, source.legacyAnnouncementId) === sourceAnnouncement);
+  setSubstep('verify_restored_target_document_absent');
+  assertRecoveryCondition('restored_target_document_present', legacyAnnouncement(target, target.legacyAnnouncementId) === '');
+  setSubstep('verify_restored_worker_hold');
+  try { assertWorkerHeld(target); } catch (error) {
+    if (error instanceof FixtureFailure) throw error;
+    assertRecoveryCondition('restored_worker_hold_failed', false);
+  }
+  const targetAfter = snapshot(target, 'first_target_after');
+  const sourceAfter = snapshot(source, 'first_source_after');
+  setSubstep('compare_restored_stores');
+  assertRecoverySnapshots(sourceAfter, targetAfter);
+  restoreAcceptanceProgress.first.fullSnapshotComparisonPassed = true;
+  setSubstep('compare_target_before_after');
+  assertRecoverySnapshots(targetBefore, targetAfter, { changed: true });
   safeChecks.fourStoreBackupAndRestore = true;
   safeChecks.exactPortalDatabaseAndSequences = true;
   safeChecks.exactCmsDatabaseAndMigrations = true;
@@ -1154,12 +1228,24 @@ async function runRecovery() {
     await cp(path.join(secondSourceBackup, file), path.join(secondName, file));
     await chmod(path.join(secondName, file), 0o600);
   }
-  const secondTargetBefore = snapshot(target);
+  setStage('second_actual_restore');
+  const secondTargetBefore = snapshot(target, 'second_target_before');
   coordinator(target, target.project, 'restore', target.payloadRelease, secondName);
-  assert.equal(databaseAuthority(target), 'legacy/1');
-  assertWorkerHeld(target);
-  assert.deepEqual(snapshot(target), snapshot(source), 'second recovery must include the post-backup synthetic live edit');
-  assert.notDeepEqual(secondTargetBefore, snapshot(target), 'second restore should apply the source live edit');
+  restoreAcceptanceProgress.second.coordinatorReturnedSuccessfully = true;
+  setSubstep('verify_restored_authority');
+  assertRecoveryCondition('restored_authority_mismatch', databaseAuthority(target) === 'legacy/1');
+  setSubstep('verify_restored_worker_hold');
+  try { assertWorkerHeld(target); } catch (error) {
+    if (error instanceof FixtureFailure) throw error;
+    assertRecoveryCondition('restored_worker_hold_failed', false);
+  }
+  const secondTargetAfter = snapshot(target, 'second_target_after');
+  const secondSourceAfter = snapshot(source, 'second_source_after');
+  setSubstep('compare_restored_stores');
+  assertRecoverySnapshots(secondSourceAfter, secondTargetAfter);
+  restoreAcceptanceProgress.second.fullSnapshotComparisonPassed = true;
+  setSubstep('compare_target_before_after');
+  assertRecoverySnapshots(secondTargetBefore, secondTargetAfter, { changed: true });
   safeChecks.repeatedCaptureRestoreAfterLiveEdit = true;
   safeChecks.allNegativeCasesRejectedBeforeRestore = negativeCases.length >= 10 &&
     negativeCases.every(item => item.rejected && item.targetContentUnchanged);
@@ -1189,6 +1275,7 @@ async function runRecovery() {
     negativeCases,
     checks: safeChecks,
     recoveryProgress: createRecoveryProgressReport(recoveryProgress),
+    restoreAcceptanceProgress,
     evidence: { kind: 'redacted-metadata-only', privateFixtureRetainedForRunnerLifetime: false },
   };
 }
@@ -1210,9 +1297,25 @@ try {
   await rm(fixtureRoot, { recursive: true, force: true });
 } catch (error) {
   preserveFixture = Boolean(fixtureRoot);
+  // Coordinator restore normally reopens before returning. A later fixture
+  // acceptance error must not leave disposable writers/admission active. This
+  // does not claim a production pre-open gate and never masks the primary error.
+  const fixtureFailureHold = restoreAcceptanceProgress.first.coordinatorReturnedSuccessfully
+    ? await holdFailedRecoveryFixtures(runtimeRefs, runtime => {
+      const output = withLease(runtime, runtime.project, 'bash', ['-c', postRestoreFixtureHoldScript,
+        'payload-fixture-failure-hold', path.join(runtime.directory, 'payload-operations-guard'), runtime.payloadRelease,
+        '/usr/bin/env', '-i', `PATH=${hostPath}`, 'HOME=/root', 'docker', 'compose',
+        ...composeArgs(runtime.project, runtime.payloadRelease, runtime, [])], {
+        substep: 'post_restore_fixture_failure_hold', failureCode: 'post_restore_fixture_hold_failed',
+        timeout: POST_RESTORE_HOLD_TIMEOUT_MS, preservePrivateErrorEvidence: true,
+        fixtureFailureHoldContext: POST_RESTORE_HOLD_CONTEXT,
+      });
+      return parseFixtureFailureHold(output, { status: 0 });
+    }) : [];
   const privateRunnerErrorEvidenceRetained = await persistPrivateCommandEvidence(
     fixtureRoot, privateCommandEvidence,
   ).catch(() => false);
+  const privateSnapshotEvidenceRetained = await privateSnapshotEvidence.persist(fixtureRoot).catch(() => false);
   const commandSubstep = error instanceof FixtureFailure ? error.diagnostic?.substep : null;
   const primarySubstep = commandSubstep && commandSubstep !== 'unclassified_command'
     ? commandSubstep : activeSubstep;
@@ -1226,11 +1329,14 @@ try {
     ...failureFields,
     checks: safeChecks,
     recoveryProgress: createRecoveryProgressReport(recoveryProgress),
+    restoreAcceptanceProgress,
+    fixtureFailureHold,
     negativeCases,
     evidence: {
       kind: 'redacted-metadata-only',
       privateFixtureRetainedForRunnerLifetime: preserveFixture,
       privateRunnerErrorEvidenceRetained,
+      privateSnapshotEvidenceRetained,
     },
   };
 }

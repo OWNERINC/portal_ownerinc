@@ -13,6 +13,81 @@ export class IntegrationGuardError extends Error {
   }
 }
 
+// The integrated fixture has no caller-selected database URL, volume or authority.
+// It is a separate opt-in contract; the older host-side preflight remains intact.
+export const functionalFallbacks = Object.freeze([
+  'DATABASE_URL', 'MIGRATION_DATABASE_URL', 'API_DATABASE_URL', 'CRON_DATABASE_URL',
+  'CMS_DATABASE_URL', 'CMS_ADMIN_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
+  'CMS_MIGRATION_DATABASE_URL', 'CMS_OBSERVER_DATABASE_URL', 'OWNER_NEWS_CONTROL_DATABASE_URL',
+  'FIREBASE_PROJECT_ID', 'FIREBASE_AUTH_EMULATOR_HOST', 'GOOGLE_APPLICATION_CREDENTIALS',
+  'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY', 'PORTAL_PUBLIC_URL', 'PORTAL_INTERNAL_URL',
+  'CMS_INTERNAL_URL', 'CMS_UPLOAD_DIR', 'UPLOAD_DIR', 'PAYLOAD_SECRET',
+  'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET', 'COMPOSE_FILE', 'COMPOSE_PROJECT_NAME',
+  'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
+  'NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'BASH_ENV', 'PYTHONPATH',
+]);
+
+export function assertFunctionalEnvironment(env) {
+  if (env.MIGRATION_TEST_DISPOSABLE !== 'true') reject('disposable_required');
+  if (env.NODE_ENV !== 'test') reject('test_environment_required');
+  if (functionalFallbacks.some(key => Object.hasOwn(env, key)) ||
+      Object.keys(env).some(key => key.startsWith('PAYLOAD_TEST_'))) reject('functional_external_override_refused');
+}
+
+export function readFunctionalConfig(env, root = repositoryRoot) {
+  assertFunctionalEnvironment(env);
+  const permitted = new Set(['PAYLOAD_FUNCTIONAL_PRIVATE_PARENT', 'PAYLOAD_FUNCTIONAL_API_IMAGE',
+    'PAYLOAD_FUNCTIONAL_CMS_IMAGE', 'PAYLOAD_FUNCTIONAL_EMULATOR_IMAGE',
+    'PAYLOAD_FUNCTIONAL_HTTPS_PORT', 'PAYLOAD_FUNCTIONAL_CERTIFICATE', 'PAYLOAD_FUNCTIONAL_PRIVATE_KEY',
+    'PAYLOAD_FUNCTIONAL_PLAYWRIGHT_MODULE', 'PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE']);
+  if (Object.keys(env).some(key => key.startsWith('PAYLOAD_FUNCTIONAL_') && !permitted.has(key))) {
+    reject('functional_unknown_setting');
+  }
+  if (!/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) reject('functional_source_revision_required');
+  const image = key => {
+    const value = env[key];
+    if (typeof value !== 'string' || !/^(?:sha256:|ghcr\.io\/ownerinc\/ownerinc-portal-(?:api|cms|firebase-emulator)@sha256:)[0-9a-f]{64}$/.test(value)) {
+      reject('functional_immutable_image_required');
+    }
+    return value;
+  };
+  const apiImage = image('PAYLOAD_FUNCTIONAL_API_IMAGE'), cmsImage = image('PAYLOAD_FUNCTIONAL_CMS_IMAGE');
+  const emulatorImage = image('PAYLOAD_FUNCTIONAL_EMULATOR_IMAGE');
+  if (new Set([apiImage, cmsImage, emulatorImage]).size !== 3) reject('functional_distinct_images_required');
+  const portText = env.PAYLOAD_FUNCTIONAL_HTTPS_PORT || '';
+  // Reserve an ephemeral loopback listener at execution time, without a
+  // check-close-rebind race. Prepared port 0 is a template, never runtime origin.
+  if (portText !== '0') {
+    reject('functional_https_port_invalid');
+  }
+  const privateParent = privatePath(env.PAYLOAD_FUNCTIONAL_PRIVATE_PARENT, root, 'functional');
+  const file = key => {
+    const value = env[key];
+    if (typeof value !== 'string' || !path.isAbsolute(value) || /[\x00-\x1f]/.test(value)) reject('functional_absolute_file_required');
+    return privatePath(value,root,'functional_file');
+  };
+  return Object.freeze({ commit: env.GITHUB_SHA, apiImage, cmsImage, emulatorImage,
+    privateParent, httpsPort: Number(portText), certificate: file('PAYLOAD_FUNCTIONAL_CERTIFICATE'),
+    privateKey: file('PAYLOAD_FUNCTIONAL_PRIVATE_KEY'), playwrightModule: file('PAYLOAD_FUNCTIONAL_PLAYWRIGHT_MODULE'),
+    browserExecutable: env.PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE === undefined ? null : file('PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE') });
+}
+
+export async function checkFunctionalParent(config, root = repositoryRoot) {
+  try {
+    const parent = await checkPrivateDirectory(config.privateParent);
+    const info = await lstat(parent);
+    if (process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022) !== 0)) {
+      reject('functional_private_parent_unsafe');
+    }
+    const checkout = await realpath(root);
+    if (overlaps(parent, checkout) || overlaps(checkout, parent)) reject('functional_directory_alias');
+    return parent;
+  } catch (error) {
+    if (error instanceof IntegrationGuardError) throw error;
+    reject('functional_private_parent_unavailable');
+  }
+}
+
 function reject(code) { throw new IntegrationGuardError(code); }
 
 function databaseTarget(value, label) {

@@ -12,7 +12,7 @@ import {
   runtimeProtocolPrivilegesVerifySQL,
   grantsSQL,
 } from './provision-db'
-import { NEWS_MUTATION_LEDGER_DDL, NEWS_MUTATION_TABLES } from '../src/publication/mutation-ledger'
+import { NEWS_MUTATION_LEDGER_STATEMENTS, NEWS_MUTATION_TABLES, type NewsMutationLedgerOperation } from '../src/publication/mutation-ledger'
 import { buildNewsMutationTriggersDDL } from '../src/publication/mutation-triggers'
 import {
   buildNewsMigrationBootstrapRunDDL,
@@ -88,6 +88,7 @@ export type FinalizerFailureDiagnostic = {
   phase: FinalizerDiagnosticPhase
   reason: string
   sqlstate: string | null
+  operation?: NewsMutationLedgerOperation
   triggerDetails?: FinalizerTriggerDiagnosticDetails
 }
 export type FinalizerCloseDiagnostic = { phase: 'admin-disconnect'; sqlstate: string | null }
@@ -295,11 +296,13 @@ function diagnosticReason(error: unknown): string {
   catch { return 'database_error' }
 }
 
-function recordFinalizerFailure(error: unknown, phase: FinalizerDiagnosticPhase) {
+function recordFinalizerFailure(error: unknown, phase: FinalizerDiagnosticPhase, operation?: NewsMutationLedgerOperation) {
   if (!error || (typeof error !== 'object' && typeof error !== 'function') || finalizerFailureDiagnostics.has(error as object)) return
   finalizerFailureDiagnostics.set(error as object, {
     phase: finalizerDiagnosticPhases.includes(phase) ? phase : 'connection-configuration',
     reason: diagnosticReason(error), sqlstate: safeDiagnosticSqlState(error),
+    ...(phase === 'protocol-ledger-ddl' && NEWS_MUTATION_LEDGER_STATEMENTS.some(statement => statement.operation === operation)
+      ? { operation } : {}),
     ...(finalizerTriggerDiagnosticDetails.get(error as object)
       ? { triggerDetails: finalizerTriggerDiagnosticDetails.get(error as object)! } : {}),
   })
@@ -316,7 +319,12 @@ export function formatFinalizerFailureDiagnostic(diagnostic: FinalizerFailureDia
   const sqlstate = typeof diagnostic.sqlstate === 'string' && /^[0-9A-Z]{5}$/u.test(diagnostic.sqlstate)
     && !finalizerDiagnosticReasons.has(diagnostic.sqlstate) ? diagnostic.sqlstate : 'none'
   const detail = diagnostic.triggerDetails ? formatFinalizerTriggerDiagnosticDetails(diagnostic.triggerDetails) : ''
-  return `CMS news protocol diagnostic: phase=${phase} reason=${reason} sqlstate=${sqlstate}${detail}`
+  // Source and expected owner describe this admin-only installer, not an observed
+  // catalog or a driver-supplied field. Never retain SQL/message/detail from pg.
+  const operation = phase === 'protocol-ledger-ddl'
+    ? NEWS_MUTATION_LEDGER_STATEMENTS.find(statement => statement.operation === diagnostic.operation)?.operation : undefined
+  const ledgerDetail = operation ? ` operation=${operation} ddl_source=mutation-ledger expected_owner=cms_admin` : ''
+  return `CMS news protocol diagnostic: phase=${phase} reason=${reason} sqlstate=${sqlstate}${ledgerDetail}${detail}`
 }
 
 function formatFinalizerTriggerDiagnosticDetails(details: FinalizerTriggerDiagnosticDetails): string {
@@ -540,7 +548,7 @@ function canonicalCheckJsonbObject(value: string): SqlExpression {
     .map(([key, item]) => [key, item as string])]
 }
 
-function tokenizeSql(input: string): SqlToken[] {
+function tokenizeSql(input: string, preserveQuotedIdentity = false): SqlToken[] {
   const tokens: SqlToken[] = []
   for (let index = 0; index < input.length;) {
     const character = input[index]!
@@ -568,7 +576,7 @@ function tokenizeSql(input: string): SqlToken[] {
         value += input[index++]!
       }
       if (!closed) return fail('native_constraint_definition_unavailable')
-      tokens.push({ kind: 'word', value: value === value.toLowerCase() ? value : `quoted:${value}` })
+      tokens.push({ kind: 'word', value: !preserveQuotedIdentity && value === value.toLowerCase() ? value : `quoted:${value}` })
       continue
     }
     const numeric = /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/u.exec(input.slice(index))
@@ -604,8 +612,8 @@ function tokenizeSql(input: string): SqlToken[] {
   return tokens
 }
 
-function parseSqlExpression(input: string): SqlExpression {
-  const tokens = tokenizeSql(input)
+function parseSqlExpression(input: string, exactObservedTypes = false): SqlExpression {
+  const tokens = tokenizeSql(input, exactObservedTypes)
   let position = 0
   const peek = (value?: string): boolean => value === undefined
     ? position < tokens.length : tokens[position]?.value === value
@@ -684,6 +692,10 @@ function parseSqlExpression(input: string): SqlExpression {
       if (peek('.')) { take(); typeParts.push(take().value) }
       if (typeParts.at(-1) === 'character' && peek('varying')) typeParts.push(take().value)
       const type = typeParts.join('.')
+      // Generic fixture snapshots have no reviewed column/type allowlist.
+      // Retain every observed cast and quoted identifier there; only the native
+      // verifier's existing default mode may use its reviewed cast equivalences.
+      if (exactObservedTypes) { result = operation(`cast:${type}`, result); continue }
       const numberLiteral = Array.isArray(result) && result[0] === 'number'
       const stringLiteral = Array.isArray(result) && result[0] === 'string'
       const castType = type.replace(/^(?:pg_catalog|public)\./u, '')
@@ -773,6 +785,12 @@ function extractCheckExpression(definition: string): string {
     }
   }
   return fail('native_constraint_definition_unavailable')
+}
+
+/** Pure observed-expression semantics only; no catalog validation or I/O.
+ * Unknown grammar throws so diagnostic snapshot callers can retain raw text. */
+export function canonicalObservedCheckDefinition(definition: string): string {
+  return JSON.stringify(parseSqlExpression(extractCheckExpression(definition), true))
 }
 
 function extractMigrationCheckExpressions(source: string): ReadonlyMap<string, string> {
@@ -2234,13 +2252,12 @@ type ProtocolFinalizerOperation = 'finalize' | 'upgrade-v1-to-v2'
 async function runProtocolFinalizerOperation(client: FinalizerClient, operation: ProtocolFinalizerOperation):
 Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
   let phase: FinalizerDiagnosticPhase = 'transaction-begin'
+  let ledgerOperation: NewsMutationLedgerOperation | undefined
   let committed = false
   try {
     await client.query('BEGIN')
-    // Canonical DDL contains some unqualified PostgreSQL types and creates the
-    // integration ledger with an unqualified table name. Pin resolution before
-    // any catalog-dependent DDL so caller/database URL settings cannot redirect
-    // object creation or type lookup.
+    // Pin built-in type/function resolution; application creation targets are
+    // explicitly public-qualified, since pg_catalog is not a creation target.
     await client.query('SET LOCAL search_path = pg_catalog, public')
     phase = 'transaction-lock'
     await client.query(`SELECT pg_catalog.pg_advisory_xact_lock(${LOCK_ID})`)
@@ -2256,7 +2273,11 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
 
     if (operation === 'finalize' && protocolState === 'empty') {
       phase = 'protocol-ledger-ddl'
-      await client.query(NEWS_MUTATION_LEDGER_DDL)
+      for (const statement of NEWS_MUTATION_LEDGER_STATEMENTS) {
+        ledgerOperation = statement.operation
+        await client.query(statement.sql)
+      }
+      ledgerOperation = undefined
       phase = 'protocol-trigger-ddl'
       await client.query(buildNewsMutationTriggersDDL())
       phase = 'protocol-binding-ddl'
@@ -2276,7 +2297,7 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
     committed = true
     return { installed: operation === 'finalize' && protocolState === 'empty', ready: false, coverageVersion: 0 }
   } catch (error) {
-    recordFinalizerFailure(error, phase)
+    recordFinalizerFailure(error, phase, ledgerOperation)
     if (!committed) {
       try { await client.query('ROLLBACK') } catch { /* Keep original failure; connection is discarded below. */ }
     }

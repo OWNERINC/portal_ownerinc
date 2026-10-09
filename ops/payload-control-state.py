@@ -57,6 +57,11 @@ CMS_MIGRATIONS = [
 ]
 LEGACY_ARTIFACTS = ['postgres.dump', 'uploads.tar.gz']
 PAYLOAD_ARTIFACTS = ['postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz']
+INSTALL_STAGES = (
+    'reserved', 'portal_grants_pending', 'portal_grants_verified',
+    'cms_resources_pending', 'cms_resources_bound', 'cms_provision_pending', 'provisioned',
+)
+INSTALL_TRANSITION_STAGES = INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')
 
 
 class StateError(Exception):
@@ -117,16 +122,20 @@ def _valid_images(images, payload=True):
 
 
 def validate_state_body(body):
-    _exact_keys(body, {
+    version = body.get('schemaVersion') if isinstance(body, dict) else None
+    names = {
         'schemaVersion', 'phase', 'cmsStatus', 'authority', 'workerHold',
         'admission', 'sequence', 'previousStateSha256', 'restoreIntent',
         'latestProofSha256', 'legacySourceProofSha256', 'releaseImages',
         'plannedReleaseImages', 'rollbackTargetImages', 'nativeCatalogFingerprint',
         'inventoryIdentity',
-    }, 'unsupported_state_shape')
-    if type(body['schemaVersion']) is not int or body['schemaVersion'] != 1 or body['phase'] != 'preauthority':
+    }
+    if type(version) is int and version == 2:
+        names.add('installIntent')
+    _exact_keys(body, names, 'unsupported_state_shape')
+    if type(version) is not int or version not in (1, 2) or body['phase'] != 'preauthority':
         fail('unsupported_state_phase')
-    if body['cmsStatus'] not in ('cold', 'migrated'):
+    if body['cmsStatus'] not in ('cold', 'migrated', 'provisioned') or (version == 1 and body['cmsStatus'] == 'provisioned'):
         fail('unsupported_cms_state')
     _exact_keys(body['authority'], {'mode', 'epoch'}, 'invalid_authority_state')
     if body['authority'].get('mode') != 'legacy' or type(body['authority'].get('epoch')) is not int or body['authority']['epoch'] != 1:
@@ -149,7 +158,7 @@ def validate_state_body(body):
             fail('invalid_state_digest')
     if not isinstance(body['inventoryIdentity'], str) or not HEX_64.fullmatch(body['inventoryIdentity']):
         fail('invalid_state_inventory_identity')
-    if body['cmsStatus'] == 'cold':
+    if body['cmsStatus'] in ('cold', 'provisioned'):
         if body['releaseImages'] is not None or body['nativeCatalogFingerprint'] is not None:
             fail('invalid_cold_state')
     else:
@@ -164,6 +173,50 @@ def validate_state_body(body):
         if body['cmsStatus'] != 'cold':
             fail('invalid_rollback_state')
         _valid_images(body['rollbackTargetImages'], payload=False)
+    install = body.get('installIntent')
+    if install is not None:
+        names = {'binding', 'stage', 'cmsTarget'}
+        if isinstance(install, dict) and isinstance(install.get('binding'), dict) and install['binding'].get('bindingVersion') == 2:
+            names.add('creation')
+        if isinstance(install, dict) and install.get('stage') in ('floor_commit_pending', 'floor_committed'):
+            names.add('floor')
+        _exact_keys(install, names, 'invalid_cold_state')
+        validate_install_binding(install['binding'])
+        stage = install['stage']
+        terminal = stage == 'floor_committed'
+        status = 'migrated' if terminal else 'provisioned' if stage in ('provisioned', 'floor_commit_pending') else 'cold'
+        if stage not in INSTALL_TRANSITION_STAGES or body['cmsStatus'] != status or \
+           (not terminal and (body['admission'] != 'closed' or body['restoreIntent'] is not None)) or \
+           body['rollbackTargetImages'] is not None:
+            fail('invalid_cold_state')
+        binding = install['binding']
+        if binding['inventoryIdentity'] != body['inventoryIdentity'] or \
+           binding['b0']['proofSha256'] != body['legacySourceProofSha256'] or \
+           (not terminal and (binding['candidate']['images'] != body['plannedReleaseImages'] or \
+                              binding['b0']['proofSha256'] != body['latestProofSha256'])):
+            fail('invalid_cold_state')
+        if 'creation' in install:
+            validate_install_creation(install['creation'])
+            if INSTALL_TRANSITION_STAGES.index(stage) < INSTALL_TRANSITION_STAGES.index('cms_resources_pending') and \
+               (install['creation']['volumes'] or install['creation']['containers']):
+                fail('invalid_cold_state')
+        if 'floor' in install:
+            _exact_keys(install['floor'], {'nativeCatalogFingerprint', 'sourceRelease', 'candidateRelease'}, 'invalid_cold_state')
+            if not isinstance(install['floor']['nativeCatalogFingerprint'], str) or \
+               not HEX_64.fullmatch(install['floor']['nativeCatalogFingerprint']) or \
+               any(install['floor'][name] != binding[name] for name in ('sourceRelease', 'candidateRelease')):
+                fail('invalid_cold_state')
+        if INSTALL_TRANSITION_STAGES.index(stage) < INSTALL_TRANSITION_STAGES.index('cms_resources_bound'):
+            if install['cmsTarget'] is not None:
+                fail('invalid_cold_state')
+        else:
+            _validate_install_target(install['cmsTarget'], 'ownerinc_cms', {'cmsPostgres', 'cmsUploads'})
+            if 'creation' in install and (install['creation']['volumes'] != install['cmsTarget']['volumes'] or \
+               set(install['creation']['containers']) != {'cms-postgres', 'cms'} or \
+               install['creation']['containers']['cms']['image'] != binding['candidate']['images']['cms']):
+                fail('invalid_cold_state')
+    elif body['cmsStatus'] == 'provisioned':
+        fail('invalid_cold_state')
     intent = body['restoreIntent']
     if intent is not None:
         _exact_keys(intent, {'proofSha256', 'target', 'releaseImages', 'targetFingerprints', 'stage'}, 'invalid_restore_intent')
@@ -193,6 +246,229 @@ def validate_state_body(body):
             if not HEX_64.fullmatch(str(value['fingerprint'])):
                 fail('invalid_restore_volumes')
     return body
+
+
+def _validate_install_target(target, database, volume_names):
+    _exact_keys(target, {'database', 'volumes'}, 'invalid_cold_state')
+    _validate_database_identity(target['database'])
+    if target['database']['databaseName'] != database:
+        fail('invalid_cold_state')
+    _exact_keys(target['volumes'], volume_names, 'invalid_cold_state')
+    for volume in target['volumes'].values():
+        _exact_keys(volume, {'name', 'driver', 'mountpoint', 'fingerprint'}, 'invalid_cold_state')
+        if volume['driver'] != 'local' or not isinstance(volume['name'], str) or not volume['name'] or \
+           not isinstance(volume['mountpoint'], str) or not os.path.isabs(volume['mountpoint']) or \
+           not isinstance(volume['fingerprint'], str) or not HEX_64.fullmatch(volume['fingerprint']):
+            fail('invalid_cold_state')
+    if len({item['name'] for item in target['volumes'].values()}) != len(volume_names):
+        fail('invalid_cold_state')
+
+
+def validate_install_binding(binding):
+    # Persistence shape is NOT candidate qualification. The isolated coordinator
+    # reserves only after real B0/lease/physical checks; production receiver stays
+    # closed. No operator JSON/state CLI may reserve or commit this intent.
+    names = {'candidate', 'candidateRelease', 'sourceRelease', 'previousImages',
+             'b0', 'inventoryIdentity', 'lease', 'portalTarget'}
+    producer = isinstance(binding, dict) and 'bindingVersion' in binding
+    if producer:
+        names.add('bindingVersion')
+    _exact_keys(binding, names, 'invalid_cold_state')
+    candidate = binding['candidate']
+    if producer and (type(binding['bindingVersion']) is not int or binding['bindingVersion'] != 2):
+        fail('invalid_cold_state')
+    validate_install_candidate(candidate, producer)
+    _valid_images(binding['previousImages'], payload=False)
+    for name in ('candidateRelease', 'sourceRelease'):
+        value = binding[name]
+        if not isinstance(value, str) or not os.path.isabs(value) or os.path.normpath(value) != value or \
+           not re.fullmatch(r'[0-9a-f]{40}', os.path.basename(value)):
+            fail('invalid_cold_state')
+    if os.path.basename(binding['candidateRelease']) != candidate['commit'] or \
+       os.path.dirname(binding['candidateRelease']) != os.path.dirname(binding['sourceRelease']) or \
+       binding['candidateRelease'] == binding['sourceRelease']:
+        fail('invalid_cold_state')
+    if producer and os.path.basename(binding['sourceRelease']) != candidate['sourceMaterialSha256'][:40]:
+        fail('invalid_cold_state')
+    _exact_keys(binding['b0'], {'directory', 'proofSha256'}, 'invalid_cold_state')
+    directory = binding['b0']['directory']
+    if not isinstance(directory, str) or not os.path.isabs(directory) or os.path.normpath(directory) != directory:
+        fail('invalid_cold_state')
+    for value in (binding['inventoryIdentity'], binding['b0']['proofSha256']):
+        if not isinstance(value, str) or not HEX_64.fullmatch(value):
+            fail('invalid_cold_state')
+    _exact_keys(binding['lease'], {'device', 'inode'}, 'invalid_cold_state')
+    if not _safe_int(binding['lease']['device']) or not _safe_int(binding['lease']['inode'], 1):
+        fail('invalid_cold_state')
+    _validate_install_target(binding['portalTarget'], 'portal', {'portalPostgres', 'portalUploads'})
+    return binding
+
+
+def validate_install_candidate(candidate, producer=False):
+    hashes = ('candidateSha256', 'sourceMaterialSha256') if producer else \
+             ('candidateSha256', 'reportSha256', 'qualificationSha256', 'bundleSha256')
+    candidate_names = {'commit', 'runId', 'runAttempt', 'images'} | set(hashes)
+    if producer:
+        candidate_names |= {'schemaVersion', 'purpose'}
+    _exact_keys(candidate, candidate_names, 'invalid_cold_state')
+    if producer and (type(candidate['schemaVersion']) is not int or candidate['schemaVersion'] != 1 or \
+                     candidate['purpose'] != 'isolated-recovery-producer'):
+        fail('invalid_cold_state')
+    if not isinstance(candidate['commit'], str) or not re.fullmatch(r'[0-9a-f]{40}', candidate['commit']) or \
+       any(not isinstance(candidate[name], str) or not re.fullmatch(r'[1-9][0-9]{0,19}', candidate[name])
+           for name in ('runId', 'runAttempt')):
+        fail('invalid_cold_state')
+    _valid_images(candidate['images'], payload=True)
+    for name in hashes:
+        if not isinstance(candidate[name], str) or not HEX_64.fullmatch(candidate[name]):
+            fail('invalid_cold_state')
+    return candidate
+
+
+def assert_install_matches(body, binding):
+    validate_install_binding(binding)
+    intent = body.get('installIntent')
+    if intent is None or canonical(intent['binding']) != canonical(binding):
+        fail('planned_release_mismatch')
+    return intent
+
+
+def reserve_install(directory, binding, proof, proof_sha256, creation=None):
+    """Internal persistence primitive. Caller must validate real B0/lease/targets
+    first; a shape-valid JSON is not permission to install. Production admission
+    qualification belongs to the outer deploy gate, not the recovery producer."""
+    validate_install_binding(binding)
+    if binding.get('bindingVersion') == 2:
+        validate_install_creation(creation)
+        if creation['volumes'] or creation['containers']:
+            fail('invalid_cold_state')
+    elif creation is not None:
+        fail('invalid_cold_state')
+    validate_proof_body(proof)
+    if proof['kind'] != 'preauthority-legacy-source' or proof['inventoryIdentity'] != binding['inventoryIdentity'] or \
+       proof['targetImages'] != binding['candidate']['images'] or proof['images'] != binding['previousImages'] or \
+       proof['source']['portal'] != binding['portalTarget']['database'] or proof_sha256 != binding['b0']['proofSha256']:
+        fail('preauthority_source_recovery_proof_mismatch')
+    old = read_state(directory)[2]
+    if old.get('installIntent') is not None:
+        assert_install_matches(old, binding)
+        return old
+    if old['schemaVersion'] != 2 or old['cmsStatus'] != 'cold' or old['admission'] != 'closed' or \
+       old['restoreIntent'] is not None or old['rollbackTargetImages'] is not None:
+        fail('invalid_cold_state')
+    def reserve(body):
+        body['installIntent'] = {'binding': json.loads(json.dumps(binding)), 'stage': 'reserved', 'cmsTarget': None}
+        if creation is not None:
+            body['installIntent']['creation'] = json.loads(json.dumps(creation))
+    return transition(directory, reserve)
+
+
+def advance_install(directory, binding, stage, cms_target=None):
+    """Persist one adjacent checkpoint; retry is exact and never clears evidence.
+    cms_target is an explicit creator-bound record, never auto-learned on retry."""
+    old = read_state(directory)[2]
+    intent = assert_install_matches(old, binding)
+    if stage not in INSTALL_STAGES or stage in ('floor_commit_pending', 'floor_committed'):
+        fail('invalid_cold_state')
+    if stage == 'cms_resources_bound':
+        _validate_install_target(cms_target, 'ownerinc_cms', {'cmsPostgres', 'cmsUploads'})
+    elif cms_target is not None:
+        fail('invalid_cold_state')
+    if stage == intent['stage']:
+        if stage == 'cms_resources_bound' and canonical(cms_target) != canonical(intent['cmsTarget']):
+            fail('restore_target_changed')
+        return old
+    if INSTALL_STAGES.index(stage) != INSTALL_STAGES.index(intent['stage']) + 1:
+        fail('invalid_cold_state')
+    def advance(body):
+        assert_install_matches(body, binding)
+        body['installIntent']['stage'] = stage
+        if stage == 'cms_resources_bound':
+            body['installIntent']['cmsTarget'] = json.loads(json.dumps(cms_target))
+        if stage == 'provisioned':
+            body['cmsStatus'] = 'provisioned'
+    return transition(directory, advance)
+
+
+def install_pending(body):
+    intent = body.get('installIntent')
+    return intent is not None and intent['stage'] != 'floor_committed'
+
+
+def validate_install_creation(value):
+    _exact_keys(value, {'nonce', 'volumes', 'containers'}, 'invalid_cold_state')
+    if not isinstance(value['nonce'], str) or not HEX_64.fullmatch(value['nonce']) or \
+       not isinstance(value['volumes'], dict) or not isinstance(value['containers'], dict) or \
+       not set(value['volumes']) <= {'cmsPostgres', 'cmsUploads'} or \
+       not set(value['containers']) <= {'cms-postgres', 'cms'}:
+        fail('invalid_cold_state')
+    for item in value['volumes'].values():
+        _exact_keys(item, {'name', 'driver', 'mountpoint', 'fingerprint'}, 'invalid_cold_state')
+        if item['driver'] != 'local' or not isinstance(item['name'], str) or not item['name'] or \
+           not isinstance(item['mountpoint'], str) or not os.path.isabs(item['mountpoint']) or \
+           not isinstance(item['fingerprint'], str) or not HEX_64.fullmatch(item['fingerprint']):
+            fail('invalid_cold_state')
+    for item in value['containers'].values():
+        _exact_keys(item, {'id', 'image', 'fingerprint'}, 'invalid_cold_state')
+        if not isinstance(item['id'], str) or not HEX_64.fullmatch(item['id']) or \
+           not isinstance(item['image'], str) or not isinstance(item['fingerprint'], str) or \
+           not HEX_64.fullmatch(item['fingerprint']):
+            fail('invalid_cold_state')
+
+
+def record_install_creation(directory, binding, kind, name, receipt):
+    if kind not in ('volumes', 'containers'):
+        fail('invalid_cold_state')
+    def record(body):
+        intent = assert_install_matches(body, binding)
+        if intent['stage'] != 'cms_resources_pending' or 'creation' not in intent:
+            fail('invalid_cold_state')
+        intent['creation'][kind][name] = json.loads(json.dumps(receipt))
+    return transition(directory, record)
+
+
+def begin_install_floor(directory, binding, fingerprint):
+    def begin(body):
+        intent = assert_install_matches(body, binding)
+        if intent['stage'] != 'provisioned':
+            fail('invalid_cold_state')
+        intent['stage'] = 'floor_commit_pending'
+        intent['floor'] = {'nativeCatalogFingerprint': fingerprint,
+                           'sourceRelease': binding['sourceRelease'], 'candidateRelease': binding['candidateRelease']}
+    return transition(directory, begin)
+
+
+def commit_install_floor(directory, binding):
+    def commit(body):
+        intent = assert_install_matches(body, binding)
+        if intent['stage'] != 'floor_commit_pending':
+            fail('invalid_cold_state')
+        intent['stage'] = 'floor_committed'
+        body['cmsStatus'] = 'migrated'
+        body['releaseImages'] = binding['candidate']['images']
+        body['plannedReleaseImages'] = None
+        body['nativeCatalogFingerprint'] = intent['floor']['nativeCatalogFingerprint']
+    return transition(directory, commit)
+
+
+def upgrade_install_schema(directory):
+    old = read_state(directory)[2]
+    if old['schemaVersion'] == 2:
+        return old
+    # Never rewrite old envelopes or migrate an active/ambiguous operation.
+    _assert_install_schema_upgrade(old)
+    def upgrade(body):
+        body['schemaVersion'] = 2
+        body['installIntent'] = None
+    return transition(directory, upgrade)
+
+
+def _assert_install_schema_upgrade(old):
+    if old['cmsStatus'] != 'cold' or any(old[name] is not None for name in (
+        'restoreIntent', 'latestProofSha256', 'legacySourceProofSha256', 'releaseImages',
+        'plannedReleaseImages', 'rollbackTargetImages', 'nativeCatalogFingerprint',
+    )):
+        fail('invalid_cold_state')
 
 
 def _validate_database_identity(value):
@@ -340,7 +616,61 @@ def _journal_name(sequence):
     return '{:020d}.json'.format(sequence)
 
 
-def read_state(directory):
+def validate_state_transition(old, new):
+    """One previous->next contract for both writes and signed journal replay.
+
+    Entry zero has no predecessor; read_state validates its body and null parent
+    separately. Envelope signatures/parent digests are checked by the caller.
+    A valid HMAC on two legal bodies is not permission for an illegal pair.
+    """
+    validate_state_body(old)
+    validate_state_body(new)
+    if new['sequence'] != old['sequence'] + 1:
+        fail('state_parent_mismatch')
+    if new['inventoryIdentity'] != old['inventoryIdentity']:
+        fail('state_inventory_identity_mismatch')
+    if old['schemaVersion'] == 2 and new['schemaVersion'] != 2:
+        fail('unsupported_state_phase')
+    if old['schemaVersion'] == 1 and new['schemaVersion'] == 2:
+        _assert_install_schema_upgrade(old)
+        if new['installIntent'] is not None or any(new[name] != old[name] for name in old
+                if name not in ('schemaVersion', 'sequence', 'previousStateSha256')):
+            fail('invalid_cold_state')
+    if old['cmsStatus'] == 'migrated' and new['cmsStatus'] != 'migrated':
+        fail('legacy_fallback_forbidden')
+    old_install = old.get('installIntent')
+    new_install = new.get('installIntent')
+    if old_install is not None:
+        if new_install is None or canonical(old_install['binding']) != canonical(new_install['binding']):
+            fail('planned_release_mismatch')
+        before, after = (INSTALL_TRANSITION_STAGES.index(item['stage']) for item in (old_install, new_install))
+        if after not in (before, before + 1):
+            fail('invalid_cold_state')
+        if old_install['cmsTarget'] is not None and canonical(old_install['cmsTarget']) != canonical(new_install['cmsTarget']):
+            fail('restore_target_changed')
+        if 'floor' in old_install and old_install['floor'] != new_install.get('floor'):
+            fail('planned_release_mismatch')
+        if 'creation' in old_install:
+            before_creation, after_creation = old_install['creation'], new_install['creation']
+            if before_creation['nonce'] != after_creation['nonce']:
+                fail('restore_target_changed')
+            for kind in ('volumes', 'containers'):
+                if any(after_creation[kind].get(name) != value for name, value in before_creation[kind].items()) or \
+                   (before_creation[kind] != after_creation[kind] and
+                    (old_install['stage'] != 'cms_resources_pending' or new_install['stage'] != 'cms_resources_pending')):
+                    fail('restore_target_changed')
+        if new_install['stage'] == 'floor_committed' and old_install['stage'] != 'floor_committed':
+            if new['admission'] != 'closed' or new['releaseImages'] != new_install['binding']['candidate']['images'] or \
+               new['plannedReleaseImages'] is not None or new['nativeCatalogFingerprint'] != new_install['floor']['nativeCatalogFingerprint']:
+                fail('invalid_migrated_state')
+    elif new_install is not None:
+        if old['schemaVersion'] != 2 or old['cmsStatus'] != 'cold' or old['admission'] != 'closed' or \
+           old['restoreIntent'] is not None or new_install['stage'] != 'reserved':
+            fail('invalid_cold_state')
+    return new
+
+
+def read_state(directory, repair_head=False, inventory_identity=None):
     _safe_runtime_directory(directory)
     key = _key_for(directory)
     state_dir, head_path = _state_paths(directory)
@@ -352,22 +682,33 @@ def read_state(directory):
         fail('state_journal_corrupt')
     body = None
     previous_digest = None
+    envelopes = []
     for sequence, name in enumerate(journal_names):
         if name != _journal_name(sequence):
             fail('state_journal_corrupt')
         path = os.path.join(state_dir, name)
         envelope = parse_canonical(_read_file(path, 0o600, private_owner=True), 'state_journal_corrupt')
         candidate = verify_envelope(envelope, key, _state_validator, 'state_journal_corrupt')
+        if inventory_identity is not None and candidate['inventoryIdentity'] != inventory_identity:
+            fail('state_inventory_identity_mismatch')
         if candidate['sequence'] != sequence or candidate['previousStateSha256'] != previous_digest:
             fail('state_parent_mismatch')
+        if body is not None:
+            validate_state_transition(body, candidate)
         previous_digest = hashlib.sha256(canonical(envelope)).hexdigest()
         body = candidate
+        envelopes.append(envelope)
+    if set(names) != set(journal_names + ['current.json']):
+        fail('state_journal_corrupt')
     head = parse_canonical(_read_file(head_path, 0o600, private_owner=True), 'state_head_corrupt')
     head_body = verify_envelope(head, key, _state_validator, 'state_head_corrupt')
     if canonical(head) != canonical(sign_envelope(body, key)) or head_body != body:
-        fail('state_head_mismatch')
-    if set(names) != set(journal_names + ['current.json']):
-        fail('state_journal_corrupt')
+        # An exclusive-lease caller may complete ONLY the unique fully signed
+        # append whose head replacement was interrupted. Never guess past a
+        # corrupt/partial record, reset history, or skip multiple journal entries.
+        if not repair_head or len(envelopes) < 2 or canonical(head) != canonical(envelopes[-2]):
+            fail('state_head_mismatch')
+        _atomic_replace(head_path, canonical(envelopes[-1]) + b'\n', 0o600)
     return key, state_dir, body, previous_digest
 
 
@@ -448,10 +789,10 @@ def initialize(directory, inventory_identity, trusted_key=None):
     if not isinstance(key, bytes) or len(key) != 32:
         fail('invalid_private_key')
     body = {
-        'schemaVersion': 1, 'phase': 'preauthority', 'cmsStatus': 'cold',
+        'schemaVersion': 2, 'phase': 'preauthority', 'cmsStatus': 'cold',
         'authority': {'mode': 'legacy', 'epoch': 1}, 'workerHold': True,
         'admission': 'open', 'sequence': 0, 'previousStateSha256': None,
-        'restoreIntent': None, 'latestProofSha256': None,
+        'restoreIntent': None, 'installIntent': None, 'latestProofSha256': None,
         'legacySourceProofSha256': None, 'releaseImages': None,
         'plannedReleaseImages': None, 'rollbackTargetImages': None,
         'nativeCatalogFingerprint': None, 'inventoryIdentity': inventory_identity,
@@ -485,7 +826,7 @@ def transition(directory, mutate):
     mutate(new)
     new['sequence'] = old['sequence'] + 1
     new['previousStateSha256'] = parent_hash
-    validate_state_body(new)
+    validate_state_transition(old, new)
     envelope = sign_envelope(new, key)
     raw = canonical(envelope) + b'\n'
     journal_path = os.path.join(state_dir, _journal_name(new['sequence']))
