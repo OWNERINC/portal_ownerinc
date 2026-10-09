@@ -526,6 +526,20 @@ const NATIVE_REQUIRED_CONSTRAINTS = [
 type SqlToken = { kind: 'word' | 'string' | 'number' | 'operator' | 'punctuation'; value: string }
 type SqlExpression = string | boolean | null | SqlExpression[]
 
+// Only the flat string-valued JSONB objects used by the native CHECK are
+// supported. Do not round JSON numbers through JS or discard duplicate keys.
+function canonicalCheckJsonbObject(value: string): SqlExpression {
+  let parsed: unknown
+  try { parsed = JSON.parse(value) } catch { return fail('native_constraint_definition_unavailable') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+    || Object.values(parsed).some(item => typeof item !== 'string')) return fail('native_constraint_definition_unavailable')
+  const stringToken = '"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\/bfnrt]|u[0-9a-fA-F]{4}))*"'
+  const pairs = [...value.matchAll(new RegExp(`(${stringToken})\\s*:\\s*(${stringToken})`, 'gu'))]
+  if (pairs.length !== Object.keys(parsed).length) return fail('native_constraint_definition_unavailable')
+  return ['jsonb-string-object', ...Object.entries(parsed).sort(([a], [b]) => compareText(a, b))
+    .map(([key, item]) => [key, item as string])]
+}
+
 function tokenizeSql(input: string): SqlToken[] {
   const tokens: SqlToken[] = []
   for (let index = 0; index < input.length;) {
@@ -623,7 +637,8 @@ function parseSqlExpression(input: string): SqlExpression {
       if (peek('distinct')) {
         take()
         expect('from')
-        return operation(negated ? 'is-not-distinct-from' : 'is-distinct-from', left, parseConcat())
+        const distinct = operation('is-distinct-from', left, parseConcat())
+        return negated ? operation('not', distinct) : distinct
       }
       if (peek('null')) { take(); return operation(negated ? 'is-not-null' : 'is-null', left) }
       if (peek('true') || peek('false') || peek('unknown')) return operation(negated ? 'is-not' : 'is', left, parseConcat())
@@ -633,7 +648,7 @@ function parseSqlExpression(input: string): SqlExpression {
       take()
       const lower = parseConcat()
       expect('and')
-      return operation('between', left, lower, parseConcat())
+      return operation('and', operation('>=', left, lower), operation('<=', left, parseConcat()))
     }
     const operator = tokens[position]?.value
     if (operator && ['=', '<>', '!=', '<', '<=', '>', '>=', '~', '!~', '~*', '!~*'].includes(operator)) {
@@ -672,10 +687,28 @@ function parseSqlExpression(input: string): SqlExpression {
       const numberLiteral = Array.isArray(result) && result[0] === 'number'
       const stringLiteral = Array.isArray(result) && result[0] === 'string'
       const castType = type.replace(/^(?:pg_catalog|public)\./u, '')
+      if (type === 'jsonb' || type === 'pg_catalog.jsonb') {
+        if (Array.isArray(result) && result[0] === 'string') {
+          result = canonicalCheckJsonbObject(result[1] as string)
+          continue
+        }
+      }
+      // PG16 deparses the native int8 ceiling as ('922...807'::bigint)::numeric.
+      // Fold only a canonical, in-range integer literal, never a column cast.
+      if ((type === 'numeric' || type === 'pg_catalog.numeric') && Array.isArray(result)
+        && ['cast:bigint', 'cast:pg_catalog.bigint'].includes(String(result[0]))
+        && Array.isArray(result[1]) && result[1][0] === 'string') {
+        const value = result[1][1]
+        if (typeof value === 'string' && /^(?:0|[1-9][0-9]*)$/u.test(value)
+          && BigInt(value) <= 9223372036854775807n) {
+          result = operation('number', value)
+          continue
+        }
+      }
       if (['text', 'varchar', 'character varying'].includes(castType)
         || castType === 'numeric' && numberLiteral
         || expectedEnums.some(entry => entry.name === castType) && stringLiteral) continue
-      result = operation(`cast:${castType}`, result)
+      result = operation(`cast:${castType === 'bigint' ? type : castType}`, result)
     }
     return result
   }
@@ -761,7 +794,13 @@ function extractMigrationCheckExpressions(source: string): ReadonlyMap<string, s
       if (character === '(') depth += 1
       else if (character === ')' && --depth === 0) {
         if (result.has(name!)) return fail('native_snapshot_invalid')
-        result.set(name!, source.slice(start, index).trim())
+        // These CHECKs live inside a tagged JS template, whose cooked strings
+        // reach Drizzle. The two historical regex \\. escapes cook to a bare dot.
+        // Decode only that reviewed source spelling; never rewrite observed SQL
+        // or silently accept a new template escape/interpolation.
+        const raw = source.slice(start, index).trim()
+        if (/\\(?!\.)|\$\{/u.test(raw)) return fail('native_snapshot_invalid')
+        result.set(name!, raw.replaceAll('\\.', '.'))
         break
       }
     }

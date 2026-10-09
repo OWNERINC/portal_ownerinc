@@ -21,6 +21,7 @@ import {
   controlRolesVerificationSQL,
 } from '../../scripts/provision-db'
 import { assertPreauthorityCatalogState } from '../../scripts/verify-preauthority-catalog'
+import { nativeChecksPg16 } from '../fixtures/native-checks-pg16'
 
 const fixtureMigrations = [
   '20261002_181423_owner_news_initial', '20261005_133515_owner_news_media',
@@ -37,6 +38,71 @@ function captureVerifierError(action: () => unknown): Error {
   }
   assert.fail('expected preauthority verifier rejection')
 }
+
+test('all 24 PostgreSQL-rendered native CHECKs pass without accepting same-name weakened predicates', () => {
+  const inventory = preauthorityExpectedNativeCatalogInventory()
+  const checks = inventory.constraints.filter(item => item.kind === 'c')
+  assert.equal(checks.length, 24)
+  assert.deepEqual(checks.map(item => item.name).sort(), Object.keys(nativeChecksPg16).sort())
+  const metadata = checks.find(item => item.name === 'legacy_news_revisions_metadata_basis_check')!
+  assert.equal(createHash('sha256').update(metadata.definition).digest('hex'),
+    '3b02b2c21f6acfcacde15c19870890242f4ecd6f156edc3e249d39387e10ecee')
+  assert.equal(createHash('sha256').update(nativeChecksPg16[metadata.name]!).digest('hex'),
+    'd745997d2ddc6747dcdaf1d922d92b00366775f74f38caad50e48620dc5239f4')
+  for (const check of checks) check.definition = nativeChecksPg16[check.name]!
+  assert.doesNotThrow(() => assertPreauthorityNativeCatalogInventory(inventory, fixtureMigrations))
+  for (const check of checks) {
+    const definition = check.definition
+    for (const weakened of ['CHECK (true)', `CHECK ((${definition.slice(7, -1)}) OR true)`]) {
+      check.definition = weakened
+      const error = captureVerifierError(() => assertPreauthorityNativeCatalogInventory(inventory, fixtureMigrations))
+      assert.equal(getPreauthorityCatalogFailureDiagnostic(error, 'native_constraints').constraintMismatch?.category,
+        'check_definition', check.name)
+    }
+    check.definition = definition
+  }
+})
+
+test('native CHECK normalization preserves JSONB values, bounds, casts, branches and regex semantics', () => {
+  const metadataName = 'legacy_news_revisions_metadata_basis_check'
+  const mutations: [string, string, string][] = [
+    [metadataName, '"unknown"', '"known"'],
+    [metadataName, '"category": "document_snapshot", ', ''],
+    [metadataName, '"title": "document_snapshot"', '"title": "document_snapshot", "extra": "value"'],
+    [metadataName, '"title": "document_snapshot"', '"title": "document_snapshot", "title": "document_snapshot"'],
+    [metadataName, '"title": "document_snapshot"', '"title": 9007199254740993'],
+    [metadataName, '::jsonb', '::json'],
+    [metadataName, '::jsonb', '::private.jsonb'],
+    [metadataName, 'original_published_at IS NULL', 'original_published_at IS NOT NULL'],
+    ['news_migration_runs_source_instance_check', '<= 128', '<= 129'],
+    ['news_migration_runs_source_instance_check', '>= 1', '> 1'],
+    ['news_migration_runs_source_instance_check', ' AND ', ' OR '],
+    ['news_migration_runs_reconciliation_sequence_check', '9223372036854775807', '9223372036854775808'],
+    ['news_migration_runs_reconciliation_sequence_check', '9223372036854775807', '9223372036854775806'],
+    ['news_migration_runs_reconciliation_sequence_check', '::bigint', '::integer'],
+    ['news_migration_runs_reconciliation_sequence_check', '::bigint', '::public.bigint'],
+    ['news_migration_runs_reconciliation_sequence_check', '(reconciliation_sequence)::numeric', '(reconciliation_sequence)::bigint'],
+    ['news_migration_runs_reconciliation_sequence_check', 'ELSE false', 'ELSE true'],
+    ['news_schedules_import_provenance_shape_check', 'NOT (original_actor_evidence IS DISTINCT', '(original_actor_evidence IS DISTINCT'],
+    ['news_schedules_import_provenance_shape_check', '(.[0-9]{1,6})', '(\\.[0-9]{1,6})'],
+    ['news_migration_items_source_identity_check', '(.[0-9]{1,6})', '(\\.[0-9]{1,6})'],
+  ]
+  for (const [name, before, after] of mutations) {
+    const inventory = preauthorityExpectedNativeCatalogInventory()
+    const check = inventory.constraints.find(item => item.name === name)!
+    check.definition = nativeChecksPg16[name]!.replace(before, after)
+    assert.notEqual(check.definition, nativeChecksPg16[name], `${name}: mutation must apply`)
+    assert.throws(() => assertPreauthorityNativeCatalogInventory(inventory, fixtureMigrations),
+      /preauthority_native_constraint_inventory_mismatch/u, `${name}: ${before} -> ${after}`)
+  }
+  const inventory = preauthorityExpectedNativeCatalogInventory()
+  const check = inventory.constraints.find(item => item.name === metadataName)!
+  check.definition = nativeChecksPg16[metadataName]!.replaceAll(
+    '"title": "document_snapshot", "category": "document_snapshot"',
+    '"category":"document_snapshot", "title":"document_snapshot"')
+  assert.doesNotThrow(() => assertPreauthorityNativeCatalogInventory(inventory, fixtureMigrations),
+    'only JSONB object key order and insignificant JSON whitespace change')
+})
 
 function preconditionClient({ failedControlCheck, protocolPresent, roleFixture = 'preauthority' }: {
   failedControlCheck?: 'ownership' | 'native-privileges'

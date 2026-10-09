@@ -272,6 +272,34 @@ correspondência da linha inteira. Códigos desconhecidos, linhas com texto adic
 stderr fora desses contextos não viram identificadores; conteúdo bruto permanece
 somente no arquivo privado do fixture.
 
+Diagnóstico do run Linux `37889449231` (fonte `427f974`): readiness inicial/restart
+da origem e snapshots quiescentes passaram, mas `verify_release_source` recusou o
+CHECK `legacy_news_revisions_metadata_basis_check`, antes de qualquer aceite de
+restore. O SHA observado `d745997d2ddc6747dcdaf1d922d92b00366775f74f38caad50e48620dc5239f4`
+foi reproduzido exatamente localmente com as seis migrations reais, compiladas
+pelo `PgDialect` do Drizzle e executadas em PGlite 0.2.17/PostgreSQL 16.4 WASM:
+`pg_get_constraintdef` acrescenta whitespace aos literais JSONB. O esperado continua
+derivado da migration, não do catálogo observado. A comparação canônica agora trata
+somente objetos JSONB planos com valores string (sem perder valores/chaves, sem
+arredondar números e recusando duplicatas), expansão de `BETWEEN`, a representação
+`NOT (IS DISTINCT FROM)` e literais bigint→numeric canônicos dentro do limite int8.
+Não remove casts arbitrários, não ignora CHECKs e não aceita apenas pelo nome.
+
+A mesma inspeção local cobriu todos os 24 CHECKs, cujas definições renderizadas estão
+em `cms/tests/fixtures/native-checks-pg16.ts` como entradas observadas de regressão.
+Também identificou duas regex históricas, em `source_identity` e
+`import_provenance_shape`: o `\.` escrito no template JavaScript da migration é
+cozido como `.` antes de chegar ao PostgreSQL (portanto casa qualquer caractere,
+não somente ponto). A extração do esperado reproduz essa semântica do SQL realmente
+executado, somente na fonte; não reescreve regex observada. As migrations permanecem
+intactas. Corrigir a restrição histórica exigiria decisão/migration separada antes
+de confiar nela como validação estrita de timestamp; não faz parte deste reparo.
+
+Isso é evidência local de parser/catálogo, **não** aceite PG16.14/Linux ou recuperação.
+Após revisão independente, o primary deve conferir todos os 24 CHECKs no ambiente
+Linux descartável com as seis migrations, sem parar no primeiro mismatch, e então
+executar os gates reais de recuperação. Nenhum restore bem-sucedido é alegado aqui.
+
 A parada de `api`, `cron` e `cms` mantém `docker compose stop --timeout 120` por
 writer. O deadline do subprocesso agora cobre o pior caso serial de todos os
 writers selecionados mais 30 s de margem (390 s para os três), sem remover nem
