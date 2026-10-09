@@ -236,6 +236,13 @@ privado fica somente no host descartável durante a vida do runner. O recovery n
 local não está disponível. Só um relatório real com `status=passed` gera o artifact
 qualificado; até esse run, Task 3 permanece sem aceite runtime.
 
+Em falhas de comando, o relatório inclui um subpasso estático, exit code, SQLSTATE
+e identificador de erro PostgreSQL somente quando reconhecidos. Comando, argumentos,
+stderr/stdout e valores SQL não são serializados nem impressos. O stderr só é
+interpretado nas chamadas `psql` de seed marcadas e configuradas com
+`VERBOSITY=sqlstate`; apenas uma linha completa `ERROR: <código conhecido>` em
+maiúsculas é aceita.
+
 ## Preparação inicial da infraestrutura de produção — inativa até nova autorização
 
 `ops/prepare-cms-infrastructure.sh` prepara o receiver, guard, adapter e helpers,

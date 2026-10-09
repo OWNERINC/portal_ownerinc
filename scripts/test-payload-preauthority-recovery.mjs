@@ -11,6 +11,7 @@ import {
   createSyntheticValues, legacyAnnouncementLookupSql, normalizePgDumpForSnapshot,
   validateRecoveryInputs, writeProtectedInventory,
 } from './integration/payload-preauthority-fixture.mjs';
+import { createCommandDiagnostic } from './integration/payload-preauthority-diagnostics.mjs';
 
 const repository = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const python = process.env.PYTHON || 'python3';
@@ -36,6 +37,7 @@ const safeChecks = {
 };
 const negativeCases = [];
 let stage = 'validate_inputs';
+let activeSubstep = null;
 let fixtureRoot = null;
 let preserveFixture = false;
 let images = null;
@@ -45,9 +47,10 @@ let projectNames = null;
 let runtimeRefs = [];
 
 class FixtureFailure extends Error {
-  constructor(code) {
+  constructor(code, diagnostic = null) {
     super(code);
     this.code = code;
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -63,15 +66,28 @@ function run(command, args = [], options = {}) {
     encoding: null,
     maxBuffer: 64 * 1024 * 1024,
     timeout: options.timeout || 180_000,
-    stdio: ['pipe', 'pipe', 'ignore'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
-  if (result.error || result.status !== 0) throw new FixtureFailure(options.failureCode || 'fixture_command_failed');
+  if (result.error || result.status !== 0) {
+    throw new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
+      substep: options.substep || activeSubstep,
+      status: result.status,
+      errorCode: result.error?.code,
+      stderr: result.stderr,
+      sqlCommandContext: options.sqlCommandContext === true,
+    }));
+  }
   return result.stdout || Buffer.alloc(0);
 }
 
 function text(result) { return result.toString('utf8').trim(); }
 
-function setStage(value) { stage = value; }
+function setStage(value) {
+  stage = value;
+  activeSubstep = null;
+}
+
+function setSubstep(value) { activeSubstep = value; }
 
 function composeArgs(project, release, runtime, actionArgs) {
   const paths = runtime.inventory.document.paths;
@@ -257,11 +273,15 @@ function composeCall(runtime, actionArgs, options = {}) {
 }
 
 async function awaitService(runtime, service, attempts = 180) {
+  const safeService = service.replaceAll('-', '_');
+  setSubstep(`wait_${safeService}_container`);
   for (let index = 0; index < attempts; index += 1) {
     const id = text(composeCall(runtime, ['ps', '-q', service]));
     if (id) {
+      setSubstep(`wait_${safeService}_health`);
       const state = text(run('docker', ['inspect', '--format', '{{.State.Health.Status}}', id]));
       if (state === 'healthy') return;
+      setSubstep(`wait_${safeService}_container_state`);
       const containerState = text(run('docker', ['inspect', '--format', '{{.State.Status}}', id]));
       if (containerState === 'exited' || containerState === 'dead') throw new FixtureFailure(`service_${service}_stopped`);
     }
@@ -320,26 +340,34 @@ async function seedProject(runtime) {
   const legacyDocumentId = randomUUID();
   const legacyRevisionId = randomUUID();
   runtime.legacyAnnouncementId = legacyDocumentId;
-  const portalSql = [
-    `INSERT INTO public.users(uid,email,name,role) VALUES('${uid}','${email}','${marker}','viewer')`,
-    `INSERT INTO public.owner_news_polls(id,title,question,status,created_by,updated_by) VALUES('${pollId}','${marker}','${marker} recovery question','draft','${uid}','${uid}')`,
-    `INSERT INTO public.cms_documents(id,content_type,source_id,title,category,created_by,updated_by) VALUES('${legacyDocumentId}','announcement','${legacyDocumentId}','${marker} legacy announcement','fixture','${uid}','${uid}')`,
-    `INSERT INTO public.cms_revisions(id,document_id,version,status,blocks,editorial,created_by) VALUES('${legacyRevisionId}','${legacyDocumentId}',1,'published','[{"type":"paragraph","text":"${marker} legacy recovery body"}]'::jsonb,'{"version":1,"kind":"article","summary":"synthetic legacy recovery fixture","author":"fixture","source_label":"fixture","source_date":null}'::jsonb,'${uid}')`,
-    `UPDATE public.cms_documents SET published_revision_id='${legacyRevisionId}',published_at=NOW() WHERE id='${legacyDocumentId}'`,
-  ].join(';\n') + ';\n';
-  composeWithLease(runtime, ['exec', '-T', 'postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
-    '--dbname=portal', '--username=portal_admin'], { input: portalSql });
-  const cmsSql = [
-    `INSERT INTO public.portal_editors(id,portal_uid,email,display_name) VALUES('${randomUUID()}','${uid}','${email}','${marker}')`,
-    `INSERT INTO public.payload_preferences(id,key,value) VALUES('${randomUUID()}','fixture-${safeToken(runtime.project)}','{"marker":"${marker}"}'::jsonb)`,
-  ].join(';\n') + ';\n';
-  composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
-    '--dbname=ownerinc_cms', '--username=cms_admin'], { input: cmsSql });
+  const runSeedStatement = (service, database, user, substep, statement) => {
+    setSubstep(substep);
+    composeWithLease(runtime, ['exec', '-T', service, 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
+      '-v', 'VERBOSITY=sqlstate', `--dbname=${database}`, `--username=${user}`], {
+      input: `${statement};\n`, substep, sqlCommandContext: true,
+    });
+  };
+  runSeedStatement('postgres', 'portal', 'portal_admin', 'seed_portal_user',
+    `INSERT INTO public.users(uid,email,name,role) VALUES('${uid}','${email}','${marker}','viewer')`);
+  runSeedStatement('postgres', 'portal', 'portal_admin', 'seed_portal_poll',
+    `INSERT INTO public.owner_news_polls(id,title,question,status,created_by,updated_by) VALUES('${pollId}','${marker}','${marker} recovery question','draft','${uid}','${uid}')`);
+  runSeedStatement('postgres', 'portal', 'portal_admin', 'seed_portal_legacy_document',
+    `INSERT INTO public.cms_documents(id,content_type,source_id,title,category,created_by,updated_by) VALUES('${legacyDocumentId}','announcement','${legacyDocumentId}','${marker} legacy announcement','fixture','${uid}','${uid}')`);
+  runSeedStatement('postgres', 'portal', 'portal_admin', 'seed_portal_legacy_revision',
+    `INSERT INTO public.cms_revisions(id,document_id,version,status,blocks,editorial,created_by) VALUES('${legacyRevisionId}','${legacyDocumentId}',1,'published','[{"type":"paragraph","text":"${marker} legacy recovery body"}]'::jsonb,'{"version":1,"kind":"article","summary":"synthetic legacy recovery fixture","author":"fixture","source_label":"fixture","source_date":null}'::jsonb,'${uid}')`);
+  runSeedStatement('postgres', 'portal', 'portal_admin', 'seed_portal_publish_legacy_revision',
+    `UPDATE public.cms_documents SET published_revision_id='${legacyRevisionId}',published_at=NOW() WHERE id='${legacyDocumentId}'`);
+  runSeedStatement('cms-postgres', 'ownerinc_cms', 'cms_admin', 'seed_cms_portal_editor',
+    `INSERT INTO public.portal_editors(id,portal_uid,email,display_name) VALUES('${randomUUID()}','${uid}','${email}','${marker}')`);
+  runSeedStatement('cms-postgres', 'ownerinc_cms', 'cms_admin', 'seed_cms_payload_preference',
+    `INSERT INTO public.payload_preferences(id,key,value) VALUES('${randomUUID()}','fixture-${safeToken(runtime.project)}','{"marker":"${marker}"}'::jsonb)`);
+  setSubstep('seed_portal_upload');
   composeWithLease(runtime, ['exec', '-T', 'api', 'sh', '-ceu', 'printf %s "$1" > /app/uploads/preauthority-fixture.txt',
-    'payload-fixture', `${marker}:portal-upload`]);
+    'payload-fixture', `${marker}:portal-upload`], { substep: 'seed_portal_upload' });
+  setSubstep('seed_cms_media');
   composeWithLease(runtime, ['exec', '-T', 'cms', 'sh', '-ceu',
     'mkdir -p /var/lib/ownerinc-cms/media/.owner-news-import/staging && printf %s "$1" > /var/lib/ownerinc-cms/media/.owner-news-import/staging/receipt.json && printf %s "$2" > /var/lib/ownerinc-cms/media/preauthority-fixture.bin',
-    'payload-fixture', `${marker}:receipt`, `${marker}:cms-media`]);
+    'payload-fixture', `${marker}:receipt`, `${marker}:cms-media`], { substep: 'seed_cms_media' });
   await assertQuiescentSnapshotStable(runtime);
 }
 
@@ -369,23 +397,37 @@ print(module._tar_tree(sys.stdin.buffer, compressed=False))
 }
 
 function snapshot(runtime) {
+  setSubstep('snapshot_portal_database_rows');
+  const portalDatabase = createHash('sha256').update(databaseDump(runtime, 'postgres', 'portal', 'portal_admin')).digest('hex');
+  setSubstep('snapshot_cms_database_rows');
+  const cmsDatabase = createHash('sha256').update(databaseDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin')).digest('hex');
+  setSubstep('snapshot_portal_database_schema');
+  const portalSchema = createHash('sha256').update(databaseSchemaDump(runtime, 'postgres', 'portal', 'portal_admin')).digest('hex');
+  setSubstep('snapshot_cms_database_schema');
+  const cmsSchema = createHash('sha256').update(databaseSchemaDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin')).digest('hex');
+  setSubstep('snapshot_portal_uploads');
+  const portalUploads = storageFingerprint(runtime, 'api', '/app/uploads');
+  setSubstep('snapshot_cms_media');
+  const cmsUploads = storageFingerprint(runtime, 'cms', '/var/lib/ownerinc-cms/media');
   return {
-    portalDatabase: createHash('sha256').update(databaseDump(runtime, 'postgres', 'portal', 'portal_admin')).digest('hex'),
-    cmsDatabase: createHash('sha256').update(databaseDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin')).digest('hex'),
-    portalSchema: createHash('sha256').update(databaseSchemaDump(runtime, 'postgres', 'portal', 'portal_admin')).digest('hex'),
-    cmsSchema: createHash('sha256').update(databaseSchemaDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin')).digest('hex'),
-    portalUploads: storageFingerprint(runtime, 'api', '/app/uploads'),
-    cmsUploads: storageFingerprint(runtime, 'cms', '/var/lib/ownerinc-cms/media'),
+    portalDatabase,
+    cmsDatabase,
+    portalSchema,
+    cmsSchema,
+    portalUploads,
+    cmsUploads,
   };
 }
 
 async function assertQuiescentSnapshotStable(runtime) {
+  setSubstep('snapshot_list_writers');
   const running = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
     .split(/\r?\n/u).filter(Boolean);
   const writers = ['api', 'cron', 'cms'].filter(service => running.includes(service));
   assert.deepEqual(writers, ['api', 'cron', 'cms'],
     'all fixture application writers must be running before the quiescence check');
-  composeWithLease(runtime, ['stop', '--timeout', '120', ...writers]);
+  setSubstep('snapshot_stop_writers');
+  composeWithLease(runtime, ['stop', '--timeout', '120', ...writers], { substep: 'snapshot_stop_writers' });
   try {
     const first = snapshot(runtime);
     const second = snapshot(runtime);
@@ -393,7 +435,8 @@ async function assertQuiescentSnapshotStable(runtime) {
       'repeated quiescent snapshots must preserve every database row, sequence, catalog and file tree');
     runtime.quiescentSnapshotStable = true;
   } finally {
-    composeWithLease(runtime, ['start', ...writers]);
+    setSubstep('snapshot_restart_writers');
+    composeWithLease(runtime, ['start', ...writers], { substep: 'snapshot_restart_writers' });
     for (const service of writers) await awaitService(runtime, service);
   }
 }
@@ -813,6 +856,8 @@ try {
     schemaVersion: 1, status: 'failed', run: runIdentity,
     images, failedStage: stage,
     failureCode: error instanceof FixtureFailure ? error.code : 'acceptance_assertion_failed',
+    ...(activeSubstep ? { failedSubstep: activeSubstep } : {}),
+    ...(error instanceof FixtureFailure && error.diagnostic ? { commandDiagnostic: error.diagnostic } : {}),
     checks: safeChecks, negativeCases,
     evidence: { kind: 'redacted-metadata-only', privateFixtureRetainedForRunnerLifetime: preserveFixture },
   };
