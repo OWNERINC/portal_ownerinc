@@ -90,6 +90,28 @@ test('CMS readiness diagnostics read only allowlisted Docker fields and HTTP sta
   assert.match(recoveryRunner, /persistPrivateCommandEvidence\(\s*fixtureRoot,\s*privateCommandEvidence,\s*\)/u);
   assert.match(recoveryRunner, /substep: 'snapshot_restart_writers',[\s\S]{0,120}preservePrivateErrorEvidence: true/u);
   assert.match(recoveryRunner, /recoveryProgress\[runtime\.role\]\.writersRestartedHealthy = true/u);
+  assert.match(recoveryRunner, /async function ensureFixtureRootUid\(file\)/u);
+  assert.match(recoveryRunner, /if \(before\.uid !== 0\) await chown\(file, 0, before\.gid\)/u);
+  assert.match(recoveryRunner, /async function assertFixtureRootUid\(file\)/u);
+  assert.match(recoveryRunner, /await assertFixtureRootUid\(document\.paths\.lock\)/u);
+  assert.match(recoveryRunner, /await ensureFixtureRootUid\(document\.paths\.environmentFile\)/u);
+  assert.match(recoveryRunner, /async function assertAdapterRejectsNonRootOwner\(runtime\)/u);
+  assert.match(recoveryRunner, /const rootOwnerProbeScript = String\.raw`[\s\S]*?trap finish_probe EXIT[\s\S]*?chown "65534:\$lock_gid"[\s\S]*?"\$guard" verify-release/u);
+  assert.match(recoveryRunner, /current_identity" == "\$lock_identity" && \/proc\/\$\$\/fd\/9 -ef "\$lock"/u);
+  assert.match(recoveryRunner, /chown "0:\$lock_gid" -- "\$lock" 2>"\$restoration_stderr"/u);
+  assert.match(recoveryRunner, /restoration_verified=1[\s\S]*?lock_uid=%s[\s\S]*?lock_gid=%s/u);
+  assert.match(recoveryRunner, /restorationVerifiedUnderLease: protocol\[5\] === '1'/u);
+  assert.match(recoveryRunner, /withLease\(runtime, runtime\.project, 'bash', commandArgs/u);
+  assert.match(recoveryRunner, /assertRootOwnerGuardProbe\(\{/u);
+  const ownerProbeSource = recoveryRunner.slice(recoveryRunner.indexOf('async function assertAdapterRejectsNonRootOwner'), recoveryRunner.indexOf('\nfunction composeCall'));
+  assert.doesNotMatch(ownerProbeSource,
+    /await chown\(lock,/u, 'ownership mutation and restoration must stay inside the leased shell transaction');
+  const validationPosition = ownerProbeSource.indexOf('assertRootOwnerGuardProbe({');
+  const fileCleanupPosition = ownerProbeSource.indexOf('Promise.all(Object.values(privateFiles)');
+  const evidenceCleanupPosition = ownerProbeSource.indexOf('privateCommandEvidence.splice(evidenceStart)');
+  assert.ok(validationPosition < fileCleanupPosition && fileCleanupPosition < evidenceCleanupPosition,
+    'private negative evidence is deleted only after validation and successful cleanup of the private stderr files');
+  assert.match(recoveryRunner, /await assertAdapterRejectsNonRootOwner\(source\)/u);
   assert.doesNotMatch(recoveryRunner, /response\.(?:text|json|arrayBuffer)\(|docker', \['logs'|State\.Health\.Log|Config\.Env/u);
   assert.match(commandRunner, /path\.join\(fixtureRoot, 'private-diagnostics'\)/u);
   assert.match(commandRunner, /chmod\(directory, 0o700\)/u);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, chown, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +18,8 @@ import {
   inferReadinessFailureReason,
 } from './integration/payload-preauthority-diagnostics.mjs';
 import {
-  controlCommandOptions, createLeasedCommandInvocation, FixtureFailure,
-  persistPrivateCommandEvidence, runFixtureCommand,
+  assertRootOwnerGuardProbe, controlCommandOptions, createLeasedCommandInvocation,
+  FixtureFailure, persistPrivateCommandEvidence, runFixtureCommand,
 } from './integration/payload-preauthority-command.mjs';
 import {
   createRecoveryFailureReportFields, runSnapshotAndRestart,
@@ -64,6 +64,82 @@ const recoveryProgress = {
   target: { initialCmsHealthPassed: false, writersRestartedHealthy: false, quiescentSnapshotComparison: 'not_started' },
   leaseTarget: { initialCmsHealthPassed: false, writersRestartedHealthy: false, quiescentSnapshotComparison: 'not_started' },
 };
+
+const rootOwnerProbeScript = String.raw`
+set -uo pipefail
+lock=$1
+expected_identity=$2
+guard=$3
+release=$4
+mutation_stderr=$5
+adapter_stderr=$6
+restoration_stderr=$7
+[[ "$PORTAL_OPERATION_LOCK_HELD" == "$lock" && ! -L "$lock" && -f "$lock" && /proc/$$/fd/9 -ef "$lock" ]] || {
+  printf 'Owner regression probe could not confirm inherited lease\n' >&2
+  exit 92
+}
+lock_identity=$(stat -Lc '%d:%i' -- "$lock" 2>/dev/null) || exit 93
+lock_gid=$(stat -c '%g' -- "$lock" 2>/dev/null) || exit 93
+[[ "$lock_identity" == "$expected_identity" && "$(stat -c '%u' -- "$lock" 2>/dev/null)" == 0 ]] || exit 94
+mutation_status=125
+adapter_status=125
+restoration_status=125
+probe_started=0
+identity_preserved=0
+lock_uid=unknown
+restored_gid=unknown
+finish_probe() {
+  original_status=$?
+  trap - EXIT
+  set +e
+  if [[ "$probe_started" == 1 ]]; then
+    current_identity=$(stat -Lc '%d:%i' -- "$lock" 2>/dev/null)
+    if [[ "$current_identity" == "$lock_identity" && /proc/$$/fd/9 -ef "$lock" ]]; then
+      identity_preserved=1
+      chown "0:$lock_gid" -- "$lock" 2>"$restoration_stderr"
+      restoration_status=$?
+    else
+      restoration_status=1
+      printf 'fixture_lock_identity_changed\n' >"$restoration_stderr"
+    fi
+    restored_identity=$(stat -Lc '%d:%i' -- "$lock" 2>/dev/null)
+    if [[ "$restored_identity" != "$lock_identity" || ! /proc/$$/fd/9 -ef "$lock" ]]; then
+      identity_preserved=0
+      if [[ "$restoration_status" == 0 ]]; then restoration_status=1; fi
+    fi
+    lock_uid=$(stat -c '%u' -- "$lock" 2>/dev/null) || lock_uid=unknown
+    restored_gid=$(stat -c '%g' -- "$lock" 2>/dev/null) || restored_gid=unknown
+    restoration_verified=0
+    if [[ "$identity_preserved" == 1 && "$restoration_status" == 0 && "$lock_uid" == 0 \
+      && "$restored_gid" == "$lock_gid" && /proc/$$/fd/9 -ef "$lock" ]]; then
+      restoration_verified=1
+    fi
+    printf 'mutation_exit=%s\nadapter_exit=%s\nrestoration_exit=%s\nlock_identity_preserved=%s\nrestoration_verified=%s\nlock_uid=%s\nlock_gid=%s\n' \
+      "$mutation_status" "$adapter_status" "$restoration_status" "$identity_preserved" "$restoration_verified" "$lock_uid" "$restored_gid"
+    exit 0
+  fi
+  exit "$original_status"
+}
+trap finish_probe EXIT
+probe_started=1
+if chown "65534:$lock_gid" -- "$lock" 2>"$mutation_stderr"; then
+  mutation_status=0
+else
+  mutation_status=$?
+  exit 0
+fi
+if [[ "$(stat -c '%u' -- "$lock" 2>/dev/null)" != 65534 ]]; then
+  mutation_status=1
+  printf 'fixture_nonroot_owner_not_applied\n' >"$mutation_stderr"
+  exit 0
+fi
+if "$guard" verify-release "$release" '' >/dev/null 2>"$adapter_stderr"; then
+  adapter_status=0
+else
+  adapter_status=$?
+fi
+exit 0
+`;
 
 function safeEnvironment(extra = {}) {
   return { PATH: hostPath, HOME: '/root', ...extra };
@@ -179,6 +255,21 @@ async function writeRootFile(file, contents, mode = 0o600) {
   await chmod(file, mode);
 }
 
+async function assertFixtureRootUid(file) {
+  const info = await lstat(file);
+  assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1,
+    'fixture protected input must remain a regular, unlinked file');
+  assert.equal(info.uid, 0, 'fixture protected input must satisfy the adapter root-UID contract');
+}
+
+async function ensureFixtureRootUid(file) {
+  const before = await lstat(file);
+  assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1,
+    'fixture control input must remain a regular, unlinked file');
+  if (before.uid !== 0) await chown(file, 0, before.gid);
+  await assertFixtureRootUid(file);
+}
+
 function envFileContents({ project, port, credentials }) {
   const origin = `http://127.0.0.1:${port}`;
   const pem = credentials.firebasePrivateKey.replaceAll('\n', '\\n');
@@ -226,6 +317,7 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
     trustedSourceInventoryIdentities: sourceInventoryIdentity ? [sourceInventoryIdentity] : [],
   });
   await writeProtectedInventory(runtimeDirectory, document);
+  await ensureFixtureRootUid(path.join(runtimeDirectory, 'payload-control-inventory.json'));
   for (const name of ['payload-control', 'payload-control-runtime.py', 'payload-control-state.py',
     'payload-control-inventory.py', 'payload-operations-guard.sh', 'compose.payload.production.yaml']) {
     const sourceName = name === 'payload-operations-guard.sh' ? name : name;
@@ -237,7 +329,10 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
   await chmod(path.join(runtimeDirectory, 'payload-operations-guard'), 0o700);
   await chmod(document.paths.composeOverride, 0o600);
   await chmod(document.paths.payloadOverride, 0o600);
+  await ensureFixtureRootUid(document.paths.composeOverride);
+  await ensureFixtureRootUid(document.paths.payloadOverride);
   await writeRootFile(document.paths.lock, 'disposable shared operation lease\n');
+  await assertFixtureRootUid(document.paths.lock);
 
   const legacyRelease = path.join(releases, 'legacy-floor');
   const payloadRelease = path.join(releases, 'payload-candidate');
@@ -255,6 +350,7 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
     portalToPayload: secret(), smtpPassword: secret(), workerSecret: secret(),
   });
   await writeRootFile(document.paths.environmentFile, envFileContents({ project, port, credentials }));
+  await ensureFixtureRootUid(document.paths.environmentFile);
   await writeRootFile(document.paths.currentRelease, `${legacyRelease}\n`);
   const helperResult = text(run(python, [path.join(runtimeDirectory, 'payload-control-inventory.py'), 'validate',
     path.join(runtimeDirectory, 'payload-control-inventory.json')]));
@@ -269,6 +365,106 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
     project, root, directory: runtimeDirectory, inventory: { document, identity },
     legacyRelease, payloadRelease, port, baseUrl: `http://127.0.0.1:${port}`,
   };
+}
+
+async function assertAdapterRejectsNonRootOwner(runtime) {
+  setStage('fixture_root_owner_guard_regression');
+  const lock = runtime.inventory.document.paths.lock;
+  const original = await lstat(lock, { bigint: true });
+  assert.equal(original.uid, 0n, 'protected fixture lock must start with the adapter-required root UID');
+  assert.ok(original.isFile() && !original.isSymbolicLink() && original.nlink === 1n,
+    'protected fixture lock must remain a regular, unlinked file');
+  const privateDirectory = path.join(fixtureRoot, 'private-diagnostics');
+  await mkdir(privateDirectory, { recursive: true, mode: 0o700 });
+  await chmod(privateDirectory, 0o700);
+  const probeId = randomUUID();
+  const privateFiles = {
+    mutation: path.join(privateDirectory, `owner-mutation-${probeId}.stderr`),
+    adapter: path.join(privateDirectory, `owner-adapter-${probeId}.stderr`),
+    restoration: path.join(privateDirectory, `owner-restoration-${probeId}.stderr`),
+  };
+  for (const file of Object.values(privateFiles)) {
+    await writeFile(file, '', { flag: 'wx', mode: 0o600 });
+    await chmod(file, 0o600);
+  }
+  const evidenceStart = privateCommandEvidence.length;
+  const options = controlCommandOptions('verify-release', runtime.payloadRelease);
+  const commandArgs = [
+    '-c', rootOwnerProbeScript,
+    'payload-root-owner-regression',
+    lock,
+    `${original.dev}:${original.ino}`,
+    path.join(runtime.directory, 'payload-operations-guard'),
+    runtime.payloadRelease,
+    privateFiles.mutation,
+    privateFiles.adapter,
+    privateFiles.restoration,
+  ];
+  let commandOutput;
+  let commandFailure;
+  try {
+    commandOutput = withLease(runtime, runtime.project, 'bash', commandArgs, {
+      release: runtime.payloadRelease,
+      substep: 'fixture_root_owner_lease_probe',
+      preservePrivateErrorEvidence: true,
+    });
+  } catch (error) {
+    commandFailure = error;
+  }
+  const privateStderr = {};
+  for (const [key, file] of Object.entries(privateFiles)) {
+    const bytes = await readFile(file).catch(() => Buffer.alloc(0));
+    privateStderr[key] = bytes.subarray(0, 16 * 1024);
+  }
+  setSubstep(null);
+  const retainPrivateProbeEvidence = () => {
+    for (const [key, stderr] of Object.entries(privateStderr)) {
+      if (stderr.length > 0 && privateCommandEvidence.length < 8) {
+        const substep = key === 'adapter' ? options.substep
+          : key === 'mutation' ? 'fixture_set_nonroot_owner' : 'fixture_restore_root_owner';
+        privateCommandEvidence.push({ substep, stderr: Buffer.from(stderr) });
+      }
+    }
+  };
+  if (commandFailure) {
+    retainPrivateProbeEvidence();
+    throw commandFailure;
+  }
+
+  const protocol = commandOutput.toString('utf8').match(
+    /^mutation_exit=(\d{1,3})\nadapter_exit=(\d{1,3})\nrestoration_exit=(\d{1,3})\nlock_identity_preserved=([01])\nrestoration_verified=([01])\nlock_uid=(\d{1,10}|unknown)\nlock_gid=(\d{1,10}|unknown)\n$/u,
+  );
+  if (!protocol) {
+    retainPrivateProbeEvidence();
+    throw new Error('owner regression probe returned an invalid fixed status protocol');
+  }
+  const after = await lstat(lock, { bigint: true }).catch(() => null);
+  const lockIdentityPreserved = protocol[4] === '1' && after !== null
+    && after.dev === original.dev && after.ino === original.ino;
+  assertRootOwnerGuardProbe({
+    mutationStatus: Number(protocol[1]),
+    mutationStderr: privateStderr.mutation,
+    adapterStatus: Number(protocol[2]),
+    adapterStderr: privateStderr.adapter,
+    restorationStatus: Number(protocol[3]),
+    restorationStderr: privateStderr.restoration,
+    lockIdentityPreserved,
+    restorationVerifiedUnderLease: protocol[5] === '1',
+    lockUid: protocol[6] === 'unknown' ? null : Number(protocol[6]),
+    lockGid: protocol[7] === 'unknown' ? null : Number(protocol[7]),
+    lockUidAfterLease: after === null ? null : Number(after.uid),
+    lockGidAfterLease: after === null ? null : Number(after.gid),
+    expectedGid: Number(original.gid),
+    controlCommandContext: options.controlCommandContext,
+    privateCommandEvidence,
+  });
+  // The helper returns only after exact adapter attribution and restoration of
+  // the original root-owned inode have both passed. If file cleanup fails, keep
+  // the buffers so the outer failure path can persist them privately.
+  setSubstep('fixture_root_owner_evidence_cleanup');
+  await Promise.all(Object.values(privateFiles).map(file => rm(file, { force: true })));
+  privateCommandEvidence.splice(evidenceStart);
+  setSubstep(null);
 }
 
 function composeCall(runtime, actionArgs, options = {}) {
@@ -849,6 +1045,7 @@ async function runRecovery() {
   runtimeRefs = [source, target, leaseTarget];
   inventoryIdentities.target = target.inventory.identity;
   inventoryIdentities.leaseTarget = leaseTarget.inventory.identity;
+  await assertAdapterRejectsNonRootOwner(source);
 
   // Pull the exact scanned/published same-run digests. Do not build, retag, or
   // substitute locally tagged images in the recovery acceptance.

@@ -270,6 +270,19 @@ os dois resumos estáticos separados em vez de deixar a falha de restart ocultar
 falha de snapshot. O `verify-release` seguinte à comparação usa stage por papel e
 subpasso fixo `payload_control_verify_release`; stderr da chamada fica somente no
 arquivo privado do fixture quando houver conteúdo.
+O runtime exige UID 0 (`owner_root=True`) nos arquivos protegidos; não há variável
+de owner configurável nem comparação com um valor `uid:gid`. O fixture confirma
+UID 0 em inventário, lock, ambiente e overrides, preservando o GID existente, e
+inclui uma negativa pelo `verify-release` real com lock temporariamente não-root.
+Uma única lease herdada (`fd 9`) permanece aberta durante a troca de UID, chamada
+do guard/adapter e restauração por `EXIT` trap; o script confirma que o caminho e
+o descritor continuam apontando ao mesmo device/inode e que UID/GID retornam aos
+valores protegidos antes de liberar a lease. A negativa só é descartada após o
+stderr exato `unsafe_required_owner` e a restauração serem confirmados. Em falha
+inesperada, stderr de mutação/adapter/restauração permanece apenas nos arquivos
+privados do fixture, e o relatório redigido conserva o diagnóstico primário do
+adapter mais o subpasso/status secundário e os indicadores da restauração, sem
+texto bruto.
 
 ## Preparação inicial da infraestrutura de produção — inativa até nova autorização
 

@@ -69,6 +69,76 @@ export function runFixtureCommand(command, args = [], options = {}) {
   return result.stdout || Buffer.alloc(0);
 }
 
+export function assertRootOwnerGuardProbe({
+  mutationStatus,
+  mutationStderr,
+  adapterStatus,
+  adapterStderr,
+  restorationStatus,
+  restorationStderr,
+  lockIdentityPreserved,
+  restorationVerifiedUnderLease,
+  lockUid,
+  lockGid,
+  lockUidAfterLease,
+  lockGidAfterLease,
+  expectedGid,
+  controlCommandContext,
+  privateCommandEvidence,
+}) {
+  const diagnostics = {
+    mutation: createCommandDiagnostic({
+      substep: 'fixture_set_nonroot_owner', status: mutationStatus, stderr: mutationStderr,
+    }),
+    adapter: createCommandDiagnostic({
+      substep: controlCommandSubstep('verify-release'),
+      status: adapterStatus,
+      stderr: adapterStderr,
+      controlCommandContext,
+    }),
+    restoration: createCommandDiagnostic({
+      substep: 'fixture_restore_root_owner', status: restorationStatus, stderr: restorationStderr,
+    }),
+  };
+  const retain = (substep, stderr) => {
+    const evidence = Buffer.isBuffer(stderr) ? stderr : Buffer.from(stderr || '');
+    if (evidence.length > 0 && Array.isArray(privateCommandEvidence) && privateCommandEvidence.length < 8) {
+      privateCommandEvidence.push({ substep, stderr: Buffer.from(evidence).subarray(0, 16 * 1024) });
+    }
+  };
+  retain('fixture_set_nonroot_owner', mutationStderr);
+  retain(controlCommandSubstep('verify-release'), adapterStderr);
+  retain('fixture_restore_root_owner', restorationStderr);
+
+  const rootOwnerRestored = restorationStatus === 0 && lockIdentityPreserved === true
+    && restorationVerifiedUnderLease === true
+    && lockUid === 0 && lockGid === expectedGid
+    && lockUidAfterLease === 0 && lockGidAfterLease === expectedGid;
+  const adapterRejectedAsExpected = mutationStatus === 0 && adapterStatus === 2
+    && diagnostics.adapter.controlErrorIdentifier === 'unsafe_required_owner';
+  if (adapterRejectedAsExpected && rootOwnerRestored) {
+    // The caller may clean private evidence only after its private-file cleanup
+    // also succeeds; retain these buffers until that final step.
+    return;
+  }
+
+  const mutationFailed = mutationStatus !== 0;
+  const failure = new FixtureFailure(
+    mutationFailed ? 'fixture_owner_probe_mutation_failed' : 'fixture_owner_guard_regression_failed',
+    mutationFailed ? diagnostics.mutation : diagnostics.adapter,
+  );
+  if (!rootOwnerRestored) {
+    failure.secondaryFailure = {
+      code: restorationStatus === 0 ? 'fixture_owner_restore_invariant_failed' : 'fixture_owner_restore_failed',
+      substep: 'fixture_restore_root_owner',
+      diagnostic: diagnostics.restoration,
+      lockIdentityPreserved: lockIdentityPreserved === true,
+      rootOwnerRestored: false,
+    };
+  }
+  throw failure;
+}
+
 export async function persistPrivateCommandEvidence(fixtureRoot, privateCommandEvidence) {
   if (!fixtureRoot || privateCommandEvidence.length === 0) return false;
   const directory = path.join(fixtureRoot, 'private-diagnostics');

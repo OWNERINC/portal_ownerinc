@@ -89,9 +89,25 @@ export function createRecoveryFailureReportFields(outcome) {
   const primary = failureSummary(outcome.primaryError, outcome.primarySubstep);
   const secondary = outcome.secondaryError
     ? failureSummary(outcome.secondaryError, outcome.secondarySubstep) : null;
+  const ownerRestoration = outcome.primaryError?.secondaryFailure;
+  const safeOwnerRestoration = ownerRestoration && typeof ownerRestoration === 'object'
+    ? {
+      failureCode: typeof ownerRestoration.code === 'string' && safeLabel.test(ownerRestoration.code)
+        ? ownerRestoration.code : 'fixture_owner_restore_failed',
+      failedSubstep: typeof ownerRestoration.substep === 'string' && safeLabel.test(ownerRestoration.substep)
+        ? ownerRestoration.substep : 'fixture_restore_root_owner',
+      ...(ownerRestoration.diagnostic && typeof ownerRestoration.diagnostic === 'object'
+        ? { commandDiagnostic: sanitizeCommandDiagnostic(ownerRestoration.diagnostic) } : {}),
+      lockIdentityPreserved: ownerRestoration.lockIdentityPreserved === true,
+      rootOwnerRestored: ownerRestoration.rootOwnerRestored === true,
+    } : null;
+  const failureContext = {
+    ...(secondary ? { writerRestart: secondary } : {}),
+    ...(safeOwnerRestoration ? { fixtureOwnerRestoration: safeOwnerRestoration } : {}),
+  };
 
   return {
     ...primary,
-    ...(secondary ? { failureContext: { writerRestart: secondary } } : {}),
+    ...(Object.keys(failureContext).length ? { failureContext } : {}),
   };
 }
