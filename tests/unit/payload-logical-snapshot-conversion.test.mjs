@@ -4,6 +4,7 @@ import test from 'node:test';
 import { assertConversionFixtureConfiguration, verifyLinuxConversionPrerequisite } from '../../scripts/integration/payload-logical-snapshot-conversion-probe.mjs';
 import { FixtureFailure } from '../../scripts/integration/payload-preauthority-command.mjs';
 import { snapshotComponents } from '../../scripts/integration/payload-preauthority-snapshot.mjs';
+import { producedLinuxRecoveryFixture } from './payload-preauthority-snapshot-producer-fixture.mjs';
 
 const baseline = () => Object.fromEntries(snapshotComponents.map((component, index) => [component, String(index).repeat(64)]));
 const rejection = () => new FixtureFailure('fixture_command_failed', {
@@ -11,16 +12,11 @@ const rejection = () => new FixtureFailure('fixture_command_failed', {
 });
 
 test('conversion runtime configuration accepts only the existing disposable source project, paths and exact Compose arguments', () => {
-  const runtimeDirectory = '/private/disposable/source/runtime';
-  const project = 'payload-preauth-a-1-1-source';
-  const release = '/private/disposable/source/releases/payload-candidate';
-  const configuration = { project, runtimeDirectory, python: 'python3', composeArgs: [
-    '--profile', 'notifications', '--env-file', `${runtimeDirectory}/fixture.runtime.conf`, '--env-file', `${release}/.image-env`,
-    '-f', `${release}/docker-compose.yml`, '-f', `${release}/docker-compose.payload.yml`, '-f', `${runtimeDirectory}/compose.fixture.yaml`,
-    '-f', `${runtimeDirectory}/compose.payload.production.yaml`, '--project-name', project, '--project-directory', release,
-  ] };
-  const environment = { COMPOSE_PROJECT_NAME: project, PORTAL_OPERATION_LOCK: `${runtimeDirectory}/deploy.lock`,
-    PORTAL_OPERATION_LOCK_HELD: `${runtimeDirectory}/deploy.lock` };
+  const produced = producedLinuxRecoveryFixture();
+  const configuration = JSON.parse(produced.wire.input);
+  const environment = produced.environment;
+  const project = configuration.project;
+  const release = produced.payloadRelease;
   assert.doesNotThrow(() => assertConversionFixtureConfiguration(configuration, environment));
   for (const invalid of [
     { ...configuration, project: 'ownerinc-portal-prod' },
@@ -169,7 +165,7 @@ test('actual recovery runner wires direct Linux conversion prerequisite under le
   assert.ok(section.indexOf("composeWithLease(runtime, ['stop'") < probe);
   assert.ok(section.indexOf("if (runtime.role === 'source')") < probe);
   assert.match(section, /withLease\(runtime, runtime\.project, process\.execPath/u);
-  assert.match(section, /composeArgs: composeArgs\(runtime\.project, runtime\.payloadRelease, runtime, \[\]\)/u);
+  assert.match(section, /conversionProbeCommandInput\(runtime, \{ commit: runIdentity\.commit, python \}\)/u);
   assert.match(section, /timeout: 15 \* 60_000/u);
   const protocol = section.indexOf("conversion.toString('utf8') !== 'PAYLOAD_LINUX_CONVERSION_PREREQUISITE passed\\n'");
   assert.ok(probe < protocol);

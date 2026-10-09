@@ -125,7 +125,7 @@ test('actual probe executable emits a strict configuration failure before invoki
     });
   } catch (caught) { error = caught; }
   assert.ok(error instanceof FixtureFailure);
-  assert.equal(error.code, 'linux_conversion_validate_fixture_configuration_invalid');
+  assert.equal(error.code, 'linux_conversion_validate_fixture_configuration_json_invalid');
   assert.equal(error.diagnostic.substep, 'conversion_validate_fixture');
   assert.doesNotMatch(JSON.stringify(error.diagnostic), /private-invalid-json/u);
 });

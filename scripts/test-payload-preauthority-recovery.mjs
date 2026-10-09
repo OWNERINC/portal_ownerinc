@@ -8,6 +8,8 @@ import {
 } from './integration/payload-preauthority-snapshot.mjs';
 import { logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './integration/payload-logical-snapshot.mjs';
 import { CONVERSION_PROBE_CONTEXT } from './integration/payload-logical-snapshot-probe-protocol.mjs';
+import { recoveryPayloadRelease, recoveryComposeArgs, recoveryFixtureEnvironment,
+  conversionProbeCommandInput } from './integration/payload-preauthority-snapshot-runtime.mjs';
 import { POST_RESTORE_HOLD_CONTEXT, POST_RESTORE_HOLD_TIMEOUT_MS,
   parseFixtureFailureHold } from './integration/payload-preauthority-snapshot-hold.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -182,18 +184,7 @@ function setStage(value) {
 function setSubstep(value) { activeSubstep = value; }
 
 function composeArgs(project, release, runtime, actionArgs) {
-  const paths = runtime.inventory.document.paths;
-  return [
-    '--profile', 'notifications', '--env-file', paths.environmentFile,
-    '--env-file', path.join(release, '.image-env'),
-    '-f', path.join(release, 'docker-compose.yml'),
-    '-f', path.join(release, 'docker-compose.payload.yml'),
-    '-f', paths.composeOverride,
-    '-f', paths.payloadOverride,
-    '--project-name', project,
-    '--project-directory', release,
-    ...actionArgs,
-  ];
+  return recoveryComposeArgs(project, release, runtime, actionArgs);
 }
 
 function compose(project, release, runtime, actionArgs, options = {}) {
@@ -204,17 +195,7 @@ function compose(project, release, runtime, actionArgs, options = {}) {
 }
 
 function fixtureEnv(project, runtime, release) {
-  return safeEnvironment({
-    COMPOSE_PROJECT_NAME: project,
-    PORTAL_OPERATION_LOCK: runtime.inventory.document.paths.lock,
-    PAYLOAD_OPERATIONS_GUARD: path.join(runtime.directory, 'payload-operations-guard'),
-    COMPOSE_ENV_FILE: runtime.inventory.document.paths.environmentFile,
-    COMPOSE_OVERRIDE: runtime.inventory.document.paths.composeOverride,
-    BACKUP_DIR: runtime.inventory.document.paths.backupRoots[0],
-    PRE_RESTORE_BACKUP_DIR: runtime.inventory.document.paths.preRestoreBackupRoot,
-    RESTORE_BASE_URL: runtime.baseUrl,
-    SMOKE_ATTEMPTS: '8',
-  });
+  return recoveryFixtureEnvironment(project, runtime, hostPath);
 }
 
 function withLease(runtime, project, command, args = [], options = {}) {
@@ -357,7 +338,7 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
 
   const sourceMaterial = legacySourceMaterial(images);
   const legacyRelease = path.join(releases, sourceMaterial.releaseId);
-  const payloadRelease = path.join(releases, runIdentity.commit);
+  const payloadRelease = recoveryPayloadRelease(releases, runIdentity.commit);
   await copyReleaseSources(legacyRelease);
   await copyReleaseSources(payloadRelease);
   await writeRootFile(path.join(legacyRelease, '.image-env'), sourceMaterial.manifest);
@@ -803,8 +784,7 @@ async function assertQuiescentSnapshotStable(runtime) {
           const conversion = withLease(runtime, runtime.project, process.execPath, [
             path.join(repository, 'scripts', 'integration', 'payload-logical-snapshot-conversion-probe.mjs'),
           ], {
-            input: JSON.stringify({ project: runtime.project, runtimeDirectory: runtime.directory,
-              python, composeArgs: composeArgs(runtime.project, runtime.payloadRelease, runtime, []) }),
+            ...conversionProbeCommandInput(runtime, { commit: runIdentity.commit, python }),
             substep: 'linux_conversion_prerequisite', failureCode: 'linux_conversion_prerequisite_failed',
             conversionProbeCommandContext: CONVERSION_PROBE_CONTEXT,
             timeout: 15 * 60_000, maxBuffer: 64 * 1024, preservePrivateErrorEvidence: true,

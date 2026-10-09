@@ -11,25 +11,33 @@ import { CONVERSION_PROBE_SUCCESS, encodeConversionProbeFailure, conversionProbe
  * project/release accepted merely because the environment says "source". */
 export function assertConversionFixtureConfiguration(configuration, environment) {
   const p = path.posix;
-  if (!configuration || typeof configuration.runtimeDirectory !== 'string'
+  const reject = reason => { throw Object.assign(new Error('invalid_probe_configuration'), { probeReason: reason }); };
+  if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)
+      || Object.keys(configuration).sort().join(',') !== 'commit,composeArgs,project,python,runtimeDirectory') reject('configuration_shape_invalid');
+  if (typeof configuration.runtimeDirectory !== 'string'
       || !p.isAbsolute(configuration.runtimeDirectory) || p.resolve(configuration.runtimeDirectory) !== configuration.runtimeDirectory
       || p.basename(configuration.runtimeDirectory) !== 'runtime'
-      || p.basename(p.dirname(configuration.runtimeDirectory)) !== 'source'
-      || typeof configuration.project !== 'string' || !/^payload-preauth-[a-z0-9-]+-source$/u.test(configuration.project)
-      || environment.COMPOSE_PROJECT_NAME !== configuration.project
-      || environment.PORTAL_OPERATION_LOCK !== p.join(configuration.runtimeDirectory, 'deploy.lock')
-      || environment.PORTAL_OPERATION_LOCK_HELD !== environment.PORTAL_OPERATION_LOCK
-      || typeof configuration.python !== 'string' || !configuration.python || configuration.python.includes('\0')) {
-    throw new Error('invalid_probe_configuration');
-  }
-  const release = p.join(p.dirname(configuration.runtimeDirectory), 'releases', 'payload-candidate');
+      || p.basename(p.dirname(configuration.runtimeDirectory)) !== 'source') reject('configuration_runtime_invalid');
+  if (typeof configuration.project !== 'string' || !/^payload-preauth-[a-z0-9-]+-source$/u.test(configuration.project)) reject('configuration_project_invalid');
+  if (typeof configuration.commit !== 'string' || !/^[0-9a-f]{40}$/u.test(configuration.commit)) reject('configuration_commit_invalid');
+  if (environment?.PAYLOAD_RECOVERY_COMMIT !== configuration.commit) reject('configuration_commit_mismatch');
+  if (environment?.COMPOSE_PROJECT_NAME !== configuration.project) reject('configuration_project_mismatch');
+  if (environment?.PORTAL_OPERATION_LOCK !== p.join(configuration.runtimeDirectory, 'deploy.lock')) reject('configuration_lock_mismatch');
+  if (environment?.PORTAL_OPERATION_LOCK_HELD !== environment.PORTAL_OPERATION_LOCK) reject('configuration_lease_mismatch');
+  if (typeof configuration.python !== 'string' || !configuration.python || configuration.python.includes('\0')) reject('configuration_python_invalid');
+  const release = p.join(p.dirname(configuration.runtimeDirectory), 'releases', configuration.commit);
   const expected = ['--profile', 'notifications', '--env-file', p.join(configuration.runtimeDirectory, 'fixture.runtime.conf'),
     '--env-file', p.join(release, '.image-env'), '-f', p.join(release, 'docker-compose.yml'),
     '-f', p.join(release, 'docker-compose.payload.yml'), '-f', p.join(configuration.runtimeDirectory, 'compose.fixture.yaml'),
     '-f', p.join(configuration.runtimeDirectory, 'compose.payload.production.yaml'), '--project-name', configuration.project,
     '--project-directory', release];
-  if (!Array.isArray(configuration.composeArgs) || configuration.composeArgs.length !== expected.length
-      || expected.some((value, index) => configuration.composeArgs[index] !== value)) throw new Error('invalid_probe_configuration');
+  const args = configuration.composeArgs;
+  if (!Array.isArray(args) || args.length !== expected.length || !args.every(value => typeof value === 'string')) reject('configuration_compose_shape_invalid');
+  if ([0,1,2,4,6,8,10,12,14,16].some(index => args[index] !== expected[index])) reject('configuration_compose_options_mismatch');
+  if (args[3] !== expected[3]) reject('configuration_compose_environment_mismatch');
+  if ([5,7,9,17].some(index => args[index] !== expected[index])) reject('configuration_compose_release_mismatch');
+  if ([11,13].some(index => args[index] !== expected[index])) reject('configuration_compose_override_mismatch');
+  if (args[15] !== expected[15]) reject('configuration_compose_project_mismatch');
 }
 
 /** The creation flag is set only after successful actual DDL. No DROP IF EXISTS
@@ -121,9 +129,10 @@ async function main() {
     let input = '';
     for await (const part of process.stdin) {
       input += part.toString('utf8');
-      if (input.length > 64 * 1024) throw new Error('invalid_probe_configuration');
+      if (input.length > 64 * 1024) throw Object.assign(new Error('invalid_probe_configuration'), { probeReason: 'configuration_input_limit_exceeded' });
     }
-    configuration = JSON.parse(input);
+    try { configuration = JSON.parse(input); }
+    catch { throw Object.assign(new Error('invalid_probe_configuration'), { probeReason: 'configuration_json_invalid' }); }
     assertConversionFixtureConfiguration(configuration, process.env);
     step = 'conversion_validate_lease';
     if (process.platform !== 'linux' || process.getuid() !== 0) {
@@ -214,7 +223,7 @@ print(module._tar_tree(sys.stdin.buffer,compressed=False))`;
   } catch (error) {
     if (evidenceDirectory) await persistPrivateCommandEvidence(evidenceDirectory, privateEvidence).catch(() => false);
     // Only finite stage metadata leaves the probe; driver/DDL details stay private.
-    if (step === 'conversion_validate_fixture' && !(error instanceof FixtureFailure)) error.probeReason = 'configuration_invalid';
+    if (step === 'conversion_validate_fixture' && !conversionProbeReasons.includes(error?.probeReason)) error.probeReason = 'configuration_invalid';
     process.stderr.write(encodeConversionProbeFailure(conversionProbeFailure(error, step)));
     process.exitCode = 2;
   }

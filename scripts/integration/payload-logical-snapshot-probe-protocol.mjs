@@ -11,6 +11,13 @@ export const conversionProbePhases = Object.freeze([
 ]);
 export const conversionProbeReasons = Object.freeze([
   'configuration_invalid', 'lease_unavailable', 'lease_identity_mismatch', 'lease_permissions_invalid',
+  'configuration_shape_invalid', 'configuration_runtime_invalid', 'configuration_project_invalid',
+  'configuration_commit_invalid', 'configuration_commit_mismatch', 'configuration_project_mismatch',
+  'configuration_lock_mismatch', 'configuration_lease_mismatch', 'configuration_python_invalid',
+  'configuration_compose_shape_invalid', 'configuration_compose_options_mismatch',
+  'configuration_compose_environment_mismatch', 'configuration_compose_release_mismatch',
+  'configuration_compose_override_mismatch', 'configuration_compose_project_mismatch',
+  'configuration_json_invalid', 'configuration_input_limit_exceeded',
   'platform_or_uid_invalid', 'writers_active', 'psql_failed', 'cli_failed', 'compose_failed', 'storage_failed',
   'catalog_absent', 'conversion_not_rejected', 'snapshot_mismatch', 'snapshot_shape_invalid', 'snapshot_result_invalid',
   'command_timeout', 'executable_not_found', 'permission_denied', 'output_limit_exceeded', 'command_signaled',
@@ -40,7 +47,7 @@ export function conversionCliLaunchReason(stderr, { context, status, errorCode, 
 function valid(value) {
   if (!value || typeof value !== 'object' || Object.keys(value).join(',') !== fields.join(',')
       || !conversionProbePhases.includes(value.phase) || !conversionProbeReasons.includes(value.reason)) return false;
-  if (value.reason === 'configuration_invalid' && value.phase !== 'conversion_validate_fixture') return false;
+  if (value.reason.startsWith('configuration_') && value.phase !== 'conversion_validate_fixture') return false;
   if (['lease_unavailable','lease_identity_mismatch','lease_permissions_invalid','platform_or_uid_invalid'].includes(value.reason)
       && value.phase !== 'conversion_validate_lease') return false;
   if (value.reason === 'writers_active' && !['conversion_baseline_writers','conversion_compare_writers'].includes(value.phase)) return false;

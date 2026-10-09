@@ -235,6 +235,103 @@ and this owned review document. No snapshot row/sequence/catalog exclusion chang
 no outside-scope implementation edits, no CI write/dispatch, commit/push, production
 SSH, Docker host-service change or delegation. Unrelated untracked files remain.
 
+## CI 37970701268 / 5538227 — concrete producer/consumer release mismatch
+
+The new redacted report proves `conversion_validate_fixture`, exit 2, with source
+initial CMS health passed and restart exit 1 still secondary. At that phase the
+probe has not inspected file ownership/modes, FD9, PostgreSQL or the CLI. Those
+are not the cause of this configuration rejection.
+
+**Concrete source evidence at 5538227:**
+
+- `scripts/test-payload-preauthority-recovery.mjs:359–360` builds the legacy release
+  from source material, and the Payload release with
+  `path.join(releases, runIdentity.commit)` — a commit-addressed directory.
+- The same runner at `184–196` uses that `runtime.payloadRelease` for all release
+  Compose inputs: `.image-env`, both release Compose files and project-directory.
+  At `806–807` it serializes those exact arguments into probe stdin.
+- `payload-logical-snapshot-conversion-probe.mjs:25–32` instead hardcoded
+  `releases/payload-candidate`. That expected path disagrees with **four** real
+  arguments (indexes 5, 7, 9, 17). Thus the real producer is deterministically
+  rejected by the old consumer. This is the confirmed primary configuration bug,
+  not a pgcrypto/AM/converter/module-loader hypothesis.
+
+### Bounded fix, strict binding retained
+
+Pure producer functions were extracted from the runner into
+`payload-preauthority-snapshot-runtime.mjs`: the actual commit-addressed release,
+Compose argument list, sanitized fixture environment and serialized probe input.
+Their existing valid-run semantics remain unchanged; the runner now calls those
+same exported functions, making the producer executable in offline regressions.
+
+Probe stdin additionally carries the approved parent `commit`. The parent passes
+that identity explicitly as `PAYLOAD_RECOVERY_COMMIT` through `options.env`; the
+existing `withLease` merge and `safeEnvironment` preserve it along with the fixture
+fields, while ambient `GITHUB_SHA` and unrelated environment values remain stripped.
+The consumer requires exact shape, lowercase **40-hex** commit, equality to that
+independent parent environment binding, and release directory
+`<own source>/releases/<commit>`. It still compares every Compose flag/path/project
+exactly, with canonical source runtime paths, exact lock/held-lease markers and the
+unchanged subsequent root/FD9/inode/mode checks. It does **not** learn authority from
+an arbitrary supplied `--project-directory`, allow a fixed alias, or accept another
+project/release/override. Private paths are never added to the report.
+
+Configuration errors now have finite field-specific reasons: JSON/shape, runtime,
+project/commit and environment bindings, lock/held marker, Python, Compose shape,
+options, environment path, release paths, overrides and project argument. For
+example, reversing the valid commit-addressed arguments to `payload-candidate`
+emits `linux_conversion_validate_fixture_configuration_compose_release_mismatch`.
+The catch handler preserves those reasons instead of overwriting them with generic
+`configuration_invalid`. No new report field/check/negative case was introduced.
+
+### Actual producer → consumer → wrapper regression
+
+The new test reads and executes the **actual production producer source modules**,
+including `createFixtureProjectNames` and `createInventory`, builds the real release
+and Compose/env input, then gives its serialized JSON to the actual consumer in a
+native Node child via the real throwing wrapper. It is not a hand-authored config
+document or copied expected Compose array. On Windows only, the producer modules
+run with Node's real POSIX path implementation in a test-local VM path ABI view;
+production files/guards are unchanged. This is transport/contract evidence, **not**
+Linux filesystem, lease or database-engine proof.
+
+The actual probe executable also consumes this produced stdin/environment: fixture
+validation passes, then the intentionally unleased test child is rejected in
+`conversion_validate_lease`, before effects. Reversing to the old release alias,
+altering any field/Compose group or stripping commit/project/lock/held exports
+fails with the exact field-specific reason through the real wrapper. A static
+regression requires the runner to use these tested producers; changing only a test
+fixture can no longer hide this integration mismatch.
+
+### Secondary restart: separate investigation required
+
+The restart never invokes the probe validator. Its actual Compose producer already
+used the commit-addressed `runtime.payloadRelease` before this patch. There is no
+source-grounded link from this hardcoded consumer alias to restart exit 1; no
+restart/resource/receipt logic was changed. Next investigation is the retained
+private stderr for `snapshot_restart_writers` from the source fixture, specifically
+the `composeWithLease` call now around runner `805–808`, helper `588–593`, and the
+generated `docker compose … start api cron cms` invocation. Check existing container
+names/service/project labels and receipt/config identity against that invocation
+only after obtaining actual Docker error evidence. Stale labels/receipts remain
+hypotheses; the primary configuration error is preserved independently.
+
+### Verification of this patch
+
+- Focused producer/configuration, conversion/protocol, command, inventory and hold
+  tests: **45 passed/two native lease skips**, zero failures.
+- Explicit PGlite native/Portal logical suite: **eight passed/one conversion-library
+  capability skip** (`58P01`), zero failures. No Linux recovery capability skip added.
+- Final `npm run verify`: **PASS**, Portal **1,712 passed/11 skipped**, CMS
+  **448 passed/11 skipped**, zero failures. Security **PASS**, zero npm vulnerabilities
+  API/cron/CMS; CMS typecheck and `git diff --check` **PASS**.
+- Log: `%LOCALAPPDATA%/Temp/opencode/cms-conversion-producer-consumer-verify.log`.
+
+Fresh review and actual Linux conversion/four-store recovery acceptance remain
+required; no Linux recovery PASS is claimed. No CI dispatch/write, commit/push,
+production SSH, Docker service mutation or delegation. No ops runtime/state,
+preparer/receiver, finalizer or other worker implementation was modified.
+
 ## Acceptance boundary
 
 The runner now compares independent observations of the two databases and two
