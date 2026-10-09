@@ -243,6 +243,13 @@ interpretado nas chamadas `psql` de seed marcadas e configuradas com
 `VERBOSITY=sqlstate`; apenas uma linha completa `ERROR: <código conhecido>` em
 maiúsculas é aceita.
 
+A parada de `api`, `cron` e `cms` mantém `docker compose stop --timeout 120` por
+writer. O deadline do subprocesso agora cobre o pior caso serial de todos os
+writers selecionados mais 30 s de margem (390 s para os três), sem remover nem
+encurtar o timeout do Docker. O snapshot só começa após `stop` terminar com sucesso
+e uma consulta confirmar que nenhum writer continua em execução; timeout continua
+sendo falha fechada, nunca autorização para capturar estado parcialmente ativo.
+
 ## Preparação inicial da infraestrutura de produção — inativa até nova autorização
 
 `ops/prepare-cms-infrastructure.sh` prepara o receiver, guard, adapter e helpers,

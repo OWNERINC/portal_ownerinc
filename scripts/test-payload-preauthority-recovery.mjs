@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import {
   candidateImagesValid, createFixtureProjectNames, createInventory,
-  createSyntheticValues, legacyAnnouncementLookupSql, normalizePgDumpForSnapshot,
+  createSyntheticValues, fixtureStopCommandTimeoutMs, FIXTURE_STOP_TIMEOUT_SECONDS,
+  legacyAnnouncementLookupSql, normalizePgDumpForSnapshot,
   validateRecoveryInputs, writeProtectedInventory,
 } from './integration/payload-preauthority-fixture.mjs';
 import { createCommandDiagnostic } from './integration/payload-preauthority-diagnostics.mjs';
@@ -420,6 +421,7 @@ function snapshot(runtime) {
 }
 
 async function assertQuiescentSnapshotStable(runtime) {
+  setStage(`quiescent_snapshot_${runtime.project}`);
   setSubstep('snapshot_list_writers');
   const running = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
     .split(/\r?\n/u).filter(Boolean);
@@ -427,8 +429,16 @@ async function assertQuiescentSnapshotStable(runtime) {
   assert.deepEqual(writers, ['api', 'cron', 'cms'],
     'all fixture application writers must be running before the quiescence check');
   setSubstep('snapshot_stop_writers');
-  composeWithLease(runtime, ['stop', '--timeout', '120', ...writers], { substep: 'snapshot_stop_writers' });
+  composeWithLease(runtime, ['stop', '--timeout', String(FIXTURE_STOP_TIMEOUT_SECONDS), ...writers], {
+    substep: 'snapshot_stop_writers',
+    timeout: fixtureStopCommandTimeoutMs(writers.length),
+  });
   try {
+    setSubstep('snapshot_verify_writers_stopped');
+    const remainingWriters = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
+      .split(/\r?\n/u).filter(service => writers.includes(service));
+    assert.deepEqual(remainingWriters, [],
+      'every fixture writer must be stopped before any snapshot is captured');
     const first = snapshot(runtime);
     const second = snapshot(runtime);
     assert.deepEqual(second, first,

@@ -19,6 +19,18 @@ const mountDefinitions = Object.freeze({
   ] },
 });
 
+export const FIXTURE_STOP_TIMEOUT_SECONDS = 120;
+export const FIXTURE_STOP_COMMAND_MARGIN_MS = 30_000;
+
+export function fixtureStopCommandTimeoutMs(writerCount) {
+  if (!Number.isSafeInteger(writerCount) || writerCount < 1 || writerCount > 3) {
+    throw new Error('invalid_fixture_writer_count');
+  }
+  // Budget for Compose stopping each requested writer serially, plus bounded
+  // client/orchestration overhead. The CLI timeout remains the per-writer cap.
+  return writerCount * FIXTURE_STOP_TIMEOUT_SECONDS * 1000 + FIXTURE_STOP_COMMAND_MARGIN_MS;
+}
+
 export function normalizePgDumpForSnapshot(dump) {
   const original = Buffer.isBuffer(dump) ? dump : Buffer.from(dump);
   // Work byte-for-byte through a one-byte string encoding. Only the paired
