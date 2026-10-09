@@ -12,7 +12,14 @@ import {
   legacyAnnouncementLookupSql, normalizePgDumpForSnapshot,
   validateRecoveryInputs, writeProtectedInventory,
 } from './integration/payload-preauthority-fixture.mjs';
-import { createCommandDiagnostic } from './integration/payload-preauthority-diagnostics.mjs';
+import {
+  CMS_READINESS_ROUTE, createCommandDiagnostic, createReadinessDiagnostic,
+  createRecoveryProgressReport,
+  inferReadinessFailureReason,
+} from './integration/payload-preauthority-diagnostics.mjs';
+import {
+  createRecoveryFailureReportFields, runSnapshotAndRestart,
+} from './integration/payload-preauthority-recovery-flow.mjs';
 
 const repository = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const python = process.env.PYTHON || 'python3';
@@ -46,12 +53,20 @@ let runIdentity = null;
 let inventoryIdentities = null;
 let projectNames = null;
 let runtimeRefs = [];
+const privateCommandEvidence = [];
+let failureReportFields = null;
+const recoveryProgress = {
+  source: { initialCmsHealthPassed: false, quiescentSnapshotComparison: 'not_started' },
+  target: { initialCmsHealthPassed: false, quiescentSnapshotComparison: 'not_started' },
+  leaseTarget: { initialCmsHealthPassed: false, quiescentSnapshotComparison: 'not_started' },
+};
 
 class FixtureFailure extends Error {
-  constructor(code, diagnostic = null) {
+  constructor(code, diagnostic = null, readinessDiagnostic = null) {
     super(code);
     this.code = code;
     this.diagnostic = diagnostic;
+    this.readinessDiagnostic = readinessDiagnostic;
   }
 }
 
@@ -70,6 +85,13 @@ function run(command, args = [], options = {}) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   if (result.error || result.status !== 0) {
+    if (options.preservePrivateErrorEvidence === true && result.stderr?.length && privateCommandEvidence.length < 8) {
+      const candidateSubstep = options.substep || activeSubstep || 'unclassified_command';
+      privateCommandEvidence.push({
+        substep: /^[a-z][a-z0-9_]{0,63}$/u.test(candidateSubstep) ? candidateSubstep : 'unclassified_command',
+        stderr: Buffer.from(result.stderr).subarray(0, 16 * 1024),
+      });
+    }
     throw new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
       substep: options.substep || activeSubstep,
       status: result.status,
@@ -89,6 +111,21 @@ function setStage(value) {
 }
 
 function setSubstep(value) { activeSubstep = value; }
+
+async function persistPrivateCommandEvidence() {
+  if (!fixtureRoot || privateCommandEvidence.length === 0) return false;
+  const directory = path.join(fixtureRoot, 'private-diagnostics');
+  const target = path.join(directory, 'command-stderr.txt');
+  const parts = [];
+  for (const [index, entry] of privateCommandEvidence.entries()) {
+    parts.push(Buffer.from(`--- command ${index + 1}: ${entry.substep} ---\n`), entry.stderr, Buffer.from('\n'));
+  }
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  await writeFile(target, Buffer.concat(parts), { flag: 'wx', mode: 0o600 });
+  await chmod(target, 0o600);
+  return true;
+}
 
 function composeArgs(project, release, runtime, actionArgs) {
   const paths = runtime.inventory.document.paths;
@@ -275,20 +312,104 @@ function composeCall(runtime, actionArgs, options = {}) {
 
 async function awaitService(runtime, service, attempts = 180) {
   const safeService = service.replaceAll('-', '_');
-  setSubstep(`wait_${safeService}_container`);
+  let lastContainerId = null;
+  let lastHealthStatus = 'unknown';
+  const readinessDiagnostic = async (reason, containerId) => {
+    let containerState = 'unknown';
+    let healthStatus = 'unknown';
+    let containerExitCode = null;
+    if (containerId) {
+      try {
+        const stateText = text(run('docker', ['inspect', '--format',
+          '{{.State.Status}}|{{.State.ExitCode}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}', containerId], {
+          timeout: 10_000,
+          substep: 'readiness_container_inspect',
+          preservePrivateErrorEvidence: true,
+        }));
+        const parsed = stateText.match(/^(created|restarting|running|removing|paused|exited|dead)\|(\d{1,3})\|(starting|healthy|unhealthy|none)$/u);
+        if (parsed) {
+          [, containerState] = parsed;
+          containerExitCode = Number(parsed[2]);
+          healthStatus = parsed[3];
+        }
+      } catch { /* Safe metadata remains unknown; private stderr is retained if available. */ }
+    }
+
+    let readinessHttpStatus = null;
+    if (service === 'cms' && containerId && !['exited', 'dead', 'removing'].includes(containerState)) {
+      const probe = `fetch("http://127.0.0.1:3001${CMS_READINESS_ROUTE}",{signal:AbortSignal.timeout(3000)})` +
+        '.then(async response=>{const status=String(response.status);await response.body?.cancel().catch(()=>{});process.stdout.write(status)})' +
+        '.catch(()=>process.stdout.write("unavailable"))';
+      try {
+        const status = text(run('docker', ['exec', containerId, 'node', '-e', probe], {
+          timeout: 8_000,
+          substep: 'readiness_http_probe',
+          preservePrivateErrorEvidence: true,
+        }));
+        if (/^[1-5]\d\d$/u.test(status)) readinessHttpStatus = Number(status);
+      } catch { /* Never include probe output or body in the report. */ }
+    }
+
+    const observedReason = inferReadinessFailureReason(reason, { containerId, containerState, healthStatus });
+    return createReadinessDiagnostic({
+      reason: observedReason,
+      containerState,
+      healthStatus,
+      containerExitCode,
+      readinessHttpStatus,
+      service,
+    });
+  };
+  const failReadiness = async (reason, containerId, originalError = null) => {
+    const detail = await readinessDiagnostic(reason, containerId);
+    const failedSubstep = originalError?.diagnostic?.substep || activeSubstep;
+    setSubstep(failedSubstep);
+    throw new FixtureFailure(
+      originalError instanceof FixtureFailure ? originalError.code : `service_${service}_not_ready`,
+      originalError instanceof FixtureFailure ? originalError.diagnostic : null,
+      detail,
+    );
+  };
+
   for (let index = 0; index < attempts; index += 1) {
+    setSubstep(`wait_${safeService}_container`);
     const id = text(composeCall(runtime, ['ps', '-q', service]));
     if (id) {
+      lastContainerId = id;
       setSubstep(`wait_${safeService}_health`);
-      const state = text(run('docker', ['inspect', '--format', '{{.State.Health.Status}}', id]));
-      if (state === 'healthy') return;
+      let state;
+      try {
+        state = text(run('docker', ['inspect', '--format', '{{.State.Health.Status}}', id], {
+          substep: `wait_${safeService}_health`,
+          preservePrivateErrorEvidence: true,
+        }));
+      } catch (error) {
+        if (!(error instanceof FixtureFailure)) throw error;
+        await failReadiness('health_inspect_failed', id, error);
+      }
+      lastHealthStatus = ['starting', 'healthy', 'unhealthy'].includes(state) ? state : 'unknown';
+      if (state === 'healthy') {
+        setSubstep(null);
+        return;
+      }
       setSubstep(`wait_${safeService}_container_state`);
-      const containerState = text(run('docker', ['inspect', '--format', '{{.State.Status}}', id]));
-      if (containerState === 'exited' || containerState === 'dead') throw new FixtureFailure(`service_${service}_stopped`);
+      let containerState;
+      try {
+        containerState = text(run('docker', ['inspect', '--format', '{{.State.Status}}', id], {
+          substep: `wait_${safeService}_container_state`,
+          preservePrivateErrorEvidence: true,
+        }));
+      } catch (error) {
+        if (!(error instanceof FixtureFailure)) throw error;
+        await failReadiness('container_inspect_failed', id, error);
+      }
+      if (containerState === 'exited' || containerState === 'dead') {
+        await failReadiness('exited', id);
+      }
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
-  throw new FixtureFailure(`service_${service}_not_ready`);
+  await failReadiness(lastContainerId && lastHealthStatus === 'unhealthy' ? 'unhealthy' : 'wait_deadline', lastContainerId);
 }
 
 function composeWithLease(runtime, actionArgs, options = {}) {
@@ -323,6 +444,7 @@ async function provisionProject(runtime) {
   composeWithLease(runtime, ['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-migrate']);
   composeWithLease(runtime, ['up', '--detach', '--no-build', '--pull', 'never', 'cms']);
   await awaitService(runtime, 'cms');
+  recoveryProgress[runtime.role].initialCmsHealthPassed = true;
   await seedProject(runtime);
   guard(runtime, runtime.project, 'verify-release', runtime.payloadRelease);
   await writeFile(runtime.inventory.document.paths.currentRelease, `${runtime.payloadRelease}\n`, { mode: 0o600 });
@@ -433,21 +555,37 @@ async function assertQuiescentSnapshotStable(runtime) {
     substep: 'snapshot_stop_writers',
     timeout: fixtureStopCommandTimeoutMs(writers.length),
   });
-  try {
-    setSubstep('snapshot_verify_writers_stopped');
-    const remainingWriters = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
-      .split(/\r?\n/u).filter(service => writers.includes(service));
-    assert.deepEqual(remainingWriters, [],
-      'every fixture writer must be stopped before any snapshot is captured');
-    const first = snapshot(runtime);
-    const second = snapshot(runtime);
-    assert.deepEqual(second, first,
-      'repeated quiescent snapshots must preserve every database row, sequence, catalog and file tree');
-    runtime.quiescentSnapshotStable = true;
-  } finally {
-    setSubstep('snapshot_restart_writers');
-    composeWithLease(runtime, ['start', ...writers], { substep: 'snapshot_restart_writers' });
-    for (const service of writers) await awaitService(runtime, service);
+  const outcome = await runSnapshotAndRestart(
+    async () => {
+      setSubstep('snapshot_verify_writers_stopped');
+      const remainingWriters = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
+        .split(/\r?\n/u).filter(service => writers.includes(service));
+      assert.deepEqual(remainingWriters, [],
+        'every fixture writer must be stopped before any snapshot is captured');
+      recoveryProgress[runtime.role].quiescentSnapshotComparison = 'running';
+      try {
+        const first = snapshot(runtime);
+        const second = snapshot(runtime);
+        setSubstep('snapshot_compare_quiescent');
+        assert.deepEqual(second, first,
+          'repeated quiescent snapshots must preserve every database row, sequence, catalog and file tree');
+        recoveryProgress[runtime.role].quiescentSnapshotComparison = 'passed';
+      } catch (error) {
+        recoveryProgress[runtime.role].quiescentSnapshotComparison = 'failed';
+        throw error;
+      }
+      runtime.quiescentSnapshotStable = true;
+    },
+    async () => {
+      setSubstep('snapshot_restart_writers');
+      composeWithLease(runtime, ['start', ...writers], { substep: 'snapshot_restart_writers' });
+      for (const service of writers) await awaitService(runtime, service);
+    },
+    () => activeSubstep,
+  );
+  if (outcome.primaryError) {
+    failureReportFields = createRecoveryFailureReportFields(outcome);
+    throw outcome.primaryError;
   }
 }
 
@@ -725,6 +863,9 @@ async function runRecovery() {
   inventoryIdentities = { source: source.inventory.identity };
   const target = await createRuntime(projectNames.target, targetRoot, source.inventory.identity, source);
   const leaseTarget = await createRuntime(leaseProject, leaseRoot, source.inventory.identity, source);
+  source.role = 'source';
+  target.role = 'target';
+  leaseTarget.role = 'leaseTarget';
   runtimeRefs = [source, target, leaseTarget];
   inventoryIdentities.target = target.inventory.identity;
   inventoryIdentities.leaseTarget = leaseTarget.inventory.identity;
@@ -841,6 +982,7 @@ async function runRecovery() {
     targetInventoryIdentity: inventoryIdentities.target,
     negativeCases,
     checks: safeChecks,
+    recoveryProgress: createRecoveryProgressReport(recoveryProgress),
     evidence: { kind: 'redacted-metadata-only', privateFixtureRetainedForRunnerLifetime: false },
   };
 }
@@ -862,14 +1004,23 @@ try {
   await rm(fixtureRoot, { recursive: true, force: true });
 } catch (error) {
   preserveFixture = Boolean(fixtureRoot);
+  const privateRunnerErrorEvidenceRetained = await persistPrivateCommandEvidence().catch(() => false);
+  const failureFields = failureReportFields || createRecoveryFailureReportFields({
+    primaryError: error,
+    primarySubstep: error instanceof FixtureFailure ? error.diagnostic?.substep || activeSubstep : activeSubstep,
+  });
   report = {
     schemaVersion: 1, status: 'failed', run: runIdentity,
     images, failedStage: stage,
-    failureCode: error instanceof FixtureFailure ? error.code : 'acceptance_assertion_failed',
-    ...(activeSubstep ? { failedSubstep: activeSubstep } : {}),
-    ...(error instanceof FixtureFailure && error.diagnostic ? { commandDiagnostic: error.diagnostic } : {}),
-    checks: safeChecks, negativeCases,
-    evidence: { kind: 'redacted-metadata-only', privateFixtureRetainedForRunnerLifetime: preserveFixture },
+    ...failureFields,
+    checks: safeChecks,
+    recoveryProgress: createRecoveryProgressReport(recoveryProgress),
+    negativeCases,
+    evidence: {
+      kind: 'redacted-metadata-only',
+      privateFixtureRetainedForRunnerLifetime: preserveFixture,
+      privateRunnerErrorEvidenceRetained,
+    },
   };
 }
 

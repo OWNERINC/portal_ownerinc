@@ -82,7 +82,7 @@ test('recovery seed and report keep failures attributable without serializing co
   }
   assert.match(recoveryRunner, /'VERBOSITY=sqlstate'/u);
   assert.match(recoveryRunner, /sqlCommandContext: true/u);
-  assert.match(recoveryRunner, /failedSubstep: activeSubstep/u);
-  assert.match(recoveryRunner, /commandDiagnostic: error\.diagnostic/u);
+  assert.match(recoveryRunner, /failureReportFields = createRecoveryFailureReportFields\(outcome\)/u);
+  assert.match(recoveryRunner, /failureFields = failureReportFields \|\| createRecoveryFailureReportFields/u);
   assert.doesNotMatch(recoveryRunner, /commandDiagnostic:\s*\{[^}]*stderr|commandDiagnostic:\s*\{[^}]*stdout/isu);
 });

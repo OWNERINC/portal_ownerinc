@@ -250,6 +250,18 @@ encurtar o timeout do Docker. O snapshot só começa após `stop` terminar com s
 e uma consulta confirmar que nenhum writer continua em execução; timeout continua
 sendo falha fechada, nunca autorização para capturar estado parcialmente ativo.
 
+Falhas de readiness incluem apenas motivo enumerado, estado/health/exit code do
+container e, para CMS, o status HTTP numérico de `/editorial/ready`; o corpo nunca é
+lido. Stderr de comandos diagnósticos fica, quando disponível, em arquivo 0600 sob
+diretório 0700 dentro do fixture root efêmero. O workflow publica somente o relatório
+redigido, nunca esse arquivo privado. O relatório também registra progresso por
+papel fixo (`source`, `target`, `leaseTarget`): readiness CMS inicial e estado da
+comparação de snapshots (`not_started`, `running`, `passed`, `failed`). Isso mantém
+visível uma comparação concluída mesmo se a restauração dos writers falhar depois.
+Se a comparação e a restauração falharem na mesma passagem, o relatório mantém
+os dois resumos estáticos separados em vez de deixar a falha de restart ocultar a
+falha de snapshot.
+
 ## Preparação inicial da infraestrutura de produção — inativa até nova autorização
 
 `ops/prepare-cms-infrastructure.sh` prepara o receiver, guard, adapter e helpers,
