@@ -36,6 +36,88 @@ def expect(code, callback):
     else:
         raise AssertionError('expected ' + code)
 
+assert R._parse_native_catalog_diagnostic(
+    'docker compose progress\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
+    'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n') == {
+        'stage': 'native_constraints', 'reason': 'preauthority_native_constraint_inventory_mismatch', 'sqlstate': None}
+assert R._parse_native_catalog_diagnostic(
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=postgres_error sqlstate=42703\n') == {
+        'stage': 'native_columns', 'reason': 'postgres_error', 'sqlstate': '42703'}
+assert R._parse_native_catalog_diagnostic(
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=protocol_control_ownership '
+    'reason=unsafe_preinstallation_control_state sqlstate=none\n') == {
+        'stage': 'protocol_control_ownership', 'reason': 'unsafe_preinstallation_control_state', 'sqlstate': None}
+assert R._parse_native_catalog_diagnostic(
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=protocol_inventory '
+    'reason=diagnostic_installed_protocol_deep_check_skipped sqlstate=none\n') == {
+        'stage': 'protocol_inventory', 'reason': 'diagnostic_installed_protocol_deep_check_skipped', 'sqlstate': None}
+for private_or_invalid in [
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=postgres_error sqlstate=secret\n',
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=private_path reason=postgres_error sqlstate=42703\n',
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=unknown sqlstate=none\n',
+]:
+    assert R._parse_native_catalog_diagnostic(private_or_invalid) == {
+        'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+
+# The adapter distinguishes an authenticated verifier result from a Compose
+# execution failure and from failure to launch the local Compose executable.
+old_compose_args, old_subprocess_run = R._compose_args, R.subprocess.run
+try:
+    R._compose_args = lambda _release: ['docker', 'compose']
+    R.subprocess.run = lambda *args, **kwargs: type('Result', (), {
+        'returncode': 1, 'stdout': '', 'stderr':
+            'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
+            'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n',
+    })()
+    try:
+        R._run_catalog_verifier('fixture-release')
+    except R.ControlError as error:
+        assert str(error) == 'native_catalog_verification_failed'
+        assert error.native_catalog_diagnostic == {
+            'stage': 'native_constraints', 'reason': 'preauthority_native_constraint_inventory_mismatch', 'sqlstate': None}
+        sink, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            R._emit_control_error(error)
+            assert sys.stderr.getvalue() == (
+                'native_catalog_verification_failed\n'
+                'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
+                'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n')
+        finally:
+            sys.stderr = sink
+    else:
+        raise AssertionError('expected native catalog rejection')
+
+    R.subprocess.run = lambda *args, **kwargs: type('Result', (), {
+        'returncode': 1, 'stdout': '', 'stderr': 'private://user:secret@database\n',
+    })()
+    try:
+        R._run_catalog_verifier('fixture-release')
+    except R.ControlError as error:
+        assert str(error) == 'native_catalog_verifier_execution_failed'
+        assert error.native_catalog_diagnostic['reason'] == 'process_exit_without_diagnostic'
+        sink, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            R._emit_control_error(error)
+            assert 'private://user:secret@database' not in sys.stderr.getvalue()
+        finally:
+            sys.stderr = sink
+    else:
+        raise AssertionError('expected unclassified verifier process failure')
+
+    def missing_compose(*args, **kwargs):
+        raise FileNotFoundError('private executable path')
+    R.subprocess.run = missing_compose
+    try:
+        R._run_catalog_verifier('fixture-release')
+    except R.ControlError as error:
+        assert str(error) == 'native_catalog_verifier_launch_failed'
+        assert error.native_catalog_diagnostic == {
+            'stage': 'launch', 'reason': 'executable_not_found', 'sqlstate': None}
+    else:
+        raise AssertionError('expected Compose executable launch failure')
+finally:
+    R._compose_args, R.subprocess.run = old_compose_args, old_subprocess_run
+
 legacy_images = {
     'api': 'ghcr.io/ownerinc/ownerinc-portal-api@sha256:' + 'a' * 64,
     'cron': 'ghcr.io/ownerinc/ownerinc-portal-cron@sha256:' + 'b' * 64,

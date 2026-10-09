@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
-  createCommandDiagnostic, extractControlErrorIdentifier, extractSqlState,
+  createCommandDiagnostic, extractControlErrorIdentifier, extractNativeCatalogVerifierDiagnostic, extractSqlState,
 } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
 
 const recoveryRunner = await readFile(new URL('../../scripts/test-payload-preauthority-recovery.mjs', import.meta.url), 'utf8');
@@ -126,6 +126,8 @@ test('control errors require a known adapter context, one exact line and an emit
   const sourceCodes = new Set([controlRuntime, controlState, controlInventory]
     .flatMap(source => [...source.matchAll(/fail\('([a-z][a-z0-9_]+)'\)/gu)]
       .map(match => match[1])));
+  sourceCodes.add('native_catalog_verifier_launch_failed');
+  sourceCodes.add('native_catalog_verifier_execution_failed');
   sourceCodes.add('admission_state_not_open');
   sourceCodes.add('admission_state_not_closed');
   for (const identifier of ['state_head_corrupt', 'proof_not_canonical', 'proof_shape_invalid']) {
@@ -136,6 +138,64 @@ test('control errors require a known adapter context, one exact line and an emit
     assert.equal(extractControlErrorIdentifier(`${identifier}\n`, context), identifier,
       `fixed adapter reason ${identifier} must be in the explicit finite allowlist`);
   }
+});
+
+test('native catalog verifier metadata distinguishes rejection, launch failure, and opaque process failure', () => {
+  const context = { controlCommandContext: 'payload-control:verify-release' };
+  const rejected = 'native_catalog_verification_failed\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n';
+  const rejectionDiagnostic = createCommandDiagnostic({
+    substep: 'payload_control_verify_release', status: 2, stderr: rejected, controlCommandContext: context.controlCommandContext,
+  });
+  assert.equal(rejectionDiagnostic.controlErrorIdentifier, 'native_catalog_verification_failed');
+  assert.deepEqual(rejectionDiagnostic.nativeCatalogVerifier, {
+    stage: 'native_constraints', reason: 'preauthority_native_constraint_inventory_mismatch', sqlState: null,
+  });
+
+  const postgresFailure = 'native_catalog_verification_failed\r\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=postgres_error sqlstate=42703\r\n';
+  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(Buffer.from(postgresFailure), context), {
+    stage: 'native_columns', reason: 'postgres_error', sqlState: '42703',
+  });
+  const ownershipFailure = 'native_catalog_verification_failed\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=protocol_control_ownership '
+    + 'reason=unsafe_preinstallation_control_state sqlstate=none\n';
+  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(ownershipFailure, context), {
+    stage: 'protocol_control_ownership', reason: 'unsafe_preinstallation_control_state', sqlState: null,
+  });
+  const installedProtocol = 'native_catalog_verification_failed\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=protocol_inventory '
+    + 'reason=diagnostic_installed_protocol_deep_check_skipped sqlstate=none\n';
+  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(installedProtocol, context), {
+    stage: 'protocol_inventory', reason: 'diagnostic_installed_protocol_deep_check_skipped', sqlState: null,
+  });
+
+  const launchFailure = 'native_catalog_verifier_launch_failed\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=launch reason=executable_not_found sqlstate=none\n';
+  assert.equal(extractControlErrorIdentifier(launchFailure, context), 'native_catalog_verifier_launch_failed');
+  assert.deepEqual(createCommandDiagnostic({
+    substep: 'payload_control_verify_release', status: 2, stderr: launchFailure,
+    controlCommandContext: context.controlCommandContext,
+  }).nativeCatalogVerifier, { stage: 'launch', reason: 'executable_not_found', sqlState: null });
+
+  const opaqueProcessFailure = 'native_catalog_verifier_execution_failed\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=process reason=process_exit_without_diagnostic sqlstate=none\n';
+  assert.equal(extractControlErrorIdentifier(opaqueProcessFailure, context), 'native_catalog_verifier_execution_failed');
+
+  for (const text of [
+    `${rejected.trimEnd()}\npostgres://private-user:secret@host/database\n`,
+    'native_catalog_verification_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=unknown_internal_error sqlstate=none\n',
+    'native_catalog_verification_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=postgres_error sqlstate=secret\n',
+    'native_catalog_verifier_launch_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=launch reason=permission_denied sqlstate=23514\n',
+    'native_catalog_verification_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=process reason=process_exit_without_diagnostic sqlstate=none\n',
+  ]) {
+    assert.equal(extractNativeCatalogVerifierDiagnostic(text, context), null,
+      'malformed, mismatched, or secret-bearing metadata remains unclassified');
+  }
+  assert.equal(extractNativeCatalogVerifierDiagnostic(rejected, {
+    controlCommandContext: 'payload-control:backup-metadata',
+  }), null, 'native catalog metadata is parsed only for explicit control invocations');
+  assert.doesNotMatch(JSON.stringify(rejectionDiagnostic), /postgres:|private-user|secret/u);
 });
 
 test('recovery seed and report keep failures attributable without serializing command data', () => {

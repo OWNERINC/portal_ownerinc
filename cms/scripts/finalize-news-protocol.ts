@@ -94,6 +94,108 @@ export type FinalizerCloseDiagnostic = { phase: 'admin-disconnect'; sqlstate: st
 export type FinalizerCloseWarningSink = (diagnostic: FinalizerCloseDiagnostic) => void
 export type ProtocolInstallationState = 'empty' | 'v1' | 'v2' | 'partial'
 
+export const preauthorityCatalogDiagnosticStages = [
+  'connection', 'transaction', 'protocol_identity', 'protocol_migrations', 'protocol_relations',
+  'protocol_columns', 'protocol_sequences', 'protocol_enums', 'protocol_constraints',
+  'protocol_indexes', 'protocol_foreign_keys', 'protocol_control_columns', 'protocol_control_roles',
+  'protocol_control_ownership', 'protocol_native_privileges', 'protocol_inventory', 'protocol_state',
+  'native_relations', 'native_columns', 'native_indexes', 'native_constraints', 'native_types',
+  'news_rows', 'verifier',
+] as const
+export type PreauthorityCatalogDiagnosticStage = typeof preauthorityCatalogDiagnosticStages[number]
+
+export type PreauthorityCatalogFailureDiagnostic = {
+  stage: PreauthorityCatalogDiagnosticStage
+  reason: string
+  sqlstate: string | null
+}
+
+const preauthorityCatalogDiagnosticReasons = new Set([
+  'postgres_error', 'preauthority_catalog_verification_failed', 'preauthority_protocol_not_absent',
+  'unsafe_admin_target', 'native_migration_ledger_mismatch', 'native_relation_inventory_mismatch',
+  'mutation_relation_inventory_mismatch', 'native_column_inventory_mismatch',
+  'native_serial_sequence_binding_or_configuration_mismatch', 'native_enum_catalog_mismatch',
+  'native_required_constraint_missing', 'native_snapshot_index_missing_or_mismatched',
+  'native_snapshot_foreign_key_mismatch', 'native_control_column_types_mismatch',
+  'native_item_run_id_type_mismatch', 'control_role_contract_mismatch',
+  'unsafe_preinstallation_control_state', 'diagnostic_installed_protocol_deep_check_skipped',
+  'partial_protocol_installation_manual_recovery_required', 'native_snapshot_invalid',
+  'native_constraint_definition_unavailable', 'preauthority_native_relation_inventory_mismatch',
+  'preauthority_native_column_inventory_mismatch', 'preauthority_native_index_inventory_mismatch',
+  'preauthority_native_constraint_inventory_mismatch', 'preauthority_native_type_inventory_mismatch',
+])
+
+const preauthorityCatalogStageByFinalizerPhase: Partial<Record<FinalizerDiagnosticPhase, PreauthorityCatalogDiagnosticStage>> = {
+  'precondition-identity': 'protocol_identity',
+  'precondition-migrations': 'protocol_migrations',
+  'precondition-relations': 'protocol_relations',
+  'precondition-columns': 'protocol_columns',
+  'precondition-sequences': 'protocol_sequences',
+  'precondition-enums': 'protocol_enums',
+  'precondition-constraints': 'protocol_constraints',
+  'precondition-indexes': 'protocol_indexes',
+  'precondition-foreign-keys': 'protocol_foreign_keys',
+  'precondition-control-columns': 'protocol_control_columns',
+  'precondition-control-roles': 'protocol_control_roles',
+  'precondition-control-ownership': 'protocol_control_ownership',
+  'precondition-native-privileges': 'protocol_native_privileges',
+  'precondition-protocol-inventory': 'protocol_inventory',
+  'precondition-installed-state': 'protocol_inventory',
+}
+
+const preauthorityCatalogStageByReason: Readonly<Record<string, PreauthorityCatalogDiagnosticStage>> = {
+  unsafe_admin_target: 'protocol_identity',
+  native_migration_ledger_mismatch: 'protocol_migrations',
+  native_relation_inventory_mismatch: 'protocol_relations',
+  mutation_relation_inventory_mismatch: 'protocol_relations',
+  native_column_inventory_mismatch: 'protocol_columns',
+  native_serial_sequence_binding_or_configuration_mismatch: 'protocol_sequences',
+  native_enum_catalog_mismatch: 'protocol_enums',
+  native_required_constraint_missing: 'protocol_constraints',
+  native_snapshot_index_missing_or_mismatched: 'protocol_indexes',
+  native_snapshot_foreign_key_mismatch: 'protocol_foreign_keys',
+  native_control_column_types_mismatch: 'protocol_control_columns',
+  native_item_run_id_type_mismatch: 'protocol_control_columns',
+  control_role_contract_mismatch: 'protocol_control_roles',
+  diagnostic_installed_protocol_deep_check_skipped: 'protocol_inventory',
+  partial_protocol_installation_manual_recovery_required: 'protocol_inventory',
+  preauthority_protocol_not_absent: 'protocol_state',
+  preauthority_native_relation_inventory_mismatch: 'native_relations',
+  preauthority_native_column_inventory_mismatch: 'native_columns',
+  preauthority_native_index_inventory_mismatch: 'native_indexes',
+  preauthority_native_constraint_inventory_mismatch: 'native_constraints',
+  preauthority_native_type_inventory_mismatch: 'native_types',
+  native_constraint_definition_unavailable: 'native_constraints',
+  native_snapshot_invalid: 'native_constraints',
+}
+
+/** Extract only fixed verifier reasons and a PostgreSQL SQLSTATE; never expose error messages. */
+export function getPreauthorityCatalogFailureDiagnostic(
+  error: unknown,
+  currentStage: PreauthorityCatalogDiagnosticStage,
+): PreauthorityCatalogFailureDiagnostic {
+  let code: unknown
+  if (error && (typeof error === 'object' || typeof error === 'function')) {
+    try { code = Object.getOwnPropertyDescriptor(error, 'code')?.value } catch { /* use bounded fallback */ }
+  }
+  const sqlstate = typeof code === 'string' && /^[0-9A-Z]{5}$/u.test(code) ? code : null
+  const base = typeof code === 'string' ? code.split(':', 1)[0] : ''
+  const reason = sqlstate ? 'postgres_error'
+    : preauthorityCatalogDiagnosticReasons.has(base) ? base : 'preauthority_catalog_verification_failed'
+  const stage = preauthorityCatalogDiagnosticStages.includes(currentStage)
+    ? preauthorityCatalogStageByReason[base] || currentStage : 'verifier'
+  return { stage, reason, sqlstate }
+}
+
+export function formatPreauthorityCatalogFailureDiagnostic(diagnostic: PreauthorityCatalogFailureDiagnostic): string {
+  const stage = preauthorityCatalogDiagnosticStages.includes(diagnostic.stage) ? diagnostic.stage : 'verifier'
+  const reason = preauthorityCatalogDiagnosticReasons.has(diagnostic.reason)
+    ? diagnostic.reason : 'preauthority_catalog_verification_failed'
+  const sqlstate = typeof diagnostic.sqlstate === 'string' && /^[0-9A-Z]{5}$/u.test(diagnostic.sqlstate)
+    ? diagnostic.sqlstate : 'none'
+  return `PREAUTHORITY_CATALOG_DIAGNOSTIC stage=${stage} reason=${reason} sqlstate=${sqlstate}`
+}
+
 const finalizerDiagnosticReasons = new Set([
   'admin_database_url_required', 'unsafe_admin_database_url', 'unsafe_admin_target',
   'observer_database_url_required', 'unsafe_observer_database_url', 'unsafe_observer_target',
@@ -944,7 +1046,12 @@ export function assertPreauthorityNativeCatalogInventory(
 /** Strict inventory used only for the unsupported protocol-absent phase. The
  * protocol finalizer itself may accept its canonical v1/v2 objects; those are
  * deliberately not passed through this preauthority-only allowlist. */
-async function verifyPreauthorityNativeCatalog(client: FinalizerClient, migrationNames: readonly string[]): Promise<string> {
+async function verifyPreauthorityNativeCatalog(
+  client: FinalizerClient,
+  migrationNames: readonly string[],
+  setStage: (stage: PreauthorityCatalogDiagnosticStage) => void,
+): Promise<string> {
+  setStage('native_relations')
   const relationsResult = await client.query(`SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
@@ -955,6 +1062,7 @@ async function verifyPreauthorityNativeCatalog(client: FinalizerClient, migratio
   })), ['schema', 'name', 'kind'])
   compareCatalogInventory(relations, expectedNativeRelations, 'preauthority_native_relation_inventory_mismatch')
 
+  setStage('native_columns')
   const columnsResult = await client.query(`SELECT namespace.nspname AS schema, relation.relname AS table_name,
     attribute.attname AS column_name, type.typname AS type_name, type_namespace.nspname AS type_schema,
     attribute.attnotnull AS not_null, pg_catalog.pg_get_expr(default_value.adbin, default_value.adrelid) AS default_expression
@@ -986,6 +1094,7 @@ async function verifyPreauthorityNativeCatalog(client: FinalizerClient, migratio
   }
   sortBy(columns, ['schema', 'table', 'name'])
 
+  setStage('native_indexes')
   const indexesResult = await client.query(`SELECT table_ns.nspname AS table_schema, table_class.relname AS table_name,
     index_ns.nspname AS index_schema, index_class.relname AS index_name, ix.indisunique AS is_unique,
     ix.indisprimary AS is_primary, ix.indisvalid AS is_valid, ix.indisready AS is_ready,
@@ -1023,6 +1132,7 @@ async function verifyPreauthorityNativeCatalog(client: FinalizerClient, migratio
     definition: String(row.definition),
   })), ['tableSchema', 'table', 'schema', 'name'])
 
+  setStage('native_constraints')
   const constraintsResult = await client.query(`SELECT namespace.nspname AS schema, relation.relname AS table_name,
     con.conname AS constraint_name, con.contype AS kind, con.convalidated AS validated,
     con.condeferrable AS deferrable, con.condeferred AS deferred,
@@ -1039,6 +1149,7 @@ async function verifyPreauthorityNativeCatalog(client: FinalizerClient, migratio
     definition: String(row.definition),
   })), ['schema', 'table', 'name', 'kind'])
 
+  setStage('native_types')
   const typesResult = await client.query(`SELECT namespace.nspname AS schema, type.typname AS name, type.typtype AS kind,
     COALESCE(array_agg(enum.enumlabel ORDER BY enum.enumsortorder) FILTER (WHERE enum.enumlabel IS NOT NULL), ARRAY[]::name[]) AS labels
     FROM pg_catalog.pg_type type JOIN pg_catalog.pg_namespace namespace ON namespace.oid=type.typnamespace
@@ -1529,17 +1640,23 @@ export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerCl
  * the one-shot finalizer, but it never installs, upgrades, or certifies protocol
  * coverage. A present or mixed protocol is rejected rather than downgraded.
  */
-export async function verifyPreauthorityCatalogReadOnly(client: FinalizerClient): Promise<{
+export async function verifyPreauthorityCatalogReadOnly(
+  client: FinalizerClient,
+  setStage: (stage: PreauthorityCatalogDiagnosticStage) => void = () => {},
+): Promise<{
   protocolStatus: 'absent'
   coverageApplicability: 'not-applicable'
   migrationNames: readonly string[]
   migrationFingerprint: string
   nativeCatalogFingerprint: string
 }> {
-  const state = await checkPreconditions(client, () => {}, true)
+  const state = await checkPreconditions(client, phase => {
+    setStage(preauthorityCatalogStageByFinalizerPhase[phase] || 'protocol_inventory')
+  }, true)
+  setStage('protocol_state')
   if (state !== 'empty') fail('preauthority_protocol_not_absent')
   const migrationFingerprint = createHash('sha256').update(JSON.stringify(MIGRATIONS)).digest('hex')
-  const nativeCatalogFingerprint = await verifyPreauthorityNativeCatalog(client, MIGRATIONS)
+  const nativeCatalogFingerprint = await verifyPreauthorityNativeCatalog(client, MIGRATIONS, setStage)
   return {
     protocolStatus: 'absent',
     coverageApplicability: 'not-applicable',

@@ -78,6 +78,23 @@ test('exit-2 command keeps stderr private while producing a bounded caller repor
   await assertExitTwoIsPrivateOnly(t, ({ args, ...options }) => runFixtureCommand(process.execPath, args, options));
 });
 
+test('redacted recovery report preserves the native verifier stage, reason, and SQLSTATE', () => {
+  const stderr = 'native_catalog_verification_failed\n'
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=postgres_error sqlstate=23514\n';
+  const failure = new FixtureFailure('fixture_command_failed', createCommandDiagnostic({
+    substep: 'payload_control_verify_release', status: 2, stderr,
+    controlCommandContext: 'payload-control:verify-release',
+  }));
+  const report = JSON.parse(JSON.stringify(createRecoveryFailureReportFields({
+    primaryError: failure, primarySubstep: 'payload_control_verify_release',
+  })));
+  assert.deepEqual(report.commandDiagnostic.nativeCatalogVerifier, {
+    stage: 'native_constraints', reason: 'postgres_error', sqlState: '23514',
+  });
+  assert.equal(report.commandDiagnostic.controlErrorIdentifier, 'native_catalog_verification_failed');
+  assert.doesNotMatch(JSON.stringify(report), /stderr|stdout|23514.*private|url|definition/u);
+});
+
 test('known adapter reason survives command capture and primary/secondary report sanitization', async () => {
   const options = controlCommandOptions('verify-release', '/synthetic/release');
   assert.equal(options.controlCommandContext, 'payload-control:verify-release');

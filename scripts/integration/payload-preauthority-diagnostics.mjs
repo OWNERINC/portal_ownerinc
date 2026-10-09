@@ -57,7 +57,8 @@ invalid_release_images invalid_release_manifest invalid_release_path invalid_res
 invalid_restore_target_fingerprints invalid_restore_volumes invalid_rollback_state invalid_state_digest
 invalid_state_inventory_identity invalid_state_parent invalid_state_sequence inventory_runtime_path_mismatch
 inventory_unavailable inventory_write_failed legacy_fallback_forbidden native_catalog_fingerprint_missing
-native_catalog_verification_failed native_catalog_verification_invalid noncanonical_inventory noncanonical_json
+native_catalog_verification_failed native_catalog_verification_invalid native_catalog_verifier_launch_failed
+native_catalog_verifier_execution_failed noncanonical_inventory noncanonical_json
 one_shot_container_running operation_lease_inode_mismatch operation_lease_missing
 operator_compose_override_forbidden planned_release_mismatch portal_database_container_unavailable
 portal_legacy_floor_mismatch portal_legacy_session_grant_floor_mismatch portal_migration_fingerprint_mismatch
@@ -110,6 +111,32 @@ const knownControlErrorIdentifiers = new Set([
   ...controlAdapterMessages.values(),
   ...controlGuardMessages.values(),
 ]);
+const nativeCatalogVerifierStages = new Set(`
+connection transaction protocol_identity protocol_migrations protocol_relations protocol_columns
+protocol_sequences protocol_enums protocol_constraints protocol_indexes protocol_foreign_keys
+protocol_control_columns protocol_control_roles protocol_control_ownership protocol_native_privileges
+protocol_inventory protocol_state native_relations native_columns native_indexes native_constraints
+native_types news_rows verifier process launch
+`.trim().split(/\s+/u));
+const nativeCatalogVerifierReasons = new Set(`
+postgres_error preauthority_catalog_verification_failed preauthority_protocol_not_absent
+unsafe_admin_target native_migration_ledger_mismatch native_relation_inventory_mismatch
+mutation_relation_inventory_mismatch native_column_inventory_mismatch
+native_serial_sequence_binding_or_configuration_mismatch native_enum_catalog_mismatch
+native_required_constraint_missing native_snapshot_index_missing_or_mismatched
+native_snapshot_foreign_key_mismatch native_control_column_types_mismatch native_item_run_id_type_mismatch
+control_role_contract_mismatch partial_protocol_installation_manual_recovery_required native_snapshot_invalid
+unsafe_preinstallation_control_state diagnostic_installed_protocol_deep_check_skipped
+native_constraint_definition_unavailable preauthority_native_relation_inventory_mismatch
+preauthority_native_column_inventory_mismatch preauthority_native_index_inventory_mismatch
+preauthority_native_constraint_inventory_mismatch preauthority_native_type_inventory_mismatch
+process_exit_without_diagnostic invalid_verifier_diagnostic executable_not_found permission_denied process_launch_failed
+`.trim().split(/\s+/u));
+const nativeCatalogVerifierControlErrors = new Set([
+  'native_catalog_verification_failed',
+  'native_catalog_verifier_launch_failed',
+  'native_catalog_verifier_execution_failed',
+]);
 
 const readinessReasons = new Set([
   'missing', 'exited', 'unhealthy', 'wait_deadline',
@@ -140,12 +167,35 @@ export function extractSqlState(stderr, { sqlCommandContext = false } = {}) {
   return match && Object.hasOwn(sqlStateIdentifiers, match[1]) ? match[1] : null;
 }
 
+export function extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext } = {}) {
+  if (!controlCommandContexts.has(controlCommandContext)) return null;
+  const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
+  const match = text.match(/^([a-z][a-z0-9_]{0,63})\r?\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=([a-z_]+) reason=([a-z][a-z0-9_]{0,63}) sqlstate=(none|[0-9A-Z]{5})\r?\n$/u);
+  if (!match || !nativeCatalogVerifierControlErrors.has(match[1])) return null;
+  const [, controlErrorIdentifier, stage, reason, rawSqlState] = match;
+  if (!nativeCatalogVerifierStages.has(stage) || !nativeCatalogVerifierReasons.has(reason)) return null;
+  const sqlState = rawSqlState === 'none' ? null : rawSqlState;
+  if ((reason === 'postgres_error') !== (sqlState !== null)) return null;
+  if (controlErrorIdentifier === 'native_catalog_verification_failed'
+    && (stage === 'process' || stage === 'launch')) return null;
+  if (controlErrorIdentifier === 'native_catalog_verifier_launch_failed'
+    && (stage !== 'launch' || !['executable_not_found', 'permission_denied', 'process_launch_failed'].includes(reason))) return null;
+  if (controlErrorIdentifier === 'native_catalog_verifier_execution_failed'
+    && (stage !== 'process' || !['process_exit_without_diagnostic', 'invalid_verifier_diagnostic'].includes(reason))) return null;
+  return { stage, reason, sqlState };
+}
+
 export function extractControlErrorIdentifier(stderr, { controlCommandContext } = {}) {
   const adapterContext = controlCommandContexts.has(controlCommandContext);
   const guardContext = controlCommandContext === controlGuardContext;
   if (!adapterContext && !guardContext) return null;
 
   const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
+  const nativeDiagnostic = extractNativeCatalogVerifierDiagnostic(text, { controlCommandContext });
+  if (nativeDiagnostic) {
+    const controlCode = text.match(/^([a-z][a-z0-9_]{0,63})\r?\n/u)?.[1];
+    return knownControlErrorIdentifiers.has(controlCode) ? controlCode : null;
+  }
   // The Python adapter uses print(reason, file=sys.stderr), so accept exactly
   // one complete line (including that terminator), never a matching line with
   // adjacent diagnostics, arguments, paths, or secret-bearing detail.
@@ -164,6 +214,7 @@ export function createCommandDiagnostic({
   substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext,
 }) {
   const sqlState = extractSqlState(stderr, { sqlCommandContext });
+  const nativeCatalogVerifier = extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext });
   return sanitizeCommandDiagnostic({
     substep: safeSubstepPattern.test(substep || '') ? substep : 'unclassified_command',
     commandExitCode: Number.isInteger(status) ? status : null,
@@ -173,10 +224,17 @@ export function createCommandDiagnostic({
     sqlState,
     errorIdentifier: sqlState ? sqlStateIdentifiers[sqlState] : null,
     controlErrorIdentifier: extractControlErrorIdentifier(stderr, { controlCommandContext }),
+    ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
   });
 }
 
 export function sanitizeCommandDiagnostic(diagnostic = {}) {
+  const native = diagnostic.nativeCatalogVerifier;
+  const nativeCatalogVerifier = native && nativeCatalogVerifierStages.has(native.stage)
+    && nativeCatalogVerifierReasons.has(native.reason)
+    && (native.sqlState === null || typeof native.sqlState === 'string' && /^[0-9A-Z]{5}$/u.test(native.sqlState))
+    && ((native.reason === 'postgres_error') === (native.sqlState !== null))
+    ? { stage: native.stage, reason: native.reason, sqlState: native.sqlState } : null;
   return {
     substep: safeSubstepPattern.test(diagnostic.substep || '') ? diagnostic.substep : 'unclassified_command',
     commandExitCode: Number.isInteger(diagnostic.commandExitCode) && diagnostic.commandExitCode >= 0 && diagnostic.commandExitCode <= 255
@@ -186,6 +244,7 @@ export function sanitizeCommandDiagnostic(diagnostic = {}) {
     errorIdentifier: knownErrorIdentifiers.has(diagnostic.errorIdentifier) ? diagnostic.errorIdentifier : null,
     controlErrorIdentifier: knownControlErrorIdentifiers.has(diagnostic.controlErrorIdentifier)
       ? diagnostic.controlErrorIdentifier : null,
+    ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
   };
 }
 

@@ -239,15 +239,19 @@ qualificado; até esse run, Task 3 permanece sem aceite runtime.
 Em falhas de comando, o relatório inclui um subpasso estático, exit code, SQLSTATE
 identificador de erro PostgreSQL e identificador de erro do adapter somente quando
 reconhecidos. Comando, argumentos, stderr/stdout e valores SQL não são serializados
-nem impressos. SQLSTATE só é interpretado nas chamadas `psql` de seed marcadas e
-configuradas com `VERBOSITY=sqlstate`; apenas a linha completa `ERROR: <código
-conhecido>` em maiúsculas é aceita. Nos contextos explícitos `release-preflight` e
+nem impressos. O campo plano `sqlState` só é interpretado nas chamadas `psql` de seed
+marcadas e configuradas com `VERBOSITY=sqlstate`; apenas a linha completa `ERROR:
+<código conhecido>` em maiúsculas é aceita. Nos contextos explícitos `release-preflight` e
 `verify-release`, o adapter Python emite o motivo fixo como uma linha simples em
 stderr; runtime, state e inventário são limitados a uma allowlist finita de códigos.
-Mensagens fixas do guard são mapeadas apenas no contexto próprio e em correspondência
-da linha inteira. Códigos desconhecidos, linhas com texto adicional e stderr fora
-desses contextos não viram identificadores; conteúdo bruto permanece somente no
-arquivo privado do fixture.
+Quando `cms-preauthority-verify` rejeita o catálogo, uma segunda linha estruturada
+preserva somente stage, motivo enumerado e SQLSTATE validado; o relatório de
+recuperação mantém esses campos sob `nativeCatalogVerifier`. Falha de execução sem
+essa linha e falha de inicialização local do Compose recebem identificadores/stages
+distintos da rejeição do catálogo. Mensagens fixas do guard são mapeadas apenas no
+contexto próprio e em correspondência da linha inteira. Códigos desconhecidos, linhas
+com texto adicional e stderr fora desses contextos não viram identificadores; conteúdo
+bruto permanece somente no arquivo privado do fixture.
 
 A parada de `api`, `cron` e `cms` mantém `docker compose stop --timeout 120` por
 writer. O deadline do subprocesso agora cobre o pior caso serial de todos os

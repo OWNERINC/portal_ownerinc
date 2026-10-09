@@ -59,9 +59,79 @@ ACTION_SET = {
 class ControlError(Exception):
     """Fixed reason only; subprocess output and environment are never echoed."""
 
+    def __init__(self, code, native_catalog_diagnostic=None):
+        super().__init__(code)
+        self.native_catalog_diagnostic = native_catalog_diagnostic
 
-def fail(code):
-    raise ControlError(code)
+
+def fail(code, native_catalog_diagnostic=None):
+    raise ControlError(code, native_catalog_diagnostic)
+
+
+NATIVE_CATALOG_DIAGNOSTIC_STAGES = set('''
+connection transaction protocol_identity protocol_migrations protocol_relations protocol_columns
+protocol_sequences protocol_enums protocol_constraints protocol_indexes protocol_foreign_keys
+protocol_control_columns protocol_control_roles protocol_control_ownership protocol_native_privileges
+protocol_inventory protocol_state native_relations native_columns native_indexes native_constraints
+native_types news_rows verifier process launch
+'''.split())
+NATIVE_CATALOG_DIAGNOSTIC_REASONS = set('''
+postgres_error preauthority_catalog_verification_failed preauthority_protocol_not_absent
+unsafe_admin_target native_migration_ledger_mismatch native_relation_inventory_mismatch
+mutation_relation_inventory_mismatch native_column_inventory_mismatch
+native_serial_sequence_binding_or_configuration_mismatch native_enum_catalog_mismatch
+native_required_constraint_missing native_snapshot_index_missing_or_mismatched
+native_snapshot_foreign_key_mismatch native_control_column_types_mismatch native_item_run_id_type_mismatch
+control_role_contract_mismatch partial_protocol_installation_manual_recovery_required native_snapshot_invalid
+unsafe_preinstallation_control_state diagnostic_installed_protocol_deep_check_skipped
+native_constraint_definition_unavailable preauthority_native_relation_inventory_mismatch
+preauthority_native_column_inventory_mismatch preauthority_native_index_inventory_mismatch
+preauthority_native_constraint_inventory_mismatch preauthority_native_type_inventory_mismatch
+process_exit_without_diagnostic invalid_verifier_diagnostic executable_not_found permission_denied
+process_launch_failed
+'''.split())
+NATIVE_CATALOG_DIAGNOSTIC_PREFIX = 'PREAUTHORITY_CATALOG_DIAGNOSTIC '
+
+
+def _parse_native_catalog_diagnostic(stderr):
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', errors='replace')
+    if not isinstance(stderr, str):
+        return None
+    candidates = [line for line in stderr.splitlines() if line.startswith(NATIVE_CATALOG_DIAGNOSTIC_PREFIX)]
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+    match = re.fullmatch(
+        r'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=([a-z_]+) reason=([a-z][a-z0-9_]{0,63}) sqlstate=(none|[0-9A-Z]{5})',
+        candidates[0],
+    )
+    if not match:
+        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+    stage, reason, sqlstate = match.groups()
+    if stage not in NATIVE_CATALOG_DIAGNOSTIC_STAGES or reason not in NATIVE_CATALOG_DIAGNOSTIC_REASONS:
+        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+    if (reason == 'postgres_error') != (sqlstate != 'none'):
+        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+    return {'stage': stage, 'reason': reason, 'sqlstate': None if sqlstate == 'none' else sqlstate}
+
+
+def _emit_control_error(error):
+    print(str(error), file=sys.stderr)
+    diagnostic = getattr(error, 'native_catalog_diagnostic', None)
+    if not isinstance(diagnostic, dict):
+        return
+    stage = diagnostic.get('stage')
+    reason = diagnostic.get('reason')
+    sqlstate = diagnostic.get('sqlstate')
+    if stage not in NATIVE_CATALOG_DIAGNOSTIC_STAGES or reason not in NATIVE_CATALOG_DIAGNOSTIC_REASONS:
+        return
+    if sqlstate is not None and (not isinstance(sqlstate, str) or not re.fullmatch(r'[0-9A-Z]{5}', sqlstate)):
+        return
+    if (reason == 'postgres_error') != (sqlstate is not None):
+        return
+    print(f'{NATIVE_CATALOG_DIAGNOSTIC_PREFIX}stage={stage} reason={reason} sqlstate={sqlstate or "none"}', file=sys.stderr)
 
 
 def _inventory(force=False):
@@ -806,9 +876,36 @@ def _compose_args(release):
 
 def _run_catalog_verifier(release):
     args = _compose_args(release) + ['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-preauthority-verify']
-    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
+    try:
+        result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                                text=True, encoding='utf-8', errors='replace')
+    except FileNotFoundError:
+        fail('native_catalog_verifier_launch_failed', {
+            'stage': 'launch', 'reason': 'executable_not_found', 'sqlstate': None,
+        })
+    except PermissionError:
+        fail('native_catalog_verifier_launch_failed', {
+            'stage': 'launch', 'reason': 'permission_denied', 'sqlstate': None,
+        })
+    except OSError:
+        fail('native_catalog_verifier_launch_failed', {
+            'stage': 'launch', 'reason': 'process_launch_failed', 'sqlstate': None,
+        })
+    except Exception:
+        fail('native_catalog_verifier_execution_failed', {
+            'stage': 'process', 'reason': 'process_exit_without_diagnostic', 'sqlstate': None,
+        })
     if result.returncode != 0:
-        fail('native_catalog_verification_failed')
+        diagnostic = _parse_native_catalog_diagnostic(result.stderr)
+        if diagnostic and diagnostic['stage'] != 'process':
+            fail('native_catalog_verification_failed', diagnostic)
+        fail('native_catalog_verifier_execution_failed', diagnostic or {
+            'stage': 'process', 'reason': 'process_exit_without_diagnostic', 'sqlstate': None,
+        })
+    if _parse_native_catalog_diagnostic(result.stderr):
+        fail('native_catalog_verifier_execution_failed', {
+            'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None,
+        })
     raw_lines = [line for line in result.stdout.splitlines() if line.strip()]
     if len(raw_lines) != 1:
         fail('native_catalog_verification_invalid')
@@ -1442,7 +1539,7 @@ def main(argv):
             os.environ['HOME'] = '/root'
         Runtime(action, release, evidence).run()
     except (ControlError, STATE.StateError) as error:
-        print(str(error), file=sys.stderr)
+        _emit_control_error(error)
         return 2
     except Exception:
         print('Payload control failed closed.', file=sys.stderr)
