@@ -1201,7 +1201,16 @@ export function assertPreauthorityNativeCatalogInventory(
     }
   }
   compareCatalogInventory(inventory.types, expectedNativeTypes, 'preauthority_native_type_inventory_mismatch')
-  return createHash('sha256').update(JSON.stringify({ migrationNames, ...inventory })).digest('hex')
+  // pg_dump's deparsed CHECK text can reparse to a flatter AND tree on restore.
+  // Hash the same observed expression representation just verified above, not
+  // PostgreSQL's incidental parentheses and never the bundled expected catalog.
+  // Every identity/metadata field and every non-CHECK definition remains bound.
+  const constraints = inventory.constraints.map(constraint => ({
+    ...constraint,
+    definition: constraint.kind === 'c'
+      ? parseSqlExpression(extractCheckExpression(constraint.definition)) : constraint.definition,
+  }))
+  return createHash('sha256').update(JSON.stringify({ migrationNames, ...inventory, constraints })).digest('hex')
 }
 
 /** Strict inventory used only for the unsupported protocol-absent phase. The

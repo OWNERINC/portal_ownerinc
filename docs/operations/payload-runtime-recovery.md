@@ -1,5 +1,50 @@
 # Runtime Payload e recuperação coordenada
 
+## Evidência Task 3 — fingerprint após restore (2026-10-09)
+
+O run `37912289512`, commit `6ec32bc`, passou pelas onze negativas e chegou ao
+primeiro restore real. Falhou em `guard_verify_restored` com
+`restored_native_catalog_fingerprint_mismatch`: o verificador aceitou o catálogo
+restaurado, mas seu hash observado não coincidiu com o hash da prova assinada de
+origem. Essa comparação permanece obrigatória e inalterada; não se avança para
+aceite dos dados/arquivos nem se limpa o restore intent após mismatch.
+
+Reprodução local com as seis migrations reais em PostgreSQL16.4/PGlite recriou
+enums, sequences, tabelas/colunas/defaults, constraints e índices a partir dos
+deparsers do catálogo **observado**, com novos OIDs. Ambos os catálogos passaram no
+verificador. A única diferença capturada foi o texto de
+`news_migration_items_source_identity_check`: a recriação converteu o agrupamento
+`((A AND B) AND CASE ...)` em `(A AND B AND CASE ...)`. O parser estrito de CHECK já
+considerava essas representações equivalentes, mas o fingerprint usava a string
+bruta. Na reprodução, os hashes anteriores eram `c00edf30ca390b3f206ca66bd7d423b63f5a09a8d297d385c44070a10ca312d7`
+e `d287fca93f1f4cc39bd2366b37232a173a9cce6c4ee7fc1c725aff4f70928998`.
+
+A correção usa, somente para definições de CHECK no fingerprint, o mesmo AST
+canônico obtido do **CHECK observado** que acabou de ser comparado ao contrato
+revisado. Não usa o AST esperado como saída nem substitui o inventário observado
+pelo snapshot bundled. Identidades, metadata de constraints, demais definições,
+colunas/defaults, índices, enums/labels, relations e migrations continuam no hash.
+Nenhuma nova equivalência foi adicionada ao parser ou à validação. Na mesma
+reprodução, origem e recriação passaram a produzir
+`cd32737e319199b3052573c61c5b5646c9002555c11b9cd0c9cf072d42ee93e3`.
+
+Os testes exercitam o reparse real e rejeitam CHECK enfraquecido, índice parcial,
+FK com ação alterada, enum com label extra e default alterado após recriação,
+mantendo o hash original após rollback. Regressão offline também comprova que o
+hash não é uma constante/snapshot esperado e que a evidência não é mutada. O teste
+existente do controller mantém a rejeição de hash observado diferente do assinado,
+sem transição de estado e com admissão fechada.
+
+O formato da prova não mudou e não há fallback para o algoritmo antigo: backups
+novos devem ser capturados com a nova imagem/verificador; hashes de provas antigas
+não são reescritos nem aceitos por relaxamento. O binding de imagens permanece
+obrigatório. A reprodução é uma reconstrução lógica de schema em memória, **não
+pg_dump/pg_restore**: não copia dados/ACLs, não testa grants/lease e não comprova o
+aceite PG16.14/Linux. Demonstra uma causa concreta compatível com o run, mas não
+dispõe dos dois inventários privados daquele CI para afirmar identidade de todos
+os detalhes. Restore positivo, snapshots pós-restore e repetição após edição
+continuam pendentes de revisão independente e nova execução autorizada.
+
 ## Evidência Task 3 — negativa de schema vazio (2026-10-09)
 
 O run `37907438863`, commit `196540e`, capturou o backup coordenado real

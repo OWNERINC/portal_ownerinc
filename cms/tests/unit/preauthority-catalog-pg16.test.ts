@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { isAbsolute } from 'node:path'
 import test from 'node:test'
 import { PgDialect } from 'drizzle-orm/pg-core'
+import { recreateNativeCatalog } from '../fixtures/recreate-native-catalog'
 import {
   verifyPreauthorityNativeCatalog,
   type FinalizerClient,
@@ -138,6 +139,78 @@ test('actual PostgreSQL catalog queries reject namespace lookalikes and retain o
           assert.equal(await verify(), canonical, 'the full real native catalog passes after each rollback')
         })
       }
+    }
+  } finally { await db.close() }
+})
+
+test('real migrated and logically recreated catalogs have the same observed fingerprint despite CHECK deparser regrouping', {
+  skip: pgliteModule ? false : 'optional PGlite unavailable; set CMS_TEST_PGLITE_MODULE to an existing module',
+  timeout: 120_000,
+}, async t => {
+  const { PGlite } = require(pgliteModule!) as { PGlite: new () => PgliteClient }
+  const db = new PGlite()
+  try {
+    const dialect = new PgDialect()
+    for (const name of migrations) {
+      const migration = await import(new URL(`../../src/migrations/${name}.ts`, import.meta.url).href)
+      await migration.up({ db: { execute: async (sql: Parameters<PgDialect['sqlToQuery']>[0]) => {
+        const query = dialect.sqlToQuery(sql)
+        assert.equal(query.params.length, 0)
+        await db.exec(query.sql)
+      } } })
+    }
+    await db.exec('SET search_path = pg_catalog, public')
+    let stage: PreauthorityCatalogDiagnosticStage = 'native_relations'
+    let capture: Record<string, Record<string, unknown>[]> = {}
+    const client: FinalizerClient = {
+      connect: async () => {}, end: async () => {},
+      query: async (sql, values) => {
+        const result = await db.query(sql, values)
+        capture[stage] = result.rows
+        return result
+      },
+    }
+    const verify = () => verifyPreauthorityNativeCatalog(client, migrations, value => { stage = value })
+    const sourceHash = await verify()
+    const source = capture
+    const sourceOid = (await db.query("SELECT 'public.news_migration_items'::regclass::oid AS oid")).rows[0]!.oid
+    await recreateNativeCatalog(db)
+    assert.notEqual((await db.query("SELECT 'public.news_migration_items'::regclass::oid AS oid")).rows[0]!.oid, sourceOid)
+    capture = {}
+    assert.equal(await verify(), sourceHash, 'hash must come from equivalent observed catalogs, not physical OIDs or deparser formatting')
+    const restored = capture
+    for (const name of ['native_relations', 'native_columns', 'native_indexes', 'native_types']) {
+      assert.deepEqual(restored[name], source[name], `${name} unchanged in the reproduction`)
+    }
+    const different = source.native_constraints!.filter((row, index) =>
+      JSON.stringify(row) !== JSON.stringify(restored.native_constraints![index]))
+    assert.deepEqual(different.map(row => row.constraint_name), ['news_migration_items_source_identity_check'])
+    assert.notDeepEqual(source.native_constraints, restored.native_constraints, 'raw-string hashing reproduces the mismatch')
+    t.diagnostic('Observed CHECK regrouping reproduced across full logical schema recreation; this is not pg_dump/pg_restore.')
+
+    // Real post-recreation drift must still reject, never yield a canonical hash.
+    const foreignKey = restored.native_constraints!.find(row => row.kind === 'f')!
+    const changedForeignKey = String(foreignKey.definition).replace(/ON DELETE (CASCADE|SET NULL|RESTRICT|NO ACTION)/u,
+      clause => clause === 'ON DELETE CASCADE' ? 'ON DELETE RESTRICT' : 'ON DELETE CASCADE')
+    assert.notEqual(changedForeignKey, foreignKey.definition)
+    const index = restored.native_indexes!.find(row => row.is_primary === false && row.is_unique === false)!
+    const enumType = restored.native_types!.find(row => row.kind === 'e')!
+    const mutations = [
+      `ALTER TABLE news_migration_items DROP CONSTRAINT news_migration_items_source_identity_check;
+       ALTER TABLE news_migration_items ADD CONSTRAINT news_migration_items_source_identity_check CHECK (true)`,
+      `DROP INDEX public."${index.index_name}"; ${index.definition} WHERE false`,
+      `ALTER TABLE public."${foreignKey.table_name}" DROP CONSTRAINT "${foreignKey.constraint_name}";
+       ALTER TABLE public."${foreignKey.table_name}" ADD CONSTRAINT "${foreignKey.constraint_name}" ${changedForeignKey}`,
+      `ALTER TYPE public."${enumType.name}" ADD VALUE 'fixture_extra_label'`,
+      "ALTER TABLE news_migration_items ALTER COLUMN source_id SET DEFAULT 'changed'",
+    ]
+    for (const [mutationIndex, sql] of mutations.entries()) {
+      await db.exec('BEGIN')
+      try {
+        await db.exec(sql)
+        await assert.rejects(verify(), /preauthority_native_(constraint|index|type|column)_inventory_mismatch/u, `mutation ${mutationIndex}`)
+      } finally { await db.exec('ROLLBACK') }
+      assert.equal(await verify(), sourceHash)
     }
   } finally { await db.close() }
 })

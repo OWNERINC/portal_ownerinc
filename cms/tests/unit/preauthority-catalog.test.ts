@@ -86,6 +86,35 @@ test('all 24 PostgreSQL-rendered native CHECKs pass without accepting same-name 
   }
 })
 
+test('fingerprint binds observed CHECK semantics rather than restore-dependent parentheses or a bundled expected hash', () => {
+  const source = preauthorityExpectedNativeCatalogInventory()
+  for (const check of source.constraints.filter(item => item.kind === 'c')) check.definition = nativeChecksPg16[check.name]!
+  const restored = structuredClone(source)
+  const check = restored.constraints.find(item => item.name === 'news_migration_items_source_identity_check')!
+  check.definition = check.definition.replace(
+    'CHECK ((((length((source_id)::text) >= 1) AND (length((source_id)::text) <= 128)) AND',
+    'CHECK (((length((source_id)::text) >= 1) AND (length((source_id)::text) <= 128) AND',
+  )
+  assert.notDeepEqual(source, restored, 'captured PG16 reparse removes a redundant AND grouping')
+  const rawHash = (inventory: typeof source) => createHash('sha256').update(JSON.stringify({ migrationNames: fixtureMigrations, ...inventory })).digest('hex')
+  assert.notEqual(rawHash(source), rawHash(restored), 'previous raw hash reproduces the mismatch')
+  const sourceCopy = structuredClone(source)
+  const sourceHash = assertPreauthorityNativeCatalogInventory(source, fixtureMigrations)
+  assert.equal(assertPreauthorityNativeCatalogInventory(restored, fixtureMigrations), sourceHash)
+  assert.deepEqual(source, sourceCopy, 'hashing must not mutate observed evidence')
+  assert.notEqual(assertPreauthorityNativeCatalogInventory(source, [...fixtureMigrations].reverse()), sourceHash,
+    'migration identity/order remain bound by the hash')
+  // The hash still uses observed fields. This helper receives defaultVerified
+  // from the real driver verifier; do not replace the inventory by expected data.
+  const observed = structuredClone(source)
+  const column = observed.columns.find(item => item.defaultExpression === 'now()')!
+  column.defaultExpression = '(now())'
+  assert.notEqual(assertPreauthorityNativeCatalogInventory(observed, fixtureMigrations), sourceHash)
+  check.definition = 'CHECK (true)'
+  assert.throws(() => assertPreauthorityNativeCatalogInventory(restored, fixtureMigrations),
+    /preauthority_native_constraint_inventory_mismatch/u)
+})
+
 test('native CHECK normalization preserves JSONB values, bounds, casts, branches and regex semantics', () => {
   const metadataName = 'legacy_news_revisions_metadata_basis_check'
   const mutations: [string, string, string][] = [
