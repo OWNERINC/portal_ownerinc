@@ -328,3 +328,120 @@ Fechamento local com código estável:
   untracked anteriores preservados. **Ready-for-fresh-review**, sem alegar
   Linux root B0/ancestry PASS. Sem CI, commit/push, SSH, produção, delegação
   ou mutação de serviços/bancos reais nesta sessão.
+
+## Fresh review — diagnóstico concreto do initializer após CI 37958217164
+
+Commit integrado `988c832`, run `37958217164`: consulta **read-only** ao GitHub
+e logs confirmaram verify non-root PASS e step root **5 PASS/zero falhas/zero
+skips**. Builds, scans e publicação passaram; qualification e deploy foram
+skipped. Isso comprova os gates nativos unitários anteriores (inclusive B0
+chmod/chown/ancestry e Git/allocator), não initializer Docker ou recovery PASS.
+
+O relatório baixado registra `prepare_...-source` → `payload_initialize_isolated`,
+exit 2, `controlErrorIdentifier: null`, zero checks de recovery passando.
+O step durou aproximadamente **4m30s** no total; não há timestamp específico do
+início da chamada initializer, portanto não se atribui todo esse tempo a ela.
+O artefato local contém somente o relatório redacted. O stderr privado ficou
+no runner, não publicado: **o reason exato dessa execução não foi recuperado**.
+Exit 2 sem process error não é evidência de timeout do caller (budget 15 min).
+
+### Defeitos comprovados e hipótese histórica
+
+1. A chamada initializer não passava contexto diagnóstico. Somente os contextos
+   preflight/verify eram reconhecidos: mesmo um reason válido ficaria null.
+2. `_initializer_command()` classificava falhas de comandos comuns Docker/Compose
+   como `native_catalog_verifier_execution_failed` e descartava seu stderr.
+3. O argv de criação usava `docker compose create --no-deps`, flag inválida.
+   Prova local **sem efeitos**: Compose **5.1.4**, `create --no-deps --help` retorna
+   `unknown flag: --no-deps`. A fonte pública Compose **v2.40.3** de `up.go`
+   confirma que `--no-deps` seleciona `IgnoreDependencies` e `--no-start` chama
+   somente `backend.Create`, não `backend.Up`/start:
+   <https://github.com/docker/compose/blob/v2.40.3/cmd/compose/up.go>.
+
+O terceiro defeito é uma **causa plausível forte**, não prova do reason histórico:
+outro gate pode ter recusado antes. Não se escolheu entre ownership, B0/archive,
+grants, imagens, receipts, readiness ou catálogo somente pela duração da falha.
+
+### Correção autorizada e conservadora
+
+- Criação agora usa `up --no-start --no-recreate --no-build --no-deps --pull never`.
+  Não foi simplesmente removido `--no-deps`: dependências não podem surgir sem
+  reserva/receipt. Overlay/labels, inventário, reserva e receipts imutáveis não
+  mudaram. O start explícito continua **depois** dos dois receipts assinados.
+- Runtime marca uma fase fechada antes de cada etapa e emite, junto ao reason
+  no exit 2, `PREAUTHORITY_INITIALIZER_DIAGNOSTIC` com phase, installStage,
+  commandExit/commandSignal e privateStderr. O marco é o último estado assinado
+  carregado/retornado, não uma inferência de head/pointer nem um reparo após erro.
+- Generic tool failure/launch/signal usam identifiers próprios do initializer.
+  Exceção interna continua fail-closed sem expor sua mensagem. Metadata privada
+  não entra no frame; nenhum SQL, environment, path, ID Docker ou userdata.
+- Stderr de ferramenta é streamed para tempfile privado no runtime validado;
+  em falha, só o tail de até **16 KiB** é retido em arquivo exclusivo 0600.
+  Falha ao guardar evidência não substitui a falha primária. Não há echo do raw
+  stderr, adoção/delete de resíduos nem mudança dos budgets existentes.
+- Parser JS exige action **e substep exatos**, exit 2 sem signal/process error,
+  body completo conhecido e frame finito. Catálogo mantém seu diagnóstico próprio
+  quando válido. Single-line reasons/guard messages anteriores são reconhecidos
+  somente nesse contexto estreito. Unknown/malformed/appended stderr fica privado.
+- Parent timeout/signal recebe apenas identifiers finitos de processo: não
+  autoriza um reason nem uma fase de adapter que não retornou normalmente.
+  Primary/secondary/hold continuam separados; relatório continua schema 1,
+  com metadata opcional dentro de commandDiagnostic e nenhum gate novo de PASS.
+
+Os quatro reasons novos (`initializer_command_failed`,
+`initializer_command_launch_failed`, `initializer_command_signaled`,
+`initializer_internal_error`) são **exclusivos desse contexto**, não aceitos como
+linha avulsa em preflight/verify. Exigem frame e relação exit/signal coerente;
+reasons anteriores permanecem no allowlist finito compartilhado. A regressão
+confronta os códigos `fail()` literais dos três helpers com o parser initializer
+para que um novo gate não volte a aparecer silenciosamente como null.
+
+Budgets não foram ampliados: wrapper initializer **15 min**, stop writers
+`--timeout 120`, readiness CMS até **180 observações com sleep 1s**. Os comandos
+Python continuam síncronos sem novo timeout próprio; duração total do step não
+identifica qual comando/check consumiu tempo. Em timeout/signal externo não se
+atribui reason do adapter; somente o erro/sinal finito do processo pai.
+
+### Regressões
+
+`payload-initializer-diagnostics.test.mjs` valida as fases contra o source Python,
+action/substep/status, frames inválidos, reasons legados, catálogo e sanitização;
+executa `Runtime.main` + comando Python reais pela command wrapper JS, incluindo
+erro, launch, exceção interna, signal, timeout e stderr opaco. Nessa seam de
+transporte o constructor não é evidência Linux/Docker; signal POSIX é real em
+Linux e explicitamente simulated em Windows. Teste da CLI usa **somente**
+`version`/`--help`, sem daemon ou serviços.
+
+O teste initializer instrumentado também passa por main, kernel/HMAC e journal
+reais em oito pontos de falha, conferindo a fase e o marco efetivo e admission
+closed/worker held. Docker/DB continuam doubles declarados. O modelo verifica
+que o start explícito só ocorre depois de ler os dois receipts no journal real.
+Negativas/quiescência/floor/assinaturas/ownership/comparadores/probe/14 checks/11
+negativas e todos os arquivos funcionais não foram relaxados para passar.
+
+O primeiro focused completo local expôs **ENAMETOOLONG** em dois subprocessos
+Python Windows: o modelo completo duplicado em `-c` excedeu o limite de argv
+após ampliar suas assertions. O helper de teste agora grava o mesmo programa
+integral em arquivo exclusivo 0600 dentro do fixture e executa-o com os mesmos
+argumentos/budget; não houve truncamento, skip ou remoção de assertions.
+
+### Fechamento local estável deste suplemento
+
+- Focused completo: **105 testes — 98 PASS / 7 skips / zero falhas**.
+  Skips são branches nativos/lease/symlink indisponíveis no Windows; a consulta
+  real de argv Compose e o transporte Python/JS novos **executaram**, sem skip.
+- `npm run verify`: **PASS**, Portal **1.700 PASS / 10 skips** e CMS
+  **448 PASS / 11 skips**, zero falhas; `verify: ok`.
+- `npm run security`: **zero vulnerabilidades** nos três pacotes.
+- `git diff --check`: **PASS**, repetido depois do registro documental.
+- Logs locais: `initializer-diagnostics-focused-final.log` e
+  `initializer-diagnostics-verify-final.log`, no diretório temporário aprovado
+  do OpenCode. Não contêm stderr privado dos serviços.
+
+**Uncommitted/unpushed, ready-for-fresh-review**, sem revisão independente ou
+runtime/recovery PASS atribuído. O run histórico root é evidência nativa do
+patch **anterior**, não execução Linux do patch presente. Nenhum novo CI,
+commit/push, SSH, deploy, delegação ou mutação de serviço/banco real foi feito.
+Workflow/receiver/qualificação externa continuam inalterados; material untracked
+anterior foi preservado. Integração/CI e execução física isolada requerem sua
+autorização separada.

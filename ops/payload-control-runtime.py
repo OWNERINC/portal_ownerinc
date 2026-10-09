@@ -13,6 +13,7 @@ import sys
 import tarfile
 import secrets
 import time
+import tempfile
 
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -58,6 +59,30 @@ ACTION_SET = {
     'install-retry-check', 'install-receiver-preflight',
     'initialize-isolated', 'install-floor-commit',
 }
+INITIALIZER_DIAGNOSTIC_PHASES = set('''
+runtime_validation request_validation source_preflight close_admission stop_writers quiescence
+b0_ancestry b0_database_capture b0_storage_capture b0_manifest b0_sign b0_validate install_reserve
+retry_boundary portal_grants_migrate portal_grants_verify portal_grants_postcheck install_advance
+resources_boundary volume_create volume_receipt container_create container_receipt database_start
+database_readiness database_binding cms_provision cms_control_bootstrap cms_migrate
+floor_boundary floor_roles floor_runtime floor_native_catalog floor_pending floor_pointer_swap floor_postcheck floor_commit
+'''.split())
+
+
+def _emit_initializer_diagnostic(runtime):
+    phase = getattr(runtime, 'initializer_phase', 'runtime_validation')
+    state = getattr(runtime, 'state', None)
+    intent = state.get('installIntent') if isinstance(state, dict) else None
+    stage = intent.get('stage') if isinstance(intent, dict) else None
+    stage = stage if stage in STATE.INSTALL_TRANSITION_STAGES else 'none'
+    phase = phase if isinstance(phase, str) and phase in INITIALIZER_DIAGNOSTIC_PHASES else 'runtime_validation'
+    exit_code = getattr(runtime, 'initializer_command_exit', None)
+    signal = getattr(runtime, 'initializer_command_signal', None)
+    exit_code = exit_code if type(exit_code) is int and 0 <= exit_code <= 255 else 'none'
+    signal = signal if type(signal) is int and 1 <= signal <= 64 else 'none'
+    retained = 'retained' if getattr(runtime, 'initializer_stderr_retained', False) is True else 'none'
+    print(f'PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase={phase} installStage={stage} '
+          f'commandExit={exit_code} commandSignal={signal} privateStderr={retained}', file=sys.stderr)
 
 
 class ControlError(Exception):
@@ -1849,12 +1874,44 @@ class Runtime:
         return template
 
     def _initializer_command(self, args, output=None):
-        result = subprocess.run(args, stdout=output if output is not None else subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, check=False,
-                                **({'pass_fds': (9,)} if os.name != 'nt' else {}))
+        self.initializer_command_exit = None
+        self.initializer_command_signal = None
+        self.initializer_stderr_retained = False
+        # Stream unknown tool stderr to a private temporary file, never parent
+        # stderr. Only a bounded tail survives failure, in an exclusive 0600 file.
+        with tempfile.TemporaryFile(dir=self.runtime_dir) as private_stderr:
+            try:
+                result = subprocess.run(args, stdout=output if output is not None else subprocess.PIPE,
+                                        stderr=private_stderr, check=False,
+                                        **({'pass_fds': (9,)} if os.name != 'nt' else {}))
+            except OSError:
+                fail('initializer_command_launch_failed')
+            if result.returncode != 0:
+                try:
+                    private_stderr.seek(0, os.SEEK_END)
+                    private_stderr.seek(max(0, private_stderr.tell() - 16 * 1024))
+                    raw = private_stderr.read(16 * 1024)
+                    if raw:
+                        STATE._write_exclusive(os.path.join(self.runtime_dir,
+                            'payload-initialize-command-' + secrets.token_hex(16) + '.stderr'), raw, 0o600)
+                        self.initializer_stderr_retained = True
+                except (OSError, STATE.StateError):
+                    pass  # Never replace the primary failure with evidence read/write failure.
         if result.returncode != 0:
-            fail('native_catalog_verifier_execution_failed')
+            if result.returncode < 0:
+                self.initializer_command_signal = -result.returncode
+                fail('initializer_command_signaled')
+            self.initializer_command_exit = result.returncode
+            fail('initializer_command_failed')
         return result.stdout if output is None else None
+
+    def _initializer_phase(self, phase):
+        if phase not in INITIALIZER_DIAGNOSTIC_PHASES:
+            fail('unsupported_operation')
+        self.initializer_phase = phase
+        self.initializer_command_exit = None
+        self.initializer_command_signal = None
+        self.initializer_stderr_retained = False
 
     def _initializer_local_daemon(self):
         # No caller-selected context/endpoint. A remote current context in the
@@ -1871,6 +1928,7 @@ class Runtime:
         return self._initializer_command(command + args)
 
     def _capture_initial_b0(self, directory):
+        self._initializer_phase('b0_ancestry')
         # Refuse any partial/unrecorded prior capture; never overwrite evidence.
         if os.path.lexists(directory):
             fail('proof_output_already_exists')
@@ -1885,16 +1943,20 @@ class Runtime:
                 self._initializer_command(args, output=stream)
                 stream.flush()
                 os.fsync(stream.fileno())
+        self._initializer_phase('b0_database_capture')
         capture('postgres.dump', ['docker', 'exec', _container_id('postgres'), 'sh', '-ceu',
                                  'pg_dump --format=custom --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"'])
+        self._initializer_phase('b0_storage_capture')
         capture('uploads.tar.gz', ['docker', 'run', '--rm', '--read-only', '--network', 'none', '--pull', 'never',
                 '--volume', self.inventory['document']['volumes']['portalUploads']['name'] + ':/data:ro',
                 'nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752',
                 'tar', '-czf', '-', '-C', '/data', '.'])
+        self._initializer_phase('b0_manifest')
         manifest = ''.join(_file_hash(os.path.join(directory, name))['sha256'] + '  ' + name + '\n'
                            for name in STATE.LEGACY_ARTIFACTS)
         STATE._write_exclusive(os.path.join(directory, 'manifest.sha256'), manifest.encode('ascii'), 0o600)
         self.evidence = os.path.join(directory, 'preauthority-proof.json')
+        self._initializer_phase('b0_sign')
         self.backup_metadata()
         self.evidence = directory
 
@@ -1993,47 +2055,66 @@ class Runtime:
     def _initialize_resources(self):
         intent = self.state['installIntent']
         binding = intent['binding']
+        self._initializer_phase('resources_boundary')
         self._creation_boundary()
         for key in ('cmsPostgres', 'cmsUploads'):
             if key not in self.state['installIntent']['creation']['volumes']:
                 entry = self.inventory['document']['volumes'][key]
+                self._initializer_phase('resources_boundary')
                 self._creation_boundary()
+                self._initializer_phase('volume_create')
                 output = self._initializer_command(['docker', 'volume', 'create', '--driver', 'local',
                     '--label', 'com.docker.compose.project=' + self.inventory['document']['project'],
                     '--label', 'com.docker.compose.volume=' + entry['composeKey'],
                     '--label', 'io.ownerinc.install-reservation=' + intent['creation']['nonce'], entry['name']])
                 if output.strip().decode('ascii') != entry['name']:
                     fail('restore_target_changed')
+                self._initializer_phase('volume_receipt')
                 self.state = STATE.record_install_creation(self.runtime_dir, binding, 'volumes', key, self._creation_volume(key))
         for service in ('cms-postgres', 'cms'):
             if service not in self.state['installIntent']['creation']['containers']:
+                self._initializer_phase('resources_boundary')
                 self._creation_boundary()
-                self._initializer_compose(['create', '--no-build', '--no-deps', '--pull', 'never', service], creation=True)
+                self._initializer_phase('container_create')
+                # `compose create` has no --no-deps flag. `up --no-start`
+                # provides create-only semantics with dependency isolation;
+                # do not drop --no-deps and accidentally create unbound services.
+                self._initializer_compose(['up', '--no-start', '--no-recreate', '--no-build', '--no-deps', '--pull', 'never', service], creation=True)
+                self._initializer_phase('container_receipt')
                 self.state = STATE.record_install_creation(self.runtime_dir, binding, 'containers', service, self._creation_container(service))
+        self._initializer_phase('resources_boundary')
         self._creation_boundary()
+        self._initializer_phase('database_start')
         self._initializer_command(['docker', 'start', self.state['installIntent']['creation']['containers']['cms-postgres']['id']])
+        self._initializer_phase('database_readiness')
         self._wait_initial_database()
+        self._initializer_phase('database_binding')
         portal, cms = self._install_target(True)
         if portal != binding['portalTarget']:
             fail('restore_target_changed')
         self.state = STATE.advance_install(self.runtime_dir, binding, 'cms_resources_bound', cms)
 
     def _initial_floor_observations(self):
+        self._initializer_phase('floor_boundary')
         self.install_retry_check()
         intent = self.state['installIntent']
         if 'creation' in intent:
             self._creation_boundary()
         for service in ('api', 'cron', 'cms'):
             self._verify_container_image(intent['binding']['candidate']['images'], service, running=False)
+        self._initializer_phase('floor_roles')
         self._install_role_verification()
+        self._initializer_phase('floor_runtime')
         self._initializer_compose(['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms',
                                   'node', '--import', 'tsx', 'scripts/provision-db.ts', '--verify-runtime'])
+        self._initializer_phase('floor_native_catalog')
         catalog = _verify_cms(self.release_path, catalog=True)
         _assert_database_quiescent('postgres')
         _assert_database_quiescent('cms-postgres')
         return catalog['nativeCatalogFingerprint']
 
     def install_floor_commit(self):
+        self._initializer_phase('floor_boundary')
         self._admission_closed()
         intent = self.state.get('installIntent')
         if intent is None or intent['stage'] not in ('provisioned', 'floor_commit_pending', 'floor_committed'):
@@ -2049,10 +2130,12 @@ class Runtime:
             print('exact signed committed floor reverified; admission remains closed and worker held')
             return
         if intent['stage'] == 'provisioned':
+            self._initializer_phase('floor_pending')
             self.state = STATE.begin_install_floor(self.runtime_dir, binding, fingerprint)
         elif fingerprint != intent['floor']['nativeCatalogFingerprint']:
             fail('native_catalog_fingerprint_missing')
         pointer = self.inventory['document']['paths']['currentRelease']
+        self._initializer_phase('floor_pointer_swap')
         _safe_regular(pointer, mode=0o600, owner_root=True)
         # Full prevalidation has completed before any pointer write. The signed
         # pending marker is durable first, and permits ONLY this exact window.
@@ -2060,12 +2143,16 @@ class Runtime:
             STATE._atomic_replace(pointer, (binding['candidateRelease'] + '\n').encode('utf-8'), 0o600)
         elif self._current_release() != binding['candidateRelease']:
             fail('current_release_invalid')
-        if self._initial_floor_observations() != fingerprint or self._current_release() != binding['candidateRelease']:
+        observed_fingerprint = self._initial_floor_observations()
+        self._initializer_phase('floor_postcheck')
+        if observed_fingerprint != fingerprint or self._current_release() != binding['candidateRelease']:
             fail('current_release_invalid')
+        self._initializer_phase('floor_commit')
         self.state = STATE.commit_install_floor(self.runtime_dir, binding)
         print('native preauthority floor committed with signed audit; admission closed and worker held')
 
     def initialize_isolated(self):
+        self._initializer_phase('request_validation')
         template = self._initializer_request()
         if self.state['schemaVersion'] != 2 or self.state.get('restoreIntent') is not None:
             fail('invalid_cold_state')
@@ -2077,37 +2164,50 @@ class Runtime:
                 fail('invalid_cold_state')
             if self.state['admission'] == 'open':
                 self.evidence = template['sourceRelease']
+                self._initializer_phase('source_preflight')
                 self.release_preflight()
+                self._initializer_phase('close_admission')
                 self.close_admission()
                 if not os.path.lexists(self.closed):
                     STATE._write_exclusive(self.closed, b'', 0o600)
+                self._initializer_phase('stop_writers')
                 self._initializer_compose(['stop', '--timeout', '120', 'nginx', 'api', 'cron', 'cms', 'cms-worker'])
+                self._initializer_phase('quiescence')
                 self.quiescence_proof()
                 self._capture_initial_b0(template['b0']['directory'])
+            self._initializer_phase('b0_validate')
             self._admission_closed()
             proof, digest = _parse_proof(template['b0']['directory'], self.key, payload=False)
             template['b0']['proofSha256'] = digest
             if digest != self.state['legacySourceProofSha256'] or digest != self.state['latestProofSha256']:
                 fail('preauthority_source_recovery_proof_mismatch')
+            self._initializer_phase('install_reserve')
             self.state = STATE.reserve_install(self.runtime_dir, template, proof, digest,
                 creation={'nonce': secrets.token_hex(32), 'volumes': {}, 'containers': {}})
         binding = self.state['installIntent']['binding']
         self.evidence = binding['b0']['directory']
         def advance(stage):
+            self._initializer_phase('install_advance')
             self.state = STATE.advance_install(self.runtime_dir, binding, stage)
         stage = self.state['installIntent']['stage']
         if stage == 'reserved':
+            self._initializer_phase('retry_boundary')
             self.install_retry_check()
             advance('portal_grants_pending')
         if self.state['installIntent']['stage'] == 'portal_grants_pending':
+            self._initializer_phase('retry_boundary')
             self.install_retry_check()
+            self._initializer_phase('portal_grants_migrate')
             self._initializer_compose(['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'migrate'])
+            self._initializer_phase('portal_grants_verify')
             self._initializer_compose(['run', '--rm', '--no-deps', '--pull', 'never', '-T',
                 '-e', 'RUN_MIGRATIONS=false', '-e', 'MIGRATION_ONLY=false', 'migrate', 'node', 'db/verify-migrations.js'])
             _verify_portal(self.release_path, 'strict')
+            self._initializer_phase('portal_grants_postcheck')
             self.install_retry_check()
             advance('portal_grants_verified')
         if self.state['installIntent']['stage'] == 'portal_grants_verified':
+            self._initializer_phase('retry_boundary')
             self.install_retry_check()
             advance('cms_resources_pending')
         if self.state['installIntent']['stage'] == 'cms_resources_pending':
@@ -2115,14 +2215,20 @@ class Runtime:
             # no cold shape bypass or inferred binding on this retry path.
             self._initialize_resources()
         if self.state['installIntent']['stage'] == 'cms_resources_bound':
+            self._initializer_phase('retry_boundary')
             self.install_retry_check()
             advance('cms_provision_pending')
         if self.state['installIntent']['stage'] == 'cms_provision_pending':
+            self._initializer_phase('retry_boundary')
             self.install_retry_check()
+            self._initializer_phase('resources_boundary')
             self._creation_boundary()
+            self._initializer_phase('cms_provision')
             self._initializer_compose(['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-provision'])
+            self._initializer_phase('cms_control_bootstrap')
             self._initializer_compose(['--profile', 'cms-control-roles', 'run', '--rm', '--no-deps', '--pull', 'never', '-T',
                 'cms-control-roles', 'node', '--import', 'tsx', 'scripts/provision-db.ts', '--bootstrap-control'])
+            self._initializer_phase('cms_migrate')
             self._initializer_compose(['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-migrate'])
             self._initial_floor_observations()
             advance('provisioned')
@@ -2152,16 +2258,24 @@ def main(argv):
         print('Invalid Payload control invocation.', file=sys.stderr)
         return 2
     action, release, evidence = argv[1:]
+    runtime = None
     try:
         if os.name != 'nt':
             os.environ['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
             os.environ['HOME'] = '/root'
-        Runtime(action, release, evidence).run()
+        runtime = Runtime(action, release, evidence)
+        runtime.run()
     except (ControlError, STATE.StateError) as error:
         _emit_control_error(error, release)
+        if action in ('initialize-isolated', 'install-floor-commit'):
+            _emit_initializer_diagnostic(runtime)
         return 2
     except Exception:
-        print('Payload control failed closed.', file=sys.stderr)
+        if action in ('initialize-isolated', 'install-floor-commit'):
+            print('initializer_internal_error', file=sys.stderr)
+            _emit_initializer_diagnostic(runtime)
+        else:
+            print('Payload control failed closed.', file=sys.stderr)
         return 2
     return 0
 

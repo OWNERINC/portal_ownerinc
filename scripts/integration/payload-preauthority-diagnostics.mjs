@@ -39,6 +39,24 @@ const controlCommandContexts = new Set([
   'payload-control:release-preflight',
   'payload-control:verify-release',
 ]);
+const initializerContexts = new Map([
+  ['payload-control:initialize-isolated', 'payload_initialize_isolated'],
+  ['payload-control:install-floor-commit', 'payload_install_floor_commit'],
+]);
+export const initializerDiagnosticPhases = Object.freeze(`
+runtime_validation request_validation source_preflight close_admission stop_writers quiescence
+b0_ancestry b0_database_capture b0_storage_capture b0_manifest b0_sign b0_validate install_reserve
+retry_boundary portal_grants_migrate portal_grants_verify portal_grants_postcheck install_advance
+resources_boundary volume_create volume_receipt container_create container_receipt database_start
+database_readiness database_binding cms_provision cms_control_bootstrap cms_migrate
+floor_boundary floor_roles floor_runtime floor_native_catalog floor_pending floor_pointer_swap floor_postcheck floor_commit
+`.trim().split(/\s+/u));
+const initializerStages = new Set(`none reserved portal_grants_pending portal_grants_verified
+cms_resources_pending cms_resources_bound cms_provision_pending provisioned floor_commit_pending floor_committed`.split(/\s+/u));
+const processSignals = new Set(['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV']);
+const initializerErrorIdentifiers = new Set([
+  'initializer_command_failed', 'initializer_command_launch_failed', 'initializer_command_signaled', 'initializer_internal_error',
+]);
 // These are the finite fixed reason codes emitted by payload-control-runtime.py,
 // payload-control-state.py and payload-control-inventory.py. Keep parsing gated
 // to the known adapter contexts above; never infer identifiers from arbitrary
@@ -139,6 +157,7 @@ restore_cms_verify_runtime restore_start_readiness restore_smoke`.trim().split(/
 const coordinatorSteps = new Set(coordinatorDiagnosticSteps);
 const knownControlErrorIdentifiers = new Set([
   ...controlErrorIdentifiers,
+  ...initializerErrorIdentifiers,
   ...controlAdapterMessages.values(),
   ...controlGuardMessages.values(),
 ]);
@@ -330,7 +349,44 @@ export function extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandC
   return { stage, reason, sqlState, ...(constraintMismatch ? { constraintMismatch } : {}) };
 }
 
-export function extractControlErrorIdentifier(stderr, { controlCommandContext, release } = {}) {
+function initializerScope(stderr, options) {
+  if (!initializerContexts.has(options.controlCommandContext)
+    || initializerContexts.get(options.controlCommandContext) !== options.substep
+    || options.status !== 2 || options.errorCode || options.signal) return null;
+  const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
+  const match = text.match(/^([\s\S]*\n)PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=([a-z][a-z0-9_]+) installStage=([a-z_]+) commandExit=(none|[0-9]{1,3}) commandSignal=(none|[0-9]{1,2}) privateStderr=(retained|none)\r?\n$/u);
+  if (!match) return text.includes('PREAUTHORITY_INITIALIZER_DIAGNOSTIC') ? null : { body: text };
+  const [, body, phase, installStage, rawExit, rawSignal, retained] = match;
+  const commandExitCode = rawExit === 'none' ? null : Number(rawExit);
+  const commandSignal = rawSignal === 'none' ? null : Number(rawSignal);
+  if (!initializerDiagnosticPhases.includes(phase) || !initializerStages.has(installStage)
+    || (commandExitCode !== null && (commandExitCode < 1 || commandExitCode > 255))
+    || (commandSignal !== null && (commandSignal < 1 || commandSignal > 64))
+    || (commandExitCode !== null && commandSignal !== null)) return null;
+  return { body, initializer: { phase, installStage, commandExitCode, commandSignal, privateStderrRetained: retained === 'retained' } };
+}
+
+function initializerBodyIdentifier(scope, release) {
+  if (!scope) return null;
+  const code = scope.body.match(/^([a-z][a-z0-9_]{0,63})\r?\n$/u)?.[1];
+  if (!initializerErrorIdentifiers.has(code)) {
+    return extractControlErrorIdentifier(scope.body, { controlCommandContext: controlGuardContext, release });
+  }
+  // These newly introduced errors are never emitted without the runtime frame;
+  // require the exact reason/exit/signal relationship, not just finite fields.
+  const metadata = scope.initializer;
+  if (!metadata) return null;
+  if (code === 'initializer_command_failed') return metadata.commandExitCode !== null && metadata.commandSignal === null ? code : null;
+  if (code === 'initializer_command_signaled') return metadata.commandExitCode === null && metadata.commandSignal !== null ? code : null;
+  return metadata.commandExitCode === null && metadata.commandSignal === null && !metadata.privateStderrRetained ? code : null;
+}
+
+export function extractControlErrorIdentifier(stderr, options = {}) {
+  const { controlCommandContext, release } = options;
+  if (initializerContexts.has(controlCommandContext)) {
+    const scope = initializerScope(stderr, options);
+    return initializerBodyIdentifier(scope, release);
+  }
   const adapterContext = controlCommandContexts.has(controlCommandContext);
   const guardContext = controlCommandContext === controlGuardContext;
   if (!adapterContext && !guardContext) return null;
@@ -387,11 +443,14 @@ export function extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext
 }
 
 export function createCommandDiagnostic({
-  substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext, coordinatorCommandContext,
+  substep, status, signal, errorCode, stderr, sqlCommandContext = false, controlCommandContext, coordinatorCommandContext,
   logicalSnapshotCommandContext, release,
 }) {
   const sqlState = extractSqlState(stderr, { sqlCommandContext });
-  const nativeCatalogVerifier = extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext, release });
+  const initializer = initializerScope(stderr, { controlCommandContext, substep, status, errorCode, signal });
+  const initializerReason = initializerBodyIdentifier(initializer, release);
+  const nativeCatalogVerifier = extractNativeCatalogVerifierDiagnostic(initializerReason ? initializer.body : stderr,
+    { controlCommandContext: initializerReason ? controlGuardContext : controlCommandContext, release });
   const logicalCode = logicalSnapshotCommandContext === 'logical-snapshot-cli'
     ? String(stderr || '').match(/^(logical_snapshot_[a-z_]+)\r?\n?$/u)?.[1] : null;
   return sanitizeCommandDiagnostic({
@@ -402,7 +461,9 @@ export function createCommandDiagnostic({
       : errorCode ? 'command_process_error' : null,
     sqlState,
     errorIdentifier: sqlState ? sqlStateIdentifiers[sqlState] : null,
-    controlErrorIdentifier: extractControlErrorIdentifier(stderr, { controlCommandContext, release }),
+    controlErrorIdentifier: extractControlErrorIdentifier(stderr, { controlCommandContext, release, substep, status, errorCode, signal }),
+    ...(processSignals.has(signal) ? { commandSignal: signal } : {}),
+    ...(initializerReason && initializer.initializer ? { initializer: initializer.initializer } : {}),
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
     ...(logicalSnapshotErrorCodes.includes(logicalCode) ? { logicalSnapshotErrorIdentifier: logicalCode } : {}),
     ...extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, status, release }),
@@ -410,6 +471,18 @@ export function createCommandDiagnostic({
 }
 
 export function sanitizeCommandDiagnostic(diagnostic = {}) {
+  const initializer = diagnostic.initializer;
+  const safeInitializer = initializer && initializerDiagnosticPhases.includes(initializer.phase)
+    && initializerStages.has(initializer.installStage)
+    && (initializer.commandExitCode === null || Number.isInteger(initializer.commandExitCode)
+      && initializer.commandExitCode >= 1 && initializer.commandExitCode <= 255)
+    && (initializer.commandSignal === null || Number.isInteger(initializer.commandSignal)
+      && initializer.commandSignal >= 1 && initializer.commandSignal <= 64)
+    && (initializer.commandExitCode === null || initializer.commandSignal === null)
+    && typeof initializer.privateStderrRetained === 'boolean'
+    ? { phase: initializer.phase, installStage: initializer.installStage,
+      commandExitCode: initializer.commandExitCode, commandSignal: initializer.commandSignal,
+      privateStderrRetained: initializer.privateStderrRetained } : null;
   const native = diagnostic.nativeCatalogVerifier;
   const nativeConstraintMismatch = native?.constraintMismatch;
   const safeConstraintMismatch = nativeConstraintMismatch && authorizedNativeConstraintMismatches.has(nativeConstraintMismatch)
@@ -456,6 +529,8 @@ export function sanitizeCommandDiagnostic(diagnostic = {}) {
     errorIdentifier: knownErrorIdentifiers.has(diagnostic.errorIdentifier) ? diagnostic.errorIdentifier : null,
     controlErrorIdentifier: knownControlErrorIdentifiers.has(diagnostic.controlErrorIdentifier)
       ? diagnostic.controlErrorIdentifier : null,
+    ...(processSignals.has(diagnostic.commandSignal) ? { commandSignal: diagnostic.commandSignal } : {}),
+    ...(safeInitializer ? { initializer: safeInitializer } : {}),
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
     ...(coordinatorSteps.has(diagnostic.coordinatorStep) ? { coordinatorStep: diagnostic.coordinatorStep } : {}),
     ...(logicalSnapshotErrorCodes.includes(diagnostic.logicalSnapshotErrorIdentifier)

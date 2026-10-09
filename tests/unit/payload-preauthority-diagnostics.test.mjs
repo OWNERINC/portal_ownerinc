@@ -138,6 +138,13 @@ test('control errors require a known adapter context, one exact line and an emit
     sourceCodes.add(identifier);
   }
   for (const identifier of sourceCodes) {
+    if (['initializer_command_failed', 'initializer_command_launch_failed', 'initializer_command_signaled'].includes(identifier)) {
+      assert.equal(extractControlErrorIdentifier(`${identifier}\n`, context), null,
+        'initializer-only command reasons must not be parsed from a preflight/verify invocation');
+      assert.equal(sanitizeCommandDiagnostic({ controlErrorIdentifier: identifier }).controlErrorIdentifier, identifier,
+        `fixed initializer reason ${identifier} must survive redacted report sanitization`);
+      continue;
+    }
     assert.equal(extractControlErrorIdentifier(`${identifier}\n`, context), identifier,
       `fixed adapter reason ${identifier} must be in the explicit finite allowlist`);
   }

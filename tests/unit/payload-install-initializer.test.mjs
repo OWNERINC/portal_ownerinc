@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -114,6 +114,11 @@ class Model:
             elif args[3] == '{{.State.Health.Status}}': output = b'healthy\n'
             else: output = (json.dumps(value['Config']['Labels']) + '\n' + json.dumps(value['Mounts']) + '\n').encode()
         elif args[:2] == ['docker','start']:
+            # The explicit start is never allowed before both creator receipts
+            # are returned by the real signed journal, including on retry.
+            recorded = self.state()['installIntent']['creation']['containers']
+            assert set(recorded) == {'cms-postgres','cms'}
+            assert args[2] == recorded['cms-postgres']['id']
             next(c for c in self.containers.values() if c['Id'] == args[2])['State']['Status'] = 'running'
         elif args[:2] == ['docker','exec']:
             output = b'private synthetic PostgreSQL archive bytes' if 'pg_dump' in args[-1] else b''
@@ -122,7 +127,8 @@ class Model:
             if 'stop' in args:
                 for service in ('api','cron','cms','nginx'):
                     if service in self.containers: self.containers[service]['State']['Status'] = 'exited'
-            elif 'create' in args:
+            elif 'up' in args and '--no-start' in args:
+                assert '--no-deps' in args and '--no-recreate' in args and '--no-build' in args
                 overlay = json.loads(open(os.path.join(self.runtime,'payload-initialize-compose.json'),encoding='utf-8').read())
                 self.create_container(args[-1],overlay['services'][args[-1]]['labels'])
             elif 'migrate' in args and args[-1] == 'migrate': self.granted = True
@@ -173,7 +179,7 @@ async function fixture(t, body) {
   const parent = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : tmpdir();
   const root = await mkdtemp(path.join(parent, 'install-initializer-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const result = spawnSync(python, ['-B', '-c', String.raw`
+  const source = String.raw`
 import copy, hashlib, importlib.util, json, os, sys
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -228,9 +234,45 @@ def provisioned(directory):
                 S.record_install_creation(directory,binding,'containers',name,
                     {'id':hashlib.sha256(name.encode()).hexdigest(),'image':images['cms'],'fingerprint':'5' * 64})
         S.advance_install(directory,binding,stage,cms_target if stage == 'cms_resources_bound' else None)
-` + observationModel + `\nMODEL_SOURCE = ${JSON.stringify(observationModel)}\n` + body, path.resolve('.'), root], { encoding: 'utf8', timeout: 90000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+` + observationModel + `\nMODEL_SOURCE = ${JSON.stringify(observationModel)}\n` + body;
+  // Large replay/guard programs exceed Windows argv limits; execute the same
+  // complete source from an exclusive private fixture file, never truncate it.
+  const program = path.join(root, 'exercise.py');
+  await writeFile(program, source, { flag: 'wx', mode: 0o600 });
+  const result = spawnSync(python, ['-B', program, path.resolve('.'), root], {
+    encoding: 'utf8', timeout: 90000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+  });
+  assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
+
+test('initializer main attributes failures to the concrete phase and last signed milestone without changing admission or audit', async t => {
+  await fixture(t, String.raw`
+from contextlib import redirect_stderr
+cases = [
+    ('stop_writers','none',lambda args:'stop' in args),
+    ('b0_database_capture','none',lambda args:args[:2]==['docker','exec'] and 'pg_dump' in args[-1]),
+    ('b0_storage_capture','none',lambda args:args[:2]==['docker','run']),
+    ('portal_grants_migrate','portal_grants_pending',lambda args:args[-1]=='migrate'),
+    ('container_create','cms_resources_pending',lambda args:'up' in args and '--no-start' in args and args[-1]=='cms-postgres'),
+    ('cms_provision','cms_provision_pending',lambda args:args[-1]=='cms-provision'),
+    ('cms_control_bootstrap','cms_provision_pending',lambda args:args[-1]=='--bootstrap-control'),
+    ('cms_migrate','cms_provision_pending',lambda args:args[-1]=='cms-migrate'),
+]
+for index,(phase,stage,fail_command) in enumerate(cases):
+    model=Model('diagnostic-' + str(index)); model.fail_command=fail_command
+    stderr=io.StringIO()
+    with model.context(),redirect_stderr(stderr):
+        assert R.main(['control','initialize-isolated',model.release,model.request])==2
+    lines=stderr.getvalue().splitlines()
+    assert lines==['initializer_command_failed','PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=' + phase +
+        ' installStage=' + stage + ' commandExit=2 commandSignal=none privateStderr=none'],lines
+    state=model.state()
+    assert state['admission']=='closed' and state['workerHold'] is True
+    assert (state['installIntent']['stage'] if state['installIntent'] else 'none')==stage
+    assert model.root not in stderr.getvalue() and images['cms'] not in stderr.getvalue()
+`);
+});
 
 test('explicit producer binding has no circular qualification fields and classic bindings remain strict', async t => {
   await fixture(t, String.raw`
@@ -315,7 +357,7 @@ for phase, predicate, expected in [
 ]:
     model = Model('retry-' + phase); model.fail_command = predicate
     with model.context():
-        expect('native_catalog_verifier_execution_failed',model.initialize)
+        expect('initializer_command_failed',model.initialize)
         assert model.state()['installIntent']['stage'] == expected
         assert model.state()['admission'] == 'closed'
         model.fail_command = None
@@ -387,7 +429,7 @@ test('candidate/lease/physical mismatch and untrusted residue fail before effect
 for negative in ('candidate','lease','portal','cms-volume','owner','pointer','b0'):
     model = Model('reject-' + negative)
     model.fail_command = lambda args:args[-1] == 'cms-provision'
-    with model.context(): expect('native_catalog_verifier_execution_failed',model.initialize)
+    with model.context(): expect('initializer_command_failed',model.initialize)
     model.fail_command = None
     before = model.state(); journal_files = sorted(os.listdir(os.path.join(model.runtime,'payload-control-state')))
     with model.context(),ExitStack() as stack:

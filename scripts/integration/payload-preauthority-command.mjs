@@ -8,6 +8,8 @@ const leaseScript = 'set -Eeuo pipefail; lock=$1; shift; exec 9<>"$lock"; flock 
 const controlSubsteps = Object.freeze({
   'release-preflight': 'payload_control_release_preflight',
   'verify-release': 'payload_control_verify_release',
+  'initialize-isolated': 'payload_initialize_isolated',
+  'install-floor-commit': 'payload_install_floor_commit',
 });
 
 export class FixtureFailure extends Error {
@@ -75,6 +77,7 @@ export function createFixtureCommandFailure(result, options = {}) {
   const failure = new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
     substep: candidateSubstep,
     status: result.status,
+    signal: result.signal,
     errorCode: result.error?.code,
     stderr: result.stderr,
     sqlCommandContext: options.sqlCommandContext === true,

@@ -185,6 +185,7 @@ export async function initializePreauthority({ runtime, runIdentity, images, run
   return withLease(runtime, runtime.project, path.join(runtime.directory, 'payload-operations-guard'),
     ['initialize-isolated', runtime.payloadRelease, request], {
       release: runtime.payloadRelease, substep: 'payload_initialize_isolated',
+      controlCommandContext: 'payload-control:initialize-isolated',
       timeout: 15 * 60_000, preservePrivateErrorEvidence: true,
     });
 }
