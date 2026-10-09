@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 const read = (file) => readFile(new URL(`../../${file}`, import.meta.url), 'utf8');
@@ -240,6 +244,99 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
   // A+B requires successful named gates, not an exact count of workflow steps.
   // This additional mandatory step must not replace or weaken any existing gate.
   assert.match(packager, /for \(const name of requiredSteps\)[\s\S]*job\.steps\.filter\(step => step\.name === name\)[\s\S]*steps\[0\]\.conclusion !== 'success'/u);
+});
+
+test('CI mirror covers all pinned Hub bases without changing production pins or weakening gates', async () => {
+  const workflow = await read('.github/workflows/ci.yml');
+  const step = namedStep(workflow, 'Verify pinned CI mirrors and configure runner pulls');
+  const service = workflow.slice(workflow.indexOf('    services:'), workflow.indexOf('    steps:'));
+  assert.match(service, /image: mirror\.gcr\.io\/library\/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777/u);
+  const sources = await Promise.all(['api/Dockerfile', 'cron/Dockerfile', 'cms/Dockerfile',
+    'docker-compose.yml', 'docker-compose.payload.yml', 'scripts/integration/editorial-admin-session-fixture.compose.yml',
+    'scripts/integration/payload-functional-base-images.mjs'].map(read));
+  const required = new Set([...sources, workflow].flatMap(source => [...source.matchAll(
+    /\b(postgres|nginx|node|golang):[A-Za-z0-9_.-]+@sha256:([0-9a-f]{64})/gu,
+  )].map(([, name, digest]) => `${name}:${digest}`)));
+  const mirrored = new Set([...step.matchAll(/\['([a-z]+)', '([0-9a-f]{64})'\]/gu)].map(([, name, digest]) => `${name}:${digest}`));
+  assert.equal(required.size, 5, 'review new Hub dependencies instead of silently relying on an unverified cache');
+  assert.deepEqual(mirrored, required, 'both Node bases plus Go, Nginx and PostgreSQL must be checked, not only the first failed service');
+  for (const source of sources) assert.doesNotMatch(source, /mirror\.gcr\.io|public\.ecr\.aws/u,
+    'transport change must remain in CI, not production Dockerfiles/Compose/fixture contracts');
+  assert.match(step, /test "\$RUNNER_ENVIRONMENT" = github-hosted/u);
+  assert.match(step, /test -z "\$\{DOCKER_HOST:-\}"[\s\S]*test -z "\$\{DOCKER_CONTEXT:-\}"[\s\S]*docker context show/u);
+  assert.match(step, /sudo dockerd --validate --config-file=\/etc\/docker\/daemon\.json/u);
+  assert.match(step, /sudo systemctl kill --kill-whom=main --signal=HUP docker\.service/u);
+  assert.match(step, /for attempt in \{1\.\.15\}; do[\s\S]*test "\$mirror_ready" = true/u);
+  assert.match(step, /docker inspect --format '\{\{\.State\.Health\.Status\}\}' "\$POSTGRES_SERVICE_ID"\)" = healthy/u);
+  assert.doesNotMatch(step, /(?:continue-on-error|always\(|insecure-registr|tlsverify|restart docker|docker login|secrets\.|\beval\b|\|\| true)/u);
+  assert.ok(workflow.indexOf('      - name: Verify pinned CI mirrors') < workflow.indexOf('      - run: npm run verify'));
+  assert.match(namedStep(workflow, 'Build production images'), /BUILDX_BUILDER: default[\s\S]*docker buildx inspect default \| grep --extended-regexp '\^Driver:\[\[:space:\]\]\+docker\$'/u);
+  assert.match(step, /config\['registry-mirrors'\] = \['https:\/\/mirror\.gcr\.io'\]/u);
+  assert.match(step, /config = json\.load\(source\)[\s\S]*json\.dump\(config, target\)/u,
+    'preserve all unrelated hosted-runner daemon options');
+});
+
+function mirrorProbeSource(workflow) {
+  const step = namedStep(workflow, 'Verify pinned CI mirrors and configure runner pulls');
+  return step.split("node --input-type=module <<'NODE'\n")[1].split('\n          NODE')[0]
+    .split('\n').map(line => line.slice(10)).join('\n');
+}
+
+test('CI manifest probe uses exact raw-byte hashes and fails closed (HTTP explicitly mocked, no Docker)', async () => {
+  const original = mirrorProbeSource(await read('.github/workflows/ci.yml'));
+  const payloads = Array.from({ length: 5 }, (_, index) => Buffer.from(`synthetic registry index ${index}`));
+  let index = 0;
+  const source = original.replace(/\['([a-z]+)', '([0-9a-f]{64})'\]/gu, (_match, name) =>
+    `['${name}', '${createHash('sha256').update(payloads[index++]).digest('hex')}']`)
+    .replace("import { createHash } from 'node:crypto';", '');
+  assert.equal(index, 5);
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const probe = new AsyncFunction('fetch', 'createHash', 'Buffer', 'AbortSignal', 'console', source);
+  for (const mode of ['good', 'same-length-tamper', 'unavailable', 'rate-limit', 'timeout', 'redirect']) {
+    let calls = 0; const messages = [];
+    const fetchMock = async (url, options) => {
+      assert.match(url, /^https:\/\/mirror\.gcr\.io\/v2\/library\/(postgres|nginx|node|golang)\/manifests\/sha256:[0-9a-f]{64}$/u);
+      assert.deepEqual(options.headers, { Accept: 'application/vnd.oci.image.index.v1+json' });
+      assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
+      let raw = payloads[calls++];
+      if (mode === 'timeout' || mode === 'redirect') throw new Error('synthetic transport failure');
+      if (mode === 'same-length-tamper') { raw = Buffer.from(raw); raw[0] ^= 1; }
+      return new Response(raw, { status: mode === 'unavailable' ? 404 : mode === 'rate-limit' ? 429 : 200,
+        headers: { 'docker-content-digest': 'sha256:' + createHash('sha256').update(payloads[calls - 1]).digest('hex') } });
+    };
+    const operation = probe(fetchMock, createHash, Buffer, AbortSignal, { log: message => messages.push(message) });
+    if (mode === 'good') { await operation; assert.equal(calls, 5); assert.equal(messages.length, 5); }
+    else { await assert.rejects(operation); assert.equal(calls, 1); assert.equal(messages.length, 0); }
+  }
+});
+
+test('CI daemon merge preserves unrelated config and rejects malformed config in private offline fixtures', async t => {
+  const python = ['python3', 'python'].find(command => spawnSync(command, ['--version'], { encoding: 'utf8' }).status === 0);
+  if (!python) { t.skip('Python unavailable; CI Python config merge execution pending'); return; }
+  const step = namedStep(await read('.github/workflows/ci.yml'), 'Verify pinned CI mirrors and configure runner pulls');
+  const snippet = step.split("sudo python3 - <<'PYTHON'\n")[1].split('\n          PYTHON')[0]
+    .split('\n').map(line => line.slice(10)).join('\n');
+  const parent = process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : tmpdir();
+  const fixture = await mkdtemp(path.join(parent, 'ci-daemon-merge-'));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  const filename = path.join(fixture, 'daemon-fixture.json');
+  // Execute only an in-memory copy with its fixed CI path replaced by this
+  // private fixture. No sudo, Docker, service or production file is accessed.
+  const source = snippet.replace("filename = '/etc/docker/daemon.json'", 'filename = __import__("sys").argv[1]');
+  assert.notEqual(source, snippet);
+  const run = () => spawnSync(python, ['-I', '-S', '-B', '-c', source, filename], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(run().status, 0);
+  assert.deepEqual(JSON.parse(await readFile(filename, 'utf8')), { 'registry-mirrors': ['https://mirror.gcr.io'] });
+  const existing = { 'log-driver': 'json-file', features: { 'containerd-snapshotter': true },
+    'registry-mirrors': ['https://previous.fixture.invalid'], builder: { gc: { enabled: true } } };
+  await writeFile(filename, JSON.stringify(existing));
+  assert.equal(run().status, 0);
+  assert.deepEqual(JSON.parse(await readFile(filename, 'utf8')), { ...existing, 'registry-mirrors': ['https://mirror.gcr.io'] });
+  for (const raw of ['[]', 'null', 'true', '{invalid']) {
+    await writeFile(filename, raw); assert.notEqual(run().status, 0);
+    assert.equal(await readFile(filename, 'utf8'), raw, 'invalid configuration must not be overwritten');
+  }
 });
 
 test('CMS image pins Node and rebuilds the matching upstream esbuild source with a patched Go toolchain', async () => {

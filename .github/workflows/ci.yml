@@ -34,7 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        # Service pulls precede checkout/steps: use the byte-identical public cache.
+        image: mirror.gcr.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_DB: portal_test
           POSTGRES_USER: portal_admin
@@ -61,6 +62,65 @@ jobs:
            api/package-lock.json
            cron/package-lock.json
            cms/package-lock.json
+      - name: Verify pinned CI mirrors and configure runner pulls
+        timeout-minutes: 5
+        env:
+          POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test -z "${DOCKER_HOST:-}"
+          test -z "${DOCKER_CONTEXT:-}"
+          test "$(docker context show)" = default
+          # Check raw index bytes, not tags or registry-provided digest headers.
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          const pins = [
+            ['postgres', '57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'],
+            ['nginx', '4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752'],
+            ['node', 'c921b97d4b74f51744057454b306b418cf693865e73b8100559189605f6955b8'],
+            ['node', '9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2'],
+            ['golang', '96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888'],
+          ];
+          for (const [name, digest] of pins) {
+            const response = await fetch(`https://mirror.gcr.io/v2/library/${name}/manifests/sha256:${digest}`, {
+              headers: { Accept: 'application/vnd.oci.image.index.v1+json' },
+              signal: AbortSignal.timeout(30_000), redirect: 'error',
+            });
+            if (!response.ok) throw new Error(`Pinned CI mirror unavailable: ${name}@sha256:${digest}`);
+            const raw = Buffer.from(await response.arrayBuffer());
+            if (createHash('sha256').update(raw).digest('hex') !== digest) throw new Error('Pinned CI mirror digest mismatch');
+            console.log(`Verified CI mirror: ${name}@sha256:${digest}`);
+          }
+          NODE
+          # Merge only the mirror setting in this ephemeral hosted runner.
+          sudo python3 - <<'PYTHON'
+          import json, os
+          filename = '/etc/docker/daemon.json'
+          config = {}
+          if os.path.exists(filename):
+              with open(filename) as source:
+                  config = json.load(source)
+          if not isinstance(config, dict):
+              raise ValueError('Invalid runner daemon configuration')
+          config['registry-mirrors'] = ['https://mirror.gcr.io']
+          with open(filename, 'w') as target:
+              json.dump(config, target)
+              target.write('\n')
+          PYTHON
+          sudo dockerd --validate --config-file=/etc/docker/daemon.json
+          # SIGHUP reloads registry mirrors without restarting the PostgreSQL service.
+          sudo systemctl kill --kill-whom=main --signal=HUP docker.service
+          mirror_ready=false
+          for attempt in {1..15}; do
+            if [[ "$(docker info --format '{{json .RegistryConfig.Mirrors}}')" == '["https://mirror.gcr.io/"]' ]]; then
+              mirror_ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$mirror_ready" = true
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$POSTGRES_SERVICE_ID")" = healthy
       - run: npm run bootstrap
       - run: npm run verify
       - name: Test preauthority CI setup with native Linux root
@@ -151,7 +211,12 @@ jobs:
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
         run: node scripts/test-academy.mjs
       - name: Build production images
+        env:
+          # The daemon-integrated builder uses the verified runner mirror config.
+          BUILDX_BUILDER: default
         run: |
+          set -euo pipefail
+          docker buildx inspect default | grep --extended-regexp '^Driver:[[:space:]]+docker$'
           docker build --tag ownerinc-portal-api:${GITHUB_SHA} api
           docker build --tag ownerinc-portal-cron:${GITHUB_SHA} --file cron/Dockerfile .
           docker build --tag ownerinc-portal-cms:${GITHUB_SHA} --file cms/Dockerfile .
