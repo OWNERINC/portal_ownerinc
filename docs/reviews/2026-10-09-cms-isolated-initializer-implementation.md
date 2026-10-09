@@ -215,3 +215,60 @@ Fechamento estável desta revisão:
   foram preservados; workflow não foi alterado nesta correção.
 - **Ready-for-review, não native Linux/CI/runtime PASS.** Nenhum CI, commit/push,
   SSH, produção, delegação ou mutação de serviços/bancos reais foi executado.
+
+## Fresh review — fixture unitário non-root após CI 37954438979
+
+O commit integrado `105200c` falhou no `npm run verify` non-root do run
+`37954438979`: **1.689 PASS, 1 falha, 21 skips**. O tail de 95 linhas do log
+local aponta o teste retry adapter em `payload-install-transition.test.mjs:196`,
+fixture:71 → `install_retry_check`:1764 → `_install_origin_check`:1754,
+`unsafe_backup_directory`. A execução não chegou aos testes root/build/recovery;
+esse resultado não é evidência de runtime.
+
+O check B0 real exige diretório canônico, dentro do backup root, e em POSIX
+UID 0/modo 0700. O fixture é criado pelo usuário do processo com mkdir 0700;
+o log não expõe UID/modo observados. A correção passa a normalizar explicitamente
+0700 e conferir por lstat o modo **e** UID real (igual ao euid), sem atribuir a
+falha apenas ao modo nem ignorar a ownership non-root.
+
+Patch limitado aos dois testes e este registro, sem código de produção:
+
+- No teste de retry, seam somente de **UID** em lstat para os dois paths exatos
+  de B0/lock quando POSIX non-root. Tipo, modo, links, realpath e demais metadata
+  permanecem reais. Windows mantém o branch nativo; metadata POSIX sintética
+  adicional é declarada como teste de contrato, não prova Linux.
+- Lock agora é um arquivo real 0600; removido o bypass genérico de
+  `_safe_regular`. O predicado real é executado, assim como o check inline B0.
+  Grants por estágio, B0/proof, lease/targets, HMAC e barreira contra efeitos
+  continuam sendo exercitados sem skip do teste central.
+- Em cada estágio, o check real recusa observações POSIX de UID 1001, modo 0750,
+  symlink e arquivo em lugar de diretório; aceita UID 0/0700. Em POSIX, B0 com
+  metadata real sem seam é recusado non-root e aceito root.
+- No branch root, chmod 0750 e chown 1001 reais do B0 sintético são recusados
+  com lstat sem mock, depois restaurados em finally. Uma chamada focada deste
+  teste foi adicionada à suíte `payload-preauthority-ci-setup.test.mjs`, já
+  executada pelo step root existente. Não foi preciso alterar workflow.
+
+O primeiro focused local passou (**80 PASS, 7 skips**, 87 testes). O primeiro
+verify detectou o contrato existente de exatamente três branches/skips na suíte
+root: o wrapper inicialmente acrescentado criava um quarto. A chamada root foi
+então incorporada ao teste nativo de ancestry existente, preservando o contrato
+sem editar/enfraquecer o teste de pipeline ou workflow. O teste central de
+transições continua sem skip; em Windows só o branch nativo já existente é skip.
+Execução Linux non-root/root continua pendente — não houve
+CI, serviços/bancos reais, produção, SSH, commit/push ou delegação nesta correção.
+Política root/private de produção, comparadores/probe/checks/relatório e todos
+os arquivos funcionais permanecem inalterados. Entrega **ready-for-review**.
+
+Fechamento do patch estável:
+
+- Focused completo **incluindo o contrato de pipeline**: **83 PASS, 6 skips,
+  zero falhas** (89 testes).
+- `npm run verify`: **PASS**, `verify: ok`; Portal **1.693 PASS/10 skips**,
+  CMS **448 PASS/11 skips**, zero falhas.
+- `npm run security`: **zero vulnerabilidades** API/cron/CMS.
+- `git diff --check`: **PASS**, repetido após este registro.
+- Somente `payload-install-transition.test.mjs`,
+  `payload-preauthority-ci-setup.test.mjs` e este documento foram alterados.
+  Untracked anteriores preservados; sem commit/push. Checks locais Windows não
+  fecham o aceite Linux non-root/root nem autorizam build/recovery/produção.

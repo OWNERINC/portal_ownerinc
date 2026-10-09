@@ -49,6 +49,14 @@ test('setup moves only private fixtures and scopes every Git command without glo
 
 test('native Linux root loader rejects a root leaf below a real uid1001 ancestor and accepts a legitimate protected path', async t => {
   if (!nativeRoot) return t.skip('requires native Linux root/chown; metadata contracts run locally, not native PASS');
+  // Reuse the stage fixture under actual root so its B0 chmod/chown assertions
+  // run in the existing native CI gate, without skipping the non-root core test.
+  assert.ok(['python3', 'python'].some(command => spawnSync(command, ['--version']).status === 0));
+  const result = spawnSync(process.execPath, ['--test', '--test-name-pattern=^retry adapter uses only',
+    'tests/unit/payload-install-transition.test.mjs'], { cwd: repo, encoding: 'utf8', timeout: 90000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /(?:pass 1|# pass 1)/u);
+  assert.match(result.stdout, /retry adapter uses only/u);
   const root = await mkdtemp('/var/lib/payload-ci-ancestry-test-');
   t.after(() => rm(root, { recursive: true, force: true }));
   await chmod(root, 0o700);

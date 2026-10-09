@@ -196,8 +196,28 @@ expect('restore_target_changed',lambda: S.advance_install(root,binding,'cms_reso
 test('retry adapter uses only the stage-reviewed grant range and revalidates B0/lease/targets without effects', async t => {
   await fixture(t, String.raw`
 from contextlib import ExitStack
+import stat
 os.makedirs(binding['b0']['directory'],mode=0o700)
+os.chmod(binding['b0']['directory'],0o700)
 config = {'paths':{'lock':os.path.join(directory,'deploy.lock'),'backupRoots':[os.path.join(directory,'backup')]}}
+with open(config['paths']['lock'],'wb') as stream: stream.write(b'fixture lease\n')
+os.chmod(config['paths']['lock'],0o600)
+# Inspect actual mode AND owner. Non-root unit fixtures cannot be root-owned;
+# model only those two exact paths' UID, never the production safety predicate.
+real_lstat = os.lstat
+actual_b0 = real_lstat(binding['b0']['directory'])
+native_posix = os.name != 'nt'
+nonroot_posix = native_posix and os.geteuid() != 0
+if native_posix:
+    assert actual_b0.st_uid == os.geteuid()
+    assert stat.S_IMODE(actual_b0.st_mode) == 0o700
+def metadata(info,**updates):
+    return SimpleNamespace(**{**{name:getattr(info,name) for name in dir(info) if name.startswith('st_')},**updates})
+def fixture_lstat(selected,*args,**kwargs):
+    info = real_lstat(selected,*args,**kwargs)
+    if nonroot_posix and selected in (binding['b0']['directory'],config['paths']['lock']):
+        return metadata(info,st_uid=0)
+    return info
 legacy = {'portalApiSessionPrivileges':[False] * 7,'portalCronSessionPrivileges':[False] * 7}
 strict = {'portalApiSessionPrivileges':[True,True,True,True,False,False,False],'portalCronSessionPrivileges':[False] * 7}
 base = {'versions':S.PORTAL_MIGRATIONS,'authorityRows':1,'authority':{'mode':'legacy','epoch':1}}
@@ -223,13 +243,14 @@ for stage in S.INSTALL_STAGES:
     probes = []
     runtime._install_role_verification = lambda: probes.append('verified-readonly-roles')
     with ExitStack() as stack:
-        for name, value in [('_verify_environment_file',lambda _config:None),('_safe_regular',lambda *_args,**_kwargs:None),
+        for name, value in [('_verify_environment_file',lambda _config:None),
                             ('_inventory',lambda **_kwargs:runtime.inventory),
                             ('_release',release),('_parse_proof',lambda *_args,**_kwargs:(proof,'5' * 64)),
                             ('_check_container_shape',lambda *_args,**_kwargs:[]),
                             ('_assert_database_quiescent',lambda _service:None),('_data_fingerprint',lambda _service:'7' * 64)]:
             stack.enter_context(patch.object(R,name,value))
         stack.enter_context(patch.object(R.os,'stat',lease_stat))
+        stack.enter_context(patch.object(R.os,'lstat',fixture_lstat))
         stack.enter_context(patch.object(R.STATE,'transition',side_effect=AssertionError('retry must not mutate')))
         for grants in [legacy,strict]:
             accepted = grants == legacy if stage == 'reserved' else True if stage == 'portal_grants_pending' else grants == strict
@@ -240,6 +261,40 @@ for stage in S.INSTALL_STAGES:
                            'portal_session_v2_grants_unprovisioned_or_mismatched',runtime.install_retry_check)
         valid_grants = legacy if stage == 'reserved' else strict
         with patch.object(R,'_psql_json',lambda *_args:{**base,**valid_grants}):
+            # Exercise the real inline B0 predicate with POSIX metadata on every
+            # platform. Windows metadata is synthetic, not native Linux proof.
+            def b0_observation(info):
+                def observe(selected,*args,**kwargs):
+                    if selected == binding['b0']['directory']: return info
+                    return fixture_lstat(selected,*args,**kwargs)
+                return observe
+            safe_b0 = metadata(actual_b0,st_uid=0,st_mode=stat.S_IFDIR | 0o700)
+            with patch.object(R.os,'name','posix'):
+                with patch.object(R.os,'lstat',b0_observation(safe_b0)):
+                    assert runtime.install_retry_check() == stage
+                for unsafe in [metadata(safe_b0,st_uid=1001),
+                               metadata(safe_b0,st_mode=stat.S_IFDIR | 0o750),
+                               metadata(safe_b0,st_mode=stat.S_IFLNK | 0o700),
+                               metadata(safe_b0,st_mode=stat.S_IFREG | 0o700)]:
+                    with patch.object(R.os,'lstat',b0_observation(unsafe)):
+                        expect('unsafe_backup_directory',runtime.install_retry_check)
+            if native_posix:
+                with patch.object(R.os,'lstat',b0_observation(actual_b0)):
+                    if actual_b0.st_uid == 0: assert runtime.install_retry_check() == stage
+                    else: expect('unsafe_backup_directory',runtime.install_retry_check)
+                if actual_b0.st_uid == 0:
+                    # Native root runs exercise real chmod/chown and unmocked
+                    # lstat too; mutate only this test-created B0, then restore.
+                    with patch.object(R.os,'lstat',real_lstat):
+                        try:
+                            os.chmod(binding['b0']['directory'],0o750)
+                            expect('unsafe_backup_directory',runtime.install_retry_check)
+                            os.chmod(binding['b0']['directory'],0o700)
+                            os.chown(binding['b0']['directory'],1001,-1)
+                            expect('unsafe_backup_directory',runtime.install_retry_check)
+                        finally:
+                            os.chown(binding['b0']['directory'],actual_b0.st_uid,-1)
+                            os.chmod(binding['b0']['directory'],0o700)
             wrong_target = copy.deepcopy(binding['portalTarget']); wrong_target['database']['databaseOid'] = '19999'
             original_target = runtime._install_target
             runtime._install_target = lambda bound:(wrong_target,cms_target if bound else None)
@@ -264,7 +319,8 @@ for stage in S.INSTALL_STAGES:
                 expect('portal_legacy_session_grant_floor_mismatch' if stage == 'reserved' else
                        'portal_session_grant_state_ambiguous' if stage == 'portal_grants_pending' else
                        'portal_session_v2_grants_unprovisioned_or_mismatched',runtime.install_retry_check)
-    assert probes == (['verified-readonly-roles'] if stage == 'provisioned' else [])
+    expected_probes = 3 if native_posix and actual_b0.st_uid == 0 else 2
+    assert probes == (['verified-readonly-roles'] * expected_probes if stage == 'provisioned' else [])
 `);
 });
 
