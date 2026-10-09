@@ -9,6 +9,11 @@ const safeLabel = /^[a-z][a-z0-9_]{0,95}$/u;
 function failureSummary(error, fallbackSubstep) {
   const commandDiagnostic = error?.diagnostic && typeof error.diagnostic === 'object'
     ? sanitizeCommandDiagnostic(error.diagnostic) : null;
+  const knownFallbackSubstep = typeof fallbackSubstep === 'string' && safeLabel.test(fallbackSubstep)
+    ? fallbackSubstep : null;
+  const normalizedCommandDiagnostic = commandDiagnostic?.substep === 'unclassified_command' && knownFallbackSubstep
+    ? { ...commandDiagnostic, substep: knownFallbackSubstep }
+    : commandDiagnostic;
   const rawReadiness = error?.readinessDiagnostic;
   const readinessDiagnostic = rawReadiness && typeof rawReadiness === 'object'
     ? createReadinessDiagnostic({
@@ -22,13 +27,13 @@ function failureSummary(error, fallbackSubstep) {
   const rawCode = typeof error?.code === 'string' && safeLabel.test(error.code)
     ? error.code : 'acceptance_assertion_failed';
   const candidateSubstep = commandDiagnostic?.substep === 'unclassified_command'
-    ? fallbackSubstep : commandDiagnostic?.substep || fallbackSubstep;
+    ? knownFallbackSubstep : commandDiagnostic?.substep || knownFallbackSubstep;
 
   return {
     failureCode: rawCode,
     ...(typeof candidateSubstep === 'string' && safeLabel.test(candidateSubstep)
       ? { failedSubstep: candidateSubstep } : {}),
-    ...(commandDiagnostic ? { commandDiagnostic } : {}),
+    ...(normalizedCommandDiagnostic ? { commandDiagnostic: normalizedCommandDiagnostic } : {}),
     ...(readinessDiagnostic ? { readinessDiagnostic } : {}),
   };
 }
@@ -64,6 +69,7 @@ export async function runSnapshotAndRestart(snapshotOperation, restartOperation,
 
   const primaryError = snapshotError || restartError;
   const primarySubstep = snapshotError ? snapshotSubstep : restartSubstep;
+  const primaryPhase = snapshotError ? 'snapshot' : restartError ? 'writer_restart' : null;
   const secondaryError = snapshotError ? restartError : null;
   const secondarySubstep = snapshotError ? restartSubstep : null;
 
@@ -71,6 +77,7 @@ export async function runSnapshotAndRestart(snapshotOperation, restartOperation,
     value,
     primaryError,
     primarySubstep,
+    primaryPhase,
     secondaryError,
     secondarySubstep,
   };

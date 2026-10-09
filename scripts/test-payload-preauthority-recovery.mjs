@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,10 +13,14 @@ import {
   validateRecoveryInputs, writeProtectedInventory,
 } from './integration/payload-preauthority-fixture.mjs';
 import {
-  CMS_READINESS_ROUTE, createCommandDiagnostic, createReadinessDiagnostic,
+  CMS_READINESS_ROUTE, createReadinessDiagnostic,
   createRecoveryProgressReport,
   inferReadinessFailureReason,
 } from './integration/payload-preauthority-diagnostics.mjs';
+import {
+  controlCommandOptions, createLeasedCommandInvocation, FixtureFailure,
+  persistPrivateCommandEvidence, runFixtureCommand,
+} from './integration/payload-preauthority-command.mjs';
 import {
   createRecoveryFailureReportFields, runSnapshotAndRestart,
 } from './integration/payload-preauthority-recovery-flow.mjs';
@@ -56,51 +60,23 @@ let runtimeRefs = [];
 const privateCommandEvidence = [];
 let failureReportFields = null;
 const recoveryProgress = {
-  source: { initialCmsHealthPassed: false, quiescentSnapshotComparison: 'not_started' },
-  target: { initialCmsHealthPassed: false, quiescentSnapshotComparison: 'not_started' },
-  leaseTarget: { initialCmsHealthPassed: false, quiescentSnapshotComparison: 'not_started' },
+  source: { initialCmsHealthPassed: false, writersRestartedHealthy: false, quiescentSnapshotComparison: 'not_started' },
+  target: { initialCmsHealthPassed: false, writersRestartedHealthy: false, quiescentSnapshotComparison: 'not_started' },
+  leaseTarget: { initialCmsHealthPassed: false, writersRestartedHealthy: false, quiescentSnapshotComparison: 'not_started' },
 };
-
-class FixtureFailure extends Error {
-  constructor(code, diagnostic = null, readinessDiagnostic = null) {
-    super(code);
-    this.code = code;
-    this.diagnostic = diagnostic;
-    this.readinessDiagnostic = readinessDiagnostic;
-  }
-}
 
 function safeEnvironment(extra = {}) {
   return { PATH: hostPath, HOME: '/root', ...extra };
 }
 
 function run(command, args = [], options = {}) {
-  const result = spawnSync(command, args, {
+  return runFixtureCommand(command, args, {
+    ...options,
     cwd: options.cwd || repository,
     env: safeEnvironment(options.env),
-    input: options.input,
-    encoding: null,
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: options.timeout || 180_000,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    activeSubstep,
+    privateCommandEvidence,
   });
-  if (result.error || result.status !== 0) {
-    if (options.preservePrivateErrorEvidence === true && result.stderr?.length && privateCommandEvidence.length < 8) {
-      const candidateSubstep = options.substep || activeSubstep || 'unclassified_command';
-      privateCommandEvidence.push({
-        substep: /^[a-z][a-z0-9_]{0,63}$/u.test(candidateSubstep) ? candidateSubstep : 'unclassified_command',
-        stderr: Buffer.from(result.stderr).subarray(0, 16 * 1024),
-      });
-    }
-    throw new FixtureFailure(options.failureCode || 'fixture_command_failed', createCommandDiagnostic({
-      substep: options.substep || activeSubstep,
-      status: result.status,
-      errorCode: result.error?.code,
-      stderr: result.stderr,
-      sqlCommandContext: options.sqlCommandContext === true,
-    }));
-  }
-  return result.stdout || Buffer.alloc(0);
 }
 
 function text(result) { return result.toString('utf8').trim(); }
@@ -111,21 +87,6 @@ function setStage(value) {
 }
 
 function setSubstep(value) { activeSubstep = value; }
-
-async function persistPrivateCommandEvidence() {
-  if (!fixtureRoot || privateCommandEvidence.length === 0) return false;
-  const directory = path.join(fixtureRoot, 'private-diagnostics');
-  const target = path.join(directory, 'command-stderr.txt');
-  const parts = [];
-  for (const [index, entry] of privateCommandEvidence.entries()) {
-    parts.push(Buffer.from(`--- command ${index + 1}: ${entry.substep} ---\n`), entry.stderr, Buffer.from('\n'));
-  }
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700);
-  await writeFile(target, Buffer.concat(parts), { flag: 'wx', mode: 0o600 });
-  await chmod(target, 0o600);
-  return true;
-}
 
 function composeArgs(project, release, runtime, actionArgs) {
   const paths = runtime.inventory.document.paths;
@@ -165,16 +126,20 @@ function fixtureEnv(project, runtime, release) {
 
 function withLease(runtime, project, command, args = [], options = {}) {
   const lock = runtime.inventory.document.paths.lock;
-  const script = 'set -Eeuo pipefail; lock=$1; shift; exec 9<>"$lock"; flock -n 9; export PORTAL_OPERATION_LOCK="$lock" PORTAL_OPERATION_LOCK_HELD="$lock"; exec "$@"';
-  return run('bash', ['-c', script, 'payload-fixture-lease', lock, command, ...args], {
+  const invocation = createLeasedCommandInvocation(lock, command, args);
+  return run(invocation.command, invocation.args, {
     ...options,
     env: { ...fixtureEnv(project, runtime, options.release || runtime.payloadRelease), ...options.env },
   });
 }
 
 function guard(runtime, project, action, release = runtime.payloadRelease, evidence = '') {
-  return withLease(runtime, project, path.join(runtime.directory, 'payload-control'),
-    [action, release, evidence], { release });
+  const options = controlCommandOptions(action, release);
+  setSubstep(options.substep);
+  const result = withLease(runtime, project, path.join(runtime.directory, 'payload-control'),
+    [action, release, evidence], options);
+  setSubstep(null);
+  return result;
 }
 
 function coordinator(runtime, project, action, release, backup = '') {
@@ -373,7 +338,10 @@ async function awaitService(runtime, service, attempts = 180) {
 
   for (let index = 0; index < attempts; index += 1) {
     setSubstep(`wait_${safeService}_container`);
-    const id = text(composeCall(runtime, ['ps', '-q', service]));
+    const id = text(composeCall(runtime, ['ps', '-q', service], {
+      substep: `wait_${safeService}_container`,
+      preservePrivateErrorEvidence: true,
+    }));
     if (id) {
       lastContainerId = id;
       setSubstep(`wait_${safeService}_health`);
@@ -446,9 +414,12 @@ async function provisionProject(runtime) {
   await awaitService(runtime, 'cms');
   recoveryProgress[runtime.role].initialCmsHealthPassed = true;
   await seedProject(runtime);
+  setStage(`verify_release_${runtime.role}`);
   guard(runtime, runtime.project, 'verify-release', runtime.payloadRelease);
+  setSubstep('persist_current_release_marker');
   await writeFile(runtime.inventory.document.paths.currentRelease, `${runtime.payloadRelease}\n`, { mode: 0o600 });
   await chmod(runtime.inventory.document.paths.currentRelease, 0o600);
+  setSubstep(null);
 }
 
 function syntheticUid(project) { return `fixture-${project}`; }
@@ -544,6 +515,7 @@ function snapshot(runtime) {
 
 async function assertQuiescentSnapshotStable(runtime) {
   setStage(`quiescent_snapshot_${runtime.project}`);
+  const snapshotStage = stage;
   setSubstep('snapshot_list_writers');
   const running = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
     .split(/\r?\n/u).filter(Boolean);
@@ -577,14 +549,22 @@ async function assertQuiescentSnapshotStable(runtime) {
       runtime.quiescentSnapshotStable = true;
     },
     async () => {
+      setStage(`restart_writers_${runtime.role}`);
       setSubstep('snapshot_restart_writers');
-      composeWithLease(runtime, ['start', ...writers], { substep: 'snapshot_restart_writers' });
+      composeWithLease(runtime, ['start', ...writers], {
+        substep: 'snapshot_restart_writers',
+        preservePrivateErrorEvidence: true,
+      });
       for (const service of writers) await awaitService(runtime, service);
+      recoveryProgress[runtime.role].writersRestartedHealthy = true;
     },
     () => activeSubstep,
   );
   if (outcome.primaryError) {
-    failureReportFields = createRecoveryFailureReportFields(outcome);
+    failureReportFields = {
+      ...createRecoveryFailureReportFields(outcome),
+      failedStage: outcome.primaryPhase === 'snapshot' ? snapshotStage : stage,
+    };
     throw outcome.primaryError;
   }
 }
@@ -1004,10 +984,15 @@ try {
   await rm(fixtureRoot, { recursive: true, force: true });
 } catch (error) {
   preserveFixture = Boolean(fixtureRoot);
-  const privateRunnerErrorEvidenceRetained = await persistPrivateCommandEvidence().catch(() => false);
+  const privateRunnerErrorEvidenceRetained = await persistPrivateCommandEvidence(
+    fixtureRoot, privateCommandEvidence,
+  ).catch(() => false);
+  const commandSubstep = error instanceof FixtureFailure ? error.diagnostic?.substep : null;
+  const primarySubstep = commandSubstep && commandSubstep !== 'unclassified_command'
+    ? commandSubstep : activeSubstep;
   const failureFields = failureReportFields || createRecoveryFailureReportFields({
     primaryError: error,
-    primarySubstep: error instanceof FixtureFailure ? error.diagnostic?.substep || activeSubstep : activeSubstep,
+    primarySubstep,
   });
   report = {
     schemaVersion: 1, status: 'failed', run: runIdentity,

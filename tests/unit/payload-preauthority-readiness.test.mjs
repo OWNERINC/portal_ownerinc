@@ -14,6 +14,7 @@ import {
 } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
 
 const recoveryRunner = await readFile(new URL('../../scripts/test-payload-preauthority-recovery.mjs', import.meta.url), 'utf8');
+const commandRunner = await readFile(new URL('../../scripts/integration/payload-preauthority-command.mjs', import.meta.url), 'utf8');
 const workflow = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 
 test('readiness report values are restricted to the state, status, exit and expected route allowlists', () => {
@@ -63,13 +64,13 @@ test('readiness failures distinguish missing, exited, unhealthy and bounded wait
 
 test('recovery progress reports only fixed fixture roles and allowlisted snapshot outcomes', () => {
   assert.deepEqual(createRecoveryProgressReport({
-    source: { initialCmsHealthPassed: true, quiescentSnapshotComparison: 'passed' },
-    target: { initialCmsHealthPassed: true, quiescentSnapshotComparison: 'failed' },
-    attackerControlledRole: { initialCmsHealthPassed: true, quiescentSnapshotComparison: 'secret' },
+    source: { initialCmsHealthPassed: true, writersRestartedHealthy: true, quiescentSnapshotComparison: 'passed' },
+    target: { initialCmsHealthPassed: true, writersRestartedHealthy: false, quiescentSnapshotComparison: 'failed' },
+    attackerControlledRole: { initialCmsHealthPassed: true, writersRestartedHealthy: true, quiescentSnapshotComparison: 'secret' },
   }), {
-    source: { initialCmsHealthPassed: true, quiescentSnapshotComparison: 'passed' },
-    target: { initialCmsHealthPassed: true, quiescentSnapshotComparison: 'failed' },
-    leaseTarget: { initialCmsHealthPassed: false, quiescentSnapshotComparison: 'not_started' },
+    source: { initialCmsHealthPassed: true, writersRestartedHealthy: true, quiescentSnapshotComparison: 'passed' },
+    target: { initialCmsHealthPassed: true, writersRestartedHealthy: false, quiescentSnapshotComparison: 'failed' },
+    leaseTarget: { initialCmsHealthPassed: false, writersRestartedHealthy: false, quiescentSnapshotComparison: 'not_started' },
   });
 });
 
@@ -81,11 +82,18 @@ test('CMS readiness diagnostics read only allowlisted Docker fields and HTTP sta
   assert.match(recoveryRunner, /recoveryProgress\[runtime\.role\]\.initialCmsHealthPassed = true/u);
   assert.match(recoveryRunner, /quiescentSnapshotComparison = 'passed'/u);
   assert.match(recoveryRunner, /quiescentSnapshotComparison = 'failed'/u);
+  assert.match(recoveryRunner, /setStage\(`restart_writers_\$\{runtime\.role\}`\)/u);
+  assert.match(recoveryRunner, /setStage\(`verify_release_\$\{runtime\.role\}`\)/u);
+  assert.match(recoveryRunner, /failedStage: outcome\.primaryPhase === 'snapshot' \? snapshotStage : stage/u);
   assert.match(recoveryRunner, /recoveryProgress: createRecoveryProgressReport\(recoveryProgress\)/u);
+  assert.match(recoveryRunner, /controlCommandOptions\(action, release\)/u);
+  assert.match(recoveryRunner, /persistPrivateCommandEvidence\(\s*fixtureRoot,\s*privateCommandEvidence,\s*\)/u);
+  assert.match(recoveryRunner, /substep: 'snapshot_restart_writers',[\s\S]{0,120}preservePrivateErrorEvidence: true/u);
+  assert.match(recoveryRunner, /recoveryProgress\[runtime\.role\]\.writersRestartedHealthy = true/u);
   assert.doesNotMatch(recoveryRunner, /response\.(?:text|json|arrayBuffer)\(|docker', \['logs'|State\.Health\.Log|Config\.Env/u);
-  assert.match(recoveryRunner, /path\.join\(fixtureRoot, 'private-diagnostics'\)/u);
-  assert.match(recoveryRunner, /chmod\(directory, 0o700\)/u);
-  assert.match(recoveryRunner, /chmod\(target, 0o600\)/u);
+  assert.match(commandRunner, /path\.join\(fixtureRoot, 'private-diagnostics'\)/u);
+  assert.match(commandRunner, /chmod\(directory, 0o700\)/u);
+  assert.match(commandRunner, /chmod\(target, 0o600\)/u);
   assert.match(workflow, /path: \$\{\{ runner\.temp \}\}\/payload-preauthority-recovery-report\.json/u);
   assert.doesNotMatch(workflow, /private-diagnostics|command-stderr\.txt/u);
 });
@@ -143,6 +151,7 @@ test('serialized recovery reports keep snapshot failure primary and restart fail
   const snapshotOnly = await runScenario(true, false);
   assert.deepEqual(snapshotOnly.calls, ['snapshot', 'restart']);
   assert.equal(snapshotOnly.outcome.primaryError, snapshotError);
+  assert.equal(snapshotOnly.outcome.primaryPhase, 'snapshot');
   assert.equal(snapshotOnly.outcome.secondaryError, null);
   assert.equal(snapshotOnly.report.failureCode, 'snapshot_command_failed');
   assert.equal(snapshotOnly.report.failedSubstep, 'snapshot_compare_quiescent');
@@ -152,6 +161,7 @@ test('serialized recovery reports keep snapshot failure primary and restart fail
   const restartOnly = await runScenario(false, true);
   assert.deepEqual(restartOnly.calls, ['snapshot', 'restart']);
   assert.equal(restartOnly.outcome.primaryError, restartError);
+  assert.equal(restartOnly.outcome.primaryPhase, 'writer_restart');
   assert.equal(restartOnly.outcome.secondaryError, null);
   assert.equal(restartOnly.report.failureCode, 'service_cms_not_ready');
   assert.equal(restartOnly.report.failedSubstep, 'wait_cms_health');
@@ -162,6 +172,7 @@ test('serialized recovery reports keep snapshot failure primary and restart fail
   const both = await runScenario(true, true);
   assert.deepEqual(both.calls, ['snapshot', 'restart']);
   assert.equal(both.outcome.primaryError, snapshotError);
+  assert.equal(both.outcome.primaryPhase, 'snapshot');
   assert.equal(both.outcome.secondaryError, restartError);
   assert.equal(both.report.failureCode, 'snapshot_command_failed');
   assert.equal(both.report.failedSubstep, 'snapshot_compare_quiescent');
@@ -173,4 +184,15 @@ test('serialized recovery reports keep snapshot failure primary and restart fail
     readinessDiagnostic: restartReadiness,
   });
   assert.doesNotMatch(JSON.stringify(both.report), /private snapshot stderr|private restart stderr/u);
+
+  const unclassifiedError = Object.assign(new Error('private command failure'), {
+    code: 'fixture_command_failed',
+    diagnostic: { substep: 'unclassified_command', commandExitCode: 2 },
+  });
+  const boundedFallback = createRecoveryFailureReportFields({
+    primaryError: unclassifiedError,
+    primarySubstep: 'snapshot_restart_writers',
+  });
+  assert.equal(boundedFallback.failedSubstep, 'snapshot_restart_writers');
+  assert.equal(boundedFallback.commandDiagnostic.substep, 'snapshot_restart_writers');
 });

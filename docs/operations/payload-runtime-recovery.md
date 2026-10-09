@@ -237,11 +237,17 @@ local não está disponível. Só um relatório real com `status=passed` gera o 
 qualificado; até esse run, Task 3 permanece sem aceite runtime.
 
 Em falhas de comando, o relatório inclui um subpasso estático, exit code, SQLSTATE
-e identificador de erro PostgreSQL somente quando reconhecidos. Comando, argumentos,
-stderr/stdout e valores SQL não são serializados nem impressos. O stderr só é
-interpretado nas chamadas `psql` de seed marcadas e configuradas com
-`VERBOSITY=sqlstate`; apenas uma linha completa `ERROR: <código conhecido>` em
-maiúsculas é aceita.
+identificador de erro PostgreSQL e identificador de erro do adapter somente quando
+reconhecidos. Comando, argumentos, stderr/stdout e valores SQL não são serializados
+nem impressos. SQLSTATE só é interpretado nas chamadas `psql` de seed marcadas e
+configuradas com `VERBOSITY=sqlstate`; apenas a linha completa `ERROR: <código
+conhecido>` em maiúsculas é aceita. Nos contextos explícitos `release-preflight` e
+`verify-release`, o adapter Python emite o motivo fixo como uma linha simples em
+stderr; runtime, state e inventário são limitados a uma allowlist finita de códigos.
+Mensagens fixas do guard são mapeadas apenas no contexto próprio e em correspondência
+da linha inteira. Códigos desconhecidos, linhas com texto adicional e stderr fora
+desses contextos não viram identificadores; conteúdo bruto permanece somente no
+arquivo privado do fixture.
 
 A parada de `api`, `cron` e `cms` mantém `docker compose stop --timeout 120` por
 writer. O deadline do subprocesso agora cobre o pior caso serial de todos os
@@ -255,12 +261,15 @@ container e, para CMS, o status HTTP numérico de `/editorial/ready`; o corpo nu
 lido. Stderr de comandos diagnósticos fica, quando disponível, em arquivo 0600 sob
 diretório 0700 dentro do fixture root efêmero. O workflow publica somente o relatório
 redigido, nunca esse arquivo privado. O relatório também registra progresso por
-papel fixo (`source`, `target`, `leaseTarget`): readiness CMS inicial e estado da
-comparação de snapshots (`not_started`, `running`, `passed`, `failed`). Isso mantém
-visível uma comparação concluída mesmo se a restauração dos writers falhar depois.
+papel fixo (`source`, `target`, `leaseTarget`): readiness CMS inicial, readiness dos
+writers após restart e estado da comparação de snapshots (`not_started`, `running`,
+`passed`, `failed`). Isso mantém visível uma comparação concluída mesmo se a
+restauração dos writers falhar depois.
 Se a comparação e a restauração falharem na mesma passagem, o relatório mantém
 os dois resumos estáticos separados em vez de deixar a falha de restart ocultar a
-falha de snapshot.
+falha de snapshot. O `verify-release` seguinte à comparação usa stage por papel e
+subpasso fixo `payload_control_verify_release`; stderr da chamada fica somente no
+arquivo privado do fixture quando houver conteúdo.
 
 ## Preparação inicial da infraestrutura de produção — inativa até nova autorização
 
