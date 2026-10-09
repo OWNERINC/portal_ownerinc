@@ -11,6 +11,7 @@ const sqlStateIdentifiers = Object.freeze({
   '08006': 'connection_failure',
   '22001': 'string_data_right_truncation',
   '22007': 'invalid_datetime_format',
+  '22021': 'character_not_in_repertoire',
   '22023': 'invalid_parameter_value',
   '23502': 'not_null_violation',
   '23503': 'foreign_key_violation',
@@ -25,7 +26,10 @@ const sqlStateIdentifiers = Object.freeze({
   '42P01': 'undefined_table',
   '42P07': 'duplicate_table',
   '42703': 'undefined_column',
+  '42710': 'duplicate_object',
   '57014': 'query_canceled',
+  '58P01': 'undefined_file',
+  '0A000': 'feature_not_supported',
 });
 
 const processErrorIdentifiers = Object.freeze({

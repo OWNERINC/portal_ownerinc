@@ -63,7 +63,7 @@ test('conversion orchestration requires stopped writers, presence, actual reject
   await verifyLinuxConversionPrerequisite(h.operations);
   assert.deepEqual(h.calls, ['stopped', 'snapshot1', 'create', 'present', 'capture', 'remove', 'stopped', 'snapshot2']);
   assert.deepEqual(h.steps, ['conversion_baseline', 'conversion_create', 'conversion_catalog_presence',
-    'conversion_require_rejection', 'conversion_cleanup', 'conversion_compare_all_stores']);
+    'conversion_require_rejection', 'conversion_cleanup', 'conversion_compare_all_stores', 'conversion_compare_all_stores']);
   assert.match(h.names[0], /^fixture_conversion_[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/u);
   assert.equal(new Set(h.names).size, 1, 'cleanup addresses only this successfully created UUID fixture');
   const other = harness();
@@ -96,6 +96,7 @@ test('successful capture, SQL/transport failures and unrelated CLI failures cann
     new FixtureFailure('fixture_command_failed', { commandExitCode: 3, sqlState: '58P01' }),
     new FixtureFailure('fixture_command_failed', { commandExitCode: 1, logicalSnapshotErrorIdentifier: 'logical_snapshot_unsupported_object' }),
     new FixtureFailure('fixture_command_failed', { commandExitCode: 2, commandError: 'command_timeout', logicalSnapshotErrorIdentifier: 'logical_snapshot_unsupported_object' }),
+    new FixtureFailure('fixture_command_failed', { commandExitCode: 2, commandSignal: 'SIGTERM', logicalSnapshotErrorIdentifier: 'logical_snapshot_unsupported_object' }),
     new FixtureFailure('fixture_command_failed', { commandExitCode: 2, logicalSnapshotErrorIdentifier: 'logical_snapshot_failed' }),
   ];
   for (const primary of failures) {
@@ -179,7 +180,7 @@ test('actual recovery runner wires direct Linux conversion prerequisite under le
   const probeCode = await readFile('scripts/integration/payload-logical-snapshot-conversion-probe.mjs', 'utf8');
   assert.match(probeCode, /process\.platform !== 'linux' \|\| process\.getuid\(\) !== 0/u);
   assert.match(probeCode, /payload-preauth-\[a-z0-9-\]\+-source/u);
-  assert.match(probeCode, /fstatSync\(9\)/u);
+  assert.match(probeCode, /fstatSync\(9, \{ bigint: true \}\)/u);
   assert.match(probeCode, /lease\.dev !== lock\.dev \|\| lease\.ino !== lock\.ino/u);
   assert.match(probeCode, /compose\(\['exec', '-T', 'postgres', 'psql'/u);
   assert.match(probeCode, /CREATE CONVERSION public\."\$\{name\}" FOR 'UTF8' TO 'LATIN1' FROM pg_catalog\.utf8_to_iso8859_1/u);
@@ -187,6 +188,7 @@ test('actual recovery runner wires direct Linux conversion prerequisite under le
   assert.match(probeCode, /input: logicalSnapshotScript/u);
   assert.match(probeCode, /payload-logical-snapshot-cli\.mjs/u);
   assert.match(probeCode, /logicalSnapshotCommandContext: 'logical-snapshot-cli'/u);
+  assert.match(section, /conversionProbeCommandContext: CONVERSION_PROBE_CONTEXT/u);
   assert.match(probeCode, /DROP CONVERSION public\."\$\{name\}"/u);
   assert.doesNotMatch(probeCode, /DROP CONVERSION IF EXISTS|nextval|t\.skip|nativeCatalogFingerprint|negativeCases/u);
 });

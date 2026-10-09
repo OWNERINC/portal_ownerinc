@@ -7,6 +7,7 @@ import {
   holdFailedRecoveryFixtures, postRestoreFixtureHoldScript,
 } from './integration/payload-preauthority-snapshot.mjs';
 import { logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './integration/payload-logical-snapshot.mjs';
+import { CONVERSION_PROBE_CONTEXT } from './integration/payload-logical-snapshot-probe-protocol.mjs';
 import { POST_RESTORE_HOLD_CONTEXT, POST_RESTORE_HOLD_TIMEOUT_MS,
   parseFixtureFailureHold } from './integration/payload-preauthority-snapshot-hold.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -805,6 +806,7 @@ async function assertQuiescentSnapshotStable(runtime) {
             input: JSON.stringify({ project: runtime.project, runtimeDirectory: runtime.directory,
               python, composeArgs: composeArgs(runtime.project, runtime.payloadRelease, runtime, []) }),
             substep: 'linux_conversion_prerequisite', failureCode: 'linux_conversion_prerequisite_failed',
+            conversionProbeCommandContext: CONVERSION_PROBE_CONTEXT,
             timeout: 15 * 60_000, maxBuffer: 64 * 1024, preservePrivateErrorEvidence: true,
           });
           if (conversion.toString('utf8') !== 'PAYLOAD_LINUX_CONVERSION_PREREQUISITE passed\n') {

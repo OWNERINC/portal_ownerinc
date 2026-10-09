@@ -137,6 +137,104 @@ owned hold regression, and updates this document. No CI dispatch/write, commit,
 push, production access, Docker service changes or delegation. Linux conversion
 and full positive/repeated four-store restore acceptance are still **pending**.
 
+## CI 37964466848 / 13b6cfb — probe attribution follow-up
+
+### Confirmed facts versus unresolved runtime cause
+
+Read-only inspection of the actual redacted report and `gh run view --log` confirms
+source `initialCmsHealthPassed=true`, primary `linux_conversion_prerequisite_failed`
+with exit 2, and separate secondary `snapshot_restart_writers` exit 1. The recovery
+step's public log contains only the final redacted failure message. The artifacts
+list contains only `payload-preauthority-recovery-report` for recovery, not the
+fixture's private stderr. No production/runner SSH or CI writes were used.
+
+The **confirmed implementation defect** is lost attribution: the child emitted a
+finite `... failed step=...` line, but the throwing command wrapper had no matching
+probe context/parser. It therefore reduced every child phase/reason to the same
+exit-2 diagnostic with null SQLSTATE/identifier. This patch fixes that wire defect.
+The underlying Linux runtime failure's phase/reason **cannot be recovered from
+the available old public evidence**, so it is not claimed fixed or assigned to a
+converter/library, pgcrypto, builtin AM, encoding, module or lease hypothesis.
+
+Ordering narrows the investigation: the parent runner's two complete snapshots
+and equality assertion occur *before* the source probe. Reaching the reported
+probe substep proves that those parent observations succeeded. Parent and child
+both use the host `process.execPath`, absolute `cms/node_modules/tsx/dist/loader.mjs`
+and `scripts/integration/payload-logical-snapshot-cli.mjs`; neither launches this
+CLI inside the CMS container or relies on Node's implicit TS stripping. Child
+`psql` runs in the source postgres container using the same capture script.
+This rules out claiming a blanket unsupported baseline as the observed cause;
+child-specific configuration/lease/driver failures remain possible. Existing
+pgcrypto/catalog/AM coverage was not weakened or replaced to make CI pass.
+
+### Precise bounded diagnostic path now implemented
+
+`payload-logical-snapshot-probe-protocol.mjs` defines a closed canonical protocol.
+It separates configuration, lease, stopped writers, baseline Portal/CMS SQL and
+CLI, each archive/tree hash, CREATE, catalog presence, rejection SQL/CLI, cleanup,
+post-cleanup captures and final all-component comparison. The child retains the
+**first failing detailed phase**, even while cleanup/comparison/restart are attempted.
+FD9/file identity now uses BigInt stats; this is hardening, not a demonstrated
+explanation of the old CI failure.
+
+The runner passes the explicit `linux-conversion-probe` context into the actual
+throwing wrapper. A failure is parsed only for one exact complete canonical line,
+clean outer exit **2**, no signal/process error and empty stdout. Timeout, malformed
+or additional output, duplicate fields, unknown phase/reason, contradictory status
+or absent context cannot authorize diagnostics or success. Success requires the
+exact fixed stdout and empty stderr. The expected unsupported-object rejection
+still requires the actual CLI exit 2, exact finite identifier and no process error
+or signal; a DDL/SQL failure cannot stand in for rejection.
+
+The wrapper propagates only existing report fields: finite `failureCode` and
+`failedSubstep`, known `commandDiagnostic.sqlState`/error identifier and CLI logical
+identifier, plus existing `snapshotMismatch` component/hash pairs when applicable.
+For example, CREATE with missing library reports
+`linux_conversion_create_psql_failed`, `conversion_create`, SQLSTATE `58P01`.
+Known `0A000`, `42710` and `22021` also survive actual known-psql context parsing.
+Native Node missing-module/extension/unsupported-stripping footers are classified
+only for a clean direct CLI exit 1; names/paths/stacks remain private. Neither raw
+DDL/data nor arbitrary exception messages cross the wire. No new report/check or
+negative-case fields were added.
+
+The secondary restart still uses direct `composeWithLease(... ['start', ...writers])`
+in the runner's quiescence callback (currently around lines 824–827), through the
+helper near lines 607–611. Its old stderr is not in the public artifact, so stale
+receipts/labels/configuration are **unproven hypotheses**, not attributed causes.
+`runSnapshotAndRestart` continues preserving it as secondary. No initializer/state,
+runtime/preparer/receiver, finalizer or mutation-ledger code was changed.
+
+### Local verification and remaining acceptance boundary
+
+- The focused snapshot/probe/command/diagnostics suite passed **48 tests/two
+  skips** before the final additional native-loader regression; the final
+  conversion/protocol-only run passed **16 tests/one native-Linux FD skip**.
+  Tests invoke the actual throwing wrapper and actual probe executable, and
+  verify per-phase SQLSTATE/logical errors, malformed/timeout rejection, all-store
+  mismatch hashes and preservation of primary over cleanup/restart failures.
+- A real Node missing-import command exercises the finite launch classifier,
+  not a synthetic module error. A new no-Docker native Linux Bash/flock → Node
+  → asynchronous stdin EOF → FD9 identity check is executable in the ordinary
+  Linux unit suite; **explicitly skipped on this Windows worker**. It is not
+  represented as a local Linux PASS.
+- Explicit PGlite rerun: **eight passed/one conversion `58P01` capability skip**,
+  zero failures. Actual native/Portal reconstruction, row/sequence precision,
+  handlerless FDW and user AM coverage remain passing. WASM pgcrypto and conversion
+  library gaps are local limitations, never permitted Linux recovery skips.
+- Final stable `npm run verify`: **PASS**, Portal **1,707 passed/11 skipped**,
+  CMS **448 passed/11 skipped**, zero failures. `npm run security`: **PASS**,
+  zero npm vulnerabilities in API/cron/CMS. CMS typecheck and `git diff --check`:
+  **PASS**. Full log:
+  `%LOCALAPPDATA%/Temp/opencode/cms-conversion-probe-attribution-final-verify.log`.
+  Actual Linux conversion/recovery acceptance remains **unproven**.
+
+Changed in this attribution follow-up: the probe, new pure protocol helper, narrow
+command-wrapper/SQLSTATE diagnostic handling, one runner context option, the
+existing conversion ordering regression, new protocol/real-command regressions
+and this owned review document. No snapshot row/sequence/catalog exclusion change,
+no outside-scope implementation edits, no CI write/dispatch, commit/push, production
+SSH, Docker host-service change or delegation. Unrelated untracked files remain.
+
 ## Acceptance boundary
 
 The runner now compares independent observations of the two databases and two
