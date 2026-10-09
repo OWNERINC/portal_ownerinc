@@ -300,6 +300,56 @@ Após revisão independente, o primary deve conferir todos os 24 CHECKs no ambie
 Linux descartável com as seis migrations, sem parar no primeiro mismatch, e então
 executar os gates reais de recuperação. Nenhum restore bem-sucedido é alegado aqui.
 
+O run seguinte `37897903239` (fonte `7bd24fa`) passou pelos CHECKs e recusou o
+inventário em `native_types`. A causa reproduzida localmente não foi enum extra:
+as seis migrations geraram exatamente os 61 enums do snapshot, incluindo os enums
+internos do Payload. A consulta agregava `pg_enum.enumlabel` como `name[]` (OID
+1003); o driver `pg` instalado devolve esse tipo como string, e o mapper anterior
+a substituía por `[]`. PGlite sozinho decodifica esse array, portanto um teste que
+usasse apenas seu decoder esconderia a falha. A consulta agora agrega `::text`
+com fallback `text[]` (OID 1009), decodificado pelo `pg`, e recusa explicitamente
+labels que não sejam array de strings. Nomes, schemas, valores e ordem dos labels
+continuam comparados exatamente com o snapshot, nunca aprovados a partir do observado.
+
+O filtro de tipos exclui somente rowtypes ligados à própria relação e arrays
+automáticos com binding recíproco `typelem`/`typarray` e dependência interna no
+catálogo. Não usa prefixo de nome nem allowlist de `typtype` para descartar tipos:
+composites standalone, domains, enums, ranges/multiranges e tipos base/shell extras
+permanecem sujeitos à rejeição. O fixture estático
+`cms/tests/fixtures/native-types-pg16.ts` preserva os 61 payloads capturados para
+regressão com o decoder real de `pg`; não contém dados de usuários ou credenciais.
+
+Depois desse reparo, a sequência **nativa completa** de consultas do verificador
+(relações, colunas/defaults, índices, constraints e tipos) passou nas seis migrations
+executadas em PostgreSQL 16.4/WASM local, com parsers do `pg` aplicados aos OIDs reais.
+DDL real de teste para composite standalone, domain, enum, range/multirange, shell,
+base type e enum em outro schema foi rejeitado; cada caso foi revertido e o catálogo
+original voltou a passar. A consulta final das 39 tabelas de mutação retornou zero.
+Isso não executou conexão/autenticação, provisão de roles, Docker nem restore.
+O relatório Linux ainda não contém catálogo bruto para comparar; aceite PG16.14,
+recuperação dos quatro stores e revisão independente do patch continuam pendentes.
+
+A revisão seguinte identificou um bypass nos filtros de schema: `_` em SQL `LIKE`
+é wildcard, portanto `NOT LIKE 'pg_toast%'` / `NOT LIKE 'pg_temp_%'` escondia schemas
+legais como `pgxtoast_hidden` e `pgxtempyhidden`. As quatro consultas nativas de
+relações, índices, constraints e tipos agora excluem somente `pg_toast`,
+`pg_toast_temp_<dígitos>` e `pg_temp_<dígitos>` por regex ancorada, além dos nomes
+exatos `pg_catalog` e `information_schema`. Nenhum lookalike é classificado como
+namespace interno por prefixo aproximado.
+
+`cms/tests/unit/preauthority-catalog-pg16.test.ts` executa as seis migrations e as
+consultas **reais**, com decoder `pg`, em PGlite em memória quando esse módulo de
+teste já estiver disponível. Pode-se apontar `CMS_TEST_PGLITE_MODULE` para o caminho
+absoluto de um módulo PGlite existente; não instala dependências, abre conexão de
+rede nem usa arquivos de banco. Sem módulo, registra skip explícito; um caminho
+fornecido inválido falha, não vira skip. Nesta revisão o teste foi executado com o
+módulo local PG16.4/WASM: enum, domain, composite standalone e tabela com índice/CHECK
+foram criados em **ambos** os schemas lookalike e rejeitados. Cada consulta afetada
+foi executada diretamente, inclusive índices/constraints que o fail-fast de relações
+normalmente impediria alcançar. Uma tabela temporária real confirmou as exclusões
+de `pg_temp_N`/`pg_toast_temp_N`, e o inventário completo voltou a passar após cada
+rollback. Esse teste não substitui o gate Linux PG16.14 nem o restore real.
+
 A parada de `api`, `cron` e `cms` mantém `docker compose stop --timeout 120` por
 writer. O deadline do subprocesso agora cobre o pior caso serial de todos os
 writers selecionados mais 30 s de margem (390 s para os três), sem remover nem

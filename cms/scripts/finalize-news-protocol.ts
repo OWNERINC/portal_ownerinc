@@ -1207,16 +1207,19 @@ export function assertPreauthorityNativeCatalogInventory(
 /** Strict inventory used only for the unsupported protocol-absent phase. The
  * protocol finalizer itself may accept its canonical v1/v2 objects; those are
  * deliberately not passed through this preauthority-only allowlist. */
-async function verifyPreauthorityNativeCatalog(
+export async function verifyPreauthorityNativeCatalog(
   client: FinalizerClient,
   migrationNames: readonly string[],
   setStage: (stage: PreauthorityCatalogDiagnosticStage) => void,
 ): Promise<string> {
   setStage('native_relations')
+  // Anchor the actual internal namespace spellings in all four catalog queries.
+  // LIKE 'pg_temp_%' / 'pg_toast%' treats underscores as wildcards and would
+  // hide legal user schemas such as pgxtempyhidden and pgxtoast_hidden.
   const relationsResult = await client.query(`SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
-      AND n.nspname NOT LIKE 'pg_temp_%' AND c.relkind IN ('r','p','v','m','f','S','c')
+    WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND n.nspname !~ '^pg_temp_[0-9]+$' AND c.relkind IN ('r','p','v','m','f','S','c')
     ORDER BY n.nspname, c.relname, c.relkind`)
   const relations = sortBy(relationsResult.rows.map(row => ({
     schema: String(row.schema), name: String(row.name), kind: String(row.kind),
@@ -1274,8 +1277,8 @@ async function verifyPreauthorityNativeCatalog(
     JOIN pg_catalog.pg_class index_class ON index_class.oid=ix.indexrelid
     JOIN pg_catalog.pg_namespace index_ns ON index_ns.oid=index_class.relnamespace
     JOIN pg_catalog.pg_am access_method ON access_method.oid=index_class.relam
-    WHERE table_ns.nspname NOT IN ('pg_catalog','information_schema') AND table_ns.nspname NOT LIKE 'pg_toast%'
-      AND table_ns.nspname NOT LIKE 'pg_temp_%'
+    WHERE table_ns.nspname NOT IN ('pg_catalog','information_schema') AND table_ns.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND table_ns.nspname !~ '^pg_temp_[0-9]+$'
     ORDER BY table_ns.nspname, table_class.relname, index_ns.nspname, index_class.relname`)
   const indexes: NativeCatalogIndex[] = sortBy(indexesResult.rows.map(row => ({
     tableSchema: String(row.table_schema), table: String(row.table_name), schema: String(row.index_schema),
@@ -1301,8 +1304,8 @@ async function verifyPreauthorityNativeCatalog(
     FROM pg_catalog.pg_constraint con
     JOIN pg_catalog.pg_class relation ON relation.oid=con.conrelid
     JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
-    WHERE namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname NOT LIKE 'pg_toast%'
-      AND namespace.nspname NOT LIKE 'pg_temp_%'
+    WHERE namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND namespace.nspname !~ '^pg_temp_[0-9]+$'
     ORDER BY namespace.nspname, relation.relname, con.conname, con.contype`)
   const constraints: NativeCatalogConstraint[] = sortBy(constraintsResult.rows.map(row => ({
     schema: String(row.schema), table: String(row.table_name), name: String(row.constraint_name), kind: String(row.kind),
@@ -1311,21 +1314,36 @@ async function verifyPreauthorityNativeCatalog(
   })), ['schema', 'table', 'name', 'kind'])
 
   setStage('native_types')
+  // Exclude only catalog-bound relation rowtypes and internally dependent
+  // automatic arrays, not types by spelling or a typtype allowlist. Standalone
+  // composites, domains, enums, ranges and user-defined base/shell types remain.
   const typesResult = await client.query(`SELECT namespace.nspname AS schema, type.typname AS name, type.typtype AS kind,
-    COALESCE(array_agg(enum.enumlabel ORDER BY enum.enumsortorder) FILTER (WHERE enum.enumlabel IS NOT NULL), ARRAY[]::name[]) AS labels
+    COALESCE(array_agg(enum.enumlabel::text ORDER BY enum.enumsortorder) FILTER (WHERE enum.enumlabel IS NOT NULL), ARRAY[]::text[]) AS labels
     FROM pg_catalog.pg_type type JOIN pg_catalog.pg_namespace namespace ON namespace.oid=type.typnamespace
     LEFT JOIN pg_catalog.pg_enum enum ON enum.enumtypid=type.oid
     LEFT JOIN pg_catalog.pg_class composite_relation ON composite_relation.oid=type.typrelid
-    WHERE (type.typrelid=0 AND type.typtype IN ('e','d','r','m')
-        OR type.typtype='c' AND composite_relation.relkind='c')
-      AND namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname NOT LIKE 'pg_toast%'
-      AND namespace.nspname NOT LIKE 'pg_temp_%'
+    WHERE NOT COALESCE(type.typtype='c' AND composite_relation.relkind IN ('r','p','v','m','f')
+        AND composite_relation.reltype=type.oid, false)
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_type element
+        JOIN pg_catalog.pg_depend dependency ON dependency.classid='pg_catalog.pg_type'::regclass
+          AND dependency.objid=type.oid AND dependency.objsubid=0
+          AND dependency.refclassid='pg_catalog.pg_type'::regclass
+          AND dependency.refobjid=element.oid AND dependency.refobjsubid=0 AND dependency.deptype='i'
+        WHERE type.typtype='b' AND type.typcategory='A'
+          AND type.typelem=element.oid AND element.typarray=type.oid)
+      AND namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND namespace.nspname !~ '^pg_temp_[0-9]+$'
     GROUP BY namespace.nspname, type.typname, type.typtype
     ORDER BY namespace.nspname, type.typname, type.typtype`)
-  const types: NativeCatalogType[] = sortBy(typesResult.rows.map(row => ({
-    schema: String(row.schema), name: String(row.name), kind: String(row.kind),
-    labels: Array.isArray(row.labels) ? row.labels.map(String) : [],
-  })), ['schema', 'name', 'kind'])
+  const types: NativeCatalogType[] = sortBy(typesResult.rows.map(row => {
+    // node-postgres does not decode name[] (OID 1003). Request text[] above,
+    // and fail closed rather than replacing an unexpected driver shape by [].
+    if (!Array.isArray(row.labels) || row.labels.some(label => typeof label !== 'string')) {
+      return fail('preauthority_native_type_inventory_mismatch')
+    }
+    return { schema: String(row.schema), name: String(row.name), kind: String(row.kind), labels: row.labels }
+  }), ['schema', 'name', 'kind'])
   return assertPreauthorityNativeCatalogInventory({ relations, columns, indexes, constraints, types }, migrationNames)
 }
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import test from 'node:test'
 import {
   assertPreauthorityNativeCatalogInventory,
@@ -11,6 +12,7 @@ import {
   nativeSchemaSnapshot,
   preauthorityExpectedNativeCatalogInventory,
   verifyPreauthorityCatalogReadOnly,
+  verifyPreauthorityNativeCatalog,
   type FinalizerClient,
   type PreauthorityCatalogDiagnosticStage,
 } from '../../scripts/finalize-news-protocol'
@@ -22,6 +24,11 @@ import {
 } from '../../scripts/provision-db'
 import { assertPreauthorityCatalogState } from '../../scripts/verify-preauthority-catalog'
 import { nativeChecksPg16 } from '../fixtures/native-checks-pg16'
+import { nativeTypeLabelsPg16Oid, nativeTypesPg16 } from '../fixtures/native-types-pg16'
+
+const { types: pgTypes } = createRequire(import.meta.url)('pg') as {
+  types: { getTypeParser(oid: number): (value: string) => unknown }
+}
 
 const fixtureMigrations = [
   '20261002_181423_owner_news_initial', '20261005_133515_owner_news_media',
@@ -254,6 +261,82 @@ function preconditionClient({ failedControlCheck, protocolPresent, roleFixture =
   }
   return { client, statements }
 }
+
+test('native type query requests text[] and accepts captured PG16 catalog through the actual pg decoder', async () => {
+  const fixture = preconditionClient()
+  const stages: PreauthorityCatalogDiagnosticStage[] = []
+  let reachedTypes = false
+  const client: FinalizerClient = {
+    ...fixture.client,
+    query: async (sql, values) => {
+      if (!sql.includes('type.typtype AS kind')) return fixture.client.query(sql, values)
+      reachedTypes = true
+      assert.match(sql, /array_agg\(enum\.enumlabel::text ORDER BY enum\.enumsortorder\)/u)
+      assert.match(sql, /ARRAY\[\]::text\[\]/u)
+      assert.doesNotMatch(sql, /ARRAY\[\]::name\[\]/u)
+      // Automatic arrays require the reciprocal pg_type binding AND internal
+      // dependency. Never discard a standalone composite or unknown base type.
+      assert.match(sql, /composite_relation\.relkind IN \('r','p','v','m','f'\)/u)
+      assert.match(sql, /composite_relation\.reltype=type\.oid/u)
+      assert.match(sql, /type\.typelem=element\.oid AND element\.typarray=type\.oid/u)
+      assert.match(sql, /dependency\.deptype='i'/u)
+      assert.doesNotMatch(sql, /type\.typtype IN \(/u)
+      const rows = nativeTypesPg16.map(row => ({
+        ...row, labels: pgTypes.getTypeParser(nativeTypeLabelsPg16Oid)(row.labels),
+      }))
+      assert.equal(rows.length, 61)
+      assert.deepEqual(rows, preauthorityExpectedNativeCatalogInventory().types)
+      assert.equal(pgTypes.getTypeParser(1003)(nativeTypesPg16[0]!.labels), nativeTypesPg16[0]!.labels,
+        'pg leaves name[] as a raw string: the pre-fix query lost every label')
+      return { rows }
+    },
+  }
+  assert.match(await verifyPreauthorityNativeCatalog(client, fixtureMigrations, stage => stages.push(stage)), /^[0-9a-f]{64}$/u)
+  assert.ok(reachedTypes)
+  assert.deepEqual(stages, ['native_relations', 'native_columns', 'native_indexes', 'native_constraints', 'native_types'])
+})
+
+test('native type boundary rejects unexpected driver shapes and extra types, including empty-label types', async () => {
+  const rows = nativeTypesPg16.map(row => ({ ...row, labels: pgTypes.getTypeParser(nativeTypeLabelsPg16Oid)(row.labels) }))
+  for (const labels of [nativeTypesPg16[0]!.labels, null, undefined, {}, [1], ['draft', null]]) {
+    const fixture = preconditionClient()
+    const client = { ...fixture.client, query: async (sql: string, values?: unknown[]) => sql.includes('type.typtype AS kind')
+      ? { rows: [{ ...rows[0]!, labels }, ...rows.slice(1)] } : fixture.client.query(sql, values) }
+    await assert.rejects(verifyPreauthorityNativeCatalog(client, fixtureMigrations, () => {}),
+      /preauthority_native_type_inventory_mismatch/u)
+  }
+  for (const kind of ['c', 'd', 'e', 'r', 'm', 'b', 'p']) {
+    const fixture = preconditionClient()
+    const client = { ...fixture.client, query: async (sql: string, values?: unknown[]) => sql.includes('type.typtype AS kind')
+      ? { rows: [...rows, { schema: 'public', name: 'fixture_extra', kind, labels: kind === 'e' ? ['x'] : [] }] }
+      : fixture.client.query(sql, values) }
+    await assert.rejects(verifyPreauthorityNativeCatalog(client, fixtureMigrations, () => {}),
+      /preauthority_native_type_inventory_mismatch/u, `extra ${kind} is not an automatic array/rowtype`)
+  }
+})
+
+test('all 61 captured native enums retain exact schema, identity, label values and order', () => {
+  const observed = nativeTypesPg16.map(row => ({ ...row,
+    labels: pgTypes.getTypeParser(nativeTypeLabelsPg16Oid)(row.labels) as string[],
+  }))
+  const expected = preauthorityExpectedNativeCatalogInventory()
+  assert.deepEqual(observed, expected.types)
+  for (const [index, type] of observed.entries()) {
+    const mutations = [
+      { ...type, labels: [...type.labels, 'fixture_extra'] },
+      { ...type, labels: type.labels.slice(1) },
+      { ...type, labels: ['fixture_changed', ...type.labels.slice(1)] },
+      { ...type, schema: 'fixture_schema' },
+      { ...type, name: `${type.name}_changed` },
+      ...(type.labels.length > 1 ? [{ ...type, labels: [...type.labels].reverse() }] : []),
+    ]
+    for (const mutation of mutations) {
+      const inventory = { ...expected, types: observed.map((row, i) => i === index ? mutation : row) }
+      assert.throws(() => assertPreauthorityNativeCatalogInventory(inventory, fixtureMigrations),
+        /preauthority_native_type_inventory_mismatch/u, type.name)
+    }
+  }
+})
 
 test('preauthority catalog accepts only an absent protocol with no native News rows', () => {
   assert.doesNotThrow(() => assertPreauthorityCatalogState('absent', 0n))
