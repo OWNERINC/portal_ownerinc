@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createCommandDiagnostic } from './payload-preauthority-diagnostics.mjs';
 import { parseFixtureFailureHold, POST_RESTORE_HOLD_CONTEXT } from './payload-preauthority-snapshot-hold.mjs';
 import { CONVERSION_PROBE_CONTEXT, CONVERSION_PROBE_SUCCESS, parseConversionProbeFailure } from './payload-logical-snapshot-probe-protocol.mjs';
+import { WRITER_RESTART_CONTEXT, WRITER_RESTART_SUCCESS, parseWriterRestartFailure, parseWriterObservation } from './payload-preauthority-writer-restart-protocol.mjs';
 
 const leaseScript = 'set -Eeuo pipefail; lock=$1; shift; exec 9<>"$lock"; flock -n 9; export PORTAL_OPERATION_LOCK="$lock" PORTAL_OPERATION_LOCK_HELD="$lock"; exec "$@"';
 const controlSubsteps = Object.freeze({
@@ -109,6 +110,21 @@ export function createFixtureCommandFailure(result, options = {}) {
       failure.message = failure.code;
     }
   }
+  if (options.writerRestartCommandContext === WRITER_RESTART_CONTEXT) {
+    const restart = parseWriterRestartFailure(result.stderr, {
+      context: options.writerRestartCommandContext, status: result.status, errorCode: result.error?.code,
+      signal: result.signal, stdout: result.stdout,
+    });
+    if (restart) {
+      failure.code = `writer_restart_${restart.service}_${restart.phase}_${restart.reason}`
+        + (restart.state !== 'unknown' ? `_${restart.state}` : '');
+      failure.message = failure.code;
+      failure.diagnostic = createCommandDiagnostic({ substep: `snapshot_restart_${restart.phase}_${restart.service}`, status: result.status });
+    } else if (!result.error && !result.signal && result.status === 2) {
+      failure.code = 'writer_restart_protocol_invalid';
+      failure.message = failure.code;
+    }
+  }
   return failure;
 }
 
@@ -132,6 +148,12 @@ export function runFixtureCommand(command, args = [], options = {}) {
   if (options.conversionProbeCommandContext === CONVERSION_PROBE_CONTEXT
       && (result.stdout?.toString('utf8') !== CONVERSION_PROBE_SUCCESS || result.stderr?.length)) {
     throw createFixtureCommandFailure(result, { ...options, failureCode: 'linux_conversion_probe_protocol_invalid' });
+  }
+  if (options.writerRestartCommandContext === WRITER_RESTART_CONTEXT
+      && (result.stderr?.length || !['observe', 'restart'].includes(options.writerRestartMode)
+        || (options.writerRestartMode === 'restart' && result.stdout?.toString('utf8') !== WRITER_RESTART_SUCCESS)
+        || (options.writerRestartMode === 'observe' && !parseWriterObservation(result.stdout)))) {
+    throw createFixtureCommandFailure(result, { ...options, failureCode: 'writer_restart_protocol_invalid' });
   }
   return result.stdout || Buffer.alloc(0);
 }

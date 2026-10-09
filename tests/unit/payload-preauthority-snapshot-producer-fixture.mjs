@@ -30,7 +30,8 @@ async function produce() {
   const fixture = await load('scripts/integration/payload-preauthority-fixture.mjs');
   const transport = await load('scripts/integration/payload-preauthority-snapshot-runtime.mjs');
   const run = { commit: '5538227c912c9d074f25aef329d44f7457160e5a', runId: '37970701268', runAttempt: '1' };
-  const project = fixture.createFixtureProjectNames(run).source;
+  const names = fixture.createFixtureProjectNames(run);
+  const project = names.source;
   const inventory = fixture.createInventory({ project, root: '/private/disposable/source' });
   const runtime = { project, directory: inventory.document.paths.runtime, inventory,
     payloadRelease: transport.recoveryPayloadRelease(inventory.document.paths.releases, run.commit),
@@ -41,7 +42,20 @@ async function produce() {
   // Exactly the environment export performed by createLeasedCommandInvocation.
   // Native FD9 identity is tested separately on Linux, not emulated here.
   environment.PORTAL_OPERATION_LOCK_HELD = environment.PORTAL_OPERATION_LOCK;
-  return { wire, environment, commit: run.commit, project, payloadRelease: runtime.payloadRelease };
+  const restartObserve = transport.writerRestartCommandInput(runtime, { commit: run.commit, python: 'python3', mode: 'observe' });
+  const restartResume = transport.writerRestartCommandInput(runtime, { commit: run.commit, python: 'python3', mode: 'restart',
+    identities: { api: 'a'.repeat(64), cron: 'b'.repeat(64), cms: 'c'.repeat(64) } });
+  const restartFixtures = [['source', names.source], ['target', names.target], ['lease-target', names.source.replace(/-source$/u, '-lease')]].map(([role, project]) => {
+    const inventory = fixture.createInventory({ project, root: `/private/disposable/${role}` });
+    const runtime = { project, directory: inventory.document.paths.runtime, inventory,
+      payloadRelease: transport.recoveryPayloadRelease(inventory.document.paths.releases, run.commit), baseUrl: 'http://127.0.0.1:1' };
+    const wire = transport.writerRestartCommandInput(runtime, { commit: run.commit, python: 'python3', mode: 'observe' });
+    const environment = { ...transport.recoveryFixtureEnvironment(project, runtime,
+      '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'), ...wire.env };
+    environment.PORTAL_OPERATION_LOCK_HELD = environment.PORTAL_OPERATION_LOCK;
+    return { role, wire, environment };
+  });
+  return { wire, environment, restartObserve, restartResume, restartFixtures, commit: run.commit, project, payloadRelease: runtime.payloadRelease };
 }
 
 export function producedLinuxRecoveryFixture() {

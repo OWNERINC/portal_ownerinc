@@ -171,11 +171,11 @@ test('actual recovery runner wires direct Linux conversion prerequisite under le
   assert.ok(probe < protocol);
   assert.ok(protocol < section.indexOf("quiescentSnapshotComparison = 'passed'"));
   assert.ok(protocol < section.indexOf('runtime.quiescentSnapshotStable = true'));
-  assert.ok(section.indexOf('runtime.quiescentSnapshotStable = true') < section.indexOf("composeWithLease(runtime, ['start'"));
+  assert.ok(section.indexOf('runtime.quiescentSnapshotStable = true') < section.indexOf("mode: 'restart', identities: observedWriters"));
   assert.doesNotMatch(section, /negativeCases\.push|safeChecks\.[a-zA-Z]+\s*=/u);
   const probeCode = await readFile('scripts/integration/payload-logical-snapshot-conversion-probe.mjs', 'utf8');
   assert.match(probeCode, /process\.platform !== 'linux' \|\| process\.getuid\(\) !== 0/u);
-  assert.match(probeCode, /payload-preauth-\[a-z0-9-\]\+-source/u);
+  assert.match(probeCode, /assertRecoveryFixtureConfiguration\(configuration, environment, \['source'\]\)/u);
   assert.match(probeCode, /fstatSync\(9, \{ bigint: true \}\)/u);
   assert.match(probeCode, /lease\.dev !== lock\.dev \|\| lease\.ino !== lock\.ino/u);
   assert.match(probeCode, /compose\(\['exec', '-T', 'postgres', 'psql'/u);

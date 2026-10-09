@@ -332,6 +332,156 @@ required; no Linux recovery PASS is claimed. No CI dispatch/write, commit/push,
 production SSH, Docker service mutation or delegation. No ops runtime/state,
 preparer/receiver, finalizer or other worker implementation was modified.
 
+## CI 37975805734 / cbf0497 — same-container writer resume
+
+### Actual evidence and prerequisite order
+
+Read the supplied redacted report and downloaded `gh run view 37975805734 --log`
+read-only. The report has sole primary `restart_writers_source`,
+`snapshot_restart_writers`, exit 1; source `initialCmsHealthPassed=true`,
+`quiescentSnapshotComparison=passed`, `writersRestartedHealthy=false`. Target and
+both restore acceptances are not started. The public log still has no private
+Docker error. The failed report has not been rewritten or promoted to PASS.
+
+At **cbf0497**, runner `779–793` invokes the actual Linux conversion executable
+under the lease with the strict conversion context. Only after its exact success
+output is accepted does `796` set the source comparison to passed and `801` mark
+the internal snapshot flag. The probe must have created the conversion, verified its
+catalog presence, observed actual CLI unsupported-object rejection, removed its
+owned object and compared all six original components. Thus **this CI provides
+source Linux conversion prerequisite evidence**, not just parent snapshot equality.
+The public `quiescentSnapshotStable` check is correctly still false: restart
+failed before the aggregate check could be marked. This supersedes the earlier
+pending-source-prerequisite status; full positive/repeated four-store recovery
+acceptance is still unproven.
+
+### Proven source incompatibility versus historical error attribution
+
+The old runner uses `composeWithLease` (`588–593`) with the same real producer of
+commit-addressed Compose args as initial startup. That function executes
+`/usr/bin/env -i PATH=<fixed host path> HOME=/root docker compose …`; the outer
+lease/environment is not silently a different project. Profiles are unchanged:
+`notifications` enables cron; `cms`/`cms-migrate` have no profile. Source initial
+start (`615`) uses `up --detach --no-deps --no-recreate --no-build --pull never
+api cron cms`, but resume (`806–809`) uses `start api cron cms` without dependency
+isolation.
+
+The actual repository model in `docker-compose.payload.yml:94–96` makes CMS depend
+on `cms-migrate: service_completed_successfully`. The initializer at
+`ops/payload-control-runtime.py:2074–2084` persists only receipted `cms-postgres` and
+`cms`, using create-only `up --no-start --no-recreate --no-deps`. At `2232`, it runs
+`cms-migrate` with **`run --rm --no-deps`**: the migration executes and verifies its
+floor but leaves no persistent service container for Compose dependency waiting.
+The legacy provision path starts postgres/api/cron; no intervening call creates a
+persistent cms-migrate container. One-off migration containers are not a substitute
+for the normal service container.
+
+The actual CI log identifies runner-image `ubuntu24/20261004.327`; its immutable
+[software manifest](https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md)
+lists Compose **2.38.2**. Inspection of that exact version's
+[`cmd/compose/start.go`](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/start.go),
+[`pkg/compose/start.go`](https://github.com/docker/compose/blob/v2.38.2/pkg/compose/start.go)
+and [`pkg/compose/convergence.go`](https://github.com/docker/compose/blob/v2.38.2/pkg/compose/convergence.go)
+shows that `startService` calls `waitDependencies`, which excludes one-offs and
+returns `<service> is missing dependency <dependency>` when a required normal
+dependency container is absent. `--no-deps` is not an option on `compose start`.
+
+**Confirmed defect:** the resume command requires a persistent dependency that
+this fixture deliberately never creates. **Not recovered from historical public
+evidence:** the exact stderr emitted in this CI, or whether another Docker error
+occurred first. Missing cms-migrate is a deterministic source incompatibility,
+not a recovered private error message. No stale label/receipt, permissions or
+daemon hypothesis is promoted to fact.
+
+### Bounded correction and diagnostics
+
+The new `payload-preauthority-writer-restart.mjs` executable observes the physical
+IDs of api/cron/cms under lease **before stop**, requiring exactly one full ID per
+service, distinct IDs, expected project/service labels, non-one-off and running
+state. Resume reacquires the same operation lease, inventories and inspects all
+three stopped services before any start, and requires the **same IDs** with exited,
+not paused/restarting state. It then uses only `docker start <captured ID>` and
+inspects those same IDs for running state. Existing per-service health/readiness
+checks still follow; only after they pass is writersRestartedHealthy set.
+
+This cannot create/pull/reconfigure/relabel/adopt containers or start migration,
+worker or dependency services. It preserves the original physical container config,
+including legacy Portal and private CMS receipt overlay labels. No initializer,
+receipt, controller state, Compose service model or signed contract is changed.
+The helper reuses the actual serialized commit-bound fixture configuration and
+sanitized parent environment producer. It requires the existing root-owned
+canonical lock/held marker, Linux/root, FD9 dev/inode identity and safe mode before
+Docker inspection or effects.
+
+The complete callflow provisions and seeds **all three** fixtures (`provisionProject`
+source, target and leaseTarget). The shared exact configuration validator was
+extracted from the probe into the runtime helper: conversion still explicitly
+passes only `['source']`, while resume explicitly allows the three known runtime
+directory/project suffix pairs `source/-source`, `target/-target` and
+`lease-target/-lease`. This policy is hardcoded, not a stdin-selected option;
+cross-role/project/path/Compose bindings remain rejected. Actual producer/CLI
+regressions cover all three fixtures and prove target/lease rejection by conversion.
+
+Closed helper diagnostics carry only finite phase/service/reason/state. The real
+throwing wrapper accepts them only in `snapshot-writer-restart` context with clean
+exit 2, empty stdout and one canonical stderr line. Observe success requires an
+exact canonical three-ID response (private transport, never a report field);
+resume success requires one fixed line and empty stderr. Missing, ambiguous,
+replaced/foreign identities, invalid physical state, inventory/inspect/start/verify
+failures and known Compose/Docker errors now distinguish themselves through the
+**existing** failureCode/failedSubstep/commandDiagnostic fields. For example:
+`writer_restart_cms_inventory_missing`,
+`writer_restart_api_inspect_state_invalid_running`, or
+`writer_restart_cron_start_command_failed_exited`. Arbitrary exit 2/output does not
+become successful resume, and primary snapshot/conversion errors retain precedence
+over resume failures. No new report field, check or negative case is introduced.
+
+Known dependency-missing, unknown-service, no-container, container-not-found and
+daemon-unavailable errors map to finite enums only after a failed actual command.
+Unrecognized stderr remains `command_failed` at the observed phase/service, with
+its bounded raw bytes retained in a unique private
+`<runtime>/writer-restart-<uuid>/private-diagnostics/command-stderr.txt`. Neither
+paths, IDs, labels, errors nor stacks cross the public diagnostic protocol. The
+outer wrapper also retains its private failure evidence. Evidence write failure
+does not replace the original failure.
+
+### Tests and checks
+
+- Actual inventory/release/Compose/environment/JSON producer modules now emit both
+  observe and resume requests; the actual restart executable consumes them through
+  the actual command wrapper and refuses an unleased child at the lease phase,
+  before Docker. This is executable producer/consumer validation, not a manually
+  typed configuration document.
+- Orchestration tests explicitly double Docker state only: require validation of
+  all services before the first effect, no adoption/recreation, partial-start
+  attribution, post-start state checks, known errors, strict codec/redaction and
+  primary-over-secondary preservation. A static regression checks the actual
+  Compose/initializer one-shot mismatch and the runner's before-stop observation,
+  prerequisite-before-comparison-before-resume/readiness order.
+- The full native Linux root Bash/flock → actual CLI → fake Docker executable test
+  checks actual argument/environment transport, before-stop ID capture and resume
+  of those IDs. No Docker daemon is involved. It is **explicitly skipped on this
+  Windows host**, not reported as Linux/service acceptance.
+- Final focused run: **55 passed / three native lease skips**, zero failures.
+- Explicit PGlite suite: **eight passed / one local conversion-library `58P01`
+  capability skip**, zero failures; no Linux capability skip added.
+- First full verify attempt failed in a new static test whose YAML/initializer
+  assertion used the wrong source spelling. Corrected the test to the actual
+  multiline dependency and create-only initializer; production ops/model untouched.
+- Final `npm run verify`: **PASS**, Portal **1,722 passed / 12 skipped**, CMS
+  **448 passed / 11 skipped**, zero failures. Log:
+  `%LOCALAPPDATA%/Temp/opencode/cms-writer-restart-final-verify.log`.
+- `npm run security`: **PASS**, zero vulnerabilities in API/cron/CMS.
+  `npm --prefix cms run typecheck` and `git diff --check`: **PASS**.
+
+The patch is uncommitted and requires independent fresh review by the primary
+before integration. No delegation, CI dispatch/write, commit/push, SSH, live Docker
+service operation or outside-owned ops/runtime/state edits were performed. The
+14-check/11-negative acceptance contracts are retained. Another authorized Linux
+wave is needed for **resume and full four-store acceptance**; this local patch has
+no recovery PASS. If resume still fails, the finite observation phase/service/reason
+is now actionable and the exact raw unknown cause stays in the private runner file.
+
 ## Acceptance boundary
 
 The runner now compares independent observations of the two databases and two

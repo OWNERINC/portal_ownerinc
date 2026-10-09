@@ -9,7 +9,9 @@ import {
 import { logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './integration/payload-logical-snapshot.mjs';
 import { CONVERSION_PROBE_CONTEXT } from './integration/payload-logical-snapshot-probe-protocol.mjs';
 import { recoveryPayloadRelease, recoveryComposeArgs, recoveryFixtureEnvironment,
-  conversionProbeCommandInput } from './integration/payload-preauthority-snapshot-runtime.mjs';
+  conversionProbeCommandInput, writerRestartCommandInput } from './integration/payload-preauthority-snapshot-runtime.mjs';
+import { WRITER_RESTART_CONTEXT } from './integration/payload-preauthority-writer-restart-protocol.mjs';
+import { assertWriterIdentities } from './integration/payload-preauthority-writer-restart.mjs';
 import { POST_RESTORE_HOLD_CONTEXT, POST_RESTORE_HOLD_TIMEOUT_MS,
   parseFixtureFailureHold } from './integration/payload-preauthority-snapshot-hold.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -757,6 +759,15 @@ async function assertQuiescentSnapshotStable(runtime) {
   const writers = ['api', 'cron', 'cms'].filter(service => running.includes(service));
   assert.deepEqual(writers, ['api', 'cron', 'cms'],
     'all fixture application writers must be running before the quiescence check');
+  setSubstep('snapshot_observe_writer_identities');
+  const observedWriters = JSON.parse(withLease(runtime, runtime.project, process.execPath, [
+    path.join(repository, 'scripts', 'integration', 'payload-preauthority-writer-restart.mjs'),
+  ], {
+    ...writerRestartCommandInput(runtime, { commit: runIdentity.commit, python, mode: 'observe' }),
+    substep: 'snapshot_observe_writer_identities', writerRestartCommandContext: WRITER_RESTART_CONTEXT,
+    writerRestartMode: 'observe', timeout: 420_000, preservePrivateErrorEvidence: true,
+  }).toString('utf8'));
+  assertWriterIdentities(observedWriters);
   setSubstep('snapshot_stop_writers');
   composeWithLease(runtime, ['stop', '--timeout', String(FIXTURE_STOP_TIMEOUT_SECONDS), ...writers], {
     substep: 'snapshot_stop_writers',
@@ -803,9 +814,12 @@ async function assertQuiescentSnapshotStable(runtime) {
     async () => {
       setStage(`restart_writers_${runtime.role}`);
       setSubstep('snapshot_restart_writers');
-      composeWithLease(runtime, ['start', ...writers], {
-        substep: 'snapshot_restart_writers',
-        preservePrivateErrorEvidence: true,
+      withLease(runtime, runtime.project, process.execPath, [
+        path.join(repository, 'scripts', 'integration', 'payload-preauthority-writer-restart.mjs'),
+      ], {
+        ...writerRestartCommandInput(runtime, { commit: runIdentity.commit, python, mode: 'restart', identities: observedWriters }),
+        substep: 'snapshot_restart_writers', writerRestartCommandContext: WRITER_RESTART_CONTEXT,
+        writerRestartMode: 'restart', timeout: 600_000, preservePrivateErrorEvidence: true,
       });
       for (const service of writers) await awaitService(runtime, service);
       recoveryProgress[runtime.role].writersRestartedHealthy = true;
