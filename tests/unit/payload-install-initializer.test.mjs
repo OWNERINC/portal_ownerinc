@@ -736,6 +736,58 @@ for args in [
 `);
 });
 
+test('exact writer resume after real terminal backup preserves receipts/floor/audit and leaves normal verify/open as separate gates', async t => {
+  await fixture(t, String.raw`
+from contextlib import redirect_stdout
+model=Model('resume-terminal-audit')
+original_create=model.create_container
+def fill(service):
+    value=model.containers[service]
+    value['Config']['Labels']['com.docker.compose.oneoff']='False'
+    value['State'].update({'Running':value['State']['Status']=='running','Paused':False,'Restarting':False})
+def create(service,*args,**kwargs):
+    original_create(service,*args,**kwargs);fill(service)
+model.create_container=create
+for service in model.containers:fill(service)
+with model.context():
+    model.initialize(); audit=copy.deepcopy(model.state()['installIntent'])
+    for service in ('api','cron','cms'):
+        value=model.containers[service]
+        # Only mutable process status changes after capture; labels/config were
+        # populated before creation receipts were signed above.
+        value['State'].update({'Status':'running','Running':True,'Paused':False,'Restarting':False})
+    R.Runtime('verify-release',model.release,None).run()
+    R.Runtime('open-admission',model.release,None).run();os.unlink(model.config['paths']['admissionClosed'])
+    with patch.object(R.Runtime,'_writer_scope',lambda _self:{'pid':101,'started':'202','device':1,'inode':9}):
+        output=io.StringIO()
+        with redirect_stdout(output): R.Runtime('observe-writers',model.release,None).run()
+        ticket=output.getvalue().strip()
+        R.Runtime('close-admission',model.release,None).run();model.write(model.config['paths']['admissionClosed'],b'')
+        for service in ('api','cron','cms'):model.containers[service]['State'].update({'Status':'exited','Running':False})
+        backup=os.path.join(model.backups,'postfloor-resume');os.mkdir(backup,0o700)
+        for name in ('postgres.dump','cms-postgres.dump'):model.write(os.path.join(backup,name),b'private synthetic PostgreSQL archive bytes')
+        for name in ('uploads.tar.gz','cms-uploads.tar.gz'):model.write(os.path.join(backup,name),model.tar_gzip)
+        model.write(os.path.join(backup,'release.images'),open(os.path.join(model.release,'.image-env'),'rb').read())
+        model.write(os.path.join(backup,'backup.format'),b'payload-v1\n')
+        R.Runtime('backup-metadata',model.release,os.path.join(backup,'operations-proof.json')).run()
+        before=model.state();calls=[];real_run=model.run
+        def writer_run(args,**kwargs):
+            if args[:2]==['docker','start']:
+                assert model.state()['admission']=='closed' and model.state()['installIntent']==audit
+                calls.append(args)
+                value=next(v for v in model.containers.values() if v['Id']==args[2])
+                value['State'].update({'Status':'running','Running':True})
+                return SimpleNamespace(returncode=0,stdout=b'')
+            return real_run(args,**kwargs)
+        with patch.object(R.subprocess,'run',writer_run):R.Runtime('resume-writers',model.release,ticket).run()
+        assert len(calls)==3 and {c[2] for c in calls}=={model.containers[s]['Id'] for s in ('api','cron','cms')}
+        assert model.state()==before and model.state()['installIntent']==audit and model.state()['admission']=='closed'
+        R.Runtime('verify-release',model.release,None).run()
+        R.Runtime('open-admission',model.release,None).run()
+        assert model.state()['installIntent']==audit and model.state()['workerHold'] is True
+`);
+});
+
 test('actual terminal backup/restore commands transition their own fields and never rewrite immutable install intent', async t => {
   await fixture(t, String.raw`
 model = Model('backup-restore-audit')

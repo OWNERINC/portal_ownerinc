@@ -60,6 +60,7 @@ else
   export PORTAL_OPERATION_LOCK_HELD=$PORTAL_OPERATION_LOCK
 fi
 export PORTAL_OPERATION_LOCK
+export PAYLOAD_WRITER_COORDINATOR_PID=$$
 
 compose() {
   local args=(--profile notifications --project-directory "$root" --project-name "${COMPOSE_PROJECT_NAME:-ownerinc-portal-prod}")
@@ -81,7 +82,8 @@ guard() {
   "$PAYLOAD_OPERATIONS_GUARD" "$1" "$root" "${2:-}"
 }
 stopped=()
-resume() { step resume_writers; if ((${#stopped[@]})); then compose start "${stopped[@]}" >/dev/null; fi; }
+writer_ticket=''
+resume() { guard resume-writers "$writer_ticket" resume_writers; }
 stop_writers() {
   local running service
   step writers_inventory_before
@@ -91,6 +93,13 @@ stop_writers() {
   for service in nginx api cron cms; do
     if grep -qx "$service" <<<"$running"; then stopped+=("$service"); fi
   done
+  # Adapter stdout is a signed, process/lease-bound ticket kept only in this
+  # coordinator's memory. Never persist or trust a raw ID sidecar on retry.
+  # Set progress in the parent: command substitution cannot update its EXIT
+  # trap state. Invoke the same guard directly so only ticket stdout is captured
+  # and observation emits exactly one progress frame, outside the subshell.
+  step guard_observe_writers
+  writer_ticket=$("$PAYLOAD_OPERATIONS_GUARD" observe-writers "$root" '')
   # Admission/drain contract covers extra one-shot import/maintenance containers;
   # it must finish before DB proof. No transaction waits on container exit.
   guard close-admission
@@ -200,7 +209,7 @@ else
   # Resume the originally stopped services only after smoke; cms-worker is never
   # included, and release verification runs against the complete resumed floor.
   step restore_start_readiness
-  compose up -d --no-deps api cms nginx
+  guard resume-readiness-writers "$writer_ticket" restore_start_readiness
   step restore_smoke
   : "${RESTORE_BASE_URL:?Set RESTORE_BASE_URL for the isolated target}"
   BASE_URL=$RESTORE_BASE_URL bash "$root/scripts/smoke.sh"

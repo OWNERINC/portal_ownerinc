@@ -1,5 +1,20 @@
 # Runtime Payload e recuperação coordenada
 
+## Revisão pendente — restart exato do coordenador (2026-10-09)
+
+O CI `37982456244`/`0fa5818` passou health/restart/comparação dos três fixtures e
+falhou no backup coordenado em `resume_writers`, exit 1. Stderr da ferramenta não
+foi recuperado; dependência Compose ausente permanece hipótese. O patch local
+substitui resume/readiness por start de IDs observados antes do stop, com ticket
+assinado somente em memória, vinculado ao processo/journal/inventário/fd9 e
+validação integral antes dos starts. Não muda o schema de estado nem cria/adota
+serviços. Interrupção não autoriza retry automático por outro coordenador.
+
+Entrega, compatibilidade v1/v2, regressões e limites estão em
+[fresh review do coordinator resume](../reviews/2026-10-09-payload-coordinator-writer-resume.md).
+**Revisão independente e aceite Linux/Docker/DB ainda pendentes**; esse registro
+não autoriza instalação do adapter/coordenador em produção nem ativa admission.
+
 ## Evidência Task 3 — comparação independente pós-restore (2026-10-09)
 
 O run `37918102226`, commit `7893d35`, passou novamente pelas onze negativas e

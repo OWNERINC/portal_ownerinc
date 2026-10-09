@@ -58,6 +58,7 @@ ACTION_SET = {
     'rollback-check', 'open-admission',
     'install-retry-check', 'install-receiver-preflight',
     'initialize-isolated', 'install-floor-commit',
+    'observe-writers', 'resume-writers', 'resume-readiness-writers',
 }
 INITIALIZER_DIAGNOSTIC_PHASES = set('''
 runtime_validation request_validation source_preflight close_admission stop_writers quiescence
@@ -1664,6 +1665,158 @@ class Runtime:
         self.state = STATE.transition(self.runtime_dir, update)
         print('preauthority writer admission reopened; CMS worker remains held')
 
+    def _writer_scope(self):
+        # No ticket survives the coordinator process/lease that observed it.
+        # Check a real ancestor, not an arbitrary caller-selected PID or sidecar.
+        value = os.environ.get('PAYLOAD_WRITER_COORDINATOR_PID', '')
+        if os.name == 'nt' or not re.fullmatch(r'[1-9][0-9]{0,9}', value):
+            fail('writer_coordinator_scope_invalid')
+        selected = int(value)
+        pid = os.getppid()
+        for _ in range(5):
+            info = os.stat('/proc/' + str(pid))
+            if info.st_uid != 0:
+                fail('writer_coordinator_scope_invalid')
+            with open('/proc/' + str(pid) + '/stat', 'r', encoding='ascii') as stream:
+                fields = stream.read(4096).rsplit(')', 1)[1].split()
+            if pid == selected:
+                lease = os.stat(self.inventory['document']['paths']['lock'])
+                descriptor = os.stat('/proc/' + str(pid) + '/fd/9')
+                if (descriptor.st_dev, descriptor.st_ino) != (lease.st_dev, lease.st_ino):
+                    fail('operation_lease_inode_mismatch')
+                return {'pid': pid, 'started': fields[19], 'device': lease.st_dev, 'inode': lease.st_ino}
+            pid = int(fields[1])
+            if pid <= 1:
+                break
+        fail('writer_coordinator_scope_invalid')
+
+    def _writer_command(self, args, reason):
+        try:
+            return self._initializer_command(args, evidence_prefix='payload-writer-command')
+        except ControlError as error:
+            if str(error) not in ('initializer_command_failed', 'initializer_command_launch_failed', 'initializer_command_signaled'):
+                raise
+            fail(reason)
+
+    def _writer_inspect(self, container, service, allowed_states):
+        raw = self._writer_command(['docker', 'inspect', container], 'writer_inspect_command_failed')
+        values = _strict_json(raw, 'writer_inspect_response_invalid')
+        if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+            fail('writer_inspect_response_invalid')
+        value = values[0]
+        labels = value.get('Config', {}).get('Labels', {})
+        status = value.get('State', {})
+        identity = value.get('Id')
+        if not isinstance(identity, str) or not STATE.HEX_64.fullmatch(identity) or not identity.startswith(container) or \
+           labels.get('com.docker.compose.project') != self.inventory['document']['project'] or \
+           labels.get('com.docker.compose.service') != service or labels.get('com.docker.compose.oneoff') != 'False':
+            fail('writer_identity_mismatch')
+        state = status.get('Status')
+        if state not in allowed_states or status.get('Running') is not (state == 'running') or \
+           status.get('Paused') is not False or status.get('Restarting') is not False:
+            fail('writer_state_invalid')
+        receipt = {'id': identity, 'fingerprint': hashlib.sha256(STATE.canonical({
+            'id': identity, 'image': value.get('Image'), 'configImage': value.get('Config', {}).get('Image'),
+            'labels': labels, 'created': value.get('Created'), 'mounts': value.get('Mounts'),
+            'healthcheck': value.get('Config', {}).get('Healthcheck'),
+        })).hexdigest()}
+        return receipt, state, status.get('Health', {}).get('Status', 'none')
+
+    def observe_writers(self):
+        if STATE.install_pending(self.state) or self.state['cmsStatus'] != 'migrated':
+            fail('writer_resume_floor_invalid')
+        images, payload = _release(self.release_path, payload=True)
+        if not payload or images != self.state['releaseImages']:
+            fail('release_state_mismatch')
+        scope = self._writer_scope()
+        _verify_release_images(self.release_path, images)
+        containers = _check_container_shape('migrated')
+        captured = {}
+        for service in ('nginx', 'api', 'cron', 'cms'):
+            found = [c for c in containers if c['service'] == service]
+            if len(found) > 1:
+                fail('writer_identity_mismatch')
+            if found and found[0]['state'] == 'running':
+                captured[service] = self._writer_inspect(found[0]['id'], service, {'running'})[0]
+            elif found and found[0]['state'] not in ('exited', 'created'):
+                fail('writer_state_invalid')
+        if not {'api', 'cron', 'cms'} <= set(captured) or len({v['id'] for v in captured.values()}) != len(captured):
+            fail('writer_identity_mismatch')
+        ticket = {'kind': 'coordinator-writers-v1', 'inventoryIdentity': self.inventory['identity'],
+                  'release': self.release_path, 'scope': scope, 'sequence': self.state['sequence'],
+                  'stateSha256': self.state_parent_hash, 'containers': captured}
+        print(STATE.canonical(STATE.sign_envelope(ticket, self.key)).decode('utf-8'))
+
+    def resume_writers(self, readiness=False):
+        self._admission_closed()
+        if STATE.install_pending(self.state) or self.state['cmsStatus'] != 'migrated' or self.state['restoreIntent'] is not None:
+            fail('writer_resume_floor_invalid')
+        if not self.evidence or len(self.evidence) > 16 * 1024:
+            fail('writer_ticket_invalid')
+        def validate(ticket):
+            STATE._exact_keys(ticket, {'kind', 'inventoryIdentity', 'release', 'scope', 'sequence', 'stateSha256', 'containers'}, 'writer_ticket_invalid')
+            if ticket['kind'] != 'coordinator-writers-v1' or ticket['inventoryIdentity'] != self.inventory['identity'] or \
+               ticket['release'] != self.release_path or ticket['scope'] != self._writer_scope() or \
+               not STATE._safe_int(ticket['sequence']) or ticket['sequence'] >= self.state['sequence'] or \
+               not isinstance(ticket['stateSha256'], str) or not STATE.HEX_64.fullmatch(ticket['stateSha256']):
+                fail('writer_ticket_invalid')
+            found = ticket['containers']
+            if not isinstance(found, dict) or not {'api', 'cron', 'cms'} <= set(found) <= {'nginx', 'api', 'cron', 'cms'}:
+                fail('writer_ticket_invalid')
+            for item in found.values():
+                STATE._exact_keys(item, {'id', 'fingerprint'}, 'writer_ticket_invalid')
+                if any(not isinstance(item[k], str) or not STATE.HEX_64.fullmatch(item[k]) for k in item):
+                    fail('writer_ticket_invalid')
+            if len({item['id'] for item in found.values()}) != len(found):
+                fail('writer_ticket_invalid')
+            return ticket
+        envelope = STATE.parse_canonical(self.evidence.encode('utf-8') + b'\n', 'writer_ticket_invalid')
+        ticket = STATE.verify_envelope(envelope, self.key, validate, 'writer_ticket_invalid')
+        # Origin is an existing signed journal entry, not an operator JSON state.
+        origin_path = os.path.join(self.state_dir, STATE._journal_name(ticket['sequence']))
+        raw = STATE._read_file(origin_path, 0o600, private_owner=True)
+        origin_envelope = STATE.parse_canonical(raw, 'state_journal_corrupt')
+        if hashlib.sha256(STATE.canonical(origin_envelope)).hexdigest() != ticket['stateSha256']:
+            fail('writer_ticket_invalid')
+        origin = STATE.verify_envelope(origin_envelope, self.key, STATE.validate_state_body, 'state_journal_corrupt')
+        if any(origin.get(k) != self.state.get(k) for k in ('inventoryIdentity', 'releaseImages', 'nativeCatalogFingerprint', 'installIntent')) or \
+           self.state['latestProofSha256'] is None or self.state['latestProofSha256'] == origin['latestProofSha256']:
+            fail('writer_resume_floor_invalid')
+        containers = _check_container_shape('migrated')
+        pending = []
+        # Validate the ENTIRE captured set and held worker before the first start.
+        for item in containers:
+            if item['service'] == 'cms-worker' and item['state'] not in ('exited', 'created'):
+                fail('worker_admission_forbidden')
+            if item['service'] in ('nginx', 'api', 'cron', 'cms') and item['service'] not in ticket['containers'] and item['state'] not in ('exited', 'created'):
+                fail('writer_identity_mismatch')
+        for service, receipt in ticket['containers'].items():
+            found = [c for c in containers if c['service'] == service]
+            if len(found) != 1:
+                fail('writer_identity_mismatch')
+            observed, state, _ = self._writer_inspect(found[0]['id'], service, {'exited', 'running'})
+            if observed != receipt:
+                fail('writer_identity_mismatch')
+            if state == 'exited' and (not readiness or service != 'cron'):
+                pending.append(receipt['id'])
+        for identity in pending:
+            self._writer_command(['docker', 'start', identity], 'writer_start_command_failed')
+        for service, receipt in ticket['containers'].items():
+            if readiness and service == 'cron':
+                continue
+            for _ in range(180):
+                observed, _, health = self._writer_inspect(receipt['id'], service, {'running'})
+                if observed != receipt:
+                    fail('writer_identity_mismatch')
+                if health == 'healthy' or (service == 'nginx' and health == 'none'):
+                    break
+                if health != 'starting':
+                    fail('writer_health_invalid')
+                time.sleep(1)
+            else:
+                fail('writer_readiness_timeout')
+        print('exact pre-stop writers resumed; admission closed and worker held')
+
     def install_receiver_preflight(self):
         # Permanent fail-closed integration boundary for this reviewed slice.
         # No environment toggle, fabricated receipt or JSON shape enables it.
@@ -1873,7 +2026,7 @@ class Runtime:
                     'portalTarget': intent['binding']['portalTarget'] if intent else self._install_target(False)[0]}
         return template
 
-    def _initializer_command(self, args, output=None):
+    def _initializer_command(self, args, output=None, evidence_prefix='payload-initialize-command'):
         self.initializer_command_exit = None
         self.initializer_command_signal = None
         self.initializer_stderr_retained = False
@@ -1893,7 +2046,7 @@ class Runtime:
                     raw = private_stderr.read(16 * 1024)
                     if raw:
                         STATE._write_exclusive(os.path.join(self.runtime_dir,
-                            'payload-initialize-command-' + secrets.token_hex(16) + '.stderr'), raw, 0o600)
+                            evidence_prefix + '-' + secrets.token_hex(16) + '.stderr'), raw, 0o600)
                         self.initializer_stderr_retained = True
                 except (OSError, STATE.StateError):
                     pass  # Never replace the primary failure with evidence read/write failure.
@@ -2235,6 +2388,9 @@ class Runtime:
         self.install_floor_commit()
 
     def run(self):
+        if self.action == 'observe-writers': return self.observe_writers()
+        if self.action == 'resume-writers': return self.resume_writers()
+        if self.action == 'resume-readiness-writers': return self.resume_writers(readiness=True)
         if self.action == 'initialize-isolated': return self.initialize_isolated()
         if self.action == 'install-floor-commit': return self.install_floor_commit()
         if self.action == 'install-receiver-preflight': return self.install_receiver_preflight()

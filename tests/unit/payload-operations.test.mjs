@@ -14,6 +14,13 @@ set -euo pipefail
 FIXTURE="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 printf '%s\\n' "$*" >> "$FIXTURE/calls"
 if [[ $1 == ps ]]; then cat "$FIXTURE/running"; exit 0; fi
+if [[ $1 == start ]]; then
+  printf 'docker:start %s\\n' "$2" >> "$FIXTURE/timeline"
+  service=nginx
+  case \${2:0:1} in 2) service=api;; 3) service=cron;; 4) service=cms;; esac
+  printf '%s\\n' "$service" >> "$FIXTURE/running"
+  exit 0
+fi
 [[ $1 == compose ]] || exit 90
 shift
 while (($#)); do
@@ -28,7 +35,7 @@ case $cmd in
       printf 'unsafe_required_owner\\nprivate-cleanup-output\\n' >&2; exit 46
     fi
     printf 'postgres\\ncms-postgres\\n' > "$FIXTURE/running";;
- start) printf '%s\\n' "$@" >> "$FIXTURE/running";;
+  start) printf 'private missing cms-migrate dependency\\n' >&2; exit 1;;
  up) printf 'postgres\\ncms-postgres\\nnginx\\napi\\ncms\\n' > "$FIXTURE/running";;
  exec|run)
     if [[ $cmd == run && " $* " == *' migrate '* ]]; then
@@ -52,9 +59,17 @@ printf '%s\\n' "$1" >> "$FIXTURE/guard.calls"
 printf 'guard:%s\\n' "$1" >> "$FIXTURE/timeline"
 if [[ \${FAIL_GUARD:-} == "$1" ]]; then
   if [[ -n \${FAIL_GUARD_STDERR:-} ]]; then printf '%s\\n' "$FAIL_GUARD_STDERR" >&2; fi
-  exit 42
+  exit "\${FAIL_GUARD_EXIT:-42}"
 fi
 case $1 in
+  observe-writers) printf 'synthetic signed-ticket double\\n';;
+  resume-writers|resume-readiness-writers)
+    [[ $3 == 'synthetic signed-ticket double' ]] || exit 94
+    for digit in 1 2 3 4; do
+      [[ $1 != resume-readiness-writers || $digit != 3 ]] || continue
+      identity=$(printf '%064d' 0 | tr 0 "$digit")
+      docker start "$identity" >/dev/null
+    done;;
   close-admission) printf 'closed\\n' > "$FIXTURE/admission";;
   open-admission) printf 'open\\n' > "$FIXTURE/admission";;
   release-preflight|restore-preflight) ! grep -qx 'cms-worker' "$FIXTURE/running";;
@@ -144,7 +159,9 @@ test('coordinated backup stops live Portal/CMS writers while the worker stays he
   assert.match(calls, /--entrypoint tar api -czf - -C \/app\/uploads \./);
   assert.equal((await readFile(path.join(backup, 'manifest.sha256'), 'utf8')).trim().split('\n').length, 7);
   assert.deepEqual((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n'),
-    ['release-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata', 'verify-release', 'open-admission']);
+    ['release-preflight', 'observe-writers', 'close-admission', 'quiescence-proof', 'backup-metadata', 'resume-writers', 'verify-release', 'open-admission']);
+  assert.doesNotMatch(calls, /compose[^\n]* start /u, 'Compose start would traverse the absent one-shot dependency in this regression');
+  for (const digit of ['1', '2', '3', '4']) assert.ok(calls.includes(`start ${digit.repeat(64)}`));
   assert.equal((await readFile(path.join(f.root, 'lock.calls'), 'utf8')).trim(), 'lock');
 });
 
@@ -156,6 +173,59 @@ test('backup preflight rejects an already-running CMS worker before capture', as
   assert.match(await readFile(path.join(f.root, 'guard.calls'), 'utf8'), /^release-preflight\n/u);
   assert.doesNotMatch(await readFile(path.join(f.root, 'calls'), 'utf8').catch(() => ''), /pg_dump|start|up/);
   assert.match(await readFile(path.join(f.root, 'running'), 'utf8'), /^cms-worker$/mu);
+});
+
+test('actual coordinated capture retains its proof and primary resume reason without opening admission or leaking tool output', async t => {
+  for (const stderr of ['writer_start_command_failed', 'private-unknown-Docker-output']) {
+    const f = await fixture(t);
+    const result = f.run('bash release/scripts/backup.sh "$PWD/release"', { FAIL_GUARD: 'resume-writers', FAIL_GUARD_STDERR: stderr });
+    assert.equal(result.status, 42);
+    const diagnostic = createCommandDiagnostic({ substep: 'payload_coordinator_backup', status: result.status,
+      stderr: result.stderr, coordinatorCommandContext: 'payload-coordinator:backup' });
+    assert.equal(diagnostic.coordinatorStep, 'resume_writers');
+    assert.equal(diagnostic.controlErrorIdentifier, stderr === 'writer_start_command_failed' ? stderr : null);
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private-unknown/u);
+    assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'closed');
+    assert.doesNotMatch(await readFile(path.join(f.root, 'guard.calls'), 'utf8'), /open-admission|verify-release/u);
+    const [backup] = await readdir(path.join(f.root, 'backups'));
+    assert.ok((await readdir(path.join(f.root, 'backups', backup))).includes('operations-proof.json'));
+  }
+});
+
+test('actual Bash observe-writers failure keeps the parent progress/failure step and attributes only exact finite reasons before effects', async t => {
+  for (const stderr of [
+    'writer_coordinator_scope_invalid', 'writer_inspect_command_failed',
+    'private-observation-error', 'writer_inspect_command_failed\nprivate-observation-detail',
+  ]) {
+    const f = await fixture(t);
+    const runningBefore = await readFile(path.join(f.root, 'running'), 'utf8');
+    const result = f.run('bash release/scripts/backup.sh "$PWD/release"', {
+      FAIL_GUARD: 'observe-writers', FAIL_GUARD_EXIT: '2', FAIL_GUARD_STDERR: stderr,
+    });
+    assert.equal(result.status, 2);
+    const progress = [...result.stderr.matchAll(/^PAYLOAD_COORDINATOR_STEP step=([^\r\n]+)$/gmu)].map(match => match[1]);
+    const failures = [...result.stderr.matchAll(/^PAYLOAD_COORDINATOR_FAILURE step=([^ ]+) status=([0-9]+)$/gmu)];
+    assert.equal(progress.at(-1), 'guard_observe_writers');
+    assert.equal(failures.length, 1, 'one primary EXIT frame, not an inherited subshell failure');
+    assert.equal(failures[0][1], progress.at(-1), 'the real parent EXIT must match the last emitted progress marker');
+    assert.equal(failures[0][2], '2');
+    assert.equal(progress.filter(step => step === 'guard_observe_writers').length, 1,
+      'observation progress is emitted once in the parent, never duplicated inside stdout capture');
+    const diagnostic = createCommandDiagnostic({ substep: 'payload_coordinator_backup', status: result.status,
+      stderr: result.stderr, coordinatorCommandContext: 'payload-coordinator:backup' });
+    assert.equal(diagnostic.coordinatorStep, 'guard_observe_writers');
+    assert.equal(diagnostic.controlErrorIdentifier,
+      ['writer_coordinator_scope_invalid', 'writer_inspect_command_failed'].includes(stderr) ? stderr : null);
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private-observation/u);
+    assert.equal(result.stdout, '', 'observation never leaks a ticket or failure body to coordinator stdout');
+    assert.deepEqual((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n'),
+      ['release-preflight', 'observe-writers']);
+    assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'open');
+    assert.equal(await readFile(path.join(f.root, 'running'), 'utf8'), runningBefore);
+    assert.deepEqual(await readdir(path.join(f.root, 'backups')), []);
+    assert.deepEqual(await readdir(path.join(f.root, 'protection')), []);
+    assert.doesNotMatch(await readFile(path.join(f.root, 'calls'), 'utf8'), /(?:\bstop\b|\bstart\b|\bup\b|\bexec\b|\brun\b|pg_dump|pg_restore)/u);
+  }
 });
 
 test('failed quiescence cannot produce a dump or reopen admission', async t => {
@@ -207,15 +277,16 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.match(calls, /--entrypoint tar api -xzf - -C \/app\/uploads/);
   const guardCalls = (await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n');
   assert.deepEqual(guardCalls, [
-    'restore-preflight', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore',
+    'restore-preflight', 'observe-writers', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore',
     'portal-restore-intermediate', 'prepare-restore', 'prepare-restore', 'prepare-restore',
     'prepare-restore', 'prepare-restore', 'prepare-restore', 'prepare-restore',
-    'verify-restored', 'verify-release', 'open-admission',
+    'verify-restored', 'resume-readiness-writers', 'resume-writers', 'verify-release', 'open-admission',
   ]);
   const timeline = (await readFile(path.join(f.root, 'timeline'), 'utf8')).trim().split('\n');
   const at = entry => timeline.findIndex(value => value === entry);
-  assert.ok(at('guard:verify-restored') < at('docker:up -d --no-deps api cms nginx'));
-  assert.ok(at('docker:start nginx api cron cms') < at('guard:verify-release'));
+  assert.ok(at('guard:verify-restored') < at('guard:resume-readiness-writers'));
+  assert.ok(at('guard:resume-writers') < at('guard:verify-release'));
+  assert.doesNotMatch(calls, /compose[^\n]*(?: start | up )/u);
   assert.ok(at('guard:verify-release') < at('guard:open-admission'));
   assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'open');
   assert.equal((await readFile(path.join(f.root, 'smoke.calls'), 'utf8')).trim(), 'smoke');

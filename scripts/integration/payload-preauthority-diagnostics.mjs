@@ -124,6 +124,8 @@ unsupported_portal_grant_mode unsupported_proof_authority unsupported_proof_kind
 unsupported_proof_shape unsupported_protocol_present_or_mixed unsupported_protocol_state unsupported_release_format
 unsupported_state_phase worker_admission_forbidden writers_not_quiescent
 admission_state_not_closed admission_state_not_open
+writer_coordinator_scope_invalid writer_resume_floor_invalid writer_inspect_command_failed writer_inspect_response_invalid
+writer_identity_mismatch writer_state_invalid writer_ticket_invalid writer_start_command_failed writer_health_invalid writer_readiness_timeout
 `.trim().split(/\s+/u));
 const controlAdapterMessages = new Map([
   ['Invalid Payload control invocation.', 'control_invocation_invalid'],
@@ -143,6 +145,7 @@ const coordinatorGuardSteps = new Set(`
 guard_release_preflight guard_close_admission guard_quiescence_proof guard_backup_metadata
 guard_verify_release guard_open_admission guard_restore_preflight guard_portal_restore_intermediate
 guard_verify_restored guard_prepare_restore_portal guard_prepare_restore_cms
+guard_observe_writers resume_writers restore_start_readiness
 guard_prepare_restore_api_clear guard_prepare_restore_api_extract
 guard_prepare_restore_cms_clear guard_prepare_restore_cms_extract guard_prepare_restore_cms_migrate
 `.trim().split(/\s+/u));
