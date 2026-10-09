@@ -257,14 +257,20 @@ marcadas e configuradas com `VERBOSITY=sqlstate`; apenas a linha completa `ERROR
 <código conhecido>` em maiúsculas é aceita. Nos contextos explícitos `release-preflight` e
 `verify-release`, o adapter Python emite o motivo fixo como uma linha simples em
 stderr; runtime, state e inventário são limitados a uma allowlist finita de códigos.
-Quando `cms-preauthority-verify` rejeita o catálogo, uma segunda linha estruturada
-preserva somente stage, motivo enumerado e SQLSTATE validado; o relatório de
-recuperação mantém esses campos sob `nativeCatalogVerifier`. Falha de execução sem
-essa linha e falha de inicialização local do Compose recebem identificadores/stages
-distintos da rejeição do catálogo. Mensagens fixas do guard são mapeadas apenas no
-contexto próprio e em correspondência da linha inteira. Códigos desconhecidos, linhas
-com texto adicional e stderr fora desses contextos não viram identificadores; conteúdo
-bruto permanece somente no arquivo privado do fixture.
+Quando `cms-preauthority-verify` rejeita o catálogo, uma linha estruturada preserva
+somente stage, motivo enumerado e SQLSTATE validado. Uma segunda linha opcional para
+mismatch de constraints preserva categoria enumerada, identidade escolhida apenas do
+inventário esperado da release candidata já validada pelo adapter (manifesto protegido
+e arquivos regulares, sem symlink/hardlink e com owner protegido); não consulta o
+checkout do controller nem aceita um caminho arbitrário por variável de ambiente.
+Contagens e SHA-256
+das definições são preservados; SQL e nomes observados não são impressos. O relatório de recuperação mantém esse resumo sob
+`nativeCatalogVerifier.constraintMismatch`. Falha de execução sem essa linha e falha
+de inicialização local do Compose recebem identificadores/stages distintos da rejeição
+do catálogo. Mensagens fixas do guard são mapeadas apenas no contexto próprio e em
+correspondência da linha inteira. Códigos desconhecidos, linhas com texto adicional e
+stderr fora desses contextos não viram identificadores; conteúdo bruto permanece
+somente no arquivo privado do fixture.
 
 A parada de `api`, `cron` e `cms` mantém `docker compose stop --timeout 120` por
 writer. O deadline do subprocesso agora cobre o pior caso serial de todos os

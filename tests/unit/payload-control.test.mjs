@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
+import { createCommandDiagnostic } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
+import { createRecoveryFailureReportFields } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
 
 const pythonCandidates = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
 const python = pythonCandidates.find(command => spawnSync(command, ['--version'], { encoding: 'utf8' }).status === 0);
@@ -38,8 +40,12 @@ def expect(code, callback):
 
 assert R._parse_native_catalog_diagnostic(
     'docker compose progress\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
-    'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n') == {
-        'stage': 'native_constraints', 'reason': 'preauthority_native_constraint_inventory_mismatch', 'sqlstate': None}
+    'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n'
+    'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=check_definition table=news_migration_runs '
+    'constraint=news_migration_runs_manifest_sha256_check expectedCount=119 observedCount=119 '
+    + 'expectedSha256=' + 'a' * 64 + ' observedSha256=' + 'b' * 64 + '\n') == {
+        'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}, \
+    'a constraint identity is not accepted without the validated release path'
 assert R._parse_native_catalog_diagnostic(
     'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=postgres_error sqlstate=42703\n') == {
         'stage': 'native_columns', 'reason': 'postgres_error', 'sqlstate': '42703'}
@@ -55,6 +61,10 @@ for private_or_invalid in [
     'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=postgres_error sqlstate=secret\n',
     'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=private_path reason=postgres_error sqlstate=42703\n',
     'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=unknown sqlstate=none\n',
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
+    'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n'
+    'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=check_definition table=fixture_table constraint=fixture_check '
+    'expectedCount=119 observedCount=119 expectedSha256=' + 'a' * 64 + ' observedSha256=' + 'b' * 64 + '\n',
 ]:
     assert R._parse_native_catalog_diagnostic(private_or_invalid) == {
         'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
@@ -77,7 +87,7 @@ try:
             'stage': 'native_constraints', 'reason': 'preauthority_native_constraint_inventory_mismatch', 'sqlstate': None}
         sink, sys.stderr = sys.stderr, io.StringIO()
         try:
-            R._emit_control_error(error)
+            R._emit_control_error(error, 'fixture-release')
             assert sys.stderr.getvalue() == (
                 'native_catalog_verification_failed\n'
                 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
@@ -97,7 +107,7 @@ try:
         assert error.native_catalog_diagnostic['reason'] == 'process_exit_without_diagnostic'
         sink, sys.stderr = sys.stderr, io.StringIO()
         try:
-            R._emit_control_error(error)
+            R._emit_control_error(error, 'fixture-release')
             assert 'private://user:secret@database' not in sys.stderr.getvalue()
         finally:
             sys.stderr = sink
@@ -438,4 +448,138 @@ finally:
   const result = spawnSync(python, ['-c', script, path.resolve('ops/payload-control-state.py'),
     path.resolve('ops/payload-control-runtime.py'), fixture], { encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+});
+
+test('relocated runtime loads only finite constraint identities from the validated candidate release through report emission', async t => {
+  if (!python) return t.skip('Python 3 unavailable; production controller requires Python 3');
+  const tempRoot = process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : tmpdir();
+  const fixture = await mkdtemp(path.join(tempRoot, 'payload-relocated-runtime-'));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+
+  const runtimeDirectory = path.join(fixture, 'runtime');
+  const release = path.join(fixture, 'releases', 'payload-candidate');
+  const cmsDirectory = path.join(release, 'cms');
+  const runtimePath = path.join(runtimeDirectory, 'payload-control-runtime.py');
+  await Promise.all([
+    mkdir(runtimeDirectory, { recursive: true }),
+    mkdir(path.join(cmsDirectory, 'src', 'migrations'), { recursive: true }),
+    mkdir(path.join(cmsDirectory, 'scripts'), { recursive: true }),
+  ]);
+  await Promise.all([
+    cp(path.resolve('ops/payload-control-runtime.py'), runtimePath),
+    cp(path.resolve('ops/payload-control-state.py'), path.join(runtimeDirectory, 'payload-control-state.py')),
+    cp(path.resolve('ops/payload-control-inventory.py'), path.join(runtimeDirectory, 'payload-control-inventory.py')),
+    cp(path.resolve('cms/src/migrations/20261006_181424_z_owner_news_native.json'),
+      path.join(cmsDirectory, 'src', 'migrations', '20261006_181424_z_owner_news_native.json')),
+    cp(path.resolve('cms/scripts/finalize-news-protocol.ts'), path.join(cmsDirectory, 'scripts', 'finalize-news-protocol.ts')),
+    writeFile(path.join(release, '.image-env'), [
+      `API_IMAGE=ghcr.io/ownerinc/ownerinc-portal-api@sha256:${'a'.repeat(64)}`,
+      `CRON_IMAGE=ghcr.io/ownerinc/ownerinc-portal-cron@sha256:${'b'.repeat(64)}`,
+      `CMS_IMAGE=ghcr.io/ownerinc/ownerinc-portal-cms@sha256:${'c'.repeat(64)}`,
+      'RELEASE_FORMAT=payload-v1', '',
+    ].join('\n'), { mode: 0o600 }),
+    writeFile(path.join(release, 'docker-compose.yml'), 'services: {}\n'),
+    writeFile(path.join(release, 'docker-compose.payload.yml'), 'services: {}\n'),
+  ]);
+
+  const script = String.raw`
+import importlib.util, io, json, os, sys, types
+
+runtime_path, release = sys.argv[1:]
+def load(path):
+    spec = importlib.util.spec_from_file_location('payload_control_relocated_runtime', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+R = load(runtime_path)
+releases = os.path.dirname(release)
+R._paths = lambda: {'releases': releases}
+owner_checks = []
+original_safe_regular = R._safe_regular
+def portable_safe_regular(path, mode=None, owner_root=False):
+    if owner_root:
+        owner_checks.append(os.path.realpath(path))
+    # The production call's owner_root=True is asserted below. On non-root CI
+    # hosts the fixture files cannot be chowned, so exercise the same no-link,
+    # regular-file, hardlink and canonical-path guards without the UID branch.
+    enforce_root = owner_root and (os.name == 'nt' or os.geteuid() == 0)
+    return original_safe_regular(path, mode=mode, owner_root=enforce_root)
+R._safe_regular = portable_safe_regular
+R._compose_args = lambda _release: ['docker', 'compose']
+valid_stderr = (
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
+    'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n'
+    'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=check_definition table=news_migration_runs '
+    'constraint=news_migration_runs_manifest_sha256_check expectedCount=119 observedCount=119 '
+    + 'expectedSha256=' + 'a' * 64 + ' observedSha256=' + 'b' * 64 + '\n')
+private_stderr = (
+    'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints '
+    'reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n'
+    'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=check_definition table=news_migration_runs '
+    'constraint=private_customer_email expectedCount=119 observedCount=119 '
+    + 'expectedSha256=' + 'a' * 64 + ' observedSha256=' + 'b' * 64 + '\n')
+def invoke(stderr):
+    R.subprocess.run = lambda *args, **kwargs: types.SimpleNamespace(returncode=2, stdout='', stderr=stderr)
+    try:
+        R._run_catalog_verifier(release)
+    except R.ControlError as error:
+        previous, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            R._emit_control_error(error, release)
+            emitted = sys.stderr.getvalue()
+        finally:
+            sys.stderr = previous
+        return str(error), emitted
+    raise AssertionError('expected verifier failure')
+
+valid_code, valid_emitted = invoke(valid_stderr)
+assert valid_code == 'native_catalog_verification_failed', valid_code
+assert 'constraint=news_migration_runs_manifest_sha256_check' in valid_emitted
+private_code, private_emitted = invoke(private_stderr)
+assert private_code == 'native_catalog_verifier_execution_failed', private_code
+assert 'private_customer_email' not in private_emitted
+assert 'reason=invalid_verifier_diagnostic' in private_emitted
+assert not os.path.exists(os.path.join(os.path.dirname(runtime_path), 'cms'))
+for protected in (os.path.join(release, '.image-env'),
+                  os.path.join(release, 'cms', 'src', 'migrations', '20261006_181424_z_owner_news_native.json'),
+                  os.path.join(release, 'cms', 'scripts', 'finalize-news-protocol.ts')):
+    assert os.path.realpath(protected) in owner_checks, protected
+print(json.dumps({'validEmitted': valid_emitted, 'privateEmitted': private_emitted}))
+`;
+  const result = spawnSync(python, ['-B', '-c', script, runtimePath, release], {
+    encoding: 'utf8', timeout: 15000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+  });
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  const emitted = JSON.parse(result.stdout);
+  const validReport = createCommandDiagnostic({
+    substep: 'payload_control_verify_release', status: 2,
+    stderr: emitted.validEmitted, controlCommandContext: 'payload-control:verify-release', release,
+  });
+  assert.equal(validReport.controlErrorIdentifier, 'native_catalog_verification_failed');
+  assert.deepEqual(validReport.nativeCatalogVerifier?.constraintMismatch, {
+    category: 'check_definition', table: 'news_migration_runs',
+    constraint: 'news_migration_runs_manifest_sha256_check', expectedCount: 119, observedCount: 119,
+    expectedDefinitionSha256: 'a'.repeat(64), observedDefinitionSha256: 'b'.repeat(64),
+  });
+  const fixtureReport = createRecoveryFailureReportFields({
+    primaryError: { code: 'native_catalog_verification_failed', diagnostic: validReport },
+    primarySubstep: 'payload_control_verify_release',
+  });
+  assert.deepEqual(fixtureReport.commandDiagnostic.nativeCatalogVerifier.constraintMismatch,
+    validReport.nativeCatalogVerifier.constraintMismatch,
+    'the release-authorized constraint identity survives final fixture-report sanitization');
+  const privateReport = createCommandDiagnostic({
+    substep: 'payload_control_verify_release', status: 2,
+    stderr: emitted.privateEmitted, controlCommandContext: 'payload-control:verify-release', release,
+  });
+  assert.equal(privateReport.controlErrorIdentifier, 'native_catalog_verifier_execution_failed');
+  assert.equal(privateReport.nativeCatalogVerifier?.reason, 'invalid_verifier_diagnostic');
+  assert.doesNotMatch(JSON.stringify(privateReport), /private_customer_email/u);
+  const privateFixtureReport = createRecoveryFailureReportFields({
+    primaryError: { code: 'native_catalog_verifier_execution_failed', diagnostic: privateReport },
+    primarySubstep: 'payload_control_verify_release',
+  });
+  assert.doesNotMatch(JSON.stringify(privateFixtureReport), /private_customer_email/u);
 });

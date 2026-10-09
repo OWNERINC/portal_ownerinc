@@ -90,34 +90,160 @@ preauthority_native_constraint_inventory_mismatch preauthority_native_type_inven
 process_exit_without_diagnostic invalid_verifier_diagnostic executable_not_found permission_denied
 process_launch_failed
 '''.split())
+NATIVE_CONSTRAINT_DIAGNOSTIC_CATEGORIES = set('''
+missing_expected unexpected_observed constraint_identity constraint_metadata
+check_definition check_definition_parse primary_key_definition foreign_key_definition
+'''.split())
 NATIVE_CATALOG_DIAGNOSTIC_PREFIX = 'PREAUTHORITY_CATALOG_DIAGNOSTIC '
+NATIVE_CONSTRAINT_DIAGNOSTIC_PREFIX = 'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC '
+NATIVE_DIAGNOSTIC_IDENTIFIER = re.compile(r'[a-z_][a-z0-9_]{0,62}')
+NATIVE_DIAGNOSTIC_SHA256 = re.compile(r'[0-9a-f]{64}')
+def _expected_native_constraint_identities(release):
+    try:
+        # Bind diagnostic identifiers to the already-selected Payload release,
+        # not to the controller checkout: installed controllers live under
+        # fixture/runtime while candidate source lives under releases/<name>/cms.
+        _release(release, payload=True, owner_root=True)
+        schema_path = os.path.join(release, 'cms', 'src', 'migrations', '20261006_181424_z_owner_news_native.json')
+        verifier_path = os.path.join(release, 'cms', 'scripts', 'finalize-news-protocol.ts')
+        schema = _strict_json(_read_bytes(schema_path, owner_root=True), 'invalid_verifier_diagnostic')
+        verifier = _read_bytes(verifier_path, owner_root=True).decode('utf-8')
+        checks_block = re.search(r'const NATIVE_REQUIRED_CONSTRAINTS = \[(.*?)\] as const', verifier, re.S)
+        if checks_block is None:
+            return set()
+        check_names = re.findall(r"'([a-z_][a-z0-9_]*)'", checks_block.group(1))
+        tables = schema.get('tables')
+        if not isinstance(tables, dict) or not check_names or len(check_names) != len(set(check_names)):
+            return set()
+        identities = set()
+        table_names = []
+        for table in tables.values():
+            if not isinstance(table, dict) or not isinstance(table.get('name'), str):
+                return set()
+            table_name = table['name']
+            if table_name.startswith('public.'):
+                table_name = table_name[len('public.'):]
+            table_names.append(table_name)
+            columns = table.get('columns')
+            foreign_keys = table.get('foreignKeys')
+            if not isinstance(columns, dict) or not isinstance(foreign_keys, dict):
+                return set()
+            if any(isinstance(column, dict) and column.get('primaryKey') is True for column in columns.values()):
+                identities.add((table_name, table_name + '_pkey'))
+            for foreign_key in foreign_keys.values():
+                if not isinstance(foreign_key, dict) or not isinstance(foreign_key.get('name'), str):
+                    return set()
+                identities.add((table_name, foreign_key['name']))
+        for name in check_names:
+            if name == 'news_migration_seal_complete':
+                table_name = 'news_migration_runs'
+            else:
+                matches = [table for table in table_names
+                           if name.startswith(table + '_') or name == table + '_metadata_basis_check']
+                if not matches:
+                    return set()
+                table_name = max(matches, key=len)
+            identities.add((table_name, name))
+        return identities
+    except (ControlError, OSError, UnicodeDecodeError, ValueError, TypeError, KeyError):
+        return set()
 
 
-def _parse_native_catalog_diagnostic(stderr):
+def _safe_native_constraint_mismatch(value, release=None):
+    if not isinstance(value, dict):
+        return None
+    category = value.get('category')
+    table = value.get('table')
+    constraint = value.get('constraint')
+    expected_count = value.get('expectedCount')
+    observed_count = value.get('observedCount')
+    expected_hash = value.get('expectedDefinitionSha256')
+    observed_hash = value.get('observedDefinitionSha256')
+    if not isinstance(category, str) or category not in NATIVE_CONSTRAINT_DIAGNOSTIC_CATEGORIES:
+        return None
+    if not ((table is None and constraint is None)
+            or (isinstance(table, str) and NATIVE_DIAGNOSTIC_IDENTIFIER.fullmatch(table)
+                and isinstance(constraint, str) and NATIVE_DIAGNOSTIC_IDENTIFIER.fullmatch(constraint)
+                and release is not None
+                and (table, constraint) in _expected_native_constraint_identities(release))):
+        return None
+    if not all(isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= 1_000_000
+               for count in (expected_count, observed_count)):
+        return None
+    if any(value is not None and (not isinstance(value, str) or not NATIVE_DIAGNOSTIC_SHA256.fullmatch(value))
+           for value in (expected_hash, observed_hash)):
+        return None
+    return {
+        'category': category, 'table': table, 'constraint': constraint,
+        'expectedCount': expected_count, 'observedCount': observed_count,
+        'expectedDefinitionSha256': expected_hash, 'observedDefinitionSha256': observed_hash,
+    }
+
+
+def _format_native_constraint_mismatch(diagnostic, release):
+    detail = _safe_native_constraint_mismatch(diagnostic, release=release)
+    if detail is None:
+        return None
+    return (
+        f"{NATIVE_CONSTRAINT_DIAGNOSTIC_PREFIX}category={detail['category']} "
+        f"table={detail['table'] or 'none'} constraint={detail['constraint'] or 'none'} "
+        f"expectedCount={detail['expectedCount']} observedCount={detail['observedCount']} "
+        f"expectedSha256={detail['expectedDefinitionSha256'] or 'none'} "
+        f"observedSha256={detail['observedDefinitionSha256'] or 'none'}"
+    )
+
+
+def _parse_native_catalog_diagnostic(stderr, release=None):
     if isinstance(stderr, bytes):
         stderr = stderr.decode('utf-8', errors='replace')
     if not isinstance(stderr, str):
         return None
     candidates = [line for line in stderr.splitlines() if line.startswith(NATIVE_CATALOG_DIAGNOSTIC_PREFIX)]
+    constraint_candidates = [line for line in stderr.splitlines() if line.startswith(NATIVE_CONSTRAINT_DIAGNOSTIC_PREFIX)]
+    invalid = {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
     if not candidates:
-        return None
-    if len(candidates) != 1:
-        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+        return invalid if constraint_candidates else None
+    if len(candidates) != 1 or len(constraint_candidates) > 1:
+        return invalid
     match = re.fullmatch(
         r'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=([a-z_]+) reason=([a-z][a-z0-9_]{0,63}) sqlstate=(none|[0-9A-Z]{5})',
         candidates[0],
     )
     if not match:
-        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+        return invalid
     stage, reason, sqlstate = match.groups()
     if stage not in NATIVE_CATALOG_DIAGNOSTIC_STAGES or reason not in NATIVE_CATALOG_DIAGNOSTIC_REASONS:
-        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
+        return invalid
     if (reason == 'postgres_error') != (sqlstate != 'none'):
-        return {'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None}
-    return {'stage': stage, 'reason': reason, 'sqlstate': None if sqlstate == 'none' else sqlstate}
+        return invalid
+    result = {'stage': stage, 'reason': reason, 'sqlstate': None if sqlstate == 'none' else sqlstate}
+    if constraint_candidates:
+        if stage != 'native_constraints' or reason != 'preauthority_native_constraint_inventory_mismatch' or release is None:
+            return invalid
+        constraint_match = re.fullmatch(
+            r'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=([a-z_]+) '
+            r'table=([a-z_][a-z0-9_]{0,62}|none) constraint=([a-z_][a-z0-9_]{0,62}|none) '
+            r'expectedCount=(0|[1-9][0-9]{0,6}) observedCount=(0|[1-9][0-9]{0,6}) '
+            r'expectedSha256=(none|[0-9a-f]{64}) observedSha256=(none|[0-9a-f]{64})',
+            constraint_candidates[0],
+        )
+        if not constraint_match:
+            return invalid
+        category, table, constraint, expected_count, observed_count, expected_hash, observed_hash = constraint_match.groups()
+        detail = _safe_native_constraint_mismatch({
+            'category': category, 'table': None if table == 'none' else table,
+            'constraint': None if constraint == 'none' else constraint,
+            'expectedCount': int(expected_count), 'observedCount': int(observed_count),
+            'expectedDefinitionSha256': None if expected_hash == 'none' else expected_hash,
+            'observedDefinitionSha256': None if observed_hash == 'none' else observed_hash,
+        }, release=release)
+        if detail is None or ((table == 'none') != (constraint == 'none')):
+            return invalid
+        result['constraintMismatch'] = detail
+    return result
 
 
-def _emit_control_error(error):
+def _emit_control_error(error, release):
     print(str(error), file=sys.stderr)
     diagnostic = getattr(error, 'native_catalog_diagnostic', None)
     if not isinstance(diagnostic, dict):
@@ -132,6 +258,10 @@ def _emit_control_error(error):
     if (reason == 'postgres_error') != (sqlstate is not None):
         return
     print(f'{NATIVE_CATALOG_DIAGNOSTIC_PREFIX}stage={stage} reason={reason} sqlstate={sqlstate or "none"}', file=sys.stderr)
+    if reason == 'preauthority_native_constraint_inventory_mismatch':
+        constraint_line = _format_native_constraint_mismatch(diagnostic.get('constraintMismatch'), release)
+        if constraint_line:
+            print(constraint_line, file=sys.stderr)
 
 
 def _inventory(force=False):
@@ -221,8 +351,8 @@ def _strict_json(raw, code):
     return value
 
 
-def _manifest(path):
-    raw = _read_bytes(path)
+def _manifest(path, owner_root=False):
+    raw = _read_bytes(path, owner_root=owner_root)
     try:
         lines = raw.decode('ascii').splitlines()
     except UnicodeDecodeError:
@@ -251,7 +381,7 @@ def _manifest(path):
     return images, payload
 
 
-def _release(path, payload=None):
+def _release(path, payload=None, owner_root=False):
     if not isinstance(path, str) or not os.path.isabs(path) or os.path.realpath(path) != path:
         fail('invalid_release_path')
     if os.path.dirname(path) != _paths()['releases']:
@@ -262,7 +392,7 @@ def _release(path, payload=None):
         fail('invalid_release_path')
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         fail('invalid_release_path')
-    images, actual_payload = _manifest(os.path.join(path, '.image-env'))
+    images, actual_payload = _manifest(os.path.join(path, '.image-env'), owner_root=owner_root)
     if payload is not None and actual_payload is not payload:
         fail('unsupported_release_format')
     if actual_payload:
@@ -896,13 +1026,13 @@ def _run_catalog_verifier(release):
             'stage': 'process', 'reason': 'process_exit_without_diagnostic', 'sqlstate': None,
         })
     if result.returncode != 0:
-        diagnostic = _parse_native_catalog_diagnostic(result.stderr)
+        diagnostic = _parse_native_catalog_diagnostic(result.stderr, release)
         if diagnostic and diagnostic['stage'] != 'process':
             fail('native_catalog_verification_failed', diagnostic)
         fail('native_catalog_verifier_execution_failed', diagnostic or {
             'stage': 'process', 'reason': 'process_exit_without_diagnostic', 'sqlstate': None,
         })
-    if _parse_native_catalog_diagnostic(result.stderr):
+    if _parse_native_catalog_diagnostic(result.stderr, release):
         fail('native_catalog_verifier_execution_failed', {
             'stage': 'process', 'reason': 'invalid_verifier_diagnostic', 'sqlstate': None,
         })
@@ -1539,7 +1669,7 @@ def main(argv):
             os.environ['HOME'] = '/root'
         Runtime(action, release, evidence).run()
     except (ControlError, STATE.StateError) as error:
-        _emit_control_error(error)
+        _emit_control_error(error, release)
         return 2
     except Exception:
         print('Payload control failed closed.', file=sys.stderr)

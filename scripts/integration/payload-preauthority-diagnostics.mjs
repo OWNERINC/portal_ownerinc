@@ -1,3 +1,8 @@
+import {
+  closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, realpathSync,
+} from 'node:fs';
+import path from 'node:path';
+
 const safeSubstepPattern = /^[a-z][a-z0-9_]{0,63}$/u;
 
 const sqlStateIdentifiers = Object.freeze({
@@ -137,6 +142,94 @@ const nativeCatalogVerifierControlErrors = new Set([
   'native_catalog_verifier_launch_failed',
   'native_catalog_verifier_execution_failed',
 ]);
+const nativeConstraintMismatchCategories = new Set(`
+missing_expected unexpected_observed constraint_identity constraint_metadata
+check_definition check_definition_parse primary_key_definition foreign_key_definition
+`.trim().split(/\s+/u));
+const nativeDiagnosticIdentifierPattern = /^[a-z_][a-z0-9_]{0,62}$/u;
+const nativeDiagnosticSha256Pattern = /^[0-9a-f]{64}$/u;
+const authorizedNativeConstraintMismatches = new WeakSet();
+function readCandidateReleaseFile(release, relativePath, expectedOwner) {
+  if (typeof release !== 'string' || !path.isAbsolute(release) || path.resolve(release) !== release
+    || realpathSync(release) !== release) throw new Error('invalid candidate release path');
+  const releaseInfo = lstatSync(release);
+  if (!releaseInfo.isDirectory() || releaseInfo.isSymbolicLink()) throw new Error('invalid candidate release directory');
+  const file = path.join(release, relativePath);
+  const before = lstatSync(file);
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || realpathSync(file) !== file
+    || (expectedOwner !== undefined && before.uid !== expectedOwner)) {
+    throw new Error('invalid candidate release file');
+  }
+  const descriptor = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0));
+  try {
+    const after = fstatSync(descriptor);
+    if (!after.isFile() || after.nlink !== 1 || before.dev !== after.dev || before.ino !== after.ino) {
+      throw new Error('candidate release file changed');
+    }
+    return readFileSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function nativeConstraintIdentitiesFromRelease(release) {
+  const manifestBytes = readCandidateReleaseFile(release, '.image-env');
+  const manifestOwner = lstatSync(path.join(release, '.image-env')).uid;
+  if ([...manifestBytes].some(byte => byte > 0x7f)) throw new Error('invalid release manifest encoding');
+  const manifestLines = manifestBytes.toString('ascii').split(/\r?\n/u);
+  if (manifestLines.at(-1) === '') manifestLines.pop();
+  const manifest = new Map();
+  for (const line of manifestLines) {
+    const separator = line.indexOf('=');
+    if (separator < 1 || separator !== line.lastIndexOf('=')) throw new Error('invalid release manifest');
+    const key = line.slice(0, separator);
+    if (manifest.has(key)) throw new Error('duplicate release manifest key');
+    manifest.set(key, line.slice(separator + 1));
+  }
+  if (manifest.size !== 4 || manifest.get('RELEASE_FORMAT') !== 'payload-v1'
+    || !/^ghcr\.io\/ownerinc\/ownerinc-portal-api@sha256:[0-9a-f]{64}$/u.test(manifest.get('API_IMAGE') || '')
+    || !/^ghcr\.io\/ownerinc\/ownerinc-portal-cron@sha256:[0-9a-f]{64}$/u.test(manifest.get('CRON_IMAGE') || '')
+    || !/^ghcr\.io\/ownerinc\/ownerinc-portal-cms@sha256:[0-9a-f]{64}$/u.test(manifest.get('CMS_IMAGE') || '')) {
+    throw new Error('unvalidated payload release manifest');
+  }
+  const schema = JSON.parse(readCandidateReleaseFile(
+    release, 'cms/src/migrations/20261006_181424_z_owner_news_native.json', manifestOwner,
+  ).toString('utf8'));
+  const verifier = readCandidateReleaseFile(release, 'cms/scripts/finalize-news-protocol.ts', manifestOwner).toString('utf8');
+  const checksBlock = verifier.match(/const NATIVE_REQUIRED_CONSTRAINTS = \[(.*?)\] as const/su)?.[1];
+  const checks = checksBlock ? [...checksBlock.matchAll(/'([a-z_][a-z0-9_]*)'/gu)].map(match => match[1]) : [];
+  const tables = Object.values(schema.tables || {});
+  if (!checks.length || new Set(checks).size !== checks.length || !tables.length) throw new Error('native diagnostic allowlist unavailable');
+  const identities = new Set();
+  const tableNames = [];
+  for (const item of tables) {
+    if (!item || typeof item.name !== 'string' || !item.columns || !item.foreignKeys) throw new Error('invalid native snapshot');
+    const tableName = item.name.replace(/^public\./u, '');
+    tableNames.push(tableName);
+    if (Object.values(item.columns).some(column => column?.primaryKey === true)) {
+      identities.add(`${tableName}\u0000${tableName}_pkey`);
+    }
+    for (const foreignKey of Object.values(item.foreignKeys)) {
+      if (typeof foreignKey?.name !== 'string') throw new Error('invalid native foreign key');
+      identities.add(`${tableName}\u0000${foreignKey.name}`);
+    }
+  }
+  for (const name of checks) {
+    const matches = name === 'news_migration_seal_complete' ? ['news_migration_runs']
+      : tableNames.filter(candidate => name.startsWith(`${candidate}_`) || name === `${candidate}_metadata_basis_check`);
+    if (!matches.length) throw new Error('native CHECK table unavailable');
+    identities.add(`${matches.sort((left, right) => right.length - left.length)[0]}\u0000${name}`);
+  }
+  return identities;
+}
+
+function nativeConstraintIdentityIsExpected(release, table, constraint) {
+  try {
+    return nativeConstraintIdentitiesFromRelease(release).has(`${table}\u0000${constraint}`);
+  } catch {
+    return false;
+  }
+}
 
 const readinessReasons = new Set([
   'missing', 'exited', 'unhealthy', 'wait_deadline',
@@ -167,31 +260,57 @@ export function extractSqlState(stderr, { sqlCommandContext = false } = {}) {
   return match && Object.hasOwn(sqlStateIdentifiers, match[1]) ? match[1] : null;
 }
 
-export function extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext } = {}) {
+export function extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext, release } = {}) {
   if (!controlCommandContexts.has(controlCommandContext)) return null;
   const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
-  const match = text.match(/^([a-z][a-z0-9_]{0,63})\r?\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=([a-z_]+) reason=([a-z][a-z0-9_]{0,63}) sqlstate=(none|[0-9A-Z]{5})\r?\n$/u);
+  const match = text.match(/^([a-z][a-z0-9_]{0,63})\r?\n(PREAUTHORITY_CATALOG_DIAGNOSTIC stage=([a-z_]+) reason=([a-z][a-z0-9_]{0,63}) sqlstate=(none|[0-9A-Z]{5}))\r?\n(?:([^\r\n]+)\r?\n)?$/u);
   if (!match || !nativeCatalogVerifierControlErrors.has(match[1])) return null;
-  const [, controlErrorIdentifier, stage, reason, rawSqlState] = match;
+  const [, controlErrorIdentifier, , stage, reason, rawSqlState, constraintLine] = match;
   if (!nativeCatalogVerifierStages.has(stage) || !nativeCatalogVerifierReasons.has(reason)) return null;
   const sqlState = rawSqlState === 'none' ? null : rawSqlState;
   if ((reason === 'postgres_error') !== (sqlState !== null)) return null;
+  let constraintMismatch = null;
+  if (constraintLine !== undefined) {
+    if (stage !== 'native_constraints' || reason !== 'preauthority_native_constraint_inventory_mismatch') return null;
+    const detail = constraintLine.match(/^PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=([a-z_]+) table=([a-z_][a-z0-9_]{0,62}|none) constraint=([a-z_][a-z0-9_]{0,62}|none) expectedCount=(0|[1-9][0-9]{0,6}) observedCount=(0|[1-9][0-9]{0,6}) expectedSha256=(none|[0-9a-f]{64}) observedSha256=(none|[0-9a-f]{64})$/u);
+    if (!detail || !nativeConstraintMismatchCategories.has(detail[1])) return null;
+    const [, category, rawTable, rawConstraint, rawExpectedCount, rawObservedCount, rawExpectedHash, rawObservedHash] = detail;
+    const table = rawTable === 'none' ? null : rawTable;
+    const constraint = rawConstraint === 'none' ? null : rawConstraint;
+    const expectedCount = Number(rawExpectedCount);
+    const observedCount = Number(rawObservedCount);
+    const expectedDefinitionSha256 = rawExpectedHash === 'none' ? null : rawExpectedHash;
+    const observedDefinitionSha256 = rawObservedHash === 'none' ? null : rawObservedHash;
+    if ((table === null) !== (constraint === null)
+      || (table !== null && (!nativeDiagnosticIdentifierPattern.test(table) || !nativeDiagnosticIdentifierPattern.test(constraint)
+        || !nativeConstraintIdentityIsExpected(release, table, constraint)))
+      || !Number.isSafeInteger(expectedCount) || expectedCount > 1_000_000
+      || !Number.isSafeInteger(observedCount) || observedCount > 1_000_000
+      || (expectedDefinitionSha256 !== null && !nativeDiagnosticSha256Pattern.test(expectedDefinitionSha256))
+      || (observedDefinitionSha256 !== null && !nativeDiagnosticSha256Pattern.test(observedDefinitionSha256))) return null;
+    constraintMismatch = {
+      category, table, constraint, expectedCount, observedCount,
+      expectedDefinitionSha256, observedDefinitionSha256,
+    };
+    Object.freeze(constraintMismatch);
+    authorizedNativeConstraintMismatches.add(constraintMismatch);
+  }
   if (controlErrorIdentifier === 'native_catalog_verification_failed'
     && (stage === 'process' || stage === 'launch')) return null;
   if (controlErrorIdentifier === 'native_catalog_verifier_launch_failed'
     && (stage !== 'launch' || !['executable_not_found', 'permission_denied', 'process_launch_failed'].includes(reason))) return null;
   if (controlErrorIdentifier === 'native_catalog_verifier_execution_failed'
     && (stage !== 'process' || !['process_exit_without_diagnostic', 'invalid_verifier_diagnostic'].includes(reason))) return null;
-  return { stage, reason, sqlState };
+  return { stage, reason, sqlState, ...(constraintMismatch ? { constraintMismatch } : {}) };
 }
 
-export function extractControlErrorIdentifier(stderr, { controlCommandContext } = {}) {
+export function extractControlErrorIdentifier(stderr, { controlCommandContext, release } = {}) {
   const adapterContext = controlCommandContexts.has(controlCommandContext);
   const guardContext = controlCommandContext === controlGuardContext;
   if (!adapterContext && !guardContext) return null;
 
   const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
-  const nativeDiagnostic = extractNativeCatalogVerifierDiagnostic(text, { controlCommandContext });
+  const nativeDiagnostic = extractNativeCatalogVerifierDiagnostic(text, { controlCommandContext, release });
   if (nativeDiagnostic) {
     const controlCode = text.match(/^([a-z][a-z0-9_]{0,63})\r?\n/u)?.[1];
     return knownControlErrorIdentifiers.has(controlCode) ? controlCode : null;
@@ -211,10 +330,10 @@ export function extractControlErrorIdentifier(stderr, { controlCommandContext } 
 }
 
 export function createCommandDiagnostic({
-  substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext,
+  substep, status, errorCode, stderr, sqlCommandContext = false, controlCommandContext, release,
 }) {
   const sqlState = extractSqlState(stderr, { sqlCommandContext });
-  const nativeCatalogVerifier = extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext });
+  const nativeCatalogVerifier = extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandContext, release });
   return sanitizeCommandDiagnostic({
     substep: safeSubstepPattern.test(substep || '') ? substep : 'unclassified_command',
     commandExitCode: Number.isInteger(status) ? status : null,
@@ -223,18 +342,49 @@ export function createCommandDiagnostic({
       : errorCode ? 'command_process_error' : null,
     sqlState,
     errorIdentifier: sqlState ? sqlStateIdentifiers[sqlState] : null,
-    controlErrorIdentifier: extractControlErrorIdentifier(stderr, { controlCommandContext }),
+    controlErrorIdentifier: extractControlErrorIdentifier(stderr, { controlCommandContext, release }),
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
   });
 }
 
 export function sanitizeCommandDiagnostic(diagnostic = {}) {
   const native = diagnostic.nativeCatalogVerifier;
+  const nativeConstraintMismatch = native?.constraintMismatch;
+  const safeConstraintMismatch = nativeConstraintMismatch && authorizedNativeConstraintMismatches.has(nativeConstraintMismatch)
+    && nativeConstraintMismatchCategories.has(nativeConstraintMismatch.category)
+    && ((nativeConstraintMismatch.table === null && nativeConstraintMismatch.constraint === null)
+      || typeof nativeConstraintMismatch.table === 'string' && nativeDiagnosticIdentifierPattern.test(nativeConstraintMismatch.table)
+        && typeof nativeConstraintMismatch.constraint === 'string' && nativeDiagnosticIdentifierPattern.test(nativeConstraintMismatch.constraint))
+    && Number.isSafeInteger(nativeConstraintMismatch.expectedCount) && nativeConstraintMismatch.expectedCount >= 0
+    && nativeConstraintMismatch.expectedCount <= 1_000_000
+    && Number.isSafeInteger(nativeConstraintMismatch.observedCount) && nativeConstraintMismatch.observedCount >= 0
+    && nativeConstraintMismatch.observedCount <= 1_000_000
+    && (nativeConstraintMismatch.expectedDefinitionSha256 === null
+      || typeof nativeConstraintMismatch.expectedDefinitionSha256 === 'string'
+        && nativeDiagnosticSha256Pattern.test(nativeConstraintMismatch.expectedDefinitionSha256))
+    && (nativeConstraintMismatch.observedDefinitionSha256 === null
+      || typeof nativeConstraintMismatch.observedDefinitionSha256 === 'string'
+        && nativeDiagnosticSha256Pattern.test(nativeConstraintMismatch.observedDefinitionSha256))
+    ? Object.freeze({
+      category: nativeConstraintMismatch.category,
+      table: nativeConstraintMismatch.table,
+      constraint: nativeConstraintMismatch.constraint,
+      expectedCount: nativeConstraintMismatch.expectedCount,
+      observedCount: nativeConstraintMismatch.observedCount,
+      expectedDefinitionSha256: nativeConstraintMismatch.expectedDefinitionSha256,
+      observedDefinitionSha256: nativeConstraintMismatch.observedDefinitionSha256,
+    }) : null;
+  if (safeConstraintMismatch) authorizedNativeConstraintMismatches.add(safeConstraintMismatch);
   const nativeCatalogVerifier = native && nativeCatalogVerifierStages.has(native.stage)
     && nativeCatalogVerifierReasons.has(native.reason)
     && (native.sqlState === null || typeof native.sqlState === 'string' && /^[0-9A-Z]{5}$/u.test(native.sqlState))
     && ((native.reason === 'postgres_error') === (native.sqlState !== null))
-    ? { stage: native.stage, reason: native.reason, sqlState: native.sqlState } : null;
+    && (!safeConstraintMismatch || native.stage === 'native_constraints'
+      && native.reason === 'preauthority_native_constraint_inventory_mismatch')
+    ? {
+      stage: native.stage, reason: native.reason, sqlState: native.sqlState,
+      ...(safeConstraintMismatch ? { constraintMismatch: safeConstraintMismatch } : {}),
+    } : null;
   return {
     substep: safeSubstepPattern.test(diagnostic.substep || '') ? diagnostic.substep : 'unclassified_command',
     commandExitCode: Number.isInteger(diagnostic.commandExitCode) && diagnostic.commandExitCode >= 0 && diagnostic.commandExitCode <= 255

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import {
-  createCommandDiagnostic, extractControlErrorIdentifier, extractNativeCatalogVerifierDiagnostic, extractSqlState,
+  createCommandDiagnostic, extractControlErrorIdentifier, extractNativeCatalogVerifierDiagnostic,
+  extractSqlState, sanitizeCommandDiagnostic,
 } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
 
 const recoveryRunner = await readFile(new URL('../../scripts/test-payload-preauthority-recovery.mjs', import.meta.url), 'utf8');
@@ -140,33 +143,78 @@ test('control errors require a known adapter context, one exact line and an emit
   }
 });
 
-test('native catalog verifier metadata distinguishes rejection, launch failure, and opaque process failure', () => {
+test('native catalog verifier metadata distinguishes rejection, launch failure, and opaque process failure', async t => {
   const context = { controlCommandContext: 'payload-control:verify-release' };
+  const tempRoot = process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : tmpdir();
+  const fixture = await mkdtemp(path.join(tempRoot, 'payload-report-release-'));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  const release = path.join(fixture, 'releases', 'payload-candidate');
+  await Promise.all([
+    mkdir(path.join(release, 'cms', 'src', 'migrations'), { recursive: true }),
+    mkdir(path.join(release, 'cms', 'scripts'), { recursive: true }),
+  ]);
+  await Promise.all([
+    cp(new URL('../../cms/src/migrations/20261006_181424_z_owner_news_native.json', import.meta.url),
+      path.join(release, 'cms', 'src', 'migrations', '20261006_181424_z_owner_news_native.json')),
+    cp(new URL('../../cms/scripts/finalize-news-protocol.ts', import.meta.url),
+      path.join(release, 'cms', 'scripts', 'finalize-news-protocol.ts')),
+    writeFile(path.join(release, '.image-env'), [
+      `API_IMAGE=ghcr.io/ownerinc/ownerinc-portal-api@sha256:${'a'.repeat(64)}`,
+      `CRON_IMAGE=ghcr.io/ownerinc/ownerinc-portal-cron@sha256:${'b'.repeat(64)}`,
+      `CMS_IMAGE=ghcr.io/ownerinc/ownerinc-portal-cms@sha256:${'c'.repeat(64)}`,
+      'RELEASE_FORMAT=payload-v1', '',
+    ].join('\n')),
+  ]);
   const rejected = 'native_catalog_verification_failed\n'
-    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n';
+    + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n'
+    + 'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=check_definition table=news_migration_runs '
+    + 'constraint=news_migration_runs_manifest_sha256_check expectedCount=119 observedCount=119 '
+    + `expectedSha256=${'a'.repeat(64)} observedSha256=${'b'.repeat(64)}\n`;
   const rejectionDiagnostic = createCommandDiagnostic({
     substep: 'payload_control_verify_release', status: 2, stderr: rejected, controlCommandContext: context.controlCommandContext,
+    release,
   });
   assert.equal(rejectionDiagnostic.controlErrorIdentifier, 'native_catalog_verification_failed');
   assert.deepEqual(rejectionDiagnostic.nativeCatalogVerifier, {
     stage: 'native_constraints', reason: 'preauthority_native_constraint_inventory_mismatch', sqlState: null,
+    constraintMismatch: {
+      category: 'check_definition', table: 'news_migration_runs',
+      constraint: 'news_migration_runs_manifest_sha256_check', expectedCount: 119, observedCount: 119,
+      expectedDefinitionSha256: 'a'.repeat(64), observedDefinitionSha256: 'b'.repeat(64),
+    },
   });
+  const forgedReport = sanitizeCommandDiagnostic({
+    substep: 'payload_control_verify_release',
+    nativeCatalogVerifier: {
+      stage: 'native_constraints', reason: 'preauthority_native_constraint_inventory_mismatch', sqlState: null,
+      constraintMismatch: {
+        category: 'check_definition', table: 'news_migration_runs',
+        constraint: 'private_customer_email', expectedCount: 119, observedCount: 119,
+        expectedDefinitionSha256: 'a'.repeat(64), observedDefinitionSha256: 'b'.repeat(64),
+      },
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(forgedReport), /private_customer_email/u,
+    'report sanitization cannot accept caller-supplied identity strings without release validation');
+  assert.equal(extractNativeCatalogVerifierDiagnostic(rejected, context), null,
+    'constraint identity is not authorized from the report generator checkout when no selected release is supplied');
 
   const postgresFailure = 'native_catalog_verification_failed\r\n'
     + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_columns reason=postgres_error sqlstate=42703\r\n';
-  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(Buffer.from(postgresFailure), context), {
+  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(Buffer.from(postgresFailure), { ...context, release }), {
     stage: 'native_columns', reason: 'postgres_error', sqlState: '42703',
   });
   const ownershipFailure = 'native_catalog_verification_failed\n'
     + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=protocol_control_ownership '
     + 'reason=unsafe_preinstallation_control_state sqlstate=none\n';
-  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(ownershipFailure, context), {
+  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(ownershipFailure, { ...context, release }), {
     stage: 'protocol_control_ownership', reason: 'unsafe_preinstallation_control_state', sqlState: null,
   });
   const installedProtocol = 'native_catalog_verification_failed\n'
     + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=protocol_inventory '
     + 'reason=diagnostic_installed_protocol_deep_check_skipped sqlstate=none\n';
-  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(installedProtocol, context), {
+  assert.deepEqual(extractNativeCatalogVerifierDiagnostic(installedProtocol, { ...context, release }), {
     stage: 'protocol_inventory', reason: 'diagnostic_installed_protocol_deep_check_skipped', sqlState: null,
   });
 
@@ -175,7 +223,7 @@ test('native catalog verifier metadata distinguishes rejection, launch failure, 
   assert.equal(extractControlErrorIdentifier(launchFailure, context), 'native_catalog_verifier_launch_failed');
   assert.deepEqual(createCommandDiagnostic({
     substep: 'payload_control_verify_release', status: 2, stderr: launchFailure,
-    controlCommandContext: context.controlCommandContext,
+    controlCommandContext: context.controlCommandContext, release,
   }).nativeCatalogVerifier, { stage: 'launch', reason: 'executable_not_found', sqlState: null });
 
   const opaqueProcessFailure = 'native_catalog_verifier_execution_failed\n'
@@ -186,10 +234,14 @@ test('native catalog verifier metadata distinguishes rejection, launch failure, 
     `${rejected.trimEnd()}\npostgres://private-user:secret@host/database\n`,
     'native_catalog_verification_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=unknown_internal_error sqlstate=none\n',
     'native_catalog_verification_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=postgres_error sqlstate=secret\n',
+    'native_catalog_verification_failed\n'
+      + 'PREAUTHORITY_CATALOG_DIAGNOSTIC stage=native_constraints reason=preauthority_native_constraint_inventory_mismatch sqlstate=none\n'
+      + 'PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=check_definition table=fixture_table constraint=fixture_check '
+      + `expectedCount=119 observedCount=119 expectedSha256=${'a'.repeat(64)} observedSha256=${'b'.repeat(64)}\n`,
     'native_catalog_verifier_launch_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=launch reason=permission_denied sqlstate=23514\n',
     'native_catalog_verification_failed\nPREAUTHORITY_CATALOG_DIAGNOSTIC stage=process reason=process_exit_without_diagnostic sqlstate=none\n',
   ]) {
-    assert.equal(extractNativeCatalogVerifierDiagnostic(text, context), null,
+    assert.equal(extractNativeCatalogVerifierDiagnostic(text, { ...context, release }), null,
       'malformed, mismatched, or secret-bearing metadata remains unclassified');
   }
   assert.equal(extractNativeCatalogVerifierDiagnostic(rejected, {

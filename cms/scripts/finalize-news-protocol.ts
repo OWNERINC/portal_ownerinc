@@ -108,7 +108,24 @@ export type PreauthorityCatalogFailureDiagnostic = {
   stage: PreauthorityCatalogDiagnosticStage
   reason: string
   sqlstate: string | null
+  constraintMismatch?: PreauthorityNativeConstraintMismatchDiagnostic
 }
+
+export const preauthorityNativeConstraintMismatchCategories = [
+  'missing_expected', 'unexpected_observed', 'constraint_identity', 'constraint_metadata',
+  'check_definition', 'check_definition_parse', 'primary_key_definition', 'foreign_key_definition',
+] as const
+export type PreauthorityNativeConstraintMismatchDiagnostic = {
+  category: typeof preauthorityNativeConstraintMismatchCategories[number]
+  table: string | null
+  constraint: string | null
+  expectedCount: number
+  observedCount: number
+  expectedDefinitionSha256: string | null
+  observedDefinitionSha256: string | null
+}
+
+const preauthorityNativeConstraintFailureDetails = new WeakMap<object, PreauthorityNativeConstraintMismatchDiagnostic>()
 
 const preauthorityCatalogDiagnosticReasons = new Set([
   'postgres_error', 'preauthority_catalog_verification_failed', 'preauthority_protocol_not_absent',
@@ -184,7 +201,13 @@ export function getPreauthorityCatalogFailureDiagnostic(
     : preauthorityCatalogDiagnosticReasons.has(base) ? base : 'preauthority_catalog_verification_failed'
   const stage = preauthorityCatalogDiagnosticStages.includes(currentStage)
     ? preauthorityCatalogStageByReason[base] || currentStage : 'verifier'
-  return { stage, reason, sqlstate }
+  const constraintMismatch = error && (typeof error === 'object' || typeof error === 'function')
+    ? preauthorityNativeConstraintFailureDetails.get(error as object) : undefined
+  return {
+    stage, reason, sqlstate,
+    ...(constraintMismatch && reason === 'preauthority_native_constraint_inventory_mismatch'
+      ? { constraintMismatch } : {}),
+  }
 }
 
 export function formatPreauthorityCatalogFailureDiagnostic(diagnostic: PreauthorityCatalogFailureDiagnostic): string {
@@ -194,6 +217,27 @@ export function formatPreauthorityCatalogFailureDiagnostic(diagnostic: Preauthor
   const sqlstate = typeof diagnostic.sqlstate === 'string' && /^[0-9A-Z]{5}$/u.test(diagnostic.sqlstate)
     ? diagnostic.sqlstate : 'none'
   return `PREAUTHORITY_CATALOG_DIAGNOSTIC stage=${stage} reason=${reason} sqlstate=${sqlstate}`
+}
+
+const PREAUTHORITY_NATIVE_DIAGNOSTIC_IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/u
+
+export function formatPreauthorityNativeConstraintMismatchDiagnostic(
+  diagnostic: PreauthorityCatalogFailureDiagnostic,
+): string | null {
+  const detail = diagnostic.constraintMismatch
+  if (diagnostic.stage !== 'native_constraints'
+    || diagnostic.reason !== 'preauthority_native_constraint_inventory_mismatch'
+    || !detail || !preauthorityNativeConstraintMismatchCategories.includes(detail.category)
+    || !Number.isSafeInteger(detail.expectedCount) || detail.expectedCount < 0 || detail.expectedCount > 1_000_000
+    || !Number.isSafeInteger(detail.observedCount) || detail.observedCount < 0 || detail.observedCount > 1_000_000
+    || !isExpectedNativeConstraintDiagnosticIdentity(detail.table, detail.constraint)
+    || detail.table !== null && !PREAUTHORITY_NATIVE_DIAGNOSTIC_IDENTIFIER.test(detail.table)
+    || detail.constraint !== null && !PREAUTHORITY_NATIVE_DIAGNOSTIC_IDENTIFIER.test(detail.constraint)
+    || (detail.expectedDefinitionSha256 !== null && !/^[0-9a-f]{64}$/u.test(detail.expectedDefinitionSha256))
+    || (detail.observedDefinitionSha256 !== null && !/^[0-9a-f]{64}$/u.test(detail.observedDefinitionSha256))) return null
+  return `PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=${detail.category} table=${detail.table ?? 'none'} `
+    + `constraint=${detail.constraint ?? 'none'} expectedCount=${detail.expectedCount} observedCount=${detail.observedCount} `
+    + `expectedSha256=${detail.expectedDefinitionSha256 ?? 'none'} observedSha256=${detail.observedDefinitionSha256 ?? 'none'}`
 }
 
 const finalizerDiagnosticReasons = new Set([
@@ -949,6 +993,51 @@ function expectedNativeConstraints(): NativeCatalogConstraint[] {
   return sortBy(constraints, ['schema', 'table', 'name', 'kind'])
 }
 
+function isExpectedNativeConstraintDiagnosticIdentity(table: string | null, name: string | null): boolean {
+  if (table === null || name === null) return table === null && name === null
+  try {
+    return expectedNativeConstraints().some(constraint => constraint.schema === 'public'
+      && constraint.table === table && constraint.name === name)
+  } catch { return false }
+}
+
+function failNativeConstraintInventoryMismatch(
+  category: PreauthorityNativeConstraintMismatchDiagnostic['category'],
+  expected: NativeCatalogConstraint | null,
+  observed: NativeCatalogConstraint | null,
+  expectedCount: number,
+  observedCount: number,
+): never {
+  const error = new Error('news_protocol_finalizer:preauthority_native_constraint_inventory_mismatch')
+  Object.defineProperty(error, 'code', { value: 'preauthority_native_constraint_inventory_mismatch', enumerable: false })
+  preauthorityNativeConstraintFailureDetails.set(error, {
+    category,
+    table: expected?.table ?? null,
+    constraint: expected?.name ?? null,
+    expectedCount,
+    observedCount,
+    expectedDefinitionSha256: expected
+      ? createHash('sha256').update(expected.definition, 'utf8').digest('hex') : null,
+    observedDefinitionSha256: observed
+      ? createHash('sha256').update(observed.definition, 'utf8').digest('hex') : null,
+  })
+  throw error
+}
+
+function nativeConstraintIdentity(constraint: NativeCatalogConstraint): string {
+  return `${constraint.schema}\u0000${constraint.table}\u0000${constraint.name}\u0000${constraint.kind}`
+}
+
+function failNativeConstraintMismatch(
+  category: PreauthorityNativeConstraintMismatchDiagnostic['category'],
+  expected: NativeCatalogConstraint | null,
+  observed: NativeCatalogConstraint | null,
+  expectedCount: number,
+  observedCount: number,
+): never {
+  return failNativeConstraintInventoryMismatch(category, expected, observed, expectedCount, observedCount)
+}
+
 const expectedNativeTypes: NativeCatalogType[] = expectedEnums.map(type => ({
   schema: type.schema, name: type.name, kind: 'e', labels: [...type.values],
 }))
@@ -1024,21 +1113,54 @@ export function assertPreauthorityNativeCatalogInventory(
       || actual.method !== reviewed.method || JSON.stringify(actual.columns) !== JSON.stringify(reviewed.columns)
       || normalizeDefinitionTokens(actual.definition) !== normalizeDefinitionTokens(reviewed.definition)
   })) fail('preauthority_native_index_inventory_mismatch')
-  if (inventory.constraints.length !== expected.constraints.length || inventory.constraints.some((actual, index) => {
-    const reviewed = expected.constraints[index]
-    if (!reviewed || actual.schema !== reviewed.schema || actual.table !== reviewed.table
-      || actual.name !== reviewed.name || actual.kind !== reviewed.kind || !actual.validated
-      || actual.deferrable || actual.deferred) return true
-    if (actual.kind === 'c') {
-      try {
-        return JSON.stringify(parseSqlExpression(extractCheckExpression(actual.definition)))
-          !== JSON.stringify(parseSqlExpression(extractCheckExpression(reviewed.definition)))
-      } catch {
-        return true
-      }
+  const expectedConstraintKeys = new Set(expected.constraints.map(nativeConstraintIdentity))
+  const observedConstraintKeys = new Set(inventory.constraints.map(nativeConstraintIdentity))
+  const missingConstraint = expected.constraints.find(constraint => !observedConstraintKeys.has(nativeConstraintIdentity(constraint)))
+  if (missingConstraint) {
+    failNativeConstraintMismatch('missing_expected', missingConstraint, null,
+      expected.constraints.length, inventory.constraints.length)
+  }
+  const unexpectedConstraint = inventory.constraints.find(constraint => !expectedConstraintKeys.has(nativeConstraintIdentity(constraint)))
+  if (unexpectedConstraint) {
+    failNativeConstraintMismatch('unexpected_observed', null, unexpectedConstraint,
+      expected.constraints.length, inventory.constraints.length)
+  }
+  if (inventory.constraints.length !== expected.constraints.length) {
+    failNativeConstraintMismatch('constraint_identity', null, null,
+      expected.constraints.length, inventory.constraints.length)
+  }
+  for (let index = 0; index < expected.constraints.length; index += 1) {
+    const reviewed = expected.constraints[index]!
+    const actual = inventory.constraints[index]!
+    if (nativeConstraintIdentity(actual) !== nativeConstraintIdentity(reviewed)) {
+      failNativeConstraintMismatch('constraint_identity', reviewed, actual,
+        expected.constraints.length, inventory.constraints.length)
     }
-    return normalizeDefinitionTokens(actual.definition) !== normalizeDefinitionTokens(reviewed.definition)
-  })) fail('preauthority_native_constraint_inventory_mismatch')
+    if (!actual.validated || actual.deferrable || actual.deferred) {
+      failNativeConstraintMismatch('constraint_metadata', reviewed, actual,
+        expected.constraints.length, inventory.constraints.length)
+    }
+    if (actual.kind === 'c') {
+      let expectedExpression: SqlExpression
+      let actualExpression: SqlExpression
+      try {
+        expectedExpression = parseSqlExpression(extractCheckExpression(reviewed.definition))
+        actualExpression = parseSqlExpression(extractCheckExpression(actual.definition))
+      } catch {
+        failNativeConstraintMismatch('check_definition_parse', reviewed, actual,
+          expected.constraints.length, inventory.constraints.length)
+      }
+      if (JSON.stringify(actualExpression!) !== JSON.stringify(expectedExpression!)) {
+        failNativeConstraintMismatch('check_definition', reviewed, actual,
+          expected.constraints.length, inventory.constraints.length)
+      }
+      continue
+    }
+    if (normalizeDefinitionTokens(actual.definition) !== normalizeDefinitionTokens(reviewed.definition)) {
+      failNativeConstraintMismatch(actual.kind === 'p' ? 'primary_key_definition' : 'foreign_key_definition',
+        reviewed, actual, expected.constraints.length, inventory.constraints.length)
+    }
+  }
   compareCatalogInventory(inventory.types, expectedNativeTypes, 'preauthority_native_type_inventory_mismatch')
   return createHash('sha256').update(JSON.stringify({ migrationNames, ...inventory })).digest('hex')
 }

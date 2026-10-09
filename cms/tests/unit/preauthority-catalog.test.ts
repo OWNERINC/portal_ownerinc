@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
   assertPreauthorityNativeCatalogInventory,
   formatPreauthorityCatalogFailureDiagnostic,
+  formatPreauthorityNativeConstraintMismatchDiagnostic,
   getPreauthorityCatalogFailureDiagnostic,
   NATIVE_ENUM_CATALOG_SQL,
   NATIVE_FOREIGN_KEYS_CATALOG_SQL,
@@ -25,6 +27,16 @@ const fixtureMigrations = [
   '20261005_151541_owner_news_publication', '20261005_220916_owner_news_legacy_history',
   '20261006_181325_a_owner_news_suspend_enum', '20261006_181424_z_owner_news_native',
 ]
+
+function captureVerifierError(action: () => unknown): Error {
+  try {
+    action()
+  } catch (error) {
+    assert.ok(error instanceof Error)
+    return error
+  }
+  assert.fail('expected preauthority verifier rejection')
+}
 
 function preconditionClient({ failedControlCheck, protocolPresent, roleFixture = 'preauthority' }: {
   failedControlCheck?: 'ownership' | 'native-privileges'
@@ -347,6 +359,28 @@ test('preauthority native inventory is exact while the protocol finalizer remain
   ]
   const fingerprint = assertPreauthorityNativeCatalogInventory(expected, migrationNames)
   assert.match(fingerprint, /^[0-9a-f]{64}$/u)
+  assert.deepEqual(
+    Object.fromEntries(['p', 'f', 'c'].map(kind => [kind, expected.constraints.filter(item => item.kind === kind).length])),
+    { p: 46, f: 49, c: 24 },
+    'native constraints are PK, FK, and reviewed CHECK entries; unique indexes stay in the separate index inventory',
+  )
+  assert.ok(expected.constraints.every(constraint => constraint.validated && !constraint.deferrable && !constraint.deferred),
+    'the expected PostgreSQL constraint catalog requires validated and non-deferrable constraints')
+  assert.equal(expected.indexes.filter(index => index.unique).length, 55,
+    'unique indexes from the combined native migration snapshots are independently covered by the strict index inventory')
+
+  for (const [field, value] of [
+    ['validated', false], ['deferrable', true], ['deferred', true],
+  ] as const) {
+    const changedConstraintMetadata = structuredClone(expected)
+    const changed = changedConstraintMetadata.constraints[0]!
+    changed[field] = value
+    const metadataError = captureVerifierError(
+      () => assertPreauthorityNativeCatalogInventory(changedConstraintMetadata, migrationNames),
+    )
+    assert.equal(getPreauthorityCatalogFailureDiagnostic(metadataError, 'native_constraints').constraintMismatch?.category,
+      'constraint_metadata', `${field} drift is rejected as metadata mismatch`)
+  }
 
   const unexpectedMaterializedView = structuredClone(expected)
   unexpectedMaterializedView.relations.push({ schema: 'public', name: 'fixture_summary', kind: 'm' })
@@ -387,8 +421,20 @@ test('preauthority native inventory is exact while the protocol finalizer remain
     ...unexpectedConstraint.constraints[0]!, name: 'fixture_unreviewed_check', kind: 'c',
     definition: 'CHECK (true)',
   })
-  assert.throws(() => assertPreauthorityNativeCatalogInventory(unexpectedConstraint, migrationNames),
-    /preauthority_native_constraint_inventory_mismatch/u)
+  const unexpectedConstraintError = captureVerifierError(
+    () => assertPreauthorityNativeCatalogInventory(unexpectedConstraint, migrationNames),
+  )
+  assert.match(unexpectedConstraintError.message, /preauthority_native_constraint_inventory_mismatch/u)
+  const unexpectedConstraintDiagnostic = getPreauthorityCatalogFailureDiagnostic(unexpectedConstraintError, 'native_constraints')
+  assert.deepEqual(unexpectedConstraintDiagnostic.constraintMismatch, {
+    category: 'unexpected_observed', table: null, constraint: null,
+    expectedCount: expected.constraints.length, observedCount: unexpectedConstraint.constraints.length,
+    expectedDefinitionSha256: null,
+    observedDefinitionSha256: createHash('sha256').update('CHECK (true)', 'utf8').digest('hex'),
+  })
+  assert.match(formatPreauthorityNativeConstraintMismatchDiagnostic(unexpectedConstraintDiagnostic)!,
+    /^PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=unexpected_observed table=none constraint=none /u)
+  assert.doesNotMatch(formatPreauthorityNativeConstraintMismatchDiagnostic(unexpectedConstraintDiagnostic)!, /fixture_unreviewed|CHECK \(true\)/u)
 
   const unexpectedCompositeType = structuredClone(expected)
   unexpectedCompositeType.types.push({ schema: 'public', name: 'fixture_payload', kind: 'c', labels: [] })
@@ -411,12 +457,47 @@ test('preauthority native inventory is exact while the protocol finalizer remain
   const pgRenderedCheck = structuredClone(expected)
   const pgCheck = pgRenderedCheck.constraints.find(constraint => constraint.name === 'news_migration_runs_manifest_sha256_check')
   assert.ok(pgCheck)
+  // PostgreSQL pg_get_constraintdef output for varchar regex checks adds
+  // parentheses and text coercions around both operands; these casts are
+  // semantics-preserving for this reviewed expression only.
   pgCheck.definition = "CHECK (((manifest_sha256)::text ~ '^[0-9a-f]{64}$'::text))"
   assert.doesNotThrow(() => assertPreauthorityNativeCatalogInventory(pgRenderedCheck, migrationNames),
-    'canonical check comparison accepts PostgreSQL-added casts and grouping without accepting changed predicates')
+    'canonical check comparison accepts PostgreSQL-rendered casts and grouping without accepting changed predicates')
+
+  const weakenedPostgresCheck = structuredClone(pgRenderedCheck)
+  const weakenedPostgresConstraint = weakenedPostgresCheck.constraints.find(constraint => constraint.name === pgCheck.name)
+  assert.ok(weakenedPostgresConstraint)
+  weakenedPostgresConstraint.definition = 'CHECK (true)'
+  const weakenedPostgresError = captureVerifierError(
+    () => assertPreauthorityNativeCatalogInventory(weakenedPostgresCheck, migrationNames),
+  )
+  assert.match(weakenedPostgresError.message,
+    /preauthority_native_constraint_inventory_mismatch/u,
+    'a same-name PostgreSQL-rendered CHECK weakened to TRUE still fails exact semantic comparison')
+  const weakenedPostgresDiagnostic = getPreauthorityCatalogFailureDiagnostic(weakenedPostgresError, 'native_constraints')
+  assert.deepEqual(weakenedPostgresDiagnostic.constraintMismatch, {
+    category: 'check_definition', table: 'news_migration_runs', constraint: pgCheck.name,
+    expectedCount: expected.constraints.length, observedCount: expected.constraints.length,
+    expectedDefinitionSha256: createHash('sha256').update(
+      expected.constraints.find(constraint => constraint.name === pgCheck.name)!.definition, 'utf8',
+    ).digest('hex'),
+    observedDefinitionSha256: createHash('sha256').update('CHECK (true)', 'utf8').digest('hex'),
+  })
+  const renderedMismatchLine = formatPreauthorityNativeConstraintMismatchDiagnostic(weakenedPostgresDiagnostic)
+  assert.ok(renderedMismatchLine)
+  assert.match(renderedMismatchLine, /category=check_definition table=news_migration_runs constraint=news_migration_runs_manifest_sha256_check/u)
+  assert.match(renderedMismatchLine, /expectedSha256=[0-9a-f]{64} observedSha256=[0-9a-f]{64}$/u)
+  assert.doesNotMatch(renderedMismatchLine, /CHECK \(|\^/u,
+    'the verifier emits only reviewed identifiers, counts and hashes, never raw definitions')
 
   const primaryKeys = expected.constraints.filter(constraint => constraint.kind === 'p')
   assert.ok(primaryKeys.length > 0)
+  const pgRenderedPrimaryKey = structuredClone(expected)
+  const renderedPrimaryKey = pgRenderedPrimaryKey.constraints.find(constraint => constraint.kind === 'p')
+  assert.ok(renderedPrimaryKey)
+  renderedPrimaryKey.definition = 'PRIMARY KEY (id)'
+  assert.doesNotThrow(() => assertPreauthorityNativeCatalogInventory(pgRenderedPrimaryKey, migrationNames),
+    'PostgreSQL pg_get_constraintdef identifier dequoting remains equivalent for reviewed primary keys')
   for (const constraint of primaryKeys) {
     const changedPrimaryKey = structuredClone(expected)
     const sameNamePrimaryKey = changedPrimaryKey.constraints.find(candidate => candidate.name === constraint.name)

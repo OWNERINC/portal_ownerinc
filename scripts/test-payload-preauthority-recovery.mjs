@@ -342,6 +342,12 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
   await writeRootFile(path.join(legacyRelease, '.image-env'), `API_IMAGE=${images.api}\nCRON_IMAGE=${images.cron}\n`);
   await writeRootFile(path.join(payloadRelease, '.image-env'),
     `API_IMAGE=${images.api}\nCRON_IMAGE=${images.cron}\nCMS_IMAGE=${images.cms}\nRELEASE_FORMAT=payload-v1\n`);
+  for (const protectedCmsInput of [
+    path.join(payloadRelease, 'cms', 'src', 'migrations', '20261006_181424_z_owner_news_native.json'),
+    path.join(payloadRelease, 'cms', 'scripts', 'finalize-news-protocol.ts'),
+  ]) {
+    await ensureFixtureRootUid(protectedCmsInput);
+  }
   const port = await allocatePort();
   const credentials = createSyntheticValues();
   const secret = () => randomBytes(48).toString('base64url');

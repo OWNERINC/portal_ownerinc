@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import {
   formatPreauthorityCatalogFailureDiagnostic,
+  formatPreauthorityNativeConstraintMismatchDiagnostic,
   getPreauthorityCatalogFailureDiagnostic,
   verifyPreauthorityCatalogReadOnly,
   type FinalizerClient,
@@ -57,9 +58,10 @@ async function main(): Promise<void> {
     })}\n`)
   } catch (error) {
     try { if (connected && client) await client.query('ROLLBACK') } catch { /* preserve the primary bounded diagnostic */ }
-    process.stderr.write(`${formatPreauthorityCatalogFailureDiagnostic(
-      getPreauthorityCatalogFailureDiagnostic(error, stage),
-    )}\n`)
+    const diagnostic = getPreauthorityCatalogFailureDiagnostic(error, stage)
+    const constraintMismatch = formatPreauthorityNativeConstraintMismatchDiagnostic(diagnostic)
+    process.stderr.write(`${formatPreauthorityCatalogFailureDiagnostic(diagnostic)}\n`)
+    if (constraintMismatch) process.stderr.write(`${constraintMismatch}\n`)
     process.exitCode = 1
   } finally {
     try { await client?.end() } catch { /* never expose driver details */ }

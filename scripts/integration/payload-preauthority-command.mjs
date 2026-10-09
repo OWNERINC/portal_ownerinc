@@ -64,6 +64,7 @@ export function runFixtureCommand(command, args = [], options = {}) {
       stderr: result.stderr,
       sqlCommandContext: options.sqlCommandContext === true,
       controlCommandContext: options.controlCommandContext,
+      release: options.release,
     }));
   }
   return result.stdout || Buffer.alloc(0);
