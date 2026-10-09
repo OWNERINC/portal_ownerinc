@@ -11,12 +11,13 @@ import tempfile
 from urllib.parse import unquote, urlsplit
 
 REQUIRED = {
-    'CMS_POSTGRES_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
+    'CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
     'CMS_ADMIN_DATABASE_URL', 'CMS_MIGRATION_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET',
 }
+LEGACY_REQUIRED = REQUIRED - {'CMS_CONTROLLER_PASSWORD'}
 SECRET_KEYS = {
-    'CMS_POSTGRES_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
+    'CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET',
 }
 URL_USERS = {
@@ -105,15 +106,17 @@ def validate_values(values):
     present = REQUIRED.intersection(values)
     if not present:
         return 'empty'
-    if present != REQUIRED:
+    if present not in (REQUIRED, LEGACY_REQUIRED):
         fail('partial_cms_credential_set')
-    for key in SECRET_KEYS:
+    legacy = present == LEGACY_REQUIRED
+    checked_secrets = SECRET_KEYS - {'CMS_CONTROLLER_PASSWORD'} if legacy else SECRET_KEYS
+    for key in checked_secrets:
         value = values[key]
         if len(value) < 32 or not re.fullmatch(r'[A-Za-z0-9_-]+', value):
             fail('invalid_cms_credential')
         if re.search(r'example|placeholder|change-me', value, re.I):
             fail('invalid_cms_credential')
-    if len({values[key] for key in SECRET_KEYS}) != len(SECRET_KEYS):
+    if len({values[key] for key in checked_secrets}) != len(checked_secrets):
         fail('cms_credentials_not_distinct')
     for key, (username, password_key) in URL_USERS.items():
         try:
@@ -132,7 +135,7 @@ def validate_values(values):
             valid = False
         if not valid:
             fail('invalid_cms_database_url')
-    return 'complete'
+    return 'legacy-complete' if legacy else 'complete'
 
 
 def inspect(path):
@@ -142,31 +145,39 @@ def inspect(path):
 
 def update(path):
     raw, before, values = read_environment(path)
-    if validate_values(values) != 'empty':
+    state = validate_values(values)
+    if state not in ('empty', 'legacy-complete'):
         fail('configuration_changed_during_preparation')
 
-    generated = {
-        'CMS_POSTGRES_PASSWORD': secrets.token_hex(32),
-        'CMS_MIGRATOR_PASSWORD': secrets.token_hex(32),
-        'CMS_RUNTIME_PASSWORD': secrets.token_hex(32),
-        'PAYLOAD_SECRET': secrets.token_hex(32),
-        'PAYLOAD_TO_PORTAL_SECRET': secrets.token_hex(32),
-        'PORTAL_TO_PAYLOAD_SECRET': secrets.token_hex(32),
-    }
-    if len(set(generated.values())) != len(generated):
-        fail('credential_generation_failed')
-    entries = {
-        **generated,
-        'CMS_ADMIN_DATABASE_URL': (
-            f"postgresql://cms_admin:{generated['CMS_POSTGRES_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
-        ),
-        'CMS_MIGRATION_DATABASE_URL': (
-            f"postgresql://cms_migrator:{generated['CMS_MIGRATOR_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
-        ),
-        'CMS_RUNTIME_DATABASE_URL': (
-            f"postgresql://cms_runtime:{generated['CMS_RUNTIME_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
-        ),
-    }
+    if state == 'legacy-complete':
+        generated = {'CMS_CONTROLLER_PASSWORD': secrets.token_hex(32)}
+        if generated['CMS_CONTROLLER_PASSWORD'] in {values[key] for key in SECRET_KEYS - {'CMS_CONTROLLER_PASSWORD'}}:
+            fail('credential_generation_failed')
+        entries = generated
+    else:
+        generated = {
+            'CMS_POSTGRES_PASSWORD': secrets.token_hex(32),
+            'CMS_CONTROLLER_PASSWORD': secrets.token_hex(32),
+            'CMS_MIGRATOR_PASSWORD': secrets.token_hex(32),
+            'CMS_RUNTIME_PASSWORD': secrets.token_hex(32),
+            'PAYLOAD_SECRET': secrets.token_hex(32),
+            'PAYLOAD_TO_PORTAL_SECRET': secrets.token_hex(32),
+            'PORTAL_TO_PAYLOAD_SECRET': secrets.token_hex(32),
+        }
+        if len(set(generated.values())) != len(generated):
+            fail('credential_generation_failed')
+        entries = {
+            **generated,
+            'CMS_ADMIN_DATABASE_URL': (
+                f"postgresql://cms_admin:{generated['CMS_POSTGRES_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
+            ),
+            'CMS_MIGRATION_DATABASE_URL': (
+                f"postgresql://cms_migrator:{generated['CMS_MIGRATOR_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
+            ),
+            'CMS_RUNTIME_DATABASE_URL': (
+                f"postgresql://cms_runtime:{generated['CMS_RUNTIME_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
+            ),
+        }
     if 'PORTAL_PUBLIC_URL' not in values:
         entries = {'PORTAL_PUBLIC_URL': CANONICAL_PORTAL_URL, **entries}
     suffix = b'' if not raw or raw.endswith(b'\n') else b'\n'

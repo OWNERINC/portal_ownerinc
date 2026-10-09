@@ -20,6 +20,13 @@ services:
     networks: [backend]
     logging: *cms_production_logs
 
+  cms-control-roles:
+    cpus: 0.50
+    mem_limit: 512m
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging: *cms_production_logs
+
   cms-migrate:
     cpus: 0.50
     mem_limit: 768m

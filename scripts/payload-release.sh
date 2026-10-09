@@ -84,6 +84,10 @@ compose "$release" run --rm migrate
 compose "$release" run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/verify-migrations.js
 compose "$release" up -d --no-deps cms-postgres
 compose "$release" run --rm cms-provision
+if ! compose "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles; then
+  compose "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles \
+    node --import tsx scripts/provision-db.ts --bootstrap-control
+fi
 compose "$release" run --rm --no-deps cms-migrate
 CRON_BOOTSTRAP_ONLY=true compose "$release" up -d --no-deps api cms cron
 guard verify-release

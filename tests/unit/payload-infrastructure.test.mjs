@@ -7,7 +7,8 @@ import test from 'node:test';
 test('optional Compose overlay renders isolated roles, volumes and one CMS image without starting Docker', t => {
   const parserEnvironment = Object.fromEntries(['PATH', 'SystemRoot', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)']
     .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
-  const result = spawnSync('docker', ['compose', '--env-file', '.env.example', '-f', 'docker-compose.yml', '-f', 'docker-compose.payload.yml', 'config', '--format', 'json'], {
+  const result = spawnSync('docker', ['compose', '--profile', 'cms-control-roles', '--env-file', '.env.example',
+    '-f', 'docker-compose.yml', '-f', 'docker-compose.payload.yml', 'config', '--format', 'json'], {
     encoding: 'utf8', timeout: 20000,
     // Do not inherit real runtime secrets or image settings into the parser.
     env: parserEnvironment,
@@ -16,14 +17,19 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
   assert.equal(result.status, 0, 'Compose parse failed (configuration output intentionally withheld)');
   const config = JSON.parse(result.stdout);
   const s = config.services;
-  for (const service of ['cms-postgres', 'cms-provision', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.ok(s[service]);
-  for (const service of ['cms-provision', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.equal(s[service].image, s.cms.image);
+  for (const service of ['cms-postgres', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.ok(s[service]);
+  for (const service of ['cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.equal(s[service].image, s.cms.image);
   assert.equal(s['cms-postgres'].ports, undefined);
   assert.equal(s.cms.ports, undefined);
   assert.equal(s.cms.build.context.replaceAll('\\', '/'), path.resolve('.').replaceAll('\\', '/'));
   assert.equal(s.cms.build.dockerfile, 'cms/Dockerfile');
   assert.equal(s['cms-worker'].deploy.replicas, 1);
   assert.match(s['cms-migrate'].environment.CMS_DATABASE_URL, /cms_migrator:/);
+  assert.equal(s['cms-control-roles'].environment.CMS_CONTROLLER_PASSWORD,
+    'placeholder-cms-controller-password-for-explicit-bootstrap-only');
+  assert.deepEqual(s['cms-control-roles'].command,
+    ['node', '--import', 'tsx', 'scripts/provision-db.ts', '--verify-control']);
+  assert.deepEqual(s['cms-control-roles'].profiles, ['cms-control-roles']);
   assert.match(s.cms.environment.CMS_DATABASE_URL, /cms_runtime:/);
   assert.equal(s.cms.environment.CMS_DATABASE_URL, s['cms-worker'].environment.CMS_DATABASE_URL);
   for (const service of ['cms', 'cms-worker']) {
@@ -35,6 +41,8 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
     assert.equal(s[service].environment.CMS_UPLOAD_DIR, s[service].volumes[0].target);
     assert.ok(!s[service].environment.CMS_UPLOAD_DIR.startsWith('/app/'));
   }
+  assert.equal(s['cms-provision'].environment.CMS_CONTROLLER_PASSWORD, undefined,
+    'ordinary CMS provisioning never receives the controller credential');
   assert.equal(s['cms-postgres'].volumes[0].source, 'cms_postgres_data');
   assert.equal(s.api.environment.CMS_INTERNAL_URL, 'http://cms:3001');
   assert.equal(s.cms.depends_on['cms-migrate'].condition, 'service_completed_successfully');
@@ -46,11 +54,24 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
 
   const fixtureResult = spawnSync('docker', ['compose', '--env-file', '.env.example', '-f', 'docker-compose.yml',
     '-f', 'docker-compose.payload.yml', '-f', 'scripts/integration/payload-preauthority-fixture.compose.yml',
-    'config', '--format', 'json'], { encoding: 'utf8', timeout: 20000, env: parserEnvironment });
+    '--profile', 'cms-control-roles', 'config', '--format', 'json'], {
+    encoding: 'utf8', timeout: 20000,
+    env: { ...parserEnvironment, CMS_IMAGE: 'local/fixture-cms:synthetic' },
+  });
   assert.equal(fixtureResult.status, 0, 'disposable fixture Compose parse failed (output intentionally withheld)');
   const fixtureConfig = JSON.parse(fixtureResult.stdout);
   assert.equal(fixtureConfig.services.cron.environment.CRON_BOOTSTRAP_ONLY, 'true',
     'the isolated fixture overlay must forward bootstrap-only mode to the actual cron service');
+  const roles = fixtureConfig.services['cms-control-roles'];
+  assert.ok(roles, 'the explicitly profiled role service must render for the disposable fixture');
+  assert.equal(roles.image, 'local/fixture-cms:synthetic');
+  assert.deepEqual(roles.command, ['node', '--import', 'tsx', 'scripts/provision-db.ts', '--verify-control']);
+  assert.equal(roles.environment.CMS_CONTROLLER_PASSWORD,
+    'placeholder-cms-controller-password-for-explicit-bootstrap-only');
+  assert.equal(roles.environment.CMS_DATABASE_URL, fixtureConfig.services['cms-provision'].environment.CMS_DATABASE_URL);
+  assert.equal(fixtureConfig.services['cms-provision'].environment.CMS_CONTROLLER_PASSWORD, undefined,
+    'the controller credential stays scoped to the one-shot role service');
+  assert.ok(roles.profiles.includes('cms-control-roles'));
 });
 
 test('owned Docker, Nginx and shell artifacts retain LF', async () => {
@@ -104,6 +125,17 @@ test('cold deploy signs its legacy source backup before provisioning and never s
   const proof = receiver.indexOf('backup-metadata "$release" "$backup/preauthority-proof.json"');
   const provision = receiver.indexOf('migration_started=true');
   assert.ok(proof >= 0 && provision > proof, 'cold source proof must be durable before migrations/provisioning');
+  for (const [name, source] of [['CI deploy', receiver], ['manual deploy', manualRelease]]) {
+    const provisionRoles = source.indexOf('cms-provision');
+    const verifyRoles = source.indexOf('--profile cms-control-roles run --rm --no-deps cms-control-roles', provisionRoles);
+    const bootstrapRoles = source.indexOf('--bootstrap-control', verifyRoles);
+    const nativeMigration = source.indexOf('cms-migrate', bootstrapRoles);
+    assert.ok(provisionRoles >= 0 && verifyRoles > provisionRoles && bootstrapRoles > verifyRoles
+      && nativeMigration > bootstrapRoles,
+    `${name} verifies and, only on failure, bootstraps control roles after provisioning and before native migrations`);
+    assert.ok(source.slice(verifyRoles - 40, verifyRoles).includes('if !'),
+      `${name} keeps bootstrap conditional on the read-only role verification`);
+  }
   assert.match(receiver, /stop_container "\$project-cms-worker-1" false/);
   assert.ok(receiver.indexOf('close-admission "$release" ||') < receiver.indexOf('rollback-check "$release"'),
     'failed deploy rollback must retain the admission fence before recovery checks');

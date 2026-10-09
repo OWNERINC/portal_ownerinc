@@ -26,7 +26,7 @@ INVENTORY_FILENAME = 'payload-control-inventory.json'
 _INVENTORY_CACHE = None
 KNOWN_SERVICES = {
     'postgres', 'cms-postgres', 'api', 'cron', 'nginx', 'cms', 'cms-worker',
-    'migrate', 'bootstrap-admin', 'cms-provision', 'cms-migrate',
+    'migrate', 'bootstrap-admin', 'cms-provision', 'cms-control-roles', 'cms-migrate',
     'cms-preauthority-verify',
 }
 NEWS_TABLES = [
@@ -384,7 +384,7 @@ def _check_container_shape(cms_status, quiescent=False):
     containers = _container_inventory()
     running = [c for c in containers if c['state'] == 'running']
     for container in containers:
-        if container['service'] in ('migrate', 'bootstrap-admin', 'cms-provision', 'cms-migrate', 'cms-preauthority-verify') and container['state'] == 'running':
+        if container['service'] in ('migrate', 'bootstrap-admin', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify') and container['state'] == 'running':
             fail('one_shot_container_running')
         if container['service'] == 'cms-worker' and container['state'] == 'running':
             fail('worker_admission_forbidden')
@@ -400,7 +400,7 @@ def _check_container_shape(cms_status, quiescent=False):
         if cms_status == 'migrated' and not any(c['service'] == 'cms-postgres' and c['state'] == 'running' for c in containers):
             fail('cms_database_container_unavailable')
         if cms_status == 'cold':
-            cms_services = {'cms-postgres', 'cms-provision', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker'}
+            cms_services = {'cms-postgres', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker'}
             if any(c['service'] in cms_services for c in containers):
                 fail('unexpected_cold_cms_container')
             project = _inventory()['document']['project']
@@ -1456,7 +1456,7 @@ class Runtime:
             for container in containers:
                 if container['service'] == 'cms-worker' and container['state'] == 'running':
                     fail('worker_admission_forbidden')
-                if container['service'] in ('api', 'cron', 'nginx', 'cms', 'migrate', 'cms-provision', 'cms-migrate', 'cms-preauthority-verify') and container['state'] == 'running':
+                if container['service'] in ('api', 'cron', 'nginx', 'cms', 'migrate', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify') and container['state'] == 'running':
                     fail('writers_not_quiescent')
             for service in ('api', 'cron'):
                 self._verify_container_image(target_images, service, running=False)

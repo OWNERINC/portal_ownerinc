@@ -298,6 +298,7 @@ validate_compose() {
     CMS_IMAGE="$cms_image" \
     PORTAL_PUBLIC_URL=https://portal.ownerinc.com.br \
     CMS_POSTGRES_PASSWORD=check \
+    CMS_CONTROLLER_PASSWORD=check \
     CMS_MIGRATOR_PASSWORD=check \
     CMS_RUNTIME_PASSWORD=check \
     CMS_ADMIN_DATABASE_URL=postgresql://cms_admin:check@cms-postgres:5432/ownerinc_cms \
@@ -462,7 +463,7 @@ else
   if ! candidate_installed; then
     atomic_text "$candidate_target" 0644 "CMS_IMAGE=$cms_image"
   fi
-  if [[ $cms_env_state == empty ]] && ! python3 "$source_private_helper" update "$environment"; then
+  if [[ $cms_env_state == empty || $cms_env_state == legacy-complete ]] && ! python3 "$source_private_helper" update "$environment"; then
     echo 'Refusing preparation: private CMS environment could not be atomically written.' >&2
     echo "The pre-change receiver, guard and environment remain in $backup_dir for manual recovery." >&2
     exit 2

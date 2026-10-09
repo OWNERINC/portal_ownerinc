@@ -26,9 +26,10 @@ const fixtureMigrations = [
   '20261006_181325_a_owner_news_suspend_enum', '20261006_181424_z_owner_news_native',
 ]
 
-function preconditionClient({ failedControlCheck, protocolPresent }: {
+function preconditionClient({ failedControlCheck, protocolPresent, roleFixture = 'preauthority' }: {
   failedControlCheck?: 'ownership' | 'native-privileges'
   protocolPresent?: boolean
+  roleFixture?: 'preauthority' | 'finalizer-installed' | 'missing-control' | 'missing-controller' | 'insecure-control' | 'insecure-controller'
 } = {}): { client: FinalizerClient; statements: string[] } {
   const statements: string[] = []
   const expected = preauthorityExpectedNativeCatalogInventory()
@@ -58,6 +59,39 @@ function preconditionClient({ failedControlCheck, protocolPresent }: {
       }
       if (sql === 'SELECT name FROM public.payload_migrations ORDER BY name') {
         return { rows: fixtureMigrations.map(name => ({ name })) }
+      }
+      if (sql.includes('SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind')) {
+        return { rows: expected.relations.map(relation => ({ ...relation })) }
+      }
+      if (sql.includes('SELECT namespace.nspname AS schema, relation.relname AS table_name')) {
+        if (sql.includes('attribute.attname AS column_name')) {
+          return { rows: expected.columns.map(column => ({
+            schema: column.schema, table_name: column.table, column_name: column.name,
+            type_name: column.type, type_schema: column.typeSchema, not_null: column.notNull,
+            default_expression: catalogDefault(column.table,
+              nativeSchemaSnapshot.tables[`public.${column.table}`]!.columns[column.name]!),
+          })) }
+        }
+        if (sql.includes('con.conname AS constraint_name')) {
+          return { rows: expected.constraints.map(constraint => ({
+            schema: constraint.schema, table_name: constraint.table, constraint_name: constraint.name,
+            kind: constraint.kind, validated: constraint.validated, deferrable: constraint.deferrable,
+            deferred: constraint.deferred, definition: constraint.definition,
+          })) }
+        }
+      }
+      if (sql.includes('SELECT table_ns.nspname AS table_schema')) {
+        return { rows: expected.indexes.map(index => ({
+          table_schema: index.tableSchema, table_name: index.table, index_schema: index.schema,
+          index_name: index.name, is_unique: index.unique, is_primary: index.primary,
+          is_valid: index.valid, is_ready: index.ready, no_predicate: index.noPredicate,
+          no_expressions: index.noExpressions, key_count: index.keyCount,
+          attribute_count: index.attributeCount, method: index.method, columns: index.columns,
+          definition: index.definition,
+        })) }
+      }
+      if (sql.includes('SELECT namespace.nspname AS schema, type.typname AS name')) {
+        return { rows: expected.types.map(type => ({ ...type })) }
       }
       if (sql.includes('SELECT c.relname AS name, c.relkind AS kind')) {
         return { rows: Object.keys(nativeSchemaSnapshot.tables).map(name => ({
@@ -119,7 +153,9 @@ function preconditionClient({ failedControlCheck, protocolPresent }: {
         ].map(([name, type]) => ({ name, type })) }
       }
       if (sql.includes("a.attrelid='public.news_migration_items'")) return { rows: [{ run_id_type: 'varchar' }] }
-      if (sql === controlRolesVerificationSQL) return { rows: [{ safe: true }] }
+      if (sql === controlRolesVerificationSQL) {
+        return { rows: [{ safe: roleFixture === 'preauthority' || roleFixture === 'finalizer-installed' }] }
+      }
       if (sql.includes('AS ledger_relations')) {
         return { rows: [protocolPresent ? {
           ledger_relations: 2, protocol_functions: 4, unexpected_protocol_functions: 0,
@@ -240,9 +276,14 @@ test('actual read-only preauthority verifier reports ownership, native-privilege
       expectedStage: 'protocol_native_privileges', expectedQuery: controlRolesNativePrivilegesVerificationSQL,
     },
     {
-      options: { protocolPresent: true }, expectedReason: 'diagnostic_installed_protocol_deep_check_skipped',
+      options: { protocolPresent: true, roleFixture: 'finalizer-installed' },
+      expectedReason: 'diagnostic_installed_protocol_deep_check_skipped',
       expectedStage: 'protocol_inventory', expectedQuery: 'AS ledger_relations',
     },
+    ...(['missing-control', 'missing-controller', 'insecure-control', 'insecure-controller'] as const).map(roleFixture => ({
+      options: { roleFixture }, expectedReason: 'control_role_contract_mismatch',
+      expectedStage: 'protocol_control_roles' as const, expectedQuery: controlRolesVerificationSQL,
+    })),
   ]
   for (const { options, expectedReason, expectedStage, expectedQuery } of cases) {
     const fixture = preconditionClient(options)
@@ -251,6 +292,10 @@ test('actual read-only preauthority verifier reports ownership, native-privilege
       .then(() => null, value => value)
     assert.ok(error instanceof Error, 'the verifier must fail closed for this fixture')
     assert.ok(fixture.statements.some(sql => sql.includes(expectedQuery)), 'the real precondition stage was reached')
+    if (options?.protocolPresent) {
+      assert.ok(fixture.statements.includes(controlRolesVerificationSQL),
+        'the canonical installed-protocol path uses the same baseline role contract before checking protocol inventory')
+    }
     assert.deepEqual(getPreauthorityCatalogFailureDiagnostic(error, currentStage), {
       stage: expectedStage, reason: expectedReason, sqlstate: null,
     })
@@ -259,6 +304,37 @@ test('actual read-only preauthority verifier reports ownership, native-privilege
     ), `PREAUTHORITY_CATALOG_DIAGNOSTIC stage=${expectedStage} reason=${expectedReason} sqlstate=none`)
     assert.ok(!fixture.statements.some(sql => sql.includes('WHERE n.nspname NOT IN')),
       'failed preconditions must stop before strict native-catalog traversal')
+  }
+})
+
+test('actual preauthority verifier accepts provisioned baseline control roles without a protocol, while role drift fails closed', async () => {
+  assert.ok(controlRolesVerificationSQL.includes("('cms_control'::name, false, true)"))
+  assert.ok(controlRolesVerificationSQL.includes("('cms_controller'::name, true, false)"))
+  assert.ok(!/owner_news_|news_migration_|pg_shdepend|has_table_privilege|has_sequence_privilege/u.test(controlRolesVerificationSQL),
+    'the shared role contract validates the provisioned baseline, not installed protocol ownership or ACLs')
+
+  const fixture = preconditionClient({ roleFixture: 'preauthority' })
+  let stage: PreauthorityCatalogDiagnosticStage = 'connection'
+  const result = await verifyPreauthorityCatalogReadOnly(fixture.client, value => { stage = value })
+  assert.equal(result.protocolStatus, 'absent')
+  assert.equal(result.coverageApplicability, 'not-applicable')
+  assert.equal(stage, 'native_types', 'a correctly provisioned preauthority database passes the shared role check and reaches native verification')
+  assert.ok(fixture.statements.includes(controlRolesVerificationSQL))
+  assert.ok(fixture.statements.some(sql => sql.includes('AS ledger_relations')),
+    'the accepted fixture has an empty finalizer protocol inventory')
+
+  for (const roleFixture of ['missing-control', 'missing-controller', 'insecure-control', 'insecure-controller'] as const) {
+    const rejected = preconditionClient({ roleFixture })
+    let failedStage: PreauthorityCatalogDiagnosticStage = 'connection'
+    const error = await verifyPreauthorityCatalogReadOnly(rejected.client, value => { failedStage = value })
+      .then(() => null, value => value)
+    assert.ok(error instanceof Error)
+    assert.deepEqual(getPreauthorityCatalogFailureDiagnostic(error, failedStage), {
+      stage: 'protocol_control_roles', reason: 'control_role_contract_mismatch', sqlstate: null,
+    }, `${roleFixture} must be rejected by the actual shared role contract`)
+    assert.ok(rejected.statements.includes(controlRolesVerificationSQL))
+    assert.ok(!rejected.statements.some(sql => sql.includes('AS ledger_relations')),
+      'role drift must fail before protocol-state or native-catalog checks')
   }
 })
 

@@ -16,8 +16,14 @@ API/cron continuam independentes do CMS em autoridade `legacy`. A API recebe
 `cms-postgres` usa PostgreSQL16, banco `ownerinc_cms`, sem porta publicada.
 Persistência: `cms_postgres_data` e `cms_uploads_data`, separadas dos volumes antigos.
 
-`cms-provision` recebe somente credencial administrativa e senhas dos papéis;
-`cms-migrate` recebe `cms_migrator`; web/worker recebem `cms_runtime`. Provisionamento
+`cms-provision` recebe somente credencial administrativa e senhas de migrator/runtime;
+`cms-control-roles` é um serviço one-shot isolado por profile e recebe a credencial
+`cms_controller` junto das credenciais necessárias à verificação. CMS web/worker
+recebem somente `cms_runtime`. A preparação privada gera a senha distinta do
+controller. Os deploys verificam as roles com `--verify-control` e, somente se a
+verificação falhar, executam o bootstrap estrito antes da migration nativa; roles
+existentes nunca têm atributos/senhas alterados. Bootstrap rejeita ownership ou ACLs
+nativas inseguras, e a verificação de release continua obrigatória. Provisionamento
 revoga CREATE/PUBLIC e concede privilégios existentes/defaults. Startup verifica
 identidade/grants sem DDL. Migrations CLI terminam antes de web/worker. `push:false`
 e ausência de `prodMigrations` permanecem obrigatórios; nenhum autoRun no web.
@@ -220,6 +226,13 @@ reais sob lock herdado, testa rejeições pré-destrutivas e compara dumps compl
 schemas/catálogos, sequências e árvores de arquivos após dois restores, preservando
 o anúncio legado pelo UUID exato da origem (e confirmando ausente o seed do alvo),
 authority `legacy/1`, protocolo ausente e worker parado.
+O setup CMS descartável também reproduz a sequência de produção: depois de
+`cms-provision`, executa o serviço perfilado `cms-control-roles` com uma senha
+`cms_controller` sintética e privada, sobrescrevendo o comando com `--bootstrap-control`
+antes de `cms-migrate`. Isso cria e verifica somente as roles baseline
+`cms_control`/`cms_controller` e seus grants mínimos; não instala o protocolo nem
+relaxa a checagem de roles. O `verify-release` continua exigindo esse contrato, então
+roles ausentes/inseguras falham antes da verificação do protocolo/catálogo.
 Somente o overlay descartável define `CRON_BOOTSTRAP_ONLY=true`; o runner confere
 o ambiente efetivo do container cron, aguarda sua healthcheck real e repete snapshots
 com os writers parados. Para a identidade dessas comparações (não para os backups

@@ -231,6 +231,7 @@ function makeEnvironment({ projectName, runId, projectId, runDirectory, httpPort
     PAYLOAD_TO_PORTAL_SECRET: randomSecret(),
     PORTAL_TO_PAYLOAD_SECRET: randomSecret(),
     CMS_POSTGRES_PASSWORD: cmsAdminPassword,
+    CMS_CONTROLLER_PASSWORD: randomSecret(),
     CMS_ADMIN_DATABASE_URL: cmsDatabaseURL('cms_admin', cmsAdminPassword),
     CMS_MIGRATOR_PASSWORD: cmsMigratorPassword,
     CMS_RUNTIME_PASSWORD: cmsRuntimePassword,

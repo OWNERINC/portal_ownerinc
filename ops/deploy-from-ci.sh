@@ -521,6 +521,10 @@ compose_for "$release" run --rm --no-deps \
 if [[ $cms_release == true ]]; then
   compose_for "$release" up -d --no-deps cms-postgres
   compose_for "$release" run --rm cms-provision
+  if ! compose_for "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles; then
+    compose_for "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles \
+      node --import tsx scripts/provision-db.ts --bootstrap-control
+  fi
   compose_for "$release" run --rm --no-deps cms-migrate
   compose_for "$release" up -d --no-deps cms
 fi

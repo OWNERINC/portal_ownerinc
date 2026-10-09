@@ -24,6 +24,7 @@ function bashPath(value) {
 function validCmsConfiguration({ includePublicUrl = true } = {}) {
   const values = {
     CMS_POSTGRES_PASSWORD: 'a'.repeat(64),
+    CMS_CONTROLLER_PASSWORD: 'g'.repeat(64),
     CMS_MIGRATOR_PASSWORD: 'b'.repeat(64),
     CMS_RUNTIME_PASSWORD: 'c'.repeat(64),
     PAYLOAD_SECRET: 'd'.repeat(64),
@@ -254,11 +255,11 @@ test('apply atomically prepares private credentials and reviewed files without a
   }));
   assert.equal(values.PORTAL_PUBLIC_URL, 'https://portal.ownerinc.com.br');
   assert.equal(environment.split(/\r?\n/u).filter(line => line.startsWith('PORTAL_PUBLIC_URL=')).length, 1);
-  const required = ['CMS_POSTGRES_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
+  const required = ['CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
     'CMS_ADMIN_DATABASE_URL', 'CMS_MIGRATION_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET'];
   for (const key of required) assert.ok(values[key], `missing ${key}`);
-  const secrets = ['CMS_POSTGRES_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
+  const secrets = ['CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET'].map(key => values[key]);
   assert.equal(new Set(secrets).size, secrets.length, 'all generated credentials must be distinct');
   for (const secret of secrets) assert.match(secret, /^[A-Za-z0-9_-]{32,}$/u);
@@ -367,6 +368,33 @@ test('an existing complete CMS credential set is preserved without secret rotati
   const backups = (await readdir(f.paths.backups)).filter(name => name.startsWith('cms-infrastructure-preparation-'));
   assert.equal(backups.length, 1);
   assert.equal(await readFile(path.join(f.paths.backups, backups[0], 'production.runtime.conf'), 'utf8'), original);
+});
+
+test('apply upgrades the prior complete private CMS configuration by adding only a distinct controller credential', async t => {
+  const f = await fixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const envPath = path.join(f.paths.secrets, 'production.runtime.conf');
+  const prior = validCmsConfiguration().replace(/^CMS_CONTROLLER_PASSWORD=.*\n/mu, '');
+  await writeFile(envPath, prior, { mode: 0o600 });
+
+  const check = f.run(['--check']);
+  assert.equal(check.status, 0, check.stderr);
+  assert.match(check.stdout, /DRY RUN/u);
+  assert.deepEqual(await readFile(envPath, 'utf8'), prior, 'read-only check must not migrate the existing private file');
+  assert.equal(await readdir(f.paths.backups).then(files => files.length), 0);
+
+  const result = f.run(['--apply']);
+  assert.equal(result.status, 0, result.stderr);
+  const updated = await readFile(envPath, 'utf8');
+  assert.ok(updated.startsWith(prior), 'the prior complete configuration remains byte-for-byte intact');
+  const added = updated.slice(prior.length).trimEnd().split(/\r?\n/u);
+  assert.equal(added.length, 1);
+  assert.match(added[0], /^CMS_CONTROLLER_PASSWORD=[A-Za-z0-9_-]{64}$/u);
+  assert.ok(!added[0].endsWith('a'.repeat(64)) && !added[0].endsWith('b'.repeat(64))
+    && !added[0].endsWith('c'.repeat(64)));
+  const backupNames = (await readdir(f.paths.backups)).filter(name => name.startsWith('cms-infrastructure-preparation-'));
+  assert.equal(backupNames.length, 1, 'the old private file is retained in the approved backup before migration');
+  assert.equal(await readFile(path.join(f.paths.backups, backupNames[0], 'production.runtime.conf'), 'utf8'), prior);
 });
 
 test('complete existing CMS credentials without a public URL are rejected without changes', async t => {

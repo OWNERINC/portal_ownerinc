@@ -77,9 +77,7 @@ No Windows, ausência de fsync de diretório retorna `directorySynced=false` e
 `assertDurablePromotion` bloqueia aplicação. Testes Windows de bytes/restart não
 são evidência de recuperação após perda de energia em Linux.
 
-## Integração ainda necessária
-
-### Bootstrap de roles de controle — fase 1 somente
+## Bootstrap de roles de controle — fase 1 somente
 
 Depois do provisionamento CMS já existente (`--provision`) e antes da migration
 nativa, a preparação autorizada de roles usa a conexão
@@ -89,7 +87,13 @@ nativa, a preparação autorizada de roles usa a conexão
 no banco e no schema `public`, atualmente de propriedade do migrator. A checagem
 superuser é intencional e evita presumir grant options que não foram verificadas.
 
-Forneça `CMS_CONTROLLER_PASSWORD` apenas ao processo one-shot de bootstrap. O valor
+Forneça `CMS_CONTROLLER_PASSWORD` apenas ao serviço one-shot de roles; a preparação
+privada de infraestrutura o gera distinto das demais credenciais. Para uma
+configuração completa criada pelo preparador anterior que ainda não contém essa
+chave, `--check` permanece somente leitura e `--apply` cria backup privado antes
+de acrescentar exclusivamente a nova senha, sem rotacionar as credenciais existentes.
+Se a role `cms_controller` já existir com outra senha, bootstrap/login falha fechado;
+não se altera senha existente automaticamente. O valor
 precisa passar as mesmas regras de tamanho/placeholder/caracteres do provisioner e
 ser distinto do runtime, migrator, senha PostgreSQL/admin e demais segredos/URLs de
 banco presentes no ambiente. O provisioner cria somente roles ausentes: `cms_control`
@@ -117,6 +121,12 @@ identidade das roles em qualquer fase. Ambas exigem URL/identidade atuais de
 verificação executa um controller login probe sem imprimir a credencial. CREATE
 ROLE é cluster-global no PostgreSQL; por isso o bootstrap não é embutido em
 migration Payload nem executado pelo migrator. Senhas e URLs não são impressas.
+Os fluxos de deploy CI e manual executam o `--verify-control` do serviço perfilado
+após `cms-provision` e antes de `cms-migrate`; somente quando a role contract query
+ou o login probe falha, repetem o serviço com `--bootstrap-control`. O provisioner
+continua criando apenas roles ausentes e validando todas antes do commit; role
+existente insegura, senha divergente, ownership ou ACL nativa fora do baseline
+interrompem o release sem relaxar a checagem.
 
 Handoff do bootstrap: `controlRolesVerificationSQL` verifica atributos explícitos,
 login esperado, password presence, zero membership nas duas direções, CONNECT e

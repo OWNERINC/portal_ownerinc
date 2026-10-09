@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   candidateImagesValid, createFixtureProjectNames, createInventory, legacyAnnouncementLookupSql,
@@ -56,6 +57,39 @@ test('fixture inventory uses isolated projects, explicit four-volume mounts, and
   assert.equal(source.document.volumes.cmsUploads.mounts.find(item => item.service === 'cms-worker').required, false);
   assert.throws(() => createInventory({ project: 'ownerinc-portal-prod', root }), /non_disposable_project/u);
   assert.throws(() => createFixtureProjectNames({ runId: 'not-a-run', runAttempt: '1' }), /invalid_run_identity/u);
+});
+
+test('Task 3 provisions the documented CMS control-role baseline before native migrations without installing protocol', async () => {
+  const runner = await readFile('scripts/test-payload-preauthority-recovery.mjs', 'utf8');
+  const overlay = await readFile('scripts/integration/payload-preauthority-fixture.compose.yml', 'utf8');
+  const compose = await readFile('docker-compose.payload.yml', 'utf8');
+  const runbook = await readFile('docs/operations/owner-news-payload-migration.md', 'utf8');
+  const provisionStart = runner.indexOf('async function provisionProject(runtime)');
+  const provisionEnd = runner.indexOf('\nfunction syntheticUid', provisionStart);
+  assert.ok(provisionStart >= 0 && provisionEnd > provisionStart);
+  const setup = runner.slice(provisionStart, provisionEnd);
+  const ordinaryProvision = setup.indexOf("'cms-provision'");
+  const roleBootstrap = setup.indexOf("'cms-control-roles'");
+  const migration = setup.indexOf("'cms-migrate'");
+  assert.ok(ordinaryProvision >= 0 && roleBootstrap > ordinaryProvision && migration > roleBootstrap,
+    'ordinary CMS role setup, control-role bootstrap, then native migration must be ordered explicitly');
+  assert.ok(/--profile', 'cms-control-roles'/u.test(setup.slice(roleBootstrap - 35, roleBootstrap + 35)),
+    'the one-shot role service is selected only for its targeted run');
+  assert.ok(/scripts\/provision-db\.ts', '--bootstrap-control'/u.test(setup),
+    'the fixture explicitly selects the existing bootstrap command rather than default read-only verification');
+  assert.doesNotMatch(setup, /--finalize-protocol|--upgrade-protocol/u,
+    'the preauthority fixture must not install protocol to make role verification pass');
+
+  assert.ok(/CMS_CONTROLLER_PASSWORD=\$\{credentials\.cmsController\}/u.test(runner),
+    'the synthetic controller credential is placed in the private fixture environment');
+  assert.ok(/cmsController: secret\(\)/u.test(runner),
+    'the controller credential is synthetic and generated for each fixture');
+  assert.ok(/cms-control-roles:[\s\S]*?CMS_CONTROLLER_PASSWORD:[\s\S]*?--verify-control/u.test(compose),
+    'the reusable profiled service scopes the controller credential to role verification/bootstrap');
+  assert.ok(/profiles: \[cms-control-roles\]/u.test(compose));
+  assert.ok(/cms-control-roles:[\s\S]*?networks: \[backend\]/u.test(overlay));
+  assert.ok(runbook.includes('scripts/provision-db.ts --bootstrap-control` antes da migration\nnativa'),
+    'the fixture follows the existing documented pre-migration provisioning phase');
 });
 
 test('legacy announcement lookup is bound to a captured source document UUID', () => {

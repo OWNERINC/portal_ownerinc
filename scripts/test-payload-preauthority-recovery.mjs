@@ -281,6 +281,7 @@ function envFileContents({ project, port, credentials }) {
     `API_DATABASE_URL=postgresql://portal_api:${credentials.portalApi}@postgres:5432/portal`,
     `CRON_DATABASE_URL=postgresql://portal_cron:${credentials.portalCron}@postgres:5432/portal`,
     assignment(`CMS_${passwordKey('PASSWORD')}`, credentials.cmsAdmin),
+    `CMS_CONTROLLER_PASSWORD=${credentials.cmsController}`,
     `CMS_MIGRATOR_PASSWORD=${credentials.cmsMigrator}`,
     `CMS_RUNTIME_PASSWORD=${credentials.cmsRuntime}`,
     `CMS_ADMIN_DATABASE_URL=postgresql://cms_admin:${credentials.cmsAdmin}@cms-postgres:5432/ownerinc_cms`,
@@ -346,7 +347,7 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
   const secret = () => randomBytes(48).toString('base64url');
   Object.assign(credentials, {
     portalAdmin: secret(), portalApi: secret(), portalCron: secret(), cmsAdmin: secret(),
-    cmsMigrator: secret(), cmsRuntime: secret(), payloadSecret: secret(), payloadToPortal: secret(),
+    cmsController: secret(), cmsMigrator: secret(), cmsRuntime: secret(), payloadSecret: secret(), payloadToPortal: secret(),
     portalToPayload: secret(), smtpPassword: secret(), workerSecret: secret(),
   });
   await writeRootFile(document.paths.environmentFile, envFileContents({ project, port, credentials }));
@@ -605,6 +606,8 @@ async function provisionProject(runtime) {
   composeWithLease(runtime, ['up', '--detach', '--no-build', '--pull', 'never', 'cms-postgres']);
   await awaitService(runtime, 'cms-postgres');
   composeWithLease(runtime, ['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-provision']);
+  composeWithLease(runtime, ['--profile', 'cms-control-roles', 'run', '--rm', '--no-deps', '--pull', 'never', '-T',
+    'cms-control-roles', 'node', '--import', 'tsx', 'scripts/provision-db.ts', '--bootstrap-control']);
   composeWithLease(runtime, ['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-migrate']);
   composeWithLease(runtime, ['up', '--detach', '--no-build', '--pull', 'never', 'cms']);
   await awaitService(runtime, 'cms');

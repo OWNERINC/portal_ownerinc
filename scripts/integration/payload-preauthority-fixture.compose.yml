@@ -28,6 +28,9 @@ services:
   cms-provision:
     networks: [backend]
 
+  cms-control-roles:
+    networks: [backend]
+
   cms-migrate:
     networks: [backend]
 
