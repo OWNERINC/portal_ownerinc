@@ -249,6 +249,113 @@ exec '${quotedPython}' "$@"
   return { root, paths, run, dockerLog, composeEnvironmentLog, flockLog, installLog };
 }
 
+async function authenticatedFixture(t, options = {}) {
+  const f = await fixture(t, options);
+  if (f.skip) return f;
+  const digest = '7'.repeat(64);
+  const approvedCms = `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:${'8'.repeat(64)}`;
+  const callback = path.join(f.paths.libexec, 'ownerinc-payload-prepare.py');
+  const log = path.join(f.root, 'context.calls');
+  const refuse = path.join(f.root, 'context.refuse');
+  const script = path.join(f.paths.bundle, 'ops', 'prepare-cms-infrastructure.sh');
+  let source = await readFile(script, 'utf8');
+  source = source.replaceAll('/opt/ownerinc/lib/payload-preparation', bashPath(f.paths.bundle))
+    .replaceAll('PATH=/usr/bin:/bin LANG=C LC_ALL=C', `PATH=${bashPath(f.paths.bin)}:/usr/bin:/bin LANG=C LC_ALL=C`);
+  // Preserve fixture helper routing (owner-only doubles); production still uses
+  // fixed isolated Python, asserted in the source-level boundary tests.
+  source = source.replace(/python3\(\) \{[^\n]+\}/u, 'python3() { command python3 "$@"; }');
+  if (process.platform === 'win32') source = source.replace('${BASH_SOURCE[0]} ==', '$(cygpath --unix "${BASH_SOURCE[0]}") ==');
+  await writeFile(script, source);
+  // Actual context/data protocol and fixed create-inventory code, with explicit
+  // authentication/lease/host observations doubled. Full cryptographic/host
+  // validators and native FD9 semantics have separate tests; this is not VPS proof.
+  await writeFile(callback, `import importlib.util,pathlib,sys,json,os
+sys.stdout.reconfigure(newline='\\n') # Linux line protocol on the Windows transport double.
+spec=importlib.util.spec_from_file_location('m',${JSON.stringify(path.join(repository, 'ops/prepare-cms-authenticated.py'))})
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+m.HOST_ROOT=${JSON.stringify(f.paths.app)};m.RUNTIME=${JSON.stringify(f.paths.runtime)}
+m.RELEASES=os.path.join(m.HOST_ROOT,'releases');m.LOCK=os.path.join(m.RUNTIME,'deploy.lock')
+m.ENVIRONMENT=${JSON.stringify(path.join(f.paths.secrets, 'production.runtime.conf'))}
+m.PRODUCTION_BACKUP=${JSON.stringify(f.paths.backups)}
+captured={'ops/payload-control-inventory.py':pathlib.Path(${JSON.stringify(path.join(f.paths.bundle, 'ops/payload-control-inventory-test.py'))}).read_bytes()}
+inv=m.load_authenticated(captured['ops/payload-control-inventory.py'],'captured-inventory.py')
+# Fixture substitutes the daily-backup constant consistently in this one fixed operation.
+original=inv.production_inventory
+def inventory(*args):
+ args=list(args);args[5]=${JSON.stringify(f.paths.dailyBackups)};return original(*[os.path.normpath(a) for a in args])
+inv.production_inventory=inventory
+original_create=inv.create
+inv.create=lambda filename,value:original_create(os.path.normpath(filename),value)
+expected=inventory(m.HOST_ROOT,m.RUNTIME,m.RELEASES,m.HOST_ROOT+'/current-release',m.LOCK,
+ '',m.PRODUCTION_BACKUP,m.PRODUCTION_BACKUP+'/restore-protection',m.ENVIRONMENT,
+ m.RUNTIME+'/compose.production.yaml',m.RUNTIME+'/compose.payload.production.yaml')
+approval={'hostBaseline':{'currentCommit':${JSON.stringify(commit)},'inventoryIdentity':inv.identity(expected),
+ 'installedPredecessors':{'commonReceiver':${JSON.stringify(previousReceiverHash)},'receiverHelper':None,
+ 'productionWrapper':${JSON.stringify(createHash('sha256').update(previousProductionReceiver).digest('hex'))},
+ 'operationsGuard':${JSON.stringify(createHash('sha256').update('previous guard\n').digest('hex'))},'cmsCandidate':None}}}
+def observe():
+ if pathlib.Path(${JSON.stringify(refuse)}).exists():raise ValueError('context denied')
+ with open(${JSON.stringify(log)},'a') as stream:stream.write(sys.argv[1]+'\\n')
+m.verify_inherited_lease=observe
+m.verify_host_baseline=lambda *args:None
+m.authenticate=lambda:(approval,captured,${JSON.stringify(approvedCms)},None,${JSON.stringify(digest)})
+m.load_authenticated=lambda *args:inv
+if sys.argv[1]=='--verify-context':print(m.verified_context(sys.argv[2]))
+elif sys.argv[1]=='--create-inventory':m.create_inventory(sys.argv[2])
+else:raise ValueError('unexpected operation')
+`, { mode: 0o755 });
+  const run = (mode = 'check', selectedDigest = digest) => spawnSync(bash, ['-c',
+    // Same-shell descriptor transport is a Windows double, not native pass_fds.
+    'exec 9<>"$1"; shift; source "$@"', 'fixture-parent', bashPath(path.join(f.paths.runtime, 'deploy.lock')),
+    bashPath(script), `--authenticated-${mode}`, selectedDigest], {
+    cwd: f.paths.bundle, encoding: 'utf8', timeout: 60000,
+    env: { PATH: `${bashPath(f.paths.bin)}:${process.env.PATH || ''}`, CMS_PREPARATION_TEST_HOST: '1',
+      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) },
+  });
+  return { ...f, runAuthenticated: run, approvedCms, refuse, log };
+}
+
+test('authenticated preparer uses fixed context protocol, inherited FD9 and approved CMS; retries preserve secrets (host/process doubles)', async t => {
+  const f = await authenticatedFixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const env = path.join(f.paths.secrets, 'production.runtime.conf');
+  const before = await readFile(env);
+  const check = f.runAuthenticated();
+  assert.equal(check.status, 0, check.stderr);
+  assert.deepEqual(await readFile(env), before);
+  assert.deepEqual(await readdir(f.paths.backups), []);
+  assert.equal(existsSync(f.flockLog), false, 'child must not reopen/reacquire via shell flock');
+  const apply = f.runAuthenticated('apply');
+  assert.equal(apply.status, 0, apply.stderr);
+  assert.equal(await readFile(path.join(f.paths.runtime, 'cms-image-candidate.env'), 'utf8'), `CMS_IMAGE=${f.approvedCms}\n`);
+  const prepared = await readFile(env);
+  const retry = f.runAuthenticated('apply');
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.deepEqual(await readFile(env), prepared);
+  assert.match(await readFile(f.log, 'utf8'), /--create-inventory/u);
+  for (const line of (await readFile(f.dockerLog, 'utf8')).trim().split('\n')) assert.match(line, / config --quiet$/u);
+});
+
+test('authenticated wrong context and dependency failure preserve receivers; direct flags do not establish authority (host doubles)', async t => {
+  const f = await authenticatedFixture(t, { failReceiverHelperInstall: true });
+  if (f.skip) return t.skip(f.skip);
+  const wrong = f.runAuthenticated('apply', '0'.repeat(64));
+  assert.notEqual(wrong.status, 0);
+  assert.deepEqual(await readdir(f.paths.backups), []);
+  await writeFile(f.refuse, 'deny');
+  assert.notEqual(f.runAuthenticated('apply').status, 0);
+  assert.deepEqual(await readdir(f.paths.backups), []);
+  await rm(f.refuse);
+  assert.notEqual(f.runAuthenticated('apply').status, 0);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy-production'), 'utf8'), previousProductionReceiver);
+  const production = await readFile('ops/prepare-cms-infrastructure.sh', 'utf8');
+  assert.match(production, /authenticated=false/u);
+  assert.match(production, /expected_current=d285029970c82d48cd50cc393a054af4cbfdf1e8/u);
+  assert.ok(production.includes(cmsImage), 'legacy CMS pin remains unchanged');
+  assert.doesNotMatch(production, /\$\{?APPROVED/u);
+});
+
 test('missing receiver helper is installed and verified before receiver publication (fake host)', async t => {
   const f = await fixture(t);
   if (f.skip) return t.skip(f.skip);

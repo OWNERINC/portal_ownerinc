@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Installed, verification-only administrative entrypoint. Never dispatches preparation."""
+"""Installed administrative entrypoint for authenticated inactive preparation."""
 import hashlib
 import json
 import os
@@ -7,6 +7,7 @@ import stat
 import sys
 import types
 import builtins
+import subprocess
 from contextlib import contextmanager
 
 HOST_ROOT = '/opt/ownerinc/apps/portal-ownerinc-real'
@@ -115,9 +116,10 @@ def host_read(filename, owner=(1000, 1000), modes=(0o600, 0o644), limit=2 * 1024
         os.close(fd)
 
 
-def lease_operation(fd, unlock=False):
+def lease_operation(fd, unlock=False, shared=False):
     import fcntl
-    fcntl.flock(fd, fcntl.LOCK_UN if unlock else fcntl.LOCK_EX | fcntl.LOCK_NB)
+    operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+    fcntl.flock(fd, fcntl.LOCK_UN if unlock else operation | fcntl.LOCK_NB)
 
 
 def lock_metadata(info):
@@ -128,8 +130,8 @@ def lock_metadata(info):
 
 
 @contextmanager
-def deployment_lease():
-    # No O_CREAT/O_TRUNC, no inherited-descriptor adoption in this check-only unit.
+def deployment_lease(close_only=False):
+    # Parent acquisition only. Inherited contexts use verify_inherited_lease.
     import errno
     try:
         os.fstat(9)
@@ -157,7 +159,9 @@ def deployment_lease():
         reaffirm()
     finally:
         try:
-            if leased:
+            # Dispatch descendants share this open description. On interruption,
+            # closing our reference must not unlock a still-running helper's FD9.
+            if leased and not close_only:
                 lease_operation(fd, unlock=True)
         finally:
             os.close(fd)
@@ -286,7 +290,7 @@ def verify_host_under_lock(approval, captured, cms_image, support):
         reaffirm()
 
 
-def verify():
+def authenticate():
     require(os.path.abspath(__file__) == LAUNCHER)
     approval_raw = protected(APPROVAL, 0o600, 1024 * 1024)
     def pairs(items):
@@ -341,21 +345,121 @@ def verify():
     verifier.verify_installed_tools(policy)
     for relative, raw in captured.items():
         require(protected(support.preparation_target(relative), support.preparation_mode(relative), 2 * support.MAX_JSON) == raw)
-    verify_host_under_lock(approval, captured, record['images']['cms'], support)
+    return approval, captured, record['images']['cms'], support, support.sha(approval_raw)
+
+
+def verify():
+    approval, captured, cms_image, support, _ = authenticate()
+    verify_host_under_lock(approval, captured, cms_image, support)
     return {'kind': 'payload-preparation-verification-only', 'sourceAuthenticated': True,
-            'admissionRecordAuthenticated': True, 'cmsImage': record['images']['cms'],
+            'admissionRecordAuthenticated': True, 'cmsImage': cms_image,
             'hostBaselineChecked': True, 'archiveBytesChecked': False,
             'preparationExecuted': False, 'deploymentAuthorized': False}
 
 
+def verify_inherited_lease():
+    # Prove FD9 and pathname still identify the same safe file, and that the
+    # exclusive lock belongs to this open description rather than another owner.
+    # A separate SH probe must be blocked by an existing EX lock. An EX probe
+    # would also block on SH and incorrectly permit upgrading inherited SH to EX.
+    # Only after that test may flock on inherited FD9 reaffirm the same OFD.
+    # The trusted dispatch parent must retain its EX lease throughout this
+    # handshake; these separate flock calls are not an atomic lock-state query.
+    # Never unlock FD9 here: child and parent share its open description.
+    host_ancestry(LOCK)
+    before = lock_metadata(os.lstat(LOCK))
+    require(lock_metadata(os.fstat(9)) == before)
+    probe = os.open(LOCK, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        require(lock_metadata(os.fstat(probe)) == before)
+        try:
+            lease_operation(probe, shared=True)
+        except BlockingIOError:
+            pass
+        else:
+            lease_operation(probe, unlock=True)
+            raise VerificationError('inherited_lease_not_held')
+        require(lock_metadata(os.fstat(9)) == before and lock_metadata(os.lstat(LOCK)) == before)
+        lease_operation(9)
+        require(lock_metadata(os.fstat(9)) == before and lock_metadata(os.lstat(LOCK)) == before)
+        host_ancestry(LOCK)
+    finally:
+        os.close(probe)
+
+
+def context_material(expected_digest):
+    require(isinstance(expected_digest, str) and len(expected_digest) == 64
+            and all(c in '0123456789abcdef' for c in expected_digest))
+    verify_inherited_lease()
+    approval, captured, cms_image, support, digest = authenticate()
+    require(digest == expected_digest)
+    verify_host_baseline(approval, captured, cms_image, support)
+    verify_inherited_lease()
+    return approval, captured, cms_image, support, digest
+
+
+def verified_context(expected_digest):
+    approval, _, cms_image, _, digest = context_material(expected_digest)
+    # Fixed line protocol: validated hashes/identifiers only, never shell text.
+    baseline = approval['hostBaseline']
+    return '\n'.join([digest, baseline['currentCommit'], cms_image] +
+                     [baseline['installedPredecessors'][role] or '-' for role in
+                      ('commonReceiver', 'receiverHelper', 'productionWrapper', 'operationsGuard', 'cmsCandidate')])
+
+
+def create_inventory(expected_digest):
+    # One fixed helper operation; no caller-selected module, destination or paths.
+    approval, captured, _, _, _ = context_material(expected_digest)
+    inventory = load_authenticated(captured['ops/payload-control-inventory.py'], ROOT + '/ops/payload-control-inventory.py')
+    value = inventory.production_inventory(HOST_ROOT, RUNTIME, RELEASES, HOST_ROOT + '/current-release', LOCK,
+        '/opt/ownerinc/backups/portal-ownerinc/daily', PRODUCTION_BACKUP, PRODUCTION_BACKUP + '/restore-protection',
+        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml')
+    require(inventory.identity(value) == approval['hostBaseline']['inventoryIdentity'])
+    inventory.verify_environment_file(ENVIRONMENT, value['environmentFileOwner'])
+    verify_inherited_lease()
+    inventory.create(RUNTIME + '/payload-control-inventory.json', value)
+
+
+def dispatch(mode):
+    require(mode in ('check', 'apply'))
+    # Authenticate before executing ANY closure helper, then reauthenticate and
+    # validate host eligibility under the lease used by the actual child.
+    initial = authenticate()
+    with deployment_lease(close_only=True) as reaffirm:
+        approval, captured, cms_image, support, digest = authenticate()
+        require(digest == initial[4])
+        verify_host_baseline(approval, captured, cms_image, support)
+        reaffirm()
+        result = subprocess.run(['/bin/bash', '--noprofile', '--norc', ROOT + '/ops/prepare-cms-infrastructure.sh',
+                                 '--authenticated-' + mode, digest],
+                                env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'},
+                                pass_fds=(9,), check=False)
+        reaffirm()
+        require(result.returncode == 0)
+        # No runtime authorization is conferred by preparing inactive files.
+        approval, captured, cms_image, support, final_digest = authenticate()
+        require(final_digest == digest)
+        verify_host_baseline(approval, captured, cms_image, support)
+        reaffirm()
+    return {'kind': 'payload-inactive-preparation', 'mode': mode, 'hostBaselineChecked': True,
+            'archiveBytesChecked': False, 'preparationExecuted': True, 'deploymentAuthorized': False}
+
+
 def main():
-    require(sys.argv[1:] == ['--check'])
+    args = sys.argv[1:]
+    require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in ('--verify-context', '--create-inventory'))
     require(sys.platform == 'linux' and os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 0)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode)
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'} and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C')
     require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'))
-    print(json.dumps(verify(), sort_keys=True))
+    if args[0] == '--verify-context':
+        print(verified_context(args[1]))
+    elif args[0] == '--create-inventory':
+        create_inventory(args[1])
+        print('Protected production inventory created from authenticated source.')
+    else:
+        print(json.dumps(dispatch(args[0][2:]), sort_keys=True))
 
 
 if __name__ == '__main__':

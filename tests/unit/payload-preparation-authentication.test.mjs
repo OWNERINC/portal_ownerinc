@@ -222,7 +222,7 @@ for scenario in ('success','busy','replaced-before','replaced-on-lock','replaced
 test('native Linux flock preserves lock bytes, refuses contention and replacement, and releases FD9 (not host end-to-end)',
   { skip: process.platform !== 'linux' }, t => {
     const result = spawnSync(python, ['-I', '-S', '-B', '-c', String.raw`
-import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil
+import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil,subprocess
 if (os.getuid(),os.getgid()) not in ((0,0),(1000,1000)):
  print('SKIP unsupported test owner');sys.exit(0)
 spec=importlib.util.spec_from_file_location('launcher',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -232,6 +232,24 @@ try:
  # Only ancestry is doubled for the disposable temp parent. flock/open/FD9,
  # leaf metadata, identity, contention, replacement and closes are native.
  m.host_ancestry=lambda _:None
+ # Regression: a sole inherited SH lease must not be upgraded to EX by checking.
+ shared=os.open(m.LOCK,os.O_RDWR)
+ if shared!=9:os.dup2(shared,9);os.close(shared)
+ fcntl.flock(9,fcntl.LOCK_SH|fcntl.LOCK_NB)
+ try:
+  try:m.verify_inherited_lease()
+  except m.VerificationError:pass
+  else:raise AssertionError('inherited shared lease accepted/upgraded')
+  assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino,'rejection closed original FD9'
+  probe=os.open(m.LOCK,os.O_RDWR)
+  try:
+   fcntl.flock(probe,fcntl.LOCK_SH|fcntl.LOCK_NB) # Original must still be SH, not EX.
+   fcntl.flock(probe,fcntl.LOCK_UN)
+   try:fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   except BlockingIOError:pass # Original SH must still be held, not unlocked.
+   else:raise AssertionError('rejection released original shared lease')
+  finally:os.close(probe)
+ finally:os.close(9)
  busy=os.open(m.LOCK,os.O_RDWR);fcntl.flock(busy,fcntl.LOCK_EX|fcntl.LOCK_NB)
  try:
   with m.deployment_lease():raise AssertionError('busy lease accepted')
@@ -240,6 +258,15 @@ try:
  with m.deployment_lease() as reaffirm:
   assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino;reaffirm()
   assert pathlib.Path(m.LOCK).read_bytes()==b'never truncated'
+  code="import importlib.util,sys; s=importlib.util.spec_from_file_location('m',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.LOCK=sys.argv[2]; m.host_ancestry=lambda _:None; m.verify_inherited_lease(); print('inherited-FD9-PASS')"
+  child=subprocess.run([sys.executable,'-I','-S','-B','-c',code,sys.argv[1],m.LOCK],pass_fds=(9,),capture_output=True,text=True,timeout=10)
+  assert child.returncode==0 and 'inherited-FD9-PASS' in child.stdout,child.stderr
+  probe=os.open(m.LOCK,os.O_RDWR)
+  try:
+   try:fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   except BlockingIOError:pass
+   else:raise AssertionError('child released parent lock')
+  finally:os.close(probe)
  try:os.fstat(9)
  except OSError:pass
  else:raise AssertionError('FD9 leaked')
@@ -283,6 +310,83 @@ with patch.object(l.os,'fstat',return_value=info),patch.object(l.os,'open') as o
  def attempt():
   with l.deployment_lease():pass
  denied(attempt);opened.assert_not_called();closed.assert_not_called()
+`);
+});
+
+test('dispatch retains parent lease across fixed child, binds approval continuity and fails closed on child/context errors (process doubles)', () => {
+  probe(String.raw`
+from contextlib import contextmanager
+from unittest.mock import patch
+material=l.authenticate();events=[];held=[False]
+@contextmanager
+def lease(close_only=False):
+ assert close_only is True
+ held[0]=True;events.append('acquire')
+ def reaffirm():assert held[0];events.append('reaffirm')
+ try:yield reaffirm
+ finally:held[0]=False;events.append('release')
+def baseline(*args):assert held[0];events.append('host')
+def child(args,**kwargs):
+ assert held[0] and kwargs['pass_fds']==(9,) and kwargs['check'] is False
+ assert args==['/bin/bash','--noprofile','--norc',l.ROOT+'/ops/prepare-cms-infrastructure.sh','--authenticated-apply',material[4]]
+ assert kwargs['env']=={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'}
+ events.append('child');return types.SimpleNamespace(returncode=0)
+with patch.object(l,'deployment_lease',lease),patch.object(l,'verify_host_baseline',side_effect=baseline),patch.object(l.subprocess,'run',side_effect=child):
+ result=l.dispatch('apply');assert result['preparationExecuted'] is True and result['deploymentAuthorized'] is False
+ assert events.index('host')<events.index('child')<events.index('release') and events.count('host')==2
+ with patch.object(l.subprocess,'run',return_value=types.SimpleNamespace(returncode=2)):
+  denied(lambda:l.dispatch('apply'));assert not held[0]
+ with patch.object(l,'authenticate',side_effect=[material,(*material[:4],'0'*64)]),patch.object(l.subprocess,'run') as run:
+  denied(lambda:l.dispatch('apply'));run.assert_not_called();assert not held[0]
+# Inherited-context flags/digests do not replace independent authentication.
+with patch.object(l,'verify_inherited_lease') as inherited,patch.object(l,'verify_host_baseline'):
+ frame=l.verified_context(material[4]).splitlines()
+ assert len(frame)==8 and frame[:3]==[material[4],approval['hostBaseline']['currentCommit'],images['cms']]
+ assert inherited.call_count==2
+ denied(lambda:l.verified_context('0'*64));denied(lambda:l.verified_context('APPROVED=1'))
+ with patch.object(l,'authenticate',side_effect=ValueError('untrusted')):
+  denied(lambda:l.verified_context(material[4]))
+`);
+});
+
+test('inherited context refuses shared, unlocked, foreign-description, missing and replaced FD9 without unlocking parent (syscall doubles)', () => {
+  probe(String.raw`
+import stat
+from unittest.mock import patch
+info=types.SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_uid=1000,st_gid=1000,st_nlink=1,st_size=7,
+ st_dev=1,st_ino=2,st_mtime_ns=3,st_ctime_ns=4)
+other=copy.copy(info);other.st_ino=3
+l.host_ancestry=lambda _:None;l.os.O_NOFOLLOW=getattr(l.os,'O_NOFOLLOW',0);l.os.O_NONBLOCK=getattr(l.os,'O_NONBLOCK',0)
+for scenario in ('valid','shared','unlocked','foreign','missing','replaced'):
+ calls=[]
+ def fstat(fd):
+  if scenario=='missing' and fd==9:raise OSError('missing')
+  return other if scenario=='replaced' and fd==9 else info
+ def lease(fd,unlock=False,shared=False):
+  calls.append((fd,unlock));assert not (fd==9 and unlock)
+  if not unlock and (fd==10 and scenario!='unlocked' and not (scenario=='shared' and shared) or fd==9 and scenario=='foreign'):raise BlockingIOError()
+ with patch.object(l.os,'lstat',return_value=info),patch.object(l.os,'fstat',side_effect=fstat), \
+      patch.object(l.os,'open',return_value=10),patch.object(l.os,'close') as closed,patch.object(l,'lease_operation',side_effect=lease):
+  if scenario=='valid':l.verify_inherited_lease()
+  else:denied(l.verify_inherited_lease)
+  assert (9,True) not in calls
+  if scenario in ('shared','unlocked'):assert all(fd!=9 for fd,_ in calls),'must reject before touching inherited FD9'
+  if scenario=='shared':closed.assert_called_once_with(10)
+# A dispatch error closes the parent's reference, never explicitly unlocks a
+# possibly surviving descendant that inherited the same open description.
+import errno
+count=[0]
+def initial_fd(fd):
+ count[0]+=1
+ if count[0]==1:raise OSError(errno.EBADF,'not open')
+ return info
+with patch.object(l.os,'lstat',return_value=info),patch.object(l.os,'fstat',side_effect=initial_fd), \
+     patch.object(l.os,'open',return_value=9),patch.object(l.os,'close') as closed,patch.object(l,'lease_operation') as locking:
+ def interrupted():
+  with l.deployment_lease(close_only=True):raise ValueError('child interrupted')
+ denied(interrupted)
+ assert locking.call_args_list==[__import__('unittest.mock',fromlist=['call']).call(9)]
+ closed.assert_called_once_with(9)
 `);
 });
 

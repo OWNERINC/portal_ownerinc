@@ -797,7 +797,7 @@ os gates aprovados.
 Nenhum segredo de runtime, Firebase, SMTP ou banco é enviado ao GitHub: eles
 continuam somente nos arquivos protegidos de cada VPS.
 
-### Preparação P2: instalação de autoridade e verificação somente
+### Preparação P2: autoridade instalada e dispatch administrativo inativo
 
 O perfil explícito `--profile preparation` de
 `ops/provision-payload-candidate-trust.py` instala uma closure fixa e inerte.
@@ -868,8 +868,8 @@ Campos extras, chaves duplicadas, tipos coercíveis e paths arbitrários não s�
 aceitos. O bootstrap valida baseline **apenas como schema**, não como observação
 do host; tampouco autentica admission durante a publicação.
 
-O launcher instalado aceita **somente `--check`**, sob o mesmo ambiente vazio e
-Python `-I -S -B`. `--apply` é negado. Antes de importar qualquer helper da closure,
+O launcher instalado aceita **`--check` ou `--apply`**, sob o mesmo ambiente vazio e
+Python `-I -S -B`. Antes de importar qualquer helper da closure,
 seu leitor stdlib verifica ancestry, ownership, modos, links, identidade e hashes
 de todos os 15 arquivos. O launcher em execução é parte da confiança administrativa
 prévia; seu próprio hash não é uma prova independente de si mesmo. Só então carrega
@@ -885,15 +885,16 @@ vem somente de `record.images.cms`; nenhum argumento fornece imagem alternativa.
 Isto confia na origem administrativa/registrar do record protegido, não recria
 artefatos CI, nem verifica bytes de archive ausentes.
 
-Saída JSON não qualificadora: `kind: payload-preparation-verification-only`,
-`sourceAuthenticated: true`, `admissionRecordAuthenticated: true`, `cmsImage`,
-`hostBaselineChecked: true`, `archiveBytesChecked: false`,
-`preparationExecuted: false`, `deploymentAuthorized: false`.
-`hostBaselineChecked` só é emitido após a verificação abaixo sob lease; falha não
-emite report de sucesso. Nenhum banco, serviço ou preparer é executado.
-Pins antigos de current release/CMS, inventory/state/guards e
-`release_not_preflighted` permanecem intactos. Integração sob lease e aceite
-operacional continuam sendo outro bloco. Provas portáteis usam doubles explícitos;
+Saída final JSON não qualificadora: `kind: payload-inactive-preparation`,
+`mode: check|apply`, `hostBaselineChecked: true`, `archiveBytesChecked: false`,
+`preparationExecuted: true`, `deploymentAuthorized: false`. `preparationExecuted`
+indica que o preparer foi chamado, inclusive em dry-run; não significa instalação
+de release nem ativação. Antes do JSON há os diagnósticos existentes do preparer.
+Falha não emite report de sucesso. Nenhum banco ou serviço é iniciado.
+Pins antigos de current release/CMS permanecem no caminho direto legado;
+somente o caminho autenticado recebe valores da aprovação/record. Inventory,
+state, guards e `release_not_preflighted` permanecem obrigatórios.
+Aceite operacional continua sendo outro bloco. Provas portáteis usam doubles explícitos;
 não qualificam instalação/root/SSH na VPS nem durabilidade sob power loss.
 
 #### Gate de host sob lease (somente leitura)
@@ -902,8 +903,8 @@ Após autenticar fonte e admission, o launcher abre o **lock existente** em
 `/opt/ownerinc/apps/portal-ownerinc-real/runtime/deploy.lock` com `O_RDWR`,
 `O_NOFOLLOW` e `O_NONBLOCK`, sem `O_CREAT` ou `O_TRUNC`. Exige arquivo regular,
 um link, owner root:root ou deploy `1000:1000`, modo `0600` ou `0644`, ancestry
-segura, e identidade estável entre pathname/descriptor. Reserva FD9 somente se
-estiver livre; descriptor herdado não é adotado nem fechado. `flock(LOCK_EX |
+segura, e identidade estável entre pathname/descriptor. O parent reserva FD9 somente se
+estiver livre; descriptor preexistente não é adotado nem fechado. `flock(LOCK_EX |
 LOCK_NB)` ocupado é recusa antes de ler o baseline. Revalida pathname/FD9 depois
 de adquirir e ao terminar; `finally` libera somente sua própria lease e fecha FD9.
 Ausência do lock é recusa, nunca criação automática.
@@ -942,12 +943,70 @@ emitidos; dados observados e ausências são rechecados antes de devolver sucess
 
 Este gate **não é preflight operacional completo**: não consulta DB/Docker,
 não valida Compose por execução, nem atualiza/classifica credenciais CMS pelo
-preparer. O campo de sucesso descreve apenas baseline e elegibilidade inicial
-verificados sob a lease que já foi liberada, não uma autorização reutilizável.
-A próxima integração deve revalidar sob lease mantida, definir handoff FD9 sem
-reabrir/truncar, conectar dispatch autenticado e substituir pins somente por
-valores aprovados. Nada disso está habilitado neste bloco.
+preparer. O campo de sucesso não é uma autorização reutilizável: cada execução
+autentica e revalida novamente sob lease. O dispatch abaixo mantém a mesma lease
+enquanto o preparer executa suas validações independentes e, somente em apply,
+publica arquivos inativos.
 
 O teste opcional Linux de flock usa syscalls reais de lock/FD9/replace, com
 ancestry do diretório temporário explicitamente dobrada. **End-to-end nativo de
 preparação permanece pendente**, inclusive baseline real e propriedade dos paths.
+
+#### Dispatch e contexto autenticado
+
+O parent autentica a closure, adquire a lease e repete autenticação e baseline.
+Chama somente `/bin/bash --noprofile --norc` com o preparer instalado fixo,
+`--authenticated-check|--authenticated-apply` e o SHA-256 da aprovação já lida.
+Passa **FD9 com `pass_fds=(9,)`** e ambiente vazio com PATH/locale fixos; retém sua
+cópia durante toda a execução, snapshots, publicações e saída do child. Revalida
+ao retorno antes de fechar sua referência. No dispatch, inclusive em erro, o
+parent não faz unlock explícito: se um helper descendente ainda possuir FD9 após
+interrupção, a lease permanece até fechar a última referência. Isso não promete
+rollback ou conclusão atômica sob interrupção; preserva exclusão entre operações.
+Comando arbitrário, source path, CMS digest
+e overrides de ambiente não são interfaces do launcher.
+
+O child não abre novamente o lock e não chama unlock. Antes de executar helpers,
+exige seu path instalado exato e consulta o launcher fixo com
+`--verify-context <approval-sha256>`. O verifier exige root/ambiente isolado,
+FD9 seguro ligado ao pathname, um probe de outra open-description bloqueado e
+flock não bloqueante bem-sucedido no próprio FD9. Assim, FD aberto mas sem lease,
+FD de outro inode ou descrição sem a lock exclusiva são recusados. O probe nunca
+substitui FD9 e o verifier nunca libera a lease herdada.
+
+Esse comando reautentica a aprovação, toda a closure, admission e host; o digest
+passado prova continuidade, **não é credencial**. Não há confiança em `APPROVED=1`,
+PID/parent observado, ambiente ou relatório anterior. Um administrador root pode
+invocar a interface interna somente se todas essas autoridades independentes e
+a lease também forem válidas; não se pretende criar isolamento contra root.
+
+O protocolo é de oito linhas limitadas: approval hash, current commit, CMS image
+do record, e hashes (ou `-` para ausência aprovada) dos cinco predecessores na
+ordem commonReceiver/receiverHelper/productionWrapper/operationsGuard/cmsCandidate.
+O shell valida quantidade e gramática, usa `mapfile` e atribuições, nunca `source`
+ou `eval`. Reconsultas devem produzir exatamente os mesmos dados. São feitas
+antes de snapshots/publicações e antes de atualizar environment/inventory/state;
+os gates de secret parcial, URL canônica, preservação de credenciais, Compose,
+inventory e integridade de state existentes continuam independentes.
+
+No caminho autenticado helpers usam `/usr/bin/python3 -I -S -B` com ambiente
+limpo. A operação interna fixa `--create-inventory <approval-sha256>` revalida
+o contexto e executa `create` do inventory a partir dos bytes capturados da
+closure autenticada, nunca do helper recém-publicado no runtime. Seus paths e
+owner policy são constantes, sem argumentos externos; o helper publicado é
+verificado separadamente. State initialization não é reparo: falha parcial é
+recusada na próxima tentativa, sem reset automático.
+
+`--check` executa apenas o caminho read-only do preparer (inclusive Compose
+`config --quiet`); `--apply` publica arquivos, configuração privada e estado
+inativos. Não faz Docker pull/up/run, migrations, alteração de authority, serviços
+ou authorized_keys. Falhas de dependência preservam os receptores anteriores;
+retry aceita somente predecessor aprovado ou bytes desejados, preservando secrets.
+O path direto `prepare-cms-infrastructure.sh --check|--apply` mantém os pins antigos
+e não ganha autoridade por ambiente ou flags forjadas.
+
+Os testes de transporte executam o shell e o protocolo reais com doubles
+explícitos de host/autenticação/processo; no Windows FD9 é transportado no mesmo
+shell de fixture. O teste Linux opcional usa subprocesso real e `pass_fds`, testa
+ausência de deadlock e confirma que o child não libera a lock do parent. Isso não
+substitui a qualificação nativa completa de preparação, ainda pendente.

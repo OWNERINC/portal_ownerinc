@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Authenticated inactive preparation dispatch
+
+The launcher now dispatches authenticated check/apply while retaining the same deployment lease and passing FD9. The preparer revalidates its fixed context and derives approved baseline/predecessor values and the CMS image from authenticated inputs; direct legacy invocation retains its old pins. Apply remains inactive preparation only, without service activation or deployment authorization.
+
+Independent review found that the inherited-lease check could upgrade a shared lock. The corrected independent probe uses shared nonblocking acquisition to reject shared/unlocked descriptors before touching FD9, retaining the same-open-description check for the exclusive case. The regression verifies that rejected shared FD9 remains open and unchanged. Fresh code review returned `ship`; native Linux handoff/lock execution remains pending.
+
+Primary complete verification was rerun after that correction: **Portal 1,834 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`**. Evidence: `%LOCALAPPDATA%/Temp/opencode/payload-preparation-dispatch-final-verify.log`. Portable host/protocol tests do not qualify end-to-end native preparation or the actual VPS. Interrupted preparation can leave partial state requiring investigation; no rollback guarantee is claimed. No live host operations occurred.
+
 ## Read-only preparation host eligibility under lease
 
 The fixed verification launcher now acquires the existing deployment lock without creation/truncation and verifies approved host bytes and hardcoded initial-state eligibility under that lease. It refuses occupied FD9, busy/replaced locks, mismatched baselines, partial control state, noninitial signed state and closed admission. Authenticated state code uses captured inventory bytes. The lease is released before returning; this report is not reusable execution authorization. Preparation dispatch and pin replacement remain disabled.

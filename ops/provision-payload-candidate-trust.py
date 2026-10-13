@@ -109,7 +109,7 @@ def provision_preparation(mode, approval_path, expected_hash, bundle):
             require(existing_target(filename, expected), 'incomplete_preparation_closure')
     publish(PREPARATION_APPROVAL, targets[PREPARATION_APPROVAL])
     require(all(existing_target(f, e) for f, e in targets.items()), 'incomplete_installation')
-    return 'Preparation verification closure installed; preparation execution and deployment remain disabled.'
+    return 'Preparation closure installed; no preparation executed and no deployment authorized.'
 
 
 class ProvisionError(Exception):
