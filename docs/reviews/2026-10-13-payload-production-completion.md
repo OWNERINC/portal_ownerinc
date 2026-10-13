@@ -1,5 +1,46 @@
 # Payload production completion: initial decision and evidence
 
+## P1 local verification — writer ticket v2 and candidate budget
+
+Primary full `npm run verify` completed with `verify: ok`: Portal **1,803 PASS / 13 skips / zero failures**, CMS **448 PASS / 11 skips / zero failures**. Log: `%LOCALAPPDATA%/Temp/opencode/payload-writer-v2-verify.log`; external fixture parent was `C:\Users\Public`.
+
+The candidate budget patch was completed while that run was active. Its new regression and affected workflow/registry/stop-budget tests were therefore checked separately by primary: **20 PASS, zero failures/skips**. Primary writer/diagnostic focused checks: **14 PASS, zero failures/skips**. Both bounded patches received independent code-review `ship`; native Linux recovery remains pending. Final `git diff --check` and `npm run security` passed; audit reported zero vulnerabilities in the configured production scopes.
+
+Mount normalization corrects the reproduced order instability, without asserting it caused the historical run. Temporary coordinator tickets use v2 only. Persistent creation receipts retain their existing algorithm pending explicit versioned treatment. No VPS service change has been made.
+
+## Bounded P1 outer recovery budget
+
+Timing evidence supplied by primary from CI `38454684188`: validation before
+recovery took 9.32 minutes; recovery ran 55.98 minutes; first restore began at
+50.3 minutes and failed after 5.62 minutes. Source backup took 5.61 minutes,
+three initializations 5.93–6.02 minutes each, and three stops 4.0 minutes each.
+These are observed timings of a failed run, not a forecast of successful recovery
+and not evidence of which identity component failed. No new CI was run for this
+budget patch.
+
+The sizing basis is the measured 50.3-minute prefix plus **three remaining
+coordinator calls** (first restore, second source backup after live edit, second
+restore), each retaining its existing 15-minute cap: **95.3 minutes** before
+remaining snapshots, comparisons, readiness and cleanup. The recovery step cap
+is therefore 120 minutes, leaving 24.7 minutes of estimated reserve. This is an
+explicit bounded allocation, not a wall-clock guarantee or expected runtime.
+
+The validate job cap is 150 minutes only for branch `workflow_dispatch` with
+`publish_candidate_only == true` and `cms_image_only != true`, matching the
+recovery step's existing mode gate. Its 30-minute non-recovery allocation exceeds
+the observed 9.32-minute prefix by 20.68 minutes for other work, qualification
+and artifact uploads. Ordinary validation, CMS-only dispatch, push and PR jobs
+retain 90 minutes; the production deploy job retains 25 minutes.
+
+Only those two outer timeout fields change. No subprocess/HTTP/stop/curl budget,
+14-check/11-negative acceptance contract, two-restore requirement, qualification,
+manual flag, permission, artifact path or deployment gate changes. Skipping
+acceptance work would invalidate recovery; moving it to a dedicated job would
+require unrelated artifact/permission/cache transport changes. Neither is part
+of this bounded patch. More time does not fix writer identity, prove recovery,
+or establish production completion. Cancellation can still prevent cleanup or
+artifact upload; fresh review and separately authorized CI remain necessary.
+
 ## Decision
 
 User approved the installation/activation design and implementation, restricted to Portal services. Notify before any n8n alteration. Work proceeds in the isolated `payload-production-completion` worktree from `be6db91`; unrelated untracked files were carried with the session and remain preserved.

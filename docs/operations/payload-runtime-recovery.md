@@ -1,5 +1,46 @@
 # Runtime Payload e recuperação coordenada
 
+## P1 — ordem de mounts no ticket efêmero do coordinator
+
+O método real `_writer_inspect` tinha um defeito reproduzível em memória: duas
+respostas Docker com o mesmo container ID e os mesmos registros de mounts, mas
+em ordem diferente, produziam fingerprints diferentes. `STATE.canonical` ordena
+chaves de objetos, não arrays; a ordem do array Docker `Mounts` não é uma identidade
+estável. Isso demonstra o defeito local, **não** atribui retroativamente a causa
+do report real de `38454684188` que falhou em `restore_start_readiness`, exit 2,
+`writer_identity_mismatch`, após fixtures e 11 negativos passarem. Esse report
+não identificou qual componente da identidade divergiu.
+
+O ticket efêmero assinado passa a ter kind **`coordinator-writers-v2`**. Antes do
+hash, exige-se `Mounts` como lista de objetos, cada um com `Destination` string
+absoluta Linux, sem NUL e sem destinos duplicados. A lista é ordenada por
+`Destination`; todos os registros, campos e a cardinalidade permanecem no hash.
+Não há projeção que descarte `Source`, `Type`, `Mode`, `RW`, `Propagation`, campos
+extras, labels ou outras propriedades. Não se normalizam listas internas nem a
+ordem de `Healthcheck.Test`, que continua semanticamente significativa.
+
+`observe-writers` produz somente v2; `resume-writers` e
+`resume-readiness-writers` recusam v1, inclusive com HMAC válido. Não há tentativa
+de aceitar hash antigo **ou** novo. Não atualizar o adapter no meio de uma operação
+coordenada: tickets são efêmeros e vinculados ao mesmo processo ancestral/lease;
+não se convertem ou reaproveitam tickets v1 em v2. HMAC, FD9, identidade do processo
+ancestral, origem no journal, floor, admission fechada, worker hold, validação de
+todo o conjunto antes do primeiro start e revalidação após start não mudam.
+
+**Receipts persistentes não migrados:** `_creation_container` mantém exatamente
+seu algoritmo anterior, inclusive sensibilidade à ordem de mounts. Alterá-lo
+silenciosamente invalidaria receipts já assinados. Uma correção desse contrato
+exige versionamento e migração explícitos em bloco posterior; não está incluída
+neste patch e continua sendo uma lacuna conhecida. O diagnóstico de divergência
+continua o código finito existente, sem inventar componente/serviço histórico ou
+publicar mounts, paths ou valores privados.
+
+Regressões usam os métodos Python reais, canonicalização/HMAC/journal reais e
+transporte Docker explicitamente simulado. Cobrem permutações de três mounts,
+mudanças reais em campos/cardinalidade, destinos malformados/duplicados, ordem do
+healthcheck, recusa antes de qualquer start e falha pós-start com admission/journal
+preservados. Isso não substitui recovery Linux/Docker nem comprova deploy.
+
 ## Progresso diagnóstico do recovery (2026-10-13)
 
 O CI `38436732170` atingiu o limite de 60 minutos sem report final publicado.

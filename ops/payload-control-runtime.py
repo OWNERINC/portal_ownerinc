@@ -1715,9 +1715,23 @@ class Runtime:
         if state not in allowed_states or status.get('Running') is not (state == 'running') or \
            status.get('Paused') is not False or status.get('Restarting') is not False:
             fail('writer_state_invalid')
+        mounts = value.get('Mounts')
+        if not isinstance(mounts, list):
+            fail('writer_inspect_response_invalid')
+        destinations = set()
+        for mount in mounts:
+            destination = mount.get('Destination') if isinstance(mount, dict) else None
+            if not isinstance(destination, str) or not destination.startswith('/') or '\0' in destination or \
+               destination in destinations:
+                fail('writer_inspect_response_invalid')
+            destinations.add(destination)
+        # Docker Mounts is an unordered collection. Preserve every record/field
+        # and its cardinality; only this v2 ephemeral writer ticket sorts it.
+        # Do NOT reuse this change for persistent _creation_container receipts.
+        mounts = sorted(mounts, key=lambda mount: mount['Destination'])
         receipt = {'id': identity, 'fingerprint': hashlib.sha256(STATE.canonical({
             'id': identity, 'image': value.get('Image'), 'configImage': value.get('Config', {}).get('Image'),
-            'labels': labels, 'created': value.get('Created'), 'mounts': value.get('Mounts'),
+            'labels': labels, 'created': value.get('Created'), 'mounts': mounts,
             'healthcheck': value.get('Config', {}).get('Healthcheck'),
         })).hexdigest()}
         return receipt, state, status.get('Health', {}).get('Status', 'none')
@@ -1742,7 +1756,7 @@ class Runtime:
                 fail('writer_state_invalid')
         if not {'api', 'cron', 'cms'} <= set(captured) or len({v['id'] for v in captured.values()}) != len(captured):
             fail('writer_identity_mismatch')
-        ticket = {'kind': 'coordinator-writers-v1', 'inventoryIdentity': self.inventory['identity'],
+        ticket = {'kind': 'coordinator-writers-v2', 'inventoryIdentity': self.inventory['identity'],
                   'release': self.release_path, 'scope': scope, 'sequence': self.state['sequence'],
                   'stateSha256': self.state_parent_hash, 'containers': captured}
         print(STATE.canonical(STATE.sign_envelope(ticket, self.key)).decode('utf-8'))
@@ -1755,7 +1769,7 @@ class Runtime:
             fail('writer_ticket_invalid')
         def validate(ticket):
             STATE._exact_keys(ticket, {'kind', 'inventoryIdentity', 'release', 'scope', 'sequence', 'stateSha256', 'containers'}, 'writer_ticket_invalid')
-            if ticket['kind'] != 'coordinator-writers-v1' or ticket['inventoryIdentity'] != self.inventory['identity'] or \
+            if ticket['kind'] != 'coordinator-writers-v2' or ticket['inventoryIdentity'] != self.inventory['identity'] or \
                ticket['release'] != self.release_path or ticket['scope'] != self._writer_scope() or \
                not STATE._safe_int(ticket['sequence']) or ticket['sequence'] >= self.state['sequence'] or \
                not isinstance(ticket['stateSha256'], str) or not STATE.HEX_64.fullmatch(ticket['stateSha256']):
