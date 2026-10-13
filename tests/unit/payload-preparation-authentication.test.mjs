@@ -75,6 +75,8 @@ def load(data,filename):
         m.read_protected=lambda name,limit,modes=(0o600,),private_parent=False:read(name,modes[0],limit)
     return m
 l.load_authenticated=load
+host_gate=l.verify_host_under_lock
+l.verify_host_under_lock=lambda *args:None # Prior tests isolate source/admission from the host gate.
 def denied(fn):
     try:fn()
     except Exception:return
@@ -85,6 +87,205 @@ function probe(code) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
+const hostModel = String.raw`
+import stat
+from unittest.mock import patch
+captured={r:store[p.preparation_target(r)][0] for r in p.PREPARATION_FILES}
+inv=l.load_authenticated(captured['ops/payload-control-inventory.py'],l.ROOT+'/ops/payload-control-inventory.py')
+expected=inv.production_inventory(l.HOST_ROOT,l.RUNTIME,l.RELEASES,l.HOST_ROOT+'/current-release',l.LOCK,
+ '/opt/ownerinc/backups/portal-ownerinc/daily',l.PRODUCTION_BACKUP,l.PRODUCTION_BACKUP+'/restore-protection',
+ l.ENVIRONMENT,l.RUNTIME+'/compose.production.yaml',l.RUNTIME+'/compose.payload.production.yaml')
+baseline=approval['hostBaseline'];baseline['inventoryIdentity']=inv.identity(expected)
+release=l.RELEASES+'/'+baseline['currentCommit'];host={};reads=[]
+def put_host(name,data,owner=(1000,1000),mode=0o644):host[name]=(data,owner,mode)
+put_host(l.HOST_ROOT+'/current-release',(release+'\n').encode())
+put_host(release+'/.image-env',('API_IMAGE='+images['api']+'\nCRON_IMAGE='+images['cron']+'\n').encode())
+for filename,field in [(release+'/docker-compose.yml','releaseComposeSha256'),(l.RUNTIME+'/compose.production.yaml','runtimeComposeSha256')]:
+ put_host(filename,b'approved-compose\n');baseline[field]=p.sha(b'approved-compose\n')
+put_host(l.ENVIRONMENT,b'PRIVATE=not-printed\n',mode=0o600)
+put_host('/usr/local/libexec/ownerinc-portal-deploy',b'approved predecessor',(0,0),0o755)
+baseline['installedPredecessors']['commonReceiver']=p.sha(b'approved predecessor')
+def host_read(name,owner=(1000,1000),modes=(0o600,0o644),limit=2*1024*1024):
+ reads.append(name);data,actual_owner,mode=host[name]
+ assert actual_owner==owner and mode in modes and 0<len(data)<=limit
+ return data
+l.host_read=host_read;l.host_ancestry=lambda _:None
+def metadata(name):
+ if name in host:
+  data,owner,mode=host[name];kind=stat.S_IFREG;size=len(data)
+ else:
+  owner=(0,0);mode=0o700 if name.endswith('payload-control-state') else 0o755;kind=stat.S_IFDIR;size=0
+ return types.SimpleNamespace(st_mode=kind|mode,st_uid=owner[0],st_gid=owner[1],st_nlink=1,st_size=size,
+  st_dev=1,st_ino=2,st_mtime_ns=3,st_ctime_ns=4)
+state_present=[False];names=['00000000000000000000.json','current.json']
+def exists(name):return name in host or name==l.RUNTIME+'/payload-control-state' and state_present[0]
+state=l.load_state_captured(captured,inv)
+assert state.INVENTORY is inv
+initial={'schemaVersion':2,'phase':'preauthority','cmsStatus':'cold','authority':{'mode':'legacy','epoch':1},
+ 'workerHold':True,'admission':'open','sequence':0,'previousStateSha256':None,'restoreIntent':None,'installIntent':None,
+ 'latestProofSha256':None,'legacySourceProofSha256':None,'releaseImages':None,'plannedReleaseImages':None,
+ 'rollbackTargetImages':None,'nativeCatalogFingerprint':None,'inventoryIdentity':baseline['inventoryIdentity']}
+key=b'K'*32
+def install_state(body):
+ state_present[0]=True
+ put_host(l.RUNTIME+'/payload-control-inventory.json',inv.canonical(expected)+b'\n',(0,0),0o600)
+ put_host(l.RUNTIME+'/payload-control.key',key,(0,0),0o600)
+ envelope=state.canonical(state.sign_envelope(body,key))+b'\n'
+ for name in names:put_host(l.RUNTIME+'/payload-control-state/'+name,envelope,(0,0),0o600)
+def run_host():
+ with patch.object(l.os.path,'lexists',side_effect=exists),patch.object(l.os,'lstat',side_effect=metadata),patch.object(l.os,'listdir',return_value=names):
+  l.verify_host_baseline(approval,captured,images['cms'],p)
+`;
+
+test('host gate checks fixed approved baseline, predecessor/desired retries and exact signed initial state without writes (I/O doubles)', () => {
+  probe(hostModel + String.raw`
+run_host() # Completely absent state/inventory is eligible; nothing created.
+assert not state_present[0] and l.RUNTIME+'/payload-control.key' not in host
+put_host('/usr/local/libexec/ownerinc-portal-deploy',captured['ops/deploy-from-ci.sh'],(0,0),0o755)
+put_host(l.RUNTIME+'/cms-image-candidate.env',('CMS_IMAGE='+images['cms']+'\n').encode(),(0,0),0o644)
+run_host() # Desired publication is an allowed retry, even when predecessor was absent.
+install_state(initial);before=copy.deepcopy(host);run_host();assert host==before
+# State imports the captured inventory even if adjacent filesystem import is poisoned.
+import importlib.util
+with patch.object(importlib.util,'spec_from_file_location',side_effect=AssertionError('reopened helper')):
+ assert l.load_state_captured(captured,inv).INVENTORY is inv
+`);
+});
+
+test('altered host baselines, partial keys, unknown inventory and signed noninitial states refuse without effects (I/O doubles)', () => {
+  probe(hostModel + String.raw`
+run_host()
+for filename in list(host):
+ if filename==l.ENVIRONMENT:continue # Secrets are deliberately not approved content hashes.
+ before=host[filename];put_host(filename,b'changed',before[1],before[2]);denied(run_host);host[filename]=before
+for field in ('inventoryIdentity','currentCommit','releaseComposeSha256','runtimeComposeSha256','releaseOverrideSha256'):
+ before=baseline[field];baseline[field]='0'*(40 if field=='currentCommit' else 64);denied(run_host);baseline[field]=before
+put_host(release+'/compose.ownerinc-vps.yaml',b'override');denied(run_host)
+baseline['releaseOverrideSha256']=p.sha(b'override');run_host()
+del host[release+'/compose.ownerinc-vps.yaml'];denied(run_host);baseline['releaseOverrideSha256']=None
+put_host(l.RUNTIME+'/payload-control.key',key,(0,0),0o600);denied(run_host);del host[l.RUNTIME+'/payload-control.key']
+state_present[0]=True;denied(run_host);state_present[0]=False
+install_state(initial);run_host()
+inventory_path=l.RUNTIME+'/payload-control-inventory.json';before=host.pop(inventory_path);denied(run_host);host[inventory_path]=before
+for field,value in [('schemaVersion',1),('sequence',1),('cmsStatus','migrated'),('admission','closed'),
+ ('workerHold',False),('restoreIntent',{}),('installIntent',{}),('nativeCatalogFingerprint','0'*64),
+ ('plannedReleaseImages',images),('latestProofSha256','0'*64),('inventoryIdentity','0'*64)]:
+ body=copy.deepcopy(initial);body[field]=value;install_state(body);before=copy.deepcopy(host);denied(run_host);assert host==before
+install_state(initial)
+head=l.RUNTIME+'/payload-control-state/current.json';data,owner,mode=host[head]
+put_host(head,data.replace(b'"hmacSha256":"',b'"hmacSha256":"0'),owner,mode)
+# Corrupt any byte if envelope spelling differs; always invalidate authenticated bytes.
+put_host(head,b'not a signed head',owner,mode);denied(run_host)
+install_state(initial);names.append('00000000000000000001.json');denied(run_host)
+`);
+});
+
+test('lease is noncreating nontruncating FD9, refuses busy/replaced/missing lock before host reads, and releases own lock (syscall doubles)', () => {
+  probe(String.raw`
+import errno,stat
+from unittest.mock import patch
+info=types.SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_uid=1000,st_gid=1000,st_nlink=1,st_size=7,
+ st_dev=1,st_ino=2,st_mtime_ns=3,st_ctime_ns=4)
+changed=copy.copy(info);changed.st_ino=3
+l.host_ancestry=lambda _:None
+l.os.O_NOFOLLOW=getattr(l.os,'O_NOFOLLOW',0);l.os.O_NONBLOCK=getattr(l.os,'O_NONBLOCK',0)
+for scenario in ('success','busy','replaced-before','replaced-on-lock','replaced-after','missing','host-fails'):
+ calls=[];held=[False];acquired=[False];opened=[False]
+ def fstat(fd):
+  if fd==9 and not opened[0]:raise OSError(errno.EBADF,'not open')
+  return info
+ def lstat(_):
+  if scenario=='missing':raise FileNotFoundError()
+  if scenario=='replaced-before' and opened[0] or scenario=='replaced-after' and acquired[0] or scenario=='replaced-on-lock' and held[0]:return changed
+  return info
+ def open_lock(filename,flags):
+  assert filename==l.LOCK and not flags & (l.os.O_CREAT|l.os.O_TRUNC);opened[0]=True;return 9
+ def lease(fd,unlock=False):
+  assert fd==9
+  calls.append('unlock' if unlock else 'lock')
+  if scenario=='busy' and not unlock:raise BlockingIOError()
+  held[0]=not unlock
+ def host(*args):
+  assert held[0];calls.append('host');acquired[0]=True
+  if scenario=='host-fails':raise ValueError('refuse')
+ with patch.object(l.os,'fstat',side_effect=fstat),patch.object(l.os,'lstat',side_effect=lstat), \
+      patch.object(l.os,'open',side_effect=open_lock),patch.object(l.os,'close',side_effect=lambda fd:calls.append('close')), \
+      patch.object(l,'lease_operation',side_effect=lease),patch.object(l,'verify_host_baseline',side_effect=host):
+  if scenario=='success':host_gate(approval,{},images['cms'],p)
+  else:denied(lambda:host_gate(approval,{},images['cms'],p))
+ assert not held[0]
+ if scenario in ('busy','replaced-before','replaced-on-lock','missing'):assert 'host' not in calls
+ if scenario in ('success','replaced-on-lock','replaced-after','host-fails'):assert calls[-2:]==['unlock','close']
+`);
+});
+
+test('native Linux flock preserves lock bytes, refuses contention and replacement, and releases FD9 (not host end-to-end)',
+  { skip: process.platform !== 'linux' }, t => {
+    const result = spawnSync(python, ['-I', '-S', '-B', '-c', String.raw`
+import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil
+if (os.getuid(),os.getgid()) not in ((0,0),(1000,1000)):
+ print('SKIP unsupported test owner');sys.exit(0)
+spec=importlib.util.spec_from_file_location('launcher',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+root=tempfile.mkdtemp(prefix='preparation-flock-')
+try:
+ m.LOCK=root+'/deploy.lock';pathlib.Path(m.LOCK).write_bytes(b'never truncated');os.chmod(m.LOCK,0o600)
+ # Only ancestry is doubled for the disposable temp parent. flock/open/FD9,
+ # leaf metadata, identity, contention, replacement and closes are native.
+ m.host_ancestry=lambda _:None
+ busy=os.open(m.LOCK,os.O_RDWR);fcntl.flock(busy,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ try:
+  with m.deployment_lease():raise AssertionError('busy lease accepted')
+ except BlockingIOError:pass
+ finally:os.close(busy)
+ with m.deployment_lease() as reaffirm:
+  assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino;reaffirm()
+  assert pathlib.Path(m.LOCK).read_bytes()==b'never truncated'
+ try:os.fstat(9)
+ except OSError:pass
+ else:raise AssertionError('FD9 leaked')
+ try:
+  with m.deployment_lease():
+   os.rename(m.LOCK,m.LOCK+'.old');pathlib.Path(m.LOCK).write_bytes(b'replaced');os.chmod(m.LOCK,0o600)
+ except m.VerificationError:pass
+ else:raise AssertionError('replacement accepted')
+ old=os.open(m.LOCK+'.old',os.O_RDWR);fcntl.flock(old,fcntl.LOCK_EX|fcntl.LOCK_NB);os.close(old)
+ assert pathlib.Path(m.LOCK+'.old').read_bytes()==b'never truncated'
+ print('native-flock-only PASS')
+finally:shutil.rmtree(root)
+`, path.join(repo, 'ops/prepare-cms-authenticated.py')], { encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.stderr);
+    if (result.stdout.startsWith('SKIP')) return t.skip(result.stdout.trim());
+    assert.match(result.stdout, /native-flock-only PASS/u);
+  });
+
+test('host-data reader retains exact deploy ownership, bounded stable bytes, and distinct trust ancestry (metadata doubles)', () => {
+  probe(String.raw`
+import stat,io
+from unittest.mock import patch
+info=types.SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_uid=1000,st_gid=1000,st_nlink=1,st_size=4,
+ st_dev=1,st_ino=2,st_mtime_ns=3,st_ctime_ns=4)
+l.host_ancestry=lambda _:None
+l.os.O_NOFOLLOW=getattr(l.os,'O_NOFOLLOW',0);l.os.O_NONBLOCK=getattr(l.os,'O_NONBLOCK',0)
+for field,value in [('st_uid',1234),('st_gid',0),('st_nlink',2),('st_mode',stat.S_IFLNK|0o644),
+ ('st_mode',stat.S_IFREG|0o666),('st_size',3*1024*1024)]:
+ bad=copy.copy(info);setattr(bad,field,value)
+ with patch.object(l.os,'lstat',return_value=bad),patch.object(l.os,'open') as opened:
+  denied(lambda:l.host_read('/host/data'));opened.assert_not_called()
+for changed in (False,True):
+ later=copy.copy(info)
+ if changed:later.st_mtime_ns+=1
+ with patch.object(l.os,'lstat',side_effect=[info,later]),patch.object(l.os,'open',return_value=4), \
+      patch.object(l.os,'fstat',return_value=info),patch.object(l.os,'fdopen',return_value=io.BytesIO(b'data')),patch.object(l.os,'close'):
+  if changed:denied(lambda:l.host_read('/host/data'))
+  else:assert l.host_read('/host/data')==b'data'
+# A preexisting FD9 is never adopted or closed in this check-only gate.
+with patch.object(l.os,'fstat',return_value=info),patch.object(l.os,'open') as opened,patch.object(l.os,'close') as closed:
+ def attempt():
+  with l.deployment_lease():pass
+ denied(attempt);opened.assert_not_called();closed.assert_not_called()
+`);
+});
+
 test('all 15 source files authenticate before any closure helper; fixed report never authorizes execution (read doubles)', () => {
   probe(String.raw`
 assert p.PREPARATION_FILES==l.FILES and len(l.FILES)==15
@@ -93,7 +294,7 @@ assert p.PREPARATION_ROOT=='/opt/ownerinc/lib/payload-preparation'
 assert p.PREPARATION_APPROVAL=='/etc/ownerinc/payload-preparation/production-approval.json'
 result=l.verify()
 assert result=={'kind':'payload-preparation-verification-only','sourceAuthenticated':True,
-    'admissionRecordAuthenticated':True,'cmsImage':images['cms'],'hostBaselineChecked':False,
+    'admissionRecordAuthenticated':True,'cmsImage':images['cms'],'hostBaselineChecked':True,
     'archiveBytesChecked':False,'preparationExecuted':False,'deploymentAuthorized':False}
 assert len(loads)==2
 for relative in p.PREPARATION_FILES:

@@ -1,5 +1,11 @@
 # Payload production completion: initial decision and evidence
 
+## Read-only preparation host eligibility under lease
+
+The fixed verification launcher now acquires the existing deployment lock without creation/truncation and verifies approved host bytes and hardcoded initial-state eligibility under that lease. It refuses occupied FD9, busy/replaced locks, mismatched baselines, partial control state, noninitial signed state and closed admission. Authenticated state code uses captured inventory bytes. The lease is released before returning; this report is not reusable execution authorization. Preparation dispatch and pin replacement remain disabled.
+
+Independent code review returned `ship`. Primary full `npm run verify` passed **Portal 1,830 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`**. Evidence: `%LOCALAPPDATA%/Temp/opencode/payload-preparation-baseline-verify.log`. Native flock and end-to-end host preparation remain separate pending gates. No VPS operations occurred.
+
 ## Preparation authority — install and verify only
 
 The preparation provisioning profile binds the exact 15-file closure and publishes the independent approval last. The fixed launcher authenticates captured source and the admission toolchain before executing their validators. It uses the existing record/policy validators and accepts only `--check`; host-baseline checking, archive-byte verification, preparation execution and deployment authorization remain explicitly false. Existing preparer pins remain unchanged.

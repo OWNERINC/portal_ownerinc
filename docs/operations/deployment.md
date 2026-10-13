@@ -887,10 +887,67 @@ artefatos CI, nem verifica bytes de archive ausentes.
 
 Saída JSON não qualificadora: `kind: payload-preparation-verification-only`,
 `sourceAuthenticated: true`, `admissionRecordAuthenticated: true`, `cmsImage`,
-`hostBaselineChecked: false`, `archiveBytesChecked: false`,
+`hostBaselineChecked: true`, `archiveBytesChecked: false`,
 `preparationExecuted: false`, `deploymentAuthorized: false`.
-Nenhum lock/FD9, host eligibility, banco, serviço ou preparer é executado.
+`hostBaselineChecked` só é emitido após a verificação abaixo sob lease; falha não
+emite report de sucesso. Nenhum banco, serviço ou preparer é executado.
 Pins antigos de current release/CMS, inventory/state/guards e
 `release_not_preflighted` permanecem intactos. Integração sob lease e aceite
 operacional continuam sendo outro bloco. Provas portáteis usam doubles explícitos;
 não qualificam instalação/root/SSH na VPS nem durabilidade sob power loss.
+
+#### Gate de host sob lease (somente leitura)
+
+Após autenticar fonte e admission, o launcher abre o **lock existente** em
+`/opt/ownerinc/apps/portal-ownerinc-real/runtime/deploy.lock` com `O_RDWR`,
+`O_NOFOLLOW` e `O_NONBLOCK`, sem `O_CREAT` ou `O_TRUNC`. Exige arquivo regular,
+um link, owner root:root ou deploy `1000:1000`, modo `0600` ou `0644`, ancestry
+segura, e identidade estável entre pathname/descriptor. Reserva FD9 somente se
+estiver livre; descriptor herdado não é adotado nem fechado. `flock(LOCK_EX |
+LOCK_NB)` ocupado é recusa antes de ler o baseline. Revalida pathname/FD9 depois
+de adquirir e ao terminar; `finally` libera somente sua própria lease e fecha FD9.
+Ausência do lock é recusa, nunca criação automática.
+
+Sob essa lease verifica paths fixos de produção, sem overrides de request:
+
+- Pointer `current-release`, commit aprovado e formato API/cron de `.image-env`.
+- Hashes dos Compose de release/runtime e presença/hash do override local
+  `compose.ownerinc-vps.yaml`.
+- Identidade do inventory fixo construído por `production_inventory`; se o
+  inventory existir, exige bytes canônicos, schema e documento exatos. Owner de
+  environment continua `1000:1000`, modo `0600`; nunca descobre política pelo host.
+- Predecessores aprovados ou bytes desejados exatos para receiver/helper/wrapper,
+  guard e CMS candidate; ausência só quando aprovada. Controles e overlay já
+  publicados permanecem ausentes-ou-idênticos, sem adoção de bytes desconhecidos.
+- Key e diretório de state ambos ausentes, ou ambos completos com inventory.
+  Para state existente aceita somente os dois arquivos do journal inicial,
+  HMAC/head íntegros e corpo **exatamente** schema-v2, preauthority/cold,
+  sequence zero, authority legacy/epoch 1, workerHold true, admission open,
+  sem intents, floor, proofs ou imagens planejadas. Sentinel admission-closed é
+  recusado. Assinatura válida não autoriza estado operacional/migrado.
+
+Helpers inventory/state vêm dos bytes já autenticados. O import adjacente do
+state é ligado ao módulo inventory capturado por um import hook local ao módulo;
+não reabre path de helper nem modifica importlib global. Usa `read_state` real
+com `repair_head=False` e identity explícita, mantendo validação criptográfica
+e do journal. A leitura de dados é substituída nesse módulo por uma leitura
+limitada/estável; não há initialize, repair, create ou rewrite.
+
+Dados deploy-owned usam API separada de leitura: owner exato `1000:1000`, modos
+`0600`/`0644` (environment somente `0600`), tamanho limitado, NOFOLLOW, um link,
+identidade antes/depois, ancestry root/deploy sem group/world write. State,
+inventory e arquivos instalados exigem root:root e modos específicos. Isso não
+relaxa o leitor root-protected da closure/admission. Valores privados não são
+emitidos; dados observados e ausências são rechecados antes de devolver sucesso.
+
+Este gate **não é preflight operacional completo**: não consulta DB/Docker,
+não valida Compose por execução, nem atualiza/classifica credenciais CMS pelo
+preparer. O campo de sucesso descreve apenas baseline e elegibilidade inicial
+verificados sob a lease que já foi liberada, não uma autorização reutilizável.
+A próxima integração deve revalidar sob lease mantida, definir handoff FD9 sem
+reabrir/truncar, conectar dispatch autenticado e substituir pins somente por
+valores aprovados. Nada disso está habilitado neste bloco.
+
+O teste opcional Linux de flock usa syscalls reais de lock/FD9/replace, com
+ancestry do diretório temporário explicitamente dobrada. **End-to-end nativo de
+preparação permanece pendente**, inclusive baseline real e propriedade dos paths.
