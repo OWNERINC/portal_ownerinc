@@ -23,7 +23,7 @@ export const FIXTURE_STOP_TIMEOUT_SECONDS = 120;
 export const FIXTURE_STOP_COMMAND_MARGIN_MS = 30_000;
 
 export function fixtureStopCommandTimeoutMs(writerCount) {
-  if (!Number.isSafeInteger(writerCount) || writerCount < 1 || writerCount > 3) {
+  if (!Number.isSafeInteger(writerCount) || writerCount < 1 || writerCount > 4) {
     throw new Error('invalid_fixture_writer_count');
   }
   // Budget for Compose stopping each requested writer serially, plus bounded

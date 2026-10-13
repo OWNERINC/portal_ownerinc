@@ -6,6 +6,7 @@ import {
   FIXTURE_STOP_TIMEOUT_SECONDS,
   fixtureStopCommandTimeoutMs,
 } from '../../scripts/integration/payload-preauthority-fixture.mjs';
+import { writerServices } from '../../scripts/integration/payload-preauthority-writer-restart-protocol.mjs';
 
 const recoveryRunner = await readFile(new URL('../../scripts/test-payload-preauthority-recovery.mjs', import.meta.url), 'utf8');
 
@@ -14,8 +15,16 @@ test('stop subprocess deadline covers the per-writer cap serially plus bounded m
   assert.equal(FIXTURE_STOP_COMMAND_MARGIN_MS, 30_000);
   assert.equal(fixtureStopCommandTimeoutMs(1), 150_000);
   assert.equal(fixtureStopCommandTimeoutMs(3), 390_000);
-  assert.throws(() => fixtureStopCommandTimeoutMs(0), /invalid_fixture_writer_count/u);
-  assert.throws(() => fixtureStopCommandTimeoutMs(4), /invalid_fixture_writer_count/u);
+  assert.equal(fixtureStopCommandTimeoutMs(4), 510_000);
+  for (const count of [0, -1, 5, 1.5, NaN, Infinity, '4', null, undefined]) {
+    assert.throws(() => fixtureStopCommandTimeoutMs(count), /invalid_fixture_writer_count/u);
+  }
+});
+
+test('the actual four-service writer lifecycle fits the stop budget', () => {
+  assert.deepEqual(writerServices, ['api', 'cron', 'cms', 'nginx']);
+  assert.equal(fixtureStopCommandTimeoutMs(writerServices.length),
+    writerServices.length * FIXTURE_STOP_TIMEOUT_SECONDS * 1000 + FIXTURE_STOP_COMMAND_MARGIN_MS);
 });
 
 test('quiescence uses the matching bounded stop flag and verifies all writers before snapshots', () => {
