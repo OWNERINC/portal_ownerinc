@@ -9,6 +9,7 @@
     "start": "next start --port 3001",
     "typecheck": "tsc --noEmit",
     "test:unit": "node scripts/test.mjs",
+    "audit:news-protocol": "node --import tsx scripts/verify-news-protocol.ts --audit-protocol",
     "generate:types": "payload generate:types",
     "generate:importmap": "payload generate:importmap",
     "migrate": "payload migrate",
@@ -31,6 +32,8 @@
     "tsx": "4.23.15"
   },
   "overrides": {
+    "esbuild": "0.28.2",
+    "tsx": "$tsx",
     "@payloadcms/next@3.90.2": {
       "sass": "1.105.1"
     },
@@ -39,9 +42,6 @@
     },
     "monaco-editor@0.57.0": {
       "dompurify": "3.4.16"
-    },
-    "@esbuild-kit/core-utils@3.3.2": {
-      "esbuild": "0.25.12"
     }
   },
   "devDependencies": {

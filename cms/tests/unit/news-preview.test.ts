@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { savedPreview, previewConflictMessage } from '../../src/admin/preview-state.js'
-import { newsScheduleEndpoints } from '../../src/endpoints/news-schedule.js'
+import { createNewsScheduleEndpoints } from '../../src/endpoints/news-schedule.js'
+import { createNewsAreaAccess } from '../../src/auth/news-area-access.js'
 import type { PayloadRequest } from 'payload'
 
 const documentId = '11111111-1111-4111-8111-111111111111', versionId = '22222222-2222-4222-8222-222222222222'
@@ -27,6 +28,7 @@ test('native preview rejects body decoded after disposal', async () => {
 })
 test('saved revision endpoint reads actual latest Versions without mutating, and missing revision is 409', async () => {
   let hasVersion = true
+  const access = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode: 'payload_frozen', epoch: 1 }) }))
   const req = { transactionID: 'live', user: { collection: 'portal-editors', portalUid: 'editor', portalActor: { uid: 'editor', canManageNews: true } },
     searchParams: new URLSearchParams({ target: 'article', documentId }) } as unknown as PayloadRequest
   req.payload = {
@@ -38,9 +40,24 @@ test('saved revision endpoint reads actual latest Versions without mutating, and
     },
     async find() { return { docs: [] } },
   } as unknown as PayloadRequest['payload']
-  const endpoint = newsScheduleEndpoints.find(e => e.method === 'get')!
+  const endpoint = createNewsScheduleEndpoints(access.canRead).find(e => e.method === 'get')!
   const response = await endpoint.handler(req)
   assert.equal(response.status, 200); assert.equal((await response.json()).versionId, versionId)
   hasVersion = false
   assert.equal((await endpoint.handler(req)).status, 409)
+})
+
+test('native schedule GET denies legacy/frozen before opening a CMS transaction', async () => {
+  for (const mode of ['legacy', 'frozen']) {
+    let calls = 0
+    const access = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode, epoch: 2 }) }))
+    const req = { transactionID: 'live', user: { collection: 'portal-editors', portalUid: 'editor',
+      portalActor: { uid: 'editor', canManageNews: true } }, searchParams: new URLSearchParams({ target: 'article', documentId }) } as unknown as PayloadRequest
+    const payload = { db: { sessions: { live: { db: { execute: async () => { calls++ } } } } } } as unknown as PayloadRequest['payload']
+    req.payload = payload
+    const endpoint = createNewsScheduleEndpoints(access.canRead).find(e => e.method === 'get')!
+    const response = await endpoint.handler(req)
+    assert.equal(response.status, 403, mode)
+    assert.equal(calls, 0, `${mode} must be denied before lock or native reads`)
+  }
 })

@@ -1,5 +1,5 @@
 import { APIError, type CollectionConfig } from 'payload'
-import { canManageNews } from '../auth/access'
+import { newsAreaReadAccess } from '../auth/news-area-access'
 import { assertPreparationIdentity } from '../publication/authority'
 import { assertPreparationBootstrap } from '../migration/preparation-bootstrap'
 
@@ -8,7 +8,7 @@ import { assertPreparationBootstrap } from '../migration/preparation-bootstrap'
 export const NewsMigrationRuns: CollectionConfig = {
   slug: 'news-migration-runs',
   admin: { hidden: true },
-  access: { read: canManageNews, create: () => false, update: () => false, delete: () => false },
+  access: { read: newsAreaReadAccess, create: () => false, update: () => false, delete: () => false },
   hooks: { beforeOperation: [async ({ operation, req, args }) => {
     if (!['create', 'update', 'delete', 'restoreVersion'].includes(operation)) return
     if (operation === 'create' && 'data' in args) { await assertPreparationBootstrap(req, args.data as Record<string, unknown>); return }

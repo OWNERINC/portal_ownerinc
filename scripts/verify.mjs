@@ -62,7 +62,7 @@ async function checkSyntax() {
 async function checkTests() {
   console.log('verify: tests');
   const tests = await filesUnder('tests/unit', '.test.mjs');
-  run(process.execPath, ['--test', ...tests], { stdio: 'inherit' });
+  run(process.execPath, ['--test', ...tests], { stdio: 'inherit', timeout: 600000 });
   console.log('verify: CMS unit tests (offline)');
   run(process.execPath, ['cms/scripts/test.mjs'], { stdio: 'inherit' });
 }

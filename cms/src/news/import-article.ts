@@ -1,5 +1,5 @@
 import { createLocalReq, type Payload, type PayloadRequest, type RequiredDataFromCollectionSlug } from 'payload'
-import { canManageNews } from '../auth/access'
+import { canWriteNews } from '../auth/access'
 import { uuid } from './primitives'
 import { legacyNewsImportContext } from './validation'
 import { withImportTransaction } from '../migration/transaction'
@@ -11,7 +11,7 @@ export async function createLegacyNewsArticle(payload: Payload,
   if (!(payload.db as typeof payload.db & { allowIDOnCreate?: boolean }).allowIDOnCreate) {
     throw new Error('legacy_import_requires_separate_import_config')
   }
-  if (!incoming || !canManageNews({ req: incoming })) throw new Error('legacy_import_actor_required')
+  if (!incoming || !canWriteNews({ req: incoming })) throw new Error('legacy_import_actor_required')
   const id = uuid(data.id)
   if (data.legacyDocumentId !== undefined && data.legacyDocumentId !== id) throw new Error('legacy_import_identity_mismatch')
   const result = await withImportTransaction(payload, incoming, async req => {

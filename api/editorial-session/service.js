@@ -1,6 +1,7 @@
 const { createHash } = require('node:crypto');
 const { ActivePortalUserError, loadActivePortalUser } = require('../middleware/active-user');
 const { can } = require('../middleware/policy');
+const { buildAdminActor } = require('./admin-actor');
 const { createSessionRecord, findSessionRecord, revokeSessionRecord } = require('./store');
 const { prepareSessionIssuance, sessionHashExists } = require('./issuance');
 
@@ -29,17 +30,21 @@ function actorFromUser(user) {
   if (!can(user, 'manageKnowledge')) throw new EditorialSessionError(403, 'editorial_permission_denied');
   return { uid: user.uid, email: user.email, name: user.name || null, canManageNews: true };
 }
-async function activeActor(db, decoded) {
+function adminActorFromUser(user) {
+  const actor = buildAdminActor(user);
+  if (!actor) throw new EditorialSessionError(403, 'editorial_permission_denied');
+  return actor;
+}
+async function activeActor(db, decoded, actorMapper = actorFromUser) {
   try {
-    return actorFromUser(await loadActivePortalUser(db, decoded));
+    return actorMapper(await loadActivePortalUser(db, decoded));
   } catch (error) {
     if (error instanceof ActivePortalUserError) throw new EditorialSessionError(403, error.reason || 'account-inactive');
     if (error instanceof EditorialSessionError) throw error;
     throw unavailable();
   }
 }
-async function issueEditorialSession({ firebaseAuth, db, token, user, previous, now }) {
-  actorFromUser(user);
+async function issueSessionCore({ firebaseAuth, db, token, user, previous, now }) {
   const previousHash = previous ? sessionHash(previous) : null;
   let client;
   let releaseError;
@@ -69,7 +74,15 @@ async function issueEditorialSession({ firebaseAuth, db, token, user, previous, 
     throw error instanceof EditorialSessionError ? error : unavailable();
   } finally { if (client) client.release(releaseError); }
 }
-async function resolveEditorialSession({ firebaseAuth, db, cookie, now = new Date() }) {
+async function issueEditorialSession(args) {
+  actorFromUser(args.user);
+  return issueSessionCore(args);
+}
+async function issueEditorialAdminSession(args) {
+  adminActorFromUser(args.user);
+  return issueSessionCore(args);
+}
+async function resolveSessionCore({ firebaseAuth, db, cookie, now = new Date() }, actorMapper) {
   const hash = sessionHash(cookie);
   let record;
   try { record = await findSessionRecord(db, hash); } catch { throw unavailable(); }
@@ -77,7 +90,13 @@ async function resolveEditorialSession({ firebaseAuth, db, cookie, now = new Dat
   let decoded;
   try { decoded = await firebaseAuth.verifySessionCookie(cookie, true); } catch (error) { throw firebaseError(error); }
   if (!decoded.uid || decoded.uid !== record.uid) throw invalidSession();
-  return { actor: await activeActor(db, decoded), expiresAt: record.expiresAt.toISOString() };
+  return { actor: await activeActor(db, decoded, actorMapper), expiresAt: record.expiresAt.toISOString() };
+}
+function resolveEditorialSession(args) {
+  return resolveSessionCore(args, actorFromUser);
+}
+function resolveEditorialAdminSession(args) {
+  return resolveSessionCore(args, adminActorFromUser);
 }
 async function revokeEditorialSession({ db, cookie }) {
   if (!cookie) return false;
@@ -94,5 +113,6 @@ async function checkEditorialActor({ firebaseAuth, db, uid }) {
 }
 module.exports = {
   EditorialSessionError, SESSION_DURATION_MS, firebaseError, unavailable,
-  issueEditorialSession, resolveEditorialSession, revokeEditorialSession, checkEditorialActor,
+  issueEditorialSession, resolveEditorialSession, issueEditorialAdminSession, resolveEditorialAdminSession,
+  adminActorFromUser, revokeEditorialSession, checkEditorialActor,
 };

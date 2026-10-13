@@ -1,5 +1,8 @@
 const express = require('express');
-const { EditorialSessionError, resolveEditorialSession, revokeEditorialSession, checkEditorialActor } = require('../editorial-session/service');
+const {
+  EditorialSessionError, resolveEditorialSession, resolveEditorialAdminSession,
+  revokeEditorialSession, checkEditorialActor,
+} = require('../editorial-session/service');
 const { assertEditorialService } = require('../editorial-session/service-auth');
 const { createEditorialQuotas } = require('../editorial-session/quota');
 const { getAuthority } = require('../owner-news/authority');
@@ -23,6 +26,12 @@ function createEditorialInternalRouter({ db, firebaseAuth, env = process.env, qu
   }
   router.post('/session/resolve', limits.resolve, json, async (req, res, next) => {
     try { res.json(await resolveEditorialSession({ firebaseAuth, db, cookie: input(req, 'cookie') })); }
+    catch (error) { next(error); }
+  });
+  // This v2 general-admin resolution deliberately shares the bounded resolve lane
+  // with News session resolution; it does not read or project News authority.
+  router.post('/admin/session/resolve', limits.resolve, json, async (req, res, next) => {
+    try { res.json(await resolveEditorialAdminSession({ firebaseAuth, db, cookie: input(req, 'cookie') })); }
     catch (error) { next(error); }
   });
   router.post('/session/revoke', limits.revoke, json, async (req, res, next) => {

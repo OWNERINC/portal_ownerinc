@@ -20,6 +20,7 @@ import { LegacyNewsRevisions } from './collections/LegacyNewsRevisions'
 import { NewsMigrationRuns } from './collections/NewsMigrationRuns'
 import { NewsMigrationItems } from './collections/NewsMigrationItems'
 import { portalPollEndpoints } from './endpoints/portal-polls'
+import { scopePayloadLockAccess } from './auth/native-admin-access'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
@@ -29,6 +30,7 @@ const PortalEditors = createPortalEditors(environment)
 // Each call creates a new adapter config; a running runtime adapter is never toggled.
 export const createCmsConfig = (importContext?: unknown) => buildConfig({
   admin: {
+    avatar: 'default',
     user: PortalEditors.slug,
     dateFormat: 'dd/MM/yyyy HH:mm',
     timezones: { defaultTimezone: 'America/Sao_Paulo', supportedTimezones: [{ label: 'São Paulo', value: 'America/Sao_Paulo' }] },
@@ -38,7 +40,7 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
       afterNavLinks: ['/admin/PortalNavigation#PortalNavigation'],
       logout: { Button: '/admin/PortalLogout#PortalLogout' },
       providers: ['/admin/SessionWatch#SessionWatch'],
-      views: { polls: { Component: '/admin/PollsView#PollsView', path: '/polls', exact: true } },
+      views: { dashboard: { Component: '/admin/AdminHome#AdminHome' }, polls: { Component: '/admin/PollsView#PollsView', path: '/polls', exact: true } },
     },
     importMap: {
       baseDir: dirname,
@@ -73,6 +75,7 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   telemetry: false,
   upload: { limits: { fileSize: 50 * 1024 * 1024 }, abortOnLimit: true, useTempFiles: false },
+  onInit: payload => scopePayloadLockAccess(payload),
   // No Payload image transformer: even unadjusted WebP is re-encoded when sharp is
   // configured. The media validator uses sharp directly and stores ORIGINAL bytes.
 })

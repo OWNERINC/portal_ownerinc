@@ -1,16 +1,29 @@
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import nativeSchema from '../src/migrations/20261006_181424_z_owner_news_native.json' with { type: 'json' }
 import {
   controlRolesVerificationSQL,
+  controlRolesPublicVerificationSQL,
   controlRolesOwnershipVerificationSQL,
   controlRolesNativePrivilegesVerificationSQL,
   runtimeProtocolFunctionsVerifySQL,
   runtimeProtocolPrivilegesVerifySQL,
   grantsSQL,
 } from './provision-db'
-import { NEWS_MUTATION_LEDGER_DDL, NEWS_MUTATION_TABLES } from '../src/publication/mutation-ledger'
+import { NEWS_MUTATION_LEDGER_STATEMENTS, NEWS_MUTATION_TABLES, type NewsMutationLedgerOperation } from '../src/publication/mutation-ledger'
 import { buildNewsMutationTriggersDDL } from '../src/publication/mutation-triggers'
+import {
+  buildNewsMigrationBootstrapRunDDL,
+  NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE,
+  NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS,
+} from '../src/publication/bootstrap-run'
+import {
+  newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
+  newsProtocolObserverPrivilegesVerificationSQL,
+  newsProtocolObserverRoleVerificationSQL,
+} from './news-protocol-observer-contract'
 
 const require = createRequire(import.meta.url)
 const MIGRATIONS = [
@@ -22,22 +35,32 @@ const MIGRATIONS = [
   '20261006_181424_z_owner_news_native',
 ] as const
 const LOCK_ID = 7194030
-const APPROVED_PROTOCOL_SIGNATURES = [
+const V1_PROTOCOL_SIGNATURES = [
   'public.owner_news_mutation_guard_stmt()',
   'public.owner_news_mutation_capture_row()',
   'public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)',
   'public.owner_news_migration_item_binding_guard()',
 ] as const
-const APPROVED_PROTOCOL_OID_ARRAY_SQL = `ARRAY[${APPROVED_PROTOCOL_SIGNATURES.map(signature => `to_regprocedure('${signature}')::oid`).join(',')}]`
+const V2_PROTOCOL_SIGNATURES = [...V1_PROTOCOL_SIGNATURES, NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE] as const
+const PROTOCOL_FUNCTION_NAMES = [
+  'owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row', 'owner_news_seal_run',
+  'owner_news_migration_item_binding_guard', 'owner_news_bootstrap_run',
+] as const
+function approvedProtocolOidArraySQL(protocolVersion: 1 | 2): string {
+  const signatures = protocolVersion === 1 ? V1_PROTOCOL_SIGNATURES : V2_PROTOCOL_SIGNATURES
+  return `ARRAY[${signatures.map(signature => `to_regprocedure('${signature}')::oid`).join(',')}]`
+}
 
 export const finalizerDiagnosticPhases = [
   'connection-configuration', 'admin-connect', 'transaction-begin', 'transaction-lock',
+  'audit-transaction-begin', 'audit-identity', 'audit-transaction-commit',
   'precondition-identity', 'precondition-migrations', 'precondition-relations', 'precondition-columns',
   'precondition-sequences', 'precondition-enums', 'precondition-constraints', 'precondition-indexes',
   'precondition-foreign-keys', 'precondition-control-columns', 'precondition-control-roles',
   'precondition-protocol-inventory', 'precondition-control-ownership', 'precondition-native-privileges',
-  'precondition-installed-state', 'protocol-head-read', 'protocol-ledger-ddl', 'protocol-trigger-ddl', 'protocol-binding-ddl',
-  'protocol-grants', 'verify-installed', 'transaction-commit', 'transaction-rollback',
+  'precondition-installed-state', 'precondition-observer-role', 'precondition-observer-privileges',
+  'protocol-head-read', 'protocol-ledger-ddl', 'protocol-trigger-ddl', 'protocol-binding-ddl',
+  'protocol-grants', 'protocol-bootstrap-ddl', 'verify-installed', 'transaction-commit', 'transaction-rollback',
 ] as const
 export type FinalizerDiagnosticPhase = typeof finalizerDiagnosticPhases[number]
 export type FinalizerTriggerDiagnosticDetails = {
@@ -65,19 +88,170 @@ export type FinalizerFailureDiagnostic = {
   phase: FinalizerDiagnosticPhase
   reason: string
   sqlstate: string | null
+  operation?: NewsMutationLedgerOperation
   triggerDetails?: FinalizerTriggerDiagnosticDetails
 }
 export type FinalizerCloseDiagnostic = { phase: 'admin-disconnect'; sqlstate: string | null }
 export type FinalizerCloseWarningSink = (diagnostic: FinalizerCloseDiagnostic) => void
-export type ProtocolInstallationState = 'empty' | 'complete'
+export type ProtocolInstallationState = 'empty' | 'v1' | 'v2' | 'partial'
+
+export const preauthorityCatalogDiagnosticStages = [
+  'connection', 'transaction', 'protocol_identity', 'protocol_migrations', 'protocol_relations',
+  'protocol_columns', 'protocol_sequences', 'protocol_enums', 'protocol_constraints',
+  'protocol_indexes', 'protocol_foreign_keys', 'protocol_control_columns', 'protocol_control_roles',
+  'protocol_control_ownership', 'protocol_native_privileges', 'protocol_inventory', 'protocol_state',
+  'native_relations', 'native_columns', 'native_indexes', 'native_constraints', 'native_types',
+  'news_rows', 'verifier',
+] as const
+export type PreauthorityCatalogDiagnosticStage = typeof preauthorityCatalogDiagnosticStages[number]
+
+export type PreauthorityCatalogFailureDiagnostic = {
+  stage: PreauthorityCatalogDiagnosticStage
+  reason: string
+  sqlstate: string | null
+  constraintMismatch?: PreauthorityNativeConstraintMismatchDiagnostic
+}
+
+export const preauthorityNativeConstraintMismatchCategories = [
+  'missing_expected', 'unexpected_observed', 'constraint_identity', 'constraint_metadata',
+  'check_definition', 'check_definition_parse', 'primary_key_definition', 'foreign_key_definition',
+] as const
+export type PreauthorityNativeConstraintMismatchDiagnostic = {
+  category: typeof preauthorityNativeConstraintMismatchCategories[number]
+  table: string | null
+  constraint: string | null
+  expectedCount: number
+  observedCount: number
+  expectedDefinitionSha256: string | null
+  observedDefinitionSha256: string | null
+}
+
+const preauthorityNativeConstraintFailureDetails = new WeakMap<object, PreauthorityNativeConstraintMismatchDiagnostic>()
+
+const preauthorityCatalogDiagnosticReasons = new Set([
+  'postgres_error', 'preauthority_catalog_verification_failed', 'preauthority_protocol_not_absent',
+  'unsafe_admin_target', 'native_migration_ledger_mismatch', 'native_relation_inventory_mismatch',
+  'mutation_relation_inventory_mismatch', 'native_column_inventory_mismatch',
+  'native_serial_sequence_binding_or_configuration_mismatch', 'native_enum_catalog_mismatch',
+  'native_required_constraint_missing', 'native_snapshot_index_missing_or_mismatched',
+  'native_snapshot_foreign_key_mismatch', 'native_control_column_types_mismatch',
+  'native_item_run_id_type_mismatch', 'control_role_contract_mismatch',
+  'unsafe_preinstallation_control_state', 'diagnostic_installed_protocol_deep_check_skipped',
+  'partial_protocol_installation_manual_recovery_required', 'native_snapshot_invalid',
+  'native_constraint_definition_unavailable', 'preauthority_native_relation_inventory_mismatch',
+  'preauthority_native_column_inventory_mismatch', 'preauthority_native_index_inventory_mismatch',
+  'preauthority_native_constraint_inventory_mismatch', 'preauthority_native_type_inventory_mismatch',
+])
+
+const preauthorityCatalogStageByFinalizerPhase: Partial<Record<FinalizerDiagnosticPhase, PreauthorityCatalogDiagnosticStage>> = {
+  'precondition-identity': 'protocol_identity',
+  'precondition-migrations': 'protocol_migrations',
+  'precondition-relations': 'protocol_relations',
+  'precondition-columns': 'protocol_columns',
+  'precondition-sequences': 'protocol_sequences',
+  'precondition-enums': 'protocol_enums',
+  'precondition-constraints': 'protocol_constraints',
+  'precondition-indexes': 'protocol_indexes',
+  'precondition-foreign-keys': 'protocol_foreign_keys',
+  'precondition-control-columns': 'protocol_control_columns',
+  'precondition-control-roles': 'protocol_control_roles',
+  'precondition-control-ownership': 'protocol_control_ownership',
+  'precondition-native-privileges': 'protocol_native_privileges',
+  'precondition-protocol-inventory': 'protocol_inventory',
+  'precondition-installed-state': 'protocol_inventory',
+}
+
+const preauthorityCatalogStageByReason: Readonly<Record<string, PreauthorityCatalogDiagnosticStage>> = {
+  unsafe_admin_target: 'protocol_identity',
+  native_migration_ledger_mismatch: 'protocol_migrations',
+  native_relation_inventory_mismatch: 'protocol_relations',
+  mutation_relation_inventory_mismatch: 'protocol_relations',
+  native_column_inventory_mismatch: 'protocol_columns',
+  native_serial_sequence_binding_or_configuration_mismatch: 'protocol_sequences',
+  native_enum_catalog_mismatch: 'protocol_enums',
+  native_required_constraint_missing: 'protocol_constraints',
+  native_snapshot_index_missing_or_mismatched: 'protocol_indexes',
+  native_snapshot_foreign_key_mismatch: 'protocol_foreign_keys',
+  native_control_column_types_mismatch: 'protocol_control_columns',
+  native_item_run_id_type_mismatch: 'protocol_control_columns',
+  control_role_contract_mismatch: 'protocol_control_roles',
+  diagnostic_installed_protocol_deep_check_skipped: 'protocol_inventory',
+  partial_protocol_installation_manual_recovery_required: 'protocol_inventory',
+  preauthority_protocol_not_absent: 'protocol_state',
+  preauthority_native_relation_inventory_mismatch: 'native_relations',
+  preauthority_native_column_inventory_mismatch: 'native_columns',
+  preauthority_native_index_inventory_mismatch: 'native_indexes',
+  preauthority_native_constraint_inventory_mismatch: 'native_constraints',
+  preauthority_native_type_inventory_mismatch: 'native_types',
+  native_constraint_definition_unavailable: 'native_constraints',
+  native_snapshot_invalid: 'native_constraints',
+}
+
+/** Extract only fixed verifier reasons and a PostgreSQL SQLSTATE; never expose error messages. */
+export function getPreauthorityCatalogFailureDiagnostic(
+  error: unknown,
+  currentStage: PreauthorityCatalogDiagnosticStage,
+): PreauthorityCatalogFailureDiagnostic {
+  let code: unknown
+  if (error && (typeof error === 'object' || typeof error === 'function')) {
+    try { code = Object.getOwnPropertyDescriptor(error, 'code')?.value } catch { /* use bounded fallback */ }
+  }
+  const sqlstate = typeof code === 'string' && /^[0-9A-Z]{5}$/u.test(code) ? code : null
+  const base = typeof code === 'string' ? code.split(':', 1)[0] : ''
+  const reason = sqlstate ? 'postgres_error'
+    : preauthorityCatalogDiagnosticReasons.has(base) ? base : 'preauthority_catalog_verification_failed'
+  const stage = preauthorityCatalogDiagnosticStages.includes(currentStage)
+    ? preauthorityCatalogStageByReason[base] || currentStage : 'verifier'
+  const constraintMismatch = error && (typeof error === 'object' || typeof error === 'function')
+    ? preauthorityNativeConstraintFailureDetails.get(error as object) : undefined
+  return {
+    stage, reason, sqlstate,
+    ...(constraintMismatch && reason === 'preauthority_native_constraint_inventory_mismatch'
+      ? { constraintMismatch } : {}),
+  }
+}
+
+export function formatPreauthorityCatalogFailureDiagnostic(diagnostic: PreauthorityCatalogFailureDiagnostic): string {
+  const stage = preauthorityCatalogDiagnosticStages.includes(diagnostic.stage) ? diagnostic.stage : 'verifier'
+  const reason = preauthorityCatalogDiagnosticReasons.has(diagnostic.reason)
+    ? diagnostic.reason : 'preauthority_catalog_verification_failed'
+  const sqlstate = typeof diagnostic.sqlstate === 'string' && /^[0-9A-Z]{5}$/u.test(diagnostic.sqlstate)
+    ? diagnostic.sqlstate : 'none'
+  return `PREAUTHORITY_CATALOG_DIAGNOSTIC stage=${stage} reason=${reason} sqlstate=${sqlstate}`
+}
+
+const PREAUTHORITY_NATIVE_DIAGNOSTIC_IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/u
+
+export function formatPreauthorityNativeConstraintMismatchDiagnostic(
+  diagnostic: PreauthorityCatalogFailureDiagnostic,
+): string | null {
+  const detail = diagnostic.constraintMismatch
+  if (diagnostic.stage !== 'native_constraints'
+    || diagnostic.reason !== 'preauthority_native_constraint_inventory_mismatch'
+    || !detail || !preauthorityNativeConstraintMismatchCategories.includes(detail.category)
+    || !Number.isSafeInteger(detail.expectedCount) || detail.expectedCount < 0 || detail.expectedCount > 1_000_000
+    || !Number.isSafeInteger(detail.observedCount) || detail.observedCount < 0 || detail.observedCount > 1_000_000
+    || !isExpectedNativeConstraintDiagnosticIdentity(detail.table, detail.constraint)
+    || detail.table !== null && !PREAUTHORITY_NATIVE_DIAGNOSTIC_IDENTIFIER.test(detail.table)
+    || detail.constraint !== null && !PREAUTHORITY_NATIVE_DIAGNOSTIC_IDENTIFIER.test(detail.constraint)
+    || (detail.expectedDefinitionSha256 !== null && !/^[0-9a-f]{64}$/u.test(detail.expectedDefinitionSha256))
+    || (detail.observedDefinitionSha256 !== null && !/^[0-9a-f]{64}$/u.test(detail.observedDefinitionSha256))) return null
+  return `PREAUTHORITY_CONSTRAINT_DIAGNOSTIC category=${detail.category} table=${detail.table ?? 'none'} `
+    + `constraint=${detail.constraint ?? 'none'} expectedCount=${detail.expectedCount} observedCount=${detail.observedCount} `
+    + `expectedSha256=${detail.expectedDefinitionSha256 ?? 'none'} observedSha256=${detail.observedDefinitionSha256 ?? 'none'}`
+}
 
 const finalizerDiagnosticReasons = new Set([
   'admin_database_url_required', 'unsafe_admin_database_url', 'unsafe_admin_target',
+  'observer_database_url_required', 'unsafe_observer_database_url', 'unsafe_observer_target',
+  'observer_role_contract_mismatch', 'observer_privilege_contract_mismatch',
+  'observer_visible_ownership_mismatch', 'protocol_not_installed', 'audit_transaction_contract_mismatch',
   'native_migration_ledger_mismatch', 'native_relation_inventory_mismatch', 'mutation_relation_inventory_mismatch',
   'native_column_inventory_mismatch', 'native_serial_sequence_binding_or_configuration_mismatch',
   'native_enum_catalog_mismatch', 'native_required_constraint_missing', 'native_snapshot_index_missing_or_mismatched',
   'native_snapshot_foreign_key_mismatch', 'native_control_column_types_mismatch', 'native_item_run_id_type_mismatch',
   'control_role_contract_mismatch', 'partial_protocol_installation_manual_recovery_required',
+  'protocol_upgrade_required', 'protocol_upgrade_requires_v1',
   'unsafe_preinstallation_control_state', 'diagnostic_installed_protocol_deep_check_skipped',
   'ledger_head_invalid_or_coverage_activated', 'canonical_function_mismatch', 'canonical_function_inventory_unavailable',
   'trigger_inventory_count_mismatch', 'trigger_key_missing', 'trigger_key_duplicate',
@@ -122,11 +296,13 @@ function diagnosticReason(error: unknown): string {
   catch { return 'database_error' }
 }
 
-function recordFinalizerFailure(error: unknown, phase: FinalizerDiagnosticPhase) {
+function recordFinalizerFailure(error: unknown, phase: FinalizerDiagnosticPhase, operation?: NewsMutationLedgerOperation) {
   if (!error || (typeof error !== 'object' && typeof error !== 'function') || finalizerFailureDiagnostics.has(error as object)) return
   finalizerFailureDiagnostics.set(error as object, {
     phase: finalizerDiagnosticPhases.includes(phase) ? phase : 'connection-configuration',
     reason: diagnosticReason(error), sqlstate: safeDiagnosticSqlState(error),
+    ...(phase === 'protocol-ledger-ddl' && NEWS_MUTATION_LEDGER_STATEMENTS.some(statement => statement.operation === operation)
+      ? { operation } : {}),
     ...(finalizerTriggerDiagnosticDetails.get(error as object)
       ? { triggerDetails: finalizerTriggerDiagnosticDetails.get(error as object)! } : {}),
   })
@@ -143,7 +319,12 @@ export function formatFinalizerFailureDiagnostic(diagnostic: FinalizerFailureDia
   const sqlstate = typeof diagnostic.sqlstate === 'string' && /^[0-9A-Z]{5}$/u.test(diagnostic.sqlstate)
     && !finalizerDiagnosticReasons.has(diagnostic.sqlstate) ? diagnostic.sqlstate : 'none'
   const detail = diagnostic.triggerDetails ? formatFinalizerTriggerDiagnosticDetails(diagnostic.triggerDetails) : ''
-  return `CMS news protocol diagnostic: phase=${phase} reason=${reason} sqlstate=${sqlstate}${detail}`
+  // Source and expected owner describe this admin-only installer, not an observed
+  // catalog or a driver-supplied field. Never retain SQL/message/detail from pg.
+  const operation = phase === 'protocol-ledger-ddl'
+    ? NEWS_MUTATION_LEDGER_STATEMENTS.find(statement => statement.operation === diagnostic.operation)?.operation : undefined
+  const ledgerDetail = operation ? ` operation=${operation} ddl_source=mutation-ledger expected_owner=cms_admin` : ''
+  return `CMS news protocol diagnostic: phase=${phase} reason=${reason} sqlstate=${sqlstate}${ledgerDetail}${detail}`
 }
 
 function formatFinalizerTriggerDiagnosticDetails(details: FinalizerTriggerDiagnosticDetails): string {
@@ -177,9 +358,21 @@ export interface DrizzleColumnSnapshot {
   name: string
   type: string
   notNull: boolean
+  primaryKey?: boolean
   default?: string | number | boolean
 }
-export interface DrizzleIndexSnapshot { name: string; isUnique: boolean; method: string }
+export interface DrizzleIndexColumnSnapshot {
+  expression: string
+  isExpression: boolean
+  asc: boolean
+  nulls: string
+}
+export interface DrizzleIndexSnapshot {
+  name: string
+  isUnique: boolean
+  method: string
+  columns: readonly DrizzleIndexColumnSnapshot[]
+}
 export interface DrizzleForeignKeySnapshot {
   name: string
   tableFrom: string
@@ -245,6 +438,10 @@ function parseNativeSnapshot(value: unknown): DrizzleNativeSnapshot {
       const type = requiredString(rawColumn, 'type')
       if (typeof rawColumn.notNull !== 'boolean') return fail('native_snapshot_invalid')
       const column: DrizzleColumnSnapshot = { name: requiredString(rawColumn, 'name'), type, notNull: rawColumn.notNull }
+      if (Object.hasOwn(rawColumn, 'primaryKey')) {
+        if (typeof rawColumn.primaryKey !== 'boolean') return fail('native_snapshot_invalid')
+        column.primaryKey = rawColumn.primaryKey
+      }
       if (Object.hasOwn(rawColumn, 'default')) {
         const defaultValue = rawColumn.default
         if (typeof defaultValue !== 'string' && typeof defaultValue !== 'number' && typeof defaultValue !== 'boolean') return fail('native_snapshot_invalid')
@@ -256,7 +453,22 @@ function parseNativeSnapshot(value: unknown): DrizzleNativeSnapshot {
     for (const [indexKey, rawIndexValue] of objectEntries(rawTable.indexes ?? {})) {
       const rawIndex = Object.fromEntries(objectEntries(rawIndexValue))
       if (typeof rawIndex.isUnique !== 'boolean') return fail('native_snapshot_invalid')
-      indexes[indexKey] = { name: requiredString(rawIndex, 'name'), method: requiredString(rawIndex, 'method'), isUnique: rawIndex.isUnique }
+      if (!Array.isArray(rawIndex.columns) || rawIndex.columns.length === 0) return fail('native_snapshot_invalid')
+      const columns = rawIndex.columns.map(rawColumn => {
+        const indexColumn = Object.fromEntries(objectEntries(rawColumn))
+        if (typeof indexColumn.isExpression !== 'boolean' || typeof indexColumn.asc !== 'boolean'
+          || typeof indexColumn.nulls !== 'string' || !['first', 'last'].includes(indexColumn.nulls)) {
+          return fail('native_snapshot_invalid')
+        }
+        return {
+          expression: requiredString(indexColumn, 'expression'), isExpression: indexColumn.isExpression,
+          asc: indexColumn.asc, nulls: indexColumn.nulls,
+        }
+      })
+      indexes[indexKey] = {
+        name: requiredString(rawIndex, 'name'), method: requiredString(rawIndex, 'method'),
+        isUnique: rawIndex.isUnique, columns,
+      }
     }
     const foreignKeys: Record<string, DrizzleForeignKeySnapshot> = {}
     for (const [key, rawForeignKeyValue] of objectEntries(rawTable.foreignKeys ?? {})) {
@@ -318,6 +530,352 @@ const NATIVE_REQUIRED_CONSTRAINTS = [
   'news_schedules_import_epoch_check', 'news_schedules_snapshot_hash_check',
   'news_schedules_import_provenance_shape_check', 'legacy_news_revisions_metadata_basis_check',
 ] as const
+
+type SqlToken = { kind: 'word' | 'string' | 'number' | 'operator' | 'punctuation'; value: string }
+type SqlExpression = string | boolean | null | SqlExpression[]
+
+// Only the flat string-valued JSONB objects used by the native CHECK are
+// supported. Do not round JSON numbers through JS or discard duplicate keys.
+function canonicalCheckJsonbObject(value: string): SqlExpression {
+  let parsed: unknown
+  try { parsed = JSON.parse(value) } catch { return fail('native_constraint_definition_unavailable') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+    || Object.values(parsed).some(item => typeof item !== 'string')) return fail('native_constraint_definition_unavailable')
+  const stringToken = '"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\/bfnrt]|u[0-9a-fA-F]{4}))*"'
+  const pairs = [...value.matchAll(new RegExp(`(${stringToken})\\s*:\\s*(${stringToken})`, 'gu'))]
+  if (pairs.length !== Object.keys(parsed).length) return fail('native_constraint_definition_unavailable')
+  return ['jsonb-string-object', ...Object.entries(parsed).sort(([a], [b]) => compareText(a, b))
+    .map(([key, item]) => [key, item as string])]
+}
+
+function tokenizeSql(input: string, preserveQuotedIdentity = false): SqlToken[] {
+  const tokens: SqlToken[] = []
+  for (let index = 0; index < input.length;) {
+    const character = input[index]!
+    if (/\s/u.test(character)) { index += 1; continue }
+    if (character === "'") {
+      index += 1
+      let value = ''
+      let closed = false
+      while (index < input.length) {
+        if (input[index] === "'" && input[index + 1] === "'") { value += "'"; index += 2; continue }
+        if (input[index] === "'") { index += 1; closed = true; break }
+        value += input[index++]!
+      }
+      if (!closed) return fail('native_constraint_definition_unavailable')
+      tokens.push({ kind: 'string', value })
+      continue
+    }
+    if (character === '"') {
+      index += 1
+      let value = ''
+      let closed = false
+      while (index < input.length) {
+        if (input[index] === '"' && input[index + 1] === '"') { value += '"'; index += 2; continue }
+        if (input[index] === '"') { index += 1; closed = true; break }
+        value += input[index++]!
+      }
+      if (!closed) return fail('native_constraint_definition_unavailable')
+      tokens.push({ kind: 'word', value: !preserveQuotedIdentity && value === value.toLowerCase() ? value : `quoted:${value}` })
+      continue
+    }
+    const numeric = /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/u.exec(input.slice(index))
+    if (numeric) {
+      tokens.push({ kind: 'number', value: numeric[0] })
+      index += numeric[0].length
+      continue
+    }
+    const word = /^[a-z_][a-z0-9_$]*/iu.exec(input.slice(index))
+    if (word) {
+      tokens.push({ kind: 'word', value: word[0].toLowerCase() })
+      index += word[0].length
+      continue
+    }
+    const operator = ['::', '!~*', '~*', '!~', '>=', '<=', '<>', '!=', '||'].find(value => input.startsWith(value, index))
+    if (operator) {
+      tokens.push({ kind: 'operator', value: operator })
+      index += operator.length
+      continue
+    }
+    if ('(),.'.includes(character)) {
+      tokens.push({ kind: 'punctuation', value: character })
+      index += 1
+      continue
+    }
+    if ('=<>~+-*/%'.includes(character)) {
+      tokens.push({ kind: 'operator', value: character })
+      index += 1
+      continue
+    }
+    return fail('native_constraint_definition_unavailable')
+  }
+  return tokens
+}
+
+function parseSqlExpression(input: string, exactObservedTypes = false): SqlExpression {
+  const tokens = tokenizeSql(input, exactObservedTypes)
+  let position = 0
+  const peek = (value?: string): boolean => value === undefined
+    ? position < tokens.length : tokens[position]?.value === value
+  const take = (): SqlToken => {
+    const token = tokens[position]
+    if (!token) return fail('native_constraint_definition_unavailable')
+    position += 1
+    return token
+  }
+  const expect = (value: string): void => { if (!peek(value)) fail('native_constraint_definition_unavailable'); position += 1 }
+  const operation = (name: string, ...args: SqlExpression[]): SqlExpression => [name, ...args]
+  const parseOr = (): SqlExpression => {
+    let result = parseAnd()
+    while (peek('or')) { take(); result = operation('or', result, parseAnd()) }
+    return result
+  }
+  const parseAnd = (): SqlExpression => {
+    let result = parseNot()
+    while (peek('and')) { take(); result = operation('and', result, parseNot()) }
+    return result
+  }
+  const parseNot = (): SqlExpression => peek('not') ? (take(), operation('not', parseNot())) : parseComparison()
+  const parseComparison = (): SqlExpression => {
+    const left = parseConcat()
+    if (peek('is')) {
+      take()
+      const negated = peek('not')
+      if (negated) take()
+      if (peek('distinct')) {
+        take()
+        expect('from')
+        const distinct = operation('is-distinct-from', left, parseConcat())
+        return negated ? operation('not', distinct) : distinct
+      }
+      if (peek('null')) { take(); return operation(negated ? 'is-not-null' : 'is-null', left) }
+      if (peek('true') || peek('false') || peek('unknown')) return operation(negated ? 'is-not' : 'is', left, parseConcat())
+      return fail('native_constraint_definition_unavailable')
+    }
+    if (peek('between')) {
+      take()
+      const lower = parseConcat()
+      expect('and')
+      return operation('and', operation('>=', left, lower), operation('<=', left, parseConcat()))
+    }
+    const operator = tokens[position]?.value
+    if (operator && ['=', '<>', '!=', '<', '<=', '>', '>=', '~', '!~', '~*', '!~*'].includes(operator)) {
+      take()
+      return operation(operator === '!=' ? '<>' : operator, left, parseConcat())
+    }
+    return left
+  }
+  const parseConcat = (): SqlExpression => {
+    let result = parseAdd()
+    while (peek('||')) { take(); result = operation('||', result, parseAdd()) }
+    return result
+  }
+  const parseAdd = (): SqlExpression => {
+    let result = parseMultiply()
+    while (peek('+') || peek('-')) { const operator = take().value; result = operation(operator, result, parseMultiply()) }
+    return result
+  }
+  const parseMultiply = (): SqlExpression => {
+    let result = parseUnary()
+    while (peek('*') || peek('/') || peek('%')) { const operator = take().value; result = operation(operator, result, parseUnary()) }
+    return result
+  }
+  const parseUnary = (): SqlExpression => {
+    if (peek('+') || peek('-')) { const operator = take().value; return operation(`unary${operator}`, parseUnary()) }
+    return parsePostfix()
+  }
+  const parsePostfix = (): SqlExpression => {
+    let result = parsePrimary()
+    while (peek('::')) {
+      take()
+      const typeParts = [take().value]
+      if (peek('.')) { take(); typeParts.push(take().value) }
+      if (typeParts.at(-1) === 'character' && peek('varying')) typeParts.push(take().value)
+      const type = typeParts.join('.')
+      // Generic fixture snapshots have no reviewed column/type allowlist.
+      // Retain every observed cast and quoted identifier there; only the native
+      // verifier's existing default mode may use its reviewed cast equivalences.
+      if (exactObservedTypes) { result = operation(`cast:${type}`, result); continue }
+      const numberLiteral = Array.isArray(result) && result[0] === 'number'
+      const stringLiteral = Array.isArray(result) && result[0] === 'string'
+      const castType = type.replace(/^(?:pg_catalog|public)\./u, '')
+      if (type === 'jsonb' || type === 'pg_catalog.jsonb') {
+        if (Array.isArray(result) && result[0] === 'string') {
+          result = canonicalCheckJsonbObject(result[1] as string)
+          continue
+        }
+      }
+      // PG16 deparses the native int8 ceiling as ('922...807'::bigint)::numeric.
+      // Fold only a canonical, in-range integer literal, never a column cast.
+      if ((type === 'numeric' || type === 'pg_catalog.numeric') && Array.isArray(result)
+        && ['cast:bigint', 'cast:pg_catalog.bigint'].includes(String(result[0]))
+        && Array.isArray(result[1]) && result[1][0] === 'string') {
+        const value = result[1][1]
+        if (typeof value === 'string' && /^(?:0|[1-9][0-9]*)$/u.test(value)
+          && BigInt(value) <= 9223372036854775807n) {
+          result = operation('number', value)
+          continue
+        }
+      }
+      if (['text', 'varchar', 'character varying'].includes(castType)
+        || castType === 'numeric' && numberLiteral
+        || expectedEnums.some(entry => entry.name === castType) && stringLiteral) continue
+      result = operation(`cast:${castType === 'bigint' ? type : castType}`, result)
+    }
+    return result
+  }
+  const parsePrimary = (): SqlExpression => {
+    if (peek('(')) { take(); const result = parseOr(); expect(')'); return result }
+    if (peek('case')) {
+      take()
+      const base = peek('when') ? null : parseOr()
+      const branches: SqlExpression[] = []
+      while (peek('when')) {
+        take()
+        const condition = parseOr()
+        expect('then')
+        branches.push(operation('when', condition, parseOr()))
+      }
+      const otherwise = peek('else') ? (take(), parseOr()) : null
+      expect('end')
+      return operation('case', base, ...branches, operation('else', otherwise))
+    }
+    const token = take()
+    if (token.kind === 'string') return operation('string', token.value)
+    if (token.kind === 'number') return operation('number', token.value)
+    if (token.kind !== 'word') return fail('native_constraint_definition_unavailable')
+    if (token.value === 'null') return null
+    if (token.value === 'true') return true
+    if (token.value === 'false') return false
+    let name = token.value
+    while (peek('.')) { take(); name += `.${take().value}` }
+    if (!peek('(')) return operation('identifier', name)
+    take()
+    const args: SqlExpression[] = []
+    if (!peek(')')) {
+      args.push(parseOr())
+      while (peek(',')) { take(); args.push(parseOr()) }
+    }
+    expect(')')
+    return operation('call', name, ...args)
+  }
+  const expression = parseOr()
+  if (position !== tokens.length) return fail('native_constraint_definition_unavailable')
+  return expression
+}
+
+function extractCheckExpression(definition: string): string {
+  const match = /^\s*CHECK\s*\(/iu.exec(definition)
+  if (!match) return fail('native_constraint_definition_unavailable')
+  const start = match[0].length
+  let depth = 1
+  let quote: "'" | '"' | null = null
+  for (let index = start; index < definition.length; index += 1) {
+    const character = definition[index]!
+    if (quote) {
+      if (character === quote && definition[index + 1] === quote) { index += 1; continue }
+      if (character === quote) quote = null
+      continue
+    }
+    if (character === "'" || character === '"') { quote = character; continue }
+    if (character === '(') depth += 1
+    else if (character === ')' && --depth === 0) {
+      if (definition.slice(index + 1).trim() !== '') return fail('native_constraint_definition_unavailable')
+      return definition.slice(start, index)
+    }
+  }
+  return fail('native_constraint_definition_unavailable')
+}
+
+/** Pure observed-expression semantics only; no catalog validation or I/O.
+ * Unknown grammar throws so diagnostic snapshot callers can retain raw text. */
+export function canonicalObservedCheckDefinition(definition: string): string {
+  return JSON.stringify(parseSqlExpression(extractCheckExpression(definition), true))
+}
+
+function extractMigrationCheckExpressions(source: string): ReadonlyMap<string, string> {
+  const result = new Map<string, string>()
+  const matcher = /ADD\s+CONSTRAINT\s+(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))\s+CHECK\s*\(/giu
+  for (const match of source.matchAll(matcher)) {
+    const name = match[1] ?? match[2]
+    const start = match.index! + match[0].length
+    let depth = 1
+    let quote: "'" | '"' | null = null
+    for (let index = start; index < source.length; index += 1) {
+      const character = source[index]!
+      if (quote) {
+        if (character === quote && source[index + 1] === quote) { index += 1; continue }
+        if (character === quote) quote = null
+        continue
+      }
+      if (character === "'" || character === '"') { quote = character; continue }
+      if (character === '(') depth += 1
+      else if (character === ')' && --depth === 0) {
+        if (result.has(name!)) return fail('native_snapshot_invalid')
+        // These CHECKs live inside a tagged JS template, whose cooked strings
+        // reach Drizzle. The two historical regex \\. escapes cook to a bare dot.
+        // Decode only that reviewed source spelling; never rewrite observed SQL
+        // or silently accept a new template escape/interpolation.
+        const raw = source.slice(start, index).trim()
+        if (/\\(?!\.)|\$\{/u.test(raw)) return fail('native_snapshot_invalid')
+        result.set(name!, raw.replaceAll('\\.', '.'))
+        break
+      }
+    }
+    if (!result.has(name!)) return fail('native_snapshot_invalid')
+  }
+  if (result.size !== NATIVE_REQUIRED_CONSTRAINTS.length
+    || NATIVE_REQUIRED_CONSTRAINTS.some(name => !result.has(name))) return fail('native_snapshot_invalid')
+  return result
+}
+
+let cachedNativeCheckExpressions: ReadonlyMap<string, string> | undefined
+
+function nativeCheckExpressions(): ReadonlyMap<string, string> {
+  if (!cachedNativeCheckExpressions) {
+    cachedNativeCheckExpressions = extractMigrationCheckExpressions(readFileSync(
+      new URL('../src/migrations/20261006_181424_z_owner_news_native.ts', import.meta.url), 'utf8'))
+  }
+  return cachedNativeCheckExpressions
+}
+
+function normalizeDefinitionTokens(definition: string): string {
+  const tokens = tokenizeSql(definition)
+  const normalized: string[] = []
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!
+    if (token.kind === 'word' && token.value === 'public' && tokens[index + 1]?.value === '.') {
+      index += 1
+      continue
+    }
+    if (token.kind === 'word' && token.value === 'match' && tokens[index + 1]?.value === 'simple') {
+      index += 1
+      continue
+    }
+    if (token.kind === 'word' && token.value === 'on' && tokens[index + 1]?.value === 'update'
+      && tokens[index + 2]?.value === 'no' && tokens[index + 3]?.value === 'action') { index += 3; continue }
+    if (token.kind === 'word' && token.value === 'on' && tokens[index + 1]?.value === 'delete'
+      && tokens[index + 2]?.value === 'no' && tokens[index + 3]?.value === 'action') { index += 3; continue }
+    normalized.push(`${token.kind}:${token.value}`)
+  }
+  return JSON.stringify(normalized)
+}
+
+function canonicalIndexDefinition(index: DrizzleIndexSnapshot, table: string): string {
+  const columns = index.columns.map(column => {
+    const expression = column.isExpression ? column.expression : quoteIdentifier(column.expression)
+    const direction = column.asc ? '' : ' DESC'
+    const nulls = column.asc && column.nulls === 'first' || !column.asc && column.nulls === 'last'
+      ? ` NULLS ${column.nulls.toUpperCase()}` : ''
+    return `${expression}${direction}${nulls}`
+  }).join(', ')
+  return `CREATE ${index.isUnique ? 'UNIQUE ' : ''}INDEX ${quoteIdentifier(index.name)} ON public.${quoteIdentifier(table)} USING ${index.method} (${columns})`
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
 const expectedIndexes = Object.values(nativeSchemaSnapshot.tables).flatMap(table => Object.values(table.indexes).map(index => ({
   table: table.name, name: index.name, unique: Boolean(index.isUnique), method: index.method,
 })))
@@ -330,6 +888,7 @@ const CONTROL_RUN_UPDATE_COLUMNS = new Set([
   'admission_state', 'activation_epoch', 'drain_receipt_sha256', 'reconciliation_sequence',
   'reconciliation_chain_sha256', 'sealed_sequence', 'sealed_chain_sha256', 'sealed_at',
 ])
+const CONTROL_RUN_INSERT_COLUMNS = new Set<string>(NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS)
 export const NEWS_MIGRATION_ITEM_BINDING_DDL = `
 CREATE OR REPLACE FUNCTION public.owner_news_migration_item_binding_guard()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
@@ -388,6 +947,435 @@ export type FinalizerClient = {
 }
 
 const jsonTables = Object.keys(nativeSchemaSnapshot.tables).map(name => name.replace(/^public\./u, '')).sort()
+
+type NativeCatalogRelation = { schema: string; name: string; kind: string }
+type NativeCatalogColumn = {
+  schema: string
+  table: string
+  name: string
+  type: string
+  typeSchema: string
+  notNull: boolean
+  defaultExpression: string | null
+  defaultVerified: boolean
+}
+type NativeCatalogIndex = {
+  tableSchema: string
+  table: string
+  schema: string
+  name: string
+  unique: boolean
+  primary: boolean
+  valid: boolean
+  ready: boolean
+  noPredicate: boolean
+  noExpressions: boolean
+  keyCount: number
+  attributeCount: number
+  method: string
+  columns: readonly { expression: string; isExpression: boolean; asc: boolean; nulls: string }[]
+  definition: string
+}
+type NativeCatalogConstraint = {
+  schema: string
+  table: string
+  name: string
+  kind: string
+  validated: boolean
+  deferrable: boolean
+  deferred: boolean
+  definition: string
+}
+type NativeCatalogType = { schema: string; name: string; kind: string; labels: string[] }
+
+const expectedNativeRelations: NativeCatalogRelation[] = [
+  ...jsonTables.map(name => ({ schema: 'public', name, kind: 'r' })),
+  ...expectedSerials.map(({ sequence }) => ({ schema: 'public', name: sequence, kind: 'S' })),
+]
+
+const expectedNativeIndexes: Omit<NativeCatalogIndex, 'valid' | 'ready' | 'noPredicate' | 'noExpressions' | 'keyCount' | 'attributeCount'>[] = [
+  ...Object.entries(nativeSchemaSnapshot.tables).flatMap(([_tableName, table]) => Object.values(table.indexes).map(index => ({
+    tableSchema: 'public', table: table.name, schema: 'public', name: index.name,
+    unique: index.isUnique, primary: false, method: index.method,
+    columns: index.columns, definition: canonicalIndexDefinition(index, table.name),
+  }))),
+  ...Object.entries(nativeSchemaSnapshot.tables).flatMap(([_tableName, table]) => {
+    const primaryColumns = Object.values(table.columns).filter(column => column.primaryKey === true)
+    if (primaryColumns.length === 0) return []
+    if (primaryColumns.length !== 1) return fail('native_snapshot_invalid')
+    const index: DrizzleIndexSnapshot = {
+      name: `${table.name}_pkey`, isUnique: true, method: 'btree',
+      columns: [{ expression: primaryColumns[0]!.name, isExpression: false, asc: true, nulls: 'last' }],
+    }
+    return [{
+      tableSchema: 'public', table: table.name, schema: 'public', name: `${table.name}_pkey`,
+      unique: true, primary: true, method: 'btree',
+      columns: index.columns, definition: canonicalIndexDefinition(index, table.name),
+    }]
+  }),
+]
+
+const requiredCheckTables: Readonly<Record<string, string>> = Object.fromEntries(NATIVE_REQUIRED_CONSTRAINTS.map(name => {
+  if (name === 'news_migration_seal_complete') return [name, 'news_migration_runs']
+  const table = jsonTables.filter(candidate => name.startsWith(`${candidate}_`)
+    || name === `${candidate}_metadata_basis_check`).sort((left, right) => right.length - left.length)[0]
+  if (!table) return fail('native_snapshot_invalid')
+  return [name, table]
+}))
+
+function expectedNativeConstraints(): NativeCatalogConstraint[] {
+  const checkExpressions = nativeCheckExpressions()
+  const constraints: NativeCatalogConstraint[] = [
+  ...Object.values(nativeSchemaSnapshot.tables).flatMap(table => {
+    const primaryColumns = Object.values(table.columns).filter(column => column.primaryKey === true)
+    return primaryColumns.length ? [{
+      schema: 'public', table: table.name, name: `${table.name}_pkey`, kind: 'p',
+      validated: true, deferrable: false, deferred: false,
+      definition: `PRIMARY KEY (${primaryColumns.map(column => quoteIdentifier(column.name)).join(', ')})`,
+    }] : []
+  }),
+  ...expectedForeignKeys.map(foreignKey => ({
+    schema: 'public', table: foreignKey.from, name: foreignKey.name, kind: 'f',
+    validated: true, deferrable: false, deferred: false,
+    definition: `FOREIGN KEY (${foreignKey.fromColumns.map(quoteIdentifier).join(', ')}) REFERENCES public.${quoteIdentifier(foreignKey.to)} (${foreignKey.toColumns.map(quoteIdentifier).join(', ')})`
+      + (foreignKey.delete.toLowerCase() === 'no action' ? '' : ` ON DELETE ${foreignKey.delete}`)
+      + (foreignKey.update.toLowerCase() === 'no action' ? '' : ` ON UPDATE ${foreignKey.update}`),
+  })),
+  ...NATIVE_REQUIRED_CONSTRAINTS.map(name => ({
+    schema: 'public', table: requiredCheckTables[name]!, name, kind: 'c',
+    validated: true, deferrable: false, deferred: false,
+    definition: `CHECK (${checkExpressions.get(name)!})`,
+  })),
+  ]
+  return sortBy(constraints, ['schema', 'table', 'name', 'kind'])
+}
+
+function isExpectedNativeConstraintDiagnosticIdentity(table: string | null, name: string | null): boolean {
+  if (table === null || name === null) return table === null && name === null
+  try {
+    return expectedNativeConstraints().some(constraint => constraint.schema === 'public'
+      && constraint.table === table && constraint.name === name)
+  } catch { return false }
+}
+
+function failNativeConstraintInventoryMismatch(
+  category: PreauthorityNativeConstraintMismatchDiagnostic['category'],
+  expected: NativeCatalogConstraint | null,
+  observed: NativeCatalogConstraint | null,
+  expectedCount: number,
+  observedCount: number,
+): never {
+  const error = new Error('news_protocol_finalizer:preauthority_native_constraint_inventory_mismatch')
+  Object.defineProperty(error, 'code', { value: 'preauthority_native_constraint_inventory_mismatch', enumerable: false })
+  preauthorityNativeConstraintFailureDetails.set(error, {
+    category,
+    table: expected?.table ?? null,
+    constraint: expected?.name ?? null,
+    expectedCount,
+    observedCount,
+    expectedDefinitionSha256: expected
+      ? createHash('sha256').update(expected.definition, 'utf8').digest('hex') : null,
+    observedDefinitionSha256: observed
+      ? createHash('sha256').update(observed.definition, 'utf8').digest('hex') : null,
+  })
+  throw error
+}
+
+function nativeConstraintIdentity(constraint: NativeCatalogConstraint): string {
+  return `${constraint.schema}\u0000${constraint.table}\u0000${constraint.name}\u0000${constraint.kind}`
+}
+
+function failNativeConstraintMismatch(
+  category: PreauthorityNativeConstraintMismatchDiagnostic['category'],
+  expected: NativeCatalogConstraint | null,
+  observed: NativeCatalogConstraint | null,
+  expectedCount: number,
+  observedCount: number,
+): never {
+  return failNativeConstraintInventoryMismatch(category, expected, observed, expectedCount, observedCount)
+}
+
+const expectedNativeTypes: NativeCatalogType[] = expectedEnums.map(type => ({
+  schema: type.schema, name: type.name, kind: 'e', labels: [...type.values],
+}))
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+function sortBy<T>(values: T[], fields: readonly (keyof T)[]): T[] {
+  return values.sort((left, right) => {
+    for (const field of fields) {
+      const compared = compareText(String(left[field]), String(right[field]))
+      if (compared !== 0) return compared
+    }
+    return 0
+  })
+}
+
+function compareCatalogInventory<T>(observed: readonly T[], expected: readonly T[], reason: string): void {
+  if (JSON.stringify(observed) !== JSON.stringify(expected)) fail(reason)
+}
+
+sortBy(expectedNativeRelations, ['schema', 'name', 'kind'])
+sortBy(expectedNativeIndexes, ['tableSchema', 'table', 'schema', 'name'])
+sortBy(expectedNativeTypes, ['schema', 'name', 'kind'])
+
+export type PreauthorityNativeCatalogInventory = {
+  relations: NativeCatalogRelation[]
+  columns: NativeCatalogColumn[]
+  indexes: NativeCatalogIndex[]
+  constraints: NativeCatalogConstraint[]
+  types: NativeCatalogType[]
+}
+
+export function preauthorityExpectedNativeCatalogInventory(): PreauthorityNativeCatalogInventory {
+  return {
+    relations: expectedNativeRelations.map(value => ({ ...value })),
+    columns: expectedColumns.map(column => ({
+      schema: 'public', table: column.table, name: column.name, type: column.type,
+      typeSchema: column.enumType ? 'public' : 'pg_catalog', notNull: column.notNull,
+      defaultExpression: column.default === null || column.default === undefined ? null : String(column.default),
+      defaultVerified: true,
+    })).sort((left, right) => compareText(left.schema, right.schema)
+      || compareText(left.table, right.table) || compareText(left.name, right.name)),
+    indexes: expectedNativeIndexes.map(index => ({
+      ...index, valid: true, ready: true, noPredicate: true, noExpressions: true,
+      keyCount: index.columns.length, attributeCount: index.columns.length,
+      columns: index.columns.map(column => ({ ...column })),
+    })),
+    constraints: expectedNativeConstraints().map(item => ({ ...item })),
+    types: expectedNativeTypes.map(value => ({ ...value, labels: [...value.labels] })),
+  }
+}
+
+export function assertPreauthorityNativeCatalogInventory(
+  inventory: PreauthorityNativeCatalogInventory,
+  migrationNames: readonly string[],
+): string {
+  compareCatalogInventory(inventory.relations, expectedNativeRelations, 'preauthority_native_relation_inventory_mismatch')
+  const expected = preauthorityExpectedNativeCatalogInventory()
+  if (inventory.columns.length !== expected.columns.length || inventory.columns.some((actual, index) => {
+    const reviewed = expected.columns[index]
+    return !reviewed || actual.schema !== reviewed.schema || actual.table !== reviewed.table
+      || actual.name !== reviewed.name || actual.type !== reviewed.type || actual.typeSchema !== reviewed.typeSchema
+      || actual.notNull !== reviewed.notNull || !actual.defaultVerified
+  })) fail('preauthority_native_column_inventory_mismatch')
+  if (inventory.indexes.length !== expected.indexes.length || inventory.indexes.some((actual, index) => {
+    const reviewed = expected.indexes[index]
+    return !reviewed || actual.tableSchema !== reviewed.tableSchema || actual.table !== reviewed.table
+      || actual.schema !== reviewed.schema || actual.name !== reviewed.name || actual.unique !== reviewed.unique
+      || actual.primary !== reviewed.primary || !actual.valid || !actual.ready || !actual.noPredicate || !actual.noExpressions
+      || actual.keyCount !== reviewed.keyCount || actual.attributeCount !== reviewed.attributeCount
+      || actual.method !== reviewed.method || JSON.stringify(actual.columns) !== JSON.stringify(reviewed.columns)
+      || normalizeDefinitionTokens(actual.definition) !== normalizeDefinitionTokens(reviewed.definition)
+  })) fail('preauthority_native_index_inventory_mismatch')
+  const expectedConstraintKeys = new Set(expected.constraints.map(nativeConstraintIdentity))
+  const observedConstraintKeys = new Set(inventory.constraints.map(nativeConstraintIdentity))
+  const missingConstraint = expected.constraints.find(constraint => !observedConstraintKeys.has(nativeConstraintIdentity(constraint)))
+  if (missingConstraint) {
+    failNativeConstraintMismatch('missing_expected', missingConstraint, null,
+      expected.constraints.length, inventory.constraints.length)
+  }
+  const unexpectedConstraint = inventory.constraints.find(constraint => !expectedConstraintKeys.has(nativeConstraintIdentity(constraint)))
+  if (unexpectedConstraint) {
+    failNativeConstraintMismatch('unexpected_observed', null, unexpectedConstraint,
+      expected.constraints.length, inventory.constraints.length)
+  }
+  if (inventory.constraints.length !== expected.constraints.length) {
+    failNativeConstraintMismatch('constraint_identity', null, null,
+      expected.constraints.length, inventory.constraints.length)
+  }
+  for (let index = 0; index < expected.constraints.length; index += 1) {
+    const reviewed = expected.constraints[index]!
+    const actual = inventory.constraints[index]!
+    if (nativeConstraintIdentity(actual) !== nativeConstraintIdentity(reviewed)) {
+      failNativeConstraintMismatch('constraint_identity', reviewed, actual,
+        expected.constraints.length, inventory.constraints.length)
+    }
+    if (!actual.validated || actual.deferrable || actual.deferred) {
+      failNativeConstraintMismatch('constraint_metadata', reviewed, actual,
+        expected.constraints.length, inventory.constraints.length)
+    }
+    if (actual.kind === 'c') {
+      let expectedExpression: SqlExpression
+      let actualExpression: SqlExpression
+      try {
+        expectedExpression = parseSqlExpression(extractCheckExpression(reviewed.definition))
+        actualExpression = parseSqlExpression(extractCheckExpression(actual.definition))
+      } catch {
+        failNativeConstraintMismatch('check_definition_parse', reviewed, actual,
+          expected.constraints.length, inventory.constraints.length)
+      }
+      if (JSON.stringify(actualExpression!) !== JSON.stringify(expectedExpression!)) {
+        failNativeConstraintMismatch('check_definition', reviewed, actual,
+          expected.constraints.length, inventory.constraints.length)
+      }
+      continue
+    }
+    if (normalizeDefinitionTokens(actual.definition) !== normalizeDefinitionTokens(reviewed.definition)) {
+      failNativeConstraintMismatch(actual.kind === 'p' ? 'primary_key_definition' : 'foreign_key_definition',
+        reviewed, actual, expected.constraints.length, inventory.constraints.length)
+    }
+  }
+  compareCatalogInventory(inventory.types, expectedNativeTypes, 'preauthority_native_type_inventory_mismatch')
+  // pg_dump's deparsed CHECK text can reparse to a flatter AND tree on restore.
+  // Hash the same observed expression representation just verified above, not
+  // PostgreSQL's incidental parentheses and never the bundled expected catalog.
+  // Every identity/metadata field and every non-CHECK definition remains bound.
+  const constraints = inventory.constraints.map(constraint => ({
+    ...constraint,
+    definition: constraint.kind === 'c'
+      ? parseSqlExpression(extractCheckExpression(constraint.definition)) : constraint.definition,
+  }))
+  return createHash('sha256').update(JSON.stringify({ migrationNames, ...inventory, constraints })).digest('hex')
+}
+
+/** Strict inventory used only for the unsupported protocol-absent phase. The
+ * protocol finalizer itself may accept its canonical v1/v2 objects; those are
+ * deliberately not passed through this preauthority-only allowlist. */
+export async function verifyPreauthorityNativeCatalog(
+  client: FinalizerClient,
+  migrationNames: readonly string[],
+  setStage: (stage: PreauthorityCatalogDiagnosticStage) => void,
+): Promise<string> {
+  setStage('native_relations')
+  // Anchor the actual internal namespace spellings in all four catalog queries.
+  // LIKE 'pg_temp_%' / 'pg_toast%' treats underscores as wildcards and would
+  // hide legal user schemas such as pgxtempyhidden and pgxtoast_hidden.
+  const relationsResult = await client.query(`SELECT n.nspname AS schema, c.relname AS name, c.relkind AS kind
+    FROM pg_catalog.pg_namespace n LEFT JOIN pg_catalog.pg_class c
+      ON n.oid=c.relnamespace AND c.relkind IN ('r','p','v','m','f','S','c')
+    WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND n.nspname !~ '^pg_temp_[0-9]+$'
+    ORDER BY n.nspname, c.relname, c.relkind`)
+  // A namespace without relations must not disappear from the inventory: its
+  // null relation entry cannot match the canonical public-only relation set.
+  const relations = sortBy(relationsResult.rows.map(row => ({
+    schema: String(row.schema), name: String(row.name), kind: String(row.kind),
+  })), ['schema', 'name', 'kind'])
+  compareCatalogInventory(relations, expectedNativeRelations, 'preauthority_native_relation_inventory_mismatch')
+
+  setStage('native_columns')
+  const columnsResult = await client.query(`SELECT namespace.nspname AS schema, relation.relname AS table_name,
+    attribute.attname AS column_name, type.typname AS type_name, type_namespace.nspname AS type_schema,
+    attribute.attnotnull AS not_null, pg_catalog.pg_get_expr(default_value.adbin, default_value.adrelid) AS default_expression
+    FROM pg_catalog.pg_class relation
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+    JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid=relation.oid
+      AND attribute.attnum > 0 AND NOT attribute.attisdropped
+    JOIN pg_catalog.pg_type type ON type.oid=attribute.atttypid
+    JOIN pg_catalog.pg_namespace type_namespace ON type_namespace.oid=type.typnamespace
+    LEFT JOIN pg_catalog.pg_attrdef default_value ON default_value.adrelid=relation.oid AND default_value.adnum=attribute.attnum
+    WHERE namespace.nspname='public' AND relation.relname = ANY($1::text[])
+    ORDER BY namespace.nspname, relation.relname, attribute.attname`, [jsonTables])
+  const expectedColumnByKey = new Map(expectedColumns.map(column => [`${column.table}.${column.name}`, column]))
+  const columns: NativeCatalogColumn[] = []
+  for (const row of columnsResult.rows) {
+    const schema = String(row.schema)
+    const table = String(row.table_name)
+    const name = String(row.column_name)
+    const expected = expectedColumnByKey.get(`${table}.${name}`)
+    if (!expected) return fail('preauthority_native_column_inventory_mismatch')
+    const defaultExpression = row.default_expression === null || row.default_expression === undefined
+      ? null : String(row.default_expression)
+    const defaultVerified = await defaultMatches(client, expected.default, defaultExpression, expected.type,
+      expected.serial ? `${table}_${name}_seq` : undefined)
+    columns.push({
+      schema, table, name, type: String(row.type_name), typeSchema: String(row.type_schema),
+      notNull: row.not_null === true, defaultExpression, defaultVerified,
+    })
+  }
+  sortBy(columns, ['schema', 'table', 'name'])
+
+  setStage('native_indexes')
+  const indexesResult = await client.query(`SELECT table_ns.nspname AS table_schema, table_class.relname AS table_name,
+    index_ns.nspname AS index_schema, index_class.relname AS index_name, ix.indisunique AS is_unique,
+    ix.indisprimary AS is_primary, ix.indisvalid AS is_valid, ix.indisready AS is_ready,
+    ix.indpred IS NULL AS no_predicate, ix.indexprs IS NULL AS no_expressions,
+    ix.indnkeyatts AS key_count, ix.indnatts AS attribute_count, access_method.amname AS method,
+    (SELECT COALESCE(json_agg(json_build_object('expression', COALESCE(attribute.attname, ''),
+      'isExpression', key.attnum = 0, 'asc', (key.option_value & 1) = 0,
+      'nulls', CASE WHEN (key.option_value & 2) = 2 THEN 'first' ELSE 'last' END) ORDER BY key.ordinality), '[]'::json)
+      FROM unnest(ix.indkey, ix.indoption) WITH ORDINALITY AS key(attnum, option_value, ordinality)
+      LEFT JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid=table_class.oid AND attribute.attnum=key.attnum
+      WHERE key.ordinality <= ix.indnkeyatts) AS columns,
+    pg_catalog.pg_get_indexdef(index_class.oid) AS definition
+    FROM pg_catalog.pg_index ix
+    JOIN pg_catalog.pg_class table_class ON table_class.oid=ix.indrelid
+    JOIN pg_catalog.pg_namespace table_ns ON table_ns.oid=table_class.relnamespace
+    JOIN pg_catalog.pg_class index_class ON index_class.oid=ix.indexrelid
+    JOIN pg_catalog.pg_namespace index_ns ON index_ns.oid=index_class.relnamespace
+    JOIN pg_catalog.pg_am access_method ON access_method.oid=index_class.relam
+    WHERE table_ns.nspname NOT IN ('pg_catalog','information_schema') AND table_ns.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND table_ns.nspname !~ '^pg_temp_[0-9]+$'
+    ORDER BY table_ns.nspname, table_class.relname, index_ns.nspname, index_class.relname`)
+  const indexes: NativeCatalogIndex[] = sortBy(indexesResult.rows.map(row => ({
+    tableSchema: String(row.table_schema), table: String(row.table_name), schema: String(row.index_schema),
+    name: String(row.index_name), unique: row.is_unique === true, primary: row.is_primary === true,
+    valid: row.is_valid === true, ready: row.is_ready === true,
+    noPredicate: row.no_predicate === true, noExpressions: row.no_expressions === true,
+    keyCount: Number(row.key_count), attributeCount: Number(row.attribute_count), method: String(row.method),
+    columns: Array.isArray(row.columns) ? row.columns.map(raw => {
+      const column = Object.fromEntries(objectEntries(raw))
+      return {
+        expression: String(column.expression), isExpression: column.isExpression === true,
+        asc: column.asc === true, nulls: String(column.nulls),
+      }
+    }) : [],
+    definition: String(row.definition),
+  })), ['tableSchema', 'table', 'schema', 'name'])
+
+  setStage('native_constraints')
+  const constraintsResult = await client.query(`SELECT namespace.nspname AS schema, relation.relname AS table_name,
+    con.conname AS constraint_name, con.contype AS kind, con.convalidated AS validated,
+    con.condeferrable AS deferrable, con.condeferred AS deferred,
+    pg_catalog.pg_get_constraintdef(con.oid, false) AS definition
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class relation ON relation.oid=con.conrelid
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid=relation.relnamespace
+    WHERE namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND namespace.nspname !~ '^pg_temp_[0-9]+$'
+    ORDER BY namespace.nspname, relation.relname, con.conname, con.contype`)
+  const constraints: NativeCatalogConstraint[] = sortBy(constraintsResult.rows.map(row => ({
+    schema: String(row.schema), table: String(row.table_name), name: String(row.constraint_name), kind: String(row.kind),
+    validated: row.validated === true, deferrable: row.deferrable === true, deferred: row.deferred === true,
+    definition: String(row.definition),
+  })), ['schema', 'table', 'name', 'kind'])
+
+  setStage('native_types')
+  // Exclude only catalog-bound relation rowtypes and internally dependent
+  // automatic arrays, not types by spelling or a typtype allowlist. Standalone
+  // composites, domains, enums, ranges and user-defined base/shell types remain.
+  const typesResult = await client.query(`SELECT namespace.nspname AS schema, type.typname AS name, type.typtype AS kind,
+    COALESCE(array_agg(enum.enumlabel::text ORDER BY enum.enumsortorder) FILTER (WHERE enum.enumlabel IS NOT NULL), ARRAY[]::text[]) AS labels
+    FROM pg_catalog.pg_type type JOIN pg_catalog.pg_namespace namespace ON namespace.oid=type.typnamespace
+    LEFT JOIN pg_catalog.pg_enum enum ON enum.enumtypid=type.oid
+    LEFT JOIN pg_catalog.pg_class composite_relation ON composite_relation.oid=type.typrelid
+    WHERE NOT COALESCE(type.typtype='c' AND composite_relation.relkind IN ('r','p','v','m','f')
+        AND composite_relation.reltype=type.oid, false)
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_type element
+        JOIN pg_catalog.pg_depend dependency ON dependency.classid='pg_catalog.pg_type'::regclass
+          AND dependency.objid=type.oid AND dependency.objsubid=0
+          AND dependency.refclassid='pg_catalog.pg_type'::regclass
+          AND dependency.refobjid=element.oid AND dependency.refobjsubid=0 AND dependency.deptype='i'
+        WHERE type.typtype='b' AND type.typcategory='A'
+          AND type.typelem=element.oid AND element.typarray=type.oid)
+      AND namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname !~ '^pg_toast(_temp_[0-9]+)?$'
+      AND namespace.nspname !~ '^pg_temp_[0-9]+$'
+    GROUP BY namespace.nspname, type.typname, type.typtype
+    ORDER BY namespace.nspname, type.typname, type.typtype`)
+  const types: NativeCatalogType[] = sortBy(typesResult.rows.map(row => {
+    // node-postgres does not decode name[] (OID 1003). Request text[] above,
+    // and fail closed rather than replacing an unexpected driver shape by [].
+    if (!Array.isArray(row.labels) || row.labels.some(label => typeof label !== 'string')) {
+      return fail('preauthority_native_type_inventory_mismatch')
+    }
+    return { schema: String(row.schema), name: String(row.name), kind: String(row.kind), labels: row.labels }
+  }), ['schema', 'name', 'kind'])
+  return assertPreauthorityNativeCatalogInventory({ relations, columns, indexes, constraints, types }, migrationNames)
+}
 
 function stripOuterParens(input: string): string {
   let value = input.trim()
@@ -519,6 +1507,18 @@ function functionBodies(ddl: string): Map<string, string> {
   ])
 }
 
+function protocolFunctionBodies(version: 1 | 2): Map<string, string> {
+  const expected = functionBodies(buildNewsMutationTriggersDDL())
+  expected.set('owner_news_migration_item_binding_guard', bindingBody())
+  if (version === 2) {
+    const bootstrapBody = extractCanonicalFunctionBodies(buildNewsMigrationBootstrapRunDDL(), ['owner_news_bootstrap_run'])
+      .get('owner_news_bootstrap_run')
+    if (bootstrapBody === undefined) return fail('canonical_function_inventory_unavailable')
+    expected.set('owner_news_bootstrap_run', bootstrapBody)
+  }
+  return expected
+}
+
 function bindingBody(): string {
   return extractCanonicalFunctionBodies(NEWS_MIGRATION_ITEM_BINDING_DDL,
     ['owner_news_migration_item_binding_guard']).get('owner_news_migration_item_binding_guard')
@@ -601,7 +1601,8 @@ function parseCanonicalTriggerMetadata(key: string, definition: string): Canonic
 async function checkPreconditions(client: FinalizerClient,
   setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {},
   readOnlyDiagnosis = false,
-  collectedFailures?: { phase: FinalizerDiagnosticPhase; reason: string }[]): Promise<ProtocolInstallationState | null> {
+  collectedFailures?: { phase: FinalizerDiagnosticPhase; reason: string }[],
+  observerAudit = false): Promise<ProtocolInstallationState | null> {
   let currentPhase: FinalizerDiagnosticPhase = 'precondition-identity'
   const enter = (phase: FinalizerDiagnosticPhase) => { currentPhase = phase; setPhase(phase) }
   const requireGuard = (condition: boolean, reason: string) => {
@@ -610,12 +1611,25 @@ async function checkPreconditions(client: FinalizerClient,
     collectedFailures!.push({ phase: currentPhase, reason: normalizeDiagnosticReason(reason) })
   }
   enter('precondition-identity')
-  const identity = await client.query(`SELECT current_user AS role, current_database() AS db,
-    r.rolsuper AS superuser, current_setting('transaction_read_only') AS read_only
+  const identity = await client.query(`SELECT current_user AS role, session_user AS session_role,
+    current_database() AS db, r.rolsuper AS superuser, current_setting('transaction_read_only') AS read_only
     FROM pg_roles r WHERE r.rolname=current_user`)
   const who = identity.rows[0]
-  requireGuard(who?.role === 'cms_admin' && who.db === 'ownerinc_cms' && who.superuser === true
-    && who.read_only === (readOnlyDiagnosis ? 'on' : 'off'), 'unsafe_admin_target')
+  if (observerAudit) {
+    requireGuard(who?.role === 'cms_observer' && who.session_role === 'cms_observer'
+      && who.db === 'ownerinc_cms' && who.superuser === false && who.read_only === 'on', 'unsafe_observer_target')
+    enter('precondition-observer-role')
+    const ownershipCatalog = await client.query(newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL)
+    requireGuard(ownershipCatalog.rows[0]?.safe === true, 'observer_role_contract_mismatch')
+    const observerRole = await client.query(newsProtocolObserverRoleVerificationSQL)
+    requireGuard(observerRole.rows[0]?.safe === true, 'observer_role_contract_mismatch')
+    enter('precondition-observer-privileges')
+    const observerPrivileges = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
+    requireGuard(observerPrivileges.rows[0]?.safe === true, 'observer_privilege_contract_mismatch')
+  } else {
+    requireGuard(who?.role === 'cms_admin' && who.db === 'ownerinc_cms' && who.superuser === true
+      && who.read_only === (readOnlyDiagnosis ? 'on' : 'off'), 'unsafe_admin_target')
+  }
 
   enter('precondition-migrations')
   const ledger = await client.query('SELECT name FROM public.payload_migrations ORDER BY name')
@@ -744,33 +1758,51 @@ async function checkPreconditions(client: FinalizerClient,
   requireGuard(item.rows[0]?.run_id_type === 'varchar', 'native_item_run_id_type_mismatch')
 
   enter('precondition-control-roles')
-  const roles = await client.query(controlRolesVerificationSQL)
+  const roles = await client.query(observerAudit ? controlRolesPublicVerificationSQL : controlRolesVerificationSQL)
   requireGuard(roles.rows[0]?.safe === true, 'control_role_contract_mismatch')
   enter('precondition-protocol-inventory')
   const state = await client.query(`SELECT
     (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname='public' AND c.relname IN ('owner_news_mutation_head','owner_news_mutation_events')) AS ledger_relations,
     (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-      WHERE n.nspname='public' AND p.proname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_seal_run','owner_news_migration_item_binding_guard')) AS protocol_functions,
+      WHERE n.nspname='public' AND p.proname = ANY($2::name[])) AS protocol_functions,
+    (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname='public' AND p.proname::text ~ '^owner_news_' AND NOT p.proname = ANY($2::name[])) AS unexpected_protocol_functions,
+    (SELECT count(*) FROM unnest($3::text[]) AS signature(value)
+      WHERE pg_catalog.to_regprocedure(signature.value) IS NOT NULL) AS v1_signatures,
+    (pg_catalog.to_regprocedure($4::text) IS NOT NULL) AS bootstrap_signature,
      (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND t.tgname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_migration_item_binding_guard','owner_news_migration_run_binding_guard')) AS protocol_triggers,
+       WHERE n.nspname='public' AND t.tgname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_migration_item_binding_guard','owner_news_migration_run_binding_guard')) AS protocol_triggers,
     (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND c.relname = ANY($1::text[]) AND NOT t.tgisinternal) AS inventory_triggers`, [NEWS_MUTATION_TABLES])
+      WHERE n.nspname='public' AND c.relname = ANY($1::text[]) AND NOT t.tgisinternal) AS inventory_triggers`,
+  [NEWS_MUTATION_TABLES, PROTOCOL_FUNCTION_NAMES, V1_PROTOCOL_SIGNATURES, NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE])
   const stateRow = state.rows[0]
   const empty = Number(stateRow?.ledger_relations) === 0 && Number(stateRow?.protocol_functions) === 0
+    && Number(stateRow?.unexpected_protocol_functions) === 0
+    && Number(stateRow?.v1_signatures) === 0 && stateRow?.bootstrap_signature === false
     && Number(stateRow?.protocol_triggers) === 0 && Number(stateRow?.inventory_triggers) === 0
-  const complete = Number(stateRow?.ledger_relations) === 2 && Number(stateRow?.protocol_functions) === 4
-    && Number(stateRow?.protocol_triggers) === NEWS_MUTATION_TABLES.length * 2 + 2
+  const triggerInventoryComplete = Number(stateRow?.protocol_triggers) === NEWS_MUTATION_TABLES.length * 2 + 2
     && Number(stateRow?.inventory_triggers) === NEWS_MUTATION_TABLES.length * 2 + 2
-  requireGuard(empty || complete, 'partial_protocol_installation_manual_recovery_required')
-  if (!empty && !complete) return null
-  if (complete && readOnlyDiagnosis) {
+  const v1 = Number(stateRow?.ledger_relations) === 2 && Number(stateRow?.protocol_functions) === 4
+    && Number(stateRow?.unexpected_protocol_functions) === 0
+    && Number(stateRow?.v1_signatures) === V1_PROTOCOL_SIGNATURES.length
+    && stateRow?.bootstrap_signature === false && triggerInventoryComplete
+  const v2 = Number(stateRow?.ledger_relations) === 2 && Number(stateRow?.protocol_functions) === 5
+    && Number(stateRow?.unexpected_protocol_functions) === 0
+    && Number(stateRow?.v1_signatures) === V1_PROTOCOL_SIGNATURES.length
+    && stateRow?.bootstrap_signature === true && triggerInventoryComplete
+  requireGuard(empty || v1 || v2, 'partial_protocol_installation_manual_recovery_required')
+  if (!empty && !v1 && !v2) return 'partial'
+  if ((v1 || v2) && readOnlyDiagnosis && !observerAudit) {
     requireGuard(false, 'diagnostic_installed_protocol_deep_check_skipped')
     return null
   }
-  if (complete) {
+  if (v1 || v2) {
     enter('precondition-installed-state')
-    await verifyInstalled(client, setPhase)
+    await verifyInstalled(client, setPhase, { observerAudit, protocolVersion: v2 ? 2 : 1 })
+  }
+  else if (observerAudit) {
+    fail('protocol_not_installed')
   }
   else {
     for (const [verifier, phase] of [
@@ -782,12 +1814,13 @@ async function checkPreconditions(client: FinalizerClient,
       requireGuard(result.rows[0]?.safe === true, 'unsafe_preinstallation_control_state')
     }
   }
-  return empty ? 'empty' : 'complete'
+  return empty ? 'empty' : v2 ? 'v2' : 'v1'
 }
 
-/** Run only the same SELECT-based preinstallation checks in an already-open
- * server-enforced read-only transaction. It deliberately never installs or
- * verifies an existing installation (the latter changes transaction role). */
+/** Run only the SELECT-based precondition diagnosis in an already-open
+ * server-enforced read-only transaction. This diagnostic intentionally skips
+ * deep validation of a complete install; auditNewsProtocolReadOnly reuses that
+ * installed-state verifier under the dedicated observer identity. */
 export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerClient): Promise<readonly FinalizerFailureDiagnostic[]> {
   let phase: FinalizerDiagnosticPhase = 'precondition-identity'
   const findings: { phase: FinalizerDiagnosticPhase; reason: string }[] = []
@@ -810,24 +1843,70 @@ export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerCl
   }
 }
 
+/**
+ * Read-only native-catalog check for the explicitly unsupported preauthority
+ * phase. This reuses the same canonical migration/snapshot/catalog verifier as
+ * the one-shot finalizer, but it never installs, upgrades, or certifies protocol
+ * coverage. A present or mixed protocol is rejected rather than downgraded.
+ */
+export async function verifyPreauthorityCatalogReadOnly(
+  client: FinalizerClient,
+  setStage: (stage: PreauthorityCatalogDiagnosticStage) => void = () => {},
+): Promise<{
+  protocolStatus: 'absent'
+  coverageApplicability: 'not-applicable'
+  migrationNames: readonly string[]
+  migrationFingerprint: string
+  nativeCatalogFingerprint: string
+}> {
+  const state = await checkPreconditions(client, phase => {
+    setStage(preauthorityCatalogStageByFinalizerPhase[phase] || 'protocol_inventory')
+  }, true)
+  setStage('protocol_state')
+  if (state !== 'empty') fail('preauthority_protocol_not_absent')
+  const migrationFingerprint = createHash('sha256').update(JSON.stringify(MIGRATIONS)).digest('hex')
+  const nativeCatalogFingerprint = await verifyPreauthorityNativeCatalog(client, MIGRATIONS, setStage)
+  return {
+    protocolStatus: 'absent',
+    coverageApplicability: 'not-applicable',
+    migrationNames: MIGRATIONS,
+    migrationFingerprint,
+    nativeCatalogFingerprint,
+  }
+}
+
 async function verifyInstalled(client: FinalizerClient,
-  setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {}): Promise<void> {
+  setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {},
+  options: { observerAudit?: boolean; protocolVersion: 1 | 2 } = { protocolVersion: 1 }): Promise<void> {
   setPhase('verify-installed')
+  const approvedProtocolOidArray = approvedProtocolOidArraySQL(options.protocolVersion)
   const head = await client.query(`SELECT sequence::text AS sequence, chain_sha256, coverage_version, write_barrier,
     barrier_run_id, barrier_epoch, barrier_receipt_sha256 FROM public.owner_news_mutation_head WHERE singleton=true`)
+  const coverage = head.rows[0]?.coverage_version
   if (head.rows.length !== 1 || !/^(0|[1-9][0-9]*)$/u.test(String(head.rows[0]?.sequence))
-    || !/^[0-9a-f]{64}$/u.test(String(head.rows[0]?.chain_sha256)) || head.rows[0]?.coverage_version !== 0
-    || !['open', 'sealed', 'frozen'].includes(String(head.rows[0]?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
+    || !/^[0-9a-f]{64}$/u.test(String(head.rows[0]?.chain_sha256))
+    || (coverage !== 0 && !(options.observerAudit && coverage === 1))
+     || !['open', 'sealed', 'frozen'].includes(String(head.rows[0]?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
   const fns = await client.query(`SELECT p.proname AS name, p.prosrc AS source, p.prosecdef AS security_definer,
-    p.proconfig AS config, r.rolname AS owner, p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS canonical_signature
+    p.proconfig AS config, r.rolname AS owner, p.oid = ANY(${approvedProtocolOidArray}) AS canonical_signature,
+    pg_catalog.pg_get_function_result(p.oid) = 'TABLE(id uuid)' AS bootstrap_return_shape,
+    p.proisstrict AS bootstrap_is_strict,
+    p.proargmodes::text[] = ARRAY['i','i','i','i','i','t']::text[] AS bootstrap_argument_modes,
+    p.proargnames = ARRAY['p_run_id','p_manifest_sha256','p_source_instance','p_source_fingerprint',
+      'p_authority_epoch','id']::text[] AS bootstrap_argument_names
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
-    WHERE n.nspname='public' AND p.proname = ANY($1::text[])`, [[...functionBodies(buildNewsMutationTriggersDDL()).keys(), 'owner_news_migration_item_binding_guard']])
-  const expected = functionBodies(buildNewsMutationTriggersDDL())
-  expected.set('owner_news_migration_item_binding_guard', bindingBody())
+    WHERE n.nspname='public' AND p.proname = ANY($1::text[])`, [PROTOCOL_FUNCTION_NAMES])
+  const expected = protocolFunctionBodies(options.protocolVersion)
   if (fns.rows.length !== expected.size || fns.rows.some(row => row.canonical_signature !== true
     || row.security_definer !== (row.name !== 'owner_news_mutation_guard_stmt')
     || row.owner !== 'cms_control' || !Array.isArray(row.config) || !row.config.includes('search_path=pg_catalog, public')
-    || row.source !== expected.get(String(row.name)))) fail(`canonical_function_mismatch:${fns.rows.map(row => `${String(row.name)}:${row.source === expected.get(String(row.name))}`).join(',')}`)
+    || row.source !== expected.get(String(row.name))
+    || row.name === 'owner_news_bootstrap_run' && (row.bootstrap_return_shape !== true
+      || row.bootstrap_is_strict !== false
+      || !catalogTextArrayMatches(row.bootstrap_argument_modes, ['i', 'i', 'i', 'i', 'i', 't'])
+      || !catalogTextArrayMatches(row.bootstrap_argument_names, [
+        'p_run_id', 'p_manifest_sha256', 'p_source_instance', 'p_source_fingerprint', 'p_authority_epoch', 'id',
+      ])))) fail(`canonical_function_mismatch:${fns.rows.map(row => `${String(row.name)}:${row.source === expected.get(String(row.name))}`).join(',')}`)
 
   const triggers = await client.query(`SELECT t.tgname AS name, c.relname AS relation, n.nspname AS relation_schema,
     t.tgenabled AS enabled, t.tgtype::integer AS event_mask,
@@ -835,7 +1914,7 @@ async function verifyInstalled(client: FinalizerClient,
     t.tgattr::text AS attribute_vector_text, pg_catalog.pg_typeof(t.tgattr)::text AS attribute_vector_type,
     t.tgnargs::integer AS argument_count, pg_catalog.octet_length(t.tgargs)::integer AS argument_bytes,
     t.tgqual IS NULL AS no_condition,
-    p.proname AS function, p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS function_identity_approved,
+    p.proname AS function, p.oid = ANY(${approvedProtocolOidArray}) AS function_identity_approved,
     pn.nspname AS function_schema, pg_catalog.pg_get_triggerdef(t.oid,false) AS definition
     FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
     JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid
@@ -916,25 +1995,39 @@ async function verifyInstalled(client: FinalizerClient,
     }
   }
 
-  // The shared privilege verifiers deliberately use current_user. Run them as
-  // the runtime principal, not as the admin connection that owns this tx.
-  await client.query('SET LOCAL ROLE cms_runtime')
   let runtimeSafe = false
-  try {
-    const identity = await client.query('SELECT current_user AS role, current_database() AS db')
-    if (identity.rows[0]?.role !== 'cms_runtime' || identity.rows[0]?.db !== 'ownerinc_cms') fail('runtime_verifier_role_switch_failed')
+  if (options.observerAudit) {
+    // Shared ACL queries name cms_runtime explicitly. An observer must not
+    // change transaction identity to perform this installed-state check.
     const privileges = await client.query(runtimeProtocolPrivilegesVerifySQL)
     const functions = await client.query(runtimeProtocolFunctionsVerifySQL)
     runtimeSafe = privileges.rows[0]?.safe === true && functions.rows[0]?.safe === true
-  } finally {
-    // If a verifier query aborts PostgreSQL's transaction, RESET also errors;
-    // the outer transaction rollback restores cms_admin before any recovery.
-    try { await client.query('RESET ROLE') } catch { /* The caller rolls back the aborted tx. */ }
+  } else {
+    // Preserve the one-shot finalizer's existing runtime-principal verification.
+    await client.query('SET LOCAL ROLE cms_runtime')
+    try {
+      const identity = await client.query('SELECT current_user AS role, current_database() AS db')
+      if (identity.rows[0]?.role !== 'cms_runtime' || identity.rows[0]?.db !== 'ownerinc_cms') {
+        fail('runtime_verifier_role_switch_failed')
+      }
+      const privileges = await client.query(runtimeProtocolPrivilegesVerifySQL)
+      const functions = await client.query(runtimeProtocolFunctionsVerifySQL)
+      runtimeSafe = privileges.rows[0]?.safe === true && functions.rows[0]?.safe === true
+    } finally {
+      // If a verifier query aborts PostgreSQL's transaction, RESET also errors;
+      // the outer transaction rollback restores cms_admin before recovery.
+      try { await client.query('RESET ROLE') } catch { /* The caller rolls back the aborted tx. */ }
+    }
   }
   if (!runtimeSafe) fail('runtime_protocol_acl_mismatch')
   const restored = await client.query(`SELECT current_user AS role, current_database() AS db,
     r.rolsuper AS superuser FROM pg_roles r WHERE r.rolname=current_user`)
-  if (restored.rows[0]?.role !== 'cms_admin' || restored.rows[0]?.db !== 'ownerinc_cms' || restored.rows[0]?.superuser !== true) fail('admin_role_restore_failed')
+  const expectedConnectionRole = options.observerAudit ? 'cms_observer' : 'cms_admin'
+  const expectedSuperuser = options.observerAudit ? false : true
+  if (restored.rows[0]?.role !== expectedConnectionRole || restored.rows[0]?.db !== 'ownerinc_cms'
+    || restored.rows[0]?.superuser !== expectedSuperuser) {
+    fail(options.observerAudit ? 'unsafe_observer_target' : 'admin_role_restore_failed')
+  }
 
   const scope = await client.query(`SELECT c.relname AS relation, c.relkind AS kind, a.attname AS column_name,
     has_table_privilege('cms_control',c.oid,'SELECT') AS control_select,
@@ -978,6 +2071,8 @@ async function verifyInstalled(client: FinalizerClient,
       const allowed = controlAllowed && (relation === 'owner_news_mutation_head' && (privilege === 'select' || privilege === 'update')
         || relation === 'owner_news_mutation_events' && privilege === 'insert'
         || (relation === 'news_migration_runs' || relation === 'news_migration_items') && privilege === 'select'
+        || options.protocolVersion === 2 && relation === 'news_migration_runs'
+          && privilege === 'insert' && CONTROL_RUN_INSERT_COLUMNS.has(column)
         || relation === 'news_migration_runs' && privilege === 'update' && CONTROL_RUN_UPDATE_COLUMNS.has(column))
       if (row[`control_column_${privilege}`] !== allowed || row[`controller_column_${privilege}`] !== false) fail(`control_role_column_acl_mismatch:${relation}:${column}:${privilege}`)
     }
@@ -993,8 +2088,12 @@ async function verifyInstalled(client: FinalizerClient,
     WHERE n.nspname='public' AND c.relkind='S'`)
   if (sequences.rows.some(row => row.control_usage !== false || row.control_select !== false || row.control_update !== false
     || row.controller_usage !== false || row.controller_select !== false || row.controller_update !== false)) fail('control_role_sequence_acl_mismatch')
-  const publicFunctionScope = await client.query(`SELECT p.oid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL}) AS approved_function,
+  const observerFunctionProjection = options.observerAudit
+    ? `has_function_privilege('cms_observer',p.oid,'EXECUTE') AS observer_execute`
+    : `false AS observer_execute`
+  const publicFunctionScope = await client.query(`SELECT p.oid = ANY(${approvedProtocolOidArray}) AS approved_function,
     p.oid = to_regprocedure('public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)')::oid AS approved_seal,
+    p.oid = to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid AS approved_bootstrap,
     p.oid = to_regprocedure('public.gen_random_uuid()')::oid AS expected_pgcrypto_signature,
     EXISTS (SELECT 1 FROM pg_depend extension_dependency
         JOIN pg_extension extension ON extension.oid=extension_dependency.refobjid
@@ -1007,16 +2106,23 @@ async function verifyInstalled(client: FinalizerClient,
       WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE') AS public_execute,
     has_function_privilege('cms_control',p.oid,'EXECUTE') AS control_execute,
     has_function_privilege('cms_controller',p.oid,'EXECUTE') AS controller_execute,
-    has_function_privilege('cms_runtime',p.oid,'EXECUTE') AS runtime_execute
+    has_function_privilege('cms_runtime',p.oid,'EXECUTE') AS runtime_execute,
+    ${observerFunctionProjection}
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'`)
   const approvedFunctionRows = publicFunctionScope.rows.filter(row => row.approved_function === true)
-  if (approvedFunctionRows.length !== 4 || publicFunctionScope.rows.some(row => {
+  if (approvedFunctionRows.length !== (options.protocolVersion === 2 ? V2_PROTOCOL_SIGNATURES.length : V1_PROTOCOL_SIGNATURES.length)
+    || publicFunctionScope.rows.some(row => {
     const trustedBaseline = row.expected_pgcrypto_signature === true
       && row.pgcrypto_extension_member === true && row.security_definer === false && row.returns_uuid === true
     if (row.public_execute === true && !trustedBaseline) return true
+    // to_regprocedure() yields SQL NULL when this optional public pgcrypto
+    // signature is absent. The observer's expected privilege is true only for
+    // that exact recognized baseline; coerce the nullable identity result
+    // before comparing the driver's boolean privilege value.
+    if (options.observerAudit && row.observer_execute !== (row.expected_pgcrypto_signature === true)) return true
     return row.runtime_execute !== row.public_execute
       || row.control_execute !== (row.approved_function === true || row.public_execute === true)
-      || row.controller_execute !== (row.approved_seal === true || row.public_execute === true)
+      || row.controller_execute !== (row.approved_seal === true || row.approved_bootstrap === true || row.public_execute === true)
   })) fail('public_function_execute_outside_allowlist')
   const acl = await client.query(`SELECT
     has_table_privilege('cms_runtime','public.owner_news_mutation_head','SELECT') AS head_read,
@@ -1025,54 +2131,173 @@ async function verifyInstalled(client: FinalizerClient,
     has_table_privilege('cms_runtime','public.owner_news_mutation_events','INSERT') AS events_write,
     has_function_privilege('cms_controller','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS controller_seal,
     has_function_privilege('cms_runtime','public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)','EXECUTE') AS runtime_seal,
+    has_function_privilege('cms_controller',to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid,'EXECUTE') AS controller_bootstrap,
+    has_function_privilege('cms_runtime',to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid,'EXECUTE') AS runtime_bootstrap,
+    EXISTS (SELECT 1 FROM pg_proc bootstrap WHERE bootstrap.oid=to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid
+      AND EXISTS (SELECT 1 FROM aclexplode(COALESCE(bootstrap.proacl,acldefault('f',bootstrap.proowner))) acl
+        WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE')) AS public_bootstrap,
+    ${options.observerAudit
+    ? `has_function_privilege('cms_observer',to_regprocedure('${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}')::oid,'EXECUTE') AS observer_bootstrap`
+    : 'false AS observer_bootstrap'}`)
+  const a = acl.rows[0]
+  if (!a?.head_read || a.head_write || !a.events_read || a.events_write || !a.controller_seal || a.runtime_seal) fail('protocol_acl_mismatch')
+  if (options.protocolVersion === 2 && (!a.controller_bootstrap || a.runtime_bootstrap || a.public_bootstrap
+    || options.observerAudit && a.observer_bootstrap)) fail('protocol_acl_mismatch')
+
+  const ownership = await client.query(`SELECT
+      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
+        WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
+        AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
+        AND (d.classid <> 'pg_proc'::regclass OR d.objid <> ALL(${approvedProtocolOidArray}))) AS unexpected_control_objects,
      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
       WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
         AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
-        AND (d.classid <> 'pg_proc'::regclass OR d.objid <> ALL(${APPROVED_PROTOCOL_OID_ARRAY_SQL}))) AS unexpected_control_objects,
-     (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-      WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-        AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
-        AND d.classid='pg_proc'::regclass AND d.objid = ANY(${APPROVED_PROTOCOL_OID_ARRAY_SQL})) AS approved_control_objects,
+        AND d.classid='pg_proc'::regclass AND d.objid = ANY(${approvedProtocolOidArray})) AS approved_control_objects,
      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
       WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
         AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_owned_objects,
      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
       WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control') AS control_shared_owned_objects,
-     (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-      WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_shared_owned_objects`)
-  const a = acl.rows[0]
-  if (!a?.head_read || a.head_write || !a.events_read || a.events_write || !a.controller_seal || a.runtime_seal) fail('protocol_acl_mismatch')
-  if (Number(a.unexpected_control_objects) !== 0 || Number(a.approved_control_objects) !== 4
-    || Number(a.controller_owned_objects) !== 0 || Number(a.control_shared_owned_objects) !== 0
-    || Number(a.controller_shared_owned_objects) !== 0) fail('unexpected_control_owned_objects')
+       (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
+         WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_shared_owned_objects`)
+  const owned = ownership.rows[0]
+  if (Number(owned?.unexpected_control_objects) !== 0
+    || Number(owned?.approved_control_objects) !== (options.protocolVersion === 2 ? V2_PROTOCOL_SIGNATURES.length : V1_PROTOCOL_SIGNATURES.length)
+    || Number(owned?.controller_owned_objects) !== 0 || Number(owned?.control_shared_owned_objects) !== 0
+    || Number(owned?.controller_shared_owned_objects) !== 0) {
+    fail(options.observerAudit ? 'observer_visible_ownership_mismatch' : 'unexpected_control_owned_objects')
+  }
 }
 
-export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+export type NewsProtocolAuditReport = {
+  status: 'PASS'
+  installed: true
+  catalogValid: true
+  targetDatabase: 'ownerinc_cms'
+  observerRole: 'cms_observer'
+  observedProtocolVersion: 1 | 2
+  observedCoverageVersion: 0 | 1
+  headSequence: string
+  writeBarrier: 'open' | 'sealed' | 'frozen'
+  ready: false
+  admissionActivated: false
+  releaseCertified: false
+  writeCoverageCertified: false
+  drainVerified: false
+  passwordPresenceCheck: 'not_performed_unprivileged'
+  clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check'
+  physicalClusterIdentity: 'not_verified'
+}
+
+/**
+ * Read-only audit of a fully installed protocol. The caller supplies an
+ * explicitly configured cms_observer connection; this function starts the
+ * server-enforced read-only snapshot before reading catalog state. It does not
+ * install, repair, lock, activate, seal, or certify release/coverage.
+ */
+export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promise<NewsProtocolAuditReport> {
+  let phase: FinalizerDiagnosticPhase = 'audit-transaction-begin'
+  let transactionOpen = false
+  try {
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    transactionOpen = true
+    phase = 'audit-identity'
+    await client.query("SET LOCAL statement_timeout = '5s'")
+    await client.query('SET LOCAL search_path = pg_catalog, public')
+    const transaction = await client.query(`SELECT current_setting('transaction_read_only') AS read_only,
+      current_setting('transaction_isolation') AS isolation,
+      current_setting('search_path') AS search_path,
+      current_setting('statement_timeout')::interval > interval '0 seconds'
+        AND current_setting('statement_timeout')::interval <= interval '5 seconds' AS bounded_timeout`)
+    const tx = transaction.rows[0]
+    if (tx?.read_only !== 'on' || tx.isolation !== 'repeatable read' || tx.search_path !== 'pg_catalog, public'
+      || tx.bounded_timeout !== true) {
+      fail('audit_transaction_contract_mismatch')
+    }
+
+    const protocolState = await checkPreconditions(client, next => { phase = next }, true, undefined, true)
+    if (protocolState !== 'v1' && protocolState !== 'v2') fail('protocol_not_installed')
+
+    const head = await client.query(`SELECT sequence::text AS sequence, coverage_version, write_barrier
+      FROM public.owner_news_mutation_head WHERE singleton=true`)
+    const row = head.rows[0]
+    if (head.rows.length !== 1 || !/^(0|[1-9][0-9]*)$/u.test(String(row?.sequence))
+      || (row?.coverage_version !== 0 && row?.coverage_version !== 1)
+      || !['open', 'sealed', 'frozen'].includes(String(row?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
+
+    phase = 'audit-transaction-commit'
+    await client.query('COMMIT')
+    transactionOpen = false
+    return {
+      status: 'PASS', installed: true, catalogValid: true, targetDatabase: 'ownerinc_cms', observerRole: 'cms_observer',
+      observedProtocolVersion: protocolState === 'v2' ? 2 : 1,
+      observedCoverageVersion: row.coverage_version as 0 | 1, headSequence: String(row.sequence),
+      writeBarrier: row.write_barrier as NewsProtocolAuditReport['writeBarrier'],
+      ready: false, admissionActivated: false, releaseCertified: false, writeCoverageCertified: false, drainVerified: false,
+      passwordPresenceCheck: 'not_performed_unprivileged',
+      clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check',
+      physicalClusterIdentity: 'not_verified',
+    }
+  } catch (error) {
+    recordFinalizerFailure(error, phase)
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK') } catch { /* Preserve the sanitized primary diagnostic. */ }
+    }
+    throw error
+  }
+}
+
+type ProtocolFinalizerOperation = 'finalize' | 'upgrade-v1-to-v2'
+
+async function runProtocolFinalizerOperation(client: FinalizerClient, operation: ProtocolFinalizerOperation):
+Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
   let phase: FinalizerDiagnosticPhase = 'transaction-begin'
+  let ledgerOperation: NewsMutationLedgerOperation | undefined
   let committed = false
   try {
     await client.query('BEGIN')
+    // Pin built-in type/function resolution; application creation targets are
+    // explicitly public-qualified, since pg_catalog is not a creation target.
+    await client.query('SET LOCAL search_path = pg_catalog, public')
     phase = 'transaction-lock'
     await client.query(`SELECT pg_catalog.pg_advisory_xact_lock(${LOCK_ID})`)
     const protocolState = await checkPreconditions(client, next => { phase = next })
-    if (protocolState === null) fail('partial_protocol_installation_manual_recovery_required')
-    if (protocolState === 'empty') {
+    if (protocolState === null || protocolState === 'partial') fail('partial_protocol_installation_manual_recovery_required')
+
+    if (operation === 'finalize' && protocolState === 'v1') {
+      fail('protocol_upgrade_required')
+    }
+    if (operation === 'upgrade-v1-to-v2' && protocolState === 'empty') {
+      fail('protocol_upgrade_requires_v1')
+    }
+
+    if (operation === 'finalize' && protocolState === 'empty') {
       phase = 'protocol-ledger-ddl'
-      await client.query(NEWS_MUTATION_LEDGER_DDL)
+      for (const statement of NEWS_MUTATION_LEDGER_STATEMENTS) {
+        ledgerOperation = statement.operation
+        await client.query(statement.sql)
+      }
+      ledgerOperation = undefined
       phase = 'protocol-trigger-ddl'
       await client.query(buildNewsMutationTriggersDDL())
       phase = 'protocol-binding-ddl'
       await client.query(NEWS_MIGRATION_ITEM_BINDING_DDL)
       phase = 'protocol-grants'
       await client.query(grantsSQL)
-      await verifyInstalled(client, next => { phase = next })
+      phase = 'protocol-bootstrap-ddl'
+      await client.query(buildNewsMigrationBootstrapRunDDL())
+      await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
+    } else if (operation === 'upgrade-v1-to-v2' && protocolState === 'v1') {
+      phase = 'protocol-bootstrap-ddl'
+      await client.query(buildNewsMigrationBootstrapRunDDL())
+      await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
     }
     phase = 'transaction-commit'
     await client.query('COMMIT')
     committed = true
-    return { installed: protocolState === 'empty', ready: false, coverageVersion: 0 }
+    return { installed: operation === 'finalize' && protocolState === 'empty', ready: false, coverageVersion: 0 }
   } catch (error) {
-    recordFinalizerFailure(error, phase)
+    recordFinalizerFailure(error, phase, ledgerOperation)
     if (!committed) {
       try { await client.query('ROLLBACK') } catch { /* Keep original failure; connection is discarded below. */ }
     }
@@ -1080,7 +2305,27 @@ export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ i
   }
 }
 
-export async function runFinalizer(env: Record<string, string | undefined> = process.env,
+export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runProtocolFinalizerOperation(client, 'finalize')
+}
+
+export async function upgradeNewsProtocolV1ToV2(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runProtocolFinalizerOperation(client, 'upgrade-v1-to-v2')
+}
+
+export type ProtocolFinalizerCommand = 'finalize' | 'upgrade-v1-to-v2'
+
+/** One exact, single-purpose command flag is required; no default can turn an
+ * ordinary finalizer invocation into an upgrade. */
+export function parseProtocolFinalizerArguments(args: readonly string[]): ProtocolFinalizerCommand | null {
+  if (args.length !== 1) return null
+  if (args[0] === '--finalize-protocol') return 'finalize'
+  if (args[0] === '--upgrade-protocol-v1-to-v2') return 'upgrade-v1-to-v2'
+  return null
+}
+
+async function runAdminProtocolOperation(operation: ProtocolFinalizerOperation,
+  env: Record<string, string | undefined>,
   suppliedClient?: FinalizerClient,
   reportCloseWarning: FinalizerCloseWarningSink = diagnostic => console.error(formatFinalizerCloseDiagnostic(diagnostic))
 ): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
@@ -1099,7 +2344,7 @@ export async function runFinalizer(env: Record<string, string | undefined> = pro
     client = suppliedClient ?? new Client({ connectionString: url!.href, connectionTimeoutMillis: 5000 })
     phase = 'admin-connect'
     await client.connect()
-    result = await finalizeNewsProtocol(client)
+    result = await runProtocolFinalizerOperation(client, operation)
   } catch (error) {
     recordFinalizerFailure(error, phase)
     operationFailed = true
@@ -1124,13 +2369,29 @@ export async function runFinalizer(env: Record<string, string | undefined> = pro
   return result
 }
 
+export async function runFinalizer(env: Record<string, string | undefined> = process.env,
+  suppliedClient?: FinalizerClient,
+  reportCloseWarning?: FinalizerCloseWarningSink
+): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runAdminProtocolOperation('finalize', env, suppliedClient, reportCloseWarning)
+}
+
+export async function runProtocolV1Upgrade(env: Record<string, string | undefined> = process.env,
+  suppliedClient?: FinalizerClient,
+  reportCloseWarning?: FinalizerCloseWarningSink
+): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runAdminProtocolOperation('upgrade-v1-to-v2', env, suppliedClient, reportCloseWarning)
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3 || process.argv[2] !== '--finalize-protocol') {
-    console.error('CMS news protocol finalizer requires --finalize-protocol and CMS_ADMIN_DATABASE_URL')
+  const command = parseProtocolFinalizerArguments(process.argv.slice(2))
+  if (command === null) {
+    console.error('CMS news protocol finalizer requires exactly one of --finalize-protocol or --upgrade-protocol-v1-to-v2 and CMS_ADMIN_DATABASE_URL')
     process.exitCode = 2
   } else {
-    runFinalizer().then(result => {
-      console.log(JSON.stringify({ ...result, message: 'protocol installed/verified; native writes and readiness remain disabled' }))
+    const run = command === 'finalize' ? runFinalizer : runProtocolV1Upgrade
+    run().then(result => {
+      console.log(JSON.stringify({ ...result, message: 'protocol operation complete; native writes and readiness remain disabled' }))
     }).catch(error => {
       console.error('CMS news protocol finalization failed; inspect target privately and use manual recovery for partial state')
       const diagnostic = getFinalizerFailureDiagnostic(error)

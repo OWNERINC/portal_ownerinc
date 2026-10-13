@@ -25,6 +25,7 @@ import { PortalLogin as PortalLogin_d25fc2dc08c1ad78183be09a7e109abb } from '../
 import { SessionWatch as SessionWatch_8a42db35d9fb0e31a10cd32542660d27 } from '../../../../admin/SessionWatch'
 import { PollsView as PollsView_18f303745f1382751138f38404290b5f } from '../../../../admin/PollsView'
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from '@payloadcms/next/rsc'
+import { AdminHome as AdminHome_74f164e5a7e149c6ba48f1c8e3b2f211 } from '../../../../admin/AdminHome'
 
 /** @type import('payload').ImportMap */
 export const importMap = {
@@ -54,5 +55,6 @@ export const importMap = {
   "/admin/PortalLogin#PortalLogin": PortalLogin_d25fc2dc08c1ad78183be09a7e109abb,
   "/admin/SessionWatch#SessionWatch": SessionWatch_8a42db35d9fb0e31a10cd32542660d27,
   "/admin/PollsView#PollsView": PollsView_18f303745f1382751138f38404290b5f,
-  "@payloadcms/next/rsc#CollectionCards": CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1
+  "@payloadcms/next/rsc#CollectionCards": CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1,
+  "/admin/AdminHome#AdminHome": AdminHome_74f164e5a7e149c6ba48f1c8e3b2f211
 }

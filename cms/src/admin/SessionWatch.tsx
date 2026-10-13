@@ -15,7 +15,7 @@ export function SessionWatch({ children }: { children?: React.ReactNode }) {
     // Browser-served module owns the single Firebase configuration, not Next.
     void import(/* webpackIgnore: true */ /* turbopackIgnore: true */ url).then(module => {
       if (!active) return
-      watcher.current = module.watchEditorialSession({ onState: (next: State) => {
+      watcher.current = module.watchEditorialSession({ version: 2, onState: (next: State) => {
         if (active) {
           // Hide synchronously on pagehide/identity loss, before a BFCache snapshot
           // or React's next commit. A restored document must validate again.
@@ -30,6 +30,6 @@ export function SessionWatch({ children }: { children?: React.ReactNode }) {
   if (pathname === '/editorial/admin/logout') return children
   if (state.status === 'ready') return <div ref={privateContent}>{children}</div>
   return <section className="portal-session-status"><h1>Sessão editorial</h1><p role="alert">{state.message || 'Validando a mesma conta do Portal…'}</p>
-    {(state.status === 'error' || state.status === 'denied') && <><button type="button" onClick={() => watcher.current ? void watcher.current.revalidate() : setAttempt(value => value + 1)}>Tentar novamente</button><p><a href="/editorial-entry.html">Entrar pelo Portal</a></p></>}
+    {(state.status === 'error' || state.status === 'denied') && <><button type="button" onClick={() => watcher.current ? void watcher.current.revalidate() : setAttempt(value => value + 1)}>Tentar novamente</button><p><a href="/cms.html">Voltar à central editorial do Portal</a></p></>}
   </section>
 }

@@ -40,6 +40,11 @@ test('real index isolates bounded authenticated bridge quotas from public IP tra
     if (forwarded) req.set('X-Forwarded-For', forwarded);
     return req.send({ cookie: `cookie-${uid}` });
   };
+  const resolveAdmin = (uid, forwarded) => {
+    const req = h.request.post('/api/internal/editorial/admin/session/resolve').set('Authorization', `Bearer ${secret}`);
+    if (forwarded) req.set('X-Forwarded-For', forwarded);
+    return req.send({ cookie: `cookie-${uid}` });
+  };
   // Bad service credentials cannot spend valid-service capacity or perform even the first DB lookup.
   for (const status of [401, 401, 429]) {
     assert.equal((await h.request.post('/api/internal/editorial/session/resolve').send({ cookie: 'cookie-a' })).status, status);
@@ -52,12 +57,17 @@ test('real index isolates bounded authenticated bridge quotas from public IP tra
   assert.equal((await h.request.get('/api/health')).status, 429);
   // Both editors use the same socket IP as each other and as the exhausted public bucket.
   assert.equal((await resolve('a')).body.actor.uid, 'a');
-  assert.equal((await resolve('b')).body.actor.uid, 'b');
+  const generalActor = await resolveAdmin('b');
+  assert.equal(generalActor.status, 200);
+  assert.deepEqual(generalActor.body.actor, {
+    version: 2, uid: 'b', email: 'b@example.test', name: 'b',
+    capabilities: { manageKnowledge: true, manageAcademy: false, manageBenefits: false, manageReminders: false },
+  });
   profiles.get('a').permissions = {};
   assert.equal((await resolve('a')).status, 403, 'current policy is still consulted on each resolution');
   assert.equal((await resolve('b')).status, 200);
   const beforeLimit = queries;
-  const overLimit = await resolve('b', '203.0.113.92');
+  const overLimit = await resolveAdmin('b', '203.0.113.92');
   assert.equal(overLimit.status, 429, 'forwarded browser IP cannot reset the service quota');
   assert.equal(overLimit.headers['cache-control'], 'no-store');
   assert.equal(queries, beforeLimit, 'over-quota requests stop before DB/Firebase work');

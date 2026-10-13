@@ -5,6 +5,36 @@ import { preflightImportDatabases, type ImportClientFactory } from './database-p
 import { planLoadedNewsImport, summarizeImportPlan } from './plan'
 import { assertPrivatePath } from '../../../scripts/owner-news-payload/files.mjs'
 import type { ConvertedImportRevision, ImportBundleManifest } from './bundle'
+import type { ImportPreflightArtifact } from './target-binding'
+
+const operatorArtifacts = new WeakMap<object, ImportPreflightArtifact>()
+const claimedOperatorArtifacts = new WeakSet<object>()
+
+function bindOperatorArtifact(preflight: object, artifact: ImportPreflightArtifact) {
+  operatorArtifacts.set(preflight, Object.freeze({ ...artifact }))
+}
+
+/** Exact preflight result identity is required; serialized copies cannot authorize application. */
+export function claimImportPreflightArtifact(value: unknown): ImportPreflightArtifact {
+  if (!value || typeof value !== 'object') throw new Error('import_preflight_binding_required')
+  const preflight = value as Record<string, unknown>
+  const artifact = operatorArtifacts.get(value)
+  if (!artifact || claimedOperatorArtifacts.has(value) || preflight.manifestSha256 !== artifact.manifestSha256 ||
+    preflight.sourceInstance !== artifact.sourceInstance || preflight.sourceFingerprint !== artifact.sourceFingerprint ||
+    preflight.authorityEpoch !== artifact.expectedEpoch ||
+    (preflight.databases as Record<string, unknown> | undefined)?.targetIdentitySha256 !== artifact.targetDatabaseIdentitySha256) {
+    throw new Error('import_preflight_binding_required')
+  }
+  claimedOperatorArtifacts.add(value)
+  claimedOperatorArtifacts.add(artifact)
+  operatorArtifacts.delete(value)
+  return artifact
+}
+
+/** Internal integrity query used by the request-capability binder. */
+export function isClaimedImportPreflightArtifact(value: unknown): value is ImportPreflightArtifact {
+  return value !== null && typeof value === 'object' && claimedOperatorArtifacts.has(value)
+}
 
 type LoadedImportBundle = {
   manifest: ImportBundleManifest
@@ -62,17 +92,23 @@ export async function runImportPreflight(args: readonly string[], dependencies: 
   const authority = manifest.source.authority
   if (manifest.source.instanceId !== environment.sourceInstance || authority.mode !== 'frozen' ||
     !Number.isSafeInteger(authority.epoch) || authority.epoch < 1) throw new Error('import_source_contract_mismatch')
-  const storage = await assertImportStorageIsolation({ ...environment, bundleDirectory: path.dirname(manifestPath) })
+  const targetUploadDir = await assertImportStorageIsolation({ ...environment, bundleDirectory: path.dirname(manifestPath) })
   const databases = await preflightImportDatabases(environment, { mode: authority.mode, epoch: authority.epoch }, dependencies.createClient)
   const plan = planLoadedNewsImport(loaded, [], dependencies.now)
   const safeSummary = summarizeImportPlan(plan)
   const expectedEntities = Object.fromEntries(['asset', 'history', 'document', 'home', 'schedule'].map(kind =>
     [kind, plan.expectedItems.filter(item => item.entityKind === kind).length]))
-  return { applyRequested: parsed.apply, manifestSha256: loaded.manifestSha256,
+  const result = Object.freeze({ applyRequested: parsed.apply, manifestSha256: loaded.manifestSha256,
     sourceFingerprint: plan.sourceFingerprint, sourceInstance: plan.sourceInstance,
     authorityEpoch: authority.epoch, expectedEntities,
-    exceptions: safeSummary.exceptions, sourceHasExceptions: safeSummary.exceptions.length > 0,
-    storage, databases }
+    exceptions: Object.freeze([...safeSummary.exceptions]), sourceHasExceptions: safeSummary.exceptions.length > 0,
+    // Preserve the preflight-only shape without exposing private paths or URLs.
+    storage: undefined, databases: Object.freeze({ ...databases }) })
+  bindOperatorArtifact(result, { bundle: loaded, manifestSha256: loaded.manifestSha256,
+    sourceInstance: plan.sourceInstance, sourceFingerprint: plan.sourceFingerprint, expectedEpoch: authority.epoch,
+    targetDatabaseURL: environment.destination.connectionString,
+    targetDatabaseIdentitySha256: databases.targetIdentitySha256, targetUploadDir })
+  return result
 }
 
 /** Real plan can be produced without --apply. Mutations stay unavailable until

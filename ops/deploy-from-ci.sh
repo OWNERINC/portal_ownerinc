@@ -148,6 +148,7 @@ flock -n 9 || {
 export PORTAL_OPERATION_LOCK="$runtime/deploy.lock" PORTAL_OPERATION_LOCK_HELD="$runtime/deploy.lock"
 export PAYLOAD_OPERATIONS_GUARD="$runtime/payload-operations-guard"
 export COMPOSE_PROJECT_NAME="$project"
+export COMPOSE_ENV_FILE="$environment" COMPOSE_OVERRIDE="$production_override"
 
 current=
 if [[ -s $current_file ]]; then
@@ -170,6 +171,7 @@ compose_for() {
   local selected_override=$production_override
   local image_environment=()
   local cms_overlay=()
+  local payload_production_overlay=()
   if [[ $target == production && -f $selected_release/compose.ownerinc-vps.yaml ]]; then
     selected_override="$selected_release/compose.ownerinc-vps.yaml"
   fi
@@ -178,6 +180,13 @@ compose_for() {
     if grep -Fxq 'RELEASE_FORMAT=payload-v1' "$selected_release/.image-env"; then
       [[ -f $selected_release/docker-compose.payload.yml ]] || return 2
       cms_overlay=(--file "$selected_release/docker-compose.payload.yml")
+      # The host-owned hardening/network overlay is required only for production
+      # Payload releases. Keep legacy and staging composition byte-for-byte in
+      # their existing file set; append this after the regular production override.
+      if [[ $target == production ]]; then
+        [[ -f $runtime/compose.payload.production.yaml && ! -L $runtime/compose.payload.production.yaml ]] || return 2
+        payload_production_overlay=(--file "$runtime/compose.payload.production.yaml")
+      fi
     fi
   fi
   docker compose \
@@ -186,6 +195,7 @@ compose_for() {
     --file "$selected_release/docker-compose.yml" \
     "${cms_overlay[@]}" \
     --file "$selected_override" \
+    "${payload_production_overlay[@]}" \
     --project-name "$project" \
     --project-directory "$selected_release" \
     --profile notifications \
@@ -207,6 +217,9 @@ wait_for_healthy_cron() {
 if [[ $current == "$releases/$requested_commit" ]]; then
   if [[ $cms_current == true ]]; then
     [[ -x $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing Payload operations guard' >&2; exit 2; }
+    # Do not treat a partial pointer window as already-current success. This
+    # receiver is not yet integrated with the reviewed install/qualification gate.
+    "$PAYLOAD_OPERATIONS_GUARD" install-receiver-preflight "$current"
     "$PAYLOAD_OPERATIONS_GUARD" verify-release "$current"
   fi
   curl --fail --silent --show-error --max-time 10 \
@@ -344,6 +357,9 @@ printf 'API_IMAGE=%s\nCRON_IMAGE=%s\n' "$api_image" "$cron_image" > "$staging/.i
 if [[ $cms_release == true ]]; then printf 'CMS_IMAGE=%s\nRELEASE_FORMAT=payload-v1\n' "$cms_image" >> "$staging/.image-env"; fi
 if [[ $cms_release == true ]]; then
   [[ -x $PAYLOAD_OPERATIONS_GUARD && ! -L $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing reviewed Payload operations guard' >&2; exit 2; }
+  # Hard barrier BEFORE pull/replacement/backup/provision/service effects. No
+  # environment switch can enable an unqualified or half-integrated install.
+  "$PAYLOAD_OPERATIONS_GUARD" install-receiver-preflight "$staging" "$current"
   "$PAYLOAD_OPERATIONS_GUARD" release-preflight "$staging" "$current"
 fi
 unlink "$staging/.ci-images"
@@ -378,9 +394,18 @@ rollback() {
   fi
   database_restored=true
   if [[ $cms_release == true || $cms_current == true ]]; then
+    # Fence out-of-band writers before deciding whether this first install may
+    # return to the previous application. Failures before backup completion must
+    # still leave the host closed once the HTTP writers have stopped.
+    if [[ ! -e $PORTAL_OPERATION_LOCK.admission-closed && ! -L $PORTAL_OPERATION_LOCK.admission-closed ]]; then
+      "$PAYLOAD_OPERATIONS_GUARD" close-admission "$release" || {
+        echo 'Unable to establish Payload admission fence; writers remain stopped.' >&2
+        exit 1
+      }
+    fi
     # No partial two-database rollback. The integration guard proves the current
     # schema/data is compatible with the floor; otherwise keep writers stopped.
-    if ! "$PAYLOAD_OPERATIONS_GUARD" rollback-check "$release" "$current"; then
+    if ! "$PAYLOAD_OPERATIONS_GUARD" rollback-check "$release" "$backup"; then
       echo 'Payload rollback requires coordinated recovery; writers remain stopped.' >&2
       exit 1
     fi
@@ -409,7 +434,13 @@ rollback() {
     mv "$current_tmp" "$current_file"
     if [[ $cms_release == true || $cms_current == true ]]; then
       "$PAYLOAD_OPERATIONS_GUARD" open-admission "$current"
-      compose_for "$current" up -d
+      if [[ $cms_current == true ]]; then
+        compose_for "$current" up -d --no-deps api cron cms nginx
+      else
+        # First-install recovery may reactivate only the previous legacy Portal
+        # application. CMS volumes/data are not restored, removed, or started.
+        compose_for "$current" up -d --no-deps api cron nginx
+      fi
     else
       compose_for "$current" up -d --remove-orphans
     fi
@@ -480,6 +511,11 @@ docker run --rm --read-only \
 (cd "$backup" && sha256sum postgres.dump uploads.tar.gz >manifest.sha256)
 (cd "$backup" && sha256sum --check manifest.sha256 >/dev/null)
 chmod 600 "$backup/postgres.dump" "$backup/uploads.tar.gz" "$backup/manifest.sha256"
+if [[ $cms_release == true ]]; then
+  # Bind the real legacy-format source set before any Portal/CMS provisioning.
+  # This proof is separate metadata; payload-v1 backup artifacts/manifest stay unchanged.
+  "$PAYLOAD_OPERATIONS_GUARD" backup-metadata "$release" "$backup/preauthority-proof.json"
+fi
 backup_complete=true
 fi
 
@@ -491,6 +527,10 @@ compose_for "$release" run --rm --no-deps \
 if [[ $cms_release == true ]]; then
   compose_for "$release" up -d --no-deps cms-postgres
   compose_for "$release" run --rm cms-provision
+  if ! compose_for "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles; then
+    compose_for "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles \
+      node --import tsx scripts/provision-db.ts --bootstrap-control
+  fi
   compose_for "$release" run --rm --no-deps cms-migrate
   compose_for "$release" up -d --no-deps cms
 fi
@@ -602,15 +642,18 @@ if [[ $cron_started != true ]]; then
   false
 fi
 if [[ $cms_release == true ]]; then
-  compose_for "$release" up -d --no-deps cms-worker
-  [[ $(docker inspect --format '{{.Config.Image}}' "$project-cms-worker-1") == "$cms_image" ]] || false
+  # Preacthority has an explicit permanent worker hold. No deploy path starts it.
   "$PAYLOAD_OPERATIONS_GUARD" verify-release "$release"
-  "$PAYLOAD_OPERATIONS_GUARD" open-admission "$release"
 fi
 current_tmp="$runtime/current-release.$$"
 printf '%s\n' "$release" >"$current_tmp"
 chmod 644 "$current_tmp"
 mv "$current_tmp" "$current_file"
+if [[ $cms_release == true ]]; then
+  # Publish the release pointer while admission is still fenced; a pointer
+  # failure must not leave signed state open to out-of-band writers.
+  "$PAYLOAD_OPERATIONS_GUARD" open-admission "$release"
+fi
 trap - ERR INT TERM
 printf '{"deployment":"ready","commit":"%s","backup":"%s"}\n' \
   "$requested_commit" "$(basename "$backup")"

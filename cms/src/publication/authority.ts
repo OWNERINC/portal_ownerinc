@@ -1,5 +1,5 @@
 import { APIError, type CollectionBeforeOperationHook, type PayloadRequest } from 'payload'
-import { canManageNews, type PortalRuntimeUser } from '../auth/access'
+import { canWriteNews, type PortalRuntimeUser } from '../auth/access'
 import { createPortalClient } from '../auth/portal-client'
 import { readCmsEnvironment } from '../config/environment'
 import { isLegacyNewsImport } from '../news/validation'
@@ -17,7 +17,7 @@ export async function assertFrozenPreparationActor(req: PayloadRequest, expected
   if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 1 || expectedEpoch >= 2147483647) {
     throw new APIError('cms_preparation_authority_conflict', 409, undefined, true)
   }
-  if (!canManageNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
+  if (!canWriteNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
   const actorUid = (req.user as PortalRuntimeUser).portalActor!.uid
   const client = createPortalClient(readCmsEnvironment(process.env))
   const authority = await client.getAuthority()
@@ -74,7 +74,7 @@ export async function assertCmsWriteAuthority(req: PayloadRequest) {
   }
   const requestingWorker = workerActor(req)
   if (preparation && requestingWorker) throw new APIError('migration_preparation_scope_mismatch', 403, undefined, true)
-  if (!requestingWorker && !canManageNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
+  if (!requestingWorker && !canWriteNews({ req })) throw new APIError('editorial_permission_denied', 403, undefined, true)
   // Only the private worker/import capabilities are session-independent. Browser
   // requests must retain verified, canonical expiry metadata AFTER the lock wait.
   const assertInteractiveSession = () => {

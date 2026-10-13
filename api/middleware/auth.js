@@ -3,14 +3,14 @@ const { getAuth } = require('firebase-admin/auth');
 const pool = require('../db');
 const { can } = require('./policy');
 const { ActivePortalUserError, loadActivePortalUser } = require('./active-user');
-const { rateLimit } = require('./security');
+const { authEmulatorEnabled, rateLimit } = require('./security');
 
 const writeLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => req.user.uid });
 const progressLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 120, key: (req) => req.user.uid });
 const progressPath = /^\/api\/academy\/lessons\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/progress$/i;
 
 if (!getApps().length) {
-  const emulator = process.env.NODE_ENV === 'development' && process.env.FIREBASE_AUTH_EMULATOR_HOST;
+  const emulator = authEmulatorEnabled(process.env);
   initializeApp(emulator ? { projectId: process.env.FIREBASE_PROJECT_ID } : {
     credential: cert({
       projectId: process.env.FIREBASE_PROJECT_ID,

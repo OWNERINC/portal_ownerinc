@@ -1,6 +1,5 @@
 import { createLocalReq, type Payload, type PayloadRequest } from 'payload'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { loadBundle } from '../../../scripts/owner-news-payload/bundle.mjs'
 import type { ConvertedImportRevision, ImportBundleManifest } from './bundle'
 import { assertFrozenPreparationActor, assertPreparationIdentity, withPreparationAuthority } from '../publication/authority'
@@ -15,18 +14,21 @@ import { reconcileImportItems, type ExpectedImportItem, type ObservedImportItem 
 import { assertImportBinding } from './identity'
 import { ImportCommitOutcomeUnknown, withImportTransaction } from './transaction'
 import { withPreparationBootstrap } from './preparation-bootstrap'
+import { assertPreparationRun } from './preparation-run'
 import { readImportDestination } from './destination'
 import { assertDurablePromotion, promoteImportAsset, recordAssetCommitOutcome, stageImportAsset, type StagedImportAsset } from './staging'
 import { withStagedImportMedia } from '../media/import-staged'
+import { activateOperatorImportCapability, assertOperatorImportActive, assertOperatorImportPending,
+  type ImportOperatorIdentity } from './target-binding'
 
-type LoadedBundle = {
+export type LoadedNewsImportBundle = {
   manifest: ImportBundleManifest
   manifestSha256: string
   revisionById: ReadonlyMap<string, { converted: ConvertedImportRevision }>
   assetPaths: ReadonlyMap<string, string>
 }
 
-function isLoadedBundle(value: unknown): value is LoadedBundle {
+function isLoadedBundle(value: unknown): value is LoadedNewsImportBundle {
   if (!value || typeof value !== 'object') return false
   const bundle = value as Record<string, unknown>
   return !!bundle.manifest && typeof bundle.manifest === 'object' &&
@@ -34,7 +36,7 @@ function isLoadedBundle(value: unknown): value is LoadedBundle {
     bundle.revisionById instanceof Map && bundle.assetPaths instanceof Map
 }
 
-function requireLoadedBundle(value: unknown): LoadedBundle {
+function requireLoadedBundle(value: unknown): LoadedNewsImportBundle {
   if (!isLoadedBundle(value)) throw new Error('import_bundle_load_failed')
   return value
 }
@@ -50,8 +52,8 @@ const cmsAPI = (payload: Payload) => payload as unknown as PayloadAPI
 const safeRow = (row: Record<string, unknown> | undefined) => row || null
 
 export type ApplyNewsImportOptions = {
-  payload: Payload; req: PayloadRequest; bundle: LoadedBundle; manifestSha256: string
-  uploadDir: string; expectedEpoch: number; now?: Date
+  payload: Payload; req: PayloadRequest; bundle: LoadedNewsImportBundle; manifestSha256: string
+  sourceFingerprint: string; uploadDir: string; expectedEpoch: number; runId: string; actorUid: string; now?: Date
 }
 
 async function readRun(payload: Payload, req: PayloadRequest, manifestSha256: string) {
@@ -67,11 +69,11 @@ async function readItems(payload: Payload, req: PayloadRequest, runId: string) {
 }
 
 async function ensurePreparationRun(payload: Payload, req: PayloadRequest, input: {
-  manifestSha256: string; expectedEpoch: number; sourceInstance: string; sourceFingerprint: string
+  runId: string; manifestSha256: string; expectedEpoch: number; sourceInstance: string; sourceFingerprint: string
 }) {
   let row = await readRun(payload, req, input.manifestSha256)
   if (!row) {
-    const bootstrap = { runId: randomUUID(), manifestSha256: input.manifestSha256, expectedEpoch: input.expectedEpoch }
+    const bootstrap = { runId: input.runId, manifestSha256: input.manifestSha256, expectedEpoch: input.expectedEpoch }
     await withPreparationBootstrap(req, bootstrap, async (bootstrapReq) => {
       row = await cmsAPI(payload).create({ collection: 'news-migration-runs', overrideAccess: true, req: bootstrapReq,
         depth: 0, data: { id: bootstrap.runId, manifestSha256: input.manifestSha256, sourceInstance: input.sourceInstance,
@@ -79,7 +81,7 @@ async function ensurePreparationRun(payload: Payload, req: PayloadRequest, input
           progressState: 'preparing', admissionState: 'open', commitOutcome: 'acknowledged', unresolvedExceptions: [] } })
     })
   }
-  if (!row || row.manifestSha256 !== input.manifestSha256 || row.sourceInstance !== input.sourceInstance ||
+  if (!row || row.id !== input.runId || row.manifestSha256 !== input.manifestSha256 || row.sourceInstance !== input.sourceInstance ||
     row.sourceFingerprint !== input.sourceFingerprint ||
     (row.authorityEpoch !== input.expectedEpoch && row.authorityEpoch !== String(input.expectedEpoch))) {
     throw new Error('migration_run_identity_conflict')
@@ -236,7 +238,7 @@ async function freshUnitConfirmation(payload: Payload, incoming: PayloadRequest,
 
 /** Read actual Payload/history/media/suspended-schedule state under the caller's
  * live request and capability. Does not bless a previous ledger receipt alone. */
-export async function reconcileNewsImport(input: { payload: Payload; req: PayloadRequest; bundle: LoadedBundle;
+export async function reconcileNewsImport(input: { payload: Payload; req: PayloadRequest; bundle: LoadedNewsImportBundle;
   manifestSha256: string; runId: string; expectedEpoch: number; stagedAssets: ReadonlyMap<string, StagedImportAsset>; now?: Date }) {
   const plan = planLoadedNewsImport(input.bundle, [], input.now)
   assertImportBinding({ runId: input.runId, manifestSha256: input.manifestSha256, authorityEpoch: input.expectedEpoch })
@@ -266,26 +268,41 @@ export async function reconcileNewsImport(input: { payload: Payload; req: Payloa
  * + history + published/draft + home + suspended schedule -> fresh whole-unit
  * receipt after COMMIT. It never seals or enqueues imported schedules. */
 export async function applyNewsImport(options: ApplyNewsImportOptions) {
+  const scope: ImportOperatorIdentity = { actorUid: options.actorUid, runId: options.runId,
+    manifestSha256: options.manifestSha256, expectedEpoch: options.expectedEpoch }
+  assertOperatorImportPending(options.req, options.payload, options.bundle, scope)
   if ((options.payload.db as typeof options.payload.db & { allowIDOnCreate?: boolean }).allowIDOnCreate !== true) {
     throw new Error('legacy_import_requires_separate_import_config')
   }
   const bundle = requireLoadedBundle(options.bundle)
   const { manifest } = bundle
   if (options.manifestSha256 !== bundle.manifestSha256 || manifest.source.authority.mode !== 'frozen' ||
-    manifest.source.instanceId === '' || manifest.source.authority.epoch !== options.expectedEpoch) throw new Error('import_bundle_identity_mismatch')
+    manifest.source.authority.epoch !== options.expectedEpoch || manifest.source.instanceId === '') {
+    throw new Error('import_bundle_identity_mismatch')
+  }
   const plan = planLoadedNewsImport(bundle, [], options.now)
+  if (plan.sourceFingerprint !== options.sourceFingerprint) throw new Error('import_bundle_identity_mismatch')
   let runId = '', resultReceipt = '', stagedAssets = new Map<string, StagedImportAsset>()
   let report: { runId: string; manifestSha256: string; receipt: string; counts: unknown;
     exceptions: unknown[]; alreadyApplied: boolean }
   try {
   report = await withImportTransaction(options.payload, options.req, async req => {
+    await activateOperatorImportCapability(options.req, req, options.payload, bundle, scope)
     await assertFrozenPreparationActor(req, options.expectedEpoch)
-    const run = await ensurePreparationRun(options.payload, req, { manifestSha256: options.manifestSha256,
+    const run = await ensurePreparationRun(options.payload, req, { runId: options.runId, manifestSha256: options.manifestSha256,
       expectedEpoch: options.expectedEpoch, sourceInstance: plan.sourceInstance, sourceFingerprint: plan.sourceFingerprint })
     runId = String(run.id)
+    if (runId !== options.runId) throw new Error('migration_run_identity_conflict')
     const binding = { runId, manifestSha256: options.manifestSha256, authorityEpoch: options.expectedEpoch }
+    const alreadyReconciled = run.progressState === 'reconciled' && run.admissionState === 'open' &&
+      run.commitOutcome === 'acknowledged'
+    const canPrepare = run.progressState === 'preparing' && run.admissionState === 'open' &&
+      run.commitOutcome === 'acknowledged'
+    if (!alreadyReconciled && !canPrepare) throw new Error('migration_preparation_run_conflict')
+    if (canPrepare) await assertPreparationRun(req, { runId, manifestSha256: options.manifestSha256,
+      expectedEpoch: options.expectedEpoch })
     stagedAssets = await stageBundleAssets({ ...options, bundle }, binding)
-    if (run.progressState === 'reconciled' && run.admissionState === 'open') {
+    if (alreadyReconciled) {
       const observed = await readImportDestination(options.payload, req, plan.expectedItems, stagedAssets)
       const classified = reconcileImportItems(plan.expectedItems, observed)
       const unit = unitReceipt(runId, options.manifestSha256, plan.expectedItems, observed, plan.exceptions)
@@ -297,11 +314,9 @@ export async function applyNewsImport(options: ApplyNewsImportOptions) {
         throw new Error('import_previous_receipt_conflict')
       }
       resultReceipt = unit.digest
+      await assertOperatorImportActive(req, options.payload, bundle, scope)
       return { runId, manifestSha256: options.manifestSha256, receipt: unit.digest, counts: plan.counts,
         exceptions: plan.exceptions, alreadyApplied: true }
-    }
-    if (run.progressState !== 'preparing' || run.admissionState !== 'open' || run.commitOutcome !== 'acknowledged') {
-      throw new Error('migration_preparation_run_conflict')
     }
     await withPreparationAuthority(req, { runId, manifestSha256: options.manifestSha256,
       expectedEpoch: options.expectedEpoch }, async authorizedReq => {
@@ -350,6 +365,7 @@ export async function applyNewsImport(options: ApplyNewsImportOptions) {
           destinationFingerprint: unit.destinationFingerprint, unresolvedExceptions: plan.exceptions,
           commitOutcome: 'acknowledged' } })
     })
+    await assertOperatorImportActive(req, options.payload, bundle, scope)
     return { runId, manifestSha256: options.manifestSha256, receipt: resultReceipt, counts: plan.counts,
       exceptions: plan.exceptions, alreadyApplied: false }
   }, { confirmCommitted: async receipt => Boolean(await freshUnitConfirmation(options.payload, options.req,

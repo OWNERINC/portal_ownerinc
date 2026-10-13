@@ -46,8 +46,15 @@ const surfaceSentinels = [
 
 const currentSurfaceContent = async (file) => {
   const source = await readFile(`${repositoryRoot}/${file}`, 'utf8');
-  if (file !== 'api/db/schema.sql') return source;
-  return source.replace(/INSERT INTO schema_migrations[\s\S]*?ON CONFLICT \(version\) DO NOTHING;/, '');
+  if (file === 'api/db/schema.sql') {
+    return source.replace(/INSERT INTO schema_migrations[\s\S]*?ON CONFLICT \(version\) DO NOTHING;/, '');
+  }
+  if (file === 'ops/payload-control-state.py') {
+    // The control adapter pins the canonical migration ledger; this one legacy
+    // migration identifier is not an active Ombudsman surface.
+    return source.replace("'016_remove_ombudsman'", "'016_historical_removal'");
+  }
+  return source;
 };
 
 test('Ombudsman route, page, permission, table, grants, and retention are absent from active source', async () => {

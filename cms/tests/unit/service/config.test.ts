@@ -21,6 +21,7 @@ async function loadConfig() {
 
 test('configuração sanitizada preserva a fronteira REST e não inicia o banco', async () => {
   const config = await loadConfig()
+  assert.equal(config.admin.avatar, 'default')
   assert.equal(config.routes.admin, '/editorial/admin')
   assert.equal(config.routes.api, '/editorial/api')
   assert.equal(config.serverURL, 'https://portal-build.invalid')

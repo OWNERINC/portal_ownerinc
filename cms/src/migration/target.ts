@@ -54,6 +54,7 @@ export async function assertImportStorageIsolation(input: { sourceUploadDir: str
         throw new ImportPreflightError('import_storage_overlap')
       }
     }
+    return target
   } catch (error) {
     if (error instanceof ImportPreflightError) throw error
     throw new ImportPreflightError('import_storage_overlap')
@@ -71,22 +72,42 @@ function exactEpoch(value: unknown): number | null {
   return Number(whole)
 }
 
-export function readImportDatabaseIdentity(row: Record<string, unknown>, expectedDatabaseName: string): ImportDatabaseIdentity {
+function parseImportDatabaseIdentity(row: Record<string, unknown>, expectedDatabaseName: string,
+  expectedReadOnly: 'on' | 'off' | 'either'): ImportDatabaseIdentity {
   if (!positiveDecimal(row.system_identifier, 18446744073709551615n) || !positiveDecimal(row.database_oid, 4294967295n) ||
-    typeof row.database_name !== 'string' || row.transaction_read_only !== 'on' || row.in_recovery !== false) {
+    typeof row.database_name !== 'string' ||
+    (expectedReadOnly === 'either' ? !['on', 'off'].includes(String(row.transaction_read_only)) : row.transaction_read_only !== expectedReadOnly) ||
+    row.in_recovery !== false) {
     throw new ImportPreflightError('import_database_identity_unavailable')
   }
   if (row.database_name !== expectedDatabaseName) throw new ImportPreflightError('import_database_name_mismatch')
   return { systemIdentifier: row.system_identifier, databaseOid: row.database_oid, databaseName: row.database_name }
 }
 
+export function readImportDatabaseIdentity(row: Record<string, unknown>, expectedDatabaseName: string): ImportDatabaseIdentity {
+  return parseImportDatabaseIdentity(row, expectedDatabaseName, 'on')
+}
+
+/** A second identity probe on the live writable Payload transaction. */
+export function readLiveImportDatabaseIdentity(row: Record<string, unknown>, expectedDatabaseName: string): ImportDatabaseIdentity {
+  return parseImportDatabaseIdentity(row, expectedDatabaseName, 'off')
+}
+
+/** A single SELECT through the configured Payload pool has no transaction-mode assumption. */
+export function readObservedImportDatabaseIdentity(row: Record<string, unknown>, expectedDatabaseName: string): ImportDatabaseIdentity {
+  return parseImportDatabaseIdentity(row, expectedDatabaseName, 'either')
+}
+
+export function importDatabaseIdentityFingerprint(value: ImportDatabaseIdentity) {
+  return createHash('sha256').update(JSON.stringify([value.systemIdentifier, value.databaseOid])).digest('hex')
+}
+
 export function assertImportDatabaseIsolation(source: ImportDatabaseIdentity, destination: ImportDatabaseIdentity) {
   if (source.systemIdentifier === destination.systemIdentifier && source.databaseOid === destination.databaseOid) {
     throw new ImportPreflightError('import_source_destination_same_database')
   }
-  const fingerprint = (value: ImportDatabaseIdentity) => createHash('sha256')
-    .update(JSON.stringify([value.systemIdentifier, value.databaseOid])).digest('hex')
-  return { sourceIdentitySha256: fingerprint(source), targetIdentitySha256: fingerprint(destination) }
+  return { sourceIdentitySha256: importDatabaseIdentityFingerprint(source),
+    targetIdentitySha256: importDatabaseIdentityFingerprint(destination) }
 }
 
 export function sourceEpochMatches(value: unknown, expected: number) {

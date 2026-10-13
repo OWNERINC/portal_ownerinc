@@ -1,19 +1,20 @@
 import { APIError, type CollectionConfig } from 'payload'
 import type { CmsEnvironment } from '../config/environment'
-import { canManageNews, denyEditorMutation, readOwnEditor, type PortalRuntimeUser } from '../auth/access'
+import { canAccessPortalAdmin, denyEditorMutation, readOwnEditor, type PortalRuntimeUser } from '../auth/access'
 import { assertEditorialOrigin, editorialCookieSettings, readEditorialCookie } from '../auth/cookie'
 import { createPortalClient } from '../auth/portal-client'
-import { createPortalStrategy } from '../auth/portal-strategy'
+import { createAdminPortalStrategy, createPortalStrategy } from '../auth/portal-strategy'
 
 export function createPortalEditors(environment: CmsEnvironment, client = createPortalClient(environment)): CollectionConfig {
   const cookie = editorialCookieSettings(environment.portalPublicURL)
   const portalStrategy = createPortalStrategy({ cookieName: cookie.name, resolve: client.resolvePortalEditor })
+  const adminPortalStrategy = createAdminPortalStrategy({ cookieName: cookie.name, resolve: client.resolvePortalAdmin })
   return {
     slug: 'portal-editors',
     admin: { useAsTitle: 'displayName', hidden: true },
-    auth: { disableLocalStrategy: true, useSessions: false, useAPIKey: false, removeTokenFromResponses: true, strategies: [portalStrategy] },
+    auth: { disableLocalStrategy: true, useSessions: false, useAPIKey: false, removeTokenFromResponses: true, strategies: [portalStrategy, adminPortalStrategy] },
     access: {
-      admin: canManageNews,
+      admin: canAccessPortalAdmin,
       create: denyEditorMutation,
       read: readOwnEditor,
       update: denyEditorMutation,
@@ -28,7 +29,15 @@ export function createPortalEditors(environment: CmsEnvironment, client = create
     hooks: {
       // Custom authentication must not mint a second, independently valid Payload session.
       beforeOperation: [({ operation }) => { if (operation === 'refresh') throw new APIError('Portal session refresh is not supported.', 403) }],
-      me: [({ args, user }) => ({ user, exp: Math.floor(Date.parse((args.req.user as PortalRuntimeUser).portalExpiresAt!) / 1000) })],
+      me: [({ args, user }) => {
+        const runtimeUser = args.req.user as PortalRuntimeUser
+        // Payload reloads the persisted projection for /me, so explicitly reattach
+        // only the actor resolved for this request. Capabilities never reach storage.
+        const requestActor = runtimeUser.portalActor ? { portalActor: runtimeUser.portalActor }
+          : runtimeUser.adminActor ? { adminActor: runtimeUser.adminActor } : {}
+        const currentUser = user ? { ...user, portalUid: runtimeUser.portalUid, ...requestActor } : user
+        return { user: currentUser, exp: Math.floor(Date.parse(runtimeUser.portalExpiresAt || runtimeUser.adminExpiresAt || '') / 1000) }
+      }],
       afterLogout: [async ({ req }) => {
         assertEditorialOrigin(req.headers, cookie.origin)
         const value = readEditorialCookie(req.headers, cookie.name)

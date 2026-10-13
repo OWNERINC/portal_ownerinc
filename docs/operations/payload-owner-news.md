@@ -1,9 +1,15 @@
 # Payload Owner News — checks e preparação do aceite
 
-Estado desta entrega: wiring offline e guard portátil implementados. A suíte real
-Task15 e a preparação portátil ainda estão incompletas; não há aceite integrado ou
-autorização de produção decorrente deste documento. Resultados por cenário ficam
-na [matriz de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md).
+Estado desta entrega: wiring offline, guard portátil, finalizer one-shot e comando
+de auditoria instalada somente leitura estão implementados. A fatia observacional
+do protocolo Owner News foi executada com PASS em fixture PostgreSQL 16 isolada;
+o escopo e os limites estão no [relatório da auditoria](../reviews/2026-10-08-owner-news-protocol-observer-audit.md).
+A suíte real Task15 e seu fluxo portátil de preparação/integração ainda estão
+incompletos. Esse PASS delimitado não equivale a prontidão, certificação, aceite
+integrado ou autorização de produção. Resultados por cenário ficam na
+[matriz de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md).
+O PASS observado antes desta atualização não valida o novo RPC V2 nem substitui
+as duas fixtures novas descritas abaixo.
 
 ## Checks separados
 
@@ -29,6 +35,165 @@ O snapshot histórico de 05/10/2026 registrou CMS 17 pacotes afetados
 (5 high/10 moderate/2 low); não é audit atual. Remediação requer análise atual por
 caminho transitivo, atualização deliberada e repetição dos checks atingidos. Não
 usar ignore global ou force/downgrade automático para produzir verde.
+
+### Auditoria do protocolo Owner News instalado (read-only)
+
+`npm --prefix cms run audit:news-protocol` executa
+`cms/scripts/verify-news-protocol.ts` com `--audit-protocol`. Requer exclusivamente
+`CMS_OBSERVER_DATABASE_URL`, apontada explicitamente como `cms_observer` para o
+database `ownerinc_cms`. Não consulta `.env`, não usa `CMS_ADMIN_DATABASE_URL`,
+`CMS_RUNTIME_DATABASE_URL`, `CMS_DATABASE_URL` ou `DATABASE_URL` como fallback e
+não cria nem altera a role. O parser recusa query/fragmento na URL para impedir
+overrides de sessão.
+
+O usuário deve fornecer uma role já provisionada segundo o contrato
+`buildNewsProtocolObserverProvisioningSQL` em
+`cms/scripts/news-protocol-observer-contract.ts`. Esse builder retorna SQL
+privilegiado, é somente um contrato para revisão/provisionamento explícito e não é
+importado pelo CLI. A role deve ser criada por procedimento separado e aprovado;
+uma role preexistente não é alterada automaticamente.
+O builder não altera ACLs públicas dos catálogos PostgreSQL.
+
+O audit começa com `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`,
+aplica `SET LOCAL statement_timeout = '5s'` e fixa o `search_path` local como
+`pg_catalog, public`; então valida identidade e catálogo. Não toma advisory lock.
+Entre as relações da aplicação, permite somente
+`SELECT` sobre `payload_migrations` e `owner_news_mutation_head`; leituras padrão
+dos catálogos PostgreSQL e de `information_schema` são necessárias para a própria
+auditoria. Não permite DML persistente nem sequence access. A única exceção é
+`UPDATE` na view canônica `pg_catalog.pg_settings`: no PostgreSQL 16, isso é
+equivalente a `SET` para a sessão, não a uma atualização persistente de linhas.
+Essa exceção é limitada pela identidade OID qualificada e por `relkind='v'`; não
+abrange `INSERT`, `DELETE` ou outros privilégios da view nem objetos de mesmo nome.
+O audit exige ausência de membership e de schema CREATE/uso alheio, rejeita grants
+`PUBLIC` em relações/colunas de aplicação e execução de funções de protocolo/
+SECURITY DEFINER. Os queries de privilégio nomeiam explicitamente `cms_runtime`;
+nenhuma troca `SET ROLE` é usada.
+
+O relatório observa o estado instalado com `observedProtocolVersion: 1 | 2`,
+derivado da assinatura/identidade exata dos catálogos, e
+`observedCoverageVersion: 0 | 1` como campos independentes. Observa também
+sequência e barrier sem ler artigos, mídia, schedules, jobs, históricos ou eventos
+do ledger.
+Sempre indica `ready=false`, `admissionActivated=false` e certificações de release,
+coverage e drain como falsas. `coverage_version=1` é somente valor observado, não
+certificação de cobertura, seal, destination reconciliation ou cutover. Antes da
+consulta de ownership, exige que `current_user` tenha `SELECT` efetivo em
+`pg_catalog.pg_shdepend`; se faltar acesso, falha sem fallback ou concessão de
+grants. Reutiliza as dependências de ownership PostgreSQL: `cms_observer`
+deve não possuir objeto algum em qualquer `dbid`; `cms_control`/`cms_controller`
+seguem o escopo canônico do finalizer (database atual e objetos compartilhados).
+O literal `pg_authid` é usado somente como OID de `refclassid`; o catálogo de
+autenticação e password presence não são lidos. O CLI sozinho verifica o nome do
+database, não a identidade física do cluster. No harness registrado no relatório
+da auditoria, essa identidade foi confirmada separadamente no fixture PostgreSQL 16;
+isso não estende a verificação de identidade a outros destinos.
+
+O finalizer one-shot é outro comando e tem fronteira mutável distinta:
+`node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
+requer `CMS_ADMIN_DATABASE_URL`; instala protocolo V2 em cold start, verifica V2
+sem DDL e, em V1, falha fechado com `protocol_upgrade_required` sem DDL. Um upgrade
+V1→V2 precisa da escolha explícita e separada
+`node --import tsx cms/scripts/finalize-news-protocol.ts --upgrade-protocol-v1-to-v2`.
+O comando não pré-semeia um run: somente a chamada controller-only ao RPC
+`owner_news_bootstrap_run` cria a primeira linha. Os seis arquivos de migration
+Payload e o snapshot nativo permanecem inalterados; `source_instance` mantém a
+identidade de origem, distinta da identidade física target que um futuro cliente
+deverá verificar. Nunca use esse finalizer para uma inspeção read-only. Leia
+[o runbook de migração](./owner-news-payload-migration.md#finalizer-one-shot-e-auditoria-instalada)
+antes de provisionar ou executar qualquer um deles.
+
+Esta compatibilidade de catálogo e os testes offline não são aceitação de banco.
+Cold install V2 e upgrade V1→V2 precisam de duas novas fixtures PostgreSQL 16 e
+leases one-shot independentes, após autorização separada; não reutilize a fixture
+do observer, leases anteriores, bancos existentes, serviços ou destinos remotos.
+Os dois cenários explícitos do harness `cms/tests/integration/protocol-finalizer.mjs`
+estão implementados e têm guards offline. A preparação/execução PostgreSQL não foi
+feita nesta alteração: requer revisão fresca e autorização explícita da sessão
+primária. Com Node 24, dependências CMS já instaladas, Docker local e PostgreSQL 16
+em cache, a sequência autorizada é:
+
+```sh
+node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario fresh-v2
+node cms/tests/integration/protocol-finalizer.mjs --execute --scenario fresh-v2 --lease "<lease privada recém-preparada>"
+node cms/tests/integration/protocol-finalizer.mjs --prepare-lease --scenario upgrade-v1
+node cms/tests/integration/protocol-finalizer.mjs --execute --scenario upgrade-v1 --lease "<outra lease privada recém-preparada>"
+```
+
+Cada `--prepare-lease` somente inspeciona o contexto local, a imagem PostgreSQL 16
+em cache, colisões UUID, porta loopback e parent privado, e grava a lease privada;
+não cria recursos Docker ou databases nem conecta ao PostgreSQL. Cada lease é
+one-shot e amarrada ao cenário. `--execute` cria
+um container/volume e database novos, verifica identidade física antes de DDL,
+preserva a fixture e, depois da claim one-shot, grava relatório em sucesso ou
+falha; não faz cleanup automático.
+`fresh-v2` prova as seis migrations existentes, ausência inicial de runs, cold
+install V2, reentrada sem mudança, observer read-only pré-bootstrap e o contrato
+RPC controller (evento único do trigger, retry sem DML, negações, barreira e ordem
+de locks). `upgrade-v1` constrói o V1 exato com os builders canônicos, prova a
+rejeição ordinária sem mutação e rollback transacional do upgrade, então atualiza
+para V2, verifica reentradas e testa o RPC. Nenhum desses cenários certifica
+Portal/Payload, readiness ou cutover. A revisão offline não substitui os dois
+aceites reais autorizados.
+
+### Harness isolado do audit `cms_observer` no PostgreSQL 16
+
+O runner offline/lease-gated está em
+`cms/tests/integration/news-protocol-observer-audit.mjs`; não integra `npm test`,
+`test:unit` ou `npm run verify`. São duas ações deliberadamente separadas:
+
+```sh
+node cms/tests/integration/news-protocol-observer-audit.mjs --prepare-lease
+node cms/tests/integration/news-protocol-observer-audit.mjs --execute --leasepath "<leasePath impresso na preparação>"
+```
+
+`--prepare-lease` valida a identidade do Docker local, a versão, a imagem
+PostgreSQL 16 já em cache, colisões de namespace e uma porta IPv4 loopback livre;
+depois grava uma lease privada one-shot. Não puxa imagem, cria container/volume,
+conecta ao banco, nem inicia serviço. O parent padrão existente é
+`%LOCALAPPDATA%\Temp\opencode` no Windows e `$HOME` em POSIX. Se esse local não
+for externo a todo checkout Git, não tiver ACL/owner aceitável, ou não existir,
+a preparação falha sem fallback. Um parent alternativo existente pode ser
+fornecido por `OWNERINC_AUDIT_PRIVATE_PARENT`; ele passa pelos mesmos checks
+de caminho absoluto, ausência de symlink/reparse point e fronteira Git, além da
+validação de ACLs/ownership (Windows) ou owner e ausência de escrita por grupo/
+outros (POSIX). Diretórios de lease e arquivos são exclusivos e privados
+(ACL restrita no Windows; `0700`/`0600` em POSIX). Não reutilize lease anterior.
+
+`--execute --leasepath` consome a lease uma vez e cria um container e volume
+PostgreSQL 16 novos no namespace UUID da lease, com label vinculada ao nonce,
+mount único e porta publicada somente em `127.0.0.1`. Usa a imagem em cache por
+ID, `ownerinc_cms`, senhas hex aleatórias distintas e Node 24/dependências CMS
+já instaladas no host; não instala pacotes nem usa imagem CMS antiga, Next, API
+ou Firebase. Aplica apenas as seis
+migrations nativas existentes, valida a ledger, faz bootstrap/verify de
+`cms_controller`, executa o finalizer one-shot em `ownerinc_cms` recém-criado,
+e então provisiona `cms_observer` pelo builder revisado. Não aplica rollback de
+fixture nem migration sintética.
+O segredo inicial de `cms_admin` fica em arquivo bind-mounted privado com
+ACL/owner restritos; `Config.Env` do container contém apenas o caminho do arquivo,
+nunca o valor do segredo.
+
+O cenário comprova no cluster descartável e separado: leitura real de
+`pg_shdepend` pelo observer; auditoria read-only com snapshots de digest dos
+catálogos públicos (metadados apenas), migrations e head antes/depois; `SELECT
+... LIMIT 0` negado com SQLSTATE `42501` para artigos, mídia, schedules, jobs e
+eventos do ledger; e ausência de `EXECUTE` em `owner_news_seal_run` sem invocar
+a função. Nenhum conteúdo de publicação é consultado. Não injeta linhas para
+forçar cobertura, não altera barrier e não conclui cobertura, CRUD, drain,
+certificação ou prontidão. O relatório registra somente hashes/contagens,
+identidades do fixture, fases e códigos sanitizados; URLs e credenciais não são
+exibidos. Container, volume e relatório são preservados, inclusive em falha;
+não há cleanup automático.
+
+O harness cria infraestrutura local descartável e executa migrations, finalizer
+e provisionamento de role no fixture; somente o CLI de auditoria e os probes de
+negação são observacionais/read-only. Uma execução PG16 real foi concluída em
+08/10/2026, run `1e852687-435d-4d09-b56d-7a6b2f375569`; consulte o relatório
+delimitado e o JSON sanitizado ligado acima. Isso fecha apenas a evidência da
+auditoria observacional `cms_observer`, não a suíte Task15, o aceite integrado ou
+qualquer verificação de produção. Runs falhos anteriores e seus artefatos foram
+preservados; não se afirma limpeza nem expiração de seus fixtures.
 
 ### Preflight offline do harness Task9
 
@@ -98,9 +263,97 @@ Esse diagnóstico é somente instrumentação para uma eventual execução reade
 separadamente autorizada; não é autorização para iniciar runtime.
 
 CI `validate` inclui cache CMS, bootstrap ampliado, verify e build sintético CMS.
-Integração real, migrations CMS repetidas, grants runtime, imagem/scan CMS e o
-contrato de digest/release aguardam integração com infraestrutura/operação.
+O workflow também está configurado para construir a imagem CMS pelo contexto raiz,
+aplicar o scan Trivy bloqueante e, nas execuções autorizadas em `main`, publicar
+no GHCR o digest validado e o SHA de origem no artefato separado `cms-image-digest`.
+Essa configuração ainda exige evidência de execução real da CI; não comprova
+build/scan/publicação executados nem implantação do CMS. O digest CMS não integra
+o manifesto automático legacy de produção, que continua com API e cron.
+Integração real, migrations CMS repetidas, grants runtime e o release operacional
+Payload permanecem gates próprios de infraestrutura/operação; consulte
+[Deployment](deployment.md#fluxo-de-release).
 Os contratos de publish/backup não são definidos uma segunda vez neste documento.
+
+O CI run `37782865173` falhou somente no scan HIGH/CRITICAL Trivy da imagem CMS;
+os scans API/cron passaram. A correção de imagem usa o índice de registry
+`node:24-alpine3.23@sha256:9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2`,
+que contém Node `24.21.0` e continua em Alpine/musl. `apk upgrade` atualiza
+`libcrypto3`/`libssl3` para `3.5.9-r0`, `musl`/`musl-utils` para `1.2.5-r23`
+e `zlib` para `1.3.2-r1`; npm fica em
+`12.2.0`, cuja engine requer Node `^24.15.0` ou superior e é compatível com essa
+base; como esse release ainda embute `brace-expansion@5.0.9` e `undici@6.28.0`,
+cada estágio substitui somente esses pacotes por upstreams corrigidos `5.0.11` e
+`6.28.1` (CVE-2026-19534), sem remover npm. O build omite
+opcionais apenas no grafo API embutido e restaura Sharp musl `0.35.5`/
+libvips `1.3.4`, versões travadas pelo lockfile API. O grafo API atualiza somente
+os transitivos Firebase Admin `@grpc/grpc-js` `1.14.4`→`1.14.5` e
+`brace-expansion` `2.1.4`→`2.1.6`, e `@fastify/busboy` `3.2.1`→`3.2.2` para
+corrigir CVE-2026-101916, CVE-2026-102276/CVE-2026-102278 e
+GHSA-gxm5-99cw-xjw9; não há upgrade do Firebase Admin. `npm`, CLI Payload, `tsx`,
+startup e migrations continuam parte do runtime; nenhum ignore ou enfraquecimento
+do scanner é permitido. O lockfile CMS unifica todas as cópias de `tsx` em
+`4.23.15` e esbuild em `0.28.2`; o binário oficial esbuild `0.28.2` ainda é
+construído com Go `1.26.5`; os findings do baseline exigiam Go `1.26.6` ou mais
+recente. O gate de outubro descrito abaixo elevou esse floor a `1.26.9`, na mesma
+linha Go 1.26. Para corrigir o binário sem alterar o grafo JavaScript, o Dockerfile
+usa um estágio separado no índice oficial `golang:1.26.9-alpine3.23` pinado por
+digest (`sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888`).
+O estágio usa `GOPROXY=https://proxy.golang.org` e `GOSUMDB=sum.golang.org`, compila
+somente `github.com/evanw/esbuild/cmd/esbuild` do tag upstream `v0.28.2` e compara
+o `go version -m` ao Go e ao módulo/soma fixados. `cms/go-build/go.sum` registra
+esbuild `h1:A2uETn4jrQTcXaT/shwTDTYBxDjl7fV7nXmUrJxfA2w=` e `golang.org/x/sys`
+`h1:0A+M6Uqn+Eje4kHMK80dtF3JCXC4ykBgQG4Fe06QRhQ=`; a verificação do módulo
+resolveu o tag para o commit upstream `609683d892977362a0f99026cb74b96263d728a9`.
+O build agora exige `go1.26.9` tanto no compilador quanto em `go version -m` do
+executável, mantendo `linux/amd64`, esbuild `0.28.2` e a mesma soma upstream.
+Substitui somente `@esbuild/linux-x64/bin/esbuild`, no estágio de build e na imagem
+final; a plataforma não-x64 falha explicitamente em vez de receber binário incorreto.
+Como evidência **histórica**, o rebuild anterior com Go `1.26.6` produziu o SHA-256
+local `ABDA5EE49A674E2160B5D6FF174804265F29F2237CEA87B1AD21C939CD6AFA73`.
+Esse hash não é atribuído ao novo build Go `1.26.9`, ainda não executado nesta revisão.
+
+O rebuild descartável **anterior**, `ownerinc-portal-cms-security-check:go-rebuild-20261008`,
+concluiu com o ID `sha256:2684b7cd30dc48090fe456cd3f4a6a1144e7ac4f9d8adcc41221c53d200bf143`,
+incluindo Next build, TSX TypeScript real, Payload CLI `info` com configuração
+sintética, Sharp/PG e fechamento de packaging sem serviços. Trivy `0.75.0`
+pinado por digest (`sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa`)
+foi executado com a mesma política CI (`HIGH,CRITICAL`, `ignore-unfixed`, exit 1):
+exit 0, zero findings OS/Node/Go; o relatório agora reconhece
+`app/cms/node_modules/@esbuild/linux-x64/bin/esbuild` como target `gobinary` e
+lista zero vulnerabilidades. O baseline original (76 findings totais, 22 no Go)
+permanece preservado. Este é um scan local do candidato, não um run do GitHub CI:
+não comprova o estado atual do scanner nem o novo toolchain.
+
+### Gate de segurança Go de 2026-10-09 — novo scan CI pendente
+
+O CI `37901050226`, commit `6938c62`, parou em **Scan CMS image**, antes da
+recuperação e sem artifact de recovery. Trivy encontrou dois HIGH no target
+`app/cms/node_modules/@esbuild/linux-x64/bin/esbuild`, stdlib `v1.26.6`:
+`CVE-2026-78667` (`net/http`, Range DoS) e `CVE-2026-97031` (`crypto/tls`, ECH DoS).
+O relatório informa correção em `1.26.9` ou `1.27.2`; foi escolhida `1.26.9` para
+manter a mesma linha do compilador. O [release oficial Go 1.26.9](https://go.dev/doc/devel/release#go1.26.9),
+publicado em 2026-10-08, confirma correções de segurança nessas bibliotecas.
+
+Proveniência consultada em 2026-10-09, somente leitura de registry:
+
+```sh
+docker buildx imagetools inspect golang:1.26.9-alpine3.23
+```
+
+- Repositório oficial: `docker.io/library/golang`.
+- Digest do índice OCI: `sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888`.
+- Manifesto `linux/amd64`: `sha256:52c60db0b6661204bf2ed874743bffc80c17eaf95d6ff51d87e205484358d40f`.
+- Revisão upstream anotada: `863ac37dfb5a3fd948626c8b4a818b6bd73b88a8`;
+  o [Dockerfile oficial dessa revisão](https://github.com/docker-library/golang/blob/863ac37dfb5a3fd948626c8b4a818b6bd73b88a8/1.26/alpine3.23/Dockerfile)
+  define `GOLANG_VERSION 1.26.9` e verifica checksum/assinatura do tarball oficial.
+
+O patch altera somente o pin do toolchain, seu floor em `go.mod`, asserts de versão
+e referências/testes correspondentes. Mantém `GOTOOLCHAIN=local`, esbuild upstream
+`v0.28.2`, `go.sum`, `-mod=readonly`, `-trimpath`, `-buildvcs=false` e os metadados
+verificáveis; não adiciona stripping, supressões, ignores nem altera thresholds do
+Trivy. `npm run security` não examina a stdlib desse executável estático Go.
+Inspeção do manifesto e testes offline **não** são build nem scan da imagem nova:
+o gate continua fechado até o scan CI passar, antes de retomar a recuperação Linux.
 
 ## Guard portátil implementado
 

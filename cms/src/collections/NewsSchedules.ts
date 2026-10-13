@@ -1,5 +1,6 @@
 import { APIError, type CollectionConfig } from 'payload'
 import { canManageNews } from '../auth/access'
+import { newsAreaReadAccess } from '../auth/news-area-access'
 import { isPublicationMutation } from '../publication/internal'
 import { requireCmsTransaction } from '../publication/transaction'
 import { assertPreparationIdentity } from '../publication/authority'
@@ -10,7 +11,7 @@ import { scheduleKey } from '../../../scripts/owner-news-payload/contract.mjs'
 export const NewsSchedules: CollectionConfig = {
   slug: 'news-schedules',
   admin: { useAsTitle: 'scheduledAt', defaultColumns: ['documentId', 'action', 'scheduledAt', 'state', 'generation'] },
-  access: { read: canManageNews, create: () => false, update: () => false, delete: () => false },
+  access: { read: newsAreaReadAccess, create: () => false, update: () => false, delete: () => false },
   hooks: { beforeOperation: [async ({ operation, req, args }) => {
     if (!['create', 'update', 'delete'].includes(operation)) return
     if (operation === 'create' && 'data' in args) {

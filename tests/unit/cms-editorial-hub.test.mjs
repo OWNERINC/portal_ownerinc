@@ -86,3 +86,34 @@ test('Payload availability failure preserves known legacy authority but never fa
     else assert.match(h.node('editor-root').textContent, /somente leitura/);
   }
 });
+
+test('general native-admin entry is available to a non-News CMS manager only after v2 runtime confirmation and ACK', async t => {
+  const h = await createMountedHarness('cms', { user: { uid: 'benefits-admin', role: 'admin', permissions: { manageBenefits: true } } });
+  t.after(() => h.page.dispose());
+  h.latest('/documents?').resolve({ data: [], total: 0 }); await drain();
+
+  assert.deepEqual(h.node('content-types').querySelectorAll('button').map(node => node.textContent), ['Benefícios']);
+  assert.equal(h.node('native-admin-entry-button').hidden, false);
+  h.node('native-admin-entry-button').click(); await drain();
+  const availability = h.requests.filter(request => request.path === '/api/cms/v2/session/availability');
+  assert.equal(availability.length, 2, 'the click requires fresh availability');
+  const issued = h.requests.find(request => request.path === '/api/cms/v2/session' && request.options.method === 'POST');
+  assert.ok(issued);
+  assert.equal(issued.options.body, '{}');
+  assert.equal(h.window.location.href, '/editorial/admin');
+});
+
+test('general native-admin entry stays hidden without both a granted capability and ready runtime', async t => {
+  for (const adminAvailabilityOverride of [
+    { version: 2, adminEntryAllowed: false, runtimeAvailable: true, canEnterAdmin: false },
+    { version: 2, adminEntryAllowed: false, runtimeAvailable: false, canEnterAdmin: true },
+  ]) {
+    const h = await createMountedHarness('cms', {
+      user: { uid: 'academy-admin', role: 'admin', permissions: { manageAcademy: true } }, adminAvailabilityOverride,
+    });
+    t.after(() => h.page.dispose());
+    h.latest('/documents?').resolve({ data: [], total: 0 }); await drain();
+    assert.equal(h.node('native-admin-entry-button').hidden, true);
+    assert.equal(h.requests.some(request => request.path === '/api/cms/v2/session' && request.options.method === 'POST'), false);
+  }
+});

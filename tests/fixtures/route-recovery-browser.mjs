@@ -208,6 +208,16 @@ export function resolveRouteRecoveryAPI({ url, method = 'GET', role = 'admin', s
     return fixtureResult([fixtures.cmsDocument], 1);
   }
   if (pathname === '/api/cms/documents' && searchParams.has('type')) return fixtureResult([], 0);
+  if (pathname === '/api/cms/v2/session/availability') {
+    const runtimeAvailable = false;
+    const canEnterAdmin = role === 'admin' && syntheticUser(role).permissions.superAdmin === true;
+    return fixtureResult({
+      version: 2,
+      adminEntryAllowed: canEnterAdmin && runtimeAvailable,
+      runtimeAvailable,
+      canEnterAdmin,
+    });
+  }
   if (pathname === '/api/cms/session/availability') {
     return fixtureResult({ mode: 'legacy', epoch: 1, activated: false, runtimeReady: false, canEnter: false });
   }

@@ -49,6 +49,22 @@ services:
         condition: service_healthy
     restart: 'no'
 
+  # Profiled one-shot role verification/bootstrap; the controller credential is
+  # never passed to the CMS web, worker, ordinary provisioner, or migrator.
+  cms-control-roles:
+    <<: *cms-image
+    profiles: [cms-control-roles]
+    environment:
+      CMS_DATABASE_URL: ${CMS_ADMIN_DATABASE_URL:?Set CMS_ADMIN_DATABASE_URL}
+      CMS_CONTROLLER_PASSWORD: ${CMS_CONTROLLER_PASSWORD:?Set CMS_CONTROLLER_PASSWORD}
+      CMS_MIGRATOR_PASSWORD: ${CMS_MIGRATOR_PASSWORD:?Set CMS_MIGRATOR_PASSWORD}
+      CMS_RUNTIME_PASSWORD: ${CMS_RUNTIME_PASSWORD:?Set CMS_RUNTIME_PASSWORD}
+    command: [node, --import, tsx, scripts/provision-db.ts, --verify-control]
+    depends_on:
+      cms-postgres:
+        condition: service_healthy
+    restart: 'no'
+
   cms-migrate:
     <<: *cms-image
     environment:
@@ -58,6 +74,15 @@ services:
     depends_on:
       cms-provision:
         condition: service_completed_successfully
+    restart: 'no'
+
+  # Explicitly invoked read-only native-catalog verifier. It is never part of
+  # `up`; the host adapter runs it only while the shared operation lease is held.
+  cms-preauthority-verify:
+    <<: *cms-image
+    environment:
+      CMS_ADMIN_DATABASE_URL: ${CMS_ADMIN_DATABASE_URL:?Set CMS_ADMIN_DATABASE_URL}
+    command: [node, --import, tsx, scripts/verify-preauthority-catalog.ts]
     restart: 'no'
 
   cms:

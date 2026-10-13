@@ -1,4 +1,5 @@
 import { readCmsEnvironment, type CmsEnvironment } from '../config/environment'
+import { parseAdminActor, validAdminExpiry, type AdminPortalResolution } from '../contracts/admin'
 import type { Authority, VerifiedPortalActor } from '../contracts/news'
 
 export class PortalAuthError extends Error {
@@ -55,6 +56,13 @@ export function createPortalClient(
         new Date(result.expiresAt).toISOString() !== result.expiresAt) throw new PortalAuthError(503)
       if (Date.parse(result.expiresAt) <= Date.now()) throw new PortalAuthError(401)
       return { actor: actor(result.actor), expiresAt: result.expiresAt }
+    },
+    async resolvePortalAdmin(cookie: string): Promise<AdminPortalResolution> {
+      const result = await request('/admin/session/resolve', { cookie }) as Partial<AdminPortalResolution> | null
+      const verifiedActor = parseAdminActor(result?.actor)
+      if (!result || !validAdminExpiry(result.expiresAt) || !verifiedActor) throw new PortalAuthError(503)
+      if (Date.parse(result.expiresAt) <= Date.now()) throw new PortalAuthError(401)
+      return { actor: verifiedActor, expiresAt: result.expiresAt }
     },
     async revokePortalEditor(cookie: string): Promise<void> { await request('/session/revoke', { cookie }) },
     async checkPortalActor(uid: string): Promise<VerifiedPortalActor> {

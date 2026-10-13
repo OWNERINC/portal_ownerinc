@@ -78,18 +78,24 @@ export function parseFixture(html) {
 // Only browser DOM and external transports/timers are doubled. Transports
 // deliberately ignore abort so tests exercise the lifecycle's late-result guard.
 export async function createMountedHarness(name = 'cms', { user = { permissions: { superAdmin: true } },
-  authority = { mode: 'legacy', epoch: 1 }, availabilityFailure = false, authorityFailure = false, availabilityOverride = null } = {}) {
+  authority = { mode: 'legacy', epoch: 1 }, availabilityFailure = false, authorityFailure = false, availabilityOverride = null,
+  adminAvailabilityOverride = null } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = parseFixture(html);
   const requests = [], revoked = [], observers = [], editorCallbacks = [], timers = new Map();
   let timerId = 0;
   const window = new FormNode('window', doc);
   const location = new URL(`https://portal.test/${name}.html`);
+  window.location = { href: location.href, assign(url) { this.href = url; } };
   window.history = {};
   const activated = authority.mode === 'payload' || authority.mode === 'payload_frozen';
   const availability = availabilityOverride || { ...authority, activated: authority.activated ?? activated,
     runtimeReady: authority.runtimeReady ?? false,
     canEnter: authority.canEnter ?? (activated && authority.runtimeReady === true) };
+  const anyAdminCapability = ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders'].some(permission =>
+    user.role === 'admin' && (user.permissions?.superAdmin === true || user.permissions?.[permission] === true));
+  const adminAvailability = adminAvailabilityOverride || { version: 2, adminEntryAllowed: anyAdminCapability,
+    runtimeAvailable: true, canEnterAdmin: anyAdminCapability };
   const request = kind => (path, options = {}) => {
     if (path === '/api/cms/owner-news/authority') return authorityFailure
       ? Promise.reject(new Error('authority unavailable'))
@@ -97,6 +103,18 @@ export async function createMountedHarness(name = 'cms', { user = { permissions:
     if (path === '/api/cms/session/availability') return availabilityFailure
       ? Promise.reject(new Error('availability unavailable'))
       : Promise.resolve(availability);
+    if (path === '/api/cms/v2/session/availability') {
+      requests.push({ kind, path, options, result: adminAvailability });
+      return Promise.resolve(adminAvailability);
+    }
+    if (path === '/api/cms/v2/session' && options.method === 'POST') {
+      const capabilities = Object.fromEntries(['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders']
+        .map(permission => [permission, user.role === 'admin' && (user.permissions?.superAdmin === true || user.permissions?.[permission] === true)]));
+      const actor = { version: 2, uid: user.uid || 'cms-test-user', email: user.email || 'cms-test-user@example.test', name: user.name || null, capabilities };
+      const session = { actor, expiresAt: '2030-01-01T00:00:00.000Z' };
+      requests.push({ kind, path, options, result: session });
+      return Promise.resolve(session);
+    }
     const pending = { kind, path, options, ...deferred() };
     requests.push(pending);
     return pending.promise;

@@ -9,4 +9,58 @@
 .portal-polls fieldset { border: 0; padding: 0; margin-block: 16px; min-width: 0; }
 .portal-polls-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .portal-polls-option { border-bottom: 1px solid var(--theme-elevation-150); margin-bottom: 16px; }
-.portal-polls button:focus-visible, .portal-navigation a:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.portal-polls button:focus-visible, .portal-navigation a:focus-visible { outline: 2px solid var(--portal-focus-color); outline-offset: 3px; }
+
+/* Ownerinc neutrals use Payload's confirmed base/elevation contract. Keep its
+   native elevation aliases and dark-mode inversion, plus semantic status ramps. */
+:root,
+html[data-theme='light'] {
+  --color-base-0: #FFFDF9;
+  --color-base-50: #FAF8F3;
+  --color-base-100: #F3F1EC;
+  --color-base-150: #E9E6DE;
+  --color-base-200: #DEDAD1;
+  --color-base-250: #D2CEC4;
+  --color-base-300: #C5C1B7;
+  --color-base-350: #B8B4AA;
+  --color-base-400: #AAA69C;
+  --color-base-450: #9A968C;
+  --color-base-500: #89867C;
+  --color-base-550: #77756B;
+  --color-base-600: #66645B;
+  --color-base-650: #56554D;
+  --color-base-700: #484840;
+  --color-base-750: #383B35;
+  --color-base-800: #292F2B;
+  --color-base-850: #1D2420;
+  --color-base-900: #101412;
+  --color-base-950: #080B09;
+  --color-base-1000: #000000;
+
+  --theme-bg: #F3F1EC;
+  --theme-input-bg: #FFFDF9;
+  --theme-text: #1D2420;
+  --portal-focus-color: #5B3A12;
+  --accessibility-outline: 2px solid var(--portal-focus-color);
+  --portal-accent: #C59B60;
+  --portal-accent-hover: #B88746;
+}
+
+html[data-theme='dark'] {
+  --theme-bg: #101412;
+  --theme-input-bg: #171B18;
+  --theme-text: #FFFDF9;
+  --portal-focus-color: #C59B60;
+  --accessibility-outline: 2px solid var(--portal-focus-color);
+  --portal-accent: #C59B60;
+  --portal-accent-hover: #D4B17A;
+}
+
+/* Gold is limited to the editorial poll draft-save submit; native confirmation and
+   destructive primary actions retain Payload's default colors. */
+.portal-polls form button[type='submit'].btn--style-primary:not(.btn--disabled) {
+  --color: #101412;
+  --bg-color: var(--portal-accent);
+  --hover-bg: var(--portal-accent-hover);
+  --hover-color: #101412;
+}

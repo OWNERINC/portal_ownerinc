@@ -2,10 +2,10 @@ const { randomUUID } = require('node:crypto');
 const { validateSolidesEnvironment } = require('../integrations/solides-config');
 
 function validateEnvironment(env) {
-  if (env.FIREBASE_AUTH_EMULATOR_HOST && env.NODE_ENV !== 'development') {
-    throw new Error('FIREBASE_AUTH_EMULATOR_HOST is only allowed when NODE_ENV=development');
+  const emulator = authEmulatorEnabled(env);
+  if (env.FIREBASE_AUTH_EMULATOR_HOST && !emulator) {
+    throw new Error('FIREBASE_AUTH_EMULATOR_HOST is only allowed in development or a marked disposable demo-project test');
   }
-  const emulator = env.NODE_ENV === 'development' && env.FIREBASE_AUTH_EMULATOR_HOST;
   const required = ['DATABASE_URL', 'FIREBASE_PROJECT_ID', 'BULK_IMPORT_WORKER_SECRET', ...(emulator ? [] : ['FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY'])];
   const missing = required.filter((name) => !env[name]);
   if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
@@ -13,6 +13,16 @@ function validateEnvironment(env) {
   if (env.PORT && (!/^\d+$/.test(env.PORT) || Number(env.PORT) > 65535)) throw new Error('Invalid environment variable: PORT');
   for (const origin of allowedOrigins(env)) new URL(origin);
   validateSolidesEnvironment(env);
+}
+
+function authEmulatorEnabled(env) {
+  if (!env.FIREBASE_AUTH_EMULATOR_HOST) return false;
+  if (env.NODE_ENV === 'development') return true;
+  return env.NODE_ENV === 'test'
+    && env.MIGRATION_TEST_DISPOSABLE === 'true'
+    && /^demo-[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(env.FIREBASE_PROJECT_ID || '')
+    && !env.FIREBASE_CLIENT_EMAIL
+    && !env.FIREBASE_PRIVATE_KEY;
 }
 
 function allowedOrigins(env) {
@@ -130,6 +140,6 @@ function errorHandler(err, req, res, next) {
 }
 
 module.exports = {
-  allowedOrigins, configureTrustProxy, cors, errorHandler, normalizeOrigin, rateLimit, requestContext, requestOrigin, safeResponses,
+  allowedOrigins, authEmulatorEnabled, configureTrustProxy, cors, errorHandler, normalizeOrigin, rateLimit, requestContext, requestOrigin, safeResponses,
   validateEnvironment,
 };
