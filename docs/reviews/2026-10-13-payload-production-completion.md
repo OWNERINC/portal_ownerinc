@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## P2 restricted admission transport — local verification
+
+Candidate CI `38471750552` stopped in verification before recovery: the progress-artifact test still asserted the former 60-minute recovery budget. That assertion now matches the approved 120-minute step; artifact and acceptance contracts remain unchanged.
+
+The complete P2 checkout passed primary `npm run verify`: **Portal 1,812 PASS / 13 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`**. Evidence: `%LOCALAPPDATA%/Temp/opencode/payload-p2-complete-verify.log`, external fixture parent `C:\Users\Public`. Review requested two corrections (obsolete receipt path in the runbook and an inaccurate preparation completion message); both were applied and independently rechecked with code-review verdict `ship`. Post-correction focused checks passed **64 tests / 2 platform skips / zero failures**. `git diff --check` passed.
+
+The restricted launcher, fixed sudo transport, protected incoming directory and ordered installer dependency publication are implemented and tested locally with explicit host/transport doubles. Native Linux sudo/SSH validation, protected verifier/policy/records provisioning and recovery qualification remain pending. The existing source approval pin is unchanged; successful admission still ends in `release_not_preflighted`. Nothing was installed on the VPS by this block.
+
 ## P1 local verification — writer ticket v2 and candidate budget
 
 Primary full `npm run verify` completed with `verify: ok`: Portal **1,803 PASS / 13 skips / zero failures**, CMS **448 PASS / 11 skips / zero failures**. Log: `%LOCALAPPDATA%/Temp/opencode/payload-writer-v2-verify.log`; external fixture parent was `C:\Users\Public`.

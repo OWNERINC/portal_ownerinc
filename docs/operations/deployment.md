@@ -135,7 +135,7 @@ continua sem iniciar serviços nem abrir admissão. Isso não instala política,
 registro ou verifier de candidatos e não constitui execução real na VPS.
 
 Payload exige UID/EUID 0 e o diretório previamente provisionado
-`/opt/ownerinc/apps/portal-ownerinc-real/incoming` root:root `0700`, com **toda** a
+`/var/lib/ownerinc/payload-candidate/incoming` root:root `0700`, com **toda** a
 cadeia até `/` root:root, sem links, bits especiais ou escrita por grupo/outros.
 O helper não corrige permissões/ownership automaticamente. Cada tentativa válida
 na sintaxe cria exclusivamente `incoming/payload-<aleatório>/`, `0700`, e um
@@ -611,6 +611,66 @@ versionados correspondentes. O arquivo de
 configuração de staging deve usar nomes de projeto, volumes, containers e
 backup distintos dos valores de produção; o receptor rejeita qualquer alvo
 que não seja `production` ou `staging`.
+
+### P2: transporte privilegiado de admission Payload (ainda sem instalação)
+
+Para `production:payload-v1 <commit> <run-id> <run-attempt> <api-image>
+<cron-image> <cms-image> <candidate-artifact-id> <qualified-artifact-id>
+<report-artifact-id>`, o wrapper de produção passa **uma única string**, sem
+interpretação, para `/usr/bin/sudo -n --
+/usr/local/libexec/ownerinc-payload-receive`. Argumentos adicionais do wrapper
+são recusados. SHA isolado e `production:<sha>` continuam delegando ao receptor
+comum sem sudo; staging não recebe esta rota.
+
+O launcher `ops/payload-receiver-root.sh` é instalado root:root `0755` em
+`/usr/local/libexec/ownerinc-payload-receive`. Exige UID/EUID zero e exatamente um
+argumento; usa Bash em modo privilegiado, ambiente vazio com PATH/locale fixos
+e `/usr/bin/python3 -I -S /usr/local/libexec/payload-receiver-admission.py payload
+<argumento>`. `parse_request` do helper é a autoridade única da gramática: rejeita
+roles desconhecidas, staging, campos extras e injeções antes de criar receipts.
+Não há `eval`, sourcing de comando SSH nem concessão de shell/Python/env via sudo.
+
+A preparação administrativa existente mantém os contratos
+`ops/prepare-cms-infrastructure.sh --check` (default) e `--apply`. A partir de
+checkout revisado sob ancestry root-protected, valida também os executáveis
+fixos `/usr/bin/sudo` e `/usr/sbin/visudo`, fontes do launcher/wrapper e paths de
+privilégio. `/etc/sudoers.d` deve existir protegido. O fragmento exato, publicado
+como root:root `0440` em `/etc/sudoers.d/ownerinc-payload-receive`, é:
+
+```sudoers
+deploy ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/ownerinc-payload-receive
+```
+
+O sudo autoriza somente esse executável fixo, sem wildcard de comando; a restrição
+de quantidade/gramática dos argumentos pertence ao launcher/helper, não ao
+matching de argumentos do sudoers. Não autoriza `sudo env`, shell, Python ou
+comandos gerais. O usuário previsto é **deploy**; outra identidade de SSH exige
+revisão explícita, não auto-descoberta. Esta regra não revoga eventuais permissões
+pré-existentes mais amplas: a configuração efetiva de SSH/sudo precisa de revisão
+administrativa antes de uso. Não se altera `authorized_keys` automaticamente.
+
+O novo incoming é `/var/lib/ownerinc/payload-candidate/incoming`, root:root `0700`,
+separado da árvore de aplicação pertencente a deploy. `--check` valida os segmentos
+existentes, sem criá-los; `--apply` cria somente os ausentes. Symlink, ownership
+ou modo inseguro existente é recusa, nunca chown/chmod de reparo. Nenhum ancestral
+da aplicação é alterado. O helper mantém seus limites, retenção de evidência e
+verificação de toda a ancestry root-protected.
+
+Após todos os gates já existentes, a preparação preserva snapshots dos arquivos
+anteriores, publica e revalida helper, incoming e launcher, valida o fragmento com
+`visudo -cf` antes do rename atômico, e só então publica o wrapper de produção.
+Falha de dependência não substitui os receptores anteriores. Interrupção pode
+deixar dependências inertes já publicadas; reexecução é idempotente. Os hashes
+dos helper/wrapper predecessores revisados são reconhecidos para esta atualização;
+conteúdo desconhecido é recusado. Não há aprovação automática de fonte/candidate.
+
+**Não executar como autorização de produção:** o pin de release/fonte antigo da
+preparação permanece inalterado e bloqueia o host observado até o próximo bloco
+de aprovação explícita de fonte. Este slice não instala toolchain/policy/records
+do verifier em `/opt/ownerinc/lib/payload-candidate`; ausência deles continua
+negando admission antes da extração. Mesmo uma admission válida termina em
+`release_not_preflighted`, sem dispatch ao runtime. Instalação/rollback/readiness,
+revisão nativa de sudo/SSH e aceite de produção permanecem pendentes.
 
 O receptor serializa deploys com `flock`, confere SHA e conteúdo do archive,
 resolve API e cron por digest imutável no GHCR e cria backup verificado de

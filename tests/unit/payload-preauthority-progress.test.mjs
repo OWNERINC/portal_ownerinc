@@ -291,7 +291,7 @@ test('diagnostic checkpoint cannot overwrite the final report even with a collid
 test('workflow keeps the final report artifact exact and uploads only an explicit separate nonqualifying checkpoint', async () => {
   const source = await readFile('.github/workflows/ci.yml', 'utf8');
   const recovery = source.slice(source.indexOf('      - name: Run disposable four-store'), source.indexOf('      - name: Upload redacted preauthority'));
-  assert.match(recovery, /timeout-minutes: 60/u);
+  assert.match(recovery, /timeout-minutes: 120/u);
   assert.match(recovery, /PAYLOAD_RECOVERY_PROGRESS="\$RECOVERY_PROGRESS"/u);
   const report = source.slice(source.indexOf('      - name: Upload redacted preauthority'), source.indexOf('      - name: Upload nonqualifying'));
   assert.match(report, /path: \$\{\{ runner.temp \}\}\/payload-preauthority-recovery-report.json\n/u);

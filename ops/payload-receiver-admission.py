@@ -14,7 +14,7 @@ import tempfile
 MAX_ARCHIVE = 10 * 1024 * 1024
 MAX_EXPANDED = 128 * 1024 * 1024
 MAX_MEMBERS = 20000
-INCOMING = '/opt/ownerinc/apps/portal-ownerinc-real/incoming'
+INCOMING = '/var/lib/ownerinc/payload-candidate/incoming'
 VERIFIER = '/opt/ownerinc/lib/payload-candidate/ops/payload-candidate-verifier.py'
 PYTHON = '/usr/bin/python3'
 CLEAN_ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}

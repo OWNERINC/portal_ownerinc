@@ -35,6 +35,11 @@ pre_restore_backup_root="$backup_root/restore-protection"
 libexec_dir=/usr/local/libexec
 receiver_target=/usr/local/libexec/ownerinc-portal-deploy
 receiver_helper_target=/usr/local/libexec/payload-receiver-admission.py
+receiver_root_target=/usr/local/libexec/ownerinc-payload-receive
+production_receiver_target=/usr/local/libexec/ownerinc-portal-deploy-production
+receiver_sudoers_target=/etc/sudoers.d/ownerinc-payload-receive
+receiver_incoming=/var/lib/ownerinc/payload-candidate/incoming
+receiver_sudoers='deploy ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/ownerinc-payload-receive'
 guard_target="$runtime/payload-operations-guard"
 control_target="$runtime/payload-control"
 control_runtime_target="$runtime/payload-control-runtime.py"
@@ -50,6 +55,8 @@ lock="$runtime/deploy.lock"
 cms_image='ghcr.io/ownerinc/ownerinc-portal-cms@sha256:6eaddc9a333ba682508a09a4ae8a6409d9e571abab9ec4a62829c2e9828730b0'
 source_receiver="$script_dir/deploy-from-ci.sh"
 source_receiver_helper="$script_dir/payload-receiver-admission.py"
+source_receiver_root="$script_dir/payload-receiver-root.sh"
+source_production_receiver="$script_dir/deploy-from-production-ci.sh"
 source_guard="$script_dir/payload-operations-guard.sh"
 source_control="$script_dir/payload-control"
 source_control_runtime="$script_dir/payload-control-runtime.py"
@@ -59,14 +66,14 @@ source_private_helper="$script_dir/prepare-cms-infrastructure-private.py"
 source_payload_overlay="$script_dir/compose.payload.production.yaml"
 payload_compose="$repo_root/docker-compose.payload.yml"
 
-for command in python3 docker flock install cmp stat mktemp mkdir mv rm date env chown chmod sha256sum; do
+for command in python3 docker flock install cmp stat mktemp mkdir mv rm date env chown chmod sha256sum cut; do
   command -v "$command" >/dev/null || {
     echo "Refusing preparation: required command is unavailable ($command)." >&2
     exit 2
   }
 done
 
-for source in "$source_receiver" "$source_receiver_helper" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" "$source_private_helper" \
+for source in "$source_receiver" "$source_receiver_helper" "$source_receiver_root" "$source_production_receiver" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" "$source_private_helper" \
   "$source_payload_overlay" "$payload_compose"; do
   [[ -f $source && ! -L $source ]] || {
     echo 'Refusing preparation: reviewed source bundle is incomplete or linked.' >&2
@@ -82,6 +89,57 @@ if ! env -i PATH="$PATH" /usr/bin/python3 -I -S -c \
   echo 'Refusing preparation: fixed receiver Python or helper source is unavailable or invalid.' >&2
   exit 2
 fi
+
+# Fixed executable paths only; validate the exact rule even in --check, without
+# publishing it. No wildcard, env, shell, Python or general sudo grant.
+[[ -x /usr/bin/sudo && -x /usr/sbin/visudo ]] && \
+  printf '%s\n' "$receiver_sudoers" | /usr/sbin/visudo -cf - >/dev/null || {
+  echo 'Refusing preparation: fixed sudo tools or narrow receiver policy invalid.' >&2
+  exit 2
+}
+/bin/bash -n "$source_receiver_root"
+/bin/bash -n "$source_production_receiver"
+
+receiver_privilege_paths() {
+  /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -S - "$1" "$receiver_incoming" \
+    "$receiver_root_target" "$production_receiver_target" "$receiver_sudoers_target" \
+    "$source_receiver_root" "$source_production_receiver" <<'PY'
+import os, stat, sys
+mode, incoming, *files = sys.argv[1:]
+def reject():
+    raise SystemExit('Refusing preparation: unsafe receiver privilege path.')
+def directory(path, create=False):
+    current = '/'
+    for part in [''] + path.strip('/').split('/'):
+        current = os.path.join(current, part) if part else current
+        try:
+            value = os.lstat(current)
+        except FileNotFoundError:
+            if not create:
+                reject()
+            if mode != 'create':
+                continue
+            os.mkdir(current, 0o700)
+            os.chown(current, 0, 0)  # Only newly created segments, never repairs.
+            value = os.lstat(current)
+        if not stat.S_ISDIR(value.st_mode) or (value.st_uid, value.st_gid) != (0, 0) or stat.S_IMODE(value.st_mode) & 0o7022:
+            reject()
+        if current == incoming and stat.S_IMODE(value.st_mode) != 0o700:
+            reject()
+directory(incoming, create=True)
+for filename in files:
+    directory(os.path.dirname(filename))
+    try:
+        value = os.lstat(filename)
+    except FileNotFoundError:
+        if filename in files[:3]:
+            continue
+        reject()
+    if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or (value.st_uid, value.st_gid) != (0, 0) or stat.S_IMODE(value.st_mode) & 0o7022:
+        reject()
+PY
+}
+receiver_privilege_paths check
 
 [[ -d $root && -d $runtime && -d $releases && -d $backup_root && -d $libexec_dir && -d $secrets_dir ]] || {
   echo 'Refusing preparation: expected production directories are incomplete.' >&2
@@ -393,12 +451,28 @@ payload_overlay_is_known && candidate_is_known && control_files_known && \
 }
 
 if [[ -e $receiver_helper_target || -L $receiver_helper_target ]] && \
-   ! file_matches "$receiver_helper_target" "$source_receiver_helper"; then
+   ! file_matches "$receiver_helper_target" "$source_receiver_helper" && \
+   [[ $(sha256sum -- "$receiver_helper_target" | cut -d ' ' -f 1) != ffe1c2ed3fb086e156401063cdeaf9c6575a49e3458b202928df7f6794587bf8 ]]; then
   echo 'Refusing preparation: installed receiver helper differs from the reviewed bundle.' >&2
   exit 2
 fi
 
+if [[ -e $production_receiver_target ]] && ! file_matches "$production_receiver_target" "$source_production_receiver" && \
+   [[ $(sha256sum -- "$production_receiver_target" | cut -d ' ' -f 1) != b1be89c891468052aea9de917e75214c7331c9ff72a4cb3e790aae9b4007d1b6 ]]; then
+  echo 'Refusing preparation: production wrapper differs from reviewed baseline and bundle.' >&2
+  exit 2
+fi
+if { [[ -e $receiver_root_target ]] && ! file_matches "$receiver_root_target" "$source_receiver_root"; } || \
+   { [[ -e $receiver_sudoers_target ]] && ! cmp -s -- "$receiver_sudoers_target" <(printf '%s\n' "$receiver_sudoers"); }; then
+  echo 'Refusing preparation: existing Payload privilege dependency differs from reviewed bundle.' >&2
+  exit 2
+fi
+
 needs_change=false
+file_installed "$receiver_root_target" "$source_receiver_root" 755 || needs_change=true
+file_installed "$production_receiver_target" "$source_production_receiver" 755 || needs_change=true
+{ [[ -f $receiver_sudoers_target ]] && root_owned_mode "$receiver_sudoers_target" 440; } || needs_change=true
+[[ -d $receiver_incoming ]] || needs_change=true
 file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || needs_change=true
 file_installed "$receiver_target" "$source_receiver" 755 || needs_change=true
 file_installed "$guard_target" "$source_guard" 755 || needs_change=true
@@ -435,6 +509,9 @@ else
   fi
   for entry in "receiver:$receiver_target:ownerinc-portal-deploy" \
     "receiver-helper:$receiver_helper_target:payload-receiver-admission.py" \
+    "receiver-root:$receiver_root_target:ownerinc-payload-receive" \
+    "production-wrapper:$production_receiver_target:ownerinc-portal-deploy-production" \
+    "receiver-sudoers:$receiver_sudoers_target:ownerinc-payload-receive.sudoers" \
     "guard:$guard_target:payload-operations-guard" "environment:$environment:production.runtime.conf"; do
     IFS=: read -r label source destination <<< "$entry"
     if [[ -f $source && ! -L $source ]]; then
@@ -483,6 +560,27 @@ else
     echo 'Refusing preparation: receiver helper installation did not verify; receiver was not replaced.' >&2
     exit 2
   }
+  receiver_privilege_paths create
+  if ! file_installed "$receiver_root_target" "$source_receiver_root" 755; then
+    atomic_install "$source_receiver_root" "$receiver_root_target" 0755
+  fi
+  file_installed "$receiver_root_target" "$source_receiver_root" 755 || exit 2
+  if [[ ! -f $receiver_sudoers_target ]] || ! root_owned_mode "$receiver_sudoers_target" 440; then
+    sudoers_temporary=$(mktemp "$(dirname -- "$receiver_sudoers_target")/.payload-receive.XXXXXX")
+    if ! { printf '%s\n' "$receiver_sudoers" > "$sudoers_temporary" && \
+      chmod 0440 "$sudoers_temporary" && chown 0:0 "$sudoers_temporary" && \
+      /usr/sbin/visudo -cf "$sudoers_temporary" >/dev/null && \
+      mv -fT -- "$sudoers_temporary" "$receiver_sudoers_target"; }; then
+      rm -f -- "$sudoers_temporary"
+      exit 2
+    fi
+  fi
+  cmp -s -- "$receiver_sudoers_target" <(printf '%s\n' "$receiver_sudoers") && \
+    root_owned_mode "$receiver_sudoers_target" 440 || exit 2
+  # Publish the SSH wrapper last; interrupted dependency setup never replaces it.
+  if ! file_installed "$production_receiver_target" "$source_production_receiver" 755; then
+    atomic_install "$source_production_receiver" "$production_receiver_target" 0755
+  fi
   if ! file_installed "$receiver_target" "$source_receiver" 755; then
     atomic_install "$source_receiver" "$receiver_target" 0755
   fi
@@ -531,4 +629,4 @@ fi
 
 echo 'Installed inactive preauthority control with a private host-only signing key and explicit worker hold; no database or service was changed.'
 echo 'BLOCKED: deployment needs a fresh complete candidate set containing the preauthority catalog verifier and actual Task 3 recovery acceptance; CMS services and worker were not started.'
-echo 'Prepared state is inactive: no Docker pull/up/run, database migration, systemd/timer, authority, wrapper, or authorized_keys change was performed.'
+echo 'Prepared state is inactive: the production SSH wrapper and restricted Payload privilege transport are installed; no Docker pull/up/run, database migration, systemd/timer, authority, or authorized_keys change was performed.'
