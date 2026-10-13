@@ -614,6 +614,79 @@ que não seja `production` ou `staging`.
 
 ### P2: transporte privilegiado de admission Payload (ainda sem instalação)
 
+#### Provisionamento administrativo offline do trust (slice separado)
+
+`ops/provision-payload-candidate-trust.py` prepara somente a closure fixa de
+admission, policy e diretórios privados. Não altera preparer, pins de release,
+runtime, sudoers, serviços ou banco; não registra candidatos nem autoriza deploy.
+**O próprio provisioner e o Python que o inicia devem ser autenticados pelo
+administrador antes da execução.** Hash calculado pelo próprio bundle, arquivo
+sidecar recebido com o candidato ou auto-checagem do programa não estabelece essa
+confiança inicial. Bibliotecas e stdlib continuam sob confiança do SO root.
+
+O contrato de CLI é explícito (nenhuma ação default):
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /root/ownerinc-reviewed/ops/provision-payload-candidate-trust.py \
+  --check \
+  --approval /root/ownerinc-reviewed/trust-approval.json \
+  --approval-sha256 "$INDEPENDENTLY_APPROVED_MANIFEST_SHA256" \
+  --bundle /root/ownerinc-reviewed/trust-bundle
+```
+
+`--apply` substitui `--check` somente após autorização administrativa. Não há
+override de destino, UID/GID, endpoint ou grant para deploy executar esse comando.
+Exige Linux, UID/EUID/GID/EGID zero, Python isolado sem site/bytecode e ambiente
+contendo somente PATH/locale fixos. A identidade canônica do Python em execução
+e do `/usr/bin/python3` usado pelo receiver deve coincidir com a policy aprovada.
+
+O manifesto independente é JSON UTF-8 de até 1 MiB, profundidade máxima 32,
+sem campos duplicados/desconhecidos, com exatamente:
+
+- `schemaVersion: 1`;
+- `kind: ownerinc-payload-trust-provisioning-v1`;
+- `policySha256`: SHA-256 dos bytes integrais de `production-policy.json`;
+- `toolchain`: mapa idêntico ao da policy v1, com os quatro hashes de arquivos
+  fixos e os quatro executáveis `{path, sha256}` (`node`, `git`, `python`,
+  `gitRemoteHttps`). A aprovação externa inclui o hash deste manifesto inteiro.
+
+O bundle permite **somente** `production-policy.json` (`0600`), os quatro paths
+de `TOOL_FILES` já definidos pelo verifier/registrar (Python `0755`, módulos
+`.mjs` `0644`) e `bin/git-remote-https` (`0755`). Diretórios extras, links e
+arquivos extras são recusados. O manifesto fica fora do bundle. Todos os inputs
+exigem arquivos regulares root:root, nlink=1 e ancestry protegida; o bundle é
+apenas lido/hasheado, nunca importado/executado. Node/Git/Python já devem existir
+nos paths canônicos aprovados com hashes correspondentes; não são instalados,
+atualizados nem aprovados por descoberta local. O helper HTTPS é copiado como
+arquivo regular independente para seu destino fixo, sem links ao binário do SO.
+
+`--check` não cria diretórios, snapshots, temporários, policy nem pycache.
+`--apply` aceita apenas destinos ausentes ou exatamente idênticos, incluindo
+modos. Conteúdo/mode/owner incompatível é recusa, nunca reparo ou rotação. Cria
+somente segmentos ausentes root:root `0700`, incluindo `records`, `work`,
+`incoming` e `trust-snapshots` sob `/var/lib/ownerinc/payload-candidate`.
+
+Antes de publicar arquivos faltantes, guarda snapshot privado UUID de estados
+ausentes/presentes, cópias dos bytes anteriores idênticos e manifesto de aprovação.
+Cada publicação usa temporário exclusivo, fsync e `renameat2(RENAME_NOREPLACE)`:
+arquivo conflitante surgido durante a operação não é sobrescrito. Não existe
+fallback para rename que substitui destinos; Linux/libc/filesystem compatível é
+pré-condição. Após conferir novamente inputs, executáveis e closure instalada,
+publica a policy exata **por último**. Registros existentes não são escritos ou
+removidos. Temporários e snapshots de falhas ficam retidos como evidência; não
+são automaticamente consumidos como sucesso. Retomada compara novamente todos
+os bytes aprovados e aceita apenas ausente/idêntico, sem migrar policy anterior.
+
+Compatibilidade dos validadores independentes do bootstrap é testada contra os
+validadores Python e Node existentes, sem executar validators fornecidos no bundle.
+Testes Windows usam filesystem real com doubles explícitos de ownership e
+semântica POSIX; fsync/NOFOLLOW/renameat2/ancestry root precisam do teste Linux root.
+Política real, IDs oficiais, hashes do host, conclusão do CI, registro autenticado
+e reprodutibilidade do pacote continuam exigindo evidência própria. O pin antigo
+do preparer permanece intacto: este provisionamento não aprova source de preparação
+nem abre `release_not_preflighted`.
+
 Para `production:payload-v1 <commit> <run-id> <run-attempt> <api-image>
 <cron-image> <cms-image> <candidate-artifact-id> <qualified-artifact-id>
 <report-artifact-id>`, o wrapper de produção passa **uma única string**, sem

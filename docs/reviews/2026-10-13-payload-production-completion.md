@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## P2 offline trust provisioner — reviewed local result
+
+Implemented the root-administrative offline provisioner with independently approved input hashes, absent-or-identical fixed-path installation, retained snapshots and policy-last publication. Independent review found a retry durability gap after successful directory creation followed by failed parent fsync. Apply now reaffirms every validated non-root segment's parent, including existing segments; check remains read-only. A red-before-fix regression covers that interruption. Fresh code review returned `ship`.
+
+The initial full verification failed in three local subprocess tests (one explicit `ETIMEDOUT`, two null exit statuses near their limits). It was not accepted. Sequential diagnosis of infrastructure/operations passed **42 / 2 platform skips**, and the corrected provisioner suite passed **6 / 1 native skip**, without increasing timeouts. A subsequent complete `npm run verify`, without competing local suites, passed: **Portal 1,818 PASS / 14 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`**. Log: `%LOCALAPPDATA%/Temp/opencode/payload-trust-final-verify.log`. The earlier failure log remains preserved; resource contention is suggested, not proven.
+
+Native Linux ownership, FD/fsync and no-replace publication acceptance remains pending. The provisioner does not authenticate itself, rotate differing policies, register candidates, authorize preparation-source execution or change the preparer's existing pins. Nothing was installed on the VPS.
+
 ## P2 restricted admission transport — local verification
 
 Candidate CI `38471750552` stopped in verification before recovery: the progress-artifact test still asserted the former 60-minute recovery budget. That assertion now matches the approved 120-minute step; artifact and acceptance contracts remain unchanged.
