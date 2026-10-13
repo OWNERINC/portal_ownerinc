@@ -6,6 +6,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { selectExternalTestParent } from '../helpers/payload-preview-temp.mjs'
 import {
   checkPreparationSources,
   parseCommandLine,
@@ -52,9 +53,34 @@ async function makeTempRoot() {
     if (parent === current) break
     current = parent
   }
-  const externalParent = highestGitAncestor ? path.dirname(highestGitAncestor) : os.tmpdir()
+  const externalParent = await selectExternalTestParent(
+    highestGitAncestor ? path.dirname(highestGitAncestor) : os.tmpdir(),
+    repoRoot, process.env.PAYLOAD_TEST_EXTERNAL_PARENT,
+  )
   return fs.mkdtemp(path.join(externalParent, 'payload-preview-preparation-'))
 }
+
+test('test-only external parent override selects a real writable directory and preserves the unset default', async t => {
+  const root = await makeTempRoot()
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const fallback = path.join(root, 'unused-default')
+  assert.equal(await selectExternalTestParent(fallback, repoRoot, undefined), fallback)
+  const selected = await selectExternalTestParent(fallback, repoRoot, root)
+  assert.equal(selected, await fs.realpath(root))
+  const child = await fs.mkdtemp(path.join(selected, 'override-probe-'))
+  assert.equal(path.dirname(child), selected)
+})
+
+test('test-only external parent override rejects relative, missing and Git parents using the real guard', async t => {
+  const root = await makeTempRoot()
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  await assert.rejects(selectExternalTestParent(root, repoRoot, 'relative-parent'), { code: 'directory_must_be_absolute' })
+  await assert.rejects(selectExternalTestParent(root, repoRoot, path.join(root, 'missing')), { code: 'directory_root_unavailable' })
+  const gitParent = path.join(root, 'git-parent')
+  await fs.mkdir(gitParent)
+  await fs.writeFile(path.join(gitParent, '.git'), 'gitdir: test-only-metadata\n')
+  await assert.rejects(selectExternalTestParent(root, repoRoot, gitParent), { code: 'directory_overlaps_repository' })
+})
 
 async function makeUnicodeCheckout(parent) {
   const root = path.join(parent, 'checkout Criação 漢字 $ fixture')

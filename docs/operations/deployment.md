@@ -77,6 +77,103 @@ Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se nec
 
 ## Fluxo de release
 
+### Receiver Payload: admissão somente (sem instalação)
+
+O receiver possui uma rota explícita de admissão, anterior à inspeção do runtime
+e ao atalho `already_current`. O comando SSH é **uma única string**, com campos
+posicionais separados por exatamente um espaço ASCII, nesta ordem:
+
+```text
+production:payload-v1 COMMIT RUN_ID RUN_ATTEMPT API_IMAGE CRON_IMAGE CMS_IMAGE CANDIDATE_ARTIFACT_ID QUALIFIED_ARTIFACT_ID REPORT_ARTIFACT_ID
+```
+
+Exemplo de transporte (não executado nesta implementação):
+
+```sh
+ssh "$VPS_USER@$VPS_HOST" "production:payload-v1 $COMMIT $RUN_ID $RUN_ATTEMPT $API_IMAGE $CRON_IMAGE $CMS_IMAGE $CANDIDATE_ARTIFACT_ID $QUALIFIED_ARTIFACT_ID $REPORT_ARTIFACT_ID" < candidate.tar.gz
+```
+
+`COMMIT` contém 40 hexadecimais minúsculos; IDs e tentativa são decimais positivos
+de até 20 dígitos, sem zeros iniciais; os três IDs de artefatos são distintos.
+Cada imagem é a referência completa `ghcr.io/ownerinc/ownerinc-portal-SERVICE@sha256:`
+seguida de 64 hexadecimais minúsculos, com SERVICE `api`, `cron`, `cms`, nessa ordem.
+Não são aceitos flags adicionais, whitespace alternativo, campos extras, staging
+Payload, paths de política/ferramentas ou permissões indicadas pelo solicitante.
+`production:SHA`, `staging:SHA` e a normalização SHA-only do wrapper de produção
+mantêm o contrato legacy de duas imagens. Três imagens via legacy são recusadas
+antes da criação da árvore de release; não constituem uma alternativa à admissão.
+Retries legacy `already_current` também precisam fornecer o archive de duas
+imagens: a classificação ocorre antes dos checks de saúde/recuperação do cron,
+para que stdin Payload não use esse atalho. O CI existente já envia esse archive.
+
+Pré-requisito de instalação **ainda operacionalmente pendente**: instalar a versão
+revisada do receiver e `ops/payload-receiver-admission.py` como
+`/usr/local/libexec/payload-receiver-admission.py`, root:root, `0755`, em ancestrais
+root:root não graváveis por grupo/outros e sem symlinks. Python 3.9+ deve estar
+disponível em `/usr/bin/python3` (também no caminho legacy, sem exigir root para
+legacy). Não há override de helper/verificador por ambiente ou request. Ambos são
+executados com ambiente limpo e `-I -S`. O helper executa exclusivamente o verificador
+instalado em `/opt/ownerinc/lib/payload-candidate/ops/payload-candidate-verifier.py`;
+o verificador existente continua autenticando a própria toolchain, a política
+protegida `/etc/ownerinc/payload-candidate/production-policy.json` e o registro em
+`/var/lib/ownerinc/payload-candidate/records`. Nenhuma alteração de política ou
+registro é feita pelo receiver. O Python usado deve corresponder ao intérprete
+fixado na política existente; mismatch falha fechado.
+
+O entrypoint existente `ops/prepare-cms-infrastructure.sh` inclui essa dependência:
+`--check` verifica o source, a sintaxe sem executá-lo, a stdlib/Python 3.9+ pelo
+intérprete fixo isolado e a cadeia root:root do destino; helper ausente é elegível,
+mas bytes instalados desconhecidos ou ownership/permissões inseguros são recusados.
+`--apply`, somente quando operacionalmente autorizado, instala o helper por
+`atomic_install` root:root `0755` e reconfere bytes/modo **antes** de publicar o
+receiver. Falha de instalação ou conferência mantém o receiver anterior. Uma
+interrupção entre esses passos pode deixar apenas o helper inerte instalado, não
+um novo receiver sem dependência. Helper já correto não é reescrito; a ausência
+dele impede o resultado “already prepared”. Se já existente, uma cópia privada
+é retida junto ao snapshot pré-mudança. O dry run não cria arquivos, e a aplicação
+continua sem iniciar serviços nem abrir admissão. Isso não instala política,
+registro ou verifier de candidatos e não constitui execução real na VPS.
+
+Payload exige UID/EUID 0 e o diretório previamente provisionado
+`/opt/ownerinc/apps/portal-ownerinc-real/incoming` root:root `0700`, com **toda** a
+cadeia até `/` root:root, sem links, bits especiais ou escrita por grupo/outros.
+O helper não corrige permissões/ownership automaticamente. Cada tentativa válida
+na sintaxe cria exclusivamente `incoming/payload-<aleatório>/`, `0700`, e um
+`candidate.tar.gz` exclusivo `0600`. A leitura de stdin consome no máximo **10 MiB
++ 1 byte** para detectar overflow, grava no máximo 10 MiB e não drena streams
+ilimitados. O recibo mantém os bytes imutáveis em memória; a verificação compara
+identidade (device/inode/metadata), FD aberto, path e conteúdo antes de consumir
+**aqueles mesmos bytes**, sem reabrir o archive para extração. A cadeia protegida
+impede substituição por outra identidade; substituir o inode com conteúdo idêntico
+durante a verificação também é recusado. Isso não depende apenas de rehash.
+
+Somente após PASS do verificador o helper inspeciona e materializa a árvore privada
+`receipt/release` (não publica em `releases/`). Aceita apenas arquivos regulares e
+diretórios, rejeita links, especiais, escapes, nomes/metadata duplicados e `.image-env`
+recebido. Limites adicionais: 128 MiB descomprimidos e 20.000 membros. Commit e as
+três imagens devem coincidir exatamente com os seletores autenticados, inclusive
+na conferência dos arquivos extraídos. Nenhum conteúdo recebido é executado ou
+sourced. **Mesmo PASS termina com exit 2 `release_not_preflighted`**; a função
+`install_receiver_preflight()` existente permanece incondicionalmente fechada.
+Não há pulls, inspeção Docker, mudanças em serviços/bancos/volumes/pointers,
+instalação, recuperação ou ativação neste bloco.
+
+Diagnósticos expõem apenas o basename gerado do recibo e códigos fechados, nunca
+request bruto, conteúdo de política/registro ou stderr do verificador. Negativas
+do verificador aparecem como `candidate_admission_denied`. Recibos Payload,
+inclusive parciais, ficam preservados; PASS também preserva `admission.json` e a
+árvore privada. Falha do helper legacy preserva apenas seu archive limitado,
+enquanto a limpeza existente remove a staging parcial. Não se removem releases
+existentes nem registros assinados. Não há garbage collection automática: o
+operador deve revisar e arquivar recibos com acesso restrito e monitorar espaço;
+limite por tentativa não é uma quota agregada. Falhas de sintaxe/root/ancestrais
+antes da criação não geram recibo.
+
+Testes de transporte usam doubles explicitamente identificados; bindings
+criptográficos usam a suíte existente `payload-candidate-admission`. A evidência
+local Windows não comprova permissões/FDs Linux, instalação no host ou deploy.
+O teste de identidade nativa Linux/root permanece pendente quando skipped.
+
 **Extensão Payload em preparação local:** o caminho legacy de duas imagens/dois
 artefatos abaixo permanece compatível. Releases `payload-v1` acrescentam CMS_IMAGE
 e exigem backup coordenado PortalDB/CMSDB/uploads/CMSmedia+staging, lease operacional

@@ -34,6 +34,7 @@ daily_backup_root=/opt/ownerinc/backups/portal-ownerinc/daily
 pre_restore_backup_root="$backup_root/restore-protection"
 libexec_dir=/usr/local/libexec
 receiver_target=/usr/local/libexec/ownerinc-portal-deploy
+receiver_helper_target=/usr/local/libexec/payload-receiver-admission.py
 guard_target="$runtime/payload-operations-guard"
 control_target="$runtime/payload-control"
 control_runtime_target="$runtime/payload-control-runtime.py"
@@ -48,6 +49,7 @@ candidate_target="$runtime/cms-image-candidate.env"
 lock="$runtime/deploy.lock"
 cms_image='ghcr.io/ownerinc/ownerinc-portal-cms@sha256:6eaddc9a333ba682508a09a4ae8a6409d9e571abab9ec4a62829c2e9828730b0'
 source_receiver="$script_dir/deploy-from-ci.sh"
+source_receiver_helper="$script_dir/payload-receiver-admission.py"
 source_guard="$script_dir/payload-operations-guard.sh"
 source_control="$script_dir/payload-control"
 source_control_runtime="$script_dir/payload-control-runtime.py"
@@ -64,13 +66,22 @@ for command in python3 docker flock install cmp stat mktemp mkdir mv rm date env
   }
 done
 
-for source in "$source_receiver" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" "$source_private_helper" \
+for source in "$source_receiver" "$source_receiver_helper" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" "$source_private_helper" \
   "$source_payload_overlay" "$payload_compose"; do
   [[ -f $source && ! -L $source ]] || {
     echo 'Refusing preparation: reviewed source bundle is incomplete or linked.' >&2
     exit 2
   }
 done
+
+# The receiver uses this exact interpreter for legacy as well as Payload. Check
+# its isolated stdlib and reviewed helper syntax without executing helper code.
+if ! env -i PATH="$PATH" /usr/bin/python3 -I -S -c \
+  'import gzip, io, os, re, stat, subprocess, sys, tarfile, tempfile; assert sys.version_info >= (3, 9); compile(open(sys.argv[1], "rb").read(), sys.argv[1], "exec")' \
+  "$source_receiver_helper" >/dev/null 2>&1; then
+  echo 'Refusing preparation: fixed receiver Python or helper source is unavailable or invalid.' >&2
+  exit 2
+fi
 
 [[ -d $root && -d $runtime && -d $releases && -d $backup_root && -d $libexec_dir && -d $secrets_dir ]] || {
   echo 'Refusing preparation: expected production directories are incomplete.' >&2
@@ -93,7 +104,7 @@ if ! python3 - "$root" "$runtime" "$releases" "$backup_root" "$daily_backup_root
     "$guard_target" "$control_target" "$control_runtime_target" "$control_state_helper_target" \
     "$control_key_target" "$payload_production_target" "$candidate_target" "$control_inventory_target" "$source_receiver" \
     "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" \
-    "$source_payload_overlay" "$payload_compose" "$source_private_helper" <<'PY'
+    "$source_payload_overlay" "$payload_compose" "$source_private_helper" "$receiver_helper_target" "$source_receiver_helper" <<'PY'
 import os
 import stat
 import sys
@@ -101,6 +112,7 @@ import sys
 directories = sys.argv[1:8]
 files = sys.argv[8:]
 optional = {files[5], files[6], files[7], files[8], files[9], files[10], files[11], files[12]}
+optional.add(files[-2])  # Receiver dependency may be absent on an eligible legacy host.
 
 def reject():
     print('Refusing preparation: unsafe path, symlink, or file permissions.', file=sys.stderr)
@@ -124,6 +136,17 @@ def inspect_directory(path):
 for directory in directories:
     inspect_directory(directory)
 
+# Unlike operator-owned runtime paths, executable receiver dependencies require
+# a root:root protected chain. Do not silently repair or traverse an unsafe one.
+parent = os.path.dirname(files[-2])
+while True:
+    value = os.lstat(parent)
+    if not stat.S_ISDIR(value.st_mode) or (value.st_uid, value.st_gid) != (0, 0) or stat.S_IMODE(value.st_mode) & 0o7022:
+        reject()
+    if parent == '/':
+        break
+    parent = os.path.dirname(parent)
+
 for path in files:
     inspect_directory(os.path.dirname(path))
     try:
@@ -140,6 +163,8 @@ for path in files:
     if mode & 0o022:
         reject()
     if path == files[4] and (value.st_uid != 0 or mode != 0o755):
+        reject()
+    if path == files[-2] and ((value.st_uid, value.st_gid) != (0, 0) or mode != 0o755):
         reject()
     if path == files[1] and ((value.st_uid, value.st_gid) != (1000, 1000) or mode != 0o600):
         reject()
@@ -367,7 +392,14 @@ payload_overlay_is_known && candidate_is_known && control_files_known && \
   exit 2
 }
 
+if [[ -e $receiver_helper_target || -L $receiver_helper_target ]] && \
+   ! file_matches "$receiver_helper_target" "$source_receiver_helper"; then
+  echo 'Refusing preparation: installed receiver helper differs from the reviewed bundle.' >&2
+  exit 2
+fi
+
 needs_change=false
+file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || needs_change=true
 file_installed "$receiver_target" "$source_receiver" 755 || needs_change=true
 file_installed "$guard_target" "$source_guard" 755 || needs_change=true
 control_files_installed || needs_change=true
@@ -402,6 +434,7 @@ else
     chmod 0700 -- "$pre_restore_backup_root"
   fi
   for entry in "receiver:$receiver_target:ownerinc-portal-deploy" \
+    "receiver-helper:$receiver_helper_target:payload-receiver-admission.py" \
     "guard:$guard_target:payload-operations-guard" "environment:$environment:production.runtime.conf"; do
     IFS=: read -r label source destination <<< "$entry"
     if [[ -f $source && ! -L $source ]]; then
@@ -441,6 +474,15 @@ else
 
   # Each file is replaced atomically. The previous receiver, guard and full
   # production environment are preserved in the private backup for manual rollback.
+  # Publish and recheck the dependency FIRST: any failure leaves the old receiver
+  # untouched. An interrupted run may leave an inert helper, never an orphan receiver.
+  if ! file_installed "$receiver_helper_target" "$source_receiver_helper" 755; then
+    atomic_install "$source_receiver_helper" "$receiver_helper_target" 0755
+  fi
+  file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || {
+    echo 'Refusing preparation: receiver helper installation did not verify; receiver was not replaced.' >&2
+    exit 2
+  }
   if ! file_installed "$receiver_target" "$source_receiver" 755; then
     atomic_install "$source_receiver" "$receiver_target" 0755
   fi

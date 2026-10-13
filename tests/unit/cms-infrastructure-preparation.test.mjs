@@ -40,7 +40,7 @@ function validCmsConfiguration({ includePublicUrl = true } = {}) {
   return `${publicUrl}${Object.entries(values).map(([key, value]) => `${key === 'CMS_POSTGRES_PASSWORD' ? 'export ' : ''}${key}=${value}`).join('\n')}\n`;
 }
 
-async function fixture(t) {
+async function fixture(t, { failReceiverHelperInstall = false, tamperReceiverHelperInstall = false } = {}) {
   const parent = process.platform === 'win32' && process.env.LOCALAPPDATA
     ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : tmpdir();
   const root = await mkdtemp(path.join(parent, 'cms-preparation-'));
@@ -76,7 +76,7 @@ async function fixture(t) {
   await chmod(path.join(paths.runtime, 'payload-operations-guard'), 0o755);
   await writeFile(path.join(paths.bundle, 'docker-compose.payload.yml'), await readFile('docker-compose.payload.yml'));
   await mkdir(path.join(paths.bundle, 'ops'));
-  for (const file of ['deploy-from-ci.sh', 'payload-operations-guard.sh', 'payload-control', 'payload-control-runtime.py',
+  for (const file of ['deploy-from-ci.sh', 'payload-receiver-admission.py', 'payload-operations-guard.sh', 'payload-control', 'payload-control-runtime.py',
     'payload-control-state.py', 'payload-control-inventory.py', 'compose.payload.production.yaml', 'prepare-cms-infrastructure-private.py']) {
     const source = path.join(repository, 'ops', file);
     await copyFile(source, path.join(paths.bundle, 'ops', file));
@@ -116,6 +116,7 @@ async function fixture(t) {
     ['/opt/ownerinc/backups/portal-ownerinc/daily', bashPath(paths.dailyBackups)],
     ['/usr/local/libexec', bashPath(paths.libexec)],
     ['install -o 0 -g 0', 'install'],
+    ['/usr/bin/python3 -I -S', 'python3 -I -S'],
     ['chown 0:0 "$temporary"', ':'],
     ['chown 0:0 -- "$pre_restore_backup_root"', process.platform === 'win32' ? ':' : 'chown 0:0 -- "$pre_restore_backup_root"'],
   ];
@@ -159,6 +160,21 @@ async function fixture(t) {
   const dockerLog = path.join(root, 'docker.calls');
   const composeEnvironmentLog = path.join(root, 'compose.environment');
   const flockLog = path.join(root, 'flock.calls');
+  const installLog = path.join(root, 'install.calls');
+  // Filesystem transport double: log atomic publications, optionally fail helper
+  // publication. No real host path, owner, Docker or service is exercised here.
+  await writeFile(path.join(paths.bin, 'mv'), `#!/usr/bin/env bash
+target="\${!#}"
+printf '%s\\n' "$target" >> '${bashPath(installLog)}'
+if [[ $target == '${bashPath(path.join(paths.libexec, 'payload-receiver-admission.py'))}' ]]; then
+  ${failReceiverHelperInstall ? 'exit 94' : ':'}
+fi
+/usr/bin/mv "$@" || exit $?
+if [[ $target == '${bashPath(path.join(paths.libexec, 'payload-receiver-admission.py'))}' ]]; then
+  ${tamperReceiverHelperInstall ? 'printf "altered after publication\\n" > "$target"' : ':'}
+fi
+exit 0
+`, { mode: 0o755 });
   const dockerLogShell = bashPath(dockerLog);
   const composeEnvironmentLogShell = bashPath(composeEnvironmentLog);
   const flockLogShell = bashPath(flockLog);
@@ -212,8 +228,80 @@ exec '${quotedPython}' "$@"
       CMS_PREPARATION_TEST_HOST: '1',
     },
   });
-  return { root, paths, run, dockerLog, composeEnvironmentLog, flockLog };
+  return { root, paths, run, dockerLog, composeEnvironmentLog, flockLog, installLog };
 }
+
+test('missing receiver helper is installed and verified before receiver publication (fake host)', async t => {
+  const f = await fixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const helper = path.join(f.paths.libexec, 'payload-receiver-admission.py');
+  assert.equal(existsSync(helper), false);
+  const check = f.run(['--check']);
+  assert.equal(check.status, 0, check.stderr);
+  assert.equal(existsSync(helper), false, 'dry run must not install dependency');
+  const applied = f.run(['--apply']);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(await readFile(helper, 'utf8'), await readFile('ops/payload-receiver-admission.py', 'utf8'));
+  const publications = (await readFile(f.installLog, 'utf8')).trim().split('\n');
+  const helperIndex = publications.indexOf(bashPath(helper));
+  const receiverIndex = publications.indexOf(bashPath(path.join(f.paths.libexec, 'ownerinc-portal-deploy')));
+  assert.ok(helperIndex >= 0 && receiverIndex > helperIndex, 'helper must precede receiver rename');
+});
+
+test('failed receiver-helper publication leaves the working receiver untouched (fake host)', async t => {
+  const f = await fixture(t, { failReceiverHelperInstall: true });
+  if (f.skip) return t.skip(f.skip);
+  const result = f.run(['--apply']);
+  assert.notEqual(result.status, 0);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+  assert.equal(existsSync(path.join(f.paths.libexec, 'payload-receiver-admission.py')), false);
+});
+
+test('receiver is not published if helper post-install verification fails (fake host)', async t => {
+  const f = await fixture(t, { tamperReceiverHelperInstall: true });
+  if (f.skip) return t.skip(f.skip);
+  const result = f.run(['--apply']);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /receiver helper installation did not verify/u);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+});
+
+for (const defect of ['missing-source', 'invalid-source', 'unknown-installed-helper', 'missing-interpreter']) {
+  test(`receiver dependency preflight refuses ${defect} without replacing the receiver (fake host)`, async t => {
+    const f = await fixture(t);
+    if (f.skip) return t.skip(f.skip);
+    const helperSource = path.join(f.paths.bundle, 'ops', 'payload-receiver-admission.py');
+    if (defect === 'missing-source') await rm(helperSource);
+    if (defect === 'invalid-source') await writeFile(helperSource, 'invalid python source !\n');
+    if (defect === 'unknown-installed-helper') {
+      const target = path.join(f.paths.libexec, 'payload-receiver-admission.py');
+      await writeFile(target, '# unexpected dependency\n');
+      await chmod(target, 0o755);
+    }
+    if (defect === 'missing-interpreter') {
+      const script = path.join(f.paths.bundle, 'ops', 'prepare-cms-infrastructure.sh');
+      const source = await readFile(script, 'utf8');
+      assert.ok(source.includes('python3 -I -S -c'));
+      await writeFile(script, source.replace('python3 -I -S -c', '/nonexistent/receiver-python -I -S -c'));
+    }
+    const result = f.run(['--apply']);
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+    assert.deepEqual(await readdir(f.paths.backups), [], 'preflight must precede backups and changes');
+  });
+}
+
+test('production installer binds the fixed helper, root chain, mode and interpreter before receiver publication', async () => {
+  const source = await readFile('ops/prepare-cms-infrastructure.sh', 'utf8');
+  assert.match(source, /receiver_helper_target=\/usr\/local\/libexec\/payload-receiver-admission\.py/u);
+  assert.match(source, /env -i PATH="\$PATH" \/usr\/bin\/python3 -I -S -c/u);
+  assert.match(source, /\(value\.st_uid, value\.st_gid\) != \(0, 0\) or stat\.S_IMODE\(value\.st_mode\) & 0o7022/u);
+  assert.match(source, /path == files\[-2\].*mode != 0o755/u);
+  const helperInstall = source.indexOf('atomic_install "$source_receiver_helper" "$receiver_helper_target" 0755');
+  const postCheck = source.indexOf('file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || {', helperInstall);
+  assert.ok(helperInstall > 0 && postCheck > helperInstall);
+  assert.ok(source.indexOf('atomic_install "$source_receiver" "$receiver_target" 0755') > postCheck);
+});
 
 test('preparation defaults to a read-only dry check and accepts only fixed host actions', async t => {
   const f = await fixture(t);
@@ -300,7 +388,7 @@ test('apply atomically prepares private credentials and reviewed files without a
   assert.equal(await readFile(path.join(f.paths.app, 'current-release'), 'utf8'), `${bashPath(f.paths.release)}\n`);
   assert.deepEqual(await readFile(lockPath), lockBefore);
   assert.match(await readFile(f.flockLog, 'utf8'), /^-n 9\n/u);
-  assert.deepEqual((await readdir(f.paths.libexec)).sort(), ['ownerinc-portal-deploy']);
+  assert.deepEqual((await readdir(f.paths.libexec)).sort(), ['ownerinc-portal-deploy', 'payload-receiver-admission.py']);
   assert.deepEqual(await readFile(path.join(f.paths.runtime, 'compose.production.yaml'), 'utf8'), 'services: {}\n');
   assert.deepEqual(await readFile(path.join(f.paths.release, '.image-env'), 'utf8'), `API_IMAGE=${apiImage}\nCRON_IMAGE=${cronImage}\n`);
   assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control'), 'utf8'), await readFile('ops/payload-control', 'utf8'));
