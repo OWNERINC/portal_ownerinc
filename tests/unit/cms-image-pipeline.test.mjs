@@ -233,8 +233,11 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
     '          test -f "$NODE_BIN" && test -x "$NODE_BIN"\n' +
     '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\\n' +
     '            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \\\n' +
-    '            tests/unit/payload-candidate-trust-provisioning.test.mjs',
-    'preserve checkout cwd and setup-node selection; both native suites are mandatory and unfiltered');
+    '            tests/unit/payload-candidate-trust-provisioning.test.mjs\n' +
+    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\\n' +
+    '            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \\\n' +
+    '            tests/unit/payload-preparation-authentication.test.mjs',
+    'preserve checkout cwd and setup-node selection; all three native suites are mandatory and unfiltered');
   const trustTests = await read('tests/unit/payload-candidate-trust-provisioning.test.mjs');
   assert.match(trustTests, /skip: process\.env\.PAYLOAD_REQUIRE_NATIVE_TRUST !== '1' &&/u);
   assert.match(trustTests, /assert\.deepEqual\(JSON\.parse\(result\.stdout\), \{ kind: 'native-trust-filesystem-proof'/u);
@@ -243,6 +246,20 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
   assert.match(provisioner, /^POLICY_PATH = '\/etc\/ownerinc\/payload-candidate\/production-policy.json'$/mu);
   assert.match(provisioner, /^STATE_ROOT = '\/var\/lib\/ownerinc\/payload-candidate'$/mu);
   assert.doesNotMatch(provisioner, /PAYLOAD_REQUIRE_NATIVE_TRUST|--destination|--tool-root|--state-root/u);
+  const preparationTests = await read('tests/unit/payload-preparation-authentication.test.mjs');
+  assert.match(preparationTests, /skip: process\.env\.PAYLOAD_REQUIRE_NATIVE_PREPARATION !== '1' &&/u);
+  assert.match(preparationTests, /assert\.deepEqual\(JSON\.parse\(result\.stdout\), \{ kind: 'native-preparation-lease-proof'/u);
+  assert.match(preparationTests, /Buffer\.byteLength\(result\.stdout\) <= 1024/u);
+  const nativePreparation = preparationTests.slice(preparationTests.indexOf("test('native Linux flock"),
+    preparationTests.indexOf("test('host-data reader"));
+  assert.match(nativePreparation, /dir='\/root'/u);
+  assert.match(nativePreparation, /assert m\.LOCK=='\/opt\/ownerinc\/apps\/portal-ownerinc-real\/runtime\/deploy\.lock'/u);
+  assert.doesNotMatch(nativePreparation, /t\.skip|m\.host_ancestry\s*=|mock|SKIP unsupported/u);
+  for (const proof of ['sharedRefused', 'originalSharedUnchanged', 'busyRefused', 'foreignDescriptionRefused',
+    'exclusiveSubprocessInheritance', 'parentExclusiveRetained', 'fd9Closed', 'pathReplacementRefused', 'sandboxRemoved']) {
+    assert.ok(nativePreparation.includes(`${proof}: true`), `native proof must require ${proof}`);
+  }
+  assert.doesNotMatch(await read('ops/prepare-cms-authenticated.py'), /PAYLOAD_REQUIRE_NATIVE_PREPARATION/u);
   assert.doesNotMatch(setup, /continue-on-error|always\(|failure\(|\|\||\beval\b|secrets\.|\bcd\b|--test-name-pattern/u);
   assert.equal(workflow.split(`      - name: ${name}\n`).length - 1, 1);
   for (const later of ['Build CMS with synthetic build-only configuration', 'Build production images', 'Publish immutable images', 'Publish CMS immutable image',

@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Mandatory native preparation-lease qualification wiring
+
+The existing candidate native gate now runs the complete preparation-authentication suite with `PAYLOAD_REQUIRE_NATIVE_PREPARATION=1`. Unsupported Linux/root execution fails rather than skips. The private native fixture checks actual flock/subprocess inheritance, shared-lock refusal without mutation, retained parent exclusivity, contention, replaced paths and cleanup. It does not qualify full preparation end to end.
+
+Review corrected the retained-parent proof to use a separate shared-lock probe (an exclusive probe could not distinguish a downgraded shared lock), and a subsequent embedded-Python indentation mistake was fixed. Fresh code review returned `ship`; primary extraction and `ast.parse` of the complete native Python passed.
+
+Full `npm run verify` passed **Portal 1,834 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-native-preparation-lease-verify.log`). The final test-only corrections occurred during that run, so primary reran the affected preparation/workflow suites afterward: **17 PASS / 1 native skip / zero failures**. Native Linux execution remains pending and is not implied by either result. No VPS operations occurred.
+
 ## Authenticated inactive preparation dispatch
 
 The launcher now dispatches authenticated check/apply while retaining the same deployment lease and passing FD9. The preparer revalidates its fixed context and derives approved baseline/predecessor values and the CMS image from authenticated inputs; direct legacy invocation retains its old pins. Apply remains inactive preparation only, without service activation or deployment authorization.

@@ -220,18 +220,26 @@ for scenario in ('success','busy','replaced-before','replaced-on-lock','replaced
 });
 
 test('native Linux flock preserves lock bytes, refuses contention and replacement, and releases FD9 (not host end-to-end)',
-  { skip: process.platform !== 'linux' }, t => {
-    const result = spawnSync(python, ['-I', '-S', '-B', '-c', String.raw`
-import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil,subprocess
-if (os.getuid(),os.getgid()) not in ((0,0),(1000,1000)):
- print('SKIP unsupported test owner');sys.exit(0)
+  { skip: process.env.PAYLOAD_REQUIRE_NATIVE_PREPARATION !== '1' &&
+      !(process.platform === 'linux' && process.getuid?.() === 0 && process.geteuid?.() === 0 &&
+        process.getgid?.() === 0 && process.getegid?.() === 0) }, () => {
+    assert.equal(process.platform, 'linux', 'required native preparation proof needs Linux');
+    for (const identity of ['getuid', 'geteuid', 'getgid', 'getegid']) {
+      assert.equal(process[identity]?.(), 0, `required native preparation proof needs ${identity}=0`);
+    }
+    const result = spawnSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', String.raw`
+import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil,subprocess,json
+assert sys.platform=='linux' and os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
+assert sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode
 spec=importlib.util.spec_from_file_location('launcher',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-root=tempfile.mkdtemp(prefix='preparation-flock-')
+assert m.LOCK=='/opt/ownerinc/apps/portal-ownerinc-real/runtime/deploy.lock'
+m.host_ancestry('/root/preparation-ancestry-check')
+root=tempfile.mkdtemp(prefix='preparation-flock-',dir='/root')
+proof={'kind':'native-preparation-lease-proof','rootIdentity':True,'protectedAncestry':True}
 try:
  m.LOCK=root+'/deploy.lock';pathlib.Path(m.LOCK).write_bytes(b'never truncated');os.chmod(m.LOCK,0o600)
- # Only ancestry is doubled for the disposable temp parent. flock/open/FD9,
- # leaf metadata, identity, contention, replacement and closes are native.
- m.host_ancestry=lambda _:None
+ # Only LOCK is redirected; all production metadata and lease primitives run.
+ m.host_ancestry(m.LOCK)
  # Regression: a sole inherited SH lease must not be upgraded to EX by checking.
  shared=os.open(m.LOCK,os.O_RDWR)
  if shared!=9:os.dup2(shared,9);os.close(shared)
@@ -240,6 +248,7 @@ try:
   try:m.verify_inherited_lease()
   except m.VerificationError:pass
   else:raise AssertionError('inherited shared lease accepted/upgraded')
+  proof['sharedRefused']=True
   assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino,'rejection closed original FD9'
   probe=os.open(m.LOCK,os.O_RDWR)
   try:
@@ -248,41 +257,69 @@ try:
    try:fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
    except BlockingIOError:pass # Original SH must still be held, not unlocked.
    else:raise AssertionError('rejection released original shared lease')
+   proof['originalSharedUnchanged']=True
   finally:os.close(probe)
  finally:os.close(9)
  busy=os.open(m.LOCK,os.O_RDWR);fcntl.flock(busy,fcntl.LOCK_EX|fcntl.LOCK_NB)
  try:
-  with m.deployment_lease():raise AssertionError('busy lease accepted')
- except BlockingIOError:pass
+  try:
+   with m.deployment_lease():raise AssertionError('busy lease accepted')
+  except BlockingIOError:pass
+  proof['busyRefused']=True
+  # A separate FD9 must not claim another open description's existing EX lock.
+  foreign=os.open(m.LOCK,os.O_RDWR)
+  if foreign!=9:os.dup2(foreign,9);os.close(foreign)
+  try:
+   try:m.verify_inherited_lease()
+   except BlockingIOError:pass
+   else:raise AssertionError('foreign exclusive lock accepted')
+   assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino
+   proof['foreignDescriptionRefused']=True
+  finally:os.close(9)
  finally:os.close(busy)
  with m.deployment_lease() as reaffirm:
   assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino;reaffirm()
   assert pathlib.Path(m.LOCK).read_bytes()==b'never truncated'
-  code="import importlib.util,sys; s=importlib.util.spec_from_file_location('m',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.LOCK=sys.argv[2]; m.host_ancestry=lambda _:None; m.verify_inherited_lease(); print('inherited-FD9-PASS')"
+  code="import importlib.util,sys; s=importlib.util.spec_from_file_location('m',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); assert m.LOCK=='/opt/ownerinc/apps/portal-ownerinc-real/runtime/deploy.lock'; m.LOCK=sys.argv[2]; m.verify_inherited_lease(); print('inherited-FD9-PASS')"
   child=subprocess.run([sys.executable,'-I','-S','-B','-c',code,sys.argv[1],m.LOCK],pass_fds=(9,),capture_output=True,text=True,timeout=10)
-  assert child.returncode==0 and 'inherited-FD9-PASS' in child.stdout,child.stderr
+  assert child.returncode==0 and child.stdout=='inherited-FD9-PASS\n',child.stderr
+  proof['exclusiveSubprocessInheritance']=True
   probe=os.open(m.LOCK,os.O_RDWR)
   try:
-   try:fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   try:fcntl.flock(probe,fcntl.LOCK_SH|fcntl.LOCK_NB)
    except BlockingIOError:pass
-   else:raise AssertionError('child released parent lock')
+   else:raise AssertionError('child released or downgraded parent exclusive lock')
+   proof['parentExclusiveRetained']=True
   finally:os.close(probe)
  try:os.fstat(9)
  except OSError:pass
  else:raise AssertionError('FD9 leaked')
+ proof['fd9Closed']=True
  try:
   with m.deployment_lease():
    os.rename(m.LOCK,m.LOCK+'.old');pathlib.Path(m.LOCK).write_bytes(b'replaced');os.chmod(m.LOCK,0o600)
  except m.VerificationError:pass
  else:raise AssertionError('replacement accepted')
+ proof['pathReplacementRefused']=True
  old=os.open(m.LOCK+'.old',os.O_RDWR);fcntl.flock(old,fcntl.LOCK_EX|fcntl.LOCK_NB);os.close(old)
  assert pathlib.Path(m.LOCK+'.old').read_bytes()==b'never truncated'
- print('native-flock-only PASS')
+ proof['originalBytesPreserved']=True
 finally:shutil.rmtree(root)
-`, path.join(repo, 'ops/prepare-cms-authenticated.py')], { encoding: 'utf8', timeout: 30000 });
+assert not os.path.exists(root)
+proof['sandboxRemoved']=True
+print(json.dumps(proof,sort_keys=True))
+`, path.join(repo, 'ops/prepare-cms-authenticated.py')], {
+      encoding: 'utf8', timeout: 30000, maxBuffer: 4096,
+      env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+    });
     assert.equal(result.status, 0, result.stderr);
-    if (result.stdout.startsWith('SKIP')) return t.skip(result.stdout.trim());
-    assert.match(result.stdout, /native-flock-only PASS/u);
+    assert.ok(Buffer.byteLength(result.stdout) <= 1024, 'native proof must be bounded');
+    assert.deepEqual(JSON.parse(result.stdout), { kind: 'native-preparation-lease-proof',
+      rootIdentity: true, protectedAncestry: true, sharedRefused: true, originalSharedUnchanged: true,
+      busyRefused: true, foreignDescriptionRefused: true, exclusiveSubprocessInheritance: true,
+      parentExclusiveRetained: true, fd9Closed: true, pathReplacementRefused: true,
+      originalBytesPreserved: true, sandboxRemoved: true });
+    console.log(result.stdout.trim());
   });
 
 test('host-data reader retains exact deploy ownership, bounded stable bytes, and distinct trust ancestry (metadata doubles)', () => {

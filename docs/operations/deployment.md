@@ -948,8 +948,8 @@ autentica e revalida novamente sob lease. O dispatch abaixo mantém a mesma leas
 enquanto o preparer executa suas validações independentes e, somente em apply,
 publica arquivos inativos.
 
-O teste opcional Linux de flock usa syscalls reais de lock/FD9/replace, com
-ancestry do diretório temporário explicitamente dobrada. **End-to-end nativo de
+O teste Linux de flock usa syscalls reais de lock/FD9/replace e ancestry real
+em sandbox privado sob `/root`, sem doubles nesse caso nativo. **End-to-end nativo de
 preparação permanece pendente**, inclusive baseline real e propriedade dos paths.
 
 #### Dispatch e contexto autenticado
@@ -969,10 +969,14 @@ e overrides de ambiente não são interfaces do launcher.
 O child não abre novamente o lock e não chama unlock. Antes de executar helpers,
 exige seu path instalado exato e consulta o launcher fixo com
 `--verify-context <approval-sha256>`. O verifier exige root/ambiente isolado,
-FD9 seguro ligado ao pathname, um probe de outra open-description bloqueado e
+FD9 seguro ligado ao pathname, um probe `LOCK_SH | LOCK_NB` de outra
+open-description bloqueado por EX e
 flock não bloqueante bem-sucedido no próprio FD9. Assim, FD aberto mas sem lease,
 FD de outro inode ou descrição sem a lock exclusiva são recusados. O probe nunca
 substitui FD9 e o verifier nunca libera a lease herdada.
+Se o probe shared conseguir a lock, libera somente o probe e recusa antes de
+tocar FD9: não promove uma lease SH herdada para EX. O parent confiável retém EX
+durante todo o handshake; chamadas separadas não são consulta atômica de estado.
 
 Esse comando reautentica a aprovação, toda a closure, admission e host; o digest
 passado prova continuidade, **não é credencial**. Não há confiança em `APPROVED=1`,
@@ -1007,6 +1011,45 @@ e não ganha autoridade por ambiente ou flags forjadas.
 
 Os testes de transporte executam o shell e o protocolo reais com doubles
 explícitos de host/autenticação/processo; no Windows FD9 é transportado no mesmo
-shell de fixture. O teste Linux opcional usa subprocesso real e `pass_fds`, testa
+shell de fixture. O teste Linux usa subprocesso real e `pass_fds`, testa
 ausência de deadlock e confirma que o child não libera a lock do parent. Isso não
 substitui a qualificação nativa completa de preparação, ainda pendente.
+
+#### Gate nativo obrigatório de lease da preparação no candidate CI
+
+O step autenticado **`Test preauthority CI setup with native Linux root`** mantém
+nome, condição e suites setup/trust anteriores, e acrescenta a suite inteira,
+sem filtro ou tolerância a falha:
+
+```sh
+sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \
+  tests/unit/payload-preparation-authentication.test.mjs
+```
+
+`NODE_BIN` continua sendo o path canônico selecionado por setup-node. A flag é
+somente do teste, não do launcher. Com ela, falta de Linux, UID/EUID/GID/EGID zero,
+Python fixo, ancestry segura ou suporte aos syscalls **falha**, nunca dá skip.
+Sem a flag, máquinas fora de Linux/root mantêm skip explícito do caso nativo.
+O Python usa `/usr/bin/python3 -I -S -B`, ambiente limpo PATH/locale e timeout;
+a flag não é encaminhada ao Python.
+
+O sandbox único e privado fica sob `/root`, removido ao fim. Antes de redirecionar
+somente `LOCK` em memória, o teste confere seu valor fixo de produção. Parent e
+subprocesso executam os leitores de metadata/ancestry e funções flock originais;
+nenhum path fixo de produção recebe writes. Não há provisionamento de closure,
+policy, credenciais, serviços, contas ou sudoers nesse caso.
+
+Node exige parse e igualdade exata do JSON `native-preparation-lease-proof`, no
+máximo 1 KiB, e emite a prova completa no log. Os campos obrigatórios comprovam:
+identidade root e ancestry; SH recusada com FD9 ainda aberto e SH original
+inalterada (outro SH adquire, EX bloqueia); busy e EX de outra descrição
+recusados; EX herdada via `pass_fds` em subprocesso sem liberar a lock do parent;
+FD9 fechado ao sair; pathname substituído recusado; bytes originais preservados;
+sandbox removido. Saída ausente/parcial ou early exit não é PASS.
+
+Os outros casos da suite continuam identificados como doubles. O gate qualifica
+**lease somente**, não bootstrap/launcher/preparer end-to-end, baseline real,
+sudo/SSH, durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets,
+14 checks, 11 negativos e dois restores não mudam. Um próximo CI qualifica sua
+própria revisão; não se atribui esta prova retroativamente a execução anterior.

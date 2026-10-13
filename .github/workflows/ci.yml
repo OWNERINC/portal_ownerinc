@@ -136,6 +136,9 @@ jobs:
           sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
             PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
             tests/unit/payload-candidate-trust-provisioning.test.mjs
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \
+            tests/unit/payload-preparation-authentication.test.mjs
       - name: Test route delivery with production Nginx image
         run: |
           docker run --rm \
