@@ -1,5 +1,46 @@
 # Runtime Payload e recuperação coordenada
 
+## Diagnóstico do predicado de quiescência do initializer
+
+O report de `38473939196` atribui a falha da terceira fixture ao initializer em
+`phase=quiescence`, `installStage=none`, com `writers_not_quiescent`. As duas
+fixtures anteriores passaram seus checks iniciais; negativos e restores não
+foram alcançados. Isso **não identifica a causa histórica** nem qual serviço
+continuava running. O stop retornar zero não substitui a observação de quiescência.
+
+No predicado real `_check_container_shape(..., quiescent=True)`, o diagnóstico
+agora resume os running não permitidos usando **a mesma lista** retornada por
+`_container_inventory`, sem novo ps/inspect. O filtro de projeto permanece no
+parser de inventory. `cold` permite somente postgres running; `migrated` permite
+também cms-postgres. Rejeições anteriores de one-shot/worker continuam distintas.
+Não há mudança do predicado, código `writers_not_quiescent`, exit 2, admission
+fechada, barreira anterior a B0, consultas SQL, budgets, retries ou aceite.
+
+O frame terminal `PREAUTHORITY_INITIALIZER_DIAGNOSTIC` admite um sufixo opcional
+com `quiescencePredicate=running_service_not_allowed`, `quiescenceCms=cold|migrated`,
+`quiescenceOffenders=<service>:running:<count>[,...]` e
+`quiescenceTruncated=true|false`. Só é aceito no comando initialize-isolated,
+substep correspondente, exit 2, erro exato writers_not_quiescent, fase quiescence,
+stage none e ausência de falha/sinal/stderr privado de subprocesso. Frames antigos
+sem sufixo continuam compatíveis; outros contextos não ganham esta atribuição.
+
+O report de falha recebe `commandDiagnostic.initializer.quiescence`:
+`{predicate, cmsStatus, offenders: [{service, state, count}], truncated}`.
+Serviços públicos são somente api, cms, cms-postgres, cron, nginx e unknown;
+state é sempre running. Há no máximo seis buckets ordenados/únicos, cada count
+entre 1 e 99; excesso de contagem marca truncated. Labels desconhecidas nunca são
+ecoadas: o produtor usa unknown e o parser rejeita valores fora da allowlist.
+Nomes/IDs de containers, projetos, paths, ambiente, SQL e stderr bruto não entram
+nesse resumo. Atributos extras não são preservados pelo sanitizer.
+
+O checkpoint de progresso **não recebe este resumo**: `firstFailure` continua
+somente stage/substep/fixtureRole, e o limite de 1 KiB permanece. O detalhamento é
+diagnóstico do report final de falha, não evidência qualificadora de sucesso.
+Regressões de modelo simulam Docker/DB explicitamente, exercitando os métodos
+reais: stop zero com API/cron running recusa antes de DB/B0/provisionamento, e
+containers de outro projeto não contaminam o resumo. Não representam execução
+nativa de recovery nem justificam reutilizar/repetir automaticamente a fixture.
+
 ## P1 — ordem de mounts no ticket efêmero do coordinator
 
 O método real `_writer_inspect` tinha um defeito reproduzível em memória: duas

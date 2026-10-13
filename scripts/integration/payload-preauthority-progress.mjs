@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
@@ -46,6 +46,9 @@ function writeCheckpoint(checkpoint, line) {
     descriptor = openSync(temporary, 'wx', 0o644);
     owned = true;
     writeFileSync(descriptor, line);
+    // Recovery may set umask 077. Only this bounded, redacted public checkpoint
+    // must remain readable by the unprivileged artifact uploader after rename.
+    fchmodSync(descriptor, 0o644);
     fsyncSync(descriptor);
     closeSync(descriptor);
     descriptor = undefined;

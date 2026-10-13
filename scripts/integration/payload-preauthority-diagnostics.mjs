@@ -356,21 +356,53 @@ export function extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandC
   return { stage, reason, sqlState, ...(constraintMismatch ? { constraintMismatch } : {}) };
 }
 
+const quiescenceServices = ['api', 'cms', 'cms-postgres', 'cron', 'nginx', 'unknown'];
+function safeQuiescenceSummary(value) {
+  if (!value || Object.keys(value).sort().join(',') !== 'cmsStatus,offenders,predicate,truncated'
+    || value.predicate !== 'running_service_not_allowed' || !['cold', 'migrated'].includes(value.cmsStatus)
+    || typeof value.truncated !== 'boolean' || !Array.isArray(value.offenders)
+    || value.offenders.length < 1 || value.offenders.length > quiescenceServices.length) return null;
+  let previous = -1;
+  const offenders = [];
+  for (const item of value.offenders) {
+    if (!item || Object.keys(item).sort().join(',') !== 'count,service,state') return null;
+    const index = quiescenceServices.indexOf(item.service);
+    if (index <= previous || item.state !== 'running' || !Number.isInteger(item.count) || item.count < 1 || item.count > 99
+      || value.cmsStatus === 'migrated' && item.service === 'cms-postgres') return null;
+    previous = index;
+    offenders.push({ service: item.service, state: 'running', count: item.count });
+  }
+  if (value.truncated && !offenders.some(item => item.count === 99)) return null;
+  return { predicate: 'running_service_not_allowed', cmsStatus: value.cmsStatus, offenders, truncated: value.truncated };
+}
+
 function initializerScope(stderr, options) {
   if (!initializerContexts.has(options.controlCommandContext)
     || initializerContexts.get(options.controlCommandContext) !== options.substep
     || options.status !== 2 || options.errorCode || options.signal) return null;
   const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
-  const match = text.match(/^([\s\S]*\n)PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=([a-z][a-z0-9_]+) installStage=([a-z_]+) commandExit=(none|[0-9]{1,3}) commandSignal=(none|[0-9]{1,2}) privateStderr=(retained|none)\r?\n$/u);
+  const match = text.match(/^([\s\S]*\n)PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=([a-z][a-z0-9_]+) installStage=([a-z_]+) commandExit=(none|[0-9]{1,3}) commandSignal=(none|[0-9]{1,2}) privateStderr=(retained|none)(?: quiescencePredicate=(running_service_not_allowed) quiescenceCms=(cold|migrated) quiescenceOffenders=([a-z0-9:,-]{1,180}) quiescenceTruncated=(true|false))?\r?\n$/u);
   if (!match) return text.includes('PREAUTHORITY_INITIALIZER_DIAGNOSTIC') ? null : { body: text };
-  const [, body, phase, installStage, rawExit, rawSignal, retained] = match;
+  const [, body, phase, installStage, rawExit, rawSignal, retained, predicate, cmsStatus, rawOffenders, rawTruncated] = match;
   const commandExitCode = rawExit === 'none' ? null : Number(rawExit);
   const commandSignal = rawSignal === 'none' ? null : Number(rawSignal);
   if (!initializerDiagnosticPhases.includes(phase) || !initializerStages.has(installStage)
     || (commandExitCode !== null && (commandExitCode < 1 || commandExitCode > 255))
     || (commandSignal !== null && (commandSignal < 1 || commandSignal > 64))
     || (commandExitCode !== null && commandSignal !== null)) return null;
-  return { body, initializer: { phase, installStage, commandExitCode, commandSignal, privateStderrRetained: retained === 'retained' } };
+  let quiescence = null;
+  if (predicate) {
+    if (options.controlCommandContext !== 'payload-control:initialize-isolated' || !/^writers_not_quiescent\r?\n$/u.test(body)
+      || phase !== 'quiescence' || installStage !== 'none' || commandExitCode !== null || commandSignal !== null || retained !== 'none') return null;
+    quiescence = safeQuiescenceSummary({ predicate, cmsStatus, truncated: rawTruncated === 'true',
+      offenders: rawOffenders.split(',').map(item => {
+        const [service, state, count] = item.split(':');
+        return { service, state, count: Number(count) };
+      }) });
+    if (!quiescence || quiescence.offenders.map(item => `${item.service}:${item.state}:${item.count}`).join(',') !== rawOffenders) return null;
+  }
+  return { body, initializer: { phase, installStage, commandExitCode, commandSignal, privateStderrRetained: retained === 'retained',
+    ...(quiescence ? { quiescence } : {}) } };
 }
 
 function initializerBodyIdentifier(scope, release) {
@@ -547,7 +579,14 @@ export function sanitizeCommandDiagnostic(diagnostic = {}) {
     && typeof initializer.privateStderrRetained === 'boolean'
     ? { phase: initializer.phase, installStage: initializer.installStage,
       commandExitCode: initializer.commandExitCode, commandSignal: initializer.commandSignal,
-      privateStderrRetained: initializer.privateStderrRetained } : null;
+       privateStderrRetained: initializer.privateStderrRetained } : null;
+  if (safeInitializer?.phase === 'quiescence' && safeInitializer.installStage === 'none'
+    && safeInitializer.commandExitCode === null && safeInitializer.commandSignal === null && !safeInitializer.privateStderrRetained
+    && diagnostic.substep === 'payload_initialize_isolated' && diagnostic.commandExitCode === 2
+    && !diagnostic.commandError && !diagnostic.commandSignal && diagnostic.controlErrorIdentifier === 'writers_not_quiescent') {
+    const quiescence = safeQuiescenceSummary(initializer.quiescence);
+    if (quiescence) safeInitializer.quiescence = quiescence;
+  }
   const native = diagnostic.nativeCatalogVerifier;
   const nativeConstraintMismatch = native?.constraintMismatch;
   const safeConstraintMismatch = nativeConstraintMismatch && authorizedNativeConstraintMismatches.has(nativeConstraintMismatch)

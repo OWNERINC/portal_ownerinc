@@ -21,6 +21,37 @@ async function fixture(t) {
     writeConsole: line => lines.push(line), alert: line => alerts.push(line), clock: () => now++ }) };
 }
 
+test('redacted checkpoint remains uploader-readable under restrictive recovery umask across atomic replacements', {
+  skip: process.platform === 'win32' ? 'requires native POSIX file modes' : false,
+}, async t => {
+  const f = await fixture(t);
+  const moduleUrl = new URL('../../scripts/integration/payload-preauthority-progress.mjs', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { statSync, readFileSync } from 'node:fs';
+    import { createRecoveryProgress } from ${JSON.stringify(moduleUrl)};
+    process.umask(0o077);
+    const checkpoint = process.argv[1];
+    const progress = createRecoveryProgress({ checkpoint, writeConsole() {}, alert(line) { throw new Error(line); } });
+    let previousSequence = 0;
+    for (const outcome of ['completed', 'failed']) {
+      progress.transition('unknown');
+      progress.finish(outcome);
+      assert.equal(statSync(checkpoint).mode & 0o777, 0o644);
+      const record = JSON.parse(readFileSync(checkpoint, 'utf8'));
+      assert.equal(record.qualifiesAcceptance, false);
+      assert.equal(record.event, 'stage_end');
+      assert.equal(record.outcome, outcome);
+      assert.ok(record.sequence > previousSequence);
+      previousSequence = record.sequence;
+    }
+    assert.equal(process.umask(), 0o077);
+  `, f.checkpoint], { encoding: 'utf8', timeout: 10000 });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(await readdir(f.root), ['progress.json']);
+});
+
 test('real serialization and checkpoint redact unknown labels, fake child output and exception text', async t => {
   const f = await fixture(t);
   const secret = 'https://user:password@private.invalid/sql?token=secret';

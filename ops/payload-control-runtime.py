@@ -70,7 +70,22 @@ floor_boundary floor_roles floor_runtime floor_native_catalog floor_pending floo
 '''.split())
 
 
-def _emit_initializer_diagnostic(runtime):
+QUIESCENCE_DIAGNOSTIC_SERVICES = ('api', 'cms', 'cms-postgres', 'cron', 'nginx', 'unknown')
+
+
+def _quiescence_failure_summary(cms_status, running, allowed):
+    counts = {}
+    for container in running:
+        if container['service'] not in allowed:
+            service = container['service'] if container['service'] in QUIESCENCE_DIAGNOSTIC_SERVICES else 'unknown'
+            counts[service] = counts.get(service, 0) + 1
+    return {'predicate': 'running_service_not_allowed', 'cmsStatus': cms_status,
+            'offenders': [{'service': service, 'state': 'running', 'count': min(counts[service], 99)}
+                          for service in QUIESCENCE_DIAGNOSTIC_SERVICES if service in counts],
+            'truncated': any(count > 99 for count in counts.values())}
+
+
+def _emit_initializer_diagnostic(runtime, error=None):
     phase = getattr(runtime, 'initializer_phase', 'runtime_validation')
     state = getattr(runtime, 'state', None)
     intent = state.get('installIntent') if isinstance(state, dict) else None
@@ -82,8 +97,23 @@ def _emit_initializer_diagnostic(runtime):
     exit_code = exit_code if type(exit_code) is int and 0 <= exit_code <= 255 else 'none'
     signal = signal if type(signal) is int and 1 <= signal <= 64 else 'none'
     retained = 'retained' if getattr(runtime, 'initializer_stderr_retained', False) is True else 'none'
+    extra = ''
+    summary = getattr(error, 'quiescence_diagnostic', None)
+    if (getattr(runtime, 'action', None) == 'initialize-isolated' and str(error) == 'writers_not_quiescent'
+            and phase == 'quiescence' and stage == 'none' and exit_code == 'none'
+            and signal == 'none' and retained == 'none' and isinstance(summary, dict)
+            and summary.get('predicate') == 'running_service_not_allowed'
+            and summary.get('cmsStatus') in ('cold', 'migrated') and type(summary.get('truncated')) is bool):
+        offenders = summary.get('offenders')
+        if (isinstance(offenders, list) and 1 <= len(offenders) <= len(QUIESCENCE_DIAGNOSTIC_SERVICES)
+                and all(isinstance(item, dict) and item.get('service') in QUIESCENCE_DIAGNOSTIC_SERVICES
+                        and item.get('state') == 'running' and type(item.get('count')) is int
+                        and 1 <= item['count'] <= 99 for item in offenders)):
+            encoded = ','.join(f"{item['service']}:running:{item['count']}" for item in offenders)
+            extra = (f" quiescencePredicate=running_service_not_allowed quiescenceCms={summary['cmsStatus']}"
+                     f" quiescenceOffenders={encoded} quiescenceTruncated={str(summary['truncated']).lower()}")
     print(f'PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase={phase} installStage={stage} '
-          f'commandExit={exit_code} commandSignal={signal} privateStderr={retained}', file=sys.stderr)
+          f'commandExit={exit_code} commandSignal={signal} privateStderr={retained}{extra}', file=sys.stderr)
 
 
 class ControlError(Exception):
@@ -563,7 +593,11 @@ def _check_container_shape(cms_status, quiescent=False):
         if cms_status == 'migrated':
             allowed.add('cms-postgres')
         if any(c['service'] not in allowed for c in running):
-            fail('writers_not_quiescent')
+            error = ControlError('writers_not_quiescent')
+            # Same observation as the failed predicate: never issue a second
+            # inventory/inspect that could describe a different container set.
+            error.quiescence_diagnostic = _quiescence_failure_summary(cms_status, running, allowed)
+            raise error
     else:
         if not any(c['service'] == 'postgres' and c['state'] == 'running' for c in containers):
             fail('portal_database_container_unavailable')
@@ -2438,7 +2472,7 @@ def main(argv):
     except (ControlError, STATE.StateError) as error:
         _emit_control_error(error, release)
         if action in ('initialize-isolated', 'install-floor-commit'):
-            _emit_initializer_diagnostic(runtime)
+            _emit_initializer_diagnostic(runtime, error)
         return 2
     except Exception:
         if action in ('initialize-isolated', 'install-floor-commit'):

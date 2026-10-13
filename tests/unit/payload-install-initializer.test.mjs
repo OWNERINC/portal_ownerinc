@@ -5,6 +5,8 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { initializationRequest, legacySourceMaterial } from '../../scripts/integration/payload-preauthority-initialize.mjs';
+import { controlCommandOptions, createFixtureCommandFailure } from '../../scripts/integration/payload-preauthority-command.mjs';
+import { createRecoveryFailureReportFields } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
 
 // Real private inventory, manifests, HMAC journal/proofs, tar trees, Runtime
 // constructor and ops commands. Docker/DB/health observations and proc-fd on
@@ -244,7 +246,64 @@ def provisioned(directory):
   });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+  return result;
 }
+
+test('successful stop with observed API/cron still running fails at the actual quiescence predicate before B0 (Docker/DB doubles)', async t => {
+  const result = await fixture(t, String.raw`
+from contextlib import redirect_stderr
+model=Model('quiescence-after-zero-stop');original_run=model.run;original_psql=model.psql;stopped=[False]
+def run(args,**kwargs):
+    if 'compose' in args and 'stop' in args:
+        model.commands.append(args);stopped[0]=True
+        return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+    result=original_run(args,**kwargs)
+    if args[:2]==['docker','ps']:
+        foreign='eeeeeeeeeeee\tother-private-project\tprivate-unknown-service\trunning\tother-private-project-private-container\n'
+        result.stdout += foreign if isinstance(result.stdout,str) else foreign.encode()
+    return result
+def psql(*args):
+    assert not stopped[0],'quiescence rejection must precede post-stop database checks'
+    return original_psql(*args)
+model.run=run;model.psql=psql;stderr=io.StringIO()
+with model.context(),redirect_stderr(stderr):
+    assert R.main(['control','initialize-isolated',model.release,model.request])==2
+text=stderr.getvalue()
+assert text==('writers_not_quiescent\nPREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=quiescence installStage=none '
+    'commandExit=none commandSignal=none privateStderr=none quiescencePredicate=running_service_not_allowed '
+    'quiescenceCms=cold quiescenceOffenders=api:running:1,cron:running:1 quiescenceTruncated=false\n'),text
+state=model.state()
+assert state['admission']=='closed' and state['workerHold'] is True and state['installIntent'] is None
+assert state['latestProofSha256'] is None and state['legacySourceProofSha256'] is None
+assert os.path.exists(model.config['paths']['admissionClosed'])
+assert os.listdir(model.backups)==[] and not model.granted and not model.roles and not model.native
+assert set(model.containers)=={'postgres','api','cron'} and len(model.volumes)==2
+index=next(i for i,c in enumerate(model.commands) if 'compose' in c and 'stop' in c)
+assert len(model.commands[index+1:])==1 and model.commands[index+1][:2]==['docker','ps'],model.commands[index+1:]
+assert model.root not in text and 'private' not in text.replace('privateStderr','')
+# The same real inventory parser must ignore the unrelated project's running
+# container even if its labels would be invalid in this project.
+for service in ('api','cron'):model.containers[service]['State']['Status']='exited'
+with model.context():
+    observed=R._check_container_shape('cold',quiescent=True)
+    assert len(observed)==3
+summary=R._quiescence_failure_summary('cold',
+    [{'service':'api','state':'running'}]*105 + [{'service':'private-malicious-label','state':'running'}],{'postgres'})
+assert summary['offenders']==[{'service':'api','state':'running','count':99},{'service':'unknown','state':'running','count':1}]
+assert summary['truncated'] is True and 'private-malicious-label' not in json.dumps(summary)
+print('QUIESCENCE_TEST_FRAME='+json.dumps(text))
+`);
+  if (!result) return; // fixture reports an explicit skip when Python is unavailable.
+  const stderr = JSON.parse(result.stdout.match(/^QUIESCENCE_TEST_FRAME=(.+)$/mu)[1]);
+  const failure = createFixtureCommandFailure({ status: 2, stderr: Buffer.from(stderr) },
+    controlCommandOptions('initialize-isolated', '/synthetic/release'));
+  const report = createRecoveryFailureReportFields({ primaryError: failure });
+  assert.equal(report.commandDiagnostic.controlErrorIdentifier, 'writers_not_quiescent');
+  assert.deepEqual(report.commandDiagnostic.initializer.quiescence, {
+    predicate: 'running_service_not_allowed', cmsStatus: 'cold', truncated: false,
+    offenders: [{ service: 'api', state: 'running', count: 1 }, { service: 'cron', state: 'running', count: 1 }],
+  });
+});
 
 test('initializer main attributes failures to the concrete phase and last signed milestone without changing admission or audit', async t => {
   await fixture(t, String.raw`

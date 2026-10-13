@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Quiescence failure attribution and progress upload correction
+
+The initializer now preserves a bounded summary from the exact inventory that rejected quiescence: allowlisted service/state buckets, capped counts and overflow indication. Its operational predicate, closed admission, pre-B0 refusal and exit remain unchanged. Parsing requires the exact initializer failure context; the summary is included only in the failed report, not the 1 KiB progress checkpoint. This does not establish which service caused the earlier run.
+
+The redacted checkpoint now explicitly applies `0644` to its exclusively owned temporary descriptor before fsync/rename, preventing restrictive recovery umask from denying the artifact uploader access. No global umask or private-evidence permissions change. The corrected POSIX regression emits and checks successive checkpoint records; native execution remains pending.
+
+Both bounded changes received independent code-review `ship`. Primary focused checks passed **37 / 1 POSIX skip / zero failures**. Complete `npm run verify` passed **Portal 1,820 PASS / 15 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`**. Log: `%LOCALAPPDATA%/Temp/opencode/payload-quiescence-final-verify.log`. No VPS changes or recovery acceptance are claimed.
+
 ## Mandatory native trust fixture wiring
 
 The candidate-only native gate now also runs the trust-provisioner suite with `PAYLOAD_REQUIRE_NATIVE_TRUST=1`, so unavailable native execution fails rather than skips. The unique `/root` sandbox redirects only destination constants; production destinations remain unchanged. The fixture asserts actual filesystem metadata, nofollow reads, no-replace rename, interrupted installation/retry, policy-last publication and existing-record preservation. This is not a power-loss test or SSH authorization proof.
