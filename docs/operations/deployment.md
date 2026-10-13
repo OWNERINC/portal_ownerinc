@@ -796,3 +796,101 @@ os gates aprovados.
 
 Nenhum segredo de runtime, Firebase, SMTP ou banco é enviado ao GitHub: eles
 continuam somente nos arquivos protegidos de cada VPS.
+
+### Preparação P2: instalação de autoridade e verificação somente
+
+O perfil explícito `--profile preparation` de
+`ops/provision-payload-candidate-trust.py` instala uma closure fixa e inerte.
+Sem esse argumento, a CLI e o schema de candidate trust permanecem inalterados.
+O **programa bootstrap deve ser autenticado administrativamente antes de root
+executá-lo**; o digest independente da aprovação não autentica retroativamente
+o programa que o verifica. Bundle recebido de candidato e `approvedRevisions`
+da policy de admission não constituem autoridade para executar preparação.
+
+Invocação administrativa, depois dessa autenticação independente:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /root/approved/provision-payload-candidate-trust.py \
+  --profile preparation --check --approval /root/approved/preparation.json \
+  --approval-sha256 "$INDEPENDENT_APPROVAL_SHA256" --bundle /root/approved/preparation-bundle
+```
+
+`--apply` no **provisioner** publica apenas fontes/launcher/aprovação, nunca
+executa o preparer. Usa os mesmos protected reads, snapshots retidos sob
+`/var/lib/ownerinc/payload-candidate/trust-snapshots`, fsync e
+`renameat2(RENAME_NOREPLACE)` do bootstrap existente. Destinos são ausentes ou
+idênticos, sem reparo de conflitos. A aprovação é publicada por último, após
+revalidar entradas e toda a closure. Retry reafirma durabilidade; não substitui
+aprovação nem fonte já instalada diferente. Não há network ou execução de bundle.
+
+Closure exata de 15 nomes no bundle e em `source.files`:
+
+```text
+ops/prepare-cms-infrastructure.sh
+ops/prepare-cms-infrastructure-private.py
+ops/payload-control-inventory.py
+ops/payload-control-state.py
+ops/deploy-from-ci.sh
+ops/payload-receiver-admission.py
+ops/payload-receiver-root.sh
+ops/deploy-from-production-ci.sh
+ops/payload-operations-guard.sh
+ops/payload-control
+ops/payload-control-runtime.py
+ops/compose.payload.production.yaml
+docker-compose.payload.yml
+ops/prepare-cms-authenticated.py
+ops/provision-payload-candidate-trust.py
+```
+
+Os arquivos vão para `/opt/ownerinc/lib/payload-preparation/<nome>`, exceto o
+launcher, instalado em `/usr/local/libexec/ownerinc-payload-prepare.py`.
+Código é root:root `0755`; Compose é `0644`; a aprovação protegida é `0600` em
+`/etc/ownerinc/payload-preparation/production-approval.json`. Bundle tem somente
+esses nomes, modos correspondentes e ancestry root-protected. Não inclui policy,
+record, executáveis admission ou configuração de runtime: são trust separado.
+
+O schema independente, fechado, é `schemaVersion: 1`,
+`kind: ownerinc-payload-preparation-approval-v1`, `environment: production`,
+`repository: OWNERINC/portal_ownerinc`, com:
+
+- `source`: `commit` (40 hex; proveniência administrativa, **não prova de árvore
+  Git**) e `files` (mapa exato dos 15 nomes para SHA-256).
+- `hostBaseline`: `currentCommit`, `legacyImages` com digests imutáveis api/cron,
+  `releaseComposeSha256`, `runtimeComposeSha256`, `releaseOverrideSha256`
+  (hash ou null para ausência), `inventoryIdentity`, e `installedPredecessors`
+  com `commonReceiver` obrigatório e `receiverHelper`, `productionWrapper`,
+  `operationsGuard`, `cmsCandidate` como hash ou null.
+- `admission`: `policySha256`, `archiveSha256`, `recordSha256`.
+
+Campos extras, chaves duplicadas, tipos coercíveis e paths arbitrários não são
+aceitos. O bootstrap valida baseline **apenas como schema**, não como observação
+do host; tampouco autentica admission durante a publicação.
+
+O launcher instalado aceita **somente `--check`**, sob o mesmo ambiente vazio e
+Python `-I -S -B`. `--apply` é negado. Antes de importar qualquer helper da closure,
+seu leitor stdlib verifica ancestry, ownership, modos, links, identidade e hashes
+de todos os 15 arquivos. O launcher em execução é parte da confiança administrativa
+prévia; seu próprio hash não é uma prova independente de si mesmo. Só então carrega
+os bytes autenticados do suporte instalado, nunca módulos do checkout.
+
+Depois autentica policy pelo hash aprovado e todos os tools/executáveis admission
+antes de carregar bytes do verifier fixo. Reutiliza `validate_record`,
+`verify_record_binding` e `verify_installed_tools` reais. O record é lido de
+`/var/lib/ownerinc/payload-candidate/records/<archiveSha256>.<policySha256>.json`,
+protegido e vinculado pelo hash independente. Mantém contrato qualificatório,
+revision/workflow/repository bindings e `deploymentAuthorized: false`. O CMS
+vem somente de `record.images.cms`; nenhum argumento fornece imagem alternativa.
+Isto confia na origem administrativa/registrar do record protegido, não recria
+artefatos CI, nem verifica bytes de archive ausentes.
+
+Saída JSON não qualificadora: `kind: payload-preparation-verification-only`,
+`sourceAuthenticated: true`, `admissionRecordAuthenticated: true`, `cmsImage`,
+`hostBaselineChecked: false`, `archiveBytesChecked: false`,
+`preparationExecuted: false`, `deploymentAuthorized: false`.
+Nenhum lock/FD9, host eligibility, banco, serviço ou preparer é executado.
+Pins antigos de current release/CMS, inventory/state/guards e
+`release_not_preflighted` permanecem intactos. Integração sob lease e aceite
+operacional continuam sendo outro bloco. Provas portáteis usam doubles explícitos;
+não qualificam instalação/root/SSH na VPS nem durabilidade sob power loss.

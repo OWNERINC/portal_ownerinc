@@ -1,5 +1,11 @@
 # Payload production completion: initial decision and evidence
 
+## Preparation authority — install and verify only
+
+The preparation provisioning profile binds the exact 15-file closure and publishes the independent approval last. The fixed launcher authenticates captured source and the admission toolchain before executing their validators. It uses the existing record/policy validators and accepts only `--check`; host-baseline checking, archive-byte verification, preparation execution and deployment authorization remain explicitly false. Existing preparer pins remain unchanged.
+
+Independent code review returned `ship`. Primary `npm run verify` passed **Portal 1,826 PASS / 15 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`**. Evidence: `%LOCALAPPDATA%/Temp/opencode/payload-preparation-authority-verify.log`. Portable preparation fixtures use explicit metadata/publication doubles; the native candidate trust fixture does not establish end-to-end native preparation-launcher acceptance. No VPS installation or host eligibility is claimed.
+
 ## Quiescence failure attribution and progress upload correction
 
 The initializer now preserves a bounded summary from the exact inventory that rejected quiescence: allowlisted service/state buckets, capped counts and overflow indication. Its operational predicate, closed admission, pre-B0 refusal and exit remain unchanged. Parsing requires the exact initializer failure context; the summary is included only in the failed report, not the 1 KiB progress checkpoint. This does not establish which service caused the earlier run.

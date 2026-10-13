@@ -19,6 +19,97 @@ TOOL_FILES = ('ops/payload-candidate-verifier.py', 'scripts/register-payload-can
               'scripts/package-payload-candidate.mjs', 'scripts/lib/payload-candidate-qualification.mjs')
 MAX_JSON = 1024 * 1024
 MAX_BINARY = 200 * MAX_JSON
+PREPARATION_ROOT = '/opt/ownerinc/lib/payload-preparation'
+PREPARATION_LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
+PREPARATION_APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
+PREPARATION_FILES = (
+    'ops/prepare-cms-infrastructure.sh', 'ops/prepare-cms-infrastructure-private.py',
+    'ops/payload-control-inventory.py', 'ops/payload-control-state.py',
+    'ops/deploy-from-ci.sh', 'ops/payload-receiver-admission.py', 'ops/payload-receiver-root.sh',
+    'ops/deploy-from-production-ci.sh', 'ops/payload-operations-guard.sh', 'ops/payload-control',
+    'ops/payload-control-runtime.py', 'ops/compose.payload.production.yaml', 'docker-compose.payload.yml',
+    'ops/prepare-cms-authenticated.py', 'ops/provision-payload-candidate-trust.py')
+
+
+def preparation_target(relative):
+    require(relative in PREPARATION_FILES, 'invalid_preparation_file')
+    return PREPARATION_LAUNCHER if relative == 'ops/prepare-cms-authenticated.py' else PREPARATION_ROOT + '/' + relative
+
+
+def preparation_mode(relative):
+    return 0o644 if relative.endswith(('.yaml', '.yml')) else 0o755
+
+
+def validate_preparation_approval(value):
+    shape(value, ('schemaVersion', 'kind', 'environment', 'repository', 'source', 'hostBaseline', 'admission'))
+    require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
+            and value['kind'] == 'ownerinc-payload-preparation-approval-v1'
+            and value['environment'] == 'production' and value['repository'] == 'OWNERINC/portal_ownerinc',
+            'invalid_preparation_approval')
+    shape(value['source'], ('commit', 'files'))
+    require(matches(value['source']['commit'], r'[0-9a-f]{40}'), 'invalid_source_commit')
+    shape(value['source']['files'], PREPARATION_FILES)
+    require(all(hash64(v) for v in value['source']['files'].values()), 'invalid_source_hash')
+    baseline = value['hostBaseline']
+    shape(baseline, ('currentCommit', 'legacyImages', 'releaseComposeSha256', 'runtimeComposeSha256',
+                     'releaseOverrideSha256', 'inventoryIdentity', 'installedPredecessors'))
+    require(matches(baseline['currentCommit'], r'[0-9a-f]{40}'), 'invalid_current_commit')
+    shape(baseline['legacyImages'], ('api', 'cron'))
+    for service, image in baseline['legacyImages'].items():
+        require(matches(image, r'ghcr\.io/ownerinc/ownerinc-portal-' + service + r'@sha256:[0-9a-f]{64}'), 'invalid_legacy_image')
+    for field in ('releaseComposeSha256', 'runtimeComposeSha256', 'inventoryIdentity'):
+        require(hash64(baseline[field]), 'invalid_baseline_hash')
+    require(baseline['releaseOverrideSha256'] is None or hash64(baseline['releaseOverrideSha256']), 'invalid_override_hash')
+    predecessors = baseline['installedPredecessors']
+    shape(predecessors, ('commonReceiver', 'receiverHelper', 'productionWrapper', 'operationsGuard', 'cmsCandidate'))
+    require(hash64(predecessors['commonReceiver']) and all(v is None or hash64(v) for v in predecessors.values()),
+            'invalid_predecessor_hash')
+    shape(value['admission'], ('policySha256', 'archiveSha256', 'recordSha256'))
+    require(all(hash64(v) for v in value['admission'].values()), 'invalid_admission_binding')
+    return value
+
+
+def load_preparation_inputs(approval_path, expected_hash, bundle):
+    require(hash64(expected_hash), 'invalid_approval_digest')
+    raw = read_protected(approval_path, 0o600, MAX_JSON)
+    require(sha(raw) == expected_hash, 'approval_digest_mismatch')
+    approval = validate_preparation_approval(strict_json(raw))
+    bundle_layout(bundle, PREPARATION_FILES)
+    targets = {}
+    for relative in PREPARATION_FILES:
+        mode = preparation_mode(relative)
+        content = read_protected(bundle + '/' + relative, mode, 2 * MAX_JSON)
+        require(sha(content) == approval['source']['files'][relative], 'preparation_source_mismatch')
+        targets[preparation_target(relative)] = (content, mode, 2 * MAX_JSON)
+    targets[PREPARATION_APPROVAL] = (raw, 0o600, MAX_JSON)
+    return raw, approval, targets
+
+
+def provision_preparation(mode, approval_path, expected_hash, bundle):
+    original = load_preparation_inputs(approval_path, expected_hash, bundle)
+    raw, _, targets = original
+    snapshots = STATE_ROOT + '/trust-snapshots'
+    directories(snapshots, missing=True, private=True)
+    present = [existing_target(filename, expected) for filename, expected in targets.items()]
+    if mode == 'check':
+        return 'Preparation provisioning check passed; no files written; host eligibility not checked.'
+    require(mode == 'apply', 'invalid_action')
+    os.umask(0o077)
+    directories(snapshots, create=True, private=True)
+    for filename in targets:
+        directories(os.path.dirname(filename), create=True)
+    if not all(present):
+        snapshot_prestate(raw, targets)
+    for filename, expected in targets.items():
+        if filename != PREPARATION_APPROVAL:
+            publish(filename, expected)
+    require(load_preparation_inputs(approval_path, expected_hash, bundle) == original, 'inputs_changed')
+    for filename, expected in targets.items():
+        if filename != PREPARATION_APPROVAL:
+            require(existing_target(filename, expected), 'incomplete_preparation_closure')
+    publish(PREPARATION_APPROVAL, targets[PREPARATION_APPROVAL])
+    require(all(existing_target(f, e) for f, e in targets.items()), 'incomplete_installation')
+    return 'Preparation verification closure installed; preparation execution and deployment remain disabled.'
 
 
 class ProvisionError(Exception):
@@ -366,10 +457,11 @@ def main(args=None):
     actions.add_argument('--apply', action='store_true')
     for flag in ('approval', 'approval-sha256', 'bundle'):
         parser.add_argument('--' + flag, required=True)
+    parser.add_argument('--profile', choices=('preparation',))
     raw_args = sys.argv[1:] if args is None else args
-    require(len(raw_args) == 7, 'invalid_arguments')
+    require(len(raw_args) == (9 if '--profile' in raw_args else 7), 'invalid_arguments')
     require(all(raw_args.count(flag) <= 1 for flag in
-                ('--check', '--apply', '--approval', '--approval-sha256', '--bundle')), 'invalid_arguments')
+                ('--check', '--apply', '--approval', '--approval-sha256', '--bundle', '--profile')), 'invalid_arguments')
     selected = parser.parse_args(raw_args)
     require(sys.platform == 'linux' and os.getuid() == 0 and os.geteuid() == 0
             and os.getgid() == 0 and os.getegid() == 0, 'root_linux_required')
@@ -377,6 +469,10 @@ def main(args=None):
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'}
             and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C', 'clean_environment_required')
+    if selected.profile == 'preparation':
+        require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'), 'python_interpreter_mismatch')
+        print(provision_preparation('check' if selected.check else 'apply', selected.approval, selected.approval_sha256, selected.bundle))
+        return
     _, policy, _ = load_inputs(selected.approval, selected.approval_sha256, selected.bundle)
     python = policy['toolchain']['executables']['python']['path']
     require(os.path.realpath(sys.executable) == python and os.path.realpath('/usr/bin/python3') == python,

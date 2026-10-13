@@ -138,6 +138,51 @@ def inventory():
     return {str(file.relative_to(root)):file.read_bytes() for file in pathlib.Path(root).rglob('*') if file.is_file()}
 `;
 
+test('preparation profile reuses protected publication and retries without changing candidate CLI (ownership doubles)', () => {
+  const result = probe(filesystem + String.raw`
+try:
+    base=os.path.join(root,'preparation');bundle=os.path.join(base,'bundle')
+    p.PREPARATION_ROOT=os.path.join(base,'installed');p.PREPARATION_LAUNCHER=os.path.join(base,'libexec','prepare.py')
+    p.PREPARATION_APPROVAL=os.path.join(base,'etc','approval.json');p.STATE_ROOT=os.path.join(base,'state')
+    content={name:b'UNTRUSTED_DATA_NEVER_EXECUTED\n' for name in p.PREPARATION_FILES}
+    for name,data in content.items():write(bundle+'/'+name,data,p.preparation_mode(name))
+    approval={'schemaVersion':1,'kind':'ownerinc-payload-preparation-approval-v1','environment':'production',
+      'repository':'OWNERINC/portal_ownerinc','source':{'commit':'a'*40,'files':{n:p.sha(d) for n,d in content.items()}},
+      'hostBaseline':{'currentCommit':'b'*40,'legacyImages':{s:'ghcr.io/ownerinc/ownerinc-portal-'+s+'@sha256:'+'c'*64 for s in ('api','cron')},
+        'releaseComposeSha256':'d'*64,'runtimeComposeSha256':'e'*64,'releaseOverrideSha256':None,'inventoryIdentity':'f'*64,
+        'installedPredecessors':{'commonReceiver':'1'*64,'receiverHelper':None,'productionWrapper':None,'operationsGuard':None,'cmsCandidate':None}},
+      'admission':{'policySha256':'2'*64,'archiveSha256':'3'*64,'recordSha256':'4'*64}}
+    raw=(json.dumps(approval)+'\n').encode();filename=os.path.join(base,'input.json');write(filename,raw,0o600)
+    args=(filename,p.sha(raw),bundle);before=inventory()
+    assert 'no files written' in p.provision_preparation('check',*args) and inventory()==before
+    original_publish=p.publish;events=[]
+    def interrupted(name,expected):
+        if len(events)==6:raise OSError('interruption')
+        original_publish(name,expected);events.append(name)
+    p.publish=interrupted;denied(lambda:p.provision_preparation('apply',*args))
+    assert not os.path.lexists(p.PREPARATION_APPROVAL)
+    def observe(name,expected):original_publish(name,expected);events.append(name)
+    p.publish=observe;events.clear();p.provision_preparation('apply',*args)
+    assert events[-1]==p.PREPARATION_APPROVAL
+    assert len(os.listdir(p.STATE_ROOT+'/trust-snapshots'))==2
+    before=inventory();p.provision_preparation('apply',*args);assert inventory()==before
+    write(p.PREPARATION_LAUNCHER,b'unknown',0o755);events.clear()
+    denied(lambda:p.provision_preparation('apply',*args),'destination_conflict');assert events==[]
+    # Existing seven-argument CLI still selects candidate trust, never preparation.
+    from unittest.mock import patch
+    cli=['--check','--approval',filename,'--approval-sha256',p.sha(raw),'--bundle',bundle]
+    with patch.object(p.sys,'platform','linux'),patch.object(p.os,'getuid',return_value=0,create=True), \
+         patch.object(p.os,'geteuid',return_value=0,create=True),patch.object(p.os,'getgid',return_value=0,create=True), \
+         patch.object(p.os,'getegid',return_value=0,create=True),patch.dict(p.os.environ,{'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'},clear=True), \
+         patch.object(p.os.path,'realpath',return_value='/usr/bin/python3'):
+        denied(lambda:p.main(cli),'invalid_shape')
+        with patch.object(p,'provision_preparation',return_value='verify-only profile') as selected:
+            p.main(cli+['--profile','preparation']);assert selected.call_count==1
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test('offline real filesystem: read-only check, exact publication, retained snapshots, idempotence and record preservation (ownership doubles)', () => {
   const result = probe(filesystem + String.raw`
 try:
