@@ -1,5 +1,69 @@
 # Runtime Payload e recuperação coordenada
 
+## Progresso diagnóstico do recovery (2026-10-13)
+
+O CI `38436732170` atingiu o limite de 60 minutos sem report final publicado.
+Os artefatos observados foram candidate, digest CMS e SBOM. O runner captura saída
+dos comandos e escreve o report de aceite somente no término: silêncio no log
+**não identifica um hang, etapa culpada ou causa raiz**. Os budgets cumulativos
+podem ultrapassar o limite global. Este bloco adiciona visibilidade, não altera
+budgets, timeout HTTP, retries, spawn síncrono, sinais, critérios de qualificação
+ou comportamento operacional.
+
+O runner agora emite JSON redigido em cada início/fim de comando síncrono e nas
+transições de stage/substep. Cada registro inclui `schemaVersion: 1`,
+`artifactKind: "diagnostic-progress"`, `qualifiesAcceptance: false`, `sequence`,
+`elapsedMs`, `stage`, `substep`, `fixtureRole`, `event`, `commandCategory`,
+`timeoutMs`, `outcome` e `firstFailure`. Os nomes são allowlists finitas; desconhecidos viram
+`unknown`. Roles públicas são apenas `source`, `target`, `leaseTarget`, `global`.
+Não entram argumentos, nomes de projetos, caminhos, environment, SQL, URLs,
+saída de filhos ou texto de exceções. O timeout de cada comando reflete exatamente
+`options.timeout || 180_000`, inclusive os budgets já maiores do coordinator.
+`elapsedMs` é monotônico desde o início do diagnóstico; comparar eventos begin/end
+para a duração observada. `completed` descreve somente o retorno da operação, não
+aceite recovery. Não há heartbeat, nova espera, retry ou polling; chamadas repetidas
+com stage/substep inalterados não geram novas transições.
+
+Antes de bloquear em um comando, o registro é persistido sincronamente como um
+checkpoint de **último evento**, limitado a 1 KiB, usando arquivo temporário
+exclusivo + fsync + rename atômico. `PAYLOAD_RECOVERY_PROGRESS` seleciona o destino;
+o default é `payload-preauthority-recovery-progress.json` em RUNNER_TEMP/temp.
+Esse destino não pode coincidir com o report final. O CI fornece explicitamente
+esse caminho e publica somente esse arquivo no artefato separado
+`payload-preauthority-recovery-progress`, inclusive após falha quando possível.
+Não há glob sobre fixtures, stderr ou evidência privada. A publicação diagnóstica
+não bloqueia a qualificação; seu upload tem `continue-on-error`.
+
+O artefato existente `payload-preauthority-recovery-report` continua contendo
+apenas seu JSON original. O schema do report final e a entrada do qualifier não
+mudaram. O qualifier rejeita o checkpoint diagnóstico, mesmo após um evento
+`completed`; ele nunca substitui report ausente ou autoriza instalação/ativação.
+
+Há boundaries explícitos para cleanup, holds pós-falha, persistência de evidências
+privadas, corrida de lease e escrita do report terminal. O motivo/stage/substep
+primário é capturado antes dos holds, respeitando qualquer falha de snapshot já
+preservada antes de um restart. `firstFailure` é `null` antes da primeira falha
+primária de aceite (rejeições esperadas da matriz negativa não o preenchem);
+depois contém somente `{stage, substep, fixtureRole}` normalizados e aparece em
+**todos** os registros seguintes, separado da operação atual. Uma falha posterior
+ou mudança para holds/cleanup não substitui esse snapshot. Stages dinâmicos são
+traduzidos apenas por igualdade com identidades conhecidas dos runtimes, nunca
+por regex que aceite nomes arbitrários. Códigos de erro, texto bruto e nomes de
+projetos não entram em `firstFailure`. A primeira falha fica retida em memória
+antes de qualquer I/O: se sua escrita falhar, um checkpoint posterior ainda a
+preserva, sem exceder o limite de 1 KiB por registro. Falha no checkpoint/console produz no máximo um
+alerta fixo `Payload recovery diagnostic progress unavailable.` e não substitui
+o erro operacional nem impede holds. Falha ao escrever o report terminal mantém
+o objeto de falha original, emite somente alerta fixo e termina sem anunciar PASS.
+
+Um checkpoint `command_begin` sem end correspondente significa **conclusão não
+observada**, não prova deadlock. SIGKILL/cancelamento do job pode impedir report
+terminal, holds em JS e até upload posterior; o checkpoint não garante execução
+dessas ações. Testes locais cobrem I/O real/serialização, interrupção de um processo
+filho e trechos reais do runner com doubles operacionais identificados. A próxima
+execução candidata autorizada ainda é necessária para localizar o orçamento gasto
+e obter aceite real; nenhum serviço ou recovery foi executado por esse bloco.
+
 ## Task 3 — contrato do proxy fixture após CI 37997573123 (2026-10-13)
 
 **Bloco 1 documental e implementação/testes locais dos blocos 2–4 concluídos; bloco 5

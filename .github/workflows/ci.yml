@@ -401,6 +401,7 @@ jobs:
           CRON_IMAGE: ${{ steps.publish.outputs.cron_image }}
           CMS_IMAGE: ${{ steps.publish_cms.outputs.cms_image }}
           RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
+          RECOVERY_PROGRESS: ${{ runner.temp }}/payload-preauthority-recovery-progress.json
         run: |
           set -euo pipefail
           # Recovery rejects every nonempty DOCKER_* override. Do not forward
@@ -411,6 +412,7 @@ jobs:
             GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" RUNNER_TEMP="$RUNNER_TEMP" \
             PAYLOAD_RECOVERY_REPORT="$RECOVERY_REPORT" \
+            PAYLOAD_RECOVERY_PROGRESS="$RECOVERY_PROGRESS" \
             node scripts/test-payload-preauthority-recovery.mjs
       - name: Upload redacted preauthority recovery report
         id: upload_recovery_report
@@ -419,6 +421,15 @@ jobs:
         with:
           name: payload-preauthority-recovery-report
           path: ${{ runner.temp }}/payload-preauthority-recovery-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Upload nonqualifying recovery diagnostic progress
+        if: ${{ always() && inputs.publish_candidate_only == true && inputs.cms_image_only != true }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: payload-preauthority-recovery-progress
+          path: ${{ runner.temp }}/payload-preauthority-recovery-progress.json
           if-no-files-found: ignore
           retention-days: 30
       - name: Create recovery-qualified candidate manifest

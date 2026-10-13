@@ -30,7 +30,7 @@ test('the actual four-service writer lifecycle fits the stop budget', () => {
 test('quiescence uses the matching bounded stop flag and verifies all writers before snapshots', () => {
   assert.match(recoveryRunner, /timeout: fixtureStopCommandTimeoutMs\(writers\.length\)/u);
   assert.match(recoveryRunner, /'--timeout', String\(FIXTURE_STOP_TIMEOUT_SECONDS\)/u);
-  assert.match(recoveryRunner, /setStage\(`quiescent_snapshot_\$\{runtime\.project\}`\)/u);
+  assert.match(recoveryRunner, /setStage\(`quiescent_snapshot_\$\{runtime\.project\}`, 'quiescent_snapshot', runtime\.role\)/u);
 
   const stop = recoveryRunner.indexOf("substep: 'snapshot_stop_writers'");
   const verify = recoveryRunner.indexOf("setSubstep('snapshot_verify_writers_stopped')");

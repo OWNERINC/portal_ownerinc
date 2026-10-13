@@ -65,3 +65,13 @@ Primary full `npm run verify`, with `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Users\Publi
 Log: `%LOCALAPPDATA%/Temp/opencode/payload-receiver-final-verify.log`. The earlier failed full verification remains preserved separately; this result does not erase it.
 
 Primary inspected the receiver routing/extraction diff, helper implementation, installer dependency publication ordering, test-only path override and matching regression changes. Reviewed code remains admission-only. Native Linux/root installation and the complete production CMS activation/editorial journey remain pending. No deployment or VPS service change was performed in this block.
+
+## Recovery timeout diagnostic block
+
+CI `38436732170` subsequently completed with a 60-minute recovery-step timeout. GitHub exposed only candidate, CMS digest and SBOM artifacts; the recovery report was unavailable. Two read-only analyses and one bounded cross-critique established the absence of live boundaries and terminal-only reporting, not the cause of the timeout. No timeout or retry increase was made.
+
+The diagnostic patch emits finite allowlisted stage/command boundaries and an atomic latest checkpoint capped at 1 KiB. It has a separate nonqualifying artifact; the acceptance report and qualifier inputs are unchanged. Every subsequent record retains the first normalized failure, including during holds. Private command data is never serialized. Fresh independent review returned `ship`, including the final first-failure correction.
+
+Primary final checks: progress/diagnostics/readiness **28 PASS, zero failures/skips**; full `npm run verify` **PASS**, Portal **1,802 PASS / 13 skips / zero failures**, CMS **448 PASS / 11 skips / zero failures**, final `verify: ok`; `git diff --check` PASS. Full verification used the same validated `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Users\Public` override. Log: `%LOCALAPPDATA%/Temp/opencode/payload-progress-final-verify.log`.
+
+These results validate the diagnostics locally; they do not identify the historical timed-out operation or qualify recovery. One new candidate execution is the next evidence-gathering step. Production remains unchanged.
