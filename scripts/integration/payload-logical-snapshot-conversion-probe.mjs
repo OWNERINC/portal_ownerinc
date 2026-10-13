@@ -175,7 +175,7 @@ print(module._tar_tree(sys.stdin.buffer,compressed=False))`;
     const assertStopped = () => {
       step = step === 'conversion_baseline' ? 'conversion_baseline_writers' : 'conversion_compare_writers';
       const running = compose(['ps', '--status', 'running', '--services']).toString('utf8').trim().split(/\r?\n/u);
-      if (running.some(service => ['api','cron','cms','cms-worker'].includes(service))) throw new FixtureFailure('logical_snapshot_conversion_writers_active');
+      if (running.some(service => ['api','cron','cms','nginx','cms-worker'].includes(service))) throw new FixtureFailure('logical_snapshot_conversion_writers_active');
     };
     const snapshot = () => {
       const prefix = step.startsWith('conversion_baseline') ? 'baseline' : 'compare';

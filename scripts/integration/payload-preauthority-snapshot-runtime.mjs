@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { request } from 'node:http';
 
 // The source-only conversion gate and the three-fixture resume gate share exact
 // path/Compose validation. Roles are a hardcoded caller policy, never stdin.
@@ -74,5 +75,47 @@ export function conversionProbeCommandInput(runtime, { commit, python }) {
 
 export function writerRestartCommandInput(runtime, { commit, python, mode, identities = null }) {
   const wire = conversionProbeCommandInput(runtime, { commit, python });
-  return { env: wire.env, input: JSON.stringify({ configuration: JSON.parse(wire.input), mode, identities }) };
+  return { env: wire.env, input: serializeWriterRestartRequest(JSON.parse(wire.input), mode, identities) };
+}
+
+export function serializeWriterRestartRequest(configuration, mode, identities = null) {
+  return JSON.stringify({ configuration, mode, identities });
+}
+
+/** Availability only, NOT the full smoke: same running proxy, one exact loopback
+ * port and HTTP 200 from /api/ready. No body, redirect following or credential
+ * output. Eight bounded 3s attempts with 250ms between attempts. */
+export async function awaitFixtureProxyAvailability(runtime, identity, inspect) {
+  const fail = code => { throw Object.assign(new Error(code), { code }); };
+  if (!Number.isInteger(runtime?.port) || runtime.port < 1 || runtime.port > 65535
+      || runtime.baseUrl !== `http://127.0.0.1:${runtime.port}`) fail('fixture_nginx_endpoint_invalid');
+  if (typeof identity !== 'string' || !/^[a-f0-9]{64}$/u.test(identity) || typeof inspect !== 'function') fail('fixture_nginx_identity_invalid');
+  const verify = async () => {
+    const value = await inspect(identity);
+    const labels = value?.Config?.Labels;
+    if (value?.Id !== identity || labels?.['com.docker.compose.project'] !== runtime.project
+        || labels?.['com.docker.compose.service'] !== 'nginx' || labels?.['com.docker.compose.oneoff'] !== 'False'
+        || value?.State?.Status !== 'running' || value.State.Running !== true
+        || value.State.Paused !== false || value.State.Restarting !== false) fail('fixture_nginx_identity_invalid');
+    const ports = value.NetworkSettings?.Ports?.['80/tcp'];
+    if (!Array.isArray(ports) || ports.length !== 1 || ports[0]?.HostIp !== '127.0.0.1'
+        || ports[0]?.HostPort !== String(runtime.port)) fail('fixture_nginx_port_invalid');
+  };
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await verify();
+    const available = await new Promise(resolve => {
+      let settled = false;
+      const finish = value => { if (!settled) { settled = true; clearTimeout(deadline); resolve(value); } };
+      const client = request(`${runtime.baseUrl}/api/ready`, { method: 'GET' }, response => {
+        finish(response.statusCode === 200);
+        response.destroy();
+      });
+      const deadline = setTimeout(() => { finish(false); client.destroy(); }, 3000);
+      client.on('error', () => finish(false));
+      client.end();
+    });
+    if (available) { await verify(); return; }
+    if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  fail('fixture_nginx_http_unavailable');
 }

@@ -1,5 +1,219 @@
 # Runtime Payload e recuperação coordenada
 
+## Task 3 — contrato do proxy fixture após CI 37997573123 (2026-10-13)
+
+**Bloco 1 documental e implementação/testes locais dos blocos 2–4 concluídos; bloco 5
+pendentes.** Este
+contrato não declara revisão independente, recovery PASS nem operação autorizada
+em produção. Fonte e evidência detalhadas:
+[follow-up do coordinator resume](../reviews/2026-10-09-payload-coordinator-writer-resume.md#follow-up-2026-10-13--bloco-1-causa-e-contratos-do-fixture-http).
+
+O report real de `37997573123`/`f4a4c71` falhou no primeiro restore em
+`restore_smoke`, exit 1. Os três fixtures haviam passado health/restart/comparação
+quiescent, e os 11 negativos estavam rejeitados sem alteração de conteúdo. O
+primeiro restore não retornou com sucesso/comparação completa; o segundo não
+passou. O log público só confirma `first_actual_restore`: o stderr HTTP privado,
+status e corpo não foram recuperados. Não atribuir ao run um erro de curl
+fabricado nem interpretar health de API/CMS como prova de frontend/proxy.
+
+O harness em `f4a4c71` prepara Postgres/API/cron e depois API/cron/CMS, sem criar
+Nginx. O commit `5211664` removeu da readiness do restore a criação implícita via
+`compose up ... nginx`, substituindo-a por resume de identidades pré-stop. Esse
+resume é a fronteira correta: a falta do proxy deve ser corrigida na preparação
+do fixture, não pela criação/adoção de um objeto durante recovery.
+
+### Preparação, URL e identidade — bloco 2 implementado localmente
+
+- Após API e CMS ready, o harness prepara Nginx explicitamente nos fixtures source, target
+  e leaseTarget **antes da primeira observação de identidades e de qualquer
+  coordenador**. Reutilizar imagem pinned e mounts read-only existentes, backend
+  e porta publicada somente no loopback. Não mudar a topologia opcional de
+  produção, receipts, estado assinado ou ops Python.
+- O endpoint é exatamente `runtime.baseUrl=http://127.0.0.1:<porta alocada do
+  fixture>`, também fornecido como `RESTORE_BASE_URL`. Smoke usa esse valor
+  explícito como `BASE_URL`; não troca por porta default, outro host, endpoint
+  direto da API ou URL com credentials para produzir um PASS.
+- O lifecycle do fixture exige exatamente quatro serviços `api,cron,cms,nginx`:
+  quatro IDs completos distintos/chaves exatas, observação canônica de até
+  **512 bytes**, validação de **todos** antes do primeiro start e inspeção dos
+  mesmos IDs/estados depois. Resume não cria, recria, puxa, relabela ou adota.
+  `cms-worker` permanece held. Nginx não tem healthcheck: exigir running identity
+  mais readiness HTTP, nunca aguardar healthcheck inexistente via `awaitService`.
+- No bloco 2, o conversion probe está no escopo explicitamente, limitado à
+  inclusão de Nginx no conjunto exigido parado. Não mudar DDL, rejeição CLI,
+  cleanup/equality, lease ou política de worker. Seu prerequisite Linux continua
+  obrigatório e fail-closed, sem skip de capacidade real.
+
+### Smoke inicial/pré-restores implementado; diagnósticos e complementos pendentes
+
+O harness executa o smoke **real e completo** na preparação e antes de cada restore
+positivo, enquanto os serviços originais ainda estão running, com a URL exata.
+Ausência do proxy, porta errada ou proxy morto deve recusar antes de `pg_restore`
+ou limpeza de storage. Essa preflight fica no fixture; não substitui os gates do
+coordenador. Manter smoke completo após restore e todos os critérios existentes
+de HTTP/Origin, páginas, redirects e grafo local JS/MIME, com os mesmos retries e
+limites de tempo. Falha pós-restore continua fechando admission e conservando
+evidência/motivo primário; não chamar uma retomada parcial de recovery.
+
+Os blocos 4–5 devem verificar produtor→wire de quatro chaves, duplicados,
+oversized, troca/ausência de proxy, API healthy com proxy ruim, mesmo-ID start,
+timeout/transiente/retry/partial/signal, credentials/contexto, status/conteúdo/JS/
+redirect inválidos, percurso real de smoke inicial e pós-restore e staged failures
+sem efeitos destrutivos. Mocks existentes não são aceite Docker/HTTP. Diagnósticos
+usam somente checks/razões finitos para transporte/status/readiness/conteúdo/
+redirect/módulo; nenhum path privado, credential, corpo ou stack sai no report.
+Stderr desconhecido permanece privado e parser não ganha fallback para output
+arbitrário. O schema estrito de sucesso do qualifier permanece igual.
+
+### Evidência delimitada do bloco 2
+
+Criação explícita sob lease usa `up --detach --no-deps --no-recreate --no-build
+--pull never nginx` somente na preparação; resume permanece mesmo-ID start sem
+criação. O conjunto de quatro chaves/IDs é validado integralmente antes do primeiro
+start e reinspecionado depois; stop e o conjunto parado do conversion incluem Nginx.
+Nenhum ops Python/Compose de produção/pin foi alterado, e o overlay fixture já
+existente fornece backend/loopback.
+
+Na criação e após restart, a checagem limitada exige identidade running/labels e
+um único binding da porta 80 ao loopback/porta atribuída antes da requisição, mais
+reinspeção após sucesso. Usa a URL exata e apenas status 200 de `/api/ready`, oito
+tentativas de até 3s, intervalo de 250ms, sem seguir redirect ou ler o corpo.
+**Isso não substitui o smoke completo do bloco 3.** Códigos finitos de endpoint,
+identidade, porta e disponibilidade HTTP usam os campos existentes; o protocolo
+diagnóstico de smoke ainda não foi implementado.
+
+A regressão red de três→quatro foi reproduzida e corrigida. Checks direcionados:
+**49 PASS / três skips nativos existentes**, zero falhas; sintaxe dos cinco scripts
+alterados e `git diff --check` **PASS**. Teste de HTTP usa um servidor loopback real
+e metadados Docker doubled; transporte Linux fake Docker permanece explicitamente
+skipped neste Windows. Não há evidência de Nginx/Docker real ou de restore PASS.
+Esses resultados pertencem ao bloco 2. Full verify/security continuam reservados
+para depois do bloco 5.
+
+### Evidência delimitada do bloco 3
+
+O ID de Nginx observado na preparação é salvo uma vez e usado pelo gate antes e
+depois do smoke; não há reobservação/adoção de substituição. A cópia real
+`<release>/scripts/smoke.sh` recebe `BASE_URL` exatamente igual ao `RESTORE_BASE_URL`
+produzido para o fixture e mantém as tentativas configuradas. O gate inicial fica
+antes do seed/open/coordenador; os dois gates positivos ficam antes do snapshot
+do alvo e de cada chamada de restore. Falha de identidade/porta/disponibilidade ou
+do smoke impede esses callbacks. Smoke POST-restore, critérios completos,
+cleanup/admission/worker e scripts de smoke/coordenador permanecem inalterados.
+O diagnóstico é ainda o código/substep fixo do comando com stderr privado;
+parser detalhado pertence ao bloco 5.
+
+O mesmo comando focado, interrompido inicialmente pelo limite externo de 120s,
+foi repetido com limite de verificação de 600s, sem mudanças de código/curl/retry:
+**44 PASS, zero falhas/skips/cancelados, exit 0, wall time 103,200s** (Node 103,033s).
+Todos os casos terminaram; nenhum hang foi observado nessa execução. Somar os
+tempos de testes paralelos não é medir wall time, e a duração exata do run anterior
+não foi recuperada. Bash/curl com o grafo completo repetido nos três fluxos custa
+tempo no Windows; não se removeu cobertura nem se aumentou timeout de produção.
+
+O wrapper real executou o shell/script real contra HTTP loopback do teste e os
+arquivos do checkout. Apenas Docker metadata e callbacks de restore eram doubles:
+isso comprova smoke HTTP e ordering no harness, não Docker/Nginx/DB restore.
+Sintaxe dos quatro arquivos de código/teste alterados e `git diff --check` **PASS**.
+Log: `%LOCALAPPDATA%/Temp/opencode/cms-nginx-block3-focused-complete.log`.
+Esses resultados pertencem ao bloco 3; a conclusão posterior do bloco 4 segue abaixo.
+
+### Evidência delimitada do bloco 4 — regressões e teardown owned
+
+Regressões adicionais validam cada um dos quatro containers antes de qualquer
+start, guard real de conversion com Nginx/worker ativo antes de DDL, adapter real
+com Nginx sem healthcheck e resume parcial fechado/journal unchanged. Smoke HTTP
+real cobre retry transitório→sucesso, exaustão nos três gates sem callbacks
+destrutivos, refused/timeout/partial/signal e critérios HTTP/HTML/JS/redirect já
+existentes. Os três percursos completos distintos foram conservados, sem adicionar
+outra repetição bem-sucedida cara do grafo. Coordenador com doubles declarados
+mantém primary/proteção/admission em falha POST-smoke, inclusive cleanup falhando;
+nesse último caso não declara writers parados se o stop realmente falhou.
+
+O EBUSY inicial foi em cleanup do fixture, após **88 PASS / uma falha / um skip**.
+Seu holder não foi identificado na inspeção posterior; fixture failed e evidência
+originais foram preservados. O gap era aguardar o driver direto sem prova de
+terminação da árvore que podia herdar cwd/handles. A correção ficou no harness:
+Windows Job Object nativo com root suspenso→assign/membership→resume, sem breakaway;
+teardown pelo handle owned, accounting zero/eventos antes da **única** remoção.
+Não há retry de rm, sleep arbitrário ou kill de PID/nome não comprovadamente owned.
+POSIX usa sessão/grupo próprio e líder vivo via IPC; execução desse ramo Linux
+continua pendente, não é demonstrada pelo Windows.
+
+A regressão sincronizada confirma root/descendente vivos e owned antes de liberar
+saída antecipada. No ramo Windows detached, o descendente continuou ativo (259)
+após root exit=0 e terminou pelo job, com accounting zero confirmado. O ramo padrão
+apresentou uma transição de saída entre leituras; não atribui retrospectivamente
+o lock antigo a um processo. O erro C# local de nomes `member` foi confirmado pelo
+primary e corrigido só no harness. Cleanup reporting failure preserva o timeout
+primário real/callbacks bloqueados; ownership incerta retém fixture e falha.
+Nenhum HTTP/curl/critério ou timeout de produção foi alterado; teste real de 500ms
+permanece, sem mock de sucesso/timeout ou skip Windows.
+
+Resultado final: **91 PASS / zero falhas / um skip Linux root existente**, 92 testes,
+exit 0, wall time **208,162s** (Node 207,922s), orçamento de verificação 600s. Native
+ownership isolado: um PASS/zero skips. Sintaxe dos seis testes e diff-check **PASS**.
+Log: `%LOCALAPPDATA%/Temp/opencode/cms-nginx-block4-owned-focused.log`.
+Isso é evidência nativa Windows de lifecycle e HTTP do teste, não Docker/Nginx/PG
+restore. Esses resultados pertencem ao bloco 4; o bloco 5 segue abaixo.
+
+Os **14 checks, 11 negativos, dois restores completos, legacy/1, worker held,
+identidades/lease, provas e catálogo assinados** continuam obrigatórios. Full verify,
+revisão independente e aceite Linux ainda não estão concluídos.
+Nenhuma
+execução de CI, commit/push, SSH, Docker/serviço ou delegação foi realizada aqui.
+
+### Evidência delimitada do bloco 5 — atribuição finita, sem mudança HTTP
+
+`scripts/smoke.sh` conserva requests, endpoints, argumentos curl, timeout de 5s,
+tentativas/intervalos, critérios completos e o output de sucesso existentes.
+Somente a falha final pode acrescentar `diagnostic` com check fixo, motivo finito
+(`transport`, `http_status`, `readiness`, `content`, `redirect`, `module`) e
+`httpStatus` numérico 100–599 ou `null`. Fatos da tentativa corrente atravessam
+command substitutions por sidecars no diretório temporário privado já existente;
+falha em gravar diagnóstico não muda o retorno HTTP. Não são publicados recursos,
+paths, URLs, headers, corpo, credenciais ou stderr arbitrário. O status é `null`
+quando a chamada existente não o fornece; não há request adicional para inferi-lo.
+
+O parser exige um único registro canônico de no máximo 512 bytes, exit 1 sem
+timeout/signal e contexto/substep explícitos. Os preflights inicial e antes dos
+dois restores usam `fixture-full-smoke`/`fixture_full_smoke`; o POST-restore usa
+apenas o frame consistente e único de `payload-coordinator:restore`, substep
+`payload_coordinator_restore`, step `restore_smoke`. Duplicatas, frame malformado,
+contexto desconhecido, mensagem privada anexada ao registro e output fingindo
+sucesso são recusados. O wrapper valida o output de sucesso existente, sem mudar
+suas chaves. Cleanup output após o frame de falha permanece privado e não troca
+a causa primária. O sanitizer acrescenta `smokeFailure` opcional somente em falha;
+schema do relatório qualificado, progress e 14 checks/11 negativos estão intactos.
+Não foi necessário alterar `scripts/payload-operations.sh` nem runtime Python.
+
+Checks locais do bloco 5:
+
+- Quatro arquivos focados: **78 testes, 77 PASS, zero falhas/cancelados, um skip
+  Linux root/FD9 existente**, exit 0, wall time **248,709s**, orçamento externo 600s.
+  Log: `%LOCALAPPDATA%/Temp/opencode/cms-nginx-block5-focused.log`.
+- Após endurecer o framing contra steps duplicados/malformados: três arquivos
+  focados, **37 testes, 36 PASS, zero falhas/cancelados, o mesmo skip**, exit 0,
+  wall time **87,697s**. Log: `cms-nginx-block5-framing-focused.log` no mesmo diretório.
+- `npm run security`: **PASS**, zero vulnerabilidades em API, cron e CMS.
+- Checks finais independentes: `npm run lint`, `npm run typecheck:cms`, scanner
+  de segredos/DHO, sintaxe dos três testes e `git diff --check`: **PASS**, exit 0.
+  Log: `cms-nginx-block5-final-static-security.log` no mesmo diretório. Esses checks
+  separados não substituem o full verify interrompido.
+- `npm run verify`: **incompleto/falhou no harness**. Sintaxe e typecheck CMS
+  passaram; os testes Node terminaram por **SIGTERM** no limite interno de 180s,
+  sem resumo completo. A ferramenta foi interrompida pelo restart do servidor;
+  não se recuperou o exit externo nem se declara uma contagem completa. O log
+  preservado é `cms-nginx-block5-full-verify.log`. CMS unit tests e gates seguintes
+  não foram alcançados nessa execução. Não se mudou o limite nem o ownership para
+  contornar isso, e nenhuma fixture failed foi removida.
+
+HTTP real/Bash/curl no teste e ownership Windows nativo continuam distintos dos
+doubles declarados de transporte do coordenador/Docker e da regressão sintética
+de schema do qualifier. **Não** comprovam Nginx/Docker/PostgreSQL, POSIX ownership
+ou os dois restores reais. Full verify completo, fresh review primary-owned e CI
+Linux autorizado continuam pendentes; não há aceite de recuperação nem deploy.
+
 ## Revisão pendente — restart exato do coordenador (2026-10-09)
 
 O CI `37982456244`/`0fa5818` passou health/restart/comparação dos três fixtures e

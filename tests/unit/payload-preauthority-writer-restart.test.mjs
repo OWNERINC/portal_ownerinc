@@ -5,16 +5,29 @@ import os from 'node:os';
 import test from 'node:test';
 import { observeOrRestartWriters, assertWriterIdentities } from '../../scripts/integration/payload-preauthority-writer-restart.mjs';
 import { WRITER_RESTART_CONTEXT, WRITER_RESTART_SUCCESS, encodeWriterRestartFailure,
-  parseWriterRestartFailure, writerCommandFailureReason } from '../../scripts/integration/payload-preauthority-writer-restart-protocol.mjs';
+  parseWriterRestartFailure, writerCommandFailureReason, writerServices, parseWriterObservation } from '../../scripts/integration/payload-preauthority-writer-restart-protocol.mjs';
 import { runFixtureCommand, createFixtureCommandFailure, createLeasedCommandInvocation } from '../../scripts/integration/payload-preauthority-command.mjs';
 import { createRecoveryFailureReportFields, runSnapshotAndRestart } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
 import { producedLinuxRecoveryFixture } from './payload-preauthority-snapshot-producer-fixture.mjs';
-import { assertRecoveryFixtureConfiguration } from '../../scripts/integration/payload-preauthority-snapshot-runtime.mjs';
+import { assertRecoveryFixtureConfiguration, serializeWriterRestartRequest } from '../../scripts/integration/payload-preauthority-snapshot-runtime.mjs';
 import { assertConversionFixtureConfiguration } from '../../scripts/integration/payload-logical-snapshot-conversion-probe.mjs';
 
 const produced = producedLinuxRecoveryFixture();
 const request = JSON.parse(produced.restartResume.input);
-const services = ['api', 'cron', 'cms'];
+// Keep the existing producer fixture unchanged. The runtime caller now supplies
+// a fourth observed ID; exercise the same serializer used by production on the
+// actual inventory/Compose-produced configuration, not a hand-authored config.
+request.identities.nginx = 'd'.repeat(64);
+const resumeInput = serializeWriterRestartRequest(request.configuration, 'restart', request.identities);
+const services = ['api', 'cron', 'cms', 'nginx'];
+test('four-service fixture identity contract includes nginx and accepts its full-ID observation beyond 256 bytes', () => {
+  assert.deepEqual(writerServices, ['api','cron','cms','nginx']);
+  const identities = {api:'a'.repeat(64),cron:'b'.repeat(64),cms:'c'.repeat(64),nginx:'d'.repeat(64)};
+  const wire = JSON.stringify(identities)+'\n';
+  assert.ok(Buffer.byteLength(wire)>256);
+  assert.doesNotThrow(() => assertWriterIdentities(identities));
+  assert.deepEqual(parseWriterObservation(wire), identities);
+});
 function fixture({ mode = 'restart', mutate = () => {}, failStart = null } = {}) {
   const data = structuredClone(request);
   data.mode = mode;
@@ -51,6 +64,16 @@ test('production producer observe/resume inputs carry identical Compose, project
   assert.equal(JSON.parse(produced.restartObserve.input).identities, null);
   assert.equal(produced.restartResume.env.PAYLOAD_RECOVERY_COMMIT, produced.commit);
   assert.deepEqual(request.configuration.composeArgs, JSON.parse(produced.wire.input).composeArgs);
+  const wire = JSON.stringify(JSON.parse(resumeInput).identities)+'\n';
+  assert.deepEqual(parseWriterObservation(wire), request.identities);
+  const canonical = wire.trimEnd();
+  for (const bad of [
+    JSON.stringify({...request.identities, nginx:request.identities.api})+'\n',
+    JSON.stringify({...request.identities, extra:'private'})+'\n',
+    JSON.stringify({api:request.identities.api,cron:request.identities.cron,cms:request.identities.cms})+'\n',
+    canonical, wire.slice(0,-3), wire+' '.repeat(513),
+    canonical.slice(0,-1)+`,"nginx":"${request.identities.nginx}"}\n`,
+  ]) assert.equal(parseWriterObservation(bad),null);
 });
 
 test('observe captures only running non-one-off writers; resume prevalidates all and starts/verifies those exact IDs without migration dependencies', () => {
@@ -61,18 +84,18 @@ test('observe captures only running non-one-off writers; resume prevalidates all
   const resume = fixture();
   assert.deepEqual(observeOrRestartWriters(resume.data, resume.operations), observed);
   const firstStart = resume.events.findIndex(e => e.docker?.[0] === 'start');
-  assert.equal(resume.events.slice(0, firstStart).filter(e => e.docker?.[0] === 'inspect').length, 3);
+  assert.equal(resume.events.slice(0, firstStart).filter(e => e.docker?.[0] === 'inspect').length, 4);
   assert.deepEqual(resume.events.filter(e => e.docker?.[0] === 'start').map(e => e.docker), services.map(s => ['start', observed[s]]));
-  assert.equal(resume.events.filter(e => e.docker?.[0] === 'inspect').length, 6);
+  assert.equal(resume.events.filter(e => e.docker?.[0] === 'inspect').length, 8);
 });
 
 test('missing/ambiguous/replaced containers, invalid labels and every unexpected state fail before any start, with finite observation attribution', () => {
   const cases = [
     ['missing', value => { value.responses.cms = ''; }],
-    ['ambiguous', value => { value.responses.cms += `${'d'.repeat(64)}\n`; }],
-    ['identity_invalid', value => { value.responses.cms = `${'d'.repeat(64)}\n`; }],
+    ['ambiguous', value => { value.responses.cms += `${'e'.repeat(64)}\n`; }],
+    ['identity_invalid', value => { value.responses.cms = `${'e'.repeat(64)}\n`; }],
     ['response_invalid', value => { value.responses.cms = 'private/path'; }],
-    ['identity_invalid', value => { value.states.cms.Id = 'd'.repeat(64); }],
+    ['identity_invalid', value => { value.states.cms.Id = 'e'.repeat(64); }],
     ...['project', 'service', 'oneoff'].map(key => ['identity_invalid', value => { value.states.cms.Config.Labels[`com.docker.compose.${key}`] = 'foreign'; }]),
     ...['created','running','paused','dead','restarting','removing','unknown'].map(state => ['state_invalid', value => { value.states.cms.State.Status = state; }]),
   ];
@@ -84,6 +107,47 @@ test('missing/ambiguous/replaced containers, invalid labels and every unexpected
   }
   for (const invalid of [null, {}, { ...request.identities, cms: request.identities.api }, { ...request.identities, private: 'data' }]) {
     assert.throws(() => assertWriterIdentities(invalid));
+  }
+});
+
+test('missing, swapped, duplicated or foreign fourth nginx rejects the whole set before ANY start', () => {
+  const cases = [
+    ['missing', f => { f.responses.nginx=''; }],
+    ['identity_invalid', f => { f.responses.nginx='e'.repeat(64)+'\n'; }],
+    ['identity_invalid', f => { f.responses.nginx=request.identities.api+'\n'; }],
+    ...['project','service','oneoff'].map(key=>['identity_invalid', f => { f.states.nginx.Config.Labels[`com.docker.compose.${key}`]='foreign'; }]),
+    ['state_invalid', f => { f.states.nginx.State.Status='created'; }],
+  ];
+  for(const [reason,mutate] of cases){
+    const f=fixture({mutate});
+    assert.throws(()=>observeOrRestartWriters(f.data,f.operations),{restartReason:reason});
+    assert.equal(f.events.some(e=>e.docker?.[0]==='start'),false);
+    assert.equal(f.current().service,'nginx');
+  }
+  const nginxFailure=fixture({failStart:'nginx'});
+  assert.throws(()=>observeOrRestartWriters(nginxFailure.data,nginxFailure.operations),{restartReason:'command_failed'});
+  assert.deepEqual(nginxFailure.current(),{phase:'start',service:'nginx',state:'exited'});
+  assert.equal(nginxFailure.events.filter(e=>e.docker?.[0]==='start').length,4);
+  const post=fixture();const docker=post.operations.docker;
+  post.operations.docker=args=>{const result=docker(args);if(args[0]==='start'&&args[1]===request.identities.nginx)post.states.nginx.State.Status='exited';return result;};
+  assert.throws(()=>observeOrRestartWriters(post.data,post.operations),{restartReason:'state_invalid'});
+  assert.deepEqual(post.current(),{phase:'verify',service:'nginx',state:'exited'});
+});
+
+test('each of the four container identities and running flags is validated before ANY start, regardless of its position', () => {
+  for(const service of services){
+    for(const mutate of [
+      value=>{value.responses[service]='';},
+      value=>{value.states[service].Config.Labels['com.docker.compose.project']='foreign';},
+      value=>{value.states[service].State.Paused=true;},
+      value=>{value.states[service].State.Restarting=true;},
+      value=>{value.states[service].State.Running=true;},
+    ]){
+      const f=fixture({mutate});
+      assert.throws(()=>observeOrRestartWriters(f.data,f.operations));
+      assert.equal(f.events.some(event=>event.docker?.[0]==='start'),false);
+      assert.equal(f.current().service,service);
+    }
   }
 });
 
@@ -149,7 +213,7 @@ test('known failed Docker/Compose messages map to finite reasons only; unknown r
 
 test('actual restart executable consumes actual producer JSON/environment and fails unleased before Docker effects', () => {
   assert.throws(() => runFixtureCommand(process.execPath,[path.resolve('scripts/integration/payload-preauthority-writer-restart.mjs')], {
-    input:produced.restartResume.input,env:produced.environment,writerRestartCommandContext:WRITER_RESTART_CONTEXT,writerRestartMode:'restart',
+    input:resumeInput,env:produced.environment,writerRestartCommandContext:WRITER_RESTART_CONTEXT,writerRestartMode:'restart',
   }), {code:'writer_restart_all_lease_lease_invalid'});
 });
 
@@ -170,12 +234,13 @@ test('actual producer and executable cover all three real provisioned fixtures; 
 test('runner observes IDs before stop and invokes tested restart producer under lease after conversion success, retaining readiness and report gates', async () => {
   const runner = await readFile('scripts/test-payload-preauthority-recovery.mjs','utf8');
   const section = runner.slice(runner.indexOf('async function assertQuiescentSnapshotStable'),runner.indexOf('async function stopWriters'));
-  assert.ok(section.indexOf("mode: 'observe'") < section.indexOf("['stop', '--timeout'"));
+  assert.ok(section.indexOf('observeFixtureWriters(runtime)') < section.indexOf("['stop', '--timeout'"));
   assert.ok(section.indexOf('conversionProbeCommandContext: CONVERSION_PROBE_CONTEXT') < section.indexOf("quiescentSnapshotComparison = 'passed'"));
   assert.ok(section.indexOf("quiescentSnapshotComparison = 'passed'") < section.indexOf("mode: 'restart', identities: observedWriters"));
   assert.doesNotMatch(section,/composeWithLease\(runtime, \['start'/u);
   assert.match(section,/writerRestartCommandContext: WRITER_RESTART_CONTEXT/u);
-  assert.match(section,/for \(const service of writers\) await awaitService\(runtime, service\)/u);
+  assert.match(section,/for \(const service of writers\.filter\(service => service !== 'nginx'\)\) await awaitService\(runtime, service\)/u);
+  assert.match(section,/await awaitFixtureProxy\(runtime, observedWriters\.nginx\)/u);
 });
 
 test('actual Compose service model requires the removed one-shot dependency, while initializer persists only receipted database/CMS services', async () => {
@@ -201,7 +266,7 @@ test('native Linux Bash/flock → real restart CLI → fake Docker observes then
     const lock = path.join(directory,'deploy.lock'); await writeFile(lock,'',{mode:0o600});
     // Only the protected disposable filesystem root is relocated from the real
     // producer. Compose/env/commit keys and arguments remain its actual contract.
-    const input = produced.restartResume.input.replaceAll('/private/disposable',root);
+    const input = resumeInput.replaceAll('/private/disposable',root);
     const environment = Object.fromEntries(Object.entries(produced.environment).map(([key,value]) => [key,value.replaceAll('/private/disposable',root)]));
     environment.PATH = `${root}:${environment.PATH}`;
     const stateFile = path.join(root,'state.json');

@@ -9,8 +9,8 @@ import {
 import { logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './integration/payload-logical-snapshot.mjs';
 import { CONVERSION_PROBE_CONTEXT } from './integration/payload-logical-snapshot-probe-protocol.mjs';
 import { recoveryPayloadRelease, recoveryComposeArgs, recoveryFixtureEnvironment,
-  conversionProbeCommandInput, writerRestartCommandInput } from './integration/payload-preauthority-snapshot-runtime.mjs';
-import { WRITER_RESTART_CONTEXT } from './integration/payload-preauthority-writer-restart-protocol.mjs';
+  conversionProbeCommandInput, writerRestartCommandInput, awaitFixtureProxyAvailability } from './integration/payload-preauthority-snapshot-runtime.mjs';
+import { WRITER_RESTART_CONTEXT, writerServices } from './integration/payload-preauthority-writer-restart-protocol.mjs';
 import { assertWriterIdentities } from './integration/payload-preauthority-writer-restart.mjs';
 import { POST_RESTORE_HOLD_CONTEXT, POST_RESTORE_HOLD_TIMEOUT_MS,
   parseFixtureFailureHold } from './integration/payload-preauthority-snapshot-hold.mjs';
@@ -35,7 +35,7 @@ import {
 import {
   assertRootOwnerGuardProbe, controlCommandOptions, coordinatorCommandOptions, createLeasedCommandInvocation,
   createBoundedCommandStderr, createFixtureCommandFailure,
-  FixtureFailure, persistPrivateCommandEvidence, runFixtureCommand,
+  FixtureFailure, persistPrivateCommandEvidence, runFixtureCommand, runFixtureSmokePreflight,
 } from './integration/payload-preauthority-command.mjs';
 import {
   createRecoveryFailureReportFields, runSnapshotAndRestart,
@@ -594,6 +594,47 @@ function composeWithLease(runtime, actionArgs, options = {}) {
   ], { ...options, release: runtime.payloadRelease });
 }
 
+function observeFixtureWriters(runtime) {
+  setSubstep('snapshot_observe_writer_identities');
+  const observed = JSON.parse(withLease(runtime, runtime.project, process.execPath, [
+    path.join(repository, 'scripts', 'integration', 'payload-preauthority-writer-restart.mjs'),
+  ], {
+    ...writerRestartCommandInput(runtime, { commit: runIdentity.commit, python, mode: 'observe' }),
+    substep: 'snapshot_observe_writer_identities', writerRestartCommandContext: WRITER_RESTART_CONTEXT,
+    writerRestartMode: 'observe', timeout: 420_000, preservePrivateErrorEvidence: true,
+  }).toString('utf8'));
+  assertWriterIdentities(observed);
+  return observed;
+}
+
+async function awaitFixtureProxy(runtime, identity) {
+  setSubstep('fixture_nginx_http_availability');
+  try {
+    await awaitFixtureProxyAvailability(runtime, identity, id => {
+      const values = JSON.parse(withLease(runtime, runtime.project, 'docker', ['inspect', id], {
+        substep: 'fixture_nginx_inspect', timeout: 10_000, preservePrivateErrorEvidence: true,
+      }).toString('utf8'));
+      if (!Array.isArray(values) || values.length !== 1) throw new FixtureFailure('fixture_nginx_identity_invalid', { substep: 'fixture_nginx_inspect' });
+      return values[0];
+    });
+  } catch (error) {
+    if (error instanceof FixtureFailure) throw error;
+    const codes = ['fixture_nginx_endpoint_invalid', 'fixture_nginx_identity_invalid', 'fixture_nginx_port_invalid', 'fixture_nginx_http_unavailable'];
+    throw new FixtureFailure(codes.includes(error?.code) ? error.code : 'fixture_nginx_identity_invalid',
+      { substep: 'fixture_nginx_http_availability' });
+  }
+}
+
+async function assertFixtureFullSmoke(runtime, afterSmoke = () => undefined) {
+  setSubstep('fixture_full_smoke');
+  return runFixtureSmokePreflight(runtime, {
+    environment: fixtureEnv(runtime.project, runtime, runtime.payloadRelease),
+    verifyProxy: awaitFixtureProxy,
+    execute: run,
+    afterSmoke,
+  });
+}
+
 async function provisionProject(runtime) {
   setStage(`prepare_${runtime.project}`);
   composeWithLease(runtime, ['up', '--detach', '--no-build', '--pull', 'never', 'postgres', 'api', 'cron']);
@@ -619,6 +660,14 @@ async function provisionProject(runtime) {
   await awaitService(runtime, 'cron');
   await awaitService(runtime, 'cms');
   recoveryProgress[runtime.role].initialCmsHealthPassed = true;
+  // Creation belongs to fixture preparation, NEVER to a resume operation.
+  setSubstep('fixture_nginx_prepare');
+  composeWithLease(runtime, ['up', '--detach', '--no-deps', '--no-recreate', '--no-build', '--pull', 'never', 'nginx'], {
+    substep: 'fixture_nginx_prepare', preservePrivateErrorEvidence: true,
+  });
+  const preparedWriters = observeFixtureWriters(runtime);
+  runtime.fixtureNginxIdentity = preparedWriters.nginx;
+  await assertFixtureFullSmoke(runtime);
   guard(runtime, runtime.project, 'verify-release', runtime.payloadRelease);
   withLease(runtime, runtime.project, path.join(runtime.directory, 'payload-operations-guard'),
     ['open-admission', runtime.payloadRelease, '']);
@@ -756,18 +805,10 @@ async function assertQuiescentSnapshotStable(runtime) {
   setSubstep('snapshot_list_writers');
   const running = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
     .split(/\r?\n/u).filter(Boolean);
-  const writers = ['api', 'cron', 'cms'].filter(service => running.includes(service));
-  assert.deepEqual(writers, ['api', 'cron', 'cms'],
+  const writers = writerServices.filter(service => running.includes(service));
+  assert.deepEqual(writers, writerServices,
     'all fixture application writers must be running before the quiescence check');
-  setSubstep('snapshot_observe_writer_identities');
-  const observedWriters = JSON.parse(withLease(runtime, runtime.project, process.execPath, [
-    path.join(repository, 'scripts', 'integration', 'payload-preauthority-writer-restart.mjs'),
-  ], {
-    ...writerRestartCommandInput(runtime, { commit: runIdentity.commit, python, mode: 'observe' }),
-    substep: 'snapshot_observe_writer_identities', writerRestartCommandContext: WRITER_RESTART_CONTEXT,
-    writerRestartMode: 'observe', timeout: 420_000, preservePrivateErrorEvidence: true,
-  }).toString('utf8'));
-  assertWriterIdentities(observedWriters);
+  const observedWriters = observeFixtureWriters(runtime);
   setSubstep('snapshot_stop_writers');
   composeWithLease(runtime, ['stop', '--timeout', String(FIXTURE_STOP_TIMEOUT_SECONDS), ...writers], {
     substep: 'snapshot_stop_writers',
@@ -821,7 +862,8 @@ async function assertQuiescentSnapshotStable(runtime) {
         substep: 'snapshot_restart_writers', writerRestartCommandContext: WRITER_RESTART_CONTEXT,
         writerRestartMode: 'restart', timeout: 600_000, preservePrivateErrorEvidence: true,
       });
-      for (const service of writers) await awaitService(runtime, service);
+      for (const service of writers.filter(service => service !== 'nginx')) await awaitService(runtime, service);
+      await awaitFixtureProxy(runtime, observedWriters.nginx);
       recoveryProgress[runtime.role].writersRestartedHealthy = true;
     },
     () => activeSubstep,
@@ -1177,8 +1219,11 @@ async function runRecovery() {
   safeChecks.allNegativeCasesRejectedBeforeRestore = true;
 
   setStage('first_actual_restore');
-  const targetBefore = snapshot(target, 'first_target_before');
-  coordinator(target, target.project, 'restore', target.payloadRelease, targetBackup);
+  const targetBefore = await assertFixtureFullSmoke(target, () => {
+    const before = snapshot(target, 'first_target_before');
+    coordinator(target, target.project, 'restore', target.payloadRelease, targetBackup);
+    return before;
+  });
   restoreAcceptanceProgress.first.coordinatorReturnedSuccessfully = true;
   setSubstep('verify_restored_authority');
   assertRecoveryCondition('restored_authority_mismatch', databaseAuthority(target) === 'legacy/1');
@@ -1225,8 +1270,11 @@ async function runRecovery() {
     await chmod(path.join(secondName, file), 0o600);
   }
   setStage('second_actual_restore');
-  const secondTargetBefore = snapshot(target, 'second_target_before');
-  coordinator(target, target.project, 'restore', target.payloadRelease, secondName);
+  const secondTargetBefore = await assertFixtureFullSmoke(target, () => {
+    const before = snapshot(target, 'second_target_before');
+    coordinator(target, target.project, 'restore', target.payloadRelease, secondName);
+    return before;
+  });
   restoreAcceptanceProgress.second.coordinatorReturnedSuccessfully = true;
   setSubstep('verify_restored_authority');
   assertRecoveryCondition('restored_authority_mismatch', databaseAuthority(target) === 'legacy/1');

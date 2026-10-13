@@ -6,7 +6,11 @@ import test from 'node:test';
 import {
   createCommandDiagnostic, extractControlErrorIdentifier, extractNativeCatalogVerifierDiagnostic,
   extractSqlState, sanitizeCommandDiagnostic,
+  extractSmokeFailure, FIXTURE_SMOKE_CONTEXT, isFixtureSmokeSuccess,
 } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
+import { createFixtureCommandFailure, runFixtureCommand } from '../../scripts/integration/payload-preauthority-command.mjs';
+import { createRecoveryFailureReportFields } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
+import { qualifyCandidate, RECOVERY_CHECKS, RECOVERY_NEGATIVES } from '../../scripts/lib/payload-candidate-qualification.mjs';
 
 const recoveryRunner = await readFile(new URL('../../scripts/test-payload-preauthority-recovery.mjs', import.meta.url), 'utf8');
 const controlRuntime = await readFile(new URL('../../ops/payload-control-runtime.py', import.meta.url), 'utf8');
@@ -14,6 +18,95 @@ const controlState = await readFile(new URL('../../ops/payload-control-state.py'
 const controlInventory = await readFile(new URL('../../ops/payload-control-inventory.py', import.meta.url), 'utf8');
 const controlEntrypoint = await readFile(new URL('../../ops/payload-control', import.meta.url), 'utf8');
 const controlGuard = await readFile(new URL('../../ops/payload-operations-guard.sh', import.meta.url), 'utf8');
+
+const smokeWire = (diagnostic={check:'root',reason:'http_status',httpStatus:503}) => JSON.stringify({check:'smoke',status:'failed',attempts:2,diagnostic})+'\n';
+
+test('smoke failure protocol requires exact context, clean actual failure and one canonical finite record', () => {
+  const context={smokeCommandContext:FIXTURE_SMOKE_CONTEXT,substep:'fixture_full_smoke',status:1,stdout:Buffer.alloc(0)};
+  const wire=smokeWire();
+  assert.deepEqual(extractSmokeFailure(wire,context),{check:'root',reason:'http_status',httpStatus:503});
+  assert.deepEqual(extractSmokeFailure(wire.replace(/\n$/u,'\r\n'),context),extractSmokeFailure(wire,context));
+  for(const override of [{smokeCommandContext:undefined},{smokeCommandContext:'docker-compose'},{substep:'unclassified_command'},{substep:undefined},{status:0},{status:2},{signal:'SIGTERM'},{errorCode:'ETIMEDOUT'},{stdout:'{"check":"smoke","status":"ok","attempt":1}\n'}]){
+    assert.equal(extractSmokeFailure(wire,{...context,...override}),null);
+  }
+  const malformed=[wire.trimEnd(),wire+'private-url-with-credentials\n','private\n'+wire,wire+wire,
+    wire.replace('"attempts":2','"attempts":2,"attempts":2'),wire.replace('"check":"root"','"check":"root","check":"root"'),
+    wire.replace('"root"','"http://user:password@private.invalid"'),wire.replace('"http_status"','"private_reason"'),
+    wire.replace('"httpStatus":503','"httpStatus":503,"body":"secret"'),wire+' '.repeat(513)];
+  for(const text of malformed)assert.equal(extractSmokeFailure(text,context),null);
+  for(const httpStatus of [99,600,-1,503.5,'503',false])assert.equal(extractSmokeFailure(smokeWire({check:'root',reason:'http_status',httpStatus}),context),null);
+  assert.equal(extractSmokeFailure(smokeWire({check:'root',reason:'readiness',httpStatus:null}),context),null);
+  assert.equal(extractSmokeFailure(smokeWire({check:'router_module',reason:'content',httpStatus:200}),context),null);
+});
+
+test('smoke metadata crosses the actual throwing wrapper/sanitizer only on failure; unknown output remains private', () => {
+  const evidence=[];
+  assert.throws(()=>runFixtureCommand(process.execPath,['-e',`process.stderr.write(${JSON.stringify(smokeWire())});process.exitCode=1`],{
+    smokeCommandContext:FIXTURE_SMOKE_CONTEXT,substep:'fixture_full_smoke',failureCode:'fixture_full_smoke_failed',
+    privateCommandEvidence:evidence,preservePrivateErrorEvidence:true,
+  }),error=>{
+    assert.deepEqual(error.diagnostic.smokeFailure,{check:'root',reason:'http_status',httpStatus:503});
+    assert.deepEqual(sanitizeCommandDiagnostic(error.diagnostic),error.diagnostic);
+    assert.deepEqual(createRecoveryFailureReportFields({primaryError:error}).commandDiagnostic.smokeFailure,error.diagnostic.smokeFailure);
+    return true;
+  });
+  assert.equal(evidence.length,1);
+  const privateText=smokeWire()+'http://user:password@private.invalid/path body-secret\n';
+  const unknown=createFixtureCommandFailure({status:1,stderr:Buffer.from(privateText),stdout:Buffer.alloc(0)},{
+    smokeCommandContext:FIXTURE_SMOKE_CONTEXT,privateCommandEvidence:evidence,preservePrivateErrorEvidence:true,
+  });
+  assert.equal(unknown.diagnostic.smokeFailure,undefined);
+  assert.doesNotMatch(JSON.stringify(createRecoveryFailureReportFields({primaryError:unknown})),/password|private\.invalid|body-secret/u);
+  assert.equal(evidence.at(-1).stderr.toString(),privateText);
+  for(const command of [{commandExitCode:0},{commandExitCode:1,commandError:'command_timeout'},{commandExitCode:1,commandSignal:'SIGTERM'}]){
+    assert.equal(sanitizeCommandDiagnostic({...command,smokeFailure:{check:'root',reason:'http_status',httpStatus:503}}).smokeFailure,undefined);
+  }
+  const success='{"check":"smoke","status":"ok","attempt":1}\n';
+  assert.equal(isFixtureSmokeSuccess(success,''),true);
+  for(const output of ['PASS\n',smokeWire(),success+success,success.replace('"attempt":1','"attempt":1,"attempt":1')]){
+    assert.throws(()=>runFixtureCommand(process.execPath,['-e',`process.stdout.write(${JSON.stringify(output)})`],{smokeCommandContext:FIXTURE_SMOKE_CONTEXT}),{code:'fixture_smoke_protocol_invalid'});
+  }
+  assert.equal(isFixtureSmokeSuccess(success,smokeWire()),false);
+});
+
+test('restore smoke metadata belongs only to its consistent single failure frame, never a prior guard, timeout or private appended body', () => {
+  const frame=(body=smokeWire(),step='restore_smoke',status=1)=>`PAYLOAD_COORDINATOR_STEP step=${step}\n${body}PAYLOAD_COORDINATOR_FAILURE step=${step} status=${status}\n`;
+  const options={substep:'payload_coordinator_restore',status:1,coordinatorCommandContext:'payload-coordinator:restore'};
+  const diagnostic=createCommandDiagnostic({...options,stderr:frame()+'private-cleanup-output\n'});
+  assert.equal(diagnostic.coordinatorStep,'restore_smoke');
+  assert.deepEqual(diagnostic.smokeFailure,{check:'root',reason:'http_status',httpStatus:503});
+  for(const change of [
+    {stderr:frame(smokeWire()+'http://user:password@private.invalid\n')},
+    {stderr:frame(smokeWire()+smokeWire())},
+    {stderr:frame()+ 'PAYLOAD_COORDINATOR_FAILURE step=restore_smoke status=1\n'},
+    {stderr:'PAYLOAD_COORDINATOR_STEP step=restore_smoke\n'+frame()},
+    {stderr:'PAYLOAD_COORDINATOR_STEP step=unknown_private_context\n'+frame()},
+    {stderr:frame().replace('STEP step=restore_smoke','STEP step=restore_smoke private-message')},
+    {stderr:frame()+'PAYLOAD_COORDINATOR_STEP step=restore_smoke\n'},
+    {stderr:frame(smokeWire(),'guard_verify_restored')},
+    {stderr:frame().replace('FAILURE step=restore_smoke','FAILURE step=resume_writers')},
+    {stderr:frame(),status:2},{stderr:frame(),signal:'SIGTERM'},{stderr:frame(),errorCode:'ETIMEDOUT'},
+    {stderr:frame(),coordinatorCommandContext:'payload-coordinator:backup'},
+    {stderr:frame(),substep:'payload_coordinator_backup'},
+  ])assert.equal(createCommandDiagnostic({...options,...change}).smokeFailure,undefined);
+});
+
+test('failure-only smoke metadata does not broaden the existing qualified success report schema (synthetic schema test, not recovery evidence)', () => {
+  const run={commit:'f'.repeat(40),runId:'37997573123',runAttempt:'1'};
+  const images=Object.fromEntries(['api','cron','cms'].map((service,index)=>[service,`ghcr.io/ownerinc/ownerinc-portal-${service}@sha256:${String(index+1).repeat(64)}`]));
+  const ddl=new Set(['unexpected_schema','weak_native_constraint','materialized_view','migration_ledger_mismatch']);
+  const report={schemaVersion:1,status:'passed',run,images,sourceInventoryIdentity:'a'.repeat(64),targetInventoryIdentity:'b'.repeat(64),
+    negativeCases:RECOVERY_NEGATIVES.map(name=>({name,rejected:true,targetContentUnchanged:true,...(ddl.has(name)?{fixtureDdlCleaned:true}:{}),
+      ...(name==='target_changed_after_restore_preflight'?{raceInjectedAfterLeaseReservation:true}:{})})),
+    checks:Object.fromEntries(RECOVERY_CHECKS.map(name=>[name,true])),
+    recoveryProgress:Object.fromEntries(['source','target','leaseTarget'].map(role=>[role,{initialCmsHealthPassed:true,writersRestartedHealthy:true,quiescentSnapshotComparison:'passed'}])),
+    restoreAcceptanceProgress:Object.fromEntries(['first','second'].map(role=>[role,{coordinatorReturnedSuccessfully:true,fullSnapshotComparisonPassed:true}])),
+    evidence:{kind:'redacted-metadata-only',privateFixtureRetainedForRunnerLifetime:false}};
+  const input={candidateBytes:Buffer.from(JSON.stringify({schemaVersion:1,...run,images})),expectedRun:run,expectedImages:images};
+  assert.doesNotThrow(()=>qualifyCandidate({...input,reportBytes:Buffer.from(JSON.stringify(report))}));
+  assert.throws(()=>qualifyCandidate({...input,reportBytes:Buffer.from(JSON.stringify({...report,commandDiagnostic:{smokeFailure:{check:'root',reason:'http_status',httpStatus:503}}}))}),/invalid_recovery_report_shape/u);
+  assert.deepEqual(createRecoveryFailureReportFields({}),{});
+});
 
 test('extracts only a known SQLSTATE-only line from a known psql invocation', () => {
   const psqlContext = { sqlCommandContext: true };

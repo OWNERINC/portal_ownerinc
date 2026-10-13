@@ -2,15 +2,15 @@ import { conversionProbeReasons } from './payload-logical-snapshot-probe-protoco
 
 export const WRITER_RESTART_CONTEXT = 'snapshot-writer-restart';
 export const WRITER_RESTART_SUCCESS = 'PAYLOAD_WRITER_RESTART passed\n';
-export const writerServices = Object.freeze(['api', 'cron', 'cms']);
+export const writerServices = Object.freeze(['api', 'cron', 'cms', 'nginx']);
 export function validWriterIdentities(value) {
-  return !!value && typeof value === 'object' && Object.keys(value).sort().join(',') === 'api,cms,cron'
+  return !!value && typeof value === 'object' && Object.keys(value).sort().join(',') === 'api,cms,cron,nginx'
     && writerServices.every(service => typeof value[service] === 'string' && /^[a-f0-9]{64}$/u.test(value[service]))
-    && new Set(Object.values(value)).size === 3;
+    && new Set(Object.values(value)).size === writerServices.length;
 }
 export function parseWriterObservation(stdout) {
   const text = Buffer.isBuffer(stdout) ? stdout.toString('utf8') : stdout;
-  if (typeof text !== 'string' || text.length > 256) return null;
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 512) return null;
   try {
     const value = JSON.parse(text);
     if (!validWriterIdentities(value)) return null;
@@ -56,8 +56,8 @@ export function writerCommandFailureReason(error, stderr, { compose = false } = 
   if (error?.diagnostic?.commandSignal) return 'command_signaled';
   const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : '';
   const lines = text.split(/\r?\n/u).filter(Boolean);
-  if (compose && lines.some(line => /^(api|cron|cms) is missing dependency (postgres|cms-postgres|cms-migrate)$/u.test(line))) return 'compose_dependency_missing';
-  if (compose && lines.some(line => /^no such service: (api|cron|cms)$/u.test(line))) return 'compose_service_unknown';
+  if (compose && lines.some(line => /^(?:(api|cron|cms) is missing dependency (postgres|cms-postgres|cms-migrate)|nginx is missing dependency api)$/u.test(line))) return 'compose_dependency_missing';
+  if (compose && lines.some(line => /^no such service: (api|cron|cms|nginx)$/u.test(line))) return 'compose_service_unknown';
   if (compose && lines.some(line => line === 'no container to start')) return 'compose_no_container';
   if (lines.some(line => /^Error response from daemon: No such container: [a-f0-9]{64}$/u.test(line))) return 'docker_container_missing';
   if (lines.some(line => /^Cannot connect to the Docker daemon at unix:\/\/[^\r\n]+\. Is the docker daemon running\?$/u.test(line))) return 'docker_daemon_unavailable';

@@ -418,7 +418,47 @@ export function extractControlErrorIdentifier(stderr, options = {}) {
   return controlGuardMessages.get(line) || controlAdapterMessages.get(line) || null;
 }
 
-export function extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, status, release } = {}) {
+export const FIXTURE_SMOKE_CONTEXT = 'fixture-full-smoke';
+const smokeChecks = new Set(`api_liveness api_readiness same_origin root missing_html canonical_html legacy_alias
+editorial_redirect router_bootstrap asset_path_module index_page router_module route_page route_module autocard_entry module_graph`.split(/\s+/u));
+const smokeModuleChecks = new Set(['router_bootstrap','asset_path_module','router_module','route_module','autocard_entry','module_graph']);
+const smokeContentChecks = new Set(['api_liveness','same_origin','canonical_html','legacy_alias','index_page','route_page']);
+
+function safeSmokeFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join(',') !== 'check,httpStatus,reason' || !smokeChecks.has(value.check)
+      || !(value.httpStatus === null || Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599)) return null;
+  const allowed = ['transport','http_status'].includes(value.reason)
+    || value.reason === 'readiness' && value.check === 'api_readiness'
+    || value.reason === 'content' && smokeContentChecks.has(value.check)
+    || value.reason === 'redirect' && value.check === 'editorial_redirect'
+    || value.reason === 'module' && smokeModuleChecks.has(value.check);
+  return allowed ? { check: value.check, reason: value.reason, httpStatus: value.httpStatus } : null;
+}
+
+export function extractSmokeFailure(stderr, { smokeCommandContext, substep, status, errorCode, signal, stdout } = {}) {
+  if (smokeCommandContext !== FIXTURE_SMOKE_CONTEXT || substep !== 'fixture_full_smoke' || status !== 1 || errorCode || signal
+      || (Buffer.isBuffer(stdout) ? stdout.length > 0 : stdout !== undefined && stdout !== '')) return null;
+  const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : stderr;
+  if (typeof text !== 'string' || Buffer.byteLength(text,'utf8') > 512) return null;
+  try {
+    const value = JSON.parse(text);
+    if (Object.keys(value).sort().join(',') !== 'attempts,check,diagnostic,status' || value.check !== 'smoke'
+        || value.status !== 'failed' || !Number.isSafeInteger(value.attempts) || value.attempts < 1) return null;
+    const diagnostic = safeSmokeFailure(value.diagnostic);
+    const canonical = JSON.stringify({check:'smoke',status:'failed',attempts:value.attempts,diagnostic})+'\n';
+    return diagnostic && canonical === text.replace(/\r\n$/u,'\n') ? diagnostic : null;
+  } catch { return null; }
+}
+
+export function isFixtureSmokeSuccess(stdout, stderr) {
+  if (stderr?.length) return false;
+  const text = Buffer.isBuffer(stdout) ? stdout.toString('utf8') : stdout;
+  const match = typeof text === 'string' && text.match(/^\{"check":"smoke","status":"ok","attempt":([1-9][0-9]*)\}\r?\n$/u);
+  return !!match && Number.isSafeInteger(Number(match[1]));
+}
+
+export function extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, substep, status, release, errorCode, signal } = {}) {
   if (!coordinatorContexts.has(coordinatorCommandContext)) return null;
   const lines = (Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '')).split(/\r?\n/u);
   let step = null;
@@ -438,10 +478,23 @@ export function extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext
     const context = { controlCommandContext: controlGuardContext, release };
     const body = lines.slice(start, index).join('\n') + '\n';
     const native = coordinatorGuardSteps.has(step) ? extractNativeCatalogVerifierDiagnostic(body, context) : null;
+    // The new smoke metadata requires an unambiguous framing context. Do not
+    // broaden the pre-existing finite coordinator-step fallback for other calls.
+    const progressFrames = lines.filter(value => value.startsWith('PAYLOAD_COORDINATOR_STEP'));
+    const smokeContextValid = progressFrames.filter(value => value === 'PAYLOAD_COORDINATOR_STEP step=restore_smoke').length === 1
+      && progressFrames.every(value => {
+        const frame = value.match(/^PAYLOAD_COORDINATOR_STEP step=([a-z_]+)$/u);
+        return frame && coordinatorSteps.has(frame[1]);
+      });
+    const smokeFailure = step === 'restore_smoke' && coordinatorCommandContext === 'payload-coordinator:restore' && substep === 'payload_coordinator_restore'
+      && smokeContextValid
+      && lines.filter(value => value.startsWith('PAYLOAD_COORDINATOR_FAILURE')).length === 1
+      ? extractSmokeFailure(body, { smokeCommandContext: FIXTURE_SMOKE_CONTEXT, substep: 'fixture_full_smoke', status, errorCode, signal }) : null;
     return {
       coordinatorStep: step,
       controlErrorIdentifier: coordinatorGuardSteps.has(step) ? extractControlErrorIdentifier(body, context) : null,
       ...(native ? { nativeCatalogVerifier: native } : {}),
+      ...(smokeFailure ? { smokeFailure } : {}),
     };
   }
   // A timeout/kill may prevent EXIT from running. Retain a finite last-started
@@ -451,7 +504,7 @@ export function extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext
 
 export function createCommandDiagnostic({
   substep, status, signal, errorCode, stderr, sqlCommandContext = false, controlCommandContext, coordinatorCommandContext,
-  logicalSnapshotCommandContext, release,
+  logicalSnapshotCommandContext, smokeCommandContext, stdout, release,
 }) {
   const sqlState = extractSqlState(stderr, { sqlCommandContext });
   const initializer = initializerScope(stderr, { controlCommandContext, substep, status, errorCode, signal });
@@ -460,6 +513,7 @@ export function createCommandDiagnostic({
     { controlCommandContext: initializerReason ? controlGuardContext : controlCommandContext, release });
   const logicalCode = logicalSnapshotCommandContext === 'logical-snapshot-cli'
     ? String(stderr || '').match(/^(logical_snapshot_[a-z_]+)\r?\n?$/u)?.[1] : null;
+  const smokeFailure = extractSmokeFailure(stderr, { smokeCommandContext, substep, status, errorCode, signal, stdout });
   return sanitizeCommandDiagnostic({
     substep: safeSubstepPattern.test(substep || '') ? substep : 'unclassified_command',
     commandExitCode: Number.isInteger(status) ? status : null,
@@ -473,11 +527,15 @@ export function createCommandDiagnostic({
     ...(initializerReason && initializer.initializer ? { initializer: initializer.initializer } : {}),
     ...(nativeCatalogVerifier ? { nativeCatalogVerifier } : {}),
     ...(logicalSnapshotErrorCodes.includes(logicalCode) ? { logicalSnapshotErrorIdentifier: logicalCode } : {}),
-    ...extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, status, release }),
+    ...(smokeFailure ? { smokeFailure } : {}),
+    ...extractCoordinatorDiagnostic(stderr, { coordinatorCommandContext, substep, status, release, errorCode, signal }),
   });
 }
 
 export function sanitizeCommandDiagnostic(diagnostic = {}) {
+  const smokeFailure = diagnostic.commandExitCode === 1 && !diagnostic.commandError && !diagnostic.commandSignal
+    && (diagnostic.substep === 'fixture_full_smoke' || diagnostic.substep === 'payload_coordinator_restore' && diagnostic.coordinatorStep === 'restore_smoke')
+    ? safeSmokeFailure(diagnostic.smokeFailure) : null;
   const initializer = diagnostic.initializer;
   const safeInitializer = initializer && initializerDiagnosticPhases.includes(initializer.phase)
     && initializerStages.has(initializer.installStage)
@@ -542,6 +600,7 @@ export function sanitizeCommandDiagnostic(diagnostic = {}) {
     ...(coordinatorSteps.has(diagnostic.coordinatorStep) ? { coordinatorStep: diagnostic.coordinatorStep } : {}),
     ...(logicalSnapshotErrorCodes.includes(diagnostic.logicalSnapshotErrorIdentifier)
       ? { logicalSnapshotErrorIdentifier: diagnostic.logicalSnapshotErrorIdentifier } : {}),
+    ...(smokeFailure ? { smokeFailure } : {}),
   };
 }
 

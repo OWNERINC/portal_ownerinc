@@ -28,9 +28,9 @@ export function observeOrRestartWriters({ configuration, mode, identities }, ope
     if (mode === 'restart' && found[service] !== identities[service]) reject('identity_invalid');
     inspect(service, mode === 'observe' ? 'running' : 'exited', 'inspect');
   }
-  if (new Set(Object.values(found)).size !== 3) reject('identity_invalid');
+  if (new Set(Object.values(found)).size !== writerServices.length) reject('identity_invalid');
   if (mode === 'observe') return found;
-  // All three passed identity/state validation before the first mutation.
+  // All four passed identity/state validation before the first mutation.
   for (const service of writerServices) {
     operations.step('start', service, 'exited');
     operations.docker(['start', found[service]]);

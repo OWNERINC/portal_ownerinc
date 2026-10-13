@@ -5,6 +5,8 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { createCommandDiagnostic } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
+import { createFixtureCommandFailure } from '../../scripts/integration/payload-preauthority-command.mjs';
+import { createRecoveryFailureReportFields } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
 
 const image = name => `ghcr.io/ownerinc/ownerinc-portal-${name}@sha256:${'b'.repeat(64)}`;
 const legacy = `API_IMAGE=${image('api')}\nCRON_IMAGE=${image('cron')}\n`;
@@ -103,7 +105,9 @@ async function fixture(t) {
   }
   await writeFile(path.join(root, 'release/.image-env'), payload);
   await writeFile(path.join(root, 'release/docker-compose.payload.yml'), '# synthetic\n');
-  await writeFile(path.join(root, 'release/scripts/smoke.sh'), '#!/bin/sh\nprintf "smoke\\n" >> "$FIXTURE/smoke.calls"\n');
+  // This is a declared sequence double, NOT HTTP evidence. Real smoke/HTTP is
+  // exercised separately in smoke-origin.test.mjs without replacing the script.
+  await writeFile(path.join(root, 'release/scripts/smoke.sh'), '#!/bin/sh\nprintf "smoke\\n" >> "$FIXTURE/smoke.calls"\nif [ "${FAIL_SMOKE:-false}" = true ]; then exit 37; fi\n');
   await writeFile(path.join(root, 'running'), 'postgres\ncms-postgres\nnginx\napi\ncron\ncms\n');
   await writeFile(path.join(root, 'admission'), 'open\n');
   await writeFile(path.join(root, 'timeline'), '');
@@ -413,4 +417,60 @@ test('coordinator preserves primary restore step/status when destructive failure
   assert.equal(parsed.controlErrorIdentifier, null, 'cleanup output cannot impersonate the primary guard');
   assert.doesNotMatch(JSON.stringify(parsed), /private-cleanup-output/u);
   assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'closed');
+});
+
+test('POST-restore smoke failure keeps admission closed, stops writers, retains protection/proof and preserves primary even if cleanup fails (smoke/Docker doubles)', async t => {
+  for(const cleanupFails of [false,true]){
+    const f=await fixture(t);
+    assert.equal(f.run('bash release/scripts/backup.sh "$PWD/release"').status,0);
+    const [name]=await readdir(path.join(f.root,'backups'));
+    await writeFile(path.join(f.root,'guard.calls'),'');
+    const result=f.run(`PRE_RESTORE_BACKUP_DIR="$PWD/protection" RESTORE_BASE_URL=http://fixture.invalid bash release/scripts/payload-operations.sh restore "$PWD/release" "$PWD/backups/${name}" --confirm RESTORE`,{
+      FAIL_SMOKE:'true',FAIL_CLEANUP_STOP:cleanupFails?'true':'false',
+    });
+    assert.equal(result.status,37,'the smoke exit, not cleanup status, remains primary');
+    const diagnostic=createCommandDiagnostic({substep:'payload_coordinator_restore',status:result.status,stderr:result.stderr,coordinatorCommandContext:'payload-coordinator:restore'});
+    assert.equal(diagnostic.coordinatorStep,'restore_smoke');
+    assert.equal(diagnostic.commandExitCode,37);
+    assert.equal((await readFile(path.join(f.root,'admission'),'utf8')).trim(),'closed');
+    const guards=await readFile(path.join(f.root,'guard.calls'),'utf8');
+    assert.doesNotMatch(guards,/^resume-writers$|^verify-release$|^open-admission$/mu);
+    const [protection]=await readdir(path.join(f.root,'protection'));
+    for(const directory of [path.join(f.root,'backups',name),path.join(f.root,'protection',protection)]){
+      assert.ok((await readdir(directory)).includes('operations-proof.json'));
+      assert.equal((await readFile(path.join(directory,'manifest.sha256'),'utf8')).trim().split('\n').length,7);
+    }
+    const running=await readFile(path.join(f.root,'running'),'utf8');
+    if(!cleanupFails)assert.doesNotMatch(running,/^(nginx|api|cron|cms|cms-worker)$/mu);
+    else{
+      assert.match(result.stderr,/private-cleanup-output/u);
+      assert.match(running,/^(nginx|api|cms)$/mu,'failed stop is not reported as successful containment');
+    }
+    assert.doesNotMatch(running,/^cron$|^cms-worker$/mu,'cron stays held through smoke failure');
+  }
+});
+
+test('actual coordinator frame/throwing wrapper scopes finite smoke failure and preserves it across cleanup failure; appended smoke output stays private (transport doubles)',async t=>{
+  const wire='{"check":"smoke","status":"failed","attempts":2,"diagnostic":{"check":"editorial_redirect","reason":"redirect","httpStatus":308}}\n';
+  for(const appended of [false,true]){
+    const f=await fixture(t);
+    assert.equal(f.run('bash release/scripts/backup.sh "$PWD/release"').status,0);
+    const [name]=await readdir(path.join(f.root,'backups'));
+    // Declared protocol producer double, not an HTTP result. The actual script
+    // and real curl attribution are exercised in smoke-origin.test.mjs.
+    await writeFile(path.join(f.root,'release/scripts/smoke.sh'),`#!/bin/sh\nprintf '%s' '${wire}' >&2\n${appended?"printf '%s\\n' 'http://user:password@private.invalid/body' >&2\n":''}exit 1\n`);
+    const result=f.run(`PRE_RESTORE_BACKUP_DIR="$PWD/protection" RESTORE_BASE_URL=http://fixture.invalid bash release/scripts/payload-operations.sh restore "$PWD/release" "$PWD/backups/${name}" --confirm RESTORE`,{FAIL_CLEANUP_STOP:'true'});
+    assert.equal(result.status,1);
+    const privateCommandEvidence=[];
+    const failure=createFixtureCommandFailure({...result,stdout:Buffer.from(result.stdout),stderr:Buffer.from(result.stderr)},
+      {coordinatorCommandContext:'payload-coordinator:restore',substep:'payload_coordinator_restore',preservePrivateErrorEvidence:true,privateCommandEvidence});
+    const report=createRecoveryFailureReportFields({primaryError:failure});
+    assert.equal(report.commandDiagnostic.coordinatorStep,'restore_smoke');
+    assert.equal(report.commandDiagnostic.commandExitCode,1);
+    assert.deepEqual(report.commandDiagnostic.smokeFailure,appended?undefined:{check:'editorial_redirect',reason:'redirect',httpStatus:308});
+    assert.doesNotMatch(JSON.stringify(report),/password|private\.invalid|private-cleanup-output/u);
+    assert.equal(privateCommandEvidence.length,1);
+    assert.match(privateCommandEvidence[0].stderr.toString(),/private-cleanup-output/u);
+    assert.equal((await readFile(path.join(f.root,'admission'),'utf8')).trim(),'closed');
+  }
 });

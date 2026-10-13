@@ -45,7 +45,10 @@ def exercise(version):
             'Config':{'Image':images.get(service,'nginx:immutable'), 'Labels':{'com.docker.compose.project':'fixture',
                 'com.docker.compose.service':service,'com.docker.compose.oneoff':'False'},'Healthcheck':{'Test':['synthetic']}},
             'Mounts':[{'Type':'volume','Name':'synthetic-'+service}],
-            'State':{'Status':'running','Running':True,'Paused':False,'Restarting':False,'Health':{'Status':'healthy'}}}
+             'State':{'Status':'running','Running':True,'Paused':False,'Restarting':False,'Health':{'Status':'healthy'}}}
+        if service=='nginx':
+            containers[service]['Config'].pop('Healthcheck')
+            containers[service]['State'].pop('Health')
     calls=[];fail_start=False
     def inventory(): return [{'id':v['Id'][:12],'service':s,'state':v['State']['Status'],'name':'fixture-'+s} for s,v in containers.items()]
     def command(args,**kwargs):
@@ -54,7 +57,7 @@ def exercise(version):
         if args[1]=='inspect':
             values=[v for v in containers.values() if v['Id'].startswith(args[2])]
             return SimpleNamespace(returncode=0,stdout=json.dumps(values).encode())
-        if fail_start:
+        if fail_start is True or fail_start==args[2]:
             kwargs['stderr'].write(b'private-tool-output:credentials-and-paths')
             return SimpleNamespace(returncode=1,stdout=b'')
         selected=next(v for v in containers.values() if v['Id']==args[2])
@@ -92,7 +95,10 @@ def exercise(version):
             ('image',lambda:containers['cms']['Config'].update({'Image':'wrong-image'}),'writer_identity_mismatch'),
             ('mount',lambda:containers['cms'].update({'Mounts':[]}),'writer_identity_mismatch'),
             ('state',lambda:containers['cms']['State'].update({'Status':'paused'}),'writer_state_invalid'),
-            ('missing',lambda:containers.pop('cms'),'writer_identity_mismatch'),
+             ('missing',lambda:containers.pop('cms'),'writer_identity_mismatch'),
+            ('nginx-id',lambda:containers['nginx'].update({'Id':'9'*64}),'writer_identity_mismatch'),
+            ('nginx-label',lambda:containers['nginx']['Config']['Labels'].update({'com.docker.compose.service':'api'}),'writer_identity_mismatch'),
+            ('nginx-missing',lambda:containers.pop('nginx'),'writer_identity_mismatch'),
             ('worker',lambda:containers.update({'cms-worker':{'Id':'9'*64,'State':{'Status':'running'}}}),'worker_admission_forbidden')]
         for _,mutate,reason in changes:
             containers.clear();containers.update(copy.deepcopy(baseline));calls.clear();mutate()
@@ -122,9 +128,23 @@ def exercise(version):
         files=[n for n in os.listdir(runtime_dir) if n.startswith('payload-writer-command-')]
         assert len(files)==1
         assert b'private-tool-output' in open(os.path.join(runtime_dir,files[0]),'rb').read()
+        # Partial second/later starts preserve closed admission and all journal
+        # bytes; all four physical inspections occur BEFORE any start.
+        for failed_service in ('cron','nginx'):
+            containers.clear();containers.update(copy.deepcopy(baseline));calls.clear()
+            fail_start=original[failed_service]['Id']
+            expect('writer_start_command_failed',lambda:runtime('resume-writers',ticket).run())
+            first_start=next(i for i,c in enumerate(calls) if c[1]=='start')
+            assert len([c for c in calls[:first_start] if c[1]=='inspect'])==4,calls
+            order=('api','cms','cron','nginx')
+            assert [c[2] for c in calls if c[1]=='start']==[original[s]['Id'] for s in order[:order.index(failed_service)+1]],calls
+            S.verify_admission(runtime_dir,'closed')
+            assert S.read_state(runtime_dir)[2]==state_before
+            assert {n:open(os.path.join(state_path,n),'rb').read() for n in os.listdir(state_path)}==journal_before
         # Post-start health failure must remain closed and never advance journal.
         fail_start=False;containers['cms']['State']['Health']['Status']='unhealthy'
         expect('writer_health_invalid',lambda:runtime('resume-writers',ticket).run())
+        S.verify_admission(runtime_dir,'closed')
         assert S.read_state(runtime_dir)[2]==state_before
         containers['cms']['State']['Health']['Status']='starting';calls.clear()
         with patch.object(R.time,'sleep',lambda _seconds:None):

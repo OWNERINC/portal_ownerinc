@@ -5,6 +5,9 @@ import { readFile, mkdtemp, mkdir, writeFile, rm, chmod } from 'node:fs/promises
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { awaitFixtureProxyAvailability } from '../../scripts/integration/payload-preauthority-snapshot-runtime.mjs';
 import {
   candidateImagesValid, createFixtureProjectNames, createInventory, legacyAnnouncementLookupSql,
   normalizePgDumpForSnapshot, validateRecoveryInputs, writeProtectedInventory,
@@ -218,6 +221,81 @@ test('legacy announcement lookup is bound to a captured source document UUID', (
   assert.doesNotMatch(query, /LIKE|project|WHERE d\.title/u);
   assert.notEqual(query, legacyAnnouncementLookupSql(targetSeedId));
   assert.throws(() => legacyAnnouncementLookupSql('not-a-uuid'), /invalid_legacy_announcement_id/u);
+});
+
+test('fixture creates pinned read-only loopback/backend nginx after API/CMS readiness and before any writer observation or seed', async () => {
+  const runner=await readFile('scripts/test-payload-preauthority-recovery.mjs','utf8');
+  const setup=runner.slice(runner.indexOf('async function provisionProject(runtime)'),runner.indexOf('\nfunction syntheticUid'));
+  const creation=setup.indexOf("['up', '--detach', '--no-deps', '--no-recreate', '--no-build', '--pull', 'never', 'nginx']");
+  assert.ok(creation>setup.indexOf("await awaitService(runtime, 'cms')"));
+  assert.ok(creation<setup.indexOf('observeFixtureWriters(runtime)'));
+  assert.ok(setup.indexOf('runtime.fixtureNginxIdentity = preparedWriters.nginx')>creation);
+  assert.ok(setup.indexOf('await assertFixtureFullSmoke(runtime)')<setup.indexOf('await seedProject(runtime)'));
+  assert.equal((runner.match(/runtime\.fixtureNginxIdentity =/gu)||[]).length,1,'never replace the saved identity to satisfy a later smoke');
+  assert.doesNotMatch(runner,/await awaitService\(runtime, 'nginx'\)/u);
+  const compose=await readFile('docker-compose.yml','utf8');
+  const nginx=compose.slice(compose.indexOf('\n  nginx:\n'),compose.indexOf('\n  cron:\n'));
+  assert.match(nginx,/image: nginx:alpine@sha256:[a-f0-9]{64}/u);
+  assert.match(nginx,/\.\/public:\/usr\/share\/nginx\/html:ro/u);
+  assert.match(nginx,/\.\/nginx\/nginx\.conf:\/etc\/nginx\/conf\.d\/default\.conf:ro/u);
+  assert.doesNotMatch(nginx,/healthcheck:/u);
+  const overlay=await readFile('scripts/integration/payload-preauthority-fixture.compose.yml','utf8');
+  assert.match(overlay,/nginx:\n\s+ports:\n\s+- "127\.0\.0\.1:\$\{HTTP_PORT:\?\}:80"\n\s+networks: \[backend\]/u);
+});
+
+test('both positive restores require the full fixture gate before target snapshot and coordinator, preserving negatives and POST-restore smoke', async () => {
+  const runner=await readFile('scripts/test-payload-preauthority-recovery.mjs','utf8');
+  assert.match(runner,/verifyProxy: awaitFixtureProxy/u);
+  assert.match(runner,/environment: fixtureEnv\(runtime\.project, runtime, runtime\.payloadRelease\)/u);
+  assert.match(runner,/execute: run/u);
+  for(const [phase,label,backup] of [['first','first_target_before','targetBackup'],['second','second_target_before','secondName']]){
+    const start=runner.indexOf(`setStage('${phase}_actual_restore')`);
+    const end=runner.indexOf(`restoreAcceptanceProgress.${phase}.coordinatorReturnedSuccessfully = true`,start);
+    const call=runner.slice(start,end);
+    assert.ok(call.indexOf('await assertFixtureFullSmoke(target, () => {')>=0);
+    assert.ok(call.indexOf('await assertFixtureFullSmoke')<call.indexOf(`snapshot(target, '${label}')`));
+    assert.ok(call.indexOf(`snapshot(target, '${label}')`)<call.indexOf(`coordinator(target, target.project, 'restore', target.payloadRelease, ${backup})`));
+  }
+  assert.ok(runner.indexOf('safeChecks.allNegativeCasesRejectedBeforeRestore = true')<runner.indexOf("setStage('first_actual_restore')"));
+  const coordinator=await readFile('scripts/payload-operations.sh','utf8');
+  assert.match(coordinator,/BASE_URL=\$RESTORE_BASE_URL bash "\$root\/scripts\/smoke\.sh"/u);
+});
+
+test('real loopback HTTP availability checks exact assigned proxy port and running identity without a nginx healthcheck (not full smoke or Docker evidence)', async t => {
+  let status=200;let requests=0;
+  const server=createServer((req,res)=>{
+    requests++;
+    assert.equal(req.url,'/api/ready');
+    res.writeHead(status);res.end('body intentionally not used by availability');
+  });
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(()=>{server.closeAllConnections();server.close();});
+  const port=server.address().port;
+  const runtime={project:'payload-preauth-block2-1-1-source',port,baseUrl:`http://127.0.0.1:${port}`};
+  const id='d'.repeat(64);
+  const value={Id:id,Config:{Labels:{'com.docker.compose.project':runtime.project,'com.docker.compose.service':'nginx','com.docker.compose.oneoff':'False'}},
+    State:{Status:'running',Running:true,Paused:false,Restarting:false},
+    NetworkSettings:{Ports:{'80/tcp':[{HostIp:'127.0.0.1',HostPort:String(port)}]}}};
+  let inspections=0;
+  await awaitFixtureProxyAvailability(runtime,id,observed=>{assert.equal(observed,id);inspections++;return value;});
+  assert.equal(inspections,2);assert.equal(requests,1);
+  for(const mutate of [
+    v=>{v.Id='e'.repeat(64);},v=>{v.Config.Labels['com.docker.compose.service']='api';},v=>{v.State.Status='exited';},
+  ]){
+    const changed=structuredClone(value);mutate(changed);
+    await assert.rejects(awaitFixtureProxyAvailability(runtime,id,()=>changed),{code:'fixture_nginx_identity_invalid'});
+  }
+  const wrongPort=structuredClone(value);wrongPort.NetworkSettings.Ports['80/tcp'][0].HostPort=String(port===65535?port-1:port+1);
+  await assert.rejects(awaitFixtureProxyAvailability(runtime,id,()=>wrongPort),{code:'fixture_nginx_port_invalid'});
+  await assert.rejects(awaitFixtureProxyAvailability({...runtime,baseUrl:runtime.baseUrl+'/'},id,()=>value),{code:'fixture_nginx_endpoint_invalid'});
+  assert.equal(requests,1,'identity, port and endpoint refusal occurs before any request');
+  status=503;
+  await assert.rejects(awaitFixtureProxyAvailability(runtime,id,()=>value),{code:'fixture_nginx_http_unavailable'});
+  assert.equal(requests,9,'eight bounded availability attempts; API/container running is not HTTP success');
+  status=200;let after=0;
+  await assert.rejects(awaitFixtureProxyAvailability(runtime,id,()=>{
+    after++;return after===1?value:{...value,State:{...value.State,Status:'exited',Running:false}};
+  }),{code:'fixture_nginx_identity_invalid'});
 });
 
 test('snapshot normalization removes only the paired pg_dump boundary keys and retains row/sequence data', () => {

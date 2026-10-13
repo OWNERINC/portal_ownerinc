@@ -152,6 +152,26 @@ test('writers/baseline failure cannot authorize DDL; resumed writers cannot auth
   assert.equal(resumed.calls.includes('snapshot2'), false);
 });
 
+test('the actual conversion assertStopped body refuses nginx and worker (and every writer) before baseline capture or DDL', async () => {
+  const source=await readFile('scripts/integration/payload-logical-snapshot-conversion-probe.mjs','utf8');
+  const start=source.indexOf('    const assertStopped = () => {');
+  const end=source.indexOf('    const snapshot = () => {',start);
+  assert.ok(start>=0 && end>start);
+  // Execute the actual lexical guard body, not a copied expected predicate.
+  // Compose stdout alone is doubled; this is not Docker/PostgreSQL evidence.
+  const body=source.slice(start,end);
+  for(const service of ['api','cron','cms','nginx','cms-worker']){
+    const queries=[];
+    const assertStopped=new Function('compose','FixtureFailure','step',`${body};return assertStopped;`)(args=>{
+      queries.push(args);return Buffer.from(`postgres\ncms-postgres\n${service}\n`);
+    },FixtureFailure,'conversion_baseline');
+    const h=harness({assertStopped});
+    await assert.rejects(verifyLinuxConversionPrerequisite(h.operations),{code:'logical_snapshot_conversion_writers_active'});
+    assert.deepEqual(queries,[['ps','--status','running','--services']]);
+    assert.deepEqual(h.calls,[],'no baseline, CREATE, rejection or cleanup effects while a writer is active');
+  }
+});
+
 test('actual recovery runner wires direct Linux conversion prerequisite under lease before the existing quiescence flag and restart', async () => {
   const runner = await readFile('scripts/test-payload-preauthority-recovery.mjs', 'utf8');
   const checks = runner.match(/const safeChecks = \{([\s\S]*?)\n\};/u)?.[1];
@@ -178,6 +198,7 @@ test('actual recovery runner wires direct Linux conversion prerequisite under le
   assert.match(probeCode, /assertRecoveryFixtureConfiguration\(configuration, environment, \['source'\]\)/u);
   assert.match(probeCode, /fstatSync\(9, \{ bigint: true \}\)/u);
   assert.match(probeCode, /lease\.dev !== lock\.dev \|\| lease\.ino !== lock\.ino/u);
+  assert.match(probeCode, /\['api','cron','cms','nginx','cms-worker'\]\.includes\(service\)/u);
   assert.match(probeCode, /compose\(\['exec', '-T', 'postgres', 'psql'/u);
   assert.match(probeCode, /CREATE CONVERSION public\."\$\{name\}" FOR 'UTF8' TO 'LATIN1' FROM pg_catalog\.utf8_to_iso8859_1/u);
   assert.match(probeCode, /SELECT count\(\*\)::text FROM pg_conversion/u);

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createCommandDiagnostic } from './payload-preauthority-diagnostics.mjs';
+import { createCommandDiagnostic, FIXTURE_SMOKE_CONTEXT, isFixtureSmokeSuccess } from './payload-preauthority-diagnostics.mjs';
 import { parseFixtureFailureHold, POST_RESTORE_HOLD_CONTEXT } from './payload-preauthority-snapshot-hold.mjs';
 import { CONVERSION_PROBE_CONTEXT, CONVERSION_PROBE_SUCCESS, parseConversionProbeFailure } from './payload-logical-snapshot-probe-protocol.mjs';
 import { WRITER_RESTART_CONTEXT, WRITER_RESTART_SUCCESS, parseWriterRestartFailure, parseWriterObservation } from './payload-preauthority-writer-restart-protocol.mjs';
@@ -47,6 +47,30 @@ export function coordinatorCommandOptions(action, release) {
   };
 }
 
+/** Fixture-only gate, not a change to production coordinator semantics. Inspect
+ * the saved proxy ID, run the actual release smoke, then inspect that SAME ID
+ * again before allowing a positive restore callback. Never return tool output. */
+export async function runFixtureSmokePreflight(runtime, {
+  environment, verifyProxy, execute = runFixtureCommand, afterSmoke = () => undefined,
+}) {
+  if (environment?.RESTORE_BASE_URL !== runtime?.baseUrl) {
+    throw new FixtureFailure('fixture_smoke_endpoint_invalid', { substep: 'fixture_full_smoke' });
+  }
+  if (typeof runtime?.fixtureNginxIdentity !== 'string' || !/^[a-f0-9]{64}$/u.test(runtime.fixtureNginxIdentity)) {
+    throw new FixtureFailure('fixture_nginx_identity_invalid', { substep: 'fixture_full_smoke' });
+  }
+  await verifyProxy(runtime, runtime.fixtureNginxIdentity);
+  await execute('bash', [path.join(runtime.payloadRelease, 'scripts', 'smoke.sh')], {
+    cwd: runtime.payloadRelease,
+    env: { ...environment, BASE_URL: runtime.baseUrl },
+    timeout: 15 * 60_000, maxBuffer: 64 * 1024,
+    substep: 'fixture_full_smoke', failureCode: 'fixture_full_smoke_failed', preservePrivateErrorEvidence: true,
+    smokeCommandContext: FIXTURE_SMOKE_CONTEXT,
+  });
+  await verifyProxy(runtime, runtime.fixtureNginxIdentity);
+  return afterSmoke();
+}
+
 export function createLeasedCommandInvocation(lock, command, args = []) {
   return {
     command: 'bash',
@@ -86,6 +110,8 @@ export function createFixtureCommandFailure(result, options = {}) {
     controlCommandContext: options.controlCommandContext,
     coordinatorCommandContext: options.coordinatorCommandContext,
     logicalSnapshotCommandContext: options.logicalSnapshotCommandContext,
+    smokeCommandContext: options.smokeCommandContext,
+    stdout: result.stdout,
     release: options.release,
   }));
   if (options.fixtureFailureHoldContext === POST_RESTORE_HOLD_CONTEXT) {
@@ -154,6 +180,9 @@ export function runFixtureCommand(command, args = [], options = {}) {
         || (options.writerRestartMode === 'restart' && result.stdout?.toString('utf8') !== WRITER_RESTART_SUCCESS)
         || (options.writerRestartMode === 'observe' && !parseWriterObservation(result.stdout)))) {
     throw createFixtureCommandFailure(result, { ...options, failureCode: 'writer_restart_protocol_invalid' });
+  }
+  if (options.smokeCommandContext === FIXTURE_SMOKE_CONTEXT && !isFixtureSmokeSuccess(result.stdout, result.stderr)) {
+    throw createFixtureCommandFailure(result, { ...options, failureCode: 'fixture_smoke_protocol_invalid' });
   }
   return result.stdout || Buffer.alloc(0);
 }
