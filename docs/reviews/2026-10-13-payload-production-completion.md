@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Mandatory native trust fixture wiring
+
+The candidate-only native gate now also runs the trust-provisioner suite with `PAYLOAD_REQUIRE_NATIVE_TRUST=1`, so unavailable native execution fails rather than skips. The unique `/root` sandbox redirects only destination constants; production destinations remain unchanged. The fixture asserts actual filesystem metadata, nofollow reads, no-replace rename, interrupted installation/retry, policy-last publication and existing-record preservation. This is not a power-loss test or SSH authorization proof.
+
+Independent code review returned `ship`. Primary complete local verification passed **Portal 1,818 PASS / 14 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-native-trust-wiring-verify.log`). Native execution itself is still pending.
+
+Candidate `38473939196` at earlier commit `7fec457` failed before restores: final report artifact `11856680769` records `payload_initialize_isolated`, phase `quiescence`, stage `none`, `writers_not_quiescent`. Source and target initial comparisons passed, but lease fixture initialization failed. No negative scenarios or restores were reached. Independently, progress upload failed with `EACCES`; the final report upload succeeded. Inspection localizes the primary rejection to disallowed running containers in the same-project inventory after successful Compose stop; the specific service and underlying cause are not yet known. Diagnostic follow-up is pending; this run does not qualify the writer identity correction.
+
 ## P2 offline trust provisioner — reviewed local result
 
 Implemented the root-administrative offline provisioner with independently approved input hashes, absent-or-identical fixed-path installation, retained snapshots and policy-last publication. Independent review found a retry durability gap after successful directory creation followed by failed parent fsync. Apply now reaffirms every validated non-root segment's parent, including existing segments; check remains read-only. A red-before-fix regression covers that interruption. Fresh code review returned `ship`.

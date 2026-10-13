@@ -228,8 +228,21 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
   assert.match(workflow, /runs-on: ubuntu-latest/u);
   assert.ok(workflow.indexOf('node-version: 24') < workflow.indexOf(`      - name: ${name}`));
   assert.equal(setup.split('        run: |\n')[1]?.trim(),
-    'set -euo pipefail\n          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs',
-    'preserve checkout cwd and setup-node PATH; execute only this suite without filtering or suppressing its exit');
+    'set -euo pipefail\n          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs\n' +
+    '          NODE_BIN="$(readlink -f -- "$(command -v node)")"\n' +
+    '          test -f "$NODE_BIN" && test -x "$NODE_BIN"\n' +
+    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\\n' +
+    '            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \\\n' +
+    '            tests/unit/payload-candidate-trust-provisioning.test.mjs',
+    'preserve checkout cwd and setup-node selection; both native suites are mandatory and unfiltered');
+  const trustTests = await read('tests/unit/payload-candidate-trust-provisioning.test.mjs');
+  assert.match(trustTests, /skip: process\.env\.PAYLOAD_REQUIRE_NATIVE_TRUST !== '1' &&/u);
+  assert.match(trustTests, /assert\.deepEqual\(JSON\.parse\(result\.stdout\), \{ kind: 'native-trust-filesystem-proof'/u);
+  const provisioner = await read('ops/provision-payload-candidate-trust.py');
+  assert.match(provisioner, /^TOOL_ROOT = '\/opt\/ownerinc\/lib\/payload-candidate'$/mu);
+  assert.match(provisioner, /^POLICY_PATH = '\/etc\/ownerinc\/payload-candidate\/production-policy.json'$/mu);
+  assert.match(provisioner, /^STATE_ROOT = '\/var\/lib\/ownerinc\/payload-candidate'$/mu);
+  assert.doesNotMatch(provisioner, /PAYLOAD_REQUIRE_NATIVE_TRUST|--destination|--tool-root|--state-root/u);
   assert.doesNotMatch(setup, /continue-on-error|always\(|failure\(|\|\||\beval\b|secrets\.|\bcd\b|--test-name-pattern/u);
   assert.equal(workflow.split(`      - name: ${name}\n`).length - 1, 1);
   for (const later of ['Build CMS with synthetic build-only configuration', 'Build production images', 'Publish immutable images', 'Publish CMS immutable image',

@@ -131,6 +131,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs
+          NODE_BIN="$(readlink -f -- "$(command -v node)")"
+          test -f "$NODE_BIN" && test -x "$NODE_BIN"
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
+            tests/unit/payload-candidate-trust-provisioning.test.mjs
       - name: Test route delivery with production Nginx image
         run: |
           docker run --rm \

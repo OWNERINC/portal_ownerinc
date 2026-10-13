@@ -9,8 +9,11 @@ const python = process.platform === 'win32' ? 'python' : 'python3';
 const modulePath = path.resolve('ops/provision-payload-candidate-trust.py');
 const verifierPath = path.resolve('ops/payload-candidate-verifier.py');
 const load = `import importlib.util\nspec=importlib.util.spec_from_file_location('p',${JSON.stringify(modulePath)})\np=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)\n`;
-function probe(code, input) {
-  return spawnSync(python, ['-I', '-S', '-B', '-c', load + code], { input, encoding: 'utf8', timeout: 30000 });
+function probe(code, input, native = false) {
+  return spawnSync(native ? '/usr/bin/python3' : python, ['-I', '-S', '-B', '-c', load + code], {
+    input, encoding: 'utf8', timeout: 30000,
+    ...(native ? { env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' } } : {}),
+  });
 }
 
 test('bootstrap policy validator agrees with both existing validators on valid and malformed contract corpus', () => {
@@ -165,27 +168,134 @@ finally:shutil.rmtree(root)
 });
 
 test('native Linux root filesystem validates protected ancestry, fsync and no-replace publication without ownership doubles', {
-  skip: process.platform !== 'linux' || process.getuid?.() !== 0,
-}, () => {
+  skip: process.env.PAYLOAD_REQUIRE_NATIVE_TRUST !== '1' && (process.platform !== 'linux' || process.getuid?.() !== 0),
+}, t => {
+  assert.equal(process.platform, 'linux', 'required native qualification cannot skip a non-Linux host');
+  assert.equal(process.getuid(), 0);
+  assert.equal(process.geteuid(), 0);
+  assert.equal(process.getgid(), 0);
+  assert.equal(process.getegid(), 0);
   const nativeFixture = filesystem
     .replace(/^root=tempfile\.mkdtemp\(.+$/mu, "root=tempfile.mkdtemp(prefix='trust-provision-',dir='/root')")
     .replace(/original_metadata=p\.file_metadata[\s\S]*?(?=def write\()/u, '');
-  const result = probe(nativeFixture + String.raw`
+  assert.doesNotMatch(nativeFixture, /p\.(?:file_metadata|directory_metadata|identity|canonical_path|directories|sync_directory|rename_noreplace)\s*=|os\.(?:fsync|open|fchmod)\s*=/u);
+  const result = probe(String.raw`
+import errno,sys
+assert p.TOOL_ROOT=='/opt/ownerinc/lib/payload-candidate'
+assert p.POLICY_PATH=='/etc/ownerinc/payload-candidate/production-policy.json'
+assert p.STATE_ROOT=='/var/lib/ownerinc/payload-candidate'
+# Only these three constants are redirected by setup(). No function replacement.
+originals={name:getattr(p,name) for name in ['read_protected','file_metadata','directory_metadata',
+    'directories','publish','sync_directory','rename_noreplace','identity']}
+assert sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode
+` + nativeFixture + String.raw`
 try:
-    inputs=setup('native');before=inventory();call(inputs,'check');assert inventory()==before
-    call(inputs);before=inventory();call(inputs);assert inventory()==before
+    inputs=setup('native')
+    # Actual main() uses the real canonical host Python, not the synthetic binary
+    # data used by portable fixtures. This is test approval, never host approval.
+    python_path=os.path.realpath('/usr/bin/python3')
+    python_hash=p.sha(p.read_protected(python_path,0o755,p.MAX_BINARY))
+    inputs[3]['toolchain']['executables']['python']={'path':python_path,'sha256':python_hash}
+    policy_raw=(json.dumps(inputs[3])+'\n').encode();write(inputs[2]+'/production-policy.json',policy_raw,0o600)
+    approval={'schemaVersion':1,'kind':'ownerinc-payload-trust-provisioning-v1',
+        'policySha256':p.sha(policy_raw),'toolchain':copy.deepcopy(inputs[3]['toolchain'])}
+    approval_raw=(json.dumps(approval)+'\n').encode();write(inputs[0],approval_raw,0o600)
+    inputs=(inputs[0],p.sha(approval_raw),inputs[2],inputs[3])
+    import contextlib,io
+    before=inventory();check_output=io.StringIO()
+    with contextlib.redirect_stdout(check_output):
+        p.main(['--check','--approval',inputs[0],'--approval-sha256',inputs[1],'--bundle',inputs[2]])
+    assert check_output.getvalue()=='Trust provisioning check passed; no files written.\n'
+    assert inventory()==before
+    assert not os.path.exists(p.TOOL_ROOT) and not os.path.exists(p.STATE_ROOT)
+    assert not os.path.exists(os.path.dirname(p.POLICY_PATH))
+    # Real partial publication represents an interrupted prior application.
+    # Functions/syscalls are not replaced to manufacture the restart state.
+    _,_,targets=p.load_inputs(*inputs[:3])
+    partial=list(targets)[:2]
+    for filename in partial:
+        p.directories(os.path.dirname(filename),create=True)
+        p.publish(filename,targets[filename])
+    inodes={filename:os.stat(filename).st_ino for filename in partial}
+    assert not os.path.exists(p.POLICY_PATH)
+    p.directories(p.STATE_ROOT+'/records',create=True,private=True)
+    record=p.STATE_ROOT+'/records/preserved.json';write(record,b'private-test-record',0o600)
+    record_before=os.stat(record)
+    synced=[];policy_events=[]
+    # Profile observes real calls; no I/O, metadata or publication function is mocked.
+    def observe(frame,event,arg):
+        if event=='call' and frame.f_code is p.sync_directory.__code__:
+            synced.append(frame.f_locals['filename'])
+        if event=='call' and frame.f_code is p.publish.__code__ and frame.f_locals['filename']==p.POLICY_PATH:
+            policy_events.append('publish-policy')
+            assert not os.path.exists(p.POLICY_PATH)
+            for filename,expected in targets.items():
+                if filename!=p.POLICY_PATH:assert p.read_protected(filename,expected[1],expected[2])==expected[0]
+    sys.setprofile(observe)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            p.main(['--apply','--approval',inputs[0],'--approval-sha256',inputs[1],'--bundle',inputs[2]])
+    finally:sys.setprofile(None)
+    assert policy_events==['publish-policy']
+    # Previously created ancestry entries must have their parents fsynced on retry.
+    current=os.path.dirname(partial[0])
+    while current!='/':
+        assert os.path.dirname(current) in synced,current
+        current=os.path.dirname(current)
+    assert all(os.stat(filename).st_ino==inode for filename,inode in inodes.items())
+    assert pathlib.Path(record).read_bytes()==b'private-test-record'
+    assert os.stat(record).st_ino==record_before.st_ino
+    before=inventory();call(inputs);assert inventory()==before
     assert stat.S_IMODE(os.stat(p.POLICY_PATH).st_mode)==0o600
-    assert os.stat(p.POLICY_PATH).st_nlink==1
+    for filename,expected in targets.items():
+        info=os.stat(filename)
+        assert (info.st_uid,info.st_gid,info.st_nlink)==(0,0,1)
+        assert stat.S_IMODE(info.st_mode)==expected[1]
     source=os.path.join(root,'noreplace-source');write(source,b'new',0o600)
+    policy_inode=os.stat(p.POLICY_PATH).st_ino
     try:p.rename_noreplace(source,p.POLICY_PATH)
-    except FileExistsError:pass
+    except FileExistsError as error:assert error.errno==errno.EEXIST
     else:raise AssertionError('replaced existing destination')
+    assert os.stat(p.POLICY_PATH).st_ino==policy_inode and pathlib.Path(source).read_bytes()==b'new'
     assert inventory()[str(pathlib.Path(p.POLICY_PATH).relative_to(root))]==before[str(pathlib.Path(p.POLICY_PATH).relative_to(root))]
+    destination=os.path.join(root,'noreplace-success');inode=os.stat(source).st_ino
+    p.rename_noreplace(source,destination);p.sync_directory(root)
+    assert not os.path.exists(source) and os.stat(destination).st_ino==inode and os.stat(destination).st_nlink==1
     linked=os.path.join(root,'linked');os.symlink(inputs[0],linked)
     denied(lambda:p.read_protected(linked,0o600,p.MAX_JSON))
+    try:fd=os.open(linked,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    except OSError as error:assert error.errno==errno.ELOOP
+    else:os.close(fd);raise AssertionError('kernel NOFOLLOW did not reject symlink')
+    os.unlink(linked);os.link(inputs[0],linked)
+    denied(lambda:p.read_protected(inputs[0],0o600,p.MAX_JSON),'unsafe_file');os.unlink(linked)
+    unsafe=os.path.join(root,'unsafe');os.mkdir(unsafe,0o700)
+    protected=unsafe+'/input';write(protected,b'private',0o600);os.chmod(unsafe,0o777)
+    denied(lambda:p.read_protected(protected,0o600,p.MAX_JSON),'unsafe_directory')
+    assert stat.S_IMODE(os.stat(unsafe).st_mode)==0o777
+    os.chmod(unsafe,0o700)
+    os.chown(protected,65534,0)
+    denied(lambda:p.read_protected(protected,0o600,p.MAX_JSON),'unsafe_file')
+    assert os.stat(protected).st_uid==65534
+    os.chown(protected,0,65534)
+    denied(lambda:p.read_protected(protected,0o600,p.MAX_JSON),'unsafe_file')
+    assert os.stat(protected).st_gid==65534
+    inputs=setup('conflict');write(p.TOOL_ROOT+'/'+p.TOOL_FILES[0],b'conflict',0o755)
+    before=inventory();denied(lambda:call(inputs),'destination_conflict');assert inventory()==before
+    assert not os.path.exists(p.POLICY_PATH)
+    assert all(getattr(p,name) is function for name,function in originals.items())
+    assert list(pathlib.Path(root).rglob('__pycache__'))==[]
+    print(json.dumps({'kind':'native-trust-filesystem-proof','schemaVersion':1,
+        'checks':['cli-check-apply','read-only','partial-retry','parent-fsync','policy-last','record-preserved','idempotent',
+            'root-metadata','rename-no-clobber','rename-success','nofollow','hardlink','unsafe-ancestor',
+            'wrong-owner','wrong-group','conflict-preserved','no-bytecode']}))
 finally:shutil.rmtree(root)
-`);
+`, undefined, true);
   assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { kind: 'native-trust-filesystem-proof', schemaVersion: 1,
+    checks: ['cli-check-apply', 'read-only', 'partial-retry', 'parent-fsync', 'policy-last', 'record-preserved', 'idempotent',
+      'root-metadata', 'rename-no-clobber', 'rename-success', 'nofollow', 'hardlink', 'unsafe-ancestor',
+      'wrong-owner', 'wrong-group', 'conflict-preserved', 'no-bytecode'] });
+  t.diagnostic(result.stdout.trim());
 });
 
 test('offline real filesystem: partial publication, conflicting races, input drift and restart never publish premature policy (ownership doubles)', () => {

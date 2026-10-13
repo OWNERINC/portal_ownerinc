@@ -687,6 +687,47 @@ e reprodutibilidade do pacote continuam exigindo evidência própria. O pin anti
 do preparer permanece intacto: este provisionamento não aprova source de preparação
 nem abre `release_not_preflighted`.
 
+##### Qualificação nativa isolada do provisioner
+
+O gate candidate-only existente `Test preauthority CI setup with native Linux root`
+também executa a suíte de trust em modo obrigatório, sem mudar o nome autenticado
+do step ou os budgets de recovery. Invocação equivalente no runner Linux descartável:
+
+```sh
+NODE_BIN="$(readlink -f -- "$(command -v node)")"
+test -f "$NODE_BIN" && test -x "$NODE_BIN"
+sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
+  tests/unit/payload-candidate-trust-provisioning.test.mjs
+```
+
+Exige UID/EUID/GID/EGID zero, ancestry `/root` protegida, `/usr/bin/python3`
+canônico root-owned, e suporte real a NOFOLLOW, links, chown, fsync de diretório
+e `renameat2(RENAME_NOREPLACE)`. Ausência de requisito falha o gate: com a flag
+obrigatória, não há skip por plataforma/UID. A flag pertence somente ao teste e
+não é encaminhada ao processo Python, iniciado com `-I -S -B` e PATH/locale fixos.
+
+O teste cria um sandbox exclusivo e privado sob `/root`, redirecionando **somente** as
+três constantes de destino do módulo em memória. Confere antes os valores de
+produção e mantém todas as funções de metadata/I/O/publicação originais. Os paths
+fixos de trust de produção não são acessados para instalação ou alterados. Arquivos
+de aprovação e binários sintéticos são dados de fixture; a identidade do Python
+real é usada para exercitar `main()` com `--check` e `--apply`. Isto não aprova
+nenhum executável, workflow ou candidato para produção.
+
+O caso nativo testa publicação parcial e retomada, fsync dos pais já existentes,
+policy por último, registros preservados, idempotência, modos/owners reais,
+symlinks/hardlinks, ancestry insegura, e rename com/sem conflito. Um observador
+de chamadas Python verifica a ordem sem substituir funções ou syscalls. O Node
+exige e exibe o JSON completo `native-trust-filesystem-proof`; resposta ausente,
+incompleta ou saída antecipada falha. O sandbox é removido ao fim; SIGKILL pode
+deixar somente esse diretório de fixture no runner descartável.
+
+As demais provas portáveis da suíte continuam identificadas como doubles. Sucesso
+de fsync/retomada **não simula power loss nem prova durabilidade de hardware**.
+Não há Docker, serviços, contas ou sudoers novos. Este gate não qualifica o
+launcher/sudo/SSH real da VPS, nem substitui registro autenticado e recovery.
+
 Para `production:payload-v1 <commit> <run-id> <run-attempt> <api-image>
 <cron-image> <cms-image> <candidate-artifact-id> <qualified-artifact-id>
 <report-artifact-id>`, o wrapper de produção passa **uma única string**, sem
