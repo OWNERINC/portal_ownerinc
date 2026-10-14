@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Isolated PG16 qualification wiring
+
+Added a mandatory candidate-only PG16 observer qualification step using an independently isolated digest-pinned container: no network, published ports or host binds, with tmpfs data. The harness executes the actual SQL producer/validator/comparator, checks catalog cases and overflow, compares before/after database and nonsecret-role fingerprints, and emits proof only after identity-checked removal. Actual PostgreSQL execution is still pending; portable checks do not establish catalog semantics.
+
+Independent code review returned `ship`. The initial full verify exposed an outdated timeout-list assertion; it now explicitly accounts for the six-minute PG16 step within the unchanged 150/120-minute job/recovery budgets. The historical outside-recovery reserve is 14.68 minutes after this additional cap, not a runtime guarantee. That correction also received `ship`.
+
+Final primary `npm run verify` passed **Portal 1,863 PASS / 17 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-legacy-security-pg16-final-verify.log`). Targeted budget/harness checks passed **7 / 1 native skip**. The new gate blocks candidate workflow success but was not added to the packager's historical authenticated required-step list. No VPS operations occurred.
+
 ## Legacy security observation primitives — offline result
 
 Added a fixed Portal/PG16 catalog-only SQL producer, bounded observation validation and exact approved-profile comparison. No live collector, grant executor or state mutation was connected. Credentials and raw role settings are excluded; all recovery/deployment authorization flags remain false. A profile cannot authorize unsafe shared-role/ownership mechanisms or retroactively establish a pre-grant baseline.

@@ -139,6 +139,13 @@ jobs:
           sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
             PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \
             tests/unit/payload-preparation-authentication.test.mjs
+      - name: Qualify legacy security observer with isolated PostgreSQL 16
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        timeout-minutes: 6
+        env:
+          PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY: "1"
+          PAYLOAD_LEGACY_SECURITY_DISPOSABLE: "1"
+        run: node --test tests/unit/payload-legacy-security-pg16.test.mjs
       - name: Test route delivery with production Nginx image
         run: |
           docker run --rm \

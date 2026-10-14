@@ -17,6 +17,10 @@ test('candidate-only outer budget covers measured prefix, existing coordinator c
   // CI 38454684188: observed prefix, not an expected successful duration.
   const observedPrefixMinutes = 50.3;
   const observedOutsideRecoveryMinutes = 9.32;
+  const pg16Step = workflow.split('      - name: Qualify legacy security observer with isolated PostgreSQL 16\n')[1]?.split('      - name:')[0];
+  assert.ok(pg16Step);
+  const pg16Minutes = Number(pg16Step.match(/timeout-minutes: (\d+)/)?.[1]);
+  assert.equal(pg16Minutes, 6);
   const coordinator = runner.slice(runner.indexOf('function coordinator('), runner.indexOf('function coordinator(') + 1600);
   const coordinatorCap = Number(coordinator.match(/timeout: (\d+) \* 60_000/)?.[1]);
   assert.equal(coordinatorCap, 15, 'inner coordinator cap must not be raised');
@@ -26,7 +30,9 @@ test('candidate-only outer budget covers measured prefix, existing coordinator c
   assert.match(remaining, /assertRecoverySnapshots\(secondSourceAfter, secondTargetAfter\)/);
   assert.ok(recoveryMinutes >= observedPrefixMinutes + 3 * coordinatorCap + 24.7);
   assert.ok(candidateMinutes - recoveryMinutes >= 30);
-  assert.ok(candidateMinutes - recoveryMinutes - observedOutsideRecoveryMinutes >= 20);
+  // The new isolated PG16 gate consumes at most six minutes of the existing
+  // outside-recovery reserve; historical timings did not include this gate.
+  assert.ok(candidateMinutes - recoveryMinutes - observedOutsideRecoveryMinutes - pg16Minutes >= 14);
   assert.match(workflow, /  deploy-production:[\s\S]*?timeout-minutes: 25/);
-  assert.deepEqual([...workflow.matchAll(/^        timeout-minutes: (\d+)$/gm)].map(m => Number(m[1])), [5, 15, 10, 15, 120]);
+  assert.deepEqual([...workflow.matchAll(/^        timeout-minutes: (\d+)$/gm)].map(m => Number(m[1])), [5, 15, 6, 10, 15, 120]);
 });

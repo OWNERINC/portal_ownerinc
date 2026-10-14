@@ -4,6 +4,67 @@
 
 ### Primitivas de observação de segurança legada — sem collector de produção
 
+#### Gate isolado PG16 no CI candidate-only
+
+O step **Qualify legacy security observer with isolated PostgreSQL 16** executa,
+antes dos builds de imagens e com timeout de 6 minutos:
+
+```sh
+PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY=1 PAYLOAD_LEGACY_SECURITY_DISPOSABLE=1 \
+  node --test tests/unit/payload-legacy-security-pg16.test.mjs
+```
+
+O harness exige Linux, GitHub Actions hosted, run/attempt numéricos, opt-in
+descartável e Docker local/default no socket `/var/run/docker.sock`. Não usa o
+PostgreSQL compartilhado das migrations. Cria cluster novo no pin PG16 existente,
+com nome `payload-legacy-security-pg16-<run>-<attempt>-<nonce>`, labels de escopo e
+nonce, network none, sem portas/volumes/binds de host, rootfs read-only e PGDATA
+em tmpfs. O database chama-se obrigatoriamente `portal` porque esse é o contrato
+do produtor; o isolamento/namespace exclusivo está no cluster descartável, não
+em renomear o database da consulta. Roles fixos nunca atingem outro cluster.
+Trust auth vale somente nesse container sem rede; passwords de roles são
+fixtures sintéticas. Nada recebe credenciais de produção.
+
+`scripts/integration/payload-legacy-security-pg16-bridge.py` importa o runtime
+real para obter a consulta e validar/comparar a resposta. Não duplica a consulta.
+Contexto v3, hashes, imagens e perfil interno do bridge são **explicitamente
+sintéticos**, sem assinatura/autenticação de source ou aprovação de produção.
+O processo Node limita comandos a 30 s e saída a 4 MiB (bridge tem limites menores
+de saída); timeout/overflow/status não-zero falham sem imprimir stderr/SQL/segredos.
+O futuro collector de produção não é registrado por este harness.
+
+Fixture DDL roda somente no cluster recém-criado. Casos reais exercitam atributos,
+membership admin/inherit/set de PG16, ACL null versus explícita, PUBLIC, grant
+options, coluna expires_at, sequence, default ACL, owner, RLS/settings e dependência
+de role em outro database **do mesmo cluster descartável**. Compara também perfil
+ausente e mudanças contra o perfil sintético inicial. O caso overflow cria 700
+tabelas estreitas para exceder os 20.000 registros reais, sem reduzir ou substituir
+os limites/SQL de produção; o validator precisa recusar o marcador de overflow.
+
+Cada execução do observer tem fingerprints antes/depois de dumps dos dois
+databases (dados, schema, owners e ACLs) e roles `--no-role-passwords`. Reutiliza a
+normalização existente somente para o par volátil restrict/unrestrict de pg_dump.
+Isto não observa passwords e não qualifica preservação/autenticação de credenciais.
+
+Cleanup em finally e sinais verifica novamente nome, nonce, ID completo, imagem e
+isolamento; remove somente o ID daquele container. Não remove por prefixo, não
+faz prune e não apaga recursos do serviço CI compartilhado. Falha de cleanup não
+emite prova. SIGKILL/cancelamento abrupto pode impedir cleanup do processo: o runner
+hosted continua sendo a fronteira descartável; não há rotina de limpeza ampla.
+
+O wrapper exige prova JSON exata menor que 1 KiB, emitida apenas depois de remover
+o cluster. Sem `PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY=1`, a parte nativa é skip
+explícito; com a flag, ambiente incompatível ou falha não vira skip. A prova cobre
+esse checkout e fixtures, não baseline legado real, bootstrap/preparação native
+end-to-end, rollback ou ingress. A primeira execução real ainda é um gate pendente
+até CI demonstrar PASS; testes portáteis não substituem essa evidência.
+
+O gate usa o job `validate` existente e não altera nomes dos steps autenticados
+anteriores, budgets candidate/recovery, os 14 checks/11 negativos/2 restores ou
+schemas de report/artifacts. O packager exige um subconjunto de steps de `validate`
+e aceita steps adicionais; o sucesso do job inclui obrigatoriamente este novo gate
+no fluxo candidate-only. Nenhuma nova chave é acrescentada ao recovery report.
+
 `portal_legacy_security_observation_sql()` em `ops/payload-control-runtime.py`
 produz SQL **fixo**, sem argumentos de database/role/SQL. Não executa SQL, não chama
 `_psql_json()` e não está no dispatcher. O transporte futuro precisa autenticar
