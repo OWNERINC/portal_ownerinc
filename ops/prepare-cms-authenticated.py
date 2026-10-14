@@ -8,6 +8,7 @@ import sys
 import types
 import builtins
 import subprocess
+import re
 from contextlib import contextmanager
 
 HOST_ROOT = '/opt/ownerinc/apps/portal-ownerinc-real'
@@ -290,7 +291,7 @@ def verify_host_under_lock(approval, captured, cms_image, support):
         reaffirm()
 
 
-def authenticate():
+def _authenticated_material():
     require(os.path.abspath(__file__) == LAUNCHER)
     approval_raw = protected(APPROVAL, 0o600, 1024 * 1024)
     def pairs(items):
@@ -345,7 +346,219 @@ def authenticate():
     verifier.verify_installed_tools(policy)
     for relative, raw in captured.items():
         require(protected(support.preparation_target(relative), support.preparation_mode(relative), 2 * support.MAX_JSON) == raw)
-    return approval, captured, record['images']['cms'], support, support.sha(approval_raw)
+    return approval, captured, record['images']['cms'], support, support.sha(approval_raw), record, verifier
+
+
+def authenticate():
+    return _authenticated_material()[:5]
+
+
+def load_runtime_captured(captured):
+    inventory = load_authenticated(captured['ops/payload-control-inventory.py'], ROOT + '/ops/payload-control-inventory.py')
+    state = load_state_captured(captured, inventory)
+    filename = ROOT + '/ops/payload-control-runtime.py'
+    class Loader:
+        def exec_module(self, module):
+            require(module is state)
+    spec = types.SimpleNamespace(loader=Loader())
+    def select(name, path):
+        require(name == 'payload_control_state' and path == ROOT + '/ops/payload-control-state.py')
+        return spec
+    def create(selected):
+        require(selected is spec)
+        return state
+    proxy = types.SimpleNamespace(util=types.SimpleNamespace(spec_from_file_location=select, module_from_spec=create))
+    def importer(name, *args, **kwargs):
+        return proxy if name == 'importlib.util' else builtins.__import__(name, *args, **kwargs)
+    runtime = types.ModuleType('authenticated_install_plan_runtime')
+    runtime.__file__ = filename
+    runtime.__dict__['__builtins__'] = dict(vars(builtins), __import__=importer)
+    exec(compile(captured['ops/payload-control-runtime.py'], filename, 'exec'), runtime.__dict__)
+    require(runtime.STATE is state and runtime.INVENTORY is inventory)
+    return runtime
+
+
+def verify_received_tree(receiver, destination, entries):
+    """Compare receiver extraction with authenticated archive, including empty files.
+
+    This is a data reader, not the executable-trust reader. Never extract, merge,
+    follow a link, import or execute anything in this tree.
+    """
+    children = {'': set()}
+    files = {}
+    for name, content in entries.items():
+        parts = name.split('/')
+        for index, part in enumerate(parts):
+            parent = '/'.join(parts[:index])
+            children.setdefault(parent, set()).add(part)
+        if content is None:
+            children.setdefault(name, set())
+        else:
+            files[name] = content
+    identities = {}
+    for relative, expected_names in children.items():
+        filename = destination + ('/' + relative if relative else '')
+        receiver.protected_directory(filename, private=not relative)
+        identities[filename] = receiver.identity(os.lstat(filename))
+        require(set(os.listdir(filename)) == expected_names)
+    for relative, expected in files.items():
+        filename = destination + '/' + relative
+        before = os.lstat(filename)
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and (before.st_uid, before.st_gid) == (0, 0) and stat.S_IMODE(before.st_mode) == 0o644
+                and before.st_size == len(expected) and before.st_size <= receiver.MAX_EXPANDED)
+        fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            require(receiver.identity(os.fstat(fd)) == receiver.identity(before))
+            with os.fdopen(fd, 'rb', closefd=False) as stream:
+                require(stream.read(len(expected) + 1) == expected)
+            require(receiver.identity(os.fstat(fd)) == receiver.identity(before)
+                    and receiver.identity(os.lstat(filename)) == receiver.identity(before))
+        finally:
+            os.close(fd)
+    for filename, identity in identities.items():
+        require(receiver.identity(os.lstat(filename)) == identity)
+
+
+def inspect_install_host(approval, captured):
+    # Separate from preparation eligibility: inspect valid pending/committed
+    # journals, never invoke Runtime.__init__ (which allows head repair).
+    runtime = load_runtime_captured(captured)
+    state, inventory = runtime.STATE, runtime.INVENTORY
+    baseline = approval['hostBaseline']
+    expected = inventory.production_inventory(HOST_ROOT, RUNTIME, RELEASES, HOST_ROOT + '/current-release', LOCK,
+        '/opt/ownerinc/backups/portal-ownerinc/daily', PRODUCTION_BACKUP, PRODUCTION_BACKUP + '/restore-protection',
+        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml')
+    require(inventory.identity(expected) == baseline['inventoryIdentity'])
+    reads = {}
+    absent = set()
+    def read(filename, owner=(0, 0), modes=(0o600,), limit=1024 * 1024):
+        value = host_read(filename, owner, modes, limit)
+        if filename in reads:
+            require(reads[filename] == (value, owner, modes, limit))
+        else:
+            require(sum(len(item[0]) for item in reads.values()) + len(value) <= 16 * 1024 * 1024)
+        reads[filename] = (value, owner, modes, limit)
+        return value
+    def host_data(filename):
+        info = os.lstat(filename)
+        owner = (info.st_uid, info.st_gid)
+        require(owner in ((0, 0), (1000, 1000)))
+        return read(filename, owner, (0o600, 0o644)), info
+    document_raw = read(RUNTIME + '/payload-control-inventory.json')
+    document = inventory.validate(state.parse_canonical(document_raw, 'invalid_inventory_file'))
+    require(document == expected)
+    read(ENVIRONMENT, (1000, 1000), (0o600,))
+    inventory.verify_environment_file(ENVIRONMENT, document['environmentFileOwner'])
+    key_path, state_dir = RUNTIME + '/payload-control.key', RUNTIME + '/payload-control-state'
+    require(os.path.lexists(key_path) and os.path.lexists(state_dir))
+    host_ancestry(key_path)
+    state_info = os.lstat(state_dir)
+    require(stat.S_ISDIR(state_info.st_mode) and (state_info.st_uid, state_info.st_gid) == (0, 0)
+            and stat.S_IMODE(state_info.st_mode) == 0o700)
+    journal_names = set(os.listdir(state_dir))
+    require(2 <= len(journal_names) <= 4096)
+    state._read_file = lambda filename, expected_mode=None, private_owner=False: read(filename)
+    key, _, body, _ = state.read_state(RUNTIME, repair_head=False, inventory_identity=inventory.identity(document))
+    source = RELEASES + '/' + baseline['currentCommit']
+    source_raw, source_info = host_data(source + '/.image-env')
+    image_bytes = ('API_IMAGE=' + baseline['legacyImages']['api'] + '\nCRON_IMAGE=' + baseline['legacyImages']['cron']).encode()
+    require(source_raw in (image_bytes, image_bytes + b'\n'))
+    pointer_raw, pointer_info = host_data(HOST_ROOT + '/current-release')
+    pointer = pointer_raw.decode('utf-8').removesuffix('\n')
+    intent = body.get('installIntent')
+    allowed = {source}
+    if intent:
+        binding = intent['binding']
+        require(binding['sourceRelease'] == source and binding['previousImages'] == baseline['legacyImages']
+                and os.path.dirname(binding['candidateRelease']) == RELEASES)
+        if intent['stage'] in ('floor_commit_pending', 'floor_committed'):
+            allowed.add(binding['candidateRelease'])
+        if intent['stage'] == 'floor_committed':
+            allowed = {binding['candidateRelease']}
+    require(pointer in allowed)
+    for filename, field in ((source + '/docker-compose.yml', 'releaseComposeSha256'),
+                             (RUNTIME + '/compose.production.yaml', 'runtimeComposeSha256')):
+        require(hashlib.sha256(host_data(filename)[0]).hexdigest() == baseline[field])
+    override = source + '/compose.ownerinc-vps.yaml'
+    if os.path.lexists(override):
+        require(hashlib.sha256(host_data(override)[0]).hexdigest() == baseline['releaseOverrideSha256'])
+    else:
+        require(baseline['releaseOverrideSha256'] is None)
+        absent.add(override)
+    b0_status = 'absent'
+    directories = [intent['binding']['b0']['directory']] if intent else \
+        [root + '/000-initial-install-b0' for root in document['paths']['backupRoots']]
+    for directory in directories:
+        require(os.path.isabs(directory) and os.path.normpath(directory) == directory
+                and any(directory != root and os.path.commonpath((directory, root)) == root
+                        for root in document['paths']['backupRoots']))
+        if not os.path.lexists(directory):
+            absent.add(directory)
+            continue
+        host_ancestry(directory + '/preauthority-proof.json')
+        info = os.lstat(directory)
+        require(stat.S_ISDIR(info.st_mode) and (info.st_uid, info.st_gid) == (0, 0) and stat.S_IMODE(info.st_mode) == 0o700)
+        if not intent:
+            b0_status = 'unbound'
+            continue
+        required = set(state.LEGACY_ARTIFACTS) | {'manifest.sha256', 'preauthority-proof.json'}
+        if not required <= set(os.listdir(directory)):
+            b0_status = 'partial'
+            continue
+        proof_raw = read(directory + '/preauthority-proof.json')
+        proof = state.verify_envelope(state.parse_canonical(proof_raw, 'proof_not_canonical'), key,
+                                      state.validate_proof_body, 'proof_shape_invalid')
+        require(proof['kind'] == 'preauthority-legacy-source' and proof['inventoryIdentity'] == body['inventoryIdentity']
+                and hashlib.sha256(proof_raw).hexdigest() == intent['binding']['b0']['proofSha256']
+                and proof['images'] == baseline['legacyImages']
+                and proof['source']['portal'] == intent['binding']['portalTarget']['database']
+                and proof['targetImages'] == intent['binding']['candidate']['images'])
+        b0_status = 'present_unverified' # Artifact hashes/restoreability/DB identity are not checked here.
+    for filename, (raw, owner, modes, limit) in reads.items():
+        require(host_read(filename, owner, modes, limit) == raw)
+    require(set(os.listdir(state_dir)) == journal_names and all(not os.path.lexists(f) for f in absent))
+    lock_info = os.lstat(LOCK)
+    ownership = all((i.st_uid, i.st_gid) == (0, 0) for i in (pointer_info, source_info, lock_info)) \
+        and all(stat.S_IMODE(i.st_mode) == 0o600 for i in (pointer_info, source_info))
+    return runtime, document, body, {'runtimeOwnershipCompatible': ownership,
+        'isolatedSourceIdentityCompatible': baseline['currentCommit'] == hashlib.sha256(source_raw).hexdigest()[:40],
+        'b0Status': b0_status}
+
+
+def check_install_plan(receipt_id):
+    require(isinstance(receipt_id, str) and re.fullmatch(r'payload-[a-z0-9_]{8}', receipt_id) is not None)
+    with deployment_lease() as reaffirm:
+        approval, captured, _, support, digest, record, verifier = _authenticated_material()
+        receiver = load_authenticated(captured['ops/payload-receiver-admission.py'], ROOT + '/ops/payload-receiver-admission.py')
+        receipt = receiver.INCOMING + '/' + receipt_id
+        receiver.protected_directory(receipt, private=True)
+        request = {key: record[key] for key in ('commit', 'runId', 'runAttempt', 'images')}
+        request['artifactIds'] = {role: entry['id'] for role, entry in record['artifacts'].items()}
+        archive = receipt + '/candidate.tar.gz'
+        raw = support.read_protected(archive, 0o600, receiver.MAX_ARCHIVE)
+        evidence = verifier.verify_candidate(archive, request)
+        require(evidence['admissionRecordSha256'] == approval['admission']['recordSha256']
+                and hashlib.sha256(raw).hexdigest() == record['archiveSha256'] and len(raw) == record['archiveBytes'])
+        selected = {service + '-image': image for service, image in record['images'].items()}
+        entries = receiver.inspect_archive(raw, record['commit'], selected)
+        verify_received_tree(receiver, receipt + '/release', entries)
+        runtime, inventory, body, observations = inspect_install_host(approval, captured)
+        destination = RELEASES + '/' + record['commit']
+        host_ancestry(destination)
+        observations['candidateReleasePresent'] = os.path.lexists(destination)
+        if observations['candidateReleasePresent']:
+            require(stat.S_ISDIR(os.lstat(destination).st_mode))
+        result = runtime.production_install_plan(record, {'sourceApprovalSha256': digest,
+            'policySha256': approval['admission']['policySha256'], 'recordSha256': approval['admission']['recordSha256']},
+            inventory, body, observations)
+        require(support.read_protected(archive, 0o600, receiver.MAX_ARCHIVE) == raw)
+        verify_received_tree(receiver, receipt + '/release', entries)
+        again = _authenticated_material()
+        require(again[4] == digest and again[5] == record and again[1] == captured)
+        reaffirm()
+        require(len(json.dumps(result).encode('utf-8')) <= 4096)
+        return result
 
 
 def verify():
@@ -447,13 +660,15 @@ def dispatch(mode):
 
 def main():
     args = sys.argv[1:]
-    require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in ('--verify-context', '--create-inventory'))
+    require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in ('--verify-context', '--create-inventory', '--check-install-plan'))
     require(sys.platform == 'linux' and os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 0)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode)
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'} and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C')
     require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'))
-    if args[0] == '--verify-context':
+    if args[0] == '--check-install-plan':
+        print(json.dumps(check_install_plan(args[1]), sort_keys=True))
+    elif args[0] == '--verify-context':
         print(verified_context(args[1]))
     elif args[0] == '--create-inventory':
         create_inventory(args[1])

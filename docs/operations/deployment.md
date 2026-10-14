@@ -1053,3 +1053,70 @@ Os outros casos da suite continuam identificados como doubles. O gate qualifica
 sudo/SSH, durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets,
 14 checks, 11 negativos e dois restores não mudam. Um próximo CI qualifica sua
 própria revisão; não se atribui esta prova retroativamente a execução anterior.
+
+#### P3: plano de instalação de produção, somente leitura
+
+O launcher instalado admite uma interface administrativa adicional:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /usr/local/libexec/ownerinc-payload-prepare.py \
+  --check-install-plan payload-abcdefgh
+```
+
+O argumento é somente um identificador `payload-[a-z0-9_]{8}` de receipt sob
+`/var/lib/ownerinc/payload-candidate/incoming`, nunca path ou seleção de newest.
+Não constitui autoridade. A aprovação protegida precisa autenticar os bytes
+atuais da closure, incluindo launcher/runtime; este incremento não atualiza
+aprovações já instaladas nem altera schemas de trust/state.
+
+Com a lease exclusiva FD9 retida, autentica closure, policy e record pelos
+contratos existentes. Só então carrega o receiver/verifier capturados e usa
+`verify_candidate()` para autenticar os bytes reais de `candidate.tar.gz` e
+`inspect_archive()` para validar membros, commit e imagens. A árvore `release`
+deve ter exatamente os arquivos/diretórios do archive, incluindo arquivos vazios:
+conteúdo diferente, membro extra, link ou owner/mode inseguro é recusa. Não extrai
+nem executa scripts recebidos. `admission.json` do receipt não é autoridade nem
+entrada do plano. Archive, árvore e material autenticado são rechecados antes
+do retorno.
+
+O host precisa já ter inventory/key/journal protegidos completos. A inspeção de
+state é separada do gate inicial da preparação: usa o `read_state` real com
+`repair_head=False`, validando HMAC, cadeia e transições, inclusive intents
+pendentes/committed. Não instancia `Runtime`, cujo constructor admite reparo de
+head. Runtime → state → inventory são ligados a módulos capturados autenticados,
+sem importar helpers do runtime instalado. Campos de baseline, source images,
+Compose/override, owner de environment e inventory fixo continuam vinculados à
+aprovação. Pointer candidato só é observado na janela assinada de floor; não é
+adotado como sucesso. Leitura de journal limita nomes a 4096 e material de host
+acumulado a 16 MiB; não há writes para acomodar entradas incompatíveis.
+
+O JSON `payload-production-install-plan-v1`, limitado a 4 KiB, contém somente
+classificação finita, hashes/identificadores/imagens já validados, identidade de
+inventory, status B0 e blockers allowlisted. O `candidate` usa os quatro hashes
+do contrato existente: candidate manifest, recovery report, qualified manifest e
+archive; `trust` mantém separadamente source approval, policy e record hashes.
+Não emite paths, nomes de volumes/containers, environment ou conteúdo privado.
+`installationExecuted` e `deploymentAuthorized` são **sempre false**.
+
+As classificações incluem initial cold, cold sem intent, install pre-floor,
+floor pending/committed, restore pending e floor sem install intent. Toda saída
+mantém blockers de initializer de produção não habilitado, binding de criação
+não integrado, observações físicas pendentes e barreira B1/ingress/readiness
+ausente. Incompatibilidade de ownership runtime e identidade hash do source
+isolado são blockers, não chown ou aliases automáticos. Project/inventory fora
+do contrato fixo aprovado é recusa, não adoção de outra topologia.
+
+B0 `present_unverified` significa somente que o proof assinado e seus bindings
+foram conferidos e os nomes necessários estão presentes; **não** verifica hashes
+dos dumps/storage, restoreability ou DB físico. B0 parcial/unbound é blocker;
+B0 ausente com intent tem blocker próprio. Sem intent, só são inspecionados os
+slots conhecidos `000-initial-install-b0` sob os backup roots fixos, sem procurar
+ou adotar backups arbitrários. Receipt de criação incompleto é reportado a partir
+do journal; ausência/presença de recursos Docker ainda exige observação separada.
+
+Nenhuma saída autoriza reservar intent, fechar admission, capturar B0, publicar
+release, puxar imagem, criar recurso, mudar pointer ou reparar journal. Ambos os
+denials finais `release_not_preflighted` continuam incondicionais. Native
+preparation end-to-end, recuperação de instalação e aceite de host permanecem
+gates separados; uma classificação não substitui esses gates.

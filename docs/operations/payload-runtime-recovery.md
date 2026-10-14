@@ -1,5 +1,27 @@
 # Runtime Payload e recuperação coordenada
 
+## P3 — inspeção de plano não é autorização de instalação
+
+`ownerinc-payload-prepare.py --check-install-plan <receipt-id>` autentica o receipt
+real e classifica o journal de produção sob lease, sem executar `Runtime` ou
+`initialize_isolated`. Interface e limites em
+[deployment](deployment.md#p3-plano-de-instalação-de-produção-somente-leitura).
+
+O classifier puro `production_install_plan()` não altera schemas, signatures,
+ações do runtime ou transitions. Estado/proof desconhecido ou assinatura inválida
+falha; estado assinado válido pendente/committed permanece visível na classificação,
+sempre com `installationExecuted: false` e `deploymentAuthorized: false`.
+Um head atrasado não é reparado. Intents não são limpos para permitir novo install.
+
+Os blockers distinguem B0 parcial/unbound/ausente, receipts de criação incompletos,
+ownership de produção incompatível e contrato isolado inadequado. Não inferem
+recursos físicos pelo nome nem promovem B0 existente a backup recuperável.
+`present_unverified` ainda exige validação de artefatos e recuperação; committed
+floor ainda exige B1 fechado, ingress fence e private readiness. Novos tickets
+por processo, recovery pre-floor e a compatibilidade de binding/receipts de
+produção são incrementos posteriores. Receiver/runtime continuam negando
+instalação com `release_not_preflighted`.
+
 ## Diagnóstico do predicado de quiescência do initializer
 
 O report de `38473939196` atribui a falha da terceira fixture ao initializer em

@@ -1266,6 +1266,78 @@ def _proof_body(kind, images, target_images, source, migrations, fingerprints, a
     return STATE.validate_proof_body(body)
 
 
+def production_install_plan(record, trust, inventory, body, observations):
+    """Pure classification, NOT authentication or permission to install.
+
+    The installed administrative caller authenticates evidence and reads the
+    signed journal without repair. No Runtime constructor or action dispatch.
+    """
+    STATE.validate_state_body(body)
+    INVENTORY.validate(inventory)
+    if body['inventoryIdentity'] != INVENTORY.identity(inventory):
+        fail('state_inventory_identity_mismatch')
+    STATE._exact_keys(trust, {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
+    if any(not isinstance(value, str) or not STATE.HEX_64.fullmatch(value) for value in trust.values()):
+        fail('invalid_cold_state')
+    STATE._exact_keys(observations, {'runtimeOwnershipCompatible', 'isolatedSourceIdentityCompatible',
+                                   'candidateReleasePresent', 'b0Status'}, 'invalid_cold_state')
+    if any(type(observations[name]) is not bool for name in observations if name != 'b0Status') or \
+       observations['b0Status'] not in ('absent', 'unbound', 'partial', 'present_unverified'):
+        fail('invalid_cold_state')
+    candidate = {key: record[key] for key in ('commit', 'runId', 'runAttempt', 'images', 'candidateSha256')}
+    candidate.update(reportSha256=record['recoveryReportSha256'],
+                     qualificationSha256=record['qualifiedManifestSha256'], bundleSha256=record['archiveSha256'])
+    STATE.validate_install_candidate(candidate, producer=False)
+    blockers = ['production_initializer_not_enabled', 'production_creation_binding_unsupported',
+                'physical_resource_observations_required', 'closed_b1_ingress_readiness_not_integrated']
+    if body['schemaVersion'] != 2:
+        blockers.append('install_state_schema_upgrade_required')
+    if inventory['project'] != 'ownerinc-portal-prod':
+        blockers.append('production_project_mismatch')
+    if not observations['runtimeOwnershipCompatible']:
+        blockers.append('production_runtime_ownership_incompatible')
+    if not observations['isolatedSourceIdentityCompatible']:
+        blockers.append('isolated_source_identity_incompatible')
+    blockers.append('candidate_release_publication_unverified' if observations['candidateReleasePresent']
+                    else 'candidate_release_not_published')
+    if observations['b0Status'] in ('partial', 'unbound'):
+        blockers.append('partial_or_unbound_b0')
+    else:
+        blockers.append('b0_recovery_verification_required')
+    intent = body.get('installIntent')
+    # A restore can retain a committed install intent: diagnose both independently.
+    if intent:
+        if observations['b0Status'] == 'absent':
+            blockers.append('bound_b0_missing')
+        if intent['binding'].get('bindingVersion') == 2:
+            blockers.append('isolated_binding_not_production_authority')
+        if intent['binding']['candidate'] != candidate:
+            blockers.append('existing_install_candidate_mismatch')
+        creation = intent.get('creation')
+        if creation is None or set(creation['volumes']) != {'cmsPostgres', 'cmsUploads'} or \
+           set(creation['containers']) != {'cms-postgres', 'cms'}:
+            blockers.append('creation_receipts_incomplete')
+        blockers.append('install_intent_retained')
+    if body.get('restoreIntent') is not None:
+        classification = 'restore_pending'
+        blockers.append('restore_intent_retained')
+    elif intent:
+        stage = intent['stage']
+        classification = stage if stage in ('floor_commit_pending', 'floor_committed') else 'pre_floor_install_pending'
+    elif body['cmsStatus'] == 'cold':
+        initial = body['sequence'] == 0 and body['admission'] == 'open' and all(body[name] is None for name in
+            ('latestProofSha256', 'legacySourceProofSha256', 'releaseImages', 'plannedReleaseImages',
+             'rollbackTargetImages', 'nativeCatalogFingerprint'))
+        classification = 'initial_cold' if initial else 'cold_without_install_intent'
+    else:
+        classification = 'noninitial_without_install_intent'
+        blockers.append('existing_floor_requires_separate_recovery')
+    return {'kind': 'payload-production-install-plan-v1', 'classification': classification,
+            'candidate': candidate, 'trust': dict(trust), 'inventoryIdentity': body['inventoryIdentity'],
+            'b0Status': observations['b0Status'], 'blockers': sorted(blockers),
+            'installationExecuted': False, 'deploymentAuthorized': False}
+
+
 class Runtime:
     def __init__(self, action, release, evidence):
         if action not in ACTION_SET:

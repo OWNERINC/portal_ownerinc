@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## P3 authenticated read-only production installation plan
+
+The fixed receipt-selected plan check authenticates archive bytes, exact extracted tree, policy/record bindings, approved host observations and signed state under the existing lease. State reading disables head repair and does not construct the mutating runtime. Classification always leaves installation and deployment authorization false. B0 presence is explicitly unverified for artifact integrity and restoreability.
+
+Independent review found retained-install blockers were omitted when restore and install intents coexist. The corrected classifier preserves restore priority while evaluating both sets of blockers; a legally transitioned, HMAC-signed coexistence regression covers missing B0, receipt gaps and candidate mismatch. Fresh review returned `ship`.
+
+The initial full verification failed once in the unrelated Academy progress suite with only a generic file-level failure; the log was retained. Sequential Academy plus production-plan checks passed **20 / zero failures**, without test or timeout changes. Subsequent complete `npm run verify` passed **Portal 1,840 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-production-install-plan-final-verify.log`). The earlier failure's cause is unconfirmed. No native host qualification or VPS changes are claimed.
+
 ## POSIX preparation fixture correction
 
 Candidate `38488642070` at `d33b4c4` failed verification before native qualification/recovery. Two host-baseline fixtures combined synthetic root-owned files with the real non-root runner identity. The actual state reader correctly refused that mismatch. A fixture-only correction now scopes and restores a consistent POSIX/root caller model; production code is unchanged. Regressions retain real signed-state verification and require exact refusal for unsafe metadata and altered HMAC. Independent review returned `ship`.
