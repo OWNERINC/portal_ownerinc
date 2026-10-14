@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## B0 child diagnostics after first native failure
+
+Candidate `38588686813` at `4903533` failed the required native B0 step at `recover_uploads_interruption;cleanup:none`; validation and production deployment were skipped. The preceding expected database interruption and signed pending checkpoint passed, but database equality and whether uploads were reached were not established. The reported cleanup outcome is not independent resource-removal evidence.
+
+Added an exact, finite, bounded child-result protocol with independent exit-status and signed-checkpoint checks. It preserves the primary phase and cleanup outcome and distinguishes security/schema, database, checkpoint and upload failures without exporting exception text. Restore commands, comparisons, retries, transitions and timeouts remain unchanged. Independent review returned `ship`.
+
+Primary complete `npm run verify` passed **Portal 1,918 PASS / 19 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-b0-child-diagnostics-verify.log`). Native execution and the original failure's cause remain pending. No VPS operations occurred.
+
 ## Isolated B0 executor and mandatory prerequisite
 
 Implemented optional signed pre-floor recovery checkpoints and an isolated-only executor. It verifies immutable B0 bytes, restores database owners/ACLs transactionally, reconciles interrupted completion checkpoints, and finishes with admission closed and readiness pending. Production v3 execution is refused before effects. Native qualification uses TEST application identities and two fixed upload files; it does not qualify production application rollback or arbitrary Portal uploads.

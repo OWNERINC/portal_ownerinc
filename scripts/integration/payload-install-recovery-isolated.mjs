@@ -3,12 +3,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+export const childLocations = ['entry_authentication', 'boundary', 'security_compare', 'role_authentication', 'schema_compare', 'database_dump_compare', 'database_data_compare', 'database_restore', 'checkpoint', 'uploads_clear', 'uploads_extract', 'uploads_compare', 'complete', 'unknown'];
+export const childFailures = ['none', 'expected_interruption', 'refused', 'unknown', 'expected_interruption_missing', 'child_exit', 'checkpoint_mismatch', 'malformed_frame'];
+export function finiteDiagnostic(value) {
+  const pattern = new RegExp(`^isolated_b0_recovery_qualification_failed:(preflight|create_resources|capture_baseline|unsupported_schema_negative|damage_fixture|recover_database_interruption|recover_uploads_interruption|recover_final|verify_preserved_evidence|complete|none|guard);child:(${childLocations.join('|')}):(${childFailures.join('|')});cleanup:(none|refused)$`, 'u');
+  return typeof value === 'string' && !value.includes('\n') && !value.includes('\r') && pattern.test(value)
+    ? value : 'isolated_b0_recovery_native_failed';
+}
+
 function nativeCommand(program, args, options) {
   const result = spawnSync(program, args, { encoding: 'utf8', timeout: options.timeout, maxBuffer: 8192, killSignal: 'SIGKILL' });
   if (result.error || result.signal || result.status !== 0) {
     const diagnostic = (result.stderr || '').trim();
-    throw new Error(/^isolated_b0_recovery_qualification_failed:(preflight|create_resources|capture_baseline|unsupported_schema_negative|damage_fixture|recover_database_interruption|recover_uploads_interruption|recover_final|verify_preserved_evidence|complete|none|guard);cleanup:(none|refused)$/u.test(diagnostic)
-      ? diagnostic : 'isolated_b0_recovery_native_failed');
+    throw new Error(finiteDiagnostic(diagnostic));
   }
   return result.stdout;
 }
@@ -41,7 +48,6 @@ export async function qualify({ env = process.env, platform = process.platform, 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   if (process.argv.length !== 2) process.exitCode = 1;
   else qualify().then(proof => console.log(JSON.stringify(proof))).catch(error => {
-    console.error(/^isolated_b0_recovery_qualification_failed:(preflight|create_resources|capture_baseline|unsupported_schema_negative|damage_fixture|recover_database_interruption|recover_uploads_interruption|recover_final|verify_preserved_evidence|complete|none|guard);cleanup:(none|refused)$/u.test(error.message)
-      ? error.message : 'isolated_b0_recovery_native_failed'); process.exitCode = 1;
+    console.error(finiteDiagnostic(error.message)); process.exitCode = 1;
   });
 }

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { qualify } from '../../scripts/integration/payload-install-recovery-isolated.mjs';
+import { qualify, childLocations, childFailures, finiteDiagnostic } from '../../scripts/integration/payload-install-recovery-isolated.mjs';
 
 const setup = String.raw`
 import copy,hashlib,importlib.util,io,json,os,pathlib,sys,tarfile
@@ -223,6 +223,106 @@ test('native guard rejects before commands and does not accept target flags', as
   let calls = 0;
   await assert.rejects(qualify({ env: {}, platform: 'linux', command: async () => { calls++; } }));
   assert.equal(calls, 0);
+});
+
+test('finite child diagnostics preserve real-journal post-restore refusals without advancing or leaking errors', async () => {
+  await probe(String.raw`
+refused(lambda:executor().execute('database'))
+assert S.read_state(str(root))[2]['installIntent']['recovery']['stage']=='database_restore_pending'
+E.mark('uploads_extract')
+E.parse_child_frame(E.child_frame('expected_interruption'),72,'uploads')
+refused(lambda:E.check_child_checkpoint(S.read_state(str(root))[2],'uploads'))
+original=ops.fence
+for location in ('security_compare','schema_compare','role_authentication'):
+ def fail_boundary(*args):
+  E.mark(location);raise E.Refused('SECRET password SQL path')
+ ops.fence=fail_boundary
+ try:executor().execute('uploads')
+ except Exception as error:
+  failure,code=E.failure_for_exception(error,'uploads')
+  assert (failure,code)==('refused',73)
+  frame=E.parse_child_frame(E.child_frame(failure),code,'uploads')
+  assert frame['location']==location and 'SECRET' not in E.child_frame(failure).decode()
+ else:assert False
+ body=S.read_state(str(root))[2];assert body['admission']=='closed' and body['workerHold']
+ assert body['installIntent']['recovery']['stage']=='database_restore_pending'
+ops.fence=original
+for comparison in ('database_dump_compare','database_data_compare'):
+ def not_reconciled(p):E.mark(comparison);return False
+ ops.database_matches=not_reconciled
+ try:executor().execute('uploads')
+ except Exception as error:
+  failure,code=E.failure_for_exception(error,'uploads');assert code==73
+  assert E.parse_child_frame(E.child_frame(failure),code,'uploads')['location']==comparison
+ else:assert False
+assert S.read_state(str(root))[2]['installIntent']['recovery']['stage']=='database_restore_pending'
+`);
+});
+
+test('upload diagnostic locations and expected interruption cannot certify the signed checkpoint', async () => {
+  await probe(String.raw`
+refused(lambda:executor().execute('database'))
+clear,extract=ops.clear_uploads,ops.extract_uploads
+for location in ('uploads_clear','uploads_extract'):
+ def broken(*args):raise RuntimeError('SECRET /private credential query')
+ ops.clear_uploads=broken if location=='uploads_clear' else clear
+ ops.extract_uploads=broken if location=='uploads_extract' else extract
+ try:executor().execute('uploads')
+ except Exception as error:
+  failure,code=E.failure_for_exception(error,'uploads');assert (failure,code)==('unknown',73)
+  frame=E.parse_child_frame(E.child_frame(failure),code,'uploads');assert frame['location']==location
+  assert 'SECRET' not in E.child_frame(failure).decode()
+ else:assert False
+ body=S.read_state(str(root))[2];assert body['admission']=='closed'
+ assert body['installIntent']['recovery']['stage']=='uploads_restore_pending'
+ops.clear_uploads,ops.extract_uploads=clear,extract
+try:executor().execute('uploads')
+except Exception as error:
+ failure,code=E.failure_for_exception(error,'uploads');assert (failure,code)==('expected_interruption',72)
+ E.parse_child_frame(E.child_frame(failure),code,'uploads')
+else:assert False
+body=S.read_state(str(root))[2];E.check_child_checkpoint(body,'uploads')
+wrong=copy.deepcopy(body);wrong['installIntent']['recovery']['stage']='database_restore_pending'
+refused(lambda:E.check_child_checkpoint(wrong,'uploads'))
+assert S.read_state(str(root))[2]==body
+`);
+});
+
+test('child protocol rejects malformed, oversized, duplicate and unknown fields and preserves finite JS parity', async () => {
+  await probe(String.raw`
+E.mark('uploads_extract');raw=E.child_frame('expected_interruption')
+assert len(raw)<=1024
+for bad in (b'',b'{}',b'x'*1025,b'{"version":1,"version":1}',raw[:-1],raw.replace(b'"version":1',b'"version":true'),raw.replace(b'"proof":null',b'"proof":null,"extra":true'),raw.replace(b'uploads_extract',b'SECRET')):
+ try:E.parse_child_frame(bad,72,'uploads')
+ except Exception:pass
+ else:assert False
+refused(lambda:E.parse_child_frame(raw,73,'uploads'))
+refused(lambda:E.parse_child_frame(raw,72,'database'))
+refused(lambda:E.parse_child_frame(raw,-9,'uploads'))
+E.mark('complete')
+missing=E.child_frame('expected_interruption_missing')
+assert E.parse_child_frame(missing,73,'uploads')['failure']=='expected_interruption_missing'
+refused(lambda:E.parse_child_frame(missing,72,'uploads'))
+readfd,writefd=os.pipe()
+try:
+ E.mark('entry_authentication');E.write_child_frame(writefd,'unknown');os.close(writefd)
+ assert E.parse_child_frame(os.read(readfd,1025),73,'uploads')['location']=='entry_authentication'
+finally:os.close(readfd)
+E.mark('SECRET');assert json.loads(E.child_frame('SECRET'))['location']=='unknown'
+assert E.failure_for_exception(RuntimeError('isolated_b0_test_interruption'),'uploads')==('unknown',73)
+assert E.failure_for_exception(E.Refused('isolated_b0_test_interruption'),None)==('refused',73)
+from unittest.mock import patch
+with patch.object(E.os,'write',side_effect=OSError('SECRET')):
+ E.write_child_frame(-1,'unknown')
+assert E.CHILD_LOCATIONS==tuple(${JSON.stringify(childLocations)})
+assert E.CHILD_FAILURES==tuple(${JSON.stringify(childFailures)})
+`);
+  for (const location of childLocations) for (const failure of childFailures) {
+    const diagnostic = `isolated_b0_recovery_qualification_failed:recover_uploads_interruption;child:${location}:${failure};cleanup:none`;
+    assert.equal(finiteDiagnostic(diagnostic), diagnostic);
+    assert.equal(finiteDiagnostic(`${diagnostic}\nSECRET`), 'isolated_b0_recovery_native_failed');
+  }
+  assert.equal(finiteDiagnostic('isolated_b0_recovery_qualification_failed:recover_uploads_interruption;child:SECRET:unknown;cleanup:none'), 'isolated_b0_recovery_native_failed');
 });
 
 test('required native isolated B0 recovery (not portable evidence)', { skip: process.env.PAYLOAD_REQUIRE_NATIVE_B0_RECOVERY !== '1', timeout: 300000 }, async () => {

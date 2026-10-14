@@ -115,6 +115,24 @@ Registrar requer nova aprovação dos hashes de workflow/revisão/toolchain; iss
 é autorização root de helpers nem nova autoridade de produção. Restore permanece
 limitado à fixture de dois uploads, sem qualificar rollback de produção.
 
+Diagnóstico B0: cada filho envia pelo pipe existente um único JSON ≤1024 bytes,
+schema exato `{version:1, location, failure, proof}`. Location/failure são enums
+finitos; proof é null em falha/interrupção e o proof fixo em sucesso. Exceções
+desconhecidas viram `unknown`, nunca texto SQL, stderr, paths ou credenciais.
+Exit 72 continua reservado à interrupção esperada, exit 73 à falha. O supervisor
+valida frame, exit real e, independentemente, checkpoint no journal autenticado;
+um frame de interrupção não certifica o checkpoint. Crash/timeout, frame inválido
+e checkpoint incorreto continuam recusados. Falha de escrita diagnóstica não muda
+o exit original e ausência de frame não permite sucesso. O erro público mantém
+fase primária e cleanup separados e acrescenta `;child:<location>:<failure>`.
+
+CI 38588686813 em 4903533 alcançou `recover_uploads_interruption`, mas a causa
+histórica permanece não confirmada: a fase inclui reconciliação/security/schema
+pós-restore antes de uploads. `cleanup:none` indica somente ausência de falha
+reportada pelo cleanup, não evidência independente. Instrumentação não modifica
+restore, comparação, retries, transições ou timeouts. Native ainda NOT RUN para
+esses bytes diagnósticos; testes portáteis não demonstram correção da falha CI.
+
 ### Observação pura do fence destrutivo — sem collector ou executor
 
 #### Qualificação isolada da topologia (TEST-only)

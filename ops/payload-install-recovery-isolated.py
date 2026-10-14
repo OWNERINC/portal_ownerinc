@@ -27,10 +27,72 @@ PG = 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f
 NGINX = 'nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752'
 HELPERS = ('payload-control-state.py', 'payload-control-inventory.py', 'payload-control-runtime.py', 'payload-install-recovery-isolated.py')
 CAP = 16 * 1024 * 1024
+CHILD_LOCATIONS = ('entry_authentication', 'boundary', 'security_compare', 'role_authentication',
+                   'schema_compare', 'database_dump_compare', 'database_data_compare', 'database_restore',
+                   'checkpoint', 'uploads_clear', 'uploads_extract', 'uploads_compare', 'complete', 'unknown')
+CHILD_FAILURES = ('none', 'expected_interruption', 'refused', 'unknown', 'expected_interruption_missing',
+                  'child_exit', 'checkpoint_mismatch', 'malformed_frame')
+DIAGNOSTIC_LOCATION = 'entry_authentication'
+
+
+def mark(location):
+    global DIAGNOSTIC_LOCATION
+    DIAGNOSTIC_LOCATION = location if location in CHILD_LOCATIONS else 'unknown'
+
+
+def child_frame(failure, proof=None):
+    return canonical({'version': 1, 'location': DIAGNOSTIC_LOCATION if DIAGNOSTIC_LOCATION in CHILD_LOCATIONS else 'unknown',
+                      'failure': failure if failure in CHILD_FAILURES else 'unknown', 'proof': proof})
+
+
+def parse_child_frame(raw, exit_code, fault):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result)
+            result[key] = value
+        return result
+    require(isinstance(raw, bytes) and len(raw) <= 1024)
+    value = json.loads(raw, object_pairs_hook=pairs)
+    require(isinstance(value, dict) and set(value) == {'version', 'location', 'failure', 'proof'})
+    require(type(value['version']) is int and value['version'] == 1 and value['location'] in CHILD_LOCATIONS and value['failure'] in CHILD_FAILURES)
+    if exit_code == 72:
+        require(fault in ('database', 'uploads') and value['failure'] == 'expected_interruption' and value['proof'] is None)
+        require(value['location'] == ('database_restore' if fault == 'database' else 'uploads_extract'))
+    elif exit_code == 0:
+        require(fault is None and value['failure'] == 'none' and value['location'] == 'complete')
+        require(canonical(value['proof']) == canonical({'kind': 'isolated-b0-recovery-proof', 'dataVerified': True, 'admissionClosed': True,
+                                  'readinessPending': True, 'productionAuthorized': False, 'applicationRollbackExecuted': False}))
+    else:
+        require(exit_code == 73 and value['proof'] is None and value['failure'] in ('refused', 'unknown', 'expected_interruption_missing'))
+    return value
+
+
+def check_child_checkpoint(body, fault):
+    expected = {'database': 'database_restore_pending', 'uploads': 'uploads_restore_pending', None: 'data_verified_readiness_pending'}[fault]
+    require(body['installIntent']['recovery']['stage'] == expected)
+
+
+def write_child_frame(descriptor, failure, proof=None):
+    # Diagnostic transport must not replace the original exit classification.
+    try:
+        raw = child_frame(failure, proof)
+        if len(raw) <= 1024:
+            os.write(descriptor, raw)
+    except Exception:
+        pass
 
 
 class Refused(Exception):
     pass
+
+
+def failure_for_exception(error, fault):
+    if isinstance(error, Refused):
+        if error.args == ('isolated_b0_test_interruption',) and fault in ('database', 'uploads'):
+            return 'expected_interruption', 72
+        return 'refused', 73
+    return 'unknown', 73
 
 
 def require(value):
@@ -157,6 +219,7 @@ class Executor:
         require(digest(canonical(self.request['baseline'])) == self.request['recovery']['securityProfileSha256'])
 
     def boundary(self):
+        mark('boundary')
         require(not self.lease.closed)
         actual = os.fstat(self.lease.fileno())
         require({'device': actual.st_dev, 'inode': actual.st_ino} == self.binding['lease'])
@@ -184,17 +247,20 @@ class Executor:
 
     def execute(self, interrupt=None):
         self.boundary()
+        mark('checkpoint')
         self.state.begin_install_recovery(str(self.directory), self.binding, self.request['recovery'])
         def stage():
             return self.boundary()['installIntent']['recovery']['stage']
         def advance(value):
             self.boundary()
+            mark('checkpoint')
             self.state.advance_install_recovery(str(self.directory), self.binding, value)
         if stage() == 'reserved':
             advance('database_restore_pending')
         if stage() == 'database_restore_pending':
             if not self.operations.database_matches(self.request['baseline']):
                 self.boundary()
+                mark('database_restore')
                 self.operations.restore_database(self.artifacts['postgres.dump'])
                 if interrupt == 'database':
                     raise Refused('isolated_b0_test_interruption')
@@ -204,8 +270,10 @@ class Executor:
             advance('uploads_restore_pending')
         if stage() == 'uploads_restore_pending':
             self.boundary()
+            mark('uploads_clear')
             self.operations.clear_uploads()
             self.boundary()
+            mark('uploads_extract')
             self.operations.extract_uploads(self.artifacts['uploads.tar.gz'])
             if interrupt == 'uploads':
                 raise Refused('isolated_b0_test_interruption')
@@ -244,6 +312,7 @@ def native_qualification():
     cleanup_deadline = None
     image_info = {}
     primary_failure = None
+    child_location, child_failure = 'unknown', 'none'
 
     def command(args, data=None):
         remaining = (cleanup_deadline if cleaning else started + 210) - time.monotonic()
@@ -474,13 +543,20 @@ def native_qualification():
                     require(sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();").strip() == b'0')
                     require(sql("SELECT count(*) FROM pg_prepared_xacts;").strip() == b'0')
                     require(sql("SELECT current_setting('server_version_num')::int BETWEEN 160000 AND 169999 AND current_setting('shared_preload_libraries')='' AND NOT pg_is_in_recovery() AND NOT EXISTS(SELECT 1 FROM pg_subscription) AND NOT EXISTS(SELECT 1 FROM pg_replication_slots) AND NOT EXISTS(SELECT 1 FROM pg_extension WHERE extname NOT IN ('plpgsql','pgcrypto')) AND NOT EXISTS(SELECT 1 FROM pg_stat_activity WHERE backend_type NOT IN ('client backend','autovacuum launcher','autovacuum worker','background writer','checkpointer','walwriter','archiver','logical replication launcher'));").strip() == b't')
+                    mark('security_compare')
                     require(digest(sql(security_sql)) == approved['roles'])
+                    mark('role_authentication')
                     require(authenticate_role('portal_api', password) == b'portal_api')
                     require(authenticate_role('portal_cron', cron_password) == b'portal_cron')
+                    mark('schema_compare')
                     require(digest(normalize_dump(dump('--schema-only', '--no-privileges'))) == approved['schema'])
 
                 def database_matches(self, approved):
-                    return digest(normalize_dump(dump())) == approved['database'] and runtime._data_fingerprint('postgres', isolated_query=sql) == approved['dataFingerprint']
+                    mark('database_dump_compare')
+                    if digest(normalize_dump(dump())) != approved['database']:
+                        return False
+                    mark('database_data_compare')
+                    return runtime._data_fingerprint('postgres', isolated_query=sql) == approved['dataFingerprint']
 
                 def restore_database(self, raw):
                     db_inspect()
@@ -494,6 +570,7 @@ def native_qualification():
                     storage('tar -xzf - -C /data', raw, writable=True)
 
                 def uploads(self):
+                    mark('uploads_compare')
                     return uploads_fingerprint(storage('tar -czf - -C /data .'))
 
             operations = Operations()
@@ -519,24 +596,27 @@ def native_qualification():
             # appending the completion checkpoint. Parent never reuses their lease.
             fcntl.flock(lease.fileno(), fcntl.LOCK_UN)
             for fault in ('database', 'uploads', None):
+                child_location, child_failure = 'unknown', 'child_exit'
                 phase = {'database': 'recover_database_interruption', 'uploads': 'recover_uploads_interruption', None: 'recover_final'}[fault]
                 reader, writer = os.pipe()
                 child = os.fork()
                 if child == 0:
                     os.close(reader)
+                    mark('entry_authentication')
                     try:
                         with open(root / 'lease', 'rb') as child_lease:
                             fcntl.flock(child_lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                             outcome = Executor(root, runtime, key, request, operations, child_lease).execute(fault)
-                            require(fault is None)
-                            raw = canonical(outcome)
-                            require(len(raw) <= 1024)
-                            os.write(writer, raw)
+                            if fault is not None:
+                                write_child_frame(writer, 'expected_interruption_missing')
+                                os._exit(73)
+                            mark('complete')
+                            write_child_frame(writer, 'none', outcome)
                         os._exit(0)
-                    except Refused as error:
-                        os._exit(72 if str(error) == 'isolated_b0_test_interruption' and fault else 73)
-                    except Exception:
-                        os._exit(73)
+                    except Exception as error:
+                        failure, exit_code = failure_for_exception(error, fault)
+                        write_child_frame(writer, failure)
+                        os._exit(exit_code)
                 os.close(writer)
                 owned_pids.add(child)
                 try:
@@ -550,13 +630,19 @@ def native_qualification():
                             require(False)
                         time.sleep(0.05)
                     raw = os.read(reader, 1025)
-                    require(os.WIFEXITED(status) and os.WEXITSTATUS(status) == (72 if fault else 0))
+                    child_location, child_failure = 'unknown', 'child_exit'
+                    require(os.WIFEXITED(status))
+                    require(os.WEXITSTATUS(status) in (0, 72, 73))
+                    child_failure = 'malformed_frame'
+                    frame = parse_child_frame(raw, os.WEXITSTATUS(status), fault)
+                    child_location, child_failure = frame['location'], frame['failure']
+                    require(os.WEXITSTATUS(status) == (72 if fault else 0))
+                    child_location, child_failure = 'checkpoint', 'checkpoint_mismatch'
                     body = S.read_state(str(root), repair_head=False)[2]
-                    expected_stage = {'database': 'database_restore_pending', 'uploads': 'uploads_restore_pending', None: 'data_verified_readiness_pending'}[fault]
-                    require(body['installIntent']['recovery']['stage'] == expected_stage)
+                    check_child_checkpoint(body, fault)
                     if fault is None:
-                        require(len(raw) <= 1024)
-                        result = json.loads(raw)
+                        result = frame['proof']
+                    child_location, child_failure = 'unknown', 'none'
                 finally:
                     os.close(reader)
             phase = 'verify_preserved_evidence'
@@ -595,7 +681,7 @@ def native_qualification():
         # Failed journal/B0/source closure stays private until hosted-runner
         # teardown; never publish its key, request, dump or filesystem path.
     if primary_failure or not cleanup_ok:
-        raise Refused('isolated_b0_recovery_qualification_failed:' + (primary_failure or 'none') + ';cleanup:' + ('none' if cleanup_ok else 'refused'))
+        raise Refused('isolated_b0_recovery_qualification_failed:' + (primary_failure or 'none') + ';child:' + child_location + ':' + child_failure + ';cleanup:' + ('none' if cleanup_ok else 'refused'))
     require(phase == 'complete')
     return dict(result, databaseAndUploadsInterruptionsReconciled=True, unrelatedEvidencePreserved=True,
                 ownedResourcesRemoved=True, applicationCompatibilityQualified=False)
@@ -607,5 +693,6 @@ if __name__ == '__main__':
         print(json.dumps(native_qualification(), separators=(',', ':')))
     except Exception as error:
         message = str(error)
-        print(message if re.fullmatch(r'isolated_b0_recovery_qualification_failed:(preflight|create_resources|capture_baseline|unsupported_schema_negative|damage_fixture|recover_database_interruption|recover_uploads_interruption|recover_final|verify_preserved_evidence|complete|none);cleanup:(none|refused)', message) else 'isolated_b0_recovery_qualification_failed:guard;cleanup:none', file=sys.stderr)
+        pattern = r'isolated_b0_recovery_qualification_failed:(preflight|create_resources|capture_baseline|unsupported_schema_negative|damage_fixture|recover_database_interruption|recover_uploads_interruption|recover_final|verify_preserved_evidence|complete|none);child:(' + '|'.join(CHILD_LOCATIONS) + '):(' + '|'.join(CHILD_FAILURES) + r');cleanup:(none|refused)'
+        print(message if re.fullmatch(pattern, message) else 'isolated_b0_recovery_qualification_failed:guard;child:unknown:unknown;cleanup:none', file=sys.stderr)
         sys.exit(1)
