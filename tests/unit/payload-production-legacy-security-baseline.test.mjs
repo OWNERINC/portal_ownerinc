@@ -170,6 +170,20 @@ assert 'legacy_session_capability_mismatch' in check(wrong)['blockers']
 `);
 });
 
+test('owner grant options without ordinary privileges remain observable but block legacy recovery', () => {
+  probe(String.raw`
+wrong=copy.deepcopy(observation)
+next(row for row in wrong['records'] if row['kind']=='object' and row['objectType']=='table' and row['name']=='cms_editor_sessions').update(owner='portal_api',aclNull=False)
+next(row for row in wrong['records'] if row['kind']=='effective' and row['objectType']=='table' and row['name']=='cms_editor_sessions' and row['role']=='portal_api' and row['privilege']=='SELECT').update(allowed=False,grantable=True)
+for expected in (profile,dict(profile,observation=wrong)):
+ result=check(wrong,expected)
+ assert result['profileMatches'] is (expected is not profile)
+ assert 'legacy_runtime_role_ownership_unsupported' in result['blockers']
+ assert 'legacy_runtime_grant_options_unsupported' in result['blockers']
+ for flag in ('credentialVerified','clusterRoleMutationAuthorized','rollbackAuthorized','installationExecuted','deploymentAuthorized'):assert result[flag] is False
+`);
+});
+
 test('unsafe role attributes, memberships, shared dependencies, settings and mechanisms remain blockers even in a matching profile', () => {
   probe(String.raw`
 cases=[(lambda o:o['records'][0].update(superuser=True),'legacy_runtime_role_attributes_unsafe'),

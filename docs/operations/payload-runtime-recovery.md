@@ -4,6 +4,81 @@
 
 ### Observação pura do fence destrutivo — sem collector ou executor
 
+#### Qualificação isolada da topologia (TEST-only)
+
+O gate candidate-only **Qualify isolated Portal fence topology** executa
+`PAYLOAD_REQUIRE_NATIVE_FENCE_TOPOLOGY=1 PAYLOAD_FENCE_TOPOLOGY_DISPOSABLE=1 node --test tests/unit/payload-fence-topology.test.mjs`
+antes dos builds, com cap de seis minutos. Sem required-native, somente esse caso
+é skip; doubles portáteis não constituem execução Docker/PG/TLS. A primeira
+execução nativa continua pendente até CI demonstrar sucesso.
+
+O harness `scripts/integration/payload-fence-topology.mjs` exige runner Linux
+GitHub-hosted, IDs run/attempt e contexto Docker default/local. Cria nove containers
+e três redes de nomes únicos `payload-fence-<run>-<attempt>-<nonce>-*`. Os nomes
+do contrato são apenas projeções lógicas dessas redes; nunca acessa o
+`ownerinc_proxy` real. Reutiliza pins existentes de PostgreSQL, Nginx e Node,
+cacheados pelo preparo de registry, com `--pull never`. Não compartilha clusters
+com migrations CI ou com a qualificação legacy-security.
+
+Portal Nginx conecta backend/proxy; API/cron conectam backend/egress; CMS e dois
+PG16 conectam backend. Proxy HTTPS, probe e serviço estrangeiro benigno usam
+somente a rede proxy da fixture. API/CMS são **stubs**, não aplicações compiladas.
+Não há portas de host, binds, volumes persistentes ou credenciais reais. Tmpfs
+recebe config/PGDATA; `volumeKeys: []` não inventa correspondência de volumes de
+produção. TLS usa certificado/key novos por execução, diretório privado, envio
+por stdin e remoção no cleanup; key nunca vai a argumentos, logs ou prova.
+
+A sequência observa alcance real apesar de zero portas publicadas, fechamento
+dos três GETs após parar Nginx, readiness loopback dos stubs enquanto o proxy
+permanece fechado e bypass real ao conectar temporariamente API à rede proxy
+própria. O perfil TEST fixa antecipadamente origem HTTPS, status 502 e hash do
+corpo gerado **somente após falha do upstream conhecido**. Não aceita 502 genérico
+como prova de produção. O serviço estrangeiro preserva ID, configuração,
+StartedAt e resposta antes/depois.
+
+São dois clusters PG16 reais, databases `portal` e `ownerinc_cms`. Observam-se
+identidades, clients/queries/transações, prepared transactions, tipos de backend,
+subscriptions/slots/extensions e condições de visibilidade. Processos internos
+conhecidos de manutenção PG16 não são classificados como aplicações escritoras;
+tipos desconhecidos bloqueiam, sem desligar autovacuum. Negativos usam client com
+transação temporária e prepared transaction de GID próprio. O client mantém a
+mesma conexão psql em transação, sinaliza ready e aguarda release explícito em
+tmpfs até o classifier concluir; presença da transação é revalidada antes/depois.
+Não depende de `pg_sleep` terminar depois do inventário. Watchdog de 90 s e timeout
+idle-in-transaction de 95 s são recusas de segurança, não critérios de sucesso.
+Release ocorre em finally, seguido de confirmação bounded de rollback/fim; falha
+segue para remoção do container descartável exato, nunca término amplo de sessões.
+Dumps de schema/dados
+e roles sem passwords verificam ausência de alterações nas rodadas read-only.
+Essa cobertura vale para clusters novos/pinados, não para extensões/configuração
+arbitrária de produção nem para preservação de passwords.
+
+Projeções exigem IDs completos, labels e mounts reais; endpoint desconhecido
+recusa. Inventário é **escopado à fixture**, não descoberta global do host.
+As duas passagens e probes cabem na janela real de 30 segundos; sem aumentar caps.
+Journal/lease/source context e receipts são explicitamente sintéticos TEST-only.
+O bridge Python chama o validator/checker real sem alterações. A baseline final
+deve manter exatamente `fence_external_topology_unverified`: o probe é outra
+vantage de container, não observer independente fora do host. Não se afirma
+cobertura não-Docker ou fence completo de produção.
+
+Transporte reutiliza limite de 4 MiB, erros sem stderr bruto, fases finitas
+`fence_topology_qualification_failed:<phase>`, deadline ativo de 270 s e reserva
+de cleanup de 60 s. Cleanup revalida ID/imagem/nonce/isolamento, remove somente
+containers próprios e redes próprias vazias; nunca prune. Para criação parcial,
+cleanup aceita somente subconjunto das attachments previstas, mantendo checks de
+ID completo, nome, nonce, imagem e isolamento; attachment estrangeira ou recurso
+substituído continua recusado. A observação normal exige topologia completa.
+Falha de cleanup impede
+prova; SIGKILL ainda depende do descarte do runner. Prova exata ≤1 KiB só sai após
+cleanup, com `applicationReadinessQualified`,
+`productionExternalCoverageVerified`, `completeProductionFenceProof` e
+`productionAuthorized` falsos. Não altera schemas/artifacts de recovery.
+
+Os caps externos continuam 150/120 min, 14 checks/11 negativos/2 restores intactos.
+Os dois gates de seis minutos deixam 8,68 min da reserva calculada a partir de
+tempos históricos; o teste exige pelo menos oito, sem garantir duração futura.
+
 `validate_portal_fence_observation()` valida a projeção fixa
 `portal-fence-observation-v1`; `check_portal_destructive_fence()` compara somente
 contexto, topologia e perfil de fechamento **já autenticados pelo chamador**.

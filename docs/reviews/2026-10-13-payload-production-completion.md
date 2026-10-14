@@ -1,5 +1,15 @@
 # Payload production completion: initial decision and evidence
 
+## Isolated fence topology and PG16 owner privileges
+
+Added the candidate-only isolated topology gate with nine owned containers, three unique networks, fixture TLS and separate PG16 clusters. It exercises actual projections through the existing validator, known-route closure, private stub readiness, alternate ingress and database negatives. Same-host probing does not establish independent production ingress coverage; proof retains that blocker and false production authorization flags. No production collector or mutation was added.
+
+Independent review identified incomplete-creation cleanup and a time-dependent held-transaction negative. Cleanup now permits only expected attachment subsets while retaining exact ownership checks; the actual creation/finally path has a failure-injection regression. The transaction uses explicit readiness/release synchronization through classification, with bounded failure safeguards. Fresh review returned `ship`; native Docker/PG/TLS execution remains pending.
+
+The PG16 observer validator also now represents implicit owner grant options independently of ordinary privileges. A red-before-fix regression reproduces the prior invalid-observation rejection; matching and mismatching profiles still retain ownership/grant-option blockers and false authorization flags. Independent review returned `ship`. This is a concrete defect consistent with candidate `38502259360` failing at `negative_comparator`, not conclusive attribution of that run.
+
+Final primary `npm run verify`, started after the corrections, passed **Portal 1,881 PASS / 18 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-topology-and-owner-privileges-final-verify.log`). The added six-minute topology gate leaves 8.68 minutes of historical outside-recovery headroom under unchanged 150/120-minute caps; this is not a timing guarantee. No VPS operations occurred.
+
 ## Pure destructive-fence contract and pg_dumpall snapshot correction
 
 Added a bounded pure fence-observation validator/classifier with exact approved identities, context/freshness, two-pass comparison, database quiescence and independent public closure evidence. Synthetic readiness observations cannot satisfy destructive fencing; all authorization/execution flags remain false. No collector or live topology change was added. Independent review returned `ship`; actual ingress qualification remains pending.

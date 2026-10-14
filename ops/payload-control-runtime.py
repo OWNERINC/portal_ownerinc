@@ -935,9 +935,11 @@ def validate_portal_legacy_security_observation(observation):
                     _legacy_security_require(row['name'] == row['owner'] and not row['aclNull'])
                 objects[object_key] = row
             elif kind == 'effective':
+                # PG16 owners can retain implicit grant options after ordinary
+                # privileges are revoked. Observe both booleans independently;
+                # ownership/grantability remain separate recovery blockers.
                 _legacy_security_require(row['role'] in LEGACY_SECURITY_ROLES and
-                    row['privilege'] in LEGACY_SECURITY_PRIVILEGES.get(row['objectType'], ()) and
-                    (not row['grantable'] or row['allowed']))
+                    row['privilege'] in LEGACY_SECURITY_PRIVILEGES.get(row['objectType'], ()))
                 effective.add(object_key + (row['role'], row['privilege']))
             else:
                 privileges = LEGACY_SECURITY_PRIVILEGES.get(row['objectType'])

@@ -146,6 +146,13 @@ jobs:
           PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY: "1"
           PAYLOAD_LEGACY_SECURITY_DISPOSABLE: "1"
         run: node --test tests/unit/payload-legacy-security-pg16.test.mjs
+      - name: Qualify isolated Portal fence topology
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        timeout-minutes: 6
+        env:
+          PAYLOAD_REQUIRE_NATIVE_FENCE_TOPOLOGY: "1"
+          PAYLOAD_FENCE_TOPOLOGY_DISPOSABLE: "1"
+        run: node --test tests/unit/payload-fence-topology.test.mjs
       - name: Test route delivery with production Nginx image
         run: |
           docker run --rm \

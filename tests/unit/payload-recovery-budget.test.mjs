@@ -30,9 +30,13 @@ test('candidate-only outer budget covers measured prefix, existing coordinator c
   assert.match(remaining, /assertRecoverySnapshots\(secondSourceAfter, secondTargetAfter\)/);
   assert.ok(recoveryMinutes >= observedPrefixMinutes + 3 * coordinatorCap + 24.7);
   assert.ok(candidateMinutes - recoveryMinutes >= 30);
-  // The new isolated PG16 gate consumes at most six minutes of the existing
-  // outside-recovery reserve; historical timings did not include this gate.
-  assert.ok(candidateMinutes - recoveryMinutes - observedOutsideRecoveryMinutes - pg16Minutes >= 14);
+  const fenceStep = workflow.split('      - name: Qualify isolated Portal fence topology\n')[1]?.split('      - name:')[0];
+  assert.ok(fenceStep);
+  const fenceMinutes = Number(fenceStep.match(/timeout-minutes: (\d+)/)?.[1]);
+  assert.equal(fenceMinutes, 6);
+  // Both six-minute gates consume existing headroom. Historical durations are
+  // observations, not successful-run timing guarantees (remaining: 8.68 min).
+  assert.ok(candidateMinutes - recoveryMinutes - observedOutsideRecoveryMinutes - pg16Minutes - fenceMinutes >= 8);
   assert.match(workflow, /  deploy-production:[\s\S]*?timeout-minutes: 25/);
-  assert.deepEqual([...workflow.matchAll(/^        timeout-minutes: (\d+)$/gm)].map(m => Number(m[1])), [5, 15, 6, 10, 15, 120]);
+  assert.deepEqual([...workflow.matchAll(/^        timeout-minutes: (\d+)$/gm)].map(m => Number(m[1])), [5, 15, 6, 6, 10, 15, 120]);
 });
