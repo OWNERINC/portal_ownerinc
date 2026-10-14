@@ -250,6 +250,74 @@ assert files[head][0]==s.canonical(history[-2])+b'\n'
 `);
 });
 
+test('production v3 correspondence uses authenticated context and plan retains four-service diagnostics (signed I/O doubles)', () => {
+  probe(String.raw`
+candidate=run()['candidate']
+def target(database,keys):
+ return {'database':{'systemIdentifier':'123','databaseOid':'456','databaseName':database},
+  'volumes':{k:{'name':k,'driver':'local','mountpoint':'/volumes/'+k,'fingerprint':'7'*64} for k in keys}}
+trust=run()['trust']
+binding={'bindingVersion':3,'authority':trust,'sourceCommit':approval['hostBaseline']['currentCommit'],
+ 'project':'ownerinc-portal-prod','candidate':candidate,'candidateRelease':l.RELEASES+'/'+record['commit'],
+ 'sourceRelease':source,'previousImages':approval['hostBaseline']['legacyImages'],
+ 'b0':{'directory':l.PRODUCTION_BACKUP+'/v3-b0','proofSha256':'9'*64},
+ 'inventoryIdentity':inv.identity(document),'lease':{'device':1,'inode':2},
+ 'portalTarget':target('portal',('portalPostgres','portalUploads'))}
+assert s.validate_production_correspondence(binding,approval,record,document,trust)==binding
+for mutate in (lambda b:b['authority'].update(recordSha256='0'*64),
+ lambda b:b['authority'].update(policySha256='0'*64),lambda b:b['authority'].update(sourceApprovalSha256='0'*64),
+ lambda b:b['candidate'].update(reportSha256='0'*64),lambda b:b['b0'].update(directory='/elsewhere/b0'),
+ lambda b:b.update(sourceCommit='3'*40,sourceRelease=l.RELEASES+'/'+'3'*40),
+ lambda b:b.update(candidateRelease='/other/'+record['commit'],sourceRelease='/other/'+'2'*40)):
+ wrong=copy.deepcopy(binding);mutate(wrong)
+ try:s.validate_production_correspondence(wrong,approval,record,document,trust)
+ except s.StateError:pass
+ else:raise AssertionError('incorrect correspondence accepted')
+body.update(admission='closed',plannedReleaseImages=images,legacySourceProofSha256='9'*64,latestProofSha256='9'*64)
+body=append(body)
+body['installIntent']={'binding':binding,'stage':'reserved','cmsTarget':None,
+ 'creation':{'receiptVersion':1,'fingerprintAlgorithm':'production-container-mounts-v1','nonce':'b'*64,'volumes':{},'containers':{}}}
+body=append(body)
+result=run();assert result['classification']=='pre_floor_install_pending'
+assert 'production_creation_execution_not_integrated' in result['blockers']
+assert 'production_creation_binding_unsupported' not in result['blockers']
+assert 'production_binding_context_mismatch' not in result['blockers']
+for stage in ('portal_grants_pending','portal_grants_verified','cms_resources_pending'):
+ body['installIntent']['stage']=stage;body=append(body)
+cms=target('ownerinc_cms',('cmsPostgres','cmsUploads'))
+body['installIntent']['creation']['volumes']=cms['volumes'];body=append(body)
+for i,service in enumerate(('cms-postgres','cms','api','cron')):
+ body['installIntent']['creation']['containers'][service]={'id':str(i+1)*64,
+ 'image':images[service] if service!='cms-postgres' else
+ 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777',
+ 'fingerprint':'e'*64,'releasePath':binding['candidateRelease'],'creationState':'created'}
+ body=append(body)
+ assert ('creation_receipts_incomplete' in run()['blockers']) is (service!='cron')
+for stage in ('cms_resources_bound','cms_provision_pending','provisioned','floor_commit_pending','floor_committed'):
+ body['installIntent']['stage']=stage
+ body['installIntent']['cmsTarget']=cms
+ if stage in ('provisioned','floor_commit_pending'):body['cmsStatus']='provisioned'
+ if stage=='floor_commit_pending':body['installIntent']['floor']={'nativeCatalogFingerprint':'8'*64,
+ 'sourceRelease':source,'candidateRelease':binding['candidateRelease']}
+ if stage=='floor_committed':
+  body.update(cmsStatus='migrated',releaseImages=images,plannedReleaseImages=None,nativeCatalogFingerprint='8'*64)
+  put(l.HOST_ROOT+'/current-release',(binding['candidateRelease']+'\n').encode())
+ body=append(body);run()
+portal=binding['portalTarget']
+body['restoreIntent']={'proofSha256':'6'*64,'stage':'reserved','releaseImages':images,
+ 'targetFingerprints':{name:'7'*64 for name in ('portalDatabase','cmsDatabase','portalUploads','cmsUploads')},
+ 'target':{'inventoryIdentity':inv.identity(document),'portal':portal['database'],'cms':cms['database'],
+ 'volumes':dict(portal['volumes'],**cms['volumes'])}}
+body=append(body)
+# A newly authenticated authority cannot silently rebind an existing signed reservation.
+approval['source']['commit']='3'*40;bind()
+result=run();assert result['classification']=='restore_pending'
+assert 'existing_install_authority_mismatch' in result['blockers']
+assert 'bound_b0_missing' in result['blockers'] and 'install_intent_retained' in result['blockers']
+assert result['installationExecuted'] is False and result['deploymentAuthorized'] is False
+`);
+});
+
 test('captured imports and existing unconditional receiver/runtime denials remain intact', () => {
   probe(String.raw`
 import importlib.util

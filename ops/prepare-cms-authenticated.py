@@ -551,7 +551,7 @@ def check_install_plan(receipt_id):
             require(stat.S_ISDIR(os.lstat(destination).st_mode))
         result = runtime.production_install_plan(record, {'sourceApprovalSha256': digest,
             'policySha256': approval['admission']['policySha256'], 'recordSha256': approval['admission']['recordSha256']},
-            inventory, body, observations)
+            inventory, body, observations, approval=approval)
         require(support.read_protected(archive, 0o600, receiver.MAX_ARCHIVE) == raw)
         verify_received_tree(receiver, receipt + '/release', entries)
         again = _authenticated_material()

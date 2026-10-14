@@ -22,6 +22,57 @@ por processo, recovery pre-floor e a compatibilidade de binding/receipts de
 produção são incrementos posteriores. Receiver/runtime continuam negando
 instalação com `release_not_preflighted`.
 
+### Binding de produção v3 e receipts persistentes
+
+O state externo continua `schemaVersion: 2`. Bindings históricos sem versão e
+isolados `bindingVersion: 2` mantêm suas formas, bytes canônicos, HMACs e algoritmo
+de receipts; leitura não adiciona defaults, converte ou regrava evidência.
+
+`bindingVersion: 3` tem exatamente `candidate`, `candidateRelease`, `sourceRelease`,
+`previousImages`, `b0`, `inventoryIdentity`, `lease`, `portalTarget`, `authority`,
+`sourceCommit`, `project` e `bindingVersion`. Project é `ownerinc-portal-prod`;
+source usa o commit aprovado, não o prefixo do hash de material isolado.
+Candidate mantém os quatro hashes de produção (manifest, report, qualification,
+archive). `authority` contém exatamente `sourceApprovalSha256`, `policySha256` e
+`recordSha256`, retidos dentro da reserva assinada.
+
+`validate_production_correspondence()` é uma comparação pura de binding com
+approval, record, inventory e hashes de bytes **já autenticados** pelo chamador.
+Confere imagens anteriores, candidatos, commits, roots de releases e B0, project
+e identidade de inventory. Não transforma strings de hashes em autoridade,
+verifica arquivos ou autoriza reserva. O launcher passa o approval autenticado
+real ao plano; nenhuma ação de instalação é registrada por este incremento.
+
+Creation v3 tem exatamente `receiptVersion: 1`,
+`fingerprintAlgorithm: production-container-mounts-v1`, `nonce`, `volumes` e
+`containers`. Volumes continuam CMS Postgres/uploads com o algoritmo anterior.
+Containers aceitam somente `cms-postgres`, `cms`, `api`, `cron`, cada um com
+`id`, `image`, `fingerprint`, `releasePath`, `creationState`. IDs são únicos,
+imagens correspondem ao candidato (Postgres mantém o pin existente), releasePath
+é o candidato e creationState é `created`. Este último é uma observação histórica
+na criação, não prova de que o recurso permanece parado.
+
+O novo helper puro de fingerprint inclui tag do algoritmo, ID, imagem configurada,
+image ID, labels completos, Created, releasePath e todos os campos de Mounts.
+Ordena somente a lista externa por Destination absoluta normalizada e única;
+preserva arrays internos. Não existe fallback para o hash antigo. O método
+persistente isolado `_creation_container()` não mudou. Topologia, labels de
+reserva e estado parado ainda precisam ser verificados pelo futuro criador.
+
+Reserva começa com maps vazios; retry exige binding e metadata de creation
+idênticos, sem descartar receipts já acumulados. Receipts só são adicionados
+durante `cms_resources_pending`; não podem ser removidos/substituídos. Os quatro
+containers e dois volumes são obrigatórios ao entrar em `cms_resources_bound`,
+e permanecem congelados depois. Não há conversão in-place de intent antigo.
+
+Plano v3 reporta `production_creation_execution_not_integrated`, divergência de
+authority/contexto e incompletude dos quatro serviços. Continua classificando
+restore com install retido e emitindo ambos os conjuntos de diagnósticos.
+`installationExecuted` e `deploymentAuthorized` permanecem false. Primitivas de
+persistência são internas: não qualificam B0 nem fornecem rollback pre-floor.
+Recuperação B0 cercada e publicação autenticada de release são gates obrigatórios
+antes de conectar qualquer criação de recursos reais a uma interface de produção.
+
 ## Diagnóstico do predicado de quiescência do initializer
 
 O report de `38473939196` atribui a falha da terceira fixture ao initializer em

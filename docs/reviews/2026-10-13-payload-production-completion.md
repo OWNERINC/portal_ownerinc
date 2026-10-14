@@ -1,5 +1,11 @@
 # Payload production completion: initial decision and evidence
 
+## Production binding v3 and independently versioned receipts
+
+Added explicit production binding v3 under the unchanged outer state schema v2, with signed source-approval/policy/record context, strict correspondence validation and versioned creation receipts. Reservations retain exact metadata; receipts are append-only at the permitted stage and require four containers plus two CMS volumes before the bound boundary. Historical unversioned/v2 bodies and the old persistent fingerprint algorithm remain unchanged. The new production algorithm sorts only validated outer mount records and includes its own version tag.
+
+The read-only plan recognizes v3 while retaining explicit execution blockers and false authorization flags. No production creation action or initializer dispatch was added. Independent code review returned `ship`. Primary full `npm run verify` passed **Portal 1,844 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-production-binding-v3-verify.log`). Native production qualification, verified B0 recovery and fenced rollback remain pending. No host operations occurred.
+
 ## P3 authenticated read-only production installation plan
 
 The fixed receipt-selected plan check authenticates archive bytes, exact extracted tree, policy/record bindings, approved host observations and signed state under the existing lease. State reading disables head repair and does not construct the mutating runtime. Classification always leaves installation and deployment authorization false. B0 presence is explicitly unverified for artifact integrity and restoreability.

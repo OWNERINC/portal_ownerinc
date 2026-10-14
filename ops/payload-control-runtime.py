@@ -1266,7 +1266,42 @@ def _proof_body(kind, images, target_images, source, migrations, fingerprints, a
     return STATE.validate_proof_body(body)
 
 
-def production_install_plan(record, trust, inventory, body, observations):
+def production_container_fingerprint(value, release_path):
+    """New persistent production algorithm; never used for historical receipts.
+
+    Caller separately verifies topology, reservation labels and stopped state.
+    Preserve all mount fields and nested array ordering, sort outer mounts only.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get('Config'), dict):
+        fail('restore_target_changed')
+    config = value['Config']
+    if not isinstance(value.get('Id'), str) or not STATE.HEX_64.fullmatch(value['Id']) or \
+       not isinstance(value.get('Image'), str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', value['Image']) or \
+       not isinstance(config.get('Image'), str) or not config['Image'] or \
+       not isinstance(value.get('Created'), str) or not value['Created'] or \
+       not isinstance(config.get('Labels'), dict) or \
+       any(not isinstance(k, str) or not isinstance(v, str) for k, v in config['Labels'].items()) or \
+       not isinstance(release_path, str) or '\0' in release_path or not os.path.isabs(release_path) or \
+       os.path.normpath(release_path) != release_path:
+        fail('restore_target_changed')
+    mounts = value.get('Mounts')
+    if not isinstance(mounts, list):
+        fail('restore_target_changed')
+    destinations = set()
+    for mount in mounts:
+        destination = mount.get('Destination') if isinstance(mount, dict) else None
+        if not isinstance(destination, str) or '\0' in destination or not os.path.isabs(destination) or \
+           os.path.normpath(destination) != destination or destination in destinations:
+            fail('restore_target_changed')
+        destinations.add(destination)
+    return hashlib.sha256(STATE.canonical({
+        'algorithm': 'production-container-mounts-v1', 'id': value['Id'], 'image': config['Image'],
+        'imageId': value['Image'], 'labels': config['Labels'], 'created': value['Created'],
+        'releasePath': release_path, 'mounts': sorted(mounts, key=lambda m: m['Destination']),
+    })).hexdigest()
+
+
+def production_install_plan(record, trust, inventory, body, observations, approval=None):
     """Pure classification, NOT authentication or permission to install.
 
     The installed administrative caller authenticates evidence and reads the
@@ -1284,11 +1319,10 @@ def production_install_plan(record, trust, inventory, body, observations):
     if any(type(observations[name]) is not bool for name in observations if name != 'b0Status') or \
        observations['b0Status'] not in ('absent', 'unbound', 'partial', 'present_unverified'):
         fail('invalid_cold_state')
-    candidate = {key: record[key] for key in ('commit', 'runId', 'runAttempt', 'images', 'candidateSha256')}
-    candidate.update(reportSha256=record['recoveryReportSha256'],
-                     qualificationSha256=record['qualifiedManifestSha256'], bundleSha256=record['archiveSha256'])
-    STATE.validate_install_candidate(candidate, producer=False)
-    blockers = ['production_initializer_not_enabled', 'production_creation_binding_unsupported',
+    candidate = STATE.production_candidate(record)
+    production = body.get('installIntent') is not None and body['installIntent']['binding'].get('bindingVersion') == 3
+    blockers = ['production_initializer_not_enabled',
+                'production_creation_execution_not_integrated' if production else 'production_creation_binding_unsupported',
                 'physical_resource_observations_required', 'closed_b1_ingress_readiness_not_integrated']
     if body['schemaVersion'] != 2:
         blockers.append('install_state_schema_upgrade_required')
@@ -1313,9 +1347,19 @@ def production_install_plan(record, trust, inventory, body, observations):
             blockers.append('isolated_binding_not_production_authority')
         if intent['binding']['candidate'] != candidate:
             blockers.append('existing_install_candidate_mismatch')
+        if production:
+            if intent['binding']['authority'] != trust:
+                blockers.append('existing_install_authority_mismatch')
+            if approval is None:
+                blockers.append('production_binding_context_required')
+            else:
+                try:
+                    STATE.validate_production_correspondence(intent['binding'], approval, record, inventory, trust)
+                except STATE.StateError:
+                    blockers.append('production_binding_context_mismatch')
         creation = intent.get('creation')
         if creation is None or set(creation['volumes']) != {'cmsPostgres', 'cmsUploads'} or \
-           set(creation['containers']) != {'cms-postgres', 'cms'}:
+           set(creation['containers']) != ({'cms-postgres', 'cms', 'api', 'cron'} if production else {'cms-postgres', 'cms'}):
             blockers.append('creation_receipts_incomplete')
         blockers.append('install_intent_retained')
     if body.get('restoreIntent') is not None:
