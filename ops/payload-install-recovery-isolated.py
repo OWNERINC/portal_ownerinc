@@ -6,6 +6,7 @@ No user-supplied SQL, target, key, request path or recovery fault is a CLI input
 The internal executor consumes authenticated bytes and the real signed journal.
 """
 import gzip
+import difflib
 from collections import Counter
 import hashlib
 import hmac
@@ -35,6 +36,276 @@ CHILD_FAILURES = ('none', 'expected_interruption', 'refused', 'unknown', 'expect
                   'child_exit', 'checkpoint_mismatch', 'malformed_frame', 'schema_line_order_delta',
                   'schema_comment_delta', 'schema_sql_delta')
 DIAGNOSTIC_LOCATION = 'entry_authentication'
+REPORT_NAME = 'schema-discrepancy.json'
+REPORT_LIMIT = 65536
+REPORT_EXPORT_PARENT = '/home/runner/work/_temp'
+REPORT_EXPORT_DIRECTORY = 'payload-b0-schema-diagnostic'
+SQL_WORDS = frozenset('CREATE ALTER DROP TABLE SCHEMA EXTENSION SEQUENCE INDEX UNIQUE CONSTRAINT CHECK DEFAULT NOT NULL PRIMARY KEY FOREIGN REFERENCES ON OWNER TO COMMENT IS SET SELECT FROM AS WITH USING ONLY ADD TYPE COLLATE INHERITS GENERATED ALWAYS BY IDENTITY START INCREMENT MINVALUE MAXVALUE CACHE NO CYCLE FUNCTION RETURNS LANGUAGE SECURITY DEFINER INVOKER GRANT REVOKE ALL PRIVILEGES PUBLIC CASCADE RESTRICT VALIDATE VALID VALUES TRUE FALSE AND OR IN ANY ARRAY'.split())
+SAFE_IDENTIFIERS = frozenset(('public', 'pg_catalog', 'postgres', 'pg_database_owner', 'pgcrypto', 'portal_api', 'portal_cron', 'recovery_records'))
+OBJECT_TYPES = ('TABLE', 'SCHEMA', 'EXTENSION', 'SEQUENCE', 'SEQUENCE OWNED BY', 'INDEX', 'CONSTRAINT',
+                'FK CONSTRAINT', 'DEFAULT', 'FUNCTION', 'TRIGGER', 'POLICY', 'TYPE', 'DOMAIN', 'COMMENT', 'ACL', 'UNKNOWN')
+QUOTED_PREFIX = re.compile(r"(?:[eEbBxXnN]|[uU]&)?(['\"])")
+DOLLAR_PREFIX = re.compile(r'\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$')
+IDENTIFIER_TOKEN = re.compile(r'[A-Za-z_][A-Za-z_0-9$]*')
+NUMBER_TOKEN = re.compile(r'[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?')
+
+
+def reject_literal_continuation(text, pos):
+    """Do not lex continuation fragments with a newly reset escape mode.
+
+    Suppress adjacent quoted strings across whitespace/comments, even same-line
+    adjacency or an explicit second prefix. This deliberately over-rejects rather
+    than implementing PostgreSQL's newline-dependent string concatenation rules.
+    The main lexer still consumes trivia normally when no fragment follows.
+    """
+    while pos < len(text):
+        if text[pos].isspace():
+            pos += 1
+        elif text.startswith('--', pos):
+            pos += 2
+            while pos < len(text) and text[pos] not in '\r\n':
+                pos += 1
+        elif text.startswith('/*', pos):
+            pos += 2
+            depth = 1
+            while depth:
+                require(pos < len(text))
+                if text.startswith('/*', pos):
+                    depth += 1
+                    require(depth <= 32)
+                    pos += 2
+                elif text.startswith('*/', pos):
+                    depth -= 1
+                    pos += 2
+                else:
+                    pos += 1
+        else:
+            following = QUOTED_PREFIX.match(text, pos)
+            require(following is None or following[1] != "'")
+            return
+
+
+def redacted_schema(raw):
+    """Small fail-closed lexer, NOT a SQL parser. No unrecognized text is emitted."""
+    require(isinstance(raw, bytes) and len(raw) <= CAP)
+    text = raw.decode('utf-8', errors='strict')
+    require('\x00' not in text)
+    tokens, pos, line = [], 0, 1
+    while pos < len(text):
+        start, first = pos, line
+        char = text[pos]
+        if char.isspace():
+            line += char == '\n'
+            pos += 1
+            continue
+        kind, visible = None, None
+        if text.startswith('--', pos):
+            end = text.find('\n', pos)
+            pos = len(text) if end < 0 else end
+            kind = 'comment'
+        elif text.startswith('/*', pos):
+            pos += 2
+            depth = 1
+            while depth:
+                require(pos < len(text))
+                if text.startswith('/*', pos):
+                    depth += 1
+                    require(depth <= 32)
+                    pos += 2
+                elif text.startswith('*/', pos):
+                    depth -= 1
+                    pos += 2
+                else:
+                    pos += 1
+            kind = 'comment'
+        else:
+            prefix = QUOTED_PREFIX.match(text, pos)
+            dollar = DOLLAR_PREFIX.match(text, pos)
+            if prefix:
+                quote = prefix[1]
+                escaped = prefix[0].upper().startswith(('E', 'U&'))
+                pos = prefix.end()
+                while True:
+                    require(pos < len(text))
+                    if text[pos] == quote:
+                        pos += 1
+                        if pos < len(text) and text[pos] == quote:
+                            pos += 1
+                            continue
+                        break
+                    if text[pos] == '\\' and escaped:
+                        pos += 1
+                        require(pos < len(text))
+                    pos += 1
+                kind = 'quoted_identifier' if quote == '"' else 'literal'
+                if quote == "'":
+                    reject_literal_continuation(text, pos)
+            elif dollar:
+                delimiter = dollar[0]
+                end = text.find(delimiter, pos + len(delimiter))
+                require(end >= 0)
+                pos = end + len(delimiter)
+                kind = 'body'
+            elif char.isascii() and (char.isalpha() or char == '_'):
+                match = IDENTIFIER_TOKEN.match(text, pos)
+                pos = match.end()
+                word = match[0]
+                if word.upper() in SQL_WORDS:
+                    kind, visible = 'keyword', word.upper()
+                elif word in SAFE_IDENTIFIERS:
+                    kind, visible = 'identifier', word
+                else:
+                    kind = 'identifier_hash'
+            elif char.isascii() and char.isdigit():
+                match = NUMBER_TOKEN.match(text, pos)
+                pos = match.end()
+                kind = 'number'
+            elif char in '(),;.:=+-*/<>[]!~|&^%?@#':
+                kind, visible = 'punctuation', char
+                pos += 1
+            else:
+                require(False)
+        value = text[start:pos].encode('utf-8')
+        line += text[start:pos].count('\n')
+        token = {'kind': kind, 'lines': [first, line]}
+        if visible is not None:
+            token['value'] = visible
+        else:
+            token.update(length=len(value), sha256=digest(value))
+        tokens.append(token)
+        require(len(tokens) <= 100000)
+    return tokens
+
+
+def schema_discrepancy(before, after):
+    # Lex everything BEFORE emitting anything: malformed suffix suppresses report.
+    streams = [redacted_schema(value) for value in (before, after)]
+    lines = [value.splitlines(keepends=True) for value in (before, after)]
+    require(all(len(value) <= 10000 for value in lines))
+    changes = [op for op in difflib.SequenceMatcher(None, lines[0], lines[1], autojunk=True).get_opcodes() if op[0] != 'equal']
+    def side(index, start, end):
+        lo, hi = max(0, start - 2), min(len(lines[index]), end + 2)
+        object_type, identity = 'UNKNOWN', digest(b'')
+        # Header content is never emitted, and is used only for diagnostics.
+        for item in reversed(lines[index][:start + 1]):
+            header = re.fullmatch(rb'-- Name: (.*); Type: ([A-Z ]+); Schema: (.*); Owner: (.*)\r?\n?', item)
+            if header:
+                candidate = header[2].decode('ascii')
+                object_type = candidate if candidate in OBJECT_TYPES else 'UNKNOWN'
+                identity = digest(item)
+                break
+        return {'range': [start + 1, end], 'contextRange': [lo + 1, hi], 'objectType': object_type,
+                'objectIdentitySha256': identity, 'sha256': digest(b''.join(lines[index][start:end])),
+                'tokens': [token for token in streams[index] if token['lines'][0] <= hi and token['lines'][1] >= lo + 1]}
+    result = {'version': 1, 'kind': 'nonqualifying-isolated-b0-schema-discrepancy',
+              'before': {'length': len(before), 'sha256': digest(before)},
+              'after': {'length': len(after), 'sha256': digest(after)},
+              'regionCount': len(changes), 'truncated': False, 'regions': []}
+    for _, a, b, c, d in changes:
+        region = {'before': side(0, a, b), 'after': side(1, c, d)}
+        result['regions'].append(region)
+        if len(canonical(result)) > REPORT_LIMIT:
+            result['regions'].pop()
+            result['truncated'] = True
+            break
+    return canonical(result)
+
+
+def capture_schema_discrepancy(directory, before, after):
+    # First mismatch only; private exclusive write, no raw schemas persisted.
+    raw = schema_discrepancy(before, after)
+    validate_schema_report(raw)
+    fd = os.open(directory / REPORT_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def export_schema_discrepancy(directory):
+    """Fixed hosted-runner destination, never a CLI/environment-selected target."""
+    source = directory / REPORT_NAME
+    if not source.exists():
+        return
+    raw = private_bytes(source, REPORT_LIMIT)
+    # Only our private first-mismatch producer creates this file. Re-encode to
+    # require canonical bytes and reject duplicate-key/noncanonical substitutions.
+    validate_schema_report(raw)
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    runner_uid = None
+    try:
+        for component in REPORT_EXPORT_PARENT.strip('/').split('/'):
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            info = os.fstat(fd)
+            if component == 'runner':
+                runner_uid = info.st_uid
+            require(info.st_uid in (0, runner_uid) and not stat.S_IMODE(info.st_mode) & 0o022)
+        os.mkdir(REPORT_EXPORT_DIRECTORY, 0o700, dir_fd=fd)
+        child = os.open(REPORT_EXPORT_DIRECTORY, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        os.close(fd)
+        fd = child
+        require(os.fstat(fd).st_uid == 0 and stat.S_IMODE(os.fstat(fd).st_mode) == 0o700)
+        output = os.open(REPORT_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        with os.fdopen(output, 'wb') as stream:
+            info = os.fstat(stream.fileno())
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600)
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o644)
+        os.fchmod(fd, 0o755)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def validate_schema_report(raw):
+    require(isinstance(raw, bytes) and len(raw) <= REPORT_LIMIT)
+    value = json.loads(raw)
+    require(canonical(value) == raw)
+    def keys(obj, names):
+        require(isinstance(obj, dict) and set(obj) == set(names.split()))
+    def integer(number, maximum=CAP):
+        require(type(number) is int and 0 <= number <= maximum)
+    def hash_value(text):
+        require(isinstance(text, str) and re.fullmatch('[a-f0-9]{64}', text) is not None)
+    def lines(pair):
+        require(isinstance(pair, list) and len(pair) == 2)
+        for number in pair:
+            integer(number, 10001)
+    keys(value, 'version kind before after regionCount truncated regions')
+    require(type(value['version']) is int and value['version'] == 1 and value['kind'] == 'nonqualifying-isolated-b0-schema-discrepancy')
+    require(type(value['truncated']) is bool and isinstance(value['regions'], list))
+    integer(value['regionCount'], 20000)
+    require(len(value['regions']) <= value['regionCount'])
+    require(value['truncated'] == (len(value['regions']) < value['regionCount']))
+    for name in ('before', 'after'):
+        keys(value[name], 'length sha256')
+        integer(value[name]['length'])
+        hash_value(value[name]['sha256'])
+    for region in value['regions']:
+        keys(region, 'before after')
+        for side in region.values():
+            keys(side, 'range contextRange objectType objectIdentitySha256 sha256 tokens')
+            lines(side['range']); lines(side['contextRange'])
+            require(side['objectType'] in OBJECT_TYPES)
+            hash_value(side['objectIdentitySha256']); hash_value(side['sha256'])
+            require(isinstance(side['tokens'], list))
+            for token in side['tokens']:
+                require(isinstance(token, dict))
+                kind = token.get('kind')
+                if kind in ('keyword', 'identifier', 'punctuation'):
+                    keys(token, 'kind lines value')
+                    allowed = SQL_WORDS if kind == 'keyword' else SAFE_IDENTIFIERS if kind == 'identifier' else tuple('(),;.:=+-*/<>[]!~|&^%?@#')
+                    require(isinstance(token['value'], str) and token['value'] in allowed)
+                else:
+                    keys(token, 'kind lines length sha256')
+                    require(kind in ('comment', 'quoted_identifier', 'literal', 'body', 'identifier_hash', 'number'))
+                    integer(token['length']); hash_value(token['sha256'])
+                lines(token['lines'])
+    return value
 
 
 def mark(location):
@@ -190,11 +461,16 @@ def schema_delta(expected, observed):
     return 'schema_sql_delta'
 
 
-def assert_schema_dump(expected, observed, approved_digest):
+def assert_schema_dump(expected, observed, approved_digest, diagnostic=None):
     mark('schema_compare')
     # The retained baseline is diagnostic material, not a replacement authority.
     require(digest(expected) == approved_digest)
     if digest(observed) != approved_digest:
+        if diagnostic is not None:
+            try:
+                diagnostic(expected, observed)
+            except Exception:
+                pass  # Diagnostic suppression must never replace the mismatch.
         try:
             category = schema_delta(expected, observed)
         except Exception:
@@ -594,7 +870,9 @@ def native_qualification():
                     observed_schema = dump('--schema-only', '--no-privileges')
                     mark('schema_normalization')
                     observed_schema = normalize_dump(observed_schema)
-                    assert_schema_dump(schema_bytes, observed_schema, approved['schema'])
+                    assert_schema_dump(schema_bytes, observed_schema, approved['schema'],
+                                       (lambda before, after: capture_schema_discrepancy(root, before, after))
+                                       if phase in ('recover_uploads_interruption', 'recover_final') else None)
 
                 def database_matches(self, approved):
                     mark('database_dump_compare')
@@ -721,6 +999,13 @@ def native_qualification():
                     docker('volume', 'rm', prefix + '-' + value)
             except Exception:
                 cleanup_ok = False
+        if primary_failure is not None:
+            try:
+                if child_failure.startswith('schema_'):
+                    require((root / REPORT_NAME).exists())
+                export_schema_discrepancy(root)
+            except Exception:
+                print('isolated_b0_schema_report_unavailable', file=sys.stderr)
         if primary_failure is None and cleanup_ok:
             shutil.rmtree(root)
         # Failed journal/B0/source closure stays private until hosted-runner

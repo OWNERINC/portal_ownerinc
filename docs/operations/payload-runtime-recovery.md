@@ -154,6 +154,62 @@ todos os casos nem identifica o delta deste runner. Não remover SQL, owners,
 constraints ou ordenar linhas para fazer o gate passar. A causa histórica segue
 não confirmada; native NOT RUN para esta instrumentação.
 
+#### One-shot discrepancy report da fixture (não qualificante)
+
+Para investigar CI 38592107287/25158c9 sem iterar categorias cegamente, um mismatch
+durante `recover_uploads_interruption` ou `recover_final` pode capturar o primeiro
+report `nonqualifying-isolated-b0-schema-discrepancy`, versão 1, ≤64 KiB. Usa somente
+os dois dumps **schema-only já capturados e normalizados**, sem query, retry ou dump
+adicional. O negativo intencional de schema não captura report. Raw schema nunca é
+escrito em arquivo por esse mecanismo.
+
+Schema exato: version/kind, before/after (length/sha256), regionCount, truncated e
+regions. Cada região contém lados before/after com range, contextRange (até duas
+linhas adjacentes), objectType finito, objectIdentitySha256, sha256 do trecho e
+tokens redigidos. Ranges usam linhas 1-based inclusivas; inserção/remoção vazia é
+representada por início = fim + 1. Todas as regiões são incluídas até o cap; o total
+original e truncated indicam perda de detalhe. Objetos sem header reconhecido são
+UNKNOWN. Headers são hashes, nunca nomes publicados.
+
+Lexer conservador (não parser SQL): somente keywords SQL da lista fixa e os nomes
+public, pg_catalog, postgres, pg_database_owner, pgcrypto, portal_api, portal_cron,
+recovery_records podem ficar visíveis; pontuação vem de lista finita. Identifiers
+desconhecidos e **todos** quoted identifiers, strings (incluindo E/U&), números,
+dollar bodies e comentários viram tipo/length/sha256. Conteúdo inválido, UTF-8
+malformado, token desconhecido, nesting excessivo ou limites (16 MiB/input,
+100000 tokens, 10000 linhas) suprimem o report. Hashes não são anonimização forte:
+valores de baixa entropia podem ser inferidos por dicionário. Esse canal é autorizado
+somente para a fixture sintética, não para produção.
+
+Continuações de string SQL são deliberadamente **não suportadas** pelo lexer:
+após fechar qualquer literal single-quoted (plain/E/U&/B/X/N), lookahead através
+de whitespace e comentários (inclusive nested block comments) recusa outro
+fragmento single-quoted antes de emitir tokens. Isso inclui concatenação PostgreSQL
+por newline, fragmentos com prefixo explícito e, conservadoramente, adjacência na
+mesma linha. Não reinicializa o modo E ao interpretar fragmentos subsequentes.
+Strings isoladas, escaped quotes, casts, separadores e comentários sem continuação
+permanecem suportados. O report inteiro é suprimido em continuação/lexing inválido;
+não há artifact parcial nem fallback raw, e a recusa primária permanece intacta.
+
+Capture privado usa arquivo exclusivo 0600 no diretório privado da fixture. Após
+falha, o supervisor verifica metadados/no-follow/nlink e valida schema/canonical JSON
+exatos antes de exportar. Destino é constante no código, sem path flag/env override:
+`/home/runner/work/_temp/payload-b0-schema-diagnostic/schema-discrepancy.json`.
+CI verifica que runner.temp corresponde a esse parent. Caminhada por descritores
+usa O_DIRECTORY/O_NOFOLLOW, owners root/runner e rejeita parents group/world-writable;
+diretório de export é criado exclusivamente root:0700 e arquivo root:0600. Só após
+write/fsync o redigido vira 0644 e o diretório 0755 para leitura pelo upload action.
+Alvo existente ou links não são sobrescritos. O cleanup da fixture não apaga esse
+resultado redigido. Erro gera somente `isolated_b0_schema_report_unavailable`, sem
+texto de exceção, preservando primary/cleanup e exit 73.
+
+Job B0 faz upload **somente em failure()**, nome fixo
+`nonqualifying-isolated-b0-schema-discrepancy`, único path acima, sem wildcard,
+retenção 7 dias. Ausência avisa, não torna recovery bem-sucedido. Nenhum report
+entra em manifest, profile, candidate/admission evidence ou prova ≤1 KiB. Testes de
+export usam doubles de descritores no Windows; segurança de filesystem Linux e
+execução nativa ainda dependem de review/qualificação. Native NOT RUN nesta entrega.
+
 ### Observação pura do fence destrutivo — sem collector ou executor
 
 #### Qualificação isolada da topologia (TEST-only)

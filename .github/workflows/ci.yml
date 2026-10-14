@@ -101,10 +101,19 @@ jobs:
         timeout-minutes: 6
         run: |
           set -euo pipefail
+          test "$RUNNER_TEMP" = /home/runner/work/_temp
           sudo -n env -i PATH="$PATH" HOME=/root \
             GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
             PAYLOAD_REQUIRE_NATIVE_B0_RECOVERY=1 PAYLOAD_B0_RECOVERY_DISPOSABLE=1 \
             node --test tests/unit/payload-install-recovery.test.mjs
+      - name: Upload nonqualifying B0 schema discrepancy
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nonqualifying-isolated-b0-schema-discrepancy
+          path: ${{ runner.temp }}/payload-b0-schema-diagnostic/schema-discrepancy.json
+          if-no-files-found: warn
+          retention-days: 7
 
   validate:
     needs: isolated-b0-recovery

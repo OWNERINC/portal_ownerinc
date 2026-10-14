@@ -6,6 +6,9 @@ import { spawnSync } from 'node:child_process';
 export const childLocations = ['entry_authentication', 'boundary', 'security_compare', 'role_authentication', 'schema_compare', 'schema_dump', 'schema_normalization', 'database_dump_compare', 'database_data_compare', 'database_restore', 'checkpoint', 'uploads_clear', 'uploads_extract', 'uploads_compare', 'complete', 'unknown'];
 export const childFailures = ['none', 'expected_interruption', 'refused', 'unknown', 'expected_interruption_missing', 'child_exit', 'checkpoint_mismatch', 'malformed_frame', 'schema_line_order_delta', 'schema_comment_delta', 'schema_sql_delta'];
 export function finiteDiagnostic(value) {
+  if (typeof value === 'string' && value.startsWith('isolated_b0_schema_report_unavailable\n')) {
+    value = value.slice('isolated_b0_schema_report_unavailable\n'.length);
+  }
   const pattern = new RegExp(`^isolated_b0_recovery_qualification_failed:(preflight|create_resources|capture_baseline|unsupported_schema_negative|damage_fixture|recover_database_interruption|recover_uploads_interruption|recover_final|verify_preserved_evidence|complete|none|guard);child:(${childLocations.join('|')}):(${childFailures.join('|')});cleanup:(none|refused)$`, 'u');
   return typeof value === 'string' && !value.includes('\n') && !value.includes('\r') && pattern.test(value)
     ? value : 'isolated_b0_recovery_native_failed';
@@ -15,6 +18,7 @@ function nativeCommand(program, args, options) {
   const result = spawnSync(program, args, { encoding: 'utf8', timeout: options.timeout, maxBuffer: 8192, killSignal: 'SIGKILL' });
   if (result.error || result.signal || result.status !== 0) {
     const diagnostic = (result.stderr || '').trim();
+    if (diagnostic.startsWith('isolated_b0_schema_report_unavailable\n')) console.error('isolated_b0_schema_report_unavailable');
     throw new Error(finiteDiagnostic(diagnostic));
   }
   return result.stdout;

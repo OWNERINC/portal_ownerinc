@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Fixture-only redacted schema discrepancy capture
+
+Candidate `38592107287` at `25158c9` confirmed `schema_compare:schema_sql_delta` after successful dump generation/normalization. The exact differing SQL remains unknown. Added a failure-only, nonqualifying artifact containing bounded redacted changed regions from already captured fixture bytes; raw dumps are never uploaded. Report generation/export failures preserve the original recovery refusal. No restore or acceptance criteria changed.
+
+Review identified escape-string continuation leakage. The corrected lexer conservatively suppresses the entire report on adjacent/continued literal fragments, including intervening comments, before emitting tokens. Fresh review approved the correction. Export remains synthetic-fixture-only; hashes can reveal low-entropy values through inference and are not a production-data export policy. Native export remains pending.
+
+An initial full verify found a workflow-test prefix collision with the new artifact step. Exact step-name selection now preserves all original report/checkpoint assertions; independent review approved that test-only correction. Primary focused checks passed **29 / 2 skips**. Final complete `npm run verify` passed **Portal 1,923 PASS / 19 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-b0-schema-discrepancy-final-verify.log`). No VPS operations occurred.
+
 ## B0 schema diagnostic boundaries
 
 Candidate `38590676716` failed with `recover_uploads_interruption;child:schema_compare:refused;cleanup:none`. That location previously included dump execution, normalization and comparison, so it did not establish a schema hash mismatch. Those operations now have distinct finite locations. An actual mismatch receives a bounded line-order/comment/SQL delta category; every mismatch still refuses. Private baseline bytes are checked against the authenticated digest. No schema content or exception text is exported, and no restore/comparison acceptance is relaxed.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -225,6 +225,74 @@ test('native guard rejects before commands and does not accept target flags', as
   assert.equal(calls, 0);
 });
 
+test('lexer suppresses newline string continuations before any fragment can expose tokens', async () => {
+  await probe(String.raw`
+# Reviewer reproduction: the second quote is escaped under the initial E mode.
+attack=b"SELECT E'prefix'\n'\\'PUBLIC -- private';"
+refused(lambda:E.redacted_schema(attack))
+separators=(b'\n',b' \r\n\t',b' -- comment\n',b' /* comment\n */ ',b'\n/* outer /* nested */ end */',b'\r',b' ')
+for prefix in (b"E'prefix'",b"'prefix'",b"U&'prefix'",b"e'prefix'"):
+ for separator in separators:
+  for tail in (b"'SELECT PUBLIC CREATE TABLE'",b"'second'\n'ALTER TABLE PUBLIC'",b"'\\'PUBLIC -- private';",b"'unterminated"):
+   candidate=b'SELECT '+prefix+separator+tail
+   refused(lambda:E.redacted_schema(candidate))
+   try:E.capture_schema_discrepancy(root,b'SELECT 1;',candidate)
+   except E.Refused:pass
+   else:assert False
+   assert not (root/E.REPORT_NAME).exists()
+# Explicitly prefixed adjacent strings are also conservatively unsupported.
+for tail in (b"E'SELECT'",b"U&'PUBLIC'",b"B'101'",b"N'SELECT'"):
+ refused(lambda:E.redacted_schema(b"SELECT 'first'\n"+tail))
+# Ordinary isolated literals/comments/casts retain useful diagnostics.
+for sql in (b"SELECT E'prefix\\'PUBLIC';",b"SELECT 'PUBLIC' /* comment\n */ ::text;",b"SELECT U&'PUBLIC\\0061';",b"SELECT 'PUBLIC', 'SELECT';"):
+ tokens=E.redacted_schema(sql)
+ assert all(t.get('value')!='PUBLIC' for t in tokens)
+for malformed in (b"SELECT 'first' /* unfinished",b"SELECT E'first\\",b"SELECT 'first'\n'broken"):
+ refused(lambda:E.redacted_schema(malformed))
+`);
+});
+
+test('one-shot discrepancy redacts all literals/bodies/comments and preserves bounded structural changes', async () => {
+  await probe(String.raw`
+before=E.normalize_dump(b'\\restrict a\n-- Name: private_name; Type: TABLE; Schema: public; Owner: postgres\nCREATE TABLE public.private_name (id integer DEFAULT 123, secret text DEFAULT E\'SECRET\\\\VALUE\');\nCOMMENT ON TABLE public.private_name IS \'PRIVATE comment\';\nALTER TABLE public.private_name OWNER TO postgres;\n\\unrestrict a\n')
+after=before.replace(b'OWNER TO postgres',b'OWNER TO portal_api').replace(b'DEFAULT 123',b'DEFAULT 456')
+raw=E.schema_discrepancy(before,after);report=E.validate_schema_report(raw)
+assert len(raw)<=65536 and report['regionCount']>=1 and not report['truncated']
+for secret in (b'private_name',b'SECRET',b'VALUE',b'PRIVATE comment',b'123',b'456'):
+ # Look only at visible token values: hashes/line numbers may contain digits.
+ assert not any(secret.decode() in token.get('value','') for region in report['regions'] for side in region.values() for token in side['tokens'])
+assert report['before']=={'length':len(before),'sha256':H(before)}
+cases=[b"SELECT 'SECRET\nMULTILINE';",b"SELECT E'SECRET\\'PRIVATE';",b'SELECT U&"SECRET\\0061";',b"SELECT U&'SECRET\\0061';",b'SELECT "postgres";',b'SELECT $$SECRET\nCREATE TABLE private_name;$$;',b'SELECT $tag$SECRET$tag$;',b'/* SECRET /* PRIVATE */ hidden */ SELECT 1;',b"CREATE TABLE x(a text CHECK(a !~* 'SECRET'));",b'CREATE EXTENSION pgcrypto WITH SCHEMA public;']
+for sql in cases:
+ tokens=E.redacted_schema(sql)
+ assert all('SECRET' not in token.get('value','') and 'PRIVATE' not in token.get('value','') for token in tokens)
+for invalid in (b"SELECT 'SECRET",b'SELECT "SECRET',b'SELECT $x$SECRET',b'/* SECRET',b'\xff',b'SELECT '+bytes([96])+b'SECRET',b'\x00',b'x'*(E.CAP+1)):
+ try:E.capture_schema_discrepancy(root,b'SELECT 1;',invalid)
+ except Exception:pass
+ else:assert False
+assert not (root/E.REPORT_NAME).exists()
+E.capture_schema_discrepancy(root,b'SELECT 1;',b'SELECT 2;')
+saved=(root/E.REPORT_NAME).read_bytes();E.validate_schema_report(saved)
+try:E.capture_schema_discrepancy(root,b'SELECT 1;',b'SELECT 3;')
+except FileExistsError:pass
+else:assert False
+assert (root/E.REPORT_NAME).read_bytes()==saved
+for bad in (saved.replace(b'"version":1',b'"version":1,"version":1'),saved.replace(b'"version":1',b'"version":true'),b'x'*65537):
+ try:E.validate_schema_report(bad)
+ except Exception:pass
+ else:assert False
+left=b''.join(('SELECT '+str(i)+';\n-- stable '+str(i)+'\n').encode() for i in range(500))
+right=left.replace(b'SELECT ',b'SELECT 999 + ')
+large=E.validate_schema_report(E.schema_discrepancy(left,right));assert large['truncated'] and large['regionCount']>len(large['regions'])
+body=S.read_state(str(root))[2]
+def failed_write(*args):raise OSError('SECRET')
+try:E.assert_schema_dump(before,after,H(before),failed_write)
+except E.SchemaMismatch as error:assert E.failure_for_exception(error,'uploads')[1]==73
+else:assert False
+assert S.read_state(str(root))[2]==body and body['admission']=='closed'
+`);
+});
+
 test('actual dump normalizer and schema diagnostics never accept order, SQL, owner or comment changes', async () => {
   await probe(String.raw`
 before=b'\\restrict alpha\n-- Name: fixture; Type: TABLE; Owner: postgres\nCREATE TABLE fixture (id integer);\nALTER TABLE fixture OWNER TO postgres;\n\\unrestrict alpha\n'
@@ -254,6 +322,73 @@ assert E.schema_delta(body,body.replace(b'original',b'changed'))=='schema_commen
 assert E.failure_for_exception(E.Refused('schema_sql_delta'),'uploads')==('refused',73)
 assert S.read_state(str(root))[2]['admission']=='closed'
 `);
+});
+
+test('discrepancy export validates exact redacted schema and uses fixed descriptor-relative exclusive paths', async () => {
+  await probe(String.raw`
+from unittest.mock import patch
+from types import SimpleNamespace
+E.capture_schema_discrepancy(root,b'CREATE SCHEMA public;',b'ALTER SCHEMA public OWNER TO postgres;')
+raw=(root/E.REPORT_NAME).read_bytes()
+value=json.loads(raw)
+for mutate in (lambda x:x.update(extra='SECRET'),lambda x:x['regions'][0]['before']['tokens'][0].update(value='SECRET'),lambda x:x.update(version=True)):
+ bad=copy.deepcopy(value);mutate(bad);refused(lambda:E.validate_schema_report(S.canonical(bad)))
+calls=[];fds={};counter=[10];out=io.BytesIO()
+class Output:
+ def __enter__(self):return self
+ def __exit__(self,*args):pass
+ def fileno(self):return 99
+ def write(self,b):out.write(b)
+ def flush(self):pass
+def opened(name,flags,mode=0,**kwargs):
+ calls.append(('open',name,flags,kwargs));counter[0]+=1;fds[counter[0]]=name;return counter[0]
+def info(fd):
+ return SimpleNamespace(st_uid=0,st_nlink=1,st_mode=(0o100600 if fd==99 else 0o40700))
+fake=SimpleNamespace(O_RDONLY=0,O_DIRECTORY=1,O_NOFOLLOW=2,O_WRONLY=4,O_CREAT=8,O_EXCL=16,
+ open=opened,close=lambda fd:None,mkdir=lambda *a,**kw:calls.append(('mkdir',a,kw)),
+ fstat=info,fdopen=lambda *a:Output(),fsync=lambda fd:None,fchmod=lambda *a:calls.append(('chmod',a)))
+with patch.object(E,'os',fake),patch.object(E,'private_bytes',return_value=raw):
+ E.export_schema_discrepancy(root)
+assert out.getvalue()==raw
+names=[c[1] for c in calls if c[0]=='open']
+assert names==['/','home','runner','work','_temp',E.REPORT_EXPORT_DIRECTORY,E.REPORT_NAME]
+assert all(c[2]&fake.O_NOFOLLOW and 'dir_fd' in c[3] for c in calls if c[0]=='open' and c[1]!='/')
+assert ('chmod',(99,0o644)) in calls and any(c[0]=='chmod' and c[1][1]==0o755 for c in calls)
+for blocked in ('home',E.REPORT_EXPORT_DIRECTORY,E.REPORT_NAME):
+ def denied(name,*args,**kwargs):
+  if name==blocked:raise FileExistsError('symlink or occupied target')
+  return opened(name,*args,**kwargs)
+ out.seek(0);out.truncate()
+ with patch.object(E,'os',fake),patch.object(fake,'open',denied),patch.object(E,'private_bytes',return_value=raw):
+  try:E.export_schema_discrepancy(root)
+  except OSError:pass
+  else:assert False
+ assert out.getvalue()==b''
+for unsafe in (SimpleNamespace(st_uid=9876,st_nlink=1,st_mode=0o40700),SimpleNamespace(st_uid=0,st_nlink=1,st_mode=0o40777)):
+ with patch.object(E,'os',fake),patch.object(fake,'fstat',return_value=unsafe),patch.object(E,'private_bytes',return_value=raw):
+  refused(lambda:E.export_schema_discrepancy(root))
+# Source hardlink refusal occurs before descriptor identity/platform differences.
+real=load('report_file_checks','payload-install-recovery-isolated.py')
+linked=root/'linked-report';os.link(root/E.REPORT_NAME,linked)
+try:real.private_bytes(root/E.REPORT_NAME,E.REPORT_LIMIT)
+except real.Refused:pass
+else:assert False
+`);
+});
+
+test('CI exports only the fixed nonqualifying redacted report on failure', async () => {
+  const workflow = await readFile('.github/workflows/ci.yml', 'utf8');
+  const job = workflow.split('  isolated-b0-recovery:\n')[1].split('  validate:\n')[0];
+  assert.match(job, /test "\$RUNNER_TEMP" = \/home\/runner\/work\/_temp/);
+  const upload = job.split('      - name: Upload nonqualifying B0 schema discrepancy\n')[1];
+  assert.match(upload, /if: failure\(\)/);
+  assert.match(upload, /name: nonqualifying-isolated-b0-schema-discrepancy/);
+  assert.match(upload, /path: \$\{\{ runner.temp \}\}\/payload-b0-schema-diagnostic\/schema-discrepancy.json/);
+  assert.match(upload, /if-no-files-found: warn/);
+  assert.doesNotMatch(upload, /\*|\.dump|\.sql|continue-on-error/);
+  const original = 'isolated_b0_recovery_qualification_failed:recover_uploads_interruption;child:schema_compare:schema_sql_delta;cleanup:none';
+  assert.equal(finiteDiagnostic(`isolated_b0_schema_report_unavailable\n${original}`), original);
+  assert.equal(finiteDiagnostic(`SECRET\n${original}`), 'isolated_b0_recovery_native_failed');
 });
 
 test('finite child diagnostics preserve real-journal post-restore refusals without advancing or leaking errors', async () => {

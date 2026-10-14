@@ -324,10 +324,13 @@ test('workflow keeps the final report artifact exact and uploads only an explici
   const recovery = source.slice(source.indexOf('      - name: Run disposable four-store'), source.indexOf('      - name: Upload redacted preauthority'));
   assert.match(recovery, /timeout-minutes: 120/u);
   assert.match(recovery, /PAYLOAD_RECOVERY_PROGRESS="\$RECOVERY_PROGRESS"/u);
-  const report = source.slice(source.indexOf('      - name: Upload redacted preauthority'), source.indexOf('      - name: Upload nonqualifying'));
+  const reportStart = source.indexOf('      - name: Upload redacted preauthority recovery report\n');
+  const diagnosticStart = source.indexOf('      - name: Upload nonqualifying recovery diagnostic progress\n', reportStart);
+  assert.ok(reportStart >= 0 && diagnosticStart > reportStart);
+  const report = source.slice(reportStart, diagnosticStart);
   assert.match(report, /path: \$\{\{ runner.temp \}\}\/payload-preauthority-recovery-report.json\n/u);
   assert.doesNotMatch(report, /progress|path: \|/u);
-  const diagnostic = source.slice(source.indexOf('      - name: Upload nonqualifying'), source.indexOf('      - name: Create recovery-qualified'));
+  const diagnostic = source.slice(diagnosticStart, source.indexOf('      - name: Create recovery-qualified', diagnosticStart));
   assert.match(diagnostic, /always\(\)/u);
   assert.match(diagnostic, /continue-on-error: true/u);
   assert.match(diagnostic, /path: \$\{\{ runner.temp \}\}\/payload-preauthority-recovery-progress.json\n/u);
