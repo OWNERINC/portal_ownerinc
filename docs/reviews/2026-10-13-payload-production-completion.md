@@ -1,5 +1,11 @@
 # Payload production completion: initial decision and evidence
 
+## POSIX preparation fixture correction
+
+Candidate `38488642070` at `d33b4c4` failed verification before native qualification/recovery. Two host-baseline fixtures combined synthetic root-owned files with the real non-root runner identity. The actual state reader correctly refused that mismatch. A fixture-only correction now scopes and restores a consistent POSIX/root caller model; production code is unchanged. Regressions retain real signed-state verification and require exact refusal for unsafe metadata and altered HMAC. Independent review returned `ship`.
+
+Primary complete `npm run verify` passed **Portal 1,836 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-preparation-posix-fixture-verify.log`). Native Linux rerun remains pending. Earlier recovery PASS `38480525768` continues to qualify only `e8e86b6` and its exact images.
+
 ## Mandatory native preparation-lease qualification wiring
 
 The existing candidate native gate now runs the complete preparation-authentication suite with `PAYLOAD_REQUIRE_NATIVE_PREPARATION=1`. Unsupported Linux/root execution fails rather than skips. The private native fixture checks actual flock/subprocess inheritance, shared-lock refusal without mutation, retained parent exclusivity, contention, replaced paths and cleanup. It does not qualify full preparation end to end.

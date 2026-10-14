@@ -110,13 +110,16 @@ def host_read(name,owner=(1000,1000),modes=(0o600,0o644),limit=2*1024*1024):
  assert actual_owner==owner and mode in modes and 0<len(data)<=limit
  return data
 l.host_read=host_read;l.host_ancestry=lambda _:None
+metadata_overrides={}
 def metadata(name):
  if name in host:
   data,owner,mode=host[name];kind=stat.S_IFREG;size=len(data)
  else:
   owner=(0,0);mode=0o700 if name.endswith('payload-control-state') else 0o755;kind=stat.S_IFDIR;size=0
- return types.SimpleNamespace(st_mode=kind|mode,st_uid=owner[0],st_gid=owner[1],st_nlink=1,st_size=size,
+ result=types.SimpleNamespace(st_mode=kind|mode,st_uid=owner[0],st_gid=owner[1],st_nlink=1,st_size=size,
   st_dev=1,st_ino=2,st_mtime_ns=3,st_ctime_ns=4)
+ result.__dict__.update(metadata_overrides.get(name,{}))
+ return result
 state_present=[False];names=['00000000000000000000.json','current.json']
 def exists(name):return name in host or name==l.RUNTIME+'/payload-control-state' and state_present[0]
 state=l.load_state_captured(captured,inv)
@@ -133,9 +136,44 @@ def install_state(body):
  envelope=state.canonical(state.sign_envelope(body,key))+b'\n'
  for name in names:put_host(l.RUNTIME+'/payload-control-state/'+name,envelope,(0,0),0o600)
 def run_host():
- with patch.object(l.os.path,'lexists',side_effect=exists),patch.object(l.os,'lstat',side_effect=metadata),patch.object(l.os,'listdir',return_value=names):
+ # This fixture represents a root administrative caller and root-owned state,
+ # not the Node runner's UID. Exercise POSIX guards even on Windows. Only OS
+ # observations are doubled: actual state.read_state/HMAC/journal checks run.
+ with patch.multiple(l.os,name='posix',getuid=lambda:0,geteuid=lambda:0,getgid=lambda:0,getegid=lambda:0,create=True), \
+      patch.object(l.os.path,'lexists',side_effect=exists),patch.object(l.os,'lstat',side_effect=metadata),patch.object(l.os,'listdir',return_value=names):
   l.verify_host_baseline(approval,captured,images['cms'],p)
 `;
+
+test('root host fixture verifies signed state even when the test runner is POSIX non-root (identity doubles)', () => {
+  probe(hostModel + String.raw`
+install_state(initial)
+with patch.object(l.os,'name','posix'),patch.object(l.os,'geteuid',return_value=1001,create=True):
+ run_host()
+ assert l.os.geteuid()==1001,'fixture identity must not escape run_host scope'
+`);
+});
+
+test('root host fixture still rejects unsafe POSIX runtime metadata and invalid signed journals (observation doubles)', () => {
+  probe(hostModel + String.raw`
+install_state(initial);run_host()
+for defect in ({'st_uid':1001},{'st_mode':stat.S_IFDIR|0o777},{'st_mode':stat.S_IFLNK|0o755}):
+ metadata_overrides[l.RUNTIME]=defect
+ try:run_host()
+ except Exception as error:assert str(error)=='unsafe_private_state_directory',str(error)
+ else:raise AssertionError('unsafe runtime metadata accepted')
+ metadata_overrides.clear()
+run_host()
+# Canonical, correctly shaped envelope with only its HMAC altered: failure must
+# come from the real cryptographic verifier, not JSON parsing or a stub reader.
+head=l.RUNTIME+'/payload-control-state/current.json'
+envelope=json.loads(host[head][0]);signature=envelope['signature']['value']
+envelope['signature']['value']=('0' if signature[0]!='0' else '1')+signature[1:]
+put_host(head,state.canonical(envelope)+b'\n',(0,0),0o600)
+try:run_host()
+except Exception as error:assert str(error)=='signature_invalid',str(error)
+else:raise AssertionError('invalid signature accepted')
+`);
+});
 
 test('host gate checks fixed approved baseline, predecessor/desired retries and exact signed initial state without writes (I/O doubles)', () => {
   probe(hostModel + String.raw`
