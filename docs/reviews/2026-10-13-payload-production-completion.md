@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Pure destructive-fence contract and pg_dumpall snapshot correction
+
+Added a bounded pure fence-observation validator/classifier with exact approved identities, context/freshness, two-pass comparison, database quiescence and independent public closure evidence. Synthetic readiness observations cannot satisfy destructive fencing; all authorization/execution flags remain false. No collector or live topology change was added. Independent review returned `ship`; actual ingress qualification remains pending.
+
+Candidate `38500583894` failed at `baseline_observer` in the new PG16 gate, after verification and before recovery. Investigation established a snapshot-normalization defect: pg_dumpall's closing restriction key precedes its cluster-completion comment, unlike the previously recognized pg_dump trailer. Primary reproduced unequal hashes for otherwise identical roles dumps and corrected only the exact recognized cluster trailer, preserving role/data bytes, CRLF and COPY-like content. Focused checks passed **16 / 1 native skip**, and independent review returned `ship`. Attribution of the original CI failure remains conditional; SQL execution success has not yet been established.
+
+Primary complete `npm run verify` passed **Portal 1,870 PASS / 17 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-fence-and-pg-normalizer-verify.log`). No VPS operations occurred.
+
 ## Isolated PG16 qualification wiring
 
 Added a mandatory candidate-only PG16 observer qualification step using an independently isolated digest-pinned container: no network, published ports or host binds, with tmpfs data. The harness executes the actual SQL producer/validator/comparator, checks catalog cases and overflow, compares before/after database and nonsecret-role fingerprints, and emits proof only after identity-checked removal. Actual PostgreSQL execution is still pending; portable checks do not establish catalog semantics.

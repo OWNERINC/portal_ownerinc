@@ -2,6 +2,61 @@
 
 ## P3 — inspeção de plano não é autorização de instalação
 
+### Observação pura do fence destrutivo — sem collector ou executor
+
+`validate_portal_fence_observation()` valida a projeção fixa
+`portal-fence-observation-v1`; `check_portal_destructive_fence()` compara somente
+contexto, topologia e perfil de fechamento **já autenticados pelo chamador**.
+Não autentica esses inputs, não aprende aprovações da observação e não registra
+action, collector, ticket assinado ou mutação. Ausência de topologia/perfil gera
+blockers finitos. `observationsMatched` significa apenas correspondência entre
+inputs, nunca prova operacional ou autorização. Toda saída mantém
+`destructiveOperationAuthorized`, `installationExecuted` e
+`deploymentAuthorized` em `false`, inclusive sem blockers.
+
+O contrato limita JSON a 4 MiB, 512 resumos de containers do host, 64 containers
+relevantes, três redes fixas e 256 endpoints por rede. Campos desconhecidos,
+segredos, IPs, aliases brutos e records duplicados são recusados. As duas passagens
+de inventário devem coincidir após normalizar somente ordem de conjuntos. IDs
+completos, imagem pinada, digest de receipt, volumes, redes e database identity
+devem corresponder à topologia aprovada. O contexto inclui inventory, journal
+hash/sequence, install binding, source approval/policy/record, PID/start identity,
+nonce e device/inode do lease. Janela e idade máxima são 30.000 ms monotônicos.
+O relógio `now_monotonic` deve vir do coordenador confiável, não do solicitante.
+
+Somente databases vinculados podem estar running; Nginx e demais serviços devem
+estar created/exited, sem running/paused/restarting/dead, one-offs ou duplicatas.
+As redes são exatamente `ownerinc-portal-backend` (internal),
+`ownerinc-portal-egress` e `ownerinc_proxy`, correlacionadas por ID. Host/container
+network sharing, portas publicadas, attachment indevido ao proxy, consumidores
+de volumes desconhecidos e endpoints backend/egress não aprovados bloqueiam.
+Outros projetos legítimos no proxy compartilhado não são rejeitados por sua mera
+presença. Relevância de endpoints, aliases/options aprovados e flags de projeção
+exigem classificação independente por um futuro collector autenticado; um JSON
+autodeclarado não prova ausência de ingress alternativo.
+
+O perfil externo deve aprovar explicitamente cobertura não-Docker, identidade do
+observer, origem HTTPS e resposta fechada exata (status 4xx/5xx e hash de corpo)
+para GET `/`, `/api/ready` e `/editorial/ready`. Não há status padrão inferido do
+proxy real. Evidência independente exige nonce e intervalo contido na observação;
+os timestamps representam envio/recebimento **no relógio local do collector**, não
+comparação de relógios monotônicos entre máquinas. Timeout, DNS/TLS error,
+redirect e resposta 2xx não provam fechamento. Nenhum endpoint HTTP é alterado.
+
+Cada database exige identidade vinculada e zero outros clients, active queries,
+open transactions, prepared transactions e background writers, com cobertura
+completa explicitamente verificada. Não há SQL novo, encerramento de sessões ou
+mudança de grants. `private-readiness` sempre bloqueia o fence destrutivo.
+
+Os testes são fixtures sintéticas, sem Docker, rede, banco ou host de produção.
+Comprovam somente validação/classificação, limites e recusa de efeitos; não
+comprovam captura fiel, autenticação de aprovações, lease real ou fechamento.
+Permanecem pendentes topologia/rotas reais aprovadas (incluindo host-native
+proxies/túneis), observer externo, collector bounded, fixture de topologia
+descartável e reobservação sob FD9 imediatamente antes de cada passo destrutivo.
+Essa fixture futura deve usar redes/proxy exclusivamente próprios, nunca o
+`ownerinc_proxy` real. Nenhuma alteração ao proxy compartilhado é autorizada.
+
 ### Primitivas de observação de segurança legada — sem collector de produção
 
 #### Gate isolado PG16 no CI candidate-only

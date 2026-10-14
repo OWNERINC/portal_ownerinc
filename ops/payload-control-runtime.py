@@ -1039,6 +1039,303 @@ def check_portal_legacy_security_baseline(observation, body, approval, record, i
             'installationExecuted': False, 'deploymentAuthorized': False}
 
 
+FENCE_NETWORKS = ('ownerinc-portal-backend', 'ownerinc-portal-egress', 'ownerinc_proxy')
+FENCE_ROUTES = ('/', '/api/ready', '/editorial/ready')
+
+
+def _fence_require(value):
+    if not value:
+        fail('fence_observation_invalid')
+
+
+def _fence_keys(value, names):
+    _fence_require(isinstance(value, dict) and set(value) == set(names.split()))
+
+
+def _fence_hash(value):
+    _fence_require(isinstance(value, str) and STATE.HEX_64.fullmatch(value) is not None)
+
+
+def _fence_uint(value):
+    _fence_require(type(value) is int and 0 <= value <= 9007199254740991)
+
+
+def _fence_context(value):
+    _fence_keys(value, 'inventoryIdentity stateSha256 sequence installBindingSha256 sourceApprovalSha256 policySha256 recordSha256 pid processStart nonce device inode')
+    for name, item in value.items():
+        if name in ('sequence', 'pid', 'processStart', 'device', 'inode'):
+            _fence_uint(item)
+            if name in ('pid', 'processStart', 'inode'):
+                _fence_require(item > 0)
+        else:
+            _fence_hash(item)
+
+
+def _fence_records(value, maximum, key):
+    _fence_require(isinstance(value, list) and len(value) <= maximum)
+    identities = []
+    for row in value:
+        _fence_require(isinstance(row, dict) and key in row and isinstance(row[key], str))
+        identities.append(row[key])
+    _fence_require(len(set(identities)) == len(identities))
+
+
+def _fence_container_identity(row):
+    for name in ('id', 'imageId', 'receiptSha256'):
+        _fence_hash(row[name])
+    _fence_require(row['service'] in KNOWN_SERVICES)
+    _fence_require(isinstance(row['image'], str) and len(row['image']) <= 512 and
+                   re.fullmatch(r'[a-z0-9./_:-]+@sha256:[0-9a-f]{64}', row['image']) is not None)
+    for name, allowed in (('networks', None), ('volumeKeys', INVENTORY.VOLUME_KEYS)):
+        values = row[name]
+        _fence_require(isinstance(values, list) and len(values) <= (3 if name == 'networks' else 4) and
+                       all(isinstance(v, str) for v in values) and len(set(values)) == len(values))
+        for value in values:
+            if allowed is None:
+                _fence_hash(value)
+            else:
+                _fence_require(value in allowed)
+
+
+def validate_portal_fence_observation(observation):
+    """Fixed Portal projections, not an authenticated Docker collector."""
+    if isinstance(observation, bytes):
+        _fence_require(len(observation) <= 4 * 1024 ** 2)
+        observation = _strict_json(observation, 'fence_observation_invalid')
+    _fence_keys(observation, 'kind mode context started ended passes databases external')
+    _fence_require(observation['kind'] == 'portal-fence-observation-v1' and observation['mode'] in ('destructive', 'private-readiness'))
+    _fence_context(observation['context'])
+    for name in ('started', 'ended'):
+        _fence_uint(observation[name])
+    _fence_require(observation['started'] <= observation['ended'])
+    _fence_require(isinstance(observation['passes'], list) and len(observation['passes']) == 2)
+    normalized = []
+    for inventory_pass in observation['passes']:
+        _fence_keys(inventory_pass, 'host containers networks')
+        _fence_records(inventory_pass['host'], 512, 'id')
+        _fence_records(inventory_pass['containers'], 64, 'id')
+        _fence_records(inventory_pass['networks'], 3, 'name')
+        for row in inventory_pass['host']:
+            _fence_keys(row, 'id portalProject portalNameClaim portalVolumeConsumer')
+            _fence_hash(row['id'])
+            _fence_require(all(type(row[k]) is bool for k in ('portalProject', 'portalNameClaim', 'portalVolumeConsumer')))
+        for row in inventory_pass['containers']:
+            _fence_keys(row, 'id service imageId image receiptSha256 networks volumeKeys status running paused restarting dead oneOff projectMatches nginxNameMatches networkMode publishedPorts aliasesApproved')
+            _fence_container_identity(row)
+            _fence_require(row['status'] in ('created', 'exited', 'running', 'paused', 'restarting', 'dead'))
+            _fence_require(row['networkMode'] in ('bridge', 'host', 'container', 'none', 'other'))
+            for key in ('running', 'paused', 'restarting', 'dead', 'oneOff', 'projectMatches', 'nginxNameMatches', 'publishedPorts', 'aliasesApproved'):
+                _fence_require(type(row[key]) is bool)
+        for row in inventory_pass['networks']:
+            _fence_keys(row, 'name id driver internal optionsApproved endpoints')
+            _fence_require(row['name'] in FENCE_NETWORKS and row['driver'] in ('bridge', 'host', 'overlay', 'macvlan', 'ipvlan', 'other'))
+            _fence_hash(row['id'])
+            _fence_require(type(row['internal']) is bool and type(row['optionsApproved']) is bool)
+            _fence_records(row['endpoints'], 256, 'id')
+            for endpoint in row['endpoints']:
+                _fence_keys(endpoint, 'id relevant')
+                _fence_hash(endpoint['id'])
+                _fence_require(type(endpoint['relevant']) is bool)
+        normalized.append({
+            'host': sorted(inventory_pass['host'], key=STATE.canonical),
+            'containers': sorted([dict(row, networks=sorted(row['networks']), volumeKeys=sorted(row['volumeKeys']))
+                                  for row in inventory_pass['containers']], key=STATE.canonical),
+            'networks': sorted([dict(row, endpoints=sorted(row['endpoints'], key=STATE.canonical))
+                                for row in inventory_pass['networks']], key=STATE.canonical),
+        })
+    _fence_records(observation['databases'], 2, 'service')
+    for row in observation['databases']:
+        _fence_keys(row, 'service containerId database clients activeQueries openTransactions preparedTransactions backgroundWriters backgroundCoverageComplete')
+        _fence_require(row['service'] in ('postgres', 'cms-postgres'))
+        _fence_hash(row['containerId'])
+        STATE._validate_database_identity(row['database'])
+        _fence_require(row['database']['databaseName'] == ('portal' if row['service'] == 'postgres' else 'ownerinc_cms'))
+        for key in ('clients', 'activeQueries', 'openTransactions', 'preparedTransactions', 'backgroundWriters'):
+            _fence_uint(row[key])
+        _fence_require(type(row['backgroundCoverageComplete']) is bool)
+    external = observation['external']
+    if external is not None:
+        _fence_keys(external, 'observerSha256 independent nonce started ended requests')
+        _fence_hash(external['observerSha256']); _fence_hash(external['nonce'])
+        _fence_require(type(external['independent']) is bool)
+        _fence_uint(external['started']); _fence_uint(external['ended'])
+        _fence_records(external['requests'], 3, 'route')
+        for row in external['requests']:
+            _fence_keys(row, 'route origin method status tlsVerified redirected transportError bodySha256')
+            _fence_require(row['route'] in FENCE_ROUTES and row['method'] == 'GET')
+            _fence_origin(row['origin'])
+            _fence_uint(row['status']); _fence_require(row['status'] <= 599)
+            _fence_require(type(row['tlsVerified']) is bool and type(row['redirected']) is bool and
+                           row['transportError'] in ('none', 'timeout', 'dns', 'tls', 'connection', 'other'))
+            _fence_hash(row['bodySha256'])
+    result = dict(observation, passes=normalized, databases=sorted(observation['databases'], key=STATE.canonical))
+    _fence_require(len(STATE.canonical(result)) <= 4 * 1024 ** 2)
+    return result
+
+
+def _fence_origin(origin):
+    _fence_require(isinstance(origin, str) and len(origin) <= 253 and
+                   re.fullmatch(r'https://[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?', origin) is not None)
+
+
+def check_portal_destructive_fence(observation, expected_context, approved_topology=None, approved_closure=None, *, now_monotonic):
+    """Already-authenticated context/profiles ONLY; input shapes confer no trust.
+
+    Times are local monotonic milliseconds. External intervals are the trusted
+    collector's send/receive interval, NOT an external machine's clock.
+    No IO, mutation, signed ticket, Runtime construction or action registration.
+    """
+    value = validate_portal_fence_observation(observation)
+    _fence_context(expected_context); _fence_uint(now_monotonic)
+    blockers = set()
+    if value['context'] != expected_context or value['passes'][0] != value['passes'][1]:
+        blockers.add('fence_context_changed')
+    if not value['started'] <= value['ended'] <= now_monotonic or now_monotonic - value['started'] > 30000:
+        blockers.add('fence_observation_stale')
+    if value['mode'] != 'destructive':
+        blockers.add('fence_private_readiness_not_destructive')
+    snapshot = value['passes'][1]
+    containers = {row['id']: row for row in snapshot['containers']}
+    networks = {row['name']: row for row in snapshot['networks']}
+    host = {row['id']: row for row in snapshot['host']}
+    if set(networks) != set(FENCE_NETWORKS) or len({row['id'] for row in networks.values()}) != 3 or not containers:
+        blockers.add('fence_observation_incomplete')
+    if any(row['id'] not in containers for row in host.values() if row['portalProject'] or row['portalNameClaim'] or row['portalVolumeConsumer']) or \
+       any(identity not in host or not host[identity]['portalProject'] for identity in containers):
+        blockers.add('fence_unaccounted_container')
+    if len({row['service'] for row in containers.values()}) != len(containers):
+        blockers.add('fence_unaccounted_container')
+    nginx = [row for row in containers.values() if row['service'] == 'nginx']
+    if len(nginx) != 1 or not nginx[0]['nginxNameMatches']:
+        blockers.add('fence_nginx_identity_mismatch')
+    for row in containers.values():
+        if row['oneOff'] or not row['projectMatches']:
+            blockers.add('fence_unaccounted_container')
+        db = row['service'] in ('postgres', 'cms-postgres')
+        consistent = (row['status'] == 'running' and row['running']) if db else (row['status'] in ('created', 'exited') and not row['running'])
+        if not consistent or any(row[k] for k in ('paused', 'restarting', 'dead')):
+            blockers.add('fence_nginx_not_stopped' if row['service'] == 'nginx' else 'fence_writer_not_stopped')
+        if row['networkMode'] != 'bridge' or row['publishedPorts'] or not row['aliasesApproved']:
+            blockers.add('fence_alternative_ingress_detected')
+        if any(identity not in {net['id'] for net in networks.values()} for identity in row['networks']):
+            blockers.add('fence_network_identity_mismatch')
+        if row['service'] != 'nginx' and networks.get('ownerinc_proxy', {}).get('id') in row['networks']:
+            blockers.add('fence_alternative_ingress_detected')
+        logical = ('ownerinc-portal-backend',)
+        if row['service'] in ('api', 'cron', 'bootstrap-admin'):
+            logical += ('ownerinc-portal-egress',)
+        elif row['service'] == 'nginx':
+            logical += ('ownerinc_proxy',)
+        if set(row['networks']) != {networks.get(name, {}).get('id') for name in logical}:
+            blockers.add('fence_network_identity_mismatch')
+        if row['id'] in host and host[row['id']]['portalVolumeConsumer'] != bool(row['volumeKeys']):
+            blockers.add('fence_unaccounted_container')
+    for net in networks.values():
+        if net['driver'] != 'bridge' or not net['optionsApproved'] or net['internal'] is not (net['name'] == 'ownerinc-portal-backend'):
+            blockers.add('fence_network_identity_mismatch')
+        for endpoint in net['endpoints']:
+            if endpoint['id'] not in host:
+                blockers.add('fence_observation_incomplete')
+            if endpoint['id'] in containers and net['id'] not in containers[endpoint['id']]['networks']:
+                blockers.add('fence_network_identity_mismatch')
+            if net['name'] != 'ownerinc_proxy' and endpoint['id'] not in containers:
+                blockers.add('fence_unapproved_endpoint')
+        for container in containers.values():
+            if container['running'] and net['id'] in container['networks'] and container['id'] not in {ep['id'] for ep in net['endpoints']}:
+                blockers.add('fence_network_identity_mismatch')
+    if approved_topology is None:
+        blockers.add('fence_topology_unapproved')
+    else:
+        _fence_keys(approved_topology, 'kind context containers networks databases')
+        _fence_require(approved_topology['kind'] == 'portal-fence-topology-v1')
+        _fence_context(approved_topology['context'])
+        if approved_topology['context'] != expected_context:
+            blockers.add('fence_context_changed')
+        _fence_records(approved_topology['containers'], 64, 'id')
+        expected_containers = {}
+        for row in approved_topology['containers']:
+            _fence_keys(row, 'id service imageId image receiptSha256 networks volumeKeys')
+            _fence_container_identity(row)
+            expected_containers[row['id']] = row
+        if set(expected_containers) != set(containers) or not {'nginx', 'api', 'cron', 'postgres'} <= {r['service'] for r in expected_containers.values()}:
+            blockers.add('fence_unaccounted_container')
+        for identity in set(expected_containers) & set(containers):
+            if any((sorted(containers[identity][key]) != sorted(item) if key in ('networks', 'volumeKeys') else containers[identity][key] != item)
+                   for key, item in expected_containers[identity].items()):
+                blockers.add('fence_container_receipt_mismatch')
+        _fence_records(approved_topology['networks'], 3, 'name')
+        if {row['name'] for row in approved_topology['networks']} != set(FENCE_NETWORKS):
+            blockers.add('fence_topology_unapproved')
+        for row in approved_topology['networks']:
+            _fence_keys(row, 'name id relevantEndpointIds')
+            _fence_require(row['name'] in FENCE_NETWORKS); _fence_hash(row['id'])
+            ids = row['relevantEndpointIds']
+            _fence_require(isinstance(ids, list) and len(ids) <= 256 and all(isinstance(i, str) for i in ids) and len(set(ids)) == len(ids))
+            for identity in ids:
+                _fence_hash(identity)
+            actual = networks.get(row['name'])
+            if actual is None or actual['id'] != row['id']:
+                blockers.add('fence_network_identity_mismatch')
+            elif {ep['id'] for ep in actual['endpoints'] if ep['relevant'] or ep['id'] in containers or row['name'] != 'ownerinc_proxy'} != set(ids):
+                blockers.add('fence_unapproved_endpoint')
+        _fence_records(approved_topology['databases'], 2, 'service')
+        expected_dbs = {}
+        for row in approved_topology['databases']:
+            _fence_keys(row, 'service containerId database')
+            _fence_require(row['service'] in ('postgres', 'cms-postgres')); _fence_hash(row['containerId'])
+            STATE._validate_database_identity(row['database'])
+            expected_dbs[row['service']] = row
+        actual_dbs = {row['service']: row for row in value['databases']}
+        db_containers = {row['service']: row['id'] for row in containers.values() if row['service'] in ('postgres', 'cms-postgres')}
+        if set(expected_dbs) != set(actual_dbs) or set(expected_dbs) != set(db_containers) or 'postgres' not in expected_dbs:
+            blockers.add('fence_database_identity_mismatch')
+        for service in set(expected_dbs) & set(actual_dbs):
+            if any(actual_dbs[service][k] != v for k, v in expected_dbs[service].items()) or actual_dbs[service]['containerId'] != db_containers.get(service):
+                blockers.add('fence_database_identity_mismatch')
+    for row in value['databases']:
+        if any(row[k] != 0 for k in ('clients', 'activeQueries', 'openTransactions', 'preparedTransactions', 'backgroundWriters')):
+            blockers.add('fence_database_not_quiescent')
+        if not row['backgroundCoverageComplete']:
+            blockers.add('fence_background_writers_unverified')
+    external = value['external']
+    if approved_closure is None:
+        blockers.add('fence_public_profile_unapproved')
+        blockers.add('fence_external_topology_unverified')
+    else:
+        _fence_keys(approved_closure, 'kind context origin observerSha256 nonDockerCoverageVerified routes')
+        _fence_require(approved_closure['kind'] == 'portal-public-closure-profile-v1')
+        _fence_context(approved_closure['context']); _fence_origin(approved_closure['origin']); _fence_hash(approved_closure['observerSha256'])
+        _fence_require(type(approved_closure['nonDockerCoverageVerified']) is bool)
+        if approved_closure['context'] != expected_context:
+            blockers.add('fence_context_changed')
+        if not approved_closure['nonDockerCoverageVerified']:
+            blockers.add('fence_external_topology_unverified')
+        _fence_records(approved_closure['routes'], 3, 'route')
+        expected_routes = {}
+        for row in approved_closure['routes']:
+            _fence_keys(row, 'route status bodySha256'); _fence_hash(row['bodySha256'])
+            _fence_require(row['route'] in FENCE_ROUTES and type(row['status']) is int and 400 <= row['status'] <= 599)
+            expected_routes[row['route']] = row
+        if set(expected_routes) != set(FENCE_ROUTES):
+            blockers.add('fence_public_probe_mismatch')
+        if external is not None:
+            if not external['independent'] or external['observerSha256'] != approved_closure['observerSha256'] or \
+               external['nonce'] != expected_context['nonce'] or not value['started'] <= external['started'] <= external['ended'] <= value['ended']:
+                blockers.add('fence_public_probe_mismatch')
+            if {row['route'] for row in external['requests']} != set(FENCE_ROUTES):
+                blockers.add('fence_public_probe_mismatch')
+            for row in external['requests']:
+                expected = expected_routes.get(row['route'])
+                if expected is None or any(row[k] != v for k, v in expected.items()) or row['origin'] != approved_closure['origin'] or \
+                   not row['tlsVerified'] or row['redirected'] or row['transportError'] != 'none':
+                    blockers.add('fence_public_probe_mismatch')
+    if external is None:
+        blockers.add('fence_public_probe_missing')
+    return {'kind': 'portal-destructive-fence-check-v1', 'observationSha256': hashlib.sha256(STATE.canonical(value)).hexdigest(),
+            'blockers': sorted(blockers), 'observationsMatched': not blockers,
+            'destructiveOperationAuthorized': False, 'installationExecuted': False, 'deploymentAuthorized': False}
+
+
 def _portal_state(grant_mode):
     value = _psql_json('postgres', """
 SELECT json_build_object(

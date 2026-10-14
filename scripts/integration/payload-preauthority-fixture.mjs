@@ -43,7 +43,15 @@ export function normalizePgDumpForSnapshot(dump) {
     const line = lineText(raw).trim();
     return line === '' || line.startsWith('--');
   });
-  const trailer = index => lines.slice(index + 1).every(raw => lineText(raw).trim() === '');
+  const trailer = index => {
+    const remaining = lines.slice(index + 1).map(lineText);
+    if (remaining.every(line => line.trim() === '')) return true;
+    // pg_dumpall places its paired closing key BEFORE this exact completion
+    // comment. Recognize only that format, never arbitrary trailing SQL/comments.
+    const clusterPrologue = lines.slice(0, restrictIndex).some(raw =>
+      lineText(raw) === '-- PostgreSQL database cluster dump');
+    return clusterPrologue && /^\n*--\n-- PostgreSQL database cluster dump complete\n--\n*$/u.test(remaining.join('\n'));
+  };
 
   let restrictIndex = -1;
   let restrictKey = null;
