@@ -9,7 +9,7 @@ import types
 import builtins
 import subprocess
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 
 HOST_ROOT = '/opt/ownerinc/apps/portal-ownerinc-real'
 RUNTIME = HOST_ROOT + '/runtime'
@@ -528,7 +528,7 @@ def inspect_install_host(approval, captured):
 
 def check_install_plan(receipt_id):
     require(isinstance(receipt_id, str) and re.fullmatch(r'payload-[a-z0-9_]{8}', receipt_id) is not None)
-    with deployment_lease() as reaffirm:
+    with deployment_lease() as reaffirm, ExitStack() as b0_evidence:
         approval, captured, _, support, digest, record, verifier = _authenticated_material()
         receiver = load_authenticated(captured['ops/payload-receiver-admission.py'], ROOT + '/ops/payload-receiver-admission.py')
         receipt = receiver.INCOMING + '/' + receipt_id
@@ -544,6 +544,16 @@ def check_install_plan(receipt_id):
         entries = receiver.inspect_archive(raw, record['commit'], selected)
         verify_received_tree(receiver, receipt + '/release', entries)
         runtime, inventory, body, observations = inspect_install_host(approval, captured)
+        key, _, rechecked_body, _ = runtime.STATE.read_state(RUNTIME, repair_head=False,
+                                                          inventory_identity=runtime.INVENTORY.identity(inventory))
+        require(rechecked_body == body)
+        b0_verification = {'artifactIntegrityVerified': False, 'storageFingerprintVerified': False,
+                           'databaseRestoreVerified': False, 'liveSourceVerified': False,
+                           'rollbackAuthorized': False, 'installationExecuted': False, 'deploymentAuthorized': False}
+        if observations['b0Status'] == 'present_unverified':
+            b0_verification = b0_evidence.enter_context(runtime.verify_production_b0_artifacts(
+                body['installIntent']['binding'], inventory, key))
+            observations['b0Status'] = 'integrity_verified'
         destination = RELEASES + '/' + record['commit']
         host_ancestry(destination)
         observations['candidateReleasePresent'] = os.path.lexists(destination)
@@ -552,10 +562,14 @@ def check_install_plan(receipt_id):
         result = runtime.production_install_plan(record, {'sourceApprovalSha256': digest,
             'policySha256': approval['admission']['policySha256'], 'recordSha256': approval['admission']['recordSha256']},
             inventory, body, observations, approval=approval)
+        result['b0Verification'] = b0_verification
         require(support.read_protected(archive, 0o600, receiver.MAX_ARCHIVE) == raw)
         verify_received_tree(receiver, receipt + '/release', entries)
         again = _authenticated_material()
         require(again[4] == digest and again[5] == record and again[1] == captured)
+        final_key, _, final_body, _ = runtime.STATE.read_state(RUNTIME, repair_head=False,
+                                                            inventory_identity=runtime.INVENTORY.identity(inventory))
+        require(final_key == key and final_body == body)
         reaffirm()
         require(len(json.dumps(result).encode('utf-8')) <= 4096)
         return result

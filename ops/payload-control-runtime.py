@@ -14,6 +14,8 @@ import tarfile
 import secrets
 import time
 import tempfile
+import gzip
+from contextlib import contextmanager, ExitStack
 
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -955,13 +957,13 @@ def _same_target(expected, actual):
     STATE.assert_restore_target_matches(expected, actual)
 
 
-def _manifest_hashes(directory, payload=True):
+def _manifest_hashes(directory, payload=True, read_bytes=None, file_hash=None):
     expected = [
         'postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz',
         'release.images', 'operations-proof.json', 'backup.format',
     ] if payload else ['postgres.dump', 'uploads.tar.gz']
     path = os.path.join(directory, 'manifest.sha256')
-    raw = _read_bytes(path)
+    raw = (read_bytes or _read_bytes)(path)
     try:
         lines = raw.decode('ascii').splitlines()
     except UnicodeDecodeError:
@@ -972,9 +974,9 @@ def _manifest_hashes(directory, payload=True):
         if not match:
             fail('backup_manifest_invalid')
         digest, name = match.groups()
-        if name in seen:
+        if name in seen or name not in expected:
             fail('backup_manifest_invalid')
-        if _file_hash(os.path.join(directory, name))['sha256'] != digest:
+        if (file_hash or _file_hash)(os.path.join(directory, name))['sha256'] != digest:
             fail('backup_manifest_mismatch')
         seen.append(name)
     if seen != expected:
@@ -995,22 +997,68 @@ def _normalize_tar_name(name):
     return '/'.join(parts)
 
 
-def _tar_tree(stream, compressed=False):
+def _tar_tree(stream, compressed=False, limits=None):
     mode = 'r|gz' if compressed else 'r|'
+    extension_count = extension_bytes = extension_depth = 0
+    class BoundedTarInfo(tarfile.TarInfo):
+        def _proc_member(self, archive):
+            nonlocal extension_count, extension_bytes, extension_depth
+            # Global PAX is updated before tarfile recursively parses the next
+            # header. Check it here before that header can copy/extend it again.
+            if len(archive.pax_headers) > limits['globalPaxKeys'] or sum(
+                    len(k.encode('utf-8')) + len(v.encode('utf-8'))
+                    for k, v in archive.pax_headers.items()) > limits['globalPaxBytes']:
+                fail('unsafe_storage_archive')
+            # tarfile processes extension payloads before yielding a member.
+            # Bound those allocations before PAX/GNU long-name parsing occurs.
+            if self.type == tarfile.GNUTYPE_SPARSE:
+                fail('unsafe_storage_archive')
+            extension = self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE,
+                                      tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK)
+            if extension:
+                extension_count += 1
+                extension_bytes += self.size
+                if not 0 <= self.size <= 64 * 1024 or extension_count > limits['extensionCount'] or \
+                   extension_bytes > limits['extensionBytes'] or extension_depth >= limits['extensionDepth']:
+                    fail('unsafe_storage_archive')
+                extension_depth += 1
+            try:
+                return super()._proc_member(archive)
+            finally:
+                if extension:
+                    extension_depth -= 1
+
+        def _proc_gnusparse_10(self, *args, **kwargs):
+            fail('unsafe_storage_archive')
     try:
-        archive = tarfile.open(fileobj=stream, mode=mode)
+        archive = tarfile.open(fileobj=stream, mode=mode, **({'tarinfo': BoundedTarInfo} if limits is not None else {}))
     except (tarfile.TarError, OSError):
         fail('unsafe_storage_archive')
     entries = {}
+    name_bytes = 0
     try:
         for member in archive:
+            if limits is not None:
+                # Only sequential extraction by this explicit TarInfo is used;
+                # links are rejected and no name lookup/getmembers is permitted.
+                # Avoid retaining every member's copy of accumulated global PAX.
+                archive.members.clear()
+                if member.sparse is not None:
+                    fail('unsafe_storage_archive')
+                name_bytes += len(member.name.encode('utf-8'))
+                if len(entries) >= limits['members'] or len(member.name) > limits['nameLength'] or name_bytes > limits['nameBytes']:
+                    fail('unsafe_storage_archive')
             name = _normalize_tar_name(member.name)
             if name in entries:
                 fail('unsafe_storage_archive')
             if member.isdir() and member.type == tarfile.DIRTYPE:
+                if limits is not None and member.size != 0:
+                    fail('unsafe_storage_archive')
                 entries[name] = {'type': 'directory', 'mode': member.mode & 0o7777, 'size': 0, 'sha256': None}
                 continue
             if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                fail('unsafe_storage_archive')
+            if limits is not None and name == '.':
                 fail('unsafe_storage_archive')
             file_stream = archive.extractfile(member)
             if file_stream is None:
@@ -1026,6 +1074,17 @@ def _tar_tree(stream, compressed=False):
             if size != member.size:
                 fail('unsafe_storage_archive')
             entries[name] = {'type': 'file', 'mode': member.mode & 0o7777, 'size': size, 'sha256': digest.hexdigest()}
+        if limits is not None:
+            for name in entries:
+                parts = name.split('/')
+                if any(entries.get('/'.join(parts[:index]), {}).get('type') == 'file'
+                       for index in range(1, len(parts))):
+                    fail('unsafe_storage_archive')
+            # Streaming tar keeps read-ahead bytes after its first end marker.
+            # Reject hidden trailing members here as well as in the gzip drain.
+            buffered = getattr(archive.fileobj, 'buf', None)
+            if not isinstance(buffered, bytes) or buffered.strip(b'\0'):
+                fail('unsafe_storage_archive')
     except ControlError:
         raise
     except (tarfile.TarError, OSError, EOFError):
@@ -1042,6 +1101,161 @@ def _archive_tree(path):
             return _tar_tree(stream, compressed=True)
     except OSError:
         fail('unsafe_storage_archive')
+
+
+# Fixed administrative limits, not environment/request overrides. Legacy readers
+# retain their existing behavior; these apply only to the production B0 check.
+PRODUCTION_B0_LIMITS = {
+    'postgres.dump': 256 * 1024 ** 3, 'uploads.tar.gz': 32 * 1024 ** 3,
+    'manifest.sha256': 4096, 'preauthority-proof.json': 64 * 1024,
+}
+PRODUCTION_B0_TAR_LIMITS = {'expanded': 64 * 1024 ** 3, 'members': 50000,
+                          'nameLength': 4096, 'nameBytes': 8 * 1024 ** 2,
+                          'extensionCount': 4096, 'extensionBytes': 1024 ** 2,
+                          'extensionDepth': 8, 'globalPaxKeys': 1024, 'globalPaxBytes': 64 * 1024}
+
+
+def _b0_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+@contextmanager
+def verify_production_b0_artifacts(binding, inventory, key):
+    """Read-only artifact integrity, never restoreability or authorization.
+
+    Caller authenticates helpers/context and retains the exclusive deployment
+    lease. Keep descriptors and identity observations alive until caller's final
+    journal/lease recheck. No Runtime, subprocess, extraction or publication.
+    """
+    STATE.validate_install_binding(binding)
+    INVENTORY.validate(inventory)
+    directory = binding['b0']['directory']
+    if binding['inventoryIdentity'] != INVENTORY.identity(inventory) or not any(
+            directory != root and os.path.commonpath((directory, root)) == root
+            for root in inventory['paths']['backupRoots']):
+        fail('preauthority_source_recovery_proof_mismatch')
+    ancestors = {}
+    current = directory
+    while True:
+        info = os.lstat(current)
+        if not stat.S_ISDIR(info.st_mode) or (info.st_uid, info.st_gid) != (0, 0) or \
+           stat.S_IMODE(info.st_mode) & 0o022 or (current == directory and stat.S_IMODE(info.st_mode) != 0o700):
+            fail('unsafe_backup_directory')
+        ancestors[current] = _b0_identity(info)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    if set(os.listdir(directory)) != set(PRODUCTION_B0_LIMITS):
+        fail('backup_manifest_invalid')
+    with ExitStack() as stack:
+        streams, identities = {}, {}
+        for name, limit in PRODUCTION_B0_LIMITS.items():
+            path = os.path.join(directory, name)
+            before = os.lstat(path)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or \
+               (before.st_uid, before.st_gid) != (0, 0) or stat.S_IMODE(before.st_mode) != 0o600 or \
+               not 0 < before.st_size <= limit:
+                fail('unsafe_backup_file')
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                stream = os.fdopen(fd, 'rb')
+            except BaseException:
+                os.close(fd)
+                raise
+            stack.enter_context(stream)
+            if _b0_identity(os.fstat(stream.fileno())) != _b0_identity(before):
+                fail('backup_artifact_changed')
+            streams[name], identities[name] = stream, _b0_identity(before)
+
+        def reaffirm():
+            if set(os.listdir(directory)) != set(PRODUCTION_B0_LIMITS):
+                fail('backup_artifact_changed')
+            for path, identity in ancestors.items():
+                if _b0_identity(os.lstat(path)) != identity:
+                    fail('backup_artifact_changed')
+            for name, identity in identities.items():
+                if _b0_identity(os.lstat(os.path.join(directory, name))) != identity or \
+                   _b0_identity(os.fstat(streams[name].fileno())) != identity:
+                    fail('backup_artifact_changed')
+
+        def small(name):
+            stream = streams[name]
+            stream.seek(0)
+            value = stream.read(PRODUCTION_B0_LIMITS[name] + 1)
+            if len(value) != identities[name][6]:
+                fail('backup_artifact_changed')
+            return value
+
+        raw = small('preauthority-proof.json')
+        proof = STATE.verify_envelope(STATE.parse_canonical(raw, 'proof_not_canonical'), key,
+                                      STATE.validate_proof_body, 'proof_shape_invalid')
+        if hashlib.sha256(raw).hexdigest() != binding['b0']['proofSha256'] or \
+           proof['kind'] != 'preauthority-legacy-source' or proof['inventoryIdentity'] != binding['inventoryIdentity'] or \
+           proof['source']['portal'] != binding['portalTarget']['database'] or \
+           proof['images'] != binding['previousImages'] or proof['targetImages'] != binding['candidate']['images']:
+            fail('preauthority_source_recovery_proof_mismatch')
+        hashes = {}
+        for artifact in proof['artifacts']:
+            name = artifact['name']
+            stream = streams[name]
+            digest, size = hashlib.sha256(), 0
+            while True:
+                block = stream.read(1024 * 1024)
+                if not block:
+                    break
+                size += len(block)
+                if size > PRODUCTION_B0_LIMITS[name]:
+                    fail('backup_artifact_changed')
+                digest.update(block)
+            hashes[name] = {'sha256': digest.hexdigest(), 'size': size}
+            if size != artifact['size'] or size != identities[name][6] or digest.hexdigest() != artifact['sha256']:
+                fail('backup_artifact_mismatch')
+        _manifest_hashes(directory, payload=False,
+                         read_bytes=lambda path: small(os.path.basename(path)),
+                         file_hash=lambda path: hashes.get(os.path.basename(path), {}))
+        expected_manifest = ''.join(hashes[name]['sha256'] + '  ' + name + '\n' for name in STATE.LEGACY_ARTIFACTS).encode('ascii')
+        if small('manifest.sha256') != expected_manifest:
+            fail('backup_manifest_invalid')
+        streams['uploads.tar.gz'].seek(0)
+
+        class BoundedExpansion:
+            def __init__(self, source):
+                self.source, self.total = source, 0
+
+            def read(self, size=-1):
+                # Also bound tar extension-header allocations before tarfile can
+                # request an attacker-selected giant PAX/long-name buffer.
+                if size < 0 or size > 1024 * 1024:
+                    fail('unsafe_storage_archive')
+                block = self.source.read(min(size, PRODUCTION_B0_TAR_LIMITS['expanded'] - self.total + 1))
+                self.total += len(block)
+                if self.total > PRODUCTION_B0_TAR_LIMITS['expanded']:
+                    fail('unsafe_storage_archive')
+                return block
+
+        try:
+            with gzip.GzipFile(fileobj=streams['uploads.tar.gz'], mode='rb') as expanded:
+                bounded = BoundedExpansion(expanded)
+                fingerprint = _tar_tree(bounded, limits=PRODUCTION_B0_TAR_LIMITS)
+                # Consume the gzip footer and remaining padding: tarfile may
+                # stop at the first end marker before CRC/expansion is checked.
+                while True:
+                    block = bounded.read(1024 * 1024)
+                    if not block:
+                        break
+                    if block.strip(b'\0'):
+                        fail('unsafe_storage_archive')
+        except (OSError, EOFError, tarfile.TarError):
+            fail('unsafe_storage_archive')
+        if fingerprint != proof['dataFingerprints']['portalUploads']:
+            fail('backup_storage_fingerprint_mismatch')
+        reaffirm()
+        yield {'artifactIntegrityVerified': True, 'storageFingerprintVerified': True,
+               'databaseRestoreVerified': False, 'liveSourceVerified': False,
+               'rollbackAuthorized': False, 'installationExecuted': False, 'deploymentAuthorized': False}
+        reaffirm()
 
 
 def _compose_args(release):
@@ -1317,7 +1531,7 @@ def production_install_plan(record, trust, inventory, body, observations, approv
     STATE._exact_keys(observations, {'runtimeOwnershipCompatible', 'isolatedSourceIdentityCompatible',
                                    'candidateReleasePresent', 'b0Status'}, 'invalid_cold_state')
     if any(type(observations[name]) is not bool for name in observations if name != 'b0Status') or \
-       observations['b0Status'] not in ('absent', 'unbound', 'partial', 'present_unverified'):
+       observations['b0Status'] not in ('absent', 'unbound', 'partial', 'present_unverified', 'integrity_verified'):
         fail('invalid_cold_state')
     candidate = STATE.production_candidate(record)
     production = body.get('installIntent') is not None and body['installIntent']['binding'].get('bindingVersion') == 3

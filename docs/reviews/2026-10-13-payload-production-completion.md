@@ -1,5 +1,15 @@
 # Payload production completion: initial decision and evidence
 
+## B0 artifact integrity — bounded read-only verification
+
+The signed-binding-selected legacy two-store B0 verifier streams complete artifacts, validates their exact manifest/proof bindings, and compares the actual uploads tree with the signed fingerprint. Retained descriptors and final evidence/journal checks protect observation consistency. Success means `integrity_verified`, not database restoreability, live-source verification or rollback authorization; installation/deployment remain unauthorized.
+
+Independent review found cumulative PAX metadata and extension-recursion risks. The opt-in bounded parser now limits aggregate extension work and global metadata and discards processed member objects; historical parsing is unchanged. Real compressed-byte regressions showed red-before-fix and bounded rejection after correction. Three new fixed error identifiers were added to the existing context-gated allowlist following full-suite failures.
+
+A subsequent local failure in ancestor identity was investigated with one controlled sibling-temp creation. It reproduced shared-ancestor mtime drift; the exact component in the original failed run was not captured. Only the fixture now consistently models protected ancestors above its sandbox, retaining live sandbox/artifact observations and inode checks. Fresh independent reviews approved the parser, allowlist and fixture corrections. Logs of failures remain preserved.
+
+Primary focused checks passed **27 / zero failures**. Complete `npm run verify` then passed **Portal 1,851 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-production-b0-isolated-fixture-verify.log`). Tests explicitly double host metadata; native qualification and actual isolated restoration remain pending. No VPS operations occurred.
+
 ## Production binding v3 and independently versioned receipts
 
 Added explicit production binding v3 under the unchanged outer state schema v2, with signed source-approval/policy/record context, strict correspondence validation and versioned creation receipts. Reservations retain exact metadata; receipts are append-only at the permitted stage and require four containers plus two CMS volumes before the bound boundary. Historical unversioned/v2 bodies and the old persistent fingerprint algorithm remain unchanged. The new production algorithm sorts only validated outer mount records and includes its own version tag.

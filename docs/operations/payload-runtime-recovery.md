@@ -22,6 +22,80 @@ por processo, recovery pre-floor e a compatibilidade de binding/receipts de
 produção são incrementos posteriores. Receiver/runtime continuam negando
 instalação com `release_not_preflighted`.
 
+### B0: integridade de artefatos verificada, recuperação ainda não autorizada
+
+O plano autenticado agora verifica B0 completo somente quando selecionado pelo
+`installIntent.binding.b0` assinado, sob os backup roots do inventory aprovado.
+Sem intent não adota backup encontrado; captura parcial/unbound continua bloqueada
+e não é apagada, completada ou reutilizada automaticamente.
+
+`verify_production_b0_artifacts()` é um context manager somente leitura, carregado
+da closure autenticada. Exige o conjunto exato `postgres.dump`, `uploads.tar.gz`,
+`manifest.sha256`, `preauthority-proof.json`: B0 legado **de dois stores**, não o
+backup Payload de quatro stores. Diretório final root:root 0700, ancestrais
+root:root sem escrita group/other, arquivos root:root 0600, regulares, single-link,
+sem symlinks. Mantém os quatro descritores abertos, verifica identidade antes/depois
+e novamente ao sair do contexto. Mudança de nome, inode, tamanho, modo, owner ou
+mtime/ctime é recusa. Leituras não incluem extração, subprocesso ou escrita.
+
+Reutiliza HMAC/schema/canonicalização de proofs do state, o parser de manifest e
+o parser/fingerprint de tar existentes. Confere hash dos bytes do proof, inventory,
+identidade da DB Portal de origem, imagens anteriores/alvo e migration floor.
+Stream de ambos os artefatos confere tamanho/hash completos contra proof e manifest;
+manifest de produção exige as duas linhas exatas, ordenadas, terminadas em LF.
+Compara o fingerprint calculado da árvore uploads com `dataFingerprints.portalUploads`
+assinado — apenas possuir um tar estruturalmente válido não basta.
+
+Limites fixos administrativos desta interface, sem override por argumentos/env:
+
+| Material | Limite |
+| --- | --- |
+| Dump Portal | 256 GiB |
+| Tar gzip uploads | 32 GiB comprimidos / 64 GiB expandidos |
+| Proof / manifest | 64 KiB / 4 KiB |
+| Membros tar | 50.000 |
+| Nome de membro | 4.096 caracteres; 8 MiB agregados em UTF-8 |
+| Header de extensão PAX/GNU | 64 KiB |
+| Extensões PAX/GNU/Solaris acumuladas | 4.096 headers / 1 MiB de payload |
+| Profundidade consecutiva de extensões | 8 |
+| PAX global retido | 1.024 chaves / 64 KiB UTF-8 de chaves + valores |
+| Bloco de leitura de artefato | 1 MiB |
+
+São tetos conservadores escolhidos para esta verificação, não medições da produção
+nem novos limites dos formatos históricos. A memória não cresce com o tamanho do
+dump: mantém somente buffers e a tabela limitada de entradas tar. Rejeita links,
+devices, sparse, nomes inseguros/duplicados, conflitos arquivo/diretório, headers
+excessivos, expansão excessiva e conteúdo não-padding após o fim do tar. Consome
+o gzip até o fim para conferir CRC e limites, incluindo padding comprimido.
+O caminho isolado/histórico mantém o comportamento anterior do tar sem estes
+limites opcionais; nenhuma serialização de proof/state foi modificada.
+Os budgets de extensão são conferidos antes de leitura/alocação e recursão do
+parser, inclusive antes do primeiro membro visível. PAX global é conferido na
+entrada do próximo header, antes de novas cópias; a atualização transitória é
+limitada pelo teto de 64 KiB do header atual. O caminho limitado limpa
+`archive.members` a cada yield: extrai somente pelo TarInfo atual, rejeita links e
+não faz lookup por nome. Não acumula uma cópia dos metadados globais por arquivo.
+Restam apenas a metadata global limitada, os frames de extensão limitados, o
+membro corrente e a tabela de fingerprints (50.000 entradas / nomes agregados
+limitados). Os limites em bytes são de conteúdo, não uma promessa de RSS exato
+do Python; overhead de objetos também fica limitado pelas contagens.
+
+No retorno, `b0Status: integrity_verified` substitui `present_unverified` somente
+após sucesso completo. `b0Verification.artifactIntegrityVerified` e
+`storageFingerprintVerified` ficam true; `databaseRestoreVerified`,
+`liveSourceVerified`, `rollbackAuthorized`, `installationExecuted` e
+`deploymentAuthorized` permanecem **false**. B0 ausente/parcial/unbound mantém
+ambos os flags de integridade false. Dados completos inválidos causam recusa,
+não um resultado positivo parcial. O journal é relido com `repair_head=False`,
+key/body precisam ser idênticos, FD9 é reafirmado e evidência permanece protegida
+até a saída. Não instancia `Runtime` ou chama `pg_restore --list`.
+
+Mesmo um dump arbitrário corretamente assinado/hash-bound não prova que PostgreSQL
+pode restaurá-lo. Restore isolado real com comparação completa, source-data vivo,
+fence de ingress/nginx observado e baseline autorizado de grants/roles continuam
+gates separados antes de rollback ou criação real. Não há executor de rollback,
+checkpoint novo, abertura de admission ou autorização de instalação neste passo.
+
 ### Binding de produção v3 e receipts persistentes
 
 O state externo continua `schemaVersion: 2`. Bindings históricos sem versão e

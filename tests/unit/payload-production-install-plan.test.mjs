@@ -121,6 +121,13 @@ l.deployment_lease=lease
 def open_file(name,flags,*args):
  assert held[0] and not flags & (os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC),'unexpected write'
  assert name in files;fd=len(fds)+20;fds[fd]=name;return fd
+def memory_fdopen(fd,*args,**kwargs):
+ class Stream(io.BytesIO):
+  def fileno(self):return fd
+  def close(self):
+   if kwargs.get('closefd',True):fds.pop(fd,None)
+   super().close()
+ return Stream(files[fds[fd]][0])
 real_runtime=l.load_runtime_captured
 def runtime(c):
  value=real_runtime(c)
@@ -133,7 +140,7 @@ def run(receipt_id='payload-abcdefgh'):
       patch.object(os,'lstat',side_effect=meta),patch.object(os,'fstat',side_effect=lambda fd:meta(fds[fd])), \
       patch.object(os.path,'lexists',side_effect=lambda n:n in files or n in directories),patch.object(os,'listdir',side_effect=listing), \
       patch.object(os,'open',side_effect=open_file),patch.object(os,'close',side_effect=lambda fd:fds.pop(fd)), \
-      patch.object(os,'fdopen',side_effect=lambda fd,*a,**kw:io.BytesIO(files[fds[fd]][0])), \
+      patch.object(os,'fdopen',side_effect=memory_fdopen), \
       patch.object(os,'mkdir',side_effect=AssertionError('write forbidden')),patch.object(l.subprocess,'run',side_effect=AssertionError('subprocess forbidden')):
   result=l.check_install_plan(receipt_id)
  assert files==before and not constructors and not held[0] and not fds
@@ -273,12 +280,46 @@ for mutate in (lambda b:b['authority'].update(recordSha256='0'*64),
  try:s.validate_production_correspondence(wrong,approval,record,document,trust)
  except s.StateError:pass
  else:raise AssertionError('incorrect correspondence accepted')
-body.update(admission='closed',plannedReleaseImages=images,legacySourceProofSha256='9'*64,latestProofSha256='9'*64)
+backup=binding['b0']['directory'];directory(backup,0o700)
+upload=io.BytesIO()
+with tarfile.open(fileobj=upload,mode='w') as tar:
+ entry=tarfile.TarInfo('data');entry.size=3;tar.addfile(entry,io.BytesIO(b'abc'))
+upload=gzip.compress(upload.getvalue(),mtime=0)
+put(backup+'/postgres.dump',b'not-a-restorability-claim');put(backup+'/uploads.tar.gz',upload)
+proof={'schemaVersion':1,'kind':'preauthority-legacy-source','phase':'preauthority',
+ 'authority':{'mode':'legacy','epoch':1},'protocol':{'status':'absent','coverage':'not-applicable'},
+ 'inventoryIdentity':binding['inventoryIdentity'],'images':binding['previousImages'],'targetImages':images,
+ 'source':{'portal':binding['portalTarget']['database'],'cms':None},
+ 'migrations':{'portal':{'versions':s.PORTAL_MIGRATIONS,'fingerprint':p.sha(s.canonical(s.PORTAL_MIGRATIONS))},
+ 'cms':None,'nativeCatalogFingerprint':None},'dataFingerprints':{'portalDatabase':'a'*64,
+ 'portalUploads':r._tar_tree(io.BytesIO(upload),compressed=True),'cmsDatabase':None,'cmsUploads':None},
+ 'artifacts':[{'name':name,'size':len(files[backup+'/'+name][0]),'sha256':p.sha(files[backup+'/'+name][0])}
+ for name in s.LEGACY_ARTIFACTS],'createdAtUtc':'2026-10-13T00:00:00Z'}
+proof_raw=s.canonical(s.sign_envelope(proof,key))+b'\n';put(backup+'/preauthority-proof.json',proof_raw)
+put(backup+'/manifest.sha256',''.join(a['sha256']+'  '+a['name']+'\n' for a in proof['artifacts']).encode())
+binding['b0']['proofSha256']=p.sha(proof_raw)
+body.update(admission='closed',plannedReleaseImages=images,legacySourceProofSha256=p.sha(proof_raw),latestProofSha256=p.sha(proof_raw))
 body=append(body)
 body['installIntent']={'binding':binding,'stage':'reserved','cmsTarget':None,
  'creation':{'receiptVersion':1,'fingerprintAlgorithm':'production-container-mounts-v1','nonce':'b'*64,'volumes':{},'containers':{}}}
 body=append(body)
 result=run();assert result['classification']=='pre_floor_install_pending'
+assert result['b0Status']=='integrity_verified'
+assert result['b0Verification']=={'artifactIntegrityVerified':True,'storageFingerprintVerified':True,
+ 'databaseRestoreVerified':False,'liveSourceVerified':False,'rollbackAuthorized':False,
+ 'installationExecuted':False,'deploymentAuthorized':False}
+head=l.RUNTIME+'/payload-control-state/current.json';saved_head=files[head]
+material=l._authenticated_material;calls=[0]
+def change_journal_before_output():
+ value=material();calls[0]+=1
+ if calls[0]==2:put(head,s.canonical(history[-2])+b'\n')
+ return value
+with patch.object(l,'_authenticated_material',side_effect=change_journal_before_output):
+ try:run()
+ except l.VerificationError:pass
+ else:raise AssertionError('journal changed before output was accepted')
+assert files[head][0]==s.canonical(history[-2])+b'\n' # Not repaired on refusal.
+files[head]=saved_head
 assert 'production_creation_execution_not_integrated' in result['blockers']
 assert 'production_creation_binding_unsupported' not in result['blockers']
 assert 'production_binding_context_mismatch' not in result['blockers']
@@ -310,6 +351,8 @@ body['restoreIntent']={'proofSha256':'6'*64,'stage':'reserved','releaseImages':i
  'volumes':dict(portal['volumes'],**cms['volumes'])}}
 body=append(body)
 # A newly authenticated authority cannot silently rebind an existing signed reservation.
+for name in ('postgres.dump','uploads.tar.gz','preauthority-proof.json','manifest.sha256'):del files[backup+'/'+name]
+del directories[backup]
 approval['source']['commit']='3'*40;bind()
 result=run();assert result['classification']=='restore_pending'
 assert 'existing_install_authority_mismatch' in result['blockers']
