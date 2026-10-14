@@ -279,7 +279,12 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
 test('CI mirror covers all pinned Hub bases without changing production pins or weakening gates', async () => {
   const workflow = await read('.github/workflows/ci.yml');
   const step = namedStep(workflow, 'Verify pinned CI mirrors and configure runner pulls');
-  const service = workflow.slice(workflow.indexOf('    services:'), workflow.indexOf('    steps:'));
+  const validateJob = workflow.split('\n  validate:\n')[1]?.split(/\n  [A-Za-z0-9_-]+:\n/u)[0];
+  assert.ok(validateJob, 'the PostgreSQL service belongs to the validate job');
+  const servicesStart = validateJob.indexOf('    services:');
+  const stepsStart = validateJob.indexOf('    steps:', servicesStart);
+  assert.ok(servicesStart >= 0 && stepsStart > servicesStart);
+  const service = validateJob.slice(servicesStart, stepsStart);
   assert.match(service, /image: mirror\.gcr\.io\/library\/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777/u);
   const sources = await Promise.all(['api/Dockerfile', 'cron/Dockerfile', 'cms/Dockerfile',
     'docker-compose.yml', 'docker-compose.payload.yml', 'scripts/integration/editorial-admin-session-fixture.compose.yml',

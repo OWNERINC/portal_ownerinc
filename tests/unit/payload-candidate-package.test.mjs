@@ -62,6 +62,10 @@ function fixture(commit = 'a'.repeat(40), treeSha = 'e'.repeat(40)) {
     started_at: '2026-10-09T10:00:00Z', completed_at: '2026-10-09T11:00:00Z',
     steps: steps.map(name => ({ name, status: 'completed', conclusion: 'success' })),
   }, { name: 'Deploy production', status: 'completed', conclusion: 'skipped' }];
+  jobs.push({ name: 'isolated-b0-recovery', run_id: run.id, run_attempt: 2, head_sha: commit, status: 'completed', conclusion: 'success',
+    started_at: '2026-10-09T09:50:00Z', completed_at: '2026-10-09T09:59:00Z',
+    steps: ['Checkout exact B0 candidate', 'Set up B0 Node', 'Prepare pinned isolated B0 images', 'Run required native isolated B0 recovery']
+      .map(name => ({ name, status: 'completed', conclusion: 'success' })) });
   const zips = { candidate: zipFile('candidate.json', candidateBytes), qualified: zipFile('qualified-candidate.json', qualifiedBytes),
     report: zipFile('payload-preauthority-recovery-report.json', reportBytes) };
   const names = { candidate: 'payload-release-candidate', qualified: 'payload-recovery-qualified-candidate', report: 'payload-preauthority-recovery-report' };
@@ -127,6 +131,23 @@ for (const [name, mutate] of [
   ['wrong validation attempt', f => { f.jobs[0].run_attempt = 1; }],
   ['deploy not skipped', f => { f.jobs[1].conclusion = 'success'; }],
   ['unexpected job', f => { f.jobs.push({ name: 'untrusted' }); }],
+  ['missing B0', f => { f.jobs.pop(); }],
+  ['duplicate B0', f => { f.jobs.push(f.jobs[2]); }],
+  ...['failure', 'cancelled', 'skipped'].map(conclusion => [`B0 ${conclusion}`, f => { f.jobs[2].conclusion = conclusion; }]),
+  ['B0 wrong SHA', f => { f.jobs[2].head_sha = 'f'.repeat(40); }],
+  ['B0 wrong run', f => { f.jobs[2].run_id++; }],
+  ['B0 wrong attempt', f => { f.jobs[2].run_attempt++; }],
+  ['B0 running', f => { f.jobs[2].status = 'in_progress'; }],
+  ['B0 setup only', f => { f.jobs[2].steps.pop(); }],
+  ['B0 skipped native step', f => { f.jobs[2].steps.at(-1).conclusion = 'skipped'; }],
+  ['B0 failed native step', f => { f.jobs[2].steps.at(-1).conclusion = 'failure'; }],
+  ['B0 incomplete native step', f => { f.jobs[2].steps.at(-1).status = 'in_progress'; }],
+  ['B0 duplicate native step', f => { f.jobs[2].steps.push(f.jobs[2].steps.at(-1)); }],
+  ['B0 missing checkout', f => { f.jobs[2].steps.shift(); }],
+  ['B0 failed prep', f => { f.jobs[2].steps[2].conclusion = 'failure'; }],
+  ['B0 invalid time', f => { f.jobs[2].started_at = 'invalid'; }],
+  ['B0 reversed time', f => { f.jobs[2].started_at = '2026-10-09T10:00:00Z'; }],
+  ['B0 completed after validate began', f => { f.jobs[2].completed_at = '2026-10-09T10:01:00Z'; }],
 ]) test(`authenticated packaging rejects ${name} before artifact downloads`, async () => {
   const f = fixture(); mutate(f);
   await assert.rejects(authenticatedGithubCandidate(f.request, f));
@@ -139,6 +160,7 @@ for (const [name, mutate] of [
   ['wrong head repo', f => { f.artifacts.qualified.workflow_run.head_repository_id = 99; }],
   ['wrong SHA', f => { f.artifacts.qualified.workflow_run.head_sha = 'b'.repeat(40); }],
   ['old attempt window', f => { f.artifacts.qualified.created_at = '2026-10-09T09:50:00Z'; }],
+  ['before B0', f => { f.artifacts.candidate.created_at = '2026-10-09T09:49:00Z'; }],
   ['expired', f => { f.artifacts.qualified.expired = true; }],
   ['missing digest', f => { delete f.artifacts.qualified.digest; }],
   ['tampered archive', f => { f.zips.qualified = Buffer.from(f.zips.qualified); f.zips.qualified[45] ^= 1; }],

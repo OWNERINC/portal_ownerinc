@@ -62,6 +62,8 @@ INSTALL_STAGES = (
     'cms_resources_pending', 'cms_resources_bound', 'cms_provision_pending', 'provisioned',
 )
 INSTALL_TRANSITION_STAGES = INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')
+INSTALL_RECOVERY_STAGES = ('reserved', 'database_restore_pending', 'database_restored',
+                           'uploads_restore_pending', 'uploads_restored', 'data_verified_readiness_pending')
 
 
 class StateError(Exception):
@@ -178,6 +180,8 @@ def validate_state_body(body):
         names = {'binding', 'stage', 'cmsTarget'}
         if isinstance(install, dict) and isinstance(install.get('binding'), dict) and install['binding'].get('bindingVersion') in (2, 3):
             names.add('creation')
+            if 'recovery' in install:
+                names.add('recovery')
         if isinstance(install, dict) and install.get('stage') in ('floor_commit_pending', 'floor_committed'):
             names.add('floor')
         _exact_keys(install, names, 'invalid_cold_state')
@@ -190,6 +194,8 @@ def validate_state_body(body):
            body['rollbackTargetImages'] is not None:
             fail('invalid_cold_state')
         binding = install['binding']
+        if 'recovery' in install:
+            validate_install_recovery(install['recovery'], install)
         if binding['inventoryIdentity'] != body['inventoryIdentity'] or \
            binding['b0']['proofSha256'] != body['legacySourceProofSha256'] or \
            (not terminal and (binding['candidate']['images'] != body['plannedReleaseImages'] or \
@@ -446,6 +452,53 @@ def advance_install(directory, binding, stage, cms_target=None):
         if stage == 'provisioned':
             body['cmsStatus'] = 'provisioned'
     return transition(directory, advance)
+
+
+def validate_install_recovery(value, intent):
+    _exact_keys(value, {'binding', 'stage'}, 'install_recovery_invalid')
+    if value['stage'] not in INSTALL_RECOVERY_STAGES or intent['stage'] not in ('reserved', 'portal_grants_pending'):
+        fail('install_recovery_invalid')
+    binding = value['binding']
+    _exact_keys(binding, {'recoveryVersion', 'purpose', 'installBindingSha256', 'originStateSha256',
+                          'b0ProofSha256', 'manifestSha256', 'portalTarget', 'sourceRelease', 'previousImages',
+                          'securityProfileSha256', 'fenceProfileSha256', 'restoreProfile'}, 'install_recovery_invalid')
+    install = intent['binding']
+    version = install.get('bindingVersion')
+    if version not in (2, 3) or type(binding['recoveryVersion']) is not int or binding['recoveryVersion'] != 1 or \
+       binding['purpose'] != ('isolated-b0-recovery' if version == 2 else 'production-b0-recovery') or \
+       binding['restoreProfile'] != 'same-target-legacy-objects-acl-v1':
+        fail('install_recovery_invalid')
+    for name in ('installBindingSha256', 'originStateSha256', 'b0ProofSha256', 'manifestSha256', 'securityProfileSha256', 'fenceProfileSha256'):
+        if not isinstance(binding[name], str) or not HEX_64.fullmatch(binding[name]):
+            fail('install_recovery_invalid')
+    if binding['installBindingSha256'] != hashlib.sha256(canonical(install)).hexdigest() or \
+       binding['b0ProofSha256'] != install['b0']['proofSha256'] or any(binding[k] != install[k] for k in ('portalTarget', 'sourceRelease', 'previousImages')):
+        fail('install_recovery_invalid')
+
+
+def begin_install_recovery(directory, binding, recovery_binding):
+    # Persistence only. The isolated executor must authenticate request, B0,
+    # profiles, exact target and fresh held lease/fence before calling this.
+    _, _, old, head = read_state(directory, repair_head=False)
+    intent = assert_install_matches(old, binding)
+    if 'recovery' in intent:
+        if intent['recovery']['binding'] != recovery_binding:
+            fail('install_recovery_invalid')
+        return old
+    if recovery_binding.get('originStateSha256') != head:
+        fail('install_recovery_invalid')
+    return transition(directory, lambda body: body['installIntent'].update(
+        recovery={'binding': json.loads(json.dumps(recovery_binding)), 'stage': 'reserved'}))
+
+
+def advance_install_recovery(directory, binding, stage):
+    old = read_state(directory, repair_head=False)[2]
+    intent = assert_install_matches(old, binding)
+    if 'recovery' not in intent or stage not in INSTALL_RECOVERY_STAGES:
+        fail('install_recovery_invalid')
+    if intent['recovery']['stage'] == stage:
+        return old
+    return transition(directory, lambda body: body['installIntent']['recovery'].update(stage=stage))
 
 
 def install_pending(body):
@@ -713,6 +766,20 @@ def validate_state_transition(old, new):
         fail('legacy_fallback_forbidden')
     old_install = old.get('installIntent')
     new_install = new.get('installIntent')
+    if old_install is not None and 'recovery' in old_install:
+        if new_install is None or 'recovery' not in new_install or \
+           {k: v for k, v in old_install.items() if k != 'recovery'} != {k: v for k, v in new_install.items() if k != 'recovery'} or \
+           old_install['recovery']['binding'] != new_install['recovery']['binding']:
+            fail('install_recovery_invalid')
+        before = INSTALL_RECOVERY_STAGES.index(old_install['recovery']['stage'])
+        after = INSTALL_RECOVERY_STAGES.index(new_install['recovery']['stage'])
+        if after not in (before, before + 1) or any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
+            fail('install_recovery_invalid')
+    elif new_install is not None and 'recovery' in new_install:
+        if old_install is None or old_install != {k: v for k, v in new_install.items() if k != 'recovery'} or \
+           new_install['recovery']['binding']['originStateSha256'] != new['previousStateSha256'] or \
+           new_install['recovery']['stage'] != 'reserved' or any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
+            fail('install_recovery_invalid')
     if old_install is not None:
         if new_install is None or canonical(old_install['binding']) != canonical(new_install['binding']):
             fail('planned_release_mismatch')

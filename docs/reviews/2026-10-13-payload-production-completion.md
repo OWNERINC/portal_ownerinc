@@ -1,5 +1,15 @@
 # Payload production completion: initial decision and evidence
 
+## Isolated B0 executor and mandatory prerequisite
+
+Implemented optional signed pre-floor recovery checkpoints and an isolated-only executor. It verifies immutable B0 bytes, restores database owners/ACLs transactionally, reconciles interrupted completion checkpoints, and finishes with admission closed and readiness pending. Production v3 execution is refused before effects. Native qualification uses TEST application identities and two fixed upload files; it does not qualify production application rollback or arbitrary Portal uploads.
+
+Candidate CI now requires a separate `isolated-b0-recovery` prerequisite job (12-minute job, five-minute preparation, six-minute native step). The packager requires its authenticated SHA/run/attempt, unique successful required steps and completion before validation begins. Missing B0 has no fallback; historical serialized formats remain unchanged and historical reconstruction requires its previously approved toolchain. Existing 150/120-minute validation/recovery caps and 14/11/two-restore criteria remain unchanged.
+
+Independent reviews approved the executor and CI/package integration. The first integrated verify exposed a workflow-test scoping error after adding the preceding job; the test now extracts the service from `validate` explicitly while retaining the exact PostgreSQL digest assertion. That correction received fresh approval and eight focused passes.
+
+Final primary `npm run verify` passed **Portal 1,915 PASS / 19 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-b0-prerequisite-final-verify.log`). Native B0 execution remains pending. No VPS operations occurred.
+
 ## Created-container lifecycle and retained cleanup diagnostics
 
 Candidate `38504402454` at `54b4652` passed the mandatory real PG16 observer gate, then failed native topology qualification with a cleanup-only error before recovery. Source-grounded reproduction showed that created Docker containers may have unallocated operational network IDs. The harness now accepts that representation only for consistent created-state containers, resolving exact configured keys against independently re-inspected owned networks. Running observations retain the populated-ID requirement. The original run's cause remains unconfirmed.

@@ -2,6 +2,119 @@
 
 ## P3 — inspeção de plano não é autorização de instalação
 
+### Restore B0 isolado com checkpoints assinados (native ainda pendente)
+
+`installIntent.recovery` é uma extensão **opcional**, sem acrescentar defaults a
+corpos históricos. Binding v2 permite purpose `isolated-b0-recovery`; binding v3
+permite `production-b0-recovery` somente como contrato de estado. O executor
+isolado recusa v3 antes de operações ou acesso aos artifacts. Não há dispatch de
+produção, alteração do receiver, conversão de receipts ou novo comando no runtime.
+
+O binding de recuperação fixa versão/purpose, hash do install binding, head de
+origem, proof/manifest B0, Portal DB/volumes, release/imagens anteriores e hashes
+dos perfis security/fence. `begin_install_recovery` autentica a cadeia existente
+sem head repair; `advance_install_recovery` permite somente adjacência:
+`reserved → database_restore_pending → database_restored → uploads_restore_pending
+→ uploads_restored → data_verified_readiness_pending`. Binding, install stage,
+receipts, CMS target e demais campos permanecem imutáveis. Admissão fica closed,
+authority legacy/1 e worker held. Floor pending/committed, restoreIntent simultâneo,
+avanço da instalação e abertura/limpeza de recovery são recusados. O initializer
+também recusa recovery antes de seus efeitos. Finalizar dados não finaliza readiness.
+
+`ops/payload-install-recovery-isolated.py --qualify` é exclusivamente um criador
+de fixture Linux/root/GitHub-hosted: nomes aleatórios próprios, PG16 com network
+none e volumes próprios. Não aceita caminhos de requests, alvos, SQL ou comandos
+do operador. O supervisor TEST copia/verifica a closure de helpers em diretório
+privado, cria chave/journal e assina o request limitado à fixture. Essa autoridade
+TEST **não é aprovação de source/candidato para produção**. API/cron/CMS image
+identities do binding são fixtures de protocolo, não imagens de aplicação
+executadas. Não se afirma rollback de aplicação ou compatibilidade funcional.
+
+Setup aplica `api/db/schema.sql` e migrations SQL pendentes da própria revisão no
+cluster novo e consulta a lista real antes do B0. Source material inclui hashes
+dos bytes SQL consumidos. Após capture do baseline, não roda migrations,
+provisionamento, alteração de roles/passwords ou DROP SCHEMA. O restore usa
+`pg_restore --single-transaction --clean --if-exists --exit-on-error`, preservando
+owners/ACLs do archive. Somente ACL de tabela `public.recovery_records` pode diferir
+do perfil TEST; outros ACLs, roles/memberships, ownership e schema devem coincidir
+antes de destruição. Não se aprende baseline do alvo danificado.
+O proof B0 mantém o algoritmo histórico de data/tree fingerprints: o runtime
+compartilha somente um transporte interno bounded para as mesmas queries e o
+mesmo agrupamento/canonicalização, com teste de paridade entre os dois caminhos.
+Hashes adicionais de dump/schema/security são campos do perfil TEST separado,
+não uma reinterpretação dos hashes históricos do proof.
+
+Artifacts são verificados por assinatura/hash/manifest, lidos por descritor com
+no-follow e estabilidade de identidade e copiados para bytes imutáveis limitados
+a 16 MiB. Restore consome esses bytes, não reabre paths após uma prova antiga.
+Uploads da fixture admitem somente dois arquivos regulares limitados, nomes fixos,
+sem links/traversal/setid; comparação inclui bytes, tamanho, modo, uid/gid. O perfil
+é deliberadamente menor que o parser B0 de produção, não sua substituição.
+
+Cada boundary revalida journal, closure, inode/lease exclusivo, container/volumes,
+quiescência e perfil, inclusive entre clear e extract. A inspeção bounded do host
+projeta somente IDs e consumo dos volumes exatos para recusar consumidores
+estranhos, sem exportar env/topologia de outros projetos. Não existem
+aplicações/escritores na fixture; network none
+não é apresentado como prova de fechamento de ingress em produção. A recuperação
+reconcilia interrupção após pg_restore antes do checkpoint pela comparação completa
+do dump/schema/grants. Uploads pending repetem clear/extract somente no volume
+vinculado. Comparações e checkpoint final mantêm closed/readiness pending.
+
+Qualificação nativa inclui linhas não vazias, uploads, dano de conteúdo e ACL,
+interrupções controladas pós-DB e pós-uploads em processos filhos distintos, cada
+qual com novo descritor/lease adquirido e leitura fresca do journal, autenticação
+TCP real de role antes/
+depois (password errada deve falhar) e volume de evidência CMS/unrelated intacto.
+Os testes portáteis usam journal/HMAC reais e operações Docker/DB dobradas; Windows
+usa double explícito da observação de descritores. Não provam execução Linux/PG.
+
+Entrada required-native (CI executa como root com ambiente limpo):
+
+```sh
+PAYLOAD_REQUIRE_NATIVE_B0_RECOVERY=1 PAYLOAD_B0_RECOVERY_DISPOSABLE=1 \
+  node --test tests/unit/payload-install-recovery.test.mjs
+```
+
+O wrapper required-native não converte falha em skip. Limites propostos: 210 s de
+trabalho + 60 s de cleanup, transporte com timeout/output cap e prova ≤1 KiB somente
+após cleanup de recursos próprios. SIGKILL depende de descarte do runner. A prova
+mantém `productionAuthorized`, `applicationRollbackExecuted` e
+`applicationCompatibilityQualified` falsos. **Native NOT RUN nesta entrega.**
+Receipts privados dos helpers de storage sobrevivem ao filho interrompido para
+cleanup pelo supervisor, limitado a PID/nome/ID/imagem/nonce/volume próprios. Em
+falha, journal/B0/closure privados permanecem até teardown do runner; nunca são
+publicados com a chave ou os dumps.
+Produção ainda exige baseline real autenticado, exclusividade de roles, credenciais,
+fence externo/não-Docker e integração de coleta/admissão. O perfil desta fixture
+não satisfaz automaticamente esses bloqueios do checker legado.
+
+CI agora exige `isolated-b0-recovery → validate` somente para dispatch candidate
+em branch, sem `cms_image_only`. O prerequisite usa runner próprio sem services,
+contents:read, checkout do SHA exato sem credenciais persistidas e os dois pins
+PG16/nginx. Verifica raw index do mirror público, recarrega registry-mirrors por
+SIGHUP antes de criar recursos (sem restart) e faz pulls das referências canônicas
+no daemon root/default. Não utiliza secrets ou login de registry.
+
+Cap do job: 12 min; preparação: 5 min; native: 6 min, incluindo cleanup interno.
+`validate` só começa após sucesso para candidate; runs comuns continuam quando B0
+é skipped, conflitos de publication modes continuam rejeitados e cancelamento não
+habilita validate. Não há polling nem parallel join. Os 150/120 min e os 8,68 min
+históricos restantes de validate não absorvem esse prerequisite; o tempo total do
+workflow aumenta em até o cap adicional, sem garantia de duração bem-sucedida.
+Os 14 checks/11 negativos/2 restores existentes não foram alterados.
+
+O packager autentica exatamente três jobs da tentativa: B0, validate e Deploy
+production skipped. Exige SHA/run/attempt, conclusão success e steps únicos de
+checkout/setup/preparação/native success; B0 deve terminar antes de validate começar.
+Artifacts continuam vinculados à janela de validate. Ausência de B0 não seleciona
+fallback histórico. Formatos de candidate/report/package/record não mudaram;
+pacotes históricos e evidência 51a0dac não são reescritos. Reconstrução de runs
+históricos requer seu toolchain aprovado anterior, não o packager fortalecido.
+Registrar requer nova aprovação dos hashes de workflow/revisão/toolchain; isso não
+é autorização root de helpers nem nova autoridade de produção. Restore permanece
+limitado à fixture de dois uploads, sem qualificar rollback de produção.
+
 ### Observação pura do fence destrutivo — sem collector ou executor
 
 #### Qualificação isolada da topologia (TEST-only)

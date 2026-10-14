@@ -1416,8 +1416,10 @@ SELECT json_build_object(
     return value
 
 
-def _data_fingerprint(service):
-    rows = _psql_json(service, """
+def _data_fingerprint(service, *, isolated_query=None):
+    # Internal disposable executor may supply a bounded query transport. It uses
+    # these SAME SQL/ordering/canonical bytes, never a different proof algorithm.
+    inventory_sql = """
 SELECT json_build_object(
   'unsupportedRelations', (SELECT COALESCE(json_agg(json_build_object(
       'schema', n.nspname, 'name', c.relname, 'kind', c.relkind
@@ -1434,7 +1436,8 @@ SELECT json_build_object(
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname='public' AND c.relkind='S')
 )::text;
-""")
+"""
+    rows = _psql_json(service, inventory_sql) if isolated_query is None else json.loads(isolated_query(inventory_sql))
     tables = rows.get('tables')
     sequences = rows.get('sequences')
     unsupported = rows.get('unsupportedRelations')
@@ -1463,6 +1466,8 @@ SELECT json_build_object(
         else:
             statements.append("SELECT pg_catalog.json_build_array('{}'::text, pg_catalog.json_build_object('last_value', row_value.last_value, 'is_called', row_value.is_called))::text FROM {} AS row_value".format(relation, quoted))
     sql = (' UNION ALL '.join(statements)) + ' ORDER BY 1;\n'
+    if isolated_query is not None:
+        return _data_fingerprint_rows(relations, isolated_query(sql).splitlines(keepends=True))
     container = _container_id(service)
     command = ['docker', 'exec', '-i', container, 'sh', '-ceu',
                'psql -XqAt -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"']
@@ -1471,30 +1476,15 @@ SELECT json_build_object(
         assert process.stdin is not None and process.stdout is not None
         process.stdin.write(sql.encode('ascii'))
         process.stdin.close()
-        grouped = {}
-        for raw_line in process.stdout:
-            try:
-                row = _strict_json(raw_line.rstrip(b'\r\n'), 'database_fingerprint_failed')
-                if not isinstance(row, list) or len(row) != 2:
-                    raise ValueError('row')
-                relation, row_value = row
-            except (UnicodeDecodeError, ValueError, ControlError):
-                process.kill()
-                fail('database_fingerprint_failed')
-            if not isinstance(relation, str) or relation not in [entry['relation'] for entry in relations] or \
-               not isinstance(row_value, dict):
-                process.kill()
-                fail('database_fingerprint_failed')
-            record = grouped.get(relation)
-            if record is None:
-                record = {'count': 0, 'hash': hashlib.sha256()}
-                grouped[relation] = record
-            record['count'] += 1
-            record['hash'].update(STATE.canonical(row_value) + b'\n')
+        fingerprint = _data_fingerprint_rows(relations, process.stdout)
         status = process.wait()
         if status != 0:
             fail('database_fingerprint_failed')
     except ControlError:
+        try:
+            process.kill()
+        except OSError:
+            pass
         raise
     except (OSError, BrokenPipeError):
         try:
@@ -1502,6 +1492,27 @@ SELECT json_build_object(
         except OSError:
             pass
         fail('database_fingerprint_failed')
+    return fingerprint
+
+
+def _data_fingerprint_rows(relations, lines):
+    grouped = {}
+    for raw_line in lines:
+        try:
+            row = _strict_json(raw_line.rstrip(b'\r\n'), 'database_fingerprint_failed')
+            if not isinstance(row, list) or len(row) != 2:
+                raise ValueError('row')
+            relation, row_value = row
+        except (UnicodeDecodeError, ValueError, ControlError):
+            fail('database_fingerprint_failed')
+        if not isinstance(relation, str) or relation not in [entry['relation'] for entry in relations] or not isinstance(row_value, dict):
+            fail('database_fingerprint_failed')
+        record = grouped.get(relation)
+        if record is None:
+            record = {'count': 0, 'hash': hashlib.sha256()}
+            grouped[relation] = record
+        record['count'] += 1
+        record['hash'].update(STATE.canonical(row_value) + b'\n')
     inventory = []
     for entry in relations:
         relation = entry['relation']
@@ -1532,6 +1543,12 @@ def _volume_info(name):
        not isinstance(raw.get('Mountpoint'), str) or not os.path.isabs(raw['Mountpoint']) or \
        project != inventory_project or compose_key != entry['composeKey']:
         fail('target_volume_invalid')
+    return _volume_receipt(raw)
+
+
+def _volume_receipt(raw):
+    """Historical receipt bytes, after the caller's exact ownership checks."""
+    labels = raw.get('Labels') or {}
     safe = {
         'name': raw['Name'], 'driver': raw['Driver'], 'mountpoint': raw['Mountpoint'],
         'labels': labels, 'options': raw.get('Options'), 'scope': raw.get('Scope'),
@@ -2895,6 +2912,8 @@ class Runtime:
         return fingerprint
 
     def _install_origin_check(self):
+        if 'recovery' in (self.state.get('installIntent') or {}):
+            fail('install_recovery_invalid')
         self._admission_closed()
         intent = self.state.get('installIntent')
         if intent is None or self.state.get('restoreIntent') is not None:
