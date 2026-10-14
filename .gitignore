@@ -13,6 +13,8 @@ cron/node_modules/
 uploads/
 *.log
 *.spdx.json
+__pycache__/
+*.py[cod]
 .worktrees/
 .openchamber/reviews/*.diff
 .openchamber/reviews/*-inputs-*.json

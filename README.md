@@ -99,6 +99,7 @@ HTML.
 - [Fluxo de dados](docs/architecture/data-flow.md)
 - [Importação privada da Owner News](docs/operations/owner-news-import.md)
 - [Ponte de leitura Payload da Owner News](docs/operations/owner-news-payload-read-bridge.md)
+- [Pendências e plano de conclusão do Payload](docs/operations/payload-pendencias-e-plano-de-conclusao-2026-10-14.md)
 - [Deploy](docs/operations/deployment.md)
 - [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Status final da V1](docs/operations/2026-08-12-v1-final-status.md)
