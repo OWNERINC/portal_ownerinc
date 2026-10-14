@@ -48,6 +48,77 @@ QUOTED_PREFIX = re.compile(r"(?:[eEbBxXnN]|[uU]&)?(['\"])")
 DOLLAR_PREFIX = re.compile(r'\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$')
 IDENTIFIER_TOKEN = re.compile(r'[A-Za-z_][A-Za-z_0-9$]*')
 NUMBER_TOKEN = re.compile(r'[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?')
+ROUNDTRIP_PROFILE = 'isolated-autocard-between-roundtrip-v1'
+SOURCE_CHECK_BLOCK = b"    CONSTRAINT autocard_cards_icon_check CHECK (((icon IS NULL) OR (((char_length(icon) >= 1) AND (char_length(icon) <= 80)) AND (icon ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)))),\n    CONSTRAINT autocard_cards_illustration_check CHECK (((illustration IS NULL) OR (((char_length(illustration) >= 1) AND (char_length(illustration) <= 80)) AND (illustration ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)))),\n"
+RESTORED_CHECK_BLOCK = b"    CONSTRAINT autocard_cards_icon_check CHECK (((icon IS NULL) OR ((char_length(icon) >= 1) AND (char_length(icon) <= 80) AND (icon ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)))),\n    CONSTRAINT autocard_cards_illustration_check CHECK (((illustration IS NULL) OR ((char_length(illustration) >= 1) AND (char_length(illustration) <= 80) AND (illustration ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)))),\n"
+
+
+def authorized_roundtrip(raw):
+    """Exact TEST delta, not SQL normalization. Full dump data is never parsed."""
+    require(isinstance(raw, bytes) and len(raw) <= CAP)
+    require(digest(SOURCE_CHECK_BLOCK) == 'c668ef57355144245a51c0f5a1931183352975da363eaa6aa80d294d4be28240')
+    require(digest(RESTORED_CHECK_BLOCK) == '014400e5cdf35928761f710e5c65b209b15e3d98a609ae1ff6e6c23373105db4')
+    require(raw.count(SOURCE_CHECK_BLOCK) == 1 and RESTORED_CHECK_BLOCK not in raw)
+    for line in SOURCE_CHECK_BLOCK.splitlines(keepends=True):
+        require(raw.count(line) == 1)
+    for name in (b'autocard_cards_icon_check', b'autocard_cards_illustration_check'):
+        require(raw.count(b'CONSTRAINT ' + name + b' ') == 1)
+    for line in RESTORED_CHECK_BLOCK.splitlines(keepends=True):
+        require(line not in raw)
+    marker = b'CREATE TABLE public.autocard_cards (\n'
+    header = b'-- Name: autocard_cards; Type: TABLE; Schema: public; Owner: postgres\n--\n\n'
+    require(raw.count(marker) == 1 and raw.count(header + marker) == 1)
+    start = raw.index(marker)
+    end = raw.find(b'\n);\n', start)
+    require(end >= 0)
+    block = raw.index(SOURCE_CHECK_BLOCK)
+    require(start < block and block + len(SOURCE_CHECK_BLOCK) <= end + 1)
+    # Lex only the pre-data prefix through this table. Reject fake markers inside
+    # a literal/body/comment or an earlier statement; do not interpret COPY data.
+    prefix = raw[:end + 4]
+    require(re.search(rb'(?im)^[ \t]*COPY[ \t]', prefix) is None)
+    # Parenthesis/semicolon tracking cannot establish statement boundaries inside
+    # SQL-standard function bodies. Reject their unquoted words lexically rather
+    # than attempting a partial BEGIN ATOMIC parser. Quoted bodies stay opaque.
+    tokens = redacted_schema(prefix, forbidden_words=('BEGIN', 'ATOMIC', 'END'))
+    create_line = raw[:start].count(b'\n') + 1
+    block_line = raw[:block].count(b'\n') + 1
+    depth, statement_start, found = 0, True, False
+    for token in tokens:
+        if token['kind'] == 'comment':
+            continue
+        line = token['lines'][0]
+        value = token.get('value')
+        if line == create_line and not found:
+            require(statement_start and depth == 0 and value == 'CREATE' and token['lines'][1] == line)
+            found = True
+        if line in (block_line, block_line + 1) and value == 'CONSTRAINT':
+            require(found and depth == 1)
+        if value == '(':
+            depth += 1
+        elif value == ')':
+            depth -= 1
+            require(depth >= 0)
+        statement_start = value == ';'
+    require(found and depth == 0 and statement_start)
+    for number in (block_line, block_line + 1):
+        on_line = [t for t in tokens if t['lines'][0] == number]
+        require(on_line and on_line[0].get('value') == 'CONSTRAINT')
+        require(not any(t['lines'][0] < number <= t['lines'][1] for t in tokens))
+    return raw[:block] + RESTORED_CHECK_BLOCK + raw[block + len(SOURCE_CHECK_BLOCK):]
+
+
+def derive_roundtrip_expectations(sources, binding, artifacts, helpers, baseline):
+    require(isinstance(sources, dict) and set(sources) == {'schema', 'database'})
+    require(digest(sources['schema']) == baseline['schema'] and digest(sources['database']) == baseline['database'])
+    return {'version': 1, 'algorithm': ROUNDTRIP_PROFILE,
+            'sourceSchema': digest(sources['schema']), 'sourceDatabase': digest(sources['database']),
+            'restoredSchema': digest(authorized_roundtrip(sources['schema'])),
+            'restoredDatabase': digest(authorized_roundtrip(sources['database'])),
+            'sourceBlock': digest(SOURCE_CHECK_BLOCK), 'restoredBlock': digest(RESTORED_CHECK_BLOCK),
+            'archiveSha256': digest(artifacts['postgres.dump']), 'proofSha256': binding['b0']['proofSha256'],
+            'manifestSha256': digest(artifacts['manifest.sha256']), 'helpersSha256': digest(canonical(helpers)),
+            'sourceMaterialSha256': binding['candidate']['sourceMaterialSha256'], 'postgresImage': PG}
 
 
 def reject_literal_continuation(text, pos):
@@ -85,7 +156,7 @@ def reject_literal_continuation(text, pos):
             return
 
 
-def redacted_schema(raw):
+def redacted_schema(raw, *, forbidden_words=()):
     """Small fail-closed lexer, NOT a SQL parser. No unrecognized text is emitted."""
     require(isinstance(raw, bytes) and len(raw) <= CAP)
     text = raw.decode('utf-8', errors='strict')
@@ -150,6 +221,7 @@ def redacted_schema(raw):
                 match = IDENTIFIER_TOKEN.match(text, pos)
                 pos = match.end()
                 word = match[0]
+                require(word.upper() not in forbidden_words)
                 if word.upper() in SQL_WORDS:
                     kind, visible = 'keyword', word.upper()
                 elif word in SAFE_IDENTIFIERS:
@@ -498,16 +570,23 @@ def uploads_fingerprint(raw):
 
 class Executor:
     """Internal TEST capability. Supervisor is sole caller; no production entry."""
-    def __init__(self, directory, runtime, key, request_raw, operations, lease):
+    def __init__(self, directory, runtime, key, request_raw, operations, lease, sources=None):
         self.directory, self.runtime, self.key = directory, runtime, key
         self.state = runtime.STATE
         self.request = authenticate(request_raw, key)
-        require(set(self.request) == {'kind', 'binding', 'recovery', 'helpers', 'artifacts', 'baseline', 'fenceProfile'})
-        require(self.request['kind'] == 'isolated-b0-recovery-request-v1')
+        self.roundtrip = self.request.get('kind') == 'isolated-b0-recovery-request-v2'
+        names = {'kind', 'binding', 'recovery', 'helpers', 'artifacts', 'baseline', 'fenceProfile'}
+        if self.roundtrip:
+            names.add('expectations')
+        require(set(self.request) == names)
+        require(self.request['kind'] in ('isolated-b0-recovery-request-v1', 'isolated-b0-recovery-request-v2'))
         self.binding = self.request['binding']
         # No subprocess or filesystem mutation precedes this production refusal.
         require(self.binding.get('bindingVersion') == 2 and self.binding['candidate']['purpose'] == 'isolated-recovery-producer')
         self.state.validate_install_binding(self.binding)
+        self.state.validate_install_recovery({'binding': self.request['recovery'], 'stage': 'reserved'},
+                                            {'binding': self.binding, 'stage': 'reserved'})
+        require(self.request['recovery']['recoveryVersion'] == (2 if self.roundtrip else 1))
         require(self.binding['b0']['directory'] == str(directory / 'b0'))
         require(set(self.request['helpers']) == set(HELPERS))
         require(set(self.request['baseline']) == {'database', 'uploads', 'schema', 'roles', 'dataFingerprint', 'uploadsFingerprint'})
@@ -534,6 +613,31 @@ class Executor:
         require(uploads_fingerprint(self.artifacts['uploads.tar.gz']) == self.request['baseline']['uploads'])
         require(runtime._tar_tree(io.BytesIO(self.artifacts['uploads.tar.gz']), compressed=True) == self.request['baseline']['uploadsFingerprint'])
         require(digest(canonical(self.request['baseline'])) == self.request['recovery']['securityProfileSha256'])
+        if self.roundtrip:
+            derived = derive_roundtrip_expectations(sources, self.binding, self.artifacts, self.request['helpers'], self.request['baseline'])
+            require(canonical(derived) == canonical(self.request['expectations']))
+            require(digest(canonical(derived)) == self.request['recovery']['expectationsSha256'])
+            self.restored_baseline = dict(self.request['baseline'], schema=derived['restoredSchema'], database=derived['restoredDatabase'])
+
+    def classify_database(self, body):
+        recovery = body['installIntent'].get('recovery')
+        stage = recovery['stage'] if recovery else 'reserved'
+        if recovery:
+            require(recovery['binding'] == self.request['recovery'])
+        mark('schema_compare')
+        observed = self.operations.schema_fingerprint()
+        if observed == self.request['baseline']['schema']:
+            require(stage in ('reserved', 'database_restore_pending'))
+            return 'source_eligible'
+        require(observed == self.restored_baseline['schema'] and stage != 'reserved')
+        require(self.operations.database_matches(self.restored_baseline))
+        return 'verified_restored'
+
+    def database_complete(self):
+        if self.roundtrip:
+            self.boundary()
+            return self.database_class == 'verified_restored'
+        return self.operations.database_matches(self.request['baseline'])
 
     def boundary(self):
         mark('boundary')
@@ -560,6 +664,8 @@ class Executor:
         require(body['admission'] == 'closed' and body['restoreIntent'] is None and body['workerHold'] is True)
         require(body['installIntent']['stage'] in ('reserved', 'portal_grants_pending'))
         self.operations.fence(self.binding, self.request['baseline'], self.request['fenceProfile'])
+        if self.roundtrip:
+            self.database_class = self.classify_database(body)
         return body
 
     def execute(self, interrupt=None):
@@ -575,13 +681,19 @@ class Executor:
         if stage() == 'reserved':
             advance('database_restore_pending')
         if stage() == 'database_restore_pending':
-            if not self.operations.database_matches(self.request['baseline']):
+            if self.roundtrip:
                 self.boundary()
-                mark('database_restore')
-                self.operations.restore_database(self.artifacts['postgres.dump'])
-                if interrupt == 'database':
-                    raise Refused('isolated_b0_test_interruption')
-            require(self.operations.database_matches(self.request['baseline']))
+                restore_needed = self.database_class == 'source_eligible'
+            else:
+                restore_needed = not self.operations.database_matches(self.request['baseline'])
+            if restore_needed:
+                self.boundary()
+                if not self.roundtrip or self.database_class == 'source_eligible':
+                    mark('database_restore')
+                    self.operations.restore_database(self.artifacts['postgres.dump'])
+                    if interrupt == 'database':
+                        raise Refused('isolated_b0_test_interruption')
+            require(self.database_complete())
             advance('database_restored')
         if stage() == 'database_restored':
             advance('uploads_restore_pending')
@@ -596,7 +708,7 @@ class Executor:
                 raise Refused('isolated_b0_test_interruption')
             require(self.operations.uploads() == self.request['baseline']['uploads'])
             advance('uploads_restored')
-        require(self.operations.database_matches(self.request['baseline']) and self.operations.uploads() == self.request['baseline']['uploads'])
+        require(self.database_complete() and self.operations.uploads() == self.request['baseline']['uploads'])
         if stage() == 'uploads_restored':
             advance('data_verified_readiness_pending')
         require(stage() == 'data_verified_readiness_pending')
@@ -792,7 +904,9 @@ def native_qualification():
         roles = digest(sql(security_sql))
         schema_bytes = normalize_dump(dump('--schema-only', '--no-privileges'))
         schema = digest(schema_bytes)
-        db_fingerprint = digest(normalize_dump(dump()))
+        full_bytes = normalize_dump(dump())
+        db_fingerprint = digest(full_bytes)
+        source_dumps = {'schema': schema_bytes, 'database': full_bytes}
         raw_uploads = storage('tar -czf - -C /data .')
         baseline = {'database': db_fingerprint, 'schema': schema, 'roles': roles, 'uploads': uploads_fingerprint(raw_uploads),
                     'dataFingerprint': runtime._data_fingerprint('postgres', isolated_query=sql),
@@ -831,13 +945,15 @@ def native_qualification():
             S.transition(str(root), lambda body: body.update(admission='closed', plannedReleaseImages=images, latestProofSha256=binding['b0']['proofSha256'], legacySourceProofSha256=binding['b0']['proofSha256']))
             S.reserve_install(str(root), binding, proof, binding['b0']['proofSha256'], {'nonce': digest(prefix.encode()), 'volumes': {}, 'containers': {}})
             fence_profile = {'scope': prefix, 'databaseContainerId': db_id, 'network': 'none', 'writers': [], 'evidenceVolume': volume_receipts['cmsEvidence']}
-            recovery = {'recoveryVersion': 1, 'purpose': 'isolated-b0-recovery', 'installBindingSha256': digest(S.canonical(binding)),
+            expectations = derive_roundtrip_expectations(source_dumps, binding, artifacts, closure, baseline)
+            recovery = {'recoveryVersion': 2, 'purpose': 'isolated-b0-recovery', 'installBindingSha256': digest(S.canonical(binding)),
                         'originStateSha256': S.read_state(str(root))[3], 'b0ProofSha256': binding['b0']['proofSha256'], 'manifestSha256': digest(artifacts['manifest.sha256']),
                         'portalTarget': binding['portalTarget'], 'sourceRelease': binding['sourceRelease'], 'previousImages': previous,
                         'securityProfileSha256': digest(canonical(baseline)), 'fenceProfileSha256': digest(canonical(fence_profile)),
-                        'restoreProfile': 'same-target-legacy-objects-acl-v1'}
-            request = S.canonical(S.sign_envelope({'kind': 'isolated-b0-recovery-request-v1', 'binding': binding, 'recovery': recovery,
-                                                  'helpers': closure, 'artifacts': {n: digest(b) for n, b in artifacts.items()}, 'baseline': baseline, 'fenceProfile': fence_profile}, key))
+                        'restoreProfile': ROUNDTRIP_PROFILE, 'expectationsSha256': digest(canonical(expectations))}
+            request = S.canonical(S.sign_envelope({'kind': 'isolated-b0-recovery-request-v2', 'binding': binding, 'recovery': recovery,
+                                                  'helpers': closure, 'artifacts': {n: digest(b) for n, b in artifacts.items()}, 'baseline': baseline, 'fenceProfile': fence_profile,
+                                                  'expectations': expectations}, key))
 
             class Operations:
                 def fence(self, expected, approved, profile):
@@ -866,13 +982,19 @@ def native_qualification():
                     mark('role_authentication')
                     require(authenticate_role('portal_api', password) == b'portal_api')
                     require(authenticate_role('portal_cron', cron_password) == b'portal_cron')
+
+                def schema_fingerprint(self):
                     mark('schema_dump')
                     observed_schema = dump('--schema-only', '--no-privileges')
                     mark('schema_normalization')
                     observed_schema = normalize_dump(observed_schema)
-                    assert_schema_dump(schema_bytes, observed_schema, approved['schema'],
-                                       (lambda before, after: capture_schema_discrepancy(root, before, after))
-                                       if phase in ('recover_uploads_interruption', 'recover_final') else None)
+                    mark('schema_compare')
+                    if digest(observed_schema) not in (expectations['sourceSchema'], expectations['restoredSchema']) and phase in ('recover_uploads_interruption', 'recover_final'):
+                        try:
+                            capture_schema_discrepancy(root, authorized_roundtrip(schema_bytes), observed_schema)
+                        except Exception:
+                            pass  # Diagnostic only; fresh journal classification still refuses.
+                    return digest(observed_schema)
 
                 def database_matches(self, approved):
                     mark('database_dump_compare')
@@ -904,7 +1026,7 @@ def native_qualification():
             head_before = S.read_state(str(root))[3]
             sql('CREATE TABLE public.b0_unexpected_fixture(id integer);')
             try:
-                Executor(root, runtime, key, request, operations, lease).execute()
+                Executor(root, runtime, key, request, operations, lease, source_dumps).execute()
             except Refused:
                 pass
             else:
@@ -929,7 +1051,7 @@ def native_qualification():
                     try:
                         with open(root / 'lease', 'rb') as child_lease:
                             fcntl.flock(child_lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            outcome = Executor(root, runtime, key, request, operations, child_lease).execute(fault)
+                            outcome = Executor(root, runtime, key, request, operations, child_lease, source_dumps).execute(fault)
                             if fault is not None:
                                 write_child_frame(writer, 'expected_interruption_missing')
                                 os._exit(73)

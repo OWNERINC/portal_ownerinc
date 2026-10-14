@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Exact TEST roundtrip expectations for B0
+
+Run `38595594718` at `928397a` exported artifact `11908694313`. Primary inspection confirmed one untruncated region (inclusive lines 189–190): the icon and illustration AutoCard CHECK constraints lose one parenthesis pair each after PostgreSQL restores the expanded BETWEEN expressions. Reconstruction matches both exact region hashes. This establishes the schema-byte difference, not complete recovery or full-dump equality.
+
+Two independent analyses and one cross-critique round selected a TEST-only versioned exact-block transformation over a reference cluster. Source schema/full dumps remain authenticated; restored expectations replace only the two code-owned lines in verified table context before damage. Recovery binding v2 freezes the expectation digest; historical v1 semantics and production v3 execution refusal remain. Fresh signed stages distinguish source eligible for restore from fully verified restored state; restored-shaped mismatches refuse without another restore.
+
+Fresh review found a SQL-standard BEGIN ATOMIC context bypass. Conservative lexical rejection and its regression closed it; re-review returned `ship`. Primary final `npm run verify` passed **Portal 1,930 PASS / 19 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-b0-exact-roundtrip-final-verify.log`). Native execution of this profile remains pending; any additional full-dump difference must refuse. No VPS operations occurred.
+
 ## Fixture-only redacted schema discrepancy capture
 
 Candidate `38592107287` at `25158c9` confirmed `schema_compare:schema_sql_delta` after successful dump generation/normalization. The exact differing SQL remains unknown. Added a failure-only, nonqualifying artifact containing bounded redacted changed regions from already captured fixture bytes; raw dumps are never uploaded. Report generation/export failures preserve the original recovery refusal. No restore or acceptance criteria changed.

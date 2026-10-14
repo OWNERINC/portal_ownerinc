@@ -4,6 +4,68 @@
 
 ### Restore B0 isolado com checkpoints assinados (native ainda pendente)
 
+#### Perfil TEST de roundtrip exato — request v2 / recoveryVersion 2
+
+CI 38595594718/928397a, artifact 11908694313, provou uma região completa sem
+truncation: linhas 189–190 dos CHECKs `autocard_cards_icon_check` e
+`autocard_cards_illustration_check`. `BETWEEN` da origem vira AND aninhado durante
+transformação PostgreSQL; ao reparse do dump, `makeAndExpr` achata esse AND. Os
+quatro bytes removidos são dois pares de parênteses, sem alteração dos outros
+tokens. A regressão offline reconstrói ambos os trechos e confere seus hashes.
+
+O novo perfil **somente TEST** `isolated-autocard-between-roundtrip-v1` autoriza
+uma transformação T code-owned, não uma normalização SQL: substitui exclusivamente
+o bloco adjacente de duas linhas cujo SHA é
+`c668ef57355144245a51c0f5a1931183352975da363eaa6aa80d294d4be28240` pelo bloco
+`014400e5cdf35928761f710e5c65b209b15e3d98a609ae1ff6e6c23373105db4`.
+Exige ocorrência única de bloco/linhas/constraints no contexto exato
+`public.autocard_cards`, header owner postgres e profundidade de tabela correta.
+Contexto em comentário/body/literal/COPY, duplicatas, ordem diferente, fonte já
+restaurada ou ambígua são recusados. Todos os demais bytes e ordem são preservados.
+O lexer existente é usado só para recusar contexto falso; não interpreta ou
+reescreve expressões SQL. Nenhuma migration ou archive SQL é modificada.
+
+A prova de contexto recusa conservadoramente qualquer palavra não quoted
+BEGIN/ATOMIC/END (case-insensitive) no prefixo inspecionado até o fim da tabela.
+Um semicolon dentro de `BEGIN ATOMIC ... END` não prova início de statement
+top-level; esses SQL-standard function bodies não são suportados ali, mesmo
+quando completos. A recusa é lexical, não substring: comentários, literals,
+quoted identifiers e dollar-quoted bodies permanecem opacos e não disparam essa
+regra. SETs e funções com bodies dollar-quoted continuam suportados. Um body
+SQL-standard posterior à tabela não pode envolvê-la; o suffix não é transformado
+nem usado como prova de contexto. Essa regra não muda o lexer diagnóstico padrão.
+
+Antes de dano/negativos, retém schema S0 e full dump F0 normalizados em memória;
+deriva S1=T(S0), F1=T(F0). Request `isolated-b0-recovery-request-v2` autentica um
+objeto expectations derivado, com versão/algoritmo, quatro digests, IDs dos dois
+blocos, archive/proof/manifest, helpers, sourceMaterial e pin PostgreSQL. O binding
+persistente `recoveryVersion:2` exige `expectationsSha256`, imutável pelo journal.
+Cada executor recompõe expectations a partir das fontes retidas autenticadas,
+não de hashes escolhidos pelo caller ou do alvo observado. O baseline original de
+seis campos permanece intacto, assim como proof/data/tree fingerprint históricos.
+
+Classificação consulta o journal HMAC fresco e mantém fence/security/roles:
+
+| Checkpoint | Schema permitido e ação |
+| --- | --- |
+| Sem recovery / reserved | Apenas S0; pode reservar restore |
+| database_restore_pending + S0 | Elegível para restore vinculado; dano autorizado de rows/ACL da tabela pode existir |
+| database_restore_pending + S1 | Somente reconcilia se F1 e dataFingerprint original forem exatos; divergência recusa sem repetir restore |
+| database_restored e posteriores | Somente S1/F1/data/security exatos; não aceita fallback S0 |
+
+Após comando de restore, verificação completa precede checkpoint. A interrupção
+intencional pós-comando continua deixando pending; a próxima entrada exige a mesma
+verificação. Schema desconhecido/híbrido recusa. Não se usa false→restore para uma
+representação S1 divergente. Timeouts/flags/commands/budgets não aumentaram; checks
+de reconciliação podem exigir mais observações dentro dos caps existentes.
+
+Request/recovery v1 conserva suas regras e bytes, sem defaults novos ou conversão
+de registros persistidos. Install binding v3 (produção) não aceita recoveryVersion
+2; o executor também o recusa antes de ler artifacts. Nenhuma autoridade de
+produção, referência-cluster ou normalizador genérico foi introduzido. Native
+**NOT RUN** para este perfil; uma diferença adicional em F1 continua desconhecida
+e causará recusa, não nova normalização automática.
+
 `installIntent.recovery` é uma extensão **opcional**, sem acrescentar defaults a
 corpos históricos. Binding v2 permite purpose `isolated-b0-recovery`; binding v3
 permite `production-b0-recovery` somente como contrato de estado. O executor

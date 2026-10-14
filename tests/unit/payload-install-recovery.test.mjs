@@ -92,6 +92,162 @@ async function probe(code) {
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
+const roundtripSetup = String.raw`
+header=b'-- Name: autocard_cards; Type: TABLE; Schema: public; Owner: postgres\n--\n\nCREATE TABLE public.autocard_cards (\n'
+schema0=header+b'    icon text,\n    illustration text,\n'+E.SOURCE_CHECK_BLOCK+b'    CONSTRAINT third CHECK (true)\n);\nALTER TABLE public.autocard_cards OWNER TO postgres;\n'
+full0=schema0+b'COPY public.recovery_records (id, body) FROM stdin;\n1\toriginal\n\\.\n'
+sources={'schema':schema0,'database':full0}
+baseline.update(schema=H(schema0),database=H(full0))
+expectations=E.derive_roundtrip_expectations(sources,binding,artifacts,helpers,baseline)
+recovery.update(recoveryVersion=2,restoreProfile=E.ROUNDTRIP_PROFILE,expectationsSha256=H(S.canonical(expectations)),securityProfileSha256=H(S.canonical(baseline)))
+request.update(kind='isolated-b0-recovery-request-v2',expectations=expectations)
+raw=S.canonical(S.sign_envelope(request,key))
+class RoundtripOps(Ops):
+ def __init__(self):
+  super().__init__();self.schema=baseline['schema'];self.full=H(b'damaged rows and supported table ACL');self.data=baseline['dataFingerprint']
+ def schema_fingerprint(self):self.events.append('schema');return self.schema
+ def database_matches(self,p):
+  self.events.append('compare_database');return self.full==p['database'] and self.data==p['dataFingerprint']
+ def restore_database(self,b):
+  assert b==artifacts['postgres.dump'];self.events.append('restore_database');self.schema=expectations['restoredSchema'];self.full=expectations['restoredDatabase'];self.data=baseline['dataFingerprint']
+ops=RoundtripOps()
+def executor(data=raw,source=sources):return E.Executor(root,R,key,data,ops,lease,source)
+`;
+
+test('exact TEST transformation accepts only the two adjacent checks in the real table context', async () => {
+  await probe(roundtripSetup + String.raw`
+for source in (schema0,full0):
+ result=E.authorized_roundtrip(source)
+ assert result==source.replace(E.SOURCE_CHECK_BLOCK,E.RESTORED_CHECK_BLOCK,1)
+ assert len(source)-len(result)==4
+for invalid in (
+ schema0.replace(E.SOURCE_CHECK_BLOCK,b''),schema0+E.SOURCE_CHECK_BLOCK,
+ schema0.replace(E.SOURCE_CHECK_BLOCK,b''.join(reversed(E.SOURCE_CHECK_BLOCK.splitlines(keepends=True)))),
+ E.authorized_roundtrip(schema0),schema0.replace(b'public.autocard_cards (',b'public.other ('),
+ b'/*\n'+schema0+b'*/\n',b'SELECT $$\n'+schema0+b'$$;\n',
+ b"SELECT '\n"+schema0.replace(b"'",b"''")+b"';\n",
+ b'COPY public.x FROM stdin;\n'+schema0+b'\\.\n',
+ schema0+E.SOURCE_CHECK_BLOCK.splitlines(keepends=True)[0],
+ schema0+E.RESTORED_CHECK_BLOCK.splitlines(keepends=True)[0],
+ schema0.replace(b'    CONSTRAINT third CHECK (true)',b'    CONSTRAINT autocard_cards_icon_check CHECK (true)'),
+ schema0.replace(b'    icon text,\n',b'    icon text DEFAULT (\n').replace(b'    CONSTRAINT third',b'    ),\n    CONSTRAINT third'),
+):refused(lambda:E.authorized_roundtrip(invalid))
+`);
+});
+
+test('roundtrip context rejects SQL-standard bodies without treating quoted/comment words as body syntax', async () => {
+  await probe(roundtripSetup + String.raw`
+# Reviewer reproduction: a function-body semicolon is not a top-level boundary.
+attack=b'CREATE FUNCTION public.f() RETURNS void LANGUAGE SQL BEGIN ATOMIC\nSELECT 1;\n'+schema0+b'END;\n'
+refused(lambda:E.authorized_roundtrip(attack))
+for opener in (
+ b'begin atomic',b'BeGiN AtOmIc',b'BEGIN /* nested /* comment */ ok */ ATOMIC',
+ b'BEGIN -- comment\nATOMIC',b'BEGIN ATOMIC\nBEGIN ATOMIC',
+):
+ candidate=b'CREATE FUNCTION public.f() RETURNS void LANGUAGE SQL '+opener+b'\nSELECT 1;\n'+schema0+b'END; END;\n'
+ refused(lambda:E.authorized_roundtrip(candidate))
+# Even a completed SQL-standard body in the inspected prefix is unsupported.
+refused(lambda:E.authorized_roundtrip(b'CREATE FUNCTION public.f() RETURNS void LANGUAGE SQL BEGIN ATOMIC SELECT 1; END;\n'+schema0))
+for word in (b'BEGIN',b'ATOMIC',b'END',b'bEgIn',b'aToMiC',b'eNd'):
+ refused(lambda:E.authorized_roundtrip(b'SELECT '+word+b';\n'+schema0))
+# No substring search: comments, literals, quoted identifiers and opaque dollar
+# bodies may contain these words without influencing context recognition.
+for prefix in (
+ b'SET statement_timeout = 0;\n',b'-- BEGIN ATOMIC END\n',b'/* BEGIN /* ATOMIC */ END */\n',
+ b"SELECT 'BEGIN ATOMIC END';\n",b'SELECT "BEGIN", "ATOMIC", "END";\n',
+ b'CREATE FUNCTION public.f() RETURNS void LANGUAGE SQL AS $body$ BEGIN ATOMIC SELECT 1; END; $body$;\n',
+ b'SELECT beginning, atomicity, ending;\n',
+):
+ candidate=prefix+schema0
+ assert E.authorized_roundtrip(candidate)==candidate.replace(E.SOURCE_CHECK_BLOCK,E.RESTORED_CHECK_BLOCK,1)
+# A later function cannot enclose the earlier target. Its bytes remain untouched.
+suffix=b'CREATE FUNCTION public.f() RETURNS void LANGUAGE SQL BEGIN ATOMIC SELECT 1; END;\n'
+assert E.authorized_roundtrip(schema0+suffix)==E.authorized_roundtrip(schema0)+suffix
+`);
+});
+
+test('v2 real journal restores source, reconciles exact restored state, and freezes expectations', async () => {
+  await probe(roundtripSetup + String.raw`
+refused(lambda:executor().execute('database'))
+body=S.read_state(str(root))[2];assert body['installIntent']['recovery']['stage']=='database_restore_pending'
+assert ops.events.count('restore_database')==1
+for field in ('expectationsSha256','restoreProfile','recoveryVersion'):
+ value=('f'*64 if field=='expectationsSha256' else 'wrong' if field=='restoreProfile' else 1)
+ refused(lambda:S.transition(str(root),lambda b:b['installIntent']['recovery']['binding'].update({field:value})))
+ assert S.read_state(str(root))[2]==body
+refused(lambda:executor().execute('uploads'))
+assert ops.events.count('restore_database')==1
+executor().execute()
+body=S.read_state(str(root))[2];assert body['installIntent']['recovery']['stage']=='data_verified_readiness_pending'
+assert body['admission']=='closed' and body['workerHold'] and body['installIntent']['stage']=='reserved'
+ops.schema=baseline['schema'];refused(lambda:executor().execute())
+assert ops.events.count('restore_database')==1
+`);
+});
+
+test('pending restored schema with wrong full/data/security refuses without any repeat restore', async () => {
+  await probe(roundtripSetup + String.raw`
+refused(lambda:executor().execute('database'))
+before=S.read_state(str(root))[2];ops.events=[]
+for label in ('rows','sequence','grants','owner','comment','function','third_constraint'):
+ ops.full=H(label.encode());refused(lambda:executor().execute());assert 'restore_database' not in ops.events
+ assert S.read_state(str(root))[2]==before
+ops.full=expectations['restoredDatabase'];ops.data=H(b'wrong sequence data')
+refused(lambda:executor().execute());assert 'restore_database' not in ops.events
+ops.data=baseline['dataFingerprint'];ops.safe=False
+refused(lambda:executor().execute());assert 'restore_database' not in ops.events
+ops.safe=True
+for schema in (H(b'unknown'),H(schema0.replace(E.SOURCE_CHECK_BLOCK.splitlines()[0],E.RESTORED_CHECK_BLOCK.splitlines()[0])),H(schema0.replace(b'third',b'fourth'))):
+ ops.schema=schema;refused(lambda:executor().execute());assert 'restore_database' not in ops.events
+assert S.read_state(str(root))[2]==before
+`);
+});
+
+test('v2 verifies actual restore before checkpoint and rejects post-checkpoint source regression', async () => {
+  await probe(roundtripSetup + String.raw`
+restore=ops.restore_database
+def damaged_restore(raw):
+ restore(raw);ops.full=H(b'additional actual dump difference')
+ops.restore_database=damaged_restore
+refused(lambda:executor().execute())
+body=S.read_state(str(root))[2]
+assert body['installIntent']['recovery']['stage']=='database_restore_pending'
+assert ops.events.count('restore_database')==1 and body['admission']=='closed'
+refused(lambda:executor().execute());assert ops.events.count('restore_database')==1
+ops.full=expectations['restoredDatabase']
+S.advance_install_recovery(str(root),binding,'database_restored')
+ops.schema=baseline['schema'];refused(lambda:executor().execute())
+assert ops.events.count('restore_database')==1
+assert S.read_state(str(root))[2]['installIntent']['recovery']['stage']=='database_restored'
+`);
+});
+
+test('v2 expectations cannot substitute source/archive/toolchain/profile and cannot execute production', async () => {
+  await probe(roundtripSetup + String.raw`
+for field in expectations:
+ bad=copy.deepcopy(request);bad['expectations'][field]='f'*64
+ bad['recovery']['expectationsSha256']=H(S.canonical(bad['expectations']))
+ refused(lambda:executor(S.canonical(S.sign_envelope(bad,key))))
+for field,value in (('recoveryVersion',1),('restoreProfile','same-target-legacy-objects-acl-v1'),('expectationsSha256','f'*64)):
+ bad=copy.deepcopy(request);bad['recovery'][field]=value
+ refused(lambda:executor(S.canonical(S.sign_envelope(bad,key))))
+badsource=dict(sources,schema=schema0+b'-- changed\n');refused(lambda:executor(source=badsource))
+(root/'b0'/'postgres.dump').write_bytes(b'archive substitution')
+refused(lambda:executor());(root/'b0'/'postgres.dump').write_bytes(artifacts['postgres.dump'])
+bad=copy.deepcopy(request);bad['helpers']['payload-control-runtime.py']='f'*64
+refused(lambda:executor(S.canonical(S.sign_envelope(bad,key))))
+bad=copy.deepcopy(request);bad['binding']['bindingVersion']=3
+# Artifact reader must not be reached for production identity.
+from unittest.mock import patch
+with patch.object(E,'private_bytes',side_effect=AssertionError('artifact touched')):
+ refused(lambda:executor(S.canonical(S.sign_envelope(bad,key))))
+assert ops.events==[]
+ops.schema=expectations['restoredSchema'];ops.full=expectations['restoredDatabase']
+refused(lambda:executor().execute()) # No recovery/reserved cannot start from S1.
+assert 'restore_database' not in ops.events
+`);
+});
+
 test('real HMAC journal: optional recovery never rewrites historical bodies, advances adjacently and freezes install', async () => {
   await probe(String.raw`
 before=snapshot();assert 'recovery' not in S.read_state(str(root))[2]['installIntent']
@@ -157,6 +313,8 @@ b.update(project='ownerinc-portal-prod',sourceCommit='c'*40,authority={k:'4'*64 
 i['creation'].update(receiptVersion=1,fingerprintAlgorithm='production-container-mounts-v1')
 r=copy.deepcopy(recovery);r.update(purpose='production-b0-recovery',installBindingSha256=H(S.canonical(b)))
 i['recovery']={'binding':r,'stage':'reserved'};S.validate_state_body(body)
+new=copy.deepcopy(body);new['installIntent']['recovery']['binding'].update(recoveryVersion=2,restoreProfile=E.ROUNDTRIP_PROFILE,expectationsSha256='f'*64)
+refused(lambda:S.validate_state_body(new))
 for stage in ('floor_commit_pending','floor_committed'):
  wrong=copy.deepcopy(body);wrong['installIntent']['stage']=stage
  refused(lambda:S.validate_state_body(wrong))
@@ -223,6 +381,40 @@ test('native guard rejects before commands and does not accept target flags', as
   let calls = 0;
   await assert.rejects(qualify({ env: {}, platform: 'linux', command: async () => { calls++; } }));
   assert.equal(calls, 0);
+});
+
+test('CI 38595594718 exact recovered constraint regions demonstrate BETWEEN roundtrip fingerprint drift', async () => {
+  await probe(String.raw`
+# Reconstructed from repository SQL and the COMPLETE redacted artifact 11908694313.
+# Region SHA matches establish exact bytes, not just similar SQL/token structure.
+def region(restored):
+ lines=[]
+ for field in ('icon','illustration'):
+  a=f'(char_length({field}) >= 1)';b=f'(char_length({field}) <= 80)'
+  c=f"({field} ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)"
+  term=f'({a} AND {b} AND {c})' if restored else f'(({a} AND {b}) AND {c})'
+  lines.append(f'    CONSTRAINT autocard_cards_{field}_check CHECK ((({field} IS NULL) OR {term})),\n')
+ return ''.join(lines).encode()
+before,after=region(False),region(True)
+assert H(before)=='c668ef57355144245a51c0f5a1931183352975da363eaa6aa80d294d4be28240'
+assert H(after)=='014400e5cdf35928761f710e5c65b209b15e3d98a609ae1ff6e6c23373105db4'
+assert len(before)-len(after)==4
+assert H(b'autocard_cards_icon_check')=='07192327026a96692c081f5c7db4e30f0acea55728128eb17948d2c06e70c780'
+schema=(pathlib.Path(repo)/'api/db/schema.sql').read_text()
+migration=(pathlib.Path(repo)/'api/db/migrations/029_autocard_media_safety.sql').read_text()
+for field in ('icon','illustration'):
+ expression=f"{field} IS NULL OR (char_length({field}) BETWEEN 1 AND 80 AND {field} ~ '^[a-z0-9]+(-[a-z0-9]+)*$')"
+ assert expression in schema and expression in migration
+assert E.normalize_dump(before)==before and E.normalize_dump(after)==after
+assert E.schema_delta(before,after)=='schema_sql_delta'
+try:E.assert_schema_dump(before,after,H(before))
+except E.SchemaMismatch as error:assert E.failure_for_exception(error,'uploads')==('schema_sql_delta',73)
+else:assert False
+# Full-dump hashing retains the same mismatch even with identical data framing.
+suffix=b'COPY public.recovery_records (id, body) FROM stdin;\n1\toriginal\n\\.\n'
+assert H(E.normalize_dump(before+suffix))!=H(E.normalize_dump(after+suffix))
+assert S.read_state(str(root))[2]['admission']=='closed'
+`);
 });
 
 test('lexer suppresses newline string continuations before any fragment can expose tokens', async () => {

@@ -459,14 +459,20 @@ def validate_install_recovery(value, intent):
     if value['stage'] not in INSTALL_RECOVERY_STAGES or intent['stage'] not in ('reserved', 'portal_grants_pending'):
         fail('install_recovery_invalid')
     binding = value['binding']
-    _exact_keys(binding, {'recoveryVersion', 'purpose', 'installBindingSha256', 'originStateSha256',
+    names = {'recoveryVersion', 'purpose', 'installBindingSha256', 'originStateSha256',
                           'b0ProofSha256', 'manifestSha256', 'portalTarget', 'sourceRelease', 'previousImages',
-                          'securityProfileSha256', 'fenceProfileSha256', 'restoreProfile'}, 'install_recovery_invalid')
+                          'securityProfileSha256', 'fenceProfileSha256', 'restoreProfile'}
+    if isinstance(binding, dict) and type(binding.get('recoveryVersion')) is int and binding['recoveryVersion'] == 2:
+        names.add('expectationsSha256')
+    _exact_keys(binding, names, 'install_recovery_invalid')
     install = intent['binding']
     version = install.get('bindingVersion')
-    if version not in (2, 3) or type(binding['recoveryVersion']) is not int or binding['recoveryVersion'] != 1 or \
+    recovery_version = binding['recoveryVersion']
+    if version not in (2, 3) or type(recovery_version) is not int or recovery_version not in (1, 2) or \
        binding['purpose'] != ('isolated-b0-recovery' if version == 2 else 'production-b0-recovery') or \
-       binding['restoreProfile'] != 'same-target-legacy-objects-acl-v1':
+       binding['restoreProfile'] != ('same-target-legacy-objects-acl-v1' if recovery_version == 1 else 'isolated-autocard-between-roundtrip-v1'):
+        fail('install_recovery_invalid')
+    if recovery_version == 2 and (version != 2 or not isinstance(binding['expectationsSha256'], str) or not HEX_64.fullmatch(binding['expectationsSha256'])):
         fail('install_recovery_invalid')
     for name in ('installBindingSha256', 'originStateSha256', 'b0ProofSha256', 'manifestSha256', 'securityProfileSha256', 'fenceProfileSha256'):
         if not isinstance(binding[name], str) or not HEX_64.fullmatch(binding[name]):
