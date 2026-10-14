@@ -62,6 +62,8 @@ INSTALL_STAGES = (
     'cms_resources_pending', 'cms_resources_bound', 'cms_provision_pending', 'provisioned',
 )
 INSTALL_TRANSITION_STAGES = INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')
+INSTALL_RECOVERY_STAGES = ('reserved', 'database_restore_pending', 'database_restored',
+                           'uploads_restore_pending', 'uploads_restored', 'data_verified_readiness_pending')
 
 
 class StateError(Exception):
@@ -176,8 +178,10 @@ def validate_state_body(body):
     install = body.get('installIntent')
     if install is not None:
         names = {'binding', 'stage', 'cmsTarget'}
-        if isinstance(install, dict) and isinstance(install.get('binding'), dict) and install['binding'].get('bindingVersion') == 2:
+        if isinstance(install, dict) and isinstance(install.get('binding'), dict) and install['binding'].get('bindingVersion') in (2, 3):
             names.add('creation')
+            if 'recovery' in install:
+                names.add('recovery')
         if isinstance(install, dict) and install.get('stage') in ('floor_commit_pending', 'floor_committed'):
             names.add('floor')
         _exact_keys(install, names, 'invalid_cold_state')
@@ -190,13 +194,15 @@ def validate_state_body(body):
            body['rollbackTargetImages'] is not None:
             fail('invalid_cold_state')
         binding = install['binding']
+        if 'recovery' in install:
+            validate_install_recovery(install['recovery'], install)
         if binding['inventoryIdentity'] != body['inventoryIdentity'] or \
            binding['b0']['proofSha256'] != body['legacySourceProofSha256'] or \
            (not terminal and (binding['candidate']['images'] != body['plannedReleaseImages'] or \
                               binding['b0']['proofSha256'] != body['latestProofSha256'])):
             fail('invalid_cold_state')
         if 'creation' in install:
-            validate_install_creation(install['creation'])
+            validate_install_creation(install['creation'], binding)
             if INSTALL_TRANSITION_STAGES.index(stage) < INSTALL_TRANSITION_STAGES.index('cms_resources_pending') and \
                (install['creation']['volumes'] or install['creation']['containers']):
                 fail('invalid_cold_state')
@@ -212,7 +218,7 @@ def validate_state_body(body):
         else:
             _validate_install_target(install['cmsTarget'], 'ownerinc_cms', {'cmsPostgres', 'cmsUploads'})
             if 'creation' in install and (install['creation']['volumes'] != install['cmsTarget']['volumes'] or \
-               set(install['creation']['containers']) != {'cms-postgres', 'cms'} or \
+               set(install['creation']['containers']) != ({'cms-postgres', 'cms', 'api', 'cron'} if binding.get('bindingVersion') == 3 else {'cms-postgres', 'cms'}) or \
                install['creation']['containers']['cms']['image'] != binding['candidate']['images']['cms']):
                 fail('invalid_cold_state')
     elif body['cmsStatus'] == 'provisioned':
@@ -270,13 +276,23 @@ def validate_install_binding(binding):
     # closed. No operator JSON/state CLI may reserve or commit this intent.
     names = {'candidate', 'candidateRelease', 'sourceRelease', 'previousImages',
              'b0', 'inventoryIdentity', 'lease', 'portalTarget'}
-    producer = isinstance(binding, dict) and 'bindingVersion' in binding
-    if producer:
+    versioned = isinstance(binding, dict) and 'bindingVersion' in binding
+    version = binding.get('bindingVersion') if isinstance(binding, dict) else None
+    producer = version == 2
+    if versioned:
         names.add('bindingVersion')
+    if version == 3:
+        names |= {'authority', 'sourceCommit', 'project'}
     _exact_keys(binding, names, 'invalid_cold_state')
     candidate = binding['candidate']
-    if producer and (type(binding['bindingVersion']) is not int or binding['bindingVersion'] != 2):
+    if versioned and (type(version) is not int or version not in (2, 3)):
         fail('invalid_cold_state')
+    if version == 3:
+        _exact_keys(binding['authority'], {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
+        if any(not isinstance(v, str) or not HEX_64.fullmatch(v) for v in binding['authority'].values()) or \
+           binding['project'] != 'ownerinc-portal-prod' or not isinstance(binding['sourceCommit'], str) or \
+           not re.fullmatch(r'[0-9a-f]{40}', binding['sourceCommit']):
+            fail('invalid_cold_state')
     validate_install_candidate(candidate, producer)
     _valid_images(binding['previousImages'], payload=False)
     for name in ('candidateRelease', 'sourceRelease'):
@@ -290,9 +306,14 @@ def validate_install_binding(binding):
         fail('invalid_cold_state')
     if producer and os.path.basename(binding['sourceRelease']) != candidate['sourceMaterialSha256'][:40]:
         fail('invalid_cold_state')
+    if version == 3 and os.path.basename(binding['sourceRelease']) != binding['sourceCommit']:
+        fail('invalid_cold_state')
     _exact_keys(binding['b0'], {'directory', 'proofSha256'}, 'invalid_cold_state')
     directory = binding['b0']['directory']
     if not isinstance(directory, str) or not os.path.isabs(directory) or os.path.normpath(directory) != directory:
+        fail('invalid_cold_state')
+    if version == 3 and any('\0' in binding[name] for name in ('sourceRelease', 'candidateRelease')) or \
+       version == 3 and '\0' in directory:
         fail('invalid_cold_state')
     for value in (binding['inventoryIdentity'], binding['b0']['proofSha256']):
         if not isinstance(value, str) or not HEX_64.fullmatch(value):
@@ -301,6 +322,46 @@ def validate_install_binding(binding):
     if not _safe_int(binding['lease']['device']) or not _safe_int(binding['lease']['inode'], 1):
         fail('invalid_cold_state')
     _validate_install_target(binding['portalTarget'], 'portal', {'portalPostgres', 'portalUploads'})
+    return binding
+
+
+def production_candidate(record):
+    """Reconstruct from an already authenticated full admission record."""
+    candidate = {name: record[name] for name in ('commit', 'runId', 'runAttempt', 'images', 'candidateSha256')}
+    candidate.update(reportSha256=record['recoveryReportSha256'],
+                     qualificationSha256=record['qualifiedManifestSha256'], bundleSha256=record['archiveSha256'])
+    return validate_install_candidate(candidate)
+
+
+def validate_production_correspondence(binding, approval, record, inventory, authority):
+    """Pure correspondence only. Caller must authenticate all inputs first.
+
+    Hash strings supplied by an operator are not authentication or permission.
+    The launcher supplies hashes of the protected bytes it actually verified.
+    """
+    validate_install_binding(binding)
+    INVENTORY.validate(inventory)
+    _exact_keys(authority, {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
+    if any(not isinstance(value, str) or not HEX_64.fullmatch(value) for value in authority.values()):
+        fail('invalid_cold_state')
+    if binding.get('bindingVersion') != 3 or binding['authority'] != authority or \
+       authority['policySha256'] != approval['admission']['policySha256'] or \
+       authority['recordSha256'] != approval['admission']['recordSha256'] or \
+       record['policySha256'] != authority['policySha256'] or \
+       record['archiveSha256'] != approval['admission']['archiveSha256'] or \
+       binding['candidate'] != production_candidate(record) or \
+       binding['inventoryIdentity'] != INVENTORY.identity(inventory) or \
+       binding['inventoryIdentity'] != approval['hostBaseline']['inventoryIdentity'] or \
+       binding['project'] != inventory['project'] or \
+       binding['sourceCommit'] != approval['hostBaseline']['currentCommit'] or \
+       binding['previousImages'] != approval['hostBaseline']['legacyImages'] or \
+       binding['sourceRelease'] != os.path.join(inventory['paths']['releases'], binding['sourceCommit']) or \
+       binding['candidateRelease'] != os.path.join(inventory['paths']['releases'], record['commit']):
+        fail('planned_release_mismatch')
+    directory = binding['b0']['directory']
+    if not any(directory != root and os.path.commonpath((root, directory)) == root
+               for root in inventory['paths']['backupRoots']):
+        fail('planned_release_mismatch')
     return binding
 
 
@@ -338,8 +399,8 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None):
     first; a shape-valid JSON is not permission to install. Production admission
     qualification belongs to the outer deploy gate, not the recovery producer."""
     validate_install_binding(binding)
-    if binding.get('bindingVersion') == 2:
-        validate_install_creation(creation)
+    if binding.get('bindingVersion') in (2, 3):
+        validate_install_creation(creation, binding)
         if creation['volumes'] or creation['containers']:
             fail('invalid_cold_state')
     elif creation is not None:
@@ -351,7 +412,10 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None):
         fail('preauthority_source_recovery_proof_mismatch')
     old = read_state(directory)[2]
     if old.get('installIntent') is not None:
-        assert_install_matches(old, binding)
+        intent = assert_install_matches(old, binding)
+        if binding.get('bindingVersion') == 3 and any(intent['creation'][name] != creation[name]
+                for name in ('receiptVersion', 'fingerprintAlgorithm', 'nonce')):
+            fail('restore_target_changed')
         return old
     if old['schemaVersion'] != 2 or old['cmsStatus'] != 'cold' or old['admission'] != 'closed' or \
        old['restoreIntent'] is not None or old['rollbackTargetImages'] is not None:
@@ -390,17 +454,77 @@ def advance_install(directory, binding, stage, cms_target=None):
     return transition(directory, advance)
 
 
+def validate_install_recovery(value, intent):
+    _exact_keys(value, {'binding', 'stage'}, 'install_recovery_invalid')
+    if value['stage'] not in INSTALL_RECOVERY_STAGES or intent['stage'] not in ('reserved', 'portal_grants_pending'):
+        fail('install_recovery_invalid')
+    binding = value['binding']
+    names = {'recoveryVersion', 'purpose', 'installBindingSha256', 'originStateSha256',
+                          'b0ProofSha256', 'manifestSha256', 'portalTarget', 'sourceRelease', 'previousImages',
+                          'securityProfileSha256', 'fenceProfileSha256', 'restoreProfile'}
+    if isinstance(binding, dict) and type(binding.get('recoveryVersion')) is int and binding['recoveryVersion'] == 2:
+        names.add('expectationsSha256')
+    _exact_keys(binding, names, 'install_recovery_invalid')
+    install = intent['binding']
+    version = install.get('bindingVersion')
+    recovery_version = binding['recoveryVersion']
+    if version not in (2, 3) or type(recovery_version) is not int or recovery_version not in (1, 2) or \
+       binding['purpose'] != ('isolated-b0-recovery' if version == 2 else 'production-b0-recovery') or \
+       binding['restoreProfile'] != ('same-target-legacy-objects-acl-v1' if recovery_version == 1 else 'isolated-autocard-between-roundtrip-v1'):
+        fail('install_recovery_invalid')
+    if recovery_version == 2 and (version != 2 or not isinstance(binding['expectationsSha256'], str) or not HEX_64.fullmatch(binding['expectationsSha256'])):
+        fail('install_recovery_invalid')
+    for name in ('installBindingSha256', 'originStateSha256', 'b0ProofSha256', 'manifestSha256', 'securityProfileSha256', 'fenceProfileSha256'):
+        if not isinstance(binding[name], str) or not HEX_64.fullmatch(binding[name]):
+            fail('install_recovery_invalid')
+    if binding['installBindingSha256'] != hashlib.sha256(canonical(install)).hexdigest() or \
+       binding['b0ProofSha256'] != install['b0']['proofSha256'] or any(binding[k] != install[k] for k in ('portalTarget', 'sourceRelease', 'previousImages')):
+        fail('install_recovery_invalid')
+
+
+def begin_install_recovery(directory, binding, recovery_binding):
+    # Persistence only. The isolated executor must authenticate request, B0,
+    # profiles, exact target and fresh held lease/fence before calling this.
+    _, _, old, head = read_state(directory, repair_head=False)
+    intent = assert_install_matches(old, binding)
+    if 'recovery' in intent:
+        if intent['recovery']['binding'] != recovery_binding:
+            fail('install_recovery_invalid')
+        return old
+    if recovery_binding.get('originStateSha256') != head:
+        fail('install_recovery_invalid')
+    return transition(directory, lambda body: body['installIntent'].update(
+        recovery={'binding': json.loads(json.dumps(recovery_binding)), 'stage': 'reserved'}))
+
+
+def advance_install_recovery(directory, binding, stage):
+    old = read_state(directory, repair_head=False)[2]
+    intent = assert_install_matches(old, binding)
+    if 'recovery' not in intent or stage not in INSTALL_RECOVERY_STAGES:
+        fail('install_recovery_invalid')
+    if intent['recovery']['stage'] == stage:
+        return old
+    return transition(directory, lambda body: body['installIntent']['recovery'].update(stage=stage))
+
+
 def install_pending(body):
     intent = body.get('installIntent')
     return intent is not None and intent['stage'] != 'floor_committed'
 
 
-def validate_install_creation(value):
-    _exact_keys(value, {'nonce', 'volumes', 'containers'}, 'invalid_cold_state')
+def validate_install_creation(value, binding=None):
+    production = binding is not None and binding.get('bindingVersion') == 3
+    names = {'nonce', 'volumes', 'containers'}
+    if production:
+        names |= {'receiptVersion', 'fingerprintAlgorithm'}
+    _exact_keys(value, names, 'invalid_cold_state')
+    if production and (type(value['receiptVersion']) is not int or value['receiptVersion'] != 1 or
+                       value['fingerprintAlgorithm'] != 'production-container-mounts-v1'):
+        fail('invalid_cold_state')
     if not isinstance(value['nonce'], str) or not HEX_64.fullmatch(value['nonce']) or \
        not isinstance(value['volumes'], dict) or not isinstance(value['containers'], dict) or \
        not set(value['volumes']) <= {'cmsPostgres', 'cmsUploads'} or \
-       not set(value['containers']) <= {'cms-postgres', 'cms'}:
+       not set(value['containers']) <= ({'cms-postgres', 'cms', 'api', 'cron'} if production else {'cms-postgres', 'cms'}):
         fail('invalid_cold_state')
     for item in value['volumes'].values():
         _exact_keys(item, {'name', 'driver', 'mountpoint', 'fingerprint'}, 'invalid_cold_state')
@@ -408,12 +532,20 @@ def validate_install_creation(value):
            not isinstance(item['mountpoint'], str) or not os.path.isabs(item['mountpoint']) or \
            not isinstance(item['fingerprint'], str) or not HEX_64.fullmatch(item['fingerprint']):
             fail('invalid_cold_state')
-    for item in value['containers'].values():
-        _exact_keys(item, {'id', 'image', 'fingerprint'}, 'invalid_cold_state')
+    for service, item in value['containers'].items():
+        _exact_keys(item, {'id', 'image', 'fingerprint'} | ({'releasePath', 'creationState'} if production else set()), 'invalid_cold_state')
         if not isinstance(item['id'], str) or not HEX_64.fullmatch(item['id']) or \
            not isinstance(item['image'], str) or not isinstance(item['fingerprint'], str) or \
            not HEX_64.fullmatch(item['fingerprint']):
             fail('invalid_cold_state')
+        if production:
+            expected = binding['candidate']['images'][service] if service != 'cms-postgres' else \
+                'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'
+            if item['image'] != expected or item['releasePath'] != binding['candidateRelease'] or item['creationState'] != 'created':
+                fail('invalid_cold_state')
+    if production and (len({item['id'] for item in value['containers'].values()}) != len(value['containers']) or
+                       len({item['name'] for item in value['volumes'].values()}) != len(value['volumes'])):
+        fail('invalid_cold_state')
 
 
 def record_install_creation(directory, binding, kind, name, receipt):
@@ -640,6 +772,20 @@ def validate_state_transition(old, new):
         fail('legacy_fallback_forbidden')
     old_install = old.get('installIntent')
     new_install = new.get('installIntent')
+    if old_install is not None and 'recovery' in old_install:
+        if new_install is None or 'recovery' not in new_install or \
+           {k: v for k, v in old_install.items() if k != 'recovery'} != {k: v for k, v in new_install.items() if k != 'recovery'} or \
+           old_install['recovery']['binding'] != new_install['recovery']['binding']:
+            fail('install_recovery_invalid')
+        before = INSTALL_RECOVERY_STAGES.index(old_install['recovery']['stage'])
+        after = INSTALL_RECOVERY_STAGES.index(new_install['recovery']['stage'])
+        if after not in (before, before + 1) or any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
+            fail('install_recovery_invalid')
+    elif new_install is not None and 'recovery' in new_install:
+        if old_install is None or old_install != {k: v for k, v in new_install.items() if k != 'recovery'} or \
+           new_install['recovery']['binding']['originStateSha256'] != new['previousStateSha256'] or \
+           new_install['recovery']['stage'] != 'reserved' or any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
+            fail('install_recovery_invalid')
     if old_install is not None:
         if new_install is None or canonical(old_install['binding']) != canonical(new_install['binding']):
             fail('planned_release_mismatch')
@@ -653,6 +799,9 @@ def validate_state_transition(old, new):
         if 'creation' in old_install:
             before_creation, after_creation = old_install['creation'], new_install['creation']
             if before_creation['nonce'] != after_creation['nonce']:
+                fail('restore_target_changed')
+            if old_install['binding'].get('bindingVersion') == 3 and any(before_creation[name] != after_creation[name]
+                    for name in ('receiptVersion', 'fingerprintAlgorithm')):
                 fail('restore_target_changed')
             for kind in ('volumes', 'containers'):
                 if any(after_creation[kind].get(name) != value for name, value in before_creation[kind].items()) or \

@@ -71,6 +71,127 @@ def fresh(label):
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
+test('production v3 receipts persist through signed transitions and reject replay without changing historical formats', async t => {
+  await fixture(t, String.raw`
+binding.update(bindingVersion=3,sourceCommit='b'*40,project='ownerinc-portal-prod',
+ authority={name:'a'*64 for name in ('sourceApprovalSha256','policySha256','recordSha256')})
+creation={'receiptVersion':1,'fingerprintAlgorithm':'production-container-mounts-v1','nonce':'b'*64,'volumes':{},'containers':{}}
+root=fresh('production-v3')
+S.reserve_install(root,binding,proof,'5'*64,creation)
+def snapshot():
+ return {name:open(os.path.join(root,'payload-control-state',name),'rb').read()
+         for name in os.listdir(os.path.join(root,'payload-control-state'))}
+before=snapshot();S.reserve_install(root,binding,proof,'5'*64,creation);assert snapshot()==before
+wrong=copy.deepcopy(creation);wrong['nonce']='c'*64
+expect('restore_target_changed',lambda:S.reserve_install(root,binding,proof,'5'*64,wrong))
+for version in (True,'3',None,1,4):
+ wrong=copy.deepcopy(binding);wrong['bindingVersion']=version
+ expect('invalid_cold_state',lambda:S.validate_install_binding(wrong))
+for name in binding['authority']:
+ wrong=copy.deepcopy(binding);wrong['authority'][name]='c'*64
+ expect('planned_release_mismatch',lambda:S.reserve_install(root,wrong,proof,'5'*64,creation))
+wrong=copy.deepcopy(creation);wrong['fingerprintAlgorithm']='legacy'
+expect('invalid_cold_state',lambda:S.reserve_install(root,binding,proof,'5'*64,wrong))
+for stage in ('portal_grants_pending','portal_grants_verified','cms_resources_pending'):
+ S.advance_install(root,binding,stage)
+for name,receipt in cms_target['volumes'].items():S.record_install_creation(root,binding,'volumes',name,receipt)
+for i,service in enumerate(('cms-postgres','cms','api','cron')):
+ receipt={'id':str(i+1)*64,'image':images[service] if service!='cms-postgres' else
+ 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777',
+ 'fingerprint':'e'*64,'releasePath':binding['candidateRelease'],'creationState':'created'}
+ for field,value in [('image','wrong'),('releasePath',binding['sourceRelease']),('creationState','running')]:
+  wrong=dict(receipt,**{field:value})
+  expect('invalid_cold_state',lambda:S.record_install_creation(root,binding,'containers',service,wrong))
+ if i:
+  wrong=dict(receipt,id='1'*64)
+  expect('invalid_cold_state',lambda:S.record_install_creation(root,binding,'containers',service,wrong))
+ S.record_install_creation(root,binding,'containers',service,receipt)
+ before=S.read_state(root)[2]
+ S.record_install_creation(root,binding,'containers',service,receipt)
+ assert S.read_state(root)[2]['installIntent']==before['installIntent']
+ wrong=dict(receipt,fingerprint='f'*64)
+ expect('restore_target_changed',lambda:S.record_install_creation(root,binding,'containers',service,wrong))
+ if service!='cron':expect('invalid_cold_state',lambda:S.advance_install(root,binding,'cms_resources_bound',cms_target))
+S.reserve_install(root,binding,proof,'5'*64,creation) # Empty retry does not discard accumulated receipts.
+before=snapshot();restarted=load('production_restart','payload-control-state.py')
+assert restarted.read_state(root)[2]==S.read_state(root)[2] and snapshot()==before
+S.advance_install(root,binding,'cms_resources_bound',cms_target)
+for stage in ('cms_provision_pending','provisioned'):S.advance_install(root,binding,stage)
+S.begin_install_floor(root,binding,'f'*64)
+S.commit_install_floor(root,binding)
+def restore(body):
+ body['restoreIntent']={'proofSha256':'7'*64,'stage':'reserved','releaseImages':images,
+ 'targetFingerprints':{k:'8'*64 for k in ('portalDatabase','cmsDatabase','portalUploads','cmsUploads')},
+ 'target':{'inventoryIdentity':binding['inventoryIdentity'],'portal':portal,'cms':cms,
+ 'volumes':dict(binding['portalTarget']['volumes'],**cms_target['volumes'])}}
+S.transition(root,restore)
+body=S.read_state(root)[2];assert body['restoreIntent'] and body['installIntent']['stage']=='floor_committed'
+expect('invalid_cold_state',lambda:S.record_install_creation(root,binding,'containers','cron',receipt))
+before=snapshot();restarted.read_state(root);assert snapshot()==before
+`);
+});
+
+test('historical unversioned and isolated v2 signed bytes remain exact and cannot be converted in place', async t => {
+  await fixture(t, String.raw`
+original=copy.deepcopy(binding)
+for version in (None,2):
+ binding=copy.deepcopy(original)
+ creation=None
+ if version==2:
+  binding['bindingVersion']=2
+  binding['candidate']={k:original['candidate'][k] for k in ('commit','runId','runAttempt','images','candidateSha256')}
+  binding['candidate'].update(schemaVersion=1,purpose='isolated-recovery-producer',sourceMaterialSha256='b'*64)
+  creation={'nonce':'c'*64,'volumes':{},'containers':{}}
+ root=fresh('historical-'+str(version));S.reserve_install(root,binding,proof,'5'*64,creation)
+ key,state_dir,body,_=S.read_state(root)
+ before={name:open(os.path.join(state_dir,name),'rb').read() for name in os.listdir(state_dir)}
+ expected=S.canonical(S.sign_envelope(body,key))+b'\n'
+ assert before['current.json']==expected
+ restarted=load('historical_restart_'+str(version),'payload-control-state.py')
+ assert restarted.read_state(root)[2]==body
+ assert {name:open(os.path.join(state_dir,name),'rb').read() for name in os.listdir(state_dir)}==before
+ upgraded=copy.deepcopy(original);upgraded.update(bindingVersion=3,sourceCommit='b'*40,project='ownerinc-portal-prod',
+  authority={k:'a'*64 for k in ('sourceApprovalSha256','policySha256','recordSha256')})
+ new_creation={'receiptVersion':1,'fingerprintAlgorithm':'production-container-mounts-v1','nonce':'c'*64,'volumes':{},'containers':{}}
+ expect('planned_release_mismatch',lambda:S.reserve_install(root,upgraded,proof,'5'*64,new_creation))
+ expect('invalid_cold_state',lambda:S.validate_install_creation(new_creation,binding))
+ assert open(os.path.join(state_dir,'current.json'),'rb').read()==expected
+`);
+});
+
+test('production fingerprint sorts only unique outer mounts and leaves persistent legacy algorithm unchanged', async t => {
+  await fixture(t, String.raw`
+value={'Id':'a'*64,'Image':'sha256:'+'b'*64,'Created':'2026-10-13T00:00:00Z',
+ 'Config':{'Image':images['api'],'Labels':{'reservation':'c'*64}},
+ 'Mounts':[{'Destination':os.path.join(directory,'z'),'RW':True,'Nested':['b','a']},
+           {'Destination':os.path.join(directory,'a'),'RW':False}]}
+release=binding['candidateRelease'];original=copy.deepcopy(value)
+digest=R.production_container_fingerprint(value,release)
+swapped=copy.deepcopy(value);swapped['Mounts'].reverse()
+assert R.production_container_fingerprint(swapped,release)==digest and value==original
+for mutate in [lambda v:v.update(Id='d'*64),lambda v:v.update(Image='sha256:'+'d'*64),
+ lambda v:v.update(Created='different'),lambda v:v['Config'].update(Image=images['cron']),
+ lambda v:v['Config']['Labels'].update(extra='field'),lambda v:v['Mounts'][0].update(RW=False),
+ lambda v:v['Mounts'][0].update(extra='field'),lambda v:v['Mounts'][0]['Nested'].reverse(),
+ lambda v:v['Mounts'].pop(),lambda v:v['Mounts'].append({'Destination':os.path.join(directory,'new')})]:
+ changed=copy.deepcopy(value);mutate(changed)
+ assert R.production_container_fingerprint(changed,release)!=digest
+assert R.production_container_fingerprint(value,binding['sourceRelease'])!=digest
+for destination in ('relative','/bad/../path','/bad\0path',value['Mounts'][1]['Destination']):
+ changed=copy.deepcopy(value);changed['Mounts'][0]['Destination']=destination
+ expect('restore_target_changed',lambda:R.production_container_fingerprint(changed,release))
+# Exercise the original persistent helper, not a copied hash formula alone.
+value['Config']['Image']=images['cms'];value['Config']['Labels']={'com.docker.compose.project':'old',
+ 'com.docker.compose.service':'cms','io.ownerinc.install-reservation':'c'*64}
+runtime=object.__new__(R.Runtime);runtime.state={'installIntent':{'creation':{'nonce':'c'*64},'binding':binding}}
+runtime.inventory={'document':{'project':'old'}}
+runtime._initializer_command=lambda args:json.dumps([value]).encode()
+with patch.object(R,'_container_id',lambda *a,**kw:'a'*64):
+ old=runtime._creation_container('cms');value['Mounts'].reverse();new=runtime._creation_container('cms')
+assert old['fingerprint']!=new['fingerprint'] and set(old)=={'id','image','fingerprint'}
+`);
+});
+
 test('signed installation milestones survive restart and exact retry without clearing evidence or enabling writers', async t => {
   await fixture(t, String.raw`
 root = fresh('milestones')

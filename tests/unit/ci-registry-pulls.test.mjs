@@ -180,6 +180,7 @@ test('actual workflow root environment maps to the real recovery validator; rein
     CMS_IMAGE: `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:${'c'.repeat(64)}`,
     GITHUB_SHA: 'd'.repeat(40), GITHUB_RUN_ID: '37994301180', GITHUB_RUN_ATTEMPT: '2',
     RUNNER_TEMP: '/synthetic/runner-temp', RECOVERY_REPORT: '/synthetic/recovery-report.json',
+    RECOVERY_PROGRESS: '/synthetic/recovery-progress.json',
     DOCKER_CONFIG: '/synthetic/private-docker', DOCKER_HOST: 'tcp://synthetic.invalid:2375',
     DOCKER_CONTEXT: 'synthetic-remote', DOCKER_TLS_VERIFY: '1', DOCKER_CERT_PATH: '/synthetic/certs',
     DOCKER_CUSTOM_OVERRIDE: 'synthetic', CI_PRIVATE_SENTINEL: 'must-not-enter-recovery',
@@ -200,6 +201,7 @@ test('actual workflow root environment maps to the real recovery validator; rein
   assertPath(environment.HOME, '/root');
   assertPath(environment.RUNNER_TEMP, parent.RUNNER_TEMP);
   assertPath(environment.PAYLOAD_RECOVERY_REPORT, parent.RECOVERY_REPORT);
+  assertPath(environment.PAYLOAD_RECOVERY_PROGRESS, parent.RECOVERY_PROGRESS);
   assert.equal(environment.CI_PRIVATE_SENTINEL, undefined);
   const inputs = recoveryInputsFromEnvironment(environment);
   assert.deepEqual(inputs.dockerEnvironment, {});

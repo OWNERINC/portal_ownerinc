@@ -65,8 +65,18 @@ export function validateGithubRun(request, { repository, workflow, run, jobs }) 
   if (!Array.isArray(jobs)) reject('invalid_github_jobs');
   const validateJobs = jobs.filter(job => job.name === 'validate');
   const deployJobs = jobs.filter(job => job.name === 'Deploy production');
-  if (validateJobs.length !== 1 || deployJobs.length !== 1 || deployJobs[0].conclusion !== 'skipped' ||
-      jobs.some(job => job.name !== 'validate' && job.name !== 'Deploy production')) reject('unexpected_candidate_jobs');
+  const b0Jobs = jobs.filter(job => job.name === 'isolated-b0-recovery');
+  if (validateJobs.length !== 1 || deployJobs.length !== 1 || b0Jobs.length !== 1 || deployJobs[0].conclusion !== 'skipped' ||
+      jobs.some(job => !['validate', 'Deploy production', 'isolated-b0-recovery'].includes(job.name))) reject('unexpected_candidate_jobs');
+  const b0 = b0Jobs[0];
+  if (b0.status !== 'completed' || b0.conclusion !== 'success' || b0.head_sha !== request.commit ||
+      apiId(b0.run_id) !== request.runId || apiId(b0.run_attempt) !== request.runAttempt || !Array.isArray(b0.steps)) {
+    reject('github_candidate_gate_not_passed');
+  }
+  for (const name of ['Checkout exact B0 candidate', 'Set up B0 Node', 'Prepare pinned isolated B0 images', 'Run required native isolated B0 recovery']) {
+    const matches = b0.steps.filter(step => step.name === name);
+    if (matches.length !== 1 || matches[0].status !== 'completed' || matches[0].conclusion !== 'success') reject('github_candidate_gate_not_passed');
+  }
   const job = validateJobs[0];
   if (job.status !== 'completed' || job.conclusion !== 'success' || job.head_sha !== request.commit ||
       apiId(job.run_id) !== request.runId || apiId(job.run_attempt) !== request.runAttempt || !Array.isArray(job.steps)) {
@@ -80,6 +90,8 @@ export function validateGithubRun(request, { repository, workflow, run, jobs }) 
   }
   const start = Date.parse(job.started_at); const end = Date.parse(job.completed_at);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) reject('invalid_github_attempt_window');
+  const b0Start = Date.parse(b0.started_at); const b0End = Date.parse(b0.completed_at);
+  if (!Number.isFinite(b0Start) || !Number.isFinite(b0End) || b0End < b0Start || b0End > start) reject('invalid_github_attempt_window');
   return { repositoryId: repository.id, workflowId: workflow.id, start, end };
 }
 

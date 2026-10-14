@@ -14,6 +14,8 @@ import tarfile
 import secrets
 import time
 import tempfile
+import gzip
+from contextlib import contextmanager, ExitStack
 
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -70,7 +72,22 @@ floor_boundary floor_roles floor_runtime floor_native_catalog floor_pending floo
 '''.split())
 
 
-def _emit_initializer_diagnostic(runtime):
+QUIESCENCE_DIAGNOSTIC_SERVICES = ('api', 'cms', 'cms-postgres', 'cron', 'nginx', 'unknown')
+
+
+def _quiescence_failure_summary(cms_status, running, allowed):
+    counts = {}
+    for container in running:
+        if container['service'] not in allowed:
+            service = container['service'] if container['service'] in QUIESCENCE_DIAGNOSTIC_SERVICES else 'unknown'
+            counts[service] = counts.get(service, 0) + 1
+    return {'predicate': 'running_service_not_allowed', 'cmsStatus': cms_status,
+            'offenders': [{'service': service, 'state': 'running', 'count': min(counts[service], 99)}
+                          for service in QUIESCENCE_DIAGNOSTIC_SERVICES if service in counts],
+            'truncated': any(count > 99 for count in counts.values())}
+
+
+def _emit_initializer_diagnostic(runtime, error=None):
     phase = getattr(runtime, 'initializer_phase', 'runtime_validation')
     state = getattr(runtime, 'state', None)
     intent = state.get('installIntent') if isinstance(state, dict) else None
@@ -82,8 +99,23 @@ def _emit_initializer_diagnostic(runtime):
     exit_code = exit_code if type(exit_code) is int and 0 <= exit_code <= 255 else 'none'
     signal = signal if type(signal) is int and 1 <= signal <= 64 else 'none'
     retained = 'retained' if getattr(runtime, 'initializer_stderr_retained', False) is True else 'none'
+    extra = ''
+    summary = getattr(error, 'quiescence_diagnostic', None)
+    if (getattr(runtime, 'action', None) == 'initialize-isolated' and str(error) == 'writers_not_quiescent'
+            and phase == 'quiescence' and stage == 'none' and exit_code == 'none'
+            and signal == 'none' and retained == 'none' and isinstance(summary, dict)
+            and summary.get('predicate') == 'running_service_not_allowed'
+            and summary.get('cmsStatus') in ('cold', 'migrated') and type(summary.get('truncated')) is bool):
+        offenders = summary.get('offenders')
+        if (isinstance(offenders, list) and 1 <= len(offenders) <= len(QUIESCENCE_DIAGNOSTIC_SERVICES)
+                and all(isinstance(item, dict) and item.get('service') in QUIESCENCE_DIAGNOSTIC_SERVICES
+                        and item.get('state') == 'running' and type(item.get('count')) is int
+                        and 1 <= item['count'] <= 99 for item in offenders)):
+            encoded = ','.join(f"{item['service']}:running:{item['count']}" for item in offenders)
+            extra = (f" quiescencePredicate=running_service_not_allowed quiescenceCms={summary['cmsStatus']}"
+                     f" quiescenceOffenders={encoded} quiescenceTruncated={str(summary['truncated']).lower()}")
     print(f'PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase={phase} installStage={stage} '
-          f'commandExit={exit_code} commandSignal={signal} privateStderr={retained}', file=sys.stderr)
+          f'commandExit={exit_code} commandSignal={signal} privateStderr={retained}{extra}', file=sys.stderr)
 
 
 class ControlError(Exception):
@@ -563,7 +595,11 @@ def _check_container_shape(cms_status, quiescent=False):
         if cms_status == 'migrated':
             allowed.add('cms-postgres')
         if any(c['service'] not in allowed for c in running):
-            fail('writers_not_quiescent')
+            error = ControlError('writers_not_quiescent')
+            # Same observation as the failed predicate: never issue a second
+            # inventory/inspect that could describe a different container set.
+            error.quiescence_diagnostic = _quiescence_failure_summary(cms_status, running, allowed)
+            raise error
     else:
         if not any(c['service'] == 'postgres' and c['state'] == 'running' for c in containers):
             fail('portal_database_container_unavailable')
@@ -663,6 +699,645 @@ def _validate_portal_session_grants(value, mode):
     fail('unsupported_portal_grant_mode')
 
 
+LEGACY_SECURITY_MAX_RECORDS = 20000
+LEGACY_SECURITY_MAX_BYTES = 4 * 1024 ** 2
+LEGACY_SECURITY_ROLES = ('portal_api', 'portal_cron')
+LEGACY_SECURITY_PRIVILEGES = {
+    'database': ('CONNECT', 'CREATE', 'TEMPORARY'), 'schema': ('USAGE', 'CREATE'),
+    'table': tuple(SESSION_TABLE_PRIVILEGES), 'column': ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES'),
+    'sequence': ('USAGE', 'SELECT', 'UPDATE'), 'routine': ('EXECUTE',), 'type': ('USAGE',),
+}
+
+
+def portal_legacy_security_observation_sql():
+    """Fixed PG16 catalog query only. NOT registered or executed by this module.
+
+    Future authenticated transport must enforce a 30s process/4MiB byte bound.
+    Catalog rows are capped before JSON aggregation; overflow never truncates.
+    """
+    return r"""
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL search_path = pg_catalog;
+SET LOCAL statement_timeout = '20s';
+SET LOCAL lock_timeout = '2s';
+SET LOCAL timezone = 'UTC';
+SET LOCAL datestyle = 'ISO, YMD';
+WITH
+scope AS MATERIALIZED (SELECT pg_catalog.current_database()='portal' AND
+ pg_catalog.current_setting('server_version_num')::integer/10000=16 AS ok),
+db AS MATERIALIZED (SELECT oid, datname, datdba, datacl FROM pg_catalog.pg_database WHERE datname=pg_catalog.current_database()),
+roles AS MATERIALIZED (SELECT oid, rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
+  rolinherit, rolreplication, rolbypassrls, rolconnlimit, rolvaliduntil
+  FROM pg_catalog.pg_roles WHERE rolname IN ('portal_api','portal_cron')),
+objects AS (
+ SELECT 'database'::text AS object_type, ''::text AS schema, d.datname::text AS name, ''::text AS subname,
+ d.datdba AS owner, d.datacl AS acl, 'd'::"char" AS acl_kind, d.oid, 0::integer AS subid, false AS unsupported
+ FROM db d
+ UNION ALL SELECT 'schema','',n.nspname,'',n.nspowner,n.nspacl,'n',n.oid,0,false
+ FROM pg_catalog.pg_namespace n WHERE n.nspname='public'
+ UNION ALL SELECT CASE WHEN c.relkind='S' THEN 'sequence' ELSE 'table' END,n.nspname,c.relname,'',
+ c.relowner,c.relacl,CASE WHEN c.relkind='S' THEN 's'::"char" ELSE 'r'::"char" END,c.oid,0,
+ c.relkind NOT IN ('r','S') OR c.relrowsecurity OR c.relforcerowsecurity
+ OR EXISTS(SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid=c.oid)
+ OR EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=c.oid AND NOT t.tgisinternal)
+ OR EXISTS(SELECT 1 FROM pg_catalog.pg_rewrite w WHERE w.ev_class=c.oid AND w.rulename<>'_RETURN')
+ FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relkind NOT IN ('i','I','t')
+ UNION ALL SELECT 'column',n.nspname,c.relname,a.attname,c.relowner,a.attacl,'c',c.oid,a.attnum,false
+ FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+ JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f') AND a.attnum>0 AND NOT a.attisdropped
+ UNION ALL SELECT 'routine',n.nspname,p.proname,pg_catalog.pg_get_function_identity_arguments(p.oid),
+ p.proowner,p.proacl,'f',p.oid,0,p.prosecdef OR p.proconfig IS NOT NULL OR p.prokind NOT IN ('f','p')
+ FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'
+ UNION ALL SELECT 'type',n.nspname,t.typname,'',t.typowner,t.typacl,'T',t.oid,0,false
+ FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public'
+ UNION ALL SELECT 'default',COALESCE(n.nspname,''),pg_catalog.pg_get_userbyid(a.defaclrole),a.defaclobjtype::text,
+ a.defaclrole,a.defaclacl,a.defaclobjtype,a.oid,0,false
+ FROM pg_catalog.pg_default_acl a LEFT JOIN pg_catalog.pg_namespace n ON n.oid=a.defaclnamespace
+ WHERE a.defaclnamespace=0 OR n.nspname='public'
+),
+bounded_objects AS MATERIALIZED (SELECT * FROM objects WHERE (SELECT ok FROM scope) LIMIT 20001),
+object_budget AS MATERIALIZED (SELECT count(*)<=20000 AS ok FROM bounded_objects),
+privileges(object_type,privilege) AS (VALUES
+ ('database','CONNECT'),('database','CREATE'),('database','TEMPORARY'),('schema','USAGE'),('schema','CREATE'),
+ ('table','SELECT'),('table','INSERT'),('table','UPDATE'),('table','DELETE'),('table','TRUNCATE'),('table','REFERENCES'),('table','TRIGGER'),
+ ('column','SELECT'),('column','INSERT'),('column','UPDATE'),('column','REFERENCES'),
+ ('sequence','USAGE'),('sequence','SELECT'),('sequence','UPDATE'),('routine','EXECUTE'),('type','USAGE')),
+effective AS (
+ SELECT o.*,r.oid AS role_oid,r.rolname,v.privilege FROM bounded_objects o
+ CROSS JOIN roles r JOIN privileges v ON v.object_type=o.object_type
+ WHERE (SELECT ok FROM object_budget)
+),
+records AS (
+ SELECT pg_catalog.jsonb_build_object('kind','role','name',r.rolname,'login',r.rolcanlogin,'superuser',r.rolsuper,
+ 'createDatabase',r.rolcreatedb,'createRole',r.rolcreaterole,'inherit',r.rolinherit,'replication',r.rolreplication,
+ 'bypassRls',r.rolbypassrls,'connectionLimit',r.rolconnlimit,'validUntil',r.rolvaliduntil::text) AS record FROM roles r
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','membership','role',pg_catalog.pg_get_userbyid(m.roleid),
+ 'member',pg_catalog.pg_get_userbyid(m.member),'grantor',pg_catalog.pg_get_userbyid(m.grantor),
+ 'admin',m.admin_option,'inherit',m.inherit_option,'set',m.set_option)
+ FROM pg_catalog.pg_auth_members m WHERE m.roleid IN (SELECT oid FROM roles) OR m.member IN (SELECT oid FROM roles)
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','settings','role',r.rolname,'present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_db_role_setting x WHERE x.setrole=r.oid OR
+ (x.setrole=0 AND x.setdatabase=(SELECT oid FROM db)))) FROM roles r
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','object','objectType',o.object_type,'schema',o.schema,
+ 'name',o.name,'subname',o.subname,'owner',pg_catalog.pg_get_userbyid(o.owner),'aclNull',o.acl IS NULL,
+ 'unsupported',o.unsupported) FROM bounded_objects o
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','acl','objectType',o.object_type,'schema',o.schema,
+ 'name',o.name,'subname',o.subname,'grantor',pg_catalog.pg_get_userbyid(a.grantor),
+ 'grantee',CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(a.grantee) END,
+ 'privilege',a.privilege_type,'grantable',a.is_grantable)
+ FROM bounded_objects o CROSS JOIN LATERAL pg_catalog.aclexplode(
+ COALESCE(o.acl,pg_catalog.acldefault(o.acl_kind,o.owner))) a WHERE (SELECT ok FROM object_budget)
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','effective','objectType',o.object_type,'schema',o.schema,
+ 'name',o.name,'subname',o.subname,'role',o.rolname,'privilege',o.privilege,
+ 'allowed',CASE o.object_type
+ WHEN 'database' THEN pg_catalog.has_database_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'schema' THEN pg_catalog.has_schema_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'table' THEN pg_catalog.has_table_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'column' THEN pg_catalog.has_column_privilege(o.role_oid,o.oid,o.subid::smallint,o.privilege)
+ WHEN 'sequence' THEN pg_catalog.has_sequence_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'routine' THEN pg_catalog.has_function_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'type' THEN pg_catalog.has_type_privilege(o.role_oid,o.oid,o.privilege) END,
+ 'grantable',CASE o.object_type
+ WHEN 'database' THEN pg_catalog.has_database_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'schema' THEN pg_catalog.has_schema_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'table' THEN pg_catalog.has_table_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'column' THEN pg_catalog.has_column_privilege(o.role_oid,o.oid,o.subid::smallint,o.privilege||' WITH GRANT OPTION')
+ WHEN 'sequence' THEN pg_catalog.has_sequence_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'routine' THEN pg_catalog.has_function_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'type' THEN pg_catalog.has_type_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION') END) FROM effective o
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','sequenceDependency','schema',n.nspname,'name',c.relname,
+ 'tableSchema',tn.nspname,'table',tc.relname,'column',a.attname,'dependency',d.deptype::text)
+ FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ JOIN pg_catalog.pg_depend d ON d.classid='pg_catalog.pg_class'::pg_catalog.regclass AND d.objid=c.oid
+ AND d.refclassid='pg_catalog.pg_class'::pg_catalog.regclass AND d.deptype IN ('a','i')
+ JOIN pg_catalog.pg_class tc ON tc.oid=d.refobjid JOIN pg_catalog.pg_namespace tn ON tn.oid=tc.relnamespace
+ JOIN pg_catalog.pg_attribute a ON a.attrelid=tc.oid AND a.attnum=d.refobjsubid
+ WHERE n.nspname='public' AND c.relkind='S'
+ -- PG16 shared dependency kinds o/a/i/r reference roles (t references tablespaces).
+ -- Only an existence flag is returned; no other database is queried.
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','guard','name','externalRoleDependencies','present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_shdepend d WHERE d.deptype IN ('o','a','i','r')
+ AND d.refobjid IN (SELECT oid FROM roles) AND NOT
+ (d.dbid=(SELECT oid FROM db) OR (d.dbid=0 AND d.classid='pg_catalog.pg_database'::pg_catalog.regclass AND d.objid=(SELECT oid FROM db)))))
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','guard','name','outsidePublicObjects','present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_namespace n WHERE n.nspname NOT IN ('public','pg_catalog','information_schema')
+ AND n.nspname !~ '^pg_(toast|temp)(_|$)'))
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','guard','name','largeObjects','present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_largeobject_metadata))
+),
+bounded_records AS MATERIALIZED (SELECT record FROM records WHERE (SELECT ok FROM scope) LIMIT 20001),
+budget AS MATERIALIZED (SELECT count(*) AS count, COALESCE(sum(pg_catalog.octet_length(record::text)),0) AS bytes FROM bounded_records),
+gate AS MATERIALIZED (SELECT (SELECT ok FROM object_budget) AND count<=20000 AND bytes+count*2+1024<=4194304
+ AND (SELECT ok FROM scope) AS ok FROM budget),
+accepted AS MATERIALIZED (SELECT b.record FROM bounded_records b WHERE (SELECT ok FROM gate)),
+document AS (SELECT pg_catalog.jsonb_build_object('schemaVersion',1,'kind','portal-legacy-security-observation-v1',
+ 'serverMajor',16,'database',pg_catalog.jsonb_build_object('systemIdentifier',
+ (SELECT system_identifier::text FROM pg_catalog.pg_control_system()),'databaseOid',(SELECT oid::text FROM db),
+ 'databaseName',pg_catalog.current_database()),'records',COALESCE(pg_catalog.jsonb_agg(record),'[]'::pg_catalog.jsonb)) AS value FROM accepted)
+SELECT CASE WHEN (SELECT ok FROM gate) THEN value ELSE
+ pg_catalog.jsonb_build_object('kind','portal-legacy-security-observation-refused') END::text FROM document;
+ROLLBACK;
+"""
+
+
+def _legacy_security_require(condition):
+    if not condition:
+        fail('legacy_security_observation_invalid')
+
+
+def validate_portal_legacy_security_observation(observation):
+    """Pure bounded validator/canonicalizer. No catalog execution or authority."""
+    if isinstance(observation, bytes):
+        _legacy_security_require(len(observation) <= LEGACY_SECURITY_MAX_BYTES)
+        observation = _strict_json(observation, 'legacy_security_observation_invalid')
+    _legacy_security_require(isinstance(observation, dict) and set(observation) ==
+        {'schemaVersion', 'kind', 'serverMajor', 'database', 'records'})
+    _legacy_security_require(type(observation['schemaVersion']) is int and observation['schemaVersion'] == 1 and
+        type(observation['serverMajor']) is int and observation['serverMajor'] == 16 and
+        observation['kind'] == 'portal-legacy-security-observation-v1')
+    STATE._validate_database_identity(observation['database'])
+    _legacy_security_require(observation['database']['databaseName'] == 'portal')
+    records = observation['records']
+    _legacy_security_require(isinstance(records, list) and len(records) <= LEGACY_SECURITY_MAX_RECORDS)
+    shapes = {
+        'role': ('name login superuser createDatabase createRole inherit replication bypassRls connectionLimit validUntil',
+                 'login superuser createDatabase createRole inherit replication bypassRls'),
+        'membership': ('role member grantor admin inherit set', 'admin inherit set'),
+        'settings': ('role present', 'present'),
+        'object': ('objectType schema name subname owner aclNull unsupported', 'aclNull unsupported'),
+        'acl': ('objectType schema name subname grantor grantee privilege grantable', 'grantable'),
+        'effective': ('objectType schema name subname role privilege allowed grantable', 'allowed grantable'),
+        'sequenceDependency': ('schema name tableSchema table column dependency', ''),
+        'guard': ('name present', 'present'),
+    }
+    identity_fields = {
+        'role': ('name',), 'membership': ('role', 'member', 'grantor'), 'settings': ('role',),
+        'object': ('objectType', 'schema', 'name', 'subname'),
+        'acl': ('objectType', 'schema', 'name', 'subname', 'grantor', 'grantee', 'privilege'),
+        'effective': ('objectType', 'schema', 'name', 'subname', 'role', 'privilege'),
+        'sequenceDependency': ('schema', 'name'), 'guard': ('name',),
+    }
+    seen, objects, effective, roles, settings, guards, dependencies = set(), {}, set(), set(), set(), set(), set()
+    total_bytes = 0
+    for row in records:
+        _legacy_security_require(isinstance(row, dict) and isinstance(row.get('kind'), str) and row['kind'] in shapes)
+        kind = row['kind']
+        names, boolean_names = (set(part.split()) for part in shapes[kind])
+        _legacy_security_require(set(row) == names | {'kind'})
+        for name in names:
+            value = row[name]
+            if name in boolean_names:
+                _legacy_security_require(type(value) is bool)
+            elif kind == 'role' and name == 'connectionLimit':
+                _legacy_security_require(type(value) is int and -1 <= value <= 2147483647)
+            elif kind == 'role' and name == 'validUntil':
+                _legacy_security_require(value is None or isinstance(value, str) and
+                    re.fullmatch(r'(?:infinity|-infinity|[0-9T :.+-]{10,64})', value) is not None)
+            else:
+                _legacy_security_require(isinstance(value, str) and len(value.encode('utf-8')) <= 8192 and
+                                         not any(token in value for token in ('\0', '\n', '\r', '\t', '://')))
+                if name not in ('schema', 'subname'):
+                    _legacy_security_require(bool(value))
+        identity = (kind,) + tuple(row[name] for name in identity_fields[kind])
+        _legacy_security_require(identity not in seen)
+        seen.add(identity)
+        total_bytes += len(STATE.canonical(row)) + 1
+        _legacy_security_require(total_bytes <= LEGACY_SECURITY_MAX_BYTES)
+        if kind == 'role':
+            _legacy_security_require(row['name'] in LEGACY_SECURITY_ROLES)
+            roles.add(row['name'])
+        elif kind == 'settings':
+            _legacy_security_require(row['role'] in LEGACY_SECURITY_ROLES)
+            settings.add(row['role'])
+        elif kind == 'membership':
+            _legacy_security_require(row['role'] in LEGACY_SECURITY_ROLES or row['member'] in LEGACY_SECURITY_ROLES)
+        elif kind == 'guard':
+            _legacy_security_require(row['name'] in ('externalRoleDependencies', 'outsidePublicObjects', 'largeObjects'))
+            guards.add(row['name'])
+        elif kind in ('object', 'acl', 'effective'):
+            object_key = tuple(row[name] for name in ('objectType', 'schema', 'name', 'subname'))
+            _legacy_security_require(row['objectType'] in set(LEGACY_SECURITY_PRIVILEGES) | {'default'})
+            _legacy_security_require(row['schema'] in ('', 'public') and bool(row['name']))
+            if row['objectType'] in ('database', 'schema'):
+                _legacy_security_require(row['schema'] == row['subname'] == '' and
+                    row['name'] == ('portal' if row['objectType'] == 'database' else 'public'))
+            elif row['objectType'] == 'default':
+                _legacy_security_require(row['subname'] in ('r', 'S', 'f', 'T', 'n', 'L'))
+            else:
+                _legacy_security_require(row['schema'] == 'public' and
+                    (row['subname'] == '' if row['objectType'] in ('table', 'sequence', 'type') else True))
+                if row['objectType'] == 'column':
+                    _legacy_security_require(bool(row['subname']))
+            if kind == 'object':
+                if row['objectType'] == 'default':
+                    _legacy_security_require(row['name'] == row['owner'] and not row['aclNull'])
+                objects[object_key] = row
+            elif kind == 'effective':
+                # PG16 owners can retain implicit grant options after ordinary
+                # privileges are revoked. Observe both booleans independently;
+                # ownership/grantability remain separate recovery blockers.
+                _legacy_security_require(row['role'] in LEGACY_SECURITY_ROLES and
+                    row['privilege'] in LEGACY_SECURITY_PRIVILEGES.get(row['objectType'], ()))
+                effective.add(object_key + (row['role'], row['privilege']))
+            else:
+                privileges = LEGACY_SECURITY_PRIVILEGES.get(row['objectType'])
+                if row['objectType'] == 'default':
+                    privileges = {'r': LEGACY_SECURITY_PRIVILEGES['table'], 'S': LEGACY_SECURITY_PRIVILEGES['sequence'],
+                                  'f': ('EXECUTE',), 'T': ('USAGE',), 'n': ('USAGE', 'CREATE'), 'L': ('SELECT', 'UPDATE')}[row['subname']]
+                _legacy_security_require(row['privilege'] in privileges)
+        elif kind == 'sequenceDependency':
+            _legacy_security_require(row['schema'] == row['tableSchema'] == 'public' and row['dependency'] in ('a', 'i'))
+            dependencies.add(('sequence', row['schema'], row['name'], ''))
+    _legacy_security_require(roles == settings == set(LEGACY_SECURITY_ROLES) and guards ==
+                            {'externalRoleDependencies', 'outsidePublicObjects', 'largeObjects'})
+    _legacy_security_require(('database', '', 'portal', '') in objects and ('schema', '', 'public', '') in objects and
+                            ('table', 'public', 'cms_editor_sessions', '') in objects)
+    expected_effective = {key + (role, privilege) for key in objects for role in LEGACY_SECURITY_ROLES
+                          for privilege in LEGACY_SECURITY_PRIVILEGES.get(key[0], ())}
+    _legacy_security_require(effective == expected_effective)
+    _legacy_security_require(dependencies == {key for key in objects if key[0] == 'sequence'})
+    for row in records:
+        if row['kind'] == 'acl':
+            _legacy_security_require(tuple(row[k] for k in ('objectType', 'schema', 'name', 'subname')) in objects)
+        elif row['kind'] == 'object' and row['objectType'] == 'column':
+            _legacy_security_require(('table', row['schema'], row['name'], '') in objects)
+        elif row['kind'] == 'sequenceDependency':
+            _legacy_security_require(('column', row['tableSchema'], row['table'], row['column']) in objects)
+    result = dict(observation, records=sorted(records, key=STATE.canonical))
+    _legacy_security_require(len(STATE.canonical(result)) <= LEGACY_SECURITY_MAX_BYTES)
+    return result
+
+
+def check_portal_legacy_security_baseline(observation, body, approval, record, inventory, authority, approved_profile=None):
+    """Internal already-authenticated inputs only; no caller hash confers trust.
+
+    A profile is independently authenticated by a future caller. There is no
+    built-in profile or production collector/repair dispatcher in this slice.
+    """
+    observed = validate_portal_legacy_security_observation(observation)
+    STATE.validate_state_body(body)
+    intent = body.get('installIntent')
+    _legacy_security_require(intent is not None and intent['binding'].get('bindingVersion') == 3)
+    binding = intent['binding']
+    STATE.validate_production_correspondence(binding, approval, record, inventory, authority)
+    _legacy_security_require(observed['database'] == binding['portalTarget']['database'])
+    blockers = {'legacy_security_host_collection_not_integrated', 'legacy_security_pg16_qualification_required',
+                'legacy_role_exclusivity_unverified', 'legacy_credentials_unverified', 'legacy_recovery_executor_not_integrated'}
+    if intent['stage'] != 'reserved' or body.get('restoreIntent') is not None:
+        blockers.add('legacy_baseline_not_pregrant')
+    for row in observed['records']:
+        kind = row['kind']
+        if kind == 'role' and (not row['login'] or any(row[k] for k in ('superuser', 'createDatabase', 'createRole', 'replication', 'bypassRls'))):
+            blockers.add('legacy_runtime_role_attributes_unsafe')
+        if kind == 'membership':
+            blockers.add('legacy_runtime_role_membership_unsupported')
+        if kind == 'settings' and row['present']:
+            blockers.add('legacy_role_settings_unsupported')
+        if kind == 'effective' and row['grantable']:
+            blockers.add('legacy_runtime_grant_options_unsupported')
+        if kind == 'effective' and row['objectType'] == 'column' and row['name'] == 'cms_editor_sessions' and row['allowed']:
+            blockers.add('legacy_session_capability_mismatch')
+        if kind == 'object':
+            if row['owner'] in LEGACY_SECURITY_ROLES:
+                blockers.add('legacy_runtime_role_ownership_unsupported')
+            if row['unsupported']:
+                blockers.add('legacy_security_mechanism_unsupported')
+        if kind == 'guard' and row['present']:
+            blockers.add({'externalRoleDependencies': 'legacy_shared_role_dependencies',
+                          'outsidePublicObjects': 'legacy_outside_public_objects', 'largeObjects': 'legacy_large_objects_unsupported'}[row['name']])
+    session = {}
+    for role, field in (('portal_api', 'portalApiSessionPrivileges'), ('portal_cron', 'portalCronSessionPrivileges')):
+        session[field] = [next(row['allowed'] for row in observed['records'] if row['kind'] == 'effective' and
+            (row['objectType'], row['schema'], row['name'], row['subname'], row['role'], row['privilege']) ==
+            ('table', 'public', 'cms_editor_sessions', '', role, privilege)) for privilege in SESSION_TABLE_PRIVILEGES]
+    try:
+        _validate_portal_session_grants(session, 'legacy')
+    except ControlError:
+        blockers.add('legacy_session_capability_mismatch')
+    profile_matches = False
+    if approved_profile is None:
+        blockers.add('legacy_capability_profile_unapproved')
+    else:
+        _legacy_security_require(isinstance(approved_profile, dict) and set(approved_profile) ==
+                                {'kind', 'sourceCommit', 'previousImages', 'observation'})
+        _legacy_security_require(approved_profile['kind'] == 'portal-legacy-security-profile-v1')
+        _legacy_security_require(isinstance(approved_profile['sourceCommit'], str) and
+                                 re.fullmatch(r'[0-9a-f]{40}', approved_profile['sourceCommit']) is not None)
+        STATE._valid_images(approved_profile['previousImages'], payload=False)
+        expected = validate_portal_legacy_security_observation(approved_profile['observation'])
+        profile_matches = (approved_profile['sourceCommit'] == binding['sourceCommit'] and
+                           approved_profile['previousImages'] == binding['previousImages'] and expected == observed)
+        if not profile_matches:
+            blockers.add('legacy_capability_profile_mismatch')
+    return {'kind': 'portal-legacy-security-baseline-check-v1', 'observationSha256': hashlib.sha256(STATE.canonical(observed)).hexdigest(),
+            'sourceApprovalSha256': authority['sourceApprovalSha256'], 'policySha256': authority['policySha256'],
+            'recordSha256': authority['recordSha256'], 'installBindingSha256': hashlib.sha256(STATE.canonical(binding)).hexdigest(),
+            'b0ProofSha256': binding['b0']['proofSha256'], 'sourceCommit': binding['sourceCommit'],
+            'previousImages': binding['previousImages'], 'inventoryIdentity': binding['inventoryIdentity'],
+            'databaseIdentity': observed['database'], 'profileMatches': profile_matches, 'blockers': sorted(blockers),
+            'credentialVerified': False, 'clusterRoleMutationAuthorized': False, 'rollbackAuthorized': False,
+            'installationExecuted': False, 'deploymentAuthorized': False}
+
+
+FENCE_NETWORKS = ('ownerinc-portal-backend', 'ownerinc-portal-egress', 'ownerinc_proxy')
+FENCE_ROUTES = ('/', '/api/ready', '/editorial/ready')
+
+
+def _fence_require(value):
+    if not value:
+        fail('fence_observation_invalid')
+
+
+def _fence_keys(value, names):
+    _fence_require(isinstance(value, dict) and set(value) == set(names.split()))
+
+
+def _fence_hash(value):
+    _fence_require(isinstance(value, str) and STATE.HEX_64.fullmatch(value) is not None)
+
+
+def _fence_uint(value):
+    _fence_require(type(value) is int and 0 <= value <= 9007199254740991)
+
+
+def _fence_context(value):
+    _fence_keys(value, 'inventoryIdentity stateSha256 sequence installBindingSha256 sourceApprovalSha256 policySha256 recordSha256 pid processStart nonce device inode')
+    for name, item in value.items():
+        if name in ('sequence', 'pid', 'processStart', 'device', 'inode'):
+            _fence_uint(item)
+            if name in ('pid', 'processStart', 'inode'):
+                _fence_require(item > 0)
+        else:
+            _fence_hash(item)
+
+
+def _fence_records(value, maximum, key):
+    _fence_require(isinstance(value, list) and len(value) <= maximum)
+    identities = []
+    for row in value:
+        _fence_require(isinstance(row, dict) and key in row and isinstance(row[key], str))
+        identities.append(row[key])
+    _fence_require(len(set(identities)) == len(identities))
+
+
+def _fence_container_identity(row):
+    for name in ('id', 'imageId', 'receiptSha256'):
+        _fence_hash(row[name])
+    _fence_require(row['service'] in KNOWN_SERVICES)
+    _fence_require(isinstance(row['image'], str) and len(row['image']) <= 512 and
+                   re.fullmatch(r'[a-z0-9./_:-]+@sha256:[0-9a-f]{64}', row['image']) is not None)
+    for name, allowed in (('networks', None), ('volumeKeys', INVENTORY.VOLUME_KEYS)):
+        values = row[name]
+        _fence_require(isinstance(values, list) and len(values) <= (3 if name == 'networks' else 4) and
+                       all(isinstance(v, str) for v in values) and len(set(values)) == len(values))
+        for value in values:
+            if allowed is None:
+                _fence_hash(value)
+            else:
+                _fence_require(value in allowed)
+
+
+def validate_portal_fence_observation(observation):
+    """Fixed Portal projections, not an authenticated Docker collector."""
+    if isinstance(observation, bytes):
+        _fence_require(len(observation) <= 4 * 1024 ** 2)
+        observation = _strict_json(observation, 'fence_observation_invalid')
+    _fence_keys(observation, 'kind mode context started ended passes databases external')
+    _fence_require(observation['kind'] == 'portal-fence-observation-v1' and observation['mode'] in ('destructive', 'private-readiness'))
+    _fence_context(observation['context'])
+    for name in ('started', 'ended'):
+        _fence_uint(observation[name])
+    _fence_require(observation['started'] <= observation['ended'])
+    _fence_require(isinstance(observation['passes'], list) and len(observation['passes']) == 2)
+    normalized = []
+    for inventory_pass in observation['passes']:
+        _fence_keys(inventory_pass, 'host containers networks')
+        _fence_records(inventory_pass['host'], 512, 'id')
+        _fence_records(inventory_pass['containers'], 64, 'id')
+        _fence_records(inventory_pass['networks'], 3, 'name')
+        for row in inventory_pass['host']:
+            _fence_keys(row, 'id portalProject portalNameClaim portalVolumeConsumer')
+            _fence_hash(row['id'])
+            _fence_require(all(type(row[k]) is bool for k in ('portalProject', 'portalNameClaim', 'portalVolumeConsumer')))
+        for row in inventory_pass['containers']:
+            _fence_keys(row, 'id service imageId image receiptSha256 networks volumeKeys status running paused restarting dead oneOff projectMatches nginxNameMatches networkMode publishedPorts aliasesApproved')
+            _fence_container_identity(row)
+            _fence_require(row['status'] in ('created', 'exited', 'running', 'paused', 'restarting', 'dead'))
+            _fence_require(row['networkMode'] in ('bridge', 'host', 'container', 'none', 'other'))
+            for key in ('running', 'paused', 'restarting', 'dead', 'oneOff', 'projectMatches', 'nginxNameMatches', 'publishedPorts', 'aliasesApproved'):
+                _fence_require(type(row[key]) is bool)
+        for row in inventory_pass['networks']:
+            _fence_keys(row, 'name id driver internal optionsApproved endpoints')
+            _fence_require(row['name'] in FENCE_NETWORKS and row['driver'] in ('bridge', 'host', 'overlay', 'macvlan', 'ipvlan', 'other'))
+            _fence_hash(row['id'])
+            _fence_require(type(row['internal']) is bool and type(row['optionsApproved']) is bool)
+            _fence_records(row['endpoints'], 256, 'id')
+            for endpoint in row['endpoints']:
+                _fence_keys(endpoint, 'id relevant')
+                _fence_hash(endpoint['id'])
+                _fence_require(type(endpoint['relevant']) is bool)
+        normalized.append({
+            'host': sorted(inventory_pass['host'], key=STATE.canonical),
+            'containers': sorted([dict(row, networks=sorted(row['networks']), volumeKeys=sorted(row['volumeKeys']))
+                                  for row in inventory_pass['containers']], key=STATE.canonical),
+            'networks': sorted([dict(row, endpoints=sorted(row['endpoints'], key=STATE.canonical))
+                                for row in inventory_pass['networks']], key=STATE.canonical),
+        })
+    _fence_records(observation['databases'], 2, 'service')
+    for row in observation['databases']:
+        _fence_keys(row, 'service containerId database clients activeQueries openTransactions preparedTransactions backgroundWriters backgroundCoverageComplete')
+        _fence_require(row['service'] in ('postgres', 'cms-postgres'))
+        _fence_hash(row['containerId'])
+        STATE._validate_database_identity(row['database'])
+        _fence_require(row['database']['databaseName'] == ('portal' if row['service'] == 'postgres' else 'ownerinc_cms'))
+        for key in ('clients', 'activeQueries', 'openTransactions', 'preparedTransactions', 'backgroundWriters'):
+            _fence_uint(row[key])
+        _fence_require(type(row['backgroundCoverageComplete']) is bool)
+    external = observation['external']
+    if external is not None:
+        _fence_keys(external, 'observerSha256 independent nonce started ended requests')
+        _fence_hash(external['observerSha256']); _fence_hash(external['nonce'])
+        _fence_require(type(external['independent']) is bool)
+        _fence_uint(external['started']); _fence_uint(external['ended'])
+        _fence_records(external['requests'], 3, 'route')
+        for row in external['requests']:
+            _fence_keys(row, 'route origin method status tlsVerified redirected transportError bodySha256')
+            _fence_require(row['route'] in FENCE_ROUTES and row['method'] == 'GET')
+            _fence_origin(row['origin'])
+            _fence_uint(row['status']); _fence_require(row['status'] <= 599)
+            _fence_require(type(row['tlsVerified']) is bool and type(row['redirected']) is bool and
+                           row['transportError'] in ('none', 'timeout', 'dns', 'tls', 'connection', 'other'))
+            _fence_hash(row['bodySha256'])
+    result = dict(observation, passes=normalized, databases=sorted(observation['databases'], key=STATE.canonical))
+    _fence_require(len(STATE.canonical(result)) <= 4 * 1024 ** 2)
+    return result
+
+
+def _fence_origin(origin):
+    _fence_require(isinstance(origin, str) and len(origin) <= 253 and
+                   re.fullmatch(r'https://[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?', origin) is not None)
+
+
+def check_portal_destructive_fence(observation, expected_context, approved_topology=None, approved_closure=None, *, now_monotonic):
+    """Already-authenticated context/profiles ONLY; input shapes confer no trust.
+
+    Times are local monotonic milliseconds. External intervals are the trusted
+    collector's send/receive interval, NOT an external machine's clock.
+    No IO, mutation, signed ticket, Runtime construction or action registration.
+    """
+    value = validate_portal_fence_observation(observation)
+    _fence_context(expected_context); _fence_uint(now_monotonic)
+    blockers = set()
+    if value['context'] != expected_context or value['passes'][0] != value['passes'][1]:
+        blockers.add('fence_context_changed')
+    if not value['started'] <= value['ended'] <= now_monotonic or now_monotonic - value['started'] > 30000:
+        blockers.add('fence_observation_stale')
+    if value['mode'] != 'destructive':
+        blockers.add('fence_private_readiness_not_destructive')
+    snapshot = value['passes'][1]
+    containers = {row['id']: row for row in snapshot['containers']}
+    networks = {row['name']: row for row in snapshot['networks']}
+    host = {row['id']: row for row in snapshot['host']}
+    if set(networks) != set(FENCE_NETWORKS) or len({row['id'] for row in networks.values()}) != 3 or not containers:
+        blockers.add('fence_observation_incomplete')
+    if any(row['id'] not in containers for row in host.values() if row['portalProject'] or row['portalNameClaim'] or row['portalVolumeConsumer']) or \
+       any(identity not in host or not host[identity]['portalProject'] for identity in containers):
+        blockers.add('fence_unaccounted_container')
+    if len({row['service'] for row in containers.values()}) != len(containers):
+        blockers.add('fence_unaccounted_container')
+    nginx = [row for row in containers.values() if row['service'] == 'nginx']
+    if len(nginx) != 1 or not nginx[0]['nginxNameMatches']:
+        blockers.add('fence_nginx_identity_mismatch')
+    for row in containers.values():
+        if row['oneOff'] or not row['projectMatches']:
+            blockers.add('fence_unaccounted_container')
+        db = row['service'] in ('postgres', 'cms-postgres')
+        consistent = (row['status'] == 'running' and row['running']) if db else (row['status'] in ('created', 'exited') and not row['running'])
+        if not consistent or any(row[k] for k in ('paused', 'restarting', 'dead')):
+            blockers.add('fence_nginx_not_stopped' if row['service'] == 'nginx' else 'fence_writer_not_stopped')
+        if row['networkMode'] != 'bridge' or row['publishedPorts'] or not row['aliasesApproved']:
+            blockers.add('fence_alternative_ingress_detected')
+        if any(identity not in {net['id'] for net in networks.values()} for identity in row['networks']):
+            blockers.add('fence_network_identity_mismatch')
+        if row['service'] != 'nginx' and networks.get('ownerinc_proxy', {}).get('id') in row['networks']:
+            blockers.add('fence_alternative_ingress_detected')
+        logical = ('ownerinc-portal-backend',)
+        if row['service'] in ('api', 'cron', 'bootstrap-admin'):
+            logical += ('ownerinc-portal-egress',)
+        elif row['service'] == 'nginx':
+            logical += ('ownerinc_proxy',)
+        if set(row['networks']) != {networks.get(name, {}).get('id') for name in logical}:
+            blockers.add('fence_network_identity_mismatch')
+        if row['id'] in host and host[row['id']]['portalVolumeConsumer'] != bool(row['volumeKeys']):
+            blockers.add('fence_unaccounted_container')
+    for net in networks.values():
+        if net['driver'] != 'bridge' or not net['optionsApproved'] or net['internal'] is not (net['name'] == 'ownerinc-portal-backend'):
+            blockers.add('fence_network_identity_mismatch')
+        for endpoint in net['endpoints']:
+            if endpoint['id'] not in host:
+                blockers.add('fence_observation_incomplete')
+            if endpoint['id'] in containers and net['id'] not in containers[endpoint['id']]['networks']:
+                blockers.add('fence_network_identity_mismatch')
+            if net['name'] != 'ownerinc_proxy' and endpoint['id'] not in containers:
+                blockers.add('fence_unapproved_endpoint')
+        for container in containers.values():
+            if container['running'] and net['id'] in container['networks'] and container['id'] not in {ep['id'] for ep in net['endpoints']}:
+                blockers.add('fence_network_identity_mismatch')
+    if approved_topology is None:
+        blockers.add('fence_topology_unapproved')
+    else:
+        _fence_keys(approved_topology, 'kind context containers networks databases')
+        _fence_require(approved_topology['kind'] == 'portal-fence-topology-v1')
+        _fence_context(approved_topology['context'])
+        if approved_topology['context'] != expected_context:
+            blockers.add('fence_context_changed')
+        _fence_records(approved_topology['containers'], 64, 'id')
+        expected_containers = {}
+        for row in approved_topology['containers']:
+            _fence_keys(row, 'id service imageId image receiptSha256 networks volumeKeys')
+            _fence_container_identity(row)
+            expected_containers[row['id']] = row
+        if set(expected_containers) != set(containers) or not {'nginx', 'api', 'cron', 'postgres'} <= {r['service'] for r in expected_containers.values()}:
+            blockers.add('fence_unaccounted_container')
+        for identity in set(expected_containers) & set(containers):
+            if any((sorted(containers[identity][key]) != sorted(item) if key in ('networks', 'volumeKeys') else containers[identity][key] != item)
+                   for key, item in expected_containers[identity].items()):
+                blockers.add('fence_container_receipt_mismatch')
+        _fence_records(approved_topology['networks'], 3, 'name')
+        if {row['name'] for row in approved_topology['networks']} != set(FENCE_NETWORKS):
+            blockers.add('fence_topology_unapproved')
+        for row in approved_topology['networks']:
+            _fence_keys(row, 'name id relevantEndpointIds')
+            _fence_require(row['name'] in FENCE_NETWORKS); _fence_hash(row['id'])
+            ids = row['relevantEndpointIds']
+            _fence_require(isinstance(ids, list) and len(ids) <= 256 and all(isinstance(i, str) for i in ids) and len(set(ids)) == len(ids))
+            for identity in ids:
+                _fence_hash(identity)
+            actual = networks.get(row['name'])
+            if actual is None or actual['id'] != row['id']:
+                blockers.add('fence_network_identity_mismatch')
+            elif {ep['id'] for ep in actual['endpoints'] if ep['relevant'] or ep['id'] in containers or row['name'] != 'ownerinc_proxy'} != set(ids):
+                blockers.add('fence_unapproved_endpoint')
+        _fence_records(approved_topology['databases'], 2, 'service')
+        expected_dbs = {}
+        for row in approved_topology['databases']:
+            _fence_keys(row, 'service containerId database')
+            _fence_require(row['service'] in ('postgres', 'cms-postgres')); _fence_hash(row['containerId'])
+            STATE._validate_database_identity(row['database'])
+            expected_dbs[row['service']] = row
+        actual_dbs = {row['service']: row for row in value['databases']}
+        db_containers = {row['service']: row['id'] for row in containers.values() if row['service'] in ('postgres', 'cms-postgres')}
+        if set(expected_dbs) != set(actual_dbs) or set(expected_dbs) != set(db_containers) or 'postgres' not in expected_dbs:
+            blockers.add('fence_database_identity_mismatch')
+        for service in set(expected_dbs) & set(actual_dbs):
+            if any(actual_dbs[service][k] != v for k, v in expected_dbs[service].items()) or actual_dbs[service]['containerId'] != db_containers.get(service):
+                blockers.add('fence_database_identity_mismatch')
+    for row in value['databases']:
+        if any(row[k] != 0 for k in ('clients', 'activeQueries', 'openTransactions', 'preparedTransactions', 'backgroundWriters')):
+            blockers.add('fence_database_not_quiescent')
+        if not row['backgroundCoverageComplete']:
+            blockers.add('fence_background_writers_unverified')
+    external = value['external']
+    if approved_closure is None:
+        blockers.add('fence_public_profile_unapproved')
+        blockers.add('fence_external_topology_unverified')
+    else:
+        _fence_keys(approved_closure, 'kind context origin observerSha256 nonDockerCoverageVerified routes')
+        _fence_require(approved_closure['kind'] == 'portal-public-closure-profile-v1')
+        _fence_context(approved_closure['context']); _fence_origin(approved_closure['origin']); _fence_hash(approved_closure['observerSha256'])
+        _fence_require(type(approved_closure['nonDockerCoverageVerified']) is bool)
+        if approved_closure['context'] != expected_context:
+            blockers.add('fence_context_changed')
+        if not approved_closure['nonDockerCoverageVerified']:
+            blockers.add('fence_external_topology_unverified')
+        _fence_records(approved_closure['routes'], 3, 'route')
+        expected_routes = {}
+        for row in approved_closure['routes']:
+            _fence_keys(row, 'route status bodySha256'); _fence_hash(row['bodySha256'])
+            _fence_require(row['route'] in FENCE_ROUTES and type(row['status']) is int and 400 <= row['status'] <= 599)
+            expected_routes[row['route']] = row
+        if set(expected_routes) != set(FENCE_ROUTES):
+            blockers.add('fence_public_probe_mismatch')
+        if external is not None:
+            if not external['independent'] or external['observerSha256'] != approved_closure['observerSha256'] or \
+               external['nonce'] != expected_context['nonce'] or not value['started'] <= external['started'] <= external['ended'] <= value['ended']:
+                blockers.add('fence_public_probe_mismatch')
+            if {row['route'] for row in external['requests']} != set(FENCE_ROUTES):
+                blockers.add('fence_public_probe_mismatch')
+            for row in external['requests']:
+                expected = expected_routes.get(row['route'])
+                if expected is None or any(row[k] != v for k, v in expected.items()) or row['origin'] != approved_closure['origin'] or \
+                   not row['tlsVerified'] or row['redirected'] or row['transportError'] != 'none':
+                    blockers.add('fence_public_probe_mismatch')
+    if external is None:
+        blockers.add('fence_public_probe_missing')
+    return {'kind': 'portal-destructive-fence-check-v1', 'observationSha256': hashlib.sha256(STATE.canonical(value)).hexdigest(),
+            'blockers': sorted(blockers), 'observationsMatched': not blockers,
+            'destructiveOperationAuthorized': False, 'installationExecuted': False, 'deploymentAuthorized': False}
+
+
 def _portal_state(grant_mode):
     value = _psql_json('postgres', """
 SELECT json_build_object(
@@ -741,8 +1416,10 @@ SELECT json_build_object(
     return value
 
 
-def _data_fingerprint(service):
-    rows = _psql_json(service, """
+def _data_fingerprint(service, *, isolated_query=None):
+    # Internal disposable executor may supply a bounded query transport. It uses
+    # these SAME SQL/ordering/canonical bytes, never a different proof algorithm.
+    inventory_sql = """
 SELECT json_build_object(
   'unsupportedRelations', (SELECT COALESCE(json_agg(json_build_object(
       'schema', n.nspname, 'name', c.relname, 'kind', c.relkind
@@ -759,7 +1436,8 @@ SELECT json_build_object(
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname='public' AND c.relkind='S')
 )::text;
-""")
+"""
+    rows = _psql_json(service, inventory_sql) if isolated_query is None else json.loads(isolated_query(inventory_sql))
     tables = rows.get('tables')
     sequences = rows.get('sequences')
     unsupported = rows.get('unsupportedRelations')
@@ -788,6 +1466,8 @@ SELECT json_build_object(
         else:
             statements.append("SELECT pg_catalog.json_build_array('{}'::text, pg_catalog.json_build_object('last_value', row_value.last_value, 'is_called', row_value.is_called))::text FROM {} AS row_value".format(relation, quoted))
     sql = (' UNION ALL '.join(statements)) + ' ORDER BY 1;\n'
+    if isolated_query is not None:
+        return _data_fingerprint_rows(relations, isolated_query(sql).splitlines(keepends=True))
     container = _container_id(service)
     command = ['docker', 'exec', '-i', container, 'sh', '-ceu',
                'psql -XqAt -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"']
@@ -796,30 +1476,15 @@ SELECT json_build_object(
         assert process.stdin is not None and process.stdout is not None
         process.stdin.write(sql.encode('ascii'))
         process.stdin.close()
-        grouped = {}
-        for raw_line in process.stdout:
-            try:
-                row = _strict_json(raw_line.rstrip(b'\r\n'), 'database_fingerprint_failed')
-                if not isinstance(row, list) or len(row) != 2:
-                    raise ValueError('row')
-                relation, row_value = row
-            except (UnicodeDecodeError, ValueError, ControlError):
-                process.kill()
-                fail('database_fingerprint_failed')
-            if not isinstance(relation, str) or relation not in [entry['relation'] for entry in relations] or \
-               not isinstance(row_value, dict):
-                process.kill()
-                fail('database_fingerprint_failed')
-            record = grouped.get(relation)
-            if record is None:
-                record = {'count': 0, 'hash': hashlib.sha256()}
-                grouped[relation] = record
-            record['count'] += 1
-            record['hash'].update(STATE.canonical(row_value) + b'\n')
+        fingerprint = _data_fingerprint_rows(relations, process.stdout)
         status = process.wait()
         if status != 0:
             fail('database_fingerprint_failed')
     except ControlError:
+        try:
+            process.kill()
+        except OSError:
+            pass
         raise
     except (OSError, BrokenPipeError):
         try:
@@ -827,6 +1492,27 @@ SELECT json_build_object(
         except OSError:
             pass
         fail('database_fingerprint_failed')
+    return fingerprint
+
+
+def _data_fingerprint_rows(relations, lines):
+    grouped = {}
+    for raw_line in lines:
+        try:
+            row = _strict_json(raw_line.rstrip(b'\r\n'), 'database_fingerprint_failed')
+            if not isinstance(row, list) or len(row) != 2:
+                raise ValueError('row')
+            relation, row_value = row
+        except (UnicodeDecodeError, ValueError, ControlError):
+            fail('database_fingerprint_failed')
+        if not isinstance(relation, str) or relation not in [entry['relation'] for entry in relations] or not isinstance(row_value, dict):
+            fail('database_fingerprint_failed')
+        record = grouped.get(relation)
+        if record is None:
+            record = {'count': 0, 'hash': hashlib.sha256()}
+            grouped[relation] = record
+        record['count'] += 1
+        record['hash'].update(STATE.canonical(row_value) + b'\n')
     inventory = []
     for entry in relations:
         relation = entry['relation']
@@ -857,6 +1543,12 @@ def _volume_info(name):
        not isinstance(raw.get('Mountpoint'), str) or not os.path.isabs(raw['Mountpoint']) or \
        project != inventory_project or compose_key != entry['composeKey']:
         fail('target_volume_invalid')
+    return _volume_receipt(raw)
+
+
+def _volume_receipt(raw):
+    """Historical receipt bytes, after the caller's exact ownership checks."""
+    labels = raw.get('Labels') or {}
     safe = {
         'name': raw['Name'], 'driver': raw['Driver'], 'mountpoint': raw['Mountpoint'],
         'labels': labels, 'options': raw.get('Options'), 'scope': raw.get('Scope'),
@@ -921,13 +1613,13 @@ def _same_target(expected, actual):
     STATE.assert_restore_target_matches(expected, actual)
 
 
-def _manifest_hashes(directory, payload=True):
+def _manifest_hashes(directory, payload=True, read_bytes=None, file_hash=None):
     expected = [
         'postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz',
         'release.images', 'operations-proof.json', 'backup.format',
     ] if payload else ['postgres.dump', 'uploads.tar.gz']
     path = os.path.join(directory, 'manifest.sha256')
-    raw = _read_bytes(path)
+    raw = (read_bytes or _read_bytes)(path)
     try:
         lines = raw.decode('ascii').splitlines()
     except UnicodeDecodeError:
@@ -938,9 +1630,9 @@ def _manifest_hashes(directory, payload=True):
         if not match:
             fail('backup_manifest_invalid')
         digest, name = match.groups()
-        if name in seen:
+        if name in seen or name not in expected:
             fail('backup_manifest_invalid')
-        if _file_hash(os.path.join(directory, name))['sha256'] != digest:
+        if (file_hash or _file_hash)(os.path.join(directory, name))['sha256'] != digest:
             fail('backup_manifest_mismatch')
         seen.append(name)
     if seen != expected:
@@ -961,44 +1653,158 @@ def _normalize_tar_name(name):
     return '/'.join(parts)
 
 
-def _tar_tree(stream, compressed=False):
+def _tar_tree(stream, compressed=False, limits=None, projection=None):
+    # Optional materialization projection is a separate, stricter contract.
+    # Historical hash fields and the default traversal remain unchanged.
+    if projection is not None and (limits is None or projection):
+        fail('unsafe_storage_archive')
     mode = 'r|gz' if compressed else 'r|'
+    extension_count = extension_bytes = extension_depth = 0
+    class BoundedTarInfo(tarfile.TarInfo):
+        def _proc_member(self, archive):
+            nonlocal extension_count, extension_bytes, extension_depth
+            # Global PAX is updated before tarfile recursively parses the next
+            # header. Check it here before that header can copy/extend it again.
+            if len(archive.pax_headers) > limits['globalPaxKeys'] or sum(
+                    len(k.encode('utf-8')) + len(v.encode('utf-8'))
+                    for k, v in archive.pax_headers.items()) > limits['globalPaxBytes']:
+                fail('unsafe_storage_archive')
+            # tarfile processes extension payloads before yielding a member.
+            # Bound those allocations before PAX/GNU long-name parsing occurs.
+            if self.type == tarfile.GNUTYPE_SPARSE:
+                fail('unsafe_storage_archive')
+            extension = self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE,
+                                      tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK)
+            if extension:
+                if projection is not None:
+                    fail('unsafe_storage_archive')
+                extension_count += 1
+                extension_bytes += self.size
+                if not 0 <= self.size <= 64 * 1024 or extension_count > limits['extensionCount'] or \
+                   extension_bytes > limits['extensionBytes'] or extension_depth >= limits['extensionDepth']:
+                    fail('unsafe_storage_archive')
+                extension_depth += 1
+            try:
+                return super()._proc_member(archive)
+            finally:
+                if extension:
+                    extension_depth -= 1
+
+        def _proc_gnusparse_10(self, *args, **kwargs):
+            fail('unsafe_storage_archive')
     try:
-        archive = tarfile.open(fileobj=stream, mode=mode)
+        archive = tarfile.open(fileobj=stream, mode=mode, **({'tarinfo': BoundedTarInfo} if limits is not None else {}))
     except (tarfile.TarError, OSError):
         fail('unsafe_storage_archive')
     entries = {}
+    name_bytes = 0
     try:
         for member in archive:
+            if limits is not None:
+                # Only sequential extraction by this explicit TarInfo is used;
+                # links are rejected and no name lookup/getmembers is permitted.
+                # Avoid retaining every member's copy of accumulated global PAX.
+                archive.members.clear()
+                if member.sparse is not None:
+                    fail('unsafe_storage_archive')
+                name_bytes += len(member.name.encode('utf-8'))
+                if len(entries) >= limits['members'] or len(member.name) > limits['nameLength'] or name_bytes > limits['nameBytes']:
+                    fail('unsafe_storage_archive')
             name = _normalize_tar_name(member.name)
             if name in entries:
                 fail('unsafe_storage_archive')
+            if projection is not None:
+                if member.pax_headers or member.sparse is not None or \
+                   type(member.uid) is not int or type(member.gid) is not int or \
+                   not 0 <= member.uid <= 2097151 or not 0 <= member.gid <= 2097151 or \
+                   type(member.mtime) is not int or not 0 <= member.mtime <= 8589934591 or \
+                   len(name.encode('utf-8')) > 100 or len(name.split('/')) > 32 or \
+                   member.mode not in ((0o700, 0o750, 0o755) if member.isdir() else (0o600, 0o640, 0o644)):
+                    fail('unsafe_storage_archive')
+                projection[name] = {'uid': member.uid, 'gid': member.gid, 'mtime': member.mtime, 'data': b''}
             if member.isdir() and member.type == tarfile.DIRTYPE:
+                if limits is not None and member.size != 0:
+                    fail('unsafe_storage_archive')
                 entries[name] = {'type': 'directory', 'mode': member.mode & 0o7777, 'size': 0, 'sha256': None}
                 continue
             if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                fail('unsafe_storage_archive')
+            if limits is not None and name == '.':
                 fail('unsafe_storage_archive')
             file_stream = archive.extractfile(member)
             if file_stream is None:
                 fail('unsafe_storage_archive')
             digest = hashlib.sha256()
             size = 0
+            content = bytearray() if projection is not None else None
             while True:
                 block = file_stream.read(1024 * 1024)
                 if not block:
                     break
                 digest.update(block)
                 size += len(block)
+                if content is not None:
+                    content.extend(block)
             if size != member.size:
                 fail('unsafe_storage_archive')
             entries[name] = {'type': 'file', 'mode': member.mode & 0o7777, 'size': size, 'sha256': digest.hexdigest()}
+            if projection is not None:
+                projection[name]['data'] = bytes(content)
+        if limits is not None:
+            for name in entries:
+                parts = name.split('/')
+                if any(entries.get('/'.join(parts[:index]), {}).get('type') == 'file'
+                       for index in range(1, len(parts))):
+                    fail('unsafe_storage_archive')
+            # Streaming tar keeps read-ahead bytes after its first end marker.
+            # Reject hidden trailing members here as well as in the gzip drain.
+            buffered = getattr(archive.fileobj, 'buf', None)
+            if not isinstance(buffered, bytes) or buffered.strip(b'\0'):
+                fail('unsafe_storage_archive')
     except ControlError:
         raise
     except (tarfile.TarError, OSError, EOFError):
         fail('unsafe_storage_archive')
     finally:
         archive.close()
+    if projection is not None:
+        if entries.get('.', {}).get('type') != 'directory':
+            fail('unsafe_storage_archive')
+        for name in entries:
+            parts = name.split('/')
+            if any(entries.get('/'.join(parts[:i]), {}).get('type') != 'directory' for i in range(1, len(parts))):
+                fail('unsafe_storage_archive')
+            projection[name].update(entries[name])
     return hashlib.sha256(STATE.canonical([{'name': name, **entries[name]} for name in sorted(entries)])).hexdigest()
+
+
+def _bounded_gzip_tar_tree(stream, limits, projection=None):
+    """Shared expansion/footer/trailing-data checks, including materialization."""
+    class BoundedExpansion:
+        def __init__(self, source):
+            self.source, self.total = source, 0
+
+        def read(self, size=-1):
+            if size < 0 or size > 1024 * 1024:
+                fail('unsafe_storage_archive')
+            block = self.source.read(min(size, limits['expanded'] - self.total + 1))
+            self.total += len(block)
+            if self.total > limits['expanded']:
+                fail('unsafe_storage_archive')
+            return block
+    try:
+        with gzip.GzipFile(fileobj=stream, mode='rb') as expanded:
+            bounded = BoundedExpansion(expanded)
+            fingerprint = _tar_tree(bounded, limits=limits, projection=projection)
+            while True:
+                block = bounded.read(1024 * 1024)
+                if not block:
+                    break
+                if block.strip(b'\0'):
+                    fail('unsafe_storage_archive')
+            return fingerprint
+    except (OSError, EOFError, tarfile.TarError):
+        fail('unsafe_storage_archive')
 
 
 def _archive_tree(path):
@@ -1008,6 +1814,133 @@ def _archive_tree(path):
             return _tar_tree(stream, compressed=True)
     except OSError:
         fail('unsafe_storage_archive')
+
+
+# Fixed administrative limits, not environment/request overrides. Legacy readers
+# retain their existing behavior; these apply only to the production B0 check.
+PRODUCTION_B0_LIMITS = {
+    'postgres.dump': 256 * 1024 ** 3, 'uploads.tar.gz': 32 * 1024 ** 3,
+    'manifest.sha256': 4096, 'preauthority-proof.json': 64 * 1024,
+}
+PRODUCTION_B0_TAR_LIMITS = {'expanded': 64 * 1024 ** 3, 'members': 50000,
+                          'nameLength': 4096, 'nameBytes': 8 * 1024 ** 2,
+                          'extensionCount': 4096, 'extensionBytes': 1024 ** 2,
+                          'extensionDepth': 8, 'globalPaxKeys': 1024, 'globalPaxBytes': 64 * 1024}
+
+
+def _b0_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+@contextmanager
+def verify_production_b0_artifacts(binding, inventory, key):
+    """Read-only artifact integrity, never restoreability or authorization.
+
+    Caller authenticates helpers/context and retains the exclusive deployment
+    lease. Keep descriptors and identity observations alive until caller's final
+    journal/lease recheck. No Runtime, subprocess, extraction or publication.
+    """
+    STATE.validate_install_binding(binding)
+    INVENTORY.validate(inventory)
+    directory = binding['b0']['directory']
+    if binding['inventoryIdentity'] != INVENTORY.identity(inventory) or not any(
+            directory != root and os.path.commonpath((directory, root)) == root
+            for root in inventory['paths']['backupRoots']):
+        fail('preauthority_source_recovery_proof_mismatch')
+    ancestors = {}
+    current = directory
+    while True:
+        info = os.lstat(current)
+        if not stat.S_ISDIR(info.st_mode) or (info.st_uid, info.st_gid) != (0, 0) or \
+           stat.S_IMODE(info.st_mode) & 0o022 or (current == directory and stat.S_IMODE(info.st_mode) != 0o700):
+            fail('unsafe_backup_directory')
+        ancestors[current] = _b0_identity(info)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    if set(os.listdir(directory)) != set(PRODUCTION_B0_LIMITS):
+        fail('backup_manifest_invalid')
+    with ExitStack() as stack:
+        streams, identities = {}, {}
+        for name, limit in PRODUCTION_B0_LIMITS.items():
+            path = os.path.join(directory, name)
+            before = os.lstat(path)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or \
+               (before.st_uid, before.st_gid) != (0, 0) or stat.S_IMODE(before.st_mode) != 0o600 or \
+               not 0 < before.st_size <= limit:
+                fail('unsafe_backup_file')
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                stream = os.fdopen(fd, 'rb')
+            except BaseException:
+                os.close(fd)
+                raise
+            stack.enter_context(stream)
+            if _b0_identity(os.fstat(stream.fileno())) != _b0_identity(before):
+                fail('backup_artifact_changed')
+            streams[name], identities[name] = stream, _b0_identity(before)
+
+        def reaffirm():
+            if set(os.listdir(directory)) != set(PRODUCTION_B0_LIMITS):
+                fail('backup_artifact_changed')
+            for path, identity in ancestors.items():
+                if _b0_identity(os.lstat(path)) != identity:
+                    fail('backup_artifact_changed')
+            for name, identity in identities.items():
+                if _b0_identity(os.lstat(os.path.join(directory, name))) != identity or \
+                   _b0_identity(os.fstat(streams[name].fileno())) != identity:
+                    fail('backup_artifact_changed')
+
+        def small(name):
+            stream = streams[name]
+            stream.seek(0)
+            value = stream.read(PRODUCTION_B0_LIMITS[name] + 1)
+            if len(value) != identities[name][6]:
+                fail('backup_artifact_changed')
+            return value
+
+        raw = small('preauthority-proof.json')
+        proof = STATE.verify_envelope(STATE.parse_canonical(raw, 'proof_not_canonical'), key,
+                                      STATE.validate_proof_body, 'proof_shape_invalid')
+        if hashlib.sha256(raw).hexdigest() != binding['b0']['proofSha256'] or \
+           proof['kind'] != 'preauthority-legacy-source' or proof['inventoryIdentity'] != binding['inventoryIdentity'] or \
+           proof['source']['portal'] != binding['portalTarget']['database'] or \
+           proof['images'] != binding['previousImages'] or proof['targetImages'] != binding['candidate']['images']:
+            fail('preauthority_source_recovery_proof_mismatch')
+        hashes = {}
+        for artifact in proof['artifacts']:
+            name = artifact['name']
+            stream = streams[name]
+            digest, size = hashlib.sha256(), 0
+            while True:
+                block = stream.read(1024 * 1024)
+                if not block:
+                    break
+                size += len(block)
+                if size > PRODUCTION_B0_LIMITS[name]:
+                    fail('backup_artifact_changed')
+                digest.update(block)
+            hashes[name] = {'sha256': digest.hexdigest(), 'size': size}
+            if size != artifact['size'] or size != identities[name][6] or digest.hexdigest() != artifact['sha256']:
+                fail('backup_artifact_mismatch')
+        _manifest_hashes(directory, payload=False,
+                         read_bytes=lambda path: small(os.path.basename(path)),
+                         file_hash=lambda path: hashes.get(os.path.basename(path), {}))
+        expected_manifest = ''.join(hashes[name]['sha256'] + '  ' + name + '\n' for name in STATE.LEGACY_ARTIFACTS).encode('ascii')
+        if small('manifest.sha256') != expected_manifest:
+            fail('backup_manifest_invalid')
+        streams['uploads.tar.gz'].seek(0)
+
+        fingerprint = _bounded_gzip_tar_tree(streams['uploads.tar.gz'], PRODUCTION_B0_TAR_LIMITS)
+        if fingerprint != proof['dataFingerprints']['portalUploads']:
+            fail('backup_storage_fingerprint_mismatch')
+        reaffirm()
+        yield {'artifactIntegrityVerified': True, 'storageFingerprintVerified': True,
+               'databaseRestoreVerified': False, 'liveSourceVerified': False,
+               'rollbackAuthorized': False, 'installationExecuted': False, 'deploymentAuthorized': False}
+        reaffirm()
 
 
 def _compose_args(release):
@@ -1230,6 +2163,122 @@ def _proof_body(kind, images, target_images, source, migrations, fingerprints, a
     if target_images is not None:
         body['targetImages'] = target_images
     return STATE.validate_proof_body(body)
+
+
+def production_container_fingerprint(value, release_path):
+    """New persistent production algorithm; never used for historical receipts.
+
+    Caller separately verifies topology, reservation labels and stopped state.
+    Preserve all mount fields and nested array ordering, sort outer mounts only.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get('Config'), dict):
+        fail('restore_target_changed')
+    config = value['Config']
+    if not isinstance(value.get('Id'), str) or not STATE.HEX_64.fullmatch(value['Id']) or \
+       not isinstance(value.get('Image'), str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', value['Image']) or \
+       not isinstance(config.get('Image'), str) or not config['Image'] or \
+       not isinstance(value.get('Created'), str) or not value['Created'] or \
+       not isinstance(config.get('Labels'), dict) or \
+       any(not isinstance(k, str) or not isinstance(v, str) for k, v in config['Labels'].items()) or \
+       not isinstance(release_path, str) or '\0' in release_path or not os.path.isabs(release_path) or \
+       os.path.normpath(release_path) != release_path:
+        fail('restore_target_changed')
+    mounts = value.get('Mounts')
+    if not isinstance(mounts, list):
+        fail('restore_target_changed')
+    destinations = set()
+    for mount in mounts:
+        destination = mount.get('Destination') if isinstance(mount, dict) else None
+        if not isinstance(destination, str) or '\0' in destination or not os.path.isabs(destination) or \
+           os.path.normpath(destination) != destination or destination in destinations:
+            fail('restore_target_changed')
+        destinations.add(destination)
+    return hashlib.sha256(STATE.canonical({
+        'algorithm': 'production-container-mounts-v1', 'id': value['Id'], 'image': config['Image'],
+        'imageId': value['Image'], 'labels': config['Labels'], 'created': value['Created'],
+        'releasePath': release_path, 'mounts': sorted(mounts, key=lambda m: m['Destination']),
+    })).hexdigest()
+
+
+def production_install_plan(record, trust, inventory, body, observations, approval=None):
+    """Pure classification, NOT authentication or permission to install.
+
+    The installed administrative caller authenticates evidence and reads the
+    signed journal without repair. No Runtime constructor or action dispatch.
+    """
+    STATE.validate_state_body(body)
+    INVENTORY.validate(inventory)
+    if body['inventoryIdentity'] != INVENTORY.identity(inventory):
+        fail('state_inventory_identity_mismatch')
+    STATE._exact_keys(trust, {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
+    if any(not isinstance(value, str) or not STATE.HEX_64.fullmatch(value) for value in trust.values()):
+        fail('invalid_cold_state')
+    STATE._exact_keys(observations, {'runtimeOwnershipCompatible', 'isolatedSourceIdentityCompatible',
+                                   'candidateReleasePresent', 'b0Status'}, 'invalid_cold_state')
+    if any(type(observations[name]) is not bool for name in observations if name != 'b0Status') or \
+       observations['b0Status'] not in ('absent', 'unbound', 'partial', 'present_unverified', 'integrity_verified'):
+        fail('invalid_cold_state')
+    candidate = STATE.production_candidate(record)
+    production = body.get('installIntent') is not None and body['installIntent']['binding'].get('bindingVersion') == 3
+    blockers = ['production_initializer_not_enabled',
+                'production_creation_execution_not_integrated' if production else 'production_creation_binding_unsupported',
+                'physical_resource_observations_required', 'closed_b1_ingress_readiness_not_integrated']
+    if body['schemaVersion'] != 2:
+        blockers.append('install_state_schema_upgrade_required')
+    if inventory['project'] != 'ownerinc-portal-prod':
+        blockers.append('production_project_mismatch')
+    if not observations['runtimeOwnershipCompatible']:
+        blockers.append('production_runtime_ownership_incompatible')
+    if not observations['isolatedSourceIdentityCompatible']:
+        blockers.append('isolated_source_identity_incompatible')
+    blockers.append('candidate_release_publication_unverified' if observations['candidateReleasePresent']
+                    else 'candidate_release_not_published')
+    if observations['b0Status'] in ('partial', 'unbound'):
+        blockers.append('partial_or_unbound_b0')
+    else:
+        blockers.append('b0_recovery_verification_required')
+    intent = body.get('installIntent')
+    # A restore can retain a committed install intent: diagnose both independently.
+    if intent:
+        if observations['b0Status'] == 'absent':
+            blockers.append('bound_b0_missing')
+        if intent['binding'].get('bindingVersion') == 2:
+            blockers.append('isolated_binding_not_production_authority')
+        if intent['binding']['candidate'] != candidate:
+            blockers.append('existing_install_candidate_mismatch')
+        if production:
+            if intent['binding']['authority'] != trust:
+                blockers.append('existing_install_authority_mismatch')
+            if approval is None:
+                blockers.append('production_binding_context_required')
+            else:
+                try:
+                    STATE.validate_production_correspondence(intent['binding'], approval, record, inventory, trust)
+                except STATE.StateError:
+                    blockers.append('production_binding_context_mismatch')
+        creation = intent.get('creation')
+        if creation is None or set(creation['volumes']) != {'cmsPostgres', 'cmsUploads'} or \
+           set(creation['containers']) != ({'cms-postgres', 'cms', 'api', 'cron'} if production else {'cms-postgres', 'cms'}):
+            blockers.append('creation_receipts_incomplete')
+        blockers.append('install_intent_retained')
+    if body.get('restoreIntent') is not None:
+        classification = 'restore_pending'
+        blockers.append('restore_intent_retained')
+    elif intent:
+        stage = intent['stage']
+        classification = stage if stage in ('floor_commit_pending', 'floor_committed') else 'pre_floor_install_pending'
+    elif body['cmsStatus'] == 'cold':
+        initial = body['sequence'] == 0 and body['admission'] == 'open' and all(body[name] is None for name in
+            ('latestProofSha256', 'legacySourceProofSha256', 'releaseImages', 'plannedReleaseImages',
+             'rollbackTargetImages', 'nativeCatalogFingerprint'))
+        classification = 'initial_cold' if initial else 'cold_without_install_intent'
+    else:
+        classification = 'noninitial_without_install_intent'
+        blockers.append('existing_floor_requires_separate_recovery')
+    return {'kind': 'payload-production-install-plan-v1', 'classification': classification,
+            'candidate': candidate, 'trust': dict(trust), 'inventoryIdentity': body['inventoryIdentity'],
+            'b0Status': observations['b0Status'], 'blockers': sorted(blockers),
+            'installationExecuted': False, 'deploymentAuthorized': False}
 
 
 class Runtime:
@@ -1715,9 +2764,23 @@ class Runtime:
         if state not in allowed_states or status.get('Running') is not (state == 'running') or \
            status.get('Paused') is not False or status.get('Restarting') is not False:
             fail('writer_state_invalid')
+        mounts = value.get('Mounts')
+        if not isinstance(mounts, list):
+            fail('writer_inspect_response_invalid')
+        destinations = set()
+        for mount in mounts:
+            destination = mount.get('Destination') if isinstance(mount, dict) else None
+            if not isinstance(destination, str) or not destination.startswith('/') or '\0' in destination or \
+               destination in destinations:
+                fail('writer_inspect_response_invalid')
+            destinations.add(destination)
+        # Docker Mounts is an unordered collection. Preserve every record/field
+        # and its cardinality; only this v2 ephemeral writer ticket sorts it.
+        # Do NOT reuse this change for persistent _creation_container receipts.
+        mounts = sorted(mounts, key=lambda mount: mount['Destination'])
         receipt = {'id': identity, 'fingerprint': hashlib.sha256(STATE.canonical({
             'id': identity, 'image': value.get('Image'), 'configImage': value.get('Config', {}).get('Image'),
-            'labels': labels, 'created': value.get('Created'), 'mounts': value.get('Mounts'),
+            'labels': labels, 'created': value.get('Created'), 'mounts': mounts,
             'healthcheck': value.get('Config', {}).get('Healthcheck'),
         })).hexdigest()}
         return receipt, state, status.get('Health', {}).get('Status', 'none')
@@ -1742,7 +2805,7 @@ class Runtime:
                 fail('writer_state_invalid')
         if not {'api', 'cron', 'cms'} <= set(captured) or len({v['id'] for v in captured.values()}) != len(captured):
             fail('writer_identity_mismatch')
-        ticket = {'kind': 'coordinator-writers-v1', 'inventoryIdentity': self.inventory['identity'],
+        ticket = {'kind': 'coordinator-writers-v2', 'inventoryIdentity': self.inventory['identity'],
                   'release': self.release_path, 'scope': scope, 'sequence': self.state['sequence'],
                   'stateSha256': self.state_parent_hash, 'containers': captured}
         print(STATE.canonical(STATE.sign_envelope(ticket, self.key)).decode('utf-8'))
@@ -1755,7 +2818,7 @@ class Runtime:
             fail('writer_ticket_invalid')
         def validate(ticket):
             STATE._exact_keys(ticket, {'kind', 'inventoryIdentity', 'release', 'scope', 'sequence', 'stateSha256', 'containers'}, 'writer_ticket_invalid')
-            if ticket['kind'] != 'coordinator-writers-v1' or ticket['inventoryIdentity'] != self.inventory['identity'] or \
+            if ticket['kind'] != 'coordinator-writers-v2' or ticket['inventoryIdentity'] != self.inventory['identity'] or \
                ticket['release'] != self.release_path or ticket['scope'] != self._writer_scope() or \
                not STATE._safe_int(ticket['sequence']) or ticket['sequence'] >= self.state['sequence'] or \
                not isinstance(ticket['stateSha256'], str) or not STATE.HEX_64.fullmatch(ticket['stateSha256']):
@@ -1878,6 +2941,8 @@ class Runtime:
         return fingerprint
 
     def _install_origin_check(self):
+        if 'recovery' in (self.state.get('installIntent') or {}):
+            fail('install_recovery_invalid')
         self._admission_closed()
         intent = self.state.get('installIntent')
         if intent is None or self.state.get('restoreIntent') is not None:
@@ -2424,7 +3489,7 @@ def main(argv):
     except (ControlError, STATE.StateError) as error:
         _emit_control_error(error, release)
         if action in ('initialize-isolated', 'install-floor-commit'):
-            _emit_initializer_diagnostic(runtime)
+            _emit_initializer_diagnostic(runtime, error)
         return 2
     except Exception:
         if action in ('initialize-isolated', 'install-floor-commit'):

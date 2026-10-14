@@ -82,8 +82,8 @@ test('CMS readiness diagnostics read only allowlisted Docker fields and HTTP sta
   assert.match(recoveryRunner, /recoveryProgress\[runtime\.role\]\.initialCmsHealthPassed = true/u);
   assert.match(recoveryRunner, /quiescentSnapshotComparison = 'passed'/u);
   assert.match(recoveryRunner, /quiescentSnapshotComparison = 'failed'/u);
-  assert.match(recoveryRunner, /setStage\(`restart_writers_\$\{runtime\.role\}`\)/u);
-  assert.match(recoveryRunner, /setStage\(`verify_release_\$\{runtime\.role\}`\)/u);
+  assert.match(recoveryRunner, /setStage\(`restart_writers_\$\{runtime\.role\}`, 'restart_writers', runtime\.role\)/u);
+  assert.match(recoveryRunner, /setStage\(`verify_release_\$\{runtime\.role\}`, 'verify_release', runtime\.role\)/u);
   assert.match(recoveryRunner, /failedStage: outcome\.primaryPhase === 'snapshot' \? snapshotStage : stage/u);
   assert.match(recoveryRunner, /recoveryProgress: createRecoveryProgressReport\(recoveryProgress\)/u);
   assert.match(recoveryRunner, /controlCommandOptions\(action, release\)/u);

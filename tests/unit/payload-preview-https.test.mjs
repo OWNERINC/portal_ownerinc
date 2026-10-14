@@ -6,6 +6,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { selectExternalTestParent } from '../helpers/payload-preview-temp.mjs'
 import {
   checkHttpsPreparationSources,
   parseRunEnvironment,
@@ -47,7 +48,10 @@ async function makeTempRoot() {
     if (parent === current) break
     current = parent
   }
-  const externalParent = highestGitAncestor ? path.dirname(highestGitAncestor) : os.tmpdir()
+  const externalParent = await selectExternalTestParent(
+    highestGitAncestor ? path.dirname(highestGitAncestor) : os.tmpdir(),
+    repoRoot, process.env.PAYLOAD_TEST_EXTERNAL_PARENT,
+  )
   return fs.mkdtemp(path.join(externalParent, 'payload-preview-https-'))
 }
 

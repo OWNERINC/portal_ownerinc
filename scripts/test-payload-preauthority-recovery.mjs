@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRecoveryProgress } from './integration/payload-preauthority-progress.mjs';
 import { createPrivateRecoveryRoot, initializePreauthority, legacySourceMaterial,
   validateRecoveryPrivateAncestry, verifyInitializerCheckout } from './integration/payload-preauthority-initialize.mjs';
 import { runCatalogNegative } from './integration/payload-preauthority-negative.mjs';
@@ -45,6 +46,8 @@ const repository = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const python = process.env.PYTHON || 'python3';
 const hostPath = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const reportPath = process.env.PAYLOAD_RECOVERY_REPORT || path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'payload-preauthority-recovery-report.json');
+const progress = createRecoveryProgress({ reportPath, checkpoint: process.env.PAYLOAD_RECOVERY_PROGRESS ||
+  path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'payload-preauthority-recovery-progress.json') });
 const assignment = (key, value) => `${key}=${value}`;
 const passwordKey = suffix => `POSTGRES_${suffix}`;
 const safeChecks = {
@@ -167,23 +170,63 @@ function safeEnvironment(extra = {}) {
 }
 
 function run(command, args = [], options = {}) {
-  return runFixtureCommand(command, args, {
+  const category = options.coordinatorCommandContext === 'payload-coordinator:backup' ? 'coordinator_backup'
+    : options.coordinatorCommandContext === 'payload-coordinator:restore' ? 'coordinator_restore'
+    : ['payload-control:release-preflight', 'payload-control:verify-release',
+      'payload-control:initialize-isolated', 'payload-control:install-floor-commit'].includes(options.controlCommandContext) ? 'control'
+    : options.sqlCommandContext === true ? 'sql'
+    : options.logicalSnapshotCommandContext === 'logical-snapshot-cli' ? 'snapshot'
+    : options.smokeCommandContext === 'fixture-full-smoke' ? 'smoke'
+    : options.writerRestartCommandContext === 'snapshot-writer-restart' ? 'writer_restart'
+    : command === 'env' ? 'compose' : command === python ? 'python' : command === process.execPath ? 'node'
+    : command === 'bash' ? 'shell' : command === 'docker' ? 'docker' : command === 'git' ? 'git' : 'unknown';
+  return progress.command({ category, role: options.progressRole,
+    substep: options.substep || activeSubstep, timeoutMs: options.timeout || 180_000 }, () => runFixtureCommand(command, args, {
     ...options,
     cwd: options.cwd || repository,
     env: safeEnvironment(options.env),
     activeSubstep,
     privateCommandEvidence,
-  });
+  }));
 }
 
 function text(result) { return result.toString('utf8').trim(); }
 
-function setStage(value) {
+function setStage(value, diagnosticStage = value, role = 'global') {
   stage = value;
   activeSubstep = null;
+  progress.transition(diagnosticStage, role);
+  progress.substep(null);
 }
 
-function setSubstep(value) { activeSubstep = value; }
+function setSubstep(value) { activeSubstep = value; progress.substep(value); }
+
+function fixtureRole(project) {
+  if (project === projectNames?.source) return 'source';
+  if (project === projectNames?.target) return 'target';
+  if (project === projectNames?.lease) return 'leaseTarget';
+  return 'global';
+}
+
+function progressFailureContext(failedStage, failedSubstep) {
+  // Only exact runtime identities may translate a private dynamic stage into a
+  // public stage/role. Never accept arbitrary prefix/regex-sanitized labels.
+  for (const runtime of runtimeRefs) {
+    if (!['source', 'target', 'leaseTarget'].includes(runtime.role)) continue;
+    for (const prefix of ['prepare', 'seed', 'quiescent_snapshot']) {
+      if (typeof runtime.project === 'string' && failedStage === `${prefix}_${runtime.project}`) {
+        return { stage: prefix, substep: failedSubstep, role: runtime.role };
+      }
+    }
+    for (const prefix of ['verify_release', 'restart_writers']) {
+      if (failedStage === `${prefix}_${runtime.role}`) {
+        return { stage: prefix, substep: failedSubstep, role: runtime.role };
+      }
+    }
+  }
+  // Fixed stages pass the helper's finite allowlist; unknown values become unknown.
+  return { stage: failedStage, substep: failedSubstep };
+}
 
 function composeArgs(project, release, runtime, actionArgs) {
   return recoveryComposeArgs(project, release, runtime, actionArgs);
@@ -193,7 +236,7 @@ function compose(project, release, runtime, actionArgs, options = {}) {
   return run('env', [
     '-i', `PATH=${hostPath}`, 'HOME=/root', 'docker', 'compose',
     ...composeArgs(project, release, runtime, actionArgs),
-  ], options);
+  ], { ...options, progressRole: fixtureRole(project) });
 }
 
 function fixtureEnv(project, runtime, release) {
@@ -205,6 +248,7 @@ function withLease(runtime, project, command, args = [], options = {}) {
   const invocation = createLeasedCommandInvocation(lock, command, args);
   return run(invocation.command, invocation.args, {
     ...options,
+    progressRole: fixtureRole(project),
     env: { ...fixtureEnv(project, runtime, options.release || runtime.payloadRelease), ...options.env },
   });
 }
@@ -222,7 +266,7 @@ function coordinator(runtime, project, action, release, backup = '') {
   const script = path.join(release, 'scripts', 'payload-operations.sh');
   const args = action === 'backup' ? [script, 'backup', release] : [script, 'restore', release, backup, '--confirm', 'RESTORE'];
   return run('bash', args, { cwd: release, env: fixtureEnv(project, runtime, release), timeout: 15 * 60_000,
-    ...coordinatorCommandOptions(action, release) });
+    ...coordinatorCommandOptions(action, release), progressRole: fixtureRole(project) });
 }
 
 async function allocatePort() {
@@ -636,7 +680,7 @@ async function assertFixtureFullSmoke(runtime, afterSmoke = () => undefined) {
 }
 
 async function provisionProject(runtime) {
-  setStage(`prepare_${runtime.project}`);
+  setStage(`prepare_${runtime.project}`, 'prepare', runtime.role);
   composeWithLease(runtime, ['up', '--detach', '--no-build', '--pull', 'never', 'postgres', 'api', 'cron']);
   await awaitService(runtime, 'api');
   await awaitService(runtime, 'cron');
@@ -672,7 +716,7 @@ async function provisionProject(runtime) {
   withLease(runtime, runtime.project, path.join(runtime.directory, 'payload-operations-guard'),
     ['open-admission', runtime.payloadRelease, '']);
   await seedProject(runtime);
-  setStage(`verify_release_${runtime.role}`);
+  setStage(`verify_release_${runtime.role}`, 'verify_release', runtime.role);
   guard(runtime, runtime.project, 'verify-release', runtime.payloadRelease);
   setSubstep(null);
 }
@@ -681,7 +725,7 @@ function syntheticUid(project) { return `fixture-${project}`; }
 function safeToken(project) { return project.replaceAll('-', '_'); }
 
 async function seedProject(runtime) {
-  setStage(`seed_${runtime.project}`);
+  setStage(`seed_${runtime.project}`, 'seed', runtime.role);
   const marker = `payload-preauthority-${runtime.project}`;
   const uid = syntheticUid(runtime.project);
   const email = `${safeToken(runtime.project)}@fixture.invalid`;
@@ -800,7 +844,7 @@ function snapshot(runtime, evidenceLabel = null) {
 }
 
 async function assertQuiescentSnapshotStable(runtime) {
-  setStage(`quiescent_snapshot_${runtime.project}`);
+  setStage(`quiescent_snapshot_${runtime.project}`, 'quiescent_snapshot', runtime.role);
   const snapshotStage = stage;
   setSubstep('snapshot_list_writers');
   const running = text(composeCall(runtime, ['ps', '--status', 'running', '--services']))
@@ -853,7 +897,7 @@ async function assertQuiescentSnapshotStable(runtime) {
       runtime.quiescentSnapshotStable = true;
     },
     async () => {
-      setStage(`restart_writers_${runtime.role}`);
+      setStage(`restart_writers_${runtime.role}`, 'restart_writers', runtime.role);
       setSubstep('snapshot_restart_writers');
       withLease(runtime, runtime.project, process.execPath, [
         path.join(repository, 'scripts', 'integration', 'payload-preauthority-writer-restart.mjs'),
@@ -957,7 +1001,7 @@ with open(proof_path, 'wb') as stream:
 }
 
 async function negativeRestore(runtime, backupPath, label, expectedChange = null) {
-  setStage(`negative_${label}`);
+  setStage(`negative_${label}`, undefined, runtime.role);
   let directory = backupPath;
   if (expectedChange) directory = await expectedChange(backupPath);
   const before = snapshot(runtime);
@@ -1035,7 +1079,7 @@ function sortKeys(value) {
 }
 
 async function targetCatalogNegative(runtime, backup, label, sql, cleanupSql) {
-  setStage(`negative_${label}`);
+  setStage(`negative_${label}`, undefined, runtime.role);
   const evidenceStart = privateCommandEvidence.length;
   const ddl = statement => composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
     '--dbname=ownerinc_cms', '--username=cms_admin'], { input: `${statement}\n`, preservePrivateErrorEvidence: true });
@@ -1215,7 +1259,7 @@ async function runRecovery() {
   await targetCatalogNegative(target, targetBackup, 'migration_ledger_mismatch',
     `INSERT INTO public.payload_migrations(name,batch) VALUES('20261008_fixture_unexpected',999)`,
     `DELETE FROM public.payload_migrations WHERE name='20261008_fixture_unexpected'`);
-  await targetContentRace(leaseTarget, leaseBackup);
+  await progress.boundary('lease_race', () => targetContentRace(leaseTarget, leaseBackup));
   safeChecks.allNegativeCasesRejectedBeforeRestore = true;
 
   setStage('first_actual_restore');
@@ -1331,20 +1375,32 @@ async function writeReport(report) {
 }
 
 let report;
+setStage('validate_inputs');
 try {
   report = await runRecovery();
   setStage('successful_fixture_cleanup');
-  for (const runtime of runtimeRefs) {
-    composeCall(runtime, ['down', '--volumes', '--remove-orphans']);
-  }
-  preserveFixture = false;
-  await rm(fixtureRoot, { recursive: true, force: true });
+  await progress.boundary('cleanup', async () => {
+    for (const runtime of runtimeRefs) {
+      composeCall(runtime, ['down', '--volumes', '--remove-orphans']);
+    }
+    preserveFixture = false;
+    await rm(fixtureRoot, { recursive: true, force: true });
+  });
 } catch (error) {
+  // Capture before holds/evidence can change activeSubstep or stage. An earlier
+  // snapshot failure (including its stage) remains primary over restart failure.
+  const failedStage = stage;
+  const commandSubstep = error instanceof FixtureFailure ? error.diagnostic?.substep : null;
+  const primarySubstep = commandSubstep && commandSubstep !== 'unclassified_command'
+    ? commandSubstep : activeSubstep;
+  const failureFields = failureReportFields || createRecoveryFailureReportFields({ primaryError: error, primarySubstep });
+  progress.failure(progressFailureContext(failureFields.failedStage ?? failedStage,
+    failureFields.failedSubstep ?? primarySubstep));
   preserveFixture = Boolean(fixtureRoot);
   // Coordinator restore normally reopens before returning. A later fixture
   // acceptance error must not leave disposable writers/admission active. This
   // does not claim a production pre-open gate and never masks the primary error.
-  const fixtureFailureHold = restoreAcceptanceProgress.first.coordinatorReturnedSuccessfully
+  const fixtureFailureHold = await progress.boundary('failure_holds', async () => restoreAcceptanceProgress.first.coordinatorReturnedSuccessfully
     ? await holdFailedRecoveryFixtures(runtimeRefs, runtime => {
       const output = withLease(runtime, runtime.project, 'bash', ['-c', postRestoreFixtureHoldScript,
         'payload-fixture-failure-hold', path.join(runtime.directory, 'payload-operations-guard'), runtime.payloadRelease,
@@ -1355,21 +1411,15 @@ try {
         fixtureFailureHoldContext: POST_RESTORE_HOLD_CONTEXT,
       });
       return parseFixtureFailureHold(output, { status: 0 });
-    }) : [];
-  const privateRunnerErrorEvidenceRetained = await persistPrivateCommandEvidence(
+    }) : []);
+  const privateRunnerErrorEvidenceRetained = await progress.boundary('private_command_evidence', () => persistPrivateCommandEvidence(
     fixtureRoot, privateCommandEvidence,
-  ).catch(() => false);
-  const privateSnapshotEvidenceRetained = await privateSnapshotEvidence.persist(fixtureRoot).catch(() => false);
-  const commandSubstep = error instanceof FixtureFailure ? error.diagnostic?.substep : null;
-  const primarySubstep = commandSubstep && commandSubstep !== 'unclassified_command'
-    ? commandSubstep : activeSubstep;
-  const failureFields = failureReportFields || createRecoveryFailureReportFields({
-    primaryError: error,
-    primarySubstep,
-  });
+  )).catch(() => false);
+  const privateSnapshotEvidenceRetained = await progress.boundary('private_snapshot_evidence',
+    () => privateSnapshotEvidence.persist(fixtureRoot)).catch(() => false);
   report = {
     schemaVersion: 1, status: 'failed', run: runIdentity,
-    images, failedStage: stage,
+    images, failedStage,
     ...failureFields,
     checks: safeChecks,
     recoveryProgress: createRecoveryProgressReport(recoveryProgress),
@@ -1385,10 +1435,19 @@ try {
   };
 }
 
-await writeReport(report);
-if (report.status !== 'passed') {
-  console.error(`Payload preauthority recovery acceptance failed at ${report.failedStage}; redacted report written.`);
+let reportWritten = false;
+try {
+  await progress.boundary('terminal_report', () => writeReport(report));
+  reportWritten = true;
+} catch {
+  // Keep the original report/failure intact; never print filesystem error text.
+  console.error('Payload recovery terminal report unavailable.');
   process.exitCode = 1;
-} else {
+}
+if (report.status !== 'passed') {
+  if (reportWritten) console.error(`Payload preauthority recovery acceptance failed at ${report.failedStage}; redacted report written.`);
+  process.exitCode = 1;
+} else if (reportWritten) {
   console.log('Payload four-store preauthority recovery acceptance passed.');
 }
+progress.finish(report.status === 'passed' && reportWritten ? 'completed' : 'failed');

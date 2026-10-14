@@ -228,8 +228,38 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
   assert.match(workflow, /runs-on: ubuntu-latest/u);
   assert.ok(workflow.indexOf('node-version: 24') < workflow.indexOf(`      - name: ${name}`));
   assert.equal(setup.split('        run: |\n')[1]?.trim(),
-    'set -euo pipefail\n          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs',
-    'preserve checkout cwd and setup-node PATH; execute only this suite without filtering or suppressing its exit');
+    'set -euo pipefail\n          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs\n' +
+    '          NODE_BIN="$(readlink -f -- "$(command -v node)")"\n' +
+    '          test -f "$NODE_BIN" && test -x "$NODE_BIN"\n' +
+    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\\n' +
+    '            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \\\n' +
+    '            tests/unit/payload-candidate-trust-provisioning.test.mjs\n' +
+    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\\n' +
+    '            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \\\n' +
+    '            tests/unit/payload-preparation-authentication.test.mjs',
+    'preserve checkout cwd and setup-node selection; all three native suites are mandatory and unfiltered');
+  const trustTests = await read('tests/unit/payload-candidate-trust-provisioning.test.mjs');
+  assert.match(trustTests, /skip: process\.env\.PAYLOAD_REQUIRE_NATIVE_TRUST !== '1' &&/u);
+  assert.match(trustTests, /assert\.deepEqual\(JSON\.parse\(result\.stdout\), \{ kind: 'native-trust-filesystem-proof'/u);
+  const provisioner = await read('ops/provision-payload-candidate-trust.py');
+  assert.match(provisioner, /^TOOL_ROOT = '\/opt\/ownerinc\/lib\/payload-candidate'$/mu);
+  assert.match(provisioner, /^POLICY_PATH = '\/etc\/ownerinc\/payload-candidate\/production-policy.json'$/mu);
+  assert.match(provisioner, /^STATE_ROOT = '\/var\/lib\/ownerinc\/payload-candidate'$/mu);
+  assert.doesNotMatch(provisioner, /PAYLOAD_REQUIRE_NATIVE_TRUST|--destination|--tool-root|--state-root/u);
+  const preparationTests = await read('tests/unit/payload-preparation-authentication.test.mjs');
+  assert.match(preparationTests, /skip: process\.env\.PAYLOAD_REQUIRE_NATIVE_PREPARATION !== '1' &&/u);
+  assert.match(preparationTests, /assert\.deepEqual\(JSON\.parse\(result\.stdout\), \{ kind: 'native-preparation-lease-proof'/u);
+  assert.match(preparationTests, /Buffer\.byteLength\(result\.stdout\) <= 1024/u);
+  const nativePreparation = preparationTests.slice(preparationTests.indexOf("test('native Linux flock"),
+    preparationTests.indexOf("test('host-data reader"));
+  assert.match(nativePreparation, /dir='\/root'/u);
+  assert.match(nativePreparation, /assert m\.LOCK=='\/opt\/ownerinc\/apps\/portal-ownerinc-real\/runtime\/deploy\.lock'/u);
+  assert.doesNotMatch(nativePreparation, /t\.skip|m\.host_ancestry\s*=|mock|SKIP unsupported/u);
+  for (const proof of ['sharedRefused', 'originalSharedUnchanged', 'busyRefused', 'foreignDescriptionRefused',
+    'exclusiveSubprocessInheritance', 'parentExclusiveRetained', 'fd9Closed', 'pathReplacementRefused', 'sandboxRemoved']) {
+    assert.ok(nativePreparation.includes(`${proof}: true`), `native proof must require ${proof}`);
+  }
+  assert.doesNotMatch(await read('ops/prepare-cms-authenticated.py'), /PAYLOAD_REQUIRE_NATIVE_PREPARATION/u);
   assert.doesNotMatch(setup, /continue-on-error|always\(|failure\(|\|\||\beval\b|secrets\.|\bcd\b|--test-name-pattern/u);
   assert.equal(workflow.split(`      - name: ${name}\n`).length - 1, 1);
   for (const later of ['Build CMS with synthetic build-only configuration', 'Build production images', 'Publish immutable images', 'Publish CMS immutable image',
@@ -249,7 +279,12 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
 test('CI mirror covers all pinned Hub bases without changing production pins or weakening gates', async () => {
   const workflow = await read('.github/workflows/ci.yml');
   const step = namedStep(workflow, 'Verify pinned CI mirrors and configure runner pulls');
-  const service = workflow.slice(workflow.indexOf('    services:'), workflow.indexOf('    steps:'));
+  const validateJob = workflow.split('\n  validate:\n')[1]?.split(/\n  [A-Za-z0-9_-]+:\n/u)[0];
+  assert.ok(validateJob, 'the PostgreSQL service belongs to the validate job');
+  const servicesStart = validateJob.indexOf('    services:');
+  const stepsStart = validateJob.indexOf('    steps:', servicesStart);
+  assert.ok(servicesStart >= 0 && stepsStart > servicesStart);
+  const service = validateJob.slice(servicesStart, stepsStart);
   assert.match(service, /image: mirror\.gcr\.io\/library\/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777/u);
   const sources = await Promise.all(['api/Dockerfile', 'cron/Dockerfile', 'cms/Dockerfile',
     'docker-compose.yml', 'docker-compose.payload.yml', 'scripts/integration/editorial-admin-session-fixture.compose.yml',

@@ -77,6 +77,103 @@ Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se nec
 
 ## Fluxo de release
 
+### Receiver Payload: admissão somente (sem instalação)
+
+O receiver possui uma rota explícita de admissão, anterior à inspeção do runtime
+e ao atalho `already_current`. O comando SSH é **uma única string**, com campos
+posicionais separados por exatamente um espaço ASCII, nesta ordem:
+
+```text
+production:payload-v1 COMMIT RUN_ID RUN_ATTEMPT API_IMAGE CRON_IMAGE CMS_IMAGE CANDIDATE_ARTIFACT_ID QUALIFIED_ARTIFACT_ID REPORT_ARTIFACT_ID
+```
+
+Exemplo de transporte (não executado nesta implementação):
+
+```sh
+ssh "$VPS_USER@$VPS_HOST" "production:payload-v1 $COMMIT $RUN_ID $RUN_ATTEMPT $API_IMAGE $CRON_IMAGE $CMS_IMAGE $CANDIDATE_ARTIFACT_ID $QUALIFIED_ARTIFACT_ID $REPORT_ARTIFACT_ID" < candidate.tar.gz
+```
+
+`COMMIT` contém 40 hexadecimais minúsculos; IDs e tentativa são decimais positivos
+de até 20 dígitos, sem zeros iniciais; os três IDs de artefatos são distintos.
+Cada imagem é a referência completa `ghcr.io/ownerinc/ownerinc-portal-SERVICE@sha256:`
+seguida de 64 hexadecimais minúsculos, com SERVICE `api`, `cron`, `cms`, nessa ordem.
+Não são aceitos flags adicionais, whitespace alternativo, campos extras, staging
+Payload, paths de política/ferramentas ou permissões indicadas pelo solicitante.
+`production:SHA`, `staging:SHA` e a normalização SHA-only do wrapper de produção
+mantêm o contrato legacy de duas imagens. Três imagens via legacy são recusadas
+antes da criação da árvore de release; não constituem uma alternativa à admissão.
+Retries legacy `already_current` também precisam fornecer o archive de duas
+imagens: a classificação ocorre antes dos checks de saúde/recuperação do cron,
+para que stdin Payload não use esse atalho. O CI existente já envia esse archive.
+
+Pré-requisito de instalação **ainda operacionalmente pendente**: instalar a versão
+revisada do receiver e `ops/payload-receiver-admission.py` como
+`/usr/local/libexec/payload-receiver-admission.py`, root:root, `0755`, em ancestrais
+root:root não graváveis por grupo/outros e sem symlinks. Python 3.9+ deve estar
+disponível em `/usr/bin/python3` (também no caminho legacy, sem exigir root para
+legacy). Não há override de helper/verificador por ambiente ou request. Ambos são
+executados com ambiente limpo e `-I -S`. O helper executa exclusivamente o verificador
+instalado em `/opt/ownerinc/lib/payload-candidate/ops/payload-candidate-verifier.py`;
+o verificador existente continua autenticando a própria toolchain, a política
+protegida `/etc/ownerinc/payload-candidate/production-policy.json` e o registro em
+`/var/lib/ownerinc/payload-candidate/records`. Nenhuma alteração de política ou
+registro é feita pelo receiver. O Python usado deve corresponder ao intérprete
+fixado na política existente; mismatch falha fechado.
+
+O entrypoint existente `ops/prepare-cms-infrastructure.sh` inclui essa dependência:
+`--check` verifica o source, a sintaxe sem executá-lo, a stdlib/Python 3.9+ pelo
+intérprete fixo isolado e a cadeia root:root do destino; helper ausente é elegível,
+mas bytes instalados desconhecidos ou ownership/permissões inseguros são recusados.
+`--apply`, somente quando operacionalmente autorizado, instala o helper por
+`atomic_install` root:root `0755` e reconfere bytes/modo **antes** de publicar o
+receiver. Falha de instalação ou conferência mantém o receiver anterior. Uma
+interrupção entre esses passos pode deixar apenas o helper inerte instalado, não
+um novo receiver sem dependência. Helper já correto não é reescrito; a ausência
+dele impede o resultado “already prepared”. Se já existente, uma cópia privada
+é retida junto ao snapshot pré-mudança. O dry run não cria arquivos, e a aplicação
+continua sem iniciar serviços nem abrir admissão. Isso não instala política,
+registro ou verifier de candidatos e não constitui execução real na VPS.
+
+Payload exige UID/EUID 0 e o diretório previamente provisionado
+`/var/lib/ownerinc/payload-candidate/incoming` root:root `0700`, com **toda** a
+cadeia até `/` root:root, sem links, bits especiais ou escrita por grupo/outros.
+O helper não corrige permissões/ownership automaticamente. Cada tentativa válida
+na sintaxe cria exclusivamente `incoming/payload-<aleatório>/`, `0700`, e um
+`candidate.tar.gz` exclusivo `0600`. A leitura de stdin consome no máximo **10 MiB
++ 1 byte** para detectar overflow, grava no máximo 10 MiB e não drena streams
+ilimitados. O recibo mantém os bytes imutáveis em memória; a verificação compara
+identidade (device/inode/metadata), FD aberto, path e conteúdo antes de consumir
+**aqueles mesmos bytes**, sem reabrir o archive para extração. A cadeia protegida
+impede substituição por outra identidade; substituir o inode com conteúdo idêntico
+durante a verificação também é recusado. Isso não depende apenas de rehash.
+
+Somente após PASS do verificador o helper inspeciona e materializa a árvore privada
+`receipt/release` (não publica em `releases/`). Aceita apenas arquivos regulares e
+diretórios, rejeita links, especiais, escapes, nomes/metadata duplicados e `.image-env`
+recebido. Limites adicionais: 128 MiB descomprimidos e 20.000 membros. Commit e as
+três imagens devem coincidir exatamente com os seletores autenticados, inclusive
+na conferência dos arquivos extraídos. Nenhum conteúdo recebido é executado ou
+sourced. **Mesmo PASS termina com exit 2 `release_not_preflighted`**; a função
+`install_receiver_preflight()` existente permanece incondicionalmente fechada.
+Não há pulls, inspeção Docker, mudanças em serviços/bancos/volumes/pointers,
+instalação, recuperação ou ativação neste bloco.
+
+Diagnósticos expõem apenas o basename gerado do recibo e códigos fechados, nunca
+request bruto, conteúdo de política/registro ou stderr do verificador. Negativas
+do verificador aparecem como `candidate_admission_denied`. Recibos Payload,
+inclusive parciais, ficam preservados; PASS também preserva `admission.json` e a
+árvore privada. Falha do helper legacy preserva apenas seu archive limitado,
+enquanto a limpeza existente remove a staging parcial. Não se removem releases
+existentes nem registros assinados. Não há garbage collection automática: o
+operador deve revisar e arquivar recibos com acesso restrito e monitorar espaço;
+limite por tentativa não é uma quota agregada. Falhas de sintaxe/root/ancestrais
+antes da criação não geram recibo.
+
+Testes de transporte usam doubles explicitamente identificados; bindings
+criptográficos usam a suíte existente `payload-candidate-admission`. A evidência
+local Windows não comprova permissões/FDs Linux, instalação no host ou deploy.
+O teste de identidade nativa Linux/root permanece pendente quando skipped.
+
 **Extensão Payload em preparação local:** o caminho legacy de duas imagens/dois
 artefatos abaixo permanece compatível. Releases `payload-v1` acrescentam CMS_IMAGE
 e exigem backup coordenado PortalDB/CMSDB/uploads/CMSmedia+staging, lease operacional
@@ -515,6 +612,180 @@ configuração de staging deve usar nomes de projeto, volumes, containers e
 backup distintos dos valores de produção; o receptor rejeita qualquer alvo
 que não seja `production` ou `staging`.
 
+### P2: transporte privilegiado de admission Payload (ainda sem instalação)
+
+#### Provisionamento administrativo offline do trust (slice separado)
+
+`ops/provision-payload-candidate-trust.py` prepara somente a closure fixa de
+admission, policy e diretórios privados. Não altera preparer, pins de release,
+runtime, sudoers, serviços ou banco; não registra candidatos nem autoriza deploy.
+**O próprio provisioner e o Python que o inicia devem ser autenticados pelo
+administrador antes da execução.** Hash calculado pelo próprio bundle, arquivo
+sidecar recebido com o candidato ou auto-checagem do programa não estabelece essa
+confiança inicial. Bibliotecas e stdlib continuam sob confiança do SO root.
+
+O contrato de CLI é explícito (nenhuma ação default):
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /root/ownerinc-reviewed/ops/provision-payload-candidate-trust.py \
+  --check \
+  --approval /root/ownerinc-reviewed/trust-approval.json \
+  --approval-sha256 "$INDEPENDENTLY_APPROVED_MANIFEST_SHA256" \
+  --bundle /root/ownerinc-reviewed/trust-bundle
+```
+
+`--apply` substitui `--check` somente após autorização administrativa. Não há
+override de destino, UID/GID, endpoint ou grant para deploy executar esse comando.
+Exige Linux, UID/EUID/GID/EGID zero, Python isolado sem site/bytecode e ambiente
+contendo somente PATH/locale fixos. A identidade canônica do Python em execução
+e do `/usr/bin/python3` usado pelo receiver deve coincidir com a policy aprovada.
+
+O manifesto independente é JSON UTF-8 de até 1 MiB, profundidade máxima 32,
+sem campos duplicados/desconhecidos, com exatamente:
+
+- `schemaVersion: 1`;
+- `kind: ownerinc-payload-trust-provisioning-v1`;
+- `policySha256`: SHA-256 dos bytes integrais de `production-policy.json`;
+- `toolchain`: mapa idêntico ao da policy v1, com os quatro hashes de arquivos
+  fixos e os quatro executáveis `{path, sha256}` (`node`, `git`, `python`,
+  `gitRemoteHttps`). A aprovação externa inclui o hash deste manifesto inteiro.
+
+O bundle permite **somente** `production-policy.json` (`0600`), os quatro paths
+de `TOOL_FILES` já definidos pelo verifier/registrar (Python `0755`, módulos
+`.mjs` `0644`) e `bin/git-remote-https` (`0755`). Diretórios extras, links e
+arquivos extras são recusados. O manifesto fica fora do bundle. Todos os inputs
+exigem arquivos regulares root:root, nlink=1 e ancestry protegida; o bundle é
+apenas lido/hasheado, nunca importado/executado. Node/Git/Python já devem existir
+nos paths canônicos aprovados com hashes correspondentes; não são instalados,
+atualizados nem aprovados por descoberta local. O helper HTTPS é copiado como
+arquivo regular independente para seu destino fixo, sem links ao binário do SO.
+
+`--check` não cria diretórios, snapshots, temporários, policy nem pycache.
+`--apply` aceita apenas destinos ausentes ou exatamente idênticos, incluindo
+modos. Conteúdo/mode/owner incompatível é recusa, nunca reparo ou rotação. Cria
+somente segmentos ausentes root:root `0700`, incluindo `records`, `work`,
+`incoming` e `trust-snapshots` sob `/var/lib/ownerinc/payload-candidate`.
+
+Antes de publicar arquivos faltantes, guarda snapshot privado UUID de estados
+ausentes/presentes, cópias dos bytes anteriores idênticos e manifesto de aprovação.
+Cada publicação usa temporário exclusivo, fsync e `renameat2(RENAME_NOREPLACE)`:
+arquivo conflitante surgido durante a operação não é sobrescrito. Não existe
+fallback para rename que substitui destinos; Linux/libc/filesystem compatível é
+pré-condição. Após conferir novamente inputs, executáveis e closure instalada,
+publica a policy exata **por último**. Registros existentes não são escritos ou
+removidos. Temporários e snapshots de falhas ficam retidos como evidência; não
+são automaticamente consumidos como sucesso. Retomada compara novamente todos
+os bytes aprovados e aceita apenas ausente/idêntico, sem migrar policy anterior.
+
+Compatibilidade dos validadores independentes do bootstrap é testada contra os
+validadores Python e Node existentes, sem executar validators fornecidos no bundle.
+Testes Windows usam filesystem real com doubles explícitos de ownership e
+semântica POSIX; fsync/NOFOLLOW/renameat2/ancestry root precisam do teste Linux root.
+Política real, IDs oficiais, hashes do host, conclusão do CI, registro autenticado
+e reprodutibilidade do pacote continuam exigindo evidência própria. O pin antigo
+do preparer permanece intacto: este provisionamento não aprova source de preparação
+nem abre `release_not_preflighted`.
+
+##### Qualificação nativa isolada do provisioner
+
+O gate candidate-only existente `Test preauthority CI setup with native Linux root`
+também executa a suíte de trust em modo obrigatório, sem mudar o nome autenticado
+do step ou os budgets de recovery. Invocação equivalente no runner Linux descartável:
+
+```sh
+NODE_BIN="$(readlink -f -- "$(command -v node)")"
+test -f "$NODE_BIN" && test -x "$NODE_BIN"
+sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
+  tests/unit/payload-candidate-trust-provisioning.test.mjs
+```
+
+Exige UID/EUID/GID/EGID zero, ancestry `/root` protegida, `/usr/bin/python3`
+canônico root-owned, e suporte real a NOFOLLOW, links, chown, fsync de diretório
+e `renameat2(RENAME_NOREPLACE)`. Ausência de requisito falha o gate: com a flag
+obrigatória, não há skip por plataforma/UID. A flag pertence somente ao teste e
+não é encaminhada ao processo Python, iniciado com `-I -S -B` e PATH/locale fixos.
+
+O teste cria um sandbox exclusivo e privado sob `/root`, redirecionando **somente** as
+três constantes de destino do módulo em memória. Confere antes os valores de
+produção e mantém todas as funções de metadata/I/O/publicação originais. Os paths
+fixos de trust de produção não são acessados para instalação ou alterados. Arquivos
+de aprovação e binários sintéticos são dados de fixture; a identidade do Python
+real é usada para exercitar `main()` com `--check` e `--apply`. Isto não aprova
+nenhum executável, workflow ou candidato para produção.
+
+O caso nativo testa publicação parcial e retomada, fsync dos pais já existentes,
+policy por último, registros preservados, idempotência, modos/owners reais,
+symlinks/hardlinks, ancestry insegura, e rename com/sem conflito. Um observador
+de chamadas Python verifica a ordem sem substituir funções ou syscalls. O Node
+exige e exibe o JSON completo `native-trust-filesystem-proof`; resposta ausente,
+incompleta ou saída antecipada falha. O sandbox é removido ao fim; SIGKILL pode
+deixar somente esse diretório de fixture no runner descartável.
+
+As demais provas portáveis da suíte continuam identificadas como doubles. Sucesso
+de fsync/retomada **não simula power loss nem prova durabilidade de hardware**.
+Não há Docker, serviços, contas ou sudoers novos. Este gate não qualifica o
+launcher/sudo/SSH real da VPS, nem substitui registro autenticado e recovery.
+
+Para `production:payload-v1 <commit> <run-id> <run-attempt> <api-image>
+<cron-image> <cms-image> <candidate-artifact-id> <qualified-artifact-id>
+<report-artifact-id>`, o wrapper de produção passa **uma única string**, sem
+interpretação, para `/usr/bin/sudo -n --
+/usr/local/libexec/ownerinc-payload-receive`. Argumentos adicionais do wrapper
+são recusados. SHA isolado e `production:<sha>` continuam delegando ao receptor
+comum sem sudo; staging não recebe esta rota.
+
+O launcher `ops/payload-receiver-root.sh` é instalado root:root `0755` em
+`/usr/local/libexec/ownerinc-payload-receive`. Exige UID/EUID zero e exatamente um
+argumento; usa Bash em modo privilegiado, ambiente vazio com PATH/locale fixos
+e `/usr/bin/python3 -I -S /usr/local/libexec/payload-receiver-admission.py payload
+<argumento>`. `parse_request` do helper é a autoridade única da gramática: rejeita
+roles desconhecidas, staging, campos extras e injeções antes de criar receipts.
+Não há `eval`, sourcing de comando SSH nem concessão de shell/Python/env via sudo.
+
+A preparação administrativa existente mantém os contratos
+`ops/prepare-cms-infrastructure.sh --check` (default) e `--apply`. A partir de
+checkout revisado sob ancestry root-protected, valida também os executáveis
+fixos `/usr/bin/sudo` e `/usr/sbin/visudo`, fontes do launcher/wrapper e paths de
+privilégio. `/etc/sudoers.d` deve existir protegido. O fragmento exato, publicado
+como root:root `0440` em `/etc/sudoers.d/ownerinc-payload-receive`, é:
+
+```sudoers
+deploy ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/ownerinc-payload-receive
+```
+
+O sudo autoriza somente esse executável fixo, sem wildcard de comando; a restrição
+de quantidade/gramática dos argumentos pertence ao launcher/helper, não ao
+matching de argumentos do sudoers. Não autoriza `sudo env`, shell, Python ou
+comandos gerais. O usuário previsto é **deploy**; outra identidade de SSH exige
+revisão explícita, não auto-descoberta. Esta regra não revoga eventuais permissões
+pré-existentes mais amplas: a configuração efetiva de SSH/sudo precisa de revisão
+administrativa antes de uso. Não se altera `authorized_keys` automaticamente.
+
+O novo incoming é `/var/lib/ownerinc/payload-candidate/incoming`, root:root `0700`,
+separado da árvore de aplicação pertencente a deploy. `--check` valida os segmentos
+existentes, sem criá-los; `--apply` cria somente os ausentes. Symlink, ownership
+ou modo inseguro existente é recusa, nunca chown/chmod de reparo. Nenhum ancestral
+da aplicação é alterado. O helper mantém seus limites, retenção de evidência e
+verificação de toda a ancestry root-protected.
+
+Após todos os gates já existentes, a preparação preserva snapshots dos arquivos
+anteriores, publica e revalida helper, incoming e launcher, valida o fragmento com
+`visudo -cf` antes do rename atômico, e só então publica o wrapper de produção.
+Falha de dependência não substitui os receptores anteriores. Interrupção pode
+deixar dependências inertes já publicadas; reexecução é idempotente. Os hashes
+dos helper/wrapper predecessores revisados são reconhecidos para esta atualização;
+conteúdo desconhecido é recusado. Não há aprovação automática de fonte/candidate.
+
+**Não executar como autorização de produção:** o pin de release/fonte antigo da
+preparação permanece inalterado e bloqueia o host observado até o próximo bloco
+de aprovação explícita de fonte. Este slice não instala toolchain/policy/records
+do verifier em `/opt/ownerinc/lib/payload-candidate`; ausência deles continua
+negando admission antes da extração. Mesmo uma admission válida termina em
+`release_not_preflighted`, sem dispatch ao runtime. Instalação/rollback/readiness,
+revisão nativa de sudo/SSH e aceite de produção permanecem pendentes.
+
 O receptor serializa deploys com `flock`, confere SHA e conteúdo do archive,
 resolve API e cron por digest imutável no GHCR e cria backup verificado de
 PostgreSQL e uploads antes de interromper a release anterior. Em seguida aplica
@@ -525,3 +796,327 @@ os gates aprovados.
 
 Nenhum segredo de runtime, Firebase, SMTP ou banco é enviado ao GitHub: eles
 continuam somente nos arquivos protegidos de cada VPS.
+
+### Preparação P2: autoridade instalada e dispatch administrativo inativo
+
+O perfil explícito `--profile preparation` de
+`ops/provision-payload-candidate-trust.py` instala uma closure fixa e inerte.
+Sem esse argumento, a CLI e o schema de candidate trust permanecem inalterados.
+O **programa bootstrap deve ser autenticado administrativamente antes de root
+executá-lo**; o digest independente da aprovação não autentica retroativamente
+o programa que o verifica. Bundle recebido de candidato e `approvedRevisions`
+da policy de admission não constituem autoridade para executar preparação.
+
+Invocação administrativa, depois dessa autenticação independente:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /root/approved/provision-payload-candidate-trust.py \
+  --profile preparation --check --approval /root/approved/preparation.json \
+  --approval-sha256 "$INDEPENDENT_APPROVAL_SHA256" --bundle /root/approved/preparation-bundle
+```
+
+`--apply` no **provisioner** publica apenas fontes/launcher/aprovação, nunca
+executa o preparer. Usa os mesmos protected reads, snapshots retidos sob
+`/var/lib/ownerinc/payload-candidate/trust-snapshots`, fsync e
+`renameat2(RENAME_NOREPLACE)` do bootstrap existente. Destinos são ausentes ou
+idênticos, sem reparo de conflitos. A aprovação é publicada por último, após
+revalidar entradas e toda a closure. Retry reafirma durabilidade; não substitui
+aprovação nem fonte já instalada diferente. Não há network ou execução de bundle.
+
+Closure exata de 15 nomes no bundle e em `source.files`:
+
+```text
+ops/prepare-cms-infrastructure.sh
+ops/prepare-cms-infrastructure-private.py
+ops/payload-control-inventory.py
+ops/payload-control-state.py
+ops/deploy-from-ci.sh
+ops/payload-receiver-admission.py
+ops/payload-receiver-root.sh
+ops/deploy-from-production-ci.sh
+ops/payload-operations-guard.sh
+ops/payload-control
+ops/payload-control-runtime.py
+ops/compose.payload.production.yaml
+docker-compose.payload.yml
+ops/prepare-cms-authenticated.py
+ops/provision-payload-candidate-trust.py
+```
+
+Os arquivos vão para `/opt/ownerinc/lib/payload-preparation/<nome>`, exceto o
+launcher, instalado em `/usr/local/libexec/ownerinc-payload-prepare.py`.
+Código é root:root `0755`; Compose é `0644`; a aprovação protegida é `0600` em
+`/etc/ownerinc/payload-preparation/production-approval.json`. Bundle tem somente
+esses nomes, modos correspondentes e ancestry root-protected. Não inclui policy,
+record, executáveis admission ou configuração de runtime: são trust separado.
+
+O schema independente, fechado, é `schemaVersion: 1`,
+`kind: ownerinc-payload-preparation-approval-v1`, `environment: production`,
+`repository: OWNERINC/portal_ownerinc`, com:
+
+- `source`: `commit` (40 hex; proveniência administrativa, **não prova de árvore
+  Git**) e `files` (mapa exato dos 15 nomes para SHA-256).
+- `hostBaseline`: `currentCommit`, `legacyImages` com digests imutáveis api/cron,
+  `releaseComposeSha256`, `runtimeComposeSha256`, `releaseOverrideSha256`
+  (hash ou null para ausência), `inventoryIdentity`, e `installedPredecessors`
+  com `commonReceiver` obrigatório e `receiverHelper`, `productionWrapper`,
+  `operationsGuard`, `cmsCandidate` como hash ou null.
+- `admission`: `policySha256`, `archiveSha256`, `recordSha256`.
+
+Campos extras, chaves duplicadas, tipos coercíveis e paths arbitrários não são
+aceitos. O bootstrap valida baseline **apenas como schema**, não como observação
+do host; tampouco autentica admission durante a publicação.
+
+O launcher instalado aceita **`--check` ou `--apply`**, sob o mesmo ambiente vazio e
+Python `-I -S -B`. Antes de importar qualquer helper da closure,
+seu leitor stdlib verifica ancestry, ownership, modos, links, identidade e hashes
+de todos os 15 arquivos. O launcher em execução é parte da confiança administrativa
+prévia; seu próprio hash não é uma prova independente de si mesmo. Só então carrega
+os bytes autenticados do suporte instalado, nunca módulos do checkout.
+
+Depois autentica policy pelo hash aprovado e todos os tools/executáveis admission
+antes de carregar bytes do verifier fixo. Reutiliza `validate_record`,
+`verify_record_binding` e `verify_installed_tools` reais. O record é lido de
+`/var/lib/ownerinc/payload-candidate/records/<archiveSha256>.<policySha256>.json`,
+protegido e vinculado pelo hash independente. Mantém contrato qualificatório,
+revision/workflow/repository bindings e `deploymentAuthorized: false`. O CMS
+vem somente de `record.images.cms`; nenhum argumento fornece imagem alternativa.
+Isto confia na origem administrativa/registrar do record protegido, não recria
+artefatos CI, nem verifica bytes de archive ausentes.
+
+Saída final JSON não qualificadora: `kind: payload-inactive-preparation`,
+`mode: check|apply`, `hostBaselineChecked: true`, `archiveBytesChecked: false`,
+`preparationExecuted: true`, `deploymentAuthorized: false`. `preparationExecuted`
+indica que o preparer foi chamado, inclusive em dry-run; não significa instalação
+de release nem ativação. Antes do JSON há os diagnósticos existentes do preparer.
+Falha não emite report de sucesso. Nenhum banco ou serviço é iniciado.
+Pins antigos de current release/CMS permanecem no caminho direto legado;
+somente o caminho autenticado recebe valores da aprovação/record. Inventory,
+state, guards e `release_not_preflighted` permanecem obrigatórios.
+Aceite operacional continua sendo outro bloco. Provas portáteis usam doubles explícitos;
+não qualificam instalação/root/SSH na VPS nem durabilidade sob power loss.
+
+#### Gate de host sob lease (somente leitura)
+
+Após autenticar fonte e admission, o launcher abre o **lock existente** em
+`/opt/ownerinc/apps/portal-ownerinc-real/runtime/deploy.lock` com `O_RDWR`,
+`O_NOFOLLOW` e `O_NONBLOCK`, sem `O_CREAT` ou `O_TRUNC`. Exige arquivo regular,
+um link, owner root:root ou deploy `1000:1000`, modo `0600` ou `0644`, ancestry
+segura, e identidade estável entre pathname/descriptor. O parent reserva FD9 somente se
+estiver livre; descriptor preexistente não é adotado nem fechado. `flock(LOCK_EX |
+LOCK_NB)` ocupado é recusa antes de ler o baseline. Revalida pathname/FD9 depois
+de adquirir e ao terminar; `finally` libera somente sua própria lease e fecha FD9.
+Ausência do lock é recusa, nunca criação automática.
+
+Sob essa lease verifica paths fixos de produção, sem overrides de request:
+
+- Pointer `current-release`, commit aprovado e formato API/cron de `.image-env`.
+- Hashes dos Compose de release/runtime e presença/hash do override local
+  `compose.ownerinc-vps.yaml`.
+- Identidade do inventory fixo construído por `production_inventory`; se o
+  inventory existir, exige bytes canônicos, schema e documento exatos. Owner de
+  environment continua `1000:1000`, modo `0600`; nunca descobre política pelo host.
+- Predecessores aprovados ou bytes desejados exatos para receiver/helper/wrapper,
+  guard e CMS candidate; ausência só quando aprovada. Controles e overlay já
+  publicados permanecem ausentes-ou-idênticos, sem adoção de bytes desconhecidos.
+- Key e diretório de state ambos ausentes, ou ambos completos com inventory.
+  Para state existente aceita somente os dois arquivos do journal inicial,
+  HMAC/head íntegros e corpo **exatamente** schema-v2, preauthority/cold,
+  sequence zero, authority legacy/epoch 1, workerHold true, admission open,
+  sem intents, floor, proofs ou imagens planejadas. Sentinel admission-closed é
+  recusado. Assinatura válida não autoriza estado operacional/migrado.
+
+Helpers inventory/state vêm dos bytes já autenticados. O import adjacente do
+state é ligado ao módulo inventory capturado por um import hook local ao módulo;
+não reabre path de helper nem modifica importlib global. Usa `read_state` real
+com `repair_head=False` e identity explícita, mantendo validação criptográfica
+e do journal. A leitura de dados é substituída nesse módulo por uma leitura
+limitada/estável; não há initialize, repair, create ou rewrite.
+
+Dados deploy-owned usam API separada de leitura: owner exato `1000:1000`, modos
+`0600`/`0644` (environment somente `0600`), tamanho limitado, NOFOLLOW, um link,
+identidade antes/depois, ancestry root/deploy sem group/world write. State,
+inventory e arquivos instalados exigem root:root e modos específicos. Isso não
+relaxa o leitor root-protected da closure/admission. Valores privados não são
+emitidos; dados observados e ausências são rechecados antes de devolver sucesso.
+
+Este gate **não é preflight operacional completo**: não consulta DB/Docker,
+não valida Compose por execução, nem atualiza/classifica credenciais CMS pelo
+preparer. O campo de sucesso não é uma autorização reutilizável: cada execução
+autentica e revalida novamente sob lease. O dispatch abaixo mantém a mesma lease
+enquanto o preparer executa suas validações independentes e, somente em apply,
+publica arquivos inativos.
+
+O teste Linux de flock usa syscalls reais de lock/FD9/replace e ancestry real
+em sandbox privado sob `/root`, sem doubles nesse caso nativo. **End-to-end nativo de
+preparação permanece pendente**, inclusive baseline real e propriedade dos paths.
+
+#### Dispatch e contexto autenticado
+
+O parent autentica a closure, adquire a lease e repete autenticação e baseline.
+Chama somente `/bin/bash --noprofile --norc` com o preparer instalado fixo,
+`--authenticated-check|--authenticated-apply` e o SHA-256 da aprovação já lida.
+Passa **FD9 com `pass_fds=(9,)`** e ambiente vazio com PATH/locale fixos; retém sua
+cópia durante toda a execução, snapshots, publicações e saída do child. Revalida
+ao retorno antes de fechar sua referência. No dispatch, inclusive em erro, o
+parent não faz unlock explícito: se um helper descendente ainda possuir FD9 após
+interrupção, a lease permanece até fechar a última referência. Isso não promete
+rollback ou conclusão atômica sob interrupção; preserva exclusão entre operações.
+Comando arbitrário, source path, CMS digest
+e overrides de ambiente não são interfaces do launcher.
+
+O child não abre novamente o lock e não chama unlock. Antes de executar helpers,
+exige seu path instalado exato e consulta o launcher fixo com
+`--verify-context <approval-sha256>`. O verifier exige root/ambiente isolado,
+FD9 seguro ligado ao pathname, um probe `LOCK_SH | LOCK_NB` de outra
+open-description bloqueado por EX e
+flock não bloqueante bem-sucedido no próprio FD9. Assim, FD aberto mas sem lease,
+FD de outro inode ou descrição sem a lock exclusiva são recusados. O probe nunca
+substitui FD9 e o verifier nunca libera a lease herdada.
+Se o probe shared conseguir a lock, libera somente o probe e recusa antes de
+tocar FD9: não promove uma lease SH herdada para EX. O parent confiável retém EX
+durante todo o handshake; chamadas separadas não são consulta atômica de estado.
+
+Esse comando reautentica a aprovação, toda a closure, admission e host; o digest
+passado prova continuidade, **não é credencial**. Não há confiança em `APPROVED=1`,
+PID/parent observado, ambiente ou relatório anterior. Um administrador root pode
+invocar a interface interna somente se todas essas autoridades independentes e
+a lease também forem válidas; não se pretende criar isolamento contra root.
+
+O protocolo é de oito linhas limitadas: approval hash, current commit, CMS image
+do record, e hashes (ou `-` para ausência aprovada) dos cinco predecessores na
+ordem commonReceiver/receiverHelper/productionWrapper/operationsGuard/cmsCandidate.
+O shell valida quantidade e gramática, usa `mapfile` e atribuições, nunca `source`
+ou `eval`. Reconsultas devem produzir exatamente os mesmos dados. São feitas
+antes de snapshots/publicações e antes de atualizar environment/inventory/state;
+os gates de secret parcial, URL canônica, preservação de credenciais, Compose,
+inventory e integridade de state existentes continuam independentes.
+
+No caminho autenticado helpers usam `/usr/bin/python3 -I -S -B` com ambiente
+limpo. A operação interna fixa `--create-inventory <approval-sha256>` revalida
+o contexto e executa `create` do inventory a partir dos bytes capturados da
+closure autenticada, nunca do helper recém-publicado no runtime. Seus paths e
+owner policy são constantes, sem argumentos externos; o helper publicado é
+verificado separadamente. State initialization não é reparo: falha parcial é
+recusada na próxima tentativa, sem reset automático.
+
+`--check` executa apenas o caminho read-only do preparer (inclusive Compose
+`config --quiet`); `--apply` publica arquivos, configuração privada e estado
+inativos. Não faz Docker pull/up/run, migrations, alteração de authority, serviços
+ou authorized_keys. Falhas de dependência preservam os receptores anteriores;
+retry aceita somente predecessor aprovado ou bytes desejados, preservando secrets.
+O path direto `prepare-cms-infrastructure.sh --check|--apply` mantém os pins antigos
+e não ganha autoridade por ambiente ou flags forjadas.
+
+Os testes de transporte executam o shell e o protocolo reais com doubles
+explícitos de host/autenticação/processo; no Windows FD9 é transportado no mesmo
+shell de fixture. O teste Linux usa subprocesso real e `pass_fds`, testa
+ausência de deadlock e confirma que o child não libera a lock do parent. Isso não
+substitui a qualificação nativa completa de preparação, ainda pendente.
+
+#### Gate nativo obrigatório de lease da preparação no candidate CI
+
+O step autenticado **`Test preauthority CI setup with native Linux root`** mantém
+nome, condição e suites setup/trust anteriores, e acrescenta a suite inteira,
+sem filtro ou tolerância a falha:
+
+```sh
+sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \
+  tests/unit/payload-preparation-authentication.test.mjs
+```
+
+`NODE_BIN` continua sendo o path canônico selecionado por setup-node. A flag é
+somente do teste, não do launcher. Com ela, falta de Linux, UID/EUID/GID/EGID zero,
+Python fixo, ancestry segura ou suporte aos syscalls **falha**, nunca dá skip.
+Sem a flag, máquinas fora de Linux/root mantêm skip explícito do caso nativo.
+O Python usa `/usr/bin/python3 -I -S -B`, ambiente limpo PATH/locale e timeout;
+a flag não é encaminhada ao Python.
+
+O sandbox único e privado fica sob `/root`, removido ao fim. Antes de redirecionar
+somente `LOCK` em memória, o teste confere seu valor fixo de produção. Parent e
+subprocesso executam os leitores de metadata/ancestry e funções flock originais;
+nenhum path fixo de produção recebe writes. Não há provisionamento de closure,
+policy, credenciais, serviços, contas ou sudoers nesse caso.
+
+Node exige parse e igualdade exata do JSON `native-preparation-lease-proof`, no
+máximo 1 KiB, e emite a prova completa no log. Os campos obrigatórios comprovam:
+identidade root e ancestry; SH recusada com FD9 ainda aberto e SH original
+inalterada (outro SH adquire, EX bloqueia); busy e EX de outra descrição
+recusados; EX herdada via `pass_fds` em subprocesso sem liberar a lock do parent;
+FD9 fechado ao sair; pathname substituído recusado; bytes originais preservados;
+sandbox removido. Saída ausente/parcial ou early exit não é PASS.
+
+Os outros casos da suite continuam identificados como doubles. O gate qualifica
+**lease somente**, não bootstrap/launcher/preparer end-to-end, baseline real,
+sudo/SSH, durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets,
+14 checks, 11 negativos e dois restores não mudam. Um próximo CI qualifica sua
+própria revisão; não se atribui esta prova retroativamente a execução anterior.
+
+#### P3: plano de instalação de produção, somente leitura
+
+O launcher instalado admite uma interface administrativa adicional:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /usr/local/libexec/ownerinc-payload-prepare.py \
+  --check-install-plan payload-abcdefgh
+```
+
+O argumento é somente um identificador `payload-[a-z0-9_]{8}` de receipt sob
+`/var/lib/ownerinc/payload-candidate/incoming`, nunca path ou seleção de newest.
+Não constitui autoridade. A aprovação protegida precisa autenticar os bytes
+atuais da closure, incluindo launcher/runtime; este incremento não atualiza
+aprovações já instaladas nem altera schemas de trust/state.
+
+Com a lease exclusiva FD9 retida, autentica closure, policy e record pelos
+contratos existentes. Só então carrega o receiver/verifier capturados e usa
+`verify_candidate()` para autenticar os bytes reais de `candidate.tar.gz` e
+`inspect_archive()` para validar membros, commit e imagens. A árvore `release`
+deve ter exatamente os arquivos/diretórios do archive, incluindo arquivos vazios:
+conteúdo diferente, membro extra, link ou owner/mode inseguro é recusa. Não extrai
+nem executa scripts recebidos. `admission.json` do receipt não é autoridade nem
+entrada do plano. Archive, árvore e material autenticado são rechecados antes
+do retorno.
+
+O host precisa já ter inventory/key/journal protegidos completos. A inspeção de
+state é separada do gate inicial da preparação: usa o `read_state` real com
+`repair_head=False`, validando HMAC, cadeia e transições, inclusive intents
+pendentes/committed. Não instancia `Runtime`, cujo constructor admite reparo de
+head. Runtime → state → inventory são ligados a módulos capturados autenticados,
+sem importar helpers do runtime instalado. Campos de baseline, source images,
+Compose/override, owner de environment e inventory fixo continuam vinculados à
+aprovação. Pointer candidato só é observado na janela assinada de floor; não é
+adotado como sucesso. Leitura de journal limita nomes a 4096 e material de host
+acumulado a 16 MiB; não há writes para acomodar entradas incompatíveis.
+
+O JSON `payload-production-install-plan-v1`, limitado a 4 KiB, contém somente
+classificação finita, hashes/identificadores/imagens já validados, identidade de
+inventory, status B0 e blockers allowlisted. O `candidate` usa os quatro hashes
+do contrato existente: candidate manifest, recovery report, qualified manifest e
+archive; `trust` mantém separadamente source approval, policy e record hashes.
+Não emite paths, nomes de volumes/containers, environment ou conteúdo privado.
+`installationExecuted` e `deploymentAuthorized` são **sempre false**.
+
+As classificações incluem initial cold, cold sem intent, install pre-floor,
+floor pending/committed, restore pending e floor sem install intent. Toda saída
+mantém blockers de initializer de produção não habilitado, binding de criação
+não integrado, observações físicas pendentes e barreira B1/ingress/readiness
+ausente. Incompatibilidade de ownership runtime e identidade hash do source
+isolado são blockers, não chown ou aliases automáticos. Project/inventory fora
+do contrato fixo aprovado é recusa, não adoção de outra topologia.
+
+B0 `present_unverified` significa somente que o proof assinado e seus bindings
+foram conferidos e os nomes necessários estão presentes; **não** verifica hashes
+dos dumps/storage, restoreability ou DB físico. B0 parcial/unbound é blocker;
+B0 ausente com intent tem blocker próprio. Sem intent, só são inspecionados os
+slots conhecidos `000-initial-install-b0` sob os backup roots fixos, sem procurar
+ou adotar backups arbitrários. Receipt de criação incompleto é reportado a partir
+do journal; ausência/presença de recursos Docker ainda exige observação separada.
+
+Nenhuma saída autoriza reservar intent, fechar admission, capturar B0, publicar
+release, puxar imagem, criar recurso, mudar pointer ou reparar journal. Ambos os
+denials finais `release_not_preflighted` continuam incondicionais. Native
+preparation end-to-end, recuperação de instalação e aceite de host permanecem
+gates separados; uma classificação não substitui esses gates.

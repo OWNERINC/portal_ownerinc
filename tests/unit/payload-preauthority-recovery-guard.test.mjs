@@ -320,3 +320,22 @@ test('snapshot normalization removes only the paired pg_dump boundary keys and r
   assert.deepEqual(normalizePgDumpForSnapshot(Buffer.from('plain dump without psql controls\n')),
     Buffer.from('plain dump without psql controls\n'));
 });
+
+test('roles-only pg_dumpall normalizes paired keys before the exact cluster completion trailer', () => {
+  const dump = (key, role = 'portal_api', newline = '\n') => [
+    '--', '-- PostgreSQL database cluster dump', '--', '', `\\restrict ${key}`, '',
+    `CREATE ROLE ${role};`, `ALTER ROLE ${role} WITH LOGIN;`,
+    `\\unrestrict ${key}`, '', '--', '-- PostgreSQL database cluster dump complete', '--', '', '',
+  ].join(newline);
+  const first = normalizePgDumpForSnapshot(dump('first'));
+  assert.deepEqual(normalizePgDumpForSnapshot(dump('second')), first);
+  assert.deepEqual(normalizePgDumpForSnapshot(dump('first', 'portal_api', '\r\n')),
+    normalizePgDumpForSnapshot(dump('second', 'portal_api', '\r\n')));
+  assert.notDeepEqual(normalizePgDumpForSnapshot(dump('third', 'portal_cron')), first);
+  assert.match(first.toString(), /CREATE ROLE portal_api;\nALTER ROLE portal_api WITH LOGIN;/u);
+  assert.throws(() => normalizePgDumpForSnapshot(dump('first').replace('\\unrestrict first', '\\unrestrict other')),
+    /invalid_pg_dump_snapshot_restriction_pair/u);
+  for (const changed of [dump('first') + 'SELECT 1;\n', dump('first').replace('cluster dump complete', 'arbitrary comment')]) {
+    assert.deepEqual(normalizePgDumpForSnapshot(changed), Buffer.from(changed));
+  }
+});

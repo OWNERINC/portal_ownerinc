@@ -22,8 +22,103 @@ permissions:
   packages: write
 
 jobs:
+  isolated-b0-recovery:
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact B0 candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up B0 Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Prepare pinned isolated B0 images
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test -z "${DOCKER_HOST:-}"
+          test -z "${DOCKER_CONTEXT:-}"
+          test "$(docker context show)" = default
+          sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root python3 --version
+          test "$(sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root docker context inspect default --format '{{json .Endpoints.docker.Host}}')" = '"unix:///var/run/docker.sock"'
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          for (const [name, digest] of [
+            ['postgres', '57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'],
+            ['nginx', '4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752'],
+          ]) {
+            const response = await fetch(`https://mirror.gcr.io/v2/library/${name}/manifests/sha256:${digest}`, {
+              headers: { Accept: 'application/vnd.oci.image.index.v1+json' },
+              signal: AbortSignal.timeout(30_000), redirect: 'error',
+            });
+            if (!response.ok) throw new Error(`Pinned CI mirror unavailable: ${name}`);
+            const raw = Buffer.from(await response.arrayBuffer());
+            if (createHash('sha256').update(raw).digest('hex') !== digest) throw new Error('Pinned CI mirror digest mismatch');
+          }
+          NODE
+          # Same bounded mirror reload as validate; no services exist in this job.
+          sudo python3 - <<'PYTHON'
+          import json, os
+          filename = '/etc/docker/daemon.json'
+          config = {}
+          if os.path.exists(filename):
+              with open(filename) as source:
+                  config = json.load(source)
+          if not isinstance(config, dict):
+              raise ValueError('Invalid runner daemon configuration')
+          config['registry-mirrors'] = ['https://mirror.gcr.io']
+          with open(filename, 'w') as target:
+              json.dump(config, target)
+              target.write('\n')
+          PYTHON
+          sudo dockerd --validate --config-file=/etc/docker/daemon.json
+          sudo systemctl kill --kill-whom=main --signal=HUP docker.service
+          mirror_ready=false
+          for attempt in {1..15}; do
+            if [[ "$(docker info --format '{{json .RegistryConfig.Mirrors}}')" == '["https://mirror.gcr.io/"]' ]]; then
+              mirror_ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$mirror_ready" = true
+          # Canonical references retain the exact RepoDigests required by the executor.
+          for image in \
+            postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 \
+            nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752; do
+            sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root docker pull "$image"
+            sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root docker image inspect "$image" >/dev/null
+          done
+      - name: Run required native isolated B0 recovery
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          test "$RUNNER_TEMP" = /home/runner/work/_temp
+          sudo -n env -i PATH="$PATH" HOME=/root \
+            GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+            PAYLOAD_REQUIRE_NATIVE_B0_RECOVERY=1 PAYLOAD_B0_RECOVERY_DISPOSABLE=1 \
+            node --test tests/unit/payload-install-recovery.test.mjs
+      - name: Upload nonqualifying B0 schema discrepancy
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nonqualifying-isolated-b0-schema-discrepancy
+          path: ${{ runner.temp }}/payload-b0-schema-diagnostic/schema-discrepancy.json
+          if-no-files-found: warn
+          retention-days: 7
+
   validate:
-    timeout-minutes: 90
+    needs: isolated-b0-recovery
+    if: ${{ !cancelled() && (needs.isolated-b0-recovery.result == 'success' || (!(github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true) && needs.isolated-b0-recovery.result == 'skipped')) }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true && 150 || 90 }}
     outputs:
       api_image: ${{ steps.publish.outputs.api_image }}
       cron_image: ${{ steps.publish.outputs.cron_image }}
@@ -131,6 +226,28 @@ jobs:
         run: |
           set -euo pipefail
           sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs
+          NODE_BIN="$(readlink -f -- "$(command -v node)")"
+          test -f "$NODE_BIN" && test -x "$NODE_BIN"
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
+            tests/unit/payload-candidate-trust-provisioning.test.mjs
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \
+            tests/unit/payload-preparation-authentication.test.mjs
+      - name: Qualify legacy security observer with isolated PostgreSQL 16
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        timeout-minutes: 6
+        env:
+          PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY: "1"
+          PAYLOAD_LEGACY_SECURITY_DISPOSABLE: "1"
+        run: node --test tests/unit/payload-legacy-security-pg16.test.mjs
+      - name: Qualify isolated Portal fence topology
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        timeout-minutes: 6
+        env:
+          PAYLOAD_REQUIRE_NATIVE_FENCE_TOPOLOGY: "1"
+          PAYLOAD_FENCE_TOPOLOGY_DISPOSABLE: "1"
+        run: node --test tests/unit/payload-fence-topology.test.mjs
       - name: Test route delivery with production Nginx image
         run: |
           docker run --rm \
@@ -395,12 +512,13 @@ jobs:
             nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
       - name: Run disposable four-store preauthority recovery on published digests
         if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
-        timeout-minutes: 60
+        timeout-minutes: 120
         env:
           API_IMAGE: ${{ steps.publish.outputs.api_image }}
           CRON_IMAGE: ${{ steps.publish.outputs.cron_image }}
           CMS_IMAGE: ${{ steps.publish_cms.outputs.cms_image }}
           RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
+          RECOVERY_PROGRESS: ${{ runner.temp }}/payload-preauthority-recovery-progress.json
         run: |
           set -euo pipefail
           # Recovery rejects every nonempty DOCKER_* override. Do not forward
@@ -411,6 +529,7 @@ jobs:
             GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" RUNNER_TEMP="$RUNNER_TEMP" \
             PAYLOAD_RECOVERY_REPORT="$RECOVERY_REPORT" \
+            PAYLOAD_RECOVERY_PROGRESS="$RECOVERY_PROGRESS" \
             node scripts/test-payload-preauthority-recovery.mjs
       - name: Upload redacted preauthority recovery report
         id: upload_recovery_report
@@ -419,6 +538,15 @@ jobs:
         with:
           name: payload-preauthority-recovery-report
           path: ${{ runner.temp }}/payload-preauthority-recovery-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Upload nonqualifying recovery diagnostic progress
+        if: ${{ always() && inputs.publish_candidate_only == true && inputs.cms_image_only != true }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: payload-preauthority-recovery-progress
+          path: ${{ runner.temp }}/payload-preauthority-recovery-progress.json
           if-no-files-found: ignore
           retention-days: 30
       - name: Create recovery-qualified candidate manifest

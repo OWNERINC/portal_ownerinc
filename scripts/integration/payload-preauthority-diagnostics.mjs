@@ -66,17 +66,17 @@ const initializerErrorIdentifiers = new Set([
 // to the known adapter contexts above; never infer identifiers from arbitrary
 // subprocess stderr.
 const controlErrorIdentifiers = new Set(`
-active_release_state_mismatch admission_open_forbidden admission_sentinel_stale
-backup_artifact_mismatch backup_artifact_unavailable backup_evidence_required backup_format_invalid
+active_release_state_mismatch admission_open_forbidden admission_sentinel_stale install_recovery_invalid
+backup_artifact_changed backup_artifact_mismatch backup_artifact_unavailable backup_evidence_required backup_format_invalid
 backup_image_manifest_mismatch backup_inventory_identity_untrusted backup_manifest_invalid backup_manifest_mismatch
-backup_release_mismatch backup_requires_closed_admission backup_root_override_forbidden cms_database_container_unavailable
+backup_release_mismatch backup_requires_closed_admission backup_root_override_forbidden backup_storage_fingerprint_mismatch cms_database_container_unavailable
 cms_migration_fingerprint_mismatch cms_migration_floor_mismatch cold_source_not_legacy
 control_compose_configuration_mismatch control_compose_configuration_missing current_release_invalid
 database_archive_validation_failed database_container_ambiguous database_fingerprint_failed
 database_fingerprint_unsupported_relation database_identity_mismatch database_inspection_failed
 database_metadata_invalid database_sessions_not_quiescent docker_endpoint_override_forbidden
 docker_inventory_unavailable docker_volume_inventory_unavailable duplicate_inventory_field duplicate_json_field environment_unavailable
-host_control_requires_root invalid_admission_state invalid_cold_state invalid_data_fingerprints
+fence_observation_invalid host_control_requires_root invalid_admission_state invalid_cold_state invalid_data_fingerprints
 invalid_database_identity invalid_environment_file_owner invalid_inventory_backup_paths invalid_inventory_file invalid_inventory_mounts
 invalid_inventory_operational_paths invalid_inventory_path invalid_inventory_paths invalid_inventory_project
 invalid_inventory_shape invalid_inventory_trust invalid_inventory_volume_name invalid_inventory_volumes
@@ -86,7 +86,7 @@ invalid_proof_inventory_identity invalid_proof_output_path invalid_proof_source 
 invalid_release_images invalid_release_manifest invalid_release_path invalid_restore_intent invalid_restore_target
 invalid_restore_target_fingerprints invalid_restore_volumes invalid_rollback_state invalid_state_digest
 invalid_state_inventory_identity invalid_state_parent invalid_state_sequence inventory_runtime_path_mismatch
-inventory_unavailable inventory_write_failed legacy_fallback_forbidden native_catalog_fingerprint_missing
+inventory_unavailable inventory_write_failed legacy_fallback_forbidden legacy_security_observation_invalid native_catalog_fingerprint_missing
 native_catalog_verification_failed native_catalog_verification_invalid native_catalog_verifier_launch_failed
 native_catalog_verifier_execution_failed noncanonical_inventory noncanonical_json
 one_shot_container_running operation_lease_inode_mismatch operation_lease_missing
@@ -113,7 +113,7 @@ state_parent_mismatch target_mount_inspection_failed target_service_mount_mismat
 target_volume_invalid target_volume_inventory_mismatch target_volume_unavailable trusted_source_identity_mismatch
 trusted_source_not_authorized unexpected_cold_cms_container unexpected_cold_cms_volume
 unexpected_cold_volume_inventory unexpected_preauthority_news_rows unknown_project_container
-unsafe_admission_sentinel unsafe_backup_artifact unsafe_backup_directory
+unsafe_admission_sentinel unsafe_backup_artifact unsafe_backup_directory unsafe_backup_file
 unsafe_environment_ancestry unsafe_environment_file unsafe_environment_owner unsafe_environment_permissions
 unsafe_inventory_ancestry unsafe_inventory_destination
 unsafe_inventory_file unsafe_inventory_permissions unsafe_private_key unsafe_private_state_directory
@@ -356,21 +356,53 @@ export function extractNativeCatalogVerifierDiagnostic(stderr, { controlCommandC
   return { stage, reason, sqlState, ...(constraintMismatch ? { constraintMismatch } : {}) };
 }
 
+const quiescenceServices = ['api', 'cms', 'cms-postgres', 'cron', 'nginx', 'unknown'];
+function safeQuiescenceSummary(value) {
+  if (!value || Object.keys(value).sort().join(',') !== 'cmsStatus,offenders,predicate,truncated'
+    || value.predicate !== 'running_service_not_allowed' || !['cold', 'migrated'].includes(value.cmsStatus)
+    || typeof value.truncated !== 'boolean' || !Array.isArray(value.offenders)
+    || value.offenders.length < 1 || value.offenders.length > quiescenceServices.length) return null;
+  let previous = -1;
+  const offenders = [];
+  for (const item of value.offenders) {
+    if (!item || Object.keys(item).sort().join(',') !== 'count,service,state') return null;
+    const index = quiescenceServices.indexOf(item.service);
+    if (index <= previous || item.state !== 'running' || !Number.isInteger(item.count) || item.count < 1 || item.count > 99
+      || value.cmsStatus === 'migrated' && item.service === 'cms-postgres') return null;
+    previous = index;
+    offenders.push({ service: item.service, state: 'running', count: item.count });
+  }
+  if (value.truncated && !offenders.some(item => item.count === 99)) return null;
+  return { predicate: 'running_service_not_allowed', cmsStatus: value.cmsStatus, offenders, truncated: value.truncated };
+}
+
 function initializerScope(stderr, options) {
   if (!initializerContexts.has(options.controlCommandContext)
     || initializerContexts.get(options.controlCommandContext) !== options.substep
     || options.status !== 2 || options.errorCode || options.signal) return null;
   const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
-  const match = text.match(/^([\s\S]*\n)PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=([a-z][a-z0-9_]+) installStage=([a-z_]+) commandExit=(none|[0-9]{1,3}) commandSignal=(none|[0-9]{1,2}) privateStderr=(retained|none)\r?\n$/u);
+  const match = text.match(/^([\s\S]*\n)PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=([a-z][a-z0-9_]+) installStage=([a-z_]+) commandExit=(none|[0-9]{1,3}) commandSignal=(none|[0-9]{1,2}) privateStderr=(retained|none)(?: quiescencePredicate=(running_service_not_allowed) quiescenceCms=(cold|migrated) quiescenceOffenders=([a-z0-9:,-]{1,180}) quiescenceTruncated=(true|false))?\r?\n$/u);
   if (!match) return text.includes('PREAUTHORITY_INITIALIZER_DIAGNOSTIC') ? null : { body: text };
-  const [, body, phase, installStage, rawExit, rawSignal, retained] = match;
+  const [, body, phase, installStage, rawExit, rawSignal, retained, predicate, cmsStatus, rawOffenders, rawTruncated] = match;
   const commandExitCode = rawExit === 'none' ? null : Number(rawExit);
   const commandSignal = rawSignal === 'none' ? null : Number(rawSignal);
   if (!initializerDiagnosticPhases.includes(phase) || !initializerStages.has(installStage)
     || (commandExitCode !== null && (commandExitCode < 1 || commandExitCode > 255))
     || (commandSignal !== null && (commandSignal < 1 || commandSignal > 64))
     || (commandExitCode !== null && commandSignal !== null)) return null;
-  return { body, initializer: { phase, installStage, commandExitCode, commandSignal, privateStderrRetained: retained === 'retained' } };
+  let quiescence = null;
+  if (predicate) {
+    if (options.controlCommandContext !== 'payload-control:initialize-isolated' || !/^writers_not_quiescent\r?\n$/u.test(body)
+      || phase !== 'quiescence' || installStage !== 'none' || commandExitCode !== null || commandSignal !== null || retained !== 'none') return null;
+    quiescence = safeQuiescenceSummary({ predicate, cmsStatus, truncated: rawTruncated === 'true',
+      offenders: rawOffenders.split(',').map(item => {
+        const [service, state, count] = item.split(':');
+        return { service, state, count: Number(count) };
+      }) });
+    if (!quiescence || quiescence.offenders.map(item => `${item.service}:${item.state}:${item.count}`).join(',') !== rawOffenders) return null;
+  }
+  return { body, initializer: { phase, installStage, commandExitCode, commandSignal, privateStderrRetained: retained === 'retained',
+    ...(quiescence ? { quiescence } : {}) } };
 }
 
 function initializerBodyIdentifier(scope, release) {
@@ -547,7 +579,14 @@ export function sanitizeCommandDiagnostic(diagnostic = {}) {
     && typeof initializer.privateStderrRetained === 'boolean'
     ? { phase: initializer.phase, installStage: initializer.installStage,
       commandExitCode: initializer.commandExitCode, commandSignal: initializer.commandSignal,
-      privateStderrRetained: initializer.privateStderrRetained } : null;
+       privateStderrRetained: initializer.privateStderrRetained } : null;
+  if (safeInitializer?.phase === 'quiescence' && safeInitializer.installStage === 'none'
+    && safeInitializer.commandExitCode === null && safeInitializer.commandSignal === null && !safeInitializer.privateStderrRetained
+    && diagnostic.substep === 'payload_initialize_isolated' && diagnostic.commandExitCode === 2
+    && !diagnostic.commandError && !diagnostic.commandSignal && diagnostic.controlErrorIdentifier === 'writers_not_quiescent') {
+    const quiescence = safeQuiescenceSummary(initializer.quiescence);
+    if (quiescence) safeInitializer.quiescence = quiescence;
+  }
   const native = diagnostic.nativeCatalogVerifier;
   const nativeConstraintMismatch = native?.constraintMismatch;
   const safeConstraintMismatch = nativeConstraintMismatch && authorizedNativeConstraintMismatches.has(nativeConstraintMismatch)

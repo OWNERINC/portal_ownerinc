@@ -475,13 +475,22 @@ test('production SSH entrypoint normalizes legacy SHA commands without admitting
   const receiver = await read('ops/deploy-from-production-ci.sh');
   const dispatch = 'exec /usr/local/libexec/ownerinc-portal-deploy "$@"';
   assert.ok(receiver.includes(dispatch));
-  const probe = receiver.replace(dispatch, 'printf "%s\\n%s\\n" "$SSH_ORIGINAL_COMMAND" "$DEPLOY_RECEIVER_ROLE"');
+  const rootDispatch = 'exec /usr/bin/sudo -n -- /usr/local/libexec/ownerinc-payload-receive "$SSH_ORIGINAL_COMMAND"';
+  assert.ok(receiver.includes(rootDispatch));
+  const probe = receiver.replace(dispatch, 'printf "%s\\n%s\\n" "$SSH_ORIGINAL_COMMAND" "$DEPLOY_RECEIVER_ROLE"')
+    .replace(rootDispatch, 'printf "%s\\nfixed-root-launcher\\n" "$SSH_ORIGINAL_COMMAND"; exit 0');
   const sha = 'a'.repeat(40);
   for (const command of [sha, `production:${sha}`]) {
     const result = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command } });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.replace(/\r/g, ''), `production:${sha}\nproduction\n`);
   }
+  // Dispatch double only: the root launcher's existing helper validates selectors.
+  const payload = `production:payload-v1 ${sha} 123 1 ${['api', 'cron', 'cms'].map(service =>
+    `ghcr.io/ownerinc/ownerinc-portal-${service}@sha256:${'b'.repeat(64)}`).join(' ')} 11 12 13`;
+  const payloadResult = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: payload } });
+  assert.equal(payloadResult.status, 0, payloadResult.stderr);
+  assert.equal(payloadResult.stdout.replace(/\r/g, ''), `${payload}\nfixed-root-launcher\n`);
   for (const command of [`staging:${sha}`, sha.slice(1), `${sha}; echo unsafe`, ` ${sha}`, sha.toUpperCase()]) {
     const result = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command } });
     assert.equal(result.status, 2, `must reject ${command}`);

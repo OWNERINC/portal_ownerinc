@@ -14,6 +14,7 @@ const apiImage = `ghcr.io/ownerinc/ownerinc-portal-api@sha256:${'a'.repeat(64)}`
 const cronImage = `ghcr.io/ownerinc/ownerinc-portal-cron@sha256:${'b'.repeat(64)}`;
 const commit = 'd285029970c82d48cd50cc393a054af4cbfdf1e8';
 const previousReceiver = 'previous receiver\n';
+const previousProductionReceiver = 'previous production receiver\n';
 const previousReceiverHash = createHash('sha256').update(previousReceiver).digest('hex');
 
 function bashPath(value) {
@@ -40,7 +41,7 @@ function validCmsConfiguration({ includePublicUrl = true } = {}) {
   return `${publicUrl}${Object.entries(values).map(([key, value]) => `${key === 'CMS_POSTGRES_PASSWORD' ? 'export ' : ''}${key}=${value}`).join('\n')}\n`;
 }
 
-async function fixture(t) {
+async function fixture(t, { failReceiverHelperInstall = false, tamperReceiverHelperInstall = false, failRootInstall = false, failSudoers = false } = {}) {
   const parent = process.platform === 'win32' && process.env.LOCALAPPDATA
     ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : tmpdir();
   const root = await mkdtemp(path.join(parent, 'cms-preparation-'));
@@ -56,6 +57,7 @@ async function fixture(t) {
     libexec: path.join(root, 'usr', 'local', 'libexec'),
     bundle: path.join(root, 'bundle'),
     bin: path.join(root, 'bin'),
+    sudoers: path.join(root, 'etc', 'sudoers.d'),
   };
   await Promise.all(Object.values(paths).map(value => mkdir(value, { recursive: true })));
   await mkdir(path.join(paths.app, 'releases'), { recursive: true });
@@ -72,11 +74,12 @@ async function fixture(t) {
   await chmod(path.join(paths.secrets, 'production.runtime.conf'), 0o600);
   await writeFile(path.join(paths.libexec, 'ownerinc-portal-deploy'), previousReceiver);
   await chmod(path.join(paths.libexec, 'ownerinc-portal-deploy'), 0o755);
+  await writeFile(path.join(paths.libexec, 'ownerinc-portal-deploy-production'), previousProductionReceiver);
   await writeFile(path.join(paths.runtime, 'payload-operations-guard'), 'previous guard\n');
   await chmod(path.join(paths.runtime, 'payload-operations-guard'), 0o755);
   await writeFile(path.join(paths.bundle, 'docker-compose.payload.yml'), await readFile('docker-compose.payload.yml'));
   await mkdir(path.join(paths.bundle, 'ops'));
-  for (const file of ['deploy-from-ci.sh', 'payload-operations-guard.sh', 'payload-control', 'payload-control-runtime.py',
+  for (const file of ['deploy-from-ci.sh', 'deploy-from-production-ci.sh', 'payload-receiver-root.sh', 'payload-receiver-admission.py', 'payload-operations-guard.sh', 'payload-control', 'payload-control-runtime.py',
     'payload-control-state.py', 'payload-control-inventory.py', 'compose.payload.production.yaml', 'prepare-cms-infrastructure-private.py']) {
     const source = path.join(repository, 'ops', file);
     await copyFile(source, path.join(paths.bundle, 'ops', file));
@@ -115,7 +118,13 @@ async function fixture(t) {
     ['/opt/ownerinc/backups/portal-ownerinc/production', bashPath(paths.backups)],
     ['/opt/ownerinc/backups/portal-ownerinc/daily', bashPath(paths.dailyBackups)],
     ['/usr/local/libexec', bashPath(paths.libexec)],
+    ['/etc/sudoers.d', bashPath(paths.sudoers)],
+    ['/var/lib/ownerinc/payload-candidate/incoming', bashPath(path.join(root, 'incoming'))],
+    ['[[ -x /usr/bin/sudo && -x /usr/sbin/visudo ]]', 'true'],
+    ['/usr/sbin/visudo', 'visudo'],
+    ['chown 0:0 "$sudoers_temporary"', ':'],
     ['install -o 0 -g 0', 'install'],
+    ['/usr/bin/python3 -I -S', 'python3 -I -S'],
     ['chown 0:0 "$temporary"', ':'],
     ['chown 0:0 -- "$pre_restore_backup_root"', process.platform === 'win32' ? ':' : 'chown 0:0 -- "$pre_restore_backup_root"'],
   ];
@@ -145,6 +154,8 @@ async function fixture(t) {
   installer = installer.replace('chown 0:0 -- "$pre_restore_backup_root"', ':');
   installer = installer.replace('expected_installed_receiver=30be4941fe15c1c75e16175625685e2f51acc6ceaa52db146d61684cdacce0f7',
     `expected_installed_receiver=${previousReceiverHash}`);
+  installer = installer.replace('b1be89c891468052aea9de917e75214c7331c9ff72a4cb3e790aae9b4007d1b6',
+    createHash('sha256').update(previousProductionReceiver).digest('hex'));
   const rootOwnedModeGate = 'root_owned_mode() { [[ $(stat -c \'%u:%g:%a\' -- "$1") == "0:0:$2" ]]; }';
   assert.ok(installer.includes(rootOwnedModeGate), 'root-owned install modes must be checked on production');
   installer = installer.replace(rootOwnedModeGate, 'root_owned_mode() { [[ -f $1 ]]; }');
@@ -154,11 +165,33 @@ async function fixture(t) {
   const securePathCheck = /# Inspect every existing path component[\s\S]*?^fi\n\n(?=# The receiver and daily backup share this lease)/mu;
   assert.match(installer, securePathCheck, 'fixed-path security inspection must remain in the production source');
   installer = installer.replace(securePathCheck, '# Fake host paths are confined to this temporary fixture.\n\n');
+  // Privilege-path ownership is exercised separately with actual Python and
+  // synthetic stat observations. This transport fixture may run on Windows.
+  installer = installer.replace(/receiver_privilege_paths\(\) \{[\s\S]*?^\}/mu,
+    'receiver_privilege_paths() { [[ $1 != create ]] || mkdir -p -m 0700 -- "$receiver_incoming"; }');
   await writeFile(path.join(paths.bundle, 'ops', 'prepare-cms-infrastructure.sh'), installer);
 
   const dockerLog = path.join(root, 'docker.calls');
   const composeEnvironmentLog = path.join(root, 'compose.environment');
   const flockLog = path.join(root, 'flock.calls');
+  const installLog = path.join(root, 'install.calls');
+  // Filesystem transport double: log atomic publications, optionally fail helper
+  // publication. No real host path, owner, Docker or service is exercised here.
+  await writeFile(path.join(paths.bin, 'mv'), `#!/usr/bin/env bash
+target="\${!#}"
+if [[ $target == '${bashPath(path.join(paths.libexec, 'ownerinc-payload-receive'))}' ]]; then
+  ${failRootInstall ? 'exit 95' : ':'}
+fi
+printf '%s\\n' "$target" >> '${bashPath(installLog)}'
+if [[ $target == '${bashPath(path.join(paths.libexec, 'payload-receiver-admission.py'))}' ]]; then
+  ${failReceiverHelperInstall ? 'exit 94' : ':'}
+fi
+/usr/bin/mv "$@" || exit $?
+if [[ $target == '${bashPath(path.join(paths.libexec, 'payload-receiver-admission.py'))}' ]]; then
+  ${tamperReceiverHelperInstall ? 'printf "altered after publication\\n" > "$target"' : ':'}
+fi
+exit 0
+`, { mode: 0o755 });
   const dockerLogShell = bashPath(dockerLog);
   const composeEnvironmentLogShell = bashPath(composeEnvironmentLog);
   const flockLogShell = bashPath(flockLog);
@@ -171,6 +204,7 @@ exit 0
 `;
   await writeFile(path.join(paths.bin, 'docker'), docker, { mode: 0o755 });
   await writeFile(path.join(paths.bin, 'flock'), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> '${flockLogShell}'\n[[ $1 == -n && $2 == 9 ]] || exit 92\nexit 0\n`, { mode: 0o755 });
+  await writeFile(path.join(paths.bin, 'visudo'), `#!/usr/bin/env bash\n[[ $1 == -cf ]] || exit 93\n[[ $2 != - ]] || cat >/dev/null\n${failSudoers ? '[[ $2 == - ]] || exit 96' : ':'}\nexit 0\n`, { mode: 0o755 });
   if (process.platform === 'win32') {
     const pythonExe = process.env.PATH.split(path.delimiter).map(directory => path.join(directory, 'python.exe')).find(existsSync);
     if (!pythonExe) return { skip: 'Windows Python runtime unavailable for private configuration fixture' };
@@ -212,8 +246,218 @@ exec '${quotedPython}' "$@"
       CMS_PREPARATION_TEST_HOST: '1',
     },
   });
-  return { root, paths, run, dockerLog, composeEnvironmentLog, flockLog };
+  return { root, paths, run, dockerLog, composeEnvironmentLog, flockLog, installLog };
 }
+
+async function authenticatedFixture(t, options = {}) {
+  const f = await fixture(t, options);
+  if (f.skip) return f;
+  const digest = '7'.repeat(64);
+  const approvedCms = `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:${'8'.repeat(64)}`;
+  const callback = path.join(f.paths.libexec, 'ownerinc-payload-prepare.py');
+  const log = path.join(f.root, 'context.calls');
+  const refuse = path.join(f.root, 'context.refuse');
+  const script = path.join(f.paths.bundle, 'ops', 'prepare-cms-infrastructure.sh');
+  let source = await readFile(script, 'utf8');
+  source = source.replaceAll('/opt/ownerinc/lib/payload-preparation', bashPath(f.paths.bundle))
+    .replaceAll('PATH=/usr/bin:/bin LANG=C LC_ALL=C', `PATH=${bashPath(f.paths.bin)}:/usr/bin:/bin LANG=C LC_ALL=C`);
+  // Preserve fixture helper routing (owner-only doubles); production still uses
+  // fixed isolated Python, asserted in the source-level boundary tests.
+  source = source.replace(/python3\(\) \{[^\n]+\}/u, 'python3() { command python3 "$@"; }');
+  if (process.platform === 'win32') source = source.replace('${BASH_SOURCE[0]} ==', '$(cygpath --unix "${BASH_SOURCE[0]}") ==');
+  await writeFile(script, source);
+  // Actual context/data protocol and fixed create-inventory code, with explicit
+  // authentication/lease/host observations doubled. Full cryptographic/host
+  // validators and native FD9 semantics have separate tests; this is not VPS proof.
+  await writeFile(callback, `import importlib.util,pathlib,sys,json,os
+sys.stdout.reconfigure(newline='\\n') # Linux line protocol on the Windows transport double.
+spec=importlib.util.spec_from_file_location('m',${JSON.stringify(path.join(repository, 'ops/prepare-cms-authenticated.py'))})
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+m.HOST_ROOT=${JSON.stringify(f.paths.app)};m.RUNTIME=${JSON.stringify(f.paths.runtime)}
+m.RELEASES=os.path.join(m.HOST_ROOT,'releases');m.LOCK=os.path.join(m.RUNTIME,'deploy.lock')
+m.ENVIRONMENT=${JSON.stringify(path.join(f.paths.secrets, 'production.runtime.conf'))}
+m.PRODUCTION_BACKUP=${JSON.stringify(f.paths.backups)}
+captured={'ops/payload-control-inventory.py':pathlib.Path(${JSON.stringify(path.join(f.paths.bundle, 'ops/payload-control-inventory-test.py'))}).read_bytes()}
+inv=m.load_authenticated(captured['ops/payload-control-inventory.py'],'captured-inventory.py')
+# Fixture substitutes the daily-backup constant consistently in this one fixed operation.
+original=inv.production_inventory
+def inventory(*args):
+ args=list(args);args[5]=${JSON.stringify(f.paths.dailyBackups)};return original(*[os.path.normpath(a) for a in args])
+inv.production_inventory=inventory
+original_create=inv.create
+inv.create=lambda filename,value:original_create(os.path.normpath(filename),value)
+expected=inventory(m.HOST_ROOT,m.RUNTIME,m.RELEASES,m.HOST_ROOT+'/current-release',m.LOCK,
+ '',m.PRODUCTION_BACKUP,m.PRODUCTION_BACKUP+'/restore-protection',m.ENVIRONMENT,
+ m.RUNTIME+'/compose.production.yaml',m.RUNTIME+'/compose.payload.production.yaml')
+approval={'hostBaseline':{'currentCommit':${JSON.stringify(commit)},'inventoryIdentity':inv.identity(expected),
+ 'installedPredecessors':{'commonReceiver':${JSON.stringify(previousReceiverHash)},'receiverHelper':None,
+ 'productionWrapper':${JSON.stringify(createHash('sha256').update(previousProductionReceiver).digest('hex'))},
+ 'operationsGuard':${JSON.stringify(createHash('sha256').update('previous guard\n').digest('hex'))},'cmsCandidate':None}}}
+def observe():
+ if pathlib.Path(${JSON.stringify(refuse)}).exists():raise ValueError('context denied')
+ with open(${JSON.stringify(log)},'a') as stream:stream.write(sys.argv[1]+'\\n')
+m.verify_inherited_lease=observe
+m.verify_host_baseline=lambda *args:None
+m.authenticate=lambda:(approval,captured,${JSON.stringify(approvedCms)},None,${JSON.stringify(digest)})
+m.load_authenticated=lambda *args:inv
+if sys.argv[1]=='--verify-context':print(m.verified_context(sys.argv[2]))
+elif sys.argv[1]=='--create-inventory':m.create_inventory(sys.argv[2])
+else:raise ValueError('unexpected operation')
+`, { mode: 0o755 });
+  const run = (mode = 'check', selectedDigest = digest) => spawnSync(bash, ['-c',
+    // Same-shell descriptor transport is a Windows double, not native pass_fds.
+    'exec 9<>"$1"; shift; source "$@"', 'fixture-parent', bashPath(path.join(f.paths.runtime, 'deploy.lock')),
+    bashPath(script), `--authenticated-${mode}`, selectedDigest], {
+    cwd: f.paths.bundle, encoding: 'utf8', timeout: 60000,
+    env: { PATH: `${bashPath(f.paths.bin)}:${process.env.PATH || ''}`, CMS_PREPARATION_TEST_HOST: '1',
+      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) },
+  });
+  return { ...f, runAuthenticated: run, approvedCms, refuse, log };
+}
+
+test('authenticated preparer uses fixed context protocol, inherited FD9 and approved CMS; retries preserve secrets (host/process doubles)', async t => {
+  const f = await authenticatedFixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const env = path.join(f.paths.secrets, 'production.runtime.conf');
+  const before = await readFile(env);
+  const check = f.runAuthenticated();
+  assert.equal(check.status, 0, check.stderr);
+  assert.deepEqual(await readFile(env), before);
+  assert.deepEqual(await readdir(f.paths.backups), []);
+  assert.equal(existsSync(f.flockLog), false, 'child must not reopen/reacquire via shell flock');
+  const apply = f.runAuthenticated('apply');
+  assert.equal(apply.status, 0, apply.stderr);
+  assert.equal(await readFile(path.join(f.paths.runtime, 'cms-image-candidate.env'), 'utf8'), `CMS_IMAGE=${f.approvedCms}\n`);
+  const prepared = await readFile(env);
+  const retry = f.runAuthenticated('apply');
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.deepEqual(await readFile(env), prepared);
+  assert.match(await readFile(f.log, 'utf8'), /--create-inventory/u);
+  for (const line of (await readFile(f.dockerLog, 'utf8')).trim().split('\n')) assert.match(line, / config --quiet$/u);
+});
+
+test('authenticated wrong context and dependency failure preserve receivers; direct flags do not establish authority (host doubles)', async t => {
+  const f = await authenticatedFixture(t, { failReceiverHelperInstall: true });
+  if (f.skip) return t.skip(f.skip);
+  const wrong = f.runAuthenticated('apply', '0'.repeat(64));
+  assert.notEqual(wrong.status, 0);
+  assert.deepEqual(await readdir(f.paths.backups), []);
+  await writeFile(f.refuse, 'deny');
+  assert.notEqual(f.runAuthenticated('apply').status, 0);
+  assert.deepEqual(await readdir(f.paths.backups), []);
+  await rm(f.refuse);
+  assert.notEqual(f.runAuthenticated('apply').status, 0);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy-production'), 'utf8'), previousProductionReceiver);
+  const production = await readFile('ops/prepare-cms-infrastructure.sh', 'utf8');
+  assert.match(production, /authenticated=false/u);
+  assert.match(production, /expected_current=d285029970c82d48cd50cc393a054af4cbfdf1e8/u);
+  assert.ok(production.includes(cmsImage), 'legacy CMS pin remains unchanged');
+  assert.doesNotMatch(production, /\$\{?APPROVED/u);
+});
+
+test('missing receiver helper is installed and verified before receiver publication (fake host)', async t => {
+  const f = await fixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const helper = path.join(f.paths.libexec, 'payload-receiver-admission.py');
+  assert.equal(existsSync(helper), false);
+  const check = f.run(['--check']);
+  assert.equal(check.status, 0, check.stderr);
+  assert.equal(existsSync(helper), false, 'dry run must not install dependency');
+  const applied = f.run(['--apply']);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(await readFile(helper, 'utf8'), await readFile('ops/payload-receiver-admission.py', 'utf8'));
+  const publications = (await readFile(f.installLog, 'utf8')).trim().split('\n');
+  const helperIndex = publications.indexOf(bashPath(helper));
+  const receiverIndex = publications.indexOf(bashPath(path.join(f.paths.libexec, 'ownerinc-portal-deploy')));
+  assert.ok(helperIndex >= 0 && receiverIndex > helperIndex, 'helper must precede receiver rename');
+});
+
+for (const fault of ['missing-launcher', 'root-publication', 'sudoers-validation']) {
+  test(`privilege dependency ${fault} preserves both old receivers (fake host)`, async t => {
+    const f = await fixture(t, { failRootInstall: fault === 'root-publication', failSudoers: fault === 'sudoers-validation' });
+    if (f.skip) return t.skip(f.skip);
+    if (fault === 'missing-launcher') await rm(path.join(f.paths.bundle, 'ops', 'payload-receiver-root.sh'));
+    const result = f.run(['--apply']);
+    assert.notEqual(result.status, 0);
+    assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+    assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy-production'), 'utf8'), previousProductionReceiver);
+    assert.equal(existsSync(path.join(f.paths.sudoers, 'ownerinc-payload-receive')), false);
+  });
+}
+
+test('reviewed predecessor helper upgrades with a retained private copy, without broadening source approval (fake host)', async t => {
+  const f = await fixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const source = await readFile('ops/payload-receiver-admission.py', 'utf8');
+  const previous = source.replace("INCOMING = '/var/lib/ownerinc/payload-candidate/incoming'",
+    "INCOMING = '/opt/ownerinc/apps/portal-ownerinc-real/incoming'");
+  assert.equal(createHash('sha256').update(previous).digest('hex'), 'ffe1c2ed3fb086e156401063cdeaf9c6575a49e3458b202928df7f6794587bf8');
+  const helper = path.join(f.paths.libexec, 'payload-receiver-admission.py');
+  await writeFile(helper, previous);
+  const result = f.run(['--apply']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(await readFile(helper, 'utf8'), source);
+  const snapshot = (await readdir(f.paths.backups)).find(name => name.startsWith('cms-infrastructure-preparation-'));
+  assert.ok(snapshot);
+  assert.equal(await readFile(path.join(f.paths.backups, snapshot, 'payload-receiver-admission.py'), 'utf8'), previous);
+  assert.equal(await readFile(path.join(f.paths.backups, snapshot, 'ownerinc-portal-deploy-production'), 'utf8'), previousProductionReceiver);
+});
+
+test('failed receiver-helper publication leaves the working receiver untouched (fake host)', async t => {
+  const f = await fixture(t, { failReceiverHelperInstall: true });
+  if (f.skip) return t.skip(f.skip);
+  const result = f.run(['--apply']);
+  assert.notEqual(result.status, 0);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+  assert.equal(existsSync(path.join(f.paths.libexec, 'payload-receiver-admission.py')), false);
+});
+
+test('receiver is not published if helper post-install verification fails (fake host)', async t => {
+  const f = await fixture(t, { tamperReceiverHelperInstall: true });
+  if (f.skip) return t.skip(f.skip);
+  const result = f.run(['--apply']);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /receiver helper installation did not verify/u);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+});
+
+for (const defect of ['missing-source', 'invalid-source', 'unknown-installed-helper', 'missing-interpreter']) {
+  test(`receiver dependency preflight refuses ${defect} without replacing the receiver (fake host)`, async t => {
+    const f = await fixture(t);
+    if (f.skip) return t.skip(f.skip);
+    const helperSource = path.join(f.paths.bundle, 'ops', 'payload-receiver-admission.py');
+    if (defect === 'missing-source') await rm(helperSource);
+    if (defect === 'invalid-source') await writeFile(helperSource, 'invalid python source !\n');
+    if (defect === 'unknown-installed-helper') {
+      const target = path.join(f.paths.libexec, 'payload-receiver-admission.py');
+      await writeFile(target, '# unexpected dependency\n');
+      await chmod(target, 0o755);
+    }
+    if (defect === 'missing-interpreter') {
+      const script = path.join(f.paths.bundle, 'ops', 'prepare-cms-infrastructure.sh');
+      const source = await readFile(script, 'utf8');
+      assert.ok(source.includes('python3 -I -S -c'));
+      await writeFile(script, source.replace('python3 -I -S -c', '/nonexistent/receiver-python -I -S -c'));
+    }
+    const result = f.run(['--apply']);
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+    assert.deepEqual(await readdir(f.paths.backups), [], 'preflight must precede backups and changes');
+  });
+}
+
+test('production installer binds the fixed helper, root chain, mode and interpreter before receiver publication', async () => {
+  const source = await readFile('ops/prepare-cms-infrastructure.sh', 'utf8');
+  assert.match(source, /receiver_helper_target=\/usr\/local\/libexec\/payload-receiver-admission\.py/u);
+  assert.match(source, /env -i PATH="\$PATH" \/usr\/bin\/python3 -I -S -c/u);
+  assert.match(source, /\(value\.st_uid, value\.st_gid\) != \(0, 0\) or stat\.S_IMODE\(value\.st_mode\) & 0o7022/u);
+  assert.match(source, /path == files\[-2\].*mode != 0o755/u);
+  const helperInstall = source.indexOf('atomic_install "$source_receiver_helper" "$receiver_helper_target" 0755');
+  const postCheck = source.indexOf('file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || {', helperInstall);
+  assert.ok(helperInstall > 0 && postCheck > helperInstall);
+  assert.ok(source.indexOf('atomic_install "$source_receiver" "$receiver_target" 0755') > postCheck);
+});
 
 test('preparation defaults to a read-only dry check and accepts only fixed host actions', async t => {
   const f = await fixture(t);
@@ -300,7 +544,16 @@ test('apply atomically prepares private credentials and reviewed files without a
   assert.equal(await readFile(path.join(f.paths.app, 'current-release'), 'utf8'), `${bashPath(f.paths.release)}\n`);
   assert.deepEqual(await readFile(lockPath), lockBefore);
   assert.match(await readFile(f.flockLog, 'utf8'), /^-n 9\n/u);
-  assert.deepEqual((await readdir(f.paths.libexec)).sort(), ['ownerinc-portal-deploy']);
+  assert.deepEqual((await readdir(f.paths.libexec)).sort(), ['ownerinc-payload-receive', 'ownerinc-portal-deploy', 'ownerinc-portal-deploy-production', 'payload-receiver-admission.py']);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-payload-receive'), 'utf8'), await readFile('ops/payload-receiver-root.sh', 'utf8'));
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy-production'), 'utf8'), await readFile('ops/deploy-from-production-ci.sh', 'utf8'));
+  assert.equal(await readFile(path.join(f.paths.sudoers, 'ownerinc-payload-receive'), 'utf8'),
+    `deploy ALL=(root) NOPASSWD: NOSETENV: ${bashPath(f.paths.libexec)}/ownerinc-payload-receive\n`);
+  const publications = (await readFile(f.installLog, 'utf8')).split('\n');
+  const publicationIndex = (directory, name) => publications.indexOf(bashPath(path.join(directory, name)));
+  assert.ok(publicationIndex(f.paths.libexec, 'payload-receiver-admission.py') < publicationIndex(f.paths.libexec, 'ownerinc-payload-receive'));
+  assert.ok(publicationIndex(f.paths.libexec, 'ownerinc-payload-receive') < publicationIndex(f.paths.sudoers, 'ownerinc-payload-receive'));
+  assert.ok(publicationIndex(f.paths.sudoers, 'ownerinc-payload-receive') < publicationIndex(f.paths.libexec, 'ownerinc-portal-deploy-production'));
   assert.deepEqual(await readFile(path.join(f.paths.runtime, 'compose.production.yaml'), 'utf8'), 'services: {}\n');
   assert.deepEqual(await readFile(path.join(f.paths.release, '.image-env'), 'utf8'), `API_IMAGE=${apiImage}\nCRON_IMAGE=${cronImage}\n`);
   assert.equal(await readFile(path.join(f.paths.runtime, 'payload-control'), 'utf8'), await readFile('ops/payload-control', 'utf8'));

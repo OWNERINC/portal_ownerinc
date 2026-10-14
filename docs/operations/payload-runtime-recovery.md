@@ -1,5 +1,923 @@
 # Runtime Payload e recuperação coordenada
 
+## P3 — inspeção de plano não é autorização de instalação
+
+### Restore B0 isolado com checkpoints assinados (native ainda pendente)
+
+**Estado da evidência:** o primary confirmou `3192127` / CI `38600074126` SUCCESS:
+native B0 25 pass/0 skip e suíte existente completa 14/11/2. Isso cobre somente
+aquele perfil TEST de dois arquivos. “Native pending/NOT RUN” nas entradas
+históricas abaixo descreve entregas anteriores. O novo request v3 descrito aqui
+é **native NOT RUN**, sem aprovação de rollback em produção.
+
+#### Uploads bounded — request v3 / baseline envelope v2
+
+O request `isolated-b0-recovery-request-v3` usa baseline explícito
+`{version:2, source:{database, uploads, schema, roles, dataFingerprint, uploadsFingerprint}}`.
+Nessa versão, uploads/ uploadsFingerprint contêm o tree hash histórico. Requests
+v1/v2 mantêm sem mudança seus seis campos e o hash antigo de dois arquivos.
+O binding recoveryVersion 2 existente congela expectationsSha256; expectations
+versão 2 acrescenta `uploads:{version:1, algorithm:bounded-tar-numeric-owners-v1,
+archiveSha256, treeSha256, metadataSha256}`. Não houve extensão de schema do estado.
+Metadados numéricos são canonicalizados separadamente (name/type/mode/uid/gid),
+autenticados antes do dano e recompostos do artifact imutável a cada entrada.
+
+O runtime compartilha traversal/limites e drain completo gzip/footer/trailing
+bytes entre B0 e materialização. `_tar_tree` continua produzindo exatamente o hash
+histórico, sem uid/gid. A projeção opt-in é mais estrita: exige root directory
+explícito e todos os parents; somente regular files e directories, modos de dir
+0700/0750/0755 e file 0600/0640/0644, UID/GID numéricos 0..2097151, nomes UTF-8
+normalizados de até 100 bytes e profundidade até 32. Links/devices/sparse/setid,
+duplicates/conflitos/traversal e todos PAX/GNU extension headers são recusados,
+inclusive xattrs/ACLs, sem ignorar metadados de extensão. Não é suporte a uploads
+arbitrários de produção. Limites de produção não aumentaram; artifact, expansão,
+payload materializado e stdout de comandos TEST permanecem limitados a 16 MiB.
+
+A partir da projeção validada deriva USTAR privado em memória: nomes de owner/group
+vazios eliminam lookup por nome, UID/GID/mode são explícitos, arquivos precedem
+metadados dos diretórios e root é aplicado por último. Somente bytes derivados do
+artifact autenticado são extraídos via tar -p no volume disposable vinculado, sem
+destino host escolhido pelo caller. Root mode/ownership é verificado junto com
+todo o tree e o digest independente de metadados; missing/extra/content/mode ou
+uid/gid diferentes impedem checkpoint. Sem migrations ou novo restore DB para
+compensar falha de uploads.
+
+Como tar padrão não expõe xattrs/ACLs nem hardlinks externos ao tree, há um guard
+read-only por descritores no mountpoint do volume próprio re-inspecionado. Não é
+um destino de escrita host: root/children são abertos no-follow, tipos/inodes e
+metadados reafirmados, arquivos exigem nlink=1 e ausência de sparse candidates,
+listxattr vazio (incluindo ACLs). O digest numérico desse walk deve coincidir com
+o observado via archive; guards também precedem clear/extract. Nenhum path/nome
+é emitido. Mtime inteiro USTAR é preservado no payload, mas não faz parte do hash
+histórico nem do novo perfil uid/gid/mode; timestamps não são nova autoridade.
+
+Há fence/identidade/lease fresco antes de clear, entre clear/extract e antes de
+verificação/checkpoint. O fault interno `uploads_clear` acrescenta uma tentativa
+em processo novo com lease novo, mantendo o mesmo frame ≤1 KiB, exit 72 e estágio
+uploads_restore_pending; `uploads` ainda interrompe após extract. Ambos retomam
+revalidando artifact e repetindo clear/extract no alvo exato. Sem CLI fault flag,
+novo campo de proof, novo timeout ou novo job. V3 production binding permanece
+recusado antes de artifacts/efeitos.
+
+Fixture nativa nova: arquivo sintético 6,180,100 bytes, segundo 574,493 bytes,
+binário curto, zero-length file, nested/empty dirs e basename repetido em paths
+distintos; UID/GID 1000:1000, dirs 0755/files 0644. Nenhum nome/conteúdo de arquivo
+real é copiado. CMS/unrelated sentinel continua independente. Essa fixture é
+maior que a observação de quatro entradas, deliberadamente exercitando casos
+adicionais dentro do mesmo cap. Native dessa versão ainda NOT RUN.
+
+#### Perfil TEST de roundtrip exato — request v2 / recoveryVersion 2
+
+CI 38595594718/928397a, artifact 11908694313, provou uma região completa sem
+truncation: linhas 189–190 dos CHECKs `autocard_cards_icon_check` e
+`autocard_cards_illustration_check`. `BETWEEN` da origem vira AND aninhado durante
+transformação PostgreSQL; ao reparse do dump, `makeAndExpr` achata esse AND. Os
+quatro bytes removidos são dois pares de parênteses, sem alteração dos outros
+tokens. A regressão offline reconstrói ambos os trechos e confere seus hashes.
+
+O novo perfil **somente TEST** `isolated-autocard-between-roundtrip-v1` autoriza
+uma transformação T code-owned, não uma normalização SQL: substitui exclusivamente
+o bloco adjacente de duas linhas cujo SHA é
+`c668ef57355144245a51c0f5a1931183352975da363eaa6aa80d294d4be28240` pelo bloco
+`014400e5cdf35928761f710e5c65b209b15e3d98a609ae1ff6e6c23373105db4`.
+Exige ocorrência única de bloco/linhas/constraints no contexto exato
+`public.autocard_cards`, header owner postgres e profundidade de tabela correta.
+Contexto em comentário/body/literal/COPY, duplicatas, ordem diferente, fonte já
+restaurada ou ambígua são recusados. Todos os demais bytes e ordem são preservados.
+O lexer existente é usado só para recusar contexto falso; não interpreta ou
+reescreve expressões SQL. Nenhuma migration ou archive SQL é modificada.
+
+A prova de contexto recusa conservadoramente qualquer palavra não quoted
+BEGIN/ATOMIC/END (case-insensitive) no prefixo inspecionado até o fim da tabela.
+Um semicolon dentro de `BEGIN ATOMIC ... END` não prova início de statement
+top-level; esses SQL-standard function bodies não são suportados ali, mesmo
+quando completos. A recusa é lexical, não substring: comentários, literals,
+quoted identifiers e dollar-quoted bodies permanecem opacos e não disparam essa
+regra. SETs e funções com bodies dollar-quoted continuam suportados. Um body
+SQL-standard posterior à tabela não pode envolvê-la; o suffix não é transformado
+nem usado como prova de contexto. Essa regra não muda o lexer diagnóstico padrão.
+
+Antes de dano/negativos, retém schema S0 e full dump F0 normalizados em memória;
+deriva S1=T(S0), F1=T(F0). Request `isolated-b0-recovery-request-v2` autentica um
+objeto expectations derivado, com versão/algoritmo, quatro digests, IDs dos dois
+blocos, archive/proof/manifest, helpers, sourceMaterial e pin PostgreSQL. O binding
+persistente `recoveryVersion:2` exige `expectationsSha256`, imutável pelo journal.
+Cada executor recompõe expectations a partir das fontes retidas autenticadas,
+não de hashes escolhidos pelo caller ou do alvo observado. O baseline original de
+seis campos permanece intacto, assim como proof/data/tree fingerprint históricos.
+
+Classificação consulta o journal HMAC fresco e mantém fence/security/roles:
+
+| Checkpoint | Schema permitido e ação |
+| --- | --- |
+| Sem recovery / reserved | Apenas S0; pode reservar restore |
+| database_restore_pending + S0 | Elegível para restore vinculado; dano autorizado de rows/ACL da tabela pode existir |
+| database_restore_pending + S1 | Somente reconcilia se F1 e dataFingerprint original forem exatos; divergência recusa sem repetir restore |
+| database_restored e posteriores | Somente S1/F1/data/security exatos; não aceita fallback S0 |
+
+Após comando de restore, verificação completa precede checkpoint. A interrupção
+intencional pós-comando continua deixando pending; a próxima entrada exige a mesma
+verificação. Schema desconhecido/híbrido recusa. Não se usa false→restore para uma
+representação S1 divergente. Timeouts/flags/commands/budgets não aumentaram; checks
+de reconciliação podem exigir mais observações dentro dos caps existentes.
+
+Request/recovery v1 conserva suas regras e bytes, sem defaults novos ou conversão
+de registros persistidos. Install binding v3 (produção) não aceita recoveryVersion
+2; o executor também o recusa antes de ler artifacts. Nenhuma autoridade de
+produção, referência-cluster ou normalizador genérico foi introduzido. Native
+**NOT RUN** para este perfil; uma diferença adicional em F1 continua desconhecida
+e causará recusa, não nova normalização automática.
+
+`installIntent.recovery` é uma extensão **opcional**, sem acrescentar defaults a
+corpos históricos. Binding v2 permite purpose `isolated-b0-recovery`; binding v3
+permite `production-b0-recovery` somente como contrato de estado. O executor
+isolado recusa v3 antes de operações ou acesso aos artifacts. Não há dispatch de
+produção, alteração do receiver, conversão de receipts ou novo comando no runtime.
+
+O binding de recuperação fixa versão/purpose, hash do install binding, head de
+origem, proof/manifest B0, Portal DB/volumes, release/imagens anteriores e hashes
+dos perfis security/fence. `begin_install_recovery` autentica a cadeia existente
+sem head repair; `advance_install_recovery` permite somente adjacência:
+`reserved → database_restore_pending → database_restored → uploads_restore_pending
+→ uploads_restored → data_verified_readiness_pending`. Binding, install stage,
+receipts, CMS target e demais campos permanecem imutáveis. Admissão fica closed,
+authority legacy/1 e worker held. Floor pending/committed, restoreIntent simultâneo,
+avanço da instalação e abertura/limpeza de recovery são recusados. O initializer
+também recusa recovery antes de seus efeitos. Finalizar dados não finaliza readiness.
+
+`ops/payload-install-recovery-isolated.py --qualify` é exclusivamente um criador
+de fixture Linux/root/GitHub-hosted: nomes aleatórios próprios, PG16 com network
+none e volumes próprios. Não aceita caminhos de requests, alvos, SQL ou comandos
+do operador. O supervisor TEST copia/verifica a closure de helpers em diretório
+privado, cria chave/journal e assina o request limitado à fixture. Essa autoridade
+TEST **não é aprovação de source/candidato para produção**. API/cron/CMS image
+identities do binding são fixtures de protocolo, não imagens de aplicação
+executadas. Não se afirma rollback de aplicação ou compatibilidade funcional.
+
+Setup aplica `api/db/schema.sql` e migrations SQL pendentes da própria revisão no
+cluster novo e consulta a lista real antes do B0. Source material inclui hashes
+dos bytes SQL consumidos. Após capture do baseline, não roda migrations,
+provisionamento, alteração de roles/passwords ou DROP SCHEMA. O restore usa
+`pg_restore --single-transaction --clean --if-exists --exit-on-error`, preservando
+owners/ACLs do archive. Somente ACL de tabela `public.recovery_records` pode diferir
+do perfil TEST; outros ACLs, roles/memberships, ownership e schema devem coincidir
+antes de destruição. Não se aprende baseline do alvo danificado.
+O proof B0 mantém o algoritmo histórico de data/tree fingerprints: o runtime
+compartilha somente um transporte interno bounded para as mesmas queries e o
+mesmo agrupamento/canonicalização, com teste de paridade entre os dois caminhos.
+Hashes adicionais de dump/schema/security são campos do perfil TEST separado,
+não uma reinterpretação dos hashes históricos do proof.
+
+Artifacts são verificados por assinatura/hash/manifest, lidos por descritor com
+no-follow e estabilidade de identidade e copiados para bytes imutáveis limitados
+a 16 MiB. Restore consome esses bytes, não reabre paths após uma prova antiga.
+Uploads da fixture admitem somente dois arquivos regulares limitados, nomes fixos,
+sem links/traversal/setid; comparação inclui bytes, tamanho, modo, uid/gid. O perfil
+é deliberadamente menor que o parser B0 de produção, não sua substituição.
+
+Cada boundary revalida journal, closure, inode/lease exclusivo, container/volumes,
+quiescência e perfil, inclusive entre clear e extract. A inspeção bounded do host
+projeta somente IDs e consumo dos volumes exatos para recusar consumidores
+estranhos, sem exportar env/topologia de outros projetos. Não existem
+aplicações/escritores na fixture; network none
+não é apresentado como prova de fechamento de ingress em produção. A recuperação
+reconcilia interrupção após pg_restore antes do checkpoint pela comparação completa
+do dump/schema/grants. Uploads pending repetem clear/extract somente no volume
+vinculado. Comparações e checkpoint final mantêm closed/readiness pending.
+
+Qualificação nativa inclui linhas não vazias, uploads, dano de conteúdo e ACL,
+interrupções controladas pós-DB e pós-uploads em processos filhos distintos, cada
+qual com novo descritor/lease adquirido e leitura fresca do journal, autenticação
+TCP real de role antes/
+depois (password errada deve falhar) e volume de evidência CMS/unrelated intacto.
+Os testes portáteis usam journal/HMAC reais e operações Docker/DB dobradas; Windows
+usa double explícito da observação de descritores. Não provam execução Linux/PG.
+
+Entrada required-native (CI executa como root com ambiente limpo):
+
+```sh
+PAYLOAD_REQUIRE_NATIVE_B0_RECOVERY=1 PAYLOAD_B0_RECOVERY_DISPOSABLE=1 \
+  node --test tests/unit/payload-install-recovery.test.mjs
+```
+
+O wrapper required-native não converte falha em skip. Limites propostos: 210 s de
+trabalho + 60 s de cleanup, transporte com timeout/output cap e prova ≤1 KiB somente
+após cleanup de recursos próprios. SIGKILL depende de descarte do runner. A prova
+mantém `productionAuthorized`, `applicationRollbackExecuted` e
+`applicationCompatibilityQualified` falsos. **Native NOT RUN nesta entrega.**
+Receipts privados dos helpers de storage sobrevivem ao filho interrompido para
+cleanup pelo supervisor, limitado a PID/nome/ID/imagem/nonce/volume próprios. Em
+falha, journal/B0/closure privados permanecem até teardown do runner; nunca são
+publicados com a chave ou os dumps.
+Produção ainda exige baseline real autenticado, exclusividade de roles, credenciais,
+fence externo/não-Docker e integração de coleta/admissão. O perfil desta fixture
+não satisfaz automaticamente esses bloqueios do checker legado.
+
+CI agora exige `isolated-b0-recovery → validate` somente para dispatch candidate
+em branch, sem `cms_image_only`. O prerequisite usa runner próprio sem services,
+contents:read, checkout do SHA exato sem credenciais persistidas e os dois pins
+PG16/nginx. Verifica raw index do mirror público, recarrega registry-mirrors por
+SIGHUP antes de criar recursos (sem restart) e faz pulls das referências canônicas
+no daemon root/default. Não utiliza secrets ou login de registry.
+
+Cap do job: 12 min; preparação: 5 min; native: 6 min, incluindo cleanup interno.
+`validate` só começa após sucesso para candidate; runs comuns continuam quando B0
+é skipped, conflitos de publication modes continuam rejeitados e cancelamento não
+habilita validate. Não há polling nem parallel join. Os 150/120 min e os 8,68 min
+históricos restantes de validate não absorvem esse prerequisite; o tempo total do
+workflow aumenta em até o cap adicional, sem garantia de duração bem-sucedida.
+Os 14 checks/11 negativos/2 restores existentes não foram alterados.
+
+O packager autentica exatamente três jobs da tentativa: B0, validate e Deploy
+production skipped. Exige SHA/run/attempt, conclusão success e steps únicos de
+checkout/setup/preparação/native success; B0 deve terminar antes de validate começar.
+Artifacts continuam vinculados à janela de validate. Ausência de B0 não seleciona
+fallback histórico. Formatos de candidate/report/package/record não mudaram;
+pacotes históricos e evidência 51a0dac não são reescritos. Reconstrução de runs
+históricos requer seu toolchain aprovado anterior, não o packager fortalecido.
+Registrar requer nova aprovação dos hashes de workflow/revisão/toolchain; isso não
+é autorização root de helpers nem nova autoridade de produção. Restore permanece
+limitado à fixture de dois uploads, sem qualificar rollback de produção.
+
+Diagnóstico B0: cada filho envia pelo pipe existente um único JSON ≤1024 bytes,
+schema exato `{version:1, location, failure, proof}`. Location/failure são enums
+finitos; proof é null em falha/interrupção e o proof fixo em sucesso. Exceções
+desconhecidas viram `unknown`, nunca texto SQL, stderr, paths ou credenciais.
+Exit 72 continua reservado à interrupção esperada, exit 73 à falha. O supervisor
+valida frame, exit real e, independentemente, checkpoint no journal autenticado;
+um frame de interrupção não certifica o checkpoint. Crash/timeout, frame inválido
+e checkpoint incorreto continuam recusados. Falha de escrita diagnóstica não muda
+o exit original e ausência de frame não permite sucesso. O erro público mantém
+fase primária e cleanup separados e acrescenta `;child:<location>:<failure>`.
+
+CI 38588686813 em 4903533 alcançou `recover_uploads_interruption`, mas a causa
+histórica permanece não confirmada: a fase inclui reconciliação/security/schema
+pós-restore antes de uploads. `cleanup:none` indica somente ausência de falha
+reportada pelo cleanup, não evidência independente. Instrumentação não modifica
+restore, comparação, retries, transições ou timeouts. Native ainda NOT RUN para
+esses bytes diagnósticos; testes portáteis não demonstram correção da falha CI.
+
+CI 38590676716 em 7a67ebb localizou a recusa em `schema_compare`, após os checks
+security/role. Naquela revisão a marca também cobria execução de pg_dump e
+normalização: não demonstra, sozinha, que o hash divergiu. Os novos locais
+`schema_dump`, `schema_normalization`, `schema_compare` separam essas operações.
+O baseline normalizado já capturado é retido privadamente, ligado ao mesmo hash
+autenticado. Se há divergência, emite somente `schema_line_order_delta`
+(mesmo multiset de linhas), `schema_comment_delta` (mesma sequência após remover
+linhas vazias ou iniciadas por `--`) ou `schema_sql_delta` (outros casos).
+Essas categorias são exclusivamente diagnósticas: todas recusam, sem considerar
+SQL semanticamente equivalente; comentários aparentes podem estar dentro de
+function bodies. Nenhum nome de objeto, SQL ou dump é publicado. Comparação de
+schema continua byte/hash exata após a normalização histórica do par restrict;
+comparações de owners/ACLs, roles e fingerprints de dados não mudam.
+
+Fonte consultada: PostgreSQL `REL_16_STABLE`, `src/bin/pg_dump/pg_dump.c`, que
+ordena objetos por tipo/nome e dependências com intenção explícita de dumps
+idênticos para schemas logicamente idênticos. Isso não prova estabilidade em
+todos os casos nem identifica o delta deste runner. Não remover SQL, owners,
+constraints ou ordenar linhas para fazer o gate passar. A causa histórica segue
+não confirmada; native NOT RUN para esta instrumentação.
+
+#### One-shot discrepancy report da fixture (não qualificante)
+
+Para investigar CI 38592107287/25158c9 sem iterar categorias cegamente, um mismatch
+durante `recover_uploads_interruption` ou `recover_final` pode capturar o primeiro
+report `nonqualifying-isolated-b0-schema-discrepancy`, versão 1, ≤64 KiB. Usa somente
+os dois dumps **schema-only já capturados e normalizados**, sem query, retry ou dump
+adicional. O negativo intencional de schema não captura report. Raw schema nunca é
+escrito em arquivo por esse mecanismo.
+
+Schema exato: version/kind, before/after (length/sha256), regionCount, truncated e
+regions. Cada região contém lados before/after com range, contextRange (até duas
+linhas adjacentes), objectType finito, objectIdentitySha256, sha256 do trecho e
+tokens redigidos. Ranges usam linhas 1-based inclusivas; inserção/remoção vazia é
+representada por início = fim + 1. Todas as regiões são incluídas até o cap; o total
+original e truncated indicam perda de detalhe. Objetos sem header reconhecido são
+UNKNOWN. Headers são hashes, nunca nomes publicados.
+
+Lexer conservador (não parser SQL): somente keywords SQL da lista fixa e os nomes
+public, pg_catalog, postgres, pg_database_owner, pgcrypto, portal_api, portal_cron,
+recovery_records podem ficar visíveis; pontuação vem de lista finita. Identifiers
+desconhecidos e **todos** quoted identifiers, strings (incluindo E/U&), números,
+dollar bodies e comentários viram tipo/length/sha256. Conteúdo inválido, UTF-8
+malformado, token desconhecido, nesting excessivo ou limites (16 MiB/input,
+100000 tokens, 10000 linhas) suprimem o report. Hashes não são anonimização forte:
+valores de baixa entropia podem ser inferidos por dicionário. Esse canal é autorizado
+somente para a fixture sintética, não para produção.
+
+Continuações de string SQL são deliberadamente **não suportadas** pelo lexer:
+após fechar qualquer literal single-quoted (plain/E/U&/B/X/N), lookahead através
+de whitespace e comentários (inclusive nested block comments) recusa outro
+fragmento single-quoted antes de emitir tokens. Isso inclui concatenação PostgreSQL
+por newline, fragmentos com prefixo explícito e, conservadoramente, adjacência na
+mesma linha. Não reinicializa o modo E ao interpretar fragmentos subsequentes.
+Strings isoladas, escaped quotes, casts, separadores e comentários sem continuação
+permanecem suportados. O report inteiro é suprimido em continuação/lexing inválido;
+não há artifact parcial nem fallback raw, e a recusa primária permanece intacta.
+
+Capture privado usa arquivo exclusivo 0600 no diretório privado da fixture. Após
+falha, o supervisor verifica metadados/no-follow/nlink e valida schema/canonical JSON
+exatos antes de exportar. Destino é constante no código, sem path flag/env override:
+`/home/runner/work/_temp/payload-b0-schema-diagnostic/schema-discrepancy.json`.
+CI verifica que runner.temp corresponde a esse parent. Caminhada por descritores
+usa O_DIRECTORY/O_NOFOLLOW, owners root/runner e rejeita parents group/world-writable;
+diretório de export é criado exclusivamente root:0700 e arquivo root:0600. Só após
+write/fsync o redigido vira 0644 e o diretório 0755 para leitura pelo upload action.
+Alvo existente ou links não são sobrescritos. O cleanup da fixture não apaga esse
+resultado redigido. Erro gera somente `isolated_b0_schema_report_unavailable`, sem
+texto de exceção, preservando primary/cleanup e exit 73.
+
+Job B0 faz upload **somente em failure()**, nome fixo
+`nonqualifying-isolated-b0-schema-discrepancy`, único path acima, sem wildcard,
+retenção 7 dias. Ausência avisa, não torna recovery bem-sucedido. Nenhum report
+entra em manifest, profile, candidate/admission evidence ou prova ≤1 KiB. Testes de
+export usam doubles de descritores no Windows; segurança de filesystem Linux e
+execução nativa ainda dependem de review/qualificação. Native NOT RUN nesta entrega.
+
+### Observação pura do fence destrutivo — sem collector ou executor
+
+#### Qualificação isolada da topologia (TEST-only)
+
+O gate candidate-only **Qualify isolated Portal fence topology** executa
+`PAYLOAD_REQUIRE_NATIVE_FENCE_TOPOLOGY=1 PAYLOAD_FENCE_TOPOLOGY_DISPOSABLE=1 node --test tests/unit/payload-fence-topology.test.mjs`
+antes dos builds, com cap de seis minutos. Sem required-native, somente esse caso
+é skip; doubles portáteis não constituem execução Docker/PG/TLS. A primeira
+execução nativa continua pendente até CI demonstrar sucesso.
+
+O harness `scripts/integration/payload-fence-topology.mjs` exige runner Linux
+GitHub-hosted, IDs run/attempt e contexto Docker default/local. Cria nove containers
+e três redes de nomes únicos `payload-fence-<run>-<attempt>-<nonce>-*`. Os nomes
+do contrato são apenas projeções lógicas dessas redes; nunca acessa o
+`ownerinc_proxy` real. Reutiliza pins existentes de PostgreSQL, Nginx e Node,
+cacheados pelo preparo de registry, com `--pull never`. Não compartilha clusters
+com migrations CI ou com a qualificação legacy-security.
+
+Portal Nginx conecta backend/proxy; API/cron conectam backend/egress; CMS e dois
+PG16 conectam backend. Proxy HTTPS, probe e serviço estrangeiro benigno usam
+somente a rede proxy da fixture. API/CMS são **stubs**, não aplicações compiladas.
+Não há portas de host, binds, volumes persistentes ou credenciais reais. Tmpfs
+recebe config/PGDATA; `volumeKeys: []` não inventa correspondência de volumes de
+produção. TLS usa certificado/key novos por execução, diretório privado, envio
+por stdin e remoção no cleanup; key nunca vai a argumentos, logs ou prova.
+
+A sequência observa alcance real apesar de zero portas publicadas, fechamento
+dos três GETs após parar Nginx, readiness loopback dos stubs enquanto o proxy
+permanece fechado e bypass real ao conectar temporariamente API à rede proxy
+própria. O perfil TEST fixa antecipadamente origem HTTPS, status 502 e hash do
+corpo gerado **somente após falha do upstream conhecido**. Não aceita 502 genérico
+como prova de produção. O serviço estrangeiro preserva ID, configuração,
+StartedAt e resposta antes/depois.
+
+São dois clusters PG16 reais, databases `portal` e `ownerinc_cms`. Observam-se
+identidades, clients/queries/transações, prepared transactions, tipos de backend,
+subscriptions/slots/extensions e condições de visibilidade. Processos internos
+conhecidos de manutenção PG16 não são classificados como aplicações escritoras;
+tipos desconhecidos bloqueiam, sem desligar autovacuum. Negativos usam client com
+transação temporária e prepared transaction de GID próprio. O client mantém a
+mesma conexão psql em transação, sinaliza ready e aguarda release explícito em
+tmpfs até o classifier concluir; presença da transação é revalidada antes/depois.
+Não depende de `pg_sleep` terminar depois do inventário. Watchdog de 90 s e timeout
+idle-in-transaction de 95 s são recusas de segurança, não critérios de sucesso.
+Release ocorre em finally, seguido de confirmação bounded de rollback/fim; falha
+segue para remoção do container descartável exato, nunca término amplo de sessões.
+Dumps de schema/dados
+e roles sem passwords verificam ausência de alterações nas rodadas read-only.
+Essa cobertura vale para clusters novos/pinados, não para extensões/configuração
+arbitrária de produção nem para preservação de passwords.
+
+Projeções exigem IDs completos, labels e mounts reais; endpoint desconhecido
+recusa. Inventário é **escopado à fixture**, não descoberta global do host.
+As duas passagens e probes cabem na janela real de 30 segundos; sem aumentar caps.
+Journal/lease/source context e receipts são explicitamente sintéticos TEST-only.
+O bridge Python chama o validator/checker real sem alterações. A baseline final
+deve manter exatamente `fence_external_topology_unverified`: o probe é outra
+vantage de container, não observer independente fora do host. Não se afirma
+cobertura não-Docker ou fence completo de produção.
+
+Transporte reutiliza limite de 4 MiB, erros sem stderr bruto, fases finitas
+`fence_topology_qualification_failed:<primary-phase>;cleanup:<codes-or-none>`,
+deadline ativo de 270 s e reserva
+de cleanup de 60 s. Cleanup revalida ID/imagem/nonce/isolamento, remove somente
+containers próprios e redes próprias vazias; nunca prune. Para criação parcial,
+cleanup aceita somente subconjunto das attachments previstas, mantendo checks de
+ID completo, nome, nonce, imagem e isolamento; attachment estrangeira ou recurso
+substituído continua recusado. A observação normal exige topologia completa.
+Uma falha de cleanup não substitui mais a fase primária. Os códigos secundários
+são finitos: `container_inspect`, `container_remove`, `network_inspect`,
+`network_not_empty`, `network_remove`, `private_remove` ou `unknown`; ausência de
+falha primária é `none`. Nenhum stderr, ID, nome ou assertion bruto é propagado.
+Criação distingue comando de rede, inspect de rede, comando de container,
+attachment, inspect pré-start e start.
+
+O inspect pré-start/cleanup reconhece uma forma documentada no código Moby
+v28.5.1: `updateContainerNetworkSettings` e `ConnectToNetwork` para container não
+running retêm EndpointSettings configurado sem alocar endpoint; `ContainerInspect`
+copia esses campos. Assim `NetworkID` pode ser vazio no estado `created`.
+Somente nesse estado consistente, com EndpointID/IPs vazios, a chave exata da rede
+pode corresponder ao nome/ID da rede própria, revalidada por inspect independente
+antes do uso. Isso valida configuração para criação/cleanup, não inventa endpoint
+ou ID na projeção. Containers running e observações normais continuam exigindo IDs
+operacionais. Fonte: `moby/moby` tag `v28.5.1`, arquivos
+`daemon/container_operations.go` e `daemon/inspect.go`. O teste é uma reprodução
+offline fundamentada nessa fonte, não um dump do runner que falhou.
+Falha de cleanup impede
+prova; SIGKILL ainda depende do descarte do runner. Prova exata ≤1 KiB só sai após
+cleanup, com `applicationReadinessQualified`,
+`productionExternalCoverageVerified`, `completeProductionFenceProof` e
+`productionAuthorized` falsos. Não altera schemas/artifacts de recovery.
+
+Os caps externos continuam 150/120 min, 14 checks/11 negativos/2 restores intactos.
+Os dois gates de seis minutos deixam 8,68 min da reserva calculada a partir de
+tempos históricos; o teste exige pelo menos oito, sem garantir duração futura.
+
+`validate_portal_fence_observation()` valida a projeção fixa
+`portal-fence-observation-v1`; `check_portal_destructive_fence()` compara somente
+contexto, topologia e perfil de fechamento **já autenticados pelo chamador**.
+Não autentica esses inputs, não aprende aprovações da observação e não registra
+action, collector, ticket assinado ou mutação. Ausência de topologia/perfil gera
+blockers finitos. `observationsMatched` significa apenas correspondência entre
+inputs, nunca prova operacional ou autorização. Toda saída mantém
+`destructiveOperationAuthorized`, `installationExecuted` e
+`deploymentAuthorized` em `false`, inclusive sem blockers.
+
+O contrato limita JSON a 4 MiB, 512 resumos de containers do host, 64 containers
+relevantes, três redes fixas e 256 endpoints por rede. Campos desconhecidos,
+segredos, IPs, aliases brutos e records duplicados são recusados. As duas passagens
+de inventário devem coincidir após normalizar somente ordem de conjuntos. IDs
+completos, imagem pinada, digest de receipt, volumes, redes e database identity
+devem corresponder à topologia aprovada. O contexto inclui inventory, journal
+hash/sequence, install binding, source approval/policy/record, PID/start identity,
+nonce e device/inode do lease. Janela e idade máxima são 30.000 ms monotônicos.
+O relógio `now_monotonic` deve vir do coordenador confiável, não do solicitante.
+
+Somente databases vinculados podem estar running; Nginx e demais serviços devem
+estar created/exited, sem running/paused/restarting/dead, one-offs ou duplicatas.
+As redes são exatamente `ownerinc-portal-backend` (internal),
+`ownerinc-portal-egress` e `ownerinc_proxy`, correlacionadas por ID. Host/container
+network sharing, portas publicadas, attachment indevido ao proxy, consumidores
+de volumes desconhecidos e endpoints backend/egress não aprovados bloqueiam.
+Outros projetos legítimos no proxy compartilhado não são rejeitados por sua mera
+presença. Relevância de endpoints, aliases/options aprovados e flags de projeção
+exigem classificação independente por um futuro collector autenticado; um JSON
+autodeclarado não prova ausência de ingress alternativo.
+
+O perfil externo deve aprovar explicitamente cobertura não-Docker, identidade do
+observer, origem HTTPS e resposta fechada exata (status 4xx/5xx e hash de corpo)
+para GET `/`, `/api/ready` e `/editorial/ready`. Não há status padrão inferido do
+proxy real. Evidência independente exige nonce e intervalo contido na observação;
+os timestamps representam envio/recebimento **no relógio local do collector**, não
+comparação de relógios monotônicos entre máquinas. Timeout, DNS/TLS error,
+redirect e resposta 2xx não provam fechamento. Nenhum endpoint HTTP é alterado.
+
+Cada database exige identidade vinculada e zero outros clients, active queries,
+open transactions, prepared transactions e background writers, com cobertura
+completa explicitamente verificada. Não há SQL novo, encerramento de sessões ou
+mudança de grants. `private-readiness` sempre bloqueia o fence destrutivo.
+
+Os testes são fixtures sintéticas, sem Docker, rede, banco ou host de produção.
+Comprovam somente validação/classificação, limites e recusa de efeitos; não
+comprovam captura fiel, autenticação de aprovações, lease real ou fechamento.
+Permanecem pendentes topologia/rotas reais aprovadas (incluindo host-native
+proxies/túneis), observer externo, collector bounded, fixture de topologia
+descartável e reobservação sob FD9 imediatamente antes de cada passo destrutivo.
+Essa fixture futura deve usar redes/proxy exclusivamente próprios, nunca o
+`ownerinc_proxy` real. Nenhuma alteração ao proxy compartilhado é autorizada.
+
+### Primitivas de observação de segurança legada — sem collector de produção
+
+#### Gate isolado PG16 no CI candidate-only
+
+O step **Qualify legacy security observer with isolated PostgreSQL 16** executa,
+antes dos builds de imagens e com timeout de 6 minutos:
+
+```sh
+PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY=1 PAYLOAD_LEGACY_SECURITY_DISPOSABLE=1 \
+  node --test tests/unit/payload-legacy-security-pg16.test.mjs
+```
+
+O harness exige Linux, GitHub Actions hosted, run/attempt numéricos, opt-in
+descartável e Docker local/default no socket `/var/run/docker.sock`. Não usa o
+PostgreSQL compartilhado das migrations. Cria cluster novo no pin PG16 existente,
+com nome `payload-legacy-security-pg16-<run>-<attempt>-<nonce>`, labels de escopo e
+nonce, network none, sem portas/volumes/binds de host, rootfs read-only e PGDATA
+em tmpfs. O database chama-se obrigatoriamente `portal` porque esse é o contrato
+do produtor; o isolamento/namespace exclusivo está no cluster descartável, não
+em renomear o database da consulta. Roles fixos nunca atingem outro cluster.
+Trust auth vale somente nesse container sem rede; passwords de roles são
+fixtures sintéticas. Nada recebe credenciais de produção.
+
+`scripts/integration/payload-legacy-security-pg16-bridge.py` importa o runtime
+real para obter a consulta e validar/comparar a resposta. Não duplica a consulta.
+Contexto v3, hashes, imagens e perfil interno do bridge são **explicitamente
+sintéticos**, sem assinatura/autenticação de source ou aprovação de produção.
+O processo Node limita comandos a 30 s e saída a 4 MiB (bridge tem limites menores
+de saída); timeout/overflow/status não-zero falham sem imprimir stderr/SQL/segredos.
+O futuro collector de produção não é registrado por este harness.
+
+Fixture DDL roda somente no cluster recém-criado. Casos reais exercitam atributos,
+membership admin/inherit/set de PG16, ACL null versus explícita, PUBLIC, grant
+options, coluna expires_at, sequence, default ACL, owner, RLS/settings e dependência
+de role em outro database **do mesmo cluster descartável**. Compara também perfil
+ausente e mudanças contra o perfil sintético inicial. O caso overflow cria 700
+tabelas estreitas para exceder os 20.000 registros reais, sem reduzir ou substituir
+os limites/SQL de produção; o validator precisa recusar o marcador de overflow.
+
+Cada execução do observer tem fingerprints antes/depois de dumps dos dois
+databases (dados, schema, owners e ACLs) e roles `--no-role-passwords`. Reutiliza a
+normalização existente somente para o par volátil restrict/unrestrict de pg_dump.
+Isto não observa passwords e não qualifica preservação/autenticação de credenciais.
+
+Cleanup em finally e sinais verifica novamente nome, nonce, ID completo, imagem e
+isolamento; remove somente o ID daquele container. Não remove por prefixo, não
+faz prune e não apaga recursos do serviço CI compartilhado. Falha de cleanup não
+emite prova. SIGKILL/cancelamento abrupto pode impedir cleanup do processo: o runner
+hosted continua sendo a fronteira descartável; não há rotina de limpeza ampla.
+
+O wrapper exige prova JSON exata menor que 1 KiB, emitida apenas depois de remover
+o cluster. Sem `PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY=1`, a parte nativa é skip
+explícito; com a flag, ambiente incompatível ou falha não vira skip. A prova cobre
+esse checkout e fixtures, não baseline legado real, bootstrap/preparação native
+end-to-end, rollback ou ingress. A primeira execução real ainda é um gate pendente
+até CI demonstrar PASS; testes portáteis não substituem essa evidência.
+
+O gate usa o job `validate` existente e não altera nomes dos steps autenticados
+anteriores, budgets candidate/recovery, os 14 checks/11 negativos/2 restores ou
+schemas de report/artifacts. O packager exige um subconjunto de steps de `validate`
+e aceita steps adicionais; o sucesso do job inclui obrigatoriamente este novo gate
+no fluxo candidate-only. Nenhuma nova chave é acrescentada ao recovery report.
+
+`portal_legacy_security_observation_sql()` em `ops/payload-control-runtime.py`
+produz SQL **fixo**, sem argumentos de database/role/SQL. Não executa SQL, não chama
+`_psql_json()` e não está no dispatcher. O transporte futuro precisa autenticar
+closure/host e impor timeout de processo de 30 s e limite de stdout de 4 MiB;
+o `_psql_json()` existente não fornece esses limites e não foi reutilizado como
+collector. Nenhuma operação de host é adicionada ao plano por este incremento.
+
+O SQL usa PG16, database `portal`, transação REPEATABLE READ READ ONLY, search_path
+`pg_catalog`, statement timeout 20 s, lock timeout 2 s, timezone UTC e DateStyle
+fixos; termina em ROLLBACK. Observa apenas `portal_api`/`portal_cron`, catálogos do
+database corrente e flags de dependências compartilhadas. Não consulta dados de
+outro database. Não seleciona passwords/verificadores, URLs ou valores de settings.
+Memberships vêm de `pg_auth_members`; atributos explícitos vêm de `pg_roles`, nunca
+de `pg_authid`. Dependências compartilhadas usam os tipos PG16 o/a/i/r de
+`pg_shdepend`, sem retornar identidades de objetos de outros projetos.
+
+CTEs limitam objetos e registros a 20.001 antes da agregação. Gates de contagem
+e soma de bytes recusam mais de 20.000 registros ou envelope acima do orçamento
+de 4 MiB; somente registros aceitos entram em `jsonb_agg`. Overflow, database ou
+major incompatível produz `portal-legacy-security-observation-refused`, que o
+validator rejeita: nunca retorna snapshot truncado como válido. São limites de
+resultado/contagem, não promessa de RSS ou plano de execução do servidor.
+
+`validate_portal_legacy_security_observation()` valida a forma exata
+`{schemaVersion:1, kind:portal-legacy-security-observation-v1, serverMajor:16,
+database, records}`. Records têm kinds fechados: role, membership, settings,
+object, acl, effective, sequenceDependency e guard. Rejeita duplicatas por
+identidade semântica, chaves extras, flags não booleanas, matriz efetiva incompleta,
+referências órfãs, URLs/controles em identificadores e limites excedidos; ordena
+somente os registros para gerar hash canônico. Não modifica a entrada.
+
+A cobertura inclui:
+- atributos não secretos, memberships incidentes nas duas direções (admin/inherit/set)
+  e presença de settings, sem seus valores;
+- owners e ACL-null versus ACL explícita de database, public, tabelas/colunas,
+  sequences, rotinas e tipos; ACLs explodidas preservam grantor/grantee/PUBLIC e
+  grant option, usando defaults efetivos quando a ACL é null;
+- default ACLs de criadores no database/public, identificadas por creator/schema/tipo;
+- privilégios efetivos completos para os dois roles, inclusive coluna, sequence,
+  acesso via PUBLIC/herança e grant option;
+- vínculo de sequence com tabela/coluna e flags para RLS/policies, triggers de
+  usuário, rules, views/kinds não suportados, security-definer/configuração de
+  rotinas, namespaces extras, large objects e dependências externas dos roles.
+
+`check_portal_legacy_security_baseline()` recebe somente inputs **já autenticados**
+por um futuro chamador. Confere state real e correspondência v3 com approval,
+record, inventory, authority e DB de `portalTarget`. Devolve hashes da observação,
+binding e B0 mais as identidades autenticadas, nunca os registros privados completos.
+Não afirma que coletou estes dados do host ou verificou bytes do B0: o proof hash
+é referência ao binding, e a verificação de artefatos continua sendo outro gate.
+
+Não existe perfil embutido inferido de `provision.js`. O perfil interno independente
+tem exatamente `kind: portal-legacy-security-profile-v1`, `sourceCommit`,
+`previousImages` e `observation`. Precisa corresponder ao commit e par de digests
+API/cron legado e à observação inteira, inclusive owners/ACLs/defaults. Ausência
+gera `legacy_capability_profile_unapproved`; diferença gera mismatch, não aceite
+de superset. Autenticação deste perfil não está implementada por esta unidade;
+nenhum JSON/flag de operador é convertido em autoridade.
+
+O checker usa apenas o modo `legacy` do verificador de privilégios de sessão,
+nunca `recovery`. Também bloqueia acesso de coluna à tabela de sessões, grant
+options dos runtime roles, atributos perigosos, memberships, settings, ownership
+pelos runtime roles e mecanismos/dependências não suportados, mesmo se um perfil
+combinar. `profileMatches` informa igualdade somente, não uma decisão de segurança.
+Só `reserved` é pré-grant; `portal_grants_pending` ou posterior produz
+`legacy_baseline_not_pregrant` e não pode aprender retroativamente um baseline.
+
+`credentialVerified`, `clusterRoleMutationAuthorized`, `rollbackAuthorized`,
+`installationExecuted` e `deploymentAuthorized` permanecem false. Collector,
+exclusividade de roles, credenciais, qualificação PG16 e executor permanecem
+blockers explícitos. Não há campos novos de state, reserva, SQL de reparo,
+ALTER ROLE/PASSWORD ou execução de migrate/provision neste passo.
+
+Testes desta unidade são fixtures Python/SQL textual; **não executam PostgreSQL**.
+Antes de um executor destrutivo, qualificar em PG16 isolado a consulta real,
+semântica PUBLIC/defaults/memberships/colunas/sequences, comportamento do par de
+imagens legado exato e restore `--no-owner --no-privileges` com reparo direcionado.
+Comprovar preservação de credenciais, owners, outros grantees/databases/projetos
+e retry interrompido sob fence real. O snapshot não prova exclusividade de
+consumidores dos roles fora dos catálogos.
+
+`ownerinc-payload-prepare.py --check-install-plan <receipt-id>` autentica o receipt
+real e classifica o journal de produção sob lease, sem executar `Runtime` ou
+`initialize_isolated`. Interface e limites em
+[deployment](deployment.md#p3-plano-de-instalação-de-produção-somente-leitura).
+
+O classifier puro `production_install_plan()` não altera schemas, signatures,
+ações do runtime ou transitions. Estado/proof desconhecido ou assinatura inválida
+falha; estado assinado válido pendente/committed permanece visível na classificação,
+sempre com `installationExecuted: false` e `deploymentAuthorized: false`.
+Um head atrasado não é reparado. Intents não são limpos para permitir novo install.
+
+Os blockers distinguem B0 parcial/unbound/ausente, receipts de criação incompletos,
+ownership de produção incompatível e contrato isolado inadequado. Não inferem
+recursos físicos pelo nome nem promovem B0 existente a backup recuperável.
+`present_unverified` ainda exige validação de artefatos e recuperação; committed
+floor ainda exige B1 fechado, ingress fence e private readiness. Novos tickets
+por processo, recovery pre-floor e a compatibilidade de binding/receipts de
+produção são incrementos posteriores. Receiver/runtime continuam negando
+instalação com `release_not_preflighted`.
+
+### B0: integridade de artefatos verificada, recuperação ainda não autorizada
+
+O plano autenticado agora verifica B0 completo somente quando selecionado pelo
+`installIntent.binding.b0` assinado, sob os backup roots do inventory aprovado.
+Sem intent não adota backup encontrado; captura parcial/unbound continua bloqueada
+e não é apagada, completada ou reutilizada automaticamente.
+
+`verify_production_b0_artifacts()` é um context manager somente leitura, carregado
+da closure autenticada. Exige o conjunto exato `postgres.dump`, `uploads.tar.gz`,
+`manifest.sha256`, `preauthority-proof.json`: B0 legado **de dois stores**, não o
+backup Payload de quatro stores. Diretório final root:root 0700, ancestrais
+root:root sem escrita group/other, arquivos root:root 0600, regulares, single-link,
+sem symlinks. Mantém os quatro descritores abertos, verifica identidade antes/depois
+e novamente ao sair do contexto. Mudança de nome, inode, tamanho, modo, owner ou
+mtime/ctime é recusa. Leituras não incluem extração, subprocesso ou escrita.
+
+Reutiliza HMAC/schema/canonicalização de proofs do state, o parser de manifest e
+o parser/fingerprint de tar existentes. Confere hash dos bytes do proof, inventory,
+identidade da DB Portal de origem, imagens anteriores/alvo e migration floor.
+Stream de ambos os artefatos confere tamanho/hash completos contra proof e manifest;
+manifest de produção exige as duas linhas exatas, ordenadas, terminadas em LF.
+Compara o fingerprint calculado da árvore uploads com `dataFingerprints.portalUploads`
+assinado — apenas possuir um tar estruturalmente válido não basta.
+
+Limites fixos administrativos desta interface, sem override por argumentos/env:
+
+| Material | Limite |
+| --- | --- |
+| Dump Portal | 256 GiB |
+| Tar gzip uploads | 32 GiB comprimidos / 64 GiB expandidos |
+| Proof / manifest | 64 KiB / 4 KiB |
+| Membros tar | 50.000 |
+| Nome de membro | 4.096 caracteres; 8 MiB agregados em UTF-8 |
+| Header de extensão PAX/GNU | 64 KiB |
+| Extensões PAX/GNU/Solaris acumuladas | 4.096 headers / 1 MiB de payload |
+| Profundidade consecutiva de extensões | 8 |
+| PAX global retido | 1.024 chaves / 64 KiB UTF-8 de chaves + valores |
+| Bloco de leitura de artefato | 1 MiB |
+
+São tetos conservadores escolhidos para esta verificação, não medições da produção
+nem novos limites dos formatos históricos. A memória não cresce com o tamanho do
+dump: mantém somente buffers e a tabela limitada de entradas tar. Rejeita links,
+devices, sparse, nomes inseguros/duplicados, conflitos arquivo/diretório, headers
+excessivos, expansão excessiva e conteúdo não-padding após o fim do tar. Consome
+o gzip até o fim para conferir CRC e limites, incluindo padding comprimido.
+O caminho isolado/histórico mantém o comportamento anterior do tar sem estes
+limites opcionais; nenhuma serialização de proof/state foi modificada.
+Os budgets de extensão são conferidos antes de leitura/alocação e recursão do
+parser, inclusive antes do primeiro membro visível. PAX global é conferido na
+entrada do próximo header, antes de novas cópias; a atualização transitória é
+limitada pelo teto de 64 KiB do header atual. O caminho limitado limpa
+`archive.members` a cada yield: extrai somente pelo TarInfo atual, rejeita links e
+não faz lookup por nome. Não acumula uma cópia dos metadados globais por arquivo.
+Restam apenas a metadata global limitada, os frames de extensão limitados, o
+membro corrente e a tabela de fingerprints (50.000 entradas / nomes agregados
+limitados). Os limites em bytes são de conteúdo, não uma promessa de RSS exato
+do Python; overhead de objetos também fica limitado pelas contagens.
+
+No retorno, `b0Status: integrity_verified` substitui `present_unverified` somente
+após sucesso completo. `b0Verification.artifactIntegrityVerified` e
+`storageFingerprintVerified` ficam true; `databaseRestoreVerified`,
+`liveSourceVerified`, `rollbackAuthorized`, `installationExecuted` e
+`deploymentAuthorized` permanecem **false**. B0 ausente/parcial/unbound mantém
+ambos os flags de integridade false. Dados completos inválidos causam recusa,
+não um resultado positivo parcial. O journal é relido com `repair_head=False`,
+key/body precisam ser idênticos, FD9 é reafirmado e evidência permanece protegida
+até a saída. Não instancia `Runtime` ou chama `pg_restore --list`.
+
+Mesmo um dump arbitrário corretamente assinado/hash-bound não prova que PostgreSQL
+pode restaurá-lo. Restore isolado real com comparação completa, source-data vivo,
+fence de ingress/nginx observado e baseline autorizado de grants/roles continuam
+gates separados antes de rollback ou criação real. Não há executor de rollback,
+checkpoint novo, abertura de admission ou autorização de instalação neste passo.
+
+### Binding de produção v3 e receipts persistentes
+
+O state externo continua `schemaVersion: 2`. Bindings históricos sem versão e
+isolados `bindingVersion: 2` mantêm suas formas, bytes canônicos, HMACs e algoritmo
+de receipts; leitura não adiciona defaults, converte ou regrava evidência.
+
+`bindingVersion: 3` tem exatamente `candidate`, `candidateRelease`, `sourceRelease`,
+`previousImages`, `b0`, `inventoryIdentity`, `lease`, `portalTarget`, `authority`,
+`sourceCommit`, `project` e `bindingVersion`. Project é `ownerinc-portal-prod`;
+source usa o commit aprovado, não o prefixo do hash de material isolado.
+Candidate mantém os quatro hashes de produção (manifest, report, qualification,
+archive). `authority` contém exatamente `sourceApprovalSha256`, `policySha256` e
+`recordSha256`, retidos dentro da reserva assinada.
+
+`validate_production_correspondence()` é uma comparação pura de binding com
+approval, record, inventory e hashes de bytes **já autenticados** pelo chamador.
+Confere imagens anteriores, candidatos, commits, roots de releases e B0, project
+e identidade de inventory. Não transforma strings de hashes em autoridade,
+verifica arquivos ou autoriza reserva. O launcher passa o approval autenticado
+real ao plano; nenhuma ação de instalação é registrada por este incremento.
+
+Creation v3 tem exatamente `receiptVersion: 1`,
+`fingerprintAlgorithm: production-container-mounts-v1`, `nonce`, `volumes` e
+`containers`. Volumes continuam CMS Postgres/uploads com o algoritmo anterior.
+Containers aceitam somente `cms-postgres`, `cms`, `api`, `cron`, cada um com
+`id`, `image`, `fingerprint`, `releasePath`, `creationState`. IDs são únicos,
+imagens correspondem ao candidato (Postgres mantém o pin existente), releasePath
+é o candidato e creationState é `created`. Este último é uma observação histórica
+na criação, não prova de que o recurso permanece parado.
+
+O novo helper puro de fingerprint inclui tag do algoritmo, ID, imagem configurada,
+image ID, labels completos, Created, releasePath e todos os campos de Mounts.
+Ordena somente a lista externa por Destination absoluta normalizada e única;
+preserva arrays internos. Não existe fallback para o hash antigo. O método
+persistente isolado `_creation_container()` não mudou. Topologia, labels de
+reserva e estado parado ainda precisam ser verificados pelo futuro criador.
+
+Reserva começa com maps vazios; retry exige binding e metadata de creation
+idênticos, sem descartar receipts já acumulados. Receipts só são adicionados
+durante `cms_resources_pending`; não podem ser removidos/substituídos. Os quatro
+containers e dois volumes são obrigatórios ao entrar em `cms_resources_bound`,
+e permanecem congelados depois. Não há conversão in-place de intent antigo.
+
+Plano v3 reporta `production_creation_execution_not_integrated`, divergência de
+authority/contexto e incompletude dos quatro serviços. Continua classificando
+restore com install retido e emitindo ambos os conjuntos de diagnósticos.
+`installationExecuted` e `deploymentAuthorized` permanecem false. Primitivas de
+persistência são internas: não qualificam B0 nem fornecem rollback pre-floor.
+Recuperação B0 cercada e publicação autenticada de release são gates obrigatórios
+antes de conectar qualquer criação de recursos reais a uma interface de produção.
+
+## Diagnóstico do predicado de quiescência do initializer
+
+O report de `38473939196` atribui a falha da terceira fixture ao initializer em
+`phase=quiescence`, `installStage=none`, com `writers_not_quiescent`. As duas
+fixtures anteriores passaram seus checks iniciais; negativos e restores não
+foram alcançados. Isso **não identifica a causa histórica** nem qual serviço
+continuava running. O stop retornar zero não substitui a observação de quiescência.
+
+No predicado real `_check_container_shape(..., quiescent=True)`, o diagnóstico
+agora resume os running não permitidos usando **a mesma lista** retornada por
+`_container_inventory`, sem novo ps/inspect. O filtro de projeto permanece no
+parser de inventory. `cold` permite somente postgres running; `migrated` permite
+também cms-postgres. Rejeições anteriores de one-shot/worker continuam distintas.
+Não há mudança do predicado, código `writers_not_quiescent`, exit 2, admission
+fechada, barreira anterior a B0, consultas SQL, budgets, retries ou aceite.
+
+O frame terminal `PREAUTHORITY_INITIALIZER_DIAGNOSTIC` admite um sufixo opcional
+com `quiescencePredicate=running_service_not_allowed`, `quiescenceCms=cold|migrated`,
+`quiescenceOffenders=<service>:running:<count>[,...]` e
+`quiescenceTruncated=true|false`. Só é aceito no comando initialize-isolated,
+substep correspondente, exit 2, erro exato writers_not_quiescent, fase quiescence,
+stage none e ausência de falha/sinal/stderr privado de subprocesso. Frames antigos
+sem sufixo continuam compatíveis; outros contextos não ganham esta atribuição.
+
+O report de falha recebe `commandDiagnostic.initializer.quiescence`:
+`{predicate, cmsStatus, offenders: [{service, state, count}], truncated}`.
+Serviços públicos são somente api, cms, cms-postgres, cron, nginx e unknown;
+state é sempre running. Há no máximo seis buckets ordenados/únicos, cada count
+entre 1 e 99; excesso de contagem marca truncated. Labels desconhecidas nunca são
+ecoadas: o produtor usa unknown e o parser rejeita valores fora da allowlist.
+Nomes/IDs de containers, projetos, paths, ambiente, SQL e stderr bruto não entram
+nesse resumo. Atributos extras não são preservados pelo sanitizer.
+
+O checkpoint de progresso **não recebe este resumo**: `firstFailure` continua
+somente stage/substep/fixtureRole, e o limite de 1 KiB permanece. O detalhamento é
+diagnóstico do report final de falha, não evidência qualificadora de sucesso.
+Regressões de modelo simulam Docker/DB explicitamente, exercitando os métodos
+reais: stop zero com API/cron running recusa antes de DB/B0/provisionamento, e
+containers de outro projeto não contaminam o resumo. Não representam execução
+nativa de recovery nem justificam reutilizar/repetir automaticamente a fixture.
+
+## P1 — ordem de mounts no ticket efêmero do coordinator
+
+O método real `_writer_inspect` tinha um defeito reproduzível em memória: duas
+respostas Docker com o mesmo container ID e os mesmos registros de mounts, mas
+em ordem diferente, produziam fingerprints diferentes. `STATE.canonical` ordena
+chaves de objetos, não arrays; a ordem do array Docker `Mounts` não é uma identidade
+estável. Isso demonstra o defeito local, **não** atribui retroativamente a causa
+do report real de `38454684188` que falhou em `restore_start_readiness`, exit 2,
+`writer_identity_mismatch`, após fixtures e 11 negativos passarem. Esse report
+não identificou qual componente da identidade divergiu.
+
+O ticket efêmero assinado passa a ter kind **`coordinator-writers-v2`**. Antes do
+hash, exige-se `Mounts` como lista de objetos, cada um com `Destination` string
+absoluta Linux, sem NUL e sem destinos duplicados. A lista é ordenada por
+`Destination`; todos os registros, campos e a cardinalidade permanecem no hash.
+Não há projeção que descarte `Source`, `Type`, `Mode`, `RW`, `Propagation`, campos
+extras, labels ou outras propriedades. Não se normalizam listas internas nem a
+ordem de `Healthcheck.Test`, que continua semanticamente significativa.
+
+`observe-writers` produz somente v2; `resume-writers` e
+`resume-readiness-writers` recusam v1, inclusive com HMAC válido. Não há tentativa
+de aceitar hash antigo **ou** novo. Não atualizar o adapter no meio de uma operação
+coordenada: tickets são efêmeros e vinculados ao mesmo processo ancestral/lease;
+não se convertem ou reaproveitam tickets v1 em v2. HMAC, FD9, identidade do processo
+ancestral, origem no journal, floor, admission fechada, worker hold, validação de
+todo o conjunto antes do primeiro start e revalidação após start não mudam.
+
+**Receipts persistentes não migrados:** `_creation_container` mantém exatamente
+seu algoritmo anterior, inclusive sensibilidade à ordem de mounts. Alterá-lo
+silenciosamente invalidaria receipts já assinados. Uma correção desse contrato
+exige versionamento e migração explícitos em bloco posterior; não está incluída
+neste patch e continua sendo uma lacuna conhecida. O diagnóstico de divergência
+continua o código finito existente, sem inventar componente/serviço histórico ou
+publicar mounts, paths ou valores privados.
+
+Regressões usam os métodos Python reais, canonicalização/HMAC/journal reais e
+transporte Docker explicitamente simulado. Cobrem permutações de três mounts,
+mudanças reais em campos/cardinalidade, destinos malformados/duplicados, ordem do
+healthcheck, recusa antes de qualquer start e falha pós-start com admission/journal
+preservados. Isso não substitui recovery Linux/Docker nem comprova deploy.
+
+## Progresso diagnóstico do recovery (2026-10-13)
+
+O CI `38436732170` atingiu o limite de 60 minutos sem report final publicado.
+Os artefatos observados foram candidate, digest CMS e SBOM. O runner captura saída
+dos comandos e escreve o report de aceite somente no término: silêncio no log
+**não identifica um hang, etapa culpada ou causa raiz**. Os budgets cumulativos
+podem ultrapassar o limite global. Este bloco adiciona visibilidade, não altera
+budgets, timeout HTTP, retries, spawn síncrono, sinais, critérios de qualificação
+ou comportamento operacional.
+
+O runner agora emite JSON redigido em cada início/fim de comando síncrono e nas
+transições de stage/substep. Cada registro inclui `schemaVersion: 1`,
+`artifactKind: "diagnostic-progress"`, `qualifiesAcceptance: false`, `sequence`,
+`elapsedMs`, `stage`, `substep`, `fixtureRole`, `event`, `commandCategory`,
+`timeoutMs`, `outcome` e `firstFailure`. Os nomes são allowlists finitas; desconhecidos viram
+`unknown`. Roles públicas são apenas `source`, `target`, `leaseTarget`, `global`.
+Não entram argumentos, nomes de projetos, caminhos, environment, SQL, URLs,
+saída de filhos ou texto de exceções. O timeout de cada comando reflete exatamente
+`options.timeout || 180_000`, inclusive os budgets já maiores do coordinator.
+`elapsedMs` é monotônico desde o início do diagnóstico; comparar eventos begin/end
+para a duração observada. `completed` descreve somente o retorno da operação, não
+aceite recovery. Não há heartbeat, nova espera, retry ou polling; chamadas repetidas
+com stage/substep inalterados não geram novas transições.
+
+Antes de bloquear em um comando, o registro é persistido sincronamente como um
+checkpoint de **último evento**, limitado a 1 KiB, usando arquivo temporário
+exclusivo + fsync + rename atômico. `PAYLOAD_RECOVERY_PROGRESS` seleciona o destino;
+o default é `payload-preauthority-recovery-progress.json` em RUNNER_TEMP/temp.
+Esse destino não pode coincidir com o report final. O CI fornece explicitamente
+esse caminho e publica somente esse arquivo no artefato separado
+`payload-preauthority-recovery-progress`, inclusive após falha quando possível.
+Não há glob sobre fixtures, stderr ou evidência privada. A publicação diagnóstica
+não bloqueia a qualificação; seu upload tem `continue-on-error`.
+
+O artefato existente `payload-preauthority-recovery-report` continua contendo
+apenas seu JSON original. O schema do report final e a entrada do qualifier não
+mudaram. O qualifier rejeita o checkpoint diagnóstico, mesmo após um evento
+`completed`; ele nunca substitui report ausente ou autoriza instalação/ativação.
+
+Há boundaries explícitos para cleanup, holds pós-falha, persistência de evidências
+privadas, corrida de lease e escrita do report terminal. O motivo/stage/substep
+primário é capturado antes dos holds, respeitando qualquer falha de snapshot já
+preservada antes de um restart. `firstFailure` é `null` antes da primeira falha
+primária de aceite (rejeições esperadas da matriz negativa não o preenchem);
+depois contém somente `{stage, substep, fixtureRole}` normalizados e aparece em
+**todos** os registros seguintes, separado da operação atual. Uma falha posterior
+ou mudança para holds/cleanup não substitui esse snapshot. Stages dinâmicos são
+traduzidos apenas por igualdade com identidades conhecidas dos runtimes, nunca
+por regex que aceite nomes arbitrários. Códigos de erro, texto bruto e nomes de
+projetos não entram em `firstFailure`. A primeira falha fica retida em memória
+antes de qualquer I/O: se sua escrita falhar, um checkpoint posterior ainda a
+preserva, sem exceder o limite de 1 KiB por registro. Falha no checkpoint/console produz no máximo um
+alerta fixo `Payload recovery diagnostic progress unavailable.` e não substitui
+o erro operacional nem impede holds. Falha ao escrever o report terminal mantém
+o objeto de falha original, emite somente alerta fixo e termina sem anunciar PASS.
+
+Um checkpoint `command_begin` sem end correspondente significa **conclusão não
+observada**, não prova deadlock. SIGKILL/cancelamento do job pode impedir report
+terminal, holds em JS e até upload posterior; o checkpoint não garante execução
+dessas ações. Testes locais cobrem I/O real/serialização, interrupção de um processo
+filho e trechos reais do runner com doubles operacionais identificados. A próxima
+execução candidata autorizada ainda é necessária para localizar o orçamento gasto
+e obter aceite real; nenhum serviço ou recovery foi executado por esse bloco.
+
 ## Task 3 — contrato do proxy fixture após CI 37997573123 (2026-10-13)
 
 **Bloco 1 documental e implementação/testes locais dos blocos 2–4 concluídos; bloco 5

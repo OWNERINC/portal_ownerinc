@@ -9,10 +9,15 @@ usage() {
 }
 
 mode=check
+authenticated=false
+approval_digest=''
 case ${1:-} in
   '') ;;
   --check) shift; (($# == 0)) || usage ;;
   --apply) mode=apply; shift; (($# == 0)) || usage ;;
+  --authenticated-check|--authenticated-apply)
+    (($# == 2)) && [[ $2 =~ ^[0-9a-f]{64}$ ]] || usage
+    mode=${1#--authenticated-}; approval_digest=$2; authenticated=true; shift 2 ;;
   *) usage ;;
 esac
 
@@ -34,6 +39,12 @@ daily_backup_root=/opt/ownerinc/backups/portal-ownerinc/daily
 pre_restore_backup_root="$backup_root/restore-protection"
 libexec_dir=/usr/local/libexec
 receiver_target=/usr/local/libexec/ownerinc-portal-deploy
+receiver_helper_target=/usr/local/libexec/payload-receiver-admission.py
+receiver_root_target=/usr/local/libexec/ownerinc-payload-receive
+production_receiver_target=/usr/local/libexec/ownerinc-portal-deploy-production
+receiver_sudoers_target=/etc/sudoers.d/ownerinc-payload-receive
+receiver_incoming=/var/lib/ownerinc/payload-candidate/incoming
+receiver_sudoers='deploy ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/ownerinc-payload-receive'
 guard_target="$runtime/payload-operations-guard"
 control_target="$runtime/payload-control"
 control_runtime_target="$runtime/payload-control-runtime.py"
@@ -48,6 +59,9 @@ candidate_target="$runtime/cms-image-candidate.env"
 lock="$runtime/deploy.lock"
 cms_image='ghcr.io/ownerinc/ownerinc-portal-cms@sha256:6eaddc9a333ba682508a09a4ae8a6409d9e571abab9ec4a62829c2e9828730b0'
 source_receiver="$script_dir/deploy-from-ci.sh"
+source_receiver_helper="$script_dir/payload-receiver-admission.py"
+source_receiver_root="$script_dir/payload-receiver-root.sh"
+source_production_receiver="$script_dir/deploy-from-production-ci.sh"
 source_guard="$script_dir/payload-operations-guard.sh"
 source_control="$script_dir/payload-control"
 source_control_runtime="$script_dir/payload-control-runtime.py"
@@ -57,20 +71,116 @@ source_private_helper="$script_dir/prepare-cms-infrastructure-private.py"
 source_payload_overlay="$script_dir/compose.payload.production.yaml"
 payload_compose="$repo_root/docker-compose.payload.yml"
 
-for command in python3 docker flock install cmp stat mktemp mkdir mv rm date env chown chmod sha256sum; do
+# A flag/digest is not authority. Only the fixed installed verifier can supply
+# context, after independently authenticating source/admission/host under FD9.
+# Direct legacy invocation retains its original source layout and pinned floor.
+authenticated_context=''
+authenticated_refresh() {
+  [[ $authenticated == true ]] || return 0
+  local observed
+  observed=$(/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+    /usr/bin/python3 -I -S -B /usr/local/libexec/ownerinc-payload-prepare.py \
+    --verify-context "$approval_digest") || return 1
+  [[ -n $authenticated_context && $observed == "$authenticated_context" ]]
+}
+approved_predecessor() {
+  local filename=$1 expected=$2
+  [[ $expected =~ ^[0-9a-f]{64}$ && -f $filename && ! -L $filename ]] && \
+    [[ $(sha256sum -- "$filename" | cut -d ' ' -f 1) == "$expected" ]]
+}
+if [[ $authenticated == true ]]; then
+  [[ $script_dir == /opt/ownerinc/lib/payload-preparation/ops && \
+     ${BASH_SOURCE[0]} == /opt/ownerinc/lib/payload-preparation/ops/prepare-cms-infrastructure.sh ]] || usage
+  authenticated_context=$(/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+    /usr/bin/python3 -I -S -B /usr/local/libexec/ownerinc-payload-prepare.py \
+    --verify-context "$approval_digest") || exit 2
+  mapfile -t approved_fields <<< "$authenticated_context"
+  [[ ${#approved_fields[@]} == 8 && ${approved_fields[0]} == "$approval_digest" && \
+     ${approved_fields[1]} =~ ^[0-9a-f]{40}$ && \
+     ${approved_fields[2]} =~ ^ghcr\.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]] || usage
+  for approved_hash in "${approved_fields[@]:3}"; do
+    [[ $approved_hash == - || $approved_hash =~ ^[0-9a-f]{64}$ ]] || usage
+  done
+  cms_image=${approved_fields[2]}
+  # Helpers use the same fixed isolated interpreter authenticated by admission,
+  # not a PATH-selected Python or caller-provided Python environment.
+  python3() { /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /usr/bin/python3 -I -S -B "$@"; }
+fi
+
+for command in python3 docker flock install cmp stat mktemp mkdir mv rm date env chown chmod sha256sum cut; do
   command -v "$command" >/dev/null || {
     echo "Refusing preparation: required command is unavailable ($command)." >&2
     exit 2
   }
 done
 
-for source in "$source_receiver" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" "$source_private_helper" \
+for source in "$source_receiver" "$source_receiver_helper" "$source_receiver_root" "$source_production_receiver" "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" "$source_private_helper" \
   "$source_payload_overlay" "$payload_compose"; do
   [[ -f $source && ! -L $source ]] || {
     echo 'Refusing preparation: reviewed source bundle is incomplete or linked.' >&2
     exit 2
   }
 done
+
+# The receiver uses this exact interpreter for legacy as well as Payload. Check
+# its isolated stdlib and reviewed helper syntax without executing helper code.
+if ! env -i PATH="$PATH" /usr/bin/python3 -I -S -c \
+  'import gzip, io, os, re, stat, subprocess, sys, tarfile, tempfile; assert sys.version_info >= (3, 9); compile(open(sys.argv[1], "rb").read(), sys.argv[1], "exec")' \
+  "$source_receiver_helper" >/dev/null 2>&1; then
+  echo 'Refusing preparation: fixed receiver Python or helper source is unavailable or invalid.' >&2
+  exit 2
+fi
+
+# Fixed executable paths only; validate the exact rule even in --check, without
+# publishing it. No wildcard, env, shell, Python or general sudo grant.
+[[ -x /usr/bin/sudo && -x /usr/sbin/visudo ]] && \
+  printf '%s\n' "$receiver_sudoers" | /usr/sbin/visudo -cf - >/dev/null || {
+  echo 'Refusing preparation: fixed sudo tools or narrow receiver policy invalid.' >&2
+  exit 2
+}
+/bin/bash -n "$source_receiver_root"
+/bin/bash -n "$source_production_receiver"
+
+receiver_privilege_paths() {
+  /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -S - "$1" "$receiver_incoming" \
+    "$receiver_root_target" "$production_receiver_target" "$receiver_sudoers_target" \
+    "$source_receiver_root" "$source_production_receiver" <<'PY'
+import os, stat, sys
+mode, incoming, *files = sys.argv[1:]
+def reject():
+    raise SystemExit('Refusing preparation: unsafe receiver privilege path.')
+def directory(path, create=False):
+    current = '/'
+    for part in [''] + path.strip('/').split('/'):
+        current = os.path.join(current, part) if part else current
+        try:
+            value = os.lstat(current)
+        except FileNotFoundError:
+            if not create:
+                reject()
+            if mode != 'create':
+                continue
+            os.mkdir(current, 0o700)
+            os.chown(current, 0, 0)  # Only newly created segments, never repairs.
+            value = os.lstat(current)
+        if not stat.S_ISDIR(value.st_mode) or (value.st_uid, value.st_gid) != (0, 0) or stat.S_IMODE(value.st_mode) & 0o7022:
+            reject()
+        if current == incoming and stat.S_IMODE(value.st_mode) != 0o700:
+            reject()
+directory(incoming, create=True)
+for filename in files:
+    directory(os.path.dirname(filename))
+    try:
+        value = os.lstat(filename)
+    except FileNotFoundError:
+        if filename in files[:3]:
+            continue
+        reject()
+    if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or (value.st_uid, value.st_gid) != (0, 0) or stat.S_IMODE(value.st_mode) & 0o7022:
+        reject()
+PY
+}
+receiver_privilege_paths check
 
 [[ -d $root && -d $runtime && -d $releases && -d $backup_root && -d $libexec_dir && -d $secrets_dir ]] || {
   echo 'Refusing preparation: expected production directories are incomplete.' >&2
@@ -93,7 +203,7 @@ if ! python3 - "$root" "$runtime" "$releases" "$backup_root" "$daily_backup_root
     "$guard_target" "$control_target" "$control_runtime_target" "$control_state_helper_target" \
     "$control_key_target" "$payload_production_target" "$candidate_target" "$control_inventory_target" "$source_receiver" \
     "$source_guard" "$source_control" "$source_control_runtime" "$source_control_state" "$source_control_inventory" \
-    "$source_payload_overlay" "$payload_compose" "$source_private_helper" <<'PY'
+    "$source_payload_overlay" "$payload_compose" "$source_private_helper" "$receiver_helper_target" "$source_receiver_helper" <<'PY'
 import os
 import stat
 import sys
@@ -101,6 +211,7 @@ import sys
 directories = sys.argv[1:8]
 files = sys.argv[8:]
 optional = {files[5], files[6], files[7], files[8], files[9], files[10], files[11], files[12]}
+optional.add(files[-2])  # Receiver dependency may be absent on an eligible legacy host.
 
 def reject():
     print('Refusing preparation: unsafe path, symlink, or file permissions.', file=sys.stderr)
@@ -124,6 +235,17 @@ def inspect_directory(path):
 for directory in directories:
     inspect_directory(directory)
 
+# Unlike operator-owned runtime paths, executable receiver dependencies require
+# a root:root protected chain. Do not silently repair or traverse an unsafe one.
+parent = os.path.dirname(files[-2])
+while True:
+    value = os.lstat(parent)
+    if not stat.S_ISDIR(value.st_mode) or (value.st_uid, value.st_gid) != (0, 0) or stat.S_IMODE(value.st_mode) & 0o7022:
+        reject()
+    if parent == '/':
+        break
+    parent = os.path.dirname(parent)
+
 for path in files:
     inspect_directory(os.path.dirname(path))
     try:
@@ -141,6 +263,8 @@ for path in files:
         reject()
     if path == files[4] and (value.st_uid != 0 or mode != 0o755):
         reject()
+    if path == files[-2] and ((value.st_uid, value.st_gid) != (0, 0) or mode != 0o755):
+        reject()
     if path == files[1] and ((value.st_uid, value.st_gid) != (1000, 1000) or mode != 0o600):
         reject()
 PY
@@ -151,15 +275,23 @@ fi
 # The receiver and daily backup share this lease. Acquire it before reading
 # state that will govern writes, then retain the same non-truncated inode.
 lock_identity=$(stat -Lc '%d:%i' -- "$lock")
-exec 9<>"$lock"
+if [[ $authenticated == true ]]; then
+  # FD9 is inherited from the still-running parent. Never reopen, truncate,
+  # reacquire on a separate open description, or unlock the parent's lease.
+  authenticated_refresh || exit 2
+else
+  exec 9<>"$lock"
+fi
 if [[ -L $lock || ! /proc/$$/fd/9 -ef $lock || $(stat -Lc '%d:%i' /proc/$$/fd/9) != "$lock_identity" ]]; then
   echo 'Refusing preparation: shared lock identity changed during open.' >&2
   exit 2
 fi
+if [[ $authenticated != true ]]; then
 flock -n 9 || {
   echo 'Refusing preparation: another deployment or coordinated operation holds the shared lock.' >&2
   exit 3
 }
+fi
 if [[ -L $lock || ! /proc/$$/fd/9 -ef $lock ]]; then
   echo 'Refusing preparation: shared lock path changed while leased.' >&2
   exit 2
@@ -222,6 +354,7 @@ current_sha=${current#"$releases/"}
   exit 2
 }
 expected_current=d285029970c82d48cd50cc393a054af4cbfdf1e8
+if [[ $authenticated == true ]]; then expected_current=${approved_fields[1]}; fi
 [[ $current_sha == "$expected_current" ]] || {
   echo 'Refusing preparation: current release changed from the reviewed API/cron-only floor.' >&2
   exit 2
@@ -274,6 +407,7 @@ PY
 fi
 
 expected_installed_receiver=30be4941fe15c1c75e16175625685e2f51acc6ceaa52db146d61684cdacce0f7
+if [[ $authenticated == true ]]; then expected_installed_receiver=${approved_fields[3]}; fi
 receiver_hash_line=$(sha256sum -- "$receiver_target")
 receiver_hash=${receiver_hash_line%% *}
 if ! cmp -s -- "$receiver_target" "$source_receiver" && [[ $receiver_hash != "$expected_installed_receiver" ]]; then
@@ -358,7 +492,8 @@ payload_overlay_is_known() {
     file_matches "$payload_production_target" "$source_payload_overlay"
 }
 candidate_is_known() {
-  [[ ! -e $candidate_target && ! -L $candidate_target ]] || candidate_matches
+  [[ ! -e $candidate_target && ! -L $candidate_target ]] || candidate_matches || \
+    { [[ $authenticated == true ]] && approved_predecessor "$candidate_target" "${approved_fields[7]}"; }
 }
 
 payload_overlay_is_known && candidate_is_known && control_files_known && \
@@ -367,7 +502,37 @@ payload_overlay_is_known && candidate_is_known && control_files_known && \
   exit 2
 }
 
+expected_helper=ffe1c2ed3fb086e156401063cdeaf9c6575a49e3458b202928df7f6794587bf8
+expected_wrapper=b1be89c891468052aea9de917e75214c7331c9ff72a4cb3e790aae9b4007d1b6
+if [[ $authenticated == true ]]; then
+  expected_helper=${approved_fields[4]}; expected_wrapper=${approved_fields[5]}
+  # Includes approved guard/candidate transitions and exact allowed absences.
+  authenticated_refresh || exit 2
+fi
+if [[ -e $receiver_helper_target || -L $receiver_helper_target ]] && \
+   ! file_matches "$receiver_helper_target" "$source_receiver_helper" && \
+   ! approved_predecessor "$receiver_helper_target" "$expected_helper"; then
+  echo 'Refusing preparation: installed receiver helper differs from the reviewed bundle.' >&2
+  exit 2
+fi
+
+if [[ -e $production_receiver_target ]] && ! file_matches "$production_receiver_target" "$source_production_receiver" && \
+   ! approved_predecessor "$production_receiver_target" "$expected_wrapper"; then
+  echo 'Refusing preparation: production wrapper differs from reviewed baseline and bundle.' >&2
+  exit 2
+fi
+if { [[ -e $receiver_root_target ]] && ! file_matches "$receiver_root_target" "$source_receiver_root"; } || \
+   { [[ -e $receiver_sudoers_target ]] && ! cmp -s -- "$receiver_sudoers_target" <(printf '%s\n' "$receiver_sudoers"); }; then
+  echo 'Refusing preparation: existing Payload privilege dependency differs from reviewed bundle.' >&2
+  exit 2
+fi
+
 needs_change=false
+file_installed "$receiver_root_target" "$source_receiver_root" 755 || needs_change=true
+file_installed "$production_receiver_target" "$source_production_receiver" 755 || needs_change=true
+{ [[ -f $receiver_sudoers_target ]] && root_owned_mode "$receiver_sudoers_target" 440; } || needs_change=true
+[[ -d $receiver_incoming ]] || needs_change=true
+file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || needs_change=true
 file_installed "$receiver_target" "$source_receiver" 755 || needs_change=true
 file_installed "$guard_target" "$source_guard" 755 || needs_change=true
 control_files_installed || needs_change=true
@@ -378,6 +543,7 @@ candidate_installed || needs_change=true
 payload_inventory_matches || needs_change=true
 
 if [[ $mode == check ]]; then
+  authenticated_refresh || exit 2
   if [[ $needs_change == true ]]; then
     echo 'DRY RUN: production host and combined Compose configuration are eligible; no files were written and no services started.'
   else
@@ -389,6 +555,7 @@ fi
 if [[ $needs_change != true ]]; then
   echo 'CMS infrastructure is already prepared; no credentials were rotated and no backup was created.'
 else
+  authenticated_refresh || exit 2
   backup_name="cms-infrastructure-preparation-$(date -u +%Y%m%dT%H%M%SZ)-$(python3 -c 'import uuid; print(uuid.uuid4())')"
   backup_dir="$backup_root/$backup_name"
   mkdir -m 0700 -- "$backup_dir" || {
@@ -402,6 +569,10 @@ else
     chmod 0700 -- "$pre_restore_backup_root"
   fi
   for entry in "receiver:$receiver_target:ownerinc-portal-deploy" \
+    "receiver-helper:$receiver_helper_target:payload-receiver-admission.py" \
+    "receiver-root:$receiver_root_target:ownerinc-payload-receive" \
+    "production-wrapper:$production_receiver_target:ownerinc-portal-deploy-production" \
+    "receiver-sudoers:$receiver_sudoers_target:ownerinc-payload-receive.sudoers" \
     "guard:$guard_target:payload-operations-guard" "environment:$environment:production.runtime.conf"; do
     IFS=: read -r label source destination <<< "$entry"
     if [[ -f $source && ! -L $source ]]; then
@@ -417,12 +588,14 @@ else
 
   atomic_install() {
     local source=$1 target=$2 permissions=$3 parent temporary
+    authenticated_refresh || return 1
     parent=$(dirname -- "$target")
     temporary=$(mktemp "$parent/.cms-preparation.XXXXXX")
     if ! install -o 0 -g 0 -m "$permissions" -- "$source" "$temporary"; then
       rm -f -- "$temporary"
       return 1
     fi
+    if ! authenticated_refresh; then rm -f -- "$temporary"; return 1; fi
     if ! mv -fT -- "$temporary" "$target"; then
       rm -f -- "$temporary"
       return 1
@@ -430,10 +603,11 @@ else
   }
   atomic_text() {
     local target=$1 permissions=$2 text=$3 parent temporary
+    authenticated_refresh || return 1
     parent=$(dirname -- "$target")
     temporary=$(mktemp "$parent/.cms-preparation.XXXXXX")
     if ! printf '%s\n' "$text" > "$temporary" || ! chmod "$permissions" "$temporary" || \
-      ! chown 0:0 "$temporary" || ! mv -fT -- "$temporary" "$target"; then
+      ! chown 0:0 "$temporary" || ! authenticated_refresh || ! mv -fT -- "$temporary" "$target"; then
       rm -f -- "$temporary"
       return 1
     fi
@@ -441,6 +615,37 @@ else
 
   # Each file is replaced atomically. The previous receiver, guard and full
   # production environment are preserved in the private backup for manual rollback.
+  # Publish and recheck the dependency FIRST: any failure leaves the old receiver
+  # untouched. An interrupted run may leave an inert helper, never an orphan receiver.
+  if ! file_installed "$receiver_helper_target" "$source_receiver_helper" 755; then
+    atomic_install "$source_receiver_helper" "$receiver_helper_target" 0755
+  fi
+  file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || {
+    echo 'Refusing preparation: receiver helper installation did not verify; receiver was not replaced.' >&2
+    exit 2
+  }
+  receiver_privilege_paths create
+  if ! file_installed "$receiver_root_target" "$source_receiver_root" 755; then
+    atomic_install "$source_receiver_root" "$receiver_root_target" 0755
+  fi
+  file_installed "$receiver_root_target" "$source_receiver_root" 755 || exit 2
+  if [[ ! -f $receiver_sudoers_target ]] || ! root_owned_mode "$receiver_sudoers_target" 440; then
+    authenticated_refresh || exit 2
+    sudoers_temporary=$(mktemp "$(dirname -- "$receiver_sudoers_target")/.payload-receive.XXXXXX")
+    if ! { printf '%s\n' "$receiver_sudoers" > "$sudoers_temporary" && \
+      chmod 0440 "$sudoers_temporary" && chown 0:0 "$sudoers_temporary" && \
+      /usr/sbin/visudo -cf "$sudoers_temporary" >/dev/null && \
+      mv -fT -- "$sudoers_temporary" "$receiver_sudoers_target"; }; then
+      rm -f -- "$sudoers_temporary"
+      exit 2
+    fi
+  fi
+  cmp -s -- "$receiver_sudoers_target" <(printf '%s\n' "$receiver_sudoers") && \
+    root_owned_mode "$receiver_sudoers_target" 440 || exit 2
+  # Publish the SSH wrapper last; interrupted dependency setup never replaces it.
+  if ! file_installed "$production_receiver_target" "$source_production_receiver" 755; then
+    atomic_install "$source_production_receiver" "$production_receiver_target" 0755
+  fi
   if ! file_installed "$receiver_target" "$source_receiver" 755; then
     atomic_install "$source_receiver" "$receiver_target" 0755
   fi
@@ -465,18 +670,29 @@ else
   if ! candidate_installed; then
     atomic_text "$candidate_target" 0644 "CMS_IMAGE=$cms_image"
   fi
+  authenticated_refresh || exit 2
   if [[ $cms_env_state == empty || $cms_env_state == legacy-complete ]] && ! python3 "$source_private_helper" update "$environment"; then
     echo 'Refusing preparation: private CMS environment could not be atomically written.' >&2
     echo "The pre-change receiver, guard and environment remain in $backup_dir for manual recovery." >&2
     exit 2
   fi
   if [[ ! -e $control_inventory_target ]]; then
-    if ! python3 "$control_inventory_helper_target" create-production "$control_inventory_target" "${inventory_args[@]}"; then
+    authenticated_refresh || exit 2
+    create_production_inventory() {
+      if [[ $authenticated == true ]]; then
+        /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /usr/bin/python3 -I -S -B \
+          /usr/local/libexec/ownerinc-payload-prepare.py --create-inventory "$approval_digest"
+      else
+        python3 "$source_control_inventory" create-production "$control_inventory_target" "${inventory_args[@]}"
+      fi
+    }
+    if ! create_production_inventory; then
       echo 'Refusing preparation: protected Payload inventory could not be created.' >&2
       exit 2
     fi
   fi
   if [[ $control_state_presence == empty ]]; then
+    authenticated_refresh || exit 2
     if ! python3 "$source_control_state" initialize "$runtime"; then
       echo 'Refusing preparation: private Payload control state could not be initialized; no production database was touched.' >&2
       echo 'If initialization partially wrote its private state, preserve it and investigate; automatic repair is forbidden.' >&2
@@ -489,4 +705,4 @@ fi
 
 echo 'Installed inactive preauthority control with a private host-only signing key and explicit worker hold; no database or service was changed.'
 echo 'BLOCKED: deployment needs a fresh complete candidate set containing the preauthority catalog verifier and actual Task 3 recovery acceptance; CMS services and worker were not started.'
-echo 'Prepared state is inactive: no Docker pull/up/run, database migration, systemd/timer, authority, wrapper, or authorized_keys change was performed.'
+echo 'Prepared state is inactive: the production SSH wrapper and restricted Payload privilege transport are installed; no Docker pull/up/run, database migration, systemd/timer, authority, or authorized_keys change was performed.'

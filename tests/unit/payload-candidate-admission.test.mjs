@@ -187,6 +187,10 @@ async function transportFixture(t) {
     started_at: '2026-10-09T10:00:00Z', completed_at: '2026-10-09T11:00:00Z',
     steps: requiredSteps.map(name => ({ name, status: 'completed', conclusion: 'success' })),
   }, { name: 'Deploy production', status: 'completed', conclusion: 'skipped' }];
+  jobs.push({ name: 'isolated-b0-recovery', run_id: run.id, run_attempt: 2, head_sha: commit, status: 'completed', conclusion: 'success',
+    started_at: '2026-10-09T09:50:00Z', completed_at: '2026-10-09T09:59:00Z',
+    steps: ['Checkout exact B0 candidate', 'Set up B0 Node', 'Prepare pinned isolated B0 images', 'Run required native isolated B0 recovery']
+      .map(name => ({ name, status: 'completed', conclusion: 'success' })) });
   const artifacts = Object.fromEntries(Object.keys(zips).map(role => [role, { id: Number(request.artifactIds[role]), name: names[role],
     expired: false, size_in_bytes: zips[role].length, digest: `sha256:${sha256(zips[role])}`, created_at: '2026-10-09T10:50:00Z',
     workflow_run: { id: run.id, repository_id: 7, head_repository_id: 7, head_sha: commit } }]));

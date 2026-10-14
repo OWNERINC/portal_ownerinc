@@ -4,6 +4,16 @@ set -Eeuo pipefail
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 077
 
+# Admission-only route: selectors cannot select tools, policy, or installation.
+# Keep this before current-release inspection (including already-current recovery).
+if [[ ${SSH_ORIGINAL_COMMAND:-} == production:payload-v1* ]]; then
+  [[ -z ${DEPLOY_RECEIVER_ROLE:-} || $DEPLOY_RECEIVER_ROLE == production ]] || {
+    echo 'Refusing deployment: receiver role does not match the SSH target.' >&2; exit 2;
+  }
+  exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /usr/bin/python3 -I -S \
+    /usr/local/libexec/payload-receiver-admission.py payload "$SSH_ORIGINAL_COMMAND"
+fi
+
 if [[ -n ${SSH_ORIGINAL_COMMAND:-} ]]; then
   case $SSH_ORIGINAL_COMMAND in
     production:*) target=production; requested_commit=${SSH_ORIGINAL_COMMAND#production:} ;;
@@ -214,41 +224,8 @@ wait_for_healthy_cron() {
   return 1
 }
 
-if [[ $current == "$releases/$requested_commit" ]]; then
-  if [[ $cms_current == true ]]; then
-    [[ -x $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing Payload operations guard' >&2; exit 2; }
-    # Do not treat a partial pointer window as already-current success. This
-    # receiver is not yet integrated with the reviewed install/qualification gate.
-    "$PAYLOAD_OPERATIONS_GUARD" install-receiver-preflight "$current"
-    "$PAYLOAD_OPERATIONS_GUARD" verify-release "$current"
-  fi
-  curl --fail --silent --show-error --max-time 10 \
-    "$public_url/api/ready" >/dev/null
-  cron_environment=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cron_container" 2>/dev/null || true)
-  cron_running=$(docker inspect --format '{{.State.Running}}' "$cron_container" 2>/dev/null || true)
-  cron_health=$(docker inspect --format '{{.State.Health.Status}}' "$cron_container" 2>/dev/null || true)
-  if ! grep -Fxq 'CRON_BOOTSTRAP_ONLY=false' <<<"$cron_environment" || [[ $cron_running != true || $cron_health != healthy ]]; then
-    CRON_BOOTSTRAP_ONLY=false compose_for "$current" up -d --force-recreate --no-deps cron
-  fi
-  if wait_for_healthy_cron; then
-    printf '{"deployment":"already_current","commit":"%s"}\n' "$requested_commit"
-    exit 0
-  fi
-  echo "Current release is not healthy; cron recovery requires operator intervention." >&2
-  exit 1
-fi
-[[ -z $current || $current =~ ^${releases}/[0-9a-f]{40}$ ]] || {
-  echo "Refusing deployment: current release path is outside the release root." >&2
-  exit 2
-}
-if [[ -n $current ]]; then
-  [[ -f $current/docker-compose.yml ]] || {
-    echo "Refusing deployment: current release is incomplete." >&2
-    exit 2
-  }
-fi
-
 archive=$(mktemp "$root/incoming/ci-${requested_commit}.XXXXXX.tar.gz")
+retain_archive=false
 staging="$releases/.staging-${requested_commit}-$$"
 release="$releases/$requested_commit"
 backup=
@@ -259,7 +236,7 @@ public_started=false
 cms_release=false
 
 cleanup_files() {
-  [[ ! -e $archive ]] || unlink "$archive"
+  [[ $retain_archive == true || ! -e $archive ]] || unlink "$archive"
   if [[ -d $staging ]]; then
     rm -rf -- "$staging"
   fi
@@ -297,25 +274,50 @@ stop_services() {
   return "$status"
 }
 
-cat >"$archive"
-archive_size=$(stat -c '%s' "$archive")
-((archive_size > 0 && archive_size <= 10485760)) || {
-  echo "Refusing deployment: archive size is outside the allowed range." >&2
+# The installed transport helper bounds stdin and rejects three-image Payload
+# manifests, links and duplicate metadata BEFORE creating the legacy release tree.
+if ! /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /usr/bin/python3 -I -S \
+  /usr/local/libexec/payload-receiver-admission.py legacy "$archive" "$staging" "$requested_commit"; then
+  retain_archive=true
+  echo "Receiver denied; retained incoming receipt: ${archive##*/}" >&2
+  exit 2
+fi
+
+# Even an already-current retry must consume/classify its supplied legacy bundle
+# before health/cron effects. A three-image stdin cannot use that shortcut.
+if [[ $current == "$releases/$requested_commit" ]]; then
+  if [[ $cms_current == true ]]; then
+    [[ -x $PAYLOAD_OPERATIONS_GUARD ]] || { echo 'Missing Payload operations guard' >&2; exit 2; }
+    # Do not treat a partial pointer window as already-current success. This
+    # receiver is not yet integrated with the reviewed install/qualification gate.
+    "$PAYLOAD_OPERATIONS_GUARD" install-receiver-preflight "$current"
+    "$PAYLOAD_OPERATIONS_GUARD" verify-release "$current"
+  fi
+  curl --fail --silent --show-error --max-time 10 \
+    "$public_url/api/ready" >/dev/null
+  cron_environment=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cron_container" 2>/dev/null || true)
+  cron_running=$(docker inspect --format '{{.State.Running}}' "$cron_container" 2>/dev/null || true)
+  cron_health=$(docker inspect --format '{{.State.Health.Status}}' "$cron_container" 2>/dev/null || true)
+  if ! grep -Fxq 'CRON_BOOTSTRAP_ONLY=false' <<<"$cron_environment" || [[ $cron_running != true || $cron_health != healthy ]]; then
+    CRON_BOOTSTRAP_ONLY=false compose_for "$current" up -d --force-recreate --no-deps cron
+  fi
+  if wait_for_healthy_cron; then
+    printf '{"deployment":"already_current","commit":"%s"}\n' "$requested_commit"
+    exit 0
+  fi
+  echo "Current release is not healthy; cron recovery requires operator intervention." >&2
+  exit 1
+fi
+[[ -z $current || $current =~ ^${releases}/[0-9a-f]{40}$ ]] || {
+  echo "Refusing deployment: current release path is outside the release root." >&2
   exit 2
 }
-gzip -t "$archive"
-while IFS= read -r member; do
-  case "$member" in
-    ''|/*|..|../*|*/..|*/../*)
-      echo "Refusing deployment: unsafe archive member." >&2
-      exit 2
-      ;;
-  esac
-done < <(tar -tzf "$archive")
-
-mkdir "$staging"
-tar --extract --gzip --file "$archive" --directory "$staging" \
-  --no-same-owner --no-same-permissions
+if [[ -n $current ]]; then
+  [[ -f $current/docker-compose.yml ]] || {
+    echo "Refusing deployment: current release is incomplete." >&2
+    exit 2
+  }
+fi
 find "$staging" -type d -exec chmod 0755 {} +
 find "$staging" -type f -exec chmod 0644 {} +
 [[ -f $staging/.ci-commit && $(<"$staging/.ci-commit") == "$requested_commit" ]] || {

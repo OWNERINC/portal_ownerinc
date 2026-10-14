@@ -7,12 +7,57 @@ import test from 'node:test';
 import { controlCommandOptions, createFixtureCommandFailure, FixtureFailure, runFixtureCommand } from '../../scripts/integration/payload-preauthority-command.mjs';
 import { createCommandDiagnostic, initializerDiagnosticPhases, sanitizeCommandDiagnostic } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
 import { createRecoveryFailureReportFields } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
+import { createRecoveryProgress } from '../../scripts/integration/payload-preauthority-progress.mjs';
 
 const repo = path.resolve('.');
 const python = (process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'])
   .find(command => spawnSync(command, ['--version']).status === 0);
 const options = controlCommandOptions('initialize-isolated', '/synthetic/release');
 const frame = (body = 'initializer_command_failed\n', phase = 'portal_grants_migrate') => `${body}PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=${phase} installStage=portal_grants_pending commandExit=17 commandSignal=none privateStderr=retained\n`;
+
+test('quiescence summary is finite, exact-scope and report-only while first-failure progress remains bounded', () => {
+  const stderr = 'writers_not_quiescent\nPREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=quiescence installStage=none commandExit=none commandSignal=none privateStderr=none quiescencePredicate=running_service_not_allowed quiescenceCms=cold quiescenceOffenders=api:running:99,cron:running:2 quiescenceTruncated=true\n';
+  const parse = (text, extra = {}) => createCommandDiagnostic({ ...options, status: 2, stderr: text, ...extra });
+  const expected = { predicate: 'running_service_not_allowed', cmsStatus: 'cold',
+    offenders: [{ service: 'api', state: 'running', count: 99 }, { service: 'cron', state: 'running', count: 2 }], truncated: true };
+  const diagnostic = parse(stderr);
+  assert.deepEqual(diagnostic.initializer?.quiescence, expected);
+  assert.deepEqual(sanitizeCommandDiagnostic(diagnostic), diagnostic);
+  assert.deepEqual(parse(stderr.replaceAll('\n', '\r\n')).initializer?.quiescence, expected);
+  for (const invalid of [stderr + 'private tail', 'private prefix\n' + stderr,
+    stderr.replace('phase=quiescence', 'phase=resources_boundary'), stderr.replace('installStage=none', 'installStage=reserved'),
+    stderr.replace('writers_not_quiescent', 'unknown_project_container'), stderr.replace('commandExit=none', 'commandExit=2'),
+    stderr.replace('privateStderr=none', 'privateStderr=retained'), stderr.replace('quiescenceCms=cold', 'quiescenceCms=private_status'),
+    stderr.replace('api:running:99', 'private_service:running:99'), stderr.replace('api:running:99', 'api:running:100'),
+    stderr.replace('api:running:99', 'api:running:01'), stderr.replace('api:running:99', 'api:exited:99'),
+    stderr.replace('api:running:99,cron:running:2', 'api:running:99,api:running:2'),
+    stderr.replace('api:running:99,cron:running:2', 'cron:running:2,api:running:99'),
+    stderr.replace('api:running:99', 'api:running:98')]) {
+    assert.equal(parse(invalid).initializer, undefined);
+    assert.doesNotMatch(JSON.stringify(parse(invalid)), /private_service|private_status|private prefix|private tail/u);
+  }
+  for (const extra of [{ status: 0 }, { signal: 'SIGKILL' }, { errorCode: 'ETIMEDOUT' },
+    { substep: 'payload_control_verify_release' }, { controlCommandContext: 'payload-control:install-floor-commit', substep: 'payload_install_floor_commit' }]) {
+    assert.equal(parse(stderr, extra).initializer, undefined);
+  }
+  assert.equal(sanitizeCommandDiagnostic({ ...diagnostic, commandExitCode: 0 }).initializer.quiescence, undefined);
+  assert.equal(sanitizeCommandDiagnostic({ ...diagnostic, initializer: { ...diagnostic.initializer,
+    quiescence: { ...expected, secret: 'never-public' } } }).initializer.quiescence, undefined);
+  const failure = createFixtureCommandFailure({ status: 2, stderr: Buffer.from(stderr) }, options);
+  assert.deepEqual(createRecoveryFailureReportFields({ primaryError: failure }).commandDiagnostic.initializer.quiescence, expected);
+  const lines = [];
+  // Console serialization only; checkpoint I/O is intentionally unavailable.
+  const progress = createRecoveryProgress({ writeConsole: line => lines.push(line), alert: () => {} });
+  progress.transition('prepare', 'leaseTarget');
+  progress.failure({ stage: 'prepare', substep: 'payload_initialize_isolated', role: 'leaseTarget', quiescence: expected });
+  progress.substep('persist_private_command_evidence');
+  for (const line of lines) {
+    assert.ok(Buffer.byteLength(line) <= 1024);
+    assert.doesNotMatch(line, /quiescence|offenders|predicate/u);
+  }
+  assert.deepEqual(JSON.parse(lines.at(-1)).firstFailure,
+    { stage: 'prepare', substep: 'payload_initialize_isolated', fixtureRole: 'leaseTarget' });
+});
 
 test('initializer reason and phase require the exact action/substep, exit 2 and a complete finite frame', async () => {
   const runtime = await readFile('ops/payload-control-runtime.py', 'utf8');
