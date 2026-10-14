@@ -1,5 +1,34 @@
 # Payload production completion: initial decision and evidence
 
+## Qualified milestone and next bounded upload slice (2026-10-14)
+
+Primary reports CI `38600074126` at `3192127` SUCCESS: native B0 **25 pass / 0 skip**,
+the complete 14 recovery checks, 11 negatives and two full-comparison restores.
+This qualifies the exact prior TEST profile, including two fixed upload files;
+it does not establish full production B0 rollback or application recovery. Older
+“native pending/NOT RUN” entries below describe their historical delivery points,
+not the status of these exact qualified bytes. The new request-v3 upload work is
+not included in that qualification and remains native NOT RUN.
+
+Primary-supplied read-only VPS planning observations on 2026-10-14 (not collected
+by this implementation session):
+
+- Current release: `ce324b1b3d36fafb98270c9dfd8e62fed87d67a3`.
+- Running API: `ghcr.io/ownerinc/ownerinc-portal-api@sha256:bf2b4f6ebd67addb38abae3f9bd9c53a8ee0b7279f23b6e4e82e8374d47705c0`; reported image ID matches.
+- Running cron: `ghcr.io/ownerinc/ownerinc-portal-cron@sha256:2549282327dcd3412524896250dcc12eb73ff92bc13c46dd335170e342b75469`; reported image ID matches.
+- PG16 pin: `postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`.
+- Volume `ownerinc-portal-prod_uploads_data`: completed bounded metadata walk,
+  four entries including root (two files/two directories), total 6,754,593 bytes,
+  largest file 6,180,100 bytes, depth two; all numeric UID/GID 1000:1000,
+  directories 0755, files 0644; no observed links, other types, sparse candidates,
+  xattrs or ACLs. No file contents/names were read.
+
+These are planning observations only, not a frozen/authenticated capability or
+recovery profile. No production filenames/content enter the CI fixture. The next
+slice uses synthetic binary/nested/empty material and independently versioned
+numeric ownership evidence; production dispatch and application readiness remain
+separate blockers.
+
 ## Exact TEST roundtrip expectations for B0
 
 Run `38595594718` at `928397a` exported artifact `11908694313`. Primary inspection confirmed one untruncated region (inclusive lines 189–190): the icon and illustration AutoCard CHECK constraints lose one parenthesis pair each after PostgreSQL restores the expanded BETWEEN expressions. Reconstruction matches both exact region hashes. This establishes the schema-byte difference, not complete recovery or full-dump equality.
@@ -288,3 +317,7 @@ The diagnostic patch emits finite allowlisted stage/command boundaries and an at
 Primary final checks: progress/diagnostics/readiness **28 PASS, zero failures/skips**; full `npm run verify` **PASS**, Portal **1,802 PASS / 13 skips / zero failures**, CMS **448 PASS / 11 skips / zero failures**, final `verify: ok`; `git diff --check` PASS. Full verification used the same validated `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Users\Public` override. Log: `%LOCALAPPDATA%/Temp/opencode/payload-progress-final-verify.log`.
 
 These results validate the diagnostics locally; they do not identify the historical timed-out operation or qualify recovery. One new candidate execution is the next evidence-gathering step. Production remains unchanged.
+
+## Bounded uploads materialization — final local evidence (2026-10-14)
+
+Independent static review in session `ses_ec454ad83ffeUvvk4qKRxClnfc` returned **SHIP for the TEST increment**, conditional on primary verification and native qualification of the new bytes. Primary final `npm run verify` passed **Portal 1,935 PASS / 19 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`; `VERIFY_EXIT=0`**. Evidence: `%LOCALAPPDATA%/Temp/opencode/payload-b0-tree-materialization-final-verify.log`; `DIFF_CHECK_EXIT=0`, before/after diff hash `2f7f1285c87a5899497a956ec116d8cc500095aa`, `DIFF_HASH_UNCHANGED=True`, `STATUS_UNCHANGED=True`. Delivery rechecked the same hash using `git diff | git hash-object --stdin` and confirmed `git diff --check` passed before this evidence-only append. Review covers exactly the two runtime/helper files, two unit-test files and two operations/review documents in this increment; native Linux ownership, descriptor walk, interrupted clear/extract resumption and execution within unchanged budgets remain pending. CI `38600074126` at `3192127` qualifies only the previous profile. This new uploads TEST gate does not establish full production B0 recovery, application rollback or deployment authorization.

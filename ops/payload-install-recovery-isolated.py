@@ -402,8 +402,8 @@ def parse_child_frame(raw, exit_code, fault):
     require(isinstance(value, dict) and set(value) == {'version', 'location', 'failure', 'proof'})
     require(type(value['version']) is int and value['version'] == 1 and value['location'] in CHILD_LOCATIONS and value['failure'] in CHILD_FAILURES)
     if exit_code == 72:
-        require(fault in ('database', 'uploads') and value['failure'] == 'expected_interruption' and value['proof'] is None)
-        require(value['location'] == ('database_restore' if fault == 'database' else 'uploads_extract'))
+        require(fault in ('database', 'uploads', 'uploads_clear') and value['failure'] == 'expected_interruption' and value['proof'] is None)
+        require(value['location'] == {'database': 'database_restore', 'uploads': 'uploads_extract', 'uploads_clear': 'uploads_clear'}[fault])
     elif exit_code == 0:
         require(fault is None and value['failure'] == 'none' and value['location'] == 'complete')
         require(canonical(value['proof']) == canonical({'kind': 'isolated-b0-recovery-proof', 'dataVerified': True, 'admissionClosed': True,
@@ -417,7 +417,7 @@ def parse_child_frame(raw, exit_code, fault):
 
 
 def check_child_checkpoint(body, fault):
-    expected = {'database': 'database_restore_pending', 'uploads': 'uploads_restore_pending', None: 'data_verified_readiness_pending'}[fault]
+    expected = {'database': 'database_restore_pending', 'uploads': 'uploads_restore_pending', 'uploads_clear': 'uploads_restore_pending', None: 'data_verified_readiness_pending'}[fault]
     require(body['installIntent']['recovery']['stage'] == expected)
 
 
@@ -443,7 +443,7 @@ def failure_for_exception(error, fault):
     if type(error) is SchemaMismatch and error.args in (('schema_line_order_delta',), ('schema_comment_delta',), ('schema_sql_delta',)):
         return error.args[0], 73
     if isinstance(error, Refused):
-        if error.args == ('isolated_b0_test_interruption',) and fault in ('database', 'uploads'):
+        if error.args == ('isolated_b0_test_interruption',) and fault in ('database', 'uploads', 'uploads_clear'):
             return 'expected_interruption', 72
         return 'refused', 73
     return 'unknown', 73
@@ -568,18 +568,93 @@ def uploads_fingerprint(raw):
     return digest(canonical(result))
 
 
+def materialized_uploads(runtime, raw):
+    """TEST v3: shared bounded traversal, independent numeric-owner expectation.
+
+    Canonical USTAR removes name-based ownership interpretation. It is derived
+    only from the immutable validated artifact, never from destination content.
+    """
+    require(isinstance(raw, bytes) and len(raw) <= CAP)
+    limits = dict(runtime.PRODUCTION_B0_TAR_LIMITS, expanded=CAP)
+    entries = {}
+    tree = runtime._bounded_gzip_tar_tree(io.BytesIO(raw), limits, projection=entries)
+    metadata = [{'name': name, **{key: entries[name][key] for key in ('type', 'mode', 'uid', 'gid')}} for name in sorted(entries)]
+    expectation = {'version': 1, 'algorithm': 'bounded-tar-numeric-owners-v1',
+                   'archiveSha256': digest(raw), 'treeSha256': tree, 'metadataSha256': digest(canonical(metadata))}
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+        # Files first; directory/root metadata last, after children are created.
+        order = sorted(n for n in entries if entries[n]['type'] == 'file') + sorted(
+            (n for n in entries if entries[n]['type'] == 'directory'), key=lambda n: (n.count('/'), n), reverse=True)
+        order = [n for n in order if n != '.'] + ['.']
+        for name in order:
+            entry = entries[name]
+            member = tarfile.TarInfo(name)
+            member.uid, member.gid, member.mode = entry['uid'], entry['gid'], entry['mode']
+            member.mtime = entry['mtime']
+            member.type = tarfile.DIRTYPE if entry['type'] == 'directory' else tarfile.REGTYPE
+            member.size = entry['size']
+            archive.addfile(member, io.BytesIO(entry['data']) if member.isfile() else None)
+            require(output.tell() <= CAP)
+    require(output.tell() <= CAP)
+    payload = gzip.compress(output.getvalue(), mtime=0)
+    require(len(payload) <= CAP)
+    return expectation, payload
+
+
+def upload_metadata_from_fd(root_fd):
+    """Read-only audit of an already identity-bound owned volume descriptor.
+
+    tar's default observation does not expose xattrs/ACLs or an external hardlink.
+    Never silently treat those as absent. No file contents or names are emitted.
+    """
+    entries, total = [], 0
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    def visit(fd, name, depth):
+        nonlocal total
+        before = os.fstat(fd)
+        require(depth <= 32 and len(name.encode('utf-8')) <= 100 and len(entries) < 50000)
+        require(not os.listxattr(fd))  # Includes POSIX ACL xattrs on Linux.
+        directory = stat.S_ISDIR(before.st_mode)
+        require(directory or stat.S_ISREG(before.st_mode))
+        mode = stat.S_IMODE(before.st_mode)
+        require(mode in ((0o700, 0o750, 0o755) if directory else (0o600, 0o640, 0o644)))
+        if not directory:
+            require(before.st_nlink == 1 and before.st_blocks * 512 >= before.st_size)
+            total += before.st_size
+            require(total <= CAP)
+        entries.append({'name': name, 'type': 'directory' if directory else 'file', 'mode': mode, 'uid': before.st_uid, 'gid': before.st_gid})
+        if directory:
+            for child in sorted(os.listdir(fd)):
+                info = os.stat(child, dir_fd=fd, follow_symlinks=False)
+                require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))
+                opened = os.open(child, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                try:
+                    require(identity(os.fstat(opened)) == identity(info))
+                    visit(opened, child if name == '.' else name + '/' + child, depth + 1)
+                    require(identity(os.stat(child, dir_fd=fd, follow_symlinks=False)) == identity(info))
+                finally:
+                    os.close(opened)
+        require(identity(os.fstat(fd)) == identity(before))
+    visit(root_fd, '.', 0)
+    return digest(canonical(sorted(entries, key=lambda entry: entry['name'])))
+
+
 class Executor:
     """Internal TEST capability. Supervisor is sole caller; no production entry."""
     def __init__(self, directory, runtime, key, request_raw, operations, lease, sources=None):
         self.directory, self.runtime, self.key = directory, runtime, key
         self.state = runtime.STATE
         self.request = authenticate(request_raw, key)
-        self.roundtrip = self.request.get('kind') == 'isolated-b0-recovery-request-v2'
+        self.materialization = self.request.get('kind') == 'isolated-b0-recovery-request-v3'
+        self.roundtrip = self.materialization or self.request.get('kind') == 'isolated-b0-recovery-request-v2'
         names = {'kind', 'binding', 'recovery', 'helpers', 'artifacts', 'baseline', 'fenceProfile'}
         if self.roundtrip:
             names.add('expectations')
         require(set(self.request) == names)
-        require(self.request['kind'] in ('isolated-b0-recovery-request-v1', 'isolated-b0-recovery-request-v2'))
+        require(self.request['kind'] in ('isolated-b0-recovery-request-v1', 'isolated-b0-recovery-request-v2', 'isolated-b0-recovery-request-v3'))
         self.binding = self.request['binding']
         # No subprocess or filesystem mutation precedes this production refusal.
         require(self.binding.get('bindingVersion') == 2 and self.binding['candidate']['purpose'] == 'isolated-recovery-producer')
@@ -589,8 +664,13 @@ class Executor:
         require(self.request['recovery']['recoveryVersion'] == (2 if self.roundtrip else 1))
         require(self.binding['b0']['directory'] == str(directory / 'b0'))
         require(set(self.request['helpers']) == set(HELPERS))
-        require(set(self.request['baseline']) == {'database', 'uploads', 'schema', 'roles', 'dataFingerprint', 'uploadsFingerprint'})
-        require(all(isinstance(v, str) and re.fullmatch('[a-f0-9]{64}', v) for v in self.request['baseline'].values()))
+        if self.materialization:
+            require(set(self.request['baseline']) == {'version', 'source'} and type(self.request['baseline']['version']) is int and self.request['baseline']['version'] == 2)
+            self.baseline = self.request['baseline']['source']
+        else:
+            self.baseline = self.request['baseline']
+        require(set(self.baseline) == {'database', 'uploads', 'schema', 'roles', 'dataFingerprint', 'uploadsFingerprint'})
+        require(all(isinstance(v, str) and re.fullmatch('[a-f0-9]{64}', v) for v in self.baseline.values()))
         require(digest(canonical(self.request['fenceProfile'])) == self.request['recovery']['fenceProfileSha256'])
         self.operations, self.lease = operations, lease
         self.artifacts = {}
@@ -604,20 +684,27 @@ class Executor:
         require(digest(canonical(json.loads(self.artifacts['preauthority-proof.json']))) == self.binding['b0']['proofSha256'])
         require(proof['source']['portal'] == self.binding['portalTarget']['database'] and proof['images'] == self.binding['previousImages'])
         require(proof['kind'] == 'preauthority-legacy-source' and proof['inventoryIdentity'] == self.binding['inventoryIdentity'] and proof['targetImages'] == self.binding['candidate']['images'])
-        require(proof['dataFingerprints']['portalDatabase'] == self.request['baseline']['dataFingerprint'] and proof['dataFingerprints']['portalUploads'] == self.request['baseline']['uploadsFingerprint'])
+        require(proof['dataFingerprints']['portalDatabase'] == self.baseline['dataFingerprint'] and proof['dataFingerprints']['portalUploads'] == self.baseline['uploadsFingerprint'])
         for artifact in proof['artifacts']:
             require(digest(self.artifacts[artifact['name']]) == artifact['sha256'] and len(self.artifacts[artifact['name']]) == artifact['size'])
         expected_manifest = ''.join(digest(self.artifacts[name]) + '  ' + name + '\n' for name in self.state.LEGACY_ARTIFACTS).encode()
         require(self.artifacts['manifest.sha256'] == expected_manifest)
         require(digest(expected_manifest) == self.request['recovery']['manifestSha256'])
-        require(uploads_fingerprint(self.artifacts['uploads.tar.gz']) == self.request['baseline']['uploads'])
-        require(runtime._tar_tree(io.BytesIO(self.artifacts['uploads.tar.gz']), compressed=True) == self.request['baseline']['uploadsFingerprint'])
+        self.upload_payload = self.artifacts['uploads.tar.gz']
+        if self.materialization:
+            self.upload_expectation, self.upload_payload = materialized_uploads(runtime, self.upload_payload)
+            require(self.upload_expectation['treeSha256'] == self.baseline['uploads'] == self.baseline['uploadsFingerprint'])
+        else:
+            require(uploads_fingerprint(self.upload_payload) == self.baseline['uploads'])
+            require(runtime._tar_tree(io.BytesIO(self.upload_payload), compressed=True) == self.baseline['uploadsFingerprint'])
         require(digest(canonical(self.request['baseline'])) == self.request['recovery']['securityProfileSha256'])
         if self.roundtrip:
-            derived = derive_roundtrip_expectations(sources, self.binding, self.artifacts, self.request['helpers'], self.request['baseline'])
+            derived = derive_roundtrip_expectations(sources, self.binding, self.artifacts, self.request['helpers'], self.baseline)
+            if self.materialization:
+                derived.update(version=2, uploads=self.upload_expectation)
             require(canonical(derived) == canonical(self.request['expectations']))
             require(digest(canonical(derived)) == self.request['recovery']['expectationsSha256'])
-            self.restored_baseline = dict(self.request['baseline'], schema=derived['restoredSchema'], database=derived['restoredDatabase'])
+            self.restored_baseline = dict(self.baseline, schema=derived['restoredSchema'], database=derived['restoredDatabase'])
 
     def classify_database(self, body):
         recovery = body['installIntent'].get('recovery')
@@ -626,7 +713,7 @@ class Executor:
             require(recovery['binding'] == self.request['recovery'])
         mark('schema_compare')
         observed = self.operations.schema_fingerprint()
-        if observed == self.request['baseline']['schema']:
+        if observed == self.baseline['schema']:
             require(stage in ('reserved', 'database_restore_pending'))
             return 'source_eligible'
         require(observed == self.restored_baseline['schema'] and stage != 'reserved')
@@ -637,7 +724,14 @@ class Executor:
         if self.roundtrip:
             self.boundary()
             return self.database_class == 'verified_restored'
-        return self.operations.database_matches(self.request['baseline'])
+        return self.operations.database_matches(self.baseline)
+
+    def uploads_complete(self):
+        if not self.materialization:
+            return self.operations.uploads() == self.baseline['uploads']
+        self.boundary()
+        observed = self.operations.upload_state()
+        return observed == {key: self.upload_expectation[key] for key in ('treeSha256', 'metadataSha256')}
 
     def boundary(self):
         mark('boundary')
@@ -663,7 +757,7 @@ class Executor:
         self.state.assert_install_matches(body, self.binding)
         require(body['admission'] == 'closed' and body['restoreIntent'] is None and body['workerHold'] is True)
         require(body['installIntent']['stage'] in ('reserved', 'portal_grants_pending'))
-        self.operations.fence(self.binding, self.request['baseline'], self.request['fenceProfile'])
+        self.operations.fence(self.binding, self.baseline, self.request['fenceProfile'])
         if self.roundtrip:
             self.database_class = self.classify_database(body)
         return body
@@ -685,7 +779,7 @@ class Executor:
                 self.boundary()
                 restore_needed = self.database_class == 'source_eligible'
             else:
-                restore_needed = not self.operations.database_matches(self.request['baseline'])
+                restore_needed = not self.operations.database_matches(self.baseline)
             if restore_needed:
                 self.boundary()
                 if not self.roundtrip or self.database_class == 'source_eligible':
@@ -701,14 +795,16 @@ class Executor:
             self.boundary()
             mark('uploads_clear')
             self.operations.clear_uploads()
+            if self.materialization and interrupt == 'uploads_clear':
+                raise Refused('isolated_b0_test_interruption')
             self.boundary()
             mark('uploads_extract')
-            self.operations.extract_uploads(self.artifacts['uploads.tar.gz'])
+            self.operations.extract_uploads(self.upload_payload)
             if interrupt == 'uploads':
                 raise Refused('isolated_b0_test_interruption')
-            require(self.operations.uploads() == self.request['baseline']['uploads'])
+            require(self.uploads_complete())
             advance('uploads_restored')
-        require(self.database_complete() and self.operations.uploads() == self.request['baseline']['uploads'])
+        require(self.database_complete() and self.uploads_complete())
         if stage() == 'uploads_restored':
             advance('data_verified_readiness_pending')
         require(stage() == 'data_verified_readiness_pending')
@@ -812,6 +908,22 @@ def native_qualification():
         finally:
             remove_helper(entry)
 
+    def upload_metadata():
+        receipt = volume('portalUploads')
+        mountpoint = Path(receipt['mountpoint'])
+        require(mountpoint.is_absolute() and '..' not in mountpoint.parts and mountpoint.name == '_data' and mountpoint.parent.name == prefix + '-portalUploads')
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for component in mountpoint.parts[1:]:
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            observed = upload_metadata_from_fd(fd)
+            require(volume('portalUploads') == receipt)
+            return observed
+        finally:
+            os.close(fd)
+
     def remove_helper(entry):
         require(set(entry) == {'name', 'volume', 'id', 'removed'} and entry['removed'] is False)
         match = re.fullmatch(re.escape(prefix) + r'-storage-([0-9]+)-[0-9]+', entry['name'])
@@ -893,7 +1005,9 @@ def native_qualification():
                 pass
             else:
                 require(False)
-        storage("printf original > /data/original.txt; printf nested > /data/nested.txt", writable=True)
+        storage("mkdir -p /data/nested /data/empty; head -c 6180100 /dev/zero > /data/original.bin; "
+                "head -c 574493 /dev/zero > /data/nested/original.bin; : > /data/zero.bin; printf '\\000\\377\\001' > /data/nested/binary.bin; "
+                "chmod 0755 /data /data/nested /data/empty; chmod 0644 /data/*.bin /data/nested/*.bin; chown -R 1000:1000 /data", writable=True)
         storage("printf unrelated > /data/sentinel", writable=True, key='cmsEvidence')
         evidence = storage('cat /data/sentinel', key='cmsEvidence')
         identity = json.loads(sql("SELECT json_build_object('systemIdentifier',(SELECT system_identifier::text FROM pg_control_system()),'databaseOid',(SELECT oid::text FROM pg_database WHERE datname=current_database()),'databaseName',current_database());"))
@@ -908,7 +1022,9 @@ def native_qualification():
         db_fingerprint = digest(full_bytes)
         source_dumps = {'schema': schema_bytes, 'database': full_bytes}
         raw_uploads = storage('tar -czf - -C /data .')
-        baseline = {'database': db_fingerprint, 'schema': schema, 'roles': roles, 'uploads': uploads_fingerprint(raw_uploads),
+        upload_expectation, _ = materialized_uploads(runtime, raw_uploads)
+        require(upload_metadata() == upload_expectation['metadataSha256'])
+        baseline = {'database': db_fingerprint, 'schema': schema, 'roles': roles, 'uploads': upload_expectation['treeSha256'],
                     'dataFingerprint': runtime._data_fingerprint('postgres', isolated_query=sql),
                     'uploadsFingerprint': runtime._tar_tree(io.BytesIO(raw_uploads), compressed=True)}
         S.initialize(str(root), digest(prefix.encode()))
@@ -946,13 +1062,15 @@ def native_qualification():
             S.reserve_install(str(root), binding, proof, binding['b0']['proofSha256'], {'nonce': digest(prefix.encode()), 'volumes': {}, 'containers': {}})
             fence_profile = {'scope': prefix, 'databaseContainerId': db_id, 'network': 'none', 'writers': [], 'evidenceVolume': volume_receipts['cmsEvidence']}
             expectations = derive_roundtrip_expectations(source_dumps, binding, artifacts, closure, baseline)
+            expectations.update(version=2, uploads=upload_expectation)
+            baseline_envelope = {'version': 2, 'source': baseline}
             recovery = {'recoveryVersion': 2, 'purpose': 'isolated-b0-recovery', 'installBindingSha256': digest(S.canonical(binding)),
                         'originStateSha256': S.read_state(str(root))[3], 'b0ProofSha256': binding['b0']['proofSha256'], 'manifestSha256': digest(artifacts['manifest.sha256']),
                         'portalTarget': binding['portalTarget'], 'sourceRelease': binding['sourceRelease'], 'previousImages': previous,
-                        'securityProfileSha256': digest(canonical(baseline)), 'fenceProfileSha256': digest(canonical(fence_profile)),
+                        'securityProfileSha256': digest(canonical(baseline_envelope)), 'fenceProfileSha256': digest(canonical(fence_profile)),
                         'restoreProfile': ROUNDTRIP_PROFILE, 'expectationsSha256': digest(canonical(expectations))}
-            request = S.canonical(S.sign_envelope({'kind': 'isolated-b0-recovery-request-v2', 'binding': binding, 'recovery': recovery,
-                                                  'helpers': closure, 'artifacts': {n: digest(b) for n, b in artifacts.items()}, 'baseline': baseline, 'fenceProfile': fence_profile,
+            request = S.canonical(S.sign_envelope({'kind': 'isolated-b0-recovery-request-v3', 'binding': binding, 'recovery': recovery,
+                                                  'helpers': closure, 'artifacts': {n: digest(b) for n, b in artifacts.items()}, 'baseline': baseline_envelope, 'fenceProfile': fence_profile,
                                                   'expectations': expectations}, key))
 
             class Operations:
@@ -1008,15 +1126,19 @@ def native_qualification():
                     docker('exec', '-i', db_id, 'pg_restore', '--single-transaction', '--clean', '--if-exists', '--exit-on-error', '-U', 'postgres', '-d', 'portal', data=raw)
 
                 def clear_uploads(self):
+                    upload_metadata()
                     storage('find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +', writable=True)
 
                 def extract_uploads(self, raw):
-                    uploads_fingerprint(raw)
-                    storage('tar -xzf - -C /data', raw, writable=True)
+                    materialized_uploads(runtime, raw)
+                    upload_metadata()
+                    storage('tar -xzpf - -C /data', raw, writable=True)
 
-                def uploads(self):
+                def upload_state(self):
                     mark('uploads_compare')
-                    return uploads_fingerprint(storage('tar -czf - -C /data .'))
+                    observed, _ = materialized_uploads(runtime, storage('tar -czf - -C /data .'))
+                    require(upload_metadata() == observed['metadataSha256'])
+                    return {key: observed[key] for key in ('treeSha256', 'metadataSha256')}
 
             operations = Operations()
             phase = 'unsupported_schema_negative'
@@ -1035,14 +1157,14 @@ def native_qualification():
             sql('DROP TABLE public.b0_unexpected_fixture;')
             phase = 'damage_fixture'
             sql("UPDATE recovery_records SET body='damaged'; REVOKE SELECT ON recovery_records FROM portal_api;")
-            storage('printf damaged > /data/original.txt', writable=True)
+            storage('printf damaged > /data/original.bin', writable=True)
             # Each attempt is a fresh child/coordinator and acquires a new open
             # lease description. Fault children exit after actual effects, without
             # appending the completion checkpoint. Parent never reuses their lease.
             fcntl.flock(lease.fileno(), fcntl.LOCK_UN)
-            for fault in ('database', 'uploads', None):
+            for fault in ('database', 'uploads_clear', 'uploads', None):
                 child_location, child_failure = 'unknown', 'child_exit'
-                phase = {'database': 'recover_database_interruption', 'uploads': 'recover_uploads_interruption', None: 'recover_final'}[fault]
+                phase = {'database': 'recover_database_interruption', 'uploads_clear': 'recover_uploads_interruption', 'uploads': 'recover_uploads_interruption', None: 'recover_final'}[fault]
                 reader, writer = os.pipe()
                 child = os.fork()
                 if child == 0:

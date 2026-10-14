@@ -36,11 +36,17 @@ binding={'bindingVersion':2,'candidate':{'schemaVersion':1,'purpose':'isolated-r
  'b0':{'directory':str(root/'b0'),'proofSha256':''}}
 buffer=io.BytesIO()
 with tarfile.open(fileobj=buffer,mode='w:gz') as tar:
- for name in ('original.txt','nested.txt'):
-  item=tarfile.TarInfo(name);item.size=8;item.mode=0o644;tar.addfile(item,io.BytesIO(b'original'))
+ if rich_fixture:
+  for name in ('.','nested','empty','other'):
+   item=tarfile.TarInfo(name);item.type=tarfile.DIRTYPE;item.mode=0o755;item.uid=item.gid=1000;tar.addfile(item)
+  for name,data in (('original.bin',bytes(range(256))*24140+b'ABCD'*65),('nested/original.bin',b'\0\xff'*100),('other/original.bin',b'same basename'),('zero',b'')):
+   item=tarfile.TarInfo(name);item.size=len(data);item.mode=0o644;item.uid=item.gid=1000;tar.addfile(item,io.BytesIO(data))
+ else:
+  for name in ('original.txt','nested.txt'):
+   item=tarfile.TarInfo(name);item.size=8;item.mode=0o644;tar.addfile(item,io.BytesIO(b'original'))
 uploads=buffer.getvalue()
 artifacts={'postgres.dump':b'actual-consumed-test-double-bytes','uploads.tar.gz':uploads}
-baseline={'database':H(b'original'),'roles':H(b'unchanged'),'schema':H(b'unchanged'),'uploads':E.uploads_fingerprint(uploads)}
+baseline={'database':H(b'original'),'roles':H(b'unchanged'),'schema':H(b'unchanged'),'uploads':R._tar_tree(io.BytesIO(uploads),compressed=True) if rich_fixture else E.uploads_fingerprint(uploads)}
 baseline.update(dataFingerprint=H(b'original'),uploadsFingerprint=R._tar_tree(io.BytesIO(uploads),compressed=True))
 S.initialize(str(root),binding['inventoryIdentity']);key=E.private_bytes(root/'payload-control.key',32)
 proof={'schemaVersion':1,'kind':'preauthority-legacy-source','phase':'preauthority','authority':{'mode':'legacy','epoch':1},'protocol':{'status':'absent','coverage':'not-applicable'},
@@ -84,10 +90,10 @@ def refused(fn):
 def snapshot():return {p.name:p.read_bytes() for p in (root/'payload-control-state').iterdir()}
 `;
 
-async function probe(code) {
+async function probe(code, { rich = false } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'b0-recovery-unit-'));
   try {
-    const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-S', '-B', '-c', setup + code, path.resolve('.'), directory], { encoding: 'utf8', timeout: 30000 });
+    const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-S', '-B', '-c', `rich_fixture=${rich ? 'True' : 'False'}\n` + setup + code, path.resolve('.'), directory], { encoding: 'utf8', timeout: 30000 });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
@@ -113,6 +119,113 @@ class RoundtripOps(Ops):
 ops=RoundtripOps()
 def executor(data=raw,source=sources):return E.Executor(root,R,key,data,ops,lease,source)
 `;
+
+const materializationSetup = roundtripSetup + String.raw`
+upload_profile,payload=E.materialized_uploads(R,artifacts['uploads.tar.gz'])
+expectations.update(version=2,uploads=upload_profile)
+request.update(kind='isolated-b0-recovery-request-v3',baseline={'version':2,'source':baseline})
+recovery.update(expectationsSha256=H(S.canonical(expectations)),securityProfileSha256=H(S.canonical(request['baseline'])))
+raw=S.canonical(S.sign_envelope(request,key))
+class MaterialOps(RoundtripOps):
+ def extract_uploads(self,b):
+  self.events.append('restore_uploads');profile,_=E.materialized_uploads(R,b)
+  self.files={k:profile[k] for k in ('treeSha256','metadataSha256')}
+ def upload_state(self):self.events.append('compare_uploads');return self.files
+ops=MaterialOps()
+def executor(data=raw,source=sources):return E.Executor(root,R,key,data,ops,lease,source)
+`;
+
+test('v3 rich upload projection preserves historical hash and independent numeric metadata', async () => {
+  await probe(materializationSetup + String.raw`
+assert set(baseline)=={'database','uploads','schema','roles','dataFingerprint','uploadsFingerprint'}
+assert upload_profile['treeSha256']==R._tar_tree(io.BytesIO(uploads),compressed=True)
+observed={};actual=R._bounded_gzip_tar_tree(io.BytesIO(payload),dict(R.PRODUCTION_B0_TAR_LIMITS,expanded=E.CAP),projection=observed)
+assert actual==upload_profile['treeSha256']
+assert observed['original.bin']['size']==6180100
+assert observed['.']['uid']==observed['.']['gid']==1000 and observed['.']['mode']==0o755
+assert observed['empty']['type']=='directory' and observed['zero']['data']==b''
+assert observed['nested/original.bin']['data']==b'\0\xff'*100
+assert all(v['uid']==v['gid']==1000 for v in observed.values())
+for fault in ('database','uploads_clear','uploads'):
+ try:executor().execute(fault)
+ except Exception as error:
+  failure,code=E.failure_for_exception(error,fault);assert code==72
+  E.parse_child_frame(E.child_frame(failure),code,fault)
+ else:assert False
+ E.check_child_checkpoint(S.read_state(str(root))[2],fault)
+executor().execute()
+assert ops.events.count('restore_database')==1 and ops.events.count('clear_uploads')==3 and ops.events.count('restore_uploads')==2
+body=S.read_state(str(root))[2];assert body['admission']=='closed' and body['installIntent']['recovery']['stage']=='data_verified_readiness_pending'
+ops.files['metadataSha256']=H(b'changed uid gid');refused(lambda:executor().execute())
+`, { rich: true });
+});
+
+test('v3 stops between clear/extract on changed fence or lease; metadata failure cannot checkpoint', async () => {
+  await probe(materializationSetup + String.raw`
+clear=ops.clear_uploads
+def unsafe_clear():clear();ops.safe=False
+ops.clear_uploads=unsafe_clear
+refused(lambda:executor().execute());assert 'restore_uploads' not in ops.events
+assert S.read_state(str(root))[2]['installIntent']['recovery']['stage']=='uploads_restore_pending'
+ops.safe=True;ops.clear_uploads=clear
+extract=ops.extract_uploads
+def wrong_metadata(raw):extract(raw);ops.files['metadataSha256']=H(b'wrong root ownership')
+ops.extract_uploads=wrong_metadata
+refused(lambda:executor().execute())
+assert S.read_state(str(root))[2]['installIntent']['recovery']['stage']=='uploads_restore_pending'
+def lost_lease():clear();lease.close()
+ops.clear_uploads=lost_lease;before=ops.events.count('restore_uploads')
+refused(lambda:executor().execute());assert ops.events.count('restore_uploads')==before
+assert S.read_state(str(root))[2]['admission']=='closed'
+`, { rich: true });
+});
+
+test('v3 invalid archives are refused by shared traversal before any clear and substitutions remain bound', async () => {
+  await probe(materializationSetup + String.raw`
+def tar_bytes(name,kind=tarfile.REGTYPE,mode=0o644,pax=None):
+ out=io.BytesIO()
+ with tarfile.open(fileobj=out,mode='w',format=tarfile.PAX_FORMAT) as tar:
+  rootentry=tarfile.TarInfo('.');rootentry.type=tarfile.DIRTYPE;rootentry.mode=0o755;rootentry.uid=rootentry.gid=1000;tar.addfile(rootentry)
+  item=tarfile.TarInfo(name);item.type=kind;item.mode=mode;item.uid=item.gid=1000;item.linkname='target';item.pax_headers=pax or {}
+  tar.addfile(item)
+ return E.gzip.compress(out.getvalue())
+bad=[tar_bytes('../escape'),tar_bytes('/absolute'),tar_bytes('link',tarfile.SYMTYPE),tar_bytes('hard',tarfile.LNKTYPE),tar_bytes('dev',tarfile.CHRTYPE),tar_bytes('sparse',tarfile.GNUTYPE_SPARSE),tar_bytes('mode',mode=0o4755),tar_bytes('missing/parent'),tar_bytes('pax',pax={'SCHILY.xattr.user.private':'secret'}),tar_bytes('pax',pax={'mtime':'1.2'}),uploads[:-4],uploads+b'non-gzip',uploads+E.gzip.compress(b'not zero'),E.gzip.compress(b'\0'*(E.CAP+1))]
+for value in bad:refused(lambda:E.materialized_uploads(R,value))
+assert ops.events==[]
+changed=copy.deepcopy(request);changed['expectations']['uploads']['metadataSha256']='f'*64
+changed['recovery']['expectationsSha256']=H(S.canonical(changed['expectations']))
+refused(lambda:executor(S.canonical(S.sign_envelope(changed,key))))
+(root/'b0'/'uploads.tar.gz').write_bytes(bad[0]);refused(lambda:executor())
+assert ops.events==[] and S.read_state(str(root))[2]['admission']=='closed'
+changed=copy.deepcopy(request);changed['binding']['bindingVersion']=3
+from unittest.mock import patch
+with patch.object(E,'private_bytes',side_effect=AssertionError('artifact access')):
+ refused(lambda:executor(S.canonical(S.sign_envelope(changed,key))))
+`, { rich: true });
+});
+
+test('owned-volume metadata guard refuses hidden xattrs, external hardlinks, sparse files and replacement', async () => {
+  await probe(String.raw`
+from types import SimpleNamespace
+from unittest.mock import patch
+def info(directory=False):
+ return SimpleNamespace(st_dev=1,st_ino=1 if directory else 2,st_mode=(0o40755 if directory else 0o100644),st_uid=1000,st_gid=1000,st_nlink=2 if directory else 1,st_size=0 if directory else 3,st_blocks=1,st_mtime_ns=1,st_ctime_ns=1)
+rootinfo,fileinfo=info(True),info()
+fake=SimpleNamespace(O_RDONLY=0,O_NOFOLLOW=1,O_NONBLOCK=2,fstat=lambda fd:rootinfo if fd==10 else fileinfo,
+ listxattr=lambda fd:[],listdir=lambda fd:['binary'],stat=lambda *a,**kw:fileinfo,open=lambda *a,**kw:11,close=lambda fd:None)
+expected=[{'name':'.','type':'directory','mode':0o755,'uid':1000,'gid':1000},{'name':'binary','type':'file','mode':0o644,'uid':1000,'gid':1000}]
+with patch.object(E,'os',fake):
+ assert E.upload_metadata_from_fd(10)==H(S.canonical(expected))
+ with patch.object(fake,'listxattr',return_value=['system.posix_acl_access']):refused(lambda:E.upload_metadata_from_fd(10))
+ for attr,value in (('st_nlink',2),('st_blocks',0),('st_mode',0o100664)):
+  original=getattr(fileinfo,attr);setattr(fileinfo,attr,value)
+  refused(lambda:E.upload_metadata_from_fd(10));setattr(fileinfo,attr,original)
+ with patch.object(fake,'stat',return_value=SimpleNamespace(st_mode=0o120777)):
+  refused(lambda:E.upload_metadata_from_fd(10))
+ changed=info();changed.st_ino=99
+ with patch.object(fake,'stat',return_value=changed):refused(lambda:E.upload_metadata_from_fd(10))
+`);
+});
 
 test('exact TEST transformation accepts only the two adjacent checks in the real table context', async () => {
   await probe(roundtripSetup + String.raw`

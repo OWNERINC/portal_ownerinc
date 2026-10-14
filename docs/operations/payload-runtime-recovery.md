@@ -4,6 +4,68 @@
 
 ### Restore B0 isolado com checkpoints assinados (native ainda pendente)
 
+**Estado da evidência:** o primary confirmou `3192127` / CI `38600074126` SUCCESS:
+native B0 25 pass/0 skip e suíte existente completa 14/11/2. Isso cobre somente
+aquele perfil TEST de dois arquivos. “Native pending/NOT RUN” nas entradas
+históricas abaixo descreve entregas anteriores. O novo request v3 descrito aqui
+é **native NOT RUN**, sem aprovação de rollback em produção.
+
+#### Uploads bounded — request v3 / baseline envelope v2
+
+O request `isolated-b0-recovery-request-v3` usa baseline explícito
+`{version:2, source:{database, uploads, schema, roles, dataFingerprint, uploadsFingerprint}}`.
+Nessa versão, uploads/ uploadsFingerprint contêm o tree hash histórico. Requests
+v1/v2 mantêm sem mudança seus seis campos e o hash antigo de dois arquivos.
+O binding recoveryVersion 2 existente congela expectationsSha256; expectations
+versão 2 acrescenta `uploads:{version:1, algorithm:bounded-tar-numeric-owners-v1,
+archiveSha256, treeSha256, metadataSha256}`. Não houve extensão de schema do estado.
+Metadados numéricos são canonicalizados separadamente (name/type/mode/uid/gid),
+autenticados antes do dano e recompostos do artifact imutável a cada entrada.
+
+O runtime compartilha traversal/limites e drain completo gzip/footer/trailing
+bytes entre B0 e materialização. `_tar_tree` continua produzindo exatamente o hash
+histórico, sem uid/gid. A projeção opt-in é mais estrita: exige root directory
+explícito e todos os parents; somente regular files e directories, modos de dir
+0700/0750/0755 e file 0600/0640/0644, UID/GID numéricos 0..2097151, nomes UTF-8
+normalizados de até 100 bytes e profundidade até 32. Links/devices/sparse/setid,
+duplicates/conflitos/traversal e todos PAX/GNU extension headers são recusados,
+inclusive xattrs/ACLs, sem ignorar metadados de extensão. Não é suporte a uploads
+arbitrários de produção. Limites de produção não aumentaram; artifact, expansão,
+payload materializado e stdout de comandos TEST permanecem limitados a 16 MiB.
+
+A partir da projeção validada deriva USTAR privado em memória: nomes de owner/group
+vazios eliminam lookup por nome, UID/GID/mode são explícitos, arquivos precedem
+metadados dos diretórios e root é aplicado por último. Somente bytes derivados do
+artifact autenticado são extraídos via tar -p no volume disposable vinculado, sem
+destino host escolhido pelo caller. Root mode/ownership é verificado junto com
+todo o tree e o digest independente de metadados; missing/extra/content/mode ou
+uid/gid diferentes impedem checkpoint. Sem migrations ou novo restore DB para
+compensar falha de uploads.
+
+Como tar padrão não expõe xattrs/ACLs nem hardlinks externos ao tree, há um guard
+read-only por descritores no mountpoint do volume próprio re-inspecionado. Não é
+um destino de escrita host: root/children são abertos no-follow, tipos/inodes e
+metadados reafirmados, arquivos exigem nlink=1 e ausência de sparse candidates,
+listxattr vazio (incluindo ACLs). O digest numérico desse walk deve coincidir com
+o observado via archive; guards também precedem clear/extract. Nenhum path/nome
+é emitido. Mtime inteiro USTAR é preservado no payload, mas não faz parte do hash
+histórico nem do novo perfil uid/gid/mode; timestamps não são nova autoridade.
+
+Há fence/identidade/lease fresco antes de clear, entre clear/extract e antes de
+verificação/checkpoint. O fault interno `uploads_clear` acrescenta uma tentativa
+em processo novo com lease novo, mantendo o mesmo frame ≤1 KiB, exit 72 e estágio
+uploads_restore_pending; `uploads` ainda interrompe após extract. Ambos retomam
+revalidando artifact e repetindo clear/extract no alvo exato. Sem CLI fault flag,
+novo campo de proof, novo timeout ou novo job. V3 production binding permanece
+recusado antes de artifacts/efeitos.
+
+Fixture nativa nova: arquivo sintético 6,180,100 bytes, segundo 574,493 bytes,
+binário curto, zero-length file, nested/empty dirs e basename repetido em paths
+distintos; UID/GID 1000:1000, dirs 0755/files 0644. Nenhum nome/conteúdo de arquivo
+real é copiado. CMS/unrelated sentinel continua independente. Essa fixture é
+maior que a observação de quatro entradas, deliberadamente exercitando casos
+adicionais dentro do mesmo cap. Native dessa versão ainda NOT RUN.
+
 #### Perfil TEST de roundtrip exato — request v2 / recoveryVersion 2
 
 CI 38595594718/928397a, artifact 11908694313, provou uma região completa sem

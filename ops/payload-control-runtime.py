@@ -1653,7 +1653,11 @@ def _normalize_tar_name(name):
     return '/'.join(parts)
 
 
-def _tar_tree(stream, compressed=False, limits=None):
+def _tar_tree(stream, compressed=False, limits=None, projection=None):
+    # Optional materialization projection is a separate, stricter contract.
+    # Historical hash fields and the default traversal remain unchanged.
+    if projection is not None and (limits is None or projection):
+        fail('unsafe_storage_archive')
     mode = 'r|gz' if compressed else 'r|'
     extension_count = extension_bytes = extension_depth = 0
     class BoundedTarInfo(tarfile.TarInfo):
@@ -1672,6 +1676,8 @@ def _tar_tree(stream, compressed=False, limits=None):
             extension = self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE,
                                       tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK)
             if extension:
+                if projection is not None:
+                    fail('unsafe_storage_archive')
                 extension_count += 1
                 extension_bytes += self.size
                 if not 0 <= self.size <= 64 * 1024 or extension_count > limits['extensionCount'] or \
@@ -1707,6 +1713,15 @@ def _tar_tree(stream, compressed=False, limits=None):
             name = _normalize_tar_name(member.name)
             if name in entries:
                 fail('unsafe_storage_archive')
+            if projection is not None:
+                if member.pax_headers or member.sparse is not None or \
+                   type(member.uid) is not int or type(member.gid) is not int or \
+                   not 0 <= member.uid <= 2097151 or not 0 <= member.gid <= 2097151 or \
+                   type(member.mtime) is not int or not 0 <= member.mtime <= 8589934591 or \
+                   len(name.encode('utf-8')) > 100 or len(name.split('/')) > 32 or \
+                   member.mode not in ((0o700, 0o750, 0o755) if member.isdir() else (0o600, 0o640, 0o644)):
+                    fail('unsafe_storage_archive')
+                projection[name] = {'uid': member.uid, 'gid': member.gid, 'mtime': member.mtime, 'data': b''}
             if member.isdir() and member.type == tarfile.DIRTYPE:
                 if limits is not None and member.size != 0:
                     fail('unsafe_storage_archive')
@@ -1721,15 +1736,20 @@ def _tar_tree(stream, compressed=False, limits=None):
                 fail('unsafe_storage_archive')
             digest = hashlib.sha256()
             size = 0
+            content = bytearray() if projection is not None else None
             while True:
                 block = file_stream.read(1024 * 1024)
                 if not block:
                     break
                 digest.update(block)
                 size += len(block)
+                if content is not None:
+                    content.extend(block)
             if size != member.size:
                 fail('unsafe_storage_archive')
             entries[name] = {'type': 'file', 'mode': member.mode & 0o7777, 'size': size, 'sha256': digest.hexdigest()}
+            if projection is not None:
+                projection[name]['data'] = bytes(content)
         if limits is not None:
             for name in entries:
                 parts = name.split('/')
@@ -1747,7 +1767,44 @@ def _tar_tree(stream, compressed=False, limits=None):
         fail('unsafe_storage_archive')
     finally:
         archive.close()
+    if projection is not None:
+        if entries.get('.', {}).get('type') != 'directory':
+            fail('unsafe_storage_archive')
+        for name in entries:
+            parts = name.split('/')
+            if any(entries.get('/'.join(parts[:i]), {}).get('type') != 'directory' for i in range(1, len(parts))):
+                fail('unsafe_storage_archive')
+            projection[name].update(entries[name])
     return hashlib.sha256(STATE.canonical([{'name': name, **entries[name]} for name in sorted(entries)])).hexdigest()
+
+
+def _bounded_gzip_tar_tree(stream, limits, projection=None):
+    """Shared expansion/footer/trailing-data checks, including materialization."""
+    class BoundedExpansion:
+        def __init__(self, source):
+            self.source, self.total = source, 0
+
+        def read(self, size=-1):
+            if size < 0 or size > 1024 * 1024:
+                fail('unsafe_storage_archive')
+            block = self.source.read(min(size, limits['expanded'] - self.total + 1))
+            self.total += len(block)
+            if self.total > limits['expanded']:
+                fail('unsafe_storage_archive')
+            return block
+    try:
+        with gzip.GzipFile(fileobj=stream, mode='rb') as expanded:
+            bounded = BoundedExpansion(expanded)
+            fingerprint = _tar_tree(bounded, limits=limits, projection=projection)
+            while True:
+                block = bounded.read(1024 * 1024)
+                if not block:
+                    break
+                if block.strip(b'\0'):
+                    fail('unsafe_storage_archive')
+            return fingerprint
+    except (OSError, EOFError, tarfile.TarError):
+        fail('unsafe_storage_archive')
 
 
 def _archive_tree(path):
@@ -1876,35 +1933,7 @@ def verify_production_b0_artifacts(binding, inventory, key):
             fail('backup_manifest_invalid')
         streams['uploads.tar.gz'].seek(0)
 
-        class BoundedExpansion:
-            def __init__(self, source):
-                self.source, self.total = source, 0
-
-            def read(self, size=-1):
-                # Also bound tar extension-header allocations before tarfile can
-                # request an attacker-selected giant PAX/long-name buffer.
-                if size < 0 or size > 1024 * 1024:
-                    fail('unsafe_storage_archive')
-                block = self.source.read(min(size, PRODUCTION_B0_TAR_LIMITS['expanded'] - self.total + 1))
-                self.total += len(block)
-                if self.total > PRODUCTION_B0_TAR_LIMITS['expanded']:
-                    fail('unsafe_storage_archive')
-                return block
-
-        try:
-            with gzip.GzipFile(fileobj=streams['uploads.tar.gz'], mode='rb') as expanded:
-                bounded = BoundedExpansion(expanded)
-                fingerprint = _tar_tree(bounded, limits=PRODUCTION_B0_TAR_LIMITS)
-                # Consume the gzip footer and remaining padding: tarfile may
-                # stop at the first end marker before CRC/expansion is checked.
-                while True:
-                    block = bounded.read(1024 * 1024)
-                    if not block:
-                        break
-                    if block.strip(b'\0'):
-                        fail('unsafe_storage_archive')
-        except (OSError, EOFError, tarfile.TarError):
-            fail('unsafe_storage_archive')
+        fingerprint = _bounded_gzip_tar_tree(streams['uploads.tar.gz'], PRODUCTION_B0_TAR_LIMITS)
         if fingerprint != proof['dataFingerprints']['portalUploads']:
             fail('backup_storage_fingerprint_mismatch')
         reaffirm()

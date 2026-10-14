@@ -138,6 +138,40 @@ assert r._archive_tree(os.path.join(directory,'uploads.tar.gz'))==proof['dataFin
 `);
 });
 
+test('shared bounded upload projection preserves historical bytes while numeric owners remain independent', () => {
+  probe(String.raw`
+def owned(uid,pax=False):
+ out=io.BytesIO()
+ with tarfile.open(fileobj=out,mode='w') as tar:
+  for name,kind,data in (('.',tarfile.DIRTYPE,b''),('empty',tarfile.DIRTYPE,b''),('file',tarfile.REGTYPE,b'\0\xff')):
+   member=tarfile.TarInfo(name);member.type=kind;member.uid=member.gid=uid;member.mode=0o755 if kind==tarfile.DIRTYPE else 0o644
+   if pax:member.pax_headers={'mtime':'0.5'}
+   member.size=len(data);tar.addfile(member,io.BytesIO(data) if data else None)
+ return gzip.compress(out.getvalue(),mtime=0)
+limits=dict(r.PRODUCTION_B0_TAR_LIMITS,expanded=16*1024*1024)
+projections=[];hashes=[]
+for uid in (0,1000):
+ raw=owned(uid);projection={}
+ historical=r._tar_tree(io.BytesIO(raw),compressed=True)
+ projected=r._bounded_gzip_tar_tree(io.BytesIO(raw),limits,projection=projection)
+ assert historical==projected
+ assert projection['.']['uid']==projection['.']['gid']==uid
+ assert projection['file']['data']==b'\0\xff'
+ hashes.append(historical);projections.append(projection)
+assert hashes[0]==hashes[1] # Never silently add ownership to the old fingerprint.
+assert projections[0]!=projections[1]
+gold=[{'name':'.','type':'directory','mode':0o755,'size':0,'sha256':None},
+ {'name':'empty','type':'directory','mode':0o755,'size':0,'sha256':None},
+ {'name':'file','type':'file','mode':0o644,'size':2,'sha256':sha(b'\0\xff')}]
+assert hashes[0]==sha(s.canonical(gold))
+raw=owned(1000,True)
+assert r._bounded_gzip_tar_tree(io.BytesIO(raw),limits)==r._tar_tree(io.BytesIO(raw),compressed=True)
+try:r._bounded_gzip_tar_tree(io.BytesIO(raw),limits,projection={})
+except r.ControlError as error:assert str(error)=='unsafe_storage_archive'
+else:raise AssertionError('materialization must not ignore PAX')
+`);
+});
+
 test('B0 rejects tampering, ordered-manifest and signed-context mismatches, partial/unbound paths (real bytes)', () => {
   probe(String.raw`
 for name in ('postgres.dump','uploads.tar.gz','manifest.sha256','preauthority-proof.json'):
