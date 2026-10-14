@@ -225,6 +225,37 @@ test('native guard rejects before commands and does not accept target flags', as
   assert.equal(calls, 0);
 });
 
+test('actual dump normalizer and schema diagnostics never accept order, SQL, owner or comment changes', async () => {
+  await probe(String.raw`
+before=b'\\restrict alpha\n-- Name: fixture; Type: TABLE; Owner: postgres\nCREATE TABLE fixture (id integer);\nALTER TABLE fixture OWNER TO postgres;\n\\unrestrict alpha\n'
+same=before.replace(b'alpha',b'beta')
+assert E.normalize_dump(before)==E.normalize_dump(same)
+expected=E.normalize_dump(before)
+E.assert_schema_dump(expected,E.normalize_dump(same),H(expected))
+cases=[
+ (expected.replace(b'CREATE TABLE fixture (id integer);\nALTER TABLE fixture OWNER TO postgres;\n',b'ALTER TABLE fixture OWNER TO postgres;\nCREATE TABLE fixture (id integer);\n'),'schema_line_order_delta'),
+ (expected.replace(b'-- Name: fixture',b'-- Name: changed'),'schema_comment_delta'),
+ (expected.replace(b'id integer',b'id text'),'schema_sql_delta'),
+ (expected.replace(b'OWNER TO postgres',b'OWNER TO portal_api'),'schema_sql_delta'),
+ (expected+b'CREATE TABLE unexpected(id integer);\n','schema_sql_delta'),
+ (expected+b'GRANT SELECT ON fixture TO PUBLIC;\n','schema_sql_delta'),
+]
+for observed,category in cases:
+ try:E.assert_schema_dump(expected,observed,H(expected))
+ except E.SchemaMismatch as error:
+  failure,code=E.failure_for_exception(error,'uploads');assert (failure,code)==(category,73)
+  frame=E.parse_child_frame(E.child_frame(failure),code,'uploads')
+  assert frame['location']=='schema_compare' and 'fixture' not in E.child_frame(failure).decode()
+ else:assert False
+refused(lambda:E.assert_schema_dump(expected,expected,'f'*64))
+# Comment classification is not SQL semantic equivalence (including bodies).
+body=b'CREATE FUNCTION x() RETURNS text AS $$\n--original\n$$ LANGUAGE sql;\n'
+assert E.schema_delta(body,body.replace(b'original',b'changed'))=='schema_comment_delta'
+assert E.failure_for_exception(E.Refused('schema_sql_delta'),'uploads')==('refused',73)
+assert S.read_state(str(root))[2]['admission']=='closed'
+`);
+});
+
 test('finite child diagnostics preserve real-journal post-restore refusals without advancing or leaking errors', async () => {
   await probe(String.raw`
 refused(lambda:executor().execute('database'))

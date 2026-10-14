@@ -6,6 +6,7 @@ No user-supplied SQL, target, key, request path or recovery fault is a CLI input
 The internal executor consumes authenticated bytes and the real signed journal.
 """
 import gzip
+from collections import Counter
 import hashlib
 import hmac
 import importlib.util
@@ -28,10 +29,11 @@ NGINX = 'nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac
 HELPERS = ('payload-control-state.py', 'payload-control-inventory.py', 'payload-control-runtime.py', 'payload-install-recovery-isolated.py')
 CAP = 16 * 1024 * 1024
 CHILD_LOCATIONS = ('entry_authentication', 'boundary', 'security_compare', 'role_authentication',
-                   'schema_compare', 'database_dump_compare', 'database_data_compare', 'database_restore',
+                   'schema_compare', 'schema_dump', 'schema_normalization', 'database_dump_compare', 'database_data_compare', 'database_restore',
                    'checkpoint', 'uploads_clear', 'uploads_extract', 'uploads_compare', 'complete', 'unknown')
 CHILD_FAILURES = ('none', 'expected_interruption', 'refused', 'unknown', 'expected_interruption_missing',
-                  'child_exit', 'checkpoint_mismatch', 'malformed_frame')
+                  'child_exit', 'checkpoint_mismatch', 'malformed_frame', 'schema_line_order_delta',
+                  'schema_comment_delta', 'schema_sql_delta')
 DIAGNOSTIC_LOCATION = 'entry_authentication'
 
 
@@ -64,7 +66,10 @@ def parse_child_frame(raw, exit_code, fault):
         require(canonical(value['proof']) == canonical({'kind': 'isolated-b0-recovery-proof', 'dataVerified': True, 'admissionClosed': True,
                                   'readinessPending': True, 'productionAuthorized': False, 'applicationRollbackExecuted': False}))
     else:
-        require(exit_code == 73 and value['proof'] is None and value['failure'] in ('refused', 'unknown', 'expected_interruption_missing'))
+        require(exit_code == 73 and value['proof'] is None and value['failure'] in ('refused', 'unknown', 'expected_interruption_missing',
+                    'schema_line_order_delta', 'schema_comment_delta', 'schema_sql_delta'))
+        if value['failure'].startswith('schema_'):
+            require(value['location'] == 'schema_compare')
     return value
 
 
@@ -87,7 +92,13 @@ class Refused(Exception):
     pass
 
 
+class SchemaMismatch(Refused):
+    pass
+
+
 def failure_for_exception(error, fault):
+    if type(error) is SchemaMismatch and error.args in (('schema_line_order_delta',), ('schema_comment_delta',), ('schema_sql_delta',)):
+        return error.args[0], 73
     if isinstance(error, Refused):
         if error.args == ('isolated_b0_test_interruption',) and fault in ('database', 'uploads'):
             return 'expected_interruption', 72
@@ -159,6 +170,36 @@ def normalize_dump(raw):
     if starts:
         require(starts[0].split()[1] == ends[0].split()[1])
     return b''.join(line for line in lines if line not in starts + ends)
+
+
+def schema_delta(expected, observed):
+    """Diagnostic ONLY, never equality/authorization or SQL normalization.
+
+    Inputs are the exact normalized dump bytes whose hashes failed comparison.
+    A comment-looking line can be function-body content: this classification
+    deliberately makes NO assertion of SQL semantic equivalence.
+    """
+    require(isinstance(expected, bytes) and isinstance(observed, bytes) and len(expected) <= CAP and len(observed) <= CAP)
+    before, after = expected.splitlines(keepends=True), observed.splitlines(keepends=True)
+    if Counter(before) == Counter(after):
+        return 'schema_line_order_delta'
+    def non_comment(lines):
+        return [line for line in lines if not line.startswith(b'--') and line.strip()]
+    if non_comment(before) == non_comment(after):
+        return 'schema_comment_delta'
+    return 'schema_sql_delta'
+
+
+def assert_schema_dump(expected, observed, approved_digest):
+    mark('schema_compare')
+    # The retained baseline is diagnostic material, not a replacement authority.
+    require(digest(expected) == approved_digest)
+    if digest(observed) != approved_digest:
+        try:
+            category = schema_delta(expected, observed)
+        except Exception:
+            category = 'schema_sql_delta'
+        raise SchemaMismatch(category)
 
 
 def uploads_fingerprint(raw):
@@ -473,7 +514,8 @@ def native_qualification():
         # schema, sequence/other table and default ACL drift remains a refusal.
         security_sql = security_sql.replace("'owners',", "'otherAcls',(SELECT json_agg(row(c.relname,c.relacl)::text ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname<>'recovery_records'),'columnAcls',(SELECT json_agg(row(c.relname,a.attname,a.attacl)::text ORDER BY c.relname,a.attnum) FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND a.attacl IS NOT NULL),'functionAcls',(SELECT json_agg(row(p.oid::regprocedure::text,p.proacl)::text ORDER BY p.oid::regprocedure::text) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'),'schemaAcl',(SELECT nspacl::text FROM pg_namespace WHERE nspname='public'),'defaultAcls',(SELECT json_agg(row(defaclrole,defaclnamespace,defaclobjtype,defaclacl)::text ORDER BY defaclrole,defaclnamespace,defaclobjtype) FROM pg_default_acl),'owners',")
         roles = digest(sql(security_sql))
-        schema = digest(normalize_dump(dump('--schema-only', '--no-privileges')))
+        schema_bytes = normalize_dump(dump('--schema-only', '--no-privileges'))
+        schema = digest(schema_bytes)
         db_fingerprint = digest(normalize_dump(dump()))
         raw_uploads = storage('tar -czf - -C /data .')
         baseline = {'database': db_fingerprint, 'schema': schema, 'roles': roles, 'uploads': uploads_fingerprint(raw_uploads),
@@ -548,8 +590,11 @@ def native_qualification():
                     mark('role_authentication')
                     require(authenticate_role('portal_api', password) == b'portal_api')
                     require(authenticate_role('portal_cron', cron_password) == b'portal_cron')
-                    mark('schema_compare')
-                    require(digest(normalize_dump(dump('--schema-only', '--no-privileges'))) == approved['schema'])
+                    mark('schema_dump')
+                    observed_schema = dump('--schema-only', '--no-privileges')
+                    mark('schema_normalization')
+                    observed_schema = normalize_dump(observed_schema)
+                    assert_schema_dump(schema_bytes, observed_schema, approved['schema'])
 
                 def database_matches(self, approved):
                     mark('database_dump_compare')

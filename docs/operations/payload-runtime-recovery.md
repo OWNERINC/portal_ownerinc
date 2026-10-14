@@ -133,6 +133,27 @@ reportada pelo cleanup, não evidência independente. Instrumentação não modi
 restore, comparação, retries, transições ou timeouts. Native ainda NOT RUN para
 esses bytes diagnósticos; testes portáteis não demonstram correção da falha CI.
 
+CI 38590676716 em 7a67ebb localizou a recusa em `schema_compare`, após os checks
+security/role. Naquela revisão a marca também cobria execução de pg_dump e
+normalização: não demonstra, sozinha, que o hash divergiu. Os novos locais
+`schema_dump`, `schema_normalization`, `schema_compare` separam essas operações.
+O baseline normalizado já capturado é retido privadamente, ligado ao mesmo hash
+autenticado. Se há divergência, emite somente `schema_line_order_delta`
+(mesmo multiset de linhas), `schema_comment_delta` (mesma sequência após remover
+linhas vazias ou iniciadas por `--`) ou `schema_sql_delta` (outros casos).
+Essas categorias são exclusivamente diagnósticas: todas recusam, sem considerar
+SQL semanticamente equivalente; comentários aparentes podem estar dentro de
+function bodies. Nenhum nome de objeto, SQL ou dump é publicado. Comparação de
+schema continua byte/hash exata após a normalização histórica do par restrict;
+comparações de owners/ACLs, roles e fingerprints de dados não mudam.
+
+Fonte consultada: PostgreSQL `REL_16_STABLE`, `src/bin/pg_dump/pg_dump.c`, que
+ordena objetos por tipo/nome e dependências com intenção explícita de dumps
+idênticos para schemas logicamente idênticos. Isso não prova estabilidade em
+todos os casos nem identifica o delta deste runner. Não remover SQL, owners,
+constraints ou ordenar linhas para fazer o gate passar. A causa histórica segue
+não confirmada; native NOT RUN para esta instrumentação.
+
 ### Observação pura do fence destrutivo — sem collector ou executor
 
 #### Qualificação isolada da topologia (TEST-only)

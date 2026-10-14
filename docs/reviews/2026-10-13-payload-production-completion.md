@@ -1,5 +1,11 @@
 # Payload production completion: initial decision and evidence
 
+## B0 schema diagnostic boundaries
+
+Candidate `38590676716` failed with `recover_uploads_interruption;child:schema_compare:refused;cleanup:none`. That location previously included dump execution, normalization and comparison, so it did not establish a schema hash mismatch. Those operations now have distinct finite locations. An actual mismatch receives a bounded line-order/comment/SQL delta category; every mismatch still refuses. Private baseline bytes are checked against the authenticated digest. No schema content or exception text is exported, and no restore/comparison acceptance is relaxed.
+
+Independent review returned `ship`. Primary complete `npm run verify` passed **Portal 1,919 PASS / 19 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-b0-schema-diagnostics-verify.log`). Native cause and B0 recovery qualification remain pending. No VPS operations occurred.
+
 ## B0 child diagnostics after first native failure
 
 Candidate `38588686813` at `4903533` failed the required native B0 step at `recover_uploads_interruption;cleanup:none`; validation and production deployment were skipped. The preceding expected database interruption and signed pending checkpoint passed, but database equality and whether uploads were reached were not established. The reported cleanup outcome is not independent resource-removal evidence.

@@ -3,8 +3,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-export const childLocations = ['entry_authentication', 'boundary', 'security_compare', 'role_authentication', 'schema_compare', 'database_dump_compare', 'database_data_compare', 'database_restore', 'checkpoint', 'uploads_clear', 'uploads_extract', 'uploads_compare', 'complete', 'unknown'];
-export const childFailures = ['none', 'expected_interruption', 'refused', 'unknown', 'expected_interruption_missing', 'child_exit', 'checkpoint_mismatch', 'malformed_frame'];
+export const childLocations = ['entry_authentication', 'boundary', 'security_compare', 'role_authentication', 'schema_compare', 'schema_dump', 'schema_normalization', 'database_dump_compare', 'database_data_compare', 'database_restore', 'checkpoint', 'uploads_clear', 'uploads_extract', 'uploads_compare', 'complete', 'unknown'];
+export const childFailures = ['none', 'expected_interruption', 'refused', 'unknown', 'expected_interruption_missing', 'child_exit', 'checkpoint_mismatch', 'malformed_frame', 'schema_line_order_delta', 'schema_comment_delta', 'schema_sql_delta'];
 export function finiteDiagnostic(value) {
   const pattern = new RegExp(`^isolated_b0_recovery_qualification_failed:(preflight|create_resources|capture_baseline|unsupported_schema_negative|damage_fixture|recover_database_interruption|recover_uploads_interruption|recover_final|verify_preserved_evidence|complete|none|guard);child:(${childLocations.join('|')}):(${childFailures.join('|')});cleanup:(none|refused)$`, 'u');
   return typeof value === 'string' && !value.includes('\n') && !value.includes('\r') && pattern.test(value)
