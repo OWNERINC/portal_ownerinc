@@ -699,6 +699,346 @@ def _validate_portal_session_grants(value, mode):
     fail('unsupported_portal_grant_mode')
 
 
+LEGACY_SECURITY_MAX_RECORDS = 20000
+LEGACY_SECURITY_MAX_BYTES = 4 * 1024 ** 2
+LEGACY_SECURITY_ROLES = ('portal_api', 'portal_cron')
+LEGACY_SECURITY_PRIVILEGES = {
+    'database': ('CONNECT', 'CREATE', 'TEMPORARY'), 'schema': ('USAGE', 'CREATE'),
+    'table': tuple(SESSION_TABLE_PRIVILEGES), 'column': ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES'),
+    'sequence': ('USAGE', 'SELECT', 'UPDATE'), 'routine': ('EXECUTE',), 'type': ('USAGE',),
+}
+
+
+def portal_legacy_security_observation_sql():
+    """Fixed PG16 catalog query only. NOT registered or executed by this module.
+
+    Future authenticated transport must enforce a 30s process/4MiB byte bound.
+    Catalog rows are capped before JSON aggregation; overflow never truncates.
+    """
+    return r"""
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL search_path = pg_catalog;
+SET LOCAL statement_timeout = '20s';
+SET LOCAL lock_timeout = '2s';
+SET LOCAL timezone = 'UTC';
+SET LOCAL datestyle = 'ISO, YMD';
+WITH
+scope AS MATERIALIZED (SELECT pg_catalog.current_database()='portal' AND
+ pg_catalog.current_setting('server_version_num')::integer/10000=16 AS ok),
+db AS MATERIALIZED (SELECT oid, datname, datdba, datacl FROM pg_catalog.pg_database WHERE datname=pg_catalog.current_database()),
+roles AS MATERIALIZED (SELECT oid, rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
+  rolinherit, rolreplication, rolbypassrls, rolconnlimit, rolvaliduntil
+  FROM pg_catalog.pg_roles WHERE rolname IN ('portal_api','portal_cron')),
+objects AS (
+ SELECT 'database'::text AS object_type, ''::text AS schema, d.datname::text AS name, ''::text AS subname,
+ d.datdba AS owner, d.datacl AS acl, 'd'::"char" AS acl_kind, d.oid, 0::integer AS subid, false AS unsupported
+ FROM db d
+ UNION ALL SELECT 'schema','',n.nspname,'',n.nspowner,n.nspacl,'n',n.oid,0,false
+ FROM pg_catalog.pg_namespace n WHERE n.nspname='public'
+ UNION ALL SELECT CASE WHEN c.relkind='S' THEN 'sequence' ELSE 'table' END,n.nspname,c.relname,'',
+ c.relowner,c.relacl,CASE WHEN c.relkind='S' THEN 's'::"char" ELSE 'r'::"char" END,c.oid,0,
+ c.relkind NOT IN ('r','S') OR c.relrowsecurity OR c.relforcerowsecurity
+ OR EXISTS(SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid=c.oid)
+ OR EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=c.oid AND NOT t.tgisinternal)
+ OR EXISTS(SELECT 1 FROM pg_catalog.pg_rewrite w WHERE w.ev_class=c.oid AND w.rulename<>'_RETURN')
+ FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relkind NOT IN ('i','I','t')
+ UNION ALL SELECT 'column',n.nspname,c.relname,a.attname,c.relowner,a.attacl,'c',c.oid,a.attnum,false
+ FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+ JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f') AND a.attnum>0 AND NOT a.attisdropped
+ UNION ALL SELECT 'routine',n.nspname,p.proname,pg_catalog.pg_get_function_identity_arguments(p.oid),
+ p.proowner,p.proacl,'f',p.oid,0,p.prosecdef OR p.proconfig IS NOT NULL OR p.prokind NOT IN ('f','p')
+ FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'
+ UNION ALL SELECT 'type',n.nspname,t.typname,'',t.typowner,t.typacl,'T',t.oid,0,false
+ FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public'
+ UNION ALL SELECT 'default',COALESCE(n.nspname,''),pg_catalog.pg_get_userbyid(a.defaclrole),a.defaclobjtype::text,
+ a.defaclrole,a.defaclacl,a.defaclobjtype,a.oid,0,false
+ FROM pg_catalog.pg_default_acl a LEFT JOIN pg_catalog.pg_namespace n ON n.oid=a.defaclnamespace
+ WHERE a.defaclnamespace=0 OR n.nspname='public'
+),
+bounded_objects AS MATERIALIZED (SELECT * FROM objects WHERE (SELECT ok FROM scope) LIMIT 20001),
+object_budget AS MATERIALIZED (SELECT count(*)<=20000 AS ok FROM bounded_objects),
+privileges(object_type,privilege) AS (VALUES
+ ('database','CONNECT'),('database','CREATE'),('database','TEMPORARY'),('schema','USAGE'),('schema','CREATE'),
+ ('table','SELECT'),('table','INSERT'),('table','UPDATE'),('table','DELETE'),('table','TRUNCATE'),('table','REFERENCES'),('table','TRIGGER'),
+ ('column','SELECT'),('column','INSERT'),('column','UPDATE'),('column','REFERENCES'),
+ ('sequence','USAGE'),('sequence','SELECT'),('sequence','UPDATE'),('routine','EXECUTE'),('type','USAGE')),
+effective AS (
+ SELECT o.*,r.oid AS role_oid,r.rolname,v.privilege FROM bounded_objects o
+ CROSS JOIN roles r JOIN privileges v ON v.object_type=o.object_type
+ WHERE (SELECT ok FROM object_budget)
+),
+records AS (
+ SELECT pg_catalog.jsonb_build_object('kind','role','name',r.rolname,'login',r.rolcanlogin,'superuser',r.rolsuper,
+ 'createDatabase',r.rolcreatedb,'createRole',r.rolcreaterole,'inherit',r.rolinherit,'replication',r.rolreplication,
+ 'bypassRls',r.rolbypassrls,'connectionLimit',r.rolconnlimit,'validUntil',r.rolvaliduntil::text) AS record FROM roles r
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','membership','role',pg_catalog.pg_get_userbyid(m.roleid),
+ 'member',pg_catalog.pg_get_userbyid(m.member),'grantor',pg_catalog.pg_get_userbyid(m.grantor),
+ 'admin',m.admin_option,'inherit',m.inherit_option,'set',m.set_option)
+ FROM pg_catalog.pg_auth_members m WHERE m.roleid IN (SELECT oid FROM roles) OR m.member IN (SELECT oid FROM roles)
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','settings','role',r.rolname,'present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_db_role_setting x WHERE x.setrole=r.oid OR
+ (x.setrole=0 AND x.setdatabase=(SELECT oid FROM db)))) FROM roles r
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','object','objectType',o.object_type,'schema',o.schema,
+ 'name',o.name,'subname',o.subname,'owner',pg_catalog.pg_get_userbyid(o.owner),'aclNull',o.acl IS NULL,
+ 'unsupported',o.unsupported) FROM bounded_objects o
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','acl','objectType',o.object_type,'schema',o.schema,
+ 'name',o.name,'subname',o.subname,'grantor',pg_catalog.pg_get_userbyid(a.grantor),
+ 'grantee',CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(a.grantee) END,
+ 'privilege',a.privilege_type,'grantable',a.is_grantable)
+ FROM bounded_objects o CROSS JOIN LATERAL pg_catalog.aclexplode(
+ COALESCE(o.acl,pg_catalog.acldefault(o.acl_kind,o.owner))) a WHERE (SELECT ok FROM object_budget)
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','effective','objectType',o.object_type,'schema',o.schema,
+ 'name',o.name,'subname',o.subname,'role',o.rolname,'privilege',o.privilege,
+ 'allowed',CASE o.object_type
+ WHEN 'database' THEN pg_catalog.has_database_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'schema' THEN pg_catalog.has_schema_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'table' THEN pg_catalog.has_table_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'column' THEN pg_catalog.has_column_privilege(o.role_oid,o.oid,o.subid::smallint,o.privilege)
+ WHEN 'sequence' THEN pg_catalog.has_sequence_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'routine' THEN pg_catalog.has_function_privilege(o.role_oid,o.oid,o.privilege)
+ WHEN 'type' THEN pg_catalog.has_type_privilege(o.role_oid,o.oid,o.privilege) END,
+ 'grantable',CASE o.object_type
+ WHEN 'database' THEN pg_catalog.has_database_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'schema' THEN pg_catalog.has_schema_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'table' THEN pg_catalog.has_table_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'column' THEN pg_catalog.has_column_privilege(o.role_oid,o.oid,o.subid::smallint,o.privilege||' WITH GRANT OPTION')
+ WHEN 'sequence' THEN pg_catalog.has_sequence_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'routine' THEN pg_catalog.has_function_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION')
+ WHEN 'type' THEN pg_catalog.has_type_privilege(o.role_oid,o.oid,o.privilege||' WITH GRANT OPTION') END) FROM effective o
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','sequenceDependency','schema',n.nspname,'name',c.relname,
+ 'tableSchema',tn.nspname,'table',tc.relname,'column',a.attname,'dependency',d.deptype::text)
+ FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ JOIN pg_catalog.pg_depend d ON d.classid='pg_catalog.pg_class'::pg_catalog.regclass AND d.objid=c.oid
+ AND d.refclassid='pg_catalog.pg_class'::pg_catalog.regclass AND d.deptype IN ('a','i')
+ JOIN pg_catalog.pg_class tc ON tc.oid=d.refobjid JOIN pg_catalog.pg_namespace tn ON tn.oid=tc.relnamespace
+ JOIN pg_catalog.pg_attribute a ON a.attrelid=tc.oid AND a.attnum=d.refobjsubid
+ WHERE n.nspname='public' AND c.relkind='S'
+ -- PG16 shared dependency kinds o/a/i/r reference roles (t references tablespaces).
+ -- Only an existence flag is returned; no other database is queried.
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','guard','name','externalRoleDependencies','present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_shdepend d WHERE d.deptype IN ('o','a','i','r')
+ AND d.refobjid IN (SELECT oid FROM roles) AND NOT
+ (d.dbid=(SELECT oid FROM db) OR (d.dbid=0 AND d.classid='pg_catalog.pg_database'::pg_catalog.regclass AND d.objid=(SELECT oid FROM db)))))
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','guard','name','outsidePublicObjects','present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_namespace n WHERE n.nspname NOT IN ('public','pg_catalog','information_schema')
+ AND n.nspname !~ '^pg_(toast|temp)(_|$)'))
+ UNION ALL SELECT pg_catalog.jsonb_build_object('kind','guard','name','largeObjects','present',
+ EXISTS(SELECT 1 FROM pg_catalog.pg_largeobject_metadata))
+),
+bounded_records AS MATERIALIZED (SELECT record FROM records WHERE (SELECT ok FROM scope) LIMIT 20001),
+budget AS MATERIALIZED (SELECT count(*) AS count, COALESCE(sum(pg_catalog.octet_length(record::text)),0) AS bytes FROM bounded_records),
+gate AS MATERIALIZED (SELECT (SELECT ok FROM object_budget) AND count<=20000 AND bytes+count*2+1024<=4194304
+ AND (SELECT ok FROM scope) AS ok FROM budget),
+accepted AS MATERIALIZED (SELECT b.record FROM bounded_records b WHERE (SELECT ok FROM gate)),
+document AS (SELECT pg_catalog.jsonb_build_object('schemaVersion',1,'kind','portal-legacy-security-observation-v1',
+ 'serverMajor',16,'database',pg_catalog.jsonb_build_object('systemIdentifier',
+ (SELECT system_identifier::text FROM pg_catalog.pg_control_system()),'databaseOid',(SELECT oid::text FROM db),
+ 'databaseName',pg_catalog.current_database()),'records',COALESCE(pg_catalog.jsonb_agg(record),'[]'::pg_catalog.jsonb)) AS value FROM accepted)
+SELECT CASE WHEN (SELECT ok FROM gate) THEN value ELSE
+ pg_catalog.jsonb_build_object('kind','portal-legacy-security-observation-refused') END::text FROM document;
+ROLLBACK;
+"""
+
+
+def _legacy_security_require(condition):
+    if not condition:
+        fail('legacy_security_observation_invalid')
+
+
+def validate_portal_legacy_security_observation(observation):
+    """Pure bounded validator/canonicalizer. No catalog execution or authority."""
+    if isinstance(observation, bytes):
+        _legacy_security_require(len(observation) <= LEGACY_SECURITY_MAX_BYTES)
+        observation = _strict_json(observation, 'legacy_security_observation_invalid')
+    _legacy_security_require(isinstance(observation, dict) and set(observation) ==
+        {'schemaVersion', 'kind', 'serverMajor', 'database', 'records'})
+    _legacy_security_require(type(observation['schemaVersion']) is int and observation['schemaVersion'] == 1 and
+        type(observation['serverMajor']) is int and observation['serverMajor'] == 16 and
+        observation['kind'] == 'portal-legacy-security-observation-v1')
+    STATE._validate_database_identity(observation['database'])
+    _legacy_security_require(observation['database']['databaseName'] == 'portal')
+    records = observation['records']
+    _legacy_security_require(isinstance(records, list) and len(records) <= LEGACY_SECURITY_MAX_RECORDS)
+    shapes = {
+        'role': ('name login superuser createDatabase createRole inherit replication bypassRls connectionLimit validUntil',
+                 'login superuser createDatabase createRole inherit replication bypassRls'),
+        'membership': ('role member grantor admin inherit set', 'admin inherit set'),
+        'settings': ('role present', 'present'),
+        'object': ('objectType schema name subname owner aclNull unsupported', 'aclNull unsupported'),
+        'acl': ('objectType schema name subname grantor grantee privilege grantable', 'grantable'),
+        'effective': ('objectType schema name subname role privilege allowed grantable', 'allowed grantable'),
+        'sequenceDependency': ('schema name tableSchema table column dependency', ''),
+        'guard': ('name present', 'present'),
+    }
+    identity_fields = {
+        'role': ('name',), 'membership': ('role', 'member', 'grantor'), 'settings': ('role',),
+        'object': ('objectType', 'schema', 'name', 'subname'),
+        'acl': ('objectType', 'schema', 'name', 'subname', 'grantor', 'grantee', 'privilege'),
+        'effective': ('objectType', 'schema', 'name', 'subname', 'role', 'privilege'),
+        'sequenceDependency': ('schema', 'name'), 'guard': ('name',),
+    }
+    seen, objects, effective, roles, settings, guards, dependencies = set(), {}, set(), set(), set(), set(), set()
+    total_bytes = 0
+    for row in records:
+        _legacy_security_require(isinstance(row, dict) and isinstance(row.get('kind'), str) and row['kind'] in shapes)
+        kind = row['kind']
+        names, boolean_names = (set(part.split()) for part in shapes[kind])
+        _legacy_security_require(set(row) == names | {'kind'})
+        for name in names:
+            value = row[name]
+            if name in boolean_names:
+                _legacy_security_require(type(value) is bool)
+            elif kind == 'role' and name == 'connectionLimit':
+                _legacy_security_require(type(value) is int and -1 <= value <= 2147483647)
+            elif kind == 'role' and name == 'validUntil':
+                _legacy_security_require(value is None or isinstance(value, str) and
+                    re.fullmatch(r'(?:infinity|-infinity|[0-9T :.+-]{10,64})', value) is not None)
+            else:
+                _legacy_security_require(isinstance(value, str) and len(value.encode('utf-8')) <= 8192 and
+                                         not any(token in value for token in ('\0', '\n', '\r', '\t', '://')))
+                if name not in ('schema', 'subname'):
+                    _legacy_security_require(bool(value))
+        identity = (kind,) + tuple(row[name] for name in identity_fields[kind])
+        _legacy_security_require(identity not in seen)
+        seen.add(identity)
+        total_bytes += len(STATE.canonical(row)) + 1
+        _legacy_security_require(total_bytes <= LEGACY_SECURITY_MAX_BYTES)
+        if kind == 'role':
+            _legacy_security_require(row['name'] in LEGACY_SECURITY_ROLES)
+            roles.add(row['name'])
+        elif kind == 'settings':
+            _legacy_security_require(row['role'] in LEGACY_SECURITY_ROLES)
+            settings.add(row['role'])
+        elif kind == 'membership':
+            _legacy_security_require(row['role'] in LEGACY_SECURITY_ROLES or row['member'] in LEGACY_SECURITY_ROLES)
+        elif kind == 'guard':
+            _legacy_security_require(row['name'] in ('externalRoleDependencies', 'outsidePublicObjects', 'largeObjects'))
+            guards.add(row['name'])
+        elif kind in ('object', 'acl', 'effective'):
+            object_key = tuple(row[name] for name in ('objectType', 'schema', 'name', 'subname'))
+            _legacy_security_require(row['objectType'] in set(LEGACY_SECURITY_PRIVILEGES) | {'default'})
+            _legacy_security_require(row['schema'] in ('', 'public') and bool(row['name']))
+            if row['objectType'] in ('database', 'schema'):
+                _legacy_security_require(row['schema'] == row['subname'] == '' and
+                    row['name'] == ('portal' if row['objectType'] == 'database' else 'public'))
+            elif row['objectType'] == 'default':
+                _legacy_security_require(row['subname'] in ('r', 'S', 'f', 'T', 'n', 'L'))
+            else:
+                _legacy_security_require(row['schema'] == 'public' and
+                    (row['subname'] == '' if row['objectType'] in ('table', 'sequence', 'type') else True))
+                if row['objectType'] == 'column':
+                    _legacy_security_require(bool(row['subname']))
+            if kind == 'object':
+                if row['objectType'] == 'default':
+                    _legacy_security_require(row['name'] == row['owner'] and not row['aclNull'])
+                objects[object_key] = row
+            elif kind == 'effective':
+                _legacy_security_require(row['role'] in LEGACY_SECURITY_ROLES and
+                    row['privilege'] in LEGACY_SECURITY_PRIVILEGES.get(row['objectType'], ()) and
+                    (not row['grantable'] or row['allowed']))
+                effective.add(object_key + (row['role'], row['privilege']))
+            else:
+                privileges = LEGACY_SECURITY_PRIVILEGES.get(row['objectType'])
+                if row['objectType'] == 'default':
+                    privileges = {'r': LEGACY_SECURITY_PRIVILEGES['table'], 'S': LEGACY_SECURITY_PRIVILEGES['sequence'],
+                                  'f': ('EXECUTE',), 'T': ('USAGE',), 'n': ('USAGE', 'CREATE'), 'L': ('SELECT', 'UPDATE')}[row['subname']]
+                _legacy_security_require(row['privilege'] in privileges)
+        elif kind == 'sequenceDependency':
+            _legacy_security_require(row['schema'] == row['tableSchema'] == 'public' and row['dependency'] in ('a', 'i'))
+            dependencies.add(('sequence', row['schema'], row['name'], ''))
+    _legacy_security_require(roles == settings == set(LEGACY_SECURITY_ROLES) and guards ==
+                            {'externalRoleDependencies', 'outsidePublicObjects', 'largeObjects'})
+    _legacy_security_require(('database', '', 'portal', '') in objects and ('schema', '', 'public', '') in objects and
+                            ('table', 'public', 'cms_editor_sessions', '') in objects)
+    expected_effective = {key + (role, privilege) for key in objects for role in LEGACY_SECURITY_ROLES
+                          for privilege in LEGACY_SECURITY_PRIVILEGES.get(key[0], ())}
+    _legacy_security_require(effective == expected_effective)
+    _legacy_security_require(dependencies == {key for key in objects if key[0] == 'sequence'})
+    for row in records:
+        if row['kind'] == 'acl':
+            _legacy_security_require(tuple(row[k] for k in ('objectType', 'schema', 'name', 'subname')) in objects)
+        elif row['kind'] == 'object' and row['objectType'] == 'column':
+            _legacy_security_require(('table', row['schema'], row['name'], '') in objects)
+        elif row['kind'] == 'sequenceDependency':
+            _legacy_security_require(('column', row['tableSchema'], row['table'], row['column']) in objects)
+    result = dict(observation, records=sorted(records, key=STATE.canonical))
+    _legacy_security_require(len(STATE.canonical(result)) <= LEGACY_SECURITY_MAX_BYTES)
+    return result
+
+
+def check_portal_legacy_security_baseline(observation, body, approval, record, inventory, authority, approved_profile=None):
+    """Internal already-authenticated inputs only; no caller hash confers trust.
+
+    A profile is independently authenticated by a future caller. There is no
+    built-in profile or production collector/repair dispatcher in this slice.
+    """
+    observed = validate_portal_legacy_security_observation(observation)
+    STATE.validate_state_body(body)
+    intent = body.get('installIntent')
+    _legacy_security_require(intent is not None and intent['binding'].get('bindingVersion') == 3)
+    binding = intent['binding']
+    STATE.validate_production_correspondence(binding, approval, record, inventory, authority)
+    _legacy_security_require(observed['database'] == binding['portalTarget']['database'])
+    blockers = {'legacy_security_host_collection_not_integrated', 'legacy_security_pg16_qualification_required',
+                'legacy_role_exclusivity_unverified', 'legacy_credentials_unverified', 'legacy_recovery_executor_not_integrated'}
+    if intent['stage'] != 'reserved' or body.get('restoreIntent') is not None:
+        blockers.add('legacy_baseline_not_pregrant')
+    for row in observed['records']:
+        kind = row['kind']
+        if kind == 'role' and (not row['login'] or any(row[k] for k in ('superuser', 'createDatabase', 'createRole', 'replication', 'bypassRls'))):
+            blockers.add('legacy_runtime_role_attributes_unsafe')
+        if kind == 'membership':
+            blockers.add('legacy_runtime_role_membership_unsupported')
+        if kind == 'settings' and row['present']:
+            blockers.add('legacy_role_settings_unsupported')
+        if kind == 'effective' and row['grantable']:
+            blockers.add('legacy_runtime_grant_options_unsupported')
+        if kind == 'effective' and row['objectType'] == 'column' and row['name'] == 'cms_editor_sessions' and row['allowed']:
+            blockers.add('legacy_session_capability_mismatch')
+        if kind == 'object':
+            if row['owner'] in LEGACY_SECURITY_ROLES:
+                blockers.add('legacy_runtime_role_ownership_unsupported')
+            if row['unsupported']:
+                blockers.add('legacy_security_mechanism_unsupported')
+        if kind == 'guard' and row['present']:
+            blockers.add({'externalRoleDependencies': 'legacy_shared_role_dependencies',
+                          'outsidePublicObjects': 'legacy_outside_public_objects', 'largeObjects': 'legacy_large_objects_unsupported'}[row['name']])
+    session = {}
+    for role, field in (('portal_api', 'portalApiSessionPrivileges'), ('portal_cron', 'portalCronSessionPrivileges')):
+        session[field] = [next(row['allowed'] for row in observed['records'] if row['kind'] == 'effective' and
+            (row['objectType'], row['schema'], row['name'], row['subname'], row['role'], row['privilege']) ==
+            ('table', 'public', 'cms_editor_sessions', '', role, privilege)) for privilege in SESSION_TABLE_PRIVILEGES]
+    try:
+        _validate_portal_session_grants(session, 'legacy')
+    except ControlError:
+        blockers.add('legacy_session_capability_mismatch')
+    profile_matches = False
+    if approved_profile is None:
+        blockers.add('legacy_capability_profile_unapproved')
+    else:
+        _legacy_security_require(isinstance(approved_profile, dict) and set(approved_profile) ==
+                                {'kind', 'sourceCommit', 'previousImages', 'observation'})
+        _legacy_security_require(approved_profile['kind'] == 'portal-legacy-security-profile-v1')
+        _legacy_security_require(isinstance(approved_profile['sourceCommit'], str) and
+                                 re.fullmatch(r'[0-9a-f]{40}', approved_profile['sourceCommit']) is not None)
+        STATE._valid_images(approved_profile['previousImages'], payload=False)
+        expected = validate_portal_legacy_security_observation(approved_profile['observation'])
+        profile_matches = (approved_profile['sourceCommit'] == binding['sourceCommit'] and
+                           approved_profile['previousImages'] == binding['previousImages'] and expected == observed)
+        if not profile_matches:
+            blockers.add('legacy_capability_profile_mismatch')
+    return {'kind': 'portal-legacy-security-baseline-check-v1', 'observationSha256': hashlib.sha256(STATE.canonical(observed)).hexdigest(),
+            'sourceApprovalSha256': authority['sourceApprovalSha256'], 'policySha256': authority['policySha256'],
+            'recordSha256': authority['recordSha256'], 'installBindingSha256': hashlib.sha256(STATE.canonical(binding)).hexdigest(),
+            'b0ProofSha256': binding['b0']['proofSha256'], 'sourceCommit': binding['sourceCommit'],
+            'previousImages': binding['previousImages'], 'inventoryIdentity': binding['inventoryIdentity'],
+            'databaseIdentity': observed['database'], 'profileMatches': profile_matches, 'blockers': sorted(blockers),
+            'credentialVerified': False, 'clusterRoleMutationAuthorized': False, 'rollbackAuthorized': False,
+            'installationExecuted': False, 'deploymentAuthorized': False}
+
+
 def _portal_state(grant_mode):
     value = _psql_json('postgres', """
 SELECT json_build_object(

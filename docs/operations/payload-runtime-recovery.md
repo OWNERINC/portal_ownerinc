@@ -2,6 +2,89 @@
 
 ## P3 — inspeção de plano não é autorização de instalação
 
+### Primitivas de observação de segurança legada — sem collector de produção
+
+`portal_legacy_security_observation_sql()` em `ops/payload-control-runtime.py`
+produz SQL **fixo**, sem argumentos de database/role/SQL. Não executa SQL, não chama
+`_psql_json()` e não está no dispatcher. O transporte futuro precisa autenticar
+closure/host e impor timeout de processo de 30 s e limite de stdout de 4 MiB;
+o `_psql_json()` existente não fornece esses limites e não foi reutilizado como
+collector. Nenhuma operação de host é adicionada ao plano por este incremento.
+
+O SQL usa PG16, database `portal`, transação REPEATABLE READ READ ONLY, search_path
+`pg_catalog`, statement timeout 20 s, lock timeout 2 s, timezone UTC e DateStyle
+fixos; termina em ROLLBACK. Observa apenas `portal_api`/`portal_cron`, catálogos do
+database corrente e flags de dependências compartilhadas. Não consulta dados de
+outro database. Não seleciona passwords/verificadores, URLs ou valores de settings.
+Memberships vêm de `pg_auth_members`; atributos explícitos vêm de `pg_roles`, nunca
+de `pg_authid`. Dependências compartilhadas usam os tipos PG16 o/a/i/r de
+`pg_shdepend`, sem retornar identidades de objetos de outros projetos.
+
+CTEs limitam objetos e registros a 20.001 antes da agregação. Gates de contagem
+e soma de bytes recusam mais de 20.000 registros ou envelope acima do orçamento
+de 4 MiB; somente registros aceitos entram em `jsonb_agg`. Overflow, database ou
+major incompatível produz `portal-legacy-security-observation-refused`, que o
+validator rejeita: nunca retorna snapshot truncado como válido. São limites de
+resultado/contagem, não promessa de RSS ou plano de execução do servidor.
+
+`validate_portal_legacy_security_observation()` valida a forma exata
+`{schemaVersion:1, kind:portal-legacy-security-observation-v1, serverMajor:16,
+database, records}`. Records têm kinds fechados: role, membership, settings,
+object, acl, effective, sequenceDependency e guard. Rejeita duplicatas por
+identidade semântica, chaves extras, flags não booleanas, matriz efetiva incompleta,
+referências órfãs, URLs/controles em identificadores e limites excedidos; ordena
+somente os registros para gerar hash canônico. Não modifica a entrada.
+
+A cobertura inclui:
+- atributos não secretos, memberships incidentes nas duas direções (admin/inherit/set)
+  e presença de settings, sem seus valores;
+- owners e ACL-null versus ACL explícita de database, public, tabelas/colunas,
+  sequences, rotinas e tipos; ACLs explodidas preservam grantor/grantee/PUBLIC e
+  grant option, usando defaults efetivos quando a ACL é null;
+- default ACLs de criadores no database/public, identificadas por creator/schema/tipo;
+- privilégios efetivos completos para os dois roles, inclusive coluna, sequence,
+  acesso via PUBLIC/herança e grant option;
+- vínculo de sequence com tabela/coluna e flags para RLS/policies, triggers de
+  usuário, rules, views/kinds não suportados, security-definer/configuração de
+  rotinas, namespaces extras, large objects e dependências externas dos roles.
+
+`check_portal_legacy_security_baseline()` recebe somente inputs **já autenticados**
+por um futuro chamador. Confere state real e correspondência v3 com approval,
+record, inventory, authority e DB de `portalTarget`. Devolve hashes da observação,
+binding e B0 mais as identidades autenticadas, nunca os registros privados completos.
+Não afirma que coletou estes dados do host ou verificou bytes do B0: o proof hash
+é referência ao binding, e a verificação de artefatos continua sendo outro gate.
+
+Não existe perfil embutido inferido de `provision.js`. O perfil interno independente
+tem exatamente `kind: portal-legacy-security-profile-v1`, `sourceCommit`,
+`previousImages` e `observation`. Precisa corresponder ao commit e par de digests
+API/cron legado e à observação inteira, inclusive owners/ACLs/defaults. Ausência
+gera `legacy_capability_profile_unapproved`; diferença gera mismatch, não aceite
+de superset. Autenticação deste perfil não está implementada por esta unidade;
+nenhum JSON/flag de operador é convertido em autoridade.
+
+O checker usa apenas o modo `legacy` do verificador de privilégios de sessão,
+nunca `recovery`. Também bloqueia acesso de coluna à tabela de sessões, grant
+options dos runtime roles, atributos perigosos, memberships, settings, ownership
+pelos runtime roles e mecanismos/dependências não suportados, mesmo se um perfil
+combinar. `profileMatches` informa igualdade somente, não uma decisão de segurança.
+Só `reserved` é pré-grant; `portal_grants_pending` ou posterior produz
+`legacy_baseline_not_pregrant` e não pode aprender retroativamente um baseline.
+
+`credentialVerified`, `clusterRoleMutationAuthorized`, `rollbackAuthorized`,
+`installationExecuted` e `deploymentAuthorized` permanecem false. Collector,
+exclusividade de roles, credenciais, qualificação PG16 e executor permanecem
+blockers explícitos. Não há campos novos de state, reserva, SQL de reparo,
+ALTER ROLE/PASSWORD ou execução de migrate/provision neste passo.
+
+Testes desta unidade são fixtures Python/SQL textual; **não executam PostgreSQL**.
+Antes de um executor destrutivo, qualificar em PG16 isolado a consulta real,
+semântica PUBLIC/defaults/memberships/colunas/sequences, comportamento do par de
+imagens legado exato e restore `--no-owner --no-privileges` com reparo direcionado.
+Comprovar preservação de credenciais, owners, outros grantees/databases/projetos
+e retry interrompido sob fence real. O snapshot não prova exclusividade de
+consumidores dos roles fora dos catálogos.
+
 `ownerinc-payload-prepare.py --check-install-plan <receipt-id>` autentica o receipt
 real e classifica o journal de produção sob lease, sem executar `Runtime` ou
 `initialize_isolated`. Interface e limites em

@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Legacy security observation primitives — offline result
+
+Added a fixed Portal/PG16 catalog-only SQL producer, bounded observation validation and exact approved-profile comparison. No live collector, grant executor or state mutation was connected. Credentials and raw role settings are excluded; all recovery/deployment authorization flags remain false. A profile cannot authorize unsafe shared-role/ownership mechanisms or retroactively establish a pre-grant baseline.
+
+Review corrected both column-privilege calls to PG16's explicit `smallint` attribute-number signature; regression assertions cover both complete calls. Full verification then caught the missing fixed diagnostic identifier, which was added to the explicit context-gated allowlist. Both corrections received code-review `ship`. Primary focused checks passed **21 / zero failures**. Final full `npm run verify` passed **Portal 1,857 PASS / 16 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-legacy-security-baseline-final-verify.log`).
+
+No SQL has been executed for this block. Actual PG16 parsing/catalog semantics, exact legacy-image functionality, profile authentication and host transport remain pending qualification. No VPS operations occurred.
+
 ## B0 artifact integrity — bounded read-only verification
 
 The signed-binding-selected legacy two-store B0 verifier streams complete artifacts, validates their exact manifest/proof bindings, and compares the actual uploads tree with the signed fingerprint. Retained descriptors and final evidence/journal checks protect observation consistency. Success means `integrity_verified`, not database restoreability, live-source verification or rollback authorization; installation/deployment remain unauthorized.
