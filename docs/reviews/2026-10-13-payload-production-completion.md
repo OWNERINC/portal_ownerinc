@@ -1,5 +1,13 @@
 # Payload production completion: initial decision and evidence
 
+## Created-container lifecycle and retained cleanup diagnostics
+
+Candidate `38504402454` at `54b4652` passed the mandatory real PG16 observer gate, then failed native topology qualification with a cleanup-only error before recovery. Source-grounded reproduction showed that created Docker containers may have unallocated operational network IDs. The harness now accepts that representation only for consistent created-state containers, resolving exact configured keys against independently re-inspected owned networks. Running observations retain the populated-ID requirement. The original run's cause remains unconfirmed.
+
+Failure reporting now preserves the primary phase and finite cleanup failures separately, without raw subprocess output or identities. Actual qualify/finally regressions cover attachment/start failures and simultaneous ownership-refused cleanup. Independent review returned `ship`; native topology success remains pending.
+
+Primary complete `npm run verify` passed **Portal 1,885 PASS / 18 skips; CMS 448 PASS / 11 skips; zero failures; `verify: ok`** (`%LOCALAPPDATA%/Temp/opencode/payload-topology-created-lifecycle-verify.log`). No VPS operations occurred.
+
 ## Isolated fence topology and PG16 owner privileges
 
 Added the candidate-only isolated topology gate with nine owned containers, three unique networks, fixture TLS and separate PG16 clusters. It exercises actual projections through the existing validator, known-route closure, private stub readiness, alternate ingress and database negatives. Same-host probing does not establish independent production ingress coverage; proof retains that blocker and false production authorization flags. No production collector or mutation was added.

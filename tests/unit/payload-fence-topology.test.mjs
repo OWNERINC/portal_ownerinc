@@ -123,7 +123,7 @@ test('cleanup double refuses replaced resources, continues own cleanup and alway
   assert.ok(removed.every(a => /^[a-f0-9]{64}$/u.test(a.at(-1))));
 });
 
-test('actual qualify creation/finally path removes partial owned container after second network attachment fails', async () => {
+for (const failure of ['connect', 'start', 'replacement']) test(`actual creation/finally path with Moby created shape: ${failure}`, async () => {
   const networks = new Map(), removed = []; let container;
   const command = async (program, args) => {
     if (program === 'openssl') {
@@ -145,11 +145,17 @@ test('actual qualify creation/finally path removes partial owned container after
       container = structuredClone(fixture().cs[0]);
       container.Name = '/' + a[a.indexOf('--name') + 1]; container.Config.Labels = labels;
       const id = a[a.indexOf('--network') + 1]; container.HostConfig.NetworkMode = id;
-      container.NetworkSettings.Networks = { partial: { NetworkID: id, Aliases: ['nginx'] } };
-      networks.get(id).Containers[container.Id] = {};
+      container.State.Status = 'created';
+      container.NetworkSettings.Networks = { [networks.get(id).Name]: { NetworkID: '', EndpointID: '', IPAddress: '', GlobalIPv6Address: '', Aliases: ['nginx'] } };
       return container.Id;
     }
-    if (a[0] === 'network' && a[1] === 'connect') throw new Error('injected second attachment failure');
+    if (a[0] === 'network' && a[1] === 'connect') {
+      if (failure === 'replacement') container.Image = 'sha256:' + 'f'.repeat(64);
+      if (failure !== 'start') throw new Error('SECRET failed attachment ID hostname');
+      container.NetworkSettings.Networks[networks.get(a.at(-2)).Name] = { NetworkID: '', EndpointID: '', IPAddress: '', GlobalIPv6Address: '', Aliases: ['nginx'] };
+      return '';
+    }
+    if (a[0] === 'start') throw new Error('SECRET start failure');
     if (a[0] === 'inspect') { assert.equal(a[1], container.Id); return JSON.stringify([container]); }
     if (a[0] === 'rm') {
       assert.equal(a[2], container.Id); removed.push(container.Id);
@@ -160,9 +166,15 @@ test('actual qualify creation/finally path removes partial owned container after
     }
     assert.fail('unexpected command boundary');
   };
-  await assert.rejects(qualify({ env: validEnv, platform: 'linux', command }), /fence_topology_qualification_failed:create_containers/);
-  assert.equal(removed.length, 4); assert.equal(networks.size, 0);
-  assert.equal(new Set(removed).size, 4);
+  await assert.rejects(qualify({ env: validEnv, platform: 'linux', command }), error => {
+    assert.equal(error.primaryPhase, failure === 'start' ? 'create_container_start' : 'create_container_connect');
+    assert.deepEqual(error.cleanupFailures, failure === 'replacement' ? ['container_inspect'] : []);
+    assert.equal(error.message, `fence_topology_qualification_failed:${error.primaryPhase};cleanup:${failure === 'replacement' ? 'container_inspect' : 'none'}`);
+    return true;
+  });
+  assert.equal(removed.length, failure === 'replacement' ? 3 : 4); assert.equal(networks.size, 0);
+  assert.equal(new Set(removed).size, removed.length);
+  if (failure === 'replacement') assert.ok(!removed.includes(container.Id));
 });
 
 test('partial cleanup still rejects replacement and foreign attachments; observation requires completion', () => {
@@ -175,6 +187,41 @@ test('partial cleanup still rejects replacement and foreign attachments; observa
   delete cs[0].NetworkSettings.Networks.foreign;
   cs[0].Id = 'f'.repeat(64);
   assert.throws(() => assertOwnedContainer(cs[0], f.containers.nginx, f, { partial: true }));
+});
+
+test('Moby v28.5.1 created endpoint configuration has no operational NetworkID until start', () => {
+  // Source-grounded shape, NOT a capture from the failed CI host:
+  // moby/moby v28.5.1 daemon/container_operations.go:
+  // updateContainerNetworkSettings retains EndpointSettings from create;
+  // ConnectToNetwork(!Running) updates config without connectToNetwork allocation.
+  // daemon/inspect.go copies those EndpointSettings into the inspect response.
+  const { f, cs } = fixture();
+  const value = cs[0]; value.State.Status = 'created';
+  for (const endpoint of Object.values(value.NetworkSettings.Networks)) {
+    Object.assign(endpoint, { NetworkID: '', EndpointID: '', IPAddress: '', GlobalIPv6Address: '' });
+  }
+  assertOwnedContainer(value, f.containers.nginx, f, { configured: true });
+  assertOwnedContainer(value, f.containers.nginx, f, { partial: true });
+  assert.throws(() => assertOwnedContainer(value, f.containers.nginx, f));
+  value.State.Status = 'running'; value.State.Running = true;
+  assert.throws(() => assertOwnedContainer(value, f.containers.nginx, f, { configured: true }));
+  value.State.Status = 'created'; value.State.Running = false;
+  const key = f.networks[0].name;
+  value.NetworkSettings.Networks.unknown = value.NetworkSettings.Networks[key]; delete value.NetworkSettings.Networks[key];
+  assert.throws(() => assertOwnedContainer(value, f.containers.nginx, f, { partial: true }));
+});
+
+test('cleanup keeps finite independent refusal and occupied-network diagnostics without raw errors', async () => {
+  const { f } = fixture();
+  f.containers = { nginx: { attempted: true } }; f.networks = [{ attempted: true }];
+  await assert.rejects(cleanupOwnedResources(f, {
+    inspect: async () => { throw new Error('SECRET container-id hostname'); },
+    inspectNetwork: async () => ({ Containers: { 'SECRET-id': {} } }),
+    docker: async () => assert.fail('must not remove refused or occupied resource'), removePrivate: async () => {},
+  }), error => {
+    assert.deepEqual(error.cleanupFailures, ['container_inspect', 'network_not_empty']);
+    assert.ok(!error.message.includes('SECRET')); return true;
+  });
 });
 
 test('held transaction release is controlled by classifier completion, not elapsed delay', async () => {

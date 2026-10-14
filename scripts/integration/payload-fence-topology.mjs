@@ -34,7 +34,7 @@ export function guardEnvironment(env = process.env, platform = process.platform)
   assert.ok(!env.DOCKER_HOST && !env.DOCKER_CONTEXT);
 }
 
-export function assertOwnedContainer(value, entry, fixture, { partial = false } = {}) {
+export function assertOwnedContainer(value, entry, fixture, { partial = false, configured = false } = {}) {
   assert.match(value.Id, /^[a-f0-9]{64}$/u);
   if (entry.id) assert.equal(value.Id, entry.id);
   assert.equal(value.Name, `/${entry.name}`);
@@ -51,7 +51,21 @@ export function assertOwnedContainer(value, entry, fixture, { partial = false } 
   assert.ok(value.Mounts.every(m => m.Type === 'tmpfs'));
   const allowed = dbRoles.includes(entry.role) ? ['/fixture', '/var/lib/postgresql/data', '/var/run/postgresql'] : ['/fixture'];
   assert.deepEqual(Object.keys(value.HostConfig.Tmpfs || {}).sort(), allowed.sort());
-  const actualNetworks = Object.values(value.NetworkSettings.Networks).map(n => n.NetworkID).sort();
+  // Moby v28.5.1 container_operations.go updateContainerNetworkSettings and
+  // ConnectToNetwork(!Running) retain configuration without allocating endpoints.
+  // Only creation/cleanup may resolve an empty operational ID through the exact
+  // owned network key. Callers re-inspect these networks first. Running/stopped
+  // observations still require actual populated IDs; no projection fabricates IDs.
+  const actualNetworks = Object.entries(value.NetworkSettings.Networks).map(([key, endpoint]) => {
+    if (endpoint.NetworkID !== '') return endpoint.NetworkID;
+    assert.ok(configured || partial);
+    assert.equal(value.State.Status, 'created');
+    for (const field of ['Running', 'Paused', 'Restarting', 'Dead']) assert.equal(value.State[field], false);
+    for (const field of ['EndpointID', 'IPAddress', 'GlobalIPv6Address']) assert.equal(endpoint[field], '');
+    const network = fixture.networks.find(n => n.name === key || n.id === key);
+    assert.ok(network);
+    return network.id;
+  }).sort();
   const expectedNetworks = attachments(entry.role).map(i => fixture.networks[i].id).sort();
   // The one explicitly owned bypass is observable, never normalized away.
   if (entry.role === 'api' && actualNetworks.includes(fixture.networks[2].id)) expectedNetworks.push(fixture.networks[2].id);
@@ -144,23 +158,44 @@ export function projectSnapshot(rawContainers, rawNetworks, fixture) {
 }
 
 export async function cleanupOwnedResources(fixture, { inspect, inspectNetwork, docker, removePrivate }) {
-  let failed = false;
+  const failures = new Set();
   for (const e of Object.values(fixture.containers).reverse()) {
     if (!e.attempted) continue;
+    let operation = 'container_inspect';
     try {
       const v = await inspect(e); // Includes exact ID, image, nonce, project and isolation checks.
+      operation = 'container_remove';
       await docker(['rm', '--force', v.Id], { timeout: 10000 }); e.attempted = false;
-    } catch { failed = true; }
+    } catch { failures.add(operation); }
   }
   for (const e of [...fixture.networks].reverse()) {
     if (!e.attempted) continue;
+    let operation = 'network_inspect';
     try {
-      const v = await inspectNetwork(e); assert.deepEqual(v.Containers || {}, {});
+      const v = await inspectNetwork(e);
+      operation = 'network_not_empty'; assert.deepEqual(v.Containers || {}, {});
+      operation = 'network_remove';
       await docker(['network', 'rm', v.Id], { timeout: 10000 }); e.attempted = false;
-    } catch { failed = true; }
+    } catch { failures.add(operation); }
   }
-  await removePrivate();
-  assert.equal(failed, false);
+  try { await removePrivate(); } catch { failures.add('private_remove'); }
+  if (failures.size) {
+    const error = new Error('fence_topology_cleanup_refused');
+    error.cleanupFailures = [...failures].sort();
+    throw error;
+  }
+}
+
+const phases = new Set(('guard preflight tls create_networks create_network_command create_network_inspect create_containers create_container_command create_container_connect create_container_inspect create_container_start configure_http readiness reachable_without_ports closed_private_readiness bypass baseline_fingerprint_capture baseline_database_identity baseline_fence_classifier baseline_fingerprint_comparison held_transaction prepared_transaction final_observation none').split(' '));
+const cleanupCodes = new Set(['container_inspect', 'container_remove', 'network_inspect', 'network_not_empty', 'network_remove', 'private_remove', 'unknown']);
+export class FenceQualificationError extends Error {
+  constructor(primaryPhase, failures = []) {
+    const primary = phases.has(primaryPhase) ? primaryPhase : 'guard';
+    const cleanup = [...new Set(failures.map(code => cleanupCodes.has(code) ? code : 'unknown'))].sort();
+    super(`fence_topology_qualification_failed:${primary};cleanup:${cleanup.join(',') || 'none'}`);
+    this.primaryPhase = primary;
+    this.cleanupFailures = cleanup;
+  }
 }
 
 // Release follows the actual classifier observation, never elapsed sleep time.
@@ -180,9 +215,9 @@ export async function withHeldTransaction({ start, ready, assertHeld, observe, r
 }
 
 export async function qualify({ env = process.env, platform = process.platform, command = runProcess } = {}) {
-  guardEnvironment(env, platform);
+  try { guardEnvironment(env, platform); } catch { throw new FenceQualificationError('guard'); }
   const started = now();
-  let phase = 'preflight', directory, cleaning = false, cleanupDeadline = 0;
+  let phase = 'preflight', directory, cleaning = false, cleanupDeadline = 0, primaryFailure = null, cleanupFailures = [];
   const bounded = (program, args, options = {}) => {
     const remaining = (cleaning ? cleanupDeadline : started + 270000) - now();
     assert.ok(remaining > 0, 'fixture deadline');
@@ -192,7 +227,13 @@ export async function qualify({ env = process.env, platform = process.platform, 
   fixture.project = `${scope}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-${fixture.nonce}`;
   const docker = (args, options) => bounded('docker', ['--context', 'default', ...args], options);
   const inspect = async e => assertOwnedContainer(JSON.parse(await docker(['inspect', e.id || e.name]))[0], e, fixture);
-  const inspectForCleanup = async e => assertOwnedContainer(JSON.parse(await docker(['inspect', e.id || e.name]))[0], e, fixture, { partial: true });
+  const inspectConfigured = async (e, partial) => {
+    // Exact network name->ID binding must still exist before configuration keys
+    // can be used for a not-yet-started container. No name-only authority.
+    for (const network of fixture.networks) await inspectNetwork(network);
+    return assertOwnedContainer(JSON.parse(await docker(['inspect', e.id || e.name]))[0], e, fixture, { partial, configured: true });
+  };
+  const inspectForCleanup = e => inspectConfigured(e, true);
   const inspectNetwork = async e => assertOwnedNetwork(JSON.parse(await docker(['network', 'inspect', e.id || e.name]))[0], e, fixture);
   const exec = async (role, args, input) => { const e = fixture.containers[role]; await inspect(e); return docker(['exec', '-i', e.id, ...args], { input, timeout: 10000 }); };
   const sql = (role, input) => exec(role, ['psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', database(role)], input);
@@ -242,9 +283,10 @@ export async function qualify({ env = process.env, platform = process.platform, 
     phase = 'create_networks';
     for (let index = 0; index < 3; index++) {
       const e = { index, name: `${fixture.project}-net-${index}`, attempted: true }; fixture.networks.push(e);
+      phase = 'create_network_command';
       e.id = await docker(['network', 'create', '--driver', 'bridge', ...(index === 0 ? ['--internal'] : []),
         '--label', `io.ownerinc.test-scope=${scope}`, '--label', `io.ownerinc.test-nonce=${fixture.nonce}`, e.name]);
-      await inspectNetwork(e);
+      phase = 'create_network_inspect'; await inspectNetwork(e);
     }
     phase = 'create_containers';
     for (const role of roles) {
@@ -261,10 +303,12 @@ export async function qualify({ env = process.env, platform = process.platform, 
         '--env', 'POSTGRES_HOST_AUTH_METHOD=trust', '--env', `POSTGRES_DB=${database(role)}`, imageFor(role), '-c', 'max_prepared_transactions=4', '-c', 'shared_buffers=16MB');
       else if (role === 'nginx') args.push('--entrypoint', 'sh', imageFor(role), '-c', 'while [ ! -f /fixture/start ]; do sleep 0.1; done; exec nginx -c /fixture/nginx.conf -g "daemon off;"');
       else args.push('--entrypoint', 'node', imageFor(role), '-e', 'setInterval(()=>{},1000)');
-      e.id = await docker(args);
+      phase = 'create_container_command'; e.id = await docker(args);
+      phase = 'create_container_connect';
       for (const index of attachments(role).slice(1)) await docker(['network', 'connect', '--alias', role, fixture.networks[index].id, e.id]);
-      await inspect(e); e.receipt = hash(JSON.stringify({ testOnly: true, id: e.id, role, image: fixture.images[imageFor(role)], nonce: fixture.nonce }));
-      await docker(['start', e.id]);
+      phase = 'create_container_inspect'; await inspectConfigured(e, false);
+      e.receipt = hash(JSON.stringify({ testOnly: true, id: e.id, role, image: fixture.images[imageFor(role)], nonce: fixture.nonce }));
+      phase = 'create_container_start'; await docker(['start', e.id]);
     }
     phase = 'configure_http';
     await write('nginx', 'nginx.conf', `pid /fixture/nginx.pid; error_log /dev/null; events {} http { access_log off; client_body_temp_path /fixture/client; proxy_temp_path /fixture/proxy; fastcgi_temp_path /fixture/fastcgi; uwsgi_temp_path /fixture/uwsgi; scgi_temp_path /fixture/scgi; server { listen 8080; location /editorial/ { proxy_pass http://cms:3001; } location / { proxy_pass http://api:3000; } } }`);
@@ -392,11 +436,12 @@ done
     assert.equal(await fingerprints(), before); assert.equal(await foreignFingerprint(), foreignBefore);
     assert.ok(!interrupted);
   } catch {
-    throw new Error(`fence_topology_qualification_failed:${phase}`);
+    primaryFailure = phase;
   } finally {
-    try { await cleanup(); } catch { throw new Error('fence_topology_qualification_failed:cleanup'); }
+    try { await cleanup(); } catch (error) { cleanupFailures = Array.isArray(error?.cleanupFailures) ? error.cleanupFailures : ['unknown']; }
     finally { process.removeListener('SIGTERM', onSignal); process.removeListener('SIGINT', onSignal); }
   }
+  if (primaryFailure || cleanupFailures.length) throw new FenceQualificationError(primaryFailure || 'none', cleanupFailures);
   return { kind: 'fence-topology-proof', actualDockerProjectionValidated: true, noPublishedPortsYetReachable: true,
     knownProxyRouteClosedAfterNginxStop: true, privateStubReadinessWhileClosed: true, alternativeIngressDetected: true,
     realDatabaseQuiescenceObserved: true, foreignFixtureUnchanged: true, ownedResourcesRemoved: true,
@@ -406,6 +451,6 @@ done
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   if (process.argv.length !== 2) process.exitCode = 1;
   else qualify().then(proof => console.log(JSON.stringify(proof))).catch(error => {
-    console.error(/^fence_topology_qualification_failed:[a-z_]+$/u.test(error.message) ? error.message : 'fence_topology_qualification_failed:guard'); process.exitCode = 1;
+    console.error(error instanceof FenceQualificationError ? error.message : 'fence_topology_qualification_failed:guard;cleanup:none'); process.exitCode = 1;
   });
 }

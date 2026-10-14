@@ -63,12 +63,31 @@ vantage de container, não observer independente fora do host. Não se afirma
 cobertura não-Docker ou fence completo de produção.
 
 Transporte reutiliza limite de 4 MiB, erros sem stderr bruto, fases finitas
-`fence_topology_qualification_failed:<phase>`, deadline ativo de 270 s e reserva
+`fence_topology_qualification_failed:<primary-phase>;cleanup:<codes-or-none>`,
+deadline ativo de 270 s e reserva
 de cleanup de 60 s. Cleanup revalida ID/imagem/nonce/isolamento, remove somente
 containers próprios e redes próprias vazias; nunca prune. Para criação parcial,
 cleanup aceita somente subconjunto das attachments previstas, mantendo checks de
 ID completo, nome, nonce, imagem e isolamento; attachment estrangeira ou recurso
 substituído continua recusado. A observação normal exige topologia completa.
+Uma falha de cleanup não substitui mais a fase primária. Os códigos secundários
+são finitos: `container_inspect`, `container_remove`, `network_inspect`,
+`network_not_empty`, `network_remove`, `private_remove` ou `unknown`; ausência de
+falha primária é `none`. Nenhum stderr, ID, nome ou assertion bruto é propagado.
+Criação distingue comando de rede, inspect de rede, comando de container,
+attachment, inspect pré-start e start.
+
+O inspect pré-start/cleanup reconhece uma forma documentada no código Moby
+v28.5.1: `updateContainerNetworkSettings` e `ConnectToNetwork` para container não
+running retêm EndpointSettings configurado sem alocar endpoint; `ContainerInspect`
+copia esses campos. Assim `NetworkID` pode ser vazio no estado `created`.
+Somente nesse estado consistente, com EndpointID/IPs vazios, a chave exata da rede
+pode corresponder ao nome/ID da rede própria, revalidada por inspect independente
+antes do uso. Isso valida configuração para criação/cleanup, não inventa endpoint
+ou ID na projeção. Containers running e observações normais continuam exigindo IDs
+operacionais. Fonte: `moby/moby` tag `v28.5.1`, arquivos
+`daemon/container_operations.go` e `daemon/inspect.go`. O teste é uma reprodução
+offline fundamentada nessa fonte, não um dump do runner que falhou.
 Falha de cleanup impede
 prova; SIGKILL ainda depende do descarte do runner. Prova exata ≤1 KiB só sai após
 cleanup, com `applicationReadinessQualified`,
