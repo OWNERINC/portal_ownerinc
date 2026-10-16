@@ -2,6 +2,61 @@
 
 ## P3 — inspeção de plano não é autorização de instalação
 
+### B0-01a — envelope mínimo autenticado de contexto (TEST local; native pendente)
+
+O incremento B0-01a implementa somente a coleta read-only de uma projeção de
+contexto. A requisição interna é JSON canônico em uma linha, incluindo o LF final,
+com limite exato de **4 KiB** e somente esta forma:
+
+```json
+{"approvalSha256":"<64 hex minúsculos>","kind":"payload-production-context-request-v1","nonce":"<64 hex minúsculos>","operation":"collect-context","schemaVersion":1}
+```
+
+A resposta também é JSON canônico em uma linha, incluindo o LF final, limitada a
+**4 KiB**, com este contrato fechado:
+
+```json
+{"context":{"approvalSha256":"<64 hex minúsculos>","inventoryIdentity":"<64 hex minúsculos>","leaseDevice":0,"leaseInode":1,"pid":1,"processStart":1,"sourceCommit":"<40 hex minúsculos>","stateSequence":0,"stateSha256":"<64 hex minúsculos>"},"deploymentAuthorized":false,"destructiveOperationAuthorized":false,"installationExecuted":false,"inventoryAuthenticated":true,"kind":"payload-production-context-observation-v1","leaseVerified":true,"nonce":"<mesmo nonce da requisição>","operation":"collect-context","productionAuthorized":false,"schemaVersion":1,"sourceAuthenticated":true,"stateAuthenticated":true}
+```
+
+Campos ausentes, extras ou duplicados, JSON não canônico, profundidade/tamanho
+excessivos, tipos coercíveis, kind/versão divergentes e qualquer operação diferente
+de `collect-context` são recusados. Não há seletor de path, comando, role, database,
+SQL, origem ou módulo fornecido pelo caller.
+
+O launcher instalado autentica approval, policy, record e os bytes da closure
+completa de preparação **antes** de carregar ou executar o observer. Sob lease
+exclusiva close-only, gera nonce fresco, projeta independentemente source commit,
+identidade do inventory, hash/sequência do state e device/inode do FD9, e inicia
+somente o observer fixo. O filho reafirma a lease herdada no FD9 antes/depois,
+informa PID e `/proc/self/stat` field 22; o pai exige o PID real do filho e valida
+nonce, approval e todo o restante da projeção. Após a saída, o pai reautentica a
+closure e o host, recompõe source/inventory/state/FD9 e recusa qualquer drift pré/
+pós-coleta. O resultado não é reutilizável: nova entrada exige processo, nonce,
+autenticação e lease frescos.
+
+Timeout de 30 segundos, byte 4097, saída/JSON/status inválido, mismatch ou falha de
+transporte terminam em recusa sanitizada, sem traceback, stderr do filho, paths,
+estado privado ou credenciais. O pai sinaliza somente o filho criado por ele e o
+recolhe antes de retornar uma recusa normal. Interrupções de cleanup têm tentativas
+finitas; se o reap não puder ser provado, o pai aplica fail-stop com `_exit(2)`, sem
+retomar o fluxo nem liberar autoridade por unwinding normal. O observer expõe apenas
+`Production context collection denied.` e o launcher mantém seu erro finito.
+
+**Estado da evidência:** código, testes portáteis e revisão de implementação com
+veredicto `ship` estão concluídos localmente. Esses testes usam doubles declarados
+para processo/FD onde necessário. A prova Linux/root real, incluindo `flock`, FD9,
+`/proc`, lifecycle do filho e cleanup, **não foi executada**; permanece pendente uma
+execução candidate-only explicitamente autorizada no gate existente. Não há prova
+do host produtivo.
+
+Esta fatia não persiste receipt ou observação, não cria approval, não captura B0 e
+não altera journal/state, policy/records, banco, roles, serviços, containers,
+redes, volumes, releases, pointers ou admission. Não fecha B0-01 produtivo, B0-02
+ou B0-03. `destructiveOperationAuthorized`, `installationExecuted`,
+`deploymentAuthorized` e `productionAuthorized` permanecem `false`;
+`release_not_preflighted` permanece obrigatório.
+
 ### Restore B0 isolado com checkpoints assinados (native ainda pendente)
 
 **Estado da evidência:** o primary confirmou `3192127` / CI `38600074126` SUCCESS:

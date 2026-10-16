@@ -824,7 +824,7 @@ idênticos, sem reparo de conflitos. A aprovação é publicada por último, ap�
 revalidar entradas e toda a closure. Retry reafirma durabilidade; não substitui
 aprovação nem fonte já instalada diferente. Não há network ou execução de bundle.
 
-Closure exata de 15 nomes no bundle e em `source.files`:
+Closure exata de 16 nomes no bundle e em `source.files`:
 
 ```text
 ops/prepare-cms-infrastructure.sh
@@ -840,6 +840,7 @@ ops/payload-control
 ops/payload-control-runtime.py
 ops/compose.payload.production.yaml
 docker-compose.payload.yml
+ops/payload-production-observer.py
 ops/prepare-cms-authenticated.py
 ops/provision-payload-candidate-trust.py
 ```
@@ -856,7 +857,7 @@ O schema independente, fechado, é `schemaVersion: 1`,
 `repository: OWNERINC/portal_ownerinc`, com:
 
 - `source`: `commit` (40 hex; proveniência administrativa, **não prova de árvore
-  Git**) e `files` (mapa exato dos 15 nomes para SHA-256).
+  Git**) e `files` (mapa exato dos 16 nomes para SHA-256).
 - `hostBaseline`: `currentCommit`, `legacyImages` com digests imutáveis api/cron,
   `releaseComposeSha256`, `runtimeComposeSha256`, `releaseOverrideSha256`
   (hash ou null para ausência), `inventoryIdentity`, e `installedPredecessors`
@@ -868,10 +869,11 @@ Campos extras, chaves duplicadas, tipos coercíveis e paths arbitrários não s�
 aceitos. O bootstrap valida baseline **apenas como schema**, não como observação
 do host; tampouco autentica admission durante a publicação.
 
-O launcher instalado aceita **`--check` ou `--apply`**, sob o mesmo ambiente vazio e
-Python `-I -S -B`. Antes de importar qualquer helper da closure,
-seu leitor stdlib verifica ancestry, ownership, modos, links, identidade e hashes
-de todos os 15 arquivos. O launcher em execução é parte da confiança administrativa
+Na interface administrativa de preparação, o launcher instalado aceita **`--check`
+ou `--apply`**, sob o mesmo ambiente vazio e Python `-I -S -B`; as interfaces
+internas fechadas são documentadas separadamente abaixo. Antes de importar qualquer
+helper da closure, seu leitor stdlib verifica ancestry, ownership, modos, links,
+identidade e hashes de todos os 16 arquivos. O launcher em execução é parte da confiança administrativa
 prévia; seu próprio hash não é uma prova independente de si mesmo. Só então carrega
 os bytes autenticados do suporte instalado, nunca módulos do checkout.
 
@@ -1000,6 +1002,32 @@ closure autenticada, nunca do helper recém-publicado no runtime. Seus paths e
 owner policy são constantes, sem argumentos externos; o helper publicado é
 verificado separadamente. State initialization não é reparo: falha parcial é
 recusada na próxima tentativa, sem reset automático.
+
+##### Entrypoint interno B0-01a de coleta de contexto
+
+O coordinator autenticado pode iniciar somente a interface interna fixa abaixo:
+
+```text
+/usr/bin/python3 -I -S -B /usr/local/libexec/ownerinc-payload-prepare.py --collect-context APPROVAL_SHA256
+```
+
+Isto **não é um atalho de operador nem uma instrução de instalação no host**. Só o
+coordinator já autenticado fornece `APPROVAL_SHA256`, que deve coincidir com os
+bytes da aprovação protegida autenticada. O FD9 com a lease exclusiva precisa já
+estar herdado; não existe argumento para escolher lock, observer, fonte ou path.
+O processo usa ambiente vazio exceto `PATH=/usr/bin:/bin`, `LANG=C` e `LC_ALL=C`.
+Antes de executar o observer, o launcher autentica a closure completa, agora
+incluindo `ops/payload-production-observer.py`; o observer executado também é o path
+fixo dessa closure instalada.
+
+Sucesso retorna apenas o envelope bounded/read-only descrito no
+[runbook de runtime](payload-runtime-recovery.md#b0-01a--envelope-mínimo-autenticado-de-contexto-test-local-native-pendente).
+Não instala, não captura B0, não persiste recibo e não concede autoridade:
+`destructiveOperationAuthorized`, `installationExecuted`, `deploymentAuthorized`
+e `productionAuthorized` continuam `false`. `release_not_preflighted` não muda.
+A implementação e a revisão portátil local estão concluídas; a qualificação
+Linux/root native requer um run candidate-only separado e explicitamente
+autorizado, e a prova no host produtivo permanece pendente.
 
 `--check` executa apenas o caminho read-only do preparer (inclusive Compose
 `config --quiet`); `--apply` publica arquivos, configuração privada e estado
