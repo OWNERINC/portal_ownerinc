@@ -1032,13 +1032,14 @@ relidos integralmente. Os caminhos comuns de preparação/instalação mantêm p
 suas leituras de conteúdo existentes.
 
 Sucesso retorna apenas o envelope bounded/read-only descrito no
-[runbook de runtime](payload-runtime-recovery.md#b0-01a--envelope-mínimo-autenticado-de-contexto-test-local-native-pendente).
+[runbook de runtime](payload-runtime-recovery.md#b0-01a--envelope-mínimo-autenticado-de-contexto-test-localnative-host-pendente).
 Não instala, não captura B0, não persiste recibo e não concede autoridade:
 `destructiveOperationAuthorized`, `installationExecuted`, `deploymentAuthorized`
 e `productionAuthorized` continuam `false`. `release_not_preflighted` não muda.
-A implementação e a revisão portátil local estão concluídas; a qualificação
-Linux/root native requer um run candidate-only separado e explicitamente
-autorizado, e a prova no host produtivo permanece pendente.
+A implementação, a revisão portátil e a qualificação Linux/root native estão
+concluídas para os bytes exatos do run candidate-only `38914950783`, attempt 1,
+SHA `84c81cb93261a89bbc7185a29f22dcb339c3f9a3`, com deploy `skipped`. A prova no
+host produtivo permanece pendente.
 
 `--check` executa apenas o caminho read-only do preparer (inclusive Compose
 `config --quiet`); `--apply` publica arquivos, configuração privada e estado
@@ -1052,7 +1053,8 @@ Os testes de transporte executam o shell e o protocolo reais com doubles
 explícitos de host/autenticação/processo; no Windows FD9 é transportado no mesmo
 shell de fixture. O teste Linux usa subprocesso real e `pass_fds`, testa
 ausência de deadlock e confirma que o child não libera a lock do parent. Isso não
-substitui a qualificação nativa completa de preparação, ainda pendente.
+substitui prova do host produtivo. A qualificação nativa da fixture de preparação
+foi executada separadamente no run candidate-only `38914950783`.
 
 #### Gate nativo da preparação no candidate CI
 
@@ -1092,7 +1094,8 @@ aplicáveis permanecem no código. O novo caso
 launcher, herança e retenção da mesma open description pelo observer, FD9/path e
 substituição do pathname. As negativas de lease SH herdada, lock busy e EX em outra
 open description permanecem cobertas por doubles portáteis de syscall, não por esse
-novo caso native. A execução native do envelope permanece pendente.
+novo caso native. A execução native do envelope passou no run candidate-only
+`38914950783`; isso não promove essas negativas portáteis a evidência nativa.
 
 O caso native atual implementado para B0-01a exige o JSON fechado
 `native-production-context-envelope-proof`, também de no máximo 1 KiB. Ele exercita
@@ -1100,12 +1103,13 @@ em sandbox Linux/root o launcher real de `collect_context()`, Python isolado,
 aquisição da lease pelo launcher com FD9 inicialmente fechado, herança de FD9 pelo
 observer, mesma open description, PID/start em `/proc`, recusa de substituição de
 path, overflow, timeout, ausência de material privado, autorizações falsas e remoção
-do sandbox. Essa proof está implementada, mas **ainda não foi executada**: depende de
-um run candidate-only explicitamente autorizado. Fora dos casos native declarados,
-os cenários portáteis continuam identificados como doubles; a suite não é descrita
-como inteiramente doubled.
+do sandbox. Essa proof foi executada no run candidate-only `38914950783`, attempt 1,
+SHA `84c81cb93261a89bbc7185a29f22dcb339c3f9a3`: a suite obrigatória teve 24 PASS,
+0 fail e 0 skip, e o JSON bounded confirmou todos os campos fechados como `true`.
+Fora dos casos native declarados, os cenários portáteis continuam identificados como
+doubles; a suite não é descrita como inteiramente native.
 
-Nem o contrato histórico lease-only nem uma futura proof do envelope qualificam
+Nem o contrato histórico lease-only nem a proof executada do envelope qualificam
 bootstrap/launcher/preparer end-to-end no host, baseline real, sudo/SSH,
 durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets, 14 checks,
 11 negativos e dois restores não mudam. Um próximo CI qualifica somente sua própria

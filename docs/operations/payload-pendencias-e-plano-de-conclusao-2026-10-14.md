@@ -42,6 +42,7 @@ alterado.
 | E06 | [Comentário de entrega](https://github.com/OWNERINC/portal_ownerinc/pull/61#issuecomment-6175791374) | Referência de handoff mais recente fornecida; deve ser correlacionada ao SHA e run, não usada como autorização de produção. |
 | E07 | [Review de conclusão](../reviews/2026-10-13-payload-production-completion.md), seção final | Revisão estática SHIP para o incremento TEST; não significa aprovação de B0 real ou implantação. |
 | E08 | Observação read-only do host em 14/10, fornecida pelo primary | Inventário de planejamento, não baseline congelado/autenticado. Detalhes abaixo. |
+| E09 | [CI 38914950783](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38914950783), attempt 1, SHA `84c81cb93261a89bbc7185a29f22dcb339c3f9a3` | CONFIRMADO pela sessão primária: workflow SUCCESS; `isolated-b0-recovery` SUCCESS; preparação Linux/root 24 PASS/0 fail/0 skip, incluindo `native-production-context-envelope-proof`; deploy SKIPPED. [Report 12056442848](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38914950783/artifacts/12056442848) com 14 checks, 11 negativos e 2 restores; [candidato qualificado 12056663225](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38914950783/artifacts/12056663225) vincula o SHA-256 raw do report `1a2404e7d8294e9e6d4d3f3966d597bf887dbb93cd66e90ea8ca75cefb117eef`. Evidência TEST-only; host produtivo não qualificado. |
 
 Identificadores integrais para conferência:
 
@@ -57,8 +58,9 @@ pendente. Permanecem **false**: `applicationRollbackExecuted`,
 `applicationCompatibilityQualified` e `productionAuthorized`.
 
 As marcações antigas “native NOT RUN” dos runbooks/reviews continuam corretas como
-histórico de suas entregas. E01 e E03 as superam apenas para seus bytes e fixtures
-exatos. Não se reescreve o histórico nem se promove TEST a baseline de produção.
+histórico de suas entregas. E01, E03 e E09 as superam apenas para seus bytes e
+fixtures exatos. Não se reescreve o histórico nem se promove TEST a baseline de
+produção.
 
 ### Inventário observado para planejamento — E08
 
@@ -159,7 +161,7 @@ todo o conjunto abaixo com fonte real autenticada e aplicações anteriores exat
 
 | ID / prioridade / estado | Dependência | Próxima ação e entregável | Aceite exato / evidência |
 | --- | --- | --- | --- |
-| B0-01a · A · TEST-ONLY local; native/host PENDENTES | P2-02 | Manter o envelope mínimo read-only implementado e executar a prova Linux/root somente em CI candidate-only explicitamente autorizada; depois ainda integrar e provar a coleta no host produtivo. | Código, testes portáteis e review `ship` locais concluídos; request/response fechados de 4 KiB, closure-first, nonce/processo/FD9/source/inventory/state vinculados e drift recusado. A prova native não foi executada; nenhuma autoridade ou mutação, e todos os campos de autorização permanecem false. R02/R03. |
+| B0-01a · A · TEST-ONLY local/native CONFIRMADOS; host PENDENTE | P2-02 | Manter o envelope mínimo read-only e integrar/provar a coleta no host produtivo somente sob autorização própria. | Código, testes portáteis e review `ship` concluídos; E09 qualifica a fixture Linux/root em CI candidate-only com 24 PASS/0 fail/0 skip e deploy SKIPPED. Request/response fechados de 4 KiB, closure-first, nonce/processo/FD9/source/inventory/state vinculados e drift recusado. Nenhuma autoridade ou mutação; todos os campos de autorização permanecem false. R02/R03. |
 | B0-01 · A · PENDENTE | P2-02 | Collector bounded autenticado do source, sob processo/lease FD9 frescos. | Closure, approval/policy/record, inventory, journal e identidades conferidos; observações manuais não viram aprovação por cópia. R02/R04. |
 | B0-02 · A · PENDENTE | B0-01 | Perfil de segurança pré-grants: owners, ACLs/defaults, memberships, privilégios efetivos, consumidores de roles e credenciais. | Aprovação independente para source/API/cron exatos; autenticação privada real; exclusividade dentro e fora dos catálogos; nenhum reparo global de role/senha. R02. |
 | B0-03 · A · PENDENTE | B0-01 | Fence efetivo de ingress Docker, host e não-Docker, com observer externo independente. | Topologia aprovada + probes de rotas exatas; timeout/DNS/TLS/502 genérico não provam fechamento; observar antes da captura e novamente antes de cada passo destrutivo sob FD9. R02. |
@@ -173,7 +175,7 @@ todo o conjunto abaixo com fonte real autenticada e aplicações anteriores exat
 ### Checklist de gate B0 completo
 
 - [x] B0-01a, somente escopo local/portátil: código, testes portáteis e review `ship`.
-- [ ] B0-01a native: executar a qualificação Linux/root em CI candidate-only com autorização explícita.
+- [x] B0-01a native: CI candidate-only `38914950783`, 24 PASS/0 fail/0 skip; deploy SKIPPED.
 - [ ] B0-01: source e collector autenticados, contexto/lease atuais.
 - [ ] B0-02: perfil pré-grants aprovado, consumidores e credenciais qualificados.
 - [ ] B0-03: fence externo independente + host/não-Docker, fresco em cada fronteira.
@@ -213,9 +215,8 @@ prazo garantido. O alvo temporal anterior era intenção, não compromisso valid
 
 ### Próximas três ações imediatas
 
-1. Preservar E04/P1-02 como TEST-only fechado e, somente com autorização explícita,
-   executar a qualificação B0-01a no gate candidate-only Linux/root; não reutilizar
-   o resultado como prova do host produtivo.
+1. Preservar E04/P1-02 e E09/B0-01a como TEST-only fechados; não reutilizar a
+   qualificação Linux/root como prova do host produtivo.
 2. Abrir a próxima thread visível para B0-01–03, delimitando collector produtivo,
    perfil pré-grants e cobertura externa independente; manter mutações bloqueadas.
 3. Fechar a decisão B0-06/07 e o plano de prova B0-08 com review fresco: schema
