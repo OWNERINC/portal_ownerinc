@@ -206,6 +206,7 @@ def main(args=None):
         require(args == ['collect-context'])
         raw = sys.stdin.buffer.read(MAX_FRAME + 1)
         request = validate_request(strict_json(raw))
+        sys.dont_write_bytecode = True
         launcher = importlib.machinery.SourceFileLoader(
             'ownerinc_payload_prepare', LAUNCHER
         ).load_module()

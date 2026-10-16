@@ -28,11 +28,24 @@ function probe(code) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
+function probeWithoutBytecodeFlag(code) {
+  const result = spawnSync(python, ['-I', '-S', '-c', setup + code, observerPath], {
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
 test('strict JSON accepts only bounded canonical UTF-8 with unique keys', () => {
   probe(String.raw`
 raw=m.canonical({'message':'caf\u00e9','schemaVersion':1})+b'\n'
 assert raw==b'{"message":"caf\\u00e9","schemaVersion":1}\n'
 assert m.strict_json(raw)=={'message':'caf\u00e9','schemaVersion':1}
+exact=b'{"x":"'+b'a'*4087+b'"}\n'
+assert len(exact)==4096 and m.strict_json(exact)=={'x':'a'*4087}
+oversized=b'{"x":"'+b'a'*4088+b'"}\n'
+assert len(oversized)==4097
+denied(lambda:m.strict_json(oversized))
 for invalid in (b'',b'{}',b'{ }\n',b'{"x":1,"x":1}\n',b'{"x":NaN}\n',b'{"message":"caf\xc3\xa9"}\n'):
  denied(lambda invalid=invalid:m.strict_json(invalid))
 denied(lambda:m.strict_json(b'{}\n',2))
@@ -77,6 +90,10 @@ for field,bad in [('sourceCommit','C'*40),('inventoryIdentity','short'),('stateS
  value=copy.deepcopy(response);value['context'][field]=bad;denied(lambda value=value:m.validate_response(value,'a'*64,'b'*64))
 denied(lambda:m.validate_response(response,'f'*64,'b'*64))
 denied(lambda:m.validate_response(response,'a'*64,'f'*64))
+original=m.canonical
+m.canonical=lambda value:b'x'*4096
+denied(lambda:m.validate_response(response,'a'*64,'b'*64))
+m.canonical=original
 `);
 });
 
@@ -89,7 +106,7 @@ class Reader:
  def read(self,maximum):assert maximum==4097;return ('42 (worker ) name) '+' '.join(fields)+'\n').encode()
 m.open=lambda filename,mode:Reader()
 assert m.process_start_ticks()==987654
-for raw in (b'',b'42 malformed',b'42 (worker) '+b' '.join([b'S']+[b'0']*19),b'42 (worker) '+b' '.join([b'S']+[b'0']*18+[b'-1'])):
+for raw in (b'',b'42 malformed',b'42 (worker) '+b' '.join([b'S']+[b'0']*19)+b'\n',b'42 (worker) '+b' '.join([b'S']+[b'0']*18+[b'-1'])+b'\n'):
  class BadReader(Reader):
   def read(self,maximum):return raw
  m.open=lambda filename,mode:BadReader()
@@ -150,4 +167,60 @@ test('CLI failures expose only the fixed denial', () => {
   assert.equal(result.stderr, 'Production context collection denied.\n');
   assert.equal(result.stderr.includes('Traceback'), false);
   assert.equal(result.stderr.includes('must-not-echo'), false);
+});
+
+test('launcher-load failure after valid parse is sanitized without external -B', () => {
+  const input = `${JSON.stringify({
+    approvalSha256: 'b'.repeat(64),
+    kind: 'payload-production-context-request-v1',
+    nonce: 'a'.repeat(64),
+    operation: 'collect-context',
+    schemaVersion: 1,
+  })}\n`;
+  const result = spawnSync(python, ['-I', '-S', observerPath, 'collect-context'], {
+    encoding: 'utf8',
+    input,
+    timeout: 10000,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'Production context collection denied.\n');
+  assert.equal(result.stderr.includes('Traceback'), false);
+  assert.equal(result.stderr.includes('/usr/local/libexec'), false);
+});
+
+test('collect failure is sanitized and launcher import disables bytecode without external -B', () => {
+  probeWithoutBytecodeFlag(String.raw`
+import io
+assert sys.dont_write_bytecode is False
+raw=m.canonical(request)+b'\n'
+stdin=types.SimpleNamespace(buffer=io.BytesIO(raw))
+stdout=types.SimpleNamespace(buffer=io.BytesIO())
+stderr=types.SimpleNamespace(buffer=io.BytesIO())
+events=[]
+class FailingLauncher:
+ def context_material(self,digest):
+  events.append('collect')
+  raise ValueError('SYNTHETIC_COLLECT_SECRET')
+class Loader:
+ def load_module(self):
+  events.append(('load',sys.dont_write_bytecode))
+  return FailingLauncher()
+def fixed_loader(name,filename):
+ assert name=='ownerinc_payload_prepare'
+ assert filename=='/usr/local/libexec/ownerinc-payload-prepare.py'
+ return Loader()
+m.importlib.machinery.SourceFileLoader=fixed_loader
+old_stdin,old_stdout,old_stderr=sys.stdin,sys.stdout,sys.stderr
+sys.stdin,sys.stdout,sys.stderr=stdin,stdout,stderr
+try:
+ try:m.main(['collect-context'])
+ except SystemExit as error:assert error.code==1
+ else:raise AssertionError('unexpected success')
+finally:sys.stdin,sys.stdout,sys.stderr=old_stdin,old_stdout,old_stderr
+assert stdout.buffer.getvalue()==b''
+assert stderr.buffer.getvalue()==b'Production context collection denied.\n'
+assert b'SYNTHETIC_COLLECT_SECRET' not in stderr.buffer.getvalue()
+assert events==[('load',True),'collect'],events
+`);
 });
