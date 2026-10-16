@@ -25,6 +25,7 @@ LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
 APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
 OBSERVER_TIMEOUT_SECONDS = 30
 OBSERVER_MAX_FRAME = 4096
+OBSERVER_CLEANUP_INTERRUPT_RETRIES = 3
 OBSERVER = ROOT + '/ops/payload-production-observer.py'
 FILES = (
     'ops/prepare-cms-infrastructure.sh', 'ops/prepare-cms-infrastructure-private.py',
@@ -548,24 +549,39 @@ def expected_context(approval, captured, approval_digest):
 
 def _terminate_and_reap(process):
     # Popen identifies the directly owned child; never signal by an externally
-    # supplied PID or process group. Once SIGKILL succeeds, POSIX wait without a
-    # timeout is the bounded completion step and is retried through interruption.
+    # supplied PID or process group. POSIX wait after SIGKILL is required for
+    # completed reaping, but is not a wall-clock time bound. Only a finite number
+    # of deliberate interruption retries is allowed; persistent failures fail-stop.
+    interruptions = 0
     while True:
         try:
             process.kill()
         except ProcessLookupError:
             break
-        except (InterruptedError, KeyboardInterrupt, SystemExit):
+        except (InterruptedError, KeyboardInterrupt):
+            interruptions += 1
+            if interruptions >= OBSERVER_CLEANUP_INTERRUPT_RETRIES:
+                raise
             continue
         else:
             break
+    interruptions = 0
     while True:
         try:
             process.wait()
-        except (InterruptedError, KeyboardInterrupt, SystemExit):
+        except (InterruptedError, KeyboardInterrupt):
+            interruptions += 1
+            if interruptions >= OBSERVER_CLEANUP_INTERRUPT_RETRIES:
+                raise
             continue
         else:
             return
+
+
+def _observer_cleanup_fail_stop():
+    # No normal unwinding may release the parent's lease when direct-child state
+    # cannot be proven reaped. _exit emits no traceback or private diagnostic.
+    os._exit(2)
 
 
 def run_bounded_observer(request):
@@ -574,6 +590,7 @@ def run_bounded_observer(request):
     registered = False
     reaped = False
     failed = False
+    termination_failed = False
     result = None
     try:
         # Authenticate the validator bytes immediately before they parse either
@@ -635,15 +652,12 @@ def run_bounded_observer(request):
         failed = True
     finally:
         if process is not None and not reaped:
-            while not reaped:
-                try:
-                    _terminate_and_reap(process)
-                    reaped = True
-                except BaseException:
-                    # Cleanup itself is mandatory. A transient interruption or
-                    # injected failure cannot release FD9 back to the caller
-                    # while its directly owned child remains unreaped.
-                    failed = True
+            try:
+                _terminate_and_reap(process)
+                reaped = True
+            except BaseException:
+                termination_failed = True
+                failed = True
         if selector is not None:
             if registered and process is not None and process.stdout is not None:
                 try:
@@ -661,6 +675,12 @@ def run_bounded_observer(request):
                         stream.close()
                     except BaseException:
                         failed = True
+        if termination_failed:
+            # Descriptor cleanup above is finite and independent. A close that
+            # raised was attempted, not assumed complete. The production hook
+            # cannot return; the second _exit defends its injectable contract.
+            _observer_cleanup_fail_stop()
+            os._exit(2)
     if failed or not reaped:
         raise VerificationError('preparation_verification_denied') from None
     return result

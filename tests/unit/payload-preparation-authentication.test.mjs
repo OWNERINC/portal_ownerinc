@@ -536,7 +536,7 @@ response={'schemaVersion':1,'kind':'payload-production-context-observation-v1','
 observer=l.load_authenticated(material[1]['ops/payload-production-observer.py'],l.OBSERVER);frame=observer.canonical(response)+b'\n'
 events=[];scenario=''
 class Pipe:
- def __init__(self,name,fd):self.name=name;self.fd=fd;self.close_calls=0
+ def __init__(self,name,fd):self.name=name;self.fd=fd;self.close_calls=0;self.open=True
  def fileno(self):return self.fd
  def write(self,value):
   events.append('stdin-write')
@@ -545,6 +545,7 @@ class Pipe:
  def close(self):
   self.close_calls+=1;events.append(self.name+'-close')
   if scenario==self.name+'-close' and self.close_calls==1:raise KeyboardInterrupt()
+  self.open=False
 class Process:
  pid=321
  def __init__(self):
@@ -557,7 +558,7 @@ class Process:
   if timeout is None and scenario=='kill-wait-retry' and self.wait_calls==1:raise KeyboardInterrupt()
   self.reaped=True;events.append('reaped');return 0
 class Selector:
- def __init__(self):self.close_calls=0
+ def __init__(self):self.close_calls=0;self.open=True
  def register(self,*args):
   events.append('register')
   if scenario=='register':raise SystemExit('private')
@@ -569,6 +570,7 @@ class Selector:
  def close(self):
   self.close_calls+=1;events.append('selector-close')
   if scenario=='selector-close':raise SystemExit('private')
+  self.open=False
 def popen(*args,**kwargs):
  if scenario=='popen':raise KeyboardInterrupt()
  events.append('spawn');return process
@@ -608,8 +610,63 @@ for scenario in ('popen','stdin-write','stdin-close','nonblocking','selector-cre
  else:
   assert process.kill_calls>=1,scenario
  assert process.stdin.close_calls>=1 and process.stdout.close_calls>=1,scenario
- if scenario=='selector-close':assert 'stdin-close' in events and 'stdout-close' in events
+ assert process.stdin.open is False,scenario
+ assert process.stdout.open==(scenario=='stdout-close'),scenario
+ if scenario=='selector-close':
+  assert selector.open is True and process.stdin.open is process.stdout.open is False
+ elif 'selector-create' in events and scenario!='selector-create':assert selector.open is False,scenario
  if scenario=='kill-wait-retry':assert process.kill_calls==2 and process.wait_calls>=2
+`);
+});
+
+test('persistent child termination failures invoke one fail-stop after finite independent resource cleanup (portable process doubles)', () => {
+  probe(String.raw`
+from unittest.mock import patch
+assert hasattr(l,'_observer_cleanup_fail_stop'),'terminal cleanup-failure policy is missing'
+material=l.authenticate();digest=material[4];nonce='7'*64
+request={'schemaVersion':1,'kind':'payload-production-context-request-v1','operation':'collect-context','nonce':nonce,'approvalSha256':digest}
+events=[];mode=''
+class FailStop(BaseException):pass
+class Pipe:
+ def __init__(self,name,fd):self.name=name;self.fd=fd;self.open=True
+ def fileno(self):return self.fd
+ def write(self,value):return len(value)
+ def close(self):events.append(self.name+'-close');self.open=False
+class Process:
+ pid=321
+ def __init__(self):self.stdin=Pipe('stdin',10);self.stdout=Pipe('stdout',11);self.kill_calls=0;self.wait_calls=0
+ def kill(self):
+  self.kill_calls+=1;events.append('kill')
+  if mode=='kill':raise OSError('persistent private kill failure')
+  if mode=='kill-interrupt':raise KeyboardInterrupt()
+ def wait(self,timeout=None):
+  self.wait_calls+=1;events.append('wait')
+  if timeout is None and mode=='wait':raise OSError('persistent private wait failure')
+  if timeout is None and mode=='wait-interrupt':raise KeyboardInterrupt()
+  return 0
+class Selector:
+ def __init__(self):self.open=True
+ def register(self,*args):pass
+ def unregister(self,*args):events.append('unregister')
+ def select(self,*args):raise RuntimeError('enter cleanup')
+ def close(self):events.append('selector-close');self.open=False
+def fail_stop():events.append('fail-stop');raise FailStop()
+for mode in ('kill','wait','kill-interrupt','wait-interrupt'):
+ events.clear();process=Process();selector=Selector()
+ with patch.object(l,'authenticate',return_value=material),patch.object(l.subprocess,'Popen',return_value=process), \
+      patch.object(l.selectors,'DefaultSelector',return_value=selector),patch.object(l.os,'set_blocking'), \
+      patch.object(l,'_observer_cleanup_fail_stop',side_effect=fail_stop),patch.object(l.time,'monotonic',return_value=0):
+  try:l.run_bounded_observer(request)
+  except FailStop:pass
+  except BaseException as error:raise AssertionError((mode,'wrong terminal path',type(error).__name__))
+  else:raise AssertionError(mode+' returned through normal denial/success')
+ assert events.count('fail-stop')==1 and events[-1]=='fail-stop',events
+ expected_kills=l.OBSERVER_CLEANUP_INTERRUPT_RETRIES if mode=='kill-interrupt' else 1
+ expected_waits=l.OBSERVER_CLEANUP_INTERRUPT_RETRIES if mode=='wait-interrupt' else (1 if mode=='wait' else 0)
+ assert process.kill_calls==expected_kills and process.wait_calls==expected_waits,events
+ assert selector.open is False and process.stdin.open is False and process.stdout.open is False,events
+ last_stdin=max(i for i,value in enumerate(events) if value=='stdin-close')
+ assert events.index('selector-close')<last_stdin<events.index('stdout-close')<events.index('fail-stop'),events
 `);
 });
 
