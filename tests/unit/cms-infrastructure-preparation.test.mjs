@@ -297,7 +297,7 @@ def observe():
  if pathlib.Path(${JSON.stringify(refuse)}).exists():raise ValueError('context denied')
  with open(${JSON.stringify(log)},'a') as stream:stream.write(sys.argv[1]+'\\n')
 m.verify_inherited_lease=observe
-m.verify_host_baseline=lambda *args:None
+m.verify_host_baseline=lambda *args,**kwargs:None
 m.authenticate=lambda:(approval,captured,${JSON.stringify(approvedCms)},None,${JSON.stringify(digest)})
 m.load_authenticated=lambda *args:inv
 if sys.argv[1]=='--verify-context':print(m.verified_context(sys.argv[2]))
