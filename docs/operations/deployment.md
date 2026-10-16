@@ -1071,15 +1071,16 @@ subprocesso executam os leitores de metadata/ancestry e funções flock originai
 nenhum path fixo de produção recebe writes. Não há provisionamento de closure,
 policy, credenciais, serviços, contas ou sudoers nesse caso.
 
-Na entrega anterior, o caso native de lease exigia parse e igualdade exata do JSON
-`native-preparation-lease-proof`, no máximo 1 KiB, e emitia a prova completa no
-log. Os campos obrigatórios comprovam:
+`native-preparation-lease-proof` era o contrato histórico do teste native
+lease-only, limitado a 1 KiB. Esse contrato exigia os seguintes campos:
 identidade root e ancestry; SH recusada com FD9 ainda aberto e SH original
 inalterada (outro SH adquire, EX bloqueia); busy e EX de outra descrição
 recusados; EX herdada via `pass_fds` em subprocesso sem liberar a lock do parent;
 FD9 fechado ao sair; pathname substituído recusado; bytes originais preservados;
-sandbox removido. Essa prova permanece evidência histórica e contrato corrente
-**somente da lease**; não é a proof do caso de envelope implementado agora.
+sandbox removido. Essa descrição registra somente o contrato anterior, não um PASS
+histórico fornecido nem um contrato de proof corrente. As garantias de lease ainda
+aplicáveis foram retidas e são cobertas pelo novo caso
+`native-production-context-envelope-proof`, cuja execução native permanece pendente.
 
 O caso native atual implementado para B0-01a exige o JSON fechado
 `native-production-context-envelope-proof`, também de no máximo 1 KiB. Ele exercita
@@ -1092,7 +1093,7 @@ um run candidate-only explicitamente autorizado. Fora dos casos native declarado
 os cenários portáteis continuam identificados como doubles; a suite não é descrita
 como inteiramente doubled.
 
-Nem a prova histórica lease-only nem uma futura proof do envelope qualificam
+Nem o contrato histórico lease-only nem uma futura proof do envelope qualificam
 bootstrap/launcher/preparer end-to-end no host, baseline real, sudo/SSH,
 durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets, 14 checks,
 11 negativos e dois restores não mudam. Um próximo CI qualifica somente sua própria
