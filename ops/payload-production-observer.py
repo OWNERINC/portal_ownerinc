@@ -9,6 +9,7 @@ import sys
 
 MAX_FRAME = 4096
 MAX_DEPTH = 16
+MAX_SAFE_INTEGER = 2**53 - 1
 HEX_64 = re.compile(r'[0-9a-f]{64}')
 HEX_40 = re.compile(r'[0-9a-f]{40}')
 LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
@@ -81,8 +82,9 @@ def validate_request(value):
     return value
 
 
-def _integer(value, minimum):
-    require(type(value) is int and value >= minimum)
+def _integer(value, minimum, maximum=None):
+    require(type(value) is int and value >= minimum
+            and (maximum is None or value <= maximum))
 
 
 def validate_response(value, expected_nonce, expected_approval):
@@ -120,8 +122,8 @@ def validate_response(value, expected_nonce, expected_approval):
     for field in ('inventoryIdentity', 'stateSha256'):
         require(isinstance(context[field], str) and HEX_64.fullmatch(context[field]))
     _integer(context['stateSequence'], 0)
-    _integer(context['pid'], 1)
-    _integer(context['processStart'], 1)
+    _integer(context['pid'], 1, MAX_SAFE_INTEGER)
+    _integer(context['processStart'], 1, MAX_SAFE_INTEGER)
     _integer(context['leaseDevice'], 0)
     _integer(context['leaseInode'], 1)
 

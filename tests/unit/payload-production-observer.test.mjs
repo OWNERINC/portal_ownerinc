@@ -88,6 +88,12 @@ for field in ('stateSequence','pid','processStart','leaseDevice','leaseInode'):
  value=copy.deepcopy(response);value['context'][field]=True;denied(lambda value=value:m.validate_response(value,'a'*64,'b'*64))
 for field,bad in [('sourceCommit','C'*40),('inventoryIdentity','short'),('stateSha256','short'),('stateSequence',-1),('pid',0),('processStart',0),('leaseDevice',-1),('leaseInode',0)]:
  value=copy.deepcopy(response);value['context'][field]=bad;denied(lambda value=value:m.validate_response(value,'a'*64,'b'*64))
+safe_max=2**53-1
+value=copy.deepcopy(response);value['context']['pid']=safe_max;value['context']['processStart']=safe_max
+assert m.validate_response(value,'a'*64,'b'*64)==value
+for field in ('pid','processStart'):
+ value=copy.deepcopy(response);value['context'][field]=safe_max+1
+ denied(lambda value=value:m.validate_response(value,'a'*64,'b'*64))
 denied(lambda:m.validate_response(response,'f'*64,'b'*64))
 denied(lambda:m.validate_response(response,'a'*64,'f'*64))
 original=m.canonical

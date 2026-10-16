@@ -546,21 +546,45 @@ def expected_context(approval, captured, approval_digest):
     }
 
 
-def run_bounded_observer(request):
-    # Authenticate the validator bytes immediately before they parse either
-    # direction of the child protocol. The caller still performs its own wider
-    # pre/post authentication and host-drift checks under the parent lease.
-    _, captured, _, _, digest = authenticate()
-    require(isinstance(request, dict) and request.get('approvalSha256') == digest)
-    observer = load_authenticated(captured['ops/payload-production-observer.py'], OBSERVER)
-    request = observer.validate_request(request)
-    request_frame = observer.canonical(request) + b'\n'
-    require(len(request_frame) <= OBSERVER_MAX_FRAME)
+def _terminate_and_reap(process):
+    # Popen identifies the directly owned child; never signal by an externally
+    # supplied PID or process group. Once SIGKILL succeeds, POSIX wait without a
+    # timeout is the bounded completion step and is retried through interruption.
+    while True:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            break
+        except (InterruptedError, KeyboardInterrupt, SystemExit):
+            continue
+        else:
+            break
+    while True:
+        try:
+            process.wait()
+        except (InterruptedError, KeyboardInterrupt, SystemExit):
+            continue
+        else:
+            return
 
+
+def run_bounded_observer(request):
     process = None
     selector = None
     registered = False
+    reaped = False
+    failed = False
+    result = None
     try:
+        # Authenticate the validator bytes immediately before they parse either
+        # direction of the child protocol. The caller still performs its own
+        # wider pre/post authentication and host-drift checks under the lease.
+        _, captured, _, _, digest = authenticate()
+        require(isinstance(request, dict) and request.get('approvalSha256') == digest)
+        observer = load_authenticated(captured['ops/payload-production-observer.py'], OBSERVER)
+        request = observer.validate_request(request)
+        request_frame = observer.canonical(request) + b'\n'
+        require(len(request_frame) <= OBSERVER_MAX_FRAME)
         process = subprocess.Popen(
             ['/usr/bin/python3', '-I', '-S', '-B', OBSERVER, 'collect-context'],
             stdin=subprocess.PIPE,
@@ -597,7 +621,9 @@ def run_bounded_observer(request):
             require(len(response_frame) <= OBSERVER_MAX_FRAME)
         remaining = deadline - time.monotonic()
         require(remaining > 0)
-        require(process.wait(timeout=remaining) == 0)
+        returncode = process.wait(timeout=remaining)
+        reaped = True
+        require(returncode == 0)
         require(0 < len(response_frame) <= OBSERVER_MAX_FRAME)
         result = observer.validate_response(
             observer.strict_json(bytes(response_frame), OBSERVER_MAX_FRAME),
@@ -605,33 +631,39 @@ def run_bounded_observer(request):
             digest,
         )
         require(result['context']['pid'] == process.pid)
-        return result
-    except Exception:
-        if process is not None:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            try:
-                process.wait(timeout=1)
-            except Exception:
-                pass
-        raise VerificationError('preparation_verification_denied')
+    except BaseException:
+        failed = True
     finally:
+        if process is not None and not reaped:
+            while not reaped:
+                try:
+                    _terminate_and_reap(process)
+                    reaped = True
+                except BaseException:
+                    # Cleanup itself is mandatory. A transient interruption or
+                    # injected failure cannot release FD9 back to the caller
+                    # while its directly owned child remains unreaped.
+                    failed = True
         if selector is not None:
             if registered and process is not None and process.stdout is not None:
                 try:
                     selector.unregister(process.stdout)
-                except Exception:
-                    pass
-            selector.close()
+                except BaseException:
+                    failed = True
+            try:
+                selector.close()
+            except BaseException:
+                failed = True
         if process is not None:
             for stream in (process.stdin, process.stdout):
                 if stream is not None:
                     try:
                         stream.close()
-                    except Exception:
-                        pass
+                    except BaseException:
+                        failed = True
+    if failed or not reaped:
+        raise VerificationError('preparation_verification_denied') from None
+    return result
 
 
 def collect_context():

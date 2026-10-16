@@ -489,11 +489,11 @@ class Pipe:
  def write(self,value):return len(value)
  def close(self):pass
 class Selector:
- def __init__(self,timeout):self.timeout=timeout
+ def __init__(self,timeout):self.timeout=timeout;self.selects=0
  def register(self,*args):pass
  def unregister(self,*args):pass
  def close(self):pass
- def select(self,remaining):return [] if self.timeout else [(types.SimpleNamespace(fileobj=process.stdout),None)]
+ def select(self,remaining):self.selects+=1;return [] if self.timeout else [(types.SimpleNamespace(fileobj=process.stdout),None)]
 class Process:
  pid=321
  def __init__(self,status):self.stdin=Pipe(10);self.stdout=Pipe(11);self.returncode=status;self.killed=False;self.waited=False
@@ -509,14 +509,107 @@ for scenario in ('timeout','overflow','nonzero','malformed','wrong-nonce','wrong
   if scenario=='wrong-pid':value['context']['pid']=999
   frame=observer.canonical(value)+b'\n'
  if scenario=='nonzero':status=4
- chunks=[frame,b''];process=Process(status);clock=iter((0,31,31,31) if timeout else (0,0,0,0,0,0))
+ chunks=[frame,b''];process=Process(status);selector=Selector(timeout)
+ clock=iter((0,0,31,31) if timeout else (0,0,0,0,0,0))
  with patch.object(l,'authenticate',return_value=material),patch.object(l.subprocess,'Popen',return_value=process), \
-      patch.object(l.selectors,'DefaultSelector',return_value=Selector(timeout)),patch.object(l.os,'read',side_effect=lambda fd,n:chunks.pop(0)), \
+      patch.object(l.selectors,'DefaultSelector',return_value=selector),patch.object(l.os,'read',side_effect=lambda fd,n:chunks.pop(0)), \
       patch.object(l.os,'set_blocking'),patch.object(l.time,'monotonic',side_effect=lambda:next(clock)):
   try:l.run_bounded_observer(request)
   except l.VerificationError as error:assert str(error)=='preparation_verification_denied'
   else:raise AssertionError(scenario+' accepted')
- assert process.waited and process.killed,scenario
+ assert process.waited,scenario
+ assert process.killed==(scenario in ('timeout','overflow')),scenario
+ if timeout:assert selector.selects==1,'timeout must pass through selector before deadline denial'
+`);
+});
+
+test('every post-spawn BaseException and cleanup failure terminates and reaps before sanitized denial (portable process doubles)', () => {
+  probe(String.raw`
+from unittest.mock import patch
+material=l.authenticate();digest=material[4];nonce='7'*64
+request={'schemaVersion':1,'kind':'payload-production-context-request-v1','operation':'collect-context','nonce':nonce,'approvalSha256':digest}
+context={'approvalSha256':digest,'sourceCommit':approval['hostBaseline']['currentCommit'],'inventoryIdentity':'8'*64,
+ 'stateSha256':'9'*64,'stateSequence':3,'pid':321,'processStart':654,'leaseDevice':7,'leaseInode':8}
+response={'schemaVersion':1,'kind':'payload-production-context-observation-v1','operation':'collect-context','nonce':nonce,
+ 'context':context,'sourceAuthenticated':True,'inventoryAuthenticated':True,'stateAuthenticated':True,'leaseVerified':True,
+ 'destructiveOperationAuthorized':False,'installationExecuted':False,'deploymentAuthorized':False,'productionAuthorized':False}
+observer=l.load_authenticated(material[1]['ops/payload-production-observer.py'],l.OBSERVER);frame=observer.canonical(response)+b'\n'
+events=[];scenario=''
+class Pipe:
+ def __init__(self,name,fd):self.name=name;self.fd=fd;self.close_calls=0
+ def fileno(self):return self.fd
+ def write(self,value):
+  events.append('stdin-write')
+  if scenario=='stdin-write':raise SystemExit('private')
+  return len(value)
+ def close(self):
+  self.close_calls+=1;events.append(self.name+'-close')
+  if scenario==self.name+'-close' and self.close_calls==1:raise KeyboardInterrupt()
+class Process:
+ pid=321
+ def __init__(self):
+  self.stdin=Pipe('stdin',10);self.stdout=Pipe('stdout',11);self.kill_calls=0;self.wait_calls=0;self.reaped=False
+ def kill(self):
+  self.kill_calls+=1;events.append('kill')
+  if scenario=='kill-wait-retry' and self.kill_calls==1:raise InterruptedError()
+ def wait(self,timeout=None):
+  self.wait_calls+=1;events.append('wait-timeout' if timeout is not None else 'wait-reap')
+  if timeout is None and scenario=='kill-wait-retry' and self.wait_calls==1:raise KeyboardInterrupt()
+  self.reaped=True;events.append('reaped');return 0
+class Selector:
+ def __init__(self):self.close_calls=0
+ def register(self,*args):
+  events.append('register')
+  if scenario=='register':raise SystemExit('private')
+ def unregister(self,*args):events.append('unregister')
+ def select(self,*args):
+  events.append('select')
+  if scenario in ('select','interrupt','kill-wait-retry'):raise KeyboardInterrupt()
+  return [(types.SimpleNamespace(fileobj=process.stdout),None)]
+ def close(self):
+  self.close_calls+=1;events.append('selector-close')
+  if scenario=='selector-close':raise SystemExit('private')
+def popen(*args,**kwargs):
+ if scenario=='popen':raise KeyboardInterrupt()
+ events.append('spawn');return process
+def selector_factory():
+ events.append('selector-create')
+ if scenario=='selector-create':raise SystemExit('private')
+ return selector
+def set_blocking(*args):
+ events.append('nonblocking')
+ if scenario=='nonblocking':raise KeyboardInterrupt()
+def read(*args):
+ events.append('read')
+ if scenario=='read':raise SystemExit('private')
+ return chunks.pop(0)
+for scenario in ('popen','stdin-write','stdin-close','nonblocking','selector-create','register','select','read',
+                 'interrupt','kill-wait-retry','selector-close','stdout-close'):
+ events.clear();chunks=[frame,b''];process=Process();selector=Selector()
+ with patch.object(l,'authenticate',return_value=material),patch.object(l.subprocess,'Popen',side_effect=popen), \
+      patch.object(l.selectors,'DefaultSelector',side_effect=selector_factory),patch.object(l.os,'set_blocking',side_effect=set_blocking), \
+      patch.object(l.os,'read',side_effect=read),patch.object(l.time,'monotonic',return_value=0):
+  try:l.run_bounded_observer(request)
+  except l.VerificationError as error:assert str(error)=='preparation_verification_denied'
+  except BaseException as error:raise AssertionError((scenario,'unsanitized',type(error).__name__))
+  else:raise AssertionError(scenario+' accepted')
+ events.append('caller-resumed')
+ if scenario=='popen':
+  assert 'spawn' not in events and process.kill_calls==process.wait_calls==0
+  continue
+ assert process.reaped and 'reaped' in events,scenario
+ denial_cleanup_end=max(events.index('reaped'),max(i for i,value in enumerate(events) if value.endswith('-close')))
+ assert denial_cleanup_end<events.index('caller-resumed'),scenario
+ assert events.index('reaped')<max(i for i,value in enumerate(events) if value=='stdin-close'),scenario
+ assert events.index('reaped')<max(i for i,value in enumerate(events) if value=='stdout-close'),scenario
+ if 'selector-close' in events:assert events.index('reaped')<events.index('selector-close'),scenario
+ if scenario in ('selector-close','stdout-close'):
+  assert process.kill_calls==0,'already reaped child must not be killed'
+ else:
+  assert process.kill_calls>=1,scenario
+ assert process.stdin.close_calls>=1 and process.stdout.close_calls>=1,scenario
+ if scenario=='selector-close':assert 'stdin-close' in events and 'stdout-close' in events
+ if scenario=='kill-wait-retry':assert process.kill_calls==2 and process.wait_calls>=2
 `);
 });
 
