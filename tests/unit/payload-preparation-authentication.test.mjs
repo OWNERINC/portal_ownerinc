@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -266,24 +266,61 @@ test('native Linux root qualifies the production context envelope on an isolated
     for (const identity of ['getuid', 'geteuid', 'getgid', 'getegid']) {
       assert.equal(process[identity]?.(), 0, `required native preparation proof needs ${identity}=0`);
     }
-    const result = spawnSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', String.raw`
-import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil,json,hashlib,types
+    let sandbox;
+    let result;
+    try {
+      sandbox = mkdtempSync('/root/payload-context-observer-');
+      result = spawnSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', String.raw`
+import os,sys,pathlib,fcntl,importlib.util,shutil,json,hashlib,time
 assert sys.platform=='linux' and os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
 assert sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode
-repo=pathlib.Path(sys.argv[1]);source_path=repo/'ops/prepare-cms-authenticated.py'
+repo=pathlib.Path(sys.argv[1]);root=sys.argv[2];source_path=repo/'ops/prepare-cms-authenticated.py'
+assert os.path.basename(root).startswith('payload-context-observer-') and os.path.dirname(root)=='/root'
+assert os.path.isdir(root) and os.stat(root).st_uid==0;os.chmod(root,0o700)
+audit_log=root+'/file-open-audit.jsonl'
+parent_audit_fd=os.open(audit_log,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_APPEND,0o600)
+os.fchmod(parent_audit_fd,0o600);audit_active=[True]
+def record_open(event,args):
+ if event!='open' or not audit_active[0] or not args:return
+ filename=args[0]
+ if not isinstance(filename,(str,bytes,os.PathLike)):return
+ try:
+  value=os.fsdecode(filename)
+  os.write(parent_audit_fd,(json.dumps({'pid':os.getpid(),'path':value},sort_keys=True,separators=(',',':'))+'\n').encode())
+ except BaseException:pass
+sys.addaudithook(record_open)
 def load(name,filename):
  spec=importlib.util.spec_from_file_location(name,filename);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 production=load('production_launcher_contract',source_path)
 assert production.HOST_ROOT=='/opt/ownerinc/apps/portal-ownerinc-real'
 assert production.ROOT=='/opt/ownerinc/lib/payload-preparation'
 assert production.APPROVAL=='/etc/ownerinc/payload-preparation/production-approval.json'
-root=tempfile.mkdtemp(prefix='payload-context-observer-',dir='/root');os.chmod(root,0o700)
 prefixes={'/opt/ownerinc':root+'/opt/ownerinc','/etc/ownerinc':root+'/etc/ownerinc',
  '/var/lib/ownerinc':root+'/var/lib/ownerinc','/usr/local/libexec':root+'/usr/local/libexec'}
 forbidden=tuple(prefixes)
 def redirect(raw):
  for old,new in prefixes.items():raw=raw.replace(old.encode(),new.encode())
  return raw
+def instrument(raw):
+ first,separator,rest=raw.partition(b'\n');assert separator
+ hook=f'''import os as _fixture_audit_os,sys as _fixture_audit_sys,json as _fixture_audit_json
+_fixture_audit_log={audit_log!r}
+_fixture_audit_guard=False
+def _fixture_record_open(_event,_args):
+ global _fixture_audit_guard
+ if _event!='open' or _fixture_audit_guard or not _args:return
+ _filename=_args[0]
+ if not isinstance(_filename,(str,bytes,_fixture_audit_os.PathLike)):return
+ _fixture_audit_guard=True
+ try:
+  _fd=_fixture_audit_os.open(_fixture_audit_log,_fixture_audit_os.O_WRONLY|_fixture_audit_os.O_APPEND)
+  try:_fixture_audit_os.write(_fd,(_fixture_audit_json.dumps({{'pid':_fixture_audit_os.getpid(),'path':_fixture_audit_os.fsdecode(_filename)}},sort_keys=True,separators=(',',':'))+'\\n').encode())
+  finally:_fixture_audit_os.close(_fd)
+ except BaseException:pass
+ finally:_fixture_audit_guard=False
+_fixture_audit_sys.addaudithook(_fixture_record_open)
+'''.encode()
+ return first+b'\n'+hook+rest
 def mkdir(filename,mode=0o755):
  pathlib.Path(filename).mkdir(parents=True,exist_ok=True);os.chmod(filename,mode)
 def write(filename,data,mode=0o600,owner=(0,0)):
@@ -293,8 +330,11 @@ def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 proof={'kind':'native-production-context-envelope-proof','schemaVersion':1,'rootIdentity':True,'isolatedPython':True}
 try:
- # Redirect fixed production roots in fixture copies only. Production source and paths stay untouched.
+ # Redirect fixed production roots in fixture copies only. The launcher and observer
+ # fixture bytes also receive a CPython open-event audit hook; production bytes stay untouched.
  files=production.FILES;captured={relative:redirect((repo/relative).read_bytes()) for relative in files}
+ for relative in ('ops/prepare-cms-authenticated.py','ops/payload-production-observer.py'):
+  captured[relative]=instrument(captured[relative])
  launcher=prefixes['/usr/local/libexec']+'/ownerinc-payload-prepare.py'
  prep=prefixes['/opt/ownerinc']+'/lib/payload-preparation'
  for relative,data in captured.items():
@@ -370,15 +410,24 @@ try:
   'admission':{'policySha256':sha(policy_raw),'archiveSha256':record['archiveSha256'],'recordSha256':sha(record_raw)}}
  write(m.APPROVAL,canonical(approval)+b'\n',0o600)
 
- # Record parent-side opens while still calling the real Linux syscall. Child fixture bytes have no unredirected root literals.
- opened=[];real_open=os.open
- def tracked_open(filename,*args,**kwargs):
-  value=os.fsdecode(filename);opened.append(value)
-  assert not any(value==item or value.startswith(item+'/') for item in forbidden),value
-  return real_open(filename,*args,**kwargs)
- os.open=tracked_open
+ # Transparently retain real Popen while independently observing the live child PID
+ # and Linux start ticks before request delivery lets the observer exit.
+ real_popen=m.subprocess.Popen;children=[]
+ def proc_start(pid):
+  raw=pathlib.Path('/proc/'+str(pid)+'/stat').read_bytes();closing=raw.rfind(b')')
+  assert closing>0;fields=raw[closing+1:].strip().split();assert len(fields)>=20
+  return int(fields[19])
+ def transparent_popen(*args,**kwargs):
+  child=real_popen(*args,**kwargs);pid=child.pid
+  assert os.path.exists('/proc/'+str(pid))
+  children.append({'pid':pid,'processStart':proc_start(pid),'spawned':time.monotonic(),'command':args[0]})
+  return child
+ m.subprocess.Popen=transparent_popen
  response=m.collect_context()
- assert response['context']['pid']>0 and response['context']['processStart']>0
+ assert len(children)==1;successful_child=children[0]
+ assert response['context']['pid']==successful_child['pid']
+ assert response['context']['processStart']==successful_child['processStart']
+ assert not os.path.exists('/proc/'+str(successful_child['pid']))
  proof['processIdentityBound']=True
  false_fields=('destructiveOperationAuthorized','installationExecuted','deploymentAuthorized','productionAuthorized')
  assert all(response[name] is False for name in false_fields);proof['authorityRemainedFalse']=True
@@ -392,7 +441,7 @@ try:
   observed=m.run_bounded_observer(request);lease=os.fstat(9)
   assert (observed['context']['leaseDevice'],observed['context']['leaseInode'])==(lease.st_dev,lease.st_ino)
   proof['exclusiveLeaseInherited']=True
-  probe=real_open(m.LOCK,os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK)
+  probe=os.open(m.LOCK,os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK)
   try:
    try:fcntl.flock(probe,fcntl.LOCK_SH|fcntl.LOCK_NB)
    except BlockingIOError:pass
@@ -400,41 +449,93 @@ try:
   finally:os.close(probe)
   reaffirm();proof['sameOpenDescriptionRetained']=True
 
- old=m.LOCK+'.original'
+ old=m.LOCK+'.original';renamed=False;replacement_written=False;replacement_refused=False
+ class ExpectedReplacementRefusal(Exception):pass
  try:
   with m.deployment_lease(close_only=True) as reaffirm:
-   os.rename(m.LOCK,old);write(m.LOCK,b'replacement\n',0o600);reaffirm()
- except m.VerificationError:proof['pathReplacementRefused']=True
- else:raise AssertionError('lock path replacement accepted')
+   os.rename(m.LOCK,old);renamed=True
+   write(m.LOCK,b'replacement\n',0o600);replacement_written=True
+   try:reaffirm()
+   except m.VerificationError:
+    replacement_refused=True;raise ExpectedReplacementRefusal()
+   else:raise AssertionError('lock path replacement accepted')
+ except ExpectedReplacementRefusal:pass
  finally:
-  if os.path.lexists(m.LOCK):os.unlink(m.LOCK)
-  if os.path.lexists(old):os.rename(old,m.LOCK)
+  if replacement_written and os.path.lexists(m.LOCK):os.unlink(m.LOCK)
+  if renamed and os.path.lexists(old):os.rename(old,m.LOCK)
+ assert renamed and replacement_written and replacement_refused and pathlib.Path(m.LOCK).read_bytes()==b'lease-fixture\n'
+ proof['pathReplacementRefused']=True
 
  overflow=root+'/overflow.py';timeout_script=root+'/timeout.py'
- write(overflow,b'import os\nos.write(1,b"x"*4097)\n',0o755)
- write(timeout_script,b'import time\ntime.sleep(60)\n',0o755)
+ overflow_started=root+'/overflow-started';overflow_prefix=root+'/overflow-prefix-written';overflow_survived=root+'/overflow-survived'
+ timeout_started=root+'/timeout-started';timeout_survived=root+'/timeout-survived'
+ overflow_source=f'''import os,time,pathlib
+pathlib.Path({overflow_started!r}).write_text(str(os.getpid()))
+os.write(1,b"x"*4096)
+pathlib.Path({overflow_prefix!r}).write_text(str(os.getpid()))
+os.write(1,b"x")
+time.sleep(5)
+pathlib.Path({overflow_survived!r}).write_text("cap missing")
+'''.encode()
+ timeout_source=f'''import os,time,pathlib
+pathlib.Path({timeout_started!r}).write_text(str(os.getpid()))
+time.sleep(3)
+pathlib.Path({timeout_survived!r}).write_text("timeout missing")
+'''.encode()
+ write(overflow,overflow_source,0o755);write(timeout_script,timeout_source,0o755)
  observer_path=m.OBSERVER;observer_timeout=m.OBSERVER_TIMEOUT_SECONDS
  def refused(script,timeout):
+  before=len(children)
   m.OBSERVER=script;m.OBSERVER_TIMEOUT_SECONDS=timeout
   try:
    with m.deployment_lease(close_only=True):m.run_bounded_observer(request)
-  except m.VerificationError:return True
-  return False
+  except m.VerificationError:pass
+  else:raise AssertionError('replacement observer was accepted')
+  assert len(children)==before+1,'rejection occurred before replacement observer spawn'
+  child=children[-1];assert child['command'][4]==script
+  return child,time.monotonic()-child['spawned']
  try:
-  assert refused(overflow,observer_timeout);proof['outputOverflowRefused']=True
-  assert refused(timeout_script,0.05);proof['timeoutRefused']=True
- finally:m.OBSERVER=observer_path;m.OBSERVER_TIMEOUT_SECONDS=observer_timeout
- assert opened and not any(value==item or value.startswith(item+'/') for value in opened for item in forbidden)
+  overflow_child,overflow_elapsed=refused(overflow,8)
+  assert pathlib.Path(overflow_started).read_text()==str(overflow_child['pid'])
+  assert pathlib.Path(overflow_prefix).read_text()==str(overflow_child['pid'])
+  assert 0<overflow_elapsed<4,'overflow fell through to timeout/EOF parsing'
+  assert not os.path.exists('/proc/'+str(overflow_child['pid'])) and not os.path.exists(overflow_survived)
+  proof['outputOverflowRefused']=True
+  timeout_limit=0.4;timeout_child,timeout_elapsed=refused(timeout_script,timeout_limit)
+  assert pathlib.Path(timeout_started).read_text()==str(timeout_child['pid'])
+  assert timeout_limit*0.75<=timeout_elapsed<=2,'shortened timeout was not causal and bounded'
+  assert not os.path.exists('/proc/'+str(timeout_child['pid'])) and not os.path.exists(timeout_survived)
+  proof['timeoutRefused']=True
+ finally:
+  m.OBSERVER=observer_path;m.OBSERVER_TIMEOUT_SECONDS=observer_timeout;m.subprocess.Popen=real_popen
+
+ audit_active[0]=False;os.close(parent_audit_fd);parent_audit_fd=None
+ audit_events=[json.loads(line) for line in pathlib.Path(audit_log).read_text().splitlines()]
+ relevant_pids={os.getpid(),successful_child['pid']};audit_pids={entry['pid'] for entry in audit_events}
+ assert relevant_pids<=audit_pids
+ for entry in audit_events:
+  if entry['pid'] in relevant_pids:
+   assert not any(entry['path']==item or entry['path'].startswith(item+'/') for item in forbidden),entry
+ child_paths={entry['path'] for entry in audit_events if entry['pid']==successful_child['pid']}
+ assert m.LAUNCHER in child_paths and '/proc/self/stat' in child_paths
 finally:
- if 'real_open' in locals():os.open=real_open
+ audit_active[0]=False
+ if 'real_popen' in locals():m.subprocess.Popen=real_popen
+ if locals().get('parent_audit_fd') is not None:os.close(parent_audit_fd)
  shutil.rmtree(root)
 assert not os.path.exists(root)
 proof['sandboxRemoved']=True
 print(json.dumps(proof,sort_keys=True,separators=(',',':')))
-`, repo], {
+`, repo, sandbox], {
       encoding: 'utf8', timeout: 120000, maxBuffer: 4096,
       env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
-    });
+      });
+    } finally {
+      if (sandbox) rmSync(sandbox, { recursive: true, force: true });
+    }
+    assert.ok(sandbox, 'native sandbox must be allocated inside the cleanup scope');
+    assert.equal(existsSync(sandbox), false, 'Node fallback cleanup must remove the native sandbox');
+    assert.ifError(result?.error);
     assert.equal(result.status, 0, result.stderr);
     assert.ok(Buffer.byteLength(result.stdout) <= 1024, 'native proof must be bounded');
     assert.deepEqual(JSON.parse(result.stdout), {
@@ -449,18 +550,36 @@ print(json.dumps(proof,sort_keys=True,separators=(',',':')))
 
 test('candidate-only CI gate retains exact native preparation discovery without widening deployment', () => {
   const workflow = readFileSync(path.join(repo, '.github/workflows/ci.yml'), 'utf8');
-  const stepName = '      - name: Test preauthority CI setup with native Linux root';
-  const start = workflow.indexOf(stepName);
-  assert.notEqual(start, -1, 'required native step name is missing');
-  const end = workflow.indexOf('\n      - name:', start + stepName.length);
-  const step = workflow.slice(start, end);
-  const candidateOnly = "if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true";
-  assert.ok(step.split(/\r?\n/u).includes(`        ${candidateOnly}`), 'native step must remain candidate-only');
-  assert.match(step, /^ {12}PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "\$NODE_BIN" --test \\$/mu);
-  assert.match(step, /^ {12}tests\/unit\/payload-preparation-authentication\.test\.mjs$/mu);
-  assert.doesNotMatch(step, /deploy-production|Deploy with backup/u);
-  assert.match(workflow,
-    /^  deploy-production:\r?\n    name: Deploy production\r?\n    needs: validate\r?\n    if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main' && inputs\.cms_image_only != true && inputs\.publish_candidate_only != true$/mu);
+  const lines = workflow.split(/\r?\n/u);
+  const exactStepName = '      - name: Test preauthority CI setup with native Linux root';
+  const stepStarts = lines.map((line, index) => (/^      - /u.test(line) ? index : -1)).filter(index => index >= 0);
+  const start = stepStarts.filter(index => lines[index] === exactStepName);
+  assert.deepEqual(start.length, 1, 'required native step must have one exact name with no suffix');
+  const next = stepStarts.find(index => index > start[0]) ?? lines.length;
+  const step = lines.slice(start[0], next);
+  assert.equal(step[0], exactStepName);
+  assert.equal(step[1], "        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true");
+  const exactCommand = [
+    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\',
+    '            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \\',
+    '            tests/unit/payload-preparation-authentication.test.mjs',
+  ].join('\n');
+  assert.equal(step.join('\n').split(exactCommand).length, 2, 'native command must be exact, contiguous, and unique in its step');
+  assert.doesNotMatch(step.join('\n'), /deploy-production|Deploy with backup/u);
+
+  const jobs = lines.indexOf('jobs:');
+  assert.ok(jobs >= 0, 'workflow jobs boundary is missing');
+  const jobStarts = lines.map((line, index) => (index > jobs && /^  [a-z0-9-]+:$/u.test(line) ? index : -1)).filter(index => index >= 0);
+  const deployStart = jobStarts.filter(index => lines[index] === '  deploy-production:');
+  assert.deepEqual(deployStart.length, 1, 'deploy job boundary must remain unique');
+  const deployEnd = jobStarts.find(index => index > deployStart[0]) ?? lines.length;
+  const deploy = lines.slice(deployStart[0], deployEnd);
+  assert.deepEqual(deploy.slice(0, 4), [
+    '  deploy-production:',
+    '    name: Deploy production',
+    '    needs: validate',
+    "    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true",
+  ]);
 });
 
 test('host-data reader retains exact deploy ownership, bounded stable bytes, and distinct trust ancestry (metadata doubles)', () => {
