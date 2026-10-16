@@ -278,17 +278,54 @@ repo=pathlib.Path(sys.argv[1]);root=sys.argv[2];source_path=repo/'ops/prepare-cm
 assert os.path.basename(root).startswith('payload-context-observer-') and os.path.dirname(root)=='/root'
 assert os.path.isdir(root) and os.stat(root).st_uid==0;os.chmod(root,0o700)
 audit_log=root+'/file-open-audit.jsonl'
-parent_audit_fd=os.open(audit_log,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_APPEND,0o600)
-os.fchmod(parent_audit_fd,0o600);audit_active=[True]
+audit_dir=root+'/process-open-audits';os.mkdir(audit_dir,0o700);os.chmod(audit_dir,0o700)
+real_os_open=os.open
+parent_audit_fd=real_os_open(audit_log,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_APPEND,0o600)
+os.fchmod(parent_audit_fd,0o600);audit_active=[True];audit_state=[None]
+production_roots=tuple(os.path.realpath(os.path.abspath(os.path.normpath(item))) for item in
+ ('/opt/ownerinc','/etc/ownerinc','/var/lib/ownerinc','/usr/local/libexec'))
+def canonical_target(filename,dir_fd=None):
+ if isinstance(filename,int):
+  descriptor='/proc/self/fd/'+str(filename);target=os.path.realpath(descriptor)
+  if target==descriptor:raise RuntimeError('unresolved_open_descriptor')
+  return target
+ value=os.fsdecode(filename)
+ if not os.path.isabs(value):
+  if dir_fd is None:base=os.getcwd()
+  else:
+   descriptor='/proc/self/fd/'+str(dir_fd);base=os.path.realpath(descriptor)
+   if base==descriptor:raise RuntimeError('unresolved_parent_dir_fd')
+  value=os.path.join(base,value)
+ return os.path.realpath(os.path.abspath(os.path.normpath(value)))
+def forbidden_target(target):
+ return any(os.path.commonpath((target,item))==item for item in production_roots)
+def append_parent_open(api,target):
+ frame=(json.dumps({'api':api,'pid':os.getpid(),'target':target},sort_keys=True,separators=(',',':'))+'\n').encode()
+ written=os.write(parent_audit_fd,frame)
+ if written!=len(frame):raise RuntimeError('parent_audit_short_write')
+ if forbidden_target(target):raise AssertionError('unchanged_production_root_open:'+target)
 def record_open(event,args):
- if event!='open' or not audit_active[0] or not args:return
- filename=args[0]
- if not isinstance(filename,(str,bytes,os.PathLike)):return
- try:
-  value=os.fsdecode(filename)
-  os.write(parent_audit_fd,(json.dumps({'pid':os.getpid(),'path':value},sort_keys=True,separators=(',',':'))+'\n').encode())
- except BaseException:pass
+ if not audit_active[0]:return
+ state=audit_state[0]
+ if state is not None:
+  if event!='open' or not args or os.fsdecode(args[0])!=state['path']:raise RuntimeError('unexpected_parent_audit_reentrancy')
+  state['seen']=True;return
+ if event=='open':append_parent_open('open',canonical_target(args[0]))
 sys.addaudithook(record_open)
+def audited_os_open(filename,flags,mode=0o777,*,dir_fd=None):
+ target=canonical_target(filename,dir_fd);append_parent_open('os.open',target)
+ state={'path':os.fsdecode(filename),'seen':False};audit_state[0]=state
+ try:return real_os_open(filename,flags,mode,dir_fd=dir_fd)
+ finally:
+  audit_state[0]=None
+  if not state['seen']:raise RuntimeError('missing_parent_os_open_audit_event')
+os.open=audited_os_open
+assert forbidden_target(canonical_target('/opt/ownerinc/../ownerinc/audit-probe'))
+escape=root+'/audit-production-link';os.symlink('/opt/ownerinc',escape)
+assert forbidden_target(canonical_target(escape+'/audit-probe'));os.unlink(escape)
+root_fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+try:assert canonical_target(b'dir-fd-probe',root_fd)==root+'/dir-fd-probe'
+finally:os.close(root_fd)
 def load(name,filename):
  spec=importlib.util.spec_from_file_location(name,filename);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 production=load('production_launcher_contract',source_path)
@@ -304,21 +341,58 @@ def redirect(raw):
 def instrument(raw):
  first,separator,rest=raw.partition(b'\n');assert separator
  hook=f'''import os as _fixture_audit_os,sys as _fixture_audit_sys,json as _fixture_audit_json
-_fixture_audit_log={audit_log!r}
-_fixture_audit_guard=False
-def _fixture_record_open(_event,_args):
- global _fixture_audit_guard
- if _event!='open' or _fixture_audit_guard or not _args:return
- _filename=_args[0]
- if not isinstance(_filename,(str,bytes,_fixture_audit_os.PathLike)):return
- _fixture_audit_guard=True
- try:
-  _fd=_fixture_audit_os.open(_fixture_audit_log,_fixture_audit_os.O_WRONLY|_fixture_audit_os.O_APPEND)
-  try:_fixture_audit_os.write(_fd,(_fixture_audit_json.dumps({{'pid':_fixture_audit_os.getpid(),'path':_fixture_audit_os.fsdecode(_filename)}},sort_keys=True,separators=(',',':'))+'\\n').encode())
+if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.realpath(_fixture_audit_sys.argv[0])=={(prefixes['/opt/ownerinc']+'/lib/payload-preparation/ops/payload-production-observer.py')!r} and not getattr(_fixture_audit_sys,'_payload_fixture_open_audit',False):
+ _fixture_audit_sys._payload_fixture_open_audit=True
+ _fixture_real_os_open=_fixture_audit_os.open
+ _fixture_audit_log={audit_dir!r}+'/child-'+str(_fixture_audit_os.getpid())+'.jsonl'
+ _fixture_log_fd=_fixture_real_os_open(_fixture_audit_log,_fixture_audit_os.O_WRONLY|_fixture_audit_os.O_CREAT|_fixture_audit_os.O_EXCL|_fixture_audit_os.O_APPEND,0o600)
+ _fixture_audit_os.fchmod(_fixture_log_fd,0o600);_fixture_audit_os.close(_fixture_log_fd)
+ _fixture_audit_state=[None]
+ _fixture_production_roots={production_roots!r}
+ def _fixture_canonical_target(_filename,_dir_fd=None):
+  if isinstance(_filename,int):
+   _descriptor='/proc/self/fd/'+str(_filename);_target=_fixture_audit_os.path.realpath(_descriptor)
+   if _target==_descriptor:raise RuntimeError('unresolved_child_open_descriptor')
+   return _target
+  _value=_fixture_audit_os.fsdecode(_filename)
+ if not _fixture_audit_os.path.isabs(_value):
+   if _dir_fd is None:_base=_fixture_audit_os.getcwd()
+   else:
+    _descriptor='/proc/self/fd/'+str(_dir_fd);_base=_fixture_audit_os.path.realpath(_descriptor)
+    if _base==_descriptor:raise RuntimeError('unresolved_child_dir_fd')
+   _value=_fixture_audit_os.path.join(_base,_value)
+  return _fixture_audit_os.path.realpath(_fixture_audit_os.path.abspath(_fixture_audit_os.path.normpath(_value)))
+ def _fixture_forbidden_target(_target):
+  return any(_fixture_audit_os.path.commonpath((_target,_root))==_root for _root in _fixture_production_roots)
+ def _fixture_append_open(_api,_target):
+  _frame=(_fixture_audit_json.dumps({{'api':_api,'pid':_fixture_audit_os.getpid(),'target':_target}},sort_keys=True,separators=(',',':'))+'\\n').encode()
+  _state={{'mode':'log','path':_fixture_audit_log,'seen':False}};_fixture_audit_state[0]=_state
+  _fd=None
+  try:
+   _fd=_fixture_real_os_open(_fixture_audit_log,_fixture_audit_os.O_WRONLY|_fixture_audit_os.O_APPEND)
+  finally:
+   _fixture_audit_state[0]=None
+   if not _state['seen']:raise RuntimeError('missing_child_log_open_audit_event')
+  try:
+   _written=_fixture_audit_os.write(_fd,_frame)
+   if _written!=len(_frame):raise RuntimeError('child_audit_short_write')
   finally:_fixture_audit_os.close(_fd)
- except BaseException:pass
- finally:_fixture_audit_guard=False
-_fixture_audit_sys.addaudithook(_fixture_record_open)
+  if _fixture_forbidden_target(_target):raise AssertionError('unchanged_production_root_open:'+_target)
+ def _fixture_record_open(_event,_args):
+  _state=_fixture_audit_state[0]
+  if _state is not None:
+   if _event!='open' or not _args or _fixture_audit_os.fsdecode(_args[0])!=_state['path']:raise RuntimeError('unexpected_child_audit_reentrancy')
+   _state['seen']=True;return
+  if _event=='open':_fixture_append_open('open',_fixture_canonical_target(_args[0]))
+ _fixture_audit_sys.addaudithook(_fixture_record_open)
+ def _fixture_audited_os_open(_filename,_flags,_mode=0o777,*,dir_fd=None):
+  _target=_fixture_canonical_target(_filename,dir_fd);_fixture_append_open('os.open',_target)
+  _state={{'mode':'os.open','path':_fixture_audit_os.fsdecode(_filename),'seen':False}};_fixture_audit_state[0]=_state
+  try:return _fixture_real_os_open(_filename,_flags,_mode,dir_fd=dir_fd)
+  finally:
+   _fixture_audit_state[0]=None
+   if not _state['seen']:raise RuntimeError('missing_child_os_open_audit_event')
+ _fixture_audit_os.open=_fixture_audited_os_open
 '''.encode()
  return first+b'\n'+hook+rest
 def mkdir(filename,mode=0o755):
@@ -509,17 +583,30 @@ pathlib.Path({timeout_survived!r}).write_text("timeout missing")
  finally:
   m.OBSERVER=observer_path;m.OBSERVER_TIMEOUT_SECONDS=observer_timeout;m.subprocess.Popen=real_popen
 
- audit_active[0]=False;os.close(parent_audit_fd);parent_audit_fd=None
- audit_events=[json.loads(line) for line in pathlib.Path(audit_log).read_text().splitlines()]
- relevant_pids={os.getpid(),successful_child['pid']};audit_pids={entry['pid'] for entry in audit_events}
- assert relevant_pids<=audit_pids
- for entry in audit_events:
-  if entry['pid'] in relevant_pids:
-   assert not any(entry['path']==item or entry['path'].startswith(item+'/') for item in forbidden),entry
- child_paths={entry['path'] for entry in audit_events if entry['pid']==successful_child['pid']}
- assert m.LAUNCHER in child_paths and '/proc/self/stat' in child_paths
+ audit_active[0]=False;os.open=real_os_open;os.close(parent_audit_fd);parent_audit_fd=None
+ def parse_audit(filename,expected_pid):
+  raw=pathlib.Path(filename).read_bytes();assert raw and raw.endswith(b'\n') and b'\r' not in raw
+  events=[]
+  for line in raw[:-1].split(b'\n'):
+   entry=json.loads(line.decode('utf-8'))
+   assert set(entry)=={'api','pid','target'} and canonical(entry)==line
+   assert entry['pid']==expected_pid and entry['api'] in ('open','os.open')
+   assert entry['target']==os.path.realpath(os.path.abspath(os.path.normpath(entry['target'])))
+   assert not forbidden_target(entry['target']),entry
+   events.append(entry)
+  assert events and {'open','os.open'}<={entry['api'] for entry in events}
+  return events
+ parent_events=parse_audit(audit_log,os.getpid())
+ instrumented_children=[child for child in children if child['command'][4]==observer_path]
+ assert len(instrumented_children)==2
+ expected_logs={'child-'+str(child['pid'])+'.jsonl' for child in instrumented_children}
+ assert set(os.listdir(audit_dir))==expected_logs
+ child_events={child['pid']:parse_audit(audit_dir+'/child-'+str(child['pid'])+'.jsonl',child['pid']) for child in instrumented_children}
+ successful_targets={entry['target'] for entry in child_events[successful_child['pid']]}
+ assert m.LAUNCHER in successful_targets and '/proc/self/stat' in successful_targets
 finally:
  audit_active[0]=False
+ os.open=real_os_open
  if 'real_popen' in locals():m.subprocess.Popen=real_popen
  if locals().get('parent_audit_fd') is not None:os.close(parent_audit_fd)
  shutil.rmtree(root)
@@ -551,25 +638,37 @@ print(json.dumps(proof,sort_keys=True,separators=(',',':')))
 test('candidate-only CI gate retains exact native preparation discovery without widening deployment', () => {
   const workflow = readFileSync(path.join(repo, '.github/workflows/ci.yml'), 'utf8');
   const lines = workflow.split(/\r?\n/u);
-  const exactStepName = '      - name: Test preauthority CI setup with native Linux root';
-  const stepStarts = lines.map((line, index) => (/^      - /u.test(line) ? index : -1)).filter(index => index >= 0);
-  const start = stepStarts.filter(index => lines[index] === exactStepName);
-  assert.deepEqual(start.length, 1, 'required native step must have one exact name with no suffix');
-  const next = stepStarts.find(index => index > start[0]) ?? lines.length;
-  const step = lines.slice(start[0], next);
-  assert.equal(step[0], exactStepName);
-  assert.equal(step[1], "        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true");
-  const exactCommand = [
-    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\',
-    '            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \\',
-    '            tests/unit/payload-preparation-authentication.test.mjs',
-  ].join('\n');
-  assert.equal(step.join('\n').split(exactCommand).length, 2, 'native command must be exact, contiguous, and unique in its step');
-  assert.doesNotMatch(step.join('\n'), /deploy-production|Deploy with backup/u);
-
   const jobs = lines.indexOf('jobs:');
   assert.ok(jobs >= 0, 'workflow jobs boundary is missing');
   const jobStarts = lines.map((line, index) => (index > jobs && /^  [a-z0-9-]+:$/u.test(line) ? index : -1)).filter(index => index >= 0);
+  const validateStart = jobStarts.filter(index => lines[index] === '  validate:');
+  assert.deepEqual(validateStart.length, 1, 'validate job boundary must remain unique');
+  const validateEnd = jobStarts.find(index => index > validateStart[0]) ?? lines.length;
+  const validate = lines.slice(validateStart[0], validateEnd);
+  const steps = validate.indexOf('    steps:');
+  assert.ok(steps >= 0, 'validate steps boundary is missing');
+  const exactStepName = '      - name: Test preauthority CI setup with native Linux root';
+  const stepStarts = validate.map((line, index) => (index > steps && /^      - /u.test(line) ? index : -1)).filter(index => index >= 0);
+  const start = stepStarts.filter(index => validate[index] === exactStepName);
+  assert.deepEqual(start.length, 1, 'required native step must have one exact name with no suffix');
+  const next = stepStarts.find(index => index > start[0]) ?? validate.length;
+  const step = validate.slice(start[0], next);
+  assert.deepEqual(step, [
+    exactStepName,
+    "        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true",
+    '        run: |',
+    '          set -euo pipefail',
+    '          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs',
+    '          NODE_BIN="$(readlink -f -- "$(command -v node)")"',
+    '          test -f "$NODE_BIN" && test -x "$NODE_BIN"',
+    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\',
+    '            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \\',
+    '            tests/unit/payload-candidate-trust-provisioning.test.mjs',
+    '          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \\',
+    '            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \\',
+    '            tests/unit/payload-preparation-authentication.test.mjs',
+  ], 'native step name, attached gate, run key, and complete shell body must be exact');
+
   const deployStart = jobStarts.filter(index => lines[index] === '  deploy-production:');
   assert.deepEqual(deployStart.length, 1, 'deploy job boundary must remain unique');
   const deployEnd = jobStarts.find(index => index > deployStart[0]) ?? lines.length;
@@ -580,6 +679,25 @@ test('candidate-only CI gate retains exact native preparation discovery without 
     '    needs: validate',
     "    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true",
   ]);
+});
+
+test('Task 4 retains executable wrong-PID and returned process-context mismatch refusal evidence', () => {
+  const source = readFileSync(path.join(repo, 'tests/unit/payload-preparation-authentication.test.mjs'), 'utf8');
+  const transportStart = source.lastIndexOf("test('bounded observer transport denies timeout, overflow, child/status/frame/binding/PID failures and always reaps");
+  const transportEnd = source.indexOf("\ntest('", transportStart + 1);
+  assert.ok(transportStart >= 0 && transportEnd > transportStart);
+  const transport = source.slice(transportStart, transportEnd);
+  assert.match(transport, /for scenario in \('timeout','overflow','nonzero','malformed','wrong-nonce','wrong-approval','wrong-pid'\):/u);
+  assert.match(transport, /if scenario=='wrong-pid':value\['context'\]\['pid'\]=999/u);
+  assert.match(transport, /try:l\.run_bounded_observer\(request\)\r?\n  except l\.VerificationError as error:assert str\(error\)=='preparation_verification_denied'\r?\n  else:raise AssertionError\(scenario\+' accepted'\)/u);
+
+  const contextStart = source.lastIndexOf("test('context collection owns the lease, independently projects context, and denies all post-child drift");
+  const contextEnd = source.indexOf("\ntest('", contextStart + 1);
+  assert.ok(contextStart >= 0 && contextEnd > contextStart);
+  const context = source.slice(contextStart, contextEnd);
+  assert.match(context, /if kind=='result':value\['context'\]\['stateSha256'\]='0'\*64/u);
+  assert.match(context, /try:l\.collect_context\(\)\r?\n  except l\.VerificationError:pass\r?\n  else:raise AssertionError\(kind\+' drift accepted'\)/u);
+  assert.match(context, /for kind in \('source','closure','approval','inventory','state','fd9','result'\):attempt\(kind\)/u);
 });
 
 test('host-data reader retains exact deploy ownership, bounded stable bytes, and distinct trust ancestry (metadata doubles)', () => {
