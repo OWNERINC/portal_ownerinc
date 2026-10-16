@@ -104,7 +104,8 @@ put_host(l.HOST_ROOT+'/current-release',(release+'\n').encode())
 put_host(release+'/.image-env',('API_IMAGE='+images['api']+'\nCRON_IMAGE='+images['cron']+'\n').encode())
 for filename,field in [(release+'/docker-compose.yml','releaseComposeSha256'),(l.RUNTIME+'/compose.production.yaml','runtimeComposeSha256')]:
  put_host(filename,b'approved-compose\n');baseline[field]=p.sha(b'approved-compose\n')
-put_host(l.ENVIRONMENT,b'PRIVATE=not-printed\n',mode=0o600)
+environment_secret=b'COLLECTOR_MUST_NOT_READ_THIS_SECRET_VALUE'
+put_host(l.ENVIRONMENT,b'PRIVATE='+environment_secret+b'\n',mode=0o600)
 put_host('/usr/local/libexec/ownerinc-portal-deploy',b'approved predecessor',(0,0),0o755)
 baseline['installedPredecessors']['commonReceiver']=p.sha(b'approved predecessor')
 def host_read(name,owner=(1000,1000),modes=(0o600,0o644),limit=2*1024*1024):
@@ -137,13 +138,17 @@ def install_state(body):
  put_host(l.RUNTIME+'/payload-control.key',key,(0,0),0o600)
  envelope=state.canonical(state.sign_envelope(body,key))+b'\n'
  for name in names:put_host(l.RUNTIME+'/payload-control-state/'+name,envelope,(0,0),0o600)
-def run_host():
+def run_host(metadata_only=False):
  # This fixture represents a root administrative caller and root-owned state,
  # not the Node runner's UID. Exercise POSIX guards even on Windows. Only OS
  # observations are doubled: actual state.read_state/HMAC/journal checks run.
  with patch.multiple(l.os,name='posix',getuid=lambda:0,geteuid=lambda:0,getgid=lambda:0,getegid=lambda:0,create=True), \
       patch.object(l.os.path,'lexists',side_effect=exists),patch.object(l.os,'lstat',side_effect=metadata),patch.object(l.os,'listdir',return_value=names):
-  l.verify_host_baseline(approval,captured,images['cms'],p)
+   l.verify_host_baseline(approval,captured,images['cms'],p,metadata_only=metadata_only)
+def run_inspect(metadata_only=False):
+ with patch.multiple(l.os,name='posix',getuid=lambda:0,geteuid=lambda:0,getgid=lambda:0,getegid=lambda:0,create=True), \
+      patch.object(l.os.path,'lexists',side_effect=exists),patch.object(l.os,'lstat',side_effect=metadata),patch.object(l.os,'listdir',return_value=names):
+  return l.inspect_install_host(approval,captured,metadata_only=metadata_only)
 `;
 
 test('root host fixture verifies signed state even when the test runner is POSIX non-root (identity doubles)', () => {
@@ -189,6 +194,29 @@ install_state(initial);before=copy.deepcopy(host);run_host();assert host==before
 import importlib.util
 with patch.object(importlib.util,'spec_from_file_location',side_effect=AssertionError('reopened helper')):
  assert l.load_state_captured(captured,inv).INVENTORY is inv
+`);
+});
+
+test('collector parent and observer-compatible inspection authenticate environment metadata without reading secret bytes', () => {
+  probe(hostModel + String.raw`
+install_state(initial)
+assert environment_secret in host[l.ENVIRONMENT][0]
+reads.clear();run_host(metadata_only=True)
+assert l.ENVIRONMENT not in reads
+reads.clear();runtime,document,body,observations=run_inspect(metadata_only=True)
+assert l.ENVIRONMENT not in reads and body==initial
+# Ordinary preparation/install defaults deliberately retain their established
+# content-read behavior; only the explicit collection mode is metadata-only.
+reads.clear();run_host();assert l.ENVIRONMENT in reads
+reads.clear();run_inspect();assert l.ENVIRONMENT in reads
+data,owner,mode=host[l.ENVIRONMENT]
+put_host(l.ENVIRONMENT,data,owner,0o644)
+for operation in (lambda:run_host(metadata_only=True),lambda:run_inspect(metadata_only=True)):
+ reads.clear()
+ try:operation()
+ except Exception as error:assert str(error)=='unsafe_environment_permissions',str(error)
+ else:raise AssertionError('unsafe collector environment metadata accepted')
+ assert l.ENVIRONMENT not in reads
 `);
 });
 
@@ -431,6 +459,11 @@ try:
  # Redirect fixed production roots in fixture copies only. The launcher and observer
  # fixture bytes also receive a CPython open-event audit hook; production bytes stay untouched.
  files=production.FILES;captured={relative:redirect((repo/relative).read_bytes()) for relative in files}
+ # Scan redirected executable bytes before adding the fixture hook, whose denylist
+ # intentionally contains the unchanged production roots as data.
+ for data in captured.values():
+  text=data.decode('utf-8')
+  for value in forbidden:assert ("'"+value) not in text and ('"'+value) not in text
  for relative in ('ops/prepare-cms-authenticated.py','ops/payload-production-observer.py'):
   captured[relative]=instrument(captured[relative])
  launcher=prefixes['/usr/local/libexec']+'/ownerinc-payload-prepare.py'
@@ -440,18 +473,13 @@ try:
   write(target,data,0o644 if relative.endswith(('.yaml','.yml')) else 0o755)
  m=load('fixture_launcher',launcher)
  support=m.load_authenticated(captured['ops/provision-payload-candidate-trust.py'],prep+'/ops/provision-payload-candidate-trust.py')
- verifier=m.load_authenticated(captured['ops/payload-candidate-verifier.py'],prep+'/ops/payload-candidate-verifier.py')
+ tool_files={relative:redirect((repo/relative).read_bytes()) for relative in support.TOOL_FILES}
+ for relative,data in tool_files.items():write(support.TOOL_ROOT+'/'+relative,data,0o755 if relative.endswith('.py') else 0o644)
+ verifier=m.load_authenticated(tool_files['ops/payload-candidate-verifier.py'],support.TOOL_ROOT+'/ops/payload-candidate-verifier.py')
  assert m.HOST_ROOT==prefixes['/opt/ownerinc']+'/apps/portal-ownerinc-real'
  assert m.ROOT==prep and m.LAUNCHER==launcher and m.APPROVAL.startswith(root+'/') and m.OBSERVER.startswith(root+'/')
  assert support.TOOL_ROOT.startswith(root+'/') and support.POLICY_PATH.startswith(root+'/')
  assert verifier.REGISTRY.startswith(root+'/') and verifier.POLICY_PATH.startswith(root+'/')
- # Every absolute production root in executable fixture bytes was redirected beneath this sandbox.
- for data in captured.values():
-  text=data.decode('utf-8')
-  for value in forbidden:assert ("'"+value) not in text and ('"'+value) not in text
-
- tool_files={relative:redirect((repo/relative).read_bytes()) for relative in support.TOOL_FILES}
- for relative,data in tool_files.items():write(support.TOOL_ROOT+'/'+relative,data,0o755 if relative.endswith('.py') else 0o644)
  python_path=os.path.realpath(sys.executable)
  executables={'node':root+'/bin/node','git':root+'/bin/git','python':python_path,
               'gitRemoteHttps':support.TOOL_ROOT+'/bin/git-remote-https'}
@@ -680,6 +708,14 @@ import json,os,pathlib,stat,sys
 source=pathlib.Path(sys.argv[1]).read_text()
 forbidden_digit_method='.'+'isdigit()';assert forbidden_digit_method not in source
 native=source.index('\nimport os,sys,pathlib,fcntl,importlib.util,shutil,json,hashlib,time,stat\n')+1
+native_script_end=source.index('\n'+chr(96)+', repo, sandbox]',native)
+native_source=source[native:native_script_end]
+compile(native_source,'<actual-native-fixture>','exec')
+tool_files_at=native_source.index("tool_files={relative:redirect((repo/relative).read_bytes()) for relative in support.TOOL_FILES}")
+verifier_at=native_source.index("verifier=m.load_authenticated(tool_files['ops/payload-candidate-verifier.py']")
+instrument_at=native_source.index("for relative in ('ops/prepare-cms-authenticated.py','ops/payload-production-observer.py'):")
+redirect_scan_at=native_source.index("for data in captured.values():",native_source.index("captured={relative:redirect"))
+assert tool_files_at<verifier_at and redirect_scan_at<instrument_at
 start=source.index('def instrument(raw):',native);end=source.index('def mkdir(filename,mode=0o755):',start)
 root=os.path.realpath(sys.argv[2]);audit_dir=os.path.join(root,'audits');os.mkdir(audit_dir)
 prefixes={'/opt/ownerinc':os.path.join(root,'redirected','opt','ownerinc'),
@@ -690,6 +726,20 @@ production_roots=tuple(os.path.realpath(item) for item in ('/opt/ownerinc','/etc
 namespace={'audit_dir':audit_dir,'prefixes':prefixes,'production_roots':production_roots}
 exec(compile(source[start:end],'<actual-instrument-source>','exec'),namespace)
 instrument=namespace['instrument']
+repository=pathlib.Path(sys.argv[1]).resolve().parents[2]
+compile_prefixes={old:new.replace('\\','/') for old,new in prefixes.items()}
+def redirect_actual(raw):
+ for old,new in compile_prefixes.items():raw=raw.replace(old.encode(),new.encode())
+ return raw
+actual_generated={}
+for relative in ('ops/prepare-cms-authenticated.py','ops/payload-production-observer.py'):
+ redirected=redirect_actual((repository/relative).read_bytes())
+ text=redirected.decode('utf-8')
+ for value in compile_prefixes:assert ("'"+value) not in text and ('"'+value) not in text
+ actual_generated[relative]=instrument(redirected)
+ compile(actual_generated[relative],relative,'exec')
+tool_files={'ops/payload-candidate-verifier.py':redirect_actual((repository/'ops/payload-candidate-verifier.py').read_bytes())}
+compile(tool_files['ops/payload-candidate-verifier.py'],'ops/payload-candidate-verifier.py','exec')
 observer=prefixes['/opt/ownerinc']+'/lib/payload-preparation/ops/payload-production-observer.py'
 launcher=prefixes['/usr/local/libexec']+'/ownerinc-payload-prepare.py'
 default_file=os.path.join(root,'default.bin');mode_file=os.path.join(root,'mode.bin');dir_base=os.path.join(root,'dir-base');child_file=os.path.join(dir_base,'child.bin')
@@ -1254,8 +1304,10 @@ def lease(close_only=False):
  def reaffirm():assert held[0];events.append('reaffirm')
  try:yield reaffirm
  finally:held[0]=False;events.append('release')
-def baseline(*args):assert held[0];events.append('host')
-def inspect(*args):assert held[0];events.append('inspect');return runtime,inventory,body,None
+def baseline(*args,**kwargs):
+ assert held[0] and kwargs=={'metadata_only':True};events.append('host')
+def inspect(*args,**kwargs):
+ assert held[0] and kwargs=={'metadata_only':True};events.append('inspect');return runtime,inventory,body,None
 def child(request):
  assert held[0];events.append('child')
  context={'approvalSha256':digest,'sourceCommit':material[0]['hostBaseline']['currentCommit'],'inventoryIdentity':'8'*64,
@@ -1284,7 +1336,8 @@ def attempt(kind):
  if kind=='state':current_body={'sequence':5,'private':'not-returned'}
  if kind=='fd9':infos[1]=types.SimpleNamespace(st_dev=7,st_ino=9)
  calls=[0]
- def changing_inspect(*args):
+ def changing_inspect(*args,**kwargs):
+  assert kwargs=={'metadata_only':True}
   calls[0]+=1
   return runtime,(inventory if calls[0]==1 else current_inventory),(body if calls[0]==1 else current_body),None
  def mismatching_child(request):

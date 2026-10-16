@@ -38,6 +38,14 @@ o host, recompõe source/inventory/state/FD9 e recusa qualquer drift pré/pós-c
 O resultado não é reutilizável: nova entrada exige processo, nonce, autenticação e
 lease frescos.
 
+Nos caminhos de coleta, tanto as verificações pré/pós do parent quanto a inspeção do
+observer tratam o arquivo privado de environment somente por metadados. Elas usam o
+`verify_environment_file` autenticado para conferir ancestry, `lstat`, tipo regular,
+link count, modo e owner antes/depois, mas não abrem nem retêm os bytes do arquivo.
+As leituras completas de source, inventory e state assinado e suas rechecagens de
+estabilidade permanecem obrigatórias. Os caminhos existentes de preparação e de
+inspeção de instalação fora da coleta conservam o comportamento anterior de leitura.
+
 O deadline de 30 segundos cobre a resposta e a saída normal do observer: byte 4097,
 saída/JSON/status inválido, mismatch, timeout ou falha de transporte causam recusa
 sanitizada, sem traceback, stderr do filho, paths, estado privado ou credenciais.

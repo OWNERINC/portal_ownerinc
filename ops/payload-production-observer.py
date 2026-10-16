@@ -165,10 +165,11 @@ def process_start_ticks():
 def collect_context(request, launcher):
     request = validate_request(request)
     approval, captured, _, _, digest = launcher.context_material(
-        request['approvalSha256']
+        request['approvalSha256'], metadata_only=True
     )
     require(digest == request['approvalSha256'])
-    runtime, inventory, body, _ = launcher.inspect_install_host(approval, captured)
+    runtime, inventory, body, _ = launcher.inspect_install_host(
+        approval, captured, metadata_only=True)
     lease = os.fstat(9)
     launcher.verify_inherited_lease()
     context = {

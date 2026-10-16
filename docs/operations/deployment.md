@@ -1023,6 +1023,14 @@ Antes de executar o observer, o launcher autentica a closure completa, agora
 incluindo `ops/payload-production-observer.py`; o observer executado também é o path
 fixo dessa closure instalada.
 
+Nesse caminho de coleta, as verificações pré/pós do parent e a inspeção do observer
+não abrem nem armazenam o conteúdo do arquivo privado de environment. Somente o
+`verify_environment_file` vindo do inventory autenticado confere ancestry, `lstat`,
+arquivo regular sem links adicionais, modo `0600` e owner aprovado, com estabilidade
+de metadados rechecada. Source, inventory e state assinado continuam autenticados e
+relidos integralmente. Os caminhos comuns de preparação/instalação mantêm por padrão
+suas leituras de conteúdo existentes.
+
 Sucesso retorna apenas o envelope bounded/read-only descrito no
 [runbook de runtime](payload-runtime-recovery.md#b0-01a--envelope-mínimo-autenticado-de-contexto-test-local-native-pendente).
 Não instala, não captura B0, não persiste recibo e não concede autoridade:
@@ -1079,8 +1087,12 @@ recusados; EX herdada via `pass_fds` em subprocesso sem liberar a lock do parent
 FD9 fechado ao sair; pathname substituído recusado; bytes originais preservados;
 sandbox removido. Essa descrição registra somente o contrato anterior, não um PASS
 histórico fornecido nem um contrato de proof corrente. As garantias de lease ainda
-aplicáveis foram retidas e são cobertas pelo novo caso
-`native-production-context-envelope-proof`, cuja execução native permanece pendente.
+aplicáveis permanecem no código. O novo caso
+`native-production-context-envelope-proof` cobre nativamente apenas aquisição EX do
+launcher, herança e retenção da mesma open description pelo observer, FD9/path e
+substituição do pathname. As negativas de lease SH herdada, lock busy e EX em outra
+open description permanecem cobertas por doubles portáteis de syscall, não por esse
+novo caso native. A execução native do envelope permanece pendente.
 
 O caso native atual implementado para B0-01a exige o JSON fechado
 `native-production-context-envelope-proof`, também de no máximo 1 KiB. Ele exercita

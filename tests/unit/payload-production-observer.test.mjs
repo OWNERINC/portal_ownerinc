@@ -133,8 +133,12 @@ class Inventory:
 runtime=types.SimpleNamespace(STATE=State,INVENTORY=Inventory)
 class Launcher:
  def __init__(self):self.checks=0
- def context_material(self,digest):assert digest=='b'*64;return ({'hostBaseline':{'currentCommit':'c'*40}},'captured',None,None,'b'*64)
- def inspect_install_host(self,approval,captured):return runtime,{'fixed':'inventory'},body,None
+ def context_material(self,digest,metadata_only=False):
+  assert digest=='b'*64 and metadata_only is True
+  return ({'hostBaseline':{'currentCommit':'c'*40}},'captured',None,None,'b'*64)
+ def inspect_install_host(self,approval,captured,metadata_only=False):
+  assert metadata_only is True
+  return runtime,{'fixed':'inventory'},body,None
  def verify_inherited_lease(self):self.checks+=1
 launcher=Launcher()
 m.os.fstat=lambda fd:types.SimpleNamespace(st_dev=7,st_ino=8)
@@ -205,7 +209,8 @@ stdout=types.SimpleNamespace(buffer=io.BytesIO())
 stderr=types.SimpleNamespace(buffer=io.BytesIO())
 events=[]
 class FailingLauncher:
- def context_material(self,digest):
+ def context_material(self,digest,metadata_only=False):
+  assert metadata_only is True
   events.append('collect')
   raise ValueError('SYNTHETIC_COLLECT_SECRET')
 class Loader:

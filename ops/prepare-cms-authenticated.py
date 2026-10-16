@@ -201,7 +201,8 @@ def load_state_captured(captured, inventory):
     return module
 
 
-def verify_host_baseline(approval, captured, cms_image, support):
+def verify_host_baseline(approval, captured, cms_image, support, metadata_only=False):
+    require(type(metadata_only) is bool)
     baseline = approval['hostBaseline']
     inventory = load_authenticated(captured['ops/payload-control-inventory.py'], ROOT + '/ops/payload-control-inventory.py')
     expected = inventory.production_inventory(HOST_ROOT, RUNTIME, RELEASES, HOST_ROOT + '/current-release', LOCK,
@@ -234,8 +235,9 @@ def verify_host_baseline(approval, captured, cms_image, support):
         require(support.sha(read(override)) == baseline['releaseOverrideSha256'])
     else:
         require(baseline['releaseOverrideSha256'] is None)
-    read(ENVIRONMENT, modes=(0o600,))
-    inventory.verify_environment_file(ENVIRONMENT, expected['environmentFileOwner'])
+    if not metadata_only:
+        read(ENVIRONMENT, modes=(0o600,))
+    environment_info = inventory.verify_environment_file(ENVIRONMENT, expected['environmentFileOwner'])
     inventory_path = RUNTIME + '/payload-control-inventory.json'
     inventory_present = present(inventory_path)
     if inventory_present:
@@ -287,6 +289,9 @@ def verify_host_baseline(approval, captured, cms_image, support):
             require(read(filename, (0, 0), (mode,)) == captured[source])
     for filename, (value, owner, modes, limit) in observed.items():
         require(host_read(filename, owner, modes, limit) == value)
+    if metadata_only:
+        require(host_identity(inventory.verify_environment_file(
+            ENVIRONMENT, expected['environmentFileOwner'])) == host_identity(environment_info))
     require(all(not os.path.lexists(filename) for filename in absent))
     if state_present:
         require(set(os.listdir(state_dir)) == {'00000000000000000000.json', 'current.json'})
@@ -427,9 +432,10 @@ def verify_received_tree(receiver, destination, entries):
         require(receiver.identity(os.lstat(filename)) == identity)
 
 
-def inspect_install_host(approval, captured):
+def inspect_install_host(approval, captured, metadata_only=False):
     # Separate from preparation eligibility: inspect valid pending/committed
     # journals, never invoke Runtime.__init__ (which allows head repair).
+    require(type(metadata_only) is bool)
     runtime = load_runtime_captured(captured)
     state, inventory = runtime.STATE, runtime.INVENTORY
     baseline = approval['hostBaseline']
@@ -455,8 +461,9 @@ def inspect_install_host(approval, captured):
     document_raw = read(RUNTIME + '/payload-control-inventory.json')
     document = inventory.validate(state.parse_canonical(document_raw, 'invalid_inventory_file'))
     require(document == expected)
-    read(ENVIRONMENT, (1000, 1000), (0o600,))
-    inventory.verify_environment_file(ENVIRONMENT, document['environmentFileOwner'])
+    if not metadata_only:
+        read(ENVIRONMENT, (1000, 1000), (0o600,))
+    environment_info = inventory.verify_environment_file(ENVIRONMENT, document['environmentFileOwner'])
     key_path, state_dir = RUNTIME + '/payload-control.key', RUNTIME + '/payload-control-state'
     require(os.path.lexists(key_path) and os.path.lexists(state_dir))
     host_ancestry(key_path)
@@ -524,6 +531,9 @@ def inspect_install_host(approval, captured):
         b0_status = 'present_unverified' # Artifact hashes/restoreability/DB identity are not checked here.
     for filename, (raw, owner, modes, limit) in reads.items():
         require(host_read(filename, owner, modes, limit) == raw)
+    if metadata_only:
+        require(host_identity(inventory.verify_environment_file(
+            ENVIRONMENT, document['environmentFileOwner'])) == host_identity(environment_info))
     require(set(os.listdir(state_dir)) == journal_names and all(not os.path.lexists(f) for f in absent))
     lock_info = os.lstat(LOCK)
     ownership = all((i.st_uid, i.st_gid) == (0, 0) for i in (pointer_info, source_info, lock_info)) \
@@ -534,7 +544,8 @@ def inspect_install_host(approval, captured):
 
 
 def expected_context(approval, captured, approval_digest):
-    runtime, inventory, body, _ = inspect_install_host(approval, captured)
+    runtime, inventory, body, _ = inspect_install_host(
+        approval, captured, metadata_only=True)
     lease = os.fstat(9)
     return {
         'approvalSha256': approval_digest,
@@ -691,7 +702,8 @@ def collect_context():
     with deployment_lease(close_only=True) as reaffirm:
         approval, captured, cms_image, support, digest = authenticate()
         require(digest == initial[4])
-        verify_host_baseline(approval, captured, cms_image, support)
+        verify_host_baseline(
+            approval, captured, cms_image, support, metadata_only=True)
         before = expected_context(approval, captured, digest)
         reaffirm()
         request = {
@@ -705,7 +717,8 @@ def collect_context():
         reaffirm()
         final = authenticate()
         require(final[4] == digest and final[1] == captured)
-        verify_host_baseline(final[0], final[1], final[2], final[3])
+        verify_host_baseline(
+            final[0], final[1], final[2], final[3], metadata_only=True)
         after = expected_context(final[0], final[1], digest)
         require(before == after)
         require(all(result['context'][key] == value for key, value in after.items()))
@@ -801,13 +814,15 @@ def verify_inherited_lease():
         os.close(probe)
 
 
-def context_material(expected_digest):
+def context_material(expected_digest, metadata_only=False):
+    require(type(metadata_only) is bool)
     require(isinstance(expected_digest, str) and len(expected_digest) == 64
             and all(c in '0123456789abcdef' for c in expected_digest))
     verify_inherited_lease()
     approval, captured, cms_image, support, digest = authenticate()
     require(digest == expected_digest)
-    verify_host_baseline(approval, captured, cms_image, support)
+    verify_host_baseline(approval, captured, cms_image, support,
+                         metadata_only=metadata_only)
     verify_inherited_lease()
     return approval, captured, cms_image, support, digest
 
