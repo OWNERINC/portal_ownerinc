@@ -145,6 +145,9 @@ try:
     p.PREPARATION_ROOT=os.path.join(base,'installed');p.PREPARATION_LAUNCHER=os.path.join(base,'libexec','prepare.py')
     p.PREPARATION_APPROVAL=os.path.join(base,'etc','approval.json');p.STATE_ROOT=os.path.join(base,'state')
     content={name:b'UNTRUSTED_DATA_NEVER_EXECUTED\n' for name in p.PREPARATION_FILES}
+    sentinel=os.path.join(base,'observer-executed')
+    observer='ops/payload-production-observer.py'
+    content[observer]=('import pathlib;pathlib.Path('+repr(sentinel)+').write_text("executed")\n').encode()
     for name,data in content.items():write(bundle+'/'+name,data,p.preparation_mode(name))
     approval={'schemaVersion':1,'kind':'ownerinc-payload-preparation-approval-v1','environment':'production',
       'repository':'OWNERINC/portal_ownerinc','source':{'commit':'a'*40,'files':{n:p.sha(d) for n,d in content.items()}},
@@ -155,15 +158,34 @@ try:
     raw=(json.dumps(approval)+'\n').encode();filename=os.path.join(base,'input.json');write(filename,raw,0o600)
     args=(filename,p.sha(raw),bundle);before=inventory()
     assert 'no files written' in p.provision_preparation('check',*args) and inventory()==before
+    assert not os.path.exists(sentinel)
+    for label,mutate in [
+        ('missing-observer',lambda value:value['source']['files'].pop(observer)),
+        ('extra-hash',lambda value:value['source']['files'].update({'extra':'0'*64}))]:
+        changed=copy.deepcopy(approval);mutate(changed);changed_raw=(json.dumps(changed)+'\n').encode()
+        changed_path=os.path.join(base,label+'.json');write(changed_path,changed_raw,0o600)
+        denied(lambda:p.provision_preparation('apply',changed_path,p.sha(changed_raw),bundle),'invalid_shape')
+        assert not os.path.lexists(p.PREPARATION_APPROVAL) and not os.path.exists(sentinel)
+    before_observer=content[observer];write(bundle+'/'+observer,b'altered after approval\n',p.preparation_mode(observer))
+    denied(lambda:p.provision_preparation('apply',*args),'preparation_source_mismatch')
+    assert not os.path.lexists(p.PREPARATION_APPROVAL) and not os.path.exists(sentinel)
+    write(bundle+'/'+observer,before_observer,p.preparation_mode(observer))
+    observer_target=p.preparation_target(observer);write(observer_target,b'conflicting observer bytes\n',p.preparation_mode(observer))
+    denied(lambda:p.provision_preparation('apply',*args),'destination_conflict')
+    assert not os.path.lexists(p.PREPARATION_APPROVAL) and not os.path.exists(sentinel)
+    os.unlink(observer_target)
     original_publish=p.publish;events=[]
     def interrupted(name,expected):
-        if len(events)==6:raise OSError('interruption')
+        if name==p.PREPARATION_APPROVAL:raise OSError('interruption-before-approval')
         original_publish(name,expected);events.append(name)
     p.publish=interrupted;denied(lambda:p.provision_preparation('apply',*args))
     assert not os.path.lexists(p.PREPARATION_APPROVAL)
+    assert all(os.path.lexists(p.preparation_target(name)) for name in p.PREPARATION_FILES)
+    assert not os.path.exists(sentinel)
     def observe(name,expected):original_publish(name,expected);events.append(name)
     p.publish=observe;events.clear();p.provision_preparation('apply',*args)
     assert events[-1]==p.PREPARATION_APPROVAL
+    assert not os.path.exists(sentinel)
     assert len(os.listdir(p.STATE_ROOT+'/trust-snapshots'))==2
     before=inventory();p.provision_preparation('apply',*args);assert inventory()==before
     write(p.PREPARATION_LAUNCHER,b'unknown',0o755);events.clear()

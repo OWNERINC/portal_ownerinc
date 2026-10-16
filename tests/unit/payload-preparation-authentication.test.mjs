@@ -465,9 +465,11 @@ with patch.object(l.os,'lstat',return_value=info),patch.object(l.os,'fstat',side
 `);
 });
 
-test('all 15 source files authenticate before any closure helper; fixed report never authorizes execution (read doubles)', () => {
+test('all 16 source files authenticate before any closure helper; fixed report never authorizes execution (read doubles)', () => {
   probe(String.raw`
-assert p.PREPARATION_FILES==l.FILES and len(l.FILES)==15
+assert len(p.PREPARATION_FILES)==16
+assert p.PREPARATION_FILES==l.FILES
+assert 'ops/payload-production-observer.py' in p.PREPARATION_FILES
 assert p.PREPARATION_LAUNCHER=='/usr/local/libexec/ownerinc-payload-prepare.py'
 assert p.PREPARATION_ROOT=='/opt/ownerinc/lib/payload-preparation'
 assert p.PREPARATION_APPROVAL=='/etc/ownerinc/payload-preparation/production-approval.json'
@@ -476,6 +478,11 @@ assert result=={'kind':'payload-preparation-verification-only','sourceAuthentica
     'admissionRecordAuthenticated':True,'cmsImage':images['cms'],'hostBaselineChecked':True,
     'archiveBytesChecked':False,'preparationExecuted':False,'deploymentAuthorized':False}
 assert len(loads)==2
+observer='ops/payload-production-observer.py';observer_target=p.preparation_target(observer)
+before=store[observer_target];loads.clear()
+put(observer_target,b'raise Exception("MUST NOT EXECUTE")\n',before[1])
+denied(l.verify);assert loads==[]
+store[observer_target]=before
 for relative in p.PREPARATION_FILES:
     filename=p.preparation_target(relative);before=store[filename];loads.clear()
     put(filename,b'raise Exception("MUST NOT EXECUTE")\n',before[1])
@@ -493,7 +500,7 @@ denied(lambda:p.validate_approval(approval));denied(lambda:p.validate_preparatio
 mutations=[lambda a:a.update(schemaVersion=True),lambda a:a.update(kind=policy['kind']),
  lambda a:a.update(environment='staging'),lambda a:a.update(repository='other/repo'),
  lambda a:a.update(approvedRevisions=policy['approvedRevisions']),lambda a:a['source'].update(commit='main'),
- lambda a:a['source']['files'].update({'extra':'a'*64}),lambda a:a['source']['files'].pop(l.FILES[0]),
+ lambda a:a['source']['files'].update({'extra':'a'*64}),lambda a:a['source']['files'].pop('ops/payload-production-observer.py'),
  lambda a:a['hostBaseline'].update(currentCommit='observed'),lambda a:a['hostBaseline'].update(inventoryIdentity=None),
  lambda a:a['hostBaseline'].update(releaseOverrideSha256=False),lambda a:a['hostBaseline'].update(allowMigrated=True),
  lambda a:a['hostBaseline']['legacyImages'].update(api='latest'),
