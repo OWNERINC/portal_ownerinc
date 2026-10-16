@@ -282,9 +282,11 @@ audit_log=root+'/file-open-audit.jsonl'
 audit_dir=root+'/process-open-audits';os.mkdir(audit_dir,0o700);os.chmod(audit_dir,0o700)
 real_os_open=os.open
 parent_audit_fd=real_os_open(audit_log,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_APPEND,0o600)
-os.fchmod(parent_audit_fd,0o600);audit_active=[True];audit_state=[None]
+os.fchmod(parent_audit_fd,0o600);audit_active=[True];audit_state=[None];parent_audit_records=[]
 production_roots=tuple(os.path.realpath(os.path.abspath(os.path.normpath(item))) for item in
  ('/opt/ownerinc','/etc/ownerinc','/var/lib/ownerinc','/usr/local/libexec'))
+def pipe_target(target):
+ return target.startswith('pipe:[') and target.endswith(']') and bool(target[6:-1]) and all('0'<=character<='9' for character in target[6:-1])
 def descriptor_target(descriptor,reason,require_directory=False):
  try:target=os.readlink('/proc/self/fd/'+str(descriptor))
  except OSError as error:raise RuntimeError(reason) from error
@@ -292,7 +294,7 @@ def descriptor_target(descriptor,reason,require_directory=False):
  if os.path.isabs(target) and not target.endswith(' (deleted)'):
   if require_directory and not stat.S_ISDIR(info.st_mode):raise RuntimeError(reason)
   return 'filesystem',os.path.realpath(target)
- if not require_directory and target.startswith('pipe:[') and target.endswith(']') and target[6:-1].isdigit() and stat.S_ISFIFO(info.st_mode):
+ if not require_directory and pipe_target(target) and stat.S_ISFIFO(info.st_mode):
   return 'pipe',target
  raise RuntimeError(reason)
 def canonical_target(filename,dir_fd=None):
@@ -307,9 +309,11 @@ def canonical_target(filename,dir_fd=None):
 def forbidden_target(target_kind,target):
  return target_kind=='filesystem' and any(os.path.commonpath((target,item))==item for item in production_roots)
 def append_parent_open(api,target_kind,target):
- frame=(json.dumps({'api':api,'pid':os.getpid(),'target':target,'targetKind':target_kind},sort_keys=True,separators=(',',':'))+'\n').encode()
+ entry={'api':api,'pid':os.getpid(),'target':target,'targetKind':target_kind}
+ frame=(json.dumps(entry,sort_keys=True,separators=(',',':'))+'\n').encode()
  written=os.write(parent_audit_fd,frame)
  if written!=len(frame):raise RuntimeError('parent_audit_short_write')
+ parent_audit_records.append(entry)
  if forbidden_target(target_kind,target):raise AssertionError('unchanged_production_root_open:'+target)
 def record_open(event,args):
  if not audit_active[0]:return
@@ -356,6 +360,8 @@ if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.r
  _fixture_audit_os.fchmod(_fixture_log_fd,0o600);_fixture_audit_os.close(_fixture_log_fd)
  _fixture_audit_state=[None]
  _fixture_production_roots={production_roots!r}
+ def _fixture_pipe_target(_target):
+  return _target.startswith('pipe:[') and _target.endswith(']') and bool(_target[6:-1]) and all('0'<=_character<='9' for _character in _target[6:-1])
  def _fixture_descriptor_target(_descriptor,_reason,_require_directory=False):
   try:_target=_fixture_audit_os.readlink('/proc/self/fd/'+str(_descriptor))
   except OSError as _error:raise RuntimeError(_reason) from _error
@@ -363,7 +369,7 @@ if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.r
   if _fixture_audit_os.path.isabs(_target) and not _target.endswith(' (deleted)'):
    if _require_directory and not _fixture_audit_stat.S_ISDIR(_info.st_mode):raise RuntimeError(_reason)
    return 'filesystem',_fixture_audit_os.path.realpath(_target)
-  if not _require_directory and _target.startswith('pipe:[') and _target.endswith(']') and _target[6:-1].isdigit() and _fixture_audit_stat.S_ISFIFO(_info.st_mode):
+  if not _require_directory and _fixture_pipe_target(_target) and _fixture_audit_stat.S_ISFIFO(_info.st_mode):
    return 'pipe',_target
   raise RuntimeError(_reason)
  def _fixture_canonical_target(_filename,_dir_fd=None):
@@ -515,7 +521,9 @@ try:
   children.append({'pid':pid,'processStart':proc_start(pid),'spawned':time.monotonic(),'command':args[0]})
   return child
  m.subprocess.Popen=transparent_popen
+ successful_parent_event_start=len(parent_audit_records)
  response=m.collect_context()
+ successful_parent_event_end=len(parent_audit_records)
  assert len(children)==1;successful_child=children[0]
  assert response['context']['pid']==successful_child['pid']
  assert response['context']['processStart']==successful_child['processStart']
@@ -613,18 +621,21 @@ pathlib.Path({timeout_survived!r}).write_text("timeout missing")
    if entry['targetKind']=='filesystem':
     assert os.path.isabs(entry['target']) and entry['target']==os.path.realpath(entry['target'])
     assert not forbidden_target('filesystem',entry['target']),entry
-   else:assert entry['target'].startswith('pipe:[') and entry['target'].endswith(']') and entry['target'][6:-1].isdigit()
+   else:assert pipe_target(entry['target'])
    events.append(entry)
   assert events and {'open','os.open'}<={entry['api'] for entry in events}
   return events
  parent_events=parse_audit(audit_log,os.getpid())
+ assert parent_events==parent_audit_records
+ successful_parent_events=parent_events[successful_parent_event_start:successful_parent_event_end]
+ successful_parent_pipes=[entry for entry in successful_parent_events if entry['api']=='open' and entry['targetKind']=='pipe']
+ assert len(successful_parent_pipes)>=2
  instrumented_children=[child for child in children if child['command'][4]==observer_path]
  assert len(instrumented_children)==2
  expected_logs={'child-'+str(child['pid'])+'.jsonl' for child in instrumented_children}
  assert set(os.listdir(audit_dir))==expected_logs
  child_events={child['pid']:parse_audit(audit_dir+'/child-'+str(child['pid'])+'.jsonl',child['pid']) for child in instrumented_children}
  successful_targets={entry['target'] for entry in child_events[successful_child['pid']] if entry['targetKind']=='filesystem'}
- assert any(entry['targetKind']=='pipe' for entry in child_events[successful_child['pid']])
  assert m.LAUNCHER in successful_targets and '/proc/'+str(successful_child['pid'])+'/stat' in successful_targets
 finally:
  audit_active[0]=False
@@ -667,6 +678,7 @@ test('generated child audit classifies Popen pipes and delegates os.open default
     const generated = spawnSync(python, ['-I', '-S', '-B', '-c', String.raw`
 import json,os,pathlib,stat,sys
 source=pathlib.Path(sys.argv[1]).read_text()
+forbidden_digit_method='.'+'isdigit()';assert forbidden_digit_method not in source
 native=source.index('\nimport os,sys,pathlib,fcntl,importlib.util,shutil,json,hashlib,time,stat\n')+1
 start=source.index('def instrument(raw):',native);end=source.index('def mkdir(filename,mode=0o755):',start)
 root=os.path.realpath(sys.argv[2]);audit_dir=os.path.join(root,'audits');os.mkdir(audit_dir)
@@ -733,15 +745,19 @@ def _assert_descriptor_refused(_descriptor,_reason):
  try:_fixture_descriptor_target(_descriptor,_reason)
  except (OSError,RuntimeError):return
  raise AssertionError(_reason+' accepted')
+assert _fixture_pipe_target('pipe:[0]') and _fixture_pipe_target('pipe:[1234567890]')
+assert not _fixture_pipe_target('pipe:[]') and not _fixture_pipe_target('pipe:['+chr(0x0661)+']')
 _assert_descriptor_refused(1000000,'invalid_descriptor')
 import socket as _fixture_socket
 _socket=_fixture_socket.socket()
 try:_assert_descriptor_refused(_socket.fileno(),'socket_descriptor')
 finally:_socket.close()
 _original_readlink=_fixture_audit_os.readlink;_original_fstat=_fixture_audit_os.fstat
+_unicode_read_fd,_unicode_write_fd=_fixture_audit_os.pipe();_unicode_fifo_info=_fixture_audit_os.fstat(_unicode_read_fd)
 _synthetic={{1000001:('pipe:[1000001]',_fixture_audit_os.stat({default_file!r})),
  1000002:('anon_inode:[eventpoll]',_fixture_audit_os.stat({default_file!r})),
- 1000003:({default_file!r}+' (deleted)',_fixture_audit_os.stat({default_file!r}))}}
+ 1000003:({default_file!r}+' (deleted)',_fixture_audit_os.stat({default_file!r})),
+ 1000004:('pipe:['+chr(0x0661)+']',_unicode_fifo_info)}}
 def _synthetic_readlink(_filename):
  _descriptor=int(_filename.rsplit('/',1)[1])
  if _descriptor in _synthetic:return _synthetic[_descriptor][0]
@@ -754,7 +770,10 @@ try:
  _assert_descriptor_refused(1000001,'mismatched_pipe_descriptor')
  _assert_descriptor_refused(1000002,'anon_inode_descriptor')
  _assert_descriptor_refused(1000003,'deleted_descriptor')
-finally:_fixture_audit_os.readlink=_original_readlink;_fixture_audit_os.fstat=_original_fstat
+ _assert_descriptor_refused(1000004,'unicode_digit_pipe_descriptor')
+finally:
+ _fixture_audit_os.readlink=_original_readlink;_fixture_audit_os.fstat=_original_fstat
+ _fixture_audit_os.close(_unicode_read_fd);_fixture_audit_os.close(_unicode_write_fd)
 _fd=_fixture_audit_os.open({default_file!r},_fixture_audit_os.O_RDONLY)
 try:assert _fixture_audit_os.read(_fd,32)==b'default'
 finally:_fixture_audit_os.close(_fd)
@@ -782,7 +801,7 @@ for _entry in _fixture_audit_records:
  if _entry['targetKind']=='filesystem':
   assert _fixture_audit_os.path.isabs(_entry['target']) and _entry['target']==_fixture_audit_os.path.realpath(_entry['target'])
   assert not _fixture_forbidden_target('filesystem',_entry['target'])
- else:assert _entry['target'].startswith('pipe:[') and _entry['target'].endswith(']') and _entry['target'][6:-1].isdigit()
+ else:assert _fixture_pipe_target(_entry['target'])
 '''.encode()
 base=b'#!/usr/bin/python3\n'+exercise
 observer_raw=instrument(base);launcher_raw=instrument(b'#!/usr/bin/python3\nVALUE=1\n')
@@ -792,7 +811,8 @@ pathlib.Path(observer).write_bytes(observer_raw);pathlib.Path(launcher).write_by
 sys.argv=[observer,'collect-context'];exec(compile(observer_raw,observer,'exec'),globals())
 if os.name=='posix':actual_fstat(portable_dir_fd);os.close(portable_dir_fd)
 print(json.dumps({'generatedModulesCompiled':True,'defaultDelegated':True,'dirFdDelegated':True,'keywordModeDelegated':True,
- 'pipeWrappingRecorded':True,'popenPipeSetupRecorded':True,'rejectedDescriptorClasses':['invalid','mismatched-pipe','socket','anon-inode','deleted'],
+ 'pipeWrappingRecorded':True,'popenPipeSetupRecorded':True,'asciiPipeIdsOnly':True,
+ 'rejectedDescriptorClasses':['invalid','mismatched-pipe','socket','anon-inode','deleted','unicode-digit-pipe'],
  'auditLog':_fixture_audit_log,'auditPid':_fixture_audit_os.getpid(),
  'symlinkDotDotResolved':True,'platformProcModel':'native' if os.name=='posix' else 'portable-injected',
  'symlinkModel':'native' if os.name=='posix' else 'component-preserving-injected'},sort_keys=True,separators=(',',':')))
@@ -821,6 +841,7 @@ print(json.dumps({'generatedModulesCompiled':True,'defaultDelegated':True,'dirFd
     delete evidence.auditLog;
     delete evidence.auditPid;
     assert.deepEqual(evidence, {
+      asciiPipeIdsOnly: true,
       defaultDelegated: true,
       dirFdDelegated: true,
       generatedModulesCompiled: true,
@@ -828,7 +849,7 @@ print(json.dumps({'generatedModulesCompiled':True,'defaultDelegated':True,'dirFd
       pipeWrappingRecorded: true,
       platformProcModel: process.platform === 'win32' ? 'portable-injected' : 'native',
       popenPipeSetupRecorded: true,
-      rejectedDescriptorClasses: ['invalid', 'mismatched-pipe', 'socket', 'anon-inode', 'deleted'],
+      rejectedDescriptorClasses: ['invalid', 'mismatched-pipe', 'socket', 'anon-inode', 'deleted', 'unicode-digit-pipe'],
       symlinkModel: process.platform === 'win32' ? 'component-preserving-injected' : 'native',
       symlinkDotDotResolved: true,
     });
