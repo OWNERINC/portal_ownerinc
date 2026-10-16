@@ -9,6 +9,8 @@ import types
 import builtins
 import subprocess
 import re
+import selectors
+import time
 from contextlib import contextmanager, ExitStack
 
 HOST_ROOT = '/opt/ownerinc/apps/portal-ownerinc-real'
@@ -21,12 +23,17 @@ PRODUCTION_BACKUP = '/opt/ownerinc/backups/portal-ownerinc/production'
 ROOT = '/opt/ownerinc/lib/payload-preparation'
 LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
 APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
+OBSERVER_TIMEOUT_SECONDS = 30
+OBSERVER_MAX_FRAME = 4096
+OBSERVER_CLEANUP_INTERRUPT_RETRIES = 3
+OBSERVER = ROOT + '/ops/payload-production-observer.py'
 FILES = (
     'ops/prepare-cms-infrastructure.sh', 'ops/prepare-cms-infrastructure-private.py',
     'ops/payload-control-inventory.py', 'ops/payload-control-state.py',
     'ops/deploy-from-ci.sh', 'ops/payload-receiver-admission.py', 'ops/payload-receiver-root.sh',
     'ops/deploy-from-production-ci.sh', 'ops/payload-operations-guard.sh', 'ops/payload-control',
     'ops/payload-control-runtime.py', 'ops/compose.payload.production.yaml', 'docker-compose.payload.yml',
+    'ops/payload-production-observer.py',
     'ops/prepare-cms-authenticated.py', 'ops/provision-payload-candidate-trust.py')
 
 
@@ -194,7 +201,8 @@ def load_state_captured(captured, inventory):
     return module
 
 
-def verify_host_baseline(approval, captured, cms_image, support):
+def verify_host_baseline(approval, captured, cms_image, support, metadata_only=False):
+    require(type(metadata_only) is bool)
     baseline = approval['hostBaseline']
     inventory = load_authenticated(captured['ops/payload-control-inventory.py'], ROOT + '/ops/payload-control-inventory.py')
     expected = inventory.production_inventory(HOST_ROOT, RUNTIME, RELEASES, HOST_ROOT + '/current-release', LOCK,
@@ -227,8 +235,9 @@ def verify_host_baseline(approval, captured, cms_image, support):
         require(support.sha(read(override)) == baseline['releaseOverrideSha256'])
     else:
         require(baseline['releaseOverrideSha256'] is None)
-    read(ENVIRONMENT, modes=(0o600,))
-    inventory.verify_environment_file(ENVIRONMENT, expected['environmentFileOwner'])
+    if not metadata_only:
+        read(ENVIRONMENT, modes=(0o600,))
+    environment_info = inventory.verify_environment_file(ENVIRONMENT, expected['environmentFileOwner'])
     inventory_path = RUNTIME + '/payload-control-inventory.json'
     inventory_present = present(inventory_path)
     if inventory_present:
@@ -280,6 +289,9 @@ def verify_host_baseline(approval, captured, cms_image, support):
             require(read(filename, (0, 0), (mode,)) == captured[source])
     for filename, (value, owner, modes, limit) in observed.items():
         require(host_read(filename, owner, modes, limit) == value)
+    if metadata_only:
+        require(host_identity(inventory.verify_environment_file(
+            ENVIRONMENT, expected['environmentFileOwner'])) == host_identity(environment_info))
     require(all(not os.path.lexists(filename) for filename in absent))
     if state_present:
         require(set(os.listdir(state_dir)) == {'00000000000000000000.json', 'current.json'})
@@ -420,9 +432,10 @@ def verify_received_tree(receiver, destination, entries):
         require(receiver.identity(os.lstat(filename)) == identity)
 
 
-def inspect_install_host(approval, captured):
+def inspect_install_host(approval, captured, metadata_only=False):
     # Separate from preparation eligibility: inspect valid pending/committed
     # journals, never invoke Runtime.__init__ (which allows head repair).
+    require(type(metadata_only) is bool)
     runtime = load_runtime_captured(captured)
     state, inventory = runtime.STATE, runtime.INVENTORY
     baseline = approval['hostBaseline']
@@ -448,8 +461,9 @@ def inspect_install_host(approval, captured):
     document_raw = read(RUNTIME + '/payload-control-inventory.json')
     document = inventory.validate(state.parse_canonical(document_raw, 'invalid_inventory_file'))
     require(document == expected)
-    read(ENVIRONMENT, (1000, 1000), (0o600,))
-    inventory.verify_environment_file(ENVIRONMENT, document['environmentFileOwner'])
+    if not metadata_only:
+        read(ENVIRONMENT, (1000, 1000), (0o600,))
+    environment_info = inventory.verify_environment_file(ENVIRONMENT, document['environmentFileOwner'])
     key_path, state_dir = RUNTIME + '/payload-control.key', RUNTIME + '/payload-control-state'
     require(os.path.lexists(key_path) and os.path.lexists(state_dir))
     host_ancestry(key_path)
@@ -517,6 +531,9 @@ def inspect_install_host(approval, captured):
         b0_status = 'present_unverified' # Artifact hashes/restoreability/DB identity are not checked here.
     for filename, (raw, owner, modes, limit) in reads.items():
         require(host_read(filename, owner, modes, limit) == raw)
+    if metadata_only:
+        require(host_identity(inventory.verify_environment_file(
+            ENVIRONMENT, document['environmentFileOwner'])) == host_identity(environment_info))
     require(set(os.listdir(state_dir)) == journal_names and all(not os.path.lexists(f) for f in absent))
     lock_info = os.lstat(LOCK)
     ownership = all((i.st_uid, i.st_gid) == (0, 0) for i in (pointer_info, source_info, lock_info)) \
@@ -524,6 +541,189 @@ def inspect_install_host(approval, captured):
     return runtime, document, body, {'runtimeOwnershipCompatible': ownership,
         'isolatedSourceIdentityCompatible': baseline['currentCommit'] == hashlib.sha256(source_raw).hexdigest()[:40],
         'b0Status': b0_status}
+
+
+def expected_context(approval, captured, approval_digest):
+    runtime, inventory, body, _ = inspect_install_host(
+        approval, captured, metadata_only=True)
+    lease = os.fstat(9)
+    return {
+        'approvalSha256': approval_digest,
+        'sourceCommit': approval['hostBaseline']['currentCommit'],
+        'inventoryIdentity': runtime.INVENTORY.identity(inventory),
+        'stateSha256': hashlib.sha256(runtime.STATE.canonical(body)).hexdigest(),
+        'stateSequence': body['sequence'],
+        'leaseDevice': lease.st_dev,
+        'leaseInode': lease.st_ino,
+    }
+
+
+def _terminate_and_reap(process):
+    # Popen identifies the directly owned child; never signal by an externally
+    # supplied PID or process group. POSIX wait after SIGKILL is required for
+    # completed reaping, but is not a wall-clock time bound. Only a finite number
+    # of deliberate interruption retries is allowed; persistent failures fail-stop.
+    interruptions = 0
+    while True:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            break
+        except (InterruptedError, KeyboardInterrupt):
+            interruptions += 1
+            if interruptions >= OBSERVER_CLEANUP_INTERRUPT_RETRIES:
+                raise
+            continue
+        else:
+            break
+    interruptions = 0
+    while True:
+        try:
+            process.wait()
+        except (InterruptedError, KeyboardInterrupt):
+            interruptions += 1
+            if interruptions >= OBSERVER_CLEANUP_INTERRUPT_RETRIES:
+                raise
+            continue
+        else:
+            return
+
+
+def _observer_cleanup_fail_stop():
+    # No normal unwinding may release the parent's lease when direct-child state
+    # cannot be proven reaped. _exit emits no traceback or private diagnostic.
+    os._exit(2)
+
+
+def run_bounded_observer(request):
+    process = None
+    selector = None
+    registered = False
+    reaped = False
+    failed = False
+    termination_failed = False
+    result = None
+    try:
+        # Authenticate the validator bytes immediately before they parse either
+        # direction of the child protocol. The caller still performs its own
+        # wider pre/post authentication and host-drift checks under the lease.
+        _, captured, _, _, digest = authenticate()
+        require(isinstance(request, dict) and request.get('approvalSha256') == digest)
+        observer = load_authenticated(captured['ops/payload-production-observer.py'], OBSERVER)
+        request = observer.validate_request(request)
+        request_frame = observer.canonical(request) + b'\n'
+        require(len(request_frame) <= OBSERVER_MAX_FRAME)
+        process = subprocess.Popen(
+            ['/usr/bin/python3', '-I', '-S', '-B', OBSERVER, 'collect-context'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            pass_fds=(9,),
+            env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'},
+            shell=False,
+            bufsize=0,
+        )
+        require(process.stdin is not None and process.stdout is not None)
+        require(process.stdin.write(request_frame) == len(request_frame))
+        process.stdin.close()
+        os.set_blocking(process.stdout.fileno(), False)
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        registered = True
+        deadline = time.monotonic() + OBSERVER_TIMEOUT_SECONDS
+        response_frame = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0)
+            ready = selector.select(remaining)
+            if not ready:
+                require(time.monotonic() < deadline)
+                continue
+            try:
+                chunk = os.read(process.stdout.fileno(), OBSERVER_MAX_FRAME + 1 - len(response_frame))
+            except BlockingIOError:
+                continue
+            if not chunk:
+                break
+            response_frame.extend(chunk)
+            require(len(response_frame) <= OBSERVER_MAX_FRAME)
+        remaining = deadline - time.monotonic()
+        require(remaining > 0)
+        returncode = process.wait(timeout=remaining)
+        reaped = True
+        require(returncode == 0)
+        require(0 < len(response_frame) <= OBSERVER_MAX_FRAME)
+        result = observer.validate_response(
+            observer.strict_json(bytes(response_frame), OBSERVER_MAX_FRAME),
+            request['nonce'],
+            digest,
+        )
+        require(result['context']['pid'] == process.pid)
+    except BaseException:
+        failed = True
+    finally:
+        if process is not None and not reaped:
+            try:
+                _terminate_and_reap(process)
+                reaped = True
+            except BaseException:
+                termination_failed = True
+                failed = True
+        if selector is not None:
+            if registered and process is not None and process.stdout is not None:
+                try:
+                    selector.unregister(process.stdout)
+                except BaseException:
+                    failed = True
+            try:
+                selector.close()
+            except BaseException:
+                failed = True
+        if process is not None:
+            for stream in (process.stdin, process.stdout):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except BaseException:
+                        failed = True
+        if termination_failed:
+            # Descriptor cleanup above is finite and independent. A close that
+            # raised was attempted, not assumed complete. The production hook
+            # cannot return; the second _exit defends its injectable contract.
+            _observer_cleanup_fail_stop()
+            os._exit(2)
+    if failed or not reaped:
+        raise VerificationError('preparation_verification_denied') from None
+    return result
+
+
+def collect_context():
+    initial = authenticate()
+    with deployment_lease(close_only=True) as reaffirm:
+        approval, captured, cms_image, support, digest = authenticate()
+        require(digest == initial[4])
+        verify_host_baseline(
+            approval, captured, cms_image, support, metadata_only=True)
+        before = expected_context(approval, captured, digest)
+        reaffirm()
+        request = {
+            'schemaVersion': 1,
+            'kind': 'payload-production-context-request-v1',
+            'operation': 'collect-context',
+            'nonce': os.urandom(32).hex(),
+            'approvalSha256': digest,
+        }
+        result = run_bounded_observer(request)
+        reaffirm()
+        final = authenticate()
+        require(final[4] == digest and final[1] == captured)
+        verify_host_baseline(
+            final[0], final[1], final[2], final[3], metadata_only=True)
+        after = expected_context(final[0], final[1], digest)
+        require(before == after)
+        require(all(result['context'][key] == value for key, value in after.items()))
+        reaffirm()
+        return result
 
 
 def check_install_plan(receipt_id):
@@ -614,13 +814,15 @@ def verify_inherited_lease():
         os.close(probe)
 
 
-def context_material(expected_digest):
+def context_material(expected_digest, metadata_only=False):
+    require(type(metadata_only) is bool)
     require(isinstance(expected_digest, str) and len(expected_digest) == 64
             and all(c in '0123456789abcdef' for c in expected_digest))
     verify_inherited_lease()
     approval, captured, cms_image, support, digest = authenticate()
     require(digest == expected_digest)
-    verify_host_baseline(approval, captured, cms_image, support)
+    verify_host_baseline(approval, captured, cms_image, support,
+                         metadata_only=metadata_only)
     verify_inherited_lease()
     return approval, captured, cms_image, support, digest
 
@@ -674,13 +876,17 @@ def dispatch(mode):
 
 def main():
     args = sys.argv[1:]
-    require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in ('--verify-context', '--create-inventory', '--check-install-plan'))
+    require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in
+            ('--verify-context', '--create-inventory', '--check-install-plan', '--collect-context'))
     require(sys.platform == 'linux' and os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 0)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode)
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'} and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C')
     require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'))
-    if args[0] == '--check-install-plan':
+    if args[0] == '--collect-context':
+        require(authenticate()[4] == args[1])
+        print(json.dumps(collect_context(), sort_keys=True, separators=(',', ':')))
+    elif args[0] == '--check-install-plan':
         print(json.dumps(check_install_plan(args[1]), sort_keys=True))
     elif args[0] == '--verify-context':
         print(verified_context(args[1]))

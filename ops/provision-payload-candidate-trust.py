@@ -28,6 +28,7 @@ PREPARATION_FILES = (
     'ops/deploy-from-ci.sh', 'ops/payload-receiver-admission.py', 'ops/payload-receiver-root.sh',
     'ops/deploy-from-production-ci.sh', 'ops/payload-operations-guard.sh', 'ops/payload-control',
     'ops/payload-control-runtime.py', 'ops/compose.payload.production.yaml', 'docker-compose.payload.yml',
+    'ops/payload-production-observer.py',
     'ops/prepare-cms-authenticated.py', 'ops/provision-payload-candidate-trust.py')
 
 

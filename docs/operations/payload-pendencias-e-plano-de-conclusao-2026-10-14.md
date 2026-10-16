@@ -15,9 +15,10 @@ draft/autosave, consultar Versions, restaurar uma versão, publicar e ler o resu
 no Portal em sessão independente. O acervo existente deve continuar íntegro.
 
 Este documento consolida o plano P1–P8 já aprovado; não cria uma nova autorização
-operacional. Foi produzido apenas com leitura local e evidência fornecida pela
-coordenação. Não houve nova consulta ao CI, browser público ou VPS nesta tarefa.
-Nenhum código, serviço, CI, SSH, banco, Docker, commit ou deploy foi alterado.
+operacional. Foi produzido com evidência fornecida pela coordenação e implementação
+local revisada. Não houve nova consulta ao CI, browser público ou VPS nesta
+atualização; nenhum serviço, SSH, banco, Docker, deploy ou ambiente produtivo foi
+alterado.
 
 ### Legenda de estado e prioridade
 
@@ -36,11 +37,12 @@ Nenhum código, serviço, CI, SSH, banco, Docker, commit ou deploy foi alterado.
 | E01 | [Commit 3192127d4796c41bd0f2c72e073aaf1bbb2ee650](https://github.com/OWNERINC/portal_ownerinc/commit/3192127d4796c41bd0f2c72e073aaf1bbb2ee650), [CI 38600074126](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38600074126) | CONFIRMADO: SUCCESS; native 25 PASS/0 skip; 14 checks, 11 negativos e 2 restores completos. Deploy SKIPPED. Qualifica o perfil TEST anterior. |
 | E02 | [Report 11917696403](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38600074126/artifacts/11917696403), [qualified 11917981281](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38600074126/artifacts/11917981281) | Artefatos do run anterior preservados; não substituem qualificação dos bytes novos. |
 | E03 | [Commit 242652c9b43f5d3a7c8a93cebc85634a6fe0bbd1](https://github.com/OWNERINC/portal_ownerinc/commit/242652c9b43f5d3a7c8a93cebc85634a6fe0bbd1), [job 116036041743](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38617436909/job/116036041743) | Push confirmado pela coordenação; native SUCCESS: 29 PASS, 0 fail, 0 skip, 57,16 s. Fecha a pendência nativa daquele incremento TEST de uploads. |
-| E04 | [CI 38617436909](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38617436909) | **Último status conhecido: IN_PROGRESS, em validate; consultar novamente.** Não afirmar workflow completo, novos 14/11/2 ou deploy com base apenas em E03. |
+| E04 | [CI 38617436909](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38617436909), attempt 1, SHA `242652c9b43f5d3a7c8a93cebc85634a6fe0bbd1` | CONFIRMADO pela sessão primária: workflow SUCCESS; deploy SKIPPED; report com 14 checks, 11 negativos e 2 restores; vínculo exato do report aos artefatos daquele run verificado. Evidência TEST-only, sem autorização produtiva. |
 | E05 | Verify local final informado pelo primary | Portal: 1.954 total / 1.935 PASS / 19 skip; CMS: 459 / 448 / 11; total: 2.413 / 2.383 / 30; zero falhas; `VERIFY_EXIT=0`. |
 | E06 | [Comentário de entrega](https://github.com/OWNERINC/portal_ownerinc/pull/61#issuecomment-6175791374) | Referência de handoff mais recente fornecida; deve ser correlacionada ao SHA e run, não usada como autorização de produção. |
 | E07 | [Review de conclusão](../reviews/2026-10-13-payload-production-completion.md), seção final | Revisão estática SHIP para o incremento TEST; não significa aprovação de B0 real ou implantação. |
 | E08 | Observação read-only do host em 14/10, fornecida pelo primary | Inventário de planejamento, não baseline congelado/autenticado. Detalhes abaixo. |
+| E09 | [CI 38914950783](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38914950783), attempt 1, SHA `84c81cb93261a89bbc7185a29f22dcb339c3f9a3` | CONFIRMADO pela sessão primária: workflow SUCCESS; `isolated-b0-recovery` SUCCESS; preparação Linux/root 24 PASS/0 fail/0 skip, incluindo `native-production-context-envelope-proof`; deploy SKIPPED. [Report 12056442848](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38914950783/artifacts/12056442848) com 14 checks, 11 negativos e 2 restores; [candidato qualificado 12056663225](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38914950783/artifacts/12056663225) vincula o SHA-256 raw do report `1a2404e7d8294e9e6d4d3f3966d597bf887dbb93cd66e90ea8ca75cefb117eef`. Evidência TEST-only; host produtivo não qualificado. |
 
 Identificadores integrais para conferência:
 
@@ -56,8 +58,9 @@ pendente. Permanecem **false**: `applicationRollbackExecuted`,
 `applicationCompatibilityQualified` e `productionAuthorized`.
 
 As marcações antigas “native NOT RUN” dos runbooks/reviews continuam corretas como
-histórico de suas entregas. E01 e E03 as superam apenas para seus bytes e fixtures
-exatos. Não se reescreve o histórico nem se promove TEST a baseline de produção.
+histórico de suas entregas. E01, E03 e E09 as superam apenas para seus bytes e
+fixtures exatos. Não se reescreve o histórico nem se promove TEST a baseline de
+produção.
 
 ### Inventário observado para planejamento — E08
 
@@ -88,7 +91,7 @@ identificada por commit, ambiente, resultado e caminho privado/sanitizado adequa
 | ID / prioridade / estado | Dependência | Próxima ação e entregável | Aceite exato / evidência |
 | --- | --- | --- | --- |
 | P1-01 · A · CONFIRMADO/TEST-ONLY | E01 | Manter a correção da ordem externa de mounts e ticket efêmero v2 já entregue. | Permutação conserva receipt; mudança real de campos/cardinalidade e healthcheck recusa; HMAC/FD9/ancestral/journal mantidos. R01/R02 + E01. |
-| P1-02 · A · PENDENTE | E04 | Fechar evidência do candidato novo, sem repetir CI cegamente. | Run/attempt/SHA e jobs completos conferidos; 14 checks/11 negativos/2 restores e artefatos exatos; deploy distinguido. E04/E06. |
+| P1-02 · A · CONFIRMADO/TEST-ONLY | E04 | Preservar a evidência fechada do candidato sem promover ou repetir CI cegamente. | Run `38617436909`, attempt 1, SHA `242652c9b43f5d3a7c8a93cebc85634a6fe0bbd1`, workflow SUCCESS, deploy SKIPPED, 14 checks/11 negativos/2 restores e vínculo exato do report aos artefatos conferidos pela sessão primária. E04/E06. |
 | P1-03 · A · CONFIRMADO/TEST-ONLY | P1-01 | Preservar versionamento separado de receipts persistentes v3 e históricos. | Nenhuma reinterpretação de hash antigo, conversão silenciosa ou adoção de recurso; integração produtiva fica em P3. R02. |
 
 ### P2 — confiança, admissão e preparação
@@ -158,6 +161,7 @@ todo o conjunto abaixo com fonte real autenticada e aplicações anteriores exat
 
 | ID / prioridade / estado | Dependência | Próxima ação e entregável | Aceite exato / evidência |
 | --- | --- | --- | --- |
+| B0-01a · A · TEST-ONLY local/native CONFIRMADOS; host PENDENTE | P2-02 | Manter o envelope mínimo read-only e integrar/provar a coleta no host produtivo somente sob autorização própria. | Código, testes portáteis e review `ship` concluídos; E09 qualifica a fixture Linux/root em CI candidate-only com 24 PASS/0 fail/0 skip e deploy SKIPPED. Request/response fechados de 4 KiB, closure-first, nonce/processo/FD9/source/inventory/state vinculados e drift recusado. Nenhuma autoridade ou mutação; todos os campos de autorização permanecem false. R02/R03. |
 | B0-01 · A · PENDENTE | P2-02 | Collector bounded autenticado do source, sob processo/lease FD9 frescos. | Closure, approval/policy/record, inventory, journal e identidades conferidos; observações manuais não viram aprovação por cópia. R02/R04. |
 | B0-02 · A · PENDENTE | B0-01 | Perfil de segurança pré-grants: owners, ACLs/defaults, memberships, privilégios efetivos, consumidores de roles e credenciais. | Aprovação independente para source/API/cron exatos; autenticação privada real; exclusividade dentro e fora dos catálogos; nenhum reparo global de role/senha. R02. |
 | B0-03 · A · PENDENTE | B0-01 | Fence efetivo de ingress Docker, host e não-Docker, com observer externo independente. | Topologia aprovada + probes de rotas exatas; timeout/DNS/TLS/502 genérico não provam fechamento; observar antes da captura e novamente antes de cada passo destrutivo sob FD9. R02. |
@@ -170,6 +174,8 @@ todo o conjunto abaixo com fonte real autenticada e aplicações anteriores exat
 
 ### Checklist de gate B0 completo
 
+- [x] B0-01a, somente escopo local/portátil: código, testes portáteis e review `ship`.
+- [x] B0-01a native: CI candidate-only `38914950783`, 24 PASS/0 fail/0 skip; deploy SKIPPED.
 - [ ] B0-01: source e collector autenticados, contexto/lease atuais.
 - [ ] B0-02: perfil pré-grants aprovado, consumidores e credenciais qualificados.
 - [ ] B0-03: fence externo independente + host/não-Docker, fresco em cada fronteira.
@@ -192,7 +198,7 @@ separada. Esta tarefa documental não criou agentes nem delegou trabalho.
 
 | Fase / thread temática proposta | Escopo manejável | Saída para aceite primário |
 | --- | --- | --- |
-| F0 — evidência do candidato atual | P1-02, consultar E04 na thread de entrega existente | Status final confirmado ou blocker exato; artefatos/run/SHA preservados. |
+| F0 — evidência do candidato atual | P1-02/E04 fechados na thread de entrega existente | Preservar status final, vínculo de artefatos, run/attempt/SHA e deploy skipped sem promoção produtiva. |
 | F1 — source, segurança e fence | P2 + B0-01–03; dividir collector, security e observer em entregas | Contratos autenticados e provas isoladas; aprovação real separada. |
 | F2 — backup e restore realista | B0-04–07; separar uploads, schema e decisão ACL | Comparações exatas e decisão fundamentada; nenhuma expansão implícita do TEST. |
 | F3 — aplicação anterior e recuperação | B0-08/09 + P3 | Rollback compatível, floor, B1 e readiness fechada demonstrados. |
@@ -209,9 +215,9 @@ prazo garantido. O alvo temporal anterior era intenção, não compromisso valid
 
 ### Próximas três ações imediatas
 
-1. Obter o resultado final de E04 com a thread `ses_ec447dc31ffej718TaJFjlVQOO`;
-   confirmar o conjunto completo antes de reutilizar qualquer pacote ou disparar CI.
-2. Abrir a próxima thread visível para B0-01–03, delimitando collector autenticado,
+1. Preservar E04/P1-02 e E09/B0-01a como TEST-only fechados; não reutilizar a
+   qualificação Linux/root como prova do host produtivo.
+2. Abrir a próxima thread visível para B0-01–03, delimitando collector produtivo,
    perfil pré-grants e cobertura externa independente; manter mutações bloqueadas.
 3. Fechar a decisão B0-06/07 e o plano de prova B0-08 com review fresco: schema
    source-grounded, owners/ACLs e aplicações anteriores exatas, antes do executor.
@@ -265,11 +271,10 @@ epoch finais, evidências editor/reader, pendências residuais explícitas e loc
 privada dos backups/receipts. A sessão primária decide o aceite com review fresco.
 Não declarar conclusão com base apenas no admin aberto, em SHIP estático ou em E03.
 
-Verificação desta edição documental: `git diff --check` sem diagnósticos; comparação
-no-index do arquivo untracked também sem diagnósticos de whitespace (exit 1 por
-arquivo adicionado). Referências locais conferidas, sem destinos ausentes.
-**Full `npm run verify` não executado nesta tarefa exclusivamente documental**, conforme escopo pedido;
-E05 é evidência anterior informada, não uma nova execução. Não houve mudança runtime.
+Verificação desta edição documental: scans e diff checks locais registrados no
+relatório Task 5. **Full `npm run verify` não executado nesta tarefa exclusivamente
+documental**, conforme escopo pedido; E05 é evidência anterior informada, não uma
+nova execução. Não houve execução runtime, native, CI ou produção nesta edição.
 
 ## 9. Referências de trabalho
 

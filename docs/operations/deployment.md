@@ -824,7 +824,7 @@ idênticos, sem reparo de conflitos. A aprovação é publicada por último, ap�
 revalidar entradas e toda a closure. Retry reafirma durabilidade; não substitui
 aprovação nem fonte já instalada diferente. Não há network ou execução de bundle.
 
-Closure exata de 15 nomes no bundle e em `source.files`:
+Closure exata de 16 nomes no bundle e em `source.files`:
 
 ```text
 ops/prepare-cms-infrastructure.sh
@@ -840,6 +840,7 @@ ops/payload-control
 ops/payload-control-runtime.py
 ops/compose.payload.production.yaml
 docker-compose.payload.yml
+ops/payload-production-observer.py
 ops/prepare-cms-authenticated.py
 ops/provision-payload-candidate-trust.py
 ```
@@ -856,7 +857,7 @@ O schema independente, fechado, é `schemaVersion: 1`,
 `repository: OWNERINC/portal_ownerinc`, com:
 
 - `source`: `commit` (40 hex; proveniência administrativa, **não prova de árvore
-  Git**) e `files` (mapa exato dos 15 nomes para SHA-256).
+  Git**) e `files` (mapa exato dos 16 nomes para SHA-256).
 - `hostBaseline`: `currentCommit`, `legacyImages` com digests imutáveis api/cron,
   `releaseComposeSha256`, `runtimeComposeSha256`, `releaseOverrideSha256`
   (hash ou null para ausência), `inventoryIdentity`, e `installedPredecessors`
@@ -868,10 +869,11 @@ Campos extras, chaves duplicadas, tipos coercíveis e paths arbitrários não s�
 aceitos. O bootstrap valida baseline **apenas como schema**, não como observação
 do host; tampouco autentica admission durante a publicação.
 
-O launcher instalado aceita **`--check` ou `--apply`**, sob o mesmo ambiente vazio e
-Python `-I -S -B`. Antes de importar qualquer helper da closure,
-seu leitor stdlib verifica ancestry, ownership, modos, links, identidade e hashes
-de todos os 15 arquivos. O launcher em execução é parte da confiança administrativa
+Na interface administrativa de preparação, o launcher instalado aceita **`--check`
+ou `--apply`**, sob o mesmo ambiente vazio e Python `-I -S -B`; as interfaces
+internas fechadas são documentadas separadamente abaixo. Antes de importar qualquer
+helper da closure, seu leitor stdlib verifica ancestry, ownership, modos, links,
+identidade e hashes de todos os 16 arquivos. O launcher em execução é parte da confiança administrativa
 prévia; seu próprio hash não é uma prova independente de si mesmo. Só então carrega
 os bytes autenticados do suporte instalado, nunca módulos do checkout.
 
@@ -1001,6 +1003,44 @@ owner policy são constantes, sem argumentos externos; o helper publicado é
 verificado separadamente. State initialization não é reparo: falha parcial é
 recusada na próxima tentativa, sem reset automático.
 
+##### Entrypoint interno B0-01a de coleta de contexto
+
+O coordinator autenticado pode iniciar somente a interface interna fixa abaixo:
+
+```text
+/usr/bin/python3 -I -S -B /usr/local/libexec/ownerinc-payload-prepare.py --collect-context APPROVAL_SHA256
+```
+
+Isto **não é um atalho de operador nem uma instrução de instalação no host**. Só o
+coordinator já autenticado fornece `APPROVAL_SHA256`, que deve coincidir com os
+bytes da aprovação protegida autenticada. Esse comando deve iniciar com **FD9
+fechado**: o launcher recusa FD9 preexistente, abre o lock de deployment fixo,
+adquire a lease exclusiva close-only e instala sua própria descrição aberta em FD9.
+Somente então inicia o observer isolado fixo e passa exclusivamente FD9 ao filho com
+`pass_fds=(9,)`. Não existe argumento para escolher lock, observer, fonte ou path.
+O processo usa ambiente vazio exceto `PATH=/usr/bin:/bin`, `LANG=C` e `LC_ALL=C`.
+Antes de executar o observer, o launcher autentica a closure completa, agora
+incluindo `ops/payload-production-observer.py`; o observer executado também é o path
+fixo dessa closure instalada.
+
+Nesse caminho de coleta, as verificações pré/pós do parent e a inspeção do observer
+não abrem nem armazenam o conteúdo do arquivo privado de environment. Somente o
+`verify_environment_file` vindo do inventory autenticado confere ancestry, `lstat`,
+arquivo regular sem links adicionais, modo `0600` e owner aprovado, com estabilidade
+de metadados rechecada. Source, inventory e state assinado continuam autenticados e
+relidos integralmente. Os caminhos comuns de preparação/instalação mantêm por padrão
+suas leituras de conteúdo existentes.
+
+Sucesso retorna apenas o envelope bounded/read-only descrito no
+[runbook de runtime](payload-runtime-recovery.md#b0-01a--envelope-mínimo-autenticado-de-contexto-test-localnative-host-pendente).
+Não instala, não captura B0, não persiste recibo e não concede autoridade:
+`destructiveOperationAuthorized`, `installationExecuted`, `deploymentAuthorized`
+e `productionAuthorized` continuam `false`. `release_not_preflighted` não muda.
+A implementação, a revisão portátil e a qualificação Linux/root native estão
+concluídas para os bytes exatos do run candidate-only `38914950783`, attempt 1,
+SHA `84c81cb93261a89bbc7185a29f22dcb339c3f9a3`, com deploy `skipped`. A prova no
+host produtivo permanece pendente.
+
 `--check` executa apenas o caminho read-only do preparer (inclusive Compose
 `config --quiet`); `--apply` publica arquivos, configuração privada e estado
 inativos. Não faz Docker pull/up/run, migrations, alteração de authority, serviços
@@ -1013,9 +1053,10 @@ Os testes de transporte executam o shell e o protocolo reais com doubles
 explícitos de host/autenticação/processo; no Windows FD9 é transportado no mesmo
 shell de fixture. O teste Linux usa subprocesso real e `pass_fds`, testa
 ausência de deadlock e confirma que o child não libera a lock do parent. Isso não
-substitui a qualificação nativa completa de preparação, ainda pendente.
+substitui prova do host produtivo. A qualificação nativa da fixture de preparação
+foi executada separadamente no run candidate-only `38914950783`.
 
-#### Gate nativo obrigatório de lease da preparação no candidate CI
+#### Gate nativo da preparação no candidate CI
 
 O step autenticado **`Test preauthority CI setup with native Linux root`** mantém
 nome, condição e suites setup/trust anteriores, e acrescenta a suite inteira,
@@ -1040,19 +1081,39 @@ subprocesso executam os leitores de metadata/ancestry e funções flock originai
 nenhum path fixo de produção recebe writes. Não há provisionamento de closure,
 policy, credenciais, serviços, contas ou sudoers nesse caso.
 
-Node exige parse e igualdade exata do JSON `native-preparation-lease-proof`, no
-máximo 1 KiB, e emite a prova completa no log. Os campos obrigatórios comprovam:
+`native-preparation-lease-proof` era o contrato histórico do teste native
+lease-only, limitado a 1 KiB. Esse contrato exigia os seguintes campos:
 identidade root e ancestry; SH recusada com FD9 ainda aberto e SH original
 inalterada (outro SH adquire, EX bloqueia); busy e EX de outra descrição
 recusados; EX herdada via `pass_fds` em subprocesso sem liberar a lock do parent;
 FD9 fechado ao sair; pathname substituído recusado; bytes originais preservados;
-sandbox removido. Saída ausente/parcial ou early exit não é PASS.
+sandbox removido. Essa descrição registra somente o contrato anterior, não um PASS
+histórico fornecido nem um contrato de proof corrente. As garantias de lease ainda
+aplicáveis permanecem no código. O novo caso
+`native-production-context-envelope-proof` cobre nativamente apenas aquisição EX do
+launcher, herança e retenção da mesma open description pelo observer, FD9/path e
+substituição do pathname. As negativas de lease SH herdada, lock busy e EX em outra
+open description permanecem cobertas por doubles portáteis de syscall, não por esse
+novo caso native. A execução native do envelope passou no run candidate-only
+`38914950783`; isso não promove essas negativas portáteis a evidência nativa.
 
-Os outros casos da suite continuam identificados como doubles. O gate qualifica
-**lease somente**, não bootstrap/launcher/preparer end-to-end, baseline real,
-sudo/SSH, durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets,
-14 checks, 11 negativos e dois restores não mudam. Um próximo CI qualifica sua
-própria revisão; não se atribui esta prova retroativamente a execução anterior.
+O caso native atual implementado para B0-01a exige o JSON fechado
+`native-production-context-envelope-proof`, também de no máximo 1 KiB. Ele exercita
+em sandbox Linux/root o launcher real de `collect_context()`, Python isolado,
+aquisição da lease pelo launcher com FD9 inicialmente fechado, herança de FD9 pelo
+observer, mesma open description, PID/start em `/proc`, recusa de substituição de
+path, overflow, timeout, ausência de material privado, autorizações falsas e remoção
+do sandbox. Essa proof foi executada no run candidate-only `38914950783`, attempt 1,
+SHA `84c81cb93261a89bbc7185a29f22dcb339c3f9a3`: a suite obrigatória teve 24 PASS,
+0 fail e 0 skip, e o JSON bounded confirmou todos os campos fechados como `true`.
+Fora dos casos native declarados, os cenários portáteis continuam identificados como
+doubles; a suite não é descrita como inteiramente native.
+
+Nem o contrato histórico lease-only nem a proof executada do envelope qualificam
+bootstrap/launcher/preparer end-to-end no host, baseline real, sudo/SSH,
+durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets, 14 checks,
+11 negativos e dois restores não mudam. Um próximo CI qualifica somente sua própria
+revisão; nenhuma prova é atribuída retroativamente a execução anterior.
 
 #### P3: plano de instalação de produção, somente leitura
 

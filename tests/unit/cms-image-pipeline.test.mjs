@@ -248,15 +248,16 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
   assert.doesNotMatch(provisioner, /PAYLOAD_REQUIRE_NATIVE_TRUST|--destination|--tool-root|--state-root/u);
   const preparationTests = await read('tests/unit/payload-preparation-authentication.test.mjs');
   assert.match(preparationTests, /skip: process\.env\.PAYLOAD_REQUIRE_NATIVE_PREPARATION !== '1' &&/u);
-  assert.match(preparationTests, /assert\.deepEqual\(JSON\.parse\(result\.stdout\), \{ kind: 'native-preparation-lease-proof'/u);
+  assert.match(preparationTests, /kind: 'native-production-context-envelope-proof', schemaVersion: 1, rootIdentity: true/u);
   assert.match(preparationTests, /Buffer\.byteLength\(result\.stdout\) <= 1024/u);
-  const nativePreparation = preparationTests.slice(preparationTests.indexOf("test('native Linux flock"),
+  const nativePreparation = preparationTests.slice(preparationTests.indexOf("test('native Linux root qualifies the production context envelope"),
     preparationTests.indexOf("test('host-data reader"));
-  assert.match(nativePreparation, /dir='\/root'/u);
-  assert.match(nativePreparation, /assert m\.LOCK=='\/opt\/ownerinc\/apps\/portal-ownerinc-real\/runtime\/deploy\.lock'/u);
+  assert.match(nativePreparation, /mkdtempSync\('\/root\/payload-context-observer-'\)/u);
+  assert.match(nativePreparation, /assert production\.HOST_ROOT=='\/opt\/ownerinc\/apps\/portal-ownerinc-real'/u);
   assert.doesNotMatch(nativePreparation, /t\.skip|m\.host_ancestry\s*=|mock|SKIP unsupported/u);
-  for (const proof of ['sharedRefused', 'originalSharedUnchanged', 'busyRefused', 'foreignDescriptionRefused',
-    'exclusiveSubprocessInheritance', 'parentExclusiveRetained', 'fd9Closed', 'pathReplacementRefused', 'sandboxRemoved']) {
+  for (const proof of ['isolatedPython', 'exclusiveLeaseInherited', 'sameOpenDescriptionRetained',
+    'processIdentityBound', 'pathReplacementRefused', 'outputOverflowRefused', 'timeoutRefused',
+    'privateMaterialAbsent', 'authorityRemainedFalse', 'sandboxRemoved']) {
     assert.ok(nativePreparation.includes(`${proof}: true`), `native proof must require ${proof}`);
   }
   assert.doesNotMatch(await read('ops/prepare-cms-authenticated.py'), /PAYLOAD_REQUIRE_NATIVE_PREPARATION/u);

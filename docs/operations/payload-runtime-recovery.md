@@ -2,13 +2,93 @@
 
 ## P3 — inspeção de plano não é autorização de instalação
 
-### Restore B0 isolado com checkpoints assinados (native ainda pendente)
+### B0-01a — envelope mínimo autenticado de contexto (TEST local/native; host pendente)
+
+O incremento B0-01a implementa somente a coleta read-only de uma projeção de
+contexto. A requisição interna é JSON canônico em uma linha, incluindo o LF final,
+com limite exato de **4 KiB** e somente esta forma:
+
+```json
+{"approvalSha256":"<64 hex minúsculos>","kind":"payload-production-context-request-v1","nonce":"<64 hex minúsculos>","operation":"collect-context","schemaVersion":1}
+```
+
+A resposta também é JSON canônico em uma linha, incluindo o LF final, limitada a
+**4 KiB**, com este contrato fechado:
+
+```json
+{"context":{"approvalSha256":"<64 hex minúsculos>","inventoryIdentity":"<64 hex minúsculos>","leaseDevice":0,"leaseInode":1,"pid":1,"processStart":1,"sourceCommit":"<40 hex minúsculos>","stateSequence":0,"stateSha256":"<64 hex minúsculos>"},"deploymentAuthorized":false,"destructiveOperationAuthorized":false,"installationExecuted":false,"inventoryAuthenticated":true,"kind":"payload-production-context-observation-v1","leaseVerified":true,"nonce":"<mesmo nonce da requisição>","operation":"collect-context","productionAuthorized":false,"schemaVersion":1,"sourceAuthenticated":true,"stateAuthenticated":true}
+```
+
+Campos ausentes, extras ou duplicados, JSON não canônico, profundidade/tamanho
+excessivos, tipos coercíveis, kind/versão divergentes e qualquer operação diferente
+de `collect-context` são recusados. Não há seletor de path, comando, role, database,
+SQL, origem ou módulo fornecido pelo caller.
+
+O launcher instalado autentica approval, policy, record e os bytes da closure
+completa de preparação **antes** de carregar ou executar o observer. O processo do
+launcher deve entrar com FD9 fechado: `collect_context()` recusa um FD9 preexistente,
+abre o lock fixo, adquire nele a lease exclusiva close-only e instala sua própria
+descrição aberta como FD9. Sob essa lease, gera nonce fresco, projeta
+independentemente source commit, identidade do inventory, hash/sequência do state e
+device/inode do FD9, e inicia somente o observer fixo, passando apenas FD9 ao filho
+com `pass_fds=(9,)`. O filho reafirma a lease herdada no FD9 antes/depois, informa
+PID e `/proc/self/stat` field 22; o pai exige o PID real do filho e valida nonce,
+approval e todo o restante da projeção. Após a saída, o pai reautentica a closure e
+o host, recompõe source/inventory/state/FD9 e recusa qualquer drift pré/pós-coleta.
+O resultado não é reutilizável: nova entrada exige processo, nonce, autenticação e
+lease frescos.
+
+Nos caminhos de coleta, tanto as verificações pré/pós do parent quanto a inspeção do
+observer tratam o arquivo privado de environment somente por metadados. Elas usam o
+`verify_environment_file` autenticado para conferir ancestry, `lstat`, tipo regular,
+link count, modo e owner antes/depois, mas não abrem nem retêm os bytes do arquivo.
+As leituras completas de source, inventory e state assinado e suas rechecagens de
+estabilidade permanecem obrigatórias. Os caminhos existentes de preparação e de
+inspeção de instalação fora da coleta conservam o comportamento anterior de leitura.
+
+O deadline de 30 segundos cobre a resposta e a saída normal do observer: byte 4097,
+saída/JSON/status inválido, mismatch, timeout ou falha de transporte causam recusa
+sanitizada, sem traceback, stderr do filho, paths, estado privado ou credenciais.
+Depois de SIGKILL, porém, `process.wait()` não possui timeout de parede: as tentativas
+de interrupção são finitas, mas não garantem duração total bounded se esse wait
+bloquear permanentemente. O pai sinaliza somente o filho criado por ele e precisa
+provar o reap antes de retornar uma recusa normal. Exceção no cleanup de kill/wait
+ou esgotamento das tentativas finitas de interrupção aciona fail-stop com `_exit(2)`;
+um wait permanentemente bloqueado permanece bloqueado e, por si só, não alcança o
+fail-stop. O observer expõe apenas `Production context collection denied.` e o
+launcher mantém diagnóstico sanitizado e comportamento fail-closed.
+
+**Estado da evidência:** código, testes portáteis e revisão de implementação com
+veredicto `ship` estão concluídos. A prova Linux/root real foi executada no CI
+candidate-only [38914950783](https://github.com/OWNERINC/portal_ownerinc/actions/runs/38914950783),
+attempt 1, SHA `84c81cb93261a89bbc7185a29f22dcb339c3f9a3`, com deploy
+`skipped`. A suite obrigatória de preparação teve 24 PASS, 0 fail e 0 skip; o caso
+`native-production-context-envelope-proof` comprovou `flock`, FD9, `/proc`, lifecycle
+do filho, limites/timeout, ausência de material privado, autorizações falsas e
+cleanup no sandbox Linux/root. Essa evidência qualifica somente a fixture TEST e
+esses bytes exatos; não há prova do host produtivo.
+
+Esta fatia não persiste receipt ou observação, não cria approval, não captura B0 e
+não altera journal/state, policy/records, banco, roles, serviços, containers,
+redes, volumes, releases, pointers ou admission. Não fecha B0-01 produtivo, B0-02
+ou B0-03. `destructiveOperationAuthorized`, `installationExecuted`,
+`deploymentAuthorized` e `productionAuthorized` permanecem `false`;
+`release_not_preflighted` permanece obrigatório.
+
+### Restore B0 isolado com checkpoints assinados (native TEST confirmado; host pendente)
 
 **Estado da evidência:** o primary confirmou `3192127` / CI `38600074126` SUCCESS:
-native B0 25 pass/0 skip e suíte existente completa 14/11/2. Isso cobre somente
-aquele perfil TEST de dois arquivos. “Native pending/NOT RUN” nas entradas
-históricas abaixo descreve entregas anteriores. O novo request v3 descrito aqui
-é **native NOT RUN**, sem aprovação de rollback em produção.
+native B0 25 pass/0 skip e suíte existente completa 14/11/2. E09, no SHA
+`84c81cb93261a89bbc7185a29f22dcb339c3f9a3`, confirmou novamente a recuperação
+isolada: 29 PASS/0 fail/0 skip, 14 checks, 11 negativos e dois restores. Isso cobre
+somente os respectivos perfis TEST. “Native pending/NOT RUN” nas entradas
+históricas abaixo descreve entregas anteriores. A afirmação de que o request v3 era
+**native NOT RUN** vale como histórico da entrega original: foi superada, somente
+para aqueles bytes e para a fixture TEST de uploads, pelo native SUCCESS E03 e pela
+evidência E04 do run `38617436909` registradas no backlog de conclusão. Isso não é
+aprovação de rollback em produção. A qualificação native do envelope B0-01a foi
+obtida separadamente no run candidate-only `38914950783`; ela também não qualifica
+o host produtivo.
 
 #### Uploads bounded — request v3 / baseline envelope v2
 
@@ -64,7 +144,11 @@ binário curto, zero-length file, nested/empty dirs e basename repetido em paths
 distintos; UID/GID 1000:1000, dirs 0755/files 0644. Nenhum nome/conteúdo de arquivo
 real é copiado. CMS/unrelated sentinel continua independente. Essa fixture é
 maior que a observação de quatro entradas, deliberadamente exercitando casos
-adicionais dentro do mesmo cap. Native dessa versão ainda NOT RUN.
+adicionais dentro do mesmo cap. “Native dessa versão ainda NOT RUN” é o estado
+histórico da entrega original; E03 native SUCCESS e E04/run `38617436909`, no
+backlog de conclusão, são a evidência posterior para a fixture TEST de uploads.
+Não promovem o host produtivo. O envelope de contexto B0-01a foi qualificado
+separadamente no run candidate-only `38914950783`, somente para sua fixture TEST.
 
 #### Perfil TEST de roundtrip exato — request v2 / recoveryVersion 2
 
