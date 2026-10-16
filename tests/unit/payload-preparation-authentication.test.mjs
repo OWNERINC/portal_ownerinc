@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -257,7 +258,7 @@ for scenario in ('success','busy','replaced-before','replaced-on-lock','replaced
 `);
 });
 
-test('native Linux flock preserves lock bytes, refuses contention and replacement, and releases FD9 (not host end-to-end)',
+test('native Linux root qualifies the production context envelope on an isolated real filesystem',
   { skip: process.env.PAYLOAD_REQUIRE_NATIVE_PREPARATION !== '1' &&
       !(process.platform === 'linux' && process.getuid?.() === 0 && process.geteuid?.() === 0 &&
         process.getgid?.() === 0 && process.getegid?.() === 0) }, () => {
@@ -266,99 +267,201 @@ test('native Linux flock preserves lock bytes, refuses contention and replacemen
       assert.equal(process[identity]?.(), 0, `required native preparation proof needs ${identity}=0`);
     }
     const result = spawnSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', String.raw`
-import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil,subprocess,json
+import os,sys,tempfile,pathlib,fcntl,importlib.util,shutil,json,hashlib,types
 assert sys.platform=='linux' and os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
 assert sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode
-spec=importlib.util.spec_from_file_location('launcher',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-assert m.LOCK=='/opt/ownerinc/apps/portal-ownerinc-real/runtime/deploy.lock'
-m.host_ancestry('/root/preparation-ancestry-check')
-root=tempfile.mkdtemp(prefix='preparation-flock-',dir='/root')
-proof={'kind':'native-preparation-lease-proof','rootIdentity':True,'protectedAncestry':True}
+repo=pathlib.Path(sys.argv[1]);source_path=repo/'ops/prepare-cms-authenticated.py'
+def load(name,filename):
+ spec=importlib.util.spec_from_file_location(name,filename);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+production=load('production_launcher_contract',source_path)
+assert production.HOST_ROOT=='/opt/ownerinc/apps/portal-ownerinc-real'
+assert production.ROOT=='/opt/ownerinc/lib/payload-preparation'
+assert production.APPROVAL=='/etc/ownerinc/payload-preparation/production-approval.json'
+root=tempfile.mkdtemp(prefix='payload-context-observer-',dir='/root');os.chmod(root,0o700)
+prefixes={'/opt/ownerinc':root+'/opt/ownerinc','/etc/ownerinc':root+'/etc/ownerinc',
+ '/var/lib/ownerinc':root+'/var/lib/ownerinc','/usr/local/libexec':root+'/usr/local/libexec'}
+forbidden=tuple(prefixes)
+def redirect(raw):
+ for old,new in prefixes.items():raw=raw.replace(old.encode(),new.encode())
+ return raw
+def mkdir(filename,mode=0o755):
+ pathlib.Path(filename).mkdir(parents=True,exist_ok=True);os.chmod(filename,mode)
+def write(filename,data,mode=0o600,owner=(0,0)):
+ pathlib.Path(filename).parent.mkdir(parents=True,exist_ok=True)
+ pathlib.Path(filename).write_bytes(data);os.chmod(filename,mode);os.chown(filename,*owner)
+def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+def sha(raw):return hashlib.sha256(raw).hexdigest()
+proof={'kind':'native-production-context-envelope-proof','schemaVersion':1,'rootIdentity':True,'isolatedPython':True}
 try:
- m.LOCK=root+'/deploy.lock';pathlib.Path(m.LOCK).write_bytes(b'never truncated');os.chmod(m.LOCK,0o600)
- # Only LOCK is redirected; all production metadata and lease primitives run.
- m.host_ancestry(m.LOCK)
- # Regression: a sole inherited SH lease must not be upgraded to EX by checking.
- shared=os.open(m.LOCK,os.O_RDWR)
- if shared!=9:os.dup2(shared,9);os.close(shared)
- fcntl.flock(9,fcntl.LOCK_SH|fcntl.LOCK_NB)
- try:
-  try:m.verify_inherited_lease()
-  except m.VerificationError:pass
-  else:raise AssertionError('inherited shared lease accepted/upgraded')
-  proof['sharedRefused']=True
-  assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino,'rejection closed original FD9'
-  probe=os.open(m.LOCK,os.O_RDWR)
-  try:
-   fcntl.flock(probe,fcntl.LOCK_SH|fcntl.LOCK_NB) # Original must still be SH, not EX.
-   fcntl.flock(probe,fcntl.LOCK_UN)
-   try:fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
-   except BlockingIOError:pass # Original SH must still be held, not unlocked.
-   else:raise AssertionError('rejection released original shared lease')
-   proof['originalSharedUnchanged']=True
-  finally:os.close(probe)
- finally:os.close(9)
- busy=os.open(m.LOCK,os.O_RDWR);fcntl.flock(busy,fcntl.LOCK_EX|fcntl.LOCK_NB)
- try:
-  try:
-   with m.deployment_lease():raise AssertionError('busy lease accepted')
-  except BlockingIOError:pass
-  proof['busyRefused']=True
-  # A separate FD9 must not claim another open description's existing EX lock.
-  foreign=os.open(m.LOCK,os.O_RDWR)
-  if foreign!=9:os.dup2(foreign,9);os.close(foreign)
-  try:
-   try:m.verify_inherited_lease()
-   except BlockingIOError:pass
-   else:raise AssertionError('foreign exclusive lock accepted')
-   assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino
-   proof['foreignDescriptionRefused']=True
-  finally:os.close(9)
- finally:os.close(busy)
- with m.deployment_lease() as reaffirm:
-  assert os.fstat(9).st_ino==os.stat(m.LOCK).st_ino;reaffirm()
-  assert pathlib.Path(m.LOCK).read_bytes()==b'never truncated'
-  code="import importlib.util,sys; s=importlib.util.spec_from_file_location('m',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); assert m.LOCK=='/opt/ownerinc/apps/portal-ownerinc-real/runtime/deploy.lock'; m.LOCK=sys.argv[2]; m.verify_inherited_lease(); print('inherited-FD9-PASS')"
-  child=subprocess.run([sys.executable,'-I','-S','-B','-c',code,sys.argv[1],m.LOCK],pass_fds=(9,),capture_output=True,text=True,timeout=10)
-  assert child.returncode==0 and child.stdout=='inherited-FD9-PASS\n',child.stderr
-  proof['exclusiveSubprocessInheritance']=True
-  probe=os.open(m.LOCK,os.O_RDWR)
+ # Redirect fixed production roots in fixture copies only. Production source and paths stay untouched.
+ files=production.FILES;captured={relative:redirect((repo/relative).read_bytes()) for relative in files}
+ launcher=prefixes['/usr/local/libexec']+'/ownerinc-payload-prepare.py'
+ prep=prefixes['/opt/ownerinc']+'/lib/payload-preparation'
+ for relative,data in captured.items():
+  target=launcher if relative=='ops/prepare-cms-authenticated.py' else prep+'/'+relative
+  write(target,data,0o644 if relative.endswith(('.yaml','.yml')) else 0o755)
+ m=load('fixture_launcher',launcher)
+ support=m.load_authenticated(captured['ops/provision-payload-candidate-trust.py'],prep+'/ops/provision-payload-candidate-trust.py')
+ verifier=m.load_authenticated(captured['ops/payload-candidate-verifier.py'],prep+'/ops/payload-candidate-verifier.py')
+ assert m.HOST_ROOT==prefixes['/opt/ownerinc']+'/apps/portal-ownerinc-real'
+ assert m.ROOT==prep and m.LAUNCHER==launcher and m.APPROVAL.startswith(root+'/') and m.OBSERVER.startswith(root+'/')
+ assert support.TOOL_ROOT.startswith(root+'/') and support.POLICY_PATH.startswith(root+'/')
+ assert verifier.REGISTRY.startswith(root+'/') and verifier.POLICY_PATH.startswith(root+'/')
+ # Every absolute production root in executable fixture bytes was redirected beneath this sandbox.
+ for data in captured.values():
+  text=data.decode('utf-8')
+  for value in forbidden:assert ("'"+value) not in text and ('"'+value) not in text
+
+ tool_files={relative:redirect((repo/relative).read_bytes()) for relative in support.TOOL_FILES}
+ for relative,data in tool_files.items():write(support.TOOL_ROOT+'/'+relative,data,0o755 if relative.endswith('.py') else 0o644)
+ python_path=os.path.realpath(sys.executable)
+ executables={'node':root+'/bin/node','git':root+'/bin/git','python':python_path,
+              'gitRemoteHttps':support.TOOL_ROOT+'/bin/git-remote-https'}
+ for role,filename in executables.items():
+  if role!='python':write(filename,('fixture-'+role+'\n').encode(),0o755)
+ policy={'schemaVersion':1,'kind':'ownerinc-payload-candidate-policy-v1','environment':'production',
+  'repository':'OWNERINC/portal_ownerinc','repositoryId':'123','workflow':'.github/workflows/ci.yml','workflowId':'456',
+  'approvedRevisions':[{'commit':'a'*40,'workflowSha256':'b'*64}],
+  'toolchain':{'files':{name:sha(data) for name,data in tool_files.items()},'executables':{}}}
+ for role,filename in executables.items():policy['toolchain']['executables'][role]={'path':filename,'sha256':sha(pathlib.Path(filename).read_bytes())}
+ policy_raw=canonical(policy)+b'\n';write(support.POLICY_PATH,policy_raw,0o600)
+ images={name:'ghcr.io/ownerinc/ownerinc-portal-'+name+'@sha256:'+'c'*64 for name in ('api','cron','cms')}
+ record={'schemaVersion':1,'kind':'payload-candidate-admission-record-v1','environment':'production','policySha256':sha(policy_raw),
+  'repository':'OWNERINC/portal_ownerinc','repositoryId':'123','workflow':'.github/workflows/ci.yml','workflowId':'456',
+  'workflowSha256':'b'*64,'commit':'a'*40,'runId':'789','runAttempt':'1','images':images,
+  'artifacts':{role:{'id':str(index+1),'digest':'sha256:'+'d'*64} for index,role in enumerate(verifier.ROLES)},
+  'qualificationContract':verifier.CONTRACT,'sourceTreeSha':'e'*40,'archiveBytes':42,'deploymentAuthorized':False}
+ for field in ('candidateSha256','qualifiedManifestSha256','recoveryReportSha256','sourceArchiveSha256','archiveSha256'):record[field]='f'*64
+ record_raw=canonical(record)+b'\n';mkdir(verifier.REGISTRY,0o700)
+ write(verifier.REGISTRY+'/'+record['archiveSha256']+'.'+record['policySha256']+'.json',record_raw,0o600)
+
+ runtime=m.RUNTIME;release=m.RELEASES+'/'+'1'*40
+ for directory,mode in ((m.HOST_ROOT,0o755),(runtime,0o755),(m.RELEASES,0o755),(release,0o755)):mkdir(directory,mode)
+ daily=prefixes['/opt/ownerinc']+'/backups/portal-ownerinc/daily'
+ for backup in (daily,m.PRODUCTION_BACKUP):mkdir(backup+'/000-initial-install-b0',0o700)
+ inventory=m.load_authenticated(captured['ops/payload-control-inventory.py'],prep+'/ops/payload-control-inventory.py')
+ expected=inventory.production_inventory(m.HOST_ROOT,runtime,m.RELEASES,m.HOST_ROOT+'/current-release',m.LOCK,
+  daily,m.PRODUCTION_BACKUP,m.PRODUCTION_BACKUP+'/restore-protection',m.ENVIRONMENT,
+  runtime+'/compose.production.yaml',runtime+'/compose.payload.production.yaml')
+ inventory_identity=inventory.identity(expected)
+ compose=b'fixture-compose\n';image_raw=('API_IMAGE='+images['api']+'\nCRON_IMAGE='+images['cron']+'\n').encode()
+ write(m.HOST_ROOT+'/current-release',(release+'\n').encode(),0o600,(1000,1000))
+ write(release+'/.image-env',image_raw,0o600,(1000,1000));write(release+'/docker-compose.yml',compose,0o644,(1000,1000))
+ write(runtime+'/compose.production.yaml',compose,0o644,(1000,1000))
+ private_marker=b'NATIVE_PRIVATE_MATERIAL_MUST_NOT_ESCAPE'
+ write(m.ENVIRONMENT,b'PRIVATE='+private_marker+b'\n',0o600,(1000,1000));write(m.LOCK,b'lease-fixture\n',0o600)
+ write(runtime+'/payload-control-inventory.json',inventory.canonical(expected)+b'\n',0o600)
+ key=b'private-key-material-32-bytes!!!';assert len(key)==32
+ write(runtime+'/payload-control.key',key,0o600);state_dir=runtime+'/payload-control-state';mkdir(state_dir,0o700)
+ state=m.load_state_captured(captured,inventory)
+ body={'schemaVersion':2,'phase':'preauthority','cmsStatus':'cold','authority':{'mode':'legacy','epoch':1},
+  'workerHold':True,'admission':'open','sequence':0,'previousStateSha256':None,'restoreIntent':None,'installIntent':None,
+  'latestProofSha256':None,'legacySourceProofSha256':None,'releaseImages':None,'plannedReleaseImages':None,
+  'rollbackTargetImages':None,'nativeCatalogFingerprint':None,'inventoryIdentity':inventory_identity}
+ envelope=state.canonical(state.sign_envelope(body,key))+b'\n'
+ write(state_dir+'/00000000000000000000.json',envelope,0o600);write(state_dir+'/current.json',envelope,0o600)
+ predecessor=prefixes['/usr/local/libexec']+'/ownerinc-portal-deploy';predecessor_raw=b'fixture-predecessor\n';write(predecessor,predecessor_raw,0o755)
+ approval={'schemaVersion':1,'kind':'ownerinc-payload-preparation-approval-v1','environment':'production','repository':'OWNERINC/portal_ownerinc',
+  'source':{'commit':'2'*40,'files':{name:sha(data) for name,data in captured.items()}},
+  'hostBaseline':{'currentCommit':'1'*40,'legacyImages':{'api':images['api'],'cron':images['cron']},
+   'releaseComposeSha256':sha(compose),'runtimeComposeSha256':sha(compose),'releaseOverrideSha256':None,
+   'inventoryIdentity':inventory_identity,'installedPredecessors':{'commonReceiver':sha(predecessor_raw),'receiverHelper':None,
+    'productionWrapper':None,'operationsGuard':None,'cmsCandidate':None}},
+  'admission':{'policySha256':sha(policy_raw),'archiveSha256':record['archiveSha256'],'recordSha256':sha(record_raw)}}
+ write(m.APPROVAL,canonical(approval)+b'\n',0o600)
+
+ # Record parent-side opens while still calling the real Linux syscall. Child fixture bytes have no unredirected root literals.
+ opened=[];real_open=os.open
+ def tracked_open(filename,*args,**kwargs):
+  value=os.fsdecode(filename);opened.append(value)
+  assert not any(value==item or value.startswith(item+'/') for item in forbidden),value
+  return real_open(filename,*args,**kwargs)
+ os.open=tracked_open
+ response=m.collect_context()
+ assert response['context']['pid']>0 and response['context']['processStart']>0
+ proof['processIdentityBound']=True
+ false_fields=('destructiveOperationAuthorized','installationExecuted','deploymentAuthorized','productionAuthorized')
+ assert all(response[name] is False for name in false_fields);proof['authorityRemainedFalse']=True
+ exposed=canonical(response)
+ assert private_marker not in exposed and key not in exposed;proof['privateMaterialAbsent']=True
+
+ material=m.authenticate();digest=material[4]
+ request={'schemaVersion':1,'kind':'payload-production-context-request-v1','operation':'collect-context',
+          'nonce':'7'*64,'approvalSha256':digest}
+ with m.deployment_lease(close_only=True) as reaffirm:
+  observed=m.run_bounded_observer(request);lease=os.fstat(9)
+  assert (observed['context']['leaseDevice'],observed['context']['leaseInode'])==(lease.st_dev,lease.st_ino)
+  proof['exclusiveLeaseInherited']=True
+  probe=real_open(m.LOCK,os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK)
   try:
    try:fcntl.flock(probe,fcntl.LOCK_SH|fcntl.LOCK_NB)
    except BlockingIOError:pass
-   else:raise AssertionError('child released or downgraded parent exclusive lock')
-   proof['parentExclusiveRetained']=True
+   else:raise AssertionError('observer released or changed the inherited exclusive lease')
   finally:os.close(probe)
- try:os.fstat(9)
- except OSError:pass
- else:raise AssertionError('FD9 leaked')
- proof['fd9Closed']=True
+  reaffirm();proof['sameOpenDescriptionRetained']=True
+
+ old=m.LOCK+'.original'
  try:
-  with m.deployment_lease():
-   os.rename(m.LOCK,m.LOCK+'.old');pathlib.Path(m.LOCK).write_bytes(b'replaced');os.chmod(m.LOCK,0o600)
- except m.VerificationError:pass
- else:raise AssertionError('replacement accepted')
- proof['pathReplacementRefused']=True
- old=os.open(m.LOCK+'.old',os.O_RDWR);fcntl.flock(old,fcntl.LOCK_EX|fcntl.LOCK_NB);os.close(old)
- assert pathlib.Path(m.LOCK+'.old').read_bytes()==b'never truncated'
- proof['originalBytesPreserved']=True
-finally:shutil.rmtree(root)
+  with m.deployment_lease(close_only=True) as reaffirm:
+   os.rename(m.LOCK,old);write(m.LOCK,b'replacement\n',0o600);reaffirm()
+ except m.VerificationError:proof['pathReplacementRefused']=True
+ else:raise AssertionError('lock path replacement accepted')
+ finally:
+  if os.path.lexists(m.LOCK):os.unlink(m.LOCK)
+  if os.path.lexists(old):os.rename(old,m.LOCK)
+
+ overflow=root+'/overflow.py';timeout_script=root+'/timeout.py'
+ write(overflow,b'import os\nos.write(1,b"x"*4097)\n',0o755)
+ write(timeout_script,b'import time\ntime.sleep(60)\n',0o755)
+ observer_path=m.OBSERVER;observer_timeout=m.OBSERVER_TIMEOUT_SECONDS
+ def refused(script,timeout):
+  m.OBSERVER=script;m.OBSERVER_TIMEOUT_SECONDS=timeout
+  try:
+   with m.deployment_lease(close_only=True):m.run_bounded_observer(request)
+  except m.VerificationError:return True
+  return False
+ try:
+  assert refused(overflow,observer_timeout);proof['outputOverflowRefused']=True
+  assert refused(timeout_script,0.05);proof['timeoutRefused']=True
+ finally:m.OBSERVER=observer_path;m.OBSERVER_TIMEOUT_SECONDS=observer_timeout
+ assert opened and not any(value==item or value.startswith(item+'/') for value in opened for item in forbidden)
+finally:
+ if 'real_open' in locals():os.open=real_open
+ shutil.rmtree(root)
 assert not os.path.exists(root)
 proof['sandboxRemoved']=True
-print(json.dumps(proof,sort_keys=True))
-`, path.join(repo, 'ops/prepare-cms-authenticated.py')], {
-      encoding: 'utf8', timeout: 30000, maxBuffer: 4096,
+print(json.dumps(proof,sort_keys=True,separators=(',',':')))
+`, repo], {
+      encoding: 'utf8', timeout: 120000, maxBuffer: 4096,
       env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
     });
     assert.equal(result.status, 0, result.stderr);
     assert.ok(Buffer.byteLength(result.stdout) <= 1024, 'native proof must be bounded');
-    assert.deepEqual(JSON.parse(result.stdout), { kind: 'native-preparation-lease-proof',
-      rootIdentity: true, protectedAncestry: true, sharedRefused: true, originalSharedUnchanged: true,
-      busyRefused: true, foreignDescriptionRefused: true, exclusiveSubprocessInheritance: true,
-      parentExclusiveRetained: true, fd9Closed: true, pathReplacementRefused: true,
-      originalBytesPreserved: true, sandboxRemoved: true });
+    assert.deepEqual(JSON.parse(result.stdout), {
+      kind: 'native-production-context-envelope-proof', schemaVersion: 1, rootIdentity: true,
+      isolatedPython: true, exclusiveLeaseInherited: true, sameOpenDescriptionRetained: true,
+      processIdentityBound: true, pathReplacementRefused: true, outputOverflowRefused: true,
+      timeoutRefused: true, privateMaterialAbsent: true, authorityRemainedFalse: true,
+      sandboxRemoved: true,
+    });
     console.log(result.stdout.trim());
   });
+
+test('candidate-only CI gate retains exact native preparation discovery without widening deployment', () => {
+  const workflow = readFileSync(path.join(repo, '.github/workflows/ci.yml'), 'utf8');
+  const stepName = '      - name: Test preauthority CI setup with native Linux root';
+  const start = workflow.indexOf(stepName);
+  assert.notEqual(start, -1, 'required native step name is missing');
+  const end = workflow.indexOf('\n      - name:', start + stepName.length);
+  const step = workflow.slice(start, end);
+  const candidateOnly = "if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true";
+  assert.ok(step.split(/\r?\n/u).includes(`        ${candidateOnly}`), 'native step must remain candidate-only');
+  assert.match(step, /^ {12}PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "\$NODE_BIN" --test \\$/mu);
+  assert.match(step, /^ {12}tests\/unit\/payload-preparation-authentication\.test\.mjs$/mu);
+  assert.doesNotMatch(step, /deploy-production|Deploy with backup/u);
+  assert.match(workflow,
+    /^  deploy-production:\r?\n    name: Deploy production\r?\n    needs: validate\r?\n    if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main' && inputs\.cms_image_only != true && inputs\.publish_candidate_only != true$/mu);
+});
 
 test('host-data reader retains exact deploy ownership, bounded stable bytes, and distinct trust ancestry (metadata doubles)', () => {
   probe(String.raw`
