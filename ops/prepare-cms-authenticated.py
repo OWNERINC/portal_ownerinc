@@ -9,6 +9,8 @@ import types
 import builtins
 import subprocess
 import re
+import selectors
+import time
 from contextlib import contextmanager, ExitStack
 
 HOST_ROOT = '/opt/ownerinc/apps/portal-ownerinc-real'
@@ -21,6 +23,9 @@ PRODUCTION_BACKUP = '/opt/ownerinc/backups/portal-ownerinc/production'
 ROOT = '/opt/ownerinc/lib/payload-preparation'
 LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
 APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
+OBSERVER_TIMEOUT_SECONDS = 30
+OBSERVER_MAX_FRAME = 4096
+OBSERVER = ROOT + '/ops/payload-production-observer.py'
 FILES = (
     'ops/prepare-cms-infrastructure.sh', 'ops/prepare-cms-infrastructure-private.py',
     'ops/payload-control-inventory.py', 'ops/payload-control-state.py',
@@ -527,6 +532,135 @@ def inspect_install_host(approval, captured):
         'b0Status': b0_status}
 
 
+def expected_context(approval, captured, approval_digest):
+    runtime, inventory, body, _ = inspect_install_host(approval, captured)
+    lease = os.fstat(9)
+    return {
+        'approvalSha256': approval_digest,
+        'sourceCommit': approval['hostBaseline']['currentCommit'],
+        'inventoryIdentity': runtime.INVENTORY.identity(inventory),
+        'stateSha256': hashlib.sha256(runtime.STATE.canonical(body)).hexdigest(),
+        'stateSequence': body['sequence'],
+        'leaseDevice': lease.st_dev,
+        'leaseInode': lease.st_ino,
+    }
+
+
+def run_bounded_observer(request):
+    # Authenticate the validator bytes immediately before they parse either
+    # direction of the child protocol. The caller still performs its own wider
+    # pre/post authentication and host-drift checks under the parent lease.
+    _, captured, _, _, digest = authenticate()
+    require(isinstance(request, dict) and request.get('approvalSha256') == digest)
+    observer = load_authenticated(captured['ops/payload-production-observer.py'], OBSERVER)
+    request = observer.validate_request(request)
+    request_frame = observer.canonical(request) + b'\n'
+    require(len(request_frame) <= OBSERVER_MAX_FRAME)
+
+    process = None
+    selector = None
+    registered = False
+    try:
+        process = subprocess.Popen(
+            ['/usr/bin/python3', '-I', '-S', '-B', OBSERVER, 'collect-context'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            pass_fds=(9,),
+            env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'},
+            shell=False,
+            bufsize=0,
+        )
+        require(process.stdin is not None and process.stdout is not None)
+        require(process.stdin.write(request_frame) == len(request_frame))
+        process.stdin.close()
+        os.set_blocking(process.stdout.fileno(), False)
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        registered = True
+        deadline = time.monotonic() + OBSERVER_TIMEOUT_SECONDS
+        response_frame = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0)
+            ready = selector.select(remaining)
+            if not ready:
+                require(time.monotonic() < deadline)
+                continue
+            try:
+                chunk = os.read(process.stdout.fileno(), OBSERVER_MAX_FRAME + 1 - len(response_frame))
+            except BlockingIOError:
+                continue
+            if not chunk:
+                break
+            response_frame.extend(chunk)
+            require(len(response_frame) <= OBSERVER_MAX_FRAME)
+        remaining = deadline - time.monotonic()
+        require(remaining > 0)
+        require(process.wait(timeout=remaining) == 0)
+        require(0 < len(response_frame) <= OBSERVER_MAX_FRAME)
+        result = observer.validate_response(
+            observer.strict_json(bytes(response_frame), OBSERVER_MAX_FRAME),
+            request['nonce'],
+            digest,
+        )
+        require(result['context']['pid'] == process.pid)
+        return result
+    except Exception:
+        if process is not None:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=1)
+            except Exception:
+                pass
+        raise VerificationError('preparation_verification_denied')
+    finally:
+        if selector is not None:
+            if registered and process is not None and process.stdout is not None:
+                try:
+                    selector.unregister(process.stdout)
+                except Exception:
+                    pass
+            selector.close()
+        if process is not None:
+            for stream in (process.stdin, process.stdout):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+
+def collect_context():
+    initial = authenticate()
+    with deployment_lease(close_only=True) as reaffirm:
+        approval, captured, cms_image, support, digest = authenticate()
+        require(digest == initial[4])
+        verify_host_baseline(approval, captured, cms_image, support)
+        before = expected_context(approval, captured, digest)
+        reaffirm()
+        request = {
+            'schemaVersion': 1,
+            'kind': 'payload-production-context-request-v1',
+            'operation': 'collect-context',
+            'nonce': os.urandom(32).hex(),
+            'approvalSha256': digest,
+        }
+        result = run_bounded_observer(request)
+        reaffirm()
+        final = authenticate()
+        require(final[4] == digest and final[1] == captured)
+        verify_host_baseline(final[0], final[1], final[2], final[3])
+        after = expected_context(final[0], final[1], digest)
+        require(before == after)
+        require(all(result['context'][key] == value for key, value in after.items()))
+        reaffirm()
+        return result
+
+
 def check_install_plan(receipt_id):
     require(isinstance(receipt_id, str) and re.fullmatch(r'payload-[a-z0-9_]{8}', receipt_id) is not None)
     with deployment_lease() as reaffirm, ExitStack() as b0_evidence:
@@ -675,13 +809,17 @@ def dispatch(mode):
 
 def main():
     args = sys.argv[1:]
-    require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in ('--verify-context', '--create-inventory', '--check-install-plan'))
+    require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in
+            ('--verify-context', '--create-inventory', '--check-install-plan', '--collect-context'))
     require(sys.platform == 'linux' and os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 0)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode)
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'} and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C')
     require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'))
-    if args[0] == '--check-install-plan':
+    if args[0] == '--collect-context':
+        require(authenticate()[4] == args[1])
+        print(json.dumps(collect_context(), sort_keys=True, separators=(',', ':')))
+    elif args[0] == '--check-install-plan':
         print(json.dumps(check_install_plan(args[1]), sort_keys=True))
     elif args[0] == '--verify-context':
         print(verified_context(args[1]))

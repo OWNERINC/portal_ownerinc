@@ -424,6 +424,190 @@ with patch.object(l,'verify_inherited_lease') as inherited,patch.object(l,'verif
 `);
 });
 
+test('bounded observer transport authenticates before the exact isolated child and validates a capped response (portable process doubles)', () => {
+  probe(String.raw`
+from unittest.mock import patch
+material=l.authenticate();digest=material[4];nonce='7'*64
+request={'schemaVersion':1,'kind':'payload-production-context-request-v1','operation':'collect-context','nonce':nonce,'approvalSha256':digest}
+context={'approvalSha256':digest,'sourceCommit':approval['hostBaseline']['currentCommit'],'inventoryIdentity':'8'*64,
+ 'stateSha256':'9'*64,'stateSequence':3,'pid':321,'processStart':654,'leaseDevice':7,'leaseInode':8}
+response={'schemaVersion':1,'kind':'payload-production-context-observation-v1','operation':'collect-context','nonce':nonce,
+ 'context':context,'sourceAuthenticated':True,'inventoryAuthenticated':True,'stateAuthenticated':True,'leaseVerified':True,
+ 'destructiveOperationAuthorized':False,'installationExecuted':False,'deploymentAuthorized':False,'productionAuthorized':False}
+observer=l.load_authenticated(material[1]['ops/payload-production-observer.py'],l.OBSERVER)
+frame=observer.canonical(response)+b'\n';events=[];chunks=[frame[:17],frame[17:],b'']
+class Pipe:
+ def __init__(self,fd):self.fd=fd;self.closed=False;self.written=b''
+ def fileno(self):return self.fd
+ def write(self,value):self.written+=value;events.append(('write',value));return len(value)
+ def close(self):self.closed=True;events.append(('close',self.fd))
+class Process:
+ pid=321
+ def __init__(self):self.stdin=Pipe(10);self.stdout=Pipe(11);self.returncode=0;self.killed=False
+ def wait(self,timeout=None):events.append(('wait',timeout));return self.returncode
+ def kill(self):self.killed=True;events.append('kill')
+process=Process()
+def popen(args,**kwargs):
+ assert events==['authenticate'],'authentication must precede spawn'
+ assert args==['/usr/bin/python3','-I','-S','-B',l.ROOT+'/ops/payload-production-observer.py','collect-context']
+ assert kwargs=={'stdin':l.subprocess.PIPE,'stdout':l.subprocess.PIPE,'stderr':l.subprocess.DEVNULL,
+  'pass_fds':(9,),'env':{'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'},'shell':False,'bufsize':0}
+ events.append('spawn');return process
+class Selector:
+ def register(self,fileobj,event):assert fileobj is process.stdout and event==l.selectors.EVENT_READ;events.append('register')
+ def select(self,timeout):assert 0<=timeout<=l.OBSERVER_TIMEOUT_SECONDS;return [(types.SimpleNamespace(fileobj=process.stdout),None)]
+ def unregister(self,fileobj):assert fileobj is process.stdout;events.append('unregister')
+ def close(self):events.append('selector-close')
+def authenticate():events.append('authenticate');return material
+with patch.object(l,'authenticate',side_effect=authenticate),patch.object(l.subprocess,'Popen',side_effect=popen), \
+     patch.object(l.selectors,'DefaultSelector',return_value=Selector()),patch.object(l.os,'read',side_effect=lambda fd,n:chunks.pop(0)), \
+     patch.object(l.os,'set_blocking',side_effect=lambda fd,value:events.append(('nonblocking',fd,value))):
+ result=l.run_bounded_observer(request)
+assert result==response and result['destructiveOperationAuthorized'] is False and result['productionAuthorized'] is False
+expected_request=observer.canonical(request)+b'\n'
+assert process.stdin.written==expected_request and len(expected_request)<=4096
+assert not process.killed and process.stdin.closed and process.stdout.closed
+wait_index=next(i for i,value in enumerate(events) if isinstance(value,tuple) and value[0]=='wait')
+assert events.index('authenticate')<events.index('spawn')<wait_index
+`);
+});
+
+test('bounded observer transport denies timeout, overflow, child/status/frame/binding/PID failures and always reaps (portable process doubles)', () => {
+  probe(String.raw`
+from unittest.mock import patch
+material=l.authenticate();digest=material[4];nonce='7'*64
+request={'schemaVersion':1,'kind':'payload-production-context-request-v1','operation':'collect-context','nonce':nonce,'approvalSha256':digest}
+base_context={'approvalSha256':digest,'sourceCommit':approval['hostBaseline']['currentCommit'],'inventoryIdentity':'8'*64,
+ 'stateSha256':'9'*64,'stateSequence':3,'pid':321,'processStart':654,'leaseDevice':7,'leaseInode':8}
+base={'schemaVersion':1,'kind':'payload-production-context-observation-v1','operation':'collect-context','nonce':nonce,
+ 'context':base_context,'sourceAuthenticated':True,'inventoryAuthenticated':True,'stateAuthenticated':True,'leaseVerified':True,
+ 'destructiveOperationAuthorized':False,'installationExecuted':False,'deploymentAuthorized':False,'productionAuthorized':False}
+observer=l.load_authenticated(material[1]['ops/payload-production-observer.py'],l.OBSERVER)
+class Pipe:
+ def __init__(self,fd):self.fd=fd
+ def fileno(self):return self.fd
+ def write(self,value):return len(value)
+ def close(self):pass
+class Selector:
+ def __init__(self,timeout):self.timeout=timeout
+ def register(self,*args):pass
+ def unregister(self,*args):pass
+ def close(self):pass
+ def select(self,remaining):return [] if self.timeout else [(types.SimpleNamespace(fileobj=process.stdout),None)]
+class Process:
+ pid=321
+ def __init__(self,status):self.stdin=Pipe(10);self.stdout=Pipe(11);self.returncode=status;self.killed=False;self.waited=False
+ def wait(self,timeout=None):self.waited=True;return self.returncode
+ def kill(self):self.killed=True
+for scenario in ('timeout','overflow','nonzero','malformed','wrong-nonce','wrong-approval','wrong-pid'):
+ value=copy.deepcopy(base);status=0;timeout=scenario=='timeout'
+ if scenario=='overflow':frame=b'x'*(l.OBSERVER_MAX_FRAME+1)
+ elif scenario=='malformed':frame=b'{not-json}\n'
+ else:
+  if scenario=='wrong-nonce':value['nonce']='6'*64
+  if scenario=='wrong-approval':value['context']['approvalSha256']='6'*64
+  if scenario=='wrong-pid':value['context']['pid']=999
+  frame=observer.canonical(value)+b'\n'
+ if scenario=='nonzero':status=4
+ chunks=[frame,b''];process=Process(status);clock=iter((0,31,31,31) if timeout else (0,0,0,0,0,0))
+ with patch.object(l,'authenticate',return_value=material),patch.object(l.subprocess,'Popen',return_value=process), \
+      patch.object(l.selectors,'DefaultSelector',return_value=Selector(timeout)),patch.object(l.os,'read',side_effect=lambda fd,n:chunks.pop(0)), \
+      patch.object(l.os,'set_blocking'),patch.object(l.time,'monotonic',side_effect=lambda:next(clock)):
+  try:l.run_bounded_observer(request)
+  except l.VerificationError as error:assert str(error)=='preparation_verification_denied'
+  else:raise AssertionError(scenario+' accepted')
+ assert process.waited and process.killed,scenario
+`);
+});
+
+test('context collection owns the lease, independently projects context, and denies all post-child drift (portable observation doubles)', () => {
+  probe(String.raw`
+from contextlib import contextmanager
+from unittest.mock import patch
+material=l.authenticate();digest=material[4];captured=material[1];held=[False];events=[]
+body={'sequence':4,'private':'not-returned'}
+class State:
+ @staticmethod
+ def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+class Inventory:
+ @staticmethod
+ def identity(value):return value['identity']
+runtime=types.SimpleNamespace(STATE=State,INVENTORY=Inventory)
+inventory={'identity':'8'*64}
+lease_info=types.SimpleNamespace(st_dev=7,st_ino=8)
+@contextmanager
+def lease(close_only=False):
+ assert close_only is True;held[0]=True;events.append('acquire')
+ def reaffirm():assert held[0];events.append('reaffirm')
+ try:yield reaffirm
+ finally:held[0]=False;events.append('release')
+def baseline(*args):assert held[0];events.append('host')
+def inspect(*args):assert held[0];events.append('inspect');return runtime,inventory,body,None
+def child(request):
+ assert held[0];events.append('child')
+ context={'approvalSha256':digest,'sourceCommit':material[0]['hostBaseline']['currentCommit'],'inventoryIdentity':'8'*64,
+  'stateSha256':hashlib.sha256(State.canonical(body)).hexdigest(),'stateSequence':4,'leaseDevice':7,'leaseInode':8,
+  'pid':321,'processStart':654}
+ return {'schemaVersion':1,'kind':'payload-production-context-observation-v1','operation':'collect-context','nonce':request['nonce'],
+  'context':context,'sourceAuthenticated':True,'inventoryAuthenticated':True,'stateAuthenticated':True,'leaseVerified':True,
+  'destructiveOperationAuthorized':False,'installationExecuted':False,'deploymentAuthorized':False,'productionAuthorized':False}
+with patch.object(l,'authenticate',side_effect=[material,material,material]),patch.object(l,'deployment_lease',lease), \
+     patch.object(l,'verify_host_baseline',side_effect=baseline),patch.object(l,'inspect_install_host',side_effect=inspect), \
+     patch.object(l,'run_bounded_observer',side_effect=child),patch.object(l.os,'fstat',return_value=lease_info), \
+     patch.object(l.os,'urandom',return_value=b'N'*32):
+ result=l.collect_context()
+assert result['nonce']==(b'N'*32).hex() and result['context']['stateSequence']==4
+assert result['deploymentAuthorized'] is False and result['productionAuthorized'] is False
+assert events.index('acquire')<events.index('child')<events.index('release') and events.count('host')==2 and events.count('inspect')==2
+
+def attempt(kind):
+ final=list(material);current_inventory={'identity':'8'*64};current_body={'sequence':4,'private':'not-returned'}
+ infos=[lease_info,lease_info]
+ if kind=='source':
+  final[0]=copy.deepcopy(material[0]);final[0]['hostBaseline']['currentCommit']='0'*40
+ if kind=='closure':final[1]=dict(captured,extra=b'drift')
+ if kind=='approval':final[4]='0'*64
+ if kind=='inventory':current_inventory={'identity':'0'*64}
+ if kind=='state':current_body={'sequence':5,'private':'not-returned'}
+ if kind=='fd9':infos[1]=types.SimpleNamespace(st_dev=7,st_ino=9)
+ calls=[0]
+ def changing_inspect(*args):
+  calls[0]+=1
+  return runtime,(inventory if calls[0]==1 else current_inventory),(body if calls[0]==1 else current_body),None
+ def mismatching_child(request):
+  value=child(request)
+  if kind=='result':value['context']['stateSha256']='0'*64
+  return value
+ with patch.object(l,'authenticate',side_effect=[material,material,tuple(final)]),patch.object(l,'deployment_lease',lease), \
+      patch.object(l,'verify_host_baseline'),patch.object(l,'inspect_install_host',side_effect=changing_inspect), \
+      patch.object(l,'run_bounded_observer',side_effect=mismatching_child),patch.object(l.os,'fstat',side_effect=infos):
+  try:l.collect_context()
+  except l.VerificationError:pass
+  else:raise AssertionError(kind+' drift accepted')
+for kind in ('source','closure','approval','inventory','state','fd9','result'):attempt(kind)
+`);
+});
+
+test('collect-context CLI has exact two-token grammar and authenticates the supplied approval before collection', () => {
+  probe(String.raw`
+from unittest.mock import patch
+material=l.authenticate();digest=material[4]
+result={'kind':'bounded','deploymentAuthorized':False}
+safe_env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'}
+identity={'getuid':lambda:0,'geteuid':lambda:0,'getgid':lambda:0,'getegid':lambda:0}
+with patch.object(l.sys,'platform','linux'),patch.multiple(l.os,create=True,**identity),patch.object(l.os.path,'realpath',side_effect=lambda value:value), \
+     patch.object(l.os,'environ',safe_env),patch.object(l,'authenticate',return_value=material),patch.object(l,'collect_context',return_value=result) as collect, \
+     patch('builtins.print') as output:
+ l.sys.argv=['launcher','--collect-context',digest];l.main();collect.assert_called_once_with()
+ output.assert_called_once_with(json.dumps(result,sort_keys=True,separators=(',',':')))
+ for args in (['--collect-context'],['--collect-context',digest,'extra'],['--collect-context','0'*64],['--collect-context='+digest]):
+  l.sys.argv=['launcher']+args
+  try:l.main()
+  except l.VerificationError:pass
+  else:raise AssertionError('grammar accepted '+repr(args))
+`);
+});
+
 test('inherited context refuses shared, unlocked, foreign-description, missing and replaced FD9 without unlocking parent (syscall doubles)', () => {
   probe(String.raw`
 import stat
@@ -481,7 +665,10 @@ assert len(loads)==2
 observer='ops/payload-production-observer.py';observer_target=p.preparation_target(observer)
 before=store[observer_target];loads.clear()
 put(observer_target,b'raise Exception("MUST NOT EXECUTE")\n',before[1])
-denied(l.verify);assert loads==[]
+try:l.verify()
+except l.VerificationError:pass
+else:raise AssertionError('observer hash mismatch accepted')
+assert loads==[]
 store[observer_target]=before
 for relative in p.PREPARATION_FILES:
     filename=p.preparation_target(relative);before=store[filename];loads.clear()
