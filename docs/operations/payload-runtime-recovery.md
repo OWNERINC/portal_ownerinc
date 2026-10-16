@@ -25,23 +25,30 @@ de `collect-context` são recusados. Não há seletor de path, comando, role, da
 SQL, origem ou módulo fornecido pelo caller.
 
 O launcher instalado autentica approval, policy, record e os bytes da closure
-completa de preparação **antes** de carregar ou executar o observer. Sob lease
-exclusiva close-only, gera nonce fresco, projeta independentemente source commit,
-identidade do inventory, hash/sequência do state e device/inode do FD9, e inicia
-somente o observer fixo. O filho reafirma a lease herdada no FD9 antes/depois,
-informa PID e `/proc/self/stat` field 22; o pai exige o PID real do filho e valida
-nonce, approval e todo o restante da projeção. Após a saída, o pai reautentica a
-closure e o host, recompõe source/inventory/state/FD9 e recusa qualquer drift pré/
-pós-coleta. O resultado não é reutilizável: nova entrada exige processo, nonce,
-autenticação e lease frescos.
+completa de preparação **antes** de carregar ou executar o observer. O processo do
+launcher deve entrar com FD9 fechado: `collect_context()` recusa um FD9 preexistente,
+abre o lock fixo, adquire nele a lease exclusiva close-only e instala sua própria
+descrição aberta como FD9. Sob essa lease, gera nonce fresco, projeta
+independentemente source commit, identidade do inventory, hash/sequência do state e
+device/inode do FD9, e inicia somente o observer fixo, passando apenas FD9 ao filho
+com `pass_fds=(9,)`. O filho reafirma a lease herdada no FD9 antes/depois, informa
+PID e `/proc/self/stat` field 22; o pai exige o PID real do filho e valida nonce,
+approval e todo o restante da projeção. Após a saída, o pai reautentica a closure e
+o host, recompõe source/inventory/state/FD9 e recusa qualquer drift pré/pós-coleta.
+O resultado não é reutilizável: nova entrada exige processo, nonce, autenticação e
+lease frescos.
 
-Timeout de 30 segundos, byte 4097, saída/JSON/status inválido, mismatch ou falha de
-transporte terminam em recusa sanitizada, sem traceback, stderr do filho, paths,
-estado privado ou credenciais. O pai sinaliza somente o filho criado por ele e o
-recolhe antes de retornar uma recusa normal. Interrupções de cleanup têm tentativas
-finitas; se o reap não puder ser provado, o pai aplica fail-stop com `_exit(2)`, sem
-retomar o fluxo nem liberar autoridade por unwinding normal. O observer expõe apenas
-`Production context collection denied.` e o launcher mantém seu erro finito.
+O deadline de 30 segundos cobre a resposta e a saída normal do observer: byte 4097,
+saída/JSON/status inválido, mismatch, timeout ou falha de transporte causam recusa
+sanitizada, sem traceback, stderr do filho, paths, estado privado ou credenciais.
+Depois de SIGKILL, porém, `process.wait()` não possui timeout de parede: as tentativas
+de interrupção são finitas, mas não garantem duração total bounded se esse wait
+bloquear permanentemente. O pai sinaliza somente o filho criado por ele e precisa
+provar o reap antes de retornar uma recusa normal. Exceção no cleanup de kill/wait
+ou esgotamento das tentativas finitas de interrupção aciona fail-stop com `_exit(2)`;
+um wait permanentemente bloqueado permanece bloqueado e, por si só, não alcança o
+fail-stop. O observer expõe apenas `Production context collection denied.` e o
+launcher mantém diagnóstico sanitizado e comportamento fail-closed.
 
 **Estado da evidência:** código, testes portáteis e revisão de implementação com
 veredicto `ship` estão concluídos localmente. Esses testes usam doubles declarados
@@ -62,8 +69,12 @@ ou B0-03. `destructiveOperationAuthorized`, `installationExecuted`,
 **Estado da evidência:** o primary confirmou `3192127` / CI `38600074126` SUCCESS:
 native B0 25 pass/0 skip e suíte existente completa 14/11/2. Isso cobre somente
 aquele perfil TEST de dois arquivos. “Native pending/NOT RUN” nas entradas
-históricas abaixo descreve entregas anteriores. O novo request v3 descrito aqui
-é **native NOT RUN**, sem aprovação de rollback em produção.
+históricas abaixo descreve entregas anteriores. A afirmação de que o request v3 era
+**native NOT RUN** vale como histórico da entrega original: foi superada, somente
+para aqueles bytes e para a fixture TEST de uploads, pelo native SUCCESS E03 e pela
+evidência E04 do run `38617436909` registradas no backlog de conclusão. Isso não é
+aprovação de rollback em produção e não é a qualificação native do envelope B0-01a,
+que continua pendente.
 
 #### Uploads bounded — request v3 / baseline envelope v2
 
@@ -119,7 +130,10 @@ binário curto, zero-length file, nested/empty dirs e basename repetido em paths
 distintos; UID/GID 1000:1000, dirs 0755/files 0644. Nenhum nome/conteúdo de arquivo
 real é copiado. CMS/unrelated sentinel continua independente. Essa fixture é
 maior que a observação de quatro entradas, deliberadamente exercitando casos
-adicionais dentro do mesmo cap. Native dessa versão ainda NOT RUN.
+adicionais dentro do mesmo cap. “Native dessa versão ainda NOT RUN” é o estado
+histórico da entrega original; E03 native SUCCESS e E04/run `38617436909`, no
+backlog de conclusão, são a evidência posterior para a fixture TEST de uploads.
+Não promovem o host produtivo nem qualificam o envelope de contexto B0-01a.
 
 #### Perfil TEST de roundtrip exato — request v2 / recoveryVersion 2
 

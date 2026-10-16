@@ -1013,8 +1013,11 @@ O coordinator autenticado pode iniciar somente a interface interna fixa abaixo:
 
 Isto **não é um atalho de operador nem uma instrução de instalação no host**. Só o
 coordinator já autenticado fornece `APPROVAL_SHA256`, que deve coincidir com os
-bytes da aprovação protegida autenticada. O FD9 com a lease exclusiva precisa já
-estar herdado; não existe argumento para escolher lock, observer, fonte ou path.
+bytes da aprovação protegida autenticada. Esse comando deve iniciar com **FD9
+fechado**: o launcher recusa FD9 preexistente, abre o lock de deployment fixo,
+adquire a lease exclusiva close-only e instala sua própria descrição aberta em FD9.
+Somente então inicia o observer isolado fixo e passa exclusivamente FD9 ao filho com
+`pass_fds=(9,)`. Não existe argumento para escolher lock, observer, fonte ou path.
 O processo usa ambiente vazio exceto `PATH=/usr/bin:/bin`, `LANG=C` e `LC_ALL=C`.
 Antes de executar o observer, o launcher autentica a closure completa, agora
 incluindo `ops/payload-production-observer.py`; o observer executado também é o path
@@ -1043,7 +1046,7 @@ shell de fixture. O teste Linux usa subprocesso real e `pass_fds`, testa
 ausência de deadlock e confirma que o child não libera a lock do parent. Isso não
 substitui a qualificação nativa completa de preparação, ainda pendente.
 
-#### Gate nativo obrigatório de lease da preparação no candidate CI
+#### Gate nativo da preparação no candidate CI
 
 O step autenticado **`Test preauthority CI setup with native Linux root`** mantém
 nome, condição e suites setup/trust anteriores, e acrescenta a suite inteira,
@@ -1068,19 +1071,32 @@ subprocesso executam os leitores de metadata/ancestry e funções flock originai
 nenhum path fixo de produção recebe writes. Não há provisionamento de closure,
 policy, credenciais, serviços, contas ou sudoers nesse caso.
 
-Node exige parse e igualdade exata do JSON `native-preparation-lease-proof`, no
-máximo 1 KiB, e emite a prova completa no log. Os campos obrigatórios comprovam:
+Na entrega anterior, o caso native de lease exigia parse e igualdade exata do JSON
+`native-preparation-lease-proof`, no máximo 1 KiB, e emitia a prova completa no
+log. Os campos obrigatórios comprovam:
 identidade root e ancestry; SH recusada com FD9 ainda aberto e SH original
 inalterada (outro SH adquire, EX bloqueia); busy e EX de outra descrição
 recusados; EX herdada via `pass_fds` em subprocesso sem liberar a lock do parent;
 FD9 fechado ao sair; pathname substituído recusado; bytes originais preservados;
-sandbox removido. Saída ausente/parcial ou early exit não é PASS.
+sandbox removido. Essa prova permanece evidência histórica e contrato corrente
+**somente da lease**; não é a proof do caso de envelope implementado agora.
 
-Os outros casos da suite continuam identificados como doubles. O gate qualifica
-**lease somente**, não bootstrap/launcher/preparer end-to-end, baseline real,
-sudo/SSH, durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets,
-14 checks, 11 negativos e dois restores não mudam. Um próximo CI qualifica sua
-própria revisão; não se atribui esta prova retroativamente a execução anterior.
+O caso native atual implementado para B0-01a exige o JSON fechado
+`native-production-context-envelope-proof`, também de no máximo 1 KiB. Ele exercita
+em sandbox Linux/root o launcher real de `collect_context()`, Python isolado,
+aquisição da lease pelo launcher com FD9 inicialmente fechado, herança de FD9 pelo
+observer, mesma open description, PID/start em `/proc`, recusa de substituição de
+path, overflow, timeout, ausência de material privado, autorizações falsas e remoção
+do sandbox. Essa proof está implementada, mas **ainda não foi executada**: depende de
+um run candidate-only explicitamente autorizado. Fora dos casos native declarados,
+os cenários portáteis continuam identificados como doubles; a suite não é descrita
+como inteiramente doubled.
+
+Nem a prova histórica lease-only nem uma futura proof do envelope qualificam
+bootstrap/launcher/preparer end-to-end no host, baseline real, sudo/SSH,
+durabilidade sob power loss ou aceite editorial. HTTP/recovery budgets, 14 checks,
+11 negativos e dois restores não mudam. Um próximo CI qualifica somente sua própria
+revisão; nenhuma prova é atribuída retroativamente a execução anterior.
 
 #### P3: plano de instalação de produção, somente leitura
 
