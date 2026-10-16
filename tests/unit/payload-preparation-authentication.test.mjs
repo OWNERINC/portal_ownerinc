@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -288,46 +288,50 @@ production_roots=tuple(os.path.realpath(os.path.abspath(os.path.normpath(item)))
 def descriptor_target(descriptor,reason,require_directory=False):
  try:target=os.readlink('/proc/self/fd/'+str(descriptor))
  except OSError as error:raise RuntimeError(reason) from error
- if not os.path.isabs(target) or target.endswith(' (deleted)'):raise RuntimeError(reason)
- if require_directory and not stat.S_ISDIR(os.fstat(descriptor).st_mode):raise RuntimeError(reason)
- return os.path.realpath(target)
+ info=os.fstat(descriptor)
+ if os.path.isabs(target) and not target.endswith(' (deleted)'):
+  if require_directory and not stat.S_ISDIR(info.st_mode):raise RuntimeError(reason)
+  return 'filesystem',os.path.realpath(target)
+ if not require_directory and target.startswith('pipe:[') and target.endswith(']') and target[6:-1].isdigit() and stat.S_ISFIFO(info.st_mode):
+  return 'pipe',target
+ raise RuntimeError(reason)
 def canonical_target(filename,dir_fd=None):
  if isinstance(filename,int):
   return descriptor_target(filename,'unresolved_open_descriptor')
  value=os.fsdecode(filename)
  if not os.path.isabs(value):
   if dir_fd is None:base=os.getcwd()
-  else:base=descriptor_target(dir_fd,'unresolved_parent_dir_fd',True)
+  else:base=descriptor_target(dir_fd,'unresolved_parent_dir_fd',True)[1]
   value=os.path.join(base,value)
- return os.path.realpath(value)
-def forbidden_target(target):
- return any(os.path.commonpath((target,item))==item for item in production_roots)
-def append_parent_open(api,target):
- frame=(json.dumps({'api':api,'pid':os.getpid(),'target':target},sort_keys=True,separators=(',',':'))+'\n').encode()
+ return 'filesystem',os.path.realpath(value)
+def forbidden_target(target_kind,target):
+ return target_kind=='filesystem' and any(os.path.commonpath((target,item))==item for item in production_roots)
+def append_parent_open(api,target_kind,target):
+ frame=(json.dumps({'api':api,'pid':os.getpid(),'target':target,'targetKind':target_kind},sort_keys=True,separators=(',',':'))+'\n').encode()
  written=os.write(parent_audit_fd,frame)
  if written!=len(frame):raise RuntimeError('parent_audit_short_write')
- if forbidden_target(target):raise AssertionError('unchanged_production_root_open:'+target)
+ if forbidden_target(target_kind,target):raise AssertionError('unchanged_production_root_open:'+target)
 def record_open(event,args):
  if not audit_active[0]:return
  state=audit_state[0]
  if state is not None:
   if event!='open' or not args or os.fsdecode(args[0])!=state['path']:raise RuntimeError('unexpected_parent_audit_reentrancy')
   state['seen']=True;return
- if event=='open':append_parent_open('open',canonical_target(args[0]))
+ if event=='open':append_parent_open('open',*canonical_target(args[0]))
 sys.addaudithook(record_open)
 def audited_os_open(filename,flags,mode=0o777,*,dir_fd=None):
- target=canonical_target(filename,dir_fd);append_parent_open('os.open',target)
+ target_kind,target=canonical_target(filename,dir_fd);append_parent_open('os.open',target_kind,target)
  state={'path':os.fsdecode(filename),'seen':False};audit_state[0]=state
  try:return real_os_open(filename,flags,mode,dir_fd=dir_fd)
  finally:
   audit_state[0]=None
   if not state['seen']:raise RuntimeError('missing_parent_os_open_audit_event')
 os.open=audited_os_open
-assert forbidden_target(canonical_target('/opt/ownerinc/../ownerinc/audit-probe'))
+assert forbidden_target(*canonical_target('/opt/ownerinc/../ownerinc/audit-probe'))
 escape=root+'/audit-production-link';os.symlink('/opt/ownerinc',escape)
-assert forbidden_target(canonical_target(escape+'/audit-probe'));os.unlink(escape)
+assert forbidden_target(*canonical_target(escape+'/audit-probe'));os.unlink(escape)
 root_fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
-try:assert canonical_target(b'dir-fd-probe',root_fd)==root+'/dir-fd-probe'
+try:assert canonical_target(b'dir-fd-probe',root_fd)==('filesystem',root+'/dir-fd-probe')
 finally:os.close(root_fd)
 def load(name,filename):
  spec=importlib.util.spec_from_file_location(name,filename);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
@@ -355,22 +359,28 @@ if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.r
  def _fixture_descriptor_target(_descriptor,_reason,_require_directory=False):
   try:_target=_fixture_audit_os.readlink('/proc/self/fd/'+str(_descriptor))
   except OSError as _error:raise RuntimeError(_reason) from _error
-  if not _fixture_audit_os.path.isabs(_target) or _target.endswith(' (deleted)'):raise RuntimeError(_reason)
-  if _require_directory and not _fixture_audit_stat.S_ISDIR(_fixture_audit_os.fstat(_descriptor).st_mode):raise RuntimeError(_reason)
-  return _fixture_audit_os.path.realpath(_target)
+  _info=_fixture_audit_os.fstat(_descriptor)
+  if _fixture_audit_os.path.isabs(_target) and not _target.endswith(' (deleted)'):
+   if _require_directory and not _fixture_audit_stat.S_ISDIR(_info.st_mode):raise RuntimeError(_reason)
+   return 'filesystem',_fixture_audit_os.path.realpath(_target)
+  if not _require_directory and _target.startswith('pipe:[') and _target.endswith(']') and _target[6:-1].isdigit() and _fixture_audit_stat.S_ISFIFO(_info.st_mode):
+   return 'pipe',_target
+  raise RuntimeError(_reason)
  def _fixture_canonical_target(_filename,_dir_fd=None):
   if isinstance(_filename,int):
    return _fixture_descriptor_target(_filename,'unresolved_child_open_descriptor')
   _value=_fixture_audit_os.fsdecode(_filename)
   if not _fixture_audit_os.path.isabs(_value):
    if _dir_fd is None:_base=_fixture_audit_os.getcwd()
-   else:_base=_fixture_descriptor_target(_dir_fd,'unresolved_child_dir_fd',True)
+   else:_base=_fixture_descriptor_target(_dir_fd,'unresolved_child_dir_fd',True)[1]
    _value=_fixture_audit_os.path.join(_base,_value)
-  return _fixture_audit_os.path.realpath(_value)
- def _fixture_forbidden_target(_target):
-  return any(_fixture_audit_os.path.commonpath((_target,_root))==_root for _root in _fixture_production_roots)
- def _fixture_append_open(_api,_target):
-  _frame=(_fixture_audit_json.dumps({{'api':_api,'pid':_fixture_audit_os.getpid(),'target':_target}},sort_keys=True,separators=(',',':'))+'\\n').encode()
+  return 'filesystem',_fixture_audit_os.path.realpath(_value)
+ def _fixture_forbidden_target(_target_kind,_target):
+  return _target_kind=='filesystem' and any(_fixture_audit_os.path.commonpath((_target,_root))==_root for _root in _fixture_production_roots)
+ _fixture_audit_records=[]
+ def _fixture_append_open(_api,_target_kind,_target):
+  _entry={{'api':_api,'pid':_fixture_audit_os.getpid(),'target':_target,'targetKind':_target_kind}}
+  _frame=(_fixture_audit_json.dumps(_entry,sort_keys=True,separators=(',',':'))+'\\n').encode()
   _state={{'mode':'log','path':_fixture_audit_log,'seen':False}};_fixture_audit_state[0]=_state
   _fd=None
   try:
@@ -382,19 +392,21 @@ if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.r
    _written=_fixture_audit_os.write(_fd,_frame)
    if _written!=len(_frame):raise RuntimeError('child_audit_short_write')
   finally:_fixture_audit_os.close(_fd)
-  if _fixture_forbidden_target(_target):raise AssertionError('unchanged_production_root_open:'+_target)
+  if _fixture_forbidden_target(_target_kind,_target):raise AssertionError('unchanged_production_root_open:'+_target)
+  _fixture_audit_records.append(_entry)
  def _fixture_record_open(_event,_args):
   _state=_fixture_audit_state[0]
   if _state is not None:
    if _event!='open' or not _args or _fixture_audit_os.fsdecode(_args[0])!=_state['path']:raise RuntimeError('unexpected_child_audit_reentrancy')
    _state['seen']=True;return
-  if _event=='open':_fixture_append_open('open',_fixture_canonical_target(_args[0]))
+  if _event=='open':_fixture_append_open('open',*_fixture_canonical_target(_args[0]))
  _fixture_audit_sys.addaudithook(_fixture_record_open)
- def _fixture_audited_os_open(_filename,_flags,_mode=0o777,*,dir_fd=None):
+ def _fixture_audited_os_open(_filename,_flags,mode=0o777,*,dir_fd=None):
   _dir_fd=dir_fd
-  _target=_fixture_canonical_target(_filename,_dir_fd);_fixture_append_open('os.open',_target)
+  _open_mode=mode
+  _target_kind,_target=_fixture_canonical_target(_filename,_dir_fd);_fixture_append_open('os.open',_target_kind,_target)
   _state={{'mode':'os.open','path':_fixture_audit_os.fsdecode(_filename),'seen':False}};_fixture_audit_state[0]=_state
-  try:return _fixture_real_os_open(_filename,_flags,_mode,dir_fd=_dir_fd)
+  try:return _fixture_real_os_open(_filename,_flags,_open_mode,dir_fd=_dir_fd)
   finally:
    _fixture_audit_state[0]=None
    if not _state['seen']:raise RuntimeError('missing_child_os_open_audit_event')
@@ -595,10 +607,13 @@ pathlib.Path({timeout_survived!r}).write_text("timeout missing")
   events=[]
   for line in raw[:-1].split(b'\n'):
    entry=json.loads(line.decode('utf-8'))
-   assert set(entry)=={'api','pid','target'} and canonical(entry)==line
+   assert set(entry)=={'api','pid','target','targetKind'} and canonical(entry)==line
    assert entry['pid']==expected_pid and entry['api'] in ('open','os.open')
-   assert os.path.isabs(entry['target']) and entry['target']==os.path.realpath(entry['target'])
-   assert not forbidden_target(entry['target']),entry
+   assert entry['targetKind'] in ('filesystem','pipe')
+   if entry['targetKind']=='filesystem':
+    assert os.path.isabs(entry['target']) and entry['target']==os.path.realpath(entry['target'])
+    assert not forbidden_target('filesystem',entry['target']),entry
+   else:assert entry['target'].startswith('pipe:[') and entry['target'].endswith(']') and entry['target'][6:-1].isdigit()
    events.append(entry)
   assert events and {'open','os.open'}<={entry['api'] for entry in events}
   return events
@@ -608,7 +623,8 @@ pathlib.Path({timeout_survived!r}).write_text("timeout missing")
  expected_logs={'child-'+str(child['pid'])+'.jsonl' for child in instrumented_children}
  assert set(os.listdir(audit_dir))==expected_logs
  child_events={child['pid']:parse_audit(audit_dir+'/child-'+str(child['pid'])+'.jsonl',child['pid']) for child in instrumented_children}
- successful_targets={entry['target'] for entry in child_events[successful_child['pid']]}
+ successful_targets={entry['target'] for entry in child_events[successful_child['pid']] if entry['targetKind']=='filesystem'}
+ assert any(entry['targetKind']=='pipe' for entry in child_events[successful_child['pid']])
  assert m.LAUNCHER in successful_targets and '/proc/'+str(successful_child['pid'])+'/stat' in successful_targets
 finally:
  audit_active[0]=False
@@ -641,7 +657,7 @@ print(json.dumps(proof,sort_keys=True,separators=(',',':')))
     console.log(result.stdout.trim());
   });
 
-test('generated child audit modules compile and wrapped os.open delegates default and dir_fd calls', () => {
+test('generated child audit classifies Popen pipes and delegates os.open default, dir_fd, and keyword mode', () => {
   let root;
   try {
     root = mkdtempSync(path.join(tmpdir(), 'payload-generated-audit-'));
@@ -664,7 +680,7 @@ exec(compile(source[start:end],'<actual-instrument-source>','exec'),namespace)
 instrument=namespace['instrument']
 observer=prefixes['/opt/ownerinc']+'/lib/payload-preparation/ops/payload-production-observer.py'
 launcher=prefixes['/usr/local/libexec']+'/ownerinc-payload-prepare.py'
-default_file=os.path.join(root,'default.bin');dir_base=os.path.join(root,'dir-base');child_file=os.path.join(dir_base,'child.bin')
+default_file=os.path.join(root,'default.bin');mode_file=os.path.join(root,'mode.bin');dir_base=os.path.join(root,'dir-base');child_file=os.path.join(dir_base,'child.bin')
 real_target=os.path.join(root,'real','target');lexical_wrong=os.path.join(root,'target')
 os.mkdir(dir_base);pathlib.Path(default_file).write_bytes(b'default');pathlib.Path(child_file).write_bytes(b'dir-fd')
 pathlib.Path(real_target).write_bytes(b'real-target');pathlib.Path(lexical_wrong).write_bytes(b'lexical-wrong')
@@ -672,12 +688,12 @@ portable_calls=[];actual_open=os.open;actual_readlink=os.readlink;actual_fstat=o
 if os.open in os.supports_dir_fd and os.name=='posix':
  portable_dir_fd=actual_open(dir_base,os.O_RDONLY|getattr(os,'O_DIRECTORY',0))
  def portable_open(filename,flags,mode=0o777,*,dir_fd=None):
-  portable_calls.append((os.fsdecode(filename),dir_fd))
+  portable_calls.append((os.fsdecode(filename),dir_fd,mode))
   return actual_open(filename,flags,mode,dir_fd=dir_fd)
 else:
  portable_dir_fd=731
  def portable_open(filename,flags,mode=0o777,*,dir_fd=None):
-  portable_calls.append((os.fsdecode(filename),dir_fd))
+  portable_calls.append((os.fsdecode(filename),dir_fd,mode))
   if dir_fd is None:return actual_open(filename,flags,mode)
   if dir_fd!=portable_dir_fd:raise OSError('unexpected portable dir_fd')
   effective=os.path.join(dir_base,os.fsdecode(filename))
@@ -686,7 +702,12 @@ else:
   return actual_open(effective,flags,mode)
  def portable_readlink(filename):
   if filename=='/proc/self/fd/'+str(portable_dir_fd):return dir_base
-  if filename.startswith('/proc/self/fd/'):raise OSError('invalid portable descriptor')
+  if filename.startswith('/proc/self/fd/'):
+   descriptor=int(filename.rsplit('/',1)[1])
+   try:info=actual_fstat(descriptor)
+   except OSError:raise OSError('invalid portable descriptor') from None
+   if stat.S_ISFIFO(info.st_mode):return 'pipe:['+str(descriptor)+']'
+   raise OSError('non-path portable descriptor')
   return actual_readlink(filename)
  def portable_fstat(descriptor):
   if descriptor==portable_dir_fd:return os.stat(dir_base)
@@ -700,22 +721,68 @@ exercise=f'''if _fixture_audit_os.name=='nt':
   if _value=={symlink_dotdot!r}:return {real_target!r}
   return _original_realpath(_value)
  _fixture_audit_os.path.realpath=_component_preserving_realpath
- try:assert _fixture_canonical_target({symlink_dotdot!r})=={real_target!r}
+ try:assert _fixture_canonical_target({symlink_dotdot!r})==('filesystem',{real_target!r})
  finally:_fixture_audit_os.path.realpath=_original_realpath
-else:assert _fixture_canonical_target({symlink_dotdot!r})=={real_target!r}
-assert _fixture_canonical_target(_fixture_audit_os.fsencode({(os.path.join(root,'real','inner','..','..','real','target'))!r}))=={real_target!r}
-assert _fixture_canonical_target('child.bin',portable_dir_fd)=={child_file!r}
+else:assert _fixture_canonical_target({symlink_dotdot!r})==('filesystem',{real_target!r})
+assert _fixture_canonical_target(_fixture_audit_os.fsencode({(os.path.join(root,'real','inner','..','..','real','target'))!r}))==('filesystem',{real_target!r})
+assert _fixture_canonical_target('child.bin',portable_dir_fd)==('filesystem',{child_file!r})
 try:_fixture_canonical_target('child.bin',portable_dir_fd+1)
 except RuntimeError:pass
 else:raise AssertionError('invalid dir_fd accepted')
+def _assert_descriptor_refused(_descriptor,_reason):
+ try:_fixture_descriptor_target(_descriptor,_reason)
+ except (OSError,RuntimeError):return
+ raise AssertionError(_reason+' accepted')
+_assert_descriptor_refused(1000000,'invalid_descriptor')
+import socket as _fixture_socket
+_socket=_fixture_socket.socket()
+try:_assert_descriptor_refused(_socket.fileno(),'socket_descriptor')
+finally:_socket.close()
+_original_readlink=_fixture_audit_os.readlink;_original_fstat=_fixture_audit_os.fstat
+_synthetic={{1000001:('pipe:[1000001]',_fixture_audit_os.stat({default_file!r})),
+ 1000002:('anon_inode:[eventpoll]',_fixture_audit_os.stat({default_file!r})),
+ 1000003:({default_file!r}+' (deleted)',_fixture_audit_os.stat({default_file!r}))}}
+def _synthetic_readlink(_filename):
+ _descriptor=int(_filename.rsplit('/',1)[1])
+ if _descriptor in _synthetic:return _synthetic[_descriptor][0]
+ return _original_readlink(_filename)
+def _synthetic_fstat(_descriptor):
+ if _descriptor in _synthetic:return _synthetic[_descriptor][1]
+ return _original_fstat(_descriptor)
+_fixture_audit_os.readlink=_synthetic_readlink;_fixture_audit_os.fstat=_synthetic_fstat
+try:
+ _assert_descriptor_refused(1000001,'mismatched_pipe_descriptor')
+ _assert_descriptor_refused(1000002,'anon_inode_descriptor')
+ _assert_descriptor_refused(1000003,'deleted_descriptor')
+finally:_fixture_audit_os.readlink=_original_readlink;_fixture_audit_os.fstat=_original_fstat
 _fd=_fixture_audit_os.open({default_file!r},_fixture_audit_os.O_RDONLY)
 try:assert _fixture_audit_os.read(_fd,32)==b'default'
 finally:_fixture_audit_os.close(_fd)
 _fd=_fixture_audit_os.open('child.bin',_fixture_audit_os.O_RDONLY,dir_fd=portable_dir_fd)
 try:assert _fixture_audit_os.read(_fd,32)==b'dir-fd'
 finally:_fixture_audit_os.close(_fd)
-assert any(_path=={default_file!r} and _dir is None for _path,_dir in portable_calls)
-assert any(_path=='child.bin' and _dir==portable_dir_fd for _path,_dir in portable_calls)
+_fd=_fixture_audit_os.open({mode_file!r},_fixture_audit_os.O_WRONLY|_fixture_audit_os.O_CREAT|_fixture_audit_os.O_EXCL,mode=0o600)
+_fixture_audit_os.close(_fd)
+assert any(_path=={default_file!r} and _dir is None for _path,_dir,_mode in portable_calls)
+assert any(_path=='child.bin' and _dir==portable_dir_fd for _path,_dir,_mode in portable_calls)
+assert any(_path=={mode_file!r} and _dir is None and _mode==0o600 for _path,_dir,_mode in portable_calls)
+_pipe_before=len([_entry for _entry in _fixture_audit_records if _entry['targetKind']=='pipe'])
+_read_fd,_write_fd=_fixture_audit_os.pipe();_fixture_audit_os.write(_write_fd,b'wrapped-pipe');_fixture_audit_os.close(_write_fd)
+with _fixture_audit_os.fdopen(_read_fd,'rb') as _pipe_stream:assert _pipe_stream.read()==b'wrapped-pipe'
+_pipe_after_wrap=len([_entry for _entry in _fixture_audit_records if _entry['targetKind']=='pipe']);assert _pipe_after_wrap>_pipe_before
+import subprocess as _fixture_subprocess
+_pipe_before_popen=len([_entry for _entry in _fixture_audit_records if _entry['targetKind']=='pipe'])
+_process=_fixture_subprocess.Popen([_fixture_audit_sys.executable,'-I','-S','-B','-c','import sys;sys.stdout.buffer.write(sys.stdin.buffer.read())'],stdin=_fixture_subprocess.PIPE,stdout=_fixture_subprocess.PIPE,stderr=_fixture_subprocess.PIPE)
+_stdout,_stderr=_process.communicate(b'popen-pipe')
+assert _process.returncode==0 and _stdout==b'popen-pipe' and _stderr==b''
+assert len([_entry for _entry in _fixture_audit_records if _entry['targetKind']=='pipe'])>_pipe_before_popen
+for _entry in _fixture_audit_records:
+ assert set(_entry)=={{'api','pid','target','targetKind'}} and _entry['pid']==_fixture_audit_os.getpid()
+ assert _entry['api'] in ('open','os.open') and _entry['targetKind'] in ('filesystem','pipe')
+ if _entry['targetKind']=='filesystem':
+  assert _fixture_audit_os.path.isabs(_entry['target']) and _entry['target']==_fixture_audit_os.path.realpath(_entry['target'])
+  assert not _fixture_forbidden_target('filesystem',_entry['target'])
+ else:assert _entry['target'].startswith('pipe:[') and _entry['target'].endswith(']') and _entry['target'][6:-1].isdigit()
 '''.encode()
 base=b'#!/usr/bin/python3\n'+exercise
 observer_raw=instrument(base);launcher_raw=instrument(b'#!/usr/bin/python3\nVALUE=1\n')
@@ -724,18 +791,44 @@ pathlib.Path(observer).parent.mkdir(parents=True);pathlib.Path(launcher).parent.
 pathlib.Path(observer).write_bytes(observer_raw);pathlib.Path(launcher).write_bytes(launcher_raw)
 sys.argv=[observer,'collect-context'];exec(compile(observer_raw,observer,'exec'),globals())
 if os.name=='posix':actual_fstat(portable_dir_fd);os.close(portable_dir_fd)
-print(json.dumps({'generatedModulesCompiled':True,'defaultDelegated':True,'dirFdDelegated':True,
+print(json.dumps({'generatedModulesCompiled':True,'defaultDelegated':True,'dirFdDelegated':True,'keywordModeDelegated':True,
+ 'pipeWrappingRecorded':True,'popenPipeSetupRecorded':True,'rejectedDescriptorClasses':['invalid','mismatched-pipe','socket','anon-inode','deleted'],
+ 'auditLog':_fixture_audit_log,'auditPid':_fixture_audit_os.getpid(),
  'symlinkDotDotResolved':True,'platformProcModel':'native' if os.name=='posix' else 'portable-injected',
  'symlinkModel':'native' if os.name=='posix' else 'component-preserving-injected'},sort_keys=True,separators=(',',':')))
 `, path.join(repo, 'tests/unit/payload-preparation-authentication.test.mjs'), root], {
       encoding: 'utf8', timeout: 30000, maxBuffer: 4096,
     });
     assert.equal(generated.status, 0, generated.stderr || generated.stdout);
-    assert.deepEqual(JSON.parse(generated.stdout), {
+    const evidence = JSON.parse(generated.stdout);
+    const actualAuditDir = statSync(path.dirname(evidence.auditLog), { bigint: true });
+    const expectedAuditDir = statSync(path.join(root, 'audits'), { bigint: true });
+    assert.equal(actualAuditDir.dev, expectedAuditDir.dev);
+    assert.equal(actualAuditDir.ino, expectedAuditDir.ino);
+    const auditLines = readFileSync(evidence.auditLog, 'utf8').split('\n');
+    assert.equal(auditLines.pop(), '');
+    assert.ok(auditLines.length > 0);
+    const auditRecords = auditLines.map((line) => JSON.parse(line));
+    for (const record of auditRecords) {
+      assert.deepEqual(Object.keys(record), ['api', 'pid', 'target', 'targetKind']);
+      assert.equal(record.pid, evidence.auditPid);
+      assert.ok(record.api === 'open' || record.api === 'os.open');
+      assert.ok(record.targetKind === 'filesystem' || record.targetKind === 'pipe');
+      if (record.targetKind === 'filesystem') assert.ok(path.isAbsolute(record.target));
+      else assert.match(record.target, /^pipe:\[[0-9]+\]$/);
+    }
+    assert.ok(auditRecords.some((record) => record.targetKind === 'pipe'));
+    delete evidence.auditLog;
+    delete evidence.auditPid;
+    assert.deepEqual(evidence, {
       defaultDelegated: true,
       dirFdDelegated: true,
       generatedModulesCompiled: true,
+      keywordModeDelegated: true,
+      pipeWrappingRecorded: true,
       platformProcModel: process.platform === 'win32' ? 'portable-injected' : 'native',
+      popenPipeSetupRecorded: true,
+      rejectedDescriptorClasses: ['invalid', 'mismatched-pipe', 'socket', 'anon-inode', 'deleted'],
       symlinkModel: process.platform === 'win32' ? 'component-preserving-injected' : 'native',
       symlinkDotDotResolved: true,
     });
