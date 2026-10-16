@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -271,7 +272,7 @@ test('native Linux root qualifies the production context envelope on an isolated
     try {
       sandbox = mkdtempSync('/root/payload-context-observer-');
       result = spawnSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', String.raw`
-import os,sys,pathlib,fcntl,importlib.util,shutil,json,hashlib,time
+import os,sys,pathlib,fcntl,importlib.util,shutil,json,hashlib,time,stat
 assert sys.platform=='linux' and os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
 assert sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode
 repo=pathlib.Path(sys.argv[1]);root=sys.argv[2];source_path=repo/'ops/prepare-cms-authenticated.py'
@@ -284,19 +285,21 @@ parent_audit_fd=real_os_open(audit_log,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_APP
 os.fchmod(parent_audit_fd,0o600);audit_active=[True];audit_state=[None]
 production_roots=tuple(os.path.realpath(os.path.abspath(os.path.normpath(item))) for item in
  ('/opt/ownerinc','/etc/ownerinc','/var/lib/ownerinc','/usr/local/libexec'))
+def descriptor_target(descriptor,reason,require_directory=False):
+ try:target=os.readlink('/proc/self/fd/'+str(descriptor))
+ except OSError as error:raise RuntimeError(reason) from error
+ if not os.path.isabs(target) or target.endswith(' (deleted)'):raise RuntimeError(reason)
+ if require_directory and not stat.S_ISDIR(os.fstat(descriptor).st_mode):raise RuntimeError(reason)
+ return os.path.realpath(target)
 def canonical_target(filename,dir_fd=None):
  if isinstance(filename,int):
-  descriptor='/proc/self/fd/'+str(filename);target=os.path.realpath(descriptor)
-  if target==descriptor:raise RuntimeError('unresolved_open_descriptor')
-  return target
+  return descriptor_target(filename,'unresolved_open_descriptor')
  value=os.fsdecode(filename)
  if not os.path.isabs(value):
   if dir_fd is None:base=os.getcwd()
-  else:
-   descriptor='/proc/self/fd/'+str(dir_fd);base=os.path.realpath(descriptor)
-   if base==descriptor:raise RuntimeError('unresolved_parent_dir_fd')
+  else:base=descriptor_target(dir_fd,'unresolved_parent_dir_fd',True)
   value=os.path.join(base,value)
- return os.path.realpath(os.path.abspath(os.path.normpath(value)))
+ return os.path.realpath(value)
 def forbidden_target(target):
  return any(os.path.commonpath((target,item))==item for item in production_roots)
 def append_parent_open(api,target):
@@ -340,8 +343,8 @@ def redirect(raw):
  return raw
 def instrument(raw):
  first,separator,rest=raw.partition(b'\n');assert separator
- hook=f'''import os as _fixture_audit_os,sys as _fixture_audit_sys,json as _fixture_audit_json
-if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.realpath(_fixture_audit_sys.argv[0])=={(prefixes['/opt/ownerinc']+'/lib/payload-preparation/ops/payload-production-observer.py')!r} and not getattr(_fixture_audit_sys,'_payload_fixture_open_audit',False):
+ hook=f'''import os as _fixture_audit_os,sys as _fixture_audit_sys,json as _fixture_audit_json,stat as _fixture_audit_stat
+if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.realpath(_fixture_audit_sys.argv[0])==_fixture_audit_os.path.realpath({(prefixes['/opt/ownerinc']+'/lib/payload-preparation/ops/payload-production-observer.py')!r}) and not getattr(_fixture_audit_sys,'_payload_fixture_open_audit',False):
  _fixture_audit_sys._payload_fixture_open_audit=True
  _fixture_real_os_open=_fixture_audit_os.open
  _fixture_audit_log={audit_dir!r}+'/child-'+str(_fixture_audit_os.getpid())+'.jsonl'
@@ -349,19 +352,21 @@ if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.r
  _fixture_audit_os.fchmod(_fixture_log_fd,0o600);_fixture_audit_os.close(_fixture_log_fd)
  _fixture_audit_state=[None]
  _fixture_production_roots={production_roots!r}
+ def _fixture_descriptor_target(_descriptor,_reason,_require_directory=False):
+  try:_target=_fixture_audit_os.readlink('/proc/self/fd/'+str(_descriptor))
+  except OSError as _error:raise RuntimeError(_reason) from _error
+  if not _fixture_audit_os.path.isabs(_target) or _target.endswith(' (deleted)'):raise RuntimeError(_reason)
+  if _require_directory and not _fixture_audit_stat.S_ISDIR(_fixture_audit_os.fstat(_descriptor).st_mode):raise RuntimeError(_reason)
+  return _fixture_audit_os.path.realpath(_target)
  def _fixture_canonical_target(_filename,_dir_fd=None):
   if isinstance(_filename,int):
-   _descriptor='/proc/self/fd/'+str(_filename);_target=_fixture_audit_os.path.realpath(_descriptor)
-   if _target==_descriptor:raise RuntimeError('unresolved_child_open_descriptor')
-   return _target
+   return _fixture_descriptor_target(_filename,'unresolved_child_open_descriptor')
   _value=_fixture_audit_os.fsdecode(_filename)
- if not _fixture_audit_os.path.isabs(_value):
+  if not _fixture_audit_os.path.isabs(_value):
    if _dir_fd is None:_base=_fixture_audit_os.getcwd()
-   else:
-    _descriptor='/proc/self/fd/'+str(_dir_fd);_base=_fixture_audit_os.path.realpath(_descriptor)
-    if _base==_descriptor:raise RuntimeError('unresolved_child_dir_fd')
+   else:_base=_fixture_descriptor_target(_dir_fd,'unresolved_child_dir_fd',True)
    _value=_fixture_audit_os.path.join(_base,_value)
-  return _fixture_audit_os.path.realpath(_fixture_audit_os.path.abspath(_fixture_audit_os.path.normpath(_value)))
+  return _fixture_audit_os.path.realpath(_value)
  def _fixture_forbidden_target(_target):
   return any(_fixture_audit_os.path.commonpath((_target,_root))==_root for _root in _fixture_production_roots)
  def _fixture_append_open(_api,_target):
@@ -386,9 +391,10 @@ if _fixture_audit_sys.argv[1:]==['collect-context'] and _fixture_audit_os.path.r
   if _event=='open':_fixture_append_open('open',_fixture_canonical_target(_args[0]))
  _fixture_audit_sys.addaudithook(_fixture_record_open)
  def _fixture_audited_os_open(_filename,_flags,_mode=0o777,*,dir_fd=None):
-  _target=_fixture_canonical_target(_filename,dir_fd);_fixture_append_open('os.open',_target)
+  _dir_fd=dir_fd
+  _target=_fixture_canonical_target(_filename,_dir_fd);_fixture_append_open('os.open',_target)
   _state={{'mode':'os.open','path':_fixture_audit_os.fsdecode(_filename),'seen':False}};_fixture_audit_state[0]=_state
-  try:return _fixture_real_os_open(_filename,_flags,_mode,dir_fd=dir_fd)
+  try:return _fixture_real_os_open(_filename,_flags,_mode,dir_fd=_dir_fd)
   finally:
    _fixture_audit_state[0]=None
    if not _state['seen']:raise RuntimeError('missing_child_os_open_audit_event')
@@ -591,7 +597,7 @@ pathlib.Path({timeout_survived!r}).write_text("timeout missing")
    entry=json.loads(line.decode('utf-8'))
    assert set(entry)=={'api','pid','target'} and canonical(entry)==line
    assert entry['pid']==expected_pid and entry['api'] in ('open','os.open')
-   assert entry['target']==os.path.realpath(os.path.abspath(os.path.normpath(entry['target'])))
+   assert os.path.isabs(entry['target']) and entry['target']==os.path.realpath(entry['target'])
    assert not forbidden_target(entry['target']),entry
    events.append(entry)
   assert events and {'open','os.open'}<={entry['api'] for entry in events}
@@ -603,7 +609,7 @@ pathlib.Path({timeout_survived!r}).write_text("timeout missing")
  assert set(os.listdir(audit_dir))==expected_logs
  child_events={child['pid']:parse_audit(audit_dir+'/child-'+str(child['pid'])+'.jsonl',child['pid']) for child in instrumented_children}
  successful_targets={entry['target'] for entry in child_events[successful_child['pid']]}
- assert m.LAUNCHER in successful_targets and '/proc/self/stat' in successful_targets
+ assert m.LAUNCHER in successful_targets and '/proc/'+str(successful_child['pid'])+'/stat' in successful_targets
 finally:
  audit_active[0]=False
  os.open=real_os_open
@@ -634,6 +640,109 @@ print(json.dumps(proof,sort_keys=True,separators=(',',':')))
     });
     console.log(result.stdout.trim());
   });
+
+test('generated child audit modules compile and wrapped os.open delegates default and dir_fd calls', () => {
+  let root;
+  try {
+    root = mkdtempSync(path.join(tmpdir(), 'payload-generated-audit-'));
+    const real = path.join(root, 'real');
+    mkdirSync(path.join(real, 'inner'), { recursive: true });
+    symlinkSync(path.join(real, 'inner'), path.join(root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
+    const generated = spawnSync(python, ['-I', '-S', '-B', '-c', String.raw`
+import json,os,pathlib,stat,sys
+source=pathlib.Path(sys.argv[1]).read_text()
+native=source.index('\nimport os,sys,pathlib,fcntl,importlib.util,shutil,json,hashlib,time,stat\n')+1
+start=source.index('def instrument(raw):',native);end=source.index('def mkdir(filename,mode=0o755):',start)
+root=os.path.realpath(sys.argv[2]);audit_dir=os.path.join(root,'audits');os.mkdir(audit_dir)
+prefixes={'/opt/ownerinc':os.path.join(root,'redirected','opt','ownerinc'),
+ '/etc/ownerinc':os.path.join(root,'redirected','etc','ownerinc'),
+ '/var/lib/ownerinc':os.path.join(root,'redirected','var','lib','ownerinc'),
+ '/usr/local/libexec':os.path.join(root,'redirected','usr','local','libexec')}
+production_roots=tuple(os.path.realpath(item) for item in ('/opt/ownerinc','/etc/ownerinc','/var/lib/ownerinc','/usr/local/libexec'))
+namespace={'audit_dir':audit_dir,'prefixes':prefixes,'production_roots':production_roots}
+exec(compile(source[start:end],'<actual-instrument-source>','exec'),namespace)
+instrument=namespace['instrument']
+observer=prefixes['/opt/ownerinc']+'/lib/payload-preparation/ops/payload-production-observer.py'
+launcher=prefixes['/usr/local/libexec']+'/ownerinc-payload-prepare.py'
+default_file=os.path.join(root,'default.bin');dir_base=os.path.join(root,'dir-base');child_file=os.path.join(dir_base,'child.bin')
+real_target=os.path.join(root,'real','target');lexical_wrong=os.path.join(root,'target')
+os.mkdir(dir_base);pathlib.Path(default_file).write_bytes(b'default');pathlib.Path(child_file).write_bytes(b'dir-fd')
+pathlib.Path(real_target).write_bytes(b'real-target');pathlib.Path(lexical_wrong).write_bytes(b'lexical-wrong')
+portable_calls=[];actual_open=os.open;actual_readlink=os.readlink;actual_fstat=os.fstat
+if os.open in os.supports_dir_fd and os.name=='posix':
+ portable_dir_fd=actual_open(dir_base,os.O_RDONLY|getattr(os,'O_DIRECTORY',0))
+ def portable_open(filename,flags,mode=0o777,*,dir_fd=None):
+  portable_calls.append((os.fsdecode(filename),dir_fd))
+  return actual_open(filename,flags,mode,dir_fd=dir_fd)
+else:
+ portable_dir_fd=731
+ def portable_open(filename,flags,mode=0o777,*,dir_fd=None):
+  portable_calls.append((os.fsdecode(filename),dir_fd))
+  if dir_fd is None:return actual_open(filename,flags,mode)
+  if dir_fd!=portable_dir_fd:raise OSError('unexpected portable dir_fd')
+  effective=os.path.join(dir_base,os.fsdecode(filename))
+  state=globals().get('_fixture_audit_state',[None])[0]
+  if state is not None:state['path']=effective
+  return actual_open(effective,flags,mode)
+ def portable_readlink(filename):
+  if filename=='/proc/self/fd/'+str(portable_dir_fd):return dir_base
+  if filename.startswith('/proc/self/fd/'):raise OSError('invalid portable descriptor')
+  return actual_readlink(filename)
+ def portable_fstat(descriptor):
+  if descriptor==portable_dir_fd:return os.stat(dir_base)
+  return actual_fstat(descriptor)
+ os.readlink=portable_readlink;os.fstat=portable_fstat
+os.open=portable_open
+symlink_dotdot=os.path.join(root,'link','..','target')
+exercise=f'''if _fixture_audit_os.name=='nt':
+ _original_realpath=_fixture_audit_os.path.realpath
+ def _component_preserving_realpath(_value):
+  if _value=={symlink_dotdot!r}:return {real_target!r}
+  return _original_realpath(_value)
+ _fixture_audit_os.path.realpath=_component_preserving_realpath
+ try:assert _fixture_canonical_target({symlink_dotdot!r})=={real_target!r}
+ finally:_fixture_audit_os.path.realpath=_original_realpath
+else:assert _fixture_canonical_target({symlink_dotdot!r})=={real_target!r}
+assert _fixture_canonical_target(_fixture_audit_os.fsencode({(os.path.join(root,'real','inner','..','..','real','target'))!r}))=={real_target!r}
+assert _fixture_canonical_target('child.bin',portable_dir_fd)=={child_file!r}
+try:_fixture_canonical_target('child.bin',portable_dir_fd+1)
+except RuntimeError:pass
+else:raise AssertionError('invalid dir_fd accepted')
+_fd=_fixture_audit_os.open({default_file!r},_fixture_audit_os.O_RDONLY)
+try:assert _fixture_audit_os.read(_fd,32)==b'default'
+finally:_fixture_audit_os.close(_fd)
+_fd=_fixture_audit_os.open('child.bin',_fixture_audit_os.O_RDONLY,dir_fd=portable_dir_fd)
+try:assert _fixture_audit_os.read(_fd,32)==b'dir-fd'
+finally:_fixture_audit_os.close(_fd)
+assert any(_path=={default_file!r} and _dir is None for _path,_dir in portable_calls)
+assert any(_path=='child.bin' and _dir==portable_dir_fd for _path,_dir in portable_calls)
+'''.encode()
+base=b'#!/usr/bin/python3\n'+exercise
+observer_raw=instrument(base);launcher_raw=instrument(b'#!/usr/bin/python3\nVALUE=1\n')
+compile(observer_raw,observer,'exec');compile(launcher_raw,launcher,'exec')
+pathlib.Path(observer).parent.mkdir(parents=True);pathlib.Path(launcher).parent.mkdir(parents=True)
+pathlib.Path(observer).write_bytes(observer_raw);pathlib.Path(launcher).write_bytes(launcher_raw)
+sys.argv=[observer,'collect-context'];exec(compile(observer_raw,observer,'exec'),globals())
+if os.name=='posix':actual_fstat(portable_dir_fd);os.close(portable_dir_fd)
+print(json.dumps({'generatedModulesCompiled':True,'defaultDelegated':True,'dirFdDelegated':True,
+ 'symlinkDotDotResolved':True,'platformProcModel':'native' if os.name=='posix' else 'portable-injected',
+ 'symlinkModel':'native' if os.name=='posix' else 'component-preserving-injected'},sort_keys=True,separators=(',',':')))
+`, path.join(repo, 'tests/unit/payload-preparation-authentication.test.mjs'), root], {
+      encoding: 'utf8', timeout: 30000, maxBuffer: 4096,
+    });
+    assert.equal(generated.status, 0, generated.stderr || generated.stdout);
+    assert.deepEqual(JSON.parse(generated.stdout), {
+      defaultDelegated: true,
+      dirFdDelegated: true,
+      generatedModulesCompiled: true,
+      platformProcModel: process.platform === 'win32' ? 'portable-injected' : 'native',
+      symlinkModel: process.platform === 'win32' ? 'component-preserving-injected' : 'native',
+      symlinkDotDotResolved: true,
+    });
+  } finally {
+    if (root) rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('candidate-only CI gate retains exact native preparation discovery without widening deployment', () => {
   const workflow = readFileSync(path.join(repo, '.github/workflows/ci.yml'), 'utf8');
