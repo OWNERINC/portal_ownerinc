@@ -6,10 +6,12 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import sharp from 'sharp'
+import { PgDialect } from 'drizzle-orm/pg-core'
 import type { Payload, PayloadRequest } from 'payload'
 import { portalPageUploadEndpoints } from '../../../src/endpoints/portal-page-uploads'
 import { portalPageMediaMutationActor, portalPageUploadAdvisoryKey } from '../../../src/portal-pages/persistence'
-import type { PortalPageUploadCleanupAdapter, PortalPageUploadCleanupItem } from '../../../src/portal-pages/upload-cleanup-queue'
+import { portalPageUploadRetryDelay, type PortalPageUploadCleanupAdapter, type PortalPageUploadCleanupItem }
+  from '../../../src/portal-pages/upload-cleanup-queue'
 import { createPortalPageUploadTransactionAdapter } from '../../fixtures/portal-page-upload-transaction-adapter'
 import {
   createPortalPageUploadService,
@@ -21,6 +23,7 @@ import {
   writePortalPageBytesFully,
 } from '../../../src/portal-pages/upload-service'
 import { createPortalPageStorageKey } from '../../../src/portal-pages/validation'
+import { withCmsTransaction } from '../../../src/publication/transaction'
 
 const MiB = 1024 * 1024
 const actor = 'editor-1'
@@ -80,6 +83,7 @@ async function fixture(options: { actorUid?: string; freeBytes?: bigint; statfsF
   type QueueRecord = PortalPageUploadCleanupItem & { status: 'pending' | 'done'; lastErrorCode?: string }
   const queue = new Map<string, QueueRecord>()
   for (const id of rows.keys()) queue.set(id, { uploadID: id, attemptCount: 0, nextAttemptAt: Number.MAX_SAFE_INTEGER, status: 'pending' })
+  const dialect = new PgDialect()
   const cloneMap = <T extends object>(source: Map<string, T>) => new Map([...source].map(([id, value]) => [id, { ...value }]))
   const transactional = async <T>(work: () => Promise<T>): Promise<T> => {
     const rowSnapshot = cloneMap(rows), queueSnapshot = cloneMap(queue)
@@ -126,9 +130,44 @@ async function fixture(options: { actorUid?: string; freeBytes?: bigint; statfsF
       if (entry) queue.set(id, { ...entry, status: 'pending', nextAttemptAt: next, lastErrorCode: undefined })
     },
   }
-  const execute = async (_query: unknown) => ({ rows: [...rows.values()].filter(row => row.state === 'uploading').map(row => ({
-    id: row.id, uploaded_by: row.uploadedBy, filesize: row.filesize,
-  })) })
+  const execute = async (query: unknown) => {
+    const compiled = dialect.sqlToQuery(query as never)
+    const normalized = compiled.sql.replace(/\s+/gu, ' ').trim()
+    const params = compiled.params
+    if (normalized.startsWith('INSERT INTO portal_page_upload_cleanup')) {
+      const id = String(params[0]).toLowerCase()
+      const timestamp = params[1] instanceof Date ? params[1].getTime() : Number(params[1])
+      if (!queue.has(id)) queue.set(id, { uploadID: id, status: 'pending', attemptCount: 0, nextAttemptAt: timestamp })
+      return { rows: [] }
+    }
+    if (normalized.startsWith('DELETE FROM portal_page_upload_cleanup')) {
+      queue.delete(String(params[0]).toLowerCase())
+      return { rows: [] }
+    }
+    if (normalized.startsWith('UPDATE portal_page_upload_cleanup SET status = \'pending\'')) {
+      if (normalized.includes('attempt_count = $2, last_error_code = $3')) {
+        const id = String(params[3]).toLowerCase()
+        const entry = queue.get(id)
+        if (entry) queue.set(id, { ...entry, status: 'pending', nextAttemptAt: Number(params[0]),
+          attemptCount: Number(params[1]), lastErrorCode: String(params[2]) })
+      } else {
+        const id = String(params[1]).toLowerCase()
+        const entry = queue.get(id)
+        if (entry) queue.set(id, { ...entry, status: 'pending', nextAttemptAt: params[0] instanceof Date ? params[0].getTime() : Number(params[0]),
+          attemptCount: normalized.includes('attempt_count = 0') ? 0 : entry.attemptCount, lastErrorCode: undefined })
+      }
+      return { rows: [] }
+    }
+    if (normalized.startsWith('SELECT status, attempt_count, extract(epoch FROM next_attempt_at) * 1000 AS next_attempt_ms')) {
+      const id = String(compiled.params[0]).toLowerCase()
+      const entry = queue.get(id)
+      return { rows: entry ? [{ status: entry.status, attempt_count: entry.attemptCount,
+        next_attempt_ms: entry.nextAttemptAt, last_error_code: entry.lastErrorCode ?? null }] : [] }
+    }
+    return { rows: [...rows.values()].filter(row => row.state === 'uploading').map(row => ({
+      id: row.id, uploaded_by: row.uploadedBy, filesize: row.filesize,
+    })) }
+  }
   const sessions: Record<string, { db: { execute: (query: unknown) => Promise<unknown> } }> = { live: { db: { execute } } }
   const payload = {
     db: { sessions,
@@ -239,17 +278,70 @@ test('chunk ingress stores only a token hash, validates owner/token, and permits
   assert.equal((await readFile(path.join(incoming, `${started.id}-0.chunk`))).equals(bytes), true)
 })
 
-test('completion streams immutable bytes, hashes exactly, and concurrent callers reconcile to the same completed result', async t => {
+test('chunk body cleanup is exclusive and crash recovery removes only the validated deterministic partial', async t => {
+  const f = await transactionFixture(); t.after(f.dispose)
+  const uploads = f.service(), bytes = pdfBytes(), started = await begin(uploads, bytes)
+  const incoming = path.join(f.uploadDir, 'portal-pages', '.incoming')
+  const partial = path.join(incoming, `${started.id}-0.part`)
+  const unrelated = path.join(incoming, 'unrelated.part')
+
+  await writeFile(partial, 'not-created-by-this-request', { mode: 0o600 })
+  await assert.rejects(sendChunk(uploads, started.id, started.token, bytes), (error: unknown) =>
+    error instanceof PortalPageUploadError && error.code === 'upload_busy')
+  assert.equal(await readFile(partial, 'utf8'), 'not-created-by-this-request',
+    'exclusive-create failure never removes a partial the request did not create')
+  await rm(partial)
+
+  const expectedLength = String(bytes.length)
+  const headers = new Headers({ 'x-portal-page-upload-token': started.token,
+    'content-type': 'application/octet-stream', 'content-length': expectedLength })
+  await assert.rejects(uploads.putChunk(started.id, '0', headers,
+    new Response(Uint8Array.from(bytes.subarray(0, bytes.length - 1))).body), (error: unknown) =>
+    error instanceof PortalPageUploadError && error.code === 'invalid_chunk_size')
+  assert.equal((await readdir(incoming)).includes(`${started.id}-0.part`), false, 'short owned body removes its exact partial')
+  await assert.rejects(uploads.putChunk(started.id, '0', headers,
+    new Response(Uint8Array.from(Buffer.concat([bytes, Buffer.from([0])]))).body), (error: unknown) =>
+    error instanceof PortalPageUploadError && error.code === 'invalid_chunk_size')
+  assert.equal((await readdir(incoming)).includes(`${started.id}-0.part`), false, 'oversized owned body removes its exact partial')
+
+  let deadPID: number | undefined
+  for (let offset = 1; offset <= 10; offset++) {
+    const candidate = process.pid + 1_000_000 + offset
+    try { process.kill(candidate, 0) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') { deadPID = candidate; break }
+    }
+  }
+  assert.ok(deadPID, 'fixture found a PID proven absent by the operating system')
+  await writeFile(path.join(incoming, `u-${started.id}.lock`), JSON.stringify({ version: 1, pid: deadPID,
+    processInstanceNonce: 'f'.repeat(48), processStartIdentity: 'crashed-process',
+    createdAt: new Date().toISOString(), nonce: 'c'.repeat(32) }), { mode: 0o600 })
+  await writeFile(partial, 'crashed partial body', { mode: 0o600 })
+  await writeFile(unrelated, 'untouched')
+
+  assert.equal((await sendChunk(uploads, started.id, started.token, bytes)).duplicate, false)
+  assert.deepEqual(await readFile(path.join(incoming, `${started.id}-0.chunk`)), bytes,
+    'a process-identity-proven stale owner permits recovery of the exact canonical partial')
+  assert.equal((await readdir(incoming)).includes(`${started.id}-0.part`), false)
+  assert.equal(await readFile(unrelated, 'utf8'), 'untouched', 'crash cleanup does not discover or delete arbitrary partial names')
+})
+
+test('completion streams immutable bytes, confirms fresh metadata, and defers a concurrent caller while owned', async t => {
   const f = await transactionFixture(); t.after(f.dispose)
   const uploads = f.service(), bytes = pdfBytes(), started = await begin(uploads, bytes)
   await sendChunk(uploads, started.id, started.token, bytes)
   const firstContext = f.service()
   const concurrentUploads = f.service()
   const traceStart = f.trace.length
-  const [first, second] = await Promise.all([
-    firstContext.complete(started.id, { token: started.token }),
-    concurrentUploads.complete(started.id, { token: started.token }),
-  ])
+  const firstCommit = deferred<void>(), continueFirst = deferred<void>()
+  f.afterNextCommit(async () => { firstCommit.resolve(); await continueFirst.promise },
+    (_transactionID, committedRows) => committedRows.get(started.id)?.state === 'complete')
+  const firstPromise = firstContext.complete(started.id, { token: started.token })
+  await firstCommit.promise
+  await assert.rejects(concurrentUploads.complete(started.id, { token: started.token }), (error: unknown) =>
+    error instanceof PortalPageUploadError && error.code === 'upload_busy' && error.status === 409)
+  continueFirst.resolve()
+  const first = await firstPromise
+  const second = await concurrentUploads.complete(started.id, { token: started.token })
   assert.deepEqual(first, second)
   assert.equal(first.sha256, createHash('sha256').update(bytes).digest('hex'))
   assert.equal(first.bytes, bytes.length)
@@ -263,11 +355,9 @@ test('completion streams immutable bytes, hashes exactly, and concurrent callers
   assert.equal(incoming.some(name => name === `${started.id}-0.chunk`), false)
   const completedLockEvents = f.trace.slice(traceStart).filter(event => event.kind === 'advisory-lock' &&
     event.lockClass === 'portal-page-upload')
-  assert.equal(completedLockEvents.length, 2, 'both actual complete calls execute the production per-upload advisory SQL')
-  assert.ok(completedLockEvents.every(event => event.lockKey === expectedUploadLockKey(started.id)),
-    'both complete sessions lock the same validated upload UUID')
-  assert.notEqual(completedLockEvents[0]!.transactionID, completedLockEvents[1]!.transactionID,
-    'concurrent complete calls own independent Payload sessions')
+  assert.equal(completedLockEvents.length, 5, 'complete, busy competitor, retry, and fresh confirmations use the production upload lock')
+  assert.ok(completedLockEvents.every(event => event.lockKey === expectedUploadLockKey(started.id)))
+  assert.equal(new Set(completedLockEvents.map(event => event.transactionID)).size, 5)
   assert.equal(f.activeSessionIDs().length, 0)
   await assert.rejects(uploads.cancel(started.id, { token: started.token }), (error: unknown) =>
     error instanceof PortalPageUploadError && error.code === 'media_already_complete')
@@ -320,6 +410,9 @@ test('cleanup defers at the committed-init/pre-manifest window while init retain
   assert.ok(f.rows.has(id), 'cleanup did not delete the committed media row')
   const deferredUntil = f.queue.get(id)!.nextAttemptAt
   assert.ok(deferredUntil !== null && deferredUntil > Date.now(), 'cleanup defers the live owner')
+  assert.equal(f.queue.get(id)?.attemptCount, 1)
+  assert.equal(f.queue.get(id)?.lastErrorCode, 'cleanup_failed')
+  assert.ok(deferredUntil! <= Date.now() + portalPageUploadRetryDelay(1), 'init accepts only the bounded sanitized deferral')
   await assert.rejects(readFile(manifestPath), { code: 'ENOENT' })
   assert.ok(f.trace.some(event => event.transactionID === ownerTransaction && event.kind === 'commit'))
   assertUploadLockOrder(f.trace)
@@ -380,7 +473,7 @@ test('cleanup recovers a committed init after its filesystem owner process disap
   assert.deepEqual(f.activeSessionIDs(), [])
 })
 
-test('cancellation releases its first transaction before cleanup races, then reacquires locks in canonical order', async t => {
+test('cancellation retains filesystem ownership through delete commit and fresh confirmation', async t => {
   const f = await transactionFixture(); t.after(f.dispose)
   const uploads = f.service(), bytes = pdfBytes(), started = await begin(uploads, bytes)
   const firstCommit = deferred<string>()
@@ -415,10 +508,54 @@ test('cancellation releases its first transaction before cleanup races, then rea
   await assert.rejects(readFile(manifestPath), { code: 'ENOENT' })
   const cancelEvents = f.trace.slice(traceStart).filter(event => event.kind === 'advisory-lock' && event.lockClass === 'portal-page-upload' &&
     event.lockKey === expectedUploadLockKey(started.id))
-  assert.equal(cancelEvents.length, 3, 'first cancel phase, racing cleanup, and final cancel phase each use the upload key')
+  assert.equal(cancelEvents.length, 4, 'first cancel phase, racing cleanup, delete phase, and fresh confirmation each use the upload key')
   assertUploadLockOrder(f.trace)
   assert.notEqual(cancelEvents[0]!.transactionID, cancelEvents[2]!.transactionID)
   assert.ok(f.trace.some(event => event.kind === 'commit' && event.transactionID === firstTransactionID))
+  assert.deepEqual(f.activeSessionIDs(), [])
+})
+
+test('paused chunk body holds no database locks while unrelated CMS work completes and same-upload work defers', async t => {
+  const f = await transactionFixture(); t.after(f.dispose)
+  const setup = f.service(), bytes = pdfBytes(), started = await begin(setup, bytes)
+  const paused = deferred<void>(), resume = deferred<void>()
+  let didPull = false
+  const rawBody = new ReadableStream<Uint8Array>({ async pull(controller) {
+    if (didPull) return
+    didPull = true
+    paused.resolve()
+    await resume.promise
+    controller.enqueue(Uint8Array.from(bytes))
+    controller.close()
+  } })
+  const ingress = f.service()
+  const putPromise = ingress.putChunk(started.id, '0', new Headers({
+    'x-portal-page-upload-token': started.token, 'content-type': 'application/octet-stream',
+    'content-length': String(bytes.length),
+  }), rawBody)
+  await paused.promise
+
+  assert.deepEqual(f.activeSessionIDs(), [], 'the body phase retains no Payload database session')
+  const unrelatedTransaction = await withCmsTransaction(f.payload, f.req(), async transactionReq =>
+    transactionReq.transactionID)
+  assert.equal(typeof unrelatedTransaction, 'string')
+  assert.deepEqual(f.activeSessionIDs(), [], 'an unrelated CMS reference transaction finishes during the paused body')
+
+  assert.deepEqual(await ingress.cleanupExpired(), { removed: 0, unresolved: 1 },
+    'cleanup records a bounded deferral instead of waiting on the live filesystem owner')
+  await assert.rejects(ingress.complete(started.id, { token: started.token }), (error: unknown) =>
+    error instanceof PortalPageUploadError && error.code === 'upload_busy' && error.status === 409)
+  await assert.rejects(ingress.cancel(started.id, { token: started.token }), (error: unknown) =>
+    error instanceof PortalPageUploadError && error.code === 'upload_busy' && error.status === 409)
+  const partial = path.join(f.uploadDir, 'portal-pages', '.incoming', `${started.id}-0.part`)
+  assert.equal((await stat(partial)).size, 0, 'same-upload competitors leave the request-owned partial untouched')
+  assert.deepEqual(f.activeSessionIDs(), [], 'competing operations do not retain database sessions while deferred')
+
+  resume.resolve()
+  const result = await putPromise
+  assert.equal(result.duplicate, false)
+  assert.deepEqual(await readFile(path.join(f.uploadDir, 'portal-pages', '.incoming', `${started.id}-0.chunk`)), bytes)
+  await assert.rejects(readFile(partial), { code: 'ENOENT' })
   assert.deepEqual(f.activeSessionIDs(), [])
 })
 
@@ -453,17 +590,19 @@ test('two independent stale-lock reclaimers cannot remove or overlap a newly est
 
   assert.equal(await readFile(lockPath, 'utf8'), establishedOwnerText,
     'the second context cannot check-then-unlink the just-published live owner')
+  await assert.rejects(secondPromise, (error: unknown) => error instanceof PortalPageUploadError && error.code === 'upload_busy')
   assert.equal(f.trace.some(event => event.transactionID === secondTransaction && event.kind === 'advisory-lock' &&
-    event.lockClass === 'portal-page-upload'), false, 'the second session cannot reach filesystem reclaim before lock ownership')
+    event.lockClass === 'portal-page-upload'), true, 'the short phase-A transaction reaches the upload key, then defers at the live file owner')
   assertUploadLockOrder(f.trace.slice(traceStart))
 
   releaseChunkWrite.resolve()
-  const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise])
+  const firstResult = await firstPromise
   assert.equal(firstResult.duplicate, false)
-  assert.equal(secondResult.duplicate, true)
+  const secondResult = await sendChunk(second, started.id, started.token, bytes)
+  assert.equal(secondResult.duplicate, true, 'an identical retry remains a duplicate success after ownership is released')
   const uploadLocks = f.trace.slice(traceStart).filter(event => event.kind === 'advisory-lock' &&
     event.lockClass === 'portal-page-upload')
-  assert.equal(uploadLocks.length, 2, 'both actual chunk calls use the production upload-lock helper')
+  assert.equal(uploadLocks.length, 7, 'phase-A, phase-C, confirmation, and the deferred competitor all use the production upload-lock helper')
   assert.ok(uploadLocks.every(event => event.lockKey === expectedUploadLockKey(started.id)))
   assert.notEqual(uploadLocks[0]!.transactionID, uploadLocks[1]!.transactionID)
   assert.deepEqual(f.activeSessionIDs(), [])
@@ -803,6 +942,9 @@ test('database queue adapter uses page-only idempotent SQL, due ordering, savepo
     if (text.startsWith('SELECT upload_id, attempt_count')) {
       return { rows: claimID ? [{ upload_id: claimID, attempt_count: 0, next_attempt_ms: now }] : [] }
     }
+    if (text.startsWith('SELECT status, attempt_count, extract(epoch FROM next_attempt_at) * 1000 AS next_attempt_ms')) {
+      return { rows: [{ status: 'pending', attempt_count: 0, next_attempt_ms: now, last_error_code: null }] }
+    }
     return { rows: [] }
   }
   const uploads = f.service(actor, undefined, { cleanupQueueAdapter: undefined })
@@ -837,8 +979,8 @@ test('concurrent init calls in independent transactions cannot exceed actor quot
   const admitted = attempts.find(result => result.status === 'fulfilled') as PromiseFulfilledResult<{ id: string }>
   const [firstKey, secondKey] = portalPageUploadAdvisoryKey(admitted.value.id)
   const begun = events.filter(event => event.kind === 'begin').map(event => event.transactionID)
-  assert.equal(begun.length, 4, 'each actual init uses independent cleanup and admission transactions')
-  assert.equal(new Set(begun).size, 4)
+  assert.equal(begun.length, 5, 'each init attempt uses cleanup/admission transactions and the admitted init confirms in a fresh session')
+  assert.equal(new Set(begun).size, 5)
   assert.ok(events.some(event => event.kind === 'advisory-lock' && event.lockClass === 'portal-page-upload' &&
     event.lockKey === `portal-page-upload:${firstKey},${secondKey}`), 'the admitted init executes the production per-upload lock helper')
   assertUploadLockOrder(events)
@@ -848,12 +990,11 @@ test('concurrent init calls in independent transactions cannot exceed actor quot
   const cancelEvents = f.trace.slice(cancelTraceStart)
   assertUploadLockOrder(cancelEvents)
   const cancelLocks = cancelEvents.filter(event => event.kind === 'advisory-lock' && event.lockClass === 'portal-page-upload')
-  assert.equal(cancelLocks.length, 2,
-    'both cancellation transactions take CMS → upload advisory locks before filesystem ownership')
+  assert.equal(cancelLocks.length, 3,
+    'cancellation mutation, delete, and fresh confirmation take CMS → upload advisory locks')
   assert.ok(cancelLocks.every(event => event.lockKey === expectedUploadLockKey(initial.id)))
-  assert.equal(new Set(cancelLocks.map(event => event.transactionID)).size, 2,
-    'cancellation releases its first transaction before opening the final cleanup transaction')
-  assert.equal(cancelEvents.filter(event => event.kind === 'commit').length, 2)
+  assert.equal(new Set(cancelLocks.map(event => event.transactionID)).size, 3)
+  assert.equal(cancelEvents.filter(event => event.kind === 'commit').length, 3)
   assert.deepEqual(f.activeSessionIDs(), [])
 })
 
@@ -938,44 +1079,120 @@ test('actual transaction rollback after file promotion restores uploading metada
   assert.ok(f.trace.some(event => event.kind === 'rollback'), 'withCmsTransaction rolled back the actual owning session')
 })
 
-test('lost commit receipts reconcile actual uploading-init and completed-media outcomes', async t => {
+test('fresh confirmation rejects swallowed rollbacks and accepts commits whose receipt is lost', async t => {
   const now = Date.parse('2026-10-19T12:00:00.000Z')
-  const initFixture = await transactionFixture({ now }); t.after(initFixture.dispose)
-  const initUploads = initFixture.service()
-  initFixture.afterNextCommit(async () => { initFixture.loseNextCommitReceipt() }, (_id, committedRows) => committedRows.size === 1)
-  await assert.rejects(initUploads.init({ originalName: 'receipt-lost.pdf', mimeType: 'application/pdf', bytes: pdfBytes().length }),
-    /transaction_fixture_lost_commit_receipt/u)
-  const orphanID = [...initFixture.rows.keys()][0]!
-  assert.equal(initFixture.rows.get(orphanID)?.state, 'uploading', 'the init metadata/queue commit succeeded')
-  await assert.rejects(readFile(path.join(initFixture.uploadDir, 'portal-pages', '.incoming', `m-${orphanID}.json`)), { code: 'ENOENT' },
-    'init does not publish or return a token after losing the transaction receipt')
-  const orphanRecovery = await initUploads.cleanupExpired()
-  assert.deepEqual(orphanRecovery, { removed: 1, unresolved: 0 }, 'real queue reconciliation deletes the tokenless uploading row')
-  assert.equal(initFixture.rows.has(orphanID), false)
-  assert.equal(initFixture.queue.has(orphanID), false)
-  assert.deepEqual(initFixture.activeSessionIDs(), [])
+  const bytes = pdfBytes()
 
-  const completeFixture = await transactionFixture({ now }); t.after(completeFixture.dispose)
-  const completeUploads = completeFixture.service(), bytes = pdfBytes()
-  const started = await begin(completeUploads, bytes)
-  await sendChunk(completeUploads, started.id, started.token, bytes)
-  assert.ok(completeFixture.queue.has(started.id), 'the session adapter committed the init queue row')
-  completeFixture.loseNextCommitReceipt()
-  await assert.rejects(completeUploads.complete(started.id, { token: started.token }), /transaction_fixture_lost_commit_receipt/u)
-  const committedRow = completeFixture.rows.get(started.id)!
-  const target = path.join(completeFixture.uploadDir, 'portal-pages', String(committedRow.storageKey))
-  const manifestPath = path.join(completeFixture.uploadDir, 'portal-pages', '.incoming', `m-${started.id}.json`)
-  assert.equal(committedRow.state, 'complete', 'the real adapter applied the completion before losing its receipt')
-  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).state, 'renamed')
-  assert.deepEqual(await readFile(target), bytes)
+  const failedInit = await transactionFixture({ now }); t.after(failedInit.dispose)
+  failedInit.afterNextCommit(async () => { failedInit.failNextCommitBeforeApply() },
+    (_transactionID, committedRows) => committedRows.size === 0)
+  await assert.rejects(failedInit.service().init({ originalName: 'rollback.pdf', mimeType: 'application/pdf', bytes: bytes.length }),
+    (error: unknown) => error instanceof PortalPageUploadError && error.code === 'upload_unavailable')
+  assert.equal(failedInit.rows.size, 0, 'fresh confirmation prevents an init token after a swallowed rollback')
+  assert.equal(failedInit.queue.size, 0)
+  assert.equal((await readdir(path.join(failedInit.uploadDir, 'portal-pages', '.incoming'))).some(name => name.startsWith('m-')), false)
+  assert.deepEqual(failedInit.activeSessionIDs(), [])
 
-  const reconciled = await completeUploads.cleanupExpired()
-  assert.deepEqual(reconciled, { removed: 0, unresolved: 0 }, 'real cleanup reconciles the committed completion without deleting bytes')
-  assert.equal(completeFixture.rows.get(started.id)?.state, 'complete')
-  assert.equal(completeFixture.rows.get(started.id)?.sha256, createHash('sha256').update(bytes).digest('hex'))
-  assert.deepEqual(await readFile(target), bytes)
-  assert.ok(completeFixture.queue.get(started.id)!.nextAttemptAt! > now, 'completed tombstone is scheduled after retention')
-  assert.deepEqual(completeFixture.activeSessionIDs(), [])
+  const committedInit = await transactionFixture({ now }); t.after(committedInit.dispose)
+  committedInit.afterNextCommit(async () => { committedInit.loseNextCommitReceipt() },
+    (_transactionID, committedRows) => committedRows.size === 0)
+  const started = await committedInit.service().init({ originalName: 'receipt-lost.pdf', mimeType: 'application/pdf', bytes: bytes.length })
+  assert.equal(committedInit.rows.get(started.id)?.state, 'uploading')
+  assert.equal(committedInit.queue.get(started.id)?.status, 'pending')
+  assert.equal(JSON.parse(await readFile(path.join(committedInit.uploadDir, 'portal-pages', '.incoming', `m-${started.id}.json`), 'utf8')).id,
+    started.id, 'fresh committed row and queue state permit manifest publication and token return')
+  assert.deepEqual(committedInit.activeSessionIDs(), [])
+
+  const failedComplete = await transactionFixture({ now }); t.after(failedComplete.dispose)
+  const failedCompleteUploads = failedComplete.service()
+  const incomplete = await begin(failedCompleteUploads, bytes)
+  await sendChunk(failedCompleteUploads, incomplete.id, incomplete.token, bytes)
+  failedComplete.failNextCommitBeforeApply()
+  await assert.rejects(failedCompleteUploads.complete(incomplete.id, { token: incomplete.token }),
+    (error: unknown) => error instanceof PortalPageUploadError && error.code === 'upload_unavailable')
+  const incompleteRow = failedComplete.rows.get(incomplete.id)!
+  const incompleteTarget = path.join(failedComplete.uploadDir, 'portal-pages', String(incompleteRow.storageKey))
+  const incompleteManifest = JSON.parse(await readFile(path.join(failedComplete.uploadDir, 'portal-pages', '.incoming', `m-${incomplete.id}.json`), 'utf8'))
+  assert.equal(incompleteRow.state, 'uploading', 'a swallowed rollback cannot be reported as completion')
+  assert.equal(incompleteManifest.state, 'renamed', 'ambiguous promoted state remains available to reconciliation')
+  assert.deepEqual(await readFile(incompleteTarget), bytes, 'ambiguous completion preserves final bytes')
+  assert.deepEqual(failedComplete.activeSessionIDs(), [])
+
+  const committedComplete = await transactionFixture({ now }); t.after(committedComplete.dispose)
+  const committedCompleteUploads = committedComplete.service()
+  const completeStarted = await begin(committedCompleteUploads, bytes)
+  await sendChunk(committedCompleteUploads, completeStarted.id, completeStarted.token, bytes)
+  committedComplete.loseNextCommitReceipt()
+  const completed = await committedCompleteUploads.complete(completeStarted.id, { token: completeStarted.token })
+  assert.equal(completed.state, 'complete', 'fresh exact row/queue state accepts an applied commit with a lost receipt')
+  assert.equal(committedComplete.rows.get(completeStarted.id)?.sha256, createHash('sha256').update(bytes).digest('hex'))
+  assert.equal(committedComplete.queue.get(completeStarted.id)?.nextAttemptAt, now + PORTAL_PAGE_UPLOAD_RETENTION_MS,
+    'the exact fresh queue snapshot includes the completion retention schedule')
+  assert.deepEqual(committedComplete.activeSessionIDs(), [])
+
+  const failedCancel = await transactionFixture({ now }); t.after(failedCancel.dispose)
+  const failedCancelUploads = failedCancel.service()
+  const cancelStarted = await begin(failedCancelUploads, bytes)
+  failedCancel.afterNextCommit(async () => { failedCancel.failNextCommitBeforeApply() })
+  await assert.rejects(failedCancelUploads.cancel(cancelStarted.id, { token: cancelStarted.token }),
+    (error: unknown) => error instanceof PortalPageUploadError && error.code === 'upload_unavailable')
+  assert.equal(failedCancel.rows.has(cancelStarted.id), true, 'fresh absence check rejects a swallowed delete rollback')
+  assert.equal(failedCancel.queue.has(cancelStarted.id), true, 'the pending queue keeps ambiguous cancellation reconcilable')
+  const cancelArtifacts = await readdir(path.join(failedCancel.uploadDir, 'portal-pages', '.incoming'))
+  assert.equal(cancelArtifacts.includes(`m-${cancelStarted.id}.json`), false)
+  assert.deepEqual(await failedCancelUploads.cleanupExpired(), { removed: 1, unresolved: 0 })
+  assert.equal(failedCancel.rows.has(cancelStarted.id), false, 'bounded reconciliation removes the ambiguous row later')
+
+  const committedCancel = await transactionFixture({ now }); t.after(committedCancel.dispose)
+  const committedCancelUploads = committedCancel.service()
+  const cancelCommitted = await begin(committedCancelUploads, bytes)
+  committedCancel.afterNextCommit(async () => { committedCancel.loseNextCommitReceipt() })
+  assert.deepEqual(await committedCancelUploads.cancel(cancelCommitted.id, { token: cancelCommitted.token }),
+    { id: cancelCommitted.id, cancelled: true }, 'fresh row/queue absence accepts a committed cancellation with lost receipt')
+  assert.equal(committedCancel.rows.has(cancelCommitted.id), false)
+  assert.equal(committedCancel.queue.has(cancelCommitted.id), false)
+  assert.deepEqual(committedCancel.activeSessionIDs(), [])
+})
+
+test('init refuses to publish a token when the committed cleanup retry exceeds its bounded schedule', async t => {
+  const now = Date.parse('2026-10-19T12:00:00.000Z')
+  const f = await transactionFixture({ now }); t.after(f.dispose)
+  f.afterNextCommit(async () => {
+    const id = [...f.rows.keys()][0]!
+    const cleanup = f.queue.get(id)!
+    f.queue.set(id, { ...cleanup, attemptCount: 1, nextAttemptAt: now + 25 * 60 * 60 * 1000,
+      lastErrorCode: 'cleanup_failed' })
+  }, (_transactionID, committedRows) => committedRows.size === 1)
+
+  await assert.rejects(f.service().init({ originalName: 'unbounded-retry.pdf', mimeType: 'application/pdf', bytes: pdfBytes().length }),
+    (error: unknown) => error instanceof PortalPageUploadError && error.code === 'upload_unavailable')
+  const id = [...f.rows.keys()][0]!
+  assert.equal(f.rows.get(id)?.state, 'uploading', 'the unconfirmed row remains for durable reconciliation')
+  await assert.rejects(readFile(path.join(f.uploadDir, 'portal-pages', '.incoming', `m-${id}.json`)), { code: 'ENOENT' },
+    'an unbounded queue snapshot cannot authorize token/manifest publication')
+  assert.deepEqual(f.activeSessionIDs(), [])
+})
+
+test('completion rejects a fresh cleanup snapshot that differs from the scheduled transaction state', async t => {
+  const f = await transactionFixture(); t.after(f.dispose)
+  const uploads = f.service(), bytes = pdfBytes(), started = await begin(uploads, bytes)
+  await sendChunk(uploads, started.id, started.token, bytes)
+  f.afterNextCommit(async () => {
+    const cleanup = f.queue.get(started.id)
+    assert.ok(cleanup)
+    f.queue.set(started.id, { ...cleanup, attemptCount: cleanup.attemptCount + 1 })
+  }, (_transactionID, committedRows) => committedRows.get(started.id)?.state === 'complete')
+
+  await assert.rejects(uploads.complete(started.id, { token: started.token }),
+    (error: unknown) => error instanceof PortalPageUploadError && error.code === 'upload_unavailable')
+  assert.equal(f.rows.get(started.id)?.state, 'complete', 'the database commit is retained despite a mismatched fresh queue snapshot')
+  const row = f.rows.get(started.id)!
+  const target = path.join(f.uploadDir, 'portal-pages', String(row.storageKey))
+  const manifestPath = path.join(f.uploadDir, 'portal-pages', '.incoming', `m-${started.id}.json`)
+  assert.deepEqual(await readFile(target), bytes, 'confirmation failure preserves promoted bytes')
+  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).state, 'renamed',
+    'confirmation failure preserves the recovery manifest')
+  assert.deepEqual(f.activeSessionIDs(), [])
 })
 
 test('unproven compensation retains the renamed manifest and queue for later reconciliation', async t => {

@@ -22,7 +22,15 @@ type Transaction = {
   dirty: boolean
   heldLocks: Set<string>
   savepoints: Map<string, Savepoint>
+  finished: boolean
+  committed: boolean
 }
+type FixtureSession = {
+  db: { execute: (statement: unknown) => Promise<{ rows: Record<string, unknown>[] }> }
+  resolve: () => Promise<void>
+  reject: () => Promise<void>
+}
+type CommitOutcome = 'commit' | 'rollback-swallowed' | 'commit-swallowed'
 type TraceEvent = {
   sequence: number
   transactionID: string
@@ -53,7 +61,7 @@ function cloneCleanupRow(row: CleanupRow): CleanupRow { return { ...row } }
 export function createPortalPageUploadTransactionAdapter(initialRows: MediaRow[] = []) {
   const rows = new Map(initialRows.map(row => [row.id, { ...row }]))
   const queue = new Map<string, CleanupRow>()
-  const sessions: Record<string, { db: { execute: (statement: unknown) => Promise<{ rows: Record<string, unknown>[] }> } }> = {}
+  const sessions: Record<string, FixtureSession> = {}
   const transactions = new Map<string, Transaction>()
   const locks = new Map<string, LockState>()
   const trace: TraceEvent[] = []
@@ -66,7 +74,7 @@ export function createPortalPageUploadTransactionAdapter(initialRows: MediaRow[]
     callback: (transactionID: string) => Promise<void>
     predicate: (transactionID: string, committedRows: Map<string, MediaRow>) => boolean
   } | undefined
-  let loseNextCommitReceipt = false
+  let nextCommitOutcome: CommitOutcome = 'commit'
   let failNextSchedule = false
 
   const event = (transactionID: string, value: Omit<TraceEvent, 'sequence' | 'transactionID'>) => {
@@ -198,6 +206,12 @@ export function createPortalPageUploadTransactionAdapter(initialRows: MediaRow[]
       return { rows: due.map(row => ({ upload_id: row.uploadID, attempt_count: row.attemptCount,
         next_attempt_ms: row.nextAttemptAt })) }
     }
+    if (query.startsWith('SELECT status, attempt_count, extract(epoch FROM next_attempt_at) * 1000 AS next_attempt_ms')) {
+      const id = String(params[0]).toLowerCase()
+      const entry = transaction.queue.get(id)
+      return { rows: entry ? [{ status: entry.status, attempt_count: entry.attemptCount,
+        next_attempt_ms: entry.nextAttemptAt, last_error_code: entry.lastErrorCode }] : [] }
+    }
     if (query.startsWith('INSERT INTO portal_page_upload_cleanup')) {
       const id = String(params[0]).toLowerCase(), timestamp = asDate(params[1])
       const existing = transaction.queue.get(id)
@@ -255,9 +269,66 @@ export function createPortalPageUploadTransactionAdapter(initialRows: MediaRow[]
       beginTransaction: async () => {
         const id = `upload-tx-${++nextID}`
         const transaction: Transaction = { id, rows: cloneMap(rows), queue: cloneMap(queue), dirty: false,
-          heldLocks: new Set(), savepoints: new Map() }
+          heldLocks: new Set(), savepoints: new Map(), finished: false, committed: false }
         transactions.set(id, transaction)
-        sessions[id] = { db: { execute: statement => execute(id, statement) } }
+        let resolveReady!: () => void
+        let rejectReady!: (error: unknown) => void
+        const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject })
+        resolveReady()
+        await ready
+
+        let finishTransaction!: (outcome: 'commit' | 'rollback') => void
+        const finish = new Promise<'commit' | 'rollback'>(resolve => { finishTransaction = resolve })
+        const discard = () => {
+          if (transaction.finished) return
+          transaction.finished = true
+          transactions.delete(id)
+          event(id, { kind: 'rollback' })
+          releaseLocks(transaction)
+        }
+        const applyCommit = () => {
+          if (transaction.dirty) {
+            rows.clear(); for (const [key, row] of transaction.rows) rows.set(key, { ...row })
+            queue.clear(); for (const [key, entry] of transaction.queue) queue.set(key, cloneCleanupRow(entry))
+          }
+          transaction.finished = true
+          transaction.committed = true
+          transactions.delete(id)
+          event(id, { kind: 'commit' })
+          releaseLocks(transaction)
+        }
+        const done = finish.then(outcome => {
+          if (outcome === 'rollback') throw new Error('transaction_fixture_explicit_rollback')
+          const commitOutcome = nextCommitOutcome
+          nextCommitOutcome = 'commit'
+          if (commitOutcome === 'rollback-swallowed') throw new Error('transaction_fixture_late_commit_rollback')
+          applyCommit()
+          if (commitOutcome === 'commit-swallowed') throw new Error('transaction_fixture_lost_commit_receipt')
+        }).catch(error => {
+          // Installed beginTransaction attaches a catch to Drizzle's completion
+          // promise and invokes transactionFailed(error). The readiness promise
+          // has already resolved before the session is returned, so this reject
+          // is inert and the catch itself fulfills (late failure is swallowed).
+          rejectReady(error)
+          if (!transaction.finished) discard()
+        })
+        const session: FixtureSession = {
+          db: { execute: statement => execute(id, statement) },
+          resolve: async () => {
+            finishTransaction('commit')
+            await done
+            const listener = afterNextCommit
+            if (transaction.committed && listener?.predicate(id, rows)) {
+              afterNextCommit = undefined
+              await listener.callback(id)
+            }
+          },
+          reject: async () => {
+            finishTransaction('rollback')
+            await done
+          },
+        }
+        sessions[id] = session
         event(id, { kind: 'begin' })
         const listener = nextBeginListener
         nextBeginListener = undefined
@@ -265,33 +336,18 @@ export function createPortalPageUploadTransactionAdapter(initialRows: MediaRow[]
         return id
       },
       commitTransaction: async (id: string) => {
-        const transaction = transactions.get(id)
-        if (!transaction || !sessions[id]) return
+        const session = sessions[id]
+        if (!session) return
         delete sessions[id]
-        if (transaction.dirty) {
-          rows.clear(); for (const [key, row] of transaction.rows) rows.set(key, { ...row })
-          queue.clear(); for (const [key, entry] of transaction.queue) queue.set(key, cloneCleanupRow(entry))
-        }
-        transactions.delete(id)
-        event(id, { kind: 'commit' })
-        releaseLocks(transaction)
-        const listener = afterNextCommit
-        if (listener?.predicate(id, rows)) {
-          afterNextCommit = undefined
-          await listener.callback(id)
-        }
-        if (loseNextCommitReceipt) {
-          loseNextCommitReceipt = false
-          throw new Error('transaction_fixture_lost_commit_receipt')
-        }
+        // Match @payloadcms/drizzle's installed commitTransaction wrapper.
+        try { await session.resolve() }
+        catch { await session.reject() }
       },
       rollbackTransaction: async (id: string) => {
-        const transaction = transactions.get(id)
-        if (!transaction || !sessions[id]) return
+        const session = sessions[id]
+        if (!session) return
         delete sessions[id]
-        transactions.delete(id)
-        event(id, { kind: 'rollback' })
-        releaseLocks(transaction)
+        await session.reject()
       },
     },
     findByID: async ({ id, req }: { id: string; req: PayloadRequest }) => {
@@ -345,7 +401,8 @@ export function createPortalPageUploadTransactionAdapter(initialRows: MediaRow[]
       predicate: (transactionID: string, committedRows: Map<string, MediaRow>) => boolean = () => true) => {
       afterNextCommit = { callback, predicate }
     },
-    loseNextCommitReceipt: () => { loseNextCommitReceipt = true },
+    loseNextCommitReceipt: () => { nextCommitOutcome = 'commit-swallowed' },
+    failNextCommitBeforeApply: () => { nextCommitOutcome = 'rollback-swallowed' },
     failNextCleanupSchedule: () => { failNextSchedule = true },
   }
 }

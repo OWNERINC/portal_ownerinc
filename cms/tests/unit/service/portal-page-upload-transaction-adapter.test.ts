@@ -56,20 +56,50 @@ test('session adapter owns independent transactions, models savepoints, and disc
   assert.ok(fixture.trace.some(event => event.kind === 'savepoint' && event.sql?.startsWith('ROLLBACK TO SAVEPOINT')))
 })
 
-test('session adapter applies a successful commit even when its receipt is lost', async () => {
+test('installed begin/commit semantics swallow a late transaction completion failure after commit', async () => {
   const fixture = createPortalPageUploadTransactionAdapter()
   fixture.loseNextCommitReceipt()
-  await assert.rejects(withCmsTransaction(fixture.payload, fixture.req(), async transactionReq => {
+  await withCmsTransaction(fixture.payload, fixture.req(), async transactionReq => {
     const id = await transactionReq.transactionID
     const session = (fixture.payload.db as unknown as { sessions: Record<string, { db: { execute: (query: unknown) => Promise<unknown> } }> }).sessions[id!]!
     await session.db.execute(sql`INSERT INTO portal_page_upload_cleanup (upload_id, status, next_attempt_at)
       VALUES (${uploadID}::uuid, 'pending', ${new Date(1234)}) ON CONFLICT (upload_id) DO NOTHING`)
-  }), /transaction_fixture_lost_commit_receipt/u)
+  })
 
-  assert.equal(fixture.queue.get(uploadID)?.nextAttemptAt, 1234, 'the commit was applied before the transport receipt failed')
+  assert.equal(fixture.queue.get(uploadID)?.nextAttemptAt, 1234, 'the commit was applied before its late receipt error')
   assert.deepEqual(fixture.activeSessionIDs(), [], 'a lost receipt does not leave a live session behind')
   assert.equal(fixture.trace.filter(event => event.kind === 'commit').length, 1)
-  assert.equal(fixture.trace.filter(event => event.kind === 'rollback').length, 0, 'rollback after a lost receipt is a native no-op')
+  const observed = await withCmsTransaction(fixture.payload, fixture.req(), async transactionReq => {
+    const id = await transactionReq.transactionID
+    const session = (fixture.payload.db as unknown as { sessions: Record<string, { db: { execute: (query: unknown) => Promise<unknown> } }> }).sessions[id!]!
+    return session.db.execute(sql`SELECT status, attempt_count, extract(epoch FROM next_attempt_at) * 1000 AS next_attempt_ms,
+      last_error_code FROM portal_page_upload_cleanup WHERE upload_id = ${uploadID}::uuid`)
+  })
+  assert.deepEqual((observed as { rows: unknown[] }).rows, [{ status: 'pending', attempt_count: 0,
+    next_attempt_ms: 1234, last_error_code: null }], 'an independent fresh session sees the applied committed state')
+  assert.deepEqual(fixture.activeSessionIDs(), [])
+})
+
+test('installed begin/commit semantics swallow a late rollback before apply', async () => {
+  const fixture = createPortalPageUploadTransactionAdapter()
+  fixture.failNextCommitBeforeApply()
+  await withCmsTransaction(fixture.payload, fixture.req(), async transactionReq => {
+    const id = await transactionReq.transactionID
+    const session = (fixture.payload.db as unknown as { sessions: Record<string, { db: { execute: (query: unknown) => Promise<unknown> } }> }).sessions[id!]!
+    await session.db.execute(sql`INSERT INTO portal_page_upload_cleanup (upload_id, status, next_attempt_at)
+      VALUES (${uploadID}::uuid, 'pending', ${new Date(1234)}) ON CONFLICT (upload_id) DO NOTHING`)
+  })
+
+  assert.equal(fixture.queue.has(uploadID), false, 'the late failed transaction was not committed')
+  assert.deepEqual(fixture.activeSessionIDs(), [])
+  const observed = await withCmsTransaction(fixture.payload, fixture.req(), async transactionReq => {
+    const id = await transactionReq.transactionID
+    const session = (fixture.payload.db as unknown as { sessions: Record<string, { db: { execute: (query: unknown) => Promise<unknown> } }> }).sessions[id!]!
+    return session.db.execute(sql`SELECT status, attempt_count, extract(epoch FROM next_attempt_at) * 1000 AS next_attempt_ms,
+      last_error_code FROM portal_page_upload_cleanup WHERE upload_id = ${uploadID}::uuid`)
+  })
+  assert.deepEqual((observed as { rows: unknown[] }).rows, [], 'a separate transaction sees no rolled-back queue row')
+  assert.deepEqual(fixture.activeSessionIDs(), [])
 })
 
 test('production per-upload advisory SQL blocks a second independent transaction until commit', async () => {

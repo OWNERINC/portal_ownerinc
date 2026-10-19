@@ -69,9 +69,39 @@ parametrizado. Init adquire ambos os ownerships antes do commit de mídia/queue 
 mantém o ownership de filesystem até publicar atomicamente o manifest. Assim,
 cleanup que encontra esse owner ativo adia o item em vez de apagar um init entre
 commit e manifest; após crash, a identidade de processo permite recuperar o lock
-e o índice durável reencontra o trabalho. Cancelamento libera o ownership de
-filesystem antes da transação final e então readquire locks na mesma ordem, sem
-inverter a ordem advisory→filesystem.
+e o índice durável reencontra o trabalho. Cancelamento mantém o ownership de
+filesystem através da transação final e da confirmação fresca. Essa fase readquire
+CMS/advisory nessa ordem enquanto já possui o arquivo; competidores nunca esperam
+por ownership de arquivo segurando locks DB, pois deferem/falham rapidamente.
+
+`@payloadcms/drizzle` pode resolver a sessão sem propagar uma falha tardia da
+Promise de conclusão Drizzle: o `catch` de `beginTransaction` chama o reject da
+Promise de prontidão já resolvida e retorna normalmente. Portanto, retorno bem-
+sucedido do helper de mutação não prova commit. Init, conclusão e cancelamento
+confirmam o resultado em uma sessão Payload nova (com `transactionID` de entrada
+removido), sob `CMS_REFERENCE_LOCK` → advisory do upload, lendo mídia e fila pela
+mesma sessão. Init só publica manifest/token após confirmar a linha uploading e
+a fila pending; uma deferral sanitizada de cleanup ocorrida durante o ownership
+de init continua válida. Conclusão confirma linha completa, hash, instante e o
+snapshot exato da fila agendada para o limite de retenção de 24 horas antes de
+limpar chunks. Cancelamento mantém o ownership de arquivo
+durante a transação final e confirma, em sessão nova, ausência da mídia, da fila
+e dos caminhos derivados antes de informar sucesso. Se a confirmação divergir,
+a operação falha fechada e deixa o reconciliador resolver estado ambíguo.
+
+O corpo bruto de cada chunk é recebido sem transação, sessão Payload ou lock
+advisory. Ingress tem três fases: autenticar e adquirir ownership em transação
+curta; transmitir com backpressure para o caminho canônico
+`<uuid>-<índice>.part` com `open('wx')` sob ownership exclusivo; e revalidar/promover
+em outra transação curta, seguida da confirmação fresca do destino, tamanho e
+hash. Competidores que encontram um filesystem owner vivo (cleanup, conclusão,
+cancelamento ou outro chunk) falham/deferem rapidamente, sem esperar por ele
+enquanto seguram o lock CMS. Se o processo cai durante a transmissão, o lock
+permanece; após a identidade do processo provar que o owner canônico está morto,
+o próximo owner pode remover somente o `.part` regular derivado daquele UUID e
+índice antes de recriá-lo exclusivamente. Falha de `wx` não remove arquivo que a
+requisição atual não criou. Nenhuma enumeração ou limpeza de entradas `.incoming`
+desconhecidas é adicionada.
 
 Completion valida somente os caminhos de chunks e partes derivados de `id` e
 `chunkCount` do manifest validado (no máximo 100 índices), via `lstat` e sem
