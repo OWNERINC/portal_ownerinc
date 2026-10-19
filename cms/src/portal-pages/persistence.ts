@@ -92,14 +92,14 @@ function expectedMimes(block: PortalPageBlock): Array<typeof PORTAL_PAGE_MEDIA_M
   }
 }
 
-function mediaMimeRequirements(page: PortalPageRefInput): Map<string, Set<string>> {
-  const requirements = new Map<string, Set<string>>()
+type PortalPageMediaUsage = { id: string; allowedMimes: ReadonlySet<string> }
+
+function mediaMimeRequirements(page: PortalPageRefInput): PortalPageMediaUsage[] {
+  const requirements: PortalPageMediaUsage[] = []
   const add = (idValue: unknown, accepted: readonly string[]) => {
     const id = relationID(idValue)
     if (!id) return
-    const existing = requirements.get(id) || new Set<string>()
-    for (const mime of accepted) existing.add(mime)
-    requirements.set(id, existing)
+    requirements.push({ id, allowedMimes: new Set(accepted) })
   }
   if (page.cover !== null) add(page.cover.asset_id, PORTAL_PAGE_IMAGE_MIMES)
   const blocks = normalizePortalPageContent(page.body)
@@ -137,26 +137,30 @@ export async function assertPortalPageMediaReferences(payload: Payload, page: Po
   return withCmsTransaction(payload, req, async transactionReq => {
     const db = await requireCmsTransaction(payload, transactionReq)
     const requirements = mediaMimeRequirements(page)
-    for (const [id, allowedMimes] of requirements) {
-      await db.execute(sql`SELECT id FROM portal_page_media WHERE id = ${id}::uuid FOR SHARE`)
-      const media = await payload.findByID({ collection: 'portal-page-media', id, req: transactionReq,
-        overrideAccess: true, depth: 0, disableErrors: true }) as Record<string, unknown> | null
-      if (!media) throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
-      let metadata: ReturnType<typeof validatePortalPageMediaMetadata>
-      try {
-        metadata = validatePortalPageMediaMetadata({
-          originalName: media.originalName, storageKey: media.storageKey, mimeType: media.mimeType,
-          filesize: media.filesize, sha256: media.sha256, state: media.state,
-          uploadedBy: media.uploadedBy, completedAt: media.completedAt ?? null,
-        })
-      } catch {
-        throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
+    const checked = new Map<string, ReturnType<typeof validatePortalPageMediaMetadata>>()
+    for (const { id, allowedMimes } of requirements) {
+      let metadata = checked.get(id)
+      if (!metadata) {
+        await db.execute(sql`SELECT id FROM portal_page_media WHERE id = ${id}::uuid FOR SHARE`)
+        const media = await payload.findByID({ collection: 'portal-page-media', id, req: transactionReq,
+          overrideAccess: true, depth: 0, disableErrors: true }) as Record<string, unknown> | null
+        if (!media) throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
+        try {
+          metadata = validatePortalPageMediaMetadata({
+            originalName: media.originalName, storageKey: media.storageKey, mimeType: media.mimeType,
+            filesize: media.filesize, sha256: media.sha256, state: media.state,
+            uploadedBy: media.uploadedBy, completedAt: media.completedAt ?? null,
+          })
+        } catch {
+          throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
+        }
+        checked.set(id, metadata)
       }
       if (!allowedMimes.has(metadata.mimeType) || (options.requireComplete !== false && metadata.state !== 'complete')) {
         throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
       }
     }
-    return [...requirements.keys()]
+    return [...new Set(requirements.map(({ id }) => id))]
   })
 }
 
@@ -238,12 +242,16 @@ export async function withExpectedPortalPageVersion<T>(req: PayloadRequest, inpu
       overrideAccess: true, depth: 0, disableErrors: true })
     if (!current) throw new APIError('portal_page_not_found', 404, undefined, true)
     const version = await latestPortalPageVersion(transactionReq, parsed.id)
-    if (!version || String(version.id) !== parsed.expected_version_id) throw conflict('portal_page_version_conflict')
+    const versionRecord = version as unknown as Record<string, unknown> | undefined
+    if (!versionRecord || String(versionRecord.id) !== parsed.expected_version_id ||
+      versionRecord.latest !== true || versionRecord.autosave !== false) {
+      throw conflict('portal_page_version_conflict')
+    }
     if (pagePublicationScopes.has(transactionReq)) throw conflict('portal_page_publication_scope_active')
     const session = await requireCmsTransaction(req.payload, transactionReq)
     pagePublicationScopes.set(transactionReq, { id: parsed.id, expectedVersionID: parsed.expected_version_id,
       operation: parsed.operation, session })
-    try { return await work(transactionReq, version as unknown as Record<string, unknown>) }
+    try { return await work(transactionReq, versionRecord) }
     finally { pagePublicationScopes.delete(transactionReq) }
   })
 }

@@ -70,11 +70,30 @@ async function payloadFixture(options: {
   versions?: Record<string, unknown>[]
   media?: Record<string, unknown>[]
   latestVersion?: Record<string, unknown>
+  mainPage?: { slug: string; status: 'draft' | 'published' } | null
 } = {}) {
   const { config, collections } = await configPayload()
   const calls: string[] = []
   const executeResults: unknown[] = []
-  const session = { execute: async (query: unknown) => { calls.push(`sql:${JSON.stringify(query)}`); return executeResults.shift() || { rows: [] } } }
+  let mainPage = options.mainPage === undefined ? { slug: 'draft-slug', status: 'draft' as const } : options.mainPage
+  const queryText = (query: unknown) => {
+    if (!query || typeof query !== 'object' || !Array.isArray((query as { queryChunks?: unknown }).queryChunks)) return ''
+    return ((query as { queryChunks: unknown[] }).queryChunks).map(chunk => {
+      if (typeof chunk === 'string') return chunk
+      if (!chunk || typeof chunk !== 'object') return ''
+      const value = (chunk as { value?: unknown }).value
+      return Array.isArray(value) ? value.join('') : ''
+    }).join('')
+  }
+  const session = { execute: async (query: unknown) => {
+    const text = queryText(query)
+    calls.push(`sql:${JSON.stringify(query)}`)
+    if (text.includes('SELECT slug, _status FROM portal_pages')) {
+      calls.push('main-page-state-read')
+      return { rows: mainPage ? [{ slug: mainPage.slug, _status: mainPage.status }] : [] }
+    }
+    return executeResults.shift() || { rows: [] }
+  } }
   const payload = {
     config,
     collections,
@@ -102,7 +121,8 @@ async function payloadFixture(options: {
     },
   } as unknown as Payload
   const req = { payload, transactionID: 'live', context: {}, user: manager } as unknown as PayloadRequest
-  return { payload, req, calls, session, executeResults, config, collections }
+  return { payload, req, calls, session, executeResults, config, collections,
+    setMainPage: (page: { slug: string; status: 'draft' | 'published' } | null) => { mainPage = page } }
 }
 
 function mediaRecord(id: string, mimeType: string, state: 'uploading' | 'complete' = 'complete') {
@@ -223,6 +243,24 @@ test('Payload blocks project exactly the Task 1 public shapes and reject malform
   ] } } }]))
 })
 
+test('persisted native page blocks omit nullish optional captions, callout titles, and layouts before normalization', () => {
+  const persisted = projectPortalPageContent([
+    { blockType: 'image', asset: pageMediaID, alt: 'Imagem', caption: null, layout: null },
+    { blockType: 'gallery', images: [
+      { asset: pageMediaID, alt: 'Imagem 1', caption: null },
+      { asset: pageMediaID, alt: 'Imagem 2', caption: 'Legenda' },
+    ], layout: null },
+    { blockType: 'callout', tone: 'info', text: 'Aviso', title: null, layout: null },
+  ])
+  assert.deepEqual(persisted, [
+    { type: 'image', asset_id: pageMediaID, alt: 'Imagem' },
+    { type: 'gallery', images: [
+      { asset_id: pageMediaID, alt: 'Imagem 1' }, { asset_id: pageMediaID, alt: 'Imagem 2', caption: 'Legenda' },
+    ] },
+    { type: 'callout', tone: 'info', text: 'Aviso' },
+  ])
+})
+
 test('category name and canonical slug use page-local normalization and bounds', () => {
   assert.deepEqual(normalizePortalPageCategory({ name: '  Crème Brûlée  ', slug: '  Equipe Produto / 2026 ', description: '  Conteúdo  ' }), {
     name: 'Crème Brûlée', slug: 'equipe-produto-2026', description: 'Conteúdo',
@@ -280,7 +318,30 @@ test('page media mutations fail closed outside the trusted scoped helper and ser
   assert.equal(isPortalPageMediaMutation(f.req), false)
 })
 
-test('published slug is immutable and native publish/unpublish transitions fail without scoped publication context', async () => {
+test('trusted media completion validates explicit metadata from a persisted Payload document', async () => {
+  const f = await payloadFixture()
+  const beforeChange = PortalPageMedia.hooks?.beforeChange?.[0]
+  assert.ok(beforeChange)
+  const persisted = {
+    ...mediaRecord(pageMediaID, 'application/pdf', 'uploading'),
+    createdAt: '2026-10-19T10:00:00.000Z', updatedAt: '2026-10-19T10:00:00.000Z',
+  }
+  const completedAt = '2026-10-19T10:30:00.000Z'
+  const data: Record<string, unknown> = { state: 'complete', completedAt }
+  const result = await withPortalPageMediaMutation(f.req, 'staff-1', 'update', async req =>
+    (beforeChange as (args: unknown) => unknown)({ operation: 'update', req, originalDoc: persisted, data }) as Record<string, unknown>)
+
+  assert.equal(result.state, 'complete')
+  assert.equal(result.completedAt, completedAt)
+  assert.equal(result.storageKey, persisted.storageKey)
+  assert.equal(result.uploadedBy, 'staff-1')
+  assert.equal('id' in data, false)
+  assert.equal('createdAt' in data, false)
+  assert.equal('updatedAt' in data, false)
+  assert.throws(() => validatePortalPageMediaMetadata({ ...persisted, state: 'uploading', completedAt: null }))
+})
+
+test('published slug uses canonical main state and remains blocked through drafts/publish until controlled unpublication', async () => {
   assert.doesNotThrow(() => validatePortalPageSlugChange('same-slug', 'same-slug', 'published'))
   assert.throws(() => validatePortalPageSlugChange('new-slug', 'same-slug', 'published'), /portal_page_slug_immutable/)
   assert.doesNotThrow(() => validatePortalPageSlugChange('new-slug', 'same-slug', 'draft'))
@@ -288,12 +349,56 @@ test('published slug is immutable and native publish/unpublish transitions fail 
   assert.throws(() => validatePortalPageStatusTransition('draft', 'published', false), /portal_page_publication_context_required/)
   assert.doesNotThrow(() => validatePortalPageStatusTransition('published', 'draft', true))
   assert.doesNotThrow(() => validatePortalPageStatusTransition('draft', 'published', true))
-  const f = await payloadFixture()
+  const f = await payloadFixture({
+    latestVersion: { id: versionID, parent: pageID, latest: true, autosave: false, version: { _status: 'draft', slug: 'publicado' } },
+    mainPage: { slug: 'publicado', status: 'published' },
+  })
+  const beforeOperation = PortalPages.hooks?.beforeOperation?.[0]
   const beforeChange = PortalPages.hooks?.beforeChange?.[0]
-  assert.ok(beforeChange)
-  await assert.rejects((beforeChange as (args: unknown) => Promise<unknown>)({
+  assert.ok(beforeOperation); assert.ok(beforeChange)
+  const draft = { id: pageID, _status: 'draft', slug: 'publicado', publishedAt: '2026-10-19T10:00:00.000Z', body: [] }
+  const save = async (req: PayloadRequest, originalDoc: Record<string, unknown>, data: Record<string, unknown>, draftSave: boolean) => {
+    await (beforeOperation as (args: unknown) => Promise<unknown>)({
+      operation: 'update', args: { id: pageID, data, draft: draftSave }, req,
+    })
+    const result = await (beforeChange as (args: unknown) => Promise<unknown>)({ data, originalDoc, operation: 'update', req })
+    return { ...(result as Record<string, unknown>), id: pageID } as Record<string, unknown>
+  }
+  const savedDraft = await save(f.req, draft, {
+    _status: 'draft', title: 'Rascunho', slug: 'publicado', summary: '', body: [],
+  }, true)
+  assert.equal(savedDraft.slug, 'publicado')
+
+  await assert.rejects(save(f.req, savedDraft, {
+    _status: 'draft', title: 'Rascunho editado', slug: 'novo-endereco', summary: '', body: [],
+  }, true), /portal_page_slug_immutable/)
+
+  const publicationInput = { id: pageID, expected_version_id: versionID, operation: 'publish' as const }
+  await assert.rejects(withExpectedPortalPageVersion(f.req, publicationInput, async req => save(req, savedDraft, {
+    _status: 'published', title: 'Rascunho editado', slug: 'novo-endereco', summary: '', body: [],
+  }, false)), /portal_page_slug_immutable/)
+
+  const unpublishInput = { ...publicationInput, operation: 'unpublish' as const }
+  const unpublished = await withExpectedPortalPageVersion(f.req, unpublishInput, async req => save(req, savedDraft, {
+    _status: 'draft', title: 'Rascunho', slug: 'publicado', summary: '', body: [],
+  }, false))
+  assert.equal(unpublished._status, 'draft')
+  assert.equal(unpublished.publishedAt, null)
+  f.setMainPage({ slug: 'publicado', status: 'draft' })
+  const renamed = await save(f.req, unpublished, {
+    _status: 'draft', title: 'Rascunho', slug: 'novo-endereco', summary: '', body: [],
+  }, true)
+  assert.equal(renamed.slug, 'novo-endereco')
+  assert.ok(f.calls.includes('main-page-state-read'))
+  assert.equal(f.calls.filter(call => call === `findByID:portal-pages:${pageID}`).length, 2,
+    'only expected-version helper reads the document through Payload; canonical hook state is SQL-read under the row lock')
+
+  const untrusted = await payloadFixture()
+  const untrustedBeforeChange = PortalPages.hooks?.beforeChange?.[0]
+  assert.ok(untrustedBeforeChange)
+  await assert.rejects((untrustedBeforeChange as (args: unknown) => Promise<unknown>)({
     data: { _status: 'published', title: 'Página', slug: 'pagina', summary: '', body: [] },
-    originalDoc: { id: pageID, _status: 'draft', slug: 'pagina' }, operation: 'update', req: f.req,
+    originalDoc: { id: pageID, _status: 'draft', slug: 'pagina' }, operation: 'update', req: untrusted.req,
   }), /portal_page_publication_context_required/)
 })
 
@@ -314,6 +419,23 @@ test('media validation locks and rejects incomplete or wrong-shape MIME referenc
       { asset_id: pageMediaID, alt: 'Imagem 1' }, { asset_id: pageMediaID, alt: 'Imagem 2' },
     ] }],
   }, good.req))
+})
+
+test('duplicate media IDs are validated independently for each image, gallery, video, and PDF usage', async () => {
+  const imageUsedAsVideo = await payloadFixture({ media: [mediaRecord(pageMediaID, 'image/png')] })
+  await assert.rejects(assertPortalPageMediaReferences(imageUsedAsVideo.payload, {
+    cover: { asset_id: pageMediaID, alt: 'Capa' },
+    body: [{ type: 'video', asset_id: pageMediaID, title: 'Vídeo' }],
+  }, imageUsedAsVideo.req), /invalid_portal_page_media_reference/)
+
+  const pdfUsedAsGalleryImage = await payloadFixture({ media: [mediaRecord(pageMediaID, 'application/pdf')] })
+  await assert.rejects(assertPortalPageMediaReferences(pdfUsedAsGalleryImage.payload, {
+    cover: null,
+    body: [
+      { type: 'gallery', images: [{ asset_id: pageMediaID, alt: 'Imagem 1' }, { asset_id: pageMediaID, alt: 'Imagem 2' }] },
+      { type: 'pdf', asset_id: pageMediaID, title: 'Documento' },
+    ],
+  }, pdfUsedAsGalleryImage.req), /invalid_portal_page_media_reference/)
 })
 
 test('reference collectors include cover, image, gallery, video, PDF, category relations and nested saved draft shapes', () => {
@@ -355,7 +477,7 @@ test('category and media deletion protection scans current drafts and retained P
 })
 
 test('server-only expected-version helper requires exact latest saved version and scopes controlled transitions', async () => {
-  const f = await payloadFixture({ latestVersion: { id: versionID, parent: pageID, version: { _status: 'draft' } } })
+  const f = await payloadFixture({ latestVersion: { id: versionID, parent: pageID, latest: true, autosave: false, version: { _status: 'draft' } } })
   const input = { id: pageID, expected_version_id: versionID, operation: 'publish' as const }
   let returnedID = ''
   await withExpectedPortalPageVersion(f.req, input, async (req, version) => {
@@ -368,6 +490,45 @@ test('server-only expected-version helper requires exact latest saved version an
   const stale = await payloadFixture({ latestVersion: { id: '018f47a2-7b3c-7a11-8a2c-1234567890b3', parent: pageID } })
   await assert.rejects(withExpectedPortalPageVersion(stale.req, input, async () => true), /portal_page_version_conflict/)
   assert.equal(isPortalPagePublication(f.req), false, 'publication scope is removed after the callback')
+})
+
+test('expected-version helper rejects reused autosave Versions and any newer revision but accepts an explicit save', async () => {
+  const input = { id: pageID, expected_version_id: versionID, operation: 'publish' as const }
+  const autosave = { id: versionID, parent: pageID, latest: true, autosave: true, version: { _status: 'draft', title: 'auto 1' } }
+  const f = await payloadFixture({ latestVersion: autosave })
+  let callbackCalled = false
+  await assert.rejects(withExpectedPortalPageVersion(f.req, input, async () => { callbackCalled = true; return true }), /portal_page_version_conflict/)
+  assert.equal(callbackCalled, false)
+
+  autosave.version = { _status: 'draft', title: 'auto 2' }
+  assert.equal(autosave.id, input.expected_version_id, 'Payload reuses the latest autosave Version identity')
+  await assert.rejects(withExpectedPortalPageVersion(f.req, input, async () => { callbackCalled = true; return true }), /portal_page_version_conflict/)
+  assert.equal(callbackCalled, false, 'an updated autosave with the same ID is still mutable and cannot be published')
+
+  const stale = await payloadFixture({ latestVersion: {
+    id: '018f47a2-7b3c-7a11-8a2c-1234567890b3', parent: pageID, latest: true, autosave: true,
+    version: { _status: 'draft', title: 'newer autosave' },
+  } })
+  await assert.rejects(withExpectedPortalPageVersion(stale.req, input, async () => true), /portal_page_version_conflict/)
+  const newerSave = await payloadFixture({ latestVersion: {
+    id: '018f47a2-7b3c-7a11-8a2c-1234567890b4', parent: pageID, latest: true, autosave: false,
+    version: { _status: 'draft', title: 'newer explicit save' },
+  } })
+  await assert.rejects(withExpectedPortalPageVersion(newerSave.req, input, async () => true), /portal_page_version_conflict/)
+  const missingSaveKind = await payloadFixture({ latestVersion: {
+    id: versionID, parent: pageID, latest: true, version: { _status: 'draft', title: 'unknown save kind' },
+  } })
+  await assert.rejects(withExpectedPortalPageVersion(missingSaveKind.req, input, async () => true), /portal_page_version_conflict/)
+
+  const explicit = await payloadFixture({ latestVersion: {
+    id: versionID, parent: pageID, latest: true, autosave: false, version: { _status: 'draft', title: 'saved' },
+  } })
+  let explicitSaveAccepted = false
+  await withExpectedPortalPageVersion(explicit.req, input, async (_req, version) => {
+    explicitSaveAccepted = version.id === versionID && version.autosave === false
+    return true
+  })
+  assert.equal(explicitSaveAccepted, true)
 })
 
 test('News media reference inventory structurally verifies page collection relationship targets', async () => {

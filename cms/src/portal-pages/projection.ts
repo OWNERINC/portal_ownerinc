@@ -78,7 +78,12 @@ function block(value: unknown): Record<string, unknown> {
 }
 
 function optionalLayout(source: Record<string, unknown>, target: Record<string, unknown>) {
-  if (Object.hasOwn(source, 'layout') && source.layout !== null && source.layout !== '') target.layout = source.layout
+  if (source.layout !== undefined && source.layout !== null && source.layout !== '') target.layout = source.layout
+}
+
+function optionalField(source: Record<string, unknown>, target: Record<string, unknown>, field: string) {
+  const value = source[field]
+  if (value !== undefined && value !== null) target[field] = value
 }
 
 /** Project native Payload blocks into the exact public Task 1 discriminator/field contract. */
@@ -97,13 +102,13 @@ export function projectPortalPageContent(value: unknown): PortalPageBlock[] {
         break
       case 'image':
         Object.assign(projected, { type: 'image', asset_id: relationID(source.asset, 'media_reference'), alt: source.alt })
-        if (Object.hasOwn(source, 'caption')) projected.caption = source.caption
+        optionalField(source, projected, 'caption')
         break
       case 'gallery':
         Object.assign(projected, { type: 'gallery', images: array(source.images).map(rawImage => {
           const image = record(rawImage)
           const result: Record<string, unknown> = { asset_id: relationID(image.asset, 'media_reference'), alt: image.alt }
-          if (Object.hasOwn(image, 'caption')) result.caption = image.caption
+          optionalField(image, result, 'caption')
           return result
         }) })
         break
@@ -118,7 +123,7 @@ export function projectPortalPageContent(value: unknown): PortalPageBlock[] {
         break
       case 'callout':
         Object.assign(projected, { type: 'callout', tone: source.tone, text: source.text })
-        if (Object.hasOwn(source, 'title')) projected.title = source.title
+        optionalField(source, projected, 'title')
         break
       case 'link':
         Object.assign(projected, { type: 'link', label: source.label, url: source.url,

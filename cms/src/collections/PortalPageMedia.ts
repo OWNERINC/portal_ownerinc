@@ -46,7 +46,16 @@ const validatePortalPageMediaBeforeChange: CollectionBeforeChangeHook = ({ data,
     }
     candidate.uploadedBy = originalDoc.uploadedBy
   }
-  const normalized = validatePortalPageMediaMetadata(candidate)
+  const normalized = validatePortalPageMediaMetadata({
+    originalName: candidate.originalName,
+    storageKey: candidate.storageKey,
+    mimeType: candidate.mimeType,
+    filesize: candidate.filesize,
+    sha256: candidate.sha256,
+    state: candidate.state,
+    uploadedBy: candidate.uploadedBy,
+    completedAt: candidate.completedAt,
+  })
   Object.assign(data, normalized)
   return data
 }

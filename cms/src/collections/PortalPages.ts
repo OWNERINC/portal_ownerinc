@@ -83,13 +83,27 @@ const normalizePortalPageBeforeChange: CollectionBeforeChangeHook = async ({ dat
   const pageID = String(original.id ?? input.id ?? '')
   const publicationScope = isPortalPagePublication(req, pageID || undefined)
   const publicationOperation = publicationScope ? portalPagePublicationOperation(req) : null
-  const currentStatus = original._status ?? 'draft'
+  let currentStatus: 'draft' | 'published' = 'draft'
+  let currentSlug = row.slug
+  if (operation === 'update') {
+    if (!pageID) throw new APIError('portal_page_update_requires_single_id', 400, undefined, true)
+    const db = await requireCmsTransaction(req.payload, req)
+    const result = await db.execute(sql`SELECT slug, _status FROM portal_pages WHERE id = ${pageID}::uuid FOR UPDATE`)
+    const current = result.rows[0] as { slug?: unknown; _status?: unknown } | undefined
+    if (!current) throw new APIError('portal_page_not_found', 404, undefined, true)
+    if (typeof current.slug !== 'string' || !['draft', 'published'].includes(String(current._status))) {
+      throw new APIError('portal_page_state_unavailable', 503, undefined, true)
+    }
+    currentSlug = current.slug
+    currentStatus = current._status as 'draft' | 'published'
+  }
   const nextStatus = publicationOperation === 'publish' ? 'published'
     : publicationOperation === 'unpublish' ? 'draft' : row._status ?? currentStatus
   validatePortalPageStatusTransition(nextStatus, currentStatus, publicationScope, portalPageSaveModes.get(req)?.draftSave === true)
 
   row.title = plainText(row.title, { min: 1, max: 200, code: 'invalid_portal_page_title' })
-  row.slug = validatePortalPageSlugChange(row.slug, original.slug, currentStatus)
+  if (publicationOperation === 'unpublish' && !Object.hasOwn(input, 'slug')) row.slug = currentSlug
+  row.slug = validatePortalPageSlugChange(row.slug, currentSlug, currentStatus)
   row.summary = plainText(row.summary ?? '', { max: 1000, multiline: true, code: 'invalid_portal_page_summary' })
   const coverID = relationID(row.cover)
   const cover = coverID === null ? null : {
