@@ -5,6 +5,8 @@ import test from 'node:test'
 const migrationPath = new URL('../../src/migrations/20261019_135005_portal_pages.ts', import.meta.url)
 const mediaLifecycleMigrationPath = new URL('../../src/migrations/20261019_150233_portal_page_media_upload_lifecycle.ts', import.meta.url)
 const mediaLifecycleSnapshotPath = new URL('../../src/migrations/20261019_150233_portal_page_media_upload_lifecycle.json', import.meta.url)
+const uploadCleanupMigrationPath = new URL('../../src/migrations/20261019_160000_portal_page_upload_cleanup.ts', import.meta.url)
+const uploadCleanupSnapshotPath = new URL('../../src/migrations/20261019_160000_portal_page_upload_cleanup.json', import.meta.url)
 const indexPath = new URL('../../src/migrations/index.ts', import.meta.url)
 const generatedTypesPath = new URL('../../src/payload-types.ts', import.meta.url)
 
@@ -57,4 +59,46 @@ test('media lifecycle migration is additive and constrains upload/hash/completio
   assert.equal(snapshot.tables?.['public.portal_page_media']?.columns?.sha256?.notNull, false)
   assert.equal(snapshot.tables?.['public.portal_page_media']?.columns?.state?.notNull, true)
   assert.equal(snapshot.tables?.['public.news_media']?.columns?.sha256?.notNull, true)
+})
+
+test('private cleanup queue migration changes only its page-upload table and has a generated snapshot', async () => {
+  const [migration, snapshotText] = await Promise.all([
+    readFile(uploadCleanupMigrationPath, 'utf8'), readFile(uploadCleanupSnapshotPath, 'utf8'),
+  ])
+  assert.doesNotMatch(migration, /(?:news_articles|news_media|news_schedules|news_audit|legacy_news_revisions|news_migration_runs|news_migration_items)/u)
+  assert.match(migration, /portal_page_upload_cleanup/u)
+  assert.match(migration, /last_error_code.*IN\s*\(/su)
+  const index = await readFile(indexPath, 'utf8')
+  assert.match(index, /migration_20261019_160000_portal_page_upload_cleanup/u)
+  const snapshot = JSON.parse(snapshotText) as {
+    tables?: Record<string, { columns?: Record<string, { notNull?: boolean }>; indexes?: Record<string, unknown> }>
+  }
+  const queue = snapshot.tables?.['public.portal_page_upload_cleanup']
+  assert.ok(queue, 'the post-migration snapshot contains the private queue table')
+  assert.equal(queue.columns?.upload_id?.notNull, true)
+  assert.equal(queue.columns?.next_attempt_at?.notNull, false)
+  assert.ok(queue.indexes?.portal_page_upload_cleanup_due_idx)
+  assert.equal(snapshot.tables?.['public.news_media']?.columns?.sha256?.notNull, true)
+})
+
+test('media lifecycle down migration rejects uploading rows with an actionable precondition', async () => {
+  const { down } = await import('../../src/migrations/20261019_150233_portal_page_media_upload_lifecycle')
+  const statements: unknown[] = []
+  const db = { async execute(statement: unknown) {
+    statements.push(statement)
+    return { rows: [{ has_uploading: true }] }
+  } }
+  await assert.rejects(down({ db } as never), /uploading.*reconcil.*before rolling back/iu)
+  assert.equal(statements.length, 1, 'the guard runs before dropping constraints or restoring NOT NULL')
+})
+
+test('cleanup queue down migration refuses pending queue work or uploading media', async () => {
+  const { down } = await import('../../src/migrations/20261019_160000_portal_page_upload_cleanup')
+  const statements: unknown[] = []
+  const db = { async execute(statement: unknown) {
+    statements.push(statement)
+    return { rows: [{ has_pending: true, has_uploading: false }] }
+  } }
+  await assert.rejects(down({ db } as never), /cannot roll back.*pending cleanup.*reconcile or cancel/iu)
+  assert.equal(statements.length, 1, 'the guard runs before dropping the queue table')
 })

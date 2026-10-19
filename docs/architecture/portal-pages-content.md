@@ -47,6 +47,19 @@ Esta decisão não altera o contrato global do parser Payload da News
 (`useTempFiles:false`, limite de 50 MiB); leitura autenticada de mídia permanece
 uma entrega posterior.
 
+O manifest privado continua sendo a autoridade para estado, caminho e hash dos
+bytes. A tabela interna `portal_page_upload_cleanup` é somente um índice durável
+de trabalho: a criação da mídia e o enqueue inicial compartilham transação; a
+conclusão agenda reconciliação na mesma transação da atualização do hash; o
+cancelamento mantém mídia/manifest enfileirados até a remoção verificada terminar.
+Cada passagem de inicialização repara e processa no máximo 32 IDs distintos, em
+ordem estável (`next_attempt_at`, `upload_id`), com `SKIP LOCKED`, savepoint por
+item e backoff exponencial limitado a 24 horas. Falhas recebem apenas códigos
+sanitizados e não bloqueiam uploads não relacionados; a admissão continua
+fail-closed para quota, disco e enqueue obrigatório. Tombstones `done` evitam
+re-enfileirar mídias concluídas já limpas. Esta tabela não referencia nem consulta
+domínios da Owner News.
+
 O leitor de vídeo/PDF usará cookie de sessão de mídia HttpOnly, SameSite=Strict,
 curta e escopada à futura rota de assets. Segredos Firebase ou de serviço nunca
 serão colocados em URLs. Tipos de arquivo no escopo são JPEG, PNG, WebP, PDF,

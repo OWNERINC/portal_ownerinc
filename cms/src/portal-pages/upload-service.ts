@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, lstat, mkdir, open, opendir, rename, stat, statfs, unlink, type FileHandle } from 'node:fs/promises'
+import { chmod, link, lstat, mkdir, open, opendir, readFile, rename, stat, statfs, unlink, type FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { Readable, Writable, type Readable as NodeReadable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -9,9 +9,15 @@ import { sql } from '@payloadcms/db-postgres'
 import type { Payload, PayloadRequest } from 'payload'
 import { MAX_IMAGE_PIXELS } from '../media/validate-upload'
 import { requireCmsTransaction } from '../publication/transaction'
-import { withPortalPageMediaMutation } from './persistence'
+import { withPortalPageMediaLifecycleMutation, withPortalPageMediaMutation } from './persistence'
 import { PORTAL_PAGE_MEDIA_SIZE_CAPS, validatePortalPageMediaMetadata } from './validation'
 import { PORTAL_PAGE_MEDIA_MIMES } from './primitives'
+import {
+  PORTAL_PAGE_UPLOAD_CLEANUP_BATCH_SIZE,
+  processPortalPageUploadCleanupBatch,
+  type PortalPageUploadCleanupAdapter,
+  type PortalPageUploadCleanupItem,
+} from './upload-cleanup-queue'
 
 const MiB = 1024 * 1024
 export const PORTAL_PAGE_UPLOAD_CHUNK_SIZE = 5 * MiB
@@ -22,11 +28,13 @@ export const PORTAL_PAGE_UPLOAD_MIN_FREE_BYTES = 1024 * MiB
 export const PORTAL_PAGE_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000
 const MAX_MANIFEST_BYTES = 8192
 const MAX_DIRECTORY_SCAN = 1024
-const MAX_MANIFEST_SCAN = 32
 const STREAM_HIGH_WATER_MARK = 64 * 1024
 const PAGE_MEDIA_COLLECTION = 'portal-page-media'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
-const MP4_BRANDS = new Set(['isom', 'iso2', 'mp41', 'mp42', 'avc1', 'M4V '])
+const MP4_BRANDS = new Set(['isom', 'iso2', 'mp41', 'mp42', 'avc1', 'M4V '].map(value => Buffer.from(value, 'ascii').toString('hex')))
+const PDF_HEADER = Buffer.from('%PDF-')
+const PDF_EOF = Buffer.from('%%EOF')
+const PROCESS_INSTANCE_NONCE = randomBytes(24).toString('hex')
 
 export class PortalPageUploadError extends Error {
   constructor(readonly code: string, readonly status: number) { super(code) }
@@ -82,6 +90,25 @@ export function expectedPortalPageUploadChunkBytes(bytes: number, chunkCount: nu
   return index === chunkCount - 1 ? bytes - (chunkCount - 1) * PORTAL_PAGE_UPLOAD_CHUNK_SIZE : PORTAL_PAGE_UPLOAD_CHUNK_SIZE
 }
 
+/** Retry short writes until every byte reaches disk; a zero-byte write is never treated as success. */
+export async function writePortalPageBytesFully(handle: Pick<FileHandle, 'write'>, bytes: Uint8Array): Promise<void> {
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
+  let offset = 0
+  while (offset < buffer.length) {
+    const result = await handle.write(buffer, offset, buffer.length - offset, null)
+    if (!Number.isSafeInteger(result.bytesWritten) || result.bytesWritten <= 0 || result.bytesWritten > buffer.length - offset) {
+      throw new Error('file write made zero progress')
+    }
+    offset += result.bytesWritten
+  }
+}
+
+async function writeFileBytes(context: MutationRequestContext, handle: Pick<FileHandle, 'write'>,
+  bytes: Uint8Array, purpose: WritePurpose): Promise<void> {
+  if (context.fileHandleWrite) return context.fileHandleWrite(handle, bytes, purpose)
+  return writePortalPageBytesFully(handle, bytes)
+}
+
 /** Stream sequential sources into a backpressured destination while hashing and enforcing an exact byte count. */
 export async function streamPortalPageBytes(sources: readonly NodeReadable[], destination: Writable, expectedBytes: number) {
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1) fail('invalid_request')
@@ -123,9 +150,22 @@ type UploadManifest = {
 }
 type StoredPaths = { root: string; pages: string; incoming: string }
 type UploadLock = { release: () => Promise<void> }
-type ActiveUploadRow = { id: string; uploaded_by: string; filesize: string | number }
+type UploadAdmissionStats = { activeForActor: number; activeGlobal: number; reservedBytes: bigint }
+type WritePurpose = 'manifest' | 'lock' | 'chunk' | 'assembly'
+type UploadQueueServiceAdapter = PortalPageUploadCleanupAdapter & {
+  enqueue: (uploadID: string, nextAttemptAt: number) => Promise<void>
+  remove: (uploadID: string) => Promise<void>
+  schedule: (uploadID: string, nextAttemptAt: number) => Promise<void>
+  markDone: (uploadID: string) => Promise<void>
+}
 type MutationRequestContext = { payload: Payload; req: PayloadRequest; actorUid: string; uploadDir: string; now?: () => number;
-  statfsFreeBytes?: (directory: string) => Promise<bigint> }
+  statfsFreeBytes?: (directory: string) => Promise<bigint>;
+  processInstanceNonce?: string;
+  processStartIdentity?: string;
+  readProcessIdentity?: (pid: number) => Promise<string | null>;
+  fileHandleWrite?: (handle: Pick<FileHandle, 'write'>, bytes: Uint8Array, purpose: WritePurpose) => Promise<void>;
+  readUploadAdmission?: (actorUid: string, now: number) => Promise<UploadAdmissionStats>;
+  cleanupQueueAdapter?: (db: Awaited<ReturnType<typeof requireCmsTransaction>>) => UploadQueueServiceAdapter }
 
 function getPaths(uploadDir: string): StoredPaths {
   if (!path.isAbsolute(uploadDir) || uploadDir.includes('\0')) fail('storage_unavailable', 503)
@@ -238,7 +278,8 @@ function validateManifest(value: unknown, expectedID: string): UploadManifest {
       row.mimeType === 'video/mp4' ? 'mp4' : 'webm'
   if (!row.storageKey.endsWith(`.${extension}`)) fail('upload_unavailable', 503)
   const hasFinalHash = typeof row.finalSha256 === 'string' && /^[0-9a-f]{64}$/u.test(row.finalSha256)
-  if ((state === 'ready_to_rename' || state === 'renamed') !== hasFinalHash ||
+  if (((state === 'ready_to_rename' || state === 'renamed') && !hasFinalHash) ||
+    ((state === 'receiving' || state === 'assembling') && hasFinalHash) ||
     (row.finalSha256 !== undefined && !hasFinalHash)) fail('upload_unavailable', 503)
   return {
     version: 1, id, storageKey: row.storageKey, actorUid: row.actorUid, mimeType: row.mimeType as PortalPageUploadInit['mimeType'],
@@ -268,7 +309,7 @@ async function readManifest(paths: StoredPaths, id: string, source = manifestPat
   return validateManifest(parsed, id)
 }
 
-async function writeManifest(paths: StoredPaths, manifest: UploadManifest): Promise<void> {
+async function writeManifest(context: MutationRequestContext, paths: StoredPaths, manifest: UploadManifest): Promise<void> {
   const id = validatedID(manifest.id)
   const normalized = validateManifest(manifest, id)
   const temp = manifestTempPath(paths, id)
@@ -277,12 +318,12 @@ async function writeManifest(paths: StoredPaths, manifest: UploadManifest): Prom
   let handle
   try {
     handle = await open(temp, 'wx', 0o600)
-    await handle.writeFile(data)
+    await writeFileBytes(context, handle, data, 'manifest')
     await handle.sync()
     await handle.close(); handle = undefined
     const target = manifestPath(paths, id)
-    if (await assertRegularOrAbsent(target)) await rename(temp, target)
-    else await rename(temp, target)
+    await assertRegularOrAbsent(target)
+    await rename(temp, target)
     await syncDirectory(paths.incoming)
   } catch (error) {
     await handle?.close().catch(() => {})
@@ -301,50 +342,159 @@ export function verifyPortalPageUploadToken(token: unknown, expectedHash: string
   return validTokenShape && /^[0-9a-f]{64}$/u.test(expectedHash) && equal
 }
 
-async function readLockOwner(filename: string): Promise<{ pid: number; live: boolean }> {
-  const bytes = await readSmallRegularFile(filename, 1024)
-  let value: Record<string, unknown>
-  try { value = asRecord(JSON.parse(bytes.toString('utf8'))) } catch { fail('upload_unavailable', 503) }
-  if (!Number.isSafeInteger(value.pid) || Number(value.pid) < 1 || typeof value.createdAt !== 'string' ||
-    !Number.isFinite(Date.parse(value.createdAt))) fail('upload_unavailable', 503)
-  if (Date.now() - Date.parse(value.createdAt) < PORTAL_PAGE_UPLOAD_RETENTION_MS) return { pid: Number(value.pid), live: true }
-  try { process.kill(Number(value.pid), 0); return { pid: Number(value.pid), live: true } }
-  catch (error) { return { pid: Number(value.pid), live: (error as NodeJS.ErrnoException).code !== 'ESRCH' } }
+async function defaultProcessIdentity(pid: number): Promise<string | null> {
+  if (process.platform !== 'linux') return pid === process.pid ? `process:${process.pid}` : null
+  try {
+    const [bootID, statText] = await Promise.all([
+      readFile('/proc/sys/kernel/random/boot_id', 'utf8'),
+      readFile(`/proc/${pid}/stat`, 'utf8'),
+    ])
+    const close = statText.lastIndexOf(')')
+    if (close < 0) return null
+    const fields = statText.slice(close + 2).trim().split(/\s+/u)
+    const startTicks = fields[19]
+    if (!startTicks || !/^\d+$/u.test(startTicks)) return null
+    return `linux:${bootID.trim()}:${startTicks}`
+  } catch { return null }
 }
 
-async function acquireUploadLock(paths: StoredPaths, id: string, waitForSameProcess = false): Promise<UploadLock> {
+async function ownProcessIdentity(context: MutationRequestContext): Promise<string> {
+  if (context.processStartIdentity) return context.processStartIdentity
+  const identity = await (context.readProcessIdentity || defaultProcessIdentity)(process.pid)
+  if (identity) return identity
+  if (process.platform !== 'linux') return `process:${process.pid}`
+  fail('storage_unavailable', 503)
+}
+
+type LockOwner = { kind: 'live'; pid: number; sameInstance: boolean } | { kind: 'stale' } | { kind: 'malformed' }
+
+async function readLockOwner(context: MutationRequestContext, filename: string, localIdentity: string): Promise<LockOwner> {
+  let info
+  try { info = await lstat(filename) } catch (error) {
+    if (isNotFound(error)) return { kind: 'stale' }
+    fail('storage_unavailable', 503)
+  }
+  if (!info.isFile() || info.isSymbolicLink() || (process.platform !== 'win32' && (info.mode & 0o077) !== 0)) {
+    fail('upload_busy', 409)
+  }
+  let bytes: Buffer
+  try { bytes = await readSmallRegularFile(filename, 1024) } catch { return { kind: 'malformed' } }
+  let value: Record<string, unknown>
+  try { value = asRecord(JSON.parse(bytes.toString('utf8'))) } catch { return { kind: 'malformed' } }
+  const allowed = ['version', 'pid', 'processInstanceNonce', 'processStartIdentity', 'createdAt', 'nonce']
+  if (Object.keys(value).length !== allowed.length || Object.keys(value).some(key => !allowed.includes(key)) ||
+    value.version !== 1 || !Number.isSafeInteger(value.pid) || Number(value.pid) < 1 ||
+    typeof value.processInstanceNonce !== 'string' || !/^[0-9a-f]{48}$/u.test(value.processInstanceNonce) ||
+    typeof value.processStartIdentity !== 'string' || !value.processStartIdentity || value.processStartIdentity.length > 256 ||
+    typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt)) ||
+    typeof value.nonce !== 'string' || !/^[0-9a-f]{32}$/u.test(value.nonce)) return { kind: 'malformed' }
+  const pid = Number(value.pid)
+  const sameInstance = pid === process.pid && value.processInstanceNonce === (context.processInstanceNonce || PROCESS_INSTANCE_NONCE) &&
+    value.processStartIdentity === localIdentity
+  if (sameInstance) return { kind: 'live', pid, sameInstance: true }
+  try { process.kill(pid, 0) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return { kind: 'stale' }
+    // Permission and platform probing failures cannot prove that a foreign owner is dead.
+    return { kind: 'live', pid, sameInstance: false }
+  }
+  const actual = await (context.readProcessIdentity || defaultProcessIdentity)(pid)
+  if (!actual) return { kind: 'live', pid, sameInstance: false }
+  if (actual === value.processStartIdentity) return { kind: 'live', pid, sameInstance: false }
+  return { kind: 'stale' }
+}
+
+async function publishUploadLock(context: MutationRequestContext, paths: StoredPaths, filename: string,
+  lockData: Buffer, temp: string): Promise<'published' | 'exists'> {
+  let handle
+  try { handle = await open(temp, 'wx', 0o600) }
+  catch (error) {
+    if (isAlreadyExists(error)) return 'exists'
+    fail('storage_unavailable', 503)
+  }
+  let linked = false
+  try {
+    await writeFileBytes(context, handle, lockData, 'lock')
+    await handle.sync()
+    await handle.close(); handle = undefined
+    try { await link(temp, filename); linked = true }
+    catch (error) {
+      if (isAlreadyExists(error)) {
+        await removeRegularFile(temp)
+        await syncDirectory(paths.incoming)
+        return 'exists'
+      }
+      throw error
+    }
+    await unlink(temp)
+    await syncDirectory(paths.incoming)
+    return 'published'
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    if (linked) {
+      const current = await readSmallRegularFile(filename, 1024).catch(() => Buffer.alloc(0))
+      let currentNonce: unknown
+      try { currentNonce = asRecord(JSON.parse(current.toString('utf8'))).nonce } catch { currentNonce = null }
+      if (currentNonce === JSON.parse(lockData.toString('utf8')).nonce) await removeRegularFile(filename).catch(() => {})
+    }
+    await removeRegularFile(temp).catch(() => {})
+    if (error instanceof PortalPageUploadError) throw error
+    fail('storage_unavailable', 503)
+  }
+}
+
+async function acquireUploadLock(context: MutationRequestContext, paths: StoredPaths, id: string,
+  waitForSameProcess = false): Promise<UploadLock> {
   const filename = uploadLockPath(paths, id)
   const nonce = randomBytes(16).toString('hex')
-  const lockData = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), nonce })
-  let handle
-  for (let attempt = 0; ; attempt++) {
-    try { handle = await open(filename, 'wx', 0o600); break }
-    catch (error) {
-      if (!isAlreadyExists(error)) fail('storage_unavailable', 503)
-      if (!(await assertRegularOrAbsent(filename))) continue
-      const owner = await readLockOwner(filename)
-      if (owner.live && waitForSameProcess && owner.pid === process.pid && attempt < 200) {
-        await new Promise(resolve => setTimeout(resolve, 25))
-        continue
-      }
-      if (!owner.live) {
+  const processInstanceNonce = context.processInstanceNonce || PROCESS_INSTANCE_NONCE
+  const processStartIdentity = await ownProcessIdentity(context)
+  const lockData = Buffer.from(JSON.stringify({ version: 1, pid: process.pid, processInstanceNonce,
+    processStartIdentity, createdAt: new Date().toISOString(), nonce }), 'utf8')
+  const temp = path.join(paths.incoming, `u-${id}.tmp`)
+  const recoverOrWait = async (filename: string, attempt: number): Promise<void> => {
+    const owner = await readLockOwner(context, filename, processStartIdentity)
+    if (owner.kind === 'stale') {
+      await removeRegularFile(filename)
+      return
+    }
+    if (owner.kind === 'malformed') {
+      let info
+      try { info = await lstat(filename) } catch (error) { if (isNotFound(error)) return; fail('storage_unavailable', 503) }
+      if (!info.isFile() || info.isSymbolicLink()) fail('upload_busy', 409)
+      if (Date.now() - info.mtimeMs >= PORTAL_PAGE_UPLOAD_RETENTION_MS) {
         await removeRegularFile(filename)
-        continue
+        return
       }
       fail('upload_busy', 409)
     }
+    if (owner.sameInstance && waitForSameProcess && attempt < 200) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+      return
+    }
+    fail('upload_busy', 409)
   }
-  try { await handle!.writeFile(lockData); await handle!.sync(); await syncDirectory(paths.incoming) }
-  catch { await handle?.close().catch(() => {}); await removeRegularFile(filename).catch(() => {}); fail('storage_unavailable', 503) }
-  return { release: async () => {
-    await handle?.close().catch(() => {})
-    const data = await readSmallRegularFile(filename, 1024)
-    let lock: Record<string, unknown>
-    try { lock = asRecord(JSON.parse(data.toString('utf8'))) } catch { fail('storage_unavailable', 503) }
-    if (lock.nonce !== nonce) fail('storage_unavailable', 503)
-    await removeRegularFile(filename)
-    await syncDirectory(paths.incoming)
-  } }
+  for (let attempt = 0; ; attempt++) {
+    if (await assertRegularOrAbsent(filename)) {
+      await recoverOrWait(filename, attempt)
+      continue
+    }
+    if (await assertRegularOrAbsent(temp)) {
+      await recoverOrWait(temp, attempt)
+      continue
+    }
+    const published = await publishUploadLock(context, paths, filename, lockData, temp)
+    if (published === 'exists') continue
+    return { release: async () => {
+      const data = await readSmallRegularFile(filename, 1024)
+      let lock: Record<string, unknown>
+      try { lock = asRecord(JSON.parse(data.toString('utf8'))) } catch { fail('storage_unavailable', 503) }
+      if (lock.nonce !== nonce || lock.processInstanceNonce !== processInstanceNonce || lock.processStartIdentity !== processStartIdentity) {
+        fail('storage_unavailable', 503)
+      }
+      await removeRegularFile(filename)
+      await syncDirectory(paths.incoming)
+    } }
+  }
 }
 
 function assertRowMatchesManifest(row: Record<string, unknown>, manifest: UploadManifest, actor: string): void {
@@ -367,18 +517,25 @@ function metadataFromRow(row: Record<string, unknown>) {
   } catch { fail('upload_unavailable', 503) }
 }
 
-async function readActiveUploadRows(payload: Payload, req: PayloadRequest): Promise<ActiveUploadRow[]> {
+async function readUploadAdmission(context: MutationRequestContext, payload: Payload, req: PayloadRequest,
+  actorUid: string, timestamp: number): Promise<UploadAdmissionStats> {
+  if (context.readUploadAdmission) return context.readUploadAdmission(actorUid, timestamp)
   const db = await requireCmsTransaction(payload, req)
   const result = await db.execute(sql`SELECT id, uploaded_by, filesize FROM portal_page_media WHERE state = 'uploading' ORDER BY id LIMIT 9`)
   const rows = (result as unknown as { rows?: unknown[] }).rows
   if (!Array.isArray(rows) || rows.length > PORTAL_PAGE_UPLOAD_MAX_ACTIVE_GLOBAL) fail('upload_unavailable', 503)
-  return rows.map(raw => {
+  let reservedBytes = 0n
+  let activeForActor = 0
+  for (const raw of rows) {
     const row = asRecord(raw)
     if (typeof row.id !== 'string' || !UUID.test(row.id) || typeof row.uploaded_by !== 'string') fail('upload_unavailable', 503)
-    try { if (BigInt(String(row.filesize)) < 1n || BigInt(String(row.filesize)) > BigInt(500 * MiB)) fail('upload_unavailable', 503) }
+    let bytes: bigint
+    try { bytes = BigInt(String(row.filesize)); if (bytes < 1n || bytes > BigInt(500 * MiB)) fail('upload_unavailable', 503) }
     catch { fail('upload_unavailable', 503) }
-    return { id: String(row.id).toLowerCase(), uploaded_by: row.uploaded_by, filesize: String(row.filesize) }
-  })
+    reservedBytes += bytes
+    if (row.uploaded_by === actorUid) activeForActor++
+  }
+  return { activeForActor, activeGlobal: rows.length, reservedBytes }
 }
 
 async function freeBytesFromStatfs(directory: string): Promise<bigint> {
@@ -388,14 +545,101 @@ async function freeBytesFromStatfs(directory: string): Promise<bigint> {
   } catch { fail('disk_unavailable', 507) }
 }
 
-async function verifyDiskReservation(context: MutationRequestContext, paths: StoredPaths, rows: ActiveUploadRow[], nextBytes: number): Promise<void> {
-  const activeBytes = rows.reduce((sum, row) => sum + BigInt(row.filesize), 0n)
+async function verifyDiskReservation(context: MutationRequestContext, paths: StoredPaths,
+  stats: UploadAdmissionStats, nextBytes: number): Promise<void> {
   let free: bigint
   try { free = await (context.statfsFreeBytes || freeBytesFromStatfs)(paths.incoming) }
   catch { fail('disk_unavailable', 507) }
   // Staging chunks and final assembly coexist until an atomic rename. Reserve both copies.
-  const need = (activeBytes + BigInt(nextBytes)) * 2n + BigInt(PORTAL_PAGE_UPLOAD_MIN_FREE_BYTES)
+  const need = (stats.reservedBytes + BigInt(nextBytes)) * 2n + BigInt(PORTAL_PAGE_UPLOAD_MIN_FREE_BYTES)
   if (free < need) fail('insufficient_disk_space', 507)
+}
+
+function queryRows(result: unknown): Array<Record<string, unknown>> {
+  const rows = result && typeof result === 'object' ? (result as { rows?: unknown }).rows : undefined
+  if (!Array.isArray(rows)) fail('upload_unavailable', 503)
+  return rows.map(asRecord)
+}
+
+function createDatabaseUploadCleanupAdapter(db: Awaited<ReturnType<typeof requireCmsTransaction>>): UploadQueueServiceAdapter {
+  const savepoint = async <T>(name: 'pass' | 'item', work: () => Promise<T>): Promise<T> => {
+    await db.execute(name === 'pass' ? sql`SAVEPOINT portal_page_upload_cleanup_pass` : sql`SAVEPOINT portal_page_upload_cleanup_item`)
+    try {
+      const result = await work()
+      await db.execute(name === 'pass' ? sql`RELEASE SAVEPOINT portal_page_upload_cleanup_pass` : sql`RELEASE SAVEPOINT portal_page_upload_cleanup_item`)
+      return result
+    } catch (error) {
+      try {
+        await db.execute(name === 'pass' ? sql`ROLLBACK TO SAVEPOINT portal_page_upload_cleanup_pass` : sql`ROLLBACK TO SAVEPOINT portal_page_upload_cleanup_item`)
+        await db.execute(name === 'pass' ? sql`RELEASE SAVEPOINT portal_page_upload_cleanup_pass` : sql`RELEASE SAVEPOINT portal_page_upload_cleanup_item`)
+      } catch { /* The caller treats a failed rollback as a pass-level failure. */ }
+      throw error
+    }
+  }
+  const setDone = async (uploadID: string) => {
+    await db.execute(sql`UPDATE portal_page_upload_cleanup SET status = 'done', next_attempt_at = NULL,
+      last_error_code = NULL, updated_at = now() WHERE upload_id = ${uploadID}::uuid`)
+  }
+  return {
+    withPassSavepoint: work => savepoint('pass', work),
+    repairMissing: async (limit, timestamp) => queryRows(await db.execute(sql`
+      WITH missing AS (
+        SELECT media.id
+        FROM portal_page_media AS media
+        LEFT JOIN portal_page_upload_cleanup AS cleanup ON cleanup.upload_id = media.id
+        WHERE cleanup.upload_id IS NULL
+        ORDER BY media.id
+        LIMIT ${limit}
+      )
+      INSERT INTO portal_page_upload_cleanup (upload_id, status, next_attempt_at)
+      SELECT id, 'pending', ${new Date(timestamp)} FROM missing
+      ON CONFLICT (upload_id) DO NOTHING
+      RETURNING upload_id`)).length,
+    claimDue: async (limit, timestamp) => queryRows(await db.execute(sql`
+      SELECT upload_id, attempt_count, extract(epoch FROM next_attempt_at) * 1000 AS next_attempt_ms
+      FROM portal_page_upload_cleanup
+      WHERE status = 'pending' AND next_attempt_at <= ${new Date(timestamp)}
+      ORDER BY next_attempt_at, upload_id
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED`)).map(row => {
+      const uploadID = typeof row.upload_id === 'string' ? row.upload_id.toLowerCase() : ''
+      const attemptCount = Number(row.attempt_count)
+      const nextAttemptAt = Number(row.next_attempt_ms)
+      if (!UUID.test(uploadID) || !Number.isSafeInteger(attemptCount) || attemptCount < 0 || !Number.isFinite(nextAttemptAt)) {
+        fail('upload_unavailable', 503)
+      }
+      return { uploadID, attemptCount, nextAttemptAt }
+    }),
+    withSavepoint: (_uploadID, work) => savepoint('item', work),
+    markDone: setDone,
+    remove: async uploadID => { await db.execute(sql`DELETE FROM portal_page_upload_cleanup WHERE upload_id = ${uploadID}::uuid`) },
+    reschedule: async (uploadID, timestamp) => {
+      await db.execute(sql`UPDATE portal_page_upload_cleanup SET status = 'pending', next_attempt_at = ${new Date(timestamp)},
+        attempt_count = 0, last_error_code = NULL, updated_at = now() WHERE upload_id = ${uploadID}::uuid`)
+    },
+    defer: async (uploadID, attempts, code, timestamp) => {
+      await db.execute(sql`UPDATE portal_page_upload_cleanup SET status = 'pending', next_attempt_at = ${new Date(timestamp)},
+        attempt_count = ${Math.min(attempts, 2_147_483_647)}, last_error_code = ${code}, updated_at = now()
+        WHERE upload_id = ${uploadID}::uuid`)
+    },
+    enqueue: async (uploadID, timestamp) => {
+      await db.execute(sql`INSERT INTO portal_page_upload_cleanup (upload_id, status, next_attempt_at)
+        VALUES (${uploadID}::uuid, 'pending', ${new Date(timestamp)})
+        ON CONFLICT (upload_id) DO UPDATE SET
+          status = CASE WHEN portal_page_upload_cleanup.status = 'done' THEN 'done' ELSE 'pending' END,
+          next_attempt_at = CASE WHEN portal_page_upload_cleanup.status = 'done' THEN NULL
+            ELSE LEAST(portal_page_upload_cleanup.next_attempt_at, EXCLUDED.next_attempt_at) END,
+          updated_at = now()`)
+    },
+    schedule: async (uploadID, timestamp) => {
+      await db.execute(sql`UPDATE portal_page_upload_cleanup SET status = 'pending', next_attempt_at = ${new Date(timestamp)},
+        last_error_code = NULL, updated_at = now() WHERE upload_id = ${uploadID}::uuid`)
+    },
+  }
+}
+
+function uploadCleanupAdapter(context: MutationRequestContext, db: Awaited<ReturnType<typeof requireCmsTransaction>>) {
+  return context.cleanupQueueAdapter?.(db) || createDatabaseUploadCleanupAdapter(db)
 }
 
 async function fileExistsRegular(filename: string): Promise<boolean> { return assertRegularOrAbsent(filename) }
@@ -422,7 +666,7 @@ async function readFileRange(filename: string, position: number, length: number,
 }
 
 function webmHasDocType(header: Buffer): boolean {
-  if (header.length < 8 || !header.subarray(0, 4).equals(Buffer.from('1a45dfa3', 'hex'))) return false
+  if (header.length < 8 || !header.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return false
   const vint = (offset: number, keepMarker = false) => {
     const first = header[offset]
     if (first === undefined || first === 0) return null
@@ -446,7 +690,7 @@ function webmHasDocType(header: Buffer): boolean {
     if (!size) return false
     offset += size.width
     if (offset + size.value > end) return false
-    if (id.value === 0x4282) found = size.value === 4 && header.toString('ascii', offset, offset + 4) === 'webm'
+    if (id.value === 0x4282) found = size.value === 4 && header.subarray(offset, offset + 4).equals(Buffer.from([0x77, 0x65, 0x62, 0x6d]))
     offset += size.value
   }
   return offset === end && found
@@ -456,9 +700,10 @@ async function validateMediaFile(filename: string, mimeType: UploadManifest['mim
   if (mimeType.startsWith('image/')) {
     if (bytes > 15 * MiB) fail('invalid_media_file', 400)
     const data = await readSmallRegularFile(filename, 15 * MiB)
-    const validSignature = mimeType === 'image/jpeg' ? data.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex')) :
-      mimeType === 'image/png' ? data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) :
-        data.length >= 20 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP' &&
+    const validSignature = mimeType === 'image/jpeg' ? data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) :
+      mimeType === 'image/png' ? data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) :
+        data.length >= 20 && data.subarray(0, 4).equals(Buffer.from([0x52, 0x49, 0x46, 0x46])) &&
+          data.subarray(8, 12).equals(Buffer.from([0x57, 0x45, 0x42, 0x50])) &&
           data.readUInt32LE(4) + 8 === data.length
     if (!validSignature) fail('invalid_media_file', 400)
     try {
@@ -475,14 +720,19 @@ async function validateMediaFile(filename: string, mimeType: UploadManifest['mim
   if (mimeType === 'application/pdf') {
     const head = await readFileRange(filename, 0, 16, 5)
     const tail = await readFileRange(filename, Math.max(0, bytes - 1024), Math.min(bytes, 1024), 5)
-    if (!head.toString('ascii').startsWith('%PDF-') || !/%%EOF[\t\n\r\f ]*$/u.test(tail.toString('latin1'))) fail('invalid_media_file', 400)
+    let eofAt = tail.lastIndexOf(PDF_EOF)
+    if (!head.subarray(0, PDF_HEADER.length).equals(PDF_HEADER) || eofAt < 0) fail('invalid_media_file', 400)
+    for (let index = eofAt + PDF_EOF.length; index < tail.length; index++) {
+      const byte = tail[index]!
+      if (byte !== 0x09 && byte !== 0x0a && byte !== 0x0c && byte !== 0x0d && byte !== 0x20) fail('invalid_media_file', 400)
+    }
     return
   }
   const header = await readFileRange(filename, 0, Math.min(bytes, 4096), 8)
   if (mimeType === 'video/mp4') {
-    if (header.length < 16 || header.toString('ascii', 4, 8) !== 'ftyp') fail('invalid_media_file', 400)
+    if (header.length < 16 || !header.subarray(4, 8).equals(Buffer.from([0x66, 0x74, 0x79, 0x70]))) fail('invalid_media_file', 400)
     const boxSize = header.readUInt32BE(0)
-    const brand = header.toString('ascii', 8, 12)
+    const brand = header.subarray(8, 12).toString('hex')
     if (boxSize < 16 || boxSize > 4096 || boxSize > bytes || boxSize % 4 !== 0 || !MP4_BRANDS.has(brand)) fail('invalid_media_file', 400)
     return
   }
@@ -509,9 +759,9 @@ async function createDiscardSink(): Promise<Writable> {
   return new Writable({ highWaterMark: STREAM_HIGH_WATER_MARK, write(_chunk, _encoding, callback) { callback() } })
 }
 
-function createFileHandleSink(handle: FileHandle): Writable {
+function createFileHandleSink(context: MutationRequestContext, handle: FileHandle, purpose: WritePurpose): Writable {
   return new Writable({ highWaterMark: STREAM_HIGH_WATER_MARK, write(chunk: Buffer | Uint8Array, _encoding, callback) {
-    void handle.write(chunk).then(() => callback(), error => callback(error as Error))
+    void writeFileBytes(context, handle, chunk, purpose).then(() => callback(), error => callback(error as Error))
   } })
 }
 
@@ -556,7 +806,7 @@ async function inspectChunkSet(paths: StoredPaths, manifest: UploadManifest): Pr
   }
 }
 
-async function assembleChunks(paths: StoredPaths, manifest: UploadManifest): Promise<string> {
+async function assembleChunks(context: MutationRequestContext, paths: StoredPaths, manifest: UploadManifest): Promise<string> {
   const partial = assembledPartPath(paths, manifest.id)
   if (await assertRegularOrAbsent(partial)) await removeRegularFile(partial)
   const sourceStreams: NodeReadable[] = []
@@ -568,7 +818,7 @@ async function assembleChunks(paths: StoredPaths, manifest: UploadManifest): Pro
   let output
   try {
     output = await open(partial, 'wx', 0o600)
-    const result = await streamPortalPageBytes(sourceStreams, createFileHandleSink(output), manifest.bytes)
+    const result = await streamPortalPageBytes(sourceStreams, createFileHandleSink(context, output, 'assembly'), manifest.bytes)
     await output.sync()
     await output.close(); output = undefined
     if (result.bytes !== manifest.bytes) fail('invalid_chunk_size', 400)
@@ -611,48 +861,12 @@ async function cleanupIncoming(paths: StoredPaths, manifest: UploadManifest, rem
   if (removeFinal) await syncDirectory(paths.pages)
 }
 
-type EntryGroup = { id: string; manifest?: string; tempManifest?: string; lock?: string; names: string[] }
-async function scanIncoming(paths: StoredPaths): Promise<EntryGroup[]> {
-  const groups = new Map<string, EntryGroup>()
-  let directory
-  try { directory = await opendir(paths.incoming) } catch { fail('storage_unavailable', 503) }
-  try {
-    let scanned = 0
-    for await (const entry of directory!) {
-      scanned++
-      if (scanned > MAX_DIRECTORY_SCAN) fail('upload_unavailable', 503)
-      if (!entry.isFile()) fail('upload_unavailable', 503)
-      const name = entry.name
-      const manifest = /^m-([0-9a-f-]{36})\.json$/u.exec(name)
-      const temporary = /^m-([0-9a-f-]{36})\.tmp$/u.exec(name)
-      const lock = /^u-([0-9a-f-]{36})\.lock$/u.exec(name)
-      const chunk = /^([0-9a-f-]{36})-(0|[1-9][0-9]{0,2})\.(?:chunk|part)$/u.exec(name)
-      const assembled = /^([0-9a-f-]{36})\.assembled\.part$/u.exec(name)
-      const match = manifest || temporary || lock || chunk || assembled
-      if (!match || !UUID.test(match[1]!)) fail('upload_unavailable', 503)
-      const id = match[1]!.toLowerCase()
-      const group = groups.get(id) || { id, names: [] }
-      group.names.push(name)
-      if (manifest) { if (group.manifest) fail('upload_unavailable', 503); group.manifest = name }
-      if (temporary) { if (group.tempManifest) fail('upload_unavailable', 503); group.tempManifest = name }
-      if (lock) { if (group.lock) fail('upload_unavailable', 503); group.lock = name }
-      if (chunk && Number(chunk[2]) >= PORTAL_PAGE_UPLOAD_MAX_CHUNKS) fail('upload_unavailable', 503)
-      groups.set(id, group)
-      if (groups.size > MAX_MANIFEST_SCAN) fail('upload_unavailable', 503)
-    }
-  } catch (error) {
-    if (error instanceof PortalPageUploadError) throw error
-    fail('storage_unavailable', 503)
-  }
-  for (const group of groups.values()) if (!group.manifest && !group.tempManifest) fail('upload_unavailable', 503)
-  return [...groups.values()].sort((a, b) => a.id.localeCompare(b.id))
-}
-
-async function writeRequestToFile(body: Readable, destination: string, expectedBytes: number): Promise<{ bytes: number; sha256: string }> {
+async function writeRequestToFile(context: MutationRequestContext, body: Readable, destination: string,
+  expectedBytes: number): Promise<{ bytes: number; sha256: string }> {
   let handle
   try {
     handle = await open(destination, 'wx', 0o600)
-    const result = await streamPortalPageBytes([body], createFileHandleSink(handle), expectedBytes)
+    const result = await streamPortalPageBytes([body], createFileHandleSink(context, handle, 'chunk'), expectedBytes)
     await handle.sync()
     await handle.close(); handle = undefined
     return result
@@ -698,115 +912,190 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
   const pathsPromise = ensureStorage(context.uploadDir)
   const getPathsReady = () => pathsPromise
 
+  async function removeUnmanifestedArtifacts(paths: StoredPaths, id: string): Promise<void> {
+    for (let index = 0; index < PORTAL_PAGE_UPLOAD_MAX_CHUNKS; index++) {
+      await removeRegularFile(chunkPath(paths, id, index))
+      await removeRegularFile(chunkPartPath(paths, id, index))
+    }
+    await removeRegularFile(assembledPartPath(paths, id))
+    await removeRegularFile(manifestTempPath(paths, id))
+    await syncDirectory(paths.incoming)
+  }
+
+  async function reconcileQueuedUpload(transactionReq: PayloadRequest, paths: StoredPaths, id: string, timestamp: number) {
+    const lock = await acquireUploadLock(context, paths, id, true)
+    try {
+      const row = await getMediaRow(context.payload, transactionReq, id)
+      const manifestPresent = await fileExistsRegular(manifestPath(paths, id))
+      if (!manifestPresent) {
+        if (row) {
+          const metadata = metadataFromRow(row)
+          if (metadata.state === 'complete') {
+            if (!metadata.sha256 || !metadata.completedAt) fail('upload_unavailable', 503)
+            const target = finalPath(paths, metadata.storageKey)
+            if (!(await fileExistsRegular(target))) fail('upload_unavailable', 503)
+            const info = await stat(target).catch(() => null)
+            if (!info?.isFile() || info.size !== metadata.filesize ||
+              await hashRegularFile(target, metadata.filesize) !== metadata.sha256) fail('upload_unavailable', 503)
+            await validateMediaFile(target, metadata.mimeType, metadata.filesize)
+            const expiresAt = Date.parse(metadata.completedAt) + PORTAL_PAGE_UPLOAD_RETENTION_MS
+            if (timestamp < expiresAt) return { done: false as const, nextAttemptAt: expiresAt }
+            await removeUnmanifestedArtifacts(paths, id)
+            return { done: true as const }
+          }
+          const target = finalPath(paths, metadata.storageKey)
+          if (await fileExistsRegular(target)) fail('upload_unavailable', 503)
+          await removeUnmanifestedArtifacts(paths, id)
+          await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true })
+        } else {
+          await removeUnmanifestedArtifacts(paths, id)
+        }
+        return { done: true as const, remove: true }
+      }
+
+      const manifest = await readManifest(paths, id)
+      const age = timestamp - Date.parse(manifest.createdAt)
+      const expiresAt = Date.parse(manifest.createdAt) + PORTAL_PAGE_UPLOAD_RETENTION_MS
+      if (!Number.isFinite(expiresAt)) fail('upload_unavailable', 503)
+
+      if (!row) {
+        if (manifest.state === 'cancelling') {
+          await cleanupIncoming(paths, manifest, true, manifest.storageKey)
+          return { done: true as const, remove: true }
+        }
+        const target = finalPath(paths, manifest.storageKey)
+        if (await fileExistsRegular(target)) fail('upload_unavailable', 503)
+        if (manifest.state === 'receiving' || manifest.state === 'assembling') {
+          await cleanupIncoming(paths, manifest)
+          return { done: true as const, remove: true }
+        }
+        // A promoted file without a matching metadata row must not be deleted or orphaned silently.
+        fail('upload_unavailable', 503)
+      }
+
+      const metadata = metadataFromRow(row)
+      assertRowMatchesManifest(row, manifest, manifest.actorUid)
+      if (metadata.state === 'complete') {
+        if ((manifest.state !== 'renamed' && manifest.state !== 'ready_to_rename') ||
+          metadata.sha256 !== manifest.finalSha256 || metadata.storageKey !== manifest.storageKey) fail('upload_unavailable', 503)
+        await verifyReadyFile(paths, manifest, finalPath(paths, metadata.storageKey))
+        const completedAt = metadata.completedAt ? Date.parse(metadata.completedAt) : Number.NaN
+        if (!Number.isFinite(completedAt)) fail('upload_unavailable', 503)
+        const completeExpiresAt = completedAt + PORTAL_PAGE_UPLOAD_RETENTION_MS
+        if (timestamp >= completeExpiresAt) {
+          await cleanupIncoming(paths, manifest, false, metadata.storageKey)
+          return { done: true as const }
+        }
+        await cleanupIncoming(paths, manifest, false, metadata.storageKey, true)
+        return { done: false as const, nextAttemptAt: Math.max(timestamp + 1, completeExpiresAt) }
+      }
+
+      if (metadata.state !== 'uploading' || metadata.uploadedBy !== manifest.actorUid) fail('upload_unavailable', 503)
+      if (manifest.state === 'cancelling') {
+        await cleanupIncoming(paths, manifest, true, metadata.storageKey)
+        await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true })
+        return { done: true as const, remove: true }
+      }
+
+      if (manifest.state === 'ready_to_rename' || manifest.state === 'renamed') {
+        if (!manifest.finalSha256) fail('upload_unavailable', 503)
+        const target = finalPath(paths, metadata.storageKey)
+        if (await fileExistsRegular(target)) await verifyReadyFile(paths, manifest, target)
+        else {
+          const partial = assembledPartPath(paths, id)
+          await verifyReadyFile(paths, manifest, partial)
+          await rename(partial, target)
+          await syncDirectory(paths.incoming)
+          await syncDirectory(paths.pages)
+        }
+        const renamed = { ...manifest, state: 'renamed' as const }
+        if (manifest.state !== 'renamed') await writeManifest(context, paths, renamed)
+        const completedAt = new Date(timestamp).toISOString()
+        await context.payload.update({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true,
+          data: { state: 'complete', sha256: renamed.finalSha256, completedAt } })
+        await cleanupIncoming(paths, renamed, false, metadata.storageKey, true)
+        return { done: false as const, nextAttemptAt: timestamp + PORTAL_PAGE_UPLOAD_RETENTION_MS }
+      }
+
+      if (age >= PORTAL_PAGE_UPLOAD_RETENTION_MS) {
+        const cancelling = { ...manifest, state: 'cancelling' as const }
+        await writeManifest(context, paths, cancelling)
+        await cleanupIncoming(paths, cancelling, true, metadata.storageKey)
+        await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true })
+        return { done: true as const, remove: true }
+      }
+      if (!Number.isFinite(expiresAt) || expiresAt <= timestamp) fail('upload_unavailable', 503)
+      return { done: false as const, nextAttemptAt: expiresAt }
+    } finally { await lock.release() }
+  }
+
   async function cleanupExpired(): Promise<{ removed: number; unresolved: number }> {
     const paths = await getPathsReady()
-    const releases: UploadLock[] = []
-    const pending: Array<{ manifest: UploadManifest; finalKey?: string; removeFinal: boolean }> = []
-    const changed: Array<{ paths: StoredPaths; manifest: UploadManifest }> = []
-    let unresolved = 0
-    let callbackReturned = false
     try {
-      await withPortalPageMediaMutation(context.req, actor, 'delete', async transactionReq => {
-        const rows = await readActiveUploadRows(context.payload, transactionReq)
-        const activeByID = new Map(rows.map(row => [row.id, row]))
-        const groups = await scanIncoming(paths)
-        for (const group of groups) {
-          const manifestSource = group.manifest ? manifestPath(paths, group.id) : manifestTempPath(paths, group.id)
-          const manifest = await readManifest(paths, group.id, manifestSource)
-          if (group.tempManifest && group.manifest) {
-            // A leftover write temp is only removable after proving its content identity.
-            await readManifest(paths, group.id, manifestTempPath(paths, group.id))
-          }
-          const age = now() - Date.parse(manifest.createdAt)
-          if (age < PORTAL_PAGE_UPLOAD_RETENTION_MS) continue
-          const row = await getMediaRow(context.payload, transactionReq, group.id)
-          if (!row) {
-            if (manifest.state === 'cancelling' || manifest.state === 'receiving' || manifest.state === 'assembling') {
-              const lock = await acquireUploadLock(paths, group.id); releases.push(lock)
-              pending.push({ manifest, finalKey: manifest.storageKey, removeFinal: manifest.state === 'cancelling' })
-            } else unresolved++
-            continue
-          }
-          const metadata = metadataFromRow(row)
-          assertRowMatchesManifest(row, manifest, manifest.actorUid)
-          if (metadata.state === 'complete') {
-            if ((manifest.state !== 'renamed' && manifest.state !== 'ready_to_rename') ||
-              metadata.sha256 !== manifest.finalSha256 || metadata.storageKey !== row.storageKey) { unresolved++; continue }
-            const target = finalPath(paths, metadata.storageKey)
-            await verifyReadyFile(paths, manifest, target)
-            const lock = await acquireUploadLock(paths, group.id); releases.push(lock)
-            pending.push({ manifest, finalKey: metadata.storageKey, removeFinal: false })
-            continue
-          }
-          if (metadata.state !== 'uploading' || metadata.uploadedBy !== manifest.actorUid || activeByID.get(group.id)?.uploaded_by !== manifest.actorUid) {
-            fail('upload_unavailable', 503)
-          }
-          if (manifest.state === 'ready_to_rename' || manifest.state === 'renamed') { unresolved++; continue }
-          const lock = await acquireUploadLock(paths, group.id); releases.push(lock)
-          const original = { ...manifest }
-          const cancelling = { ...manifest, state: 'cancelling' as const }
-          await writeManifest(paths, cancelling)
-          changed.push({ paths, manifest: original })
-          await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id: group.id, req: transactionReq, overrideAccess: true })
-          pending.push({ manifest: cancelling, finalKey: metadata.storageKey, removeFinal: true })
-        }
-        callbackReturned = true
-        return rows
+      return await withPortalPageMediaLifecycleMutation(context.req, actor, async transactionReq => {
+        const db = await requireCmsTransaction(context.payload, transactionReq)
+        const adapter = uploadCleanupAdapter(context, db)
+        const result = await processPortalPageUploadCleanupBatch(adapter,
+          (id, timestamp) => reconcileQueuedUpload(transactionReq, paths, id, timestamp), now())
+        return { removed: result.done, unresolved: result.deferred }
       })
-      let removed = 0
-      for (const item of pending) {
-        await cleanupIncoming(paths, item.manifest, item.removeFinal, item.finalKey)
-        removed++
-      }
-      return { removed, unresolved }
-    } catch (error) {
-      // Callback errors are known rollbacks. Commit failures happen after the callback and
-      // deliberately leave the "cancelling" manifests for a later reconciliation pass.
-      if (!callbackReturned && changed.length) {
-        for (const item of changed) await writeManifest(item.paths, item.manifest).catch(() => {})
-      }
-      throw error
-    } finally {
-      for (const lock of releases.reverse()) await lock.release().catch(() => {})
-    }
+    } catch { return { removed: 0, unresolved: 1 } }
   }
 
   async function init(value: unknown) {
     const input = validatePortalPageUploadInit(value)
     const paths = await getPathsReady()
-    await cleanupExpired()
+    await cleanupExpired().catch(() => {})
     const token = randomBytes(32).toString('base64url')
-    const timestamp = new Date(now()).toISOString()
+    const timestampMs = now()
+    const timestamp = new Date(timestampMs).toISOString()
     let createdID: string | undefined
+    let createdStorageKey: string | undefined
     await withPortalPageMediaMutation(context.req, actor, 'create', async transactionReq => {
-      const active = await readActiveUploadRows(context.payload, transactionReq)
-      const activeForActor = active.filter(row => row.uploaded_by === actor).length
-      if (activeForActor >= PORTAL_PAGE_UPLOAD_MAX_ACTIVE_PER_ACTOR || active.length >= PORTAL_PAGE_UPLOAD_MAX_ACTIVE_GLOBAL) fail('upload_limit_reached', 429)
-      await verifyDiskReservation(context, paths, active, input.bytes)
-      let created: Record<string, unknown> | undefined
-      try {
-        created = await context.payload.create({ collection: PAGE_MEDIA_COLLECTION, req: transactionReq, overrideAccess: true,
-          data: { originalName: input.originalName, mimeType: input.mimeType, filesize: input.bytes, sha256: null,
-            state: 'uploading', completedAt: null } as never }) as unknown as Record<string, unknown>
-        const id = validatedID(created.id)
-        createdID = id
-        const metadata = metadataFromRow({ ...created, id })
-        if (metadata.state !== 'uploading' || metadata.uploadedBy !== actor || metadata.sha256 !== null ||
-          metadata.mimeType !== input.mimeType || metadata.filesize !== input.bytes) fail('upload_unavailable', 503)
-        const manifest: UploadManifest = { version: 1, id, storageKey: metadata.storageKey, actorUid: actor, mimeType: input.mimeType, bytes: input.bytes,
-          chunkSize: PORTAL_PAGE_UPLOAD_CHUNK_SIZE, chunkCount: input.chunkCount, createdAt: timestamp,
-          tokenHash: tokenHash(token), state: 'receiving' }
-        await writeManifest(paths, manifest)
-        return id
-      } catch (error) {
-        if (createdID) {
-          await removeRegularFile(manifestTempPath(paths, createdID)).catch(() => {})
-          await removeRegularFile(manifestPath(paths, createdID)).catch(() => {})
-        }
-        throw error
+      const stats = await readUploadAdmission(context, context.payload, transactionReq, actor, timestampMs)
+      if (stats.activeForActor >= PORTAL_PAGE_UPLOAD_MAX_ACTIVE_PER_ACTOR || stats.activeGlobal >= PORTAL_PAGE_UPLOAD_MAX_ACTIVE_GLOBAL) {
+        fail('upload_limit_reached', 429)
       }
+      await verifyDiskReservation(context, paths, stats, input.bytes)
+      let created: Record<string, unknown> | undefined
+      created = await context.payload.create({ collection: PAGE_MEDIA_COLLECTION, req: transactionReq, overrideAccess: true,
+        data: { originalName: input.originalName, mimeType: input.mimeType, filesize: input.bytes, sha256: null,
+          state: 'uploading', completedAt: null } as never }) as unknown as Record<string, unknown>
+      const id = validatedID(created.id)
+      createdID = id
+      const metadata = metadataFromRow({ ...created, id })
+      if (metadata.state !== 'uploading' || metadata.uploadedBy !== actor || metadata.sha256 !== null ||
+        metadata.mimeType !== input.mimeType || metadata.filesize !== input.bytes) fail('upload_unavailable', 503)
+      createdStorageKey = metadata.storageKey
+      const db = await requireCmsTransaction(context.payload, transactionReq)
+      await uploadCleanupAdapter(context, db).enqueue(id, timestampMs)
+      return id
     })
     if (!createdID) fail('upload_unavailable', 503)
+    const manifest: UploadManifest = {
+      version: 1, id: createdID, storageKey: createdStorageKey!, actorUid: actor,
+      mimeType: input.mimeType, bytes: input.bytes, chunkSize: PORTAL_PAGE_UPLOAD_CHUNK_SIZE,
+      chunkCount: input.chunkCount, createdAt: timestamp, tokenHash: tokenHash(token), state: 'receiving',
+    }
+    try {
+      await writeManifest(context, paths, manifest)
+    } catch (error) {
+      let compensated = false
+      try {
+        await withPortalPageMediaLifecycleMutation(context.req, actor, async transactionReq => {
+          const row = await getMediaRow(context.payload, transactionReq, createdID!)
+          if (row) await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id: createdID!, req: transactionReq, overrideAccess: true })
+          const db = await requireCmsTransaction(context.payload, transactionReq)
+          await uploadCleanupAdapter(context, db).remove(createdID!)
+        })
+        compensated = true
+      } catch { /* A committed init with a missing manifest is retried by its durable queue row. */ }
+      if (compensated) {
+        await removeRegularFile(manifestTempPath(paths, createdID)).catch(() => {})
+        await removeRegularFile(manifestPath(paths, createdID)).catch(() => {})
+      }
+      throw error
+    }
     return { id: createdID, token, chunkSize: PORTAL_PAGE_UPLOAD_CHUNK_SIZE, chunkCount: input.chunkCount,
       bytes: input.bytes, mimeType: input.mimeType }
   }
@@ -820,7 +1109,7 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
     const initialManifest = await readManifest(paths, id)
     if (!verifyPortalPageUploadToken(token, initialManifest.tokenHash)) fail('invalid_upload_token', 403)
     if (initialManifest.actorUid !== actor) fail('upload_not_found', 404)
-    const lock = await acquireUploadLock(paths, id)
+    const lock = await acquireUploadLock(context, paths, id)
     try {
       const manifest = await readManifest(paths, id)
       if (!verifyPortalPageUploadToken(token, manifest.tokenHash)) fail('invalid_upload_token', 403)
@@ -842,7 +1131,7 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
       }
       const partial = chunkPartPath(paths, id, index)
       try {
-        const result = await writeRequestToFile(source, partial, expected)
+        const result = await writeRequestToFile(context, source, partial, expected)
         if (await fileExistsRegular(destination)) fail('chunk_conflict', 409)
         await rename(partial, destination)
         await syncDirectory(paths.incoming)
@@ -867,7 +1156,7 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
     let result: { id: string; state: 'complete'; mimeType: string; bytes: number; sha256: string; completedAt: string } | undefined
     try {
       result = await withPortalPageMediaMutation(context.req, actor, 'update', async transactionReq => {
-        lock = await acquireUploadLock(paths, id, true)
+        lock = await acquireUploadLock(context, paths, id, true)
         const row = await getMediaRow(context.payload, transactionReq, id)
         if (!row) fail('upload_not_found', 404)
         const { manifest, metadata } = await validateAuthorizedUpload(paths, id, token, actor, row)
@@ -886,18 +1175,18 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
           await inspectChunkSet(paths, currentManifest)
           if (await fileExistsRegular(target)) fail('upload_unavailable', 503)
           currentManifest = { ...currentManifest, state: 'assembling' }
-          await writeManifest(paths, currentManifest)
+          await writeManifest(context, paths, currentManifest)
           let assembledHash: string
-          try { assembledHash = await assembleChunks(paths, currentManifest) }
+          try { assembledHash = await assembleChunks(context, paths, currentManifest) }
           catch (error) {
             await removeRegularFile(assembledPartPath(paths, id)).catch(() => {})
             if (!(error instanceof PortalPageUploadError) || error.code !== 'upload_unavailable') {
-              await writeManifest(paths, { ...currentManifest, state: 'receiving' }).catch(() => {})
+              await writeManifest(context, paths, { ...currentManifest, state: 'receiving' }).catch(() => {})
             }
             throw error
           }
           currentManifest = { ...currentManifest, state: 'ready_to_rename', finalSha256: assembledHash }
-          await writeManifest(paths, currentManifest)
+          await writeManifest(context, paths, currentManifest)
         }
         if (currentManifest.state === 'ready_to_rename') {
           if (await fileExistsRegular(target)) {
@@ -910,7 +1199,7 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
             await syncDirectory(paths.pages)
           }
           currentManifest = { ...currentManifest, state: 'renamed' }
-          await writeManifest(paths, currentManifest)
+          await writeManifest(context, paths, currentManifest)
         }
         if (currentManifest.state !== 'renamed' || !currentManifest.finalSha256) fail('upload_unavailable', 503)
         await verifyReadyFile(paths, currentManifest, target)
@@ -918,13 +1207,16 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
         try {
           await context.payload.update({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true,
             data: { state: 'complete', sha256: currentManifest.finalSha256, completedAt } })
+          const db = await requireCmsTransaction(context.payload, transactionReq)
+          await uploadCleanupAdapter(context, db).schedule(id, now())
         } catch (error) {
           try {
+            if (await fileExistsRegular(target)) await verifyReadyFile(paths, currentManifest, target)
             await removeRegularFile(target)
             await removeRegularFile(assembledPartPath(paths, id))
             currentManifest = { ...currentManifest, state: 'receiving' }
             delete currentManifest.finalSha256
-            await writeManifest(paths, currentManifest)
+            await writeManifest(context, paths, currentManifest)
             await syncDirectory(paths.pages)
           } catch { /* Keep the renamed manifest if compensation itself is uncertain. */ }
           throw error
@@ -951,7 +1243,7 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
     let storageKey: string | undefined
     try {
       const result = await withPortalPageMediaMutation(context.req, actor, 'delete', async transactionReq => {
-        lock = await acquireUploadLock(paths, id)
+        lock = await acquireUploadLock(context, paths, id, true)
         const manifest = await readManifest(paths, id)
         if (!verifyPortalPageUploadToken(token, manifest.tokenHash)) fail('invalid_upload_token', 403)
         if (manifest.actorUid !== actor) fail('upload_not_found', 404)
@@ -967,17 +1259,31 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
         if (metadata.state !== 'uploading') fail('media_already_complete', 409)
         storageKey = metadata.storageKey
         const cancelling = { ...manifest, state: 'cancelling' as const }
-        await writeManifest(paths, cancelling)
+        await writeManifest(context, paths, cancelling)
         try {
-          await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true })
+          const db = await requireCmsTransaction(context.payload, transactionReq)
+          await uploadCleanupAdapter(context, db).schedule(id, now())
         } catch (error) {
-          await writeManifest(paths, manifest).catch(() => {})
+          await writeManifest(context, paths, manifest).catch(() => {})
           throw error
         }
         manifestForCleanup = cancelling
         return { id, cancelled: true }
       })
-      if (manifestForCleanup) await cleanupIncoming(paths, manifestForCleanup, Boolean(storageKey), storageKey)
+      if (manifestForCleanup) {
+        await cleanupIncoming(paths, manifestForCleanup, true, storageKey || manifestForCleanup.storageKey)
+        await withPortalPageMediaLifecycleMutation(context.req, actor, async transactionReq => {
+          const row = await getMediaRow(context.payload, transactionReq, id)
+          if (row) {
+            const metadata = metadataFromRow(row)
+            assertRowMatchesManifest(row, manifestForCleanup!, actor)
+            if (metadata.state !== 'uploading') fail('media_already_complete', 409)
+            await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true })
+          }
+          const db = await requireCmsTransaction(context.payload, transactionReq)
+          await uploadCleanupAdapter(context, db).remove(id)
+        })
+      }
       return result
     } finally { await lock?.release() }
   }
@@ -988,6 +1294,6 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
 export const PORTAL_PAGE_UPLOAD_INTERNAL_LIMITS = Object.freeze({
   maxManifestBytes: MAX_MANIFEST_BYTES,
   maxDirectoryScan: MAX_DIRECTORY_SCAN,
-  maxManifestScan: MAX_MANIFEST_SCAN,
+  cleanupBatchSize: PORTAL_PAGE_UPLOAD_CLEANUP_BATCH_SIZE,
   streamHighWaterMark: STREAM_HIGH_WATER_MARK,
 })

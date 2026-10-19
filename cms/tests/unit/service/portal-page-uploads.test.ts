@@ -6,6 +6,7 @@ import {
   expectedPortalPageUploadChunkBytes,
   streamPortalPageBytes,
   validatePortalPageUploadInit,
+  writePortalPageBytesFully,
 } from '../../../src/portal-pages/upload-service'
 
 const MiB = 1024 * 1024
@@ -37,9 +38,11 @@ test('500 MiB generated source is consumed and hashed through backpressure witho
   let sinkBytes = 0
   let maxWriteBytes = 0
   let maxQueuedBytes = 0
+  let maxProducerLead = 0
   const source = Readable.from((function* () {
     for (let remaining = totalBytes; remaining > 0; remaining -= window.length) {
       produced++
+      maxProducerLead = Math.max(maxProducerLead, produced - writes)
       yield window
     }
   })(), { objectMode: false, highWaterMark: window.length })
@@ -50,6 +53,7 @@ test('500 MiB generated source is consumed and hashed through backpressure witho
       sinkBytes += chunk.length
       maxWriteBytes = Math.max(maxWriteBytes, chunk.length)
       maxQueuedBytes = Math.max(maxQueuedBytes, this.writableLength)
+      maxProducerLead = Math.max(maxProducerLead, produced - writes)
       queueMicrotask(callback)
     },
   })
@@ -61,5 +65,28 @@ test('500 MiB generated source is consumed and hashed through backpressure witho
   assert.ok(writes > 0 && writes <= totalBytes / window.length)
   assert.ok(maxWriteBytes <= window.length)
   assert.ok(maxQueuedBytes <= window.length * 2)
-  assert.ok(produced - writes <= 4, 'source production remains close to downstream consumption under backpressure')
+  assert.ok(maxProducerLead <= 4, `source lead peaked at ${maxProducerLead} windows`)
+})
+
+test('FileHandle writes loop over short writes and reject zero progress', async () => {
+  const source = Buffer.from('bounded-file-handle-write')
+  const written = Buffer.alloc(source.length)
+  let position = 0
+  let calls = 0
+  const shortHandle = {
+    async write(buffer: Buffer, offset: number, length: number) {
+      calls++
+      const count = Math.min(3, length)
+      buffer.copy(written, position, offset, offset + count)
+      position += count
+      return { bytesWritten: count, buffer: written }
+    },
+  }
+  await writePortalPageBytesFully(shortHandle as never, source)
+  assert.ok(calls > 1)
+  assert.deepEqual(written, source)
+
+  await assert.rejects(writePortalPageBytesFully({
+    async write() { return { bytesWritten: 0, buffer: Buffer.alloc(0) } },
+  } as never, source), /zero progress/u)
 })

@@ -24,7 +24,7 @@ type PortalPagePublicationScope = {
 }
 type PortalPageMediaMutationScope = {
   actorUid: string
-  operation: 'create' | 'update' | 'delete'
+  operation: 'create' | 'update' | 'delete' | 'lifecycle'
   session: unknown
 }
 
@@ -266,8 +266,12 @@ export function portalPagePublicationPageID(req: PayloadRequest): string | null 
 
 export function isPortalPageMediaMutation(req: PayloadRequest, operation?: PortalPageMediaMutationScope['operation']): boolean {
   const scope = pageMediaMutationScopes.get(req)
-  if (!scope || (operation && scope.operation !== operation)) return false
+  if (!scope || (operation && scope.operation !== operation && !(scope.operation === 'lifecycle' && operation !== 'create'))) return false
   return true
+}
+
+export function isPortalPageMediaLifecycleMutation(req: PayloadRequest): boolean {
+  return pageMediaMutationScopes.get(req)?.operation === 'lifecycle'
 }
 
 export function portalPageMediaMutationActor(req: PayloadRequest): string | null {
@@ -283,6 +287,20 @@ export async function withPortalPageMediaMutation<T>(req: PayloadRequest, actorU
     if (pageMediaMutationScopes.has(transactionReq)) throw conflict('portal_page_media_mutation_scope_active')
     const session = await requireCmsTransaction(req.payload, transactionReq)
     pageMediaMutationScopes.set(transactionReq, { actorUid: actor, operation, session })
+    try { return await work(transactionReq) }
+    finally { pageMediaMutationScopes.delete(transactionReq) }
+  })
+}
+
+/** Internal recovery boundary that may complete or delete one media row in a shared transaction. */
+export async function withPortalPageMediaLifecycleMutation<T>(req: PayloadRequest, actorUid: string,
+  work: (req: PayloadRequest) => Promise<T>): Promise<T> {
+  const actor = typeof actorUid === 'string' ? actorUid.trim() : ''
+  if (!actor || actor.length > 128 || /[\p{Cc}]/u.test(actor)) throw denied('portal_page_media_actor_required')
+  return withCmsTransaction(req.payload, req, async transactionReq => {
+    if (pageMediaMutationScopes.has(transactionReq)) throw conflict('portal_page_media_mutation_scope_active')
+    const session = await requireCmsTransaction(req.payload, transactionReq)
+    pageMediaMutationScopes.set(transactionReq, { actorUid: actor, operation: 'lifecycle', session })
     try { return await work(transactionReq) }
     finally { pageMediaMutationScopes.delete(transactionReq) }
   })

@@ -6,6 +6,7 @@ import * as migration_20261006_181325_a_owner_news_suspend_enum from './20261006
 import * as migration_20261006_181424_z_owner_news_native from './20261006_181424_z_owner_news_native';
 import * as migration_20261019_135005_portal_pages from './20261019_135005_portal_pages';
 import * as migration_20261019_150233_portal_page_media_upload_lifecycle from './20261019_150233_portal_page_media_upload_lifecycle';
+import * as migration_20261019_160000_portal_page_upload_cleanup from './20261019_160000_portal_page_upload_cleanup';
 
 export const migrations = [
   {
@@ -47,5 +48,10 @@ export const migrations = [
     up: migration_20261019_150233_portal_page_media_upload_lifecycle.up,
     down: migration_20261019_150233_portal_page_media_upload_lifecycle.down,
     name: '20261019_150233_portal_page_media_upload_lifecycle'
+  },
+  {
+    up: migration_20261019_160000_portal_page_upload_cleanup.up,
+    down: migration_20261019_160000_portal_page_upload_cleanup.down,
+    name: '20261019_160000_portal_page_upload_cleanup',
   },
 ];

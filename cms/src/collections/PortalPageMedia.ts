@@ -4,6 +4,7 @@ import { requireCmsTransaction } from '../publication/transaction'
 import {
   assertPortalPageMediaOrphan,
   isPortalPageMediaMutation,
+  isPortalPageMediaLifecycleMutation,
   portalPageMediaMutationActor,
 } from '../portal-pages/persistence'
 import { createPortalPageStorageKey, validatePortalPageMediaMetadata } from '../portal-pages/validation'
@@ -34,6 +35,7 @@ const validatePortalPageMediaBeforeChange: CollectionBeforeChangeHook = ({ data,
     throw new APIError('portal_page_media_server_only', 403, undefined, true)
   }
   const actorUid = portalPageMediaMutationActor(req)
+  const lifecycleMutation = isPortalPageMediaLifecycleMutation(req)
   if (!actorUid) throw new APIError('portal_page_media_actor_required', 403, undefined, true)
   const candidate = { ...(originalDoc as Record<string, unknown> | undefined), ...(data as Record<string, unknown>) }
   if (operation === 'create') {
@@ -41,7 +43,8 @@ const validatePortalPageMediaBeforeChange: CollectionBeforeChangeHook = ({ data,
     candidate.storageKey = createPortalPageStorageKey(candidate.mimeType)
   }
   else {
-    if (!originalDoc || originalDoc.uploadedBy !== actorUid || originalDoc.state !== 'uploading' || candidate.state !== 'complete') {
+    if (!originalDoc || (!lifecycleMutation && originalDoc.uploadedBy !== actorUid) ||
+      originalDoc.state !== 'uploading' || candidate.state !== 'complete') {
       throw new APIError('portal_page_media_metadata_immutable', 403, undefined, true)
     }
     candidate.uploadedBy = originalDoc.uploadedBy

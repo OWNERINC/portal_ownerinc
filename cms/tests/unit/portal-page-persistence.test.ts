@@ -12,10 +12,12 @@ import {
   assertPortalPageMediaReferences,
   collectPortalPageCategoryIds,
   collectPortalPageMediaIds,
+  isPortalPageMediaLifecycleMutation,
   isPortalPagePublication,
   isPortalPageMediaMutation,
   projectPortalPageContent,
   withPortalPageMediaMutation,
+  withPortalPageMediaLifecycleMutation,
   withExpectedPortalPageVersion,
 } from '../../src/portal-pages/persistence'
 import {
@@ -347,6 +349,25 @@ test('trusted media completion validates explicit metadata from a persisted Payl
   assert.equal('createdAt' in data, false)
   assert.equal('updatedAt' in data, false)
   assert.throws(() => validatePortalPageMediaMetadata({ ...persisted, state: 'uploading', completedAt: null }))
+})
+
+test('internal lifecycle recovery can complete another actor media row without changing its owner', async () => {
+  const f = await payloadFixture()
+  const beforeChange = PortalPageMedia.hooks?.beforeChange?.[0]
+  assert.ok(beforeChange)
+  const persisted = {
+    ...mediaRecord(pageMediaID, 'application/pdf', 'uploading'), uploadedBy: 'other-editor',
+  }
+  const data: Record<string, unknown> = { state: 'complete', sha256: 'c'.repeat(64), completedAt: '2026-10-19T10:30:00.000Z' }
+  const result = await withPortalPageMediaLifecycleMutation(f.req, 'recovery-worker', async req => {
+    assert.equal(isPortalPageMediaLifecycleMutation(req), true)
+    assert.equal(isPortalPageMediaMutation(req, 'update'), true)
+    return (beforeChange as (args: unknown) => unknown)({ operation: 'update', req, originalDoc: persisted, data }) as Record<string, unknown>
+  })
+  assert.equal(result.state, 'complete')
+  assert.equal(result.uploadedBy, 'other-editor')
+  assert.equal(data.uploadedBy, 'other-editor')
+  assert.equal(isPortalPageMediaLifecycleMutation(f.req), false)
 })
 
 test('published slug uses canonical main state and remains blocked through drafts/publish until controlled unpublication', async () => {
