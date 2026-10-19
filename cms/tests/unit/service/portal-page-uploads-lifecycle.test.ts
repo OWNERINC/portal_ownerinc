@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -236,6 +236,171 @@ async function sendChunk(service: ReturnType<typeof createPortalPageUploadServic
     'content-length': String(bytes.length),
   }), new Response(Uint8Array.from(bytes)).body)
 }
+
+async function proveLockOwnerStale(lockPath: string): Promise<void> {
+  let deadPID: number | undefined
+  for (let offset = 1; offset <= 100; offset++) {
+    const candidate = process.pid + 1_000_000 + offset
+    try { process.kill(candidate, 0) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') { deadPID = candidate; break }
+    }
+  }
+  assert.ok(deadPID, 'fixture found a PID proven absent by the operating system')
+  await writeFile(lockPath, JSON.stringify({ version: 1, pid: deadPID, processInstanceNonce: 'f'.repeat(48),
+    processStartIdentity: 'terminated-process-start', createdAt: new Date().toISOString(), nonce: 'c'.repeat(32) }),
+  { mode: 0o600 })
+}
+
+test('unexpired cleanup reconciles a stale-owner interrupted chunk partial before rescheduling', async t => {
+  const now = Date.now()
+  const f = await transactionFixture({ now }); t.after(f.dispose)
+  const uploads = f.service(), bytes = pdfBytes(), started = await begin(uploads, bytes)
+  const incoming = path.join(f.uploadDir, 'portal-pages', '.incoming')
+  const partial = path.join(incoming, `${started.id}-0.part`)
+  const manifestPath = path.join(incoming, `m-${started.id}.json`)
+  const manifestTemp = path.join(incoming, `m-${started.id}.tmp`)
+  const lockPath = path.join(incoming, `u-${started.id}.lock`)
+  await writeFile(partial, 'interrupted chunk body', { mode: 0o600 })
+  await writeFile(manifestTemp, 'interrupted manifest replacement', { mode: 0o600 })
+  await proveLockOwnerStale(lockPath)
+
+  assert.deepEqual(await uploads.cleanupExpired(), { removed: 0, unresolved: 0 },
+    'unexpired receiving uploads are reconciled and rescheduled without being deleted')
+  await assert.rejects(readFile(partial), { code: 'ENOENT' }, 'the stale request-owned partial was removed')
+  await assert.rejects(readFile(manifestTemp), { code: 'ENOENT' }, 'the exact incomplete manifest temp was removed')
+  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).state, 'receiving', 'the manifest remains authoritative')
+  assert.equal(f.queue.get(started.id)?.nextAttemptAt, now + PORTAL_PAGE_UPLOAD_RETENTION_MS)
+  assert.deepEqual(await sendChunk(uploads, started.id, started.token, bytes),
+    { id: started.id, index: 0, received: true, duplicate: false, sha256: createHash('sha256').update(bytes).digest('hex') },
+    'retrying the interrupted declared index succeeds after cleanup reclaimed the stale owner')
+})
+
+test('a different chunk that first reclaims a stale owner cannot strand the interrupted index partial', async t => {
+  const f = await transactionFixture(); t.after(f.dispose)
+  const uploads = f.service(), bytes = Buffer.alloc(PORTAL_PAGE_UPLOAD_CHUNK_SIZE + 1, 0x41)
+  const started = await begin(uploads, bytes)
+  assert.equal(started.chunkCount, 2)
+  const incoming = path.join(f.uploadDir, 'portal-pages', '.incoming')
+  const interrupted = path.join(incoming, `${started.id}-0.part`)
+  const lockPath = path.join(incoming, `u-${started.id}.lock`)
+  const lastChunk = Buffer.from([0x42])
+  await writeFile(interrupted, 'interrupted first index', { mode: 0o600 })
+  await proveLockOwnerStale(lockPath)
+
+  await sendChunk(uploads, started.id, started.token, lastChunk, '1')
+  await assert.rejects(readFile(interrupted), { code: 'ENOENT' },
+    'the first stale-owner reclaimer reconciles every declared index, not only its request index')
+  assert.deepEqual(await readFile(path.join(incoming, `${started.id}-1.chunk`)), lastChunk,
+    'the newly completed canonical chunk remains intact')
+  assert.equal((await sendChunk(uploads, started.id, started.token, bytes.subarray(0, PORTAL_PAGE_UPLOAD_CHUNK_SIZE))).duplicate,
+    false, 'retrying the interrupted index succeeds after another index reclaimed the owner')
+  assert.deepEqual(await readFile(path.join(incoming, `${started.id}-1.chunk`)), lastChunk,
+    'recovery removes partials only and retains completed chunks')
+})
+
+test('complete and cancel first reclaimers reconcile stale chunk partials through the shared helper', async t => {
+  const completeFixture = await transactionFixture(); t.after(completeFixture.dispose)
+  const completeUploads = completeFixture.service(), completeBytes = pdfBytes()
+  const completeStarted = await begin(completeUploads, completeBytes)
+  const completeIncoming = path.join(completeFixture.uploadDir, 'portal-pages', '.incoming')
+  const completePart = path.join(completeIncoming, `${completeStarted.id}-0.part`)
+  await writeFile(completePart, 'interrupted before promotion', { mode: 0o600 })
+  await proveLockOwnerStale(path.join(completeIncoming, `u-${completeStarted.id}.lock`))
+
+  await assert.rejects(completeUploads.complete(completeStarted.id, { token: completeStarted.token }),
+    (error: unknown) => error instanceof PortalPageUploadError && error.code === 'upload_incomplete')
+  await assert.rejects(readFile(completePart), { code: 'ENOENT' },
+    'complete takes over the stale owner and removes the interrupted non-authoritative part before inspecting chunks')
+  await assert.rejects(readFile(path.join(completeIncoming, `r-${completeStarted.id}.lock`)), { code: 'ENOENT' })
+  await sendChunk(completeUploads, completeStarted.id, completeStarted.token, completeBytes)
+  assert.equal((await completeUploads.complete(completeStarted.id, { token: completeStarted.token })).state, 'complete')
+
+  const cancelFixture = await transactionFixture(); t.after(cancelFixture.dispose)
+  const cancelUploads = cancelFixture.service(), cancelBytes = pdfBytes()
+  const cancelStarted = await begin(cancelUploads, cancelBytes)
+  const cancelIncoming = path.join(cancelFixture.uploadDir, 'portal-pages', '.incoming')
+  const cancelPart = path.join(cancelIncoming, `${cancelStarted.id}-0.part`)
+  await writeFile(cancelPart, 'interrupted before promotion', { mode: 0o600 })
+  await proveLockOwnerStale(path.join(cancelIncoming, `u-${cancelStarted.id}.lock`))
+
+  assert.deepEqual(await cancelUploads.cancel(cancelStarted.id, { token: cancelStarted.token }),
+    { id: cancelStarted.id, cancelled: true })
+  await assert.rejects(readFile(cancelPart), { code: 'ENOENT' })
+  await assert.rejects(readFile(path.join(cancelIncoming, `r-${cancelStarted.id}.lock`)), { code: 'ENOENT' })
+  assert.equal(cancelFixture.rows.has(cancelStarted.id), false)
+})
+
+test('stale partial recovery preserves validated assembled bytes for ready-to-rename recovery', async t => {
+  const f = await transactionFixture(); t.after(f.dispose)
+  const uploads = f.service(), bytes = pdfBytes(), started = await begin(uploads, pdfBytes())
+  await sendChunk(uploads, started.id, started.token, bytes)
+  const incoming = path.join(f.uploadDir, 'portal-pages', '.incoming')
+  const manifestPath = path.join(incoming, `m-${started.id}.json`)
+  const assembledPath = path.join(incoming, `${started.id}.assembled.part`)
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, state: 'ready_to_rename', finalSha256: sha256 }), { mode: 0o600 })
+  await writeFile(assembledPath, bytes, { mode: 0o600 })
+  await proveLockOwnerStale(path.join(incoming, `u-${started.id}.lock`))
+
+  assert.deepEqual(await uploads.cleanupExpired(), { removed: 0, unresolved: 0 })
+  const row = f.rows.get(started.id)!
+  assert.equal(row.state, 'complete')
+  assert.equal(row.sha256, sha256)
+  assert.deepEqual(await readFile(path.join(f.uploadDir, 'portal-pages', String(row.storageKey))), bytes,
+    'the complete assembled recovery source was preserved and promoted to final bytes')
+  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).state, 'renamed')
+})
+
+test('stale partial recovery fails closed on an expected symlink and leaves unrelated part entries untouched', async t => {
+  const now = Date.now()
+  const f = await transactionFixture({ now }); t.after(f.dispose)
+  const uploads = f.service(), bytes = pdfBytes(), started = await begin(uploads, bytes)
+  const incoming = path.join(f.uploadDir, 'portal-pages', '.incoming')
+  const expectedPart = path.join(incoming, `${started.id}-0.part`)
+  const unrelatedPart = path.join(incoming, `${randomUUID()}-0.part`)
+  const unrelatedNamedPart = path.join(incoming, 'unrelated-upload.part')
+  const lockPath = path.join(incoming, `u-${started.id}.lock`)
+  const externalDirectory = path.join(f.uploadDir, 'external-part-target')
+  const recoveryMarker = path.join(incoming, `r-${started.id}.lock`)
+  await mkdir(externalDirectory)
+  await writeFile(path.join(externalDirectory, 'target.txt'), 'outside')
+  await writeFile(unrelatedNamedPart, 'unrelated bytes')
+  let expectedIsSymlink = false
+  let unrelatedIsSymlink = false
+  try {
+    await symlink(externalDirectory, expectedPart, 'junction')
+    expectedIsSymlink = true
+    await symlink(externalDirectory, unrelatedPart, 'junction')
+    unrelatedIsSymlink = true
+  } catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code || '')) throw error
+    t.diagnostic('symlink/junction creation unavailable on this platform; non-regular expected part still exercises fail-closed handling')
+    if (expectedIsSymlink) await rm(expectedPart, { recursive: true, force: true })
+    await mkdir(expectedPart)
+    await writeFile(unrelatedPart, 'unrelated symlink-shaped name')
+  }
+  await proveLockOwnerStale(lockPath)
+
+  assert.deepEqual(await uploads.cleanupExpired(), { removed: 0, unresolved: 1 },
+    'unsafe expected partial state defers cleanup instead of following or deleting it')
+  assert.ok(await lstat(expectedPart), 'the expected non-regular/symlink path is retained for safe retry')
+  assert.ok(await lstat(recoveryMarker), 'failed reconciliation preserves durable stale-owner evidence')
+  assert.equal(await readFile(unrelatedNamedPart, 'utf8'), 'unrelated bytes')
+  if (unrelatedIsSymlink) assert.equal((await lstat(unrelatedPart)).isSymbolicLink(), true)
+  else assert.equal(await readFile(unrelatedPart, 'utf8'), 'unrelated symlink-shaped name')
+
+  await rm(expectedPart, { recursive: true, force: true })
+  await writeFile(expectedPart, 'safe retry partial', { mode: 0o600 })
+  f.queue.get(started.id)!.nextAttemptAt = now
+  assert.deepEqual(await uploads.cleanupExpired(), { removed: 0, unresolved: 0 },
+    'a later bounded cleanup retry finishes the preserved recovery work')
+  await assert.rejects(readFile(expectedPart), { code: 'ENOENT' })
+  await assert.rejects(readFile(recoveryMarker), { code: 'ENOENT' }, 'the marker clears only after safe reconciliation completes')
+  assert.equal(await readFile(unrelatedNamedPart, 'utf8'), 'unrelated bytes')
+  if (unrelatedIsSymlink) assert.equal((await lstat(unrelatedPart)).isSymbolicLink(), true)
+  else assert.equal(await readFile(unrelatedPart, 'utf8'), 'unrelated symlink-shaped name')
+})
 
 test('chunk ingress stores only a token hash, validates owner/token, and permits only exact hash-identical duplicates', async t => {
   const f = await fixture(); t.after(f.dispose)

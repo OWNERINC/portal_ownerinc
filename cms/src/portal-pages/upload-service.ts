@@ -216,6 +216,7 @@ async function ensureStorage(uploadDir: string): Promise<StoredPaths> {
 function manifestPath(paths: StoredPaths, id: string): string { return path.join(paths.incoming, `m-${id}.json`) }
 function manifestTempPath(paths: StoredPaths, id: string): string { return path.join(paths.incoming, `m-${id}.tmp`) }
 function uploadLockPath(paths: StoredPaths, id: string): string { return path.join(paths.incoming, `u-${id}.lock`) }
+function recoveryMarkerPath(paths: StoredPaths, id: string): string { return path.join(paths.incoming, `r-${id}.lock`) }
 function chunkPath(paths: StoredPaths, id: string, index: number): string { return path.join(paths.incoming, `${id}-${index}.chunk`) }
 function chunkPartPath(paths: StoredPaths, id: string, index: number): string { return path.join(paths.incoming, `${id}-${index}.part`) }
 function assembledPartPath(paths: StoredPaths, id: string): string { return path.join(paths.incoming, `${id}.assembled.part`) }
@@ -405,6 +406,34 @@ async function readLockOwner(context: MutationRequestContext, filename: string, 
   return { kind: 'stale' }
 }
 
+/** Preserve process-identity proof across failed partial cleanup without enumerating storage. */
+async function preserveStaleOwnerEvidence(context: MutationRequestContext, paths: StoredPaths, id: string,
+  staleOwnerPath: string, localIdentity: string): Promise<boolean> {
+  const marker = recoveryMarkerPath(paths, id)
+  if (await assertRegularOrAbsent(marker)) {
+    const existingOwner = await readLockOwner(context, marker, localIdentity)
+    if (existingOwner.kind !== 'stale') fail('upload_busy', 409)
+    // The marker must be durable before removing the canonical stale lock.
+    await syncDirectory(paths.incoming)
+    await removeRegularFile(staleOwnerPath)
+    await syncDirectory(paths.incoming)
+    return true
+  }
+
+  try { await link(staleOwnerPath, marker) } catch (error) {
+    if (isNotFound(error)) return false
+    if (!isAlreadyExists(error)) fail('storage_unavailable', 503)
+    if (!(await assertRegularOrAbsent(marker))) return false
+    const existingOwner = await readLockOwner(context, marker, localIdentity)
+    if (existingOwner.kind !== 'stale') fail('upload_busy', 409)
+  }
+  // Preserve the only recovery proof before unlinking its canonical name.
+  await syncDirectory(paths.incoming)
+  await removeRegularFile(staleOwnerPath)
+  await syncDirectory(paths.incoming)
+  return true
+}
+
 async function publishUploadLock(context: MutationRequestContext, paths: StoredPaths, filename: string,
   lockData: Buffer, temp: string): Promise<'published' | 'exists'> {
   let handle
@@ -446,6 +475,7 @@ async function publishUploadLock(context: MutationRequestContext, paths: StoredP
 
 async function acquireUploadLock(context: MutationRequestContext, paths: StoredPaths, id: string): Promise<UploadLock> {
   const filename = uploadLockPath(paths, id)
+  const marker = recoveryMarkerPath(paths, id)
   const nonce = randomBytes(16).toString('hex')
   const processInstanceNonce = context.processInstanceNonce || PROCESS_INSTANCE_NONCE
   const processStartIdentity = await ownProcessIdentity(context)
@@ -456,8 +486,10 @@ async function acquireUploadLock(context: MutationRequestContext, paths: StoredP
   const recoverOrWait = async (filename: string): Promise<void> => {
     const owner = await readLockOwner(context, filename, processStartIdentity)
     if (owner.kind === 'stale') {
-      await removeRegularFile(filename)
-      if (filename === uploadLockPath(paths, id)) recoveredStaleOwner = true
+      if (filename === uploadLockPath(paths, id)) {
+        recoveredStaleOwner = (await preserveStaleOwnerEvidence(context, paths, id, filename, processStartIdentity)) ||
+          recoveredStaleOwner
+      } else await removeRegularFile(filename)
       return
     }
     if (owner.kind === 'malformed') {
@@ -480,6 +512,11 @@ async function acquireUploadLock(context: MutationRequestContext, paths: StoredP
     if (await assertRegularOrAbsent(temp)) {
       await recoverOrWait(temp)
       continue
+    }
+    if (await assertRegularOrAbsent(marker)) {
+      const owner = await readLockOwner(context, marker, processStartIdentity)
+      if (owner.kind !== 'stale') fail('upload_busy', 409)
+      recoveredStaleOwner = true
     }
     const published = await publishUploadLock(context, paths, filename, lockData, temp)
     if (published === 'exists') continue
@@ -837,6 +874,40 @@ async function cleanupIncoming(paths: StoredPaths, manifest: UploadManifest, rem
   if (removeFinal) await syncDirectory(paths.pages)
 }
 
+async function reconcileStaleManifestPartials(paths: StoredPaths, manifest: UploadManifest,
+  ownership: UploadLock): Promise<void> {
+  if (!ownership.recoveredStaleOwner) return
+  if (!UUID.test(manifest.id) || !Number.isSafeInteger(manifest.chunkCount) || manifest.chunkCount < 1 ||
+    manifest.chunkCount > PORTAL_PAGE_UPLOAD_MAX_CHUNKS) fail('upload_unavailable', 503)
+
+  for (let index = 0; index < manifest.chunkCount; index++) {
+    const partial = chunkPartPath(paths, manifest.id, index)
+    if (await assertRegularOrAbsent(partial)) await removeRegularFile(partial)
+  }
+  const manifestTemp = manifestTempPath(paths, manifest.id)
+  if (await assertRegularOrAbsent(manifestTemp)) await removeRegularFile(manifestTemp)
+  // During assembly this file is incomplete and can be rebuilt from canonical
+  // chunks. Once ready_to_rename/renamed it is a validated recovery source.
+  if (manifest.state === 'receiving' || manifest.state === 'assembling') {
+    const assembled = assembledPartPath(paths, manifest.id)
+    if (await assertRegularOrAbsent(assembled)) await removeRegularFile(assembled)
+  }
+
+  // Persist exact-part removals before clearing the recovery marker. If any
+  // validation/removal/sync fails, the marker remains for a bounded retry.
+  await syncDirectory(paths.incoming)
+  await removeRegularFile(recoveryMarkerPath(paths, manifest.id))
+  await syncDirectory(paths.incoming)
+  ownership.recoveredStaleOwner = false
+}
+
+async function clearStaleRecoveryMarker(paths: StoredPaths, id: string, ownership: UploadLock): Promise<void> {
+  if (!ownership.recoveredStaleOwner) return
+  await removeRegularFile(recoveryMarkerPath(paths, id))
+  await syncDirectory(paths.incoming)
+  ownership.recoveredStaleOwner = false
+}
+
 async function writeRequestToFile(context: MutationRequestContext, body: Readable, destination: string,
   expectedBytes: number, onCreated?: () => void): Promise<{ bytes: number; sha256: string }> {
   let handle
@@ -979,19 +1050,23 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
             const expiresAt = Date.parse(metadata.completedAt) + PORTAL_PAGE_UPLOAD_RETENTION_MS
             if (timestamp < expiresAt) return { done: false as const, nextAttemptAt: expiresAt }
             await removeUnmanifestedArtifacts(paths, id)
+            await clearStaleRecoveryMarker(paths, id, lock)
             return { done: true as const }
           }
           const target = finalPath(paths, metadata.storageKey)
           if (await fileExistsRegular(target)) fail('upload_unavailable', 503)
           await removeUnmanifestedArtifacts(paths, id)
+          await clearStaleRecoveryMarker(paths, id, lock)
           await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id, req: transactionReq, overrideAccess: true })
         } else {
           await removeUnmanifestedArtifacts(paths, id)
+          await clearStaleRecoveryMarker(paths, id, lock)
         }
         return { done: true as const, remove: true }
       }
 
       const manifest = await readManifest(paths, id)
+      await reconcileStaleManifestPartials(paths, manifest, lock)
       const age = timestamp - Date.parse(manifest.createdAt)
       const expiresAt = Date.parse(manifest.createdAt) + PORTAL_PAGE_UPLOAD_RETENTION_MS
       if (!Number.isFinite(expiresAt)) fail('upload_unavailable', 503)
@@ -1127,6 +1202,7 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
       }
       try {
         await writeManifest(context, paths, manifest)
+        await reconcileStaleManifestPartials(paths, manifest, ownership)
       } catch (error) {
         await ownership.release()
         ownership = undefined
@@ -1138,6 +1214,7 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
               await removeRegularFile(manifestTempPath(paths, createdID!))
               await removeRegularFile(manifestPath(paths, createdID!))
               await removeUnmanifestedArtifacts(paths, createdID!)
+              await clearStaleRecoveryMarker(paths, createdID!, compensationLock)
               const row = await getMediaRow(context.payload, transactionReq, createdID!)
               if (row) await context.payload.delete({ collection: PAGE_MEDIA_COLLECTION, id: createdID!, req: transactionReq, overrideAccess: true })
               const db = await requireCmsTransaction(context.payload, transactionReq)
@@ -1178,7 +1255,13 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
         const expected = expectedPortalPageUploadChunkBytes(manifest.bytes, manifest.chunkCount, index)
         validateChunkRequest(headers.get('content-type'), headers.get('content-length'), expected)
         const lock = await acquireUploadLock(context, paths, id)
-        return { manifest, expected, originalName: metadata.originalName, lock }
+        try {
+          await reconcileStaleManifestPartials(paths, manifest, lock)
+          return { manifest, expected, originalName: metadata.originalName, lock }
+        } catch (error) {
+          await lock.release()
+          throw error
+        }
       })
       ownership = phaseA.lock
 
@@ -1260,10 +1343,12 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
     try {
       result = await withPortalPageMediaMutation(standaloneRequest(context.req), actor, 'update', async transactionReq => {
         await lockPortalPageUpload(context.payload, transactionReq, id)
-        lock = await acquireUploadLock(context, paths, id)
+        const ownership = await acquireUploadLock(context, paths, id)
+        lock = ownership
         const row = await getMediaRow(context.payload, transactionReq, id)
         if (!row) fail('upload_not_found', 404)
         const { manifest, metadata } = await validateAuthorizedUpload(paths, id, token, actor, row)
+        await reconcileStaleManifestPartials(paths, manifest, ownership)
         storageKey = metadata.storageKey
         const target = finalPath(paths, metadata.storageKey)
         if (metadata.state === 'complete') {
@@ -1360,10 +1445,12 @@ export function createPortalPageUploadService(context: MutationRequestContext) {
     try {
       await withPortalPageMediaMutation(cancelRequest, actor, 'delete', async transactionReq => {
         await lockPortalPageUpload(context.payload, transactionReq, id)
-        lock = await acquireUploadLock(context, paths, id)
+        const ownership = await acquireUploadLock(context, paths, id)
+        lock = ownership
         const manifest = await readManifest(paths, id)
         if (!verifyPortalPageUploadToken(token, manifest.tokenHash)) fail('invalid_upload_token', 403)
         if (manifest.actorUid !== actor) fail('upload_not_found', 404)
+        await reconcileStaleManifestPartials(paths, manifest, ownership)
         const row = await getMediaRow(context.payload, transactionReq, id)
         if (!row) {
           if (manifest.state !== 'cancelling') fail('upload_not_found', 404)

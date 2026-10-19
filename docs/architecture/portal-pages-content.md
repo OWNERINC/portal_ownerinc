@@ -103,6 +103,25 @@ o próximo owner pode remover somente o `.part` regular derivado daquele UUID e
 requisição atual não criou. Nenhuma enumeração ou limpeza de entradas `.incoming`
 desconhecidas é adicionada.
 
+Ao provar por identidade de processo que `u-<uuid>.lock` ficou stale, o reclaimer
+cria primeiro o hard link exato `r-<uuid>.lock` para preservar essa evidência e
+só então remove o caminho de lock antigo. Com o novo ownership de filesystem, a
+mesma rotina percorre apenas os índices declarados pelo manifest validado
+(1–100), valida cada `<uuid>-<índice>.part` por `lstat` como arquivo regular
+privado sem symlink e remove esses corpos incompletos. Em estados `receiving` e
+`assembling`, também pode remover o scratch exato `.assembled.part`, que pode ser
+reconstruído dos chunks; nos estados `ready_to_rename`/`renamed`, esse arquivo
+validado é preservado como fonte de recuperação. Chunks canônicos `.chunk`,
+manifest e arquivo final nunca são removidos por essa reconciliação. Cleanup faz
+essa passagem antes de reagendar um receiving não expirado; chunk, complete,
+cancel e init que forem os primeiros reclaimers usam a mesma rotina. O marker só
+é removido depois de todas as verificações/remoções e sync de diretório. Se uma
+verificação, remoção ou sync falhar, ele sobrevive à liberação do owner e permite
+uma nova tentativa limitada; caminhos desconhecidos, inclusive outros nomes
+`.part`, não são enumerados nem tocados. A rotina também remove somente o
+`m-<uuid>.tmp` exato, que nunca é fonte autoritativa; o `u-<uuid>.tmp` da
+publicação do lock já é validado/reconciliado pelo próprio acquire do lock.
+
 Completion valida somente os caminhos de chunks e partes derivados de `id` e
 `chunkCount` do manifest validado (no máximo 100 índices), via `lstat` e sem
 seguir symlinks. A contagem total de entradas em `.incoming` não participa da
