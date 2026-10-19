@@ -3,6 +3,8 @@ import type {
   PortalPageGalleryImage,
   PortalPageLayout,
 } from './blocks'
+import { APIError } from 'payload'
+import { randomUUID } from 'node:crypto'
 import type { PortalPageDTO, PortalPagePublicationInput } from './contracts'
 import { normalizePortalRichNodes, type PortalPageRichNodeBudget } from './rich-text'
 import {
@@ -15,6 +17,7 @@ import {
   oneOf,
   plainText,
   PORTAL_PAGE_LAYOUTS,
+  PORTAL_PAGE_MEDIA_MIMES,
   record,
   utf8Bytes,
   uuid,
@@ -32,6 +35,107 @@ export function normalizeSlug(value: unknown): string {
     .replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '')
   if (slug.length < 1 || slug.length > 160 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(slug)) invalid(INVALID_SLUG)
   return slug
+}
+
+export type PortalPageCategoryValue = { name: string; slug: string; description?: string }
+
+/** Page-local category normalization; names retain Unicode while slugs are canonical ASCII. */
+export function normalizePortalPageCategory(value: unknown): PortalPageCategoryValue {
+  const category = record(value, 'invalid_portal_page_category')
+  keys(category, ['name', 'slug', 'description'], 'invalid_portal_page_category')
+  const normalized: PortalPageCategoryValue = {
+    name: plainText(category.name, { min: 1, max: 100, code: 'invalid_portal_page_category' }),
+    slug: normalizeSlug(category.slug),
+  }
+  if (Object.hasOwn(category, 'description') && category.description !== null && category.description !== undefined) {
+    normalized.description = plainText(category.description, { max: 1000, multiline: true, code: 'invalid_portal_page_category' })
+  }
+  return normalized
+}
+
+export const PORTAL_PAGE_MEDIA_SIZE_CAPS: Readonly<Record<(typeof PORTAL_PAGE_MEDIA_MIMES)[number], number>> = {
+  'image/jpeg': 15 * 1024 * 1024,
+  'image/png': 15 * 1024 * 1024,
+  'image/webp': 15 * 1024 * 1024,
+  'application/pdf': 100 * 1024 * 1024,
+  'video/mp4': 500 * 1024 * 1024,
+  'video/webm': 500 * 1024 * 1024,
+}
+
+const portalPageMediaExtensions: Readonly<Record<(typeof PORTAL_PAGE_MEDIA_MIMES)[number], string>> = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+  'application/pdf': 'pdf', 'video/mp4': 'mp4', 'video/webm': 'webm',
+}
+
+/** Generate a server-owned canonical random metadata key; physical storage is added later. */
+export function createPortalPageStorageKey(value: unknown): string {
+  const mimeType = oneOf(value, PORTAL_PAGE_MEDIA_MIMES, 'invalid_portal_page_media_metadata')
+  return `${randomUUID()}.${portalPageMediaExtensions[mimeType]}`
+}
+
+export type PortalPageMediaMetadata = {
+  originalName: string
+  storageKey: string
+  mimeType: (typeof PORTAL_PAGE_MEDIA_MIMES)[number]
+  filesize: number
+  sha256: string
+  state: 'uploading' | 'complete'
+  uploadedBy: string
+  completedAt: string | null
+}
+
+/** Validates metadata only; byte ingestion and storage are owned by a later task. */
+export function validatePortalPageMediaMetadata(value: unknown): PortalPageMediaMetadata {
+  const media = record(value, 'invalid_portal_page_media_metadata')
+  keys(media, ['originalName', 'storageKey', 'mimeType', 'filesize', 'sha256', 'state', 'uploadedBy', 'completedAt'],
+    'invalid_portal_page_media_metadata')
+  const mimeType = oneOf(media.mimeType, PORTAL_PAGE_MEDIA_MIMES, 'invalid_portal_page_media_metadata')
+  const idAndExtension = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([a-z0-9]+)$/u.exec(
+    typeof media.storageKey === 'string' ? media.storageKey : '',
+  )
+  if (!idAndExtension || idAndExtension[2] !== portalPageMediaExtensions[mimeType]) invalid('invalid_portal_page_media_metadata')
+  if (!Number.isSafeInteger(media.filesize) || Number(media.filesize) < 1 || Number(media.filesize) > PORTAL_PAGE_MEDIA_SIZE_CAPS[mimeType]) {
+    invalid('invalid_portal_page_media_metadata')
+  }
+  if (typeof media.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(media.sha256)) invalid('invalid_portal_page_media_metadata')
+  const state = oneOf(media.state, ['uploading', 'complete'] as const, 'invalid_portal_page_media_metadata')
+  let completedAt: string | null = null
+  if (media.completedAt !== null && media.completedAt !== undefined) {
+    if (typeof media.completedAt !== 'string' || !Number.isFinite(Date.parse(media.completedAt))) invalid('invalid_portal_page_media_metadata')
+    const parsed = new Date(media.completedAt)
+    if (parsed.toISOString() !== media.completedAt) invalid('invalid_portal_page_media_metadata')
+    completedAt = parsed.toISOString()
+  }
+  if ((state === 'complete') !== (completedAt !== null)) invalid('invalid_portal_page_media_metadata')
+  return {
+    originalName: plainText(media.originalName, { min: 1, max: 255, code: 'invalid_portal_page_media_metadata' }),
+    storageKey: media.storageKey as string,
+    mimeType,
+    filesize: Number(media.filesize),
+    sha256: media.sha256,
+    state,
+    uploadedBy: plainText(media.uploadedBy, { min: 1, max: 128, code: 'invalid_portal_page_media_metadata' }),
+    completedAt,
+  }
+}
+
+export function validatePortalPageSlugChange(nextSlug: unknown, currentSlug: unknown, currentStatus: unknown): string {
+  const next = normalizeSlug(nextSlug)
+  if (currentStatus === 'published' && normalizeSlug(currentSlug) !== next) {
+    throw new APIError('portal_page_slug_immutable', 409, undefined, true)
+  }
+  return next
+}
+
+export function validatePortalPageStatusTransition(nextStatus: unknown, currentStatus: unknown, trusted: boolean,
+  draftSave = false): void {
+  const next = nextStatus === 'published' ? 'published' : nextStatus === 'draft' ? 'draft' : null
+  const current = currentStatus === 'published' ? 'published' : currentStatus === 'draft' ? 'draft' : null
+  if (!next) invalid('invalid_portal_page_status')
+  const savingCurrentPublishedDraft = draftSave && current === 'published' && next === 'draft'
+  if (!trusted && !savingCurrentPublishedDraft && (next === 'published' || (current !== null && next !== current))) {
+    throw new APIError('portal_page_publication_context_required', 403, undefined, true)
+  }
 }
 
 function layout(value: Record<string, unknown>): PortalPageLayout | undefined {

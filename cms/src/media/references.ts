@@ -85,7 +85,8 @@ export async function canReadPublishedMedia(payload: Payload, id: string, req: P
 /** Explicit inventory: new schedule/snapshot/history stores MUST extend this protection. */
 export function assertReferenceStoreCoverage(payload: Payload) {
   const covered = new Set(['portal-editors', 'news-articles', 'news-media', 'news-schedules', 'news-audit', 'legacy-news-revisions', 'payload-preferences',
-    'news-migration-runs', 'news-migration-items', 'payload-locked-documents', 'payload-migrations', 'payload-jobs', 'payload-kv'])
+    'news-migration-runs', 'news-migration-items', 'portal-pages', 'portal-page-categories', 'portal-page-media',
+    'payload-locked-documents', 'payload-migrations', 'payload-jobs', 'payload-kv'])
   const internal = ['id', 'createdAt', 'updatedAt', '_status']
   const publication = ['publishedAt', 'publicationGeneration', 'legacyDocumentId', 'legacySourceId', 'legacyRevisionId', 'importedAt']
   const onlyFields = (fields: Field[], names: string[]) => fields.every(field => 'name' in field && names.includes(field.name))
@@ -96,9 +97,13 @@ export function assertReferenceStoreCoverage(payload: Payload) {
   const history = payload.collections['legacy-news-revisions']?.config
   const migrationRuns = payload.collections['news-migration-runs']?.config
   const migrationItems = payload.collections['news-migration-items']?.config
+  const portalPages = payload.collections['portal-pages']?.config
+  const portalPageCategories = payload.collections['portal-page-categories']?.config
+  const portalPageMedia = payload.collections['portal-page-media']?.config
   const tasks = payload.config.jobs.tasks || []
   if (Object.keys(payload.collections).some(slug => !covered.has(slug)) ||
     !migrationRuns || !migrationItems ||
+    !portalPages || !portalPageCategories || !portalPageMedia ||
     payload.config.globals.some(global => global.slug !== 'news-home') || payload.config.jobs.workflows?.length ||
     tasks.some(task => task.slug !== 'publish-news-snapshot' || !onlyFields(task.inputSchema || [], ['scheduleId']) || !onlyFields(task.outputSchema || [], ['state'])) ||
      (schedules && !onlyFields(schedules.fields, [...internal, 'target', 'documentId', 'action', 'versionId', 'snapshot', 'snapshotHash', 'scheduledAt', 'actorUid', 'generation', 'state', 'jobId',
@@ -110,12 +115,96 @@ export function assertReferenceStoreCoverage(payload: Payload) {
        'commitOutcome', 'reconciliationSequence', 'reconciliationChainSha256', 'reconciliationSha256', 'destinationFingerprint', 'unresolvedExceptions',
        'sealedSequence', 'sealedChainSha256', 'sealedAt', 'activationEpoch', 'drainReceiptSha256'])) ||
      (migrationItems && !onlyFields(migrationItems.fields, [...internal, 'runId', 'manifestSha256', 'entityKind', 'sourceId', 'expectedHash', 'destinationId', 'observedHash', 'state', 'commitOutcome'])) ||
-    !onlyFields(articles.fields, [...internal, ...publication, 'title', 'category', 'editorial', 'body']) ||
-    (home && !onlyFields(home.fields, [...internal, ...publication, 'eyebrow', 'headline', 'summary'])) ||
+     !onlyFields(articles.fields, [...internal, ...publication, 'title', 'category', 'editorial', 'body']) ||
+     !onlyFields(portalPages.fields, [...internal, 'title', 'slug', 'summary', 'cover', 'coverAlt', 'categories', 'body', 'publishedAt', 'createdBy', 'updatedBy']) ||
+     !onlyFields(portalPageCategories.fields, [...internal, 'name', 'slug', 'description']) ||
+     !onlyFields(portalPageMedia.fields, [...internal, 'originalName', 'storageKey', 'mimeType', 'filesize', 'sha256', 'state', 'uploadedBy', 'completedAt']) ||
+     !portalPageCollectionsAvoidNewsMedia(portalPages, portalPageCategories, portalPageMedia) ||
+     (home && !onlyFields(home.fields, [...internal, ...publication, 'eyebrow', 'headline', 'summary'])) ||
     !articles.versions || articles.versions.maxPerDoc !== 0 ||
     (articles.versions.drafts && articles.versions.drafts.schedulePublish)) {
     throw new APIError('media_reference_store_not_covered', 503, undefined, true)
   }
+}
+
+/**
+ * The page collection names are covered only after a structural walk proves that
+ * every nested Payload relation targets page-local media/categories. This is
+ * intentionally not a slug-only allowlist: a new block-level relationship to
+ * news-media (or any other collection) invalidates the News deletion invariant.
+ */
+function portalPageCollectionsAvoidNewsMedia(...collections: Array<{ slug: string; fields: Field[] }>): boolean {
+  const allowedTargets = new Set(['portal-page-media', 'portal-page-categories'])
+  const relationTargets: string[] = []
+  let hasNativeUpload = false
+
+  const visit = (fields: unknown[]) => {
+    for (const raw of fields) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+      const field = raw as Record<string, unknown>
+      if (field.type === 'upload') hasNativeUpload = true
+      if (field.type === 'relationship' || field.type === 'upload') {
+        const relationTo = field.relationTo
+        const targets = Array.isArray(relationTo) ? relationTo : typeof relationTo === 'string' ? [relationTo] : []
+        if (targets.length === 0 || targets.some(target => typeof target !== 'string' || !allowedTargets.has(target))) return false
+        relationTargets.push(...targets as string[])
+      }
+      if ('fields' in field) {
+        if (!Array.isArray(field.fields) || !visit(field.fields)) return false
+      }
+      if ('blocks' in field) {
+        if (!Array.isArray(field.blocks)) return false
+        for (const block of field.blocks) {
+          if (!block || typeof block !== 'object' || Array.isArray(block) ||
+            !Array.isArray((block as Record<string, unknown>).fields) || !visit((block as Record<string, unknown>).fields as unknown[])) return false
+        }
+      }
+      if (field.type === 'tabs') {
+        if (!Array.isArray(field.tabs)) return false
+        for (const tab of field.tabs) {
+          if (!tab || typeof tab !== 'object' || Array.isArray(tab) ||
+            !Array.isArray((tab as Record<string, unknown>).fields) || !visit((tab as Record<string, unknown>).fields as unknown[])) return false
+        }
+      }
+    }
+    return true
+  }
+
+  for (const collection of collections) if (!visit(collection.fields)) return false
+  if (hasNativeUpload || relationTargets.includes('news-media')) return false
+
+  const pageTargets = relationTargetsFrom(collections[0]!.fields)
+  const categoryTargets = relationTargetsFrom(collections[1]!.fields)
+  const mediaTargets = relationTargetsFrom(collections[2]!.fields)
+  return pageTargets.every(target => allowedTargets.has(target)) && categoryTargets.length === 0 && mediaTargets.length === 0
+}
+
+function relationTargetsFrom(fields: unknown[]): string[] {
+  const targets: string[] = []
+  const visit = (items: unknown[]) => {
+    for (const raw of items) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const field = raw as Record<string, unknown>
+      if (field.type === 'relationship') {
+        const relationTo = field.relationTo
+        if (typeof relationTo === 'string') targets.push(relationTo)
+        else if (Array.isArray(relationTo)) targets.push(...relationTo.filter((target): target is string => typeof target === 'string'))
+      }
+      if (Array.isArray(field.fields)) visit(field.fields)
+      if (Array.isArray(field.blocks)) for (const block of field.blocks) {
+        if (block && typeof block === 'object' && Array.isArray((block as Record<string, unknown>).fields)) {
+          visit((block as Record<string, unknown>).fields as unknown[])
+        }
+      }
+      if (Array.isArray(field.tabs)) for (const tab of field.tabs) {
+        if (tab && typeof tab === 'object' && Array.isArray((tab as Record<string, unknown>).fields)) {
+          visit((tab as Record<string, unknown>).fields as unknown[])
+        }
+      }
+    }
+  }
+  visit(fields)
+  return targets
 }
 
 export async function assertMediaOrphan(payload: Payload, id: string, req: PayloadRequest) {

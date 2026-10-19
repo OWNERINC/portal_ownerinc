@@ -4,6 +4,9 @@ import type { Payload, PayloadRequest } from 'payload'
 import { NewsMigrationItems } from '../../src/collections/NewsMigrationItems.js'
 import { NewsMigrationRuns } from '../../src/collections/NewsMigrationRuns.js'
 import { NewsSchedules } from '../../src/collections/NewsSchedules.js'
+import { PortalPageCategories } from '../../src/collections/PortalPageCategories.js'
+import { PortalPageMedia } from '../../src/collections/PortalPageMedia.js'
+import { PortalPages } from '../../src/collections/PortalPages.js'
 import { assertMediaOrphan } from '../../src/media/references.js'
 
 const mediaId = 'a0000000-0000-4000-8000-000000000001'
@@ -27,6 +30,9 @@ function fixture(options: { schedules?: Record<string, unknown>[]; items?: Recor
       ...(!options.omitRuns ? { 'news-migration-runs': { config: NewsMigrationRuns } } : {}),
       ...(!options.omitItems ? { 'news-migration-items': { config: { ...NewsMigrationItems, fields: options.extraItemField
         ? [...NewsMigrationItems.fields, { name: 'futureReservationData', type: 'json' as const }] : NewsMigrationItems.fields } } } : {}),
+      'portal-pages': { config: PortalPages },
+      'portal-page-categories': { config: PortalPageCategories },
+      'portal-page-media': { config: PortalPageMedia },
       ...(options.extraStore ? { 'future-retention-store': { config: { fields: [] } } } : {}),
     },
     config: { globals: [{ slug: 'news-home', fields: fields(['id', 'createdAt', 'updatedAt', '_status', 'publishedAt', 'publicationGeneration',

@@ -21,6 +21,9 @@ import { NewsMigrationRuns } from './collections/NewsMigrationRuns'
 import { NewsMigrationItems } from './collections/NewsMigrationItems'
 import { portalPollEndpoints } from './endpoints/portal-polls'
 import { scopePayloadLockAccess } from './auth/native-admin-access'
+import { PortalPageCategories } from './collections/PortalPageCategories'
+import { PortalPageMedia } from './collections/PortalPageMedia'
+import { PortalPages } from './collections/PortalPages'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
@@ -49,7 +52,8 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   routes: { admin: '/editorial/admin', api: '/editorial/api' },
   serverURL: environment.portalPublicURL,
-  collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext), NewsSchedules, NewsAudit, LegacyNewsRevisions, NewsMigrationRuns, NewsMigrationItems],
+  collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext), NewsSchedules, NewsAudit, LegacyNewsRevisions,
+    NewsMigrationRuns, NewsMigrationItems, PortalPageCategories, PortalPageMedia, PortalPages],
   globals: [NewsHome],
   endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints],
   i18n: { supportedLanguages: { pt }, fallbackLanguage: 'pt' },

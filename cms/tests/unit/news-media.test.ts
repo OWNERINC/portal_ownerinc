@@ -11,6 +11,9 @@ import { collectMediaIds, assertMediaOrphan, canReadPublishedMedia } from '../..
 import { createNewsMedia } from '../../src/collections/NewsMedia.js'
 import { NewsMigrationItems } from '../../src/collections/NewsMigrationItems.js'
 import { NewsMigrationRuns } from '../../src/collections/NewsMigrationRuns.js'
+import { PortalPageCategories } from '../../src/collections/PortalPageCategories.js'
+import { PortalPageMedia } from '../../src/collections/PortalPageMedia.js'
+import { PortalPages } from '../../src/collections/PortalPages.js'
 import { getFileHandler } from '../../node_modules/payload/dist/uploads/endpoints/getFile.js'
 import { normalizeNewsDraftReferences } from '../../src/news/validation.js'
 import { mediaRange, openNewsMedia } from '../../src/media/read-file.js'
@@ -93,7 +96,8 @@ async function fixture() {
     db: { sessions, beginTransaction: async () => { calls.push('begin'); return 'live' },
       commitTransaction: async () => { calls.push('commit') }, rollbackTransaction: async () => { calls.push('rollback') } },
     collections: { 'news-media': { config: { upload: { staticDir: directory } } }, 'news-articles': { config: { fields: [], versions: { maxPerDoc: 0 } } },
-      'news-migration-runs': { config: NewsMigrationRuns }, 'news-migration-items': { config: NewsMigrationItems } },
+      'news-migration-runs': { config: NewsMigrationRuns }, 'news-migration-items': { config: NewsMigrationItems },
+      'portal-pages': { config: PortalPages }, 'portal-page-categories': { config: PortalPageCategories }, 'portal-page-media': { config: PortalPageMedia } },
     config: { globals: [], jobs: { tasks: [] } },
     findByID: async ({ id, req }: { id: string; req: PayloadRequest }) => { dataReads.push('findByID'); assert.equal(req.transactionID, 'live'); return assets.get(id) || null },
     find: async ({ req, collection, where }: { req: PayloadRequest; collection: string; where?: Where }) => {

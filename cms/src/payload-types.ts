@@ -28,6 +28,9 @@ export interface Config {
     'legacy-news-revisions': LegacyNewsRevision;
     'news-migration-runs': NewsMigrationRun;
     'news-migration-items': NewsMigrationItem;
+    'portal-page-categories': PortalPageCategory;
+    'portal-page-media': PortalPageMedia;
+    'portal-pages': PortalPage;
     'payload-kv': PayloadKv;
     'payload-jobs': PayloadJob;
     'payload-locked-documents': PayloadLockedDocument;
@@ -44,6 +47,9 @@ export interface Config {
     'legacy-news-revisions': LegacyNewsRevisionsSelect<false> | LegacyNewsRevisionsSelect<true>;
     'news-migration-runs': NewsMigrationRunsSelect<false> | NewsMigrationRunsSelect<true>;
     'news-migration-items': NewsMigrationItemsSelect<false> | NewsMigrationItemsSelect<true>;
+    'portal-page-categories': PortalPageCategoriesSelect<false> | PortalPageCategoriesSelect<true>;
+    'portal-page-media': PortalPageMediaSelect<false> | PortalPageMediaSelect<true>;
+    'portal-pages': PortalPagesSelect<false> | PortalPagesSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-jobs': PayloadJobsSelect<false> | PayloadJobsSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -456,6 +462,160 @@ export interface NewsMigrationItem {
   commitOutcome: 'acknowledged' | 'unknown';
   updatedAt: string;
   createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-page-categories".
+ */
+export interface PortalPageCategory {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-page-media".
+ */
+export interface PortalPageMedia {
+  id: string;
+  originalName: string;
+  storageKey: string;
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf' | 'video/mp4' | 'video/webm';
+  filesize: number;
+  sha256: string;
+  state: 'uploading' | 'complete';
+  uploadedBy: string;
+  completedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-pages".
+ */
+export interface PortalPage {
+  id: string;
+  title: string;
+  slug: string;
+  summary?: string | null;
+  cover?: (string | null) | PortalPageMedia;
+  coverAlt?: string | null;
+  categories?: (string | PortalPageCategory)[] | null;
+  body?:
+    | (
+        | {
+            text: string;
+            level: '2' | '3' | '4';
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'heading';
+          }
+        | {
+            content?: {
+              root: {
+                type: string;
+                children: {
+                  type: any;
+                  version: number;
+                  [k: string]: unknown;
+                }[];
+                direction: ('ltr' | 'rtl') | null;
+                format: 'left' | 'start' | 'center' | 'right' | 'end' | 'justify' | '';
+                indent: number;
+                version: number;
+              };
+              [k: string]: unknown;
+            } | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'rich_text';
+          }
+        | {
+            asset?: (string | null) | PortalPageMedia;
+            alt: string;
+            caption?: string | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'image';
+          }
+        | {
+            images?:
+              | {
+                  asset?: (string | null) | PortalPageMedia;
+                  alt: string;
+                  caption?: string | null;
+                  id?: string | null;
+                }[]
+              | null;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'gallery';
+          }
+        | {
+            asset?: (string | null) | PortalPageMedia;
+            title: string;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'video';
+          }
+        | {
+            provider: 'youtube' | 'vimeo';
+            url: string;
+            title: string;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'embed';
+          }
+        | {
+            asset?: (string | null) | PortalPageMedia;
+            title: string;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'pdf';
+          }
+        | {
+            tone: 'info' | 'warning' | 'success';
+            title?: string | null;
+            text: string;
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'callout';
+          }
+        | {
+            label: string;
+            url: string;
+            newTab?: boolean | null;
+            style: 'primary' | 'secondary';
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'link';
+          }
+        | {
+            layout?: ('content' | 'wide' | 'full' | 'left' | 'right') | null;
+            id?: string | null;
+            blockName?: string | null;
+            blockType: 'divider';
+          }
+      )[]
+    | null;
+  publishedAt?: string | null;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  updatedAt: string;
+  createdAt: string;
+  _status?: ('draft' | 'published') | null;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -934,6 +1094,153 @@ export interface NewsMigrationItemsSelect<T extends boolean = true> {
   commitOutcome?: T;
   updatedAt?: T;
   createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-page-categories_select".
+ */
+export interface PortalPageCategoriesSelect<T extends boolean = true> {
+  name?: T;
+  slug?: T;
+  description?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-page-media_select".
+ */
+export interface PortalPageMediaSelect<T extends boolean = true> {
+  originalName?: T;
+  storageKey?: T;
+  mimeType?: T;
+  filesize?: T;
+  sha256?: T;
+  state?: T;
+  uploadedBy?: T;
+  completedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-pages_select".
+ */
+export interface PortalPagesSelect<T extends boolean = true> {
+  title?: T;
+  slug?: T;
+  summary?: T;
+  cover?: T;
+  coverAlt?: T;
+  categories?: T;
+  body?:
+    | T
+    | {
+        heading?:
+          | T
+          | {
+              text?: T;
+              level?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        rich_text?:
+          | T
+          | {
+              content?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        image?:
+          | T
+          | {
+              asset?: T;
+              alt?: T;
+              caption?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        gallery?:
+          | T
+          | {
+              images?:
+                | T
+                | {
+                    asset?: T;
+                    alt?: T;
+                    caption?: T;
+                    id?: T;
+                  };
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        video?:
+          | T
+          | {
+              asset?: T;
+              title?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        embed?:
+          | T
+          | {
+              provider?: T;
+              url?: T;
+              title?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        pdf?:
+          | T
+          | {
+              asset?: T;
+              title?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        callout?:
+          | T
+          | {
+              tone?: T;
+              title?: T;
+              text?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        link?:
+          | T
+          | {
+              label?: T;
+              url?: T;
+              newTab?: T;
+              style?: T;
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+        divider?:
+          | T
+          | {
+              layout?: T;
+              id?: T;
+              blockName?: T;
+            };
+      };
+  publishedAt?: T;
+  createdBy?: T;
+  updatedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  _status?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

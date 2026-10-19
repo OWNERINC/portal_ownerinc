@@ -4,6 +4,7 @@ import * as migration_20261005_151541_owner_news_publication from './20261005_15
 import * as migration_20261005_220916_owner_news_legacy_history from './20261005_220916_owner_news_legacy_history';
 import * as migration_20261006_181325_a_owner_news_suspend_enum from './20261006_181325_a_owner_news_suspend_enum';
 import * as migration_20261006_181424_z_owner_news_native from './20261006_181424_z_owner_news_native';
+import * as migration_20261019_135005_portal_pages from './20261019_135005_portal_pages';
 
 export const migrations = [
   {
@@ -34,6 +35,11 @@ export const migrations = [
   {
     up: migration_20261006_181424_z_owner_news_native.up,
     down: migration_20261006_181424_z_owner_news_native.down,
-    name: '20261006_181424_z_owner_news_native'
+    name: '20261006_181424_z_owner_news_native',
+  },
+  {
+    up: migration_20261019_135005_portal_pages.up,
+    down: migration_20261019_135005_portal_pages.down,
+    name: '20261019_135005_portal_pages'
   },
 ];

@@ -1,5 +1,7 @@
 export * from './blocks'
 export * from './contracts'
 export * from './primitives'
+export * from './projection'
+export * from './persistence'
 export * from './rich-text'
 export * from './validation'
