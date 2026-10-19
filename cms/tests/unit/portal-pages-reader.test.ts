@@ -17,6 +17,9 @@ const draftVersionID = '018f47a2-7b3c-7a11-8a2c-1234567890ae'
 const otherPageVersionID = '018f47a2-7b3c-7a11-8a2c-1234567890af'
 const assetID = '018f47a2-7b3c-7a11-8a2c-1234567890b0'
 const categoryID = '018f47a2-7b3c-7a11-8a2c-1234567890b1'
+const assetAID = '018f47a2-7b3c-7a11-8a2c-1234567890b2'
+const assetBID = '018f47a2-7b3c-7a11-8a2c-1234567890b3'
+const revisionBID = '018f47a2-7b3c-7a11-8a2c-1234567890b4'
 
 const reader = { uid: 'reader-uid', email: 'reader@example.invalid', name: null, canManageKnowledge: false }
 const editor = { ...reader, canManageKnowledge: true }
@@ -40,9 +43,9 @@ function fixture() {
   const newer = page(newerID, 'newer-policy', 'Newer policy', newerPublishedAt)
   const draft = page('018f47a2-7b3c-7a11-8a2c-1234567890b2', 'draft-only', 'Private draft', publishedAt, 'draft')
   const versions = [
-    version(versionID, pageID, published),
-    version(draftVersionID, pageID, page(pageID, 'older-policy', 'Unpublished edit', publishedAt), 'draft'),
     version(otherPageVersionID, newerID, newer),
+    version(draftVersionID, pageID, page(pageID, 'older-policy', 'Unpublished edit', publishedAt), 'draft'),
+    version(versionID, pageID, published),
   ]
   const calls: string[] = []
   const media = { id: assetID, originalName: 'guide.pdf', storageKey: '018f47a2-7b3c-7a11-8a2c-1234567890b3.pdf',
@@ -73,7 +76,7 @@ function fixture() {
       return { docs: selected, hasNextPage: start + limit < docs.length, totalDocs: docs.length }
     },
     findVersions: async (args: Record<string, any>) => {
-      calls.push('findVersions')
+      calls.push(`findVersions:${JSON.stringify(args.sort || null)}`)
       assert.equal(args.req.transactionID, 'live')
       let docs = versions
       const filters = args.where?.and || []
@@ -83,6 +86,9 @@ function fixture() {
       if (parent) docs = docs.filter(doc => doc.parent === parent)
       if (id) docs = docs.filter(doc => doc.id === id)
       if (status) docs = docs.filter(doc => doc.version._status === status)
+      if (Array.isArray(args.sort) && args.sort.join(',') === '-updatedAt,-id') {
+        docs = [...docs].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || b.id.localeCompare(a.id))
+      }
       if (args.limit) docs = docs.slice(0, args.limit)
       return { docs, hasNextPage: false }
     },
@@ -152,9 +158,44 @@ test('asset authorization binds the exact current published Version or the exact
   await assert.rejects(resolvePreviewPortalPageForAsset(f.req, pageID, draftVersionID, reader), /permission_denied/)
 })
 
+test('latest published version query is explicitly ordered and publish A → B denies A asset URLs', async () => {
+  const f = fixture()
+  const oldPublished = f.versions.find(row => row.id === versionID)!
+  const oldPage = page(pageID, 'older-policy', 'Revision A', '2026-10-19T10:00:00.000Z')
+  oldPage.body = [{ blockType: 'image', asset: assetAID, alt: 'Revision A asset' }] as any
+  oldPublished.version = { ...oldPage }
+  oldPublished.updatedAt = '2026-10-19T10:00:00.000Z'
+
+  const latestPage = page(pageID, 'older-policy', 'Revision B', '2026-10-19T11:00:00.000Z')
+  latestPage.body = [{ blockType: 'image', asset: assetBID, alt: 'Revision B asset' }] as any
+  Object.assign(f.published, latestPage)
+  f.versions.push(version(revisionBID, pageID, latestPage))
+  // Keep the fixture deliberately out of database order: B is appended after A and the other page.
+
+  const media = (id: string, key: string) => ({ id, originalName: `${key}.png`, storageKey: `${id}.png`,
+    mimeType: 'image/png', filesize: 20, sha256: 'b'.repeat(64), state: 'complete', uploadedBy: 'editor',
+    completedAt: '2026-10-19T11:00:00.000Z' })
+  ;(f.payload as unknown as { findByID: (args: Record<string, unknown>) => Promise<unknown> }).findByID = async args => {
+    f.calls.push(`findByID:${String(args.collection)}`)
+    assert.equal((args.req as PayloadRequest).transactionID, 'live')
+    if (args.collection === 'portal-pages') return f.published
+    if (args.collection === 'portal-page-categories' && args.id === categoryID) return { id: categoryID, slug: 'policies', name: 'Policies' }
+    if (args.collection === 'portal-page-media' && args.id === assetAID) return media(assetAID, 'revision-a')
+    if (args.collection === 'portal-page-media' && args.id === assetBID) return media(assetBID, 'revision-b')
+    return null
+  }
+
+  const stale = await resolvePublishedPortalPageForAsset(f.req, pageID, versionID)
+  const current = await resolvePublishedPortalPageForAsset(f.req, pageID, revisionBID)
+  assert.equal(stale, null, 'a published revision A URL is denied after publishing B')
+  assert.equal(current?.dto.revision.id, revisionBID)
+  assert.deepEqual([...current!.media.keys()], [assetBID], 'only B media is authorized by the current published snapshot')
+  assert.ok(f.calls.includes('findVersions:["-updatedAt","-id"]'), 'latest-version lookup uses updatedAt DESC then id DESC')
+})
+
 test('published reads fail closed when the saved published Version projection drifts from the main document', async () => {
   const f = fixture()
-  const savedVersion = f.versions[0]!.version as Record<string, unknown>
+  const savedVersion = f.versions.find(row => row.id === versionID)!.version as Record<string, unknown>
   savedVersion.title = 'saved but divergent title'
   await assert.rejects(queryPortalPagePublishedDetail(f.req, 'older-policy', reader),
     error => (error as { status?: number }).status === 503)

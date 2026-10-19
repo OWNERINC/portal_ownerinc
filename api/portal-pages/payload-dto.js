@@ -82,7 +82,9 @@ function validateBlock(block, budget) {
   budget.nodes++;
   assert(budget.nodes <= 10_000 && record(block) && typeof block.type === 'string');
   if (Object.hasOwn(block, 'layout')) assert(LAYOUTS.has(block.layout));
-  const fields = (...required) => hasKeys(block, ['type', ...required], ['layout']);
+  const fields = (...required) => hasKeys(block, ['type', ...required], [
+    'layout', ...(block.type === 'image' ? ['caption'] : []), ...(block.type === 'callout' ? ['title'] : []),
+  ]);
   switch (block.type) {
     case 'heading':
       assert(fields('text', 'level') && plain(block.text, 200, { min: 1 }) && Number.isInteger(block.level) && [2, 3, 4].includes(block.level));

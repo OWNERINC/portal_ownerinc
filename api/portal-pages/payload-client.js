@@ -49,12 +49,20 @@ function parseRange(value, size) {
   return { start, end, partial: true };
 }
 
-function readWithIdleTimeout(reader, controller, idleTimeoutMs) {
+function readWithIdleTimeout(reader, controller, idleTimeoutMs, timers = null) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => { controller.abort(); reject(unavailable()); }, idleTimeoutMs);
+    timer = setTimeout(() => {
+      timers?.delete(timer);
+      controller.abort();
+      reject(unavailable());
+    }, idleTimeoutMs);
+    timers?.add(timer);
   });
-  return Promise.race([reader.read(), timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([reader.read(), timeout]).finally(() => {
+    clearTimeout(timer);
+    timers?.delete(timer);
+  });
 }
 
 async function readJSONResponse(response, controller, maxBytes, idleTimeoutMs) {
@@ -159,30 +167,64 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
   async function asset(input, actor, options = {}) {
     const { response, controller, cleanup } = await request('asset', input, actor, options);
     let reader;
-    let output;
     let bytes = 0;
-    let done = false;
-    let finished = false;
-    const finish = async () => {
-      if (finished) return;
-      finished = true;
-      controller.signal.removeEventListener('abort', abort);
-      cleanup();
+    let outputController;
+    let outputState = 'open';
+    let cleanupPromise;
+    const idleTimers = new Set();
+    const cleanupResources = ({ cancelUpstream = true, abortFetch = true } = {}) => {
+      if (cleanupPromise) return cleanupPromise;
+      cleanupPromise = (async () => {
+        for (const timer of idleTimers) clearTimeout(timer);
+        idleTimers.clear();
+        controller.signal.removeEventListener('abort', abort);
+        cleanup();
+        if (abortFetch && !controller.signal.aborted) controller.abort();
+        try {
+          if (cancelUpstream) {
+            if (reader) await reader.cancel().catch(() => {});
+            else await response.body?.cancel().catch(() => {});
+          }
+        } finally {
+          try { reader?.releaseLock(); } catch {}
+        }
+      })();
+      return cleanupPromise;
     };
-    const cancel = async () => {
-      if (done) return;
-      done = true;
-      if (reader) await reader.cancel().catch(() => {});
-      else await response.body?.cancel().catch(() => {});
-      controller.abort();
-      output = null;
-      await finish();
+    const setOutputState = (state, error) => {
+      if (outputState !== 'open') return false;
+      outputState = state;
+      const target = outputController;
+      outputController = null;
+      if (state === 'closed') target?.close();
+      else if (state === 'errored') target?.error(error || unavailable());
+      return true;
     };
     const abort = () => {
-      if (output) { output.error(unavailable()); output = null; }
-      void cancel();
+      setOutputState('errored', unavailable());
+      void cleanupResources();
     };
     try {
+      if (response.status === 403 || response.status === 404) {
+        let body;
+        try {
+          const encoding = (response.headers.get('content-encoding') || 'identity').toLowerCase();
+          if (encoding !== 'identity' || !response.body) throw unavailable();
+          body = await readJSONResponse(response, controller, 1024, idleTimeoutMs);
+        } catch {
+          await cleanupResources();
+          throw safeError(503);
+        }
+        const expected = response.status === 403 ? 'forbidden' : 'not_found';
+        const exact = body !== null && typeof body === 'object' && !Array.isArray(body)
+          && Object.keys(body).length === 1 && body.error === expected;
+        if (!exact) {
+          await cleanupResources();
+          throw safeError(503);
+        }
+        await cleanupResources({ cancelUpstream: true, abortFetch: true });
+        throw safeError(response.status);
+      }
       const length = response.headers.get('content-length');
       const cache = response.headers.get('cache-control') || '';
       if (!length || !/^\d+$/u.test(length) || Number(length) > MAX_ASSET_BYTES ||
@@ -194,7 +236,7 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
         const match = /^bytes \*\/(\d+)$/u.exec(contentRange);
         if (declaredLength !== 0 || !match || Number(match[1]) < 1 || Number(match[1]) > MAX_ASSET_BYTES
           || input.range === null || parseRange(input.range, Number(match[1])) !== null) throw unavailable();
-        await cancel();
+        await cleanupResources();
         return { status: 416, headers: { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff',
           'Content-Length': '0', 'Content-Range': contentRange }, body: null };
       }
@@ -226,36 +268,36 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
       if (contentRange) headers['Content-Range'] = contentRange;
       const body = new ReadableStream({
         start(streamController) {
-          output = streamController;
+          outputController = streamController;
           controller.signal.addEventListener('abort', abort, { once: true });
           if (controller.signal.aborted) abort();
         },
         async pull(streamController) {
-          if (done) return;
+          if (outputState !== 'open') return;
           try {
-            const part = await readWithIdleTimeout(reader, controller, idleTimeoutMs);
-            if (controller.signal.aborted) throw unavailable();
+            const part = await readWithIdleTimeout(reader, controller, idleTimeoutMs, idleTimers);
+            if (outputState !== 'open' || controller.signal.aborted) return;
             if (part.done) {
               if (bytes !== declaredLength) throw unavailable();
-              done = true;
-              streamController.close();
-              output = null;
-              await finish();
+              if (setOutputState('closed')) await cleanupResources({ cancelUpstream: false, abortFetch: false });
               return;
             }
             bytes += part.value.byteLength;
             if (bytes > declaredLength || bytes > MAX_ASSET_BYTES) throw unavailable();
             streamController.enqueue(part.value);
           } catch {
-            if (!done && output) { done = true; streamController.error(unavailable()); output = null; }
-            await cancel();
+            setOutputState('errored', unavailable());
+            await cleanupResources();
           }
         },
-        cancel,
+        async cancel() {
+          setOutputState('cancelled');
+          await cleanupResources();
+        },
       }, { highWaterMark: 0 });
       return { status: response.status, headers, body };
     } catch (error) {
-      await cancel();
+      await cleanupResources();
       throw error?.status ? error : unavailable();
     }
   }

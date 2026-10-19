@@ -3,7 +3,7 @@ import { hasPortalPagesServiceAccess, portalPageActions, readPortalPageActor, re
   validPortalPageRequestID, type PortalPageAction } from '../auth/portal-pages-service-access'
 import { readCmsEnvironment } from '../config/environment'
 import { withCmsTransaction } from '../publication/transaction'
-import { openPortalPageMedia } from '../portal-pages/read-file'
+import { openPortalPageMedia, type PortalPageAssetResponse } from '../portal-pages/read-file'
 import {
   queryPortalPageCategories,
   queryPortalPagePreview,
@@ -55,7 +55,33 @@ function json(value: unknown, maxBytes: number): Response {
   return new Response(serialized, { status: 200, headers: { ...RESPONSE_HEADERS, 'Content-Type': 'application/json; charset=utf-8' } })
 }
 
-async function handle(action: PortalPageAction, req: PayloadRequest): Promise<Response> {
+async function readAssetResponse(req: PayloadRequest, actor: ReturnType<typeof readPortalPageActor>,
+  input: ReturnType<typeof readPortalPageInput>, openAsset: typeof openPortalPageMedia): Promise<Response> {
+  let opened: PortalPageAssetResponse | undefined
+  let handedOff = false
+  try {
+    // Asset delivery must own transaction completion before the response body is handed to Next.
+    const isolatedRequest = { ...req, transactionID: undefined } as PayloadRequest
+    const result = await withCmsTransaction(req.payload, isolatedRequest, async transactionReq => {
+      const page = input.preview
+        ? await resolvePreviewPortalPageForAsset(transactionReq, input.pageId as string, input.revisionId as string, actor)
+        : await resolvePublishedPortalPageForAsset(transactionReq, input.pageId as string, input.revisionId as string)
+      if (!page) throw new APIError('not_found', 404, undefined, true)
+      const media = page.media.get(input.assetId as string)
+      if (!media) throw new APIError('not_found', 404, undefined, true)
+      const { uploadDir } = readCmsEnvironment(process.env)
+      opened = await openAsset({ uploadDir, media, range: input.range as string | null, signal: req.signal })
+      return opened
+    })
+    const response = new Response(result.body, { status: result.status, headers: result.headers })
+    handedOff = true
+    return response
+  } finally {
+    if (!handedOff && opened?.body) await opened.body.cancel().catch(() => {})
+  }
+}
+
+async function handle(action: PortalPageAction, req: PayloadRequest, openAsset: typeof openPortalPageMedia): Promise<Response> {
   try {
     if (!hasPortalPagesServiceAccess(req)) throw new APIError('forbidden', 403, undefined, true)
     if (!validPortalPageRequestID(req.headers.get('x-request-id'))) throw new APIError('invalid_request', 400, undefined, true)
@@ -65,19 +91,7 @@ async function handle(action: PortalPageAction, req: PayloadRequest): Promise<Re
     const request = body as Record<string, unknown>
     const actor = readPortalPageActor(request.actor)
     const input = readPortalPageInput(action, request.input)
-    if (action === 'asset') {
-      const result = await withCmsTransaction(req.payload, req, async transactionReq => {
-        const page = input.preview
-          ? await resolvePreviewPortalPageForAsset(transactionReq, input.pageId as string, input.revisionId as string, actor)
-          : await resolvePublishedPortalPageForAsset(transactionReq, input.pageId as string, input.revisionId as string)
-        if (!page) throw new APIError('not_found', 404, undefined, true)
-        const media = page.media.get(input.assetId as string)
-        if (!media) throw new APIError('not_found', 404, undefined, true)
-        const { uploadDir } = readCmsEnvironment(process.env)
-        return openPortalPageMedia({ uploadDir, media, range: input.range as string | null, signal: req.signal })
-      })
-      return new Response(result.body, { status: result.status, headers: result.headers })
-    }
+    if (action === 'asset') return await readAssetResponse(req, actor, input, openAsset)
     if (action === 'list') return json(await queryPortalPages(req, input as never, actor), 16 * MiB)
     if (action === 'categories') return json(await queryPortalPageCategories(req, actor), 16 * MiB)
     if (action === 'detail') {
@@ -91,8 +105,13 @@ async function handle(action: PortalPageAction, req: PayloadRequest): Promise<Re
   } catch (error) { return responseError(error) }
 }
 
-export const portalPageReadEndpoints: Endpoint[] = portalPageActions.map(action => ({
-  path: `/portal-pages/${action}`,
-  method: 'post',
-  handler: req => handle(action, req),
-}))
+export function createPortalPageReadEndpoints(options: { openAsset?: typeof openPortalPageMedia } = {}): Endpoint[] {
+  const openAsset = options.openAsset || openPortalPageMedia
+  return portalPageActions.map(action => ({
+    path: `/portal-pages/${action}`,
+    method: 'post',
+    handler: req => handle(action, req, openAsset),
+  }))
+}
+
+export const portalPageReadEndpoints: Endpoint[] = createPortalPageReadEndpoints()

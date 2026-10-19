@@ -15,6 +15,40 @@ const page = {
   published_at: '2026-10-19T10:00:00.000Z', content_version: 1, asset_scope: 'portal-pages',
   content_blocks: [{ type: 'divider' }], revision: { id: versionID, status: 'published' },
 };
+const assetHeaders = (length, overrides = {}) => ({
+  'content-type': 'application/pdf', 'content-length': String(length), 'accept-ranges': 'bytes',
+  'content-disposition': `inline; filename="${assetID}.pdf"`, 'cache-control': 'private,no-store',
+  'x-content-type-options': 'nosniff', ...overrides,
+});
+
+function trackAbortSignal() {
+  const listeners = new Set();
+  return {
+    aborted: false,
+    listeners,
+    addEventListener(_type, listener) { listeners.add(listener); },
+    removeEventListener(_type, listener) { listeners.delete(listener); },
+    abort() {
+      this.aborted = true;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+}
+
+function makeAssetClient({ body, length = 4, idleTimeoutMs = 100, headers = {}, signal = trackAbortSignal() }) {
+  let fetchSignal;
+  const client = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret, idleTimeoutMs,
+    fetchImpl: async (_url, init) => {
+      fetchSignal = init.signal;
+      return new Response(body, { headers: assetHeaders(length, headers) });
+    },
+  });
+  return {
+    signal,
+    get fetchSignal() { return fetchSignal; },
+    asset: () => client.asset({ pageId: pageID, revisionId: versionID, assetId: assetID, preview: false, range: null }, actor, { signal }),
+  };
+}
 
 function jsonResponse(value, headers = {}) {
   return new Response(JSON.stringify(value), { status: 200,
@@ -124,3 +158,140 @@ test('per-read idle timeout rejects and cancels an asset stream', async () => {
   await assert.rejects(reader.read());
   assert.equal(cancelled, true);
 })
+
+test('asset CMS JSON errors map only exact bounded forbidden/not_found bodies and never expose backend details', async () => {
+  const valid = [
+    { status: 403, error: 'forbidden', mapped: 403 },
+    { status: 404, error: 'not_found', mapped: 404 },
+  ];
+  for (const entry of valid) {
+    const client = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret,
+      fetchImpl: async () => Response.json({ error: entry.error }, { status: entry.status }),
+    });
+    await assert.rejects(client.asset({ pageId: pageID, revisionId: versionID, assetId: assetID, preview: false, range: null }, actor),
+      error => error.status === entry.mapped && !/CMS|detail|private/i.test(error.message));
+  }
+
+  const invalid = [
+    { status: 403, body: Response.json({ error: 'not_found' }, { status: 403 }) },
+    { status: 404, body: Response.json({ error: 'not_found', detail: 'private CMS detail' }, { status: 404 }) },
+    { status: 403, body: new Response('{"error":"forbidden"}', { status: 403, headers: { 'content-type': 'text/plain' } }) },
+    { status: 404, body: new Response('{', { status: 404, headers: { 'content-type': 'application/json' } }) },
+    { status: 403, body: new Response('{"error":"forbidden"}', { status: 403, headers: {
+      'content-type': 'application/json', 'content-length': '1025',
+    } }) },
+    { status: 500, body: Response.json({ error: 'forbidden' }, { status: 500 }) },
+  ];
+  for (const entry of invalid) {
+    const client = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret, fetchImpl: async () => entry.body });
+    await assert.rejects(client.asset({ pageId: pageID, revisionId: versionID, assetId: assetID, preview: false, range: null }, actor),
+      error => error.status === 503 && !/private CMS detail|forbidden|not_found/i.test(error.message));
+  }
+
+  let oversizedBodyCancelled = 0;
+  const oversizedBody = new Response(new ReadableStream({ cancel() { oversizedBodyCancelled++; } }, { highWaterMark: 0 }), {
+    status: 403, headers: { 'content-type': 'application/json', 'content-length': '1025' },
+  });
+  const oversizedClient = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret,
+    fetchImpl: async () => oversizedBody,
+  });
+  await assert.rejects(oversizedClient.asset({ pageId: pageID, revisionId: versionID, assetId: assetID, preview: false, range: null }, actor),
+    error => error.status === 503);
+  assert.equal(oversizedBodyCancelled, 1, 'oversized CMS error bodies are cancelled before returning the safe 503');
+});
+
+test('asset stream reaches exact EOF once, releases request listeners, and clears its idle timeout without aborting', async () => {
+  const source = new ReadableStream({
+    start(controller) { controller.enqueue(Buffer.from('PDF!')); controller.close(); },
+  }, { highWaterMark: 0 });
+  const state = makeAssetClient({ body: source, length: 4, idleTimeoutMs: 20 });
+  const result = await state.asset();
+  const reader = result.body.getReader();
+  assert.deepEqual(Buffer.from((await reader.read()).value), Buffer.from('PDF!'));
+  assert.equal((await reader.read()).done, true);
+  assert.equal(state.signal.listeners.size, 0);
+  assert.equal(state.fetchSignal.aborted, false, 'normal EOF does not abort a completed fetch');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(state.fetchSignal.aborted, false, 'the completed stream leaves no idle timer behind');
+});
+
+test('asset stream overrun, underrun, and reader rejection error downstream and clean resources once', async () => {
+  const cases = [
+    {
+      name: 'overrun', length: 4,
+      body: new ReadableStream({ pull(controller) { controller.enqueue(Buffer.from('12345')); } }, { highWaterMark: 0 }),
+      reads: 1,
+    },
+    {
+      name: 'underrun', length: 4,
+      body: new ReadableStream({ start(controller) { controller.enqueue(Buffer.from('123')); controller.close(); } }, { highWaterMark: 0 }),
+      reads: 2,
+    },
+    {
+      name: 'reader rejection', length: 4,
+      body: new ReadableStream({ pull() { throw new Error('private reader failure'); } }, { highWaterMark: 0 }),
+      reads: 1,
+    },
+  ];
+  for (const entry of cases) {
+    const state = makeAssetClient({ body: entry.body, length: entry.length });
+    const result = await state.asset();
+    const reader = result.body.getReader();
+    if (entry.name === 'underrun') assert.equal((await reader.read()).value.byteLength, 3);
+    for (let index = 0; index < entry.reads - (entry.name === 'underrun' ? 1 : 0); index++) {
+      await assert.rejects(reader.read());
+    }
+    assert.equal(state.fetchSignal.aborted, true, `${entry.name} aborts the upstream fetch`);
+    assert.equal(state.signal.listeners.size, 0, `${entry.name} removes request listeners`);
+    await reader.cancel().catch(() => {});
+    assert.equal(state.signal.listeners.size, 0, `${entry.name} cleanup is idempotent`);
+  }
+});
+
+test('asset idle timeout, bad success headers, consumer cancel, and request abort cancel upstream and release listeners', async () => {
+  const idleSource = new ReadableStream({ pull() { return new Promise(() => {}); }, cancel() { idleCancelled++; } }, { highWaterMark: 0 });
+  let idleCancelled = 0;
+  const idle = makeAssetClient({ body: idleSource, length: 4, idleTimeoutMs: 10 });
+  const idleResult = await idle.asset();
+  await assert.rejects(idleResult.body.getReader().read());
+  assert.equal(idleCancelled, 1);
+  assert.equal(idle.fetchSignal.aborted, true);
+  assert.equal(idle.signal.listeners.size, 0);
+
+  let headerCancelled = 0;
+  const badHeaders = makeAssetClient({
+    body: new ReadableStream({ pull() { return new Promise(() => {}); }, cancel() { headerCancelled++; } }, { highWaterMark: 0 }),
+    headers: { 'content-type': 'video/quicktime' },
+  });
+  await assert.rejects(badHeaders.asset(), error => error.status === 503);
+  assert.equal(headerCancelled, 1, 'header validation failure cancels the created response body');
+  assert.equal(badHeaders.fetchSignal.aborted, true);
+  assert.equal(badHeaders.signal.listeners.size, 0);
+
+  let consumerCancelled = 0;
+  const consumer = makeAssetClient({
+    body: new ReadableStream({ pull(controller) { controller.enqueue(Buffer.from('PDF!')); }, cancel() { consumerCancelled++; } }, { highWaterMark: 0 }),
+  });
+  const consumerResult = await consumer.asset();
+  const consumerReader = consumerResult.body.getReader();
+  await consumerReader.read();
+  await consumerReader.cancel();
+  assert.equal(consumerCancelled, 1);
+  assert.equal(consumer.fetchSignal.aborted, true);
+  assert.equal(consumer.signal.listeners.size, 0);
+
+  let requestCancelled = 0;
+  const requestAbort = trackAbortSignal();
+  const aborted = makeAssetClient({
+    body: new ReadableStream({ pull() { return new Promise(() => {}); }, cancel() { requestCancelled++; } }, { highWaterMark: 0 }),
+    signal: requestAbort,
+  });
+  const abortedResult = await aborted.asset();
+  const abortedReader = abortedResult.body.getReader();
+  const pendingRead = abortedReader.read();
+  requestAbort.abort();
+  await assert.rejects(pendingRead);
+  assert.equal(requestCancelled, 1);
+  assert.equal(aborted.fetchSignal.aborted, true);
+  assert.equal(requestAbort.listeners.size, 0);
+});
