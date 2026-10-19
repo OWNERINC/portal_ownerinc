@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { APIError, type Payload, type PayloadRequest } from 'payload'
 import { sql } from '@payloadcms/db-postgres'
 import { canManagePortalPages } from '../auth/portal-pages-access'
@@ -14,6 +15,24 @@ import {
 } from './validation'
 
 export { projectPortalPageContent } from './projection'
+
+const PORTAL_PAGE_UPLOAD_ADVISORY_NAMESPACE = 'ownerinc.portal-page-upload.advisory.v1\0'
+
+/** Map a validated upload UUID to a collision-resistant, domain-separated 64-bit advisory key. */
+export function portalPageUploadAdvisoryKey(rawID: string): readonly [number, number] {
+  const id = uuid(rawID).replaceAll('-', '')
+  const digest = createHash('sha256').update(PORTAL_PAGE_UPLOAD_ADVISORY_NAMESPACE, 'utf8')
+    .update(Buffer.from(id, 'hex')).digest()
+  return [digest.readInt32BE(0), digest.readInt32BE(4)]
+}
+
+/** Acquire the current transaction's per-upload lock after the shared CMS reference lock. */
+export async function lockPortalPageUpload(payload: Payload, req: PayloadRequest, rawID: string): Promise<void> {
+  const [first, second] = portalPageUploadAdvisoryKey(rawID)
+  const db = await requireCmsTransaction(payload, req)
+  await db.execute(sql`SELECT pg_advisory_xact_lock(${first}, ${second})`)
+  await requireCmsTransaction(payload, req)
+}
 
 type PortalPageRefInput = { cover: null | { asset_id: string; alt: string }; body: unknown }
 type PortalPagePublicationScope = {

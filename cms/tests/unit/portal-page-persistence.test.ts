@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Payload, PayloadRequest } from 'payload'
+import { PgDialect } from 'drizzle-orm/pg-core'
 import { canManagePortalPages, portalPageEditorAccess } from '../../src/auth/portal-pages-access'
 import { PortalPageCategories } from '../../src/collections/PortalPageCategories'
 import { PortalPageMedia, portalPageMediaReadAccess } from '../../src/collections/PortalPageMedia'
@@ -19,6 +20,8 @@ import {
   withPortalPageMediaMutation,
   withPortalPageMediaLifecycleMutation,
   withExpectedPortalPageVersion,
+  lockPortalPageUpload,
+  portalPageUploadAdvisoryKey,
 } from '../../src/portal-pages/persistence'
 import {
   createPortalPageStorageKey,
@@ -558,6 +561,30 @@ test('expected-version helper rejects reused autosave Versions and any newer rev
     return true
   })
   assert.equal(explicitSaveAccepted, true)
+})
+
+test('upload advisory keys are stable UUID-derived int32 pairs and the production lock helper binds them', async () => {
+  const upper = pageMediaID.toUpperCase()
+  const key = portalPageUploadAdvisoryKey(pageMediaID)
+  assert.deepEqual(portalPageUploadAdvisoryKey(upper), key, 'UUID spelling is canonicalized before hashing')
+  assert.deepEqual(portalPageUploadAdvisoryKey(pageMediaID), key, 'key derivation is stable')
+  assert.notDeepEqual(key, portalPageUploadAdvisoryKey(versionID), 'different UUIDs map to different sample keys')
+  assert.equal(key.length, 2)
+  assert.ok(key.every(part => Number.isInteger(part) && part >= -2_147_483_648 && part <= 2_147_483_647))
+  assert.throws(() => portalPageUploadAdvisoryKey('../not-a-uuid'), /invalid_portal_page_content/)
+
+  const statements: unknown[] = []
+  const payload = { db: { sessions: { live: { db: { execute: async (statement: unknown) => {
+    statements.push(statement)
+    return { rows: [] }
+  } } } } } } as unknown as Payload
+  const req = { payload, transactionID: 'live' } as PayloadRequest
+  await lockPortalPageUpload(payload, req, pageMediaID)
+
+  assert.equal(statements.length, 1, 'the production helper executes one transaction-scoped upload lock')
+  const compiled = new PgDialect().sqlToQuery(statements[0] as never)
+  assert.match(compiled.sql, /^SELECT pg_advisory_xact_lock\(\$1, \$2\)$/u)
+  assert.deepEqual(compiled.params, key, 'both key components are SQL parameters, not interpolated SQL text')
 })
 
 test('News media reference inventory structurally verifies page collection relationship targets', async () => {

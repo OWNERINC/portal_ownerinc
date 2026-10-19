@@ -60,6 +60,25 @@ fail-closed para quota, disco e enqueue obrigatório. Tombstones `done` evitam
 re-enfileirar mídias concluídas já limpas. Esta tabela não referencia nem consulta
 domínios da Owner News.
 
+Operações de upload preservam a ordem de lock `CMS_REFERENCE_LOCK` → advisory
+transacional por upload → ownership do arquivo. O par de chaves int32 é derivado
+dos oito primeiros bytes do SHA-256 de
+`ownerinc.portal-page-upload.advisory.v1\0` concatenado aos bytes do UUID
+validado; isso separa o namespace de outros advisory locks e mantém o SQL
+parametrizado. Init adquire ambos os ownerships antes do commit de mídia/queue e
+mantém o ownership de filesystem até publicar atomicamente o manifest. Assim,
+cleanup que encontra esse owner ativo adia o item em vez de apagar um init entre
+commit e manifest; após crash, a identidade de processo permite recuperar o lock
+e o índice durável reencontra o trabalho. Cancelamento libera o ownership de
+filesystem antes da transação final e então readquire locks na mesma ordem, sem
+inverter a ordem advisory→filesystem.
+
+Completion valida somente os caminhos de chunks e partes derivados de `id` e
+`chunkCount` do manifest validado (no máximo 100 índices), via `lstat` e sem
+seguir symlinks. A contagem total de entradas em `.incoming` não participa da
+conclusão; arquivos desconhecidos não são fonte de estado nem são removidos por
+essa validação.
+
 O leitor de vídeo/PDF usará cookie de sessão de mídia HttpOnly, SameSite=Strict,
 curta e escopada à futura rota de assets. Segredos Firebase ou de serviço nunca
 serão colocados em URLs. Tipos de arquivo no escopo são JPEG, PNG, WebP, PDF,
