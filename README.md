@@ -93,6 +93,7 @@ HTML.
 - [Roadmap da integração Sólides](docs/product/solides-roadmap.md)
 - [Privacidade e retenção](docs/product/privacy-retention.md)
 - [Arquitetura](docs/architecture/overview.md)
+- [Páginas modulares do Portal](docs/architecture/portal-pages-content.md)
 - [Auditoria da plataforma](docs/reviews/2026-07-20-platform-audit.md)
 - [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)
 - [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)

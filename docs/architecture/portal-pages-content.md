@@ -44,8 +44,8 @@ desabilitado. Não existe rota pública `/uploads` para essas mídias.
 Linhas `uploading` não são selecionáveis em conteúdo: só a conclusão marca a mídia
 como `complete`, após validar bytes e persistir hash SHA-256 e `completedAt`.
 Esta decisão não altera o contrato global do parser Payload da News
-(`useTempFiles:false`, limite de 50 MiB); leitura autenticada de mídia permanece
-uma entrega posterior.
+(`useTempFiles:false`, limite de 50 MiB). A leitura privada de páginas modulares
+usa o endpoint independente descrito em “Ponte de leitura” abaixo.
 
 O manifest privado continua sendo a autoridade para estado, caminho e hash dos
 bytes. A tabela interna `portal_page_upload_cleanup` é somente um índice durável
@@ -128,10 +128,54 @@ seguir symlinks. A contagem total de entradas em `.incoming` não participa da
 conclusão; arquivos desconhecidos não são fonte de estado nem são removidos por
 essa validação.
 
-O leitor de vídeo/PDF usará cookie de sessão de mídia HttpOnly, SameSite=Strict,
-curta e escopada à futura rota de assets. Segredos Firebase ou de serviço nunca
-serão colocados em URLs. Tipos de arquivo no escopo são JPEG, PNG, WebP, PDF,
-MP4 e WebM; MOV/QuickTime não é suportado.
+## Ponte de leitura privada (Task 4)
+
+O Portal lê por `GET /api/contents/`, `/api/contents/categories` e
+`/api/contents/:slug`, sempre com Firebase Bearer auth e revalidação do usuário
+ativo. Paginação usa `limit` 1–50 e `offset` 0–1.000.000; lista, detalhe e
+categorias são `private,no-store`. O catálogo, contagens, ordem
+`publishedAt DESC, id DESC` e detalhe usam somente páginas publicadas elegíveis.
+A API valida independentemente cada `PortalPageDTO`; a lista retorna array e
+`X-Total-Count`, limitada a 50 DTOs de até 5 MiB normalizados cada e 16 MiB agregados.
+
+`GET /api/contents/preview/:pageId?version=<uuid>` exige `manageKnowledge` e lê a
+Version salva exata, sem substituir sua identidade pela versão atual. DTO normal
+identifica a Version publicada atual; a resolução de asset confere esse mesmo ID
+e rejeita links de uma publicação anterior. Se a projeção salva publicada divergir
+do documento principal, o CMS falha fechado em vez de fabricar uma revisão.
+
+O serviço mantém POSTs internos somente leitura em
+`/editorial/api/portal-pages/{list,categories,detail,preview,asset}`. Essa lista de
+paths e o segredo `PORTAL_TO_PAYLOAD_SECRET` são próprios das páginas modulares;
+não compartilham allowlist nem autoridade da Owner News. O CMS recusa `Origin`,
+`Cookie` e `Sec-Fetch-Site`; o Nginx responde 404 para os paths internos públicos.
+Nenhuma mídia de páginas é servida por `/uploads`.
+
+`POST /api/contents/media-session` usa o ID token Firebase já autenticado para
+emitir cookie Firebase de exatamente cinco minutos, sem aceitar body ou retornar
+token/identidade. Produção usa `__Secure-ownerinc-content-media`, `Secure`,
+`HttpOnly`, `SameSite=Strict` e `Path=/api/contents/assets`; desenvolvimento usa
+`ownerinc-content-media-dev` somente em localhost HTTP. POST e DELETE exigem Origin
+igual a `PORTAL_PUBLIC_URL` e rejeitam `Sec-Fetch-Site: cross-site`. Cada asset GET
+verifica a sessão Firebase com revogação, carrega novamente o usuário ativo e, em
+preview, revalida `manageKnowledge`. Cookie ausente, duplicado, inválido, expirado
+ou revogado não autoriza bytes.
+
+Asset URLs contêm somente UUIDs de página, revisão e mídia. A allowlist de mídia é
+JPEG, PNG, WebP, PDF, MP4 e WebM; MOV/QuickTime não é suportado. Sob a
+transação/lock de referências CMS, a mídia precisa estar referenciada pelo DTO
+exato e cumprir MIME por uso (capa/imagem/galeria, vídeo ou PDF) antes de abrir o
+descriptor privado.
+O leitor envia chunks de 64 KiB com backpressure/cancelamento e nunca revela
+`storageKey` ou caminho local. Imagens recebem resposta integral; PDF e vídeo
+suportam um único Range, inclusive sufixo/aberto, com 416 para intervalos inválidos.
+O máximo por arquivo é 500 MiB. O cliente API limita tempo até headers e timeout de
+inatividade por leitura, sem um timeout total durante reprodução.
+
+Nginx tem `location ^~ /api/contents/assets/` antes do proxy genérico, bloqueio
+cross-site, corpo máximo de 1 KiB, buffering de request desligado e quota
+`media_reads`. Essas rotas não ativam o frontend nem qualquer mutação/publicação;
+deploy e teste contra Firebase/Nginx reais continuam separados.
 
 ## Conteúdo e evolução
 
@@ -148,7 +192,7 @@ galeria são ordenadas.
 ## Escopo desta decisão
 
 Esta fundação define primitivos, tipos, validação e a fronteira de DTO. Coleções,
-projeção de drafts nativos, persistência/relações, endpoints, interface, ingress
-de upload, serviço de mídia e deploy são entregas posteriores. A implementação
-da fundação não altera Owner News, `api/`, parser global, migrations ou serviços
-em execução.
+projeção de drafts nativos, persistência/relações, ponte de leitura e ingress de
+upload foram adicionados em tarefas próprias. A interface, publicação, deploy e
+aceite contra serviços reais continuam posteriores. Essas entregas não alteram
+Owner News, seu parser global, migrations de domínio ou serviços em execução.

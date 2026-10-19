@@ -83,6 +83,21 @@ test('every API resource route requires authentication', async () => {
         assert.ok(guard >= 0 && guard < route.index, 'factory routes require the real default auth guard first');
         continue;
       }
+      if (file === 'contents.js') {
+        if (route[1].startsWith("'/',") || route[1].startsWith("'/categories'")
+          || route[1].startsWith("'/preview/:pageId'") || route[1].startsWith("'/:slug'")) {
+          assert.match(route[1], /authenticate/, 'Portal JSON reads require the real Bearer middleware');
+        }
+        if (route[1].startsWith("'/media-session'")) {
+          assert.match(source, /router\.post\('\/media-session'[\s\S]*?authenticate,/,
+            'media-cookie issuance requires the real Bearer middleware');
+        }
+        assert.match(source, /verifySessionCookie\(cookie, true\)/,
+          'private media requires a revocation-checked Firebase session cookie');
+        assert.match(source, /loadActivePortalUser\(db, decoded\)/,
+          'private media revalidates the active Portal account');
+        continue;
+      }
       if (!globallyProtected) assert.match(route[1], /authMiddleware/, `${file}: unauthenticated route`);
     }
   }

@@ -112,6 +112,14 @@ function expectedMimes(block: PortalPageBlock): Array<typeof PORTAL_PAGE_MEDIA_M
 }
 
 type PortalPageMediaUsage = { id: string; allowedMimes: ReadonlySet<string> }
+export type PortalPageMediaReadRecord = {
+  id: string
+  storageKey: string
+  mimeType: (typeof PORTAL_PAGE_MEDIA_MIMES)[number]
+  filesize: number
+  sha256: string | null
+  state: 'uploading' | 'complete'
+}
 
 function mediaMimeRequirements(page: PortalPageRefInput): PortalPageMediaUsage[] {
   const requirements: PortalPageMediaUsage[] = []
@@ -150,20 +158,21 @@ export async function assertPortalPageCategoryReferences(payload: Payload, value
   })
 }
 
-/** Validate existence, completeness (when required), and block-specific MIME under row locks. */
-export async function assertPortalPageMediaReferences(payload: Payload, page: PortalPageRefInput, req: PayloadRequest,
-  options: { requireComplete?: boolean } = {}): Promise<string[]> {
+/** Load each selected media row under the shared reference lock and validate every usage role. */
+export async function loadPortalPageMediaReferences(payload: Payload, page: PortalPageRefInput, req: PayloadRequest,
+  options: { requireComplete?: boolean } = {}): Promise<Map<string, PortalPageMediaReadRecord>> {
   return withCmsTransaction(payload, req, async transactionReq => {
     const db = await requireCmsTransaction(payload, transactionReq)
     const requirements = mediaMimeRequirements(page)
-    const checked = new Map<string, ReturnType<typeof validatePortalPageMediaMetadata>>()
+    const checked = new Map<string, PortalPageMediaReadRecord>()
     for (const { id, allowedMimes } of requirements) {
-      let metadata = checked.get(id)
-      if (!metadata) {
+      let record = checked.get(id)
+      if (!record) {
         await db.execute(sql`SELECT id FROM portal_page_media WHERE id = ${id}::uuid FOR SHARE`)
         const media = await payload.findByID({ collection: 'portal-page-media', id, req: transactionReq,
           overrideAccess: true, depth: 0, disableErrors: true }) as Record<string, unknown> | null
         if (!media) throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
+        let metadata: ReturnType<typeof validatePortalPageMediaMetadata>
         try {
           metadata = validatePortalPageMediaMetadata({
             originalName: media.originalName, storageKey: media.storageKey, mimeType: media.mimeType,
@@ -173,14 +182,22 @@ export async function assertPortalPageMediaReferences(payload: Payload, page: Po
         } catch {
           throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
         }
-        checked.set(id, metadata)
+        record = { id, storageKey: metadata.storageKey, mimeType: metadata.mimeType, filesize: metadata.filesize,
+          sha256: metadata.sha256, state: metadata.state }
+        checked.set(id, record)
       }
-      if (!allowedMimes.has(metadata.mimeType) || (options.requireComplete !== false && metadata.state !== 'complete')) {
+      if (!allowedMimes.has(record.mimeType) || (options.requireComplete !== false && record.state !== 'complete')) {
         throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
       }
     }
-    return [...new Set(requirements.map(({ id }) => id))]
+    return checked
   })
+}
+
+/** Validate existence, completeness (when required), and block-specific MIME under row locks. */
+export async function assertPortalPageMediaReferences(payload: Payload, page: PortalPageRefInput, req: PayloadRequest,
+  options: { requireComplete?: boolean } = {}): Promise<string[]> {
+  return [...(await loadPortalPageMediaReferences(payload, page, req, options)).keys()]
 }
 
 async function scanPortalPageReferences(payload: Payload, req: PayloadRequest,

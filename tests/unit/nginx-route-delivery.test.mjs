@@ -39,6 +39,35 @@ function quoteNginx(value) {
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }
 
+test('Nginx gives Portal content assets a narrow streaming route and keeps private CMS reads blocked', async () => {
+  const config = await readFile('nginx/nginx.conf', 'utf8');
+  const assetStart = config.indexOf('location ^~ /api/contents/assets/ {');
+  const genericAPI = config.indexOf('location ^~ /api/ {');
+  assert.notEqual(assetStart, -1, 'an exact Portal media prefix must exist');
+  assert.ok(assetStart < genericAPI, 'the Portal asset prefix must precede the generic API proxy');
+  const assetEnd = config.indexOf('\n    }', assetStart);
+  const assetBlock = config.slice(assetStart, assetEnd);
+  for (const directive of [
+    'if ($cross_site_request) { return 403; }',
+    'client_max_body_size 1k;',
+    'proxy_request_buffering off;',
+    'limit_req zone=media_reads burst=40 nodelay;',
+    'proxy_pass $api_upstream;',
+    'proxy_set_header X-Forwarded-Proto $forwarded_proto;',
+    'proxy_set_header X-Forwarded-Host $http_host;',
+    'proxy_set_header X-Forwarded-Port "";',
+  ]) assert.ok(assetBlock.includes(directive), `asset location must contain ${directive}`);
+  assert.doesNotMatch(assetBlock, /proxy_pass\s+\$cms_upstream|\/uploads/u);
+
+  const privateExact = config.indexOf('location = /editorial/api/portal-pages { return 404; }');
+  const privatePrefix = config.indexOf('location ^~ /editorial/api/portal-pages/ { return 404; }');
+  const editorialCatchAll = config.indexOf('location ^~ /editorial/ {');
+  assert.notEqual(privateExact, -1);
+  assert.notEqual(privatePrefix, -1);
+  assert.ok(privateExact < editorialCatchAll && privatePrefix < editorialCatchAll,
+    'private CMS service paths must be denied before the editorial proxy');
+});
+
 test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and existing proxies', async t => {
   if (process.platform === 'win32') return t.skip('real Nginx acceptance requires Linux');
   const version = spawnSync('nginx', ['-v'], { encoding: 'utf8' });
@@ -183,8 +212,24 @@ test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and ex
   assert.equal(await apiProxy.text(), 'api:/api/route-recovery-check.html');
   assertSecurityHeaders(apiProxy);
 
+  const pageAssetURL = '/api/contents/assets/018f47a2-7b3c-7a11-8a2c-1234567890ab/018f47a2-7b3c-7a11-8a2c-1234567890ac/018f47a2-7b3c-7a11-8a2c-1234567890ad';
+  const pageAsset = await fetch(`${baseUrl}${pageAssetURL}`, { headers: { range: 'bytes=1-4' } });
+  assert.equal(pageAsset.status, 200);
+  assert.equal(await pageAsset.text(), `api:${pageAssetURL}`);
+  assertSecurityHeaders(pageAsset);
+  const crossSiteAsset = await fetch(`${baseUrl}${pageAssetURL}`, { headers: { 'sec-fetch-site': 'cross-site' } });
+  assert.equal(crossSiteAsset.status, 403, 'cross-site asset reads must stop at Nginx');
+  assert.doesNotMatch(await crossSiteAsset.text(), /api:/);
+  assertSecurityHeaders(crossSiteAsset);
+
   const cmsProxy = await fetch(`${baseUrl}/editorial/api/route-recovery-check.html`);
   assert.equal(cmsProxy.status, 200);
   assert.equal(await cmsProxy.text(), 'cms:/editorial/api/route-recovery-check.html');
   assertSecurityHeaders(cmsProxy, { csp: false });
+  for (const privatePath of ['/editorial/api/portal-pages', '/editorial/api/portal-pages/list']) {
+    const denied = await fetch(`${baseUrl}${privatePath}`);
+    assert.equal(denied.status, 404, `${privatePath} must not reach CMS`);
+    assert.doesNotMatch(await denied.text(), /cms:/);
+    assertSecurityHeaders(denied, { csp: false });
+  }
 });

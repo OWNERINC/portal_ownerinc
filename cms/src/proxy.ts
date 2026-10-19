@@ -3,6 +3,7 @@ import { assertEditorialOrigin, editorialCookieSettings } from './auth/cookie'
 import { PortalAuthError } from './auth/portal-client'
 import { readPortalPublicURL } from './config/environment'
 import { hasNewsServiceAccess } from './auth/service-access'
+import { hasPortalPagesServiceAccess } from './auth/portal-pages-service-access'
 import { randomBytes } from 'node:crypto'
 
 export function editorialPolicy(nonce: string, development = false) {
@@ -32,7 +33,7 @@ export function proxy(request: NextRequest) {
   }
   const next = () => finish(NextResponse.next({ request: { headers } }))
   if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return next()
-  if (hasNewsServiceAccess(request)) return next()
+  if (hasNewsServiceAccess(request) || hasPortalPagesServiceAccess(request)) return next()
   try {
     const { origin } = editorialCookieSettings(readPortalPublicURL(process.env))
     assertEditorialOrigin(request.headers, origin)
