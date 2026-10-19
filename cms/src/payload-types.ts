@@ -485,7 +485,7 @@ export interface PortalPageMedia {
   storageKey: string;
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf' | 'video/mp4' | 'video/webm';
   filesize: number;
-  sha256: string;
+  sha256?: string | null;
   state: 'uploading' | 'complete';
   uploadedBy: string;
   completedAt?: string | null;

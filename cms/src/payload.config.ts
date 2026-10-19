@@ -24,6 +24,7 @@ import { scopePayloadLockAccess } from './auth/native-admin-access'
 import { PortalPageCategories } from './collections/PortalPageCategories'
 import { PortalPageMedia } from './collections/PortalPageMedia'
 import { PortalPages } from './collections/PortalPages'
+import { portalPageUploadEndpoints } from './endpoints/portal-page-uploads'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
@@ -55,7 +56,7 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext), NewsSchedules, NewsAudit, LegacyNewsRevisions,
     NewsMigrationRuns, NewsMigrationItems, PortalPageCategories, PortalPageMedia, PortalPages],
   globals: [NewsHome],
-  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints],
+  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints, ...portalPageUploadEndpoints],
   i18n: { supportedLanguages: { pt }, fallbackLanguage: 'pt' },
   editor: newsEditor,
   secret: environment.payloadSecret,

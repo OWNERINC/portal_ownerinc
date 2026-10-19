@@ -128,7 +128,7 @@ async function payloadFixture(options: {
 function mediaRecord(id: string, mimeType: string, state: 'uploading' | 'complete' = 'complete') {
   return {
     id, originalName: 'arquivo', storageKey: createPortalPageStorageKey(mimeType), mimeType, filesize: 100,
-    sha256: 'a'.repeat(64), state, uploadedBy: 'staff-1',
+    sha256: state === 'complete' ? 'a'.repeat(64) : null, state, uploadedBy: 'staff-1',
     completedAt: state === 'complete' ? '2026-10-19T10:20:30.000Z' : null,
   }
 }
@@ -277,11 +277,17 @@ test('media metadata enforces random canonical keys, hash, positive integer size
     sha256: 'a'.repeat(64), state: 'complete', uploadedBy: 'staff-1', completedAt: '2026-10-19T10:20:30.000Z',
   }
   assert.deepEqual(validatePortalPageMediaMetadata(metadata), { ...metadata, originalName: 'Manual.PDF' })
+  const uploading = { ...metadata, sha256: null, state: 'uploading', completedAt: null }
+  assert.deepEqual(validatePortalPageMediaMetadata(uploading), { ...uploading, originalName: 'Manual.PDF' })
+  const hashAbsentWhileUploading = { ...uploading }
+  delete (hashAbsentWhileUploading as Partial<typeof uploading>).sha256
+  assert.equal(validatePortalPageMediaMetadata(hashAbsentWhileUploading).sha256, null)
   for (const invalid of [
     { ...metadata, storageKey: '../secret.pdf' }, { ...metadata, storageKey: `${pageMediaID}.png` },
     { ...metadata, sha256: 'A'.repeat(64) }, { ...metadata, filesize: 0 }, { ...metadata, filesize: 1.5 },
     { ...metadata, mimeType: 'video/quicktime', storageKey: `${pageMediaID}.mov` },
     { ...metadata, filesize: 100 * 1024 * 1024 + 1 }, { ...metadata, state: 'complete', completedAt: null },
+    { ...metadata, state: 'complete', sha256: null },
     { ...metadata, state: 'uploading', completedAt: '2026-10-19T10:20:30.000Z' },
   ]) assert.throws(() => validatePortalPageMediaMetadata(invalid))
   assert.throws(() => validatePortalPageMediaMetadata({ ...metadata, mimeType: 'image/png', storageKey: createPortalPageStorageKey('image/png'), filesize: 15 * 1024 * 1024 + 1 }))
@@ -306,7 +312,7 @@ test('page media mutations fail closed outside the trusted scoped helper and ser
   const attackerKey = `${pageMediaID}.pdf`
   const result = await withPortalPageMediaMutation(f.req, 'trusted-uploader', 'create', async req => {
     assert.equal(isPortalPageMediaMutation(req, 'create'), true)
-    const { id: _id, ...metadata } = mediaRecord(pageMediaID, 'application/pdf')
+    const { id: _id, ...metadata } = mediaRecord(pageMediaID, 'application/pdf', 'uploading')
     return (beforeChange as (args: unknown) => unknown)({
       operation: 'create', req, originalDoc: undefined,
       data: { ...metadata, storageKey: attackerKey, uploadedBy: 'attacker' },
@@ -315,6 +321,7 @@ test('page media mutations fail closed outside the trusted scoped helper and ser
   assert.notEqual(result.storageKey, attackerKey)
   assert.match(String(result.storageKey), /^[0-9a-f-]{36}\.pdf$/u)
   assert.equal(result.uploadedBy, 'trusted-uploader')
+  assert.equal(result.sha256, null, 'new uploads remain incomplete until byte verification')
   assert.equal(isPortalPageMediaMutation(f.req), false)
 })
 
@@ -327,12 +334,13 @@ test('trusted media completion validates explicit metadata from a persisted Payl
     createdAt: '2026-10-19T10:00:00.000Z', updatedAt: '2026-10-19T10:00:00.000Z',
   }
   const completedAt = '2026-10-19T10:30:00.000Z'
-  const data: Record<string, unknown> = { state: 'complete', completedAt }
+  const data: Record<string, unknown> = { state: 'complete', sha256: 'b'.repeat(64), completedAt }
   const result = await withPortalPageMediaMutation(f.req, 'staff-1', 'update', async req =>
     (beforeChange as (args: unknown) => unknown)({ operation: 'update', req, originalDoc: persisted, data }) as Record<string, unknown>)
 
   assert.equal(result.state, 'complete')
   assert.equal(result.completedAt, completedAt)
+  assert.equal(result.sha256, 'b'.repeat(64))
   assert.equal(result.storageKey, persisted.storageKey)
   assert.equal(result.uploadedBy, 'staff-1')
   assert.equal('id' in data, false)

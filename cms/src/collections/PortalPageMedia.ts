@@ -19,7 +19,7 @@ const protectPortalPageMediaOperation: CollectionBeforeOperationHook = async ({ 
   }
   await requireCmsTransaction(req.payload, req)
   if (operation === 'update') {
-    if (!('data' in args) || !args.data || Object.keys(args.data).some(field => !['state', 'completedAt'].includes(field))) {
+    if (!('data' in args) || !args.data || Object.keys(args.data).some(field => !['state', 'sha256', 'completedAt'].includes(field))) {
       throw new APIError('portal_page_media_metadata_immutable', 403, undefined, true)
     }
   }
@@ -86,7 +86,7 @@ export const PortalPageMedia: CollectionConfig = {
       { label: 'PDF', value: 'application/pdf' }, { label: 'MP4', value: 'video/mp4' }, { label: 'WebM', value: 'video/webm' },
     ], admin: { readOnly: true } },
     { name: 'filesize', label: 'Tamanho em bytes', type: 'number', required: true, min: 1, admin: { readOnly: true } },
-    { name: 'sha256', label: 'Integridade SHA-256', type: 'text', required: true, minLength: 64, maxLength: 64, admin: { readOnly: true } },
+    { name: 'sha256', label: 'Integridade SHA-256', type: 'text', required: false, minLength: 64, maxLength: 64, admin: { readOnly: true } },
     { name: 'state', label: 'Estado', type: 'select', required: true, options: [
       { label: 'Em envio', value: 'uploading' }, { label: 'Concluído', value: 'complete' },
     ], admin: { readOnly: true } },

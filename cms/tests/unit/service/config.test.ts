@@ -27,6 +27,8 @@ test('configuração sanitizada preserva a fronteira REST e não inicia o banco'
   assert.equal(config.serverURL, 'https://portal-build.invalid')
   assert.equal(config.graphQL.disable, true)
   assert.deepEqual(config.jobs.autoRun, [])
+  assert.equal(config.upload.limits?.fileSize, 50 * 1024 * 1024)
+  assert.equal(config.upload.useTempFiles, false, 'private chunk ingress must not alter the buffered News parser')
 
   // Adapter construction only; connect/init are deliberately never invoked.
   const adapter = config.db.init({ payload: {} as Payload }) as DatabaseAdapter

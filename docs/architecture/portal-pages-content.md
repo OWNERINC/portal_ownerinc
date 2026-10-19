@@ -32,9 +32,20 @@ nas tarefas posteriores.
 
 ## Mídia e uploads
 
-Uploads de até 500 MiB usarão ingress separado, em chunks, com armazenamento
-temporário privado. Esta decisão não altera o contrato global do parser Payload
-da News (`useTempFiles:false`, limite de 50 MiB).
+O ingress privado do editor usa `POST /portal-page-uploads/init`, chunks
+`PUT /:id/chunks/:index` de 5 MiB e endpoints autenticados de conclusão/cancelamento.
+Imagens têm limite de 15 MiB, PDF 100 MiB e MP4/WebM 500 MiB; no máximo 100 chunks,
+dois envios ativos por editor e oito no total. A reserva exige 1 GiB livre além de
+duas cópias dos envios ativos. Manifests e partes ficam sob
+`CMS_UPLOAD_DIR/portal-pages/.incoming`, são privados e expirados após 24 horas.
+O Nginx limita somente o ingress de chunks a 6 MiB com buffering de request
+desabilitado. Não existe rota pública `/uploads` para essas mídias.
+
+Linhas `uploading` não são selecionáveis em conteúdo: só a conclusão marca a mídia
+como `complete`, após validar bytes e persistir hash SHA-256 e `completedAt`.
+Esta decisão não altera o contrato global do parser Payload da News
+(`useTempFiles:false`, limite de 50 MiB); leitura autenticada de mídia permanece
+uma entrega posterior.
 
 O leitor de vídeo/PDF usará cookie de sessão de mídia HttpOnly, SameSite=Strict,
 curta e escopada à futura rota de assets. Segredos Firebase ou de serviço nunca

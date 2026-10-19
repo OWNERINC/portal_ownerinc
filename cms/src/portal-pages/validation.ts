@@ -78,13 +78,13 @@ export type PortalPageMediaMetadata = {
   storageKey: string
   mimeType: (typeof PORTAL_PAGE_MEDIA_MIMES)[number]
   filesize: number
-  sha256: string
+  sha256: string | null
   state: 'uploading' | 'complete'
   uploadedBy: string
   completedAt: string | null
 }
 
-/** Validates metadata only; byte ingestion and storage are owned by a later task. */
+/** Validates page-media metadata, including its upload-in-progress sentinel state. */
 export function validatePortalPageMediaMetadata(value: unknown): PortalPageMediaMetadata {
   const media = record(value, 'invalid_portal_page_media_metadata')
   keys(media, ['originalName', 'storageKey', 'mimeType', 'filesize', 'sha256', 'state', 'uploadedBy', 'completedAt'],
@@ -97,8 +97,13 @@ export function validatePortalPageMediaMetadata(value: unknown): PortalPageMedia
   if (!Number.isSafeInteger(media.filesize) || Number(media.filesize) < 1 || Number(media.filesize) > PORTAL_PAGE_MEDIA_SIZE_CAPS[mimeType]) {
     invalid('invalid_portal_page_media_metadata')
   }
-  if (typeof media.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(media.sha256)) invalid('invalid_portal_page_media_metadata')
   const state = oneOf(media.state, ['uploading', 'complete'] as const, 'invalid_portal_page_media_metadata')
+  let sha256: string | null = null
+  if (media.sha256 !== null && media.sha256 !== undefined) {
+    if (typeof media.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(media.sha256)) invalid('invalid_portal_page_media_metadata')
+    sha256 = media.sha256
+  }
+  if ((state === 'complete') !== (sha256 !== null)) invalid('invalid_portal_page_media_metadata')
   let completedAt: string | null = null
   if (media.completedAt !== null && media.completedAt !== undefined) {
     if (typeof media.completedAt !== 'string' || !Number.isFinite(Date.parse(media.completedAt))) invalid('invalid_portal_page_media_metadata')
@@ -112,7 +117,7 @@ export function validatePortalPageMediaMetadata(value: unknown): PortalPageMedia
     storageKey: media.storageKey as string,
     mimeType,
     filesize: Number(media.filesize),
-    sha256: media.sha256,
+    sha256,
     state,
     uploadedBy: plainText(media.uploadedBy, { min: 1, max: 128, code: 'invalid_portal_page_media_metadata' }),
     completedAt,
