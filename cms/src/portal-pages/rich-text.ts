@@ -4,6 +4,7 @@ import { array, boolean, httpsURL, invalid, keys, oneOf, record, safeRichText } 
 const INVALID_RICH_TEXT = 'invalid_portal_page_rich_text'
 const MAX_RICH_TEXT_NODES = 10_000
 const marks = ['bold', 'italic', 'underline', 'code'] as const
+type PortalPageInlineLeaf = Exclude<PortalPageInline, { type: 'link' }>
 
 export type PortalPageRichNodeBudget = { nodes: number }
 
@@ -36,12 +37,23 @@ function normalizeInline(
         type: 'link',
         url: httpsURL(inline.url, INVALID_RICH_TEXT),
         new_tab: boolean(inline.new_tab, INVALID_RICH_TEXT),
-        children: array(inline.children).map(child => normalizeInline(child, budget, depth + 1)),
+        children: array(inline.children).map(child => normalizeLinkChild(child, budget, depth + 1)),
       }
     }
     default:
       invalid(INVALID_RICH_TEXT)
   }
+}
+
+function normalizeLinkChild(
+  value: unknown,
+  budget: PortalPageRichNodeBudget,
+  depth: number,
+): PortalPageInlineLeaf {
+  // Link children are text/break only, preventing invalid nested <a> output.
+  const child = normalizeInline(value, budget, depth)
+  if (child.type === 'link') invalid(INVALID_RICH_TEXT)
+  return child
 }
 
 /** Normalize the page-local safe rich-text DTO with a caller-shared 10,000-node budget. */

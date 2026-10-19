@@ -117,6 +117,8 @@ test('rich text rejects unsupported fields, nested links, unsafe text and malfor
     [{ type: 'paragraph', children: [{ type: 'link', url: 'http://example.test', new_tab: false, children: [] }] }],
     [{ type: 'paragraph', children: [{ type: 'link', url: 'https://user:pass@example.test', new_tab: false, children: [] }] }],
     [{ type: 'paragraph', children: [{ type: 'link', url: 'https://example.test', new_tab: 'yes', children: [] }] }],
+    [{ type: 'paragraph', children: [{ type: 'link', url: 'https://example.test', new_tab: false,
+      children: [{ type: 'link', url: 'https://example.test', new_tab: false, children: [] }] }] }],
     [{ type: 'heading', level: 1, children: [] }],
     [{ type: 'paragraph', children: 'not-an-array' }],
     [{ type: 'paragraph', children: [{ type: 'text', text: 'x', marks: [], style: 'color:red' }] }],
@@ -127,7 +129,7 @@ test('rich text rejects unsupported fields, nested links, unsafe text and malfor
   for (const nodes of badRichValues) assert.throws(() => normalizePortalPageContent([{ type: 'rich_text', nodes }]))
 })
 
-test('rich text enforces one 10,000-node and four-level inline budget across the page', () => {
+test('rich text enforces one 10,000-node budget across the page and rejects nested anchors', () => {
   const exact = { type: 'rich_text', nodes: [{ type: 'paragraph',
     children: Array.from({ length: 9999 }, () => ({ type: 'break' })) }] }
   assert.doesNotThrow(() => normalizePortalPageContent([exact]))
@@ -136,17 +138,10 @@ test('rich text enforces one 10,000-node and four-level inline budget across the
   assert.throws(() => normalizePortalPageContent([over]))
   assert.throws(() => normalizePortalPageContent([exact, { ...exact }]))
 
-  let nested: unknown = { type: 'text', text: 'x', marks: [] }
-  for (let depth = 0; depth < 3; depth++) nested = ({ type: 'link', url: 'https://example.test',
-    new_tab: false, children: [nested] })
+  const safeLink = { type: 'link', url: 'https://example.test', new_tab: false,
+    children: [{ type: 'text', text: 'link', marks: [] }] }
   assert.doesNotThrow(() => normalizePortalPageContent([{ type: 'rich_text', nodes: [
-    { type: 'paragraph', children: [nested] },
-  ] }]))
-  nested = { type: 'text', text: 'x', marks: [] }
-  for (let depth = 0; depth < 4; depth++) nested = ({ type: 'link', url: 'https://example.test',
-    new_tab: false, children: [nested] })
-  assert.throws(() => normalizePortalPageContent([{ type: 'rich_text', nodes: [
-    { type: 'paragraph', children: [nested] },
+    { type: 'paragraph', children: [safeLink] },
   ] }]))
 })
 
@@ -202,12 +197,16 @@ test('YouTube and Vimeo embeds normalize supported URLs and reject unsafe/noncan
     `https://youtube.com/shorts/${youtubeID}`,
     `https://www.youtube.com/embed/${youtubeID}`,
   ]) {
-    assert.deepEqual(normalizePortalPageContent([{ type: 'embed', provider: 'youtube', url, title: 'Vídeo' }]),
+    const normalized = normalizePortalPageContent([{ type: 'embed', provider: 'youtube', url, title: 'Vídeo' }])
+    assert.deepEqual(normalized,
       [{ type: 'embed', provider: 'youtube', url: `https://www.youtube.com/embed/${youtubeID}`, title: 'Vídeo' }])
+    assert.deepEqual(normalizePortalPageContent(normalized), normalized)
   }
   for (const url of ['https://vimeo.com/12345678', 'https://www.vimeo.com/12345678']) {
-    assert.deepEqual(normalizePortalPageContent([{ type: 'embed', provider: 'vimeo', url, title: 'Vimeo' }]),
+    const normalized = normalizePortalPageContent([{ type: 'embed', provider: 'vimeo', url, title: 'Vimeo' }])
+    assert.deepEqual(normalized,
       [{ type: 'embed', provider: 'vimeo', url: 'https://player.vimeo.com/video/12345678', title: 'Vimeo' }])
+    assert.deepEqual(normalizePortalPageContent(normalized), normalized)
   }
 
   for (const [provider, url] of [
@@ -225,7 +224,13 @@ test('YouTube and Vimeo embeds normalize supported URLs and reject unsafe/noncan
     ['vimeo', 'https://vimeo.com/not-numeric'],
     ['vimeo', 'https://vimeo.com/12345678/extra'],
     ['vimeo', 'https://vimeo.com/12345678?autoplay=1'],
-    ['vimeo', 'https://player.vimeo.com/video/12345678'],
+    ['vimeo', 'https://player.vimeo.com/channel/12345678'],
+    ['vimeo', 'https://player.vimeo.com/video/12345678/extra'],
+    ['vimeo', 'https://player.vimeo.com/video/12345678?autoplay=1'],
+    ['vimeo', 'https://player.vimeo.com:443/video/12345678'],
+    ['vimeo', 'https://user@player.vimeo.com/video/12345678'],
+    ['vimeo', 'https://player.vimeo.com/video/012345678'],
+    ['vimeo', 'https://player.vimeo.com/video/12345678#fragment'],
     ['vimeo', 'https://youtube.com/watch?v=dQw4w9WgXcQ'],
   ] as const) assert.throws(() => normalizePortalPageContent([{ type: 'embed', provider, url, title: 'Vídeo' }]))
   for (const block of [

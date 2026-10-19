@@ -42,11 +42,19 @@ function withLayout<T extends { type: PortalPageBlock['type'] }>(block: T, value
   return value === undefined ? block : { ...block, layout: value }
 }
 
-function normalizeEmbedURL(
-  provider: 'youtube' | 'vimeo',
-  value: unknown,
-  allowCanonicalVimeo: boolean,
-): string {
+function revalidateCanonicalEmbedURL(provider: 'youtube' | 'vimeo', value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const match = provider === 'youtube'
+    ? /^https:\/\/www\.youtube\.com\/embed\/([A-Za-z0-9_-]{11})$/u.exec(value)
+    : /^https:\/\/player\.vimeo\.com\/video\/([1-9][0-9]*)$/u.exec(value)
+  if (!match) return null
+  return provider === 'youtube'
+    ? `https://www.youtube.com/embed/${match[1]}`
+    : `https://player.vimeo.com/video/${match[1]}`
+}
+
+/** Accepts only editor/source URLs on the approved provider hosts and source paths. */
+function normalizeEmbedSourceURL(provider: 'youtube' | 'vimeo', value: unknown): string {
   const code = 'invalid_portal_page_embed'
   if (typeof value !== 'string') invalid(code)
   const raw = value.trim()
@@ -81,16 +89,16 @@ function normalizeEmbedURL(
     invalid(code)
   }
 
-  // The player host is accepted only when validating our own normalized public DTO projection.
-  if (allowCanonicalVimeo && hostname === 'player.vimeo.com' && query === undefined && rawPath === parsed.pathname) {
-    const canonical = /^\/video\/([1-9][0-9]*)$/u.exec(rawPath)
-    if (canonical) return `https://player.vimeo.com/video/${canonical[1]}`
-  }
   if ((hostname === 'vimeo.com' || hostname === 'www.vimeo.com') && query === undefined) {
     const match = /^\/([1-9][0-9]*)$/u.exec(rawPath)
     if (match) return `https://player.vimeo.com/video/${match[1]}`
   }
   invalid(code)
+}
+
+/** Source acceptance and canonical-output revalidation are separate allowlisted paths. */
+function normalizeEmbedURL(provider: 'youtube' | 'vimeo', value: unknown): string {
+  return revalidateCanonicalEmbedURL(provider, value) ?? normalizeEmbedSourceURL(provider, value)
 }
 
 function normalizeGalleryImage(value: unknown): PortalPageGalleryImage {
@@ -102,7 +110,7 @@ function normalizeGalleryImage(value: unknown): PortalPageGalleryImage {
   return result
 }
 
-function normalizeBlock(value: unknown, budget: PortalPageRichNodeBudget, allowCanonicalVimeo: boolean): PortalPageBlock {
+function normalizeBlock(value: unknown, budget: PortalPageRichNodeBudget): PortalPageBlock {
   const block = record(value)
   const type = block.type
   const blockLayout = layout(block)
@@ -138,7 +146,7 @@ function normalizeBlock(value: unknown, budget: PortalPageRichNodeBudget, allowC
     case 'embed': {
       keys(block, [...contentKeys, 'provider', 'url', 'title'])
       const provider = oneOf(block.provider, ['youtube', 'vimeo'] as const)
-      return withLayout({ type, provider, url: normalizeEmbedURL(provider, block.url, allowCanonicalVimeo),
+      return withLayout({ type, provider, url: normalizeEmbedURL(provider, block.url),
         title: plainText(block.title, { min: 1, max: 200 }) }, blockLayout)
     }
     case 'callout': {
@@ -163,11 +171,11 @@ function normalizeBlock(value: unknown, budget: PortalPageRichNodeBudget, allowC
   }
 }
 
-function normalizeContent(value: unknown, allowCanonicalVimeo = false): PortalPageBlock[] {
+function normalizeContent(value: unknown): PortalPageBlock[] {
   const source = array(value)
   if (source.length > 100) invalid()
   const budget: PortalPageRichNodeBudget = { nodes: 0 }
-  const blocks = source.map(block => normalizeBlock(block, budget, allowCanonicalVimeo))
+  const blocks = source.map(block => normalizeBlock(block, budget))
   if (utf8Bytes(blocks) > MAX_PORTAL_PAGE_CONTENT_BYTES) invalid('portal_page_content_too_large')
   return blocks
 }
@@ -234,7 +242,7 @@ export function validatePortalPageDTO(value: unknown): PortalPageDTO {
     published_at: normalizeTimestamp(page.published_at),
     content_version: 1,
     asset_scope: assetScope,
-    content_blocks: normalizeContent(page.content_blocks, true),
+    content_blocks: normalizeContent(page.content_blocks),
     revision: { id: uuid(revisionValue.id, INVALID_DTO), status },
   }
 }

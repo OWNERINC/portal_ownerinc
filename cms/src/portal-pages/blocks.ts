@@ -1,10 +1,12 @@
 export type PortalPageLayout = 'content' | 'wide' | 'full' | 'left' | 'right'
 export type PortalPageMark = 'bold' | 'italic' | 'underline' | 'code'
 
-export type PortalPageInline =
+type PortalPageInlineLeaf =
   | { type: 'text'; text: string; marks: PortalPageMark[] }
   | { type: 'break' }
-  | { type: 'link'; url: string; new_tab: boolean; children: PortalPageInline[] }
+
+export type PortalPageInline = PortalPageInlineLeaf
+  | { type: 'link'; url: string; new_tab: boolean; children: PortalPageInlineLeaf[] }
 
 export type PortalPageRichNode =
   | { type: 'paragraph'; children: PortalPageInline[] }
