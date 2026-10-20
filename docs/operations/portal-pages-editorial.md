@@ -65,8 +65,21 @@ de autenticação, conflito, tipo, limite ou quota não é repetido. Se uma tent
 de início perdeu a resposta, confira o estado antes de iniciar conscientemente um
 novo envio. Cancelamento só é anunciado depois de confirmação; caso contrário, o
 estado permanece pendente para reconciliação. Não recarregue a página esperando
-retomada: o cliente não promete retomada após reload; limpeza durável de sessões
-incompletas pode levar até 24 horas.
+retomada: o cliente não promete retomada após reload. Envios incompletos tornam-se
+elegíveis para limpeza após 24 horas, mas esse valor não é prazo de conclusão: a
+limpeza é disparada por tráfego no próximo `POST /editorial/api/portal-page-uploads/init`,
+sem scheduler e sem garantia de conclusão em tempo de relógio.
+
+Para provocar uma passagem, um operador autorizado pode iniciar um envio válido pela
+interface normal do CMS; o `init` executa a passagem limitada antes de reservar o novo
+envio. Conclua ou cancele essa reserva pelo fluxo normal. Não há comando CLI nem rota
+operacional de cleanup independente. O helper interno
+`processPortalPageUploadCleanupBatch(adapter, reconcile, now, batchSize)` em
+`cms/src/portal-pages/upload-cleanup-queue.ts` é chamado pelo init e requer o adapter,
+a reconciliação e a transação do CMS; não deve ser invocado diretamente por operadores.
+Cada passagem examina no máximo 32 IDs. Falhas de um item são isoladas e reagendadas
+com backoff exponencial limitado a 24 horas; um item poison não bloqueia os demais,
+mas pode permanecer pendente até uma passagem posterior.
 
 ## Verificação local
 

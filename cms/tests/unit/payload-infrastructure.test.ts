@@ -5,6 +5,7 @@ import test from 'node:test'
 import { NextRequest } from 'next/server'
 import type { Payload } from 'payload'
 import { proxy, editorialPolicy } from '../../src/proxy'
+import { normalizePortalPageContent } from '../../src/portal-pages/validation'
 import {
   buildProtocolRuntimeGrantsSQL, controlRolesBootstrapSQL, controlRolesNativePrivilegesVerificationSQL,
   controlRolePasswordPresenceSQL, controlRolesOwnershipVerificationSQL, controlRolesVerificationSQL,
@@ -26,6 +27,25 @@ test('nonce is fresh, replaces attacker headers and matches request and response
   assert.notEqual(first.headers.get('x-middleware-request-x-nonce'), 'attacker')
   assert.equal(first.headers.get('Cache-Control'), 'private, no-store')
   assert.doesNotMatch(editorialPolicy('a'.repeat(32)), /unsafe-eval|script-src[^;]*unsafe-inline/)
+})
+
+test('editorial CSP permits exactly the canonical Portal Page embed renderer origins', () => {
+  const embeds = normalizePortalPageContent([
+    { type: 'embed', provider: 'youtube', url: 'https://youtu.be/dQw4w9WgXcQ', title: 'YouTube' },
+    { type: 'embed', provider: 'vimeo', url: 'https://vimeo.com/12345678', title: 'Vimeo' },
+  ])
+  const renderedOrigins = embeds.map(block => new URL((block as { url: string }).url).origin)
+  assert.deepEqual(renderedOrigins, ['https://www.youtube.com', 'https://player.vimeo.com'])
+
+  const frameDirective = editorialPolicy('a'.repeat(32)).split('; ').find(directive => directive.startsWith('frame-src '))!
+  assert.deepEqual(frameDirective.split(/\s+/u).slice(1), [
+    'https://*.firebaseapp.com', 'https://www.youtube.com', 'https://player.vimeo.com',
+  ])
+  for (const origin of renderedOrigins) assert.ok(frameDirective.includes(origin), `${origin} is present in frame-src`)
+  assert.doesNotMatch(frameDirective, /evil\.example|youtube\.com\.evil|\*\.vimeo\.com/u)
+  assert.throws(() => normalizePortalPageContent([
+    { type: 'embed', provider: 'youtube', url: 'https://youtube.com.evil.test/watch?v=dQw4w9WgXcQ', title: 'Untrusted' },
+  ]))
 })
 
 test('origin guard remains enforced for native form/actions with CSP on denial', () => {

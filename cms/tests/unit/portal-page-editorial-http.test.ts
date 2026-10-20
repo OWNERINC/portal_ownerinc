@@ -67,8 +67,14 @@ test('unauthenticated and expired sessions are 401; identity mismatch and missin
   request(expired, { search: `id=${pageID}` })
   assertSafe(await endpoint('revision').handler(expired.req), 401)
 
+  const invalidExpiry = editorialFixture()
+  Object.assign(invalidExpiry.req, { user: { ...(invalidExpiry.req.user as object), adminExpiresAt: 'not-an-expiry' } })
+  request(invalidExpiry, { search: `id=${pageID}` })
+  assertSafe(await endpoint('revision').handler(invalidExpiry.req), 401)
+
   for (const changed of [
     { ...user, adminActor: { ...(user.adminActor as object), uid: 'different-uid' } },
+    { ...user, adminActor: { ...(user.adminActor as Record<string, unknown>), version: 1 } },
     { ...user, adminActor: { ...(user.adminActor as Record<string, unknown>), capabilities: {
       manageKnowledge: false, manageAcademy: true, manageBenefits: false, manageReminders: false,
     } } },
@@ -77,6 +83,23 @@ test('unauthenticated and expired sessions are 401; identity mismatch and missin
     Object.assign(denied.req, { user: changed })
     request(denied, { text: JSON.stringify({ id: null, data: nativePage }) })
     assertSafe(await endpoint('save').handler(denied.req), 403)
+  }
+})
+
+test('legacy or News-only actors cannot use editorial Page endpoints in any News authority mode', async () => {
+  for (const authorityMode of ['legacy', 'frozen', 'payload', 'payload_frozen']) {
+    const f = editorialFixture()
+    const v2User = f.req.user as unknown as Record<string, unknown>
+    Object.assign(f.req, {
+      user: { ...v2User, adminActor: undefined, adminExpiresAt: undefined,
+        portalActor: { uid: 'editor-uid', email: 'editor@example.test', name: null, canManageNews: true },
+        portalExpiresAt: '2099-01-01T00:00:00.000Z' },
+      context: { authorityMode },
+    })
+    request(f, { text: JSON.stringify({ id: null, data: nativePage }) })
+    assertSafe(await endpoint('save').handler(f.req), 403)
+    assert.equal(f.calls.some(call => call.operation === 'begin' || call.operation === 'create' || call.operation === 'update'), false,
+      `News-only actor cannot mutate pages in ${authorityMode}`)
   }
 })
 

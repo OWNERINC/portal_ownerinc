@@ -112,20 +112,29 @@ async function writeFileBytes(context: MutationRequestContext, handle: Pick<File
 }
 
 /** Stream sequential sources into a backpressured destination while hashing and enforcing an exact byte count. */
-export async function streamPortalPageBytes(sources: readonly NodeReadable[], destination: Writable, expectedBytes: number) {
+export async function streamPortalPageBytes(sources: readonly PortalPageByteSource[], destination: Writable, expectedBytes: number) {
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1) fail('invalid_request')
   const digest = createHash('sha256')
   let bytes = 0
   const source = Readable.from((async function* () {
-    for (const stream of sources) {
-      for await (const chunk of stream) {
-        if (!Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) fail('invalid_upload_body')
-        const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-        bytes += part.byteLength
-        if (bytes > expectedBytes) fail('invalid_chunk_size', 400)
-        digest.update(part)
-        for (let offset = 0; offset < part.length; offset += STREAM_HIGH_WATER_MARK) {
-          yield part.subarray(offset, Math.min(part.length, offset + STREAM_HIGH_WATER_MARK))
+    for (const item of sources) {
+      let opened: PortalPageByteSourceHandle | undefined
+      try {
+        opened = typeof item === 'function' ? await item() : { stream: item }
+        for await (const chunk of opened.stream) {
+          if (!Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) fail('invalid_upload_body')
+          const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          bytes += part.byteLength
+          if (bytes > expectedBytes) fail('invalid_chunk_size', 400)
+          digest.update(part)
+          for (let offset = 0; offset < part.length; offset += STREAM_HIGH_WATER_MARK) {
+            yield part.subarray(offset, Math.min(part.length, offset + STREAM_HIGH_WATER_MARK))
+          }
+        }
+      } finally {
+        if (opened) {
+          opened.stream.destroy()
+          await opened.close?.()
         }
       }
     }
@@ -154,6 +163,9 @@ type StoredPaths = { root: string; pages: string; incoming: string }
 type UploadLock = { release: () => Promise<void>; recoveredStaleOwner: boolean }
 type UploadAdmissionStats = { activeForActor: number; activeGlobal: number; reservedBytes: bigint }
 type WritePurpose = 'manifest' | 'lock' | 'chunk' | 'assembly'
+type PortalPageByteSourceHandle = { stream: NodeReadable; close?: () => Promise<void> }
+type PortalPageByteSource = NodeReadable | (() => Promise<PortalPageByteSourceHandle>)
+type AssemblyFileHandle = Pick<FileHandle, 'write' | 'sync' | 'close'>
 type UploadQueueServiceAdapter = PortalPageUploadCleanupAdapter & {
   enqueue: (uploadID: string, nextAttemptAt: number) => Promise<void>
   remove: (uploadID: string) => Promise<void>
@@ -166,6 +178,8 @@ type MutationRequestContext = { payload: Payload; req: PayloadRequest; actorUid:
   processStartIdentity?: string;
   readProcessIdentity?: (pid: number) => Promise<string | null>;
   fileHandleWrite?: (handle: Pick<FileHandle, 'write'>, bytes: Uint8Array, purpose: WritePurpose) => Promise<void>;
+  openChunkReadSource?: (filename: string) => Promise<PortalPageByteSourceHandle>;
+  openAssemblyFile?: (filename: string) => Promise<AssemblyFileHandle>;
   readUploadAdmission?: (actorUid: string, now: number) => Promise<UploadAdmissionStats>;
   cleanupQueueAdapter?: (db: Awaited<ReturnType<typeof requireCmsTransaction>>) => UploadQueueServiceAdapter }
 
@@ -791,11 +805,39 @@ async function createReadStreamSafe(filename: string): Promise<NodeReadable> {
   }
 }
 
+async function createChunkReadSourceSafe(context: MutationRequestContext, filename: string): Promise<PortalPageByteSourceHandle> {
+  if (!(await assertRegularOrAbsent(filename))) fail('upload_incomplete', 409)
+  if (context.openChunkReadSource) return context.openChunkReadSource(filename)
+  let handle: FileHandle | undefined
+  try {
+    handle = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW || 0))
+    const info = await handle.stat()
+    if (!info.isFile() || (process.platform !== 'win32' && (info.mode & 0o077) !== 0)) fail('upload_incomplete', 409)
+    const owned = handle
+    handle = undefined
+    const stream = owned.createReadStream({ autoClose: false, highWaterMark: STREAM_HIGH_WATER_MARK })
+    let closed = false
+    return {
+      stream,
+      close: async () => {
+        if (closed) return
+        closed = true
+        stream.destroy()
+        await owned.close()
+      },
+    }
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    if (error instanceof PortalPageUploadError) throw error
+    throw new PortalPageUploadError('storage_unavailable', 503)
+  }
+}
+
 async function createDiscardSink(): Promise<Writable> {
   return new Writable({ highWaterMark: STREAM_HIGH_WATER_MARK, write(_chunk, _encoding, callback) { callback() } })
 }
 
-function createFileHandleSink(context: MutationRequestContext, handle: FileHandle, purpose: WritePurpose): Writable {
+function createFileHandleSink(context: MutationRequestContext, handle: Pick<FileHandle, 'write'>, purpose: WritePurpose): Writable {
   return new Writable({ highWaterMark: STREAM_HIGH_WATER_MARK, write(chunk: Buffer | Uint8Array, _encoding, callback) {
     void writeFileBytes(context, handle, chunk, purpose).then(() => callback(), error => callback(error as Error))
   } })
@@ -822,25 +864,27 @@ async function inspectChunkSet(paths: StoredPaths, manifest: UploadManifest): Pr
 async function assembleChunks(context: MutationRequestContext, paths: StoredPaths, manifest: UploadManifest): Promise<string> {
   const partial = assembledPartPath(paths, manifest.id)
   if (await assertRegularOrAbsent(partial)) await removeRegularFile(partial)
-  const sourceStreams: NodeReadable[] = []
-  for (let index = 0; index < manifest.chunkCount; index++) {
-    const filename = chunkPath(paths, manifest.id, index)
-    const stream = await createReadStreamSafe(filename)
-    sourceStreams.push(stream)
-  }
-  let output
+  let output: AssemblyFileHandle | undefined
+  let assemblyStarted = false
   try {
-    output = await open(partial, 'wx', 0o600)
-    const result = await streamPortalPageBytes(sourceStreams, createFileHandleSink(context, output, 'assembly'), manifest.bytes)
+    output = await (context.openAssemblyFile ? context.openAssemblyFile(partial) : open(partial, 'wx', 0o600))
+    assemblyStarted = true
+    const sources: PortalPageByteSource[] = Array.from({ length: manifest.chunkCount }, (_, index) => () =>
+      createChunkReadSourceSafe(context, chunkPath(paths, manifest.id, index)))
+    const result = await streamPortalPageBytes(sources, createFileHandleSink(context, output, 'assembly'), manifest.bytes)
     await output.sync()
-    await output.close(); output = undefined
+    const completedOutput = output
+    output = undefined
+    await completedOutput.close()
     if (result.bytes !== manifest.bytes) fail('invalid_chunk_size', 400)
     await syncDirectory(paths.incoming)
     await validateMediaFile(partial, manifest.mimeType, manifest.bytes)
     return result.sha256
   } catch (error) {
-    await output?.close().catch(() => {})
-    await Promise.all(sourceStreams.map(stream => { stream.destroy(); return Promise.resolve() }))
+    const failedOutput = output
+    output = undefined
+    await failedOutput?.close().catch(() => {})
+    if (assemblyStarted) await removeRegularFile(partial).catch(() => {})
     if (error instanceof PortalPageUploadError) throw error
     fail('storage_unavailable', 503)
   }

@@ -12,7 +12,7 @@ export function editorialPolicy(nonce: string, development = false) {
     "form-action 'self'", `script-src 'self' 'nonce-${nonce}' https://www.gstatic.com${development ? " 'unsafe-eval'" : ''}`,
     "style-src 'self' 'unsafe-inline'", "font-src 'self' data:", "img-src 'self' data: blob:",
     "media-src 'self' blob:", `connect-src 'self' https://*.googleapis.com https://*.firebaseio.com${development ? ' http://localhost:9099 http://127.0.0.1:9099 ws://localhost:* ws://127.0.0.1:*' : ''}`,
-    "frame-src https://*.firebaseapp.com", "worker-src 'self' blob:"].join('; ')
+    "frame-src https://*.firebaseapp.com https://www.youtube.com https://player.vimeo.com", "worker-src 'self' blob:"].join('; ')
 }
 
 // Native Payload layout actions do not all pass through our serverFunction.

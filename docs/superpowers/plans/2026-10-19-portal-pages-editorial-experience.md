@@ -481,7 +481,7 @@ const RETRY_DELAYS = [1000, 2000, 4000] as const
 
 Chunk and complete retry only network error, `upload_busy`, HTTP 429 or transient 503; same ID/token, same chunk index and same Blob bytes. Cancel retries only busy/network, same three delays; other errors become visible pending/error. No retry for `chunk_conflict`, invalid token, 400, 401/403, 404, 413/415 or 507. Init is never retried automatically on lost response; report possible pending reservation and require conscious new initiation subject to quotas. Manual retry keeps token and last unacknowledged index while mounted; no invented status/resume route and no reload promise. Abort is not itself a network error eligible for retry. Retry delay is abortable. Explain `upload_limit_reached`: two active uploads per editor/eight globally.
 
-Add beforeunload only while active, remove on settle. Close/Escape active Drawer asks “Cancelar envio?”; cancel before closing when possible. `dispose()` aborts, attempts authenticated DELETE best-effort while token exists, then clears references; never use sendBeacon. Crash/suspension cleanup is server durable queue and 24h expiry/reconciliation, not guaranteed unload execution.
+Add beforeunload only while active, remove on settle. Close/Escape active Drawer asks “Cancelar envio?”; cancel before closing when possible. `dispose()` aborts, attempts authenticated DELETE best-effort while token exists, then clears references; never use sendBeacon. Crash/suspension cleanup is queue-backed: incomplete uploads become eligible after 24h, but a later upload `init` triggers bounded reconciliation, with no scheduler or wall-clock completion guarantee.
 
 - [ ] **Step 5: Write destination selection tests and browser cases.**
 

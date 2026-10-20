@@ -66,7 +66,9 @@ O ingress privado do editor usa `POST /portal-page-uploads/init`, chunks
 Imagens têm limite de 15 MiB, PDF 100 MiB e MP4/WebM 500 MiB; no máximo 100 chunks,
 dois envios ativos por editor e oito no total. A reserva exige 1 GiB livre além de
 duas cópias dos envios ativos. Manifests e partes ficam sob
-`CMS_UPLOAD_DIR/portal-pages/.incoming`, são privados e expirados após 24 horas.
+`CMS_UPLOAD_DIR/portal-pages/.incoming` e são privados. Um envio incompleto torna-se
+elegível para reconciliação quando atinge 24 horas; isso é um limite de elegibilidade,
+não um prazo de remoção.
 O Nginx limita somente o ingress de chunks a 6 MiB com buffering de request
 desabilitado. Não existe rota pública `/uploads` para essas mídias.
 
@@ -87,7 +89,10 @@ item e backoff exponencial limitado a 24 horas. Falhas recebem apenas códigos
 sanitizados e não bloqueiam uploads não relacionados; a admissão continua
 fail-closed para quota, disco e enqueue obrigatório. Tombstones `done` evitam
 re-enfileirar mídias concluídas já limpas. Esta tabela não referencia nem consulta
-domínios da Owner News.
+domínios da Owner News. A passagem é disparada pelo tráfego de um `init` posterior;
+não há scheduler/cron para essa fila e não existe garantia de conclusão em tempo de
+relógio. Itens problemáticos são isolados e reagendados com backoff, mas só serão
+tentados quando uma passagem posterior os reivindicar.
 
 Operações de upload preservam a ordem de lock `CMS_REFERENCE_LOCK` → advisory
 transacional por upload → ownership do arquivo. O par de chaves int32 é derivado

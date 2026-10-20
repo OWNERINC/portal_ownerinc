@@ -382,6 +382,22 @@ test('CMS asset retention is scheduled with the shared upload volume', async () 
   assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
 });
 
+test('Portal Page upload cleanup is traffic-triggered after expiry eligibility, not scheduled', async () => {
+  const [architecture, operations] = await Promise.all([
+    read('docs/architecture/portal-pages-content.md'), read('docs/operations/portal-pages-editorial.md'),
+  ]);
+  assert.match(architecture, /elegível para reconciliação quando atinge 24 horas/u);
+  assert.match(architecture, /tráfego de um `init` posterior/u);
+  assert.match(architecture, /não há scheduler\/cron para essa fila/u);
+  assert.match(architecture, /não existe garantia de conclusão em tempo de\s+relógio/u);
+  assert.match(operations, /não é prazo de conclusão/u);
+  assert.match(operations, /POST \/editorial\/api\/portal-page-uploads\/init/u);
+  assert.match(operations, /processPortalPageUploadCleanupBatch\(adapter, reconcile, now, batchSize\)/u);
+  assert.match(operations, /no máximo 32 IDs/u);
+  assert.match(operations, /backoff exponencial limitado a 24 horas/u);
+  assert.doesNotMatch(operations, /limpeza durável de sessões incompletas pode levar até 24 horas/u);
+});
+
 test('CI builds and publishes commit-addressed production images', async () => {
   const [workflow, apiPackage] = await Promise.all([
     read('.github/workflows/ci.yml'), read('api/package.json'),

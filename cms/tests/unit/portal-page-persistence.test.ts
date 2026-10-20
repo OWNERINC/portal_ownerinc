@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Payload, PayloadRequest } from 'payload'
 import { PgDialect } from 'drizzle-orm/pg-core'
+import { canManageNews } from '../../src/auth/access'
 import { canManagePortalPages, portalPageEditorAccess } from '../../src/auth/portal-pages-access'
 import { PortalPageCategories } from '../../src/collections/PortalPageCategories'
 import { PortalPageMedia, portalPageMediaReadAccess } from '../../src/collections/PortalPageMedia'
@@ -53,13 +54,19 @@ async function createTestCmsConfig() {
 
 const manager = {
   id: 'portal-editor-1', collection: 'portal-editors', portalUid: 'staff-1',
-  portalActor: { uid: 'staff-1', canManageNews: true },
+  adminActor: { version: 2, uid: 'staff-1', email: 'staff@example.test', name: null,
+    capabilities: { manageKnowledge: true, manageAcademy: false, manageBenefits: false, manageReminders: false } },
+  adminExpiresAt: '2099-01-01T00:00:00.000Z',
 }
 const adminManager = {
   id: 'portal-editor-2', collection: 'portal-editors', portalUid: 'staff-2',
   adminActor: { version: 2, uid: 'staff-2', email: 'staff@example.test', name: null,
     capabilities: { manageKnowledge: true, manageAcademy: false, manageBenefits: false, manageReminders: false } },
+  adminExpiresAt: '2099-01-01T00:00:00.000Z',
 }
+const newsOnlyManager = { id: 'portal-editor-news', collection: 'portal-editors', portalUid: 'news-staff',
+  portalActor: { uid: 'news-staff', email: 'news@example.test', name: null, canManageNews: true },
+  portalExpiresAt: '2099-01-01T00:00:00.000Z' }
 
 async function configPayload() {
   const config = await createTestCmsConfig()
@@ -138,19 +145,57 @@ function mediaRecord(id: string, mimeType: string, state: 'uploading' | 'complet
   }
 }
 
-test('page editorial access accepts only verified portal editors with existing capability semantics in every News mode', async () => {
+test('page collections and helpers require live V2 manageKnowledge in every News authority mode', async () => {
   for (const authorityMode of ['legacy', 'frozen', 'payload', 'payload_frozen']) {
+    const newsReq = { user: newsOnlyManager, context: { authorityMode } } as unknown as PayloadRequest
+    assert.equal(canManageNews({ req: newsReq }), true, `News authority remains unchanged in ${authorityMode}`)
+    assert.equal(canManagePortalPages({ req: newsReq }), false, `News-only actor denied in ${authorityMode}`)
+    assert.equal(await portalPageEditorAccess({ req: newsReq } as never), false, authorityMode)
+    for (const collection of [PortalPages, PortalPageCategories, PortalPageMedia]) {
+      for (const operation of ['admin', 'create', 'read', 'update', 'delete', 'readVersions'] as const) {
+        const access = collection.access?.[operation]
+        if (access) assert.equal(await access({ req: newsReq } as never), false,
+          `${collection.slug}.${operation} rejects News-only actor in ${authorityMode}`)
+      }
+    }
+
     const req = { user: manager, context: { authorityMode } } as unknown as PayloadRequest
     assert.equal(canManagePortalPages({ req }), true, authorityMode)
     assert.equal(await portalPageEditorAccess({ req } as never), true, authorityMode)
+    for (const collection of [PortalPages, PortalPageCategories, PortalPageMedia]) {
+      for (const operation of ['admin', 'create', 'read', 'update', 'delete', 'readVersions'] as const) {
+        const access = collection.access?.[operation]
+        const serverOnlyMediaMutation = collection.slug === 'portal-page-media' &&
+          ['create', 'update', 'delete'].includes(operation)
+        const allowed = !serverOnlyMediaMutation
+        if (access) {
+          const result = await access({ req } as never)
+          if (collection.slug === 'portal-page-media' && operation === 'read') {
+            assert.deepEqual(result, { state: { equals: 'complete' } },
+              `portal-page-media.read scopes to complete media in ${authorityMode}`)
+          } else {
+            assert.equal(result, allowed,
+              `${collection.slug}.${operation} ${allowed ? 'accepts' : 'denies'} V2 manageKnowledge in ${authorityMode}`)
+          }
+        }
+      }
+    }
     const v2Req = { user: adminManager, context: { authorityMode } } as unknown as PayloadRequest
     assert.equal(canManagePortalPages({ req: v2Req }), true, `V2 manageKnowledge in ${authorityMode}`)
   }
   for (const user of [null, { ...manager, collection: 'users' }, { ...manager, portalUid: 'other' },
-    { ...manager, portalActor: { uid: 'staff-1', canManageNews: false } },
-    { ...adminManager, adminActor: { ...adminManager.adminActor, capabilities: { ...adminManager.adminActor.capabilities, manageKnowledge: false } } }]) {
+    { ...newsOnlyManager, adminActor: { ...manager.adminActor, capabilities: { ...manager.adminActor.capabilities, manageKnowledge: false } } },
+    { ...manager, adminExpiresAt: '2020-01-01T00:00:00.000Z' }, { ...manager, adminExpiresAt: 'not-an-expiry' },
+    { ...manager, adminActor: { ...manager.adminActor, version: 1 } },
+    { ...manager, adminActor: { ...manager.adminActor, capabilities: { ...manager.adminActor.capabilities, manageKnowledge: false } } },
+    { ...manager, adminActor: { ...manager.adminActor, uid: 'different-staff' } },
+  ]) {
     assert.equal(canManagePortalPages({ req: { user } as unknown as PayloadRequest }), false)
   }
+
+  assert.throws(() => canManagePortalPages({ req: { user: newsOnlyManager,
+    responseHeaders: new Headers({ 'x-ownerinc-auth-status': '503', 'x-ownerinc-auth-reason': 'portal_unavailable' }) } as unknown as PayloadRequest }),
+  (error: unknown) => (error as { status?: number }).status === 503, 'Portal dependency failures remain 503')
 })
 
 test('three page collections are registered, editor-scoped, non-locking and use unlimited autosaved drafts', async () => {
@@ -173,6 +218,7 @@ test('three page collections are registered, editor-scoped, non-locking and use 
   assert.equal(PortalPageMedia.access?.update?.({ req: { user: manager } as never } as never), false)
   assert.equal(PortalPageMedia.access?.delete?.({ req: { user: manager } as never } as never), false)
   assert.deepEqual(await portalPageMediaReadAccess({ req: { user: manager } as never } as never), { state: { equals: 'complete' } })
+  assert.equal(await portalPageMediaReadAccess({ req: { user: newsOnlyManager } as never } as never), false)
 
   const categories = PortalPageCategories.fields
   const categoryName = categories.find(field => 'name' in field && field.name === 'name')! as unknown as Record<string, unknown>

@@ -211,3 +211,26 @@ status agregado NOT_EXECUTED. O JSON, storage state (não criado nesta execuçã
 uploads e demais artefatos privados foram removidos junto com a fixture. Não se
 alega browser, acessibilidade manual, Nginx, Firebase real, deploy ou filesystem
 Linux.
+
+## Final reviewer-fix wave — 2026-10-20
+
+| Check | Resultado | Evidência |
+|---|---|---|
+| Regressões focadas de autorização editorial, preview, infraestrutura, Nginx e upload | **PASS, 117/117** | News-only negado em todos os quatro modos sem alterar `canManageNews`; V2 `manageKnowledge`/UID/expiração aceitos; expirado mantém 401 e falha de dependência permanece 503. |
+| Montagem sequencial e recuperação | **PASS** | Falhas de abertura/leitura do chunk posterior fecham cada descriptor exatamente uma vez, removem `.assembled.part` e permitem retry; 100 chunks esparsos de 5 MiB confirmam 500 MiB e SHA-256 exatos, pico de um descriptor-fonte e um descriptor de saída. |
+| Rota Nginx de save | **PASS / integração real NOT_EXECUTED** | Invariantes confirmam a location exata de 9 MiB e preservam os limites genéricos de 6 MiB. O teste de entrega real de 8 MiB está incluído, mas foi SKIP nesta sessão Windows porque requer Nginx/Linux. |
+| CSP de embeds | **PASS** | `frame-src` acrescenta somente `https://www.youtube.com` e `https://player.vimeo.com`; regressão usa embed normalizado e rejeita deriva da allowlist. |
+| Contrato operacional de cleanup | **PASS** | 24 horas é elegibilidade, não SLA; init posterior dispara a passagem limitada, sem scheduler nem garantia de prazo. A invariante verifica a arquitetura e o runbook operacional. |
+| `npm run test:unit` em `cms/` | **PASS** | 712 testes: 701 PASS, 11 SKIP opcionais por PGlite indisponível, 0 FAIL. |
+| `npm run typecheck` em `cms/` | **PASS** | TypeScript sem emissão. |
+| `generate:importmap` / `generate:types` em `cms/` | **PASS** | Build-only: import map informou `No new imports found`; geração de tipos encerrou sem delta rastreado. |
+| `npm run verify` na raiz | **PASS** | 1.994 testes raiz: 1.975 PASS, 19 SKIP, 0 FAIL; suíte CMS: 712 testes, 701 PASS, 11 SKIP, 0 FAIL; syntax, tipos, segurança e Compose concluíram com `verify: ok`. Executado com `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Windows\Temp`; a afinidade do verificador foi limitada a oito CPUs para evitar starvation dos fixtures Bash no Windows. Nenhum serviço foi iniciado. |
+| `git diff --check` | **PASS** | Sem erros de whitespace após a consolidação dos documentos. |
+
+Os cinco itens desta rodada mantêm News e os limites genéricos sem alteração:
+autorização de Portal Pages usa somente a sessão V2 viva `manageKnowledge` com UID
+correspondente; o ingress de save recebe uma location exata de 9 MiB; CSP permite
+os dois origins canônicos dos renderers; limpeza permanece on-demand e sem SLA; e
+assembly abre chunks sequencialmente, com no máximo um descriptor-fonte. A evidência
+de browser, checklist manual, Nginx/Firebase reais, deploy e filesystem Linux
+continua **NOT_EXECUTED** e não é inferida pelos checks offline.

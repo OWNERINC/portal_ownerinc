@@ -367,8 +367,10 @@ Em fechar Drawer ativo, perguntar “Cancelar envio?”; cancelar antes de fecha
 quando possível. `beforeunload` só durante upload avisa sobre saída; em unmount
 abortar e tentar cancelamento best-effort se ainda houver token. sendBeacon não
 substitui DELETE autenticado. Fechamento/crash/browser suspenso pode impedir
-cleanup; a fila durável e expiração/reconciliação de 24h da Task 3 são a garantia
-servidora, não o evento de unload. Cancelamento incerto não é exibido como sucesso.
+cleanup; envios incompletos tornam-se elegíveis para reconciliação após 24h, mas a
+passagem é disparada por tráfego em um `init` posterior e não tem garantia de
+conclusão em tempo de relógio. A fila durável não é um scheduler. Cancelamento
+incerto não é exibido como sucesso.
 
 Allowlist visível e no `accept`: JPEG `.jpg,.jpeg`, PNG `.png`, WebP `.webp`
 (15 MiB); PDF `.pdf` (100 MiB); MP4 `.mp4`, WebM `.webm` (500 MiB). Cover/image/

@@ -78,7 +78,13 @@ test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and ex
   const publicRoot = path.resolve('public');
   const staticRoot = path.join(tempDir, 'public');
   const api = createServer((req, res) => { res.end(`api:${req.url}`); });
-  const cms = createServer((req, res) => { res.end(`cms:${req.url}`); });
+  const cms = createServer((req, res) => {
+    let bytes = 0;
+    req.on('data', chunk => { bytes += chunk.length; });
+    req.on('end', () => {
+      res.end(req.method === 'POST' ? `cms:${req.url}:bytes=${bytes}` : `cms:${req.url}`);
+    });
+  });
   let nginx;
   let nginxOutput = '';
   t.after(async () => {
@@ -226,6 +232,31 @@ test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and ex
   assert.equal(cmsProxy.status, 200);
   assert.equal(await cmsProxy.text(), 'cms:/editorial/api/route-recovery-check.html');
   assertSecurityHeaders(cmsProxy, { csp: false });
+
+  const createBody = Buffer.alloc(8 * 1024 * 1024, 0x20);
+  createBody[0] = 0x7b;
+  createBody[1] = 0x7d;
+  const pageSave = await fetch(`${baseUrl}/editorial/api/portal-page-editorial/save`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: createBody,
+  });
+  assert.equal(pageSave.status, 200, 'the exact create route accepts the full 8 MiB API JSON cap');
+  assert.equal(await pageSave.text(), `cms:/editorial/api/portal-page-editorial/save:bytes=${createBody.length}`);
+  assertSecurityHeaders(pageSave, { csp: false });
+
+  const oversizedGeneric = await fetch(`${baseUrl}/editorial/api/portal-page-editorial/revision`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: createBody,
+  });
+  assert.equal(oversizedGeneric.status, 413, 'unrelated editorial routes retain the 6 MiB ceiling');
+  assert.doesNotMatch(await oversizedGeneric.text(), /cms:/u);
+  assertSecurityHeaders(oversizedGeneric, { csp: false });
+
+  const crossSiteSave = await fetch(`${baseUrl}/editorial/api/portal-page-editorial/save`, {
+    method: 'POST', headers: { 'sec-fetch-site': 'cross-site' }, body: '{}',
+  });
+  assert.equal(crossSiteSave.status, 403, 'the exact save route keeps the editorial cross-site guard');
+  assert.doesNotMatch(await crossSiteSave.text(), /cms:/u);
+  assertSecurityHeaders(crossSiteSave, { csp: false });
+
   for (const privatePath of ['/editorial/api/portal-pages', '/editorial/api/portal-pages/list']) {
     const denied = await fetch(`${baseUrl}${privatePath}`);
     assert.equal(denied.status, 404, `${privatePath} must not reach CMS`);

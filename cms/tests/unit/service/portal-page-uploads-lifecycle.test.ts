@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, mkdir, open, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import sharp from 'sharp'
+import { Transform } from 'node:stream'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import type { Payload, PayloadRequest } from 'payload'
 import { portalPageUploadEndpoints } from '../../../src/endpoints/portal-page-uploads'
@@ -235,6 +236,60 @@ async function sendChunk(service: ReturnType<typeof createPortalPageUploadServic
     'content-type': 'application/octet-stream',
     'content-length': String(bytes.length),
   }), new Response(Uint8Array.from(bytes)).body)
+}
+
+function instrumentAssembly(options: { failOpenIndex?: number; failReadIndex?: number } = {}) {
+  let activeSources = 0, peakSources = 0, sourceOpens = 0, sourceCloses = 0
+  let activeOutput = 0, outputOpens = 0, outputCloses = 0
+  const overrides = {
+    openAssemblyFile: async (filename: string) => {
+      const handle = await open(filename, 'wx', 0o600)
+      activeOutput++
+      outputOpens++
+      let closed = false
+      return {
+        write: handle.write.bind(handle),
+        sync: handle.sync.bind(handle),
+        close: async () => {
+          assert.equal(closed, false, 'assembly output descriptor closes only once')
+          closed = true
+          outputCloses++
+          activeOutput--
+          await handle.close()
+        },
+      }
+    },
+    openChunkReadSource: async (filename: string) => {
+      assert.equal(activeOutput, 1, 'one output descriptor stays open while source chunks are read')
+      assert.equal(activeSources, 0, 'the prior source chunk has closed before the next is opened')
+      const index = Number(/-(\d+)\.chunk$/u.exec(filename)?.[1])
+      if (index === options.failOpenIndex) throw new Error('injected later chunk open failure')
+      const handle = await open(filename, 'r')
+      const source = handle.createReadStream({ autoClose: false, highWaterMark: 64 * 1024 })
+      const stream = index === options.failReadIndex
+        ? source.pipe(new Transform({ transform(_chunk, _encoding, callback) { callback(new Error('injected chunk read failure')) } }))
+        : source
+      sourceOpens++
+      activeSources++
+      peakSources = Math.max(peakSources, activeSources)
+      let closed = false
+      return {
+        stream,
+        close: async () => {
+          assert.equal(closed, false, `chunk ${index} source descriptor closes only once`)
+          closed = true
+          sourceCloses++
+          activeSources--
+          source.destroy()
+          await handle.close()
+        },
+      }
+    },
+  }
+  return {
+    overrides,
+    stats: () => ({ activeSources, peakSources, sourceOpens, sourceCloses, activeOutput, outputOpens, outputCloses }),
+  }
 }
 
 async function proveLockOwnerStale(lockPath: string): Promise<void> {
@@ -805,6 +860,78 @@ test('format checks validate decoded images and bounded PDF/MP4/WebM structure w
   await assert.rejects(uploads.init({ originalName: 'video.mov', mimeType: 'video/quicktime', bytes: 10 }),
     (error: unknown) => error instanceof PortalPageUploadError && error.code === 'unsupported_media')
 })
+
+test('later chunk open/read failures close each descriptor once, remove partial assembly, and remain retryable', async t => {
+  const first = Buffer.alloc(PORTAL_PAGE_UPLOAD_CHUNK_SIZE, 0x20)
+  Buffer.from('%PDF-1.7\n').copy(first)
+  const second = Buffer.alloc(64 * 1024, 0x20)
+  Buffer.from('%%EOF').copy(second, second.length - 5)
+  const bytes = Buffer.concat([first, second])
+
+  for (const scenario of [
+    { name: 'open later chunk', failure: { failOpenIndex: 1 }, expectedOpenedSources: 1 },
+    { name: 'read later chunk', failure: { failReadIndex: 1 }, expectedOpenedSources: 2 },
+  ]) await t.test(scenario.name, async t => {
+    const f = await fixture(); t.after(f.dispose)
+    const uploads = f.service()
+    const started = await begin(uploads, bytes)
+    await sendChunk(uploads, started.id, started.token, first, '0')
+    await sendChunk(uploads, started.id, started.token, second, '1')
+    const observed = instrumentAssembly(scenario.failure)
+    const failing = f.service(actor, undefined, observed.overrides)
+    await assert.rejects(failing.complete(started.id, { token: started.token }), (error: unknown) =>
+      error instanceof PortalPageUploadError && error.code === 'storage_unavailable')
+
+    const incoming = path.join(f.uploadDir, 'portal-pages', '.incoming')
+    await assert.rejects(readFile(path.join(incoming, `${started.id}.assembled.part`)), { code: 'ENOENT' })
+    assert.equal(JSON.parse(await readFile(path.join(incoming, `m-${started.id}.json`), 'utf8')).state, 'receiving')
+    assert.equal(f.rows.get(started.id)?.state, 'uploading')
+    assert.deepEqual(observed.stats(), {
+      activeSources: 0, peakSources: 1, sourceOpens: scenario.expectedOpenedSources,
+      sourceCloses: scenario.expectedOpenedSources, activeOutput: 0, outputOpens: 1, outputCloses: 1,
+    })
+
+    const retried = await uploads.complete(started.id, { token: started.token })
+    assert.equal(retried.bytes, bytes.length)
+    assert.equal(retried.sha256, createHash('sha256').update(bytes).digest('hex'))
+  })
+})
+
+test('100 sparse 5 MiB chunks assemble with one source descriptor, exact byte count, and exact SHA-256',
+  { timeout: 120_000 }, async t => {
+    const f = await fixture(); t.after(f.dispose)
+    const uploads = f.service()
+    const totalBytes = 500 * MiB
+    const header = mp4Bytes()
+    const started = await uploads.init({ originalName: 'sparse-maximum.mp4', mimeType: 'video/mp4', bytes: totalBytes })
+    const incoming = path.join(f.uploadDir, 'portal-pages', '.incoming')
+    for (let index = 0; index < 100; index++) {
+      const source = await open(path.join(incoming, `${started.id}-${index}.chunk`), 'wx', 0o600)
+      try {
+        await source.truncate(PORTAL_PAGE_UPLOAD_CHUNK_SIZE)
+        if (index === 0) await source.write(header, 0, header.length, 0)
+      } finally { await source.close() }
+    }
+
+    const expected = createHash('sha256')
+    expected.update(header)
+    const zeroWindow = Buffer.alloc(64 * 1024)
+    for (let remaining = totalBytes - header.length; remaining > 0; remaining -= zeroWindow.length) {
+      expected.update(zeroWindow.subarray(0, Math.min(remaining, zeroWindow.length)))
+    }
+    const observed = instrumentAssembly()
+    const completed = await f.service(actor, undefined, observed.overrides).complete(started.id, { token: started.token })
+    const hash = expected.digest('hex')
+    assert.equal(completed.bytes, totalBytes)
+    assert.equal(completed.sha256, hash)
+    assert.equal(f.rows.get(started.id)?.filesize, totalBytes)
+    assert.equal(f.rows.get(started.id)?.sha256, hash)
+    assert.equal((await stat(path.join(f.uploadDir, 'portal-pages', String(f.rows.get(started.id)?.storageKey)))).size, totalBytes)
+    assert.deepEqual(observed.stats(), {
+      activeSources: 0, peakSources: 1, sourceOpens: 100, sourceCloses: 100,
+      activeOutput: 0, outputOpens: 1, outputCloses: 1,
+    })
+  })
 
 test('high-bit corruption in fixed media signatures is never normalized into an accepted format', async t => {
   const f = await fixture(); t.after(f.dispose)
@@ -1494,6 +1621,25 @@ test('endpoint enforces same-origin V2 editor auth and derives actor identity on
     i18n: { t: (key: string) => key }, payloadDataLoader: {},
     headers: new Headers({ origin: 'https://portal.example.test', 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }),
     body: new Response(serialized).body } as unknown as PayloadRequest
+
+  for (const authorityMode of ['legacy', 'frozen', 'payload', 'payload_frozen']) {
+    const newsOnly = { id: 'news-editor', collection: 'portal-editors', portalUid: uid,
+      portalActor: { uid, email: 'editor@example.test', name: null, canManageNews: true },
+      portalExpiresAt: new Date(Date.now() + 60_000).toISOString() }
+    const denied = await handler({ ...request, user: newsOnly,
+      context: { authorityMode }, body: new Response(serialized).body } as unknown as PayloadRequest)
+    assert.equal(denied.status, 403, `News-only upload authority is denied in ${authorityMode}`)
+    assert.equal(f.rows.size, 0)
+  }
+  for (const [label, changedUser, expectedStatus] of [
+    ['UID mismatch', { ...user, adminActor: { ...user.adminActor, uid: 'different-uid' } }, 403],
+    ['expired V2 session', { ...user, adminExpiresAt: '2020-01-01T00:00:00.000Z' }, 401],
+    ['invalid V2 expiry', { ...user, adminExpiresAt: 'not-an-expiry' }, 401],
+  ] as const) {
+    const denied = await handler({ ...request, user: changedUser, body: new Response(serialized).body } as unknown as PayloadRequest)
+    assert.equal(denied.status, expectedStatus, label)
+    assert.equal(f.rows.size, 0, `${label} cannot reserve media`)
+  }
   const response = await handler(request)
   assert.equal(response.status, 201)
   const started = await response.json() as { id: string; token: string }
