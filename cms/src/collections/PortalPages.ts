@@ -21,6 +21,12 @@ import { portalPageBlocks } from '../portal-pages/native-blocks'
 
 const portalPageSaveModes = new WeakMap<PayloadRequest, { draftSave: boolean }>()
 const noDirectFieldWrite = { create: () => false, update: () => false }
+const requiredTextField = '/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField'
+const mediaField = (kind: 'image' | 'video' | 'pdf') => ({
+  path: '/admin/portal-pages/PortalPageMediaField',
+  exportName: 'PortalPageMediaField',
+  clientProps: { kind },
+})
 
 function requestPortalUID(req: PayloadRequest): string {
   const user = req.user as (typeof req.user & { portalUid?: unknown }) | null
@@ -143,7 +149,14 @@ export const PortalPages: CollectionConfig = {
   labels: { singular: 'Página modular', plural: 'Páginas modulares' },
   lockDocuments: false,
   disableBulkDelete: true,
-  admin: { useAsTitle: 'title', defaultColumns: ['title', 'slug', '_status', 'publishedAt'] },
+  admin: { useAsTitle: 'title', defaultColumns: ['title', 'slug', '_status', 'publishedAt'],
+    components: { edit: {
+      beforeDocumentControls: ['/admin/portal-pages/PortalPageEditorialControls#PortalPageEditorialControls'],
+      PublishButton: '/admin/portal-pages/EmptyPortalPageControl#EmptyPortalPageControl',
+      UnpublishButton: '/admin/portal-pages/EmptyPortalPageControl#EmptyPortalPageControl',
+      PreviewButton: '/admin/portal-pages/EmptyPortalPageControl#EmptyPortalPageControl',
+    } },
+  },
   access: {
     admin: portalPageEditorAccess,
     create: portalPageEditorAccess,
@@ -155,13 +168,15 @@ export const PortalPages: CollectionConfig = {
   versions: { maxPerDoc: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } },
   hooks: { beforeOperation: [protectPortalPageOperation], beforeValidate: [stampPortalPageAuthors], beforeChange: [normalizePortalPageBeforeChange] },
   fields: [
-    { name: 'title', label: 'Título', type: 'text', required: true, maxLength: 200 },
+    { name: 'title', label: 'Título', type: 'text', required: true, maxLength: 200,
+      admin: { components: { Field: requiredTextField } } },
     { name: 'slug', label: 'Endereço canônico', type: 'text', required: true, maxLength: 160, unique: true, index: true,
+      admin: { components: { Field: requiredTextField } },
       hooks: { beforeValidate: [({ value }) => value === undefined ? value : normalizeSlug(value)] } },
     { name: 'summary', label: 'Resumo', type: 'textarea', maxLength: 1000 },
     { name: 'cover', label: 'Capa', type: 'relationship', relationTo: 'portal-page-media',
       filterOptions: { state: { equals: 'complete' }, mimeType: { in: [...PORTAL_PAGE_IMAGE_MIMES] } },
-      admin: { allowCreate: false, allowEdit: false } },
+      admin: { allowCreate: false, allowEdit: false, components: { Field: mediaField('image') } } },
     { name: 'coverAlt', label: 'Texto alternativo da capa', type: 'text', maxLength: 300 },
     { name: 'categories', label: 'Categorias', type: 'relationship', relationTo: 'portal-page-categories', hasMany: true, maxRows: 20,
       admin: { allowCreate: false, allowEdit: false } },

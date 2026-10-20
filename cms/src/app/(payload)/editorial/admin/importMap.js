@@ -17,15 +17,19 @@ import { SavedPreview as SavedPreview_d06cf693d6cc4e05f0931ed87efc74dd } from '.
 import { ScheduleRevision as ScheduleRevision_bc9b5d2ff4dd53b92853be609fa1cd32 } from '../../../../admin/ScheduleRevision'
 import { LegacyHistory as LegacyHistory_b9524fd9ef11400b74290e9e00eccbf3 } from '../../../../admin/LegacyHistory'
 import { CreateArticleView as CreateArticleView_17756cddd938e4258b1deafd868bbe85 } from '../../../../news/CreateArticleView'
+import { PortalPageRequiredTextField as PortalPageRequiredTextField_21bea796e5921046e8c3d9e51d829cad } from '../../../../admin/portal-pages/PortalPageRequiredTextField'
+import { PortalPageMediaField as PortalPageMediaField_b58957a0f3bd91b5f48b1ae9efca2fdb } from '../../../../admin/portal-pages/PortalPageMediaField'
+import { PortalPageEditorialControls as PortalPageEditorialControls_13bf80fb15cdd7b052d016153330aab1 } from '../../../../admin/portal-pages/PortalPageEditorialControls'
+import { EmptyPortalPageControl as EmptyPortalPageControl_432012d5257bb0884ba2b772f7f0c595 } from '../../../../admin/portal-pages/EmptyPortalPageControl'
 import { PortalLogout as PortalLogout_1f4e782dd69a1a9b22405fd8d14b6453 } from '../../../../admin/PortalLogout'
 import { BrandIcon as BrandIcon_d4751384a7cf3b09ce46117cb8895da1 } from '../../../../admin/Brand'
 import { Brand as Brand_d4751384a7cf3b09ce46117cb8895da1 } from '../../../../admin/Brand'
 import { PortalNavigation as PortalNavigation_cccd2e78b85e986ade209051835032de } from '../../../../admin/PortalNavigation'
 import { PortalLogin as PortalLogin_d25fc2dc08c1ad78183be09a7e109abb } from '../../../../admin/PortalLogin'
 import { SessionWatch as SessionWatch_8a42db35d9fb0e31a10cd32542660d27 } from '../../../../admin/SessionWatch'
+import { AdminHome as AdminHome_9a1cc88f83f8cd653988538d70821bff } from '../../../../admin/AdminHome'
 import { PollsView as PollsView_18f303745f1382751138f38404290b5f } from '../../../../admin/PollsView'
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from '@payloadcms/next/rsc'
-import { AdminHome as AdminHome_74f164e5a7e149c6ba48f1c8e3b2f211 } from '../../../../admin/AdminHome'
 
 /** @type import('payload').ImportMap */
 export const importMap = {
@@ -48,13 +52,17 @@ export const importMap = {
   "/admin/ScheduleRevision#ScheduleRevision": ScheduleRevision_bc9b5d2ff4dd53b92853be609fa1cd32,
   "/admin/LegacyHistory#LegacyHistory": LegacyHistory_b9524fd9ef11400b74290e9e00eccbf3,
   "/news/CreateArticleView#CreateArticleView": CreateArticleView_17756cddd938e4258b1deafd868bbe85,
+  "/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField": PortalPageRequiredTextField_21bea796e5921046e8c3d9e51d829cad,
+  "/admin/portal-pages/PortalPageMediaField#PortalPageMediaField": PortalPageMediaField_b58957a0f3bd91b5f48b1ae9efca2fdb,
+  "/admin/portal-pages/PortalPageEditorialControls#PortalPageEditorialControls": PortalPageEditorialControls_13bf80fb15cdd7b052d016153330aab1,
+  "/admin/portal-pages/EmptyPortalPageControl#EmptyPortalPageControl": EmptyPortalPageControl_432012d5257bb0884ba2b772f7f0c595,
   "/admin/PortalLogout#PortalLogout": PortalLogout_1f4e782dd69a1a9b22405fd8d14b6453,
   "/admin/Brand#BrandIcon": BrandIcon_d4751384a7cf3b09ce46117cb8895da1,
   "/admin/Brand#Brand": Brand_d4751384a7cf3b09ce46117cb8895da1,
   "/admin/PortalNavigation#PortalNavigation": PortalNavigation_cccd2e78b85e986ade209051835032de,
   "/admin/PortalLogin#PortalLogin": PortalLogin_d25fc2dc08c1ad78183be09a7e109abb,
   "/admin/SessionWatch#SessionWatch": SessionWatch_8a42db35d9fb0e31a10cd32542660d27,
+  "/admin/AdminHome#AdminHome": AdminHome_9a1cc88f83f8cd653988538d70821bff,
   "/admin/PollsView#PollsView": PollsView_18f303745f1382751138f38404290b5f,
-  "@payloadcms/next/rsc#CollectionCards": CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1,
-  "/admin/AdminHome#AdminHome": AdminHome_74f164e5a7e149c6ba48f1c8e3b2f211
+  "@payloadcms/next/rsc#CollectionCards": CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1
 }

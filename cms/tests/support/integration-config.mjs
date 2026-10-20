@@ -127,6 +127,13 @@ export function readIntegrationConfig(env, root = repositoryRoot) {
   if (!['test', 'development'].includes(env.NODE_ENV)) reject('test_environment_required');
   const portal = databaseTarget(env.PAYLOAD_TEST_PORTAL_DATABASE_URL, 'portal');
   const cms = databaseTarget(env.PAYLOAD_TEST_CMS_DATABASE_URL, 'cms');
+  // A checked-in test target is the only permitted database source. Do not let
+  // a normal CMS/API runtime setting silently shadow either guarded URL.
+  if (['DATABASE_URL', 'MIGRATION_DATABASE_URL', 'API_DATABASE_URL', 'CRON_DATABASE_URL',
+    'CMS_DATABASE_URL', 'CMS_ADMIN_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
+    'CMS_MIGRATION_DATABASE_URL', 'CMS_OBSERVER_DATABASE_URL'].some(key => Object.hasOwn(env, key))) {
+    reject('runtime_database_fallback_refused');
+  }
   if (portal.identity === cms.identity) reject('distinct_databases_required');
   const uploads = privatePath(env.PAYLOAD_TEST_UPLOAD_DIR, root, 'uploads');
   const evidence = privatePath(env.PAYLOAD_TEST_EVIDENCE_DIR, root, 'evidence');
@@ -134,8 +141,15 @@ export function readIntegrationConfig(env, root = repositoryRoot) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(env.PAYLOAD_TEST_RUN_ID || '')) {
     reject('synthetic_run_id_required');
   }
+  let playwrightModule = null;
+  if (Object.hasOwn(env, 'PAYLOAD_TEST_PLAYWRIGHT_MODULE')) {
+    if (typeof env.PAYLOAD_TEST_PLAYWRIGHT_MODULE !== 'string' || !path.isAbsolute(env.PAYLOAD_TEST_PLAYWRIGHT_MODULE) ||
+        /[\x00-\x1f]/.test(env.PAYLOAD_TEST_PLAYWRIGHT_MODULE)) reject('playwright_module_invalid');
+    playwrightModule = path.resolve(env.PAYLOAD_TEST_PLAYWRIGHT_MODULE);
+    if (overlaps(root, playwrightModule) || overlaps(playwrightModule, root)) reject('playwright_module_must_be_external');
+  }
   return Object.freeze({ portalDatabaseURL: portal.url, cmsDatabaseURL: cms.url,
-    uploadDir: uploads, evidenceDir: evidence, runId: env.PAYLOAD_TEST_RUN_ID });
+    uploadDir: uploads, evidenceDir: evidence, runId: env.PAYLOAD_TEST_RUN_ID, playwrightModule });
 }
 
 async function checkPrivateDirectory(directory) {

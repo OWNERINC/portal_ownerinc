@@ -6,6 +6,7 @@ import type { EditorialErrorBody, SaveInput } from '../portal-pages/editorial-co
 import { EDITORIAL_HEADERS, EXISTING_JSON_BYTES, CREATE_JSON_BYTES } from '../portal-pages/editorial-contracts'
 import { assertEditorialReadHeaders, requirePortalPageEditor } from '../portal-pages/editorial-auth'
 import { readEditorialRevision, saveEditorialVersion, transitionEditorialPublication } from '../portal-pages/editorial-service'
+import { readEditorialPreviewAsset } from '../portal-pages/editorial-preview'
 
 const messages: Readonly<Record<string, string>> = {
   invalid_request: 'A solicitação editorial é inválida.',
@@ -144,4 +145,5 @@ export const portalPageEditorialEndpoints: Endpoint[] = [
   { path: '/portal-page-editorial/revision', method: 'get', handler: req => revision(req) },
   { path: '/portal-page-editorial/save', method: 'post', handler: req => post(req, 'save') },
   { path: '/portal-page-editorial/publication', method: 'post', handler: req => post(req, 'publication') },
+  { path: '/portal-page-editorial/preview-assets/:pageId/:versionId/:assetId', method: 'get', handler: req => readEditorialPreviewAsset(req) },
 ]

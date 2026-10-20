@@ -555,6 +555,51 @@ Edge failures. It preserves the historical failures as observed at that time.
 `idType:'uuid'` alone still does **not** preserve a supplied ID; use only the separate
 trusted import capability described above. No operational importer is delivered here.
 
+## Portal Pages editorial interface and exact preview (Task 4)
+
+`portal-pages` keeps native Payload fields, two-second autosave, Versions and
+version diffs. The editorial controls create a separate immutable explicit
+snapshot; preview is bound to its page UUID and Version UUID, while publication
+and unpublication require an explicit confirmation against the current saved
+Version. The CMS preview is dynamic, private and not a public Portal route.
+Preview asset requests reauthorize the V2 `manageKnowledge` session on every GET,
+verify exact Version references and MIME role, and reuse the safe descriptor and
+Range reader. There is no historical restore action.
+
+Offline checks are `npm --prefix cms run test:unit` and
+`npm --prefix cms run typecheck`. Payload import-map and types generation are
+configuration-only operations; see the offline commands above. The focused local
+integration command is deliberately separate from `npm run verify`:
+
+```sh
+npm --prefix cms run test:portal-pages:integration -- --check-config
+npm --prefix cms run test:portal-pages:integration -- --execute
+node cms/tests/integration/portal-page-editorial-browser.mjs
+```
+
+The preflight requires `MIGRATION_TEST_DISPOSABLE=true`, `NODE_ENV=test`, distinct
+loopback CMS/Portal database URLs with test/dev database names, private distinct
+upload/evidence directories outside the checkout and a UUIDv4 run ID. It rejects
+runtime DB URL fallbacks and never reads `.env`. `--check-config` does not load
+Payload/pg or connect and reports `NOT_EXECUTED`. `--execute` is explicit, applies
+reviewed migrations only to the guarded CMS test target, then runs real Payload /
+PostgreSQL native acceptance. It does not provision or start Docker. The optional
+`PAYLOAD_TEST_PLAYWRIGHT_MODULE` must be an absolute path to an externally installed
+Playwright module; only after a successful native fixture does it write the private
+browser handoff and storage state under the evidence directory. The dedicated
+browser command validates that handoff and starts only its own loopback Next process
+and test-only V2 actor transport; it stops those processes in `finally`.
+
+No integration or browser PASS is implied by unit tests, typecheck, generated
+imports or check-only config. An unprepared fixture, database, Playwright module or
+session remains `NOT_EXECUTED`; skipped acceptance cannot produce an overall PASS.
+The generic root `npm run test:payload` runner remains separately blocked with its
+existing exit-2 behavior.
+
+See the [editorial runbook](../docs/operations/portal-pages-editorial.md) and
+[Task 4 acceptance record](../docs/reviews/2026-10-19-portal-pages-editorial-acceptance.md)
+for workflow guidance, manual accessibility checks and per-run evidence.
+
 ## Dependency review (2026-10-02)
 
 All exact Task 1 pins were available on the public npm registry and their peer

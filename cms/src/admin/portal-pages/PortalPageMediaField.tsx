@@ -16,6 +16,52 @@ type NativeAncestors = {
   blockType: string | null
 }
 
+type EditorialUploadFixtureEntry = {
+  ids: () => string[]
+  move: (from: number, to: number) => void
+  remove: (index: number) => void
+}
+
+type EditorialUploadFixtureOperation = {
+  path: string
+  operation: 'reorder' | 'remove'
+  targetRowID: string
+  otherRowID: string
+}
+
+declare global {
+  interface Window {
+    __portalPageUploadFixture?: {
+      galleryRowIDs: (path: string) => string[]
+      mutateGalleryRows: (request: EditorialUploadFixtureOperation) => boolean
+    }
+  }
+}
+
+const editorialUploadFixtureEntries = new Map<string, EditorialUploadFixtureEntry>()
+
+function exposeEditorialUploadFixture(): void {
+  if (typeof window === 'undefined' || window.__portalPageUploadFixture) return
+  window.__portalPageUploadFixture = {
+    galleryRowIDs: path => editorialUploadFixtureEntries.get(path)?.ids() || [],
+    mutateGalleryRows: request => {
+      const entry = editorialUploadFixtureEntries.get(request.path)
+      if (!entry) return false
+      const ids = entry.ids()
+      const target = ids.indexOf(request.targetRowID)
+      if (target < 0) return false
+      if (request.operation === 'remove') {
+        entry.remove(target)
+        return true
+      }
+      const other = ids.indexOf(request.otherRowID)
+      if (other < 0 || other === target) return false
+      entry.move(target, other)
+      return true
+    },
+  }
+}
+
 function rowID(rows: Array<{ id?: unknown }> | undefined, index: number): string | null {
   const id = rows?.[index]?.id
   return typeof id === 'string' && id.length > 0 ? id : null
@@ -62,6 +108,15 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
     const galleryRows = gallery ? fields[`body.${blockIndex}.images`]?.rows : undefined
     return { blockID, blockType, galleryItemID: galleryIndex === null ? null : rowID(galleryRows, galleryIndex) }
   })
+  const galleryFixtureState = useFormFields(([fields]): { path: string; ids: string[] } | null => {
+    const match = path.match(/^body\.(\d+)\.images\.\d+\.asset$/u)
+    if (!match) return null
+    const arrayPath = `body.${match[1]}.images`
+    const rows = fields[arrayPath]?.rows
+    return { path: arrayPath, ids: rows?.map(row => typeof row.id === 'string' ? row.id : '') || [] }
+  })
+  const galleryFixtureRef = useRef(galleryFixtureState)
+  galleryFixtureRef.current = galleryFixtureState
   const generationRef = useRef<{ identity: string; generation: number } | null>(null)
   const capturedDestinationRef = useRef<Destination | null>(null)
   const destinationInvalidatedRef = useRef(false)
@@ -107,6 +162,26 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
     readGenerationRef.current += 1
     readControllerRef.current?.abort()
   }, [])
+
+  useEffect(() => {
+    // Test-only native array operations are enabled solely by the dedicated
+    // browser fixture. Production builds compile this branch out, and ordinary
+    // development sessions never expose form mutation helpers by default.
+    if (process.env.NODE_ENV !== 'development' ||
+      process.env.NEXT_PUBLIC_PORTAL_PAGE_EDITORIAL_TEST_FIXTURE !== 'true' || !galleryFixtureState) return
+    const arrayPath = galleryFixtureState.path
+    const entry: EditorialUploadFixtureEntry = {
+      ids: () => galleryFixtureRef.current?.path === arrayPath ? [...galleryFixtureRef.current.ids] : [],
+      move: (from, to) => form.moveFieldRow({ path: arrayPath, moveFromIndex: from, moveToIndex: to }),
+      remove: index => form.removeFieldRow({ path: arrayPath, rowIndex: index }),
+    }
+    editorialUploadFixtureEntries.set(arrayPath, entry)
+    exposeEditorialUploadFixture()
+    return () => {
+      if (editorialUploadFixtureEntries.get(arrayPath) === entry) editorialUploadFixtureEntries.delete(arrayPath)
+      if (editorialUploadFixtureEntries.size === 0 && typeof window !== 'undefined') delete window.__portalPageUploadFixture
+    }
+  }, [form.moveFieldRow, form.removeFieldRow, galleryFixtureState])
 
   const destinationStillMatches = useCallback((): boolean => {
     const captured = capturedDestinationRef.current

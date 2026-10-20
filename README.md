@@ -65,6 +65,16 @@ Preparação de bancos, migrations e runtime é uma etapa separada e autorizada.
 Consulte o [runbook Payload](docs/operations/payload-owner-news.md) e a
 [matriz de aceite](docs/reviews/2026-10-02-payload-owner-news-acceptance.md).
 
+O aceite CMS das páginas modulares usa o comando separado
+`npm --prefix cms run test:portal-pages:integration -- --check-config`; ele exige
+opt-in, duas URLs de banco loopback `test`/`dev`, diretórios privados distintos e
+UUID de execução. Check-only retorna `NOT_EXECUTED` sem conexão. A execução real
+aplica migrations somente ao banco CMS explicitamente guardado; não inicia Docker
+e não usa `DATABASE_URL` nem credenciais de runtime como fallback. A suíte genérica
+`test:payload` continua inalterada e bloqueada. Veja o
+[runbook editorial das páginas](docs/operations/portal-pages-editorial.md) e a
+[matriz de aceite Task 4](docs/reviews/2026-10-19-portal-pages-editorial-acceptance.md).
+
 ## Contratos de UI e prevenção de quebras
 
 Os scripts das páginas podem atender seções com estruturas diferentes. Um

@@ -16,16 +16,22 @@ const text = (name: string, label: string, maxLength?: number, required = true):
 const textarea = (name: string, label: string, maxLength: number, required = false): Field => ({
   name, label, type: 'textarea', required, maxLength,
 })
-const pageMedia = (label: string, mimes: readonly string[] = PORTAL_PAGE_MEDIA_MIMES): Field => ({
+const requiredText = (name: string, label: string, maxLength?: number, required = true): Field => ({
+  name, label, type: 'text', required, ...(maxLength === undefined ? {} : { maxLength }),
+  admin: { components: { Field: '/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField' } },
+})
+const pageMedia = (label: string, kind: 'image' | 'video' | 'pdf', mimes: readonly string[] = PORTAL_PAGE_MEDIA_MIMES): Field => ({
   name: 'asset', label, type: 'relationship', relationTo: 'portal-page-media',
   filterOptions: { state: { equals: 'complete' }, mimeType: { in: [...mimes] } },
-  admin: { allowCreate: false, allowEdit: false },
+  admin: { allowCreate: false, allowEdit: false, components: { Field: {
+    path: '/admin/portal-pages/PortalPageMediaField', exportName: 'PortalPageMediaField', clientProps: { kind },
+  } } },
 })
 
 export const portalPageBlocks: Block[] = [
   {
     slug: 'heading', labels: { singular: 'Título de seção', plural: 'Títulos de seção' },
-    fields: [text('text', 'Título', 200), {
+    fields: [requiredText('text', 'Título', 200), {
       name: 'level', label: 'Nível do título', type: 'select', required: true, defaultValue: '2',
       options: [{ label: 'Nível 2', value: '2' }, { label: 'Nível 3', value: '3' }, { label: 'Nível 4', value: '4' }],
     }, layout],
@@ -36,40 +42,41 @@ export const portalPageBlocks: Block[] = [
   },
   {
     slug: 'image', labels: { singular: 'Imagem', plural: 'Imagens' },
-    fields: [pageMedia('Arquivo de imagem', PORTAL_PAGE_IMAGE_MIMES), text('alt', 'Texto alternativo', 300),
+    fields: [pageMedia('Arquivo de imagem', 'image', PORTAL_PAGE_IMAGE_MIMES), requiredText('alt', 'Texto alternativo', 300),
       textarea('caption', 'Legenda', 1000), layout],
   },
   {
     slug: 'gallery', labels: { singular: 'Galeria', plural: 'Galerias' },
     fields: [{
       name: 'images', label: 'Imagens', type: 'array', minRows: 2, maxRows: 20,
-      fields: [pageMedia('Arquivo de imagem', PORTAL_PAGE_IMAGE_MIMES), text('alt', 'Texto alternativo', 300),
+      fields: [pageMedia('Arquivo de imagem', 'image', PORTAL_PAGE_IMAGE_MIMES), requiredText('alt', 'Texto alternativo', 300),
         textarea('caption', 'Legenda', 1000)],
     }, layout],
   },
   {
     slug: 'video', labels: { singular: 'Vídeo', plural: 'Vídeos' },
-    fields: [pageMedia('Arquivo de vídeo', ['video/mp4', 'video/webm']), text('title', 'Título do vídeo', 200), layout],
+    fields: [pageMedia('Arquivo de vídeo', 'video', ['video/mp4', 'video/webm']), requiredText('title', 'Título do vídeo', 200), layout],
   },
   {
     slug: 'embed', labels: { singular: 'Vídeo incorporado', plural: 'Vídeos incorporados' },
     fields: [{ name: 'provider', label: 'Provedor', type: 'select', required: true,
       options: [{ label: 'YouTube', value: 'youtube' }, { label: 'Vimeo', value: 'vimeo' }] },
-    text('url', 'Endereço do vídeo'), text('title', 'Título acessível', 200), layout],
+    requiredText('url', 'Endereço do vídeo'), requiredText('title', 'Título acessível', 200), layout],
   },
   {
     slug: 'pdf', labels: { singular: 'Documento PDF', plural: 'Documentos PDF' },
-    fields: [pageMedia('Arquivo PDF', ['application/pdf']), text('title', 'Título do documento', 200), layout],
+    fields: [pageMedia('Arquivo PDF', 'pdf', ['application/pdf']), requiredText('title', 'Título do documento', 200), layout],
   },
   {
     slug: 'callout', labels: { singular: 'Aviso', plural: 'Avisos' },
     fields: [{ name: 'tone', label: 'Tipo do aviso', type: 'select', required: true, defaultValue: 'info',
       options: [{ label: 'Informação', value: 'info' }, { label: 'Atenção', value: 'warning' }, { label: 'Sucesso', value: 'success' }] },
-    text('title', 'Título', 200, false), textarea('text', 'Texto do aviso', 2000, true), layout],
+    text('title', 'Título', 200, false), { name: 'text', label: 'Texto do aviso', type: 'textarea', required: true, maxLength: 2000,
+      admin: { components: { Field: '/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField' } } }, layout],
   },
   {
     slug: 'link', labels: { singular: 'Link', plural: 'Links' },
-    fields: [text('label', 'Texto do link', 200), text('url', 'Endereço do link'),
+    fields: [requiredText('label', 'Texto do link', 200), requiredText('url', 'Endereço do link'),
       { name: 'newTab', label: 'Abrir em nova aba', type: 'checkbox', defaultValue: false },
       { name: 'style', label: 'Estilo', type: 'select', required: true, defaultValue: 'primary',
         options: [{ label: 'Principal', value: 'primary' }, { label: 'Secundário', value: 'secondary' }] }, layout],

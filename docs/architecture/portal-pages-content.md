@@ -56,8 +56,8 @@ de mídia.
 A edição usa a sessão editorial V2 já existente e a capacidade `manageKnowledge`.
 Ela é independente dos modos de autoridade da Owner News. Não se deve afrouxar
 `canReadNewsArea`, `assertCmsWriteAuthority` ou os locks nativos da News para
-habilitar páginas; autorização e escrita das páginas terão sua própria fronteira
-nas tarefas posteriores.
+habilitar páginas; autorização e escrita de páginas permanecem na fronteira
+própria de `portal-pages` e dos endpoints editoriais.
 
 ## Mídia e uploads
 
@@ -206,6 +206,39 @@ cross-site, corpo máximo de 1 KiB, buffering de request desligado e quota
 `media_reads`. Essas rotas não ativam o frontend nem qualquer mutação/publicação;
 deploy e teste contra Firebase/Nginx reais continuam separados.
 
+## Prévia editorial privada no CMS
+
+O editor Payload registra controles próprios de salvar/publicar/despublicar e
+substitui os slots nativos de publicação e preview por componentes vazios somente
+em `portal-pages`; autosave nativo de dois segundos, Versions sem retenção máxima,
+diff e histórico permanecem disponíveis. O salvamento explícito cria uma Version
+imutável pela Local API e a publicação exige confirmação contra a mesma Version
+explícita ainda `latest`; não existe ação de restaurar uma revisão histórica.
+
+`/editorial/portal-pages/preview/{pageId}?version={versionId}` é uma página
+dinâmica e `private, no-store`, renderizada do DTO normalizado da Version exata.
+Ela revalida a sessão V2 `manageKnowledge` e nunca troca UUID ausente, inválido ou
+de outro pai pelo documento publicado/atual. O aviso deixa explícito que abrir a
+prévia não publica a página. Texto, rich text, embeds e todos os tipos de bloco
+passam pelas allowlists do DTO; a página não usa o shell público do Portal.
+
+Cada URL privada de mídia inclui UUID de página, Version e mídia. O novo GET
+editorial revalida a sessão em toda requisição, confirma a referência e o MIME
+específico do bloco, abre o descriptor seguro somente após a transação e devolve
+`private,no-store`/`nosniff`. Imagens são integrais; PDF e vídeo mantêm a faixa
+única (inclusive aberta e sufixo), backpressure de 64 KiB e cancelamento do leitor
+existente. A URL e o DTO não contêm caminho de disco, `storageKey` ou token. Os
+bytes já transmitidos não podem ser revogados retroativamente; uma nova requisição
+Range sem sessão válida é negada.
+
+Os controles de capa, imagem, galeria, vídeo e PDF continuam usando os campos
+Relationship nativos; o wrapper de upload só permite selecionar mídia completa
+depois da releitura autenticada. A confirmação de versão é invalidada por edição,
+upload, autosave concorrente, troca de documento ou outra operação/modal. A
+documentação operacional e a matriz por execução ficam em
+[`docs/operations/portal-pages-editorial.md`](../operations/portal-pages-editorial.md)
+e [`docs/reviews/2026-10-19-portal-pages-editorial-acceptance.md`](../reviews/2026-10-19-portal-pages-editorial-acceptance.md).
+
 ## Conteúdo e evolução
 
 Galerias exigem lightbox no leitor. A exposição de navegação depende da
@@ -220,8 +253,9 @@ galeria são ordenadas.
 
 ## Escopo desta decisão
 
-Esta fundação define primitivos, tipos, validação e a fronteira de DTO. Coleções,
-projeção de drafts nativos, persistência/relações, ponte de leitura e ingress de
-upload foram adicionados em tarefas próprias. A interface, publicação, deploy e
-aceite contra serviços reais continuam posteriores. Essas entregas não alteram
-Owner News, seu parser global, migrations de domínio ou serviços em execução.
+Esta fundação e as tarefas seguintes definem primitivos, tipos, validação,
+coleções, projeção de drafts nativos, persistência/relações, ponte de leitura,
+ingress de upload e interface editorial no CMS. Deploy e aceite contra serviços
+reais continuam gates separados e devem ser registrados com seus próprios
+resultados. Essas entregas não alteram Owner News, seu parser global, migrations de
+domínio ou serviços em execução.
