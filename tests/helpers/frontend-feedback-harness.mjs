@@ -33,7 +33,7 @@ export class FixtureNode extends Node {
     this.naturalWidth = 800; this.naturalHeight = 800; this.complete = true;
     this.style = { setProperty(name, value) { this[name] = String(value); }, getPropertyValue(name) { return this[name] || ''; }, removeProperty(name) { delete this[name]; } };
   }
-  get nodeType() { return this.tagName === '#TEXT' ? 3 : 1; }
+  get nodeType() { return this.tagName === '#TEXT' ? 3 : this.tagName === '#FRAGMENT' ? 11 : 1; }
   get textContent() { return (this._text || '') + this.children.map(node => node.textContent).join(''); }
   set textContent(value) { this.replaceChildren(); this._text = String(value); }
   get innerHTML() { return this._markup ?? this.textContent; }
@@ -47,6 +47,16 @@ export class FixtureNode extends Node {
     if (name === 'style') { this.attrs[name] = String(value); return; }
     super.setAttribute(name, value);
     if (booleans.has(name)) this[name] = true;
+  }
+  append(...nodes) {
+    for (const node of nodes) {
+      if (node?.nodeType === 11) {
+        this.append(...[...node.children]);
+        node.children = [];
+        continue;
+      }
+      super.append(node);
+    }
   }
   removeAttribute(name) { super.removeAttribute(name); if (booleans.has(name)) this[name] = false; }
   getAttribute(name) {
@@ -109,6 +119,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   doc.createElement = tag => new FixtureNode(tag, doc);
   doc.createElementNS = (_, tag) => doc.createElement(tag);
   doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
+  doc.createDocumentFragment = () => doc.createElement('#fragment');
   doc.getElementById = id => doc.querySelector(`#${id}`);
   doc.downloads = []; doc.fonts = { ready: fonts };
   parseInto(doc, html);

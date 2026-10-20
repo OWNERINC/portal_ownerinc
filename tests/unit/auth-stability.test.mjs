@@ -65,7 +65,7 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
   }
   const context = vm.createContext({
     auth, document, sessionStorage, localStorage, window: { location }, location,
-    URL, URLSearchParams, DOMException, setTimeout, console,
+    URL, URLSearchParams, DOMException, TextDecoder, setTimeout, console,
     configureContentsAvailability: options => availabilityConfigurations.push(options),
     onAuthStateChanged: (_auth, callback) => { listeners.push(callback); return () => {}; },
     signOut: async () => { signouts += 1; changeUser(null); await signOutImpl?.(); },
@@ -435,4 +435,38 @@ test('non-rendering validation preserves the current view on outages and fetch h
   const url = await asset.api.fetchAPIAsset('/api/assets/one');
   assert.match(url, /^blob:/);
   URL.revokeObjectURL(url);
+});
+
+test('authErrorBodyLimit is opt-in, strips before fetch, bounds auth clones, and preserves a nonfatal 403 response', async () => {
+  let cancelled = 0;
+  let rawOptions;
+  const h = harness({ fetchImpl: (_path, options) => {
+    rawOptions = options;
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(16 * 1024 + 1)); controller.close(); },
+      cancel() { cancelled += 1; },
+    }, { highWaterMark: 0 }), { status: 403, headers: { 'content-type': 'application/json' } });
+  } });
+  const response = await h.api.authenticatedFetch('/api/contents/published-policy', { authErrorBodyLimit: 16384 });
+  assert.equal(response.status, 403);
+  assert.equal(Object.hasOwn(rawOptions, 'authErrorBodyLimit'), false, 'the private option never reaches native fetch');
+  assert.equal(h.signouts, 0, 'an oversized unrecognized resource 403 remains nonfatal');
+  assert.equal(await response.text().then(text => text.length), 16 * 1024 + 1, 'the original response remains readable to bounded API code');
+  assert.equal(cancelled, 0, 'the nonfatal original body is not cancelled behind the caller');
+});
+
+test('bounded opt-in auth decode still ends 401 sessions and cancels the unauthorized original body', async () => {
+  let cancelled = 0;
+  let rawOptions;
+  const h = harness({ fetchImpl: (_path, options) => {
+    rawOptions = options;
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(16 * 1024 + 1)); },
+      cancel() { cancelled += 1; },
+    }, { highWaterMark: 0 }), { status: 401, headers: { 'content-type': 'application/json' } });
+  } });
+  await assert.rejects(h.api.authenticatedFetch('/api/contents/published-policy', { authErrorBodyLimit: 16384 }), error => error.status === 401);
+  assert.equal(Object.hasOwn(rawOptions, 'authErrorBodyLimit'), false);
+  assert.equal(h.signouts, 1, '401 ends the validated session even when its body cannot be parsed');
+  assert.equal(cancelled, 1, 'fatal unauthorized bodies are cancelled after session handling');
 });

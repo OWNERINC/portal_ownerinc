@@ -9,6 +9,7 @@ export const routes = Object.freeze({
   '/academy.html': './academy.js',
   '/announcements.html': './announcements.js',
   '/news-preview.html': './news-preview.js',
+  '/contents.html': './portal-contents/index.js',
   '/editorial-entry.html': './editorial-entry.js',
   '/reminders.html': './reminders.js',
   '/profile.html': './profile.js',

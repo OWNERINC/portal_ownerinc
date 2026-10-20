@@ -50,6 +50,9 @@ export class Node extends Events {
     };
   }
   get childNodes() { return this.children; }
+  get nodeType() { return this.tagName === '#TEXT' ? 3 : this.tagName === '#FRAGMENT' ? 11 : 1; }
+  get textContent() { return (this._text || '') + this.children.map(node => node.textContent).join(''); }
+  set textContent(value) { this.replaceChildren(); this._text = String(value); }
   get isConnected() { return this === this.ownerDocument?.documentElement || Boolean(this.parentNode?.isConnected); }
   setAttribute(key, value) {
     this.attrs[key] = String(value);
@@ -62,6 +65,7 @@ export class Node extends Events {
   removeAttribute(key) { delete this.attrs[key]; }
   append(...nodes) {
     for (const node of nodes) {
+      if (node?.nodeType === 11) { this.append(...[...node.children]); node.children = []; continue; }
       node.remove(); node.parentNode = this;
       const adopt = child => { child.ownerDocument = this.ownerDocument; child.children.forEach(adopt); };
       adopt(node); this.children.push(node); this.ownerDocument?.appended?.(node);
@@ -111,6 +115,8 @@ function makeDocument(path, styles = [], dependencies = []) {
   doc.head = new Node('head', doc); doc.body = new Node('body', doc);
   doc.documentElement.append(doc.head, doc.body);
   doc.createElement = tag => new Node(tag, doc);
+  doc.createTextNode = text => { const node = new Node('#text', doc); node.textContent = text; return node; };
+  doc.createDocumentFragment = () => new Node('#fragment', doc);
   doc.querySelectorAll = selector => doc.documentElement.querySelectorAll(selector);
   doc.querySelector = selector => doc.documentElement.querySelector(selector);
   doc.getElementById = id => doc.querySelector(`#${id}`);
@@ -123,7 +129,7 @@ function makeDocument(path, styles = [], dependencies = []) {
   const wrapper = new Node('div', doc, { class: 'portal-wrapper' });
   const sidebar = new Node('aside', doc, { class: 'sidebar' });
   const nav = new Node('ul', doc, { class: 'sidebar-nav' });
-  for (const name of ['dashboard', 'knowledge', 'academy', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos']) {
+  for (const name of ['dashboard', 'knowledge', 'academy', 'announcements', 'contents', 'profile', 'admin', 'cms', 'autocard', 'cards-pos']) {
     nav.append(new Node('a', doc, { href: `https://portal.test/${name}.html` }));
   }
   sidebar.append(nav);
@@ -131,15 +137,22 @@ function makeDocument(path, styles = [], dependencies = []) {
   const topbar = new Node('header', doc, { class: 'topbar' });
   topbar.append(new Node('button', doc, { class: 'mobile-menu-toggle' }), new Node('span', doc, { class: 'topbar-title' }));
   const main = new Node('main', doc, { id: 'main-content', class: 'page-body' });
-  main.append(new Node('h1', doc, { id: `heading-${path}` }));
+  if (path === '/contents.html') {
+    const root = new Node('section', doc, { id: 'contents-root', class: 'portal-contents', 'aria-label': 'Conteúdos' });
+    root.append(new Node('h1', doc, { id: 'contents-title', tabindex: '-1' }));
+    root.append(new Node('p', doc, { id: 'contents-status', role: 'status', 'aria-live': 'polite' }));
+    root.append(new Node('div', doc, { id: 'contents-view' }));
+    main.append(root);
+  } else main.append(new Node('h1', doc, { id: `heading-${path}` }));
   outer.append(topbar, main); wrapper.append(sidebar, outer); doc.body.append(wrapper);
   styles.forEach(href => doc.head.append(new Node('link', doc, { rel: 'stylesheet', href })));
   dependencies.forEach(src => doc.head.append(new Node('script', doc, { src, integrity: 'test-integrity' })));
   return doc;
 }
 
-export async function createRouterHarness({ initialURL = 'https://portal.test/dashboard.html', user, autoStart = true, realUI = false } = {}) {
-  const doc = makeDocument('/dashboard.html');
+export async function createRouterHarness({ initialURL = 'https://portal.test/dashboard.html', user, autoStart = true, realUI = false,
+  moduleOverrides = {} } = {}) {
+  const doc = makeDocument(new URL(initialURL).pathname);
   const window = new Events();
   const location = { href: initialURL, replace(url) { this.redirect = url; } };
   for (const key of ['pathname', 'search', 'hash', 'origin']) Object.defineProperty(location, key, { get() { return new URL(this.href)[key]; } });
@@ -165,7 +178,8 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
   const observers = [];
   let currentScope;
   const context = vm.createContext({
-    document: doc, window, location, URL, URLSearchParams, AbortController, DOMException, console,
+    document: doc, window, location, URL, URLSearchParams, AbortController, DOMException, TextEncoder, TextDecoder,
+    Response, ReadableStream, Uint8Array, console,
     setTimeout, clearTimeout, requestAnimationFrame: fn => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout,
     Event: TestEvent, PopStateEvent: TestEvent,
     MutationObserver: class {
@@ -189,6 +203,7 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
     },
     DOMParser: class { parseFromString(path) { return pages.get(path)?.() || makeDocument(path); } },
     loadModule: async name => {
+      if (Object.hasOwn(moduleOverrides, name)) return moduleOverrides[name];
       if (!modules.has(name)) modules.set(name, { mount(page) {
         currentScope = page; mounts.push({ name, page });
         page.listen(window, 'test-page-event', () => events.push(name));
@@ -226,14 +241,45 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
   if (autoStart) { await context.router.startRouter(); await drain(); }
   return {
     context, doc, window, location, history, entries, mounts, disposed, events, resources, requests, modules,
-    router: context.router, get scope() { return currentScope; },
+    router: context.router, moduleOverrides, get scope() { return currentScope; },
+    async loadContentsModule({ request = async path => path.endsWith('/categories')
+      ? Response.json([]) : path.includes('?') ? new Response('[]', { headers: { 'X-Total-Count': '0' } }) : Response.json({}) } = {}) {
+      const listeners = new Set();
+      let identity = { uid: context.user?.uid || 'user-1', generation: 1, validated: true };
+      const requests = [];
+      context.getContentsIdentity = () => identity;
+      context.subscribeContentsIdentity = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+      context.authenticatedFetch = (path, options = {}) => { requests.push({ path, options }); return request(path, options); };
+      const moduleFiles = [
+        ['dto', 'public/js/portal-contents/dto.js', 'validatePortalPageDTO, validateDetail, validateList, validateCategories, isCanonicalSlug, PAGE_SIZE, MAX_OFFSET, MAX_TOTAL, MAX_BLOCKS, MAX_NODES, MAX_CONTENT_BYTES, MAX_DETAIL_BYTES, MAX_COLLECTION_BYTES, LAYOUTS'],
+        ['richText', 'public/js/portal-contents/rich-text.js', 'renderRichText'],
+        ['api', 'public/js/portal-contents/api.js', 'readBoundedJSON, createContentsAPI'],
+        ['catalog', 'public/js/portal-contents/catalog.js', 'renderCatalog, renderCategories'],
+        ['reader', 'public/js/portal-contents/reader.js', 'renderReader'],
+        ['index', 'public/js/portal-contents/index.js', 'parseContentsLocation, mount'],
+      ];
+      context.__contentsModules = {};
+      for (const [name, file, exports] of moduleFiles) {
+        const feature = (await readFile(file, 'utf8')).replace(/^import[^\n]*\n/gmu, '').replace(/^export\s+/gmu, '');
+        vm.runInContext(`(() => { ${feature}\n globalThis.__contentsModules.${name} = { ${exports} }; Object.assign(globalThis, globalThis.__contentsModules.${name}); })();`,
+          context, { filename: file });
+      }
+      const contentsModule = { mount(page) {
+        currentScope = page; mounts.push({ name: './portal-contents/index.js', page });
+        return context.__contentsModules.index.mount(page);
+      } };
+      moduleOverrides['./portal-contents/index.js'] = contentsModule;
+      return { module: contentsModule, modules: context.__contentsModules, requests,
+        notifyIdentity(next) { identity = next; for (const listener of [...listeners]) listener(next); } };
+    },
     page(path, { styles = [], scripts = [], setup } = {}) {
       pages.set(path, () => { const doc = makeDocument(path, styles, scripts); setup?.(doc); return doc; });
     },
     notifyAuthChange() { observers.filter(observer => observer.target === doc.documentElement).forEach(observer => observer.callback()); },
     click(path, options = {}) {
-      const anchor = new Node('a', doc, { href: path, ...options });
-      const event = new TestEvent('click', { target: anchor }); doc.dispatchEvent(event); return event;
+      const { button = 0, ...eventOptions } = options;
+      const anchor = new Node('a', doc, { href: path });
+      const event = new TestEvent('click', { target: anchor, button, ...eventOptions }); doc.dispatchEvent(event); return event;
     },
   };
 }

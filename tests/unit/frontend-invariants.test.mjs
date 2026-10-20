@@ -177,7 +177,7 @@ test('profile exposes safe API errors instead of hiding upload and save failures
   assert.match(profile, /runProfileAction/);
   assert.doesNotMatch(profile, /users\/me\/export/);
   assert.match(auth, /export async function authenticatedFetch\(/);
-  assert.match(auth, /await handleAuthenticationFailure\(path, response\)/);
+  assert.match(auth, /await handleAuthenticationFailure\(path, response, boundedAuthErrorLimit\)/);
   assert.match(auth, /path === '\/api\/users\/me' \? 'access' : null/);
   assert.match(upload, /fileSize: 500 \* 1024/);
 });

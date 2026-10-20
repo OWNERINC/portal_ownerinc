@@ -107,6 +107,25 @@ test('all shell destinations mount repeatedly with one document, sidebar, topbar
   assert.equal(h.disposed.length, h.mounts.length - 1);
 });
 
+test('contents is admitted by the active-user router without using availability as route authorization', async () => {
+  const h = await createRouterHarness();
+  const featureCSS = 'https://portal.test/css/portal-contents.css';
+  h.page('/contents.html', { styles: [featureCSS] });
+  const main = h.doc.getElementById('main-content');
+  assert.equal(h.router.routes['/contents.html'], './portal-contents/index.js');
+  assert.equal(h.router.routeAllowed('/contents.html', h.context.user), true);
+  assert.equal(await h.router.navigate('/contents.html?slug=published-policy'), true);
+  assert.equal(h.location.pathname, '/contents.html');
+  assert.equal(h.location.search, '?slug=published-policy');
+  assert.equal(h.doc.getElementById('main-content'), main, 'the persistent shell keeps its original main element');
+  assert.equal(h.scope.active, true);
+  assert.equal(h.requests.filter(request => String(request.url).includes('/api/contents/availability')).length, 0);
+  const activeStylesheet = h.doc.querySelectorAll('link[rel="stylesheet"]').find(link => link.href === featureCSS);
+  assert.equal(activeStylesheet?.media, 'all');
+  await h.router.navigate('/knowledge.html');
+  assert.equal(activeStylesheet.media, 'not all', 'the page-local reader stylesheet is disabled outside its route');
+});
+
 test('signed-out direct links keep the destination query and fragment through login', async () => {
   const destination = '/knowledge.html?q=normas&article=one#pdf';
   const h = await createRouterHarness({ initialURL: `https://portal.test${destination}`, user: null });

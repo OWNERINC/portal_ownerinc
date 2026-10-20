@@ -354,7 +354,7 @@ test('real smoke checks route HTML and the delivered local module graph, health,
     assert.equal(transientLivenessFailures,0);
     const router = await readFile('public/js/router.js', 'utf8');
     const routes = [...router.matchAll(/^\s*'([^']+\.html)': '([^']+)'/gm)];
-    assert.equal(routes.length, 14, 'all registered direct-link pages should be checked');
+    assert.equal(routes.length, 15, 'all registered direct-link pages should be checked');
     for (const [, route] of routes) assert.ok(requests.includes(route), `Smoke must fetch ${route}`);
     assert.ok(requests.includes('/js/owner-news/asset-path.mjs'), 'Smoke must fetch the .mjs dependency');
     for (const asset of ['/js/index.js', '/js/auth-shell.js', '/js/sidebar-state.js', '/js/sidebar.js']) {

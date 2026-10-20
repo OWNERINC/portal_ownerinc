@@ -234,14 +234,42 @@ async function finishSessionExit(uid, redirect, signOutPortal = true) {
   }
 }
 
-async function handleAuthenticationFailure(path, response) {
+async function readBoundedAuthenticationBody(response, maxBytes) {
+  const reader = response?.body?.getReader?.();
+  if (!reader) return {};
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const parts = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value?.byteLength || 0;
+      if (size > maxBytes) throw new Error('oversized auth body');
+      parts.push(decoder.decode(value, { stream: true }));
+    }
+    parts.push(decoder.decode());
+    const body = JSON.parse(parts.join(''));
+    return body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  } catch {
+    void reader.cancel().catch(() => {});
+    return {};
+  } finally {
+    try { reader.releaseLock(); } catch { /* The reader may already be released. */ }
+  }
+}
+
+async function handleAuthenticationFailure(path, response, bodyLimit = null) {
   if (response.status !== 401 && response.status !== 403) return false;
   const session = { uid: sessionUid, epoch: sessionEpoch };
-  const body = await response.clone().json().catch(() => ({}));
+  const body = bodyLimit === null
+    ? await response.clone().json().catch(() => ({}))
+    : await readBoundedAuthenticationBody(response.clone(), bodyLimit);
   assertCurrentSession(session);
   const reason = authRedirectReason(path, response, body);
   if (!reason) return false;
-  await endSession(reason);
+  try { await endSession(reason); }
+  finally { await response.body?.cancel?.().catch(() => {}); }
   throw new APIError(body.error || `A solicitação falhou (${response.status}).`, response.status, body.reason, body.requestId);
 }
 
@@ -269,6 +297,9 @@ async function fetchForSession(path, options, session) {
     throw new APIError('Sessão encerrada.', 401, 'session');
   }
   assertCurrentSession(session);
+  const { authErrorBodyLimit, ...fetchOptions } = options;
+  const boundedAuthErrorLimit = Number.isSafeInteger(authErrorBodyLimit) && authErrorBodyLimit > 0
+    ? Math.min(authErrorBodyLimit, 16 * 1024) : null;
   const headers = {
     ...(typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
     'Authorization': `Bearer ${token}`,
@@ -276,13 +307,13 @@ async function fetchForSession(path, options, session) {
   };
   let response;
   try {
-    response = await fetch(path, { ...options, headers });
+    response = await fetch(path, { ...fetchOptions, headers });
   } catch (error) {
     assertCurrentSession(session);
     throw error;
   }
   assertCurrentSession(session);
-  await handleAuthenticationFailure(path, response);
+  await handleAuthenticationFailure(path, response, boundedAuthErrorLimit);
   assertCurrentSession(session);
   return response;
 }
