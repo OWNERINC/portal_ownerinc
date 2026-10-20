@@ -384,7 +384,9 @@ test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and ro
     const req = await makeReq()
     await assert.rejects(transaction.withCmsTransaction(payload, req, (transactionReq: any) =>
       persistence.assertPortalPageMediaReferences(payload, { cover: null,
-        body: [{ blockType: 'video', asset: fixture.pdf.id, title: 'Wrong MIME' }] }, transactionReq,
+        body: persistence.projectPortalPageContent([
+          { blockType: 'video', asset: fixture.pdf.id, title: 'Wrong MIME' },
+        ]) }, transactionReq,
       { requireComplete: true })), (error: any) => error?.status === 400)
     const incomplete = await persistence.withPortalPageMediaMutation(await makeReq(), actor.uid, 'create', (transactionReq: any) =>
       payload.create({ collection: 'portal-page-media', req: transactionReq, overrideAccess: true,
@@ -392,7 +394,9 @@ test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and ro
           mimeType: 'image/png', filesize: 16, sha256: null, state: 'uploading', completedAt: null, uploadedBy: actor.uid } }))
     await assert.rejects(transaction.withCmsTransaction(payload, await makeReq(), (transactionReq: any) =>
       persistence.assertPortalPageMediaReferences(payload, { cover: null,
-        body: [{ blockType: 'image', asset: incomplete.id, alt: 'Incomplete' }] }, transactionReq,
+        body: persistence.projectPortalPageContent([
+          { blockType: 'image', asset: incomplete.id, alt: 'Incomplete' },
+        ]) }, transactionReq,
       { requireComplete: true })), (error: any) => error?.status === 400)
   })
 
@@ -400,7 +404,8 @@ test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and ro
     assert.ok(makeMediaRecord)
     const check = async (record: any, page: { cover: null | { asset_id: string; alt: string }; body: unknown[] }) =>
       transaction.withCmsTransaction(payload, await makeReq(), (transactionReq: any) =>
-        persistence.assertPortalPageMediaReferences(payload, page, transactionReq, { requireComplete: true }))
+        persistence.assertPortalPageMediaReferences(payload, { ...page,
+          body: persistence.projectPortalPageContent(page.body) }, transactionReq, { requireComplete: true }))
 
     for (const [mimeType, extension] of [['image/jpeg', 'jpg'], ['image/png', 'png'], ['image/webp', 'webp']]) {
       const image = await makeMediaRecord!(mimeType, extension, `matrix-${extension}-${config.runId.slice(0, 8)}.${extension}`)

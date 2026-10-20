@@ -129,7 +129,8 @@ const normalizePortalPageBeforeChange: CollectionBeforeChangeHook = async ({ dat
     input._status = 'draft'
     input.publishedAt = null
   } else {
-    if (Object.hasOwn(input, 'publishedAt') && input.publishedAt !== originalPublishedAt) {
+    if (Object.hasOwn(input, 'publishedAt') && input.publishedAt !== undefined &&
+      input.publishedAt !== originalPublishedAt) {
       throw new APIError('portal_page_published_at_server_owned', 403, undefined, true)
     }
     input.publishedAt = originalPublishedAt

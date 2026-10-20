@@ -211,6 +211,21 @@ test('three page collections are registered, editor-scoped, non-locking and use 
   }
 })
 
+test('Payload native create tolerates an undefined publishedAt placeholder but rejects client timestamps', async () => {
+  const f = await payloadFixture()
+  const beforeChange = PortalPages.hooks?.beforeChange?.[0]
+  assert.ok(beforeChange)
+  const input = { title: 'Guia inicial', slug: 'guia-inicial', summary: '', cover: null,
+    coverAlt: null, categories: [], body: [], _status: 'draft', publishedAt: undefined }
+  const args = { data: input, operation: 'create', originalDoc: {}, req: f.req }
+  const normalized = await beforeChange(args as never)
+  assert.equal((normalized as Record<string, unknown>).publishedAt, null)
+
+  await assert.rejects(beforeChange({ ...args,
+    data: { ...input, publishedAt: '2026-10-20T10:00:00.000Z' },
+  } as never), { status: 403 })
+})
+
 test('Payload blocks project exactly the Task 1 public shapes and reject malformed rich text/media rows', () => {
   const projected = projectPortalPageContent([
     { blockType: 'heading', text: '  Título  ', level: 2 },
