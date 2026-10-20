@@ -115,6 +115,9 @@
     });
     mobileMedia.addEventListener('change', function () { setDrawer(false, false, true); });
     setDrawer(false, false);
+    document.addEventListener('portal:close-sidebar', function (event) {
+      closeDrawer(event.detail?.restoreFocus === true);
+    });
     document.addEventListener('portal:navigated', function () { closeDrawer(false); });
   }
 

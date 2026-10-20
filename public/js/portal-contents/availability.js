@@ -54,6 +54,10 @@ function focusFallback(link, active) {
   const document = configuration?.document;
   const sidebar = active?.closest?.('.sidebar') || link.closest?.('.sidebar');
   const drawerOwnsFocus = document?.body?.classList?.contains('sidebar-open') && sidebar?.contains?.(active);
+  if (drawerOwnsFocus) {
+    // The shell drops main-content inertness; this gate owns the final focus target.
+    document.dispatchEvent(new CustomEvent('portal:close-sidebar', { detail: { restoreFocus: false } }));
+  }
   const mobileToggle = drawerOwnsFocus ? document.querySelector('.mobile-menu-toggle') : null;
   const target = mobileToggle && !hasUnavailableAncestor(mobileToggle)
     ? mobileToggle : document.querySelector('main h1');

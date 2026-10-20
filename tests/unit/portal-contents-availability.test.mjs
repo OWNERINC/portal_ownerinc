@@ -115,18 +115,34 @@ function makeHarness() {
   const link = new FakeNode(document, 'li', { className: 'contents-link', hidden: true });
   const anchor = new FakeNode(document, 'a', { href: './contents.html' });
   link.append(anchor);
-  sidebar.append(link);
+  const otherLink = new FakeNode(document, 'li');
+  const otherAnchor = new FakeNode(document, 'a', { href: './dashboard.html' });
+  otherLink.append(otherAnchor);
+  sidebar.append(link, otherLink);
+  const mainContent = new FakeNode(document, 'div', { className: 'main-content' });
+  const topbar = new FakeNode(document, 'header', { className: 'topbar' });
   const mobileToggle = new FakeNode(document, 'button', { className: 'mobile-menu-toggle' });
   const main = new FakeNode(document, 'main');
   const heading = new FakeNode(document, 'h1');
   main.append(heading);
-  document.body.append(sidebar, mobileToggle, main);
+  topbar.append(mobileToggle);
+  mainContent.append(topbar, main);
+  document.body.append(sidebar, mainContent);
   document.querySelector = selector => ({
     '.contents-link': link,
     '.mobile-menu-toggle': mobileToggle,
     '.sidebar': sidebar,
+    '.main-content': mainContent,
     'main h1': heading,
   }[selector] || null);
+  const shellEvents = [];
+  document.addEventListener('portal:close-sidebar', event => {
+    shellEvents.push(event);
+    if (event.detail?.restoreFocus === false && document.body.classList.contains('sidebar-open')) {
+      document.body.classList.remove('sidebar-open');
+      mainContent.inert = false;
+    }
+  });
 
   const current = { uid: null, generation: 0, validated: false };
   const listeners = new Set();
@@ -149,7 +165,7 @@ function makeHarness() {
   };
   const context = vm.createContext({
     document, window, AbortController, DOMException, TextDecoder, TextEncoder,
-    ArrayBuffer, Uint8Array, ReadableStream, Response, JSON, Object, Promise, Error, TypeError,
+    ArrayBuffer, Uint8Array, ReadableStream, Response, CustomEvent, JSON, Object, Promise, Error, TypeError,
   });
   const apiSource = availabilitySource.replace(/^export /gmu, '')
     + '\nglobalThis.contentsGate = { configureContentsAvailability, probeContentsAvailability, resetContentsAvailability, get state() { return state; } };';
@@ -158,7 +174,12 @@ function makeHarness() {
   const subscribeIdentity = listener => { listeners.add(listener); return () => listeners.delete(listener); };
   const options = { request, getIdentity: () => Object.freeze({ ...current }), subscribeIdentity, document, window };
   gate.configureContentsAvailability(options);
-  return { gate, identity, requests, link, anchor, heading, mobileToggle, document, window, sidebar, listeners, options,
+  return { gate, identity, requests, link, anchor, otherAnchor, heading, mobileToggle, mainContent,
+    document, window, sidebar, listeners, options, shellEvents,
+    openDrawer() {
+      document.body.classList.add('sidebar-open');
+      mainContent.inert = true;
+    },
     dispatch(target, name) { target.dispatchEvent(new Event(name)); } };
 }
 
@@ -276,7 +297,7 @@ test('navigation, visibility and online triggers coalesce and recover only on de
   assert.doesNotMatch(availabilitySource, /setInterval|setTimeout/u, 'the gate does not poll');
 });
 
-test('reset aborts and hides synchronously; hiding a focused link falls back to visible content or drawer control', () => {
+test('reset aborts and hides synchronously; focused drawer links close before mobile focus restoration', () => {
   const content = makeHarness();
   content.identity({ uid: 'a', generation: 1, validated: true });
   content.requests[0].resolve(jsonResponse({ available: true }));
@@ -294,11 +315,29 @@ test('reset aborts and hides synchronously; hiding a focused link falls back to 
     mobile.identity({ uid: 'a', generation: 1, validated: true });
     mobile.requests[0].resolve(jsonResponse({ available: true }));
     return drain().then(() => {
-      mobile.document.body.classList.add('sidebar-open');
+      mobile.openDrawer();
       mobile.anchor.focus();
       mobile.gate.resetContentsAvailability();
       assert.equal(mobile.link.hidden, true);
+      assert.equal(mobile.shellEvents.length, 1);
+      assert.equal(mobile.shellEvents[0].detail.restoreFocus, false, 'availability owns the final focus target');
+      assert.equal(mobile.document.body.classList.contains('sidebar-open'), false, 'drawer closes synchronously');
+      assert.equal(mobile.mainContent.inert, false, 'main content is available before focus restoration');
       assert.equal(mobile.document.activeElement, mobile.mobileToggle);
+
+      const unrelated = makeHarness();
+      unrelated.identity({ uid: 'a', generation: 1, validated: true });
+      unrelated.requests[0].resolve(jsonResponse({ available: true }));
+      return drain().then(() => {
+        unrelated.openDrawer();
+        unrelated.otherAnchor.focus();
+        unrelated.gate.resetContentsAvailability();
+        assert.equal(unrelated.link.hidden, true);
+        assert.equal(unrelated.shellEvents.length, 0, 'hiding an unfocused Contents link does not close the drawer');
+        assert.equal(unrelated.document.body.classList.contains('sidebar-open'), true);
+        assert.equal(unrelated.mainContent.inert, true);
+        assert.equal(unrelated.document.activeElement, unrelated.otherAnchor, 'unrelated focus is preserved');
+      });
     });
   });
 });

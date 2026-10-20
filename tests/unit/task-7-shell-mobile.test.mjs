@@ -195,6 +195,7 @@ function createTestDocument() {
     listeners: new Map(),
     createElement(tag) { return createTestNode(document, tag); },
     addEventListener(type, handler) { document.listeners.set(type, handler); },
+    dispatchEvent(event) { document.listeners.get(event.type)?.(event); return true; },
     querySelectorAll() { return []; },
     querySelector() { return null; },
   };
@@ -609,6 +610,7 @@ function loadSidebarHarness({ includeToggle = true, linkOptions = [{}] } = {}) {
   topbar.className = 'topbar';
   const mainContent = createTestNode(document, 'div');
   mainContent.className = 'main-content';
+  mainContent.append(topbar, createTestNode(document, 'main'));
   navigation.append(...(toggle ? [toggle] : []), ...wrappers);
   document.body.append(navigation, mainContent);
   document.querySelector = selector => ({ '.sidebar': navigation, '.topbar': topbar, '.main-content': mainContent, '.sidebar-brand': null }[selector] || null);
@@ -1564,4 +1566,26 @@ test('drawer initial focus and trap skip hidden/inert candidates, wrap first/las
   const emptyEvent = { key: 'Tab', preventDefault() { this.defaultPrevented = true; } };
   assert.doesNotThrow(() => empty.document.listeners.get('keydown')(emptyEvent));
   assert.equal(emptyEvent.defaultPrevented, true, 'an empty trap stays bounded without indexing missing candidates');
+});
+
+test('portal close-sidebar event closes synchronously without overriding the caller focus handoff', () => {
+  const harness = loadSidebarHarness({ includeToggle: false, linkOptions: [{}] });
+  harness.mobileToggle.focus();
+  harness.mobileToggle.dispatch('click');
+  assert.equal(harness.document.body.classList.contains('sidebar-open'), true);
+  assert.equal(harness.mainContent.inert, true);
+  assert.equal(harness.document.activeElement, harness.links[0]);
+
+  harness.document.dispatchEvent({ type: 'portal:close-sidebar', detail: { restoreFocus: false } });
+  assert.equal(harness.document.body.classList.contains('sidebar-open'), false);
+  assert.equal(harness.mainContent.inert, false);
+  assert.equal(harness.document.activeElement, harness.links[0], 'false restore intent leaves final focus to availability');
+  harness.mobileToggle.focus();
+  assert.equal(harness.document.activeElement, harness.mobileToggle, 'the now-available toggle accepts the handoff');
+
+  harness.mobileToggle.dispatch('click');
+  harness.document.dispatchEvent({ type: 'portal:close-sidebar', detail: { restoreFocus: true } });
+  assert.equal(harness.document.body.classList.contains('sidebar-open'), false);
+  assert.equal(harness.mainContent.inert, false);
+  assert.equal(harness.document.activeElement, harness.mobileToggle, 'explicit restoration retains drawer return-focus behavior');
 });
