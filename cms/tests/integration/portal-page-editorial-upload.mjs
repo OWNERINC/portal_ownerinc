@@ -2,15 +2,16 @@ const UPLOAD_BASE = '/editorial/api/portal-page-uploads'
 const MEDIA_BASE = '/editorial/api/portal-page-media'
 const CHUNK_BYTES = 5 * 1024 * 1024
 const MEDIA = [
-  { name: 'cover', path: 'cover', kind: 'image', fieldLabel: 'Capa', labelIndex: 0,
+  { name: 'cover', path: 'cover', kind: 'image', fieldLabel: 'Capa',
     fileName: 'cover.png', mimeType: 'image/png', id: '11111111-1111-4111-8111-111111111111' },
-  { name: 'image.asset', path: 'body.0.asset', kind: 'image', fieldLabel: 'Arquivo de imagem', labelIndex: 0,
+  { name: 'image.asset', path: 'body.0.asset', kind: 'image', fieldLabel: 'Arquivo de imagem',
     fileName: 'inline.png', mimeType: 'image/png', id: '22222222-2222-4222-8222-222222222222' },
-  { name: 'gallery.images[0].asset', path: 'body.1.images.0.asset', kind: 'image', fieldLabel: 'Arquivo de imagem', labelIndex: 1,
+  { name: 'gallery.images[0].asset', path: 'body.1.images.0.asset', fieldLabel: 'Arquivo de imagem',
+    galleryPath: 'body.1.images', kind: 'image',
     fileName: 'gallery.png', mimeType: 'image/png', id: '33333333-3333-4333-8333-333333333333' },
-  { name: 'video.asset', path: 'body.2.asset', kind: 'video', fieldLabel: 'Arquivo de vídeo', labelIndex: 0,
+  { name: 'video.asset', path: 'body.2.asset', kind: 'video', fieldLabel: 'Arquivo de vídeo',
     fileName: 'lesson.mp4', mimeType: 'video/mp4', id: '44444444-4444-4444-8444-444444444444' },
-  { name: 'pdf.asset', path: 'body.3.asset', kind: 'pdf', fieldLabel: 'Arquivo PDF', labelIndex: 0,
+  { name: 'pdf.asset', path: 'body.3.asset', kind: 'pdf', fieldLabel: 'Arquivo PDF',
     fileName: 'handbook.pdf', mimeType: 'application/pdf', id: '55555555-5555-4555-8555-555555555555' },
 ]
 
@@ -35,35 +36,26 @@ async function collect(name, action) {
 }
 
 async function relationshipWrapper(page, destination) {
-  const native = page.getByLabel(destination.fieldLabel, { exact: true }).nth(destination.labelIndex)
-  await native.waitFor({ state: 'visible' })
-  const wrapper = page.locator('.portal-page-media-field').filter({ has: native }).first()
+  const wrapper = page.locator(`.portal-page-media-field[data-portal-page-media-path="${destination.path}"]`)
   await wrapper.waitFor({ state: 'visible' })
+  const native = wrapper.getByLabel(destination.fieldLabel, { exact: true })
+  await native.waitFor({ state: 'visible' })
   return { native, wrapper }
 }
 
 async function visibleNativeValue(wrapper, path) {
-  const hiddenInputs = wrapper.locator('input[type="hidden"]')
-  const count = await hiddenInputs.count()
-  for (let index = 0; index < count; index += 1) {
-    const input = hiddenInputs.nth(index)
-    const name = await input.getAttribute('name')
-    const value = await input.inputValue().catch(() => '')
-    if (name === path || value) return value
-  }
+  const value = await wrapper.locator('input[type="hidden"]').evaluateAll((inputs, fieldPath) => {
+    const matching = inputs.find(input => input.getAttribute('name') === fieldPath) || inputs.find(input => input.value)
+    return matching?.value || ''
+  }, path)
+  if (value) return value
   return wrapper.innerText()
 }
 
 async function assertNativeID(wrapper, path, id) {
-  const hiddenInputs = wrapper.locator('input[type="hidden"]')
-  const count = await hiddenInputs.count()
-  for (let index = 0; index < count; index += 1) {
-    const input = hiddenInputs.nth(index)
-    const name = await input.getAttribute('name')
-    const value = await input.inputValue().catch(() => '')
-    if ((name === path || name?.endsWith(path.split('.').at(-1))) && value === id) return
-    if (value === id) return
-  }
+  const matches = await wrapper.locator('input[type="hidden"]').evaluateAll((inputs, expected) =>
+    inputs.some(input => (input.getAttribute('name') === expected.path || input.value) && input.value === expected.id), { path, id })
+  if (matches) return
   assert((await wrapper.innerText()).includes(id), 'native_relationship_value_does_not_match_returned_media_id')
 }
 
@@ -77,7 +69,10 @@ async function installUploadRoutes(page, destination, options = {}) {
   const bytes = options.bytes || 4
   const chunkStarted = deferred()
   const allowComplete = deferred()
+  const deleteStarted = deferred()
+  const deleteSettled = deferred()
   let chunks = 0
+  let deletes = 0
   let collectionReads = 0
   const routes = []
   const register = async (pattern, handler) => {
@@ -116,25 +111,29 @@ async function installUploadRoutes(page, destination, options = {}) {
   })
   await register(`**${UPLOAD_BASE}/${uploadID}`, async route => {
     if (route.request().method() === 'DELETE') {
+      deletes += 1
+      deleteStarted.resolve()
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: uploadID, cancelled: true }) })
+      deleteSettled.resolve()
       return
     }
     await route.continue()
   })
   return {
-    uploadID, bytes, chunkStarted, allowComplete, origin,
-    get chunks() { return chunks }, get collectionReads() { return collectionReads },
+    uploadID, bytes, chunkStarted, allowComplete, deleteStarted, deleteSettled, origin,
+    get chunks() { return chunks }, get deletes() { return deletes }, get collectionReads() { return collectionReads },
     async cleanup() { for (const [pattern, handler] of routes) await page.unroute(pattern, handler) },
   }
 }
 
 async function reset(page, initialURL) {
   await page.goto(initialURL, { waitUntil: 'domcontentloaded' })
-  await page.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).first().waitFor({ state: 'visible' })
+  const { wrapper } = await relationshipWrapper(page, MEDIA[0])
+  await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).waitFor({ state: 'visible' })
 }
 
-async function uploadThroughSelection(page, initialURL, destination) {
-  await reset(page, initialURL)
+async function uploadThroughSelection(page, initialURL, destination, { reloadPage = true } = {}) {
+  if (reloadPage) await reset(page, initialURL)
   const fixture = await installUploadRoutes(page, destination, { waitForComplete: true })
   const { wrapper } = await relationshipWrapper(page, destination)
   const initialValue = await visibleNativeValue(wrapper, destination.path)
@@ -152,13 +151,13 @@ async function uploadThroughSelection(page, initialURL, destination) {
       `${destination.name}: relationship changed before complete and explicit selection`)
     assert(fixture.chunks === 1, `${destination.name}: expected one sequential chunk`)
     fixture.allowComplete.resolve()
-    await page.getByRole('button', { name: 'Usar este arquivo', exact: true }).waitFor({ state: 'visible' })
+    await wrapper.getByRole('button', { name: 'Usar este arquivo', exact: true }).waitFor({ state: 'visible' })
     assert(fixture.collectionReads === 1, `${destination.name}: authenticated collection reread was not performed`)
     assert(await visibleNativeValue(wrapper, destination.path) === initialValue,
       `${destination.name}: collection refresh changed the native relationship without explicit selection`)
     assert(await fileInput.evaluate(element => element === document.activeElement),
       `${destination.name}: refreshing only the relationship selector moved focus away from the file input`)
-    await page.getByRole('button', { name: 'Usar este arquivo', exact: true }).click()
+    await wrapper.getByRole('button', { name: 'Usar este arquivo', exact: true }).click()
     await assertNativeID(wrapper, destination.path, fixture.uploadID)
     assert(await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true })
       .evaluate(element => element === document.activeElement),
@@ -172,7 +171,9 @@ async function uploadThroughSelection(page, initialURL, destination) {
 
 /**
  * Runs only after Task 4 registers the field and provides a real authorized native editor fixture.
- * The fixture must contain cover, image block, gallery with at least two rows, video and PDF in that order.
+ * The fixture must expose all five wrappers by data-portal-page-media-path and contain a gallery with at least two rows.
+ * Task 4 must expose window.__portalPageUploadFixture.galleryRowIDs(path) and
+ * mutateGalleryRows({ path, operation, targetRowID, otherRowID }) for controlled Payload form-state transitions compatible with the Drawer focus trap.
  * Routes intercept only upload/read responses; the relationships, native form values and focus remain real.
  *
  * @param {import('@playwright/test').Page} page
@@ -221,25 +222,70 @@ export async function runEditorialUploadCases(page) {
     }
   }))
 
-  results.push(await collect('removing or reordering a native gallery row invalidates the captured destination', async () => {
+  for (const operation of ['reorder', 'remove']) results.push(await collect(`${operation} gallery row invalidates the captured destination`, async () => {
     const destination = MEDIA[2]
     await reset(page, initialURL)
     const fixture = await installUploadRoutes(page, destination, { waitForComplete: true })
     try {
-      const { native, wrapper } = await relationshipWrapper(page, destination)
+      const { wrapper } = await relationshipWrapper(page, destination)
+      const beforeIDs = await page.evaluate(path => window.__portalPageUploadFixture?.galleryRowIDs(path), destination.galleryPath)
+      assert(Array.isArray(beforeIDs) && beforeIDs.length >= 2, 'Task_4_gallery_fixture_must_expose_two_native_row_IDs')
       await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
       await page.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
       await fixture.chunkStarted.promise
-      const galleryRow = native.locator('xpath=ancestor::*[contains(@class,"array-field__row") or contains(@class,"array-row")]').first()
-      const remove = galleryRow.getByRole('button', { name: /remover|remove|delete|excluir/iu }).first()
-      const move = galleryRow.getByRole('button', { name: /mover|move|reordenar|reorder/iu }).first()
-      if (await remove.count()) await remove.click()
-      else if (await move.count()) await move.click()
-      else throw new Error('native_gallery_remove_or_reorder_control_missing')
+      await page.getByRole('status').filter({ hasText: 'Validando arquivo…' }).waitFor({ state: 'visible' })
+      await page.keyboard.press('Escape')
+      const closeConfirmation = page.getByRole('alertdialog', { name: 'Cancelar envio?' })
+      await closeConfirmation.waitFor({ state: 'visible' })
+      if (operation === 'remove') {
+        await closeConfirmation.getByRole('button', { name: 'Continuar envio', exact: true }).click()
+      }
+      const mutation = await page.evaluate(async request => {
+        const fixture = window.__portalPageUploadFixture
+        if (!fixture?.mutateGalleryRows || !fixture.galleryRowIDs) throw new Error('Task_4_controlled_gallery_fixture_missing')
+        const currentIDs = await fixture.galleryRowIDs(request.path)
+        const changed = await fixture.mutateGalleryRows({ path: request.path, operation: request.operation,
+          targetRowID: request.targetRowID, otherRowID: request.otherRowID })
+        const nextIDs = await fixture.galleryRowIDs(request.path)
+        return { currentIDs, nextIDs, changed }
+      }, { path: destination.galleryPath, operation, targetRowID: beforeIDs[0], otherRowID: beforeIDs[1] })
+      assert(JSON.stringify(mutation.currentIDs) === JSON.stringify(beforeIDs), 'gallery_rows_changed_before_the_upload_destination_was_captured')
+      assert(Array.isArray(mutation.nextIDs) && JSON.stringify(mutation.nextIDs) !== JSON.stringify(mutation.currentIDs),
+        `${operation}_did_not_change_native_gallery_row_order_or_membership`)
+      if (operation === 'reorder') {
+        assert(mutation.nextIDs.length === mutation.currentIDs.length &&
+          mutation.nextIDs[0] === mutation.currentIDs[1] && mutation.nextIDs[1] === mutation.currentIDs[0],
+        'gallery_reorder_did_not_deterministically_swap_the_captured_row_with_its_neighbor')
+      } else {
+        assert(mutation.nextIDs.length === mutation.currentIDs.length - 1 && !mutation.nextIDs.includes(beforeIDs[0]),
+          'gallery_removal_did_not_remove_the_captured_row_ID')
+      }
+      assert(mutation.changed === true, 'Task_4_fixture_did_not_confirm_the_controlled_form_state_transition')
+      if (operation === 'reorder') {
+        await closeConfirmation.getByRole('button', { name: 'Continuar envio', exact: true }).click()
+        await page.getByLabel('Escolha um arquivo', { exact: true }).waitFor({ state: 'visible' })
+      }
       fixture.allowComplete.resolve()
-      await page.getByRole('alert').filter({ hasText: /destino mudou|seleção.*desativada/iu }).waitFor({ state: 'visible' })
-      const useFile = page.getByRole('button', { name: 'Usar este arquivo', exact: true })
-      assert(await useFile.count() === 0 || await useFile.isDisabled(), 'gallery_reorder_or_removal_kept_selection_enabled')
+      if (operation === 'reorder') {
+        await page.getByRole('alert').filter({ hasText: /destino mudou|seleção.*desativada/iu }).waitFor({ state: 'visible' })
+        assert(await wrapper.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
+          'reorder_kept_selection_available_after_native_row_ID_mutation')
+      } else {
+        await fixture.deleteStarted.promise
+        await fixture.deleteSettled.promise
+        const remainingDestination = page.locator(`.portal-page-media-field[data-portal-page-media-path="${destination.path}"]`)
+        await remainingDestination.waitFor({ state: 'visible' })
+        assert(fixture.deletes === 1, 'removed_destination_did_not_dispose_and_cancel_its_private_upload_session')
+        assert(await remainingDestination.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
+          'removed_destination_media_was_available_for_selection_on_the_remaining_row')
+        assert(await visibleNativeValue(remainingDestination, destination.path) !== fixture.uploadID,
+          'removed_destination_upload_ID_was_written_to_the_remaining_native_row')
+        await remainingDestination.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
+        await page.getByLabel('Escolha um arquivo', { exact: true }).waitFor({ state: 'visible' })
+        assert(await remainingDestination.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
+          'reopening_the_remaining_gallery_field_restored_the_removed_upload_selection')
+        await page.getByRole('button', { name: 'Fechar painel', exact: true }).click()
+      }
     } finally { fixture.allowComplete.resolve(); await fixture.cleanup() }
   }))
 
@@ -248,7 +294,8 @@ export async function runEditorialUploadCases(page) {
     await reset(page, initialURL)
     const fixture = await installUploadRoutes(page, destination, { waitForComplete: true })
     try {
-      await page.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).nth(3).click()
+      const { wrapper } = await relationshipWrapper(page, destination)
+      await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
       await page.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
       await fixture.chunkStarted.promise
       const nextDocument = new URL('/editorial/admin/collections/portal-pages/create', fixture.origin).toString()
@@ -269,19 +316,19 @@ export async function runEditorialUploadCases(page) {
     const publish = page.getByRole('button', { name: 'Publicar versão salva', exact: true })
     assert(await publish.isEnabled(), 'Task_2_confirmation_not_ready_before_relationship_change')
     const { wrapper } = await relationshipWrapper(page, destination)
-    const altInput = page.getByLabel('Texto alternativo', { exact: true }).first()
+    const altInput = page.locator('input[name="body.0.alt"]')
     const altBefore = await altInput.inputValue().catch(() => '')
     const altRequired = await altInput.getAttribute('aria-required') ?? await altInput.getAttribute('required')
-    const videoTitle = page.getByLabel('Título do vídeo', { exact: true })
+    const videoTitle = page.locator('input[name="body.2.title"]')
     const titleBefore = await videoTitle.inputValue().catch(() => '')
     const titleRequired = await videoTitle.getAttribute('aria-required') ?? await videoTitle.getAttribute('required')
-    const result = await uploadThroughSelection(page, initialURL, destination)
+    const result = await uploadThroughSelection(page, initialURL, destination, { reloadPage: false })
     await assertNativeID(wrapper, destination.path, result.id)
     assert(altRequired === 'true' || altRequired === '', 'native_alt_text_is_no_longer_required')
     assert(await altInput.inputValue().catch(() => '') === altBefore,
       'upload_overwrote_native_alt_text')
     assert(titleRequired === 'true' || titleRequired === '', 'native_video_title_is_no_longer_required')
-    assert(await page.getByLabel('Título do vídeo', { exact: true }).inputValue().catch(() => '') === titleBefore,
+    assert(await page.locator('input[name="body.2.title"]').inputValue().catch(() => '') === titleBefore,
       'upload_overwrote_native_title')
     if (await publish.count()) assert(await publish.isDisabled(), 'uploaded_relationship_did_not_invalidate_Task_2_confirmation')
     assert(await page.locator('.portal-page-media-field').count() >= 5, 'remount_only_selector_preserves_the_native_wrapper_and_focus')

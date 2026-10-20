@@ -2,11 +2,13 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { RelationshipFieldClientProps } from 'payload'
-import { RelationshipField, useDocumentForm, useDocumentInfo, useField, useFormFields } from '@payloadcms/ui'
+import { RelationshipField, useDocumentForm, useDocumentInfo, useField, useForm, useFormBackgroundProcessing,
+  useFormFields, useFormInitializing, useFormProcessing } from '@payloadcms/ui'
 import { useEditorialFieldFocusTarget } from './editorial-focus'
 import { PortalPageUploadPanel, PortalPageUploadPanelHostContext } from './PortalPageUploadPanel'
 import { isDestinationSelectable, portalPageUploadIsOwnedByOther, readCompleteMedia, sameDestination } from './upload-client'
 import type { CompleteMedia, Destination, MediaKind } from './upload-client'
+import { isPortalPageMediaEditable } from './upload-panel-state'
 
 type NativeAncestors = {
   blockID: string | null
@@ -40,6 +42,10 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
   const info = useDocumentInfo()
   const triggerID = useId().replace(/[^a-zA-Z0-9_-]/gu, '')
   const disabledExplanationID = `portal-page-upload-disabled-${triggerID}`
+  const form = useForm()
+  const processing = useFormProcessing()
+  const backgroundProcessing = useFormBackgroundProcessing()
+  const initializing = useFormInitializing()
   const documentForm = useDocumentForm()
   const fieldState = useField<string | null>({ potentiallyStalePath: props.path })
   const path = fieldState.path
@@ -83,6 +89,19 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
   currentDestinationRef.current = destination
   const readyRef = useRef<CompleteMedia | null>(ready)
   readyRef.current = ready
+  const editabilityRef = useRef({ fieldDisabled: Boolean(fieldState.disabled), readOnly: Boolean(props.readOnly),
+    formDisabled: Boolean(form.disabled), locked: Boolean(info.documentIsLocked || info.isLocked), processing,
+    backgroundProcessing, initializing: Boolean(form.initializing || initializing),
+    documentInitializing: Boolean(info.isInitializing) })
+  editabilityRef.current = { fieldDisabled: Boolean(fieldState.disabled), readOnly: Boolean(props.readOnly),
+    formDisabled: Boolean(form.disabled), locked: Boolean(info.documentIsLocked || info.isLocked), processing,
+    backgroundProcessing, initializing: Boolean(form.initializing || initializing),
+    documentInitializing: Boolean(info.isInitializing) }
+
+  const canOperate = useCallback((): { ok: boolean; message?: string } => {
+    if (isPortalPageMediaEditable(editabilityRef.current)) return { ok: true }
+    return { ok: false, message: 'O campo ou formulário está desabilitado, bloqueado ou em processamento. Aguarde antes de operar a mídia.' }
+  }, [])
 
   useEffect(() => () => {
     readGenerationRef.current += 1
@@ -97,6 +116,11 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
   }, [ancestors.blockType, kind])
 
   const onUploadStart = useCallback((): { ok: boolean; message?: string } => {
+    const permission = canOperate()
+    if (!permission.ok) {
+      setSelectionError(permission.message || 'O campo não está disponível para envio agora.')
+      return permission
+    }
     const current = currentDestinationRef.current
     if (!isDestinationSelectable(current, kind) || !targetKindMatches(current.path, ancestors.blockType, kind)) {
       setSelectionError('Este destino ainda não tem uma identidade nativa segura. Salve ou atualize a linha e tente novamente.')
@@ -113,7 +137,7 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
     setReady(null)
     setSelectionError('')
     return { ok: true }
-  }, [ancestors.blockType, kind])
+  }, [ancestors.blockType, canOperate, kind])
 
   const onComplete = useCallback((media: CompleteMedia): void => {
     const captured = capturedDestinationRef.current
@@ -165,6 +189,11 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
 
   function selectReadyMedia(closeUploadPanel: () => void): void {
     const media = readyRef.current
+    const permission = canOperate()
+    if (!permission.ok) {
+      setSelectionError(permission.message || 'O campo não está disponível para selecionar mídia agora.')
+      return
+    }
     if (!media || !destinationStillMatches()) {
       setSelectionError('O destino mudou. O arquivo não foi selecionado; atualize a página e envie novamente.')
       return
@@ -176,14 +205,15 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
   }
 
   const relationshipComponentProps: RelationshipFieldClientProps = { ...relationshipProps, path }
-  const isBlocked = fieldState.disabled || Boolean(props.readOnly) || Boolean(info.documentIsLocked || info.isLocked) ||
+  const permission = canOperate()
+  const isBlocked = !permission.ok ||
     info.uploadStatus === 'uploading' ||
     portalPageUploadIsOwnedByOther(documentID, documentForm, mutexOwnerRef.current)
   const disabledExplanation = info.uploadStatus === 'uploading' || portalPageUploadIsOwnedByOther(documentID, documentForm, mutexOwnerRef.current)
     ? 'Aguarde o envio ativo neste documento antes de iniciar outro arquivo.'
-    : 'O campo está indisponível ou somente leitura neste momento.'
+    : permission.message || 'O campo está indisponível ou somente leitura neste momento.'
 
-  return <div className="portal-page-media-field">
+  return <div className="portal-page-media-field" data-portal-page-media-path={path}>
     <RelationshipField {...relationshipComponentProps} key={selectorRefresh} />
     <div className="portal-page-media-field__actions">
       <button type="button" ref={focusTarget} disabled={isBlocked} aria-describedby={isBlocked ? disabledExplanationID : undefined} onClick={() => {
@@ -193,11 +223,11 @@ export function PortalPageMediaField(props: RelationshipFieldClientProps & { kin
       }}>Enviar novo arquivo</button>
       {isBlocked && <p id={disabledExplanationID}>{disabledExplanation}</p>}
     </div>
-    {panelOpen && <PortalPageUploadPanelHostContext.Provider value={{ onUploadStart,
+    {panelOpen && <PortalPageUploadPanelHostContext.Provider value={{ onUploadStart, canOperate,
       selectionSlot: closeUploadPanel => <div className="portal-page-media-field__selection">
         {selectionError && <p role={selectionError === 'Conferindo a mídia concluída…' ? 'status' : 'alert'}
           aria-live={selectionError === 'Conferindo a mídia concluída…' ? 'polite' : undefined}>{selectionError}</p>}
-        {ready && <button type="button" disabled={!destinationStillMatches() || Boolean(selectionError)}
+        {ready && <button type="button" disabled={!canOperate().ok || !destinationStillMatches() || Boolean(selectionError)}
           onClick={() => selectReadyMedia(closeUploadPanel)}>Usar este arquivo</button>}
         {capturedDestinationRef.current && !destinationStillMatches() &&
           <p role="alert">O destino mudou. A seleção deste arquivo está desativada.</p>}

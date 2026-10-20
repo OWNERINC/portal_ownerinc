@@ -53,6 +53,9 @@ test('the relationship wrapper consumes only public Payload APIs and the reviewe
   assert.match(wrapperSource, /useField/u)
   assert.match(wrapperSource, /useFormFields/u)
   assert.match(wrapperSource, /useDocumentInfo/u)
+  assert.match(wrapperSource, /useFormProcessing/u)
+  assert.match(wrapperSource, /useFormBackgroundProcessing/u)
+  assert.match(wrapperSource, /useFormInitializing/u)
   assert.match(wrapperSource, /useEditorialFieldFocusTarget/u)
   assert.match(wrapperSource, /\.rows/u, 'native array/block row IDs must be observed from selective form state')
   assert.match(panelSource, /setUploadStatus\?\./u)
@@ -61,6 +64,18 @@ test('the relationship wrapper consumes only public Payload APIs and the reviewe
   assert.doesNotMatch(wrapperSource, /fetch\(['"]\/api\/|graphql|portal-page-media['"].*method/u)
   assert.match(wrapperSource, /readGenerationRef\.current\s*\+=\s*1[\s\S]{0,120}readControllerRef\.current\?\.abort\(\)/u,
     'starting a later upload must invalidate any earlier collection reread')
+  assert.match(wrapperSource, /canOperate/u)
+  assert.match(wrapperSource, /selectReadyMedia[\s\S]{0,400}canOperate/u,
+    'selection must guard current form editability in its click handler')
+  assert.match(wrapperSource, /data-portal-page-media-path=\{path\}/u,
+    'the browser fixture can address a destination by its exact native field path')
+  const selectionStart = wrapperSource.indexOf('function selectReadyMedia')
+  const selectionEnd = wrapperSource.indexOf('\n  const relationshipComponentProps', selectionStart)
+  const selectionHandler = wrapperSource.slice(selectionStart, selectionEnd)
+  const editabilityGuard = selectionHandler.indexOf('if (!permission.ok)')
+  const valueAssignment = selectionHandler.indexOf('fieldState.setValue')
+  assert.ok(editabilityGuard >= 0 && editabilityGuard < valueAssignment,
+    'field value assignment must remain after the synchronous editability check')
 })
 
 test('the accessible upload panel uses a labeled file input, linked instructions, status, alert, progress and Drawer', () => {
@@ -77,6 +92,15 @@ test('the accessible upload panel uses a labeled file input, linked instructions
   assert.match(panelSource, /Cancelar envio\?/u)
   assert.match(panelSource, /role="alertdialog"[\s\S]{0,100}aria-labelledby/u,
     'the cancellation confirmation needs an accessible name')
+  assert.match(panelSource, /resolveUploadDrawerClose/u)
+  assert.match(panelSource, /async function runUpload[\s\S]{0,300}host\.canOperate/u,
+    'starting and retrying from an already-open panel must recheck form editability')
+  assert.match(panelSource, /async function cancelCurrentUpload[\s\S]{0,500}host\.canOperate/u,
+    'cancellation from an open panel must recheck form editability')
+  assert.match(panelSource, /acquireForRun\(\)/u,
+    'resuming cancellation from an idle session must claim document ownership')
+  assert.match(panelSource, /shouldRetainUploadActivityAfterRunFailure/u,
+    'an aborted run must preserve activity while cancellation owns the request lifecycle')
   assert.match(clientSource, /upload_limit_reached|dois uploads por editor e oito no total/u)
 })
 
@@ -88,4 +112,10 @@ test('browser acceptance source names all five native media destinations and req
     assert.ok(browserSource.toLowerCase().includes(expected.toLowerCase()), `browser cases must cover ${expected}`)
   }
   assert.match(browserSource, /runEditorialUploadCases/u)
+  assert.doesNotMatch(browserSource, /\.nth\(|\.first\(/u, 'destination locators must not depend on rendered order')
+  assert.match(browserSource, /reloadPage:\s*false/u, 'Task 2 confirmation must remain on the loaded form')
+  assert.match(browserSource, /__portalPageUploadFixture/u,
+    'gallery mutation requires an explicit Task 4 controlled form-state fixture action')
+  assert.match(browserSource, /galleryRowIDs|gallery row IDs/u,
+    'the browser case must prove row mutation occurred before checking invalidation')
 })

@@ -5,9 +5,11 @@ import { Drawer, useDocumentForm, useDocumentInfo, useModal } from '@payloadcms/
 import { PORTAL_PAGE_UPLOAD_ACCEPT, PORTAL_PAGE_UPLOAD_FORMAT_HELP, UploadClientError, claimPortalPageUpload, createUploadClient,
   releasePortalPageUpload, validateUploadFile } from './upload-client'
 import type { CompleteMedia, MediaKind, UploadClient, UploadProgress } from './upload-client'
+import { resolveUploadDrawerClose, shouldRetainUploadActivityAfterRunFailure } from './upload-panel-state'
 
 type UploadPanelHost = {
   onUploadStart?: () => { ok: boolean; message?: string }
+  canOperate?: () => { ok: boolean; message?: string }
   selectionSlot?: (closePanel: () => void) => React.ReactNode
 }
 
@@ -90,6 +92,8 @@ export function PortalPageUploadPanel(props: {
   const [confirmClose, setConfirmClose] = useState(false)
   const [cancelPending, setCancelPending] = useState(false)
   const isOpen = Boolean(modalState[slug]?.isOpen)
+  const onCloseRef = useRef(props.onClose)
+  onCloseRef.current = props.onClose
 
   function makeClient(): UploadClient {
     return createUploadClient({
@@ -132,12 +136,14 @@ export function PortalPageUploadPanel(props: {
   }, [openPanel])
 
   useEffect(() => {
-    const wasOpen = wasOpenRef.current
-    if (wasOpen && !isOpen && (activeRef.current || hasSession)) {
+    const action = resolveUploadDrawerClose(wasOpenRef.current, isOpen, activeRef.current, hasSession)
+    wasOpenRef.current = isOpen
+    if (action === 'confirm-and-reopen') {
       setConfirmClose(true)
       openPanel()
+    } else if (action === 'close-panel') {
+      onCloseRef.current()
     }
-    wasOpenRef.current = isOpen
   }, [hasSession, isOpen, openPanel])
 
   useEffect(() => {
@@ -193,6 +199,11 @@ export function PortalPageUploadPanel(props: {
 
   async function runUpload(action: () => Promise<CompleteMedia>): Promise<void> {
     if (activeRef.current) return
+    const permission = host.canOperate?.() ?? { ok: true }
+    if (!permission.ok) {
+      setFailure(permission.message || 'O formulário não está disponível para operar este envio agora.')
+      return
+    }
     if (!acquireForRun()) {
       setFailure('Outro envio está ativo neste documento. Aguarde antes de iniciar ou retomar um arquivo.')
       return
@@ -214,9 +225,9 @@ export function PortalPageUploadPanel(props: {
       setMessage('')
       props.onComplete(media)
     } catch (error) {
+      if (shouldRetainUploadActivityAfterRunFailure(cancelIntentRef.current)) return
       activeRef.current = false
       setActive(false)
-      if (cancelIntentRef.current) return
       const isRetryable = error instanceof UploadClientError && error.retryable
       setFailure(safeErrorMessage(error))
       setRetryable(isRetryable)
@@ -268,7 +279,18 @@ export function PortalPageUploadPanel(props: {
       props.onClose()
       return
     }
+    const permission = host.canOperate?.() ?? { ok: true }
+    if (!permission.ok) {
+      setFailure(permission.message || 'O formulário não está disponível para cancelar este envio agora.')
+      return
+    }
+    if (!acquireForRun()) {
+      setFailure('Outro envio está ativo neste documento. Aguarde antes de cancelar este arquivo.')
+      return
+    }
     cancelIntentRef.current = true
+    activeRef.current = true
+    setActive(true)
     setFailure('')
     setRetryable(false)
     try {

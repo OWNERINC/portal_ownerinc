@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createUploadClient, readCompleteMedia, validateUploadFile } from '../../src/admin/portal-pages/upload-client'
+import { claimPortalPageUpload, createUploadClient, readCompleteMedia, releasePortalPageUpload,
+  validateUploadFile } from '../../src/admin/portal-pages/upload-client'
 import type { CompleteMedia, MediaKind, UploadProgress } from '../../src/admin/portal-pages/upload-client'
 
 const MiB = 1024 * 1024
@@ -625,11 +626,84 @@ test('media_already_complete during cancellation rereads the collection and retu
   assert.equal(collectionReads, 1)
 })
 
+test('media_already_complete cancellation rejects collection MIME swaps and byte-count mismatches', async () => {
+  for (const collection of [
+    { mimeType: 'image/jpeg', filesize: 3 },
+    { mimeType: 'image/png', filesize: 4 },
+  ]) {
+    const pendingFile = virtualFile(3).file
+    let chunkStarted!: () => void
+    const ready = new Promise<void>(resolve => { chunkStarted = resolve })
+    let collectionReads = 0
+    const racing = createUploadClient(options(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/init')) return json(initReceipt(), 201)
+      if (url.includes('/chunks/')) return new Promise<Response>((_resolve, reject) => {
+        chunkStarted()
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+      })
+      if (init?.method === 'DELETE') return json({ error: 'media_already_complete' }, 409)
+      if (url === `/editorial/api/portal-page-media/${uploadID}?depth=0`) {
+        collectionReads += 1
+        return json(collectionReceipt({ id: uploadID, ...collection }))
+      }
+      throw new Error(`unexpected route: ${url}`)
+    }))
+    const running = racing.start(pendingFile, 'image').catch(() => undefined)
+    await ready
+
+    await assert.rejects(racing.cancel(), /mídia|confirmad/iu)
+    await running
+    assert.equal(collectionReads, 1)
+    await assert.rejects(racing.retry(), /retomad|conclu/iu)
+  }
+})
+
+test('cancellation does not retry bare HTTP 429 or a non-busy HTTP 503', async () => {
+  for (const failure of [
+    { name: '429', status: 429, error: 'upload_limit_reached' },
+    { name: '503 non-busy', status: 503, error: 'upload_unavailable' },
+  ]) {
+    const file = virtualFile(3).file
+    let chunkStarted!: () => void
+    let deleteStarted!: () => void
+    const started = new Promise<void>(resolve => { chunkStarted = resolve })
+    const deleted = new Promise<void>(resolve => { deleteStarted = resolve })
+    let deletes = 0
+    const progress: UploadProgress[] = []
+    const client = createUploadClient(options(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/init')) return json(initReceipt(), 201)
+      if (url.includes('/chunks/')) return new Promise<Response>((_resolve, reject) => {
+        chunkStarted()
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+      })
+      if (init?.method === 'DELETE') {
+        deletes += 1
+        deleteStarted()
+        return json({ error: failure.error }, failure.status)
+      }
+      throw new Error(`unexpected route: ${url}`)
+    }, value => progress.push(value)))
+    const running = client.start(file, 'image').catch(() => undefined)
+    await started
+
+    const cancelled = client.cancel()
+    await deleted
+    await assert.rejects(cancelled)
+    await running
+    assert.equal(deletes, 1, `${failure.name} must not retry cancellation`)
+    assert.equal(progress.some(value => value.phase === 'cancelled'), false)
+    assert.equal(progress.at(-1)?.phase, 'error')
+  }
+})
+
 test('exhausted transient cancellation stays pending and never announces cancelled', async () => {
   const { file } = virtualFile(3)
   let enteredChunk!: () => void
   const chunkStarted = new Promise<void>(resolve => { enteredChunk = resolve })
   const progress: UploadProgress[] = []
+  const sleeps: number[] = []
   let deletes = 0
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = String(input)
@@ -644,14 +718,43 @@ test('exhausted transient cancellation stays pending and never announces cancell
     }
     throw new Error('unexpected_route')
   }
-  const client = createUploadClient(options(fetch, item => progress.push(item)))
+  const client = createUploadClient(options(fetch, item => progress.push(item), sleeps))
   const running = client.start(file, 'image').catch(() => undefined)
   await chunkStarted
   assert.equal(await client.cancel(), 'pending')
   await running
   assert.equal(deletes, 4)
+  assert.deepEqual(sleeps, [1050, 2050, 4050])
   assert.equal(progress.some(item => item.phase === 'cancelled'), false)
   assert.equal(progress.at(-1)?.phase, 'error')
+})
+
+test('cancellation retries explicit upload_busy but not bare 429 or non-busy 503 status', async () => {
+  const { file } = virtualFile(3)
+  let enteredChunk!: () => void
+  const chunkStarted = new Promise<void>(resolve => { enteredChunk = resolve })
+  let deletes = 0
+  const sleeps: number[] = []
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/init')) return json(initReceipt(), 201)
+    if (url.includes('/chunks/')) return new Promise<Response>((_resolve, reject) => {
+      enteredChunk()
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    })
+    if (init?.method === 'DELETE') {
+      deletes += 1
+      return json({ error: 'upload_busy' }, 409)
+    }
+    throw new Error('unexpected_route')
+  }
+  const client = createUploadClient(options(fetch, () => {}, sleeps))
+  const running = client.start(file, 'image').catch(() => undefined)
+  await chunkStarted
+  assert.equal(await client.cancel(), 'pending')
+  await running
+  assert.equal(deletes, 4, 'explicit upload_busy retains bounded cancellation retries')
+  assert.deepEqual(sleeps, [1050, 2050, 4050])
 })
 
 test('dispose aborts, attempts best-effort authenticated cancellation, then removes retry credentials', async () => {

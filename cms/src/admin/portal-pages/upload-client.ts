@@ -181,11 +181,10 @@ function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError'
 }
 
-function retryableError(error: unknown): error is UploadClientError {
+function retryableError(error: unknown, policy: 'transfer' | 'cancel'): error is UploadClientError {
   if (!(error instanceof UploadClientError)) return false
-  if (error.code === 'upload_busy') return true
-  if (error.status === 429 || error.status === 503) return true
-  return error.code === 'network_failure'
+  if (error.code === 'network_failure' || error.code === 'upload_busy') return true
+  return policy === 'transfer' && (error.status === 429 || error.status === 503)
 }
 
 async function responseData(fetcher: typeof fetch, url: string, init: RequestInit, stage: RequestStage): Promise<ResponseData> {
@@ -301,6 +300,8 @@ export function createUploadClient(options: {
 }): UploadClient {
   let fileRef: File | null = null
   let kindRef: MediaKind | null = null
+  let expectedMimeType: string | null = null
+  let expectedBytes: number | null = null
   let uploadID: string | null = null
   let tokenRef: string | null = null
   let chunkCount = 0
@@ -331,6 +332,8 @@ export function createUploadClient(options: {
     tokenRef = null
     uploadID = null
     kindRef = null
+    expectedMimeType = null
+    expectedBytes = null
     failedStage = null
     failedIndex = 0
     canRetry = false
@@ -358,7 +361,8 @@ export function createUploadClient(options: {
     for (let attempt = 0; ; attempt += 1) {
       try { return await request() }
       catch (error) {
-        if (isAbort(error) || !retryableError(error) || attempt >= PORTAL_PAGE_UPLOAD_RETRY_DELAYS.length) throw error
+        const policy = stage === 'cancel' ? 'cancel' : 'transfer'
+        if (isAbort(error) || !retryableError(error, policy) || attempt >= PORTAL_PAGE_UPLOAD_RETRY_DELAYS.length) throw error
         const baseDelay = PORTAL_PAGE_UPLOAD_RETRY_DELAYS[attempt]!
         const jitter = Math.floor(Math.max(0, Math.min(0.999999999, options.random())) * 100)
         await options.sleep(baseDelay + jitter, signal)
@@ -397,8 +401,8 @@ export function createUploadClient(options: {
   async function sendComplete(signal: AbortSignal): Promise<CompleteMedia> {
     const id = uploadID!
     const secret = tokenRef!
-    const mimeType = validateUploadFile(fileRef!, kindRef!).mimeType
-    const bytes = totalBytes
+    const mimeType = expectedMimeType!
+    const bytes = expectedBytes!
     emit('validating', chunkCount)
     const response = await retryingRequest('complete', signal, async () => {
       const data = await responseData(options.fetch, `${UPLOAD_BASE}/${id}/complete`, {
@@ -427,7 +431,7 @@ export function createUploadClient(options: {
           if (!isAbort(error) && !cancelRequested) {
             failedStage = 'chunk'
             failedIndex = index
-            canRetry = retryableError(error)
+            canRetry = retryableError(error, 'transfer')
             emit('error', index)
           }
           throw error
@@ -443,7 +447,7 @@ export function createUploadClient(options: {
         return result
       } catch (error) {
         if (!isAbort(error) && !cancelRequested) {
-          canRetry = retryableError(error)
+          canRetry = retryableError(error, 'transfer')
           emit('error', chunkCount)
         }
         throw error
@@ -470,6 +474,8 @@ export function createUploadClient(options: {
     completedMedia = null
     fileRef = file
     kindRef = kind
+    expectedMimeType = validated.mimeType
+    expectedBytes = validated.bytes
     totalBytes = validated.bytes
     confirmedBytes = 0
     nextIndex = 0
@@ -548,7 +554,7 @@ export function createUploadClient(options: {
         if (!isAbort(error) && !cancelRequested) {
           failedStage = 'complete'
           failedIndex = chunkCount
-          canRetry = retryableError(error)
+          canRetry = retryableError(error, 'transfer')
           emit('error', chunkCount)
         }
         throw error
@@ -577,6 +583,8 @@ export function createUploadClient(options: {
     const id = uploadID
     const secret = tokenRef
     const kind = kindRef
+    const mimeType = expectedMimeType
+    const bytes = expectedBytes
     if (!id || !secret || !kind) {
       // Init may have committed before its response was lost; never claim this was cancelled.
       canRetry = false
@@ -606,6 +614,9 @@ export function createUploadClient(options: {
       if (error instanceof UploadClientError && error.code === 'media_already_complete') {
         try {
           const media = await readCollectionMedia(id, kind, controller.signal, options.fetch)
+          if (media.id !== id || media.mimeType !== mimeType || media.bytes !== bytes) {
+            throw new UploadClientError('A mídia concluída não corresponde ao envio original.', { code: 'invalid_media_response' })
+          }
           completedMedia = media
           clearSecrets()
           initStarted = false
@@ -617,7 +628,7 @@ export function createUploadClient(options: {
           throw readError
         }
       }
-      if (retryableError(error)) {
+      if (retryableError(error, 'cancel')) {
         canRetry = false
         emit('error')
         return 'pending'
