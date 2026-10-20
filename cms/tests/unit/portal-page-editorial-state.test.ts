@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { afterEach, mock, test } from 'node:test'
-import { acceptsEditableRequest, changePublication, confirmedVersion, createRequestGeneration, editorialBlocked,
-  fetchRevision, saveVersion } from '../../src/admin/portal-pages/editorial-state'
-import type { EditorGate } from '../../src/admin/portal-pages/editorial-state'
+import { acceptsEditableRequest, changePublication, confirmedVersion, createEditorialOperationController,
+  createRequestGeneration, editorialBlocked, fetchRevision, saveVersion } from '../../src/admin/portal-pages/editorial-state'
+import type { EditorGate, EditorialLiveState } from '../../src/admin/portal-pages/editorial-state'
 import type { NativeEditable, PublicationResult, RevisionResult, SaveResult } from '../../src/portal-pages/editorial-contracts'
 
 const pageID = '11111111-1111-4111-8111-111111111111'
@@ -30,6 +30,19 @@ const saveReceipt: SaveResult = {
 const publicationReceipt: PublicationResult = {
   id: pageID, operation: 'publish', source_version_id: versionID,
   resulting_version_id: olderVersionID, document_status: 'published', published_at: savedAt,
+}
+
+const clearGate: EditorGate = { modified: false, processing: false, backgroundProcessing: false,
+  initializing: false, disabled: false, locked: false, uploading: false, otherModalOpen: false, busy: false }
+
+function liveState(documentID = pageID, fieldRevision = 'editable-v1', gate = clearGate): EditorialLiveState {
+  return { documentID, fieldRevision, gate }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
 }
 
 afterEach(() => mock.restoreAll())
@@ -189,6 +202,15 @@ test('malformed mutation receipts are rejected and are never retried', async () 
   assert.equal(calls.length, 1)
 
   mock.restoreAll()
+  const wrongPageIDCalls = mockFetch(Response.json({ ...saveReceipt, id: olderVersionID }, { status: 201 }))
+  await assert.rejects(saveVersion({ id: pageID, expected_latest_version_id: versionID,
+    expected_snapshot_hash: hash }, new AbortController().signal), /Não foi possível confirmar a operação/u)
+  assert.equal(wrongPageIDCalls.length, 1)
+  assert.deepEqual(JSON.parse(String(wrongPageIDCalls[0]!.init?.body)), {
+    id: pageID, expected_latest_version_id: versionID, expected_snapshot_hash: hash,
+  })
+
+  mock.restoreAll()
   const publicationCalls = mockFetch(Response.json({ ...publicationReceipt, operation: 'unpublish' }))
   await assert.rejects(changePublication({ id: pageID, expected_version_id: versionID, operation: 'publish' },
     new AbortController().signal), /Não foi possível confirmar a operação/u)
@@ -202,13 +224,21 @@ test('409 preserves local save fields through a stable CAS conflict error and is
     expected_snapshot_hash: hash }, new AbortController().signal), /A página mudou desde a conferência\. Seus campos foram preservados\./u)
   assert.deepEqual(nativePage, before)
   assert.equal(calls.length, 1)
+  assert.deepEqual(JSON.parse(String(calls[0]!.init?.body)), {
+    id: pageID, expected_latest_version_id: versionID, expected_snapshot_hash: hash,
+  })
 })
 
 test('network loss and 503 are ambiguous, carry no retry, and session expiry has a stable message', async () => {
+  const before = structuredClone(nativePage)
   const unavailableCalls = mockFetch(Response.json({ error: 'portal_page_editorial_unavailable', message: 'unavailable' }, { status: 503 }))
   await assert.rejects(saveVersion({ id: pageID, expected_latest_version_id: versionID,
     expected_snapshot_hash: hash }, new AbortController().signal), /Não foi possível confirmar a operação\. Consulte o estado antes de tentar novamente\./u)
   assert.equal(unavailableCalls.length, 1)
+  assert.deepEqual(nativePage, before)
+  assert.deepEqual(JSON.parse(String(unavailableCalls[0]!.init?.body)), {
+    id: pageID, expected_latest_version_id: versionID, expected_snapshot_hash: hash,
+  })
 
   mock.restoreAll()
   const lostCalls = mockFetch(async () => { throw new TypeError('connection lost') })
@@ -220,4 +250,120 @@ test('network loss and 503 are ambiguous, carry no retry, and session expiry has
   const expiredCalls = mockFetch(Response.json({ error: 'editorial_session_invalid', message: 'expired' }, { status: 401 }))
   await assert.rejects(fetchRevision(pageID, new AbortController().signal), /A sessão editorial expirou\. Entre novamente\./u)
   assert.equal(expiredCalls.length, 1)
+})
+
+test('the coordinator permits its own processing/disabled lease render without invalidating ownership', () => {
+  const initial = liveState()
+  const coordinator = createEditorialOperationController(initial)
+  const operation = coordinator.start(false, initial)!
+  const setters: string[] = []
+
+  assert.equal(coordinator.acquireLease(operation, initial, {
+    setProcessing: value => setters.push(`processing:${value}`),
+    setDisabled: value => setters.push(`disabled:${value}`),
+  }), true)
+  const leased = liveState(pageID, 'editable-v1', { ...clearGate, processing: true, disabled: true, busy: true })
+  const observation = coordinator.observe(leased)
+
+  assert.equal(observation.unsafe, false)
+  assert.equal(observation.invalidated, false)
+  assert.equal(operation.ticket.signal.aborted, false)
+  assert.equal(coordinator.isCurrent(operation, leased), true)
+  assert.deepEqual(setters, ['processing:true', 'disabled:true'])
+  assert.equal(coordinator.finish(operation, leased), true)
+  assert.deepEqual(setters, ['processing:true', 'disabled:true', 'processing:false', 'disabled:false'])
+})
+
+test('external autosave, upload, form edit, and modal transitions invalidate hash/GET/POST continuations', async () => {
+  const transitions: Array<{ name: string; apply: (state: EditorialLiveState) => EditorialLiveState }> = [
+    { name: 'backgroundProcessing', apply: state => ({ ...state, gate: { ...state.gate, backgroundProcessing: true } }) },
+    { name: 'uploading', apply: state => ({ ...state, gate: { ...state.gate, uploading: true } }) },
+    { name: 'form edit', apply: state => ({ ...state, fieldRevision: 'editable-v2', gate: { ...state.gate, modified: true } }) },
+    { name: 'other modal', apply: state => ({ ...state, gate: { ...state.gate, otherModalOpen: true } }) },
+  ]
+
+  for (const phase of ['hashing', 'reading', 'saving'] as const) {
+    for (const transition of transitions) {
+      const initial = liveState()
+      const coordinator = createEditorialOperationController(initial)
+      const operation = coordinator.start(false, initial)!
+      coordinator.setPhase(operation, phase)
+      if (phase === 'saving') coordinator.acquireLease(operation, initial, { setProcessing: () => {}, setDisabled: () => {} })
+
+      const waiting = deferred<void>()
+      let applied = false
+      const continuation = waiting.promise.then(() => {
+        if (coordinator.isCurrent(operation, transition.apply(initial))) applied = true
+      })
+      const changed = transition.apply(initial)
+      const observation = coordinator.observe(changed)
+      waiting.resolve()
+      await continuation
+
+      assert.equal(observation.invalidated, true, `${transition.name} during ${phase}`)
+      assert.equal(operation.ticket.signal.aborted, true, `${transition.name} aborts ${phase}`)
+      assert.equal(applied, false, `${transition.name} must not apply a stale ${phase} continuation`)
+      assert.equal(coordinator.active, null)
+    }
+  }
+})
+
+test('document switch and unmount abort active work before a stale response can apply', async () => {
+  for (const invalidate of [
+    (coordinator: ReturnType<typeof createEditorialOperationController>) => coordinator.observe(liveState(olderVersionID)),
+    (coordinator: ReturnType<typeof createEditorialOperationController>) => coordinator.dispose(),
+  ]) {
+    const coordinator = createEditorialOperationController(liveState())
+    const operation = coordinator.start(false)!
+    const waiting = deferred<RevisionResult>()
+    let applied = false
+    const continuation = waiting.promise.then(() => {
+      if (coordinator.isCurrent(operation, coordinator.live)) applied = true
+    })
+
+    invalidate(coordinator)
+    waiting.resolve(revision)
+    await continuation
+
+    assert.equal(operation.ticket.signal.aborted, true)
+    assert.equal(coordinator.isCurrent(operation), false)
+    assert.equal(applied, false)
+  }
+})
+
+test('a stale finally cannot release a newer document operation or its form lease', () => {
+  const oldState = liveState()
+  const coordinator = createEditorialOperationController(oldState)
+  const oldSetters: string[] = []
+  const oldOperation = coordinator.start(false, oldState)!
+  coordinator.acquireLease(oldOperation, oldState, {
+    setProcessing: value => oldSetters.push(`processing:${value}`),
+    setDisabled: value => oldSetters.push(`disabled:${value}`),
+  })
+
+  const newState = liveState(olderVersionID)
+  assert.equal(coordinator.observe(newState).cancelled, oldOperation)
+  const newOperation = coordinator.start(false, newState)!
+  const newSetters: string[] = []
+  coordinator.acquireLease(newOperation, newState, {
+    setProcessing: value => newSetters.push(`processing:${value}`),
+    setDisabled: value => newSetters.push(`disabled:${value}`),
+  })
+
+  assert.equal(coordinator.finish(oldOperation, newState), false)
+  assert.equal(coordinator.active, newOperation)
+  assert.deepEqual(oldSetters, ['processing:true', 'disabled:true'])
+  assert.deepEqual(newSetters, ['processing:true', 'disabled:true'])
+  assert.equal(coordinator.finish(newOperation, newState), true)
+  assert.deepEqual(newSetters, ['processing:true', 'disabled:true', 'processing:false', 'disabled:false'])
+})
+
+test('synchronous duplicate activation grants exactly one operation owner', () => {
+  const coordinator = createEditorialOperationController(liveState())
+  const first = coordinator.start(false)
+
+  assert.ok(first)
+  assert.equal(coordinator.start(false), null)
+  assert.equal(coordinator.active, first)
+  assert.equal(coordinator.busy, true)
 })

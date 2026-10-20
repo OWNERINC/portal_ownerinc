@@ -1,14 +1,15 @@
 'use client'
 
 import React, { useEffect, useRef, useState } from 'react'
-import { Button, Modal, useDocumentInfo, useForm, useFormBackgroundProcessing, useFormFields,
+import { Button, Modal, useDocumentForm, useDocumentInfo, useForm, useFormBackgroundProcessing, useFormFields,
   useFormInitializing, useFormModified, useFormProcessing, useModal } from '@payloadcms/ui'
 import type { PortalPagePublicationInput } from '../../portal-pages/contracts'
 import { CREATE_JSON_BYTES } from '../../portal-pages/editorial-contracts'
 import { EDITORIAL_AMBIGUOUS_MESSAGE, EDITORIAL_CONFLICT_MESSAGE, EditorialRequestError,
-  acceptsEditableRequest, changePublication, confirmedVersion, createRequestGeneration, editorialBlocked, editableHash,
+  changePublication, confirmedVersion, createEditorialOperationController, editorialBlocked, editableHash,
   extractNativeEditable, fetchRevision, saveVersion } from './editorial-state'
-import type { EditorGate, RequestTicket } from './editorial-state'
+import type { EditorGate, EditorialLiveState, EditorialOperation } from './editorial-state'
+import { editorialFieldFocusRegistryFor } from './editorial-focus-state'
 
 const MODAL_SLUG = 'portal-page-editorial-confirmation'
 const EDITABLE_FIELD_ROOTS = new Set(['title', 'slug', 'summary', 'cover', 'coverAlt', 'categories', 'body'])
@@ -18,22 +19,6 @@ const CREATE_AMBIGUOUS_MESSAGE =
   'A criação pode ter sido concluída, mas a confirmação foi perdida. Confira a lista nativa e o slug antes de tentar criar novamente.'
 
 type PublicationAction = PortalPagePublicationInput['operation']
-type FormLease = {
-  previousProcessing: boolean
-  previousDisabled: boolean
-  setProcessing: (processing: boolean) => void
-  setDisabled: (disabled: boolean) => void
-  released: boolean
-}
-type ActiveOperation = {
-  documentID: string
-  fieldRevision: string
-  ticket: RequestTicket
-  allowModified: boolean
-  phase: 'hashing' | 'reading' | 'saving' | 'publishing'
-  lease?: FormLease
-}
-type LiveState = { documentID: string; fieldRevision: string; gate: EditorGate }
 
 function signatureValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
@@ -73,6 +58,7 @@ function latestOperationTitle(value: unknown): string {
 
 export function PortalPageEditorialControls(): React.JSX.Element {
   const info = useDocumentInfo()
+  const documentForm = useDocumentForm()
   const form = useForm()
   const modified = useFormModified()
   const processing = useFormProcessing()
@@ -89,9 +75,6 @@ export function PortalPageEditorialControls(): React.JSX.Element {
   const [confirmedFieldRevision, setConfirmedFieldRevision] = useState<string | null>(null)
   const [createdPageHref, setCreatedPageHref] = useState('')
   const [publicationAction, setPublicationAction] = useState<PublicationAction | null>(null)
-  const generations = useRef(createRequestGeneration())
-  const operationRef = useRef<ActiveOperation | null>(null)
-  const busyRef = useRef(false)
   const confirmedRef = useRef(confirmed)
   const confirmedFieldRevisionRef = useRef(confirmedFieldRevision)
   confirmedRef.current = confirmed
@@ -109,18 +92,13 @@ export function PortalPageEditorialControls(): React.JSX.Element {
     otherModalOpen,
     busy,
   }
-  const liveRef = useRef<LiveState>({ documentID, fieldRevision, gate })
-  liveRef.current = { documentID, fieldRevision, gate }
-
-  function releaseLease(operation: ActiveOperation): void {
-    const lease = operation.lease
-    if (!lease || lease.released) return
-    lease.released = true
-    if (operationRef.current === operation && liveRef.current.documentID === operation.documentID) {
-      lease.setProcessing(lease.previousProcessing)
-      lease.setDisabled(lease.previousDisabled)
-    }
-  }
+  const live: EditorialLiveState = { documentID, fieldRevision, gate }
+  const controllerRef = useRef<ReturnType<typeof createEditorialOperationController> | null>(null)
+  if (!controllerRef.current) controllerRef.current = createEditorialOperationController(live)
+  const controller = controllerRef.current
+  const liveRef = useRef(live)
+  liveRef.current = live
+  const fieldFocusRegistry = editorialFieldFocusRegistryFor(documentForm)
 
   function clearAuthorization(): void {
     setConfirmed(null)
@@ -130,89 +108,44 @@ export function PortalPageEditorialControls(): React.JSX.Element {
     setCreatedPageHref('')
   }
 
-  function cancelActiveOperation(ambiguous: boolean, closeConfirmation: boolean): void {
-    const active = operationRef.current
-    if (!active) return
-    if (active.phase === 'saving' || active.phase === 'publishing') {
-      if (ambiguous) setFailure(active.documentID ? EDITORIAL_AMBIGUOUS_MESSAGE : CREATE_AMBIGUOUS_MESSAGE)
-    }
-    releaseLease(active)
-    operationRef.current = null
-    generations.current.invalidate()
-    busyRef.current = false
-    setBusy(false)
-    if (closeConfirmation && modalState[MODAL_SLUG]?.isOpen) closeModal(MODAL_SLUG)
-  }
-
-  const previousIdentity = useRef({ documentID, fieldRevision })
   useEffect(() => {
-    const previous = previousIdentity.current
-    const documentChanged = previous.documentID !== documentID
-    const fieldsChanged = previous.fieldRevision !== fieldRevision
-    const active = operationRef.current
-    const current = liveRef.current.gate
-    const ownLease = active?.lease !== undefined && !active.lease.released
-    const unsafe = current.backgroundProcessing || current.initializing || current.locked || current.uploading ||
-      current.otherModalOpen || (!ownLease && (current.processing || current.disabled)) ||
-      (Boolean(documentID) && (!active || !active.allowModified) && current.modified)
-
-    if (active && documentChanged) cancelActiveOperation(false, true)
-    else if (active && fieldsChanged) cancelActiveOperation(true, true)
-    else if (active && unsafe) cancelActiveOperation(active.phase === 'saving' || active.phase === 'publishing', true)
-    else if (documentChanged || fieldsChanged || unsafe) generations.current.invalidate()
+    const observation = controller.observe(liveRef.current)
+    const { documentChanged, fieldsChanged, unsafe, cancelled } = observation
+    if (cancelled) {
+      const ambiguous = !documentChanged && (fieldsChanged || unsafe) &&
+        (cancelled.phase === 'saving' || cancelled.phase === 'publishing')
+      if (ambiguous) setFailure(cancelled.documentID ? EDITORIAL_AMBIGUOUS_MESSAGE : CREATE_AMBIGUOUS_MESSAGE)
+      setBusy(controller.busy)
+      if (modalState[MODAL_SLUG]?.isOpen) closeModal(MODAL_SLUG)
+    }
 
     if (documentChanged || fieldsChanged || unsafe) {
       clearAuthorization()
       setPublicationAction(null)
       if (modalState[MODAL_SLUG]?.isOpen) closeModal(MODAL_SLUG)
     }
-    if (documentID && (current.modified || current.backgroundProcessing) && !operationRef.current) {
+    if (documentID && (gate.modified || gate.backgroundProcessing) && !controller.active) {
       setMessage(WAITING_MESSAGE)
-    } else if (message === WAITING_MESSAGE && !current.modified && !current.backgroundProcessing) {
+    } else if (message === WAITING_MESSAGE && !gate.modified && !gate.backgroundProcessing) {
       setMessage('')
     }
-    previousIdentity.current = { documentID, fieldRevision }
+    // observe owns request invalidation and operation cancellation; the local UI
+    // effects above only clear the corresponding confirmation/status state.
   }, [documentID, fieldRevision, modified, processing, backgroundProcessing, initializing, form.disabled,
-    info.documentIsLocked, info.isLocked, info.uploadStatus, otherModalOpen, message])
+    info.documentIsLocked, info.isLocked, info.uploadStatus, otherModalOpen, message, controller])
 
   useEffect(() => () => {
-    const active = operationRef.current
-    if (active) {
-      releaseLease(active)
-      operationRef.current = null
-    }
-    generations.current.invalidate()
-  }, [])
+    controller.dispose(liveRef.current)
+  }, [controller])
 
-  function externalGateIsSafe(operation: ActiveOperation): boolean {
-    const current = liveRef.current
-    if (current.documentID !== operation.documentID || current.fieldRevision !== operation.fieldRevision) return false
-    const currentGate = current.gate
-    if (currentGate.backgroundProcessing || currentGate.initializing || currentGate.locked || currentGate.uploading ||
-      currentGate.otherModalOpen || (!operation.allowModified && currentGate.modified)) return false
-    return (operation.lease !== undefined && operation.lease.released === false) || operation.lease?.released === true ||
-      (!currentGate.processing && !currentGate.disabled)
+  function operationIsCurrent(operation: EditorialOperation): boolean {
+    return controller.isCurrent(operation, liveRef.current)
   }
 
-  function operationIsCurrent(operation: ActiveOperation): boolean {
-    return operationRef.current === operation && acceptsEditableRequest(generations.current, operation.ticket,
-      liveRef.current.documentID, operation.fieldRevision, liveRef.current.fieldRevision) &&
-      externalGateIsSafe(operation)
-  }
-
-  function startOperation(allowModified: boolean, preserveAuthorization = false): ActiveOperation | null {
+  function startOperation(allowModified: boolean, preserveAuthorization = false): EditorialOperation | null {
     const current = liveRef.current
-    if (operationRef.current || busyRef.current) return null
-    const currentGate = current.gate
-    const blocked = currentGate.processing || currentGate.backgroundProcessing || currentGate.initializing ||
-      currentGate.disabled || currentGate.locked || currentGate.uploading || currentGate.otherModalOpen ||
-      (!allowModified && currentGate.modified)
-    if (blocked) return null
-    const ticket = generations.current.begin(current.documentID)
-    const operation: ActiveOperation = { documentID: current.documentID, fieldRevision: current.fieldRevision,
-      ticket, allowModified, phase: 'hashing' }
-    operationRef.current = operation
-    busyRef.current = true
+    const operation = controller.start(allowModified, current)
+    if (!operation) return null
     setBusy(true)
     setFailure('')
     setMessage('')
@@ -220,20 +153,12 @@ export function PortalPageEditorialControls(): React.JSX.Element {
     return operation
   }
 
-  function acquireFormLease(operation: ActiveOperation): void {
-    if (!operationIsCurrent(operation)) return
-    operation.lease = { previousProcessing: processing, previousDisabled: form.disabled,
-      setProcessing: form.setProcessing, setDisabled: form.setDisabled, released: false }
-    form.setProcessing(true)
-    form.setDisabled(true)
+  function acquireFormLease(operation: EditorialOperation): void {
+    controller.acquireLease(operation, liveRef.current, { setProcessing: form.setProcessing, setDisabled: form.setDisabled })
   }
 
-  function finishOperation(operation: ActiveOperation): void {
-    if (operationRef.current !== operation) return
-    releaseLease(operation)
-    operationRef.current = null
-    busyRef.current = false
-    setBusy(false)
+  function finishOperation(operation: EditorialOperation): void {
+    if (controller.finish(operation, liveRef.current)) setBusy(controller.busy)
   }
 
   function showWaitingForAutosave(): void {
@@ -241,9 +166,9 @@ export function PortalPageEditorialControls(): React.JSX.Element {
     setFailure('')
   }
 
-  async function refreshWithoutAdopting(operation: ActiveOperation): Promise<void> {
+  async function refreshWithoutAdopting(operation: EditorialOperation): Promise<void> {
     if (!operationIsCurrent(operation) || !operation.documentID) return
-    operation.phase = 'reading'
+    controller.setPhase(operation, 'reading')
     try { await fetchRevision(operation.documentID, operation.ticket.signal) }
     catch { /* Keep authorization cleared; the user must consciously save/check again. */ }
   }
@@ -264,12 +189,12 @@ export function PortalPageEditorialControls(): React.JSX.Element {
       let data
       let localHash: string
       if (creating) {
-        operation.phase = 'hashing'
+        controller.setPhase(operation, 'hashing')
         setMessage('Conferindo campos…')
         const valid = await form.validateForm()
         if (!operationIsCurrent(operation)) return
         if (!valid) {
-          form.formRef.current?.reportValidity()
+          fieldFocusRegistry.focusFirstInvalid(form.getFields())
           setMessage('Corrija os campos inválidos antes de salvar a página.')
           return
         }
@@ -283,7 +208,7 @@ export function PortalPageEditorialControls(): React.JSX.Element {
         if (!operationIsCurrent(operation)) return
         acquireFormLease(operation)
         if (!operationIsCurrent(operation)) return
-        operation.phase = 'saving'
+        controller.setPhase(operation, 'saving')
         setMessage('Salvando versão…')
         const receipt = await saveVersion({ id: null, data }, operation.ticket.signal)
         if (!operationIsCurrent(operation)) return
@@ -293,11 +218,11 @@ export function PortalPageEditorialControls(): React.JSX.Element {
         return
       }
 
-      operation.phase = 'hashing'
+      controller.setPhase(operation, 'hashing')
       data = extractNativeEditable(form.getData())
       localHash = await editableHash(data)
       if (!operationIsCurrent(operation)) return
-      operation.phase = 'reading'
+      controller.setPhase(operation, 'reading')
       setMessage('Conferindo versão…')
       const revision = await fetchRevision(operation.documentID, operation.ticket.signal)
       if (!operationIsCurrent(operation)) return
@@ -310,14 +235,14 @@ export function PortalPageEditorialControls(): React.JSX.Element {
 
       acquireFormLease(operation)
       if (!operationIsCurrent(operation)) return
-      operation.phase = 'saving'
+      controller.setPhase(operation, 'saving')
       setMessage('Salvando versão…')
       const receipt = await saveVersion({ id: operation.documentID,
         expected_latest_version_id: revision.latest.version_id, expected_snapshot_hash: revision.latest.snapshot_hash },
       operation.ticket.signal)
       if (!operationIsCurrent(operation)) return
       if (receipt.editable_hash !== localHash) throw new EditorialRequestError(EDITORIAL_AMBIGUOUS_MESSAGE, { ambiguous: true })
-      operation.phase = 'reading'
+      controller.setPhase(operation, 'reading')
       setMessage('Conferindo versão…')
       const afterSave = await fetchRevision(operation.documentID, operation.ticket.signal)
       if (!operationIsCurrent(operation)) return
@@ -335,7 +260,7 @@ export function PortalPageEditorialControls(): React.JSX.Element {
         ? CREATE_AMBIGUOUS_MESSAGE : messageFrom(error))
       setMessage('')
       if (error instanceof EditorialRequestError && (error.ambiguous || isConflict(error))) {
-        releaseLease(operation)
+        controller.releaseLease(operation, liveRef.current)
         await refreshWithoutAdopting(operation)
       }
     } finally {
@@ -352,7 +277,7 @@ export function PortalPageEditorialControls(): React.JSX.Element {
       const editable = extractNativeEditable(form.getData())
       const localHash = await editableHash(editable)
       if (!operationIsCurrent(operation)) return
-      operation.phase = 'reading'
+      controller.setPhase(operation, 'reading')
       setMessage('Conferindo versão…')
       const revision = await fetchRevision(operation.documentID, operation.ticket.signal)
       if (!operationIsCurrent(operation)) return
@@ -387,7 +312,7 @@ export function PortalPageEditorialControls(): React.JSX.Element {
       const editable = extractNativeEditable(form.getData())
       const localHash = await editableHash(editable)
       if (!operationIsCurrent(operation)) return
-      operation.phase = 'reading'
+      controller.setPhase(operation, 'reading')
       setMessage('Conferindo versão…')
       const revision = await fetchRevision(operation.documentID, operation.ticket.signal)
       if (!operationIsCurrent(operation)) return
@@ -403,7 +328,7 @@ export function PortalPageEditorialControls(): React.JSX.Element {
 
       acquireFormLease(operation)
       if (!operationIsCurrent(operation)) return
-      operation.phase = 'publishing'
+      controller.setPhase(operation, 'publishing')
       setMessage(action === 'publish' ? 'Publicando…' : 'Despublicando…')
       const result = await changePublication({ id: expected.id, expected_version_id: expected.versionID,
         operation: action }, operation.ticket.signal)
@@ -414,7 +339,7 @@ export function PortalPageEditorialControls(): React.JSX.Element {
       setMessage(result.operation === 'publish' ? 'Página publicada' : 'Página despublicada')
       setFailure('')
 
-      operation.phase = 'reading'
+      controller.setPhase(operation, 'reading')
       try {
         const afterPublication = await fetchRevision(operation.documentID, operation.ticket.signal)
         if (!operationIsCurrent(operation)) return
@@ -435,7 +360,7 @@ export function PortalPageEditorialControls(): React.JSX.Element {
       setFailure(messageFrom(error))
       setMessage('')
       if (error instanceof EditorialRequestError && (error.ambiguous || isConflict(error))) {
-        releaseLease(operation)
+        controller.releaseLease(operation, liveRef.current)
         await refreshWithoutAdopting(operation)
       }
     } finally { finishOperation(operation) }

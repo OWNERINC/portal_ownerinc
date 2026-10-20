@@ -58,6 +58,156 @@ export function acceptsEditableRequest(generation: RequestGeneration, ticket: Re
   return capturedFieldRevision === currentFieldRevision && generation.accepts(ticket, documentID)
 }
 
+export type EditorialOperationPhase = 'hashing' | 'reading' | 'saving' | 'publishing'
+export type EditorialLiveState = { documentID: string; fieldRevision: string; gate: EditorGate }
+export type EditorialFormLease = {
+  previousProcessing: boolean
+  previousDisabled: boolean
+  setProcessing: (processing: boolean) => void
+  setDisabled: (disabled: boolean) => void
+  released: boolean
+}
+export type EditorialOperation = {
+  documentID: string
+  fieldRevision: string
+  ticket: RequestTicket
+  allowModified: boolean
+  phase: EditorialOperationPhase
+  lease?: EditorialFormLease
+}
+export type EditorialOperationObservation = {
+  documentChanged: boolean
+  fieldsChanged: boolean
+  unsafe: boolean
+  invalidated: boolean
+  cancelled: EditorialOperation | null
+}
+
+/**
+ * Framework-independent ownership/gate controller shared by the Payload
+ * controls and node tests. Setters are injected only for form leases.
+ */
+export function createEditorialOperationController(initial: EditorialLiveState,
+  generations: RequestGeneration = createRequestGeneration()) {
+  let live = initial
+  let active: EditorialOperation | null = null
+  let leaseOwner: EditorialOperation | null = null
+  let busy = false
+
+  function releaseLease(operation: EditorialOperation, state: EditorialLiveState = live): void {
+    const lease = operation.lease
+    if (!lease || lease.released) return
+    lease.released = true
+    if (active === operation && leaseOwner === operation && state.documentID === operation.documentID) {
+      leaseOwner = null
+      lease.setProcessing(lease.previousProcessing)
+      lease.setDisabled(lease.previousDisabled)
+    }
+  }
+
+  function externalGateIsSafe(operation: EditorialOperation, state: EditorialLiveState): boolean {
+    if (state.documentID !== operation.documentID || state.fieldRevision !== operation.fieldRevision) return false
+    const gate = state.gate
+    if (gate.backgroundProcessing || gate.initializing || gate.locked || gate.uploading || gate.otherModalOpen ||
+      (!operation.allowModified && gate.modified)) return false
+    return operation.lease !== undefined || (!gate.processing && !gate.disabled)
+  }
+
+  function cancelActive(state: EditorialLiveState): EditorialOperation | null {
+    const operation = active
+    if (!operation) return null
+    releaseLease(operation, state)
+    active = null
+    busy = false
+    generations.invalidate()
+    return operation
+  }
+
+  return {
+    get active(): EditorialOperation | null { return active },
+    get busy(): boolean { return busy },
+    get live(): EditorialLiveState { return live },
+
+    start(allowModified: boolean, state: EditorialLiveState = live): EditorialOperation | null {
+      if (active || busy) return null
+      const gate = state.gate
+      if (gate.processing || gate.backgroundProcessing || gate.initializing || gate.disabled || gate.locked ||
+        gate.uploading || gate.otherModalOpen || (!allowModified && gate.modified)) return null
+      const ticket = generations.begin(state.documentID)
+      const operation: EditorialOperation = { documentID: state.documentID, fieldRevision: state.fieldRevision,
+        ticket, allowModified, phase: 'hashing' }
+      active = operation
+      busy = true
+      return operation
+    },
+
+    isCurrent(operation: EditorialOperation, state: EditorialLiveState = live): boolean {
+      return active === operation && acceptsEditableRequest(generations, operation.ticket, state.documentID,
+        operation.fieldRevision, state.fieldRevision) && externalGateIsSafe(operation, state)
+    },
+
+    acquireLease(operation: EditorialOperation, state: EditorialLiveState,
+      setters: { setProcessing: (processing: boolean) => void; setDisabled: (disabled: boolean) => void }): boolean {
+      if (!this.isCurrent(operation, state)) return false
+      operation.lease = { previousProcessing: state.gate.processing, previousDisabled: state.gate.disabled,
+        setProcessing: setters.setProcessing, setDisabled: setters.setDisabled, released: false }
+      leaseOwner = operation
+      setters.setProcessing(true)
+      setters.setDisabled(true)
+      return true
+    },
+
+    releaseLease(operation: EditorialOperation, state: EditorialLiveState = live): void {
+      releaseLease(operation, state)
+    },
+
+    setPhase(operation: EditorialOperation, phase: EditorialOperationPhase): void {
+      if (active === operation) operation.phase = phase
+    },
+
+    finish(operation: EditorialOperation, state: EditorialLiveState = live): boolean {
+      if (active !== operation) return false
+      releaseLease(operation, state)
+      active = null
+      busy = false
+      return true
+    },
+
+    cancel(state: EditorialLiveState = live): EditorialOperation | null {
+      return cancelActive(state)
+    },
+
+    observe(next: EditorialLiveState): EditorialOperationObservation {
+      const previous = live
+      const documentChanged = previous.documentID !== next.documentID
+      const fieldsChanged = previous.fieldRevision !== next.fieldRevision
+      const operation = active
+      const ownLease = operation?.lease !== undefined && !operation.lease.released
+      const gate = next.gate
+      const unsafe = gate.backgroundProcessing || gate.initializing || gate.locked || gate.uploading ||
+        gate.otherModalOpen || (!ownLease && (gate.processing || gate.disabled)) ||
+        (Boolean(next.documentID) && (!operation || !operation.allowModified) && gate.modified)
+
+      live = next
+      let cancelled: EditorialOperation | null = null
+      let invalidated = false
+      if (operation && (documentChanged || fieldsChanged || unsafe)) {
+        cancelled = cancelActive(next)
+        invalidated = true
+      } else if (documentChanged || fieldsChanged || unsafe) {
+        generations.invalidate()
+        invalidated = true
+      }
+      return { documentChanged, fieldsChanged, unsafe, invalidated, cancelled }
+    },
+
+    dispose(state: EditorialLiveState = live): void {
+      cancelActive(state)
+      generations.invalidate()
+    },
+  }
+}
+
 export function confirmedVersion(revision: RevisionResult, localHash: string): null | {
   id: string
   versionID: string
