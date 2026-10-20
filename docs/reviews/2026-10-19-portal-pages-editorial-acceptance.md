@@ -2,11 +2,11 @@
 
 ## Estado desta entrega
 
-**Status global: NOT_EXECUTED para integração real, navegador e checklist manual.**
+**Status global: integração real nativa Payload/PostgreSQL PASS; navegador e checklist manual NOT_EXECUTED.**
 Os checks offline e as suites unitárias reportadas abaixo são verificações de
-código; não provam persistência PostgreSQL, sessão V2 real ou acessibilidade por
-leitor de tela. A execução ainda requer uma fixture disposable previamente
-preparada e opt-in explícito.
+código; não provam sessão V2 de produção ou acessibilidade por leitor de tela.
+A execução nativa real foi feita em fixture local descartável, explicitamente
+optada e removida após a coleta de evidência.
 
 ## Evidência offline
 
@@ -14,11 +14,11 @@ preparada e opt-in explícito.
 |---|---|---|
 | `node --import tsx --test tests/unit/portal-page-editorial-config.test.ts tests/unit/portal-page-editorial-integration-guard.test.ts tests/unit/portal-page-editorial-preview.test.ts tests/unit/portal-page-media-reader.test.ts` | PASS | 36 testes: safe asset headers, cancellation/descriptor closure, Range/backpressure, textarea wrapper, filesystem privacy, strict environment, stale-run abort, handoff and exhaustive aggregation. |
 | `npm run typecheck` em `cms/` | PASS | TypeScript sem emissão. |
-| `npm run test:unit` em `cms/` | PASS | 698 casos: 687 PASS, 11 SKIP opcionais (PGlite indisponível), 0 FAIL. |
+| `npm run test:unit` em `cms/` | PASS | Verificação final: 705 casos, 694 PASS, 11 SKIP opcionais (PGlite indisponível), 0 FAIL. |
 | `npm run generate:importmap` com `CMS_BUILD_ONLY=true` e `NEXT_PHASE=phase-production-build` | PASS | CLI informou `No new imports found`; o mapa gerado já contém o novo wrapper e preserva os imports anteriores. |
 | `npm run generate:types` com as mesmas variáveis | PASS | Executado pela CLI; nenhum delta de tipo necessário. |
 | `node --check` dos runners MJS e dos helpers de integração | PASS | Sintaxe local; não inicia Payload nem serviços. |
-| `npm run verify` com `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Windows\Temp` | PASS | 1.993 testes raiz: 1.974 PASS, 19 SKIP, 0 FAIL; suíte CMS: 698 casos, 687 PASS, 11 SKIP, 0 FAIL; segurança e Compose passaram. Nenhum serviço foi iniciado. |
+| `npm run verify` com `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Windows\Temp` | PASS | 1.993 testes raiz: 1.974 PASS, 19 SKIP, 0 FAIL; suíte CMS final: 705 casos, 694 PASS, 11 SKIP, 0 FAIL; typecheck, segurança e Compose passaram. Nenhum serviço foi iniciado por este check offline. |
 | `git diff --check` | PASS | Sem erros de whitespace. |
 
 ## RED/GREEN dos achados da revisão
@@ -34,6 +34,9 @@ preparada e opt-in explícito.
 Os testes de ciclo do stream e de privacidade de filesystem adicionados nesta rodada agora passam. Não se registra uma falha funcional prévia de cancelamento que não foi observada; o RED de headers foi reproduzido diretamente no endpoint.
 
 ## Guard e integração nativa
+
+O quadro abaixo registra o estado antes do aceite descartável real de
+2026-10-20; o resultado atual está na seção final deste documento.
 
 O novo runner dedicado é `npm --prefix cms run test:portal-pages:integration`.
 `--check-config` exige opt-in, `NODE_ENV=test`, URLs loopback distintas com nomes `test`/`dev`,
@@ -134,6 +137,9 @@ about the live Portal service.
 
 ## Docker e recursos
 
+O quadro abaixo descreve a rodada offline anterior ao aceite descartável real; a
+execução nativa de 2026-10-20 e sua limpeza estão registradas na seção final.
+
 - O `npm run verify` consultou `docker compose version` (`29.5.3`); nenhum daemon,
   container, serviço ou recurso Docker foi iniciado, alterado ou removido.
 - Nenhum container, volume, rede, banco, upload dir ou evidência de integração foi
@@ -152,6 +158,56 @@ about the live Portal service.
 - Alterações de runtime são restritas ao CMS editorial das páginas. Nenhum frontend
   público do Portal, Nginx, script de deploy, serviço em execução ou Ownerinc Brain
   foi incluído.
-- A evidência acima não transforma `NOT_EXECUTED` em aceite real. Erro ou ausência
-  na execução futura deve continuar visível como `FAIL`/`NOT_EXECUTED`, sem relaxar
-  autorização, CAS, versionamento ou limites.
+- Os casos browser/manual ainda marcados `NOT_EXECUTED` não se convertem em aceite
+  real. Erro ou ausência em nova execução deve continuar visível como
+  `FAIL`/`NOT_EXECUTED`, sem relaxar autorização, CAS, versionamento ou limites.
+
+## Aceite real nativo — 2026-10-20
+
+| Caso/comando | Resultado | Evidência |
+|---|---|---|
+| `npm --prefix cms run test:portal-pages:integration -- --check-config` | CONFIG_VALID / NOT_EXECUTED | UUID de execução validado; preflight confirmou diretórios e alvos sem conectar nem alegar aceite. |
+| Migrations revisadas via `npm --prefix cms run test:portal-pages:integration -- --execute` | PASS | Migrations aplicadas somente ao banco CMS descartável PostgreSQL 16.15. |
+| Suíte native Payload/PostgreSQL do mesmo `--execute` | **PASS, 16/16 casos obrigatórios** | Payload 3.90.2 e adapter PostgreSQL reais; hooks Portal Pages, tabela Versions, autosave, CAS, publicação concorrente, rollback/readback, MIME e autorização privada executados. |
+| Resultado agregado do comando `--execute` | NOT_EXECUTED | Correto: o caso browser foi NOT_EXECUTED por não haver módulo Playwright externo nem handoff/sessão browser válida. O agregado não converte browser ausente em PASS. |
+| Browser e checklist manual | NOT_EXECUTED | Sem Playwright/session handoff; teclado, leitor de tela, reduced motion e viewport não foram validados manualmente. |
+
+Identificação não secreta da fixture: `runId` `9eb8f3f8-2663-446b-83f8-43fb6e6eaec7`;
+container `task4-acceptance-pg-9eb8f3f82663446b`; volume
+`task4-acceptance-data-9eb8f3f82663446b`; PostgreSQL `16.15`; bind somente
+`127.0.0.1:58270`; bancos `portal_pages_portal_dev` e `portal_pages_cms_test`.
+Os diretórios de upload e evidência eram distintos e exclusivos sob
+`%LOCALAPPDATA%\Temp\opencode` e foram removidos. Cleanup confirmado: container
+parado e removido, volume removido, diretórios removidos. Nenhuma senha ou URL
+com credencial foi registrada.
+
+### RED/GREEN durante o aceite nativo
+
+- **RED — create inicial:** a execução real inicial falhou em
+  `initial explicit create runs Portal author hooks and persists a native Version`
+  com `portal_page_published_at_server_owned` (403). Payload 3.90.2 inclui a
+  propriedade `publishedAt` com valor `undefined` no hook de create; a comparação
+  antiga tratava o placeholder como tentativa de escrita. O teste focado novo
+  reproduziu a mesma falha (0 PASS, 1 FAIL).
+- **GREEN — create inicial:** o hook agora ignora apenas o placeholder
+  `undefined`, grava o valor original server-owned (`null` no create) e continua
+  recusando timestamp efetivamente fornecido. O teste focado passou (1/1), e a
+  execução real final confirmou create, hooks e Version persistida.
+- **RED — matriz MIME:** após o primeiro ajuste, a execução real falhou no caso
+  `complete media MIME-role matrix accepts every supported native role` com
+  status 400. A fixture chamava o helper de persistência com blocos no formato
+  Payload (`blockType`/`asset`), embora o helper receba blocos públicos já
+  projetados (`type`/`asset_id`); assim, o erro era conteúdo inválido, não a
+  validação de MIME. A mesma forma inválida fazia os testes negativos anteriores
+  obterem 400 sem alcançar a regra pretendida.
+- **GREEN — matriz MIME:** os casos agora passam os blocos nativos por
+  `projectPortalPageContent` antes de chamar o helper, incluindo verificações de
+  MIME incompatível e mídia incompleta. Na execução final, a matriz completa e
+  todos os outros 15 casos nativos passaram.
+
+O `--execute` final foi runId `9eb8f3f8-2663-446b-83f8-43fb6e6eaec7`; seu JSON
+privado nomeou migrations e suíte native como PASS, browser como NOT_EXECUTED e
+status agregado NOT_EXECUTED. O JSON, storage state (não criado nesta execução),
+uploads e demais artefatos privados foram removidos junto com a fixture. Não se
+alega browser, acessibilidade manual, Nginx, Firebase real, deploy ou filesystem
+Linux.
