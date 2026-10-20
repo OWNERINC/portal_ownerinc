@@ -1,5 +1,6 @@
 import { expectedEditorialControlCases } from './portal-page-editorial-controls.mjs'
 import { expectedEditorialUploadCases } from './portal-page-editorial-upload.mjs'
+import { uploadPositionAcceptanceName } from './portal-page-editorial-browser-orchestration.mjs'
 
 const VALID_STATUSES = new Set(['PASS', 'FAIL', 'NOT_EXECUTED', 'SKIP'])
 
@@ -19,14 +20,17 @@ export const expectedNativeAcceptanceCases = Object.freeze([
   'draft save followed by unpublish preserves published withdrawal and exact history',
   'a resolved commit failure cannot return a false mutation receipt',
   'receipt confirmation survives a later legitimate Version before independent readback',
+  'separate structural and history fixtures preserve the original positional upload Version',
 ])
 
 export const expectedBrowserAcceptanceCases = Object.freeze([
   'browser fixture starts with an authenticated Portal Pages editor',
-  'private dynamic exact preview stays on its immutable Version after a later save',
   ...expectedEditorialControlCases,
-  'existing News controls smoke: preview, scheduling and legacy history render',
+  uploadPositionAcceptanceName,
   ...expectedEditorialUploadCases,
+  'existing News controls smoke: preview, scheduling and legacy history render',
+  'exact old preview remains fixed after a subsequent save and publication, including its Range asset',
+  'fresh preview asset Range is denied after actual disposable editorial session revocation',
 ])
 
 /** Fail closed when expected cases are missing, duplicated, unexpected, or malformed. */

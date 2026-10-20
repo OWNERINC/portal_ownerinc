@@ -4,7 +4,6 @@
 // and a local test-only V2 actor transport. No Docker or production service is
 // started or contacted.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { lstat, realpath } from 'node:fs/promises'
 import net from 'node:net'
@@ -13,7 +12,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { checkIntegrationDirectories, readIntegrationConfig } from '../support/integration-config.mjs'
 import { readPrivateEvidence, writePrivateEvidence } from '../support/private-evidence.mjs'
+import { runEditorialControlAndUploadSuites } from './portal-page-editorial-browser-orchestration.mjs'
 import { runEditorialControlCases } from './portal-page-editorial-controls.mjs'
+import { createLocalActorTransport } from './portal-page-editorial-test-actor.mjs'
 import { runEditorialUploadCases } from './portal-page-editorial-upload.mjs'
 import { aggregateAcceptanceCases, expectedBrowserAcceptanceCases, notExecutedAcceptanceCases } from './portal-page-editorial-cases.mjs'
 
@@ -81,8 +82,13 @@ async function readHandoff(config) {
   let value
   try { value = JSON.parse(await readPrivateEvidence(handoffPath)) } catch { throw Object.assign(new Error(), { code: 'browser_handoff_invalid' }) }
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).sort().join(',') !== 'baseURL,playwrightModule,runId,storageStateFile' ||
-      value.runId !== config.runId) throw Object.assign(new Error(), { code: 'browser_handoff_invalid' })
+      Object.keys(value).sort().join(',') !== 'baseURL,historicalPageID,playwrightModule,runId,storageStateFile,structuralPageID' ||
+      value.runId !== config.runId || typeof value.structuralPageID !== 'string' ||
+      typeof value.historicalPageID !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.structuralPageID) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.historicalPageID)) {
+    throw Object.assign(new Error(), { code: 'browser_handoff_invalid' })
+  }
 
   let base
   try { base = new URL(value.baseURL) } catch { throw Object.assign(new Error(), { code: 'browser_base_url_invalid' }) }
@@ -115,71 +121,8 @@ async function readHandoff(config) {
       state.cookies[0]?.name !== 'ownerinc-editorial-dev' || state.cookies[0]?.value !== config.runId) {
     throw Object.assign(new Error(), { code: 'browser_storage_state_invalid' })
   }
-  return { baseURL: base.origin, playwrightModule: value.playwrightModule, storageStateFile: stateRealPath }
-}
-
-function createLocalActorTransport(config, serviceSecret) {
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
-  const actor = {
-    version: 2,
-    uid: `portal-page-task4-${config.runId}`,
-    email: `${config.runId}@example.invalid`,
-    name: 'Portal Pages Task 4 synthetic editor',
-    capabilities: { manageKnowledge: true, manageAcademy: false, manageBenefits: false, manageReminders: false },
-  }
-  const server = createServer(async (request, response) => {
-    response.setHeader('Cache-Control', 'no-store')
-    if (request.headers.authorization !== `Bearer ${serviceSecret}`) {
-      response.writeHead(401, { 'Content-Type': 'application/json' }).end('{"reason":"editorial_session_invalid"}')
-      return
-    }
-    const url = new URL(request.url || '/', 'http://127.0.0.1')
-    if (request.method === 'GET' && url.pathname === '/api/internal/editorial/authority') {
-      response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"mode":"payload","epoch":1}')
-      return
-    }
-    if (request.method === 'POST' && url.pathname.endsWith('/session/resolve')) {
-      const chunks = []
-      let bytes = 0
-      for await (const chunk of request) {
-        bytes += chunk.length
-        if (bytes > 16 * 1024) {
-          response.writeHead(413).end()
-          return
-        }
-        chunks.push(chunk)
-      }
-      let body
-      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch {
-        response.writeHead(400).end()
-        return
-      }
-      if (body.cookie !== config.runId) {
-        response.writeHead(401, { 'Content-Type': 'application/json' }).end('{"reason":"editorial_session_invalid"}')
-        return
-      }
-      if (url.pathname === '/api/internal/editorial/session/resolve') {
-        // The V1 strategy intentionally declines; the next strategy independently
-        // revalidates this exact synthetic cookie as a V2 knowledge actor.
-        response.writeHead(401, { 'Content-Type': 'application/json' }).end('{"reason":"editorial_session_invalid"}')
-        return
-      }
-      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ actor, expiresAt }))
-      return
-    }
-    if (request.method === 'POST' && url.pathname === '/api/internal/editorial/actor/check') {
-      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ actor: {
-        uid: actor.uid, email: actor.email, name: actor.name, canManageNews: true,
-      } }))
-      return
-    }
-    if (request.method === 'POST' && url.pathname === '/api/internal/editorial/session/revoke') {
-      response.writeHead(204).end()
-      return
-    }
-    response.writeHead(404).end()
-  })
-  return server
+  return { baseURL: base.origin, playwrightModule: value.playwrightModule,
+    storageStateFile: stateRealPath, structuralPageID: value.structuralPageID, historicalPageID: value.historicalPageID }
 }
 
 function waitForChildExit(child, timeoutMs) {
@@ -215,6 +158,13 @@ async function readiness(baseURL, child) {
   return false
 }
 
+async function readBrowserRange(page, assetURL) {
+  return page.evaluate(async href => {
+    const response = await fetch(href, { headers: { Range: 'bytes=0-4' }, cache: 'no-store' })
+    return { status: response.status, contentRange: response.headers.get('content-range'), body: await response.text() }
+  }, assetURL)
+}
+
 async function runExactPreview(page, context, baseURL) {
   const saveButton = page.getByRole('button', { name: 'Salvar versão', exact: true })
   await saveButton.waitFor({ state: 'visible' })
@@ -224,29 +174,101 @@ async function runExactPreview(page, context, baseURL) {
   const previewURL = new URL(await link.getAttribute('href'), baseURL)
   const versionID = previewURL.searchParams.get('version')
   assert.match(versionID || '', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu)
+  assert.match(previewURL.pathname,
+    /^\/editorial\/portal-pages\/preview\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu)
   assert.equal(await link.getAttribute('target'), '_blank')
   assert.equal(await link.getAttribute('rel'), 'noopener noreferrer')
   const oldSummary = await page.getByLabel('Resumo', { exact: true }).inputValue()
   const previewTab = await context.newPage()
-  const response = await previewTab.goto(previewURL.toString(), { waitUntil: 'domcontentloaded' })
-  assert.equal(response?.status(), 200)
-  assert.match(response?.headers()['cache-control'] || '', /private.*no-store/u)
-  assert.equal(new URL(previewTab.url()).searchParams.get('version'), versionID)
-  await previewTab.getByText('Esta prévia não publica a página.', { exact: true }).waitFor({ state: 'visible' })
-  await previewTab.getByText(versionID, { exact: true }).waitFor({ state: 'visible' })
+  let keepOpenForRevocationProbe = false
+  try {
+    const response = await previewTab.goto(previewURL.toString(), { waitUntil: 'domcontentloaded' })
+    assert.equal(response?.status(), 200)
+    assert.match(response?.headers()['cache-control'] || '', /private.*no-store/u)
+    assert.equal(new URL(previewTab.url()).searchParams.get('version'), versionID)
+    await previewTab.getByText('Esta prévia não publica a página.', { exact: true }).waitFor({ state: 'visible' })
+    await previewTab.getByText(versionID, { exact: true }).waitFor({ state: 'visible' })
+    await previewTab.getByText(oldSummary, { exact: true }).waitFor({ state: 'visible' })
 
-  const summary = page.getByLabel('Resumo', { exact: true })
-  await summary.fill(`Alteração posterior ${Date.now()}`)
-  await page.getByRole('status').filter({ hasText: 'Aguardando salvamento automático' }).waitFor({ state: 'visible' })
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline && !(await saveButton.isEnabled())) await new Promise(resolve => setTimeout(resolve, 100))
-  assert.equal(await saveButton.isEnabled(), true)
-  await saveButton.click()
-  await page.getByRole('status').filter({ hasText: 'Versão salva' }).waitFor({ state: 'visible' })
-  await previewTab.reload({ waitUntil: 'domcontentloaded' })
-  assert.equal(new URL(previewTab.url()).searchParams.get('version'), versionID)
-  assert.equal(await previewTab.getByText(oldSummary, { exact: true }).count(), oldSummary ? 1 : 0)
-  await previewTab.close()
+    const pdfLink = previewTab.locator('.portal-page-preview__pdf a').first()
+    await pdfLink.waitFor({ state: 'visible' })
+    const oldAssetURL = new URL(await pdfLink.getAttribute('href'), baseURL)
+    assert.ok(oldAssetURL.pathname.includes(`/${versionID}/`), 'old_pdf_url_not_bound_to_exact_version')
+    const firstRange = await readBrowserRange(previewTab, oldAssetURL.toString())
+    assert.equal(firstRange.status, 206)
+    assert.equal(firstRange.contentRange, 'bytes 0-4/16')
+    assert.equal(firstRange.body, 'synth')
+
+    const summary = page.getByLabel('Resumo', { exact: true })
+    const newerSummary = `Alteração posterior ${Date.now()}`
+    await summary.fill(newerSummary)
+    await page.getByRole('status').filter({ hasText: 'Aguardando salvamento automático' }).waitFor({ state: 'visible' })
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline && !(await saveButton.isEnabled())) await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(await saveButton.isEnabled(), true)
+    await saveButton.click()
+    await page.getByRole('status').filter({ hasText: 'Versão salva' }).waitFor({ state: 'visible' })
+    const newerLink = page.getByRole('link', { name: 'Abrir prévia desta versão em nova aba', exact: true })
+    const newerURL = new URL(await newerLink.getAttribute('href'), baseURL)
+    const newerVersionID = newerURL.searchParams.get('version')
+    assert.match(newerVersionID || '', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu)
+    assert.notEqual(newerVersionID, versionID, 'subsequent_save_reused_old_version_id')
+
+    const publish = page.getByRole('button', { name: 'Publicar versão salva', exact: true })
+    await publish.waitFor({ state: 'visible' })
+    await publish.click()
+    const confirmation = page.getByRole('dialog')
+    await confirmation.waitFor({ state: 'visible' })
+    await confirmation.getByRole('button', { name: 'Publicar esta versão', exact: true }).click()
+    await page.getByRole('status').filter({ hasText: 'Página publicada' }).waitFor({ state: 'visible' })
+
+    await previewTab.reload({ waitUntil: 'domcontentloaded' })
+    assert.equal(new URL(previewTab.url()).searchParams.get('version'), versionID)
+    await previewTab.getByText(oldSummary, { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await previewTab.getByText(newerSummary, { exact: true }).count(), 0)
+    const reloadedPdfURL = new URL(await previewTab.locator('.portal-page-preview__pdf a').first().getAttribute('href'), baseURL)
+    assert.equal(reloadedPdfURL.toString(), oldAssetURL.toString())
+    const secondRange = await readBrowserRange(previewTab, oldAssetURL.toString())
+    assert.equal(secondRange.status, 206)
+    assert.equal(secondRange.contentRange, firstRange.contentRange)
+    assert.equal(secondRange.body, firstRange.body)
+    keepOpenForRevocationProbe = true
+    return { versionID, previewURL: previewURL.toString(), assetURL: oldAssetURL.toString(), previewTab }
+  } finally { if (!keepOpenForRevocationProbe) await previewTab.close() }
+}
+
+async function revokeAndProbeOldAsset(page, context, { assetURL, baseURL, bridgeURL, serviceSecret, runId }) {
+  const cookieName = 'ownerinc-editorial-dev'
+  const beforeCookies = await context.cookies(baseURL)
+  const fixtureCookie = beforeCookies.find(cookie => cookie.name === cookieName && cookie.value === runId)
+  assert.ok(fixtureCookie, 'active_disposable_editorial_cookie_missing_before_revocation')
+
+  const before = await readBrowserRange(page, assetURL)
+  assert.equal(before.status, 206, 'fresh_editorial_range_failed_before_server_session_revocation')
+  assert.ok(before.body.length > 0, 'pre_revocation_range_returned_no_media_bytes')
+
+  const revokeResponse = await fetch(`${bridgeURL}/api/internal/editorial/session/revoke`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${serviceSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cookie: runId }),
+    redirect: 'error', cache: 'no-store',
+  })
+  if (revokeResponse.status === 404) {
+    await revokeResponse.body?.cancel()
+    throw Object.assign(new Error('synthetic_bridge_session_revoke_unsupported'), { code: 'synthetic_bridge_session_revoke_unsupported' })
+  }
+  assert.equal(revokeResponse.status, 204, 'disposable_authority_did_not_confirm_session_revocation')
+  await revokeResponse.body?.cancel()
+
+  const retainedCookies = await context.cookies(baseURL)
+  assert.ok(retainedCookies.some(cookie => cookie.name === cookieName && cookie.value === runId),
+    'browser_did_not_retain_the_stale_cookie_for_the_fresh_post_revocation_request')
+  const response = await readBrowserRange(page, assetURL)
+  assert.ok([401, 403].includes(response.status), `post_revocation_range_status:${response.status}`)
+  assert.equal(response.contentRange, null, 'revoked_asset_response_advertised_media_range')
+  const body = response.body
+  assert.equal(body.includes(before.body), false, 'post_revocation_response_included_previous_media_bytes')
+  assert.equal(body.includes('synthetic-pdf-00'), false, 'post_revocation_response_disclosed_pdf_bytes')
 }
 
 async function main() {
@@ -300,28 +322,27 @@ async function main() {
     if (!href) throw Object.assign(new Error(), { code: 'synthetic_page_not_found' })
     await page.goto(new URL(href, handoff.baseURL).toString(), { waitUntil: 'domcontentloaded' })
     await page.getByRole('button', { name: 'Salvar versão', exact: true }).waitFor({ state: 'visible' })
+    const structuralPage = await context.newPage()
+    const structuralEditorURL = new URL(
+      `/editorial/admin/collections/portal-pages/${handoff.structuralPageID}`, handoff.baseURL).toString()
+    await structuralPage.goto(structuralEditorURL, { waitUntil: 'domcontentloaded' })
+    await structuralPage.getByRole('button', { name: 'Salvar versão', exact: true }).waitFor({ state: 'visible' })
 
     const cases = [{ name: 'browser fixture starts with an authenticated Portal Pages editor', status: 'PASS',
       detail: 'The guarded local editor session and synthetic Portal Pages document loaded.' }]
     try {
-      await runExactPreview(page, context, handoff.baseURL)
-      cases.push({ name: 'private dynamic exact preview stays on its immutable Version after a later save',
-        status: 'PASS', detail: 'Exact Version, private response headers and historical content were verified.' })
+      const suiteCases = await runEditorialControlAndUploadSuites({
+        page,
+        structuralPage,
+        runControls: runEditorialControlCases,
+        runUploads: runEditorialUploadCases,
+      })
+      cases.push(...suiteCases.map(item => ({ ...item,
+        detail: item.status === 'PASS' || item.status === 'NOT_EXECUTED'
+          ? item.detail : 'Browser assertion failed; sensitive request details were withheld.' })))
     } catch {
-      cases.push({ name: 'private dynamic exact preview stays on its immutable Version after a later save',
-        status: 'FAIL', detail: 'Browser assertion failed; sensitive request details were withheld.' })
-    }
-    for (const suite of [
-      ['editorial controls and state races', runEditorialControlCases],
-      ['all five native media destinations and upload lifecycle', runEditorialUploadCases],
-    ]) {
-      try {
-        const casesFromSuite = await suite[1](page)
-        for (const item of casesFromSuite) cases.push({ name: item.name, status: item.status,
-          detail: item.status === 'PASS' ? item.detail : 'Browser assertion failed; sensitive request details were withheld.' })
-      } catch {
-        cases.push({ name: suite[0], status: 'FAIL', detail: 'Browser suite stopped unexpectedly; sensitive request details were withheld.' })
-      }
+      cases.push({ name: 'editorial controls and upload orchestration completed', status: 'FAIL',
+        detail: 'Browser suites stopped unexpectedly; sensitive request details were withheld.' })
     }
     try {
       await page.goto(`${handoff.baseURL}/editorial/admin/collections/news-articles/create`, { waitUntil: 'domcontentloaded' })
@@ -334,6 +355,48 @@ async function main() {
     } catch {
       cases.push({ name: 'existing News controls smoke: preview, scheduling and legacy history render',
         status: 'FAIL', detail: 'Existing News control slots did not render in the disposable editor.' })
+    }
+
+    let historicalPreview
+    const historicalCaseName = 'exact old preview remains fixed after a subsequent save and publication, including its Range asset'
+    try {
+      const historicalPage = await context.newPage()
+      await historicalPage.goto(new URL(
+        `/editorial/admin/collections/portal-pages/${handoff.historicalPageID}`, handoff.baseURL).toString(),
+      { waitUntil: 'domcontentloaded' })
+      await historicalPage.getByRole('button', { name: 'Salvar versão', exact: true }).waitFor({ state: 'visible' })
+      historicalPreview = await runExactPreview(historicalPage, context, handoff.baseURL)
+      cases.push({ name: historicalCaseName, status: 'PASS',
+        detail: 'The exact old Version URL retained its summary and PDF Range bytes after a newer Version was published.' })
+    } catch {
+      cases.push({ name: historicalCaseName, status: 'FAIL',
+        detail: 'Exact old-Version content or asset changed after a newer publication; sensitive details were withheld.' })
+    }
+
+    const revocationCaseName = 'fresh preview asset Range is denied after actual disposable editorial session revocation'
+    if (!historicalPreview?.assetURL) {
+      cases.push({ name: revocationCaseName, status: 'NOT_EXECUTED',
+        detail: 'The historical-preview case did not produce an exact asset URL, so no revocation probe was issued.' })
+    } else {
+      try {
+        await revokeAndProbeOldAsset(historicalPreview.previewTab, context, {
+          assetURL: historicalPreview.assetURL,
+          baseURL: handoff.baseURL,
+          bridgeURL,
+          serviceSecret,
+          runId: checked.runId,
+        })
+        cases.push({ name: revocationCaseName, status: 'PASS',
+          detail: 'The disposable authority revoked the cookie over HTTP; a fresh browser Range request with that retained cookie returned 401/403 and no media bytes.' })
+      } catch (error) {
+        if (error?.code === 'synthetic_bridge_session_revoke_unsupported') {
+          cases.push({ name: revocationCaseName, status: 'NOT_EXECUTED',
+            detail: 'The disposable authority does not implement the session-revocation HTTP contract required for this browser probe.' })
+        } else {
+          cases.push({ name: revocationCaseName, status: 'FAIL',
+            detail: 'Fresh post-revocation asset request did not fail closed; sensitive request details were withheld.' })
+        }
+      } finally { await historicalPreview.previewTab.close().catch(() => {}) }
     }
     const aggregate = aggregateAcceptanceCases(expectedBrowserAcceptanceCases, cases)
     result = report(aggregate.status, aggregate.cases)

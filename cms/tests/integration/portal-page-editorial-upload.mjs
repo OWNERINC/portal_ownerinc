@@ -25,6 +25,23 @@ export const expectedEditorialUploadCases = Object.freeze([
   'native focus, alt/title values and Task 2 confirmation are preserved or invalidated correctly',
 ])
 
+export const expectedUploadDestinationPositions = Object.freeze({
+  image: 'body.0.asset',
+  gallery: 'body.1.images.0.asset',
+  video: 'body.2.asset',
+  pdf: 'body.3.asset',
+})
+
+/** Snapshot the live Payload wrapper positions without changing form state. */
+export async function readUploadDestinationPositions(page) {
+  const paths = await page.locator('.portal-page-media-field').evaluateAll(elements =>
+    elements.map(element => element.getAttribute('data-portal-page-media-path')))
+  return Object.fromEntries(Object.entries(expectedUploadDestinationPositions).map(([name, expectedPath]) => {
+    const matches = paths.filter(path => path === expectedPath).length
+    return [name, matches === 1 ? expectedPath : null]
+  }))
+}
+
 function assertCaseRegistry(results) {
   const actual = results.map(item => item.name)
   if (actual.length !== expectedEditorialUploadCases.length ||
@@ -218,7 +235,10 @@ async function uploadThroughSelection(page, initialURL, destination, { reloadPag
  * @param {import('@playwright/test').Page} page
  * @returns {Promise<Array<{name: string; status: 'PASS'|'FAIL'; detail: string}>>}
  */
-export async function runEditorialUploadCases(page) {
+export async function runEditorialUploadCases(page, verifiedPositions) {
+  assert(verifiedPositions && Object.entries(expectedUploadDestinationPositions)
+    .every(([name, expectedPath]) => verifiedPositions[name] === expectedPath),
+  'original_upload_destination_positions_not_verified')
   const initialURL = page.url()
   const results = []
 

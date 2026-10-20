@@ -36,6 +36,19 @@ function assert(condition, detail) {
   if (!condition) throw new Error(detail)
 }
 
+/** Equality helper shared by live browser cases and their unit-executed tests. */
+export function assertEqual(actual, expected, detail) {
+  assert(Object.is(actual, expected), detail)
+}
+
+export function assertNotEqual(actual, expected, detail) {
+  assert(!Object.is(actual, expected), detail)
+}
+
+export function assertMatch(actual, pattern, detail) {
+  assert(typeof actual === 'string' && pattern instanceof RegExp && pattern.test(actual), detail)
+}
+
 function assertCaseRegistry(results) {
   const actual = results.map(item => item.name)
   if (actual.length !== expectedEditorialControlCases.length ||
@@ -90,8 +103,10 @@ async function collect(name, action) {
  * @param {import('@playwright/test').Page} page
  * @returns {Promise<Array<{name: string; status: 'PASS'|'FAIL'; detail: string}>>}
  */
-export async function runEditorialControlCases(page) {
+export async function runEditorialControlCases(page, structuralPage) {
+  assert(page && structuralPage && page !== structuralPage, 'structural_editor_page_must_be_isolated')
   const initialURL = page.url()
+  const structuralURL = structuralPage.url()
   const origin = new URL(initialURL).origin
   const createURL = new URL(CREATE_PATH, origin).toString()
   const results = []
@@ -130,11 +145,11 @@ export async function runEditorialControlCases(page) {
     await page.getByRole('button', { name: 'Aviso', exact: true }).click()
     const textarea = page.getByLabel('Texto do aviso', { exact: true })
     await textarea.waitFor({ state: 'visible' })
-    assert.equal(await textarea.evaluate(element => element.tagName), 'TEXTAREA', 'callout_text_did_not_use_native_textarea')
-    assert.match(await textarea.getAttribute('name') || '', /body\.0\.text/u, 'callout_text_native_field_path_was_not_preserved')
+    assertEqual(await textarea.evaluate(element => element.tagName), 'TEXTAREA', 'callout_text_did_not_use_native_textarea')
+    assertMatch(await textarea.getAttribute('name') || '', /body\.0\.text/u, 'callout_text_native_field_path_was_not_preserved')
     await page.getByRole('button', { name: SAVE_BUTTON, exact: true }).click()
     await page.getByRole('status').filter({ hasText: 'Corrija os campos inválidos' }).waitFor({ state: 'visible' })
-    assert.equal(await textarea.evaluate(element => element === document.activeElement), true,
+    assertEqual(await textarea.evaluate(element => element === document.activeElement), true,
       'required_callout_textarea_was_not_registered_as_the_native_focus_target')
   }))
 
@@ -363,8 +378,8 @@ export async function runEditorialControlCases(page) {
   }))
 
   results.push(await collect('native block insertion and reordering remain available and persist', async () => {
-    await reset(page, initialURL)
-    const body = page.locator('[data-field-path="body"]')
+    await reset(structuralPage, structuralURL)
+    const body = structuralPage.locator('[data-field-path="body"]')
     await body.waitFor({ state: 'visible' })
     const rows = body.locator('.blocks-field__row')
     const before = await rows.count()
@@ -372,21 +387,21 @@ export async function runEditorialControlCases(page) {
     const firstLabel = await rows.nth(0).locator('.blocks-field__block-pill').innerText()
     const secondLabel = await rows.nth(1).locator('.blocks-field__block-pill').innerText()
     await rows.nth(0).locator('.array-actions__button').click()
-    await page.getByRole('button', { name: 'Mover para Baixo', exact: true }).click()
-    await page.waitForFunction(({ selector, expected }) =>
+    await structuralPage.getByRole('button', { name: 'Mover para Baixo', exact: true }).click()
+    await structuralPage.waitForFunction(({ selector, expected }) =>
       document.querySelector(`${selector} .blocks-field__row .blocks-field__block-pill`)?.textContent?.trim() === expected,
     { selector: '[data-field-path="body"]', expected: secondLabel })
-    assert.notEqual(firstLabel, secondLabel, 'native_block_fixture_needs_distinct_adjacent_blocks')
+    assertNotEqual(firstLabel, secondLabel, 'native_block_fixture_needs_distinct_adjacent_blocks')
 
     await rows.nth(0).locator('.array-actions__button').click()
-    await page.getByRole('button', { name: 'Adicionar abaixo', exact: true }).click()
-    await page.getByRole('button', { name: 'Divisor', exact: true }).click()
-    assert.equal(await rows.count(), before + 1, 'native_block_insertion_did_not_add_the_selected_block')
-    await saveAndWaitForPreview(page)
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    assert.equal(await body.locator('.blocks-field__row').count(), before + 1,
+    await structuralPage.getByRole('button', { name: 'Adicionar abaixo', exact: true }).click()
+    await structuralPage.getByRole('button', { name: 'Divisor', exact: true }).click()
+    assertEqual(await rows.count(), before + 1, 'native_block_insertion_did_not_add_the_selected_block')
+    await saveAndWaitForPreview(structuralPage)
+    await structuralPage.reload({ waitUntil: 'domcontentloaded' })
+    assertEqual(await body.locator('.blocks-field__row').count(), before + 1,
       'native_block_insertion_or_reordering_was_not_persisted')
-    assert.equal(await body.locator('.blocks-field__row').nth(0).locator('.blocks-field__block-pill').innerText(), secondLabel,
+    assertEqual(await body.locator('.blocks-field__row').nth(0).locator('.blocks-field__block-pill').innerText(), secondLabel,
       'native_block_reordering_was_not_persisted')
   }))
 

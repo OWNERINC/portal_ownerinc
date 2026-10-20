@@ -75,6 +75,36 @@ encerrados em `finally`.
 O checklist detalhado e as operações de mídia estão em
 [`docs/operations/portal-pages-editorial.md`](../operations/portal-pages-editorial.md).
 
+## Review-fix round 2 — browser acceptance guards
+
+| Check | Result | Evidence |
+|---|---|---|
+| Focused browser harness, runner registry/source, config/preview/media regressions | **PASS** | 41 tests passed, including success/throw paths for all exported browser assertions, isolated structural-page orchestration, unchanged upload position delivery, exhaustive named-case aggregation, and stateful fixture-cookie revocation. |
+| All Task 4 `portal-page-*` unit tests | **PASS** | 154 tests passed. |
+| `npm run typecheck` in `cms/` | **PASS** | TypeScript completed without emission. |
+| `npm run test:unit` in `cms/` | **PASS** | 703 tests: 692 passed, 0 failed, 11 skipped because optional PGlite is unavailable. |
+| `node --check` for Task 4 editorial MJS modules | **PASS** | Browser runner and modified helpers parse; syntax only. |
+| `git diff --check` | **PASS** | No whitespace errors before commit. |
+| `npm run verify` with `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Windows\Temp` | **PASS** | Root suite: 1,993 tests, 1,974 passed, 0 failed, 19 skipped; CMS suite: 703 tests, 692 passed, 0 failed, 11 skipped; security and Compose checks passed. |
+
+Round 2 fixes remove undeclared Node-style `assert.*` calls from the browser
+controls module and exercise the replacement helpers directly. A distinct
+structural Page prevents reorder/insertion checks from altering the upload
+fixture; an orchestration guard snapshots and rechecks the original image,
+gallery, video and PDF paths before forwarding them to upload tests. The
+required browser registry now includes an exact historical-preview-after-newer-
+publication case and a final fresh-Range-after-revocation case. The local test
+bridge invalidates subsequent V2 resolution for the exact revoked synthetic
+cookie, with an offline HTTP test proving unrelated fixture-cookie state remains
+valid.
+
+These checks do **not** claim either browser case passed against a live browser
+or real Portal service. No disposable PostgreSQL fixture, browser handoff, or
+external Playwright installation was provided for this run. Native/database,
+browser, manual accessibility, and live-service acceptance remain
+**NOT_EXECUTED**. If those prerequisites are absent, both new named browser cases
+are emitted as `NOT_EXECUTED`; aggregation cannot produce overall `PASS`.
+
 ## Docker e recursos
 
 - O `npm run verify` consultou `docker compose version` (`29.5.3`); nenhum daemon,

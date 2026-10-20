@@ -33,6 +33,8 @@ let preview: any
 let editable: any
 let fixture: { category: any; image: any; video: any; pdf: any }
 let makeMediaRecord: ((mimeType: string, extension: string, originalName: string) => Promise<any>) | undefined
+let structuralPageID = ''
+let historicalPageID = ''
 
 function safeFailure(error: unknown): string {
   if (error && typeof error === 'object' && 'status' in error && typeof error.status === 'number') {
@@ -207,7 +209,7 @@ after(async () => {
         value: config.runId, domain: '127.0.0.1', path: '/', expires: Math.floor(Date.now() / 1000) + 3600,
         httpOnly: true, secure: false, sameSite: 'Lax' }], origins: [] })}\n`)
       const browserFixture = { runId: config.runId, baseURL: 'http://127.0.0.1:3100',
-        playwrightModule: config.playwrightModule, storageStateFile }
+        playwrightModule: config.playwrightModule, storageStateFile, structuralPageID, historicalPageID }
       await writePrivateEvidence(path.join(config.evidenceDir, 'portal-page-editorial-browser.json'),
         `${JSON.stringify(browserFixture, null, 2)}\n`)
     }
@@ -534,5 +536,48 @@ test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and ro
       assert.ok(receipt.version_id)
       assert.notEqual((await editorial.readEditorialRevision(await makeReq(), pageID)).latest?.version_id, receipt.version_id)
     } finally { adapter.commitTransaction = realCommit }
+  })
+
+  await acceptance('separate structural and history fixtures preserve the original positional upload Version', async () => {
+    const original = await versionByID(saveB.version_id)
+    assert.deepEqual(original.version.body.slice(0, 4).map((block: any) => block.blockType),
+      ['image', 'gallery', 'video', 'pdf'])
+    const structural = await editorial.saveEditorialVersion(await makeReq(), { id: null, data: {
+      title: `Task 4 structural ${runId.slice(0, 8)}`,
+      slug: `task-4-structural-${runId.slice(0, 8)}`,
+      summary: 'Dedicated block editing fixture',
+      cover: fixture.image.id,
+      coverAlt: 'Capa da fixture estrutural',
+      categories: [fixture.category.id],
+      body: [
+        { blockType: 'heading', text: 'Bloco estrutural inicial', level: '2' },
+        { blockType: 'divider' },
+      ],
+    } as never })
+    structuralPageID = structural.id
+    assert.ok(structuralPageID)
+    assert.notEqual(structuralPageID, pageID)
+    const structuralVersion = await versionByID(structural.version_id)
+    assert.deepEqual(structuralVersion.version.body.map((block: any) => block.blockType), ['heading', 'divider'])
+
+    const historical = await editorial.saveEditorialVersion(await makeReq(), { id: null, data: {
+      title: `Task 4 historical ${runId.slice(0, 8)}`,
+      slug: `task-4-historical-${runId.slice(0, 8)}`,
+      summary: 'Historical preview fixture summary',
+      cover: fixture.image.id,
+      coverAlt: 'Capa da fixture histórica',
+      categories: [fixture.category.id],
+      body: [{ blockType: 'pdf', asset: fixture.pdf.id, title: 'PDF histórico' }],
+    } as never })
+    historicalPageID = historical.id
+    assert.ok(historicalPageID)
+    assert.notEqual(historicalPageID, pageID)
+    assert.notEqual(historicalPageID, structuralPageID)
+    const historicalVersion = await versionByID(historical.version_id)
+    assert.deepEqual(historicalVersion.version.body.map((block: any) => block.blockType), ['pdf'])
+
+    const originalAfter = await versionByID(saveB.version_id)
+    assert.deepEqual(originalAfter.version.body.slice(0, 4).map((block: any) => block.blockType),
+      ['image', 'gallery', 'video', 'pdf'])
   })
 })
