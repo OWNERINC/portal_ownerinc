@@ -43,6 +43,46 @@ test('bounded JSON honors abort during body read and rejects an already-aborted 
   assert.equal(cancelled, 1);
 });
 
+test('bounded JSON rejects invalid or oversized declared lengths before reading and does not cancel completed bodies', async () => {
+  const { harness } = await apiFrom();
+  for (const contentLength of ['01', '-1', '+1', '1.5', '1, 1', '9007199254740992', '17']) {
+    let pulls = 0;
+    let cancelled = 0;
+    const response = {
+      headers: { get: name => name === 'Content-Length' ? contentLength : null },
+      body: new ReadableStream({
+        pull(controller) { pulls += 1; controller.enqueue(new TextEncoder().encode('{}')); controller.close(); },
+        cancel() { cancelled += 1; },
+      }, { highWaterMark: 0 }),
+    };
+    await assert.rejects(harness.modules.api.readBoundedJSON(response, { maxBytes: 16 }));
+    assert.equal(pulls, 0, `Content-Length ${contentLength} must be rejected before reading`);
+    assert.equal(cancelled, 1, `Content-Length ${contentLength} must cancel once`);
+  }
+
+  let cancelCalls = 0;
+  let reads = 0;
+  const malformedButConsumed = {
+    headers: { get: () => null },
+    body: { getReader: () => ({
+      async read() {
+        reads += 1;
+        return reads === 1
+          ? { value: new TextEncoder().encode('{'), done: false }
+          : { value: undefined, done: true };
+      },
+      async cancel() { cancelCalls += 1; },
+      releaseLock() {},
+    }) },
+  };
+  await assert.rejects(harness.modules.api.readBoundedJSON(malformedButConsumed, { maxBytes: 16 }), error => error.name === 'SyntaxError');
+  assert.equal(cancelCalls, 0, 'a fully consumed stream is not cancelled just because JSON parsing fails');
+
+  const withoutLength = new Response('{"ok":true}');
+  assert.equal((await harness.modules.api.readBoundedJSON(withoutLength, { maxBytes: 16 })).ok, true,
+    'streamed responses may omit Content-Length');
+});
+
 test('contents API requests exact GET URLs with bounded auth options and returns only validated data/total', async () => {
   const { harness, api } = await apiFrom({ request: async (path, options) => {
     if (path.startsWith('/api/contents/?')) {
@@ -86,6 +126,70 @@ test('list count header is strict decimal text and response payload must be a ra
     headers: { 'X-Total-Count': '0' },
   }) });
   await assert.rejects(envelope.api.list({}, contextFor()), error => error.code === 'invalid_contents');
+});
+
+test('invalid or missing X-Total-Count cancels a deferred response body before its first read', async () => {
+  for (const total of [null, 'not-a-count']) {
+    let pulls = 0;
+    let cancelled = 0;
+    const { api } = await apiFrom({ request: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: name => name === 'X-Total-Count' ? total : null },
+      body: new ReadableStream({
+        pull() { pulls += 1; return new Promise(() => {}); },
+        cancel() { cancelled += 1; },
+      }, { highWaterMark: 0 }),
+    }) });
+    await assert.rejects(api.list({}, contextFor()), error => error.status === 400 && error.code === 'invalid_contents');
+    assert.equal(pulls, 0, 'invalid count headers are checked before body reads');
+    assert.equal(cancelled, 1, 'the unread response body is cancelled exactly once');
+  }
+});
+
+test('stale list responses are cancelled before a body read when the run is superseded', async () => {
+  let releaseResponse;
+  let pulls = 0;
+  let cancelled = 0;
+  let current = true;
+  const { api } = await apiFrom({ request: () => new Promise(resolve => { releaseResponse = resolve; }) });
+  const pending = api.list({}, contextFor(new AbortController().signal, () => current));
+  current = false;
+  releaseResponse({
+    ok: true,
+    status: 200,
+    headers: { get: name => name === 'X-Total-Count' ? '0' : null },
+    body: new ReadableStream({
+      pull() { pulls += 1; return new Promise(() => {}); },
+      cancel() { cancelled += 1; },
+    }, { highWaterMark: 0 }),
+  });
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(pulls, 0, 'stale responses are not read');
+  assert.equal(cancelled, 1, 'the stale response body is cancelled once');
+});
+
+test('deferred response streams are cancelled exactly once when a current list run aborts mid-read', async () => {
+  let releasePull;
+  let pullStarted;
+  const pullStartedPromise = new Promise(resolve => { pullStarted = resolve; });
+  const gate = new Promise(resolve => { releasePull = resolve; });
+  let cancelled = 0;
+  const controller = new AbortController();
+  const { api } = await apiFrom({ request: async () => new Response(new ReadableStream({
+    async pull(stream) {
+      pullStarted();
+      await gate;
+      try { stream.enqueue(new TextEncoder().encode('[]')); stream.close(); } catch { /* The stale reader already cancelled. */ }
+    },
+    cancel() { cancelled += 1; },
+  }, { highWaterMark: 0 }), { headers: { 'X-Total-Count': '0' } }) });
+  const pending = api.list({}, contextFor(controller.signal));
+  await pullStartedPromise;
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  releasePull();
+  assert.equal(cancelled, 1);
 });
 
 test('list validates duplicate IDs, row limits, count consistency and aggregate bytes before returning', async () => {
@@ -156,6 +260,31 @@ test('transport, parse and DTO failures map to fixed safe errors without backend
   }
   const offline = await apiFrom({ request: async () => { throw new Error('private transport implementation'); } });
   await assert.rejects(offline.api.categories(contextFor()), error => error.status === 503 && !/private transport/u.test(error.message));
+});
+
+test('every supported API status keeps its exact sanitized code and distinct fixed Portuguese message', async () => {
+  const expected = new Map([
+    [400, ['Não foi possível abrir este conteúdo com segurança.', 'invalid_contents']],
+    [401, ['Sua sessão não está mais válida. Entre novamente para continuar.', 'session']],
+    [403, ['Você não tem permissão para visualizar este conteúdo.', 'access_denied']],
+    [404, ['Este conteúdo não está mais disponível.', 'not_found']],
+    [409, ['O conteúdo mudou durante a leitura. Atualize e tente novamente.', 'conflict']],
+    [413, ['Este conteúdo excede o limite permitido para leitura.', 'too_large']],
+    [429, ['Muitas solicitações. Aguarde um instante e tente novamente.', 'rate_limited']],
+    [503, ['Conteúdos temporariamente indisponíveis.', 'unavailable']],
+  ]);
+  for (const [status, [message, code]] of expected) {
+    const { api } = await apiFrom({ request: async () => new Response('private server detail', { status }) });
+    await assert.rejects(api.detail('published-policy', contextFor()), error => {
+      assert.equal(error.status, status);
+      assert.equal(error.message, message);
+      assert.equal(error.code, code);
+      assert.deepEqual(Object.keys(error).sort(), ['code', 'status']);
+      assert.equal(Object.hasOwn(error, 'reason'), false, 'server reason fields never cross the reader API boundary');
+      assert.doesNotMatch(error.message, /private server detail/u);
+      return true;
+    });
+  }
 });
 
 test('identity or view generation change after a delayed complete body prevents API result commit', async () => {

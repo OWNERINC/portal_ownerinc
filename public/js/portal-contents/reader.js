@@ -86,6 +86,8 @@ function renderBlock(document, block, dto, blockIndex, media) {
     const labels = { info: 'Informação', warning: 'Atenção', success: 'Sucesso' };
     const aside = element(document, 'aside', `contents-callout contents-callout-${block.tone}`);
     const label = element(document, 'p', 'contents-callout-label', labels[block.tone]);
+    label.id = `contents-callout-label-${dto.id.toLowerCase()}-${blockIndex}`;
+    aside.setAttribute('aria-labelledby', label.id);
     aside.append(label);
     if (block.title) aside.append(element(document, 'h2', '', block.title));
     aside.append(element(document, 'p', 'contents-callout-text', block.text));

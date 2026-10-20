@@ -7,7 +7,7 @@ import { pageFixture } from './portal-contents-fixtures.mjs';
 const moduleFiles = [
   ['dto', 'public/js/portal-contents/dto.js', 'validatePortalPageDTO, validateDetail, validateList, validateCategories, isCanonicalSlug, PAGE_SIZE, MAX_OFFSET, MAX_TOTAL, MAX_BLOCKS, MAX_NODES, MAX_CONTENT_BYTES, MAX_DETAIL_BYTES, MAX_COLLECTION_BYTES, LAYOUTS'],
   ['richText', 'public/js/portal-contents/rich-text.js', 'renderRichText'],
-  ['api', 'public/js/portal-contents/api.js', 'readBoundedJSON, createContentsAPI'],
+  ['api', 'public/js/portal-contents/api.js', 'readBoundedJSON, createContentsAPI, contentsErrorMessage'],
   ['catalog', 'public/js/portal-contents/catalog.js', 'renderCatalog, renderCategories'],
   ['reader', 'public/js/portal-contents/reader.js', 'renderReader'],
   ['index', 'public/js/portal-contents/index.js', 'parseContentsLocation, mount'],

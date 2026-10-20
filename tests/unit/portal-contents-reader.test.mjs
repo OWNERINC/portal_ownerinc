@@ -41,6 +41,26 @@ test('ordinary reader renders safe semantic content and returns inert media desc
   assert.equal(root.querySelectorAll('[onclick], [onerror], [onload]').length, 0);
 });
 
+test('callout asides are accessibly named by their visible tone labels with unique IDs', async () => {
+  const h = await createContentsHarness();
+  const root = emptyRoot(h);
+  h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'callout', tone: 'info', text: 'Texto informativo' },
+    { type: 'callout', tone: 'warning', title: 'Importante', text: 'Texto de atenção' },
+    { type: 'callout', tone: 'success', text: 'Texto de sucesso' },
+  ] }), {}, {});
+  const asides = root.querySelectorAll('aside');
+  assert.equal(asides.length, 3);
+  const labelIds = asides.map(aside => {
+    const label = aside.querySelector('.contents-callout-label');
+    assert.ok(label?.id, 'the visible tone label has a stable DOM ID');
+    assert.equal(aside.getAttribute('aria-labelledby'), label.id, 'the aside name is tied to its visible tone label');
+    return label.id;
+  });
+  assert.equal(new Set(labelIds).size, labelIds.length, 'multiple callouts never reuse an accessible-name ID');
+  assert.deepEqual(asides.map(aside => aside.querySelector('.contents-callout-label').textContent), ['Informação', 'Atenção', 'Sucesso']);
+});
+
 test('rich text marks use a fixed safe nesting order and links expose visible new-tab cues', async () => {
   const h = await createContentsHarness();
   const dto = pageFixture({ content_blocks: [{ type: 'rich_text', nodes: [

@@ -8,6 +8,7 @@ export function createPageLifecycle({ user, history = window.history } = {}) {
   const timers = new Set();
   const frames = new Set();
   const urls = new Set();
+  let localNavigationRestoration = null;
   const page = {
     user, history, signal: controller.signal,
     get active() { return !controller.signal.aborted; },
@@ -24,6 +25,21 @@ export function createPageLifecycle({ user, history = window.history } = {}) {
       target.addEventListener(type, listener, options);
       page.cleanup(() => target.removeEventListener(type, listener, options));
       return listener;
+    },
+    get hasLocalNavigationRestoration() { return typeof localNavigationRestoration === 'function'; },
+    setLocalNavigationRestoration(getFocusTarget) {
+      if (typeof getFocusTarget !== 'function') throw new TypeError('A restauração local precisa fornecer o alvo de foco.');
+      localNavigationRestoration = getFocusTarget;
+      const unregister = () => {
+        if (localNavigationRestoration === getFocusTarget) localNavigationRestoration = null;
+        cleanups.delete(unregister);
+      };
+      cleanups.add(unregister);
+      return unregister;
+    },
+    getLocalNavigationFocusTarget(url) {
+      try { return localNavigationRestoration?.(url) || null; }
+      catch { return null; }
     },
     timeout(fn, delay) {
       if (!page.active) return null;

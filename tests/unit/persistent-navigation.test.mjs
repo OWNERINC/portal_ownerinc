@@ -191,6 +191,21 @@ test('history preserves page-local query/filter state, scroll, and focus across 
   assert.equal(h.location.pathname, '/academy.html');
 });
 
+test('same-page Owner News links keep their existing scroll and focus behavior without Contents opt-in', async () => {
+  const h = await createRouterHarness();
+  await h.router.navigate('/announcements.html?category=Cultura');
+  await drain(); await h.scope.ready();
+  const heading = h.doc.getElementById('heading-/announcements.html');
+  heading.focus();
+  h.window.scrollY = 275;
+  const event = h.click('/announcements.html?category=News');
+  await drain();
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(h.location.search, '?category=News');
+  assert.equal(h.window.scrollY, 275, 'the new Contents restoration hook does not scroll other pages');
+  assert.equal(h.doc.activeElement.id, heading.id, 'the new hook does not replace Owner News focus behavior');
+});
+
 test('Academy catalog return metadata coexists with the real router history index across areas', async () => {
   const h = await createRouterHarness();
   const catalog = 'https://portal.test/academy.html?initial_offset=20&role_category=Vendas';

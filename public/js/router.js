@@ -238,7 +238,7 @@ async function prepareScripts(doc) {
   }
 }
 
-function restorePosition(page, url, saved) {
+function restorePosition(page, url, saved, { localForward = false } = {}) {
   const version = ++restoration;
   const interaction = new AbortController();
   let touched = false;
@@ -251,7 +251,8 @@ function restorePosition(page, url, saved) {
     if (!page.active || touched || version !== restoration) return;
     let hashId = '';
     try { hashId = decodeURIComponent(url.hash.slice(1)); } catch (_) { /* Invalid fragment stays a native URL. */ }
-    const target = document.getElementById(saved?.focus || hashId) || document.getElementById('main-content');
+    const localTarget = !saved && localForward ? page.getLocalNavigationFocusTarget?.(url) : null;
+    const target = document.getElementById(saved?.focus || hashId) || localTarget || document.getElementById('main-content');
     if (target && !target.closest('[hidden], .hidden, [inert]')) {
       if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
       target.focus({ preventScroll: true });
@@ -480,8 +481,12 @@ export async function startRouter() {
       const leaving = activePage;
       if (!await commitPageLeaveUI() || activePage !== leaving) return;
       transition?.abort(); clearNavigationNotice(); closePageDialogs();
-      if (url.href !== location.href) pageHistory.pushState({}, '', url);
+      const movedForward = url.href !== activeURL.href;
+      if (movedForward) pageHistory.pushState({}, '', url);
       dispatchLocalHistory();
+      if (movedForward && activePage?.hasLocalNavigationRestoration) {
+        restorePosition(activePage, url, null, { localForward: true });
+      }
       return;
     }
     event.preventDefault();

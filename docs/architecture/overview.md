@@ -371,6 +371,11 @@ dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
   original sem inserir histórico duplicado. Query/hash locais continuam com os
   loaders da página. Foco e rolagem são restaurados após os loaders, desde que o
   usuário não tenha começado outra interação.
+- Uma página pode registrar um alvo de foco para a navegação local explícita. Só
+  nesse opt-in o router aguarda `page.ready()`, leva o foco ao título carregado e
+  rola ao início após um link local encaminhado; Back/Forward continua usando o
+  snapshot salvo de foco/rolagem, e páginas sem registro mantêm o comportamento
+  anterior. Conteúdos usa esse contrato; Owner News e as demais áreas não.
 - `generate-public-shell.mjs` gera o bootstrap e a restauração antecipada da
   sidebar em todos os HTMLs. CSS específico fica inativo fora da sua página;
   html2canvas, Lucide e jsPDF são reutilizados no documento. Admin reconcilia

@@ -160,6 +160,55 @@ test('404 and 400 details have distinct safe states; 503 retry is same-route and
   assert.equal(retry.document.activeElement, retry.document.querySelector('#contents-view').querySelector('h1'));
 });
 
+test('all supported API statuses render distinct fixed Portuguese copy without backend details', async () => {
+  const cases = [
+    [400, 'Não foi possível abrir este conteúdo com segurança.'],
+    [401, 'Sua sessão não está mais válida. Entre novamente para continuar.'],
+    [403, 'Você não tem permissão para visualizar este conteúdo.'],
+    [404, 'Este conteúdo não está mais disponível.'],
+    [409, 'O conteúdo mudou durante a leitura. Atualize e tente novamente.'],
+    [413, 'Este conteúdo excede o limite permitido para leitura.'],
+    [429, 'Muitas solicitações. Aguarde um instante e tente novamente.'],
+    [503, 'Conteúdos temporariamente indisponíveis.'],
+  ];
+  const observed = new Set();
+  for (const [status, message] of cases) {
+    const h = await createContentsHarness({ url: '/contents.html?slug=published-policy',
+      request: async () => responseForDetail('', status) });
+    h.mount(); await h.ready();
+    const state = h.document.querySelector('#contents-status');
+    assert.ok(state.textContent.startsWith(message), `HTTP ${status} has its fixed status copy`);
+    assert.doesNotMatch(state.textContent, /private server detail/u);
+    observed.add(state.textContent.slice(0, message.length));
+  }
+  assert.equal(observed.size, cases.length, 'each supported status has distinct user-facing copy');
+});
+
+test('retry focus intent belongs only to its run and a superseded late response cannot steal focus', async () => {
+  let calls = 0;
+  let pullStarted;
+  const pullStartedPromise = new Promise(resolve => { pullStarted = resolve; });
+  let staleCancelled = 0;
+  const h = await createContentsHarness({ url: '/contents.html?slug=published-policy', request: async () => {
+    calls += 1;
+    if (calls === 1) return responseForDetail('', 503);
+    if (calls === 2) return new Response(new ReadableStream({
+      pull() { pullStarted(); return new Promise(() => {}); },
+      cancel() { staleCancelled += 1; },
+    }, { highWaterMark: 0 }));
+    return responseForDetail('another-page');
+  } });
+  h.mount(); await h.ready();
+  h.document.body.focus();
+  h.document.querySelector('#contents-status button').click();
+  await pullStartedPromise;
+  assert.equal(calls, 2);
+  await h.popstate('/contents.html?slug=another-page');
+  assert.equal(h.document.querySelector('#contents-view h1').textContent, 'Outra página');
+  assert.equal(h.document.activeElement.tagName, 'BODY', 'ordinary navigation does not inherit a stale retry focus request');
+  assert.equal(staleCancelled, 1, 'the superseded retry stream is cancelled');
+});
+
 test('missing optional status target does not block direct-route rendering', async () => {
   const h = await createContentsHarness({ url: '/contents.html?slug=published-policy' });
   h.document.getElementById('contents-status').remove();
@@ -239,5 +288,48 @@ test('real persistent router admits contents while availability is unavailable a
   assert.equal(h.location.pathname, '/knowledge.html');
   assert.ok(requested.includes('/api/contents/categories'));
   assert.equal(h.router.routes['/announcements.html'], './announcements.js', 'Owner News routing remains unchanged');
+  assert.ok(feature.modules.index);
+});
+
+test('Contents local forward anchors wait for the current load, focus its heading, and preserve traversal snapshots', async () => {
+  const dto = pageFixture({ content_blocks: [] });
+  let resolveReader;
+  let delayReader = true;
+  const h = await createRouterHarness({ initialURL: 'https://portal.test/contents.html', autoStart: false });
+  h.page('/contents.html');
+  const feature = await h.loadContentsModule({ request: async path => {
+    if (path === '/api/contents/categories') return Response.json([]);
+    if (path.startsWith('/api/contents/?')) return new Response(JSON.stringify([dto]), { headers: { 'X-Total-Count': '1' } });
+    if (path.endsWith('/published-policy') && delayReader) {
+      delayReader = false;
+      return new Promise(resolve => { resolveReader = resolve; });
+    }
+    return Response.json({ ...dto, slug: path.split('/').at(-1), title: 'Página de leitura' });
+  } });
+  await h.router.startRouter();
+  await h.scope.ready();
+  const catalogHeading = h.doc.querySelector('#contents-view h1');
+  catalogHeading.focus();
+  h.window.scrollTo(0, 420);
+
+  const click = h.click('/contents.html?slug=published-policy');
+  await drain();
+  assert.equal(typeof resolveReader, 'function', 'the click started the tracked detail loader');
+  assert.equal(h.window.scrollY, 420, 'forward restoration must wait while the tracked loader is pending');
+  resolveReader(Response.json({ ...dto, title: 'Página de leitura' }));
+  await h.scope.ready();
+  await drain();
+  const readerHeading = h.doc.querySelector('#contents-view h1');
+  assert.equal(click.defaultPrevented, true);
+  assert.equal(h.window.scrollY, 0, 'forward local navigation resets scroll only after the tracked load completes');
+  assert.equal(h.doc.activeElement.id, readerHeading.id, 'forward local navigation focuses the new reader heading');
+
+  h.history.back(); await drain(); await h.scope.ready();
+  assert.equal(h.location.search, '');
+  assert.equal(h.window.scrollY, 420, 'Back restores the saved catalog scroll position');
+  assert.equal(h.doc.activeElement.id, catalogHeading.id, 'Back restores the saved catalog focus target');
+  h.history.forward(); await drain(); await h.scope.ready();
+  assert.equal(h.doc.activeElement.id, 'contents-title');
+  assert.equal(h.window.scrollY, 0, 'Forward restores the saved reader position rather than rerunning the forward reset');
   assert.ok(feature.modules.index);
 });

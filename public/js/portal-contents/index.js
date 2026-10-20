@@ -1,5 +1,5 @@
 import { getContentsIdentity, subscribeContentsIdentity } from '../auth.js';
-import { createContentsAPI } from './api.js';
+import { contentsErrorMessage, createContentsAPI } from './api.js';
 import { renderCatalog, renderCategories } from './catalog.js';
 import { MAX_OFFSET, PAGE_SIZE, isCanonicalSlug } from './dto.js';
 import { renderReader } from './reader.js';
@@ -114,7 +114,7 @@ export function mount(page) {
     status.append(link);
   }
 
-  function statusRetry(message, run, { focusHeading = false, categoryOnly = false } = {}) {
+  function statusRetry(message, { categoryOnly = false } = {}) {
     if (!status) return;
     status.replaceChildren(makeElement(document, 'span', '', message));
     const retry = makeElement(document, 'button', 'contents-retry', 'Tentar novamente');
@@ -124,8 +124,6 @@ export function mount(page) {
       else startRoute(true);
     });
     status.append(retry);
-    if (focusHeading) status.setAttribute('data-focus-on-reload', 'true');
-    void run;
   }
 
   function showLoadFailure(error, run) {
@@ -133,15 +131,20 @@ export function mount(page) {
     root?.replaceChildren();
     container?.removeAttribute('aria-busy');
     if (!status) return;
+    const message = contentsErrorMessage(error?.code === 'invalid_contents' ? { status: 400 } : error);
     if (run.state.kind === 'reader' && error?.status === 404) {
-      statusLink('Este conteúdo não está mais disponível.', 'Voltar ao catálogo', lastCatalogHref);
+      statusLink(message, 'Voltar ao catálogo', lastCatalogHref);
       return;
     }
     if (error?.status === 400 || error?.code === 'invalid_contents' || run.state.kind === 'invalid') {
-      statusLink('Não foi possível abrir este conteúdo com segurança.', 'Voltar ao catálogo', lastCatalogHref);
+      statusLink(message, 'Voltar ao catálogo', lastCatalogHref);
       return;
     }
-    statusRetry('Conteúdos temporariamente indisponíveis.', run);
+    if (error?.status === 401 || error?.status === 403) {
+      status.textContent = message;
+      return;
+    }
+    statusRetry(message);
   }
 
   function showCategoryFailure(error, run) {
@@ -220,7 +223,7 @@ export function mount(page) {
     }
     const identity = getContentsIdentity();
     const run = { id: generation, state, identity: { uid: identity?.uid, generation: identity?.generation },
-      controller: new AbortController() };
+      controller: new AbortController(), focusHeading: fromRetry };
     active = run;
     if (!identityIsValid(identity)) {
       if (status) status.textContent = '';
@@ -230,13 +233,12 @@ export function mount(page) {
     if (state.href && currentHref !== state.href) {
       page.history?.replaceState?.(window.history?.state, '', state.href);
     }
-    if (fromRetry) status?.setAttribute('data-focus-on-reload', 'true');
     setLoading(run);
     const options = { method: 'GET', signal: run.controller.signal };
     void tracked.loadView(state.href || '/contents.html', options).then(() => {
       if (!current(run)) return;
-      if (status?.getAttribute('data-focus-on-reload') === 'true') {
-        status.removeAttribute('data-focus-on-reload');
+      if (run.focusHeading) {
+        run.focusHeading = false;
         renderedView?.heading?.focus?.();
       }
     }).catch(error => showLoadFailure(error, run));
@@ -264,6 +266,7 @@ export function mount(page) {
   }
 
   const unsubscribe = subscribeContentsIdentity(onIdentity);
+  page.setLocalNavigationRestoration?.(() => renderedView?.heading || shellHeading || null);
   page.cleanup(() => {
     unsubscribe?.();
     clearView();
