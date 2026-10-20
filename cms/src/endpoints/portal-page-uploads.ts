@@ -1,10 +1,8 @@
 import { APIError, type Endpoint, type PayloadRequest } from 'payload'
-import { isVerifiedNewsActor } from '../auth/access'
-import { canManagePortalPages } from '../auth/portal-pages-access'
 import { assertEditorialOrigin } from '../auth/cookie'
 import { PortalAuthError } from '../auth/portal-client'
-import { parseAdminActor } from '../contracts/admin'
 import { readCmsEnvironment, readPortalPublicURL } from '../config/environment'
+import { requirePortalPageUploadUID } from '../portal-pages/editorial-auth'
 import { createPortalPageUploadService, PortalPageUploadError } from '../portal-pages/upload-service'
 
 const RESPONSE_HEADERS = { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' }
@@ -23,29 +21,7 @@ const messages: Record<string, string> = {
 }
 
 function currentEditorUID(req: PayloadRequest): string {
-  if (!canManagePortalPages({ req })) throw new PortalPageUploadError('forbidden', 403)
-  const user = req.user as (NonNullable<PayloadRequest['user']> & {
-    portalUid?: string
-    portalActor?: { uid: string; canManageNews: boolean }
-    adminActor?: unknown
-    adminExpiresAt?: string
-    portalExpiresAt?: string
-  }) | null
-  if (!user || user.collection !== 'portal-editors' || typeof user.portalUid !== 'string') throw new PortalPageUploadError('forbidden', 403)
-  const adminActor = parseAdminActor(user.adminActor)
-  if (adminActor?.capabilities.manageKnowledge === true && adminActor.uid === user.portalUid) {
-    if (!Number.isFinite(Date.parse(user.adminExpiresAt || '')) || Date.parse(user.adminExpiresAt || '') <= Date.now()) {
-      throw new PortalAuthError(401)
-    }
-    return adminActor.uid
-  }
-  if (isVerifiedNewsActor(user as never)) {
-    if (!Number.isFinite(Date.parse(user.portalExpiresAt || '')) || Date.parse(user.portalExpiresAt || '') <= Date.now()) {
-      throw new PortalAuthError(401)
-    }
-    return user.portalActor!.uid
-  }
-  throw new PortalPageUploadError('forbidden', 403)
+  return requirePortalPageUploadUID(req)
 }
 
 async function readJson(req: PayloadRequest): Promise<unknown> {

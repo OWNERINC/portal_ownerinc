@@ -26,6 +26,7 @@ import { PortalPageMedia } from './collections/PortalPageMedia'
 import { PortalPages } from './collections/PortalPages'
 import { portalPageUploadEndpoints } from './endpoints/portal-page-uploads'
 import { portalPageReadEndpoints } from './endpoints/portal-pages'
+import { portalPageEditorialEndpoints } from './endpoints/portal-page-editorial'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
@@ -57,7 +58,8 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext), NewsSchedules, NewsAudit, LegacyNewsRevisions,
     NewsMigrationRuns, NewsMigrationItems, PortalPageCategories, PortalPageMedia, PortalPages],
   globals: [NewsHome],
-  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints, ...portalPageUploadEndpoints, ...portalPageReadEndpoints],
+  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints, ...portalPageUploadEndpoints,
+    ...portalPageReadEndpoints, ...portalPageEditorialEndpoints],
   i18n: { supportedLanguages: { pt }, fallbackLanguage: 'pt' },
   editor: newsEditor,
   secret: environment.payloadSecret,

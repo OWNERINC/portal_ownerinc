@@ -434,6 +434,23 @@ test('published slug uses canonical main state and remains blocked through draft
   }), /portal_page_publication_context_required/)
 })
 
+test('native REST status changes and historical restores still require the page publication helper', async () => {
+  const f = await payloadFixture({ mainPage: { slug: 'pagina', status: 'published' } })
+  const beforeOperation = PortalPages.hooks?.beforeOperation?.[0]
+  const beforeChange = PortalPages.hooks?.beforeChange?.[0]
+  assert.ok(beforeOperation); assert.ok(beforeChange)
+  await assert.rejects((beforeOperation as (args: unknown) => Promise<unknown>)({
+    operation: 'update', args: { id: pageID, data: { _status: 'published' }, draft: false }, req: f.req,
+  }), /portal_page_publication_context_required/)
+  await assert.rejects((beforeChange as (args: unknown) => Promise<unknown>)({
+    operation: 'update', data: { _status: 'draft', title: 'Página', slug: 'pagina', summary: '', body: [] },
+    originalDoc: { id: pageID, _status: 'published', slug: 'pagina' }, req: f.req,
+  }), /portal_page_publication_context_required/)
+  await assert.rejects((beforeOperation as (args: unknown) => Promise<unknown>)({
+    operation: 'restoreVersion', args: { id: pageID, version: versionID, draft: true }, req: f.req,
+  }), /portal_page_restore_requires_publication_helper/)
+})
+
 test('media validation locks and rejects incomplete or wrong-shape MIME references before publication', async () => {
   for (const asset of [
     mediaRecord(pageMediaID, 'image/png', 'uploading'),

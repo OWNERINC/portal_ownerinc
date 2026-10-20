@@ -4,7 +4,6 @@ import type {
   PortalPageLayout,
 } from './blocks'
 import { APIError } from 'payload'
-import { randomUUID } from 'node:crypto'
 import type { PortalPageDTO, PortalPagePublicationInput } from './contracts'
 import { normalizePortalRichNodes, type PortalPageRichNodeBudget } from './rich-text'
 import {
@@ -70,7 +69,7 @@ const portalPageMediaExtensions: Readonly<Record<(typeof PORTAL_PAGE_MEDIA_MIMES
 /** Generate a server-owned canonical random metadata key; physical storage is added later. */
 export function createPortalPageStorageKey(value: unknown): string {
   const mimeType = oneOf(value, PORTAL_PAGE_MEDIA_MIMES, 'invalid_portal_page_media_metadata')
-  return `${randomUUID()}.${portalPageMediaExtensions[mimeType]}`
+  return `${globalThis.crypto.randomUUID()}.${portalPageMediaExtensions[mimeType]}`
 }
 
 export type PortalPageMediaMetadata = {

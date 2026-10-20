@@ -17,10 +17,33 @@ uma afirmação sobre qual versão está publicada. Ativos públicos se vinculam
 revisão publicada; ativos de preview se vinculam à versão salva exata e à
 identidade do editor.
 
-Publicação futura recebe somente `{id,expected_version_id,operation}`. A mutação
-deverá comparar `expected_version_id` com a versão salva mais recente antes da
-transição. Rascunhos e Versions retidos, capas e imagens de galeria contam como
-referências para impedir exclusão prematura de mídia.
+As rotas editoriais do CMS são
+`/editorial/api/portal-page-editorial/{revision,save,publication}`. A consulta de
+revisão lê sob `CMS_REFERENCE_LOCK` e lock da página; ela separa o status principal
+da versão `latest`, calcula um hash de snapshot que inclui UUID, pai, autosave,
+`updatedAt` e conteúdo nativo, e informa separadamente a última versão explícita.
+Múltiplas versões `latest` falham fechadas.
+
+O salvamento explícito de documento existente aceita somente o UUID e o par
+`expected_latest_version_id`/`expected_snapshot_hash`; compare-and-swap rejeita
+inclusive uma autosave alterada in-place. O primeiro salvamento aceita os sete
+campos nativos editáveis, sem metadados de servidor. O limite de corpo é 16 KiB
+para salvamento existente, 8 MiB para criação e 5 MiB para o conteúdo projetado.
+Ambas as mutações criam snapshots nativos não-autosave pela Local API do Payload.
+
+A publicação/despublicação recebe somente `{id,expected_version_id,operation}` e
+exige que a versão esperada ainda seja a versão `latest` explícita. A transição
+copia todos os sete campos do snapshot nativo escolhido dentro da mesma transação;
+despublicar grava um novo draft e não reescreve a versão fonte. Respostas de
+mutação só são entregues depois de reler a Version exata em uma sessão Payload
+nova e comparar pai, conteúdo, autores, status, autosave e datas. A confirmação
+não depende de a versão ainda ser `latest`, pois outra edição legítima pode ocorrer
+após o commit. POSTs exigem Origin igual à origem configurada e rejeitam
+`Sec-Fetch-Site: cross-site`; GET de revisão permite navegação sem Origin, mas
+também rejeita cross-site. A autenticação editorial exige sessão V2 com
+`manageKnowledge` e UID/expiração correspondentes. Rascunhos e Versions retidos,
+capas e imagens de galeria contam como referências para impedir exclusão prematura
+de mídia.
 
 ## Edição e autorização
 

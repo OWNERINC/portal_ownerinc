@@ -252,7 +252,8 @@ async function latestPortalPageVersion(req: PayloadRequest, id: string) {
   await requireCmsTransaction(req.payload, req)
   const result = await req.payload.findVersions({ collection: 'portal-pages', req,
     where: { and: [{ parent: { equals: id } }, { latest: { equals: true } }] },
-    depth: 0, overrideAccess: true, limit: 1, sort: '-updatedAt' })
+    depth: 0, overrideAccess: true, limit: 2, sort: ['-updatedAt', '-id'] })
+  if (result.docs.length > 1) throw unavailable('portal_page_version_state_unavailable')
   return result.docs[0]
 }
 

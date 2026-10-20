@@ -91,5 +91,5 @@ export function httpsURL(value: unknown, code = 'invalid_portal_page_url'): stri
 }
 
 export function utf8Bytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8')
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength
 }
