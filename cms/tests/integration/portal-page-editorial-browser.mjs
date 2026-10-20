@@ -165,6 +165,12 @@ async function readBrowserRange(page, assetURL) {
   }, assetURL)
 }
 
+async function directPreviewPDFLink(page) {
+  const link = page.locator('.portal-page-preview__pdf > a').first()
+  await link.waitFor({ state: 'visible' })
+  return link
+}
+
 async function runExactPreview(page, context, baseURL) {
   const saveButton = page.getByRole('button', { name: 'Salvar versão', exact: true })
   await saveButton.waitFor({ state: 'visible' })
@@ -190,8 +196,7 @@ async function runExactPreview(page, context, baseURL) {
     await previewTab.getByText(versionID, { exact: true }).waitFor({ state: 'visible' })
     await previewTab.getByText(oldSummary, { exact: true }).waitFor({ state: 'visible' })
 
-    const pdfLink = previewTab.locator('.portal-page-preview__pdf a').first()
-    await pdfLink.waitFor({ state: 'visible' })
+    const pdfLink = await directPreviewPDFLink(previewTab)
     const oldAssetURL = new URL(await pdfLink.getAttribute('href'), baseURL)
     assert.ok(oldAssetURL.pathname.includes(`/${versionID}/`), 'old_pdf_url_not_bound_to_exact_version')
     const firstRange = await readBrowserRange(previewTab, oldAssetURL.toString())
@@ -226,7 +231,8 @@ async function runExactPreview(page, context, baseURL) {
     assert.equal(new URL(previewTab.url()).searchParams.get('version'), versionID)
     await previewTab.getByText(oldSummary, { exact: true }).waitFor({ state: 'visible' })
     assert.equal(await previewTab.getByText(newerSummary, { exact: true }).count(), 0)
-    const reloadedPdfURL = new URL(await previewTab.locator('.portal-page-preview__pdf a').first().getAttribute('href'), baseURL)
+    const reloadedPdfLink = await directPreviewPDFLink(previewTab)
+    const reloadedPdfURL = new URL(await reloadedPdfLink.getAttribute('href'), baseURL)
     assert.equal(reloadedPdfURL.toString(), oldAssetURL.toString())
     const secondRange = await readBrowserRange(previewTab, oldAssetURL.toString())
     assert.equal(secondRange.status, 206)

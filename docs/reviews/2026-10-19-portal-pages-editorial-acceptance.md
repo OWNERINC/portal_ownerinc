@@ -105,6 +105,33 @@ browser, manual accessibility, and live-service acceptance remain
 **NOT_EXECUTED**. If those prerequisites are absent, both new named browser cases
 are emitted as `NOT_EXECUTED`; aggregation cannot produce overall `PASS`.
 
+## Review-fix round 3 — editor restoration and direct PDF link
+
+| Check | Result | Evidence |
+|---|---|---|
+| Focused browser harness | **PASS** | 6 tests passed, including navigation to a Versions view, restoration/readiness before the second snapshot and upload invocation, and restoration in `finally` after a controls error. |
+| All Task 4 `portal-page-*` unit tests | **PASS** | 155 tests passed. |
+| `npm run typecheck` in `cms/` | **PASS** | TypeScript completed without emission. |
+| `npm run test:unit` in `cms/` | **PASS** | 704 tests: 693 passed, 0 failed, 11 skipped because optional PGlite is unavailable. |
+| `node --check` for Task 4 editorial MJS modules | **PASS** | Browser runner and editorial helpers parse; syntax only. |
+| `git diff --check` | **PASS** | No whitespace errors before commit. |
+| `npm run verify` with `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Windows\Temp` | **PASS on retry** | The first run reported a root subprocess failure for `admin-list-filters.test.mjs`; the file passed independently (38/38), and the full rerun passed root tests, CMS tests, security, and Compose checks. |
+
+The orchestration captures the original editor URL before controls, restores it
+from `finally`, and waits for the exact native save button and image, gallery,
+video, and PDF wrappers before taking the second upload-position snapshot. The
+behavioral harness confirms restoration and all readiness checks precede that
+snapshot and upload invocation. If controls throw, restoration is attempted and
+uploads are not called. The historical-preview case now reads the direct child
+`.portal-page-preview__pdf > a` link before and after reload, excluding the
+nested `<object>` fallback anchor.
+
+Browser and real PostgreSQL/Payload acceptance remain **NOT_EXECUTED** in this
+round. No disposable database/browser handoff or external Playwright fixture was
+started. The named browser case order and synthetic revocation behavior are
+unchanged; the local revocation bridge remains test-only evidence, not evidence
+about the live Portal service.
+
 ## Docker e recursos
 
 - O `npm run verify` consultou `docker compose version` (`29.5.3`); nenhum daemon,

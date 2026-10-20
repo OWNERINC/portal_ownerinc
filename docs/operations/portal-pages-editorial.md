@@ -113,14 +113,16 @@ faltante, duplicado, inesperado ou status inválido falha; qualquer `FAIL` falha
 `NOT_EXECUTED` ou `SKIP` impede `PASS`. Um caso não executado nunca é omitido do JSON.
 
 No browser acceptance, inserção/reordenação de blocos usa uma Page sintética
-separada. Antes e depois dos controles, o runner confere os destinos originais
-da imagem, galeria, vídeo e PDF; só executa uploads se os mesmos caminhos
-continuarem presentes, e entrega o mapa verificado à suíte de upload. O fluxo
-executa controles/uploads e o smoke de News antes do caso histórico, que salva
-uma versão nova, publica-a e então relê a URL da versão antiga e seus bytes PDF
-por Range. A revogação da sessão sintética é o último caso: chama o contrato HTTP
-da autoridade descartável e faz uma nova requisição Range no navegador com o
-cookie antigo ainda presente.
+separada. Antes dos controles, o runner guarda a URL do editor principal e os
+destinos da imagem, galeria, vídeo e PDF. Em `finally`, restaura aquela URL e
+aguarda o controle nativo de salvar e cada wrapper exato; só então repete o
+snapshot. Uploads só executam quando todos os caminhos continuam iguais, e
+recebem o mapa verificado. O fluxo executa controles/uploads e o smoke de News
+antes do caso histórico, que salva uma versão nova, publica-a e então relê a URL
+da versão antiga e seus bytes PDF por Range. A prévia consulta o link PDF externo
+direto (não o fallback aninhado no `<object>`). A revogação da sessão sintética é
+o último caso: chama o contrato HTTP da autoridade descartável e faz uma nova
+requisição Range no navegador com o cookie antigo ainda presente.
 
 Essa ponte com revogação stateful é exclusiva do fixture descartável e não
 simula nem comprova o serviço Portal real. Sem fixture/handoff/Playwright, os

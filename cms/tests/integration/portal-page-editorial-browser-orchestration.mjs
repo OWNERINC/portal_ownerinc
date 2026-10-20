@@ -24,10 +24,24 @@ async function snapshot(page) {
   try { return await readUploadDestinationPositions(page) } catch { return null }
 }
 
+async function restoreOriginalEditor(page, originalURL) {
+  await page.goto(originalURL, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: 'Salvar versão', exact: true }).waitFor({ state: 'visible' })
+  await Promise.all(Object.values(expectedUploadDestinationPositions).map(path =>
+    page.locator(`.portal-page-media-field[data-portal-page-media-path="${path}"]`)
+      .waitFor({ state: 'visible' })))
+}
+
 /** Run controls with their isolated structural editor, then gate uploads on the original page positions. */
 export async function runEditorialControlAndUploadSuites({ page, structuralPage, runControls, runUploads }) {
+  const originalEditorURL = page.url()
   const before = await snapshot(page)
-  const controls = await runControls(page, structuralPage)
+  let controls
+  try {
+    controls = await runControls(page, structuralPage)
+  } finally {
+    await restoreOriginalEditor(page, originalEditorURL)
+  }
   const after = await snapshot(page)
   const positionsVerified = samePositions(before, after)
   const positionResult = {

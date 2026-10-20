@@ -39,19 +39,58 @@ test('editorial control assertion paths use their exported boolean-backed helper
   assert.throws(() => controls.assertMatch('body.asset', /body\.\d+\.asset/u, 'path_invalid'), /path_invalid/u)
 })
 
-test('browser orchestration keeps block edits separate and passes original media positions to uploads', async () => {
+test('browser orchestration restores the editor after controls before snapshots and preserves upload positions', async () => {
   const orchestration = await import('../integration/portal-page-editorial-browser-orchestration.mjs') as unknown as BrowserOrchestration
   const originalPositions = orchestration.expectedUploadDestinationPositions
-  const makePage = (paths: string[]) => ({
-    paths,
-    locator(selector: string) {
-      assert.equal(selector, '.portal-page-media-field')
-      return { evaluateAll: async (callback: (nodes: Array<{ getAttribute(name: string): string | null }>) => unknown) =>
-        callback(paths.map(value => ({ getAttribute: name => name === 'data-portal-page-media-path' ? value : null }))) }
-    },
-  })
-  const editorPage = makePage(Object.values(originalPositions))
-  const structuralPage = makePage(['body.0.text', 'body.1.text'])
+  const originalEditorURL = 'http://127.0.0.1:3100/editorial/admin/collections/portal-pages/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const versionsURL = `${originalEditorURL}/versions`
+  const events: string[] = []
+  const makePage = (paths: string[], startURL: string) => {
+    let currentURL = startURL
+    let view: 'editor' | 'versions' = 'editor'
+    return {
+      paths,
+      url: () => currentURL,
+      get view() { return view },
+      async goto(url: string, options: { waitUntil: string }) {
+        assert.equal(options.waitUntil, 'domcontentloaded')
+        events.push(`goto:${url}`)
+        currentURL = url
+        view = url === startURL ? 'editor' : 'versions'
+      },
+      getByRole(role: string, options: { name: string; exact: boolean }) {
+        assert.equal(role, 'button')
+        assert.equal(options.name, 'Salvar versão')
+        assert.equal(options.exact, true)
+        return { waitFor: async ({ state }: { state: string }) => {
+          assert.equal(state, 'visible')
+          assert.equal(view, 'editor')
+          events.push('native-editor-ready')
+        } }
+      },
+      locator(selector: string) {
+        if (selector === '.portal-page-media-field') {
+          return { evaluateAll: async (callback: (nodes: Array<{ getAttribute(name: string): string | null }>) => unknown) => {
+            events.push(`snapshot:${view}`)
+            const currentPaths = view === 'editor' ? paths : []
+            return callback(currentPaths.map(value => ({
+              getAttribute: name => name === 'data-portal-page-media-path' ? value : null,
+            })))
+          } }
+        }
+        const path = Object.values(originalPositions).find(value =>
+          selector === `.portal-page-media-field[data-portal-page-media-path="${value}"]`)
+        assert.ok(path, `unexpected_destination_wrapper_selector:${selector}`)
+        return { waitFor: async ({ state }: { state: string }) => {
+          assert.equal(state, 'visible')
+          assert.equal(view, 'editor')
+          events.push(`wrapper-ready:${path}`)
+        } }
+      },
+    }
+  }
+  const editorPage = makePage(Object.values(originalPositions), originalEditorURL)
+  const structuralPage = { paths: ['body.0.text', 'body.1.text'] }
   let uploadedPositions: Readonly<Record<string, string | null>> | undefined
   const callOrder: string[] = []
 
@@ -62,14 +101,19 @@ test('browser orchestration keeps block edits separate and passes original media
     structuralPage,
     runControls: async (page, structure) => {
       callOrder.push('controls')
+      events.push('controls')
       assert.equal(page, editorPage)
       assert.equal(structure, structuralPage)
       assert.notEqual(page, structure)
       structure.paths.reverse()
+      const mutablePage = page as typeof editorPage
+      await mutablePage.goto(versionsURL, { waitUntil: 'domcontentloaded' })
+      // Controls leave this original Page on the Versions/diff view; orchestration must restore it.
       return controlCases
     },
     runUploads: async (page, positions) => {
       callOrder.push('uploads')
+      events.push('uploads')
       assert.equal(page, editorPage)
       uploadedPositions = positions
       return uploadCases
@@ -77,9 +121,67 @@ test('browser orchestration keeps block edits separate and passes original media
   })
 
   assert.deepEqual(callOrder, ['controls', 'uploads'])
+  const controlsIndex = events.indexOf('controls')
+  const restoreIndex = events.indexOf(`goto:${originalEditorURL}`)
+  const editorReadyIndex = events.indexOf('native-editor-ready', restoreIndex)
+  const postSnapshotIndex = events.indexOf('snapshot:editor', editorReadyIndex + 1)
+  const uploadIndex = events.indexOf('uploads')
+  assert.ok(controlsIndex < restoreIndex, 'editor_restore_did_not_follow_controls')
+  assert.ok(restoreIndex < editorReadyIndex && editorReadyIndex < postSnapshotIndex,
+    `editor_not_ready_before_post_controls_snapshot:${events.join(',')}`)
+  for (const path of Object.values(originalPositions)) {
+    const wrapperIndex = events.indexOf(`wrapper-ready:${path}`)
+    assert.ok(editorReadyIndex < wrapperIndex && wrapperIndex < postSnapshotIndex,
+      `destination_wrapper_not_ready_before_snapshot:${path}`)
+  }
+  assert.ok(postSnapshotIndex < uploadIndex, 'uploads_started_before_restored_position_snapshot')
+  assert.deepEqual(events.filter(event => event.startsWith('snapshot:')), ['snapshot:editor', 'snapshot:editor'])
+  assert.equal(editorPage.url(), originalEditorURL)
+  assert.equal(editorPage.view, 'editor')
   assert.deepEqual(uploadedPositions, originalPositions)
   assert.equal(results.find(item => item.name === orchestration.uploadPositionAcceptanceName)?.status, 'PASS')
   assert.ok(results.includes(uploadCases[0]!))
+})
+
+test('browser orchestration restores the editor in finally when controls fail and never starts uploads', async () => {
+  const orchestration = await import('../integration/portal-page-editorial-browser-orchestration.mjs') as unknown as BrowserOrchestration
+  const originalURL = 'http://127.0.0.1:3100/editorial/admin/collections/portal-pages/cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  let currentURL = originalURL
+  let view: 'editor' | 'versions' = 'editor'
+  let uploadCalled = false
+  const events: string[] = []
+  const page = {
+    url: () => currentURL,
+    goto: async (url: string) => { events.push(`goto:${url}`); currentURL = url; view = 'editor' },
+    getByRole: () => ({ waitFor: async () => { assert.equal(view, 'editor'); events.push('editor-ready') } }),
+    locator: (selector: string) => selector === '.portal-page-media-field'
+      ? { evaluateAll: async (callback: (nodes: Array<{ getAttribute(name: string): string | null }>) => unknown) => {
+        events.push(`snapshot:${view}`)
+        return callback(Object.values(orchestration.expectedUploadDestinationPositions).map(path => ({
+          getAttribute: () => path,
+        })))
+      } }
+      : { waitFor: async () => { assert.equal(view, 'editor'); events.push(`wrapper-ready:${selector}`) } },
+  }
+  const controlError = new Error('control_suite_failed')
+
+  await assert.rejects(orchestration.runEditorialControlAndUploadSuites({
+    page,
+    structuralPage: {},
+    runControls: async () => {
+      events.push('controls')
+      currentURL = `${originalURL}/versions`
+      view = 'versions'
+      throw controlError
+    },
+    runUploads: async () => { uploadCalled = true; return [] },
+  }), error => error === controlError)
+
+  assert.equal(currentURL, originalURL)
+  assert.deepEqual(events.slice(0, 4), [
+    'snapshot:editor', 'controls', `goto:${originalURL}`, 'editor-ready',
+  ])
+  assert.equal(uploadCalled, false)
 })
 
 test('changed positional media destinations fail the invariant and skip the upload suite', async () => {
@@ -88,11 +190,16 @@ test('changed positional media destinations fail the invariant and skip the uplo
   let reads = 0
   let uploadCalled = false
   const page = {
-    locator: () => ({ evaluateAll: async (callback: (nodes: Array<{ getAttribute(name: string): string | null }>) => unknown) => {
-      reads++
-      const current = reads === 1 ? paths : ['body.99.asset', ...paths.slice(1)]
-      return callback(current.map(value => ({ getAttribute: () => value })))
-    } }),
+    url: () => 'http://127.0.0.1:3100/editorial/admin/collections/portal-pages/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    goto: async () => {},
+    getByRole: () => ({ waitFor: async () => {} }),
+    locator: (selector: string) => selector === '.portal-page-media-field'
+      ? { evaluateAll: async (callback: (nodes: Array<{ getAttribute(name: string): string | null }>) => unknown) => {
+        reads++
+        const current = reads === 1 ? paths : ['body.99.asset', ...paths.slice(1)]
+        return callback(current.map(value => ({ getAttribute: () => value })))
+      } }
+      : { waitFor: async () => {} },
   }
   const controls: BrowserCase[] = [{ name: 'controls completed', status: 'PASS', detail: '' }]
   const results = await orchestration.runEditorialControlAndUploadSuites({
@@ -129,6 +236,11 @@ test('browser acceptance registry requires historical preview and revocation; so
   assert.match(browser, /historicalPreview = await runExactPreview\(historicalPage, context, handoff\.baseURL\)/u)
   assert.match(browser, /await revokeAndProbeOldAsset\(/u)
   assert.match(browser, /notExecutedAcceptanceCases\(expectedBrowserAcceptanceCases/u)
+  assert.match(browser, /async function directPreviewPDFLink\(page\)[\s\S]*?page\.locator\('\.portal-page-preview__pdf > a'\)/u)
+  assert.equal((browser.match(/directPreviewPDFLink\(previewTab\)/gu) || []).length, 2,
+    'historical preview must use the direct PDF link both before and after reload')
+  assert.doesNotMatch(browser, /portal-page-preview__pdf a(?:['"`])/u,
+    'historical preview must not select the nested object fallback anchor')
   assert.ok(browser.indexOf('runEditorialControlAndUploadSuites(') < browser.indexOf('historicalPreview = await runExactPreview('))
   assert.ok(browser.indexOf('existing News controls smoke: preview, scheduling and legacy history render') <
     browser.indexOf('historicalPreview = await runExactPreview('))
