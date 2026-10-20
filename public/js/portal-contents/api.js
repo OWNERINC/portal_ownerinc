@@ -1,4 +1,5 @@
 import { authenticatedFetch, getContentsIdentity } from '../auth.js';
+import { parseContentLength } from '../content-length.js';
 import { MAX_COLLECTION_BYTES, MAX_DETAIL_BYTES, MAX_OFFSET, MAX_TOTAL, PAGE_SIZE, isCanonicalSlug, validateCategories, validateDetail, validateList } from './dto.js';
 
 const AUTH_ERROR_BODY_LIMIT = 16 * 1024;
@@ -79,18 +80,6 @@ async function cancelOwnedBody(response) {
   } catch { /* Cancellation is best-effort; the response is already rejected. */ }
 }
 
-function validateContentLength(response, maxBytes) {
-  const value = response?.headers?.get?.('Content-Length');
-  if (value === null || value === undefined) return;
-  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    throw new Error('Resposta com tamanho declarado inválido.');
-  }
-  const length = Number(value);
-  if (!Number.isSafeInteger(length) || length > maxBytes) {
-    throw new Error('Resposta excede o limite permitido.');
-  }
-}
-
 export async function readBoundedJSON(response, { signal, maxBytes } = {}) {
   const owned = bodyOwner(response);
   if (!owned) throw new Error('Resposta inválida.');
@@ -106,7 +95,10 @@ export async function readBoundedJSON(response, { signal, maxBytes } = {}) {
   try {
     reader = owned.body.getReader();
     owned.state.reader = reader;
-    validateContentLength(response, maxBytes);
+    const declaredLength = parseContentLength(response?.headers?.get?.('Content-Length'), maxBytes);
+    if (declaredLength.kind !== 'absent' && declaredLength.kind !== 'valid') {
+      throw new Error('Resposta excede os limites declarados.');
+    }
     if (signal?.aborted) throw abortError();
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) throw abortError();

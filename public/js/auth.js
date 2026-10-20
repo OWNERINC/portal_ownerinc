@@ -1,5 +1,6 @@
 import { auth } from './firebase-config.js';
 import { revokeEditorialSession } from './editorial-session-watch.js';
+import { parseContentLength } from './content-length.js';
 import { configureContentsAvailability } from './portal-contents/availability.js';
 import { onAuthStateChanged, signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
@@ -235,6 +236,12 @@ async function finishSessionExit(uid, redirect, signOutPortal = true) {
 }
 
 async function readBoundedAuthenticationBody(response, maxBytes) {
+  const declaredLength = parseContentLength(response?.headers?.get?.('Content-Length'), maxBytes);
+  if (declaredLength.kind !== 'absent' && declaredLength.kind !== 'valid') {
+    try { void Promise.resolve(response?.body?.cancel?.()).catch(() => {}); }
+    catch { /* Cancelling the clone branch is best-effort and must not block its original tee. */ }
+    return {};
+  }
   const reader = response?.body?.getReader?.();
   if (!reader) return {};
   const decoder = new TextDecoder('utf-8', { fatal: true });

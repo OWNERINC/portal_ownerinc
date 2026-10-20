@@ -5,8 +5,10 @@ import vm from 'node:vm';
 
 const authSource = await readFile(new URL('../../public/js/auth.js', import.meta.url), 'utf8');
 const shellSource = await readFile(new URL('../../public/js/auth-shell.js', import.meta.url), 'utf8');
+const contentLengthSource = await readFile(new URL('../../public/js/content-length.js', import.meta.url), 'utf8').catch(() => '');
 const snapshotKey = 'ownerinc-auth-snapshot';
 const firebaseKey = 'firebase:authUser:test-key:[DEFAULT]';
+const CONTENTS_AUTH_BODY_LIMIT = 16 * 1024;
 const account = uid => ({ uid, getIdToken: async () => `token-${uid}` });
 const userDoc = (uid = 'a', overrides = {}) => ({
   uid, role: 'admin', name: 'Private name', email: `${uid}@example.test`,
@@ -26,6 +28,81 @@ function deferred() {
   let reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
+}
+function trackedResponse({ status = 403, contentLength, bytes = new TextEncoder().encode('{"error":"private body"}') } = {}) {
+  let pulls = 0;
+  let sourceCancellations = 0;
+  let sent = false;
+  let cloneCalls = 0;
+  let clonePullBaseline;
+  let cloneBodyCancels = 0;
+  let cloneReaderAcquisitions = 0;
+  let cloneReaderReads = 0;
+  let cloneReaderCancels = 0;
+  let resolveSourceCancellation;
+  const sourceCancellation = new Promise(resolve => { resolveSourceCancellation = resolve; });
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  if (contentLength !== undefined) headers.set('Content-Length', String(contentLength));
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      if (sent) controller.close();
+      else { sent = true; controller.enqueue(bytes); }
+    },
+    cancel() { sourceCancellations += 1; resolveSourceCancellation(); },
+  }, { highWaterMark: 0 });
+  const response = new Response(body, { status, headers });
+  const nativeClone = response.clone.bind(response);
+  Object.defineProperty(response, 'clone', { value() {
+    cloneCalls += 1;
+    const clone = nativeClone();
+    const cloneBody = clone.body;
+    const nativeBodyCancel = cloneBody.cancel.bind(cloneBody);
+    Object.defineProperty(cloneBody, 'cancel', { value(...args) {
+      cloneBodyCancels += 1;
+      return nativeBodyCancel(...args);
+    } });
+    const nativeGetReader = cloneBody.getReader.bind(cloneBody);
+    Object.defineProperty(cloneBody, 'getReader', { value(...args) {
+      cloneReaderAcquisitions += 1;
+      const reader = nativeGetReader(...args);
+      const nativeRead = reader.read.bind(reader);
+      Object.defineProperty(reader, 'read', { value(...readArgs) {
+        cloneReaderReads += 1;
+        return nativeRead(...readArgs);
+      } });
+      const nativeReaderCancel = reader.cancel.bind(reader);
+      Object.defineProperty(reader, 'cancel', { value(...cancelArgs) {
+        cloneReaderCancels += 1;
+        return nativeReaderCancel(...cancelArgs);
+      } });
+      return reader;
+    } });
+    queueMicrotask(() => { clonePullBaseline = pulls; });
+    return clone;
+  } });
+  return {
+    response,
+    sourceCancellation,
+    get pulls() { return pulls; },
+    get sourceCancellations() { return sourceCancellations; },
+    get cloneCalls() { return cloneCalls; },
+    get clonePullBaseline() { return clonePullBaseline; },
+    get cloneBodyCancels() { return cloneBodyCancels; },
+    get cloneReaderAcquisitions() { return cloneReaderAcquisitions; },
+    get cloneReaderReads() { return cloneReaderReads; },
+    get cloneReaderCancels() { return cloneReaderCancels; },
+  };
+}
+async function settleWithin(promise, label) {
+  let timer;
+  try {
+    await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 300);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function storage(entries = {}) {
   const values = new Map(Object.entries(entries));
@@ -76,6 +153,11 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
       return fetchImpl ? fetchImpl(...args) : response(userDoc(auth.currentUser.uid));
     },
   });
+  if (contentLengthSource) {
+    const parserSource = contentLengthSource.replace(/^export\s+/gmu, '');
+    vm.runInContext(`${parserSource}\nglobalThis.parseContentLength = parseContentLength;`, context,
+      { filename: 'public/js/content-length.js' });
+  }
   vm.runInContext(shellSource, context);
   if (loadModule) {
     const source = authSource.replace(/^import[\s\S]*?;\s*/gm, '').replace(/^export /gm, '');
@@ -469,4 +551,88 @@ test('bounded opt-in auth decode still ends 401 sessions and cancels the unautho
   assert.equal(Object.hasOwn(rawOptions, 'authErrorBodyLimit'), false);
   assert.equal(h.signouts, 1, '401 ends the validated session even when its body cannot be parsed');
   assert.equal(cancelled, 1, 'fatal unauthorized bodies are cancelled after session handling');
+});
+
+test('opt-in auth Content-Length precheck rejects before clone reads and cancels only the clone tee branch', async () => {
+  const invalidLengths = [
+    '16385', '', '01', '-1', '+1', '1.5', '1e2', '1, 1', '9007199254740992',
+  ];
+  for (const contentLength of invalidLengths) {
+    const tracked = trackedResponse({ contentLength });
+    const h = harness({ fetchImpl: () => tracked.response });
+    const result = await h.api.authenticatedFetch('/api/contents/published-policy', {
+      authErrorBodyLimit: CONTENTS_AUTH_BODY_LIMIT,
+    });
+    assert.equal(result.status, 403);
+    assert.equal(h.signouts, 0, 'a nonfatal resource 403 keeps the session');
+    assert.equal(tracked.cloneCalls, 1, 'the 403 path creates one cloned branch for bounded auth inspection');
+    assert.equal(tracked.cloneReaderAcquisitions, 0, 'the clone reader is never acquired for a rejected header');
+    assert.equal(tracked.cloneReaderReads, 0, 'the bounded clone performs zero body reads before rejection');
+    assert.equal(tracked.cloneBodyCancels, 1, 'the rejected clone branch is cancelled once');
+    assert.equal(typeof tracked.clonePullBaseline, 'number', 'the native tee prefetch baseline is recorded');
+    assert.equal(tracked.pulls, tracked.clonePullBaseline,
+      `Content-Length ${JSON.stringify(contentLength)} causes no additional source pulls beyond native tee setup`);
+
+    // The clone cancellation promise waits for the original tee branch. Cancelling
+    // that caller-owned branch must release both branches and the source promptly.
+    await settleWithin(result.body.cancel(), `tee cancellation for ${JSON.stringify(contentLength)}`);
+    await settleWithin(tracked.sourceCancellation, `source cancellation for ${JSON.stringify(contentLength)}`);
+    assert.equal(tracked.pulls, tracked.clonePullBaseline, 'cancelling the two branches does not pull additional bytes');
+    assert.equal(tracked.sourceCancellations, 1, 'the tee source is cancelled exactly once after both owners cancel');
+  }
+});
+
+test('opt-in auth decoder preserves valid, absent and understated-header caller branches', async () => {
+  const validBytes = new TextEncoder().encode('{"reason":"resource-denied","error":"private body"}');
+  for (const contentLength of [String(validBytes.byteLength), undefined]) {
+    const tracked = trackedResponse({ bytes: validBytes, contentLength });
+    const h = harness({ fetchImpl: () => tracked.response });
+    const result = await h.api.authenticatedFetch('/api/contents/published-policy', {
+      authErrorBodyLimit: CONTENTS_AUTH_BODY_LIMIT,
+    });
+    assert.equal(result.status, 403);
+    assert.equal(h.signouts, 0);
+    assert.ok(tracked.pulls > tracked.clonePullBaseline, 'valid and absent lengths keep the streaming JSON path');
+    assert.ok(tracked.cloneReaderReads > 0);
+    assert.equal(tracked.cloneBodyCancels, 0);
+    assert.equal(await result.text(), new TextDecoder().decode(validBytes), 'the original response remains readable');
+  }
+
+  const oversizedBytes = new Uint8Array(CONTENTS_AUTH_BODY_LIMIT + 1).fill(0x78);
+  for (const contentLength of [undefined, '1']) {
+    const oversized = trackedResponse({ bytes: oversizedBytes, contentLength });
+    const h = harness({ fetchImpl: () => oversized.response });
+    const result = await h.api.authenticatedFetch('/api/contents/published-policy', {
+      authErrorBodyLimit: CONTENTS_AUTH_BODY_LIMIT,
+    });
+    assert.equal(result.status, 403);
+    assert.equal(h.signouts, 0);
+    assert.equal(oversized.cloneReaderReads, 1,
+      'the actual-byte cap rejects the first oversized chunk without asking the clone for another read');
+    assert.equal(oversized.cloneReaderCancels, 1, 'stream overflow cancels the clone reader once');
+    assert.equal(oversized.cloneBodyCancels, 0);
+    assert.equal((await result.arrayBuffer()).byteLength, oversizedBytes.byteLength,
+      'byte overflow cancels only the auth clone; the caller keeps the complete original body');
+  }
+});
+
+test('malformed opt-in 401 stays sanitized and normal auth cancels the original tee branch', async () => {
+  const tracked = trackedResponse({ status: 401, contentLength: '1, 1' });
+  const h = harness({ fetchImpl: () => tracked.response });
+  await assert.rejects(h.api.authenticatedFetch('/api/contents/published-policy', {
+    authErrorBodyLimit: CONTENTS_AUTH_BODY_LIMIT,
+  }), error => {
+    assert.equal(error.status, 401);
+    assert.doesNotMatch(error.message, /private body/u);
+    return true;
+  });
+  await settleWithin(tracked.sourceCancellation, 'fatal 401 tee cancellation');
+  assert.equal(tracked.cloneCalls, 1);
+  assert.equal(tracked.cloneReaderAcquisitions, 0);
+  assert.equal(tracked.cloneReaderReads, 0);
+  assert.equal(tracked.cloneBodyCancels, 1);
+  assert.equal(tracked.pulls, tracked.clonePullBaseline,
+    'malformed auth JSON causes no extra pulls beyond the native tee prefetch');
+  assert.equal(tracked.sourceCancellations, 1, 'existing auth semantics cancel the original branch exactly once');
+  assert.equal(h.signouts, 1);
 });
