@@ -95,6 +95,7 @@ export async function installAuthTransport(h, uid = 'editor-a') {
     sessionStorage: { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) },
     onAuthStateChanged: (_auth, fn) => { listeners.push(fn); return () => {}; },
     signOut: async () => changeUser(null), updateProfile: async () => {}, revokeEditorialSession: async () => {},
+    configureContentsAvailability() {},
     fetch: (path, options = {}) => { const request = { path, options, ...deferred() }; requests.push(request); return request.promise; },
   });
   const source = (await readFile('public/js/auth.js', 'utf8')).replace(/^import[\s\S]*?;\s*/gm, '').replace(/^export /gm, '');

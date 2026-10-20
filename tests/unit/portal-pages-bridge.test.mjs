@@ -85,8 +85,14 @@ function fixture(settings = env) {
   };
 
   state.payloadCalls = [];
+  state.payloadCallOptions = [];
+  state.listImpl = null;
   state.payloadClient = {
-    async list(input, actor) { state.payloadCalls.push({ action: 'list', input, actor }); return { rows: [page], count: 9 }; },
+    async list(input, actor, options) {
+      state.payloadCalls.push({ action: 'list', input, actor });
+      state.payloadCallOptions.push(options);
+      return state.listImpl ? state.listImpl(input, actor, options) : { rows: [page], count: 9 };
+    },
     async categories(input, actor) { state.payloadCalls.push({ action: 'categories', input, actor }); return [{ id: pageID, slug: 'policies', name: 'Policies', count: 2 }]; },
     async detail(input, actor) { state.payloadCalls.push({ action: 'detail', input, actor }); return input.slug === page.slug ? page : null; },
     async preview(input, actor) { state.payloadCalls.push({ action: 'preview', input, actor }); return input.pageId === pageID && input.versionId === versionID ? preview : null; },
@@ -102,10 +108,30 @@ function fixture(settings = env) {
 
   const auth = loadAuthModule(state);
   const authenticate = auth.createAuthMiddleware({ firebaseAuth: state.firebaseAuth, db: state.db });
+  state.authenticate = authenticate;
+  state.buildRequest = ({ payloadClient = state.payloadClient, payloadClientFactory } = {}) => {
+    const app = express();
+    app.use(requestContext);
+    app.use('/api/contents', createContentsRouter({ db: state.db, firebaseAuth: state.firebaseAuth, authenticate,
+      payloadClient, payloadClientFactory, env: settings }));
+    return request(app);
+  };
   const app = express();
   app.use(requestContext);
+  app.use((req, res, next) => {
+    if (state.captureSignalCleanup) {
+      const requestListeners = new Set(req.listeners('aborted'));
+      const responseListeners = new Set(res.listeners('close'));
+      res.once('close', () => setImmediate(() => {
+        state.requestSignalListenersCleaned = !req.listeners('aborted').some(listener => !requestListeners.has(listener))
+          && !res.listeners('close').some(listener => !responseListeners.has(listener));
+      }));
+    }
+    next();
+  });
   app.use('/api/contents', createContentsRouter({ db: state.db, firebaseAuth: state.firebaseAuth, authenticate,
     payloadClient: state.payloadClient, env: settings }));
+  state.app = app;
   state.request = request(app);
   state.withBearer = call => call.set('Authorization', 'Bearer bearer-reader');
   const localDevelopment = settings.NODE_ENV === 'development' && /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/u.test(settings.PORTAL_PUBLIC_URL || '');
@@ -113,6 +139,137 @@ function fixture(settings = env) {
   state.cookie = uid => `${mediaCookieName}=${uid === 'editor' ? 'editor.session.cookie' : 'reader.session.cookie'}`;
   return state;
 }
+
+test('availability is authenticated, exact, bodyless, and independent of editorial permission', async () => {
+  const state = fixture();
+  assert.equal((await state.request.get('/api/contents/availability')).status, 401);
+
+  const response = await state.withBearer(state.request.get('/api/contents/availability'));
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { available: true });
+  assert.deepEqual(Object.keys(response.body), ['available']);
+  assert.equal(response.headers['cache-control'], 'private,no-store');
+  assert.deepEqual(state.payloadCalls[0].input, { limit: 1, offset: 0 });
+  assert.equal(state.payloadCalls[0].actor.canManageKnowledge, false);
+  assert.equal(state.payloadCallOptions[0].signal instanceof AbortSignal, true);
+  assert.equal(typeof state.payloadCallOptions[0].requestId, 'string');
+  assert.equal(state.payloadCalls[0].action, 'list');
+
+  for (const url of ['/api/contents/availability?extra=1', '/api/contents/availability?x=1&x=2']) {
+    assert.equal((await state.withBearer(state.request.get(url))).status, 400, url);
+  }
+  assert.equal((await state.withBearer(state.request.get('/api/contents/availability').send({ unexpected: true }))).status, 400);
+  assert.equal((await state.withBearer(state.request.get('/api/contents/availability').set('Transfer-Encoding', 'chunked').send('x'))).status, 400);
+  assert.equal(state.payloadCalls.length, 1, 'invalid query/body never reaches Payload');
+});
+
+test('availability distinguishes empty from inconsistent and unavailable Payload results', async () => {
+  const state = fixture();
+  state.listImpl = async () => ({ rows: [], count: 0 });
+  const empty = await state.withBearer(state.request.get('/api/contents/availability'));
+  assert.equal(empty.status, 200);
+  assert.deepEqual(empty.body, { available: false });
+
+  const invalidResults = [
+    null,
+    { rows: [], count: 1 },
+    { rows: [page], count: 0 },
+    { rows: [page, page], count: 2 },
+    { rows: [page], count: 1.5 },
+    { rows: [page], count: 100001 },
+  ];
+  for (const invalid of invalidResults) {
+    state.listImpl = async () => invalid;
+    const response = await state.withBearer(state.request.get('/api/contents/availability'));
+    assert.equal(response.status, 503);
+    assert.equal(response.body.reason, 'portal_pages_unavailable');
+    assert.equal(response.text.includes('count'), false);
+    assert.equal(response.text.includes('content_blocks'), false);
+  }
+
+  state.listImpl = async () => { throw new Error('private Payload client exception'); };
+  const failed = await state.withBearer(state.request.get('/api/contents/availability'));
+  assert.equal(failed.status, 503);
+  assert.equal(failed.body.reason, 'portal_pages_unavailable');
+  assert.doesNotMatch(failed.text, /private Payload|Published policy|reader-a|count/u);
+});
+
+test('availability rejects disabled and unapproved users through the real authentication middleware', async () => {
+  const disabled = fixture();
+  disabled.users.set(reader.uid, { ...reader, permissions: { accountDisabled: true } });
+  const disabledResponse = await disabled.withBearer(disabled.request.get('/api/contents/availability'));
+  assert.equal(disabledResponse.status, 403);
+  assert.equal(disabled.payloadCalls.length, 0);
+
+  const unapproved = fixture();
+  unapproved.users.delete(reader.uid);
+  unapproved.db.query = async (sql, values = []) => {
+    if (sql.includes('FROM users u')) return { rows: [] };
+    if (sql.includes('FROM pending_registrations')) return { rows: [{ status: 'pending' }] };
+    throw new Error(`Unexpected SQL: ${sql} ${values}`);
+  };
+  const pendingResponse = await unapproved.withBearer(unapproved.request.get('/api/contents/availability'));
+  assert.equal(pendingResponse.status, 403);
+  assert.equal(pendingResponse.body.reason, 'pending-approval');
+  assert.equal(unapproved.payloadCalls.length, 0);
+});
+
+test('availability factory failures and client timeouts fail closed without disclosing private details', async () => {
+  const state = fixture();
+  const factoryRequest = state.buildRequest({ payloadClient: null,
+    payloadClientFactory: () => { throw new Error('secret factory configuration'); } });
+  const factoryError = await state.withBearer(factoryRequest.get('/api/contents/availability'));
+  assert.equal(factoryError.status, 503);
+  assert.equal(factoryError.body.reason, 'portal_pages_unavailable');
+  assert.doesNotMatch(factoryError.text, /secret factory|client|actor|reader-a/u);
+
+  state.listImpl = async () => { throw Object.assign(new Error('private timeout details'), { code: 'ETIMEDOUT', status: 504 }); };
+  const timeout = await state.withBearer(state.request.get('/api/contents/availability'));
+  assert.equal(timeout.status, 503);
+  assert.equal(timeout.body.reason, 'portal_pages_unavailable');
+  assert.doesNotMatch(timeout.text, /private timeout|ETIMEDOUT|reader-a/u);
+});
+
+test('availability aborts Payload work on client disconnect and static route precedes slug detail', async () => {
+  const state = fixture();
+  state.listImpl = (_input, _actor, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => {
+      state.disconnectedSignalAborted = options.signal.aborted;
+      reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }));
+    }, { once: true });
+    state.disconnectReady = true;
+  });
+  // Exercise the real HTTP close/abort hooks without starting external services.
+  state.captureSignalCleanup = true;
+  const server = state.app.listen(0);
+  try {
+    const address = server.address();
+    const controller = new AbortController();
+    const responsePromise = fetch(`http://127.0.0.1:${address.port}/api/contents/availability`, {
+      headers: { Authorization: 'Bearer bearer-reader' }, signal: controller.signal,
+    }).catch(error => error);
+    for (let attempt = 0; attempt < 20 && !state.disconnectReady; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(state.disconnectReady, true, 'availability must dispatch a bounded Payload list request');
+    controller.abort();
+    await responsePromise;
+    for (let attempt = 0; attempt < 20 && !state.disconnectedSignalAborted; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(state.disconnectedSignalAborted, true);
+    for (let attempt = 0; attempt < 20 && state.requestSignalListenersCleaned === undefined; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(state.requestSignalListenersCleaned, true, 'abort and close listeners must be removed after disconnect');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+  const staticState = fixture();
+  const staticResponse = await staticState.withBearer(staticState.request.get('/api/contents/availability'));
+  assert.equal(staticResponse.status, 200);
+  assert.equal(staticState.payloadCalls[0].action, 'list', 'availability must not fall through to /:slug detail');
+});
 
 function cookieFor(response, expectedName) {
   const value = response.headers['set-cookie']?.find(cookie => cookie.startsWith(`${expectedName}=`));

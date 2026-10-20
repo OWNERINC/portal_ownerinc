@@ -22,6 +22,7 @@ function harness({ ready = Promise.resolve() } = {}) {
       : Response.json({ uid: 'a', expiresAt: new Date(h.now + 7200000).toISOString() }),
     change(uid) { auth.currentUser = uid ? { uid } : null; callbacks.forEach(fn => fn()); }, callbacks, states, timers, requests, redirects, signs, document, window, main, auth };
   const context = vm.createContext({ auth, document, window, URL, URLSearchParams, AbortController, DOMException,
+    configureContentsAvailability() {},
     Date: class extends Date { static now() { return h.now; } },
     onAuthStateChanged: (_, fn) => { callbacks.add(fn); return () => callbacks.delete(fn); },
      fetch: (...args) => { requests.push(args); return Promise.resolve().then(() => h.response(...args)); },

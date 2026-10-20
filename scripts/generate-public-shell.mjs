@@ -7,6 +7,7 @@ const pages = [
   ['reminders', 'Lembretes', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
   ['announcements', 'Owner News', 'megaphone'],
+  ['contents', 'Conteúdos', 'book-open'],
   ['profile', 'Meu Perfil', 'user'],
 ];
 
@@ -17,6 +18,7 @@ const generatedPages = [
   ['academy.html', 'academy', 'Academy'],
   ['benefits.html', 'benefits', 'Benefícios'],
   ['announcements.html', 'announcements', 'Owner News'],
+  ['contents.html', 'contents', 'Conteúdos'],
   ['news-preview.html', 'news-preview', 'Prévia editorial'],
   ['editorial-entry.html', 'editorial-entry', 'Painel editorial'],
   ['profile.html', 'profile', 'Meu Perfil'],
@@ -67,14 +69,16 @@ function activeClass(active) {
   return active ? ' class="active" aria-current="page"' : '';
 }
 
-function navItem(href, label, icon, className = '', active = false, id = '') {
+function navItem(href, label, icon, className = '', active = false, id = '', hidden = false) {
   const classes = className ? ` class="${className}"` : '';
   const elementId = id ? ` id="${id}"` : '';
-  return `      <li${elementId}${classes}><a href="./${href}"${activeClass(active)} title="${label}"><i data-lucide="${icon}"></i><span>${label}</span></a></li>`;
+  const hiddenAttribute = hidden ? ' hidden' : '';
+  return `      <li${elementId}${classes}${hiddenAttribute}><a href="./${href}"${activeClass(active)} title="${label}"><i data-lucide="${icon}"></i><span>${label}</span></a></li>`;
 }
 
 function sidebar(current) {
-  const items = pages.map(([page, label, icon]) => navItem(`${page}.html`, label, icon, '', current === page)).join('\n');
+  const items = pages.map(([page, label, icon]) => navItem(`${page}.html`, label, icon,
+    page === 'contents' ? 'contents-link' : '', current === page, '', page === 'contents')).join('\n');
   return `<!-- generated:portal-sidebar -->
     <ul class="sidebar-nav">
 ${items}

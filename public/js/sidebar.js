@@ -43,6 +43,19 @@
     overlay.setAttribute('aria-hidden', 'true');
     overlay.inert = true;
     overlay.tabIndex = -1;
+    function hasUnavailableAncestor(node) {
+      for (var current = node; current; current = current.parentElement || current.parentNode) {
+        if (current.hidden || current.inert || current.disabled || current.hasAttribute?.('hidden')
+          || current.hasAttribute?.('inert') || current.hasAttribute?.('disabled') || current.classList?.contains('hidden')
+          || current.getAttribute?.('aria-hidden') === 'true') return true;
+      }
+      return false;
+    }
+    function getFocusableItems() {
+      return Array.from(sidebar.querySelectorAll('a[href], button:not([disabled])')).filter(function (node) {
+        return !node.disabled && node.tabIndex >= 0 && !hasUnavailableAncestor(node);
+      });
+    }
     function setDrawer(open, restoreFocus, restoreInside) {
       var isMobile = mobileMedia.matches;
       var active = document.activeElement;
@@ -63,7 +76,7 @@
       overlay.tabIndex = drawerOpen ? 0 : -1;
       overlay.inert = !drawerOpen;
       overlay.setAttribute('aria-hidden', String(!drawerOpen));
-      if (drawerOpen) sidebar.querySelector('a, button')?.focus();
+      if (drawerOpen) getFocusableItems()[0]?.focus();
       else if (restoreFocus || (restoreInside && focusInSidebar)) {
         var target = drawerReturnFocus;
         drawerReturnFocus = null;
@@ -89,7 +102,8 @@
       if (event.key === 'Escape' && document.body.classList.contains('sidebar-open')) {
         closeDrawer(true);
       } else if (event.key === 'Tab' && document.body.classList.contains('sidebar-open')) {
-        var focusable = Array.from(sidebar.querySelectorAll('a[href], button:not([disabled])'));
+        var focusable = getFocusableItems();
+        if (!focusable.length) { event.preventDefault(); return; }
         var first = focusable[0];
         var last = focusable[focusable.length - 1];
         if (event.shiftKey && document.activeElement === first) {

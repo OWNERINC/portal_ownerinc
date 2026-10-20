@@ -171,6 +171,22 @@ function createContentsRouter({ db = pool, firebaseAuth = defaultFirebaseAuth, a
   }
 
   router.get('/', authenticate, rejectBody, queryRoute('list', parseList));
+  router.get('/availability', authenticate, rejectBody, async (req, res) => {
+    if (!strictQuery(req.query, [])) return sendError({ status: 400 }, req, res);
+    const { controller, cleanup } = createRequestSignal(req, res);
+    try {
+      const result = await getPayloadClient().list({ limit: 1, offset: 0 }, portalActor(req.user),
+        { signal: controller.signal, requestId: req.id });
+      if (controller.signal.aborted) return;
+      if (!result || !Array.isArray(result.rows) || !Number.isSafeInteger(result.count)
+        || result.count < 0 || result.count > 100000 || result.rows.length > 1
+        || (result.count === 0 && result.rows.length !== 0)
+        || (result.count > 0 && result.rows.length !== 1)) throw new Error('unavailable');
+      return res.json({ available: result.count > 0 });
+    } catch (error) {
+      if (!controller.signal.aborted) return sendError(error, req, res);
+    } finally { cleanup(); }
+  });
   router.get('/categories', authenticate, rejectBody, queryRoute('categories', req => strictQuery(req.query, []) ? {} : null));
   router.get('/preview/:pageId', authenticate, rejectBody, queryRoute('preview', req => {
     const pageId = canonicalUUID(req.params.pageId);

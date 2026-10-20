@@ -40,6 +40,7 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
   const listeners = [];
   const redirects = [];
   const requests = [];
+  const availabilityConfigurations = [];
   let signouts = 0;
   const main = { children: ['existing content'], replaceChildren(...children) { this.children = children; } };
   const auth = {
@@ -65,6 +66,7 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
   const context = vm.createContext({
     auth, document, sessionStorage, localStorage, window: { location }, location,
     URL, URLSearchParams, DOMException, setTimeout, console,
+    configureContentsAvailability: options => availabilityConfigurations.push(options),
     onAuthStateChanged: (_auth, callback) => { listeners.push(callback); return () => {}; },
     signOut: async () => { signouts += 1; changeUser(null); await signOutImpl?.(); },
     updateProfile: async () => {},
@@ -77,10 +79,10 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
   vm.runInContext(shellSource, context);
   if (loadModule) {
     const source = authSource.replace(/^import[\s\S]*?;\s*/gm, '').replace(/^export /gm, '');
-    vm.runInContext(`${source}\nglobalThis.api = { requireAuth, getCurrentUserDoc, getCachedUserSnapshot, authenticatedFetch, fetchAPI, fetchAPIPage, fetchAPIAsset, logout };`, context);
+    vm.runInContext(`${source}\nglobalThis.api = { requireAuth, getCurrentUserDoc, getCachedUserSnapshot, authenticatedFetch, fetchAPI, fetchAPIPage, fetchAPIAsset, logout, getContentsIdentity: typeof getContentsIdentity === 'function' ? getContentsIdentity : null, subscribeContentsIdentity: typeof subscribeContentsIdentity === 'function' ? subscribeContentsIdentity : null };`, context);
   }
   return {
-    api: context.api, auth, sessionStorage, localStorage, document, main, requests, redirects, location,
+    api: context.api, auth, sessionStorage, localStorage, document, main, requests, redirects, location, availabilityConfigurations,
     changeUser, listeners, get signouts() { return signouts; },
   };
 }
@@ -99,6 +101,35 @@ test('early shell retains old same-account navigation, but rejects legacy, misma
     assert.equal(h.document.documentElement.dataset.portalRole, undefined);
     assert.equal(h.sessionStorage.getItem(snapshotKey), null);
   }
+});
+
+test('contents identity is live-validation-only; visual snapshots cannot validate or reveal navigation', async () => {
+  const h = harness();
+  assert.equal(typeof h.api.getContentsIdentity, 'function');
+  assert.equal(typeof h.api.subscribeContentsIdentity, 'function');
+  assert.equal(h.availabilityConfigurations.length, 1);
+  assert.equal(h.availabilityConfigurations[0].request, h.api.authenticatedFetch);
+  assert.equal(h.api.getContentsIdentity().validated, false);
+  h.listeners[0](h.auth.currentUser);
+  assert.equal(h.api.getCachedUserSnapshot().uid, 'a', 'the visual snapshot remains available for existing hints');
+  assert.equal(h.api.getContentsIdentity().validated, false, 'reading the snapshot must not validate identity');
+  assert.equal(JSON.parse(h.sessionStorage.getItem(snapshotKey)).validated, undefined);
+
+  const identities = [];
+  h.api.subscribeContentsIdentity(value => identities.push(value));
+  const initialGeneration = h.api.getContentsIdentity().generation;
+  await h.api.getCurrentUserDoc();
+  const validated = h.api.getContentsIdentity();
+  assert.deepEqual({ ...validated }, { uid: 'a', generation: initialGeneration, validated: true });
+  assert.equal(identities.at(-1).validated, true);
+  assert.equal(Object.isFrozen(validated), true);
+
+  h.changeUser('b');
+  const changed = h.api.getContentsIdentity();
+  assert.equal(changed.uid, 'b');
+  assert.equal(changed.validated, false, 'identity changes synchronously clear the validated gate');
+  assert.ok(changed.generation > validated.generation);
+  assert.equal(identities.at(-1).validated, false);
 });
 
 test('cached helper waits for Firebase identity and exposes only same-account visual data', async () => {

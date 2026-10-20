@@ -128,7 +128,8 @@ function createTestNode(document, tag = 'div', id = '') {
     focus() {
       let current = this;
       while (current) {
-        if (current.disabled || current.inert) return;
+        if (current.disabled || current.inert || current.hidden || current.classList?.contains('hidden')
+          || current.getAttribute?.('aria-hidden') === 'true') return;
         current = current.parentNode;
       }
       document.activeElement = this;
@@ -580,19 +581,35 @@ globalThis.profileCropHarness = { openCropDialog, closeCropDialog, saveCrop, dra
   return { context, document, nodes, cropDialog, cropFrame, cropImage, cropCloseButton, cropResetButton, cropApplyButton, adjustPhotoButton, avatarButton, opener, saveRequests, harness: context.profileCropHarness };
 }
 
-function loadSidebarHarness() {
+function loadSidebarHarness({ includeToggle = true, linkOptions = [{}] } = {}) {
   const document = createTestDocument();
   const nodes = new Map();
   const navigation = createTestNode(document, 'aside');
   navigation.className = 'sidebar';
-  const toggle = register(document, createTestNode(document, 'button', 'sidebar-toggle'), nodes);
-  const link = createTestNode(document, 'a');
-  link.setAttribute('href', './dashboard.html');
+  const toggle = includeToggle ? register(document, createTestNode(document, 'button', 'sidebar-toggle'), nodes) : null;
+  const wrappers = [];
+  const links = linkOptions.map((options, index) => {
+    const wrapper = createTestNode(document, 'li');
+    if (options.ancestorHidden) wrapper.hidden = true;
+    if (options.ancestorInert) wrapper.inert = true;
+    if (options.ancestorAriaHidden) wrapper.setAttribute('aria-hidden', 'true');
+    if (options.ancestorClassHidden) wrapper.className = 'hidden';
+    const link = createTestNode(document, 'a', `sidebar-link-${index}`);
+    link.setAttribute('href', `./page-${index}.html`);
+    link.disabled = options.disabled === true;
+    link.inert = options.inert === true;
+    link.hidden = options.hidden === true;
+    link.tabIndex = options.tabIndex ?? 0;
+    if (options.ariaHidden) link.setAttribute('aria-hidden', 'true');
+    wrapper.append(link);
+    wrappers.push(wrapper);
+    return link;
+  });
   const topbar = createTestNode(document, 'header');
   topbar.className = 'topbar';
   const mainContent = createTestNode(document, 'div');
   mainContent.className = 'main-content';
-  navigation.append(toggle, link);
+  navigation.append(...(toggle ? [toggle] : []), ...wrappers);
   document.body.append(navigation, mainContent);
   document.querySelector = selector => ({ '.sidebar': navigation, '.topbar': topbar, '.main-content': mainContent, '.sidebar-brand': null }[selector] || null);
   document.getElementById = id => nodes.get(id) || null;
@@ -605,7 +622,7 @@ function loadSidebarHarness() {
   vm.runInNewContext(sidebar.replace(/\(function \(\) \{/, '(function () {'), context, { filename: 'sidebar.js' });
   const mobileToggle = topbar.children[0];
   const overlay = document.body.children.find(child => child.className === 'sidebar-overlay');
-  return { context, document, sidebar: navigation, toggle, link, topbar, mainContent, mobileToggle, overlay, media };
+  return { context, document, sidebar: navigation, toggle, links, link: links[0], wrappers, topbar, mainContent, mobileToggle, overlay, media };
 }
 
 function cssColor(source, token) {
@@ -1520,4 +1537,31 @@ test('mobile sidebar synchronizes drawer accessibility state and restores its op
   media.listeners[0]({ matches: true });
   assert.equal(document.activeElement, mobileToggle);
   assert.equal(navigation.getAttribute('aria-hidden'), 'true');
+});
+
+test('drawer initial focus and trap skip hidden/inert candidates, wrap first/last, and tolerate no candidate', () => {
+  const harness = loadSidebarHarness({ includeToggle: false, linkOptions: [
+    { ancestorHidden: true }, { ancestorInert: true }, { ancestorAriaHidden: true },
+    { ancestorClassHidden: true }, { disabled: true }, { tabIndex: -1 }, {}, {},
+  ] });
+  harness.mobileToggle.focus();
+  harness.mobileToggle.dispatch('click');
+  assert.equal(harness.document.activeElement, harness.links[6], 'initial drawer focus skips unavailable ancestors and controls');
+
+  const backwards = { key: 'Tab', shiftKey: true, preventDefault() { this.defaultPrevented = true; } };
+  harness.document.activeElement = harness.links[6];
+  harness.document.listeners.get('keydown')(backwards);
+  assert.equal(backwards.defaultPrevented, true);
+  assert.equal(harness.document.activeElement, harness.links[7], 'Shift+Tab from the first candidate wraps to the last');
+  const forwards = { key: 'Tab', preventDefault() { this.defaultPrevented = true; } };
+  harness.document.listeners.get('keydown')(forwards);
+  assert.equal(forwards.defaultPrevented, true);
+  assert.equal(harness.document.activeElement, harness.links[6], 'Tab from the last candidate wraps to the first');
+
+  const empty = loadSidebarHarness({ includeToggle: false, linkOptions: [{ ancestorHidden: true }, { tabIndex: -1 }] });
+  empty.mobileToggle.focus();
+  empty.mobileToggle.dispatch('click');
+  const emptyEvent = { key: 'Tab', preventDefault() { this.defaultPrevented = true; } };
+  assert.doesNotThrow(() => empty.document.listeners.get('keydown')(emptyEvent));
+  assert.equal(emptyEvent.defaultPrevented, true, 'an empty trap stays bounded without indexing missing candidates');
 });

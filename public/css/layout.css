@@ -125,6 +125,8 @@ html[data-auth-snapshot="true"][data-pos-cards-access="true"] .pos-cards-link { 
   overflow-x: hidden;
 }
 
+.sidebar-nav > li[hidden] { display: none !important; }
+
 .sidebar-nav a {
   display: flex;
   align-items: center;

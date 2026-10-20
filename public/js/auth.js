@@ -1,5 +1,6 @@
 import { auth } from './firebase-config.js';
 import { revokeEditorialSession } from './editorial-session-watch.js';
+import { configureContentsAvailability } from './portal-contents/availability.js';
 import { onAuthStateChanged, signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
@@ -9,9 +10,29 @@ const INVALID_TOKEN_CODES = new Set(['auth/user-token-expired', 'auth/invalid-us
 let authStateKnown = false;
 let sessionUid;
 let sessionEpoch = 0;
+let sessionValidated = false;
 let sessionDenied = false;
 let pendingValidation = null;
 let visualSnapshot = null;
+const contentsIdentityListeners = new Set();
+
+export function getContentsIdentity() {
+  return Object.freeze({ uid: sessionUid || null, generation: sessionEpoch,
+    validated: Boolean(sessionUid && sessionValidated && !sessionDenied) });
+}
+
+export function subscribeContentsIdentity(listener) {
+  if (typeof listener !== 'function') throw new TypeError('A listener is required.');
+  contentsIdentityListeners.add(listener);
+  return () => contentsIdentityListeners.delete(listener);
+}
+
+function notifyContentsIdentity() {
+  const identity = getContentsIdentity();
+  for (const listener of contentsIdentityListeners) {
+    try { listener(identity); } catch (_) { /* Navigation listeners cannot interrupt authentication. */ }
+  }
+}
 
 function setAuthState(state) {
   document.documentElement.dataset.authState = state;
@@ -111,6 +132,7 @@ function applyNavigation(user) {
 }
 
 function clearVerifiedRole() {
+  sessionValidated = false;
   sessionEpoch += 1;
   sessionDenied = true;
   pendingValidation = null;
@@ -127,6 +149,7 @@ function clearVerifiedRole() {
   } catch (_) {
     // Nothing else is required when storage is unavailable.
   }
+  notifyContentsIdentity();
 }
 
 function syncSession() {
@@ -333,6 +356,8 @@ export async function getCurrentUserDoc() {
         applyNavigation(user);
         cacheAuthSnapshot(user);
         setAuthState('ready');
+        sessionValidated = true;
+        notifyContentsIdentity();
         return user;
       } catch (error) {
         syncSession();
@@ -419,3 +444,6 @@ export function can(user, perm) {
 export function updateAuthDisplayName(name) {
   if (auth.currentUser) return updateProfile(auth.currentUser, { displayName: name });
 }
+
+configureContentsAvailability({ request: authenticatedFetch, getIdentity: getContentsIdentity,
+  subscribeIdentity: subscribeContentsIdentity, document, window });
