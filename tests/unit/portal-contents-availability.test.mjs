@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 const availabilitySource = await readFile(new URL('../../public/js/portal-contents/availability.js', import.meta.url), 'utf8')
   .catch(() => null);
@@ -9,6 +11,13 @@ const generatedPages = [
   'dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'news-preview',
   'editorial-entry', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides', 'contents',
 ];
+
+class HarnessCustomEvent extends Event {
+  constructor(type, init = {}) {
+    super(type, init);
+    this.detail = Object.prototype.hasOwnProperty.call(init, 'detail') ? init.detail : null;
+  }
+}
 
 function deferred() {
   let resolve;
@@ -165,7 +174,8 @@ function makeHarness() {
   };
   const context = vm.createContext({
     document, window, AbortController, DOMException, TextDecoder, TextEncoder,
-    ArrayBuffer, Uint8Array, ReadableStream, Response, CustomEvent, JSON, Object, Promise, Error, TypeError,
+    ArrayBuffer, Uint8Array, ReadableStream, Response, CustomEvent: HarnessCustomEvent,
+    JSON, Object, Promise, Error, TypeError,
   });
   const apiSource = availabilitySource.replace(/^export /gmu, '')
     + '\nglobalThis.contentsGate = { configureContentsAvailability, probeContentsAvailability, resetContentsAvailability, get state() { return state; } };';
@@ -182,6 +192,24 @@ function makeHarness() {
     },
     dispatch(target, name) { target.dispatchEvent(new Event(name)); } };
 }
+
+test('availability fixture provides CustomEvent independently of the host global', () => {
+  const preloader = fileURLToPath(new URL('../helpers/disable-global-custom-event.cjs', import.meta.url));
+  const testFile = fileURLToPath(import.meta.url);
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const probe = spawnSync(process.execPath, [
+    '--require', preloader,
+    '--test',
+    '--test-name-pattern=focused drawer links close before mobile focus restoration',
+    testFile,
+  ], { encoding: 'utf8', env, timeout: 120_000, windowsHide: true });
+  const output = `${probe.stdout}\n${probe.stderr}`;
+
+  assert.equal(probe.error, undefined, probe.error?.message);
+  assert.equal(probe.status, 0, output);
+  assert.match(output, /focused drawer links close before mobile focus restoration/u);
+});
 
 async function drain() {
   await new Promise(resolve => setImmediate(resolve));
