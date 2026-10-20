@@ -118,4 +118,31 @@ test('browser acceptance source names all five native media destinations and req
     'gallery mutation requires an explicit Task 4 controlled form-state fixture action')
   assert.match(browserSource, /galleryRowIDs|gallery row IDs/u,
     'the browser case must prove row mutation occurred before checking invalidation')
+  assert.match(browserSource, /async function activeUploadDialog\(page\)[\s\S]{0,180}getByRole\('dialog', \{ name: \/\^portal-page-upload-/u,
+    'upload actions must scope to Payload’s portaled dialog by its accessible upload-slug name')
+  assert.match(browserSource, /assert\(await dialogs\.count\(\) === 1/u,
+    'multiple active drawers must fail explicitly instead of making a locator ambiguous')
+  const openDialogStart = browserSource.indexOf('async function openUploadDialog')
+  const openDialogEnd = browserSource.indexOf('\nasync function assertDialogClosed', openDialogStart)
+  const openDialogHelper = browserSource.slice(openDialogStart, openDialogEnd)
+  assert.ok(openDialogHelper.includes('existingDialogs.count() === 0') &&
+    openDialogHelper.indexOf("wrapper.getByRole('button', { name: 'Enviar novo arquivo'") <
+    openDialogHelper.indexOf('return activeUploadDialog(page)'),
+  'destination wrapper must only open its field; actions must move to the uniquely named active dialog')
+  assert.match(browserSource, /async function assertDialogClosed/u)
+  assert.match(browserSource, /const reopenedDialog = await openUploadDialog\(page, (?:wrapper|remainingDestination)\)/u,
+    'browser acceptance must assert an upload drawer closes and can reopen')
+  assert.match(browserSource, /dialog\.getByLabel\('Escolha um arquivo'/u)
+  assert.match(browserSource, /dialog\.getByRole\('status'/u)
+  assert.match(browserSource, /dialog\.getByRole\('button', \{ name: 'Usar este arquivo'/u)
+  assert.doesNotMatch(browserSource, /page\.getByLabel\('Escolha um arquivo'/u,
+    'file inputs must be scoped to the active upload dialog')
+  assert.doesNotMatch(browserSource, /page\.getByRole\('alert'\)/u,
+    'negative upload assertions must be scoped to the active dialog')
+  assert.doesNotMatch(browserSource, /page\.getByRole\('button', \{ name: 'Usar este arquivo'/u,
+    'selection absence must not be inferred from field-wrapper ancestry')
+  assert.doesNotMatch(browserSource, /(?:wrapper|remainingDestination)\.getByRole\('button', \{ name: 'Usar este arquivo'/u,
+    'both positive and negative selection checks must stay inside the associated dialog')
+  assert.doesNotMatch(browserSource, /page\.getByRole\('status'\)\.filter\(\{ hasText: '(?:Validando arquivo|Arquivo pronto para selecionar)/u,
+    'upload status assertions must be scoped to the active dialog')
 })

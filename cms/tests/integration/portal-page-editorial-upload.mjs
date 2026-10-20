@@ -43,6 +43,26 @@ async function relationshipWrapper(page, destination) {
   return { native, wrapper }
 }
 
+/** Payload's public Modal markup exposes each Drawer as a dialog named by its exact slug. */
+async function activeUploadDialog(page) {
+  const dialogs = page.getByRole('dialog', { name: /^portal-page-upload-/u })
+  await dialogs.waitFor({ state: 'visible' })
+  assert(await dialogs.count() === 1, 'expected_exactly_one_visible_Portal_Page_upload_dialog')
+  return dialogs
+}
+
+async function openUploadDialog(page, wrapper) {
+  const existingDialogs = page.getByRole('dialog', { name: /^portal-page-upload-/u })
+  assert(await existingDialogs.count() === 0, 'an_upload_dialog_was_already_active_before_opening_the_field_destination')
+  await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
+  return activeUploadDialog(page)
+}
+
+async function assertDialogClosed(dialog, detail) {
+  await dialog.waitFor({ state: 'hidden' })
+  assert(await dialog.count() === 0, detail)
+}
+
 async function visibleNativeValue(wrapper, path) {
   const value = await wrapper.locator('input[type="hidden"]').evaluateAll((inputs, fieldPath) => {
     const matching = inputs.find(input => input.getAttribute('name') === fieldPath) || inputs.find(input => input.value)
@@ -138,27 +158,28 @@ async function uploadThroughSelection(page, initialURL, destination, { reloadPag
   const { wrapper } = await relationshipWrapper(page, destination)
   const initialValue = await visibleNativeValue(wrapper, destination.path)
   try {
-    await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
-    const fileInput = page.getByLabel('Escolha um arquivo', { exact: true })
+    const dialog = await openUploadDialog(page, wrapper)
+    const fileInput = dialog.getByLabel('Escolha um arquivo', { exact: true })
     await fileInput.focus()
     await fileInput.setInputFiles(validFile(destination))
     await fixture.chunkStarted.promise
-    await page.getByRole('status').filter({ hasText: 'Validando arquivo…' }).waitFor({ state: 'visible' })
-    const progress = page.getByRole('progressbar', { name: 'Blocos confirmados do envio' })
+    await dialog.getByRole('status').filter({ hasText: 'Validando arquivo…' }).waitFor({ state: 'visible' })
+    const progress = dialog.getByRole('progressbar', { name: 'Blocos confirmados do envio' })
     assert(Number(await progress.getAttribute('aria-valuenow')) === fixture.bytes,
       `${destination.name}: chunk progress did not reach the acknowledged 100% boundary`)
     assert(await visibleNativeValue(wrapper, destination.path) === initialValue,
       `${destination.name}: relationship changed before complete and explicit selection`)
     assert(fixture.chunks === 1, `${destination.name}: expected one sequential chunk`)
     fixture.allowComplete.resolve()
-    await wrapper.getByRole('button', { name: 'Usar este arquivo', exact: true }).waitFor({ state: 'visible' })
+    await dialog.getByRole('button', { name: 'Usar este arquivo', exact: true }).waitFor({ state: 'visible' })
     assert(fixture.collectionReads === 1, `${destination.name}: authenticated collection reread was not performed`)
     assert(await visibleNativeValue(wrapper, destination.path) === initialValue,
       `${destination.name}: collection refresh changed the native relationship without explicit selection`)
     assert(await fileInput.evaluate(element => element === document.activeElement),
       `${destination.name}: refreshing only the relationship selector moved focus away from the file input`)
-    await wrapper.getByRole('button', { name: 'Usar este arquivo', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Usar este arquivo', exact: true }).click()
     await assertNativeID(wrapper, destination.path, fixture.uploadID)
+    await assertDialogClosed(dialog, `${destination.name}: upload dialog remained open after explicit selection`)
     assert(await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true })
       .evaluate(element => element === document.activeElement),
     `${destination.name}: native Drawer did not return focus to the field-local upload control`)
@@ -196,12 +217,17 @@ export async function runEditorialUploadCases(page) {
     const { wrapper } = await relationshipWrapper(page, destination)
     const before = await visibleNativeValue(wrapper, destination.path)
     try {
-      await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
-      await page.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
+      const dialog = await openUploadDialog(page, wrapper)
+      await dialog.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
       await fixture.chunkStarted.promise
-      await page.getByRole('status').filter({ hasText: 'Arquivo pronto para selecionar' }).waitFor({ state: 'visible' })
-      await page.getByRole('button', { name: 'Fechar painel', exact: true }).click()
+      await dialog.getByRole('status').filter({ hasText: 'Arquivo pronto para selecionar' }).waitFor({ state: 'visible' })
+      await dialog.getByRole('button', { name: 'Fechar painel', exact: true }).click()
+      await assertDialogClosed(dialog, 'idle upload dialog did not close')
       assert(await visibleNativeValue(wrapper, destination.path) === before, 'close_without_selection_changed_native_value')
+
+      const reopenedDialog = await openUploadDialog(page, wrapper)
+      await reopenedDialog.getByRole('button', { name: 'Fechar painel', exact: true }).click()
+      await assertDialogClosed(reopenedDialog, 'reopened upload dialog did not close')
     } finally { fixture.allowComplete.resolve(); await fixture.cleanup() }
   }))
 
@@ -212,12 +238,14 @@ export async function runEditorialUploadCases(page) {
       const fixture = await installUploadRoutes(page, destination, read)
       try {
         const { wrapper } = await relationshipWrapper(page, destination)
-        await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
-        await page.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
+        const dialog = await openUploadDialog(page, wrapper)
+        await dialog.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
         await fixture.chunkStarted.promise
-        await page.getByRole('alert').filter({ hasText: /mídia concluída não pôde ser confirmada/iu }).waitFor({ state: 'visible' })
-        assert(await page.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
+        await dialog.getByRole('alert').filter({ hasText: /mídia concluída não pôde ser confirmada/iu }).waitFor({ state: 'visible' })
+        assert(await dialog.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
           'wrong_mime_or_failed_collection_response_enabled_selection')
+        assert(await activeUploadDialog(page).then(active => active.count()) === 1,
+          'failed_collection_reread_closed_or_duplicated_the_active_upload_dialog')
       } finally { fixture.allowComplete.resolve(); await fixture.cleanup() }
     }
   }))
@@ -230,12 +258,12 @@ export async function runEditorialUploadCases(page) {
       const { wrapper } = await relationshipWrapper(page, destination)
       const beforeIDs = await page.evaluate(path => window.__portalPageUploadFixture?.galleryRowIDs(path), destination.galleryPath)
       assert(Array.isArray(beforeIDs) && beforeIDs.length >= 2, 'Task_4_gallery_fixture_must_expose_two_native_row_IDs')
-      await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
-      await page.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
+      const dialog = await openUploadDialog(page, wrapper)
+      await dialog.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
       await fixture.chunkStarted.promise
-      await page.getByRole('status').filter({ hasText: 'Validando arquivo…' }).waitFor({ state: 'visible' })
+      await dialog.getByRole('status').filter({ hasText: 'Validando arquivo…' }).waitFor({ state: 'visible' })
       await page.keyboard.press('Escape')
-      const closeConfirmation = page.getByRole('alertdialog', { name: 'Cancelar envio?' })
+      const closeConfirmation = dialog.getByRole('alertdialog', { name: 'Cancelar envio?' })
       await closeConfirmation.waitFor({ state: 'visible' })
       if (operation === 'remove') {
         await closeConfirmation.getByRole('button', { name: 'Continuar envio', exact: true }).click()
@@ -263,28 +291,30 @@ export async function runEditorialUploadCases(page) {
       assert(mutation.changed === true, 'Task_4_fixture_did_not_confirm_the_controlled_form_state_transition')
       if (operation === 'reorder') {
         await closeConfirmation.getByRole('button', { name: 'Continuar envio', exact: true }).click()
-        await page.getByLabel('Escolha um arquivo', { exact: true }).waitFor({ state: 'visible' })
+        await dialog.getByLabel('Escolha um arquivo', { exact: true }).waitFor({ state: 'visible' })
+        assert(await activeUploadDialog(page).then(active => active.count()) === 1,
+          'reorder_confirmation_did_not_resolve_to_one_reopened_upload_dialog')
       }
       fixture.allowComplete.resolve()
       if (operation === 'reorder') {
-        await page.getByRole('alert').filter({ hasText: /destino mudou|seleção.*desativada/iu }).waitFor({ state: 'visible' })
-        assert(await wrapper.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
+        await dialog.getByRole('alert').filter({ hasText: /destino mudou|seleção.*desativada/iu }).waitFor({ state: 'visible' })
+        assert(await dialog.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
           'reorder_kept_selection_available_after_native_row_ID_mutation')
       } else {
         await fixture.deleteStarted.promise
         await fixture.deleteSettled.promise
+        await assertDialogClosed(dialog, 'removed gallery row left its upload dialog open')
         const remainingDestination = page.locator(`.portal-page-media-field[data-portal-page-media-path="${destination.path}"]`)
         await remainingDestination.waitFor({ state: 'visible' })
         assert(fixture.deletes === 1, 'removed_destination_did_not_dispose_and_cancel_its_private_upload_session')
-        assert(await remainingDestination.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
-          'removed_destination_media_was_available_for_selection_on_the_remaining_row')
         assert(await visibleNativeValue(remainingDestination, destination.path) !== fixture.uploadID,
           'removed_destination_upload_ID_was_written_to_the_remaining_native_row')
-        await remainingDestination.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
-        await page.getByLabel('Escolha um arquivo', { exact: true }).waitFor({ state: 'visible' })
-        assert(await remainingDestination.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
+        const reopenedDialog = await openUploadDialog(page, remainingDestination)
+        await reopenedDialog.getByLabel('Escolha um arquivo', { exact: true }).waitFor({ state: 'visible' })
+        assert(await reopenedDialog.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
           'reopening_the_remaining_gallery_field_restored_the_removed_upload_selection')
-        await page.getByRole('button', { name: 'Fechar painel', exact: true }).click()
+        await reopenedDialog.getByRole('button', { name: 'Fechar painel', exact: true }).click()
+        await assertDialogClosed(reopenedDialog, 'remaining gallery upload dialog did not close after reopen')
       }
     } finally { fixture.allowComplete.resolve(); await fixture.cleanup() }
   }))
@@ -295,14 +325,15 @@ export async function runEditorialUploadCases(page) {
     const fixture = await installUploadRoutes(page, destination, { waitForComplete: true })
     try {
       const { wrapper } = await relationshipWrapper(page, destination)
-      await wrapper.getByRole('button', { name: 'Enviar novo arquivo', exact: true }).click()
-      await page.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
+      const dialog = await openUploadDialog(page, wrapper)
+      await dialog.getByLabel('Escolha um arquivo', { exact: true }).setInputFiles(validFile(destination))
       await fixture.chunkStarted.promise
       const nextDocument = new URL('/editorial/admin/collections/portal-pages/create', fixture.origin).toString()
       await page.goto(nextDocument, { waitUntil: 'domcontentloaded' })
       fixture.allowComplete.resolve()
+      await assertDialogClosed(dialog, 'document navigation left the previous upload dialog active')
       await page.getByRole('button', { name: 'Salvar versão', exact: true }).waitFor({ state: 'visible' })
-      assert(await page.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
+      assert(await dialog.getByRole('button', { name: 'Usar este arquivo', exact: true }).count() === 0,
         'old_upload_selected_into_new_document')
     } finally { fixture.allowComplete.resolve(); await fixture.cleanup() }
   }))
