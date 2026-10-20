@@ -67,9 +67,10 @@ Consulte o [runbook Payload](docs/operations/payload-owner-news.md) e a
 
 O aceite CMS das páginas modulares usa o comando separado
 `npm --prefix cms run test:portal-pages:integration -- --check-config`; ele exige
-opt-in, duas URLs de banco loopback `test`/`dev`, diretórios privados distintos e
-UUID de execução. Check-only retorna `NOT_EXECUTED` sem conexão. A execução real
-aplica migrations somente ao banco CMS explicitamente guardado; não inicia Docker
+opt-in, `NODE_ENV=test`, duas URLs de banco loopback `test`/`dev`, diretórios
+privados distintos e UUID de execução. Check-only retorna `NOT_EXECUTED` sem
+conexão. A execução real aplica migrations somente ao banco CMS explicitamente
+guardado; não inicia Docker
 e não usa `DATABASE_URL` nem credenciais de runtime como fallback. A suíte genérica
 `test:payload` continua inalterada e bloqueada. Veja o
 [runbook editorial das páginas](docs/operations/portal-pages-editorial.md) e a

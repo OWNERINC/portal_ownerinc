@@ -15,6 +15,24 @@ const MEDIA = [
     fileName: 'handbook.pdf', mimeType: 'application/pdf', id: '55555555-5555-4555-8555-555555555555' },
 ]
 
+export const expectedEditorialUploadCases = Object.freeze([
+  ...MEDIA.map(destination => `${destination.name}: chunks complete, collection reread, then explicit native selection`),
+  'close without selection leaves the native relationship value unchanged',
+  'wrong MIME or failed collection reread keeps selection disabled',
+  'reorder gallery row invalidates the captured destination',
+  'remove gallery row invalidates the captured destination',
+  'document navigation during upload never selects into the new document',
+  'native focus, alt/title values and Task 2 confirmation are preserved or invalidated correctly',
+])
+
+function assertCaseRegistry(results) {
+  const actual = results.map(item => item.name)
+  if (actual.length !== expectedEditorialUploadCases.length ||
+      actual.some((name, index) => name !== expectedEditorialUploadCases[index])) {
+    throw new Error('editorial_upload_case_registry_mismatch')
+  }
+}
+
 function assert(condition, detail) {
   if (!condition) throw new Error(detail)
 }
@@ -365,5 +383,6 @@ export async function runEditorialUploadCases(page) {
     assert(await page.locator('.portal-page-media-field').count() >= 5, 'remount_only_selector_preserves_the_native_wrapper_and_focus')
   }))
 
+  assertCaseRegistry(results)
   return results
 }

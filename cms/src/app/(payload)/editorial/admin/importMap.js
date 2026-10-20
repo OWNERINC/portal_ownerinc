@@ -19,6 +19,7 @@ import { LegacyHistory as LegacyHistory_b9524fd9ef11400b74290e9e00eccbf3 } from 
 import { CreateArticleView as CreateArticleView_17756cddd938e4258b1deafd868bbe85 } from '../../../../news/CreateArticleView'
 import { PortalPageRequiredTextField as PortalPageRequiredTextField_21bea796e5921046e8c3d9e51d829cad } from '../../../../admin/portal-pages/PortalPageRequiredTextField'
 import { PortalPageMediaField as PortalPageMediaField_b58957a0f3bd91b5f48b1ae9efca2fdb } from '../../../../admin/portal-pages/PortalPageMediaField'
+import { PortalPageRequiredTextareaField as PortalPageRequiredTextareaField_d68eb803e258542b7d3dfc9dd2afc319 } from '../../../../admin/portal-pages/PortalPageRequiredTextareaField'
 import { PortalPageEditorialControls as PortalPageEditorialControls_13bf80fb15cdd7b052d016153330aab1 } from '../../../../admin/portal-pages/PortalPageEditorialControls'
 import { EmptyPortalPageControl as EmptyPortalPageControl_432012d5257bb0884ba2b772f7f0c595 } from '../../../../admin/portal-pages/EmptyPortalPageControl'
 import { PortalLogout as PortalLogout_1f4e782dd69a1a9b22405fd8d14b6453 } from '../../../../admin/PortalLogout'
@@ -54,6 +55,7 @@ export const importMap = {
   "/news/CreateArticleView#CreateArticleView": CreateArticleView_17756cddd938e4258b1deafd868bbe85,
   "/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField": PortalPageRequiredTextField_21bea796e5921046e8c3d9e51d829cad,
   "/admin/portal-pages/PortalPageMediaField#PortalPageMediaField": PortalPageMediaField_b58957a0f3bd91b5f48b1ae9efca2fdb,
+  "/admin/portal-pages/PortalPageRequiredTextareaField#PortalPageRequiredTextareaField": PortalPageRequiredTextareaField_d68eb803e258542b7d3dfc9dd2afc319,
   "/admin/portal-pages/PortalPageEditorialControls#PortalPageEditorialControls": PortalPageEditorialControls_13bf80fb15cdd7b052d016153330aab1,
   "/admin/portal-pages/EmptyPortalPageControl#EmptyPortalPageControl": EmptyPortalPageControl_432012d5257bb0884ba2b772f7f0c595,
   "/admin/PortalLogout#PortalLogout": PortalLogout_1f4e782dd69a1a9b22405fd8d14b6453,

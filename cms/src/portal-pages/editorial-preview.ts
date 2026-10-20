@@ -10,8 +10,13 @@ import { resolvePreviewPortalPageForAsset, queryPortalPagePreview } from './read
 import type { PortalPageReadActor } from './reader'
 import { withCmsTransaction } from '../publication/transaction'
 import { uuid } from './primitives'
+import type { PortalPageMediaReadRecord } from './persistence'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+const SAFE_MEDIA_EXTENSIONS: Readonly<Record<PortalPageMediaReadRecord['mimeType'], string>> = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+  'application/pdf': 'pdf', 'video/mp4': 'mp4', 'video/webm': 'webm',
+}
 
 const notFound = () => new APIError('portal_page_not_found', 404, undefined, true)
 const unavailable = () => new APIError('portal_page_editorial_unavailable', 503, undefined, true)
@@ -83,33 +88,48 @@ function safeAssetError(error: unknown): Response {
     { status, headers: EDITORIAL_HEADERS })
 }
 
-/** Freshly authorize and open one private asset for this exact saved version. */
-export async function readEditorialPreviewAsset(req: PayloadRequest): Promise<Response> {
-  let opened: PortalPageAssetResponse | undefined
-  try {
-    assertEditorialReadHeaders(req.headers)
-    const actor = requirePortalPageEditor(req)
-    const route = req.routeParams as Record<string, unknown> | undefined
-    const pageID = strictUUID(route?.pageId)
-    const versionID = strictUUID(route?.versionId)
-    const assetID = strictUUID(route?.assetId)
-    const uploadDir = readCmsEnvironment(process.env).uploadDir
-    // Never inherit a caller's transaction for an asset GET. The descriptor is
-    // opened while reference rows are locked, then the transaction commits before
-    // its stream is handed to Next/Fetch.
-    const freshReq = { ...req, transactionID: undefined, context: { ...req.context } }
-    const result = await withCmsTransaction(req.payload, freshReq, async transactionReq => {
-      const page = await resolvePreviewPortalPageForAsset(transactionReq, pageID, versionID, actor)
-      const media = page?.media.get(assetID)
-      if (!media || media.state !== 'complete') throw notFound()
-      opened = await openPortalPageMedia({ uploadDir, media, range: req.headers.get('range'), signal: req.signal })
-      return opened
-    })
-    return new Response(result.body, { status: result.status, headers: { ...EDITORIAL_HEADERS, ...result.headers } })
-  } catch (error) {
-    // A commit can fail after a descriptor has been opened. The body has not
-    // crossed the response boundary yet, so close it and disclose no bytes.
-    await opened?.body?.cancel().catch(() => {})
-    return safeAssetError(error)
+/** Factory seam keeps endpoint ownership/failure behavior observable in tests. */
+export function createEditorialPreviewAssetReader(
+  openMedia: typeof openPortalPageMedia = openPortalPageMedia,
+): (req: PayloadRequest) => Promise<Response> {
+  return async (req: PayloadRequest): Promise<Response> => {
+    let opened: PortalPageAssetResponse | undefined
+    let extension: string | undefined
+    try {
+      assertEditorialReadHeaders(req.headers)
+      const actor = requirePortalPageEditor(req)
+      const route = req.routeParams as Record<string, unknown> | undefined
+      const pageID = strictUUID(route?.pageId)
+      const versionID = strictUUID(route?.versionId)
+      const assetID = strictUUID(route?.assetId)
+      const uploadDir = readCmsEnvironment(process.env).uploadDir
+      // Never inherit a caller's transaction for an asset GET. The descriptor is
+      // opened while reference rows are locked, then the transaction commits before
+      // its stream is handed to Next/Fetch.
+      const freshReq = { ...req, transactionID: undefined, context: { ...req.context } }
+      const result = await withCmsTransaction(req.payload, freshReq, async transactionReq => {
+        const page = await resolvePreviewPortalPageForAsset(transactionReq, pageID, versionID, actor)
+        const media = page?.media.get(assetID)
+        if (!media || media.state !== 'complete') throw notFound()
+        extension = SAFE_MEDIA_EXTENSIONS[media.mimeType]
+        if (!extension) throw unavailable()
+        opened = await openMedia({ uploadDir, media, range: req.headers.get('range'), signal: req.signal })
+        return opened
+      })
+      if (!extension) throw unavailable()
+      const headers = new Headers({ ...EDITORIAL_HEADERS, ...result.headers })
+      // Storage keys and original upload names are private implementation data.
+      // The public name is derived only from the validated asset ID and MIME.
+      headers.set('Content-Disposition', `inline; filename="portal-page-${assetID}.${extension}"`)
+      return new Response(result.body, { status: result.status, headers })
+    } catch (error) {
+      // A commit can fail after a descriptor has been opened. The body has not
+      // crossed the response boundary yet, so close it and disclose no bytes.
+      await opened?.body?.cancel().catch(() => {})
+      return safeAssetError(error)
+    }
   }
 }
+
+/** Freshly authorize and open one private asset for this exact saved version. */
+export const readEditorialPreviewAsset = createEditorialPreviewAssetReader()

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { lstat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { after, before, test } from 'node:test'
+import { aggregateAcceptanceCases, expectedNativeAcceptanceCases } from './portal-page-editorial-cases.mjs'
+import { ensurePrivateDirectory, writePrivateEvidence } from '../support/private-evidence.mjs'
 
 type IntegrationConfig = {
   cmsDatabaseURL: string
@@ -18,6 +20,8 @@ const cases: Array<{ name: string; status: 'PASS' | 'FAIL' | 'NOT_EXECUTED'; det
 let setupFailed = false
 let config: IntegrationConfig
 let payload: any
+let payloadConfig: any
+let handlePayloadREST: ((input: any) => Promise<Response>) | undefined
 let actor: any
 let user: any
 let makeReq: () => Promise<any>
@@ -28,6 +32,7 @@ let reader: any
 let preview: any
 let editable: any
 let fixture: { category: any; image: any; video: any; pdf: any }
+let makeMediaRecord: ((mimeType: string, extension: string, originalName: string) => Promise<any>) | undefined
 
 function safeFailure(error: unknown): string {
   if (error && typeof error === 'object' && 'status' in error && typeof error.status === 'number') {
@@ -88,10 +93,38 @@ before(async () => {
       runId: checked.runId,
       uploadDir: checked.uploadDir,
     }
-    const [payloadModule, configModule] = await Promise.all([
-      import('payload'), import('../../src/payload.config.js'),
-    ])
-    payload = await payloadModule.getPayload({ config: configModule.default })
+    await ensurePrivateDirectory(path.join(config.uploadDir, 'portal-pages'))
+    // The REST acceptance below exercises Payload's real auth middleware without
+    // contacting Portal: capture this narrow synthetic V2 resolver in the config.
+    const realFetch = globalThis.fetch
+    const adminActor = {
+      version: 2, uid: `portal-page-task4-${config.runId}`, email: `${config.runId}@example.invalid`,
+      name: 'Portal Pages Task 4 synthetic editor',
+      capabilities: { manageKnowledge: true, manageAcademy: false, manageBenefits: false, manageReminders: false },
+    }
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+      if (url.pathname.endsWith('/admin/session/resolve')) {
+        let body: { cookie?: string } = {}
+        try { body = JSON.parse(String(init?.body || '{}')) as { cookie?: string } } catch { /* invalid synthetic request */ }
+        if (body.cookie !== config.runId) return Response.json({ reason: 'editorial_session_invalid' }, { status: 401 })
+        return Response.json({ actor: adminActor, expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() })
+      }
+      if (url.pathname.endsWith('/session/resolve')) {
+        return Response.json({ reason: 'editorial_session_invalid' }, { status: 401 })
+      }
+      return Response.json({ reason: 'editorial_unavailable' }, { status: 503 })
+    }) as typeof fetch
+    let payloadModule: typeof import('payload')
+    let configModule: typeof import('../../src/payload.config.js')
+    try {
+      ;[payloadModule, configModule] = await Promise.all([
+        import('payload'), import('../../src/payload.config.js'),
+      ])
+    } finally { globalThis.fetch = realFetch }
+    payloadConfig = configModule.default
+    handlePayloadREST = payloadModule.handleEndpoints
+    payload = await payloadModule.getPayload({ config: payloadConfig })
 
     const uid = `portal-page-task4-${config.runId}`
     actor = {
@@ -120,14 +153,13 @@ before(async () => {
       import('../../src/portal-pages/editorial-native.js'),
     ])
 
-    await mkdir(path.join(config.uploadDir, 'portal-pages'), { recursive: true, mode: 0o700 })
     const req = await makeReq()
     const category = await transaction.withCmsTransaction(payload, req, (transactionReq: any) => payload.create({
       collection: 'portal-page-categories', req: transactionReq, overrideAccess: false,
       data: { name: `Task 4 ${config.runId.slice(0, 8)}`, slug: `task-4-${config.runId.slice(0, 8)}` },
     }))
 
-    const makeMedia = async (mimeType: string, extension: string, originalName: string) => {
+    makeMediaRecord = async (mimeType: string, extension: string, originalName: string) => {
       const mediaReq = await makeReq()
       return persistence.withPortalPageMediaMutation(mediaReq, actor.uid, 'create', (transactionReq: any) =>
         payload.create({ collection: 'portal-page-media', req: transactionReq, overrideAccess: true,
@@ -135,9 +167,9 @@ before(async () => {
             sha256: 'a'.repeat(64), state: 'complete', completedAt: new Date().toISOString(), uploadedBy: actor.uid },
         }))
     }
-    const image = await makeMedia('image/png', 'png', `task4-${config.runId.slice(0, 8)}.png`)
-    const video = await makeMedia('video/mp4', 'mp4', `task4-${config.runId.slice(0, 8)}.mp4`)
-    const pdf = await makeMedia('application/pdf', 'pdf', `task4-${config.runId.slice(0, 8)}.pdf`)
+    const image = await makeMediaRecord('image/png', 'png', `task4-${config.runId.slice(0, 8)}.png`)
+    const video = await makeMediaRecord('video/mp4', 'mp4', `task4-${config.runId.slice(0, 8)}.mp4`)
+    const pdf = await makeMediaRecord('application/pdf', 'pdf', `task4-${config.runId.slice(0, 8)}.pdf`)
     const mediaFiles = [
       [image, Buffer.from('synthetic-image!')],
       [video, Buffer.from('synthetic-video!')],
@@ -148,16 +180,6 @@ before(async () => {
       return writeFile(path.join(config.uploadDir, 'portal-pages', media.storageKey), contents, { mode: 0o600 })
     }))
     fixture = { category, image, video, pdf }
-    if (config.playwrightModule) {
-      const storageStateFile = path.join(config.evidenceDir, 'portal-page-editorial-storage-state.json')
-      await writeFile(storageStateFile, `${JSON.stringify({ cookies: [{ name: 'ownerinc-editorial-dev',
-        value: config.runId, domain: '127.0.0.1', path: '/', expires: Math.floor(Date.now() / 1000) + 3600,
-        httpOnly: true, secure: false, sameSite: 'Lax' }], origins: [] })}\n`, { mode: 0o600 })
-      const browserFixture = { runId: config.runId, baseURL: 'http://127.0.0.1:3100',
-        playwrightModule: config.playwrightModule, storageStateFile }
-      await writeFile(path.join(config.evidenceDir, 'portal-page-editorial-browser.json'),
-        `${JSON.stringify(browserFixture, null, 2)}\n`, { mode: 0o600 })
-    }
   } catch (error) {
     setupFailed = true
     throw error
@@ -166,12 +188,30 @@ before(async () => {
 
 after(async () => {
   try { await payload?.destroy() } catch { /* Report only sanitized fixture status. */ }
-  const status = setupFailed || cases.some(item => item.status === 'FAIL') ? 'FAIL'
-    : cases.length > 0 && cases.every(item => item.status === 'PASS') ? 'PASS' : 'NOT_EXECUTED'
   if (!config?.evidenceDir) return
-  const report = { runId: config.runId, status, cases }
-  await writeFile(path.join(config.evidenceDir, 'portal-page-editorial-native-cases.json'),
-    `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+  const aggregate = aggregateAcceptanceCases(expectedNativeAcceptanceCases, cases)
+  const status = setupFailed ? 'FAIL' : aggregate.status
+  const report = { runId: config.runId, status,
+    cases: setupFailed ? [...aggregate.cases, { name: 'native fixture setup', status: 'FAIL', detail: 'native_fixture_setup_failed' }] : aggregate.cases }
+  await writePrivateEvidence(path.join(config.evidenceDir, 'portal-page-editorial-native-cases.json'),
+    `${JSON.stringify(report, null, 2)}\n`)
+  if (status !== 'PASS') {
+    process.exitCode = status === 'FAIL' ? 1 : 2
+    return
+  }
+  if (config.playwrightModule) {
+    const moduleInfo = await lstat(config.playwrightModule).catch(() => null)
+    if (moduleInfo?.isFile() && !moduleInfo.isSymbolicLink()) {
+      const storageStateFile = path.join(config.evidenceDir, 'portal-page-editorial-storage-state.json')
+      await writePrivateEvidence(storageStateFile, `${JSON.stringify({ cookies: [{ name: 'ownerinc-editorial-dev',
+        value: config.runId, domain: '127.0.0.1', path: '/', expires: Math.floor(Date.now() / 1000) + 3600,
+        httpOnly: true, secure: false, sameSite: 'Lax' }], origins: [] })}\n`)
+      const browserFixture = { runId: config.runId, baseURL: 'http://127.0.0.1:3100',
+        playwrightModule: config.playwrightModule, storageStateFile }
+      await writePrivateEvidence(path.join(config.evidenceDir, 'portal-page-editorial-browser.json'),
+        `${JSON.stringify(browserFixture, null, 2)}\n`)
+    }
+  }
 })
 
 test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and rollback acceptance', async () => {
@@ -226,7 +266,22 @@ test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and ro
     assert.equal(row.version.slug, data.slug)
   })
 
-  await acceptance('direct native publication and historical restore remain denied without the helper scope', async () => {
+  await acceptance('direct REST publish and historical restore requests remain denied', async () => {
+    assert.ok(handlePayloadREST)
+    const restHeaders = { 'Content-Type': 'application/json',
+      Cookie: `__Host-ownerinc-editorial=${config.runId}`, Origin: 'https://portal-test.invalid',
+      'sec-fetch-site': 'same-origin' }
+    const restPublish = await handlePayloadREST!({ config: payloadConfig, request: new Request(
+      `https://portal-test.invalid/editorial/api/portal-pages/${pageID}`, {
+        method: 'PATCH', headers: restHeaders, body: JSON.stringify({ _status: 'published' }),
+      }) })
+    assert.equal(restPublish.status, 403, 'authenticated direct REST publication must hit the capability guard')
+    const restRestore = await handlePayloadREST!({ config: payloadConfig, request: new Request(
+      `https://portal-test.invalid/editorial/api/portal-pages/versions/${saveA.version_id}?draft=true`, {
+        method: 'POST', headers: restHeaders, body: '{}',
+      }) })
+    assert.equal(restRestore.status, 403, 'authenticated direct REST restore must hit the capability guard')
+
     const req = await makeReq()
     await assert.rejects(transaction.withCmsTransaction(payload, req, (transactionReq: any) => payload.update({
       collection: 'portal-pages', id: pageID, req: transactionReq, overrideAccess: false, draft: false,
@@ -312,6 +367,17 @@ test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and ro
     assert.equal(main.cover, fixture.image.id)
   })
 
+  await acceptance('old exact preview remains on its saved Version after a subsequent publication', async () => {
+    const historical = await preview.loadEditorialPreview(await makeReq(), pageID, saveA.version_id)
+    assert.equal(historical.dto.revision.id, saveA.version_id)
+    assert.equal(historical.dto.title, data.title)
+    assert.equal(historical.dto.summary, 'Initial editorial summary')
+    assert.equal(historical.dto.revision.status, 'draft')
+    const current = await mainPage(pageID)
+    assert.equal(current._status, 'published')
+    assert.equal(current.summary, 'Autosave two')
+  })
+
   await acceptance('wrong MIME role and incomplete media are rejected before publication', async () => {
     const req = await makeReq()
     await assert.rejects(transaction.withCmsTransaction(payload, req, (transactionReq: any) =>
@@ -326,6 +392,53 @@ test('real Payload/PostgreSQL Portal Pages snapshot, publication, preview and ro
       persistence.assertPortalPageMediaReferences(payload, { cover: null,
         body: [{ blockType: 'image', asset: incomplete.id, alt: 'Incomplete' }] }, transactionReq,
       { requireComplete: true })), (error: any) => error?.status === 400)
+  })
+
+  await acceptance('complete media MIME-role matrix accepts every supported native role', async () => {
+    assert.ok(makeMediaRecord)
+    const check = async (record: any, page: { cover: null | { asset_id: string; alt: string }; body: unknown[] }) =>
+      transaction.withCmsTransaction(payload, await makeReq(), (transactionReq: any) =>
+        persistence.assertPortalPageMediaReferences(payload, page, transactionReq, { requireComplete: true }))
+
+    for (const [mimeType, extension] of [['image/jpeg', 'jpg'], ['image/png', 'png'], ['image/webp', 'webp']]) {
+      const image = await makeMediaRecord!(mimeType, extension, `matrix-${extension}-${config.runId.slice(0, 8)}.${extension}`)
+      await check(image, { cover: { asset_id: image.id, alt: 'Capa sintética' }, body: [] })
+      await check(image, { cover: null, body: [{ blockType: 'image', asset: image.id, alt: 'Imagem' }] })
+      await check(image, { cover: null, body: [{ blockType: 'gallery', images: [
+        { asset: image.id, alt: 'Galeria um' }, { asset: image.id, alt: 'Galeria dois' },
+      ] }] })
+    }
+    for (const [mimeType, extension] of [['video/mp4', 'mp4'], ['video/webm', 'webm']]) {
+      const video = await makeMediaRecord!(mimeType, extension, `matrix-${extension}-${config.runId.slice(0, 8)}.${extension}`)
+      await check(video, { cover: null, body: [{ blockType: 'video', asset: video.id, title: 'Vídeo' }] })
+    }
+    const pdf = await makeMediaRecord!('application/pdf', 'pdf', `matrix-${config.runId.slice(0, 8)}.pdf`)
+    await check(pdf, { cover: null, body: [{ blockType: 'pdf', asset: pdf.id, title: 'PDF' }] })
+  })
+
+  await acceptance('fresh asset Range requests are denied after editor permission or session revocation', async () => {
+    const assetRequest = async () => {
+      const req = await makeReq()
+      req.routeParams = { pageId: pageID, versionId: saveB.version_id, assetId: fixture.pdf.id }
+      req.headers = new Headers({ 'sec-fetch-site': 'same-origin', range: 'bytes=1-4' })
+      return req
+    }
+    const allowed = await preview.readEditorialPreviewAsset(await assetRequest())
+    assert.equal(allowed.status, 206)
+    await allowed.body?.cancel()
+
+    const permissionRevoked = await assetRequest()
+    permissionRevoked.user = { ...permissionRevoked.user, adminActor: { ...actor,
+      capabilities: { ...actor.capabilities, manageKnowledge: false } } }
+    const permissionDenied = await preview.readEditorialPreviewAsset(permissionRevoked)
+    assert.equal(permissionDenied.status, 403)
+    assert.doesNotMatch(await permissionDenied.text(), /synthetic-pdf|preview!/u)
+
+    const sessionRevoked = await assetRequest()
+    sessionRevoked.user = { ...sessionRevoked.user, adminExpiresAt: '2020-01-01T00:00:00.000Z' }
+    const sessionDenied = await preview.readEditorialPreviewAsset(sessionRevoked)
+    assert.equal(sessionDenied.status, 401)
+    assert.doesNotMatch(await sessionDenied.text(), /synthetic-pdf|preview!/u)
   })
 
   await acceptance('fresh exact preview keeps its historical Version and private media authorization', async () => {

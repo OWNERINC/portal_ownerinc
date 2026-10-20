@@ -14,16 +14,18 @@ function media(filesize = pdf.length, mimeType: 'application/pdf' | 'video/mp4' 
 
 function descriptor(bytes: Buffer, size = bytes.length) {
   let closed = 0
+  let reads = 0
   const handle: PortalPageDescriptor = {
     stat: async () => ({ size, isFile: () => true }),
     read: async (buffer, offset, length, position) => {
+      reads++
       const available = Math.min(length, Math.max(0, bytes.length - position))
       bytes.copy(buffer as Buffer, offset, position, position + available)
       return { bytesRead: available, buffer: buffer as Buffer }
     },
     close: async () => { closed++ },
   }
-  return { handle, get closed() { return closed } }
+  return { handle, get reads() { return reads }, get closed() { return closed } }
 }
 
 test('range parser accepts full, suffix, open-ended and bounded ranges; rejects malformed, multiple and unsatisfiable ranges', () => {
@@ -90,6 +92,25 @@ test('500 MiB video metadata streams bounded 64 KiB reads without allocating the
   assert.equal(first.value?.byteLength, 64 * 1024)
   await reader.cancel()
   assert.equal(video.closed, 1)
+})
+
+test('a paused consumer pulls exactly one 64 KiB chunk on demand and cancellation closes once', async () => {
+  const bytes = Buffer.alloc(256 * 1024)
+  for (let index = 0; index < bytes.length; index++) bytes[index] = index % 251
+  const opened = descriptor(bytes)
+  const response = await portalPageMediaResponse({ media: media(bytes.length), openDescriptor: async () => opened.handle })
+  const reader = response.body!.getReader()
+  assert.equal(opened.reads, 0, 'opening the response must not prefetch file data')
+  const first = await reader.read()
+  assert.equal(first.value?.byteLength, 64 * 1024)
+  assert.equal(opened.reads, 1, 'the first demand should cause exactly one bounded descriptor read')
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(opened.reads, 1, 'a paused consumer must not trigger a speculative next chunk')
+  const second = await reader.read()
+  assert.equal(second.value?.byteLength, 64 * 1024)
+  assert.equal(opened.reads, 2)
+  await reader.cancel()
+  assert.equal(opened.closed, 1)
 })
 
 test('abort and consumer cancellation close the exact descriptor', async () => {

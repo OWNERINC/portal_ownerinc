@@ -95,6 +95,23 @@ URL remota, cookie de produção nem storage state fora do diretório de evidên
 Não execute estes comandos com `.env`/URLs de runtime. O runner genérico
 `npm run test:payload` mantém seu comportamento bloqueado e não é substituído.
 
+O runner dedicado e o entrypoint browser exigem `NODE_ENV=test`; somente o processo
+Next local, iniciado e encerrado pelo entrypoint browser, recebe `NODE_ENV=development`.
+Em Linux, os diretórios configurados de upload/evidências devem pertencer ao UID do
+processo e ter modo sem permissões de grupo/outros; arquivos de evidência são regulares,
+sem symlink, do mesmo UID e sem permissões de grupo/outros. A subpasta de mídia do
+fixture é criada ou apertada para `0700`, e evidências são gravadas em arquivo temporário
+exclusivo, com `0600`, `fsync` e rename atômico. No Windows, o guard verifica caminho,
+tipo e symlink, mas não declara privacidade POSIX por UID/modo.
+
+Antes de uma execução `--execute`, somente os nomes conhecidos de artefatos Task 4
+(handoff, storage state e resultados anteriores) são validados e removidos; qualquer
+arquivo existente inseguro interrompe o preflight antes da migration/adapter. A fixture
+native só cria storage state e handoff novos em teardown, depois de setup e de todos os
+casos native obrigatórios passarem. Casos são agregados por registro nomeado: nome
+faltante, duplicado, inesperado ou status inválido falha; qualquer `FAIL` falha o grupo;
+`NOT_EXECUTED` ou `SKIP` impede `PASS`. Um caso não executado nunca é omitido do JSON.
+
 ## Checklist manual de acessibilidade
 
 Marque cada item somente após validação manual no fixture local:

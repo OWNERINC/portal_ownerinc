@@ -13,6 +13,36 @@ export class IntegrationGuardError extends Error {
   }
 }
 
+function platformUID(platform) {
+  return platform === 'linux' && typeof process.getuid === 'function' ? process.getuid() : undefined;
+}
+
+/** Validate only the final disposable directory's ownership/mode, never /tmp or home ancestors. */
+export function validatePrivateDirectoryStat(info, { platform = process.platform, uid = platformUID(platform) } = {}) {
+  if (!info || typeof info.isDirectory !== 'function' || !info.isDirectory() ||
+      typeof info.isSymbolicLink !== 'function' || info.isSymbolicLink()) reject('private_directory_invalid');
+  if (platform === 'linux') {
+    if (!Number.isInteger(uid) || info.uid !== uid || !Number.isInteger(info.mode) || (info.mode & 0o077) !== 0) {
+      reject('private_directory_unsafe');
+    }
+    return 'linux_owner_mode_verified';
+  }
+  return 'portable_path_type_only';
+}
+
+/** Evidence files are private credentials and reports: never accept links or broad Linux permissions. */
+export function validatePrivateEvidenceFileStat(info, { platform = process.platform, uid = platformUID(platform) } = {}) {
+  if (!info || typeof info.isFile !== 'function' || !info.isFile() ||
+      typeof info.isSymbolicLink !== 'function' || info.isSymbolicLink()) reject('private_evidence_file_invalid');
+  if (platform === 'linux') {
+    if (!Number.isInteger(uid) || info.uid !== uid || !Number.isInteger(info.mode) || (info.mode & 0o077) !== 0) {
+      reject('private_evidence_file_unsafe');
+    }
+    return 'linux_owner_mode_verified';
+  }
+  return 'portable_path_type_only';
+}
+
 // The integrated fixture has no caller-selected database URL, volume or authority.
 // It is a separate opt-in contract; the older host-side preflight remains intact.
 export const functionalFallbacks = Object.freeze([
@@ -124,7 +154,7 @@ function privatePath(value, root, label) {
 
 export function readIntegrationConfig(env, root = repositoryRoot) {
   if (env.MIGRATION_TEST_DISPOSABLE !== 'true') reject('disposable_required');
-  if (!['test', 'development'].includes(env.NODE_ENV)) reject('test_environment_required');
+  if (env.NODE_ENV !== 'test') reject('test_environment_required');
   const portal = databaseTarget(env.PAYLOAD_TEST_PORTAL_DATABASE_URL, 'portal');
   const cms = databaseTarget(env.PAYLOAD_TEST_CMS_DATABASE_URL, 'cms');
   // A checked-in test target is the only permitted database source. Do not let
@@ -153,6 +183,7 @@ export function readIntegrationConfig(env, root = repositoryRoot) {
 }
 
 async function checkPrivateDirectory(directory) {
+  const target = path.resolve(directory);
   let current = directory;
   // A user's home may itself be a dotfiles Git repository. Explicit scratch
   // directories under the OS temp root do not become source fixtures for that
@@ -162,6 +193,7 @@ async function checkPrivateDirectory(directory) {
   while (true) {
     const info = await lstat(current);
     if (info.isSymbolicLink() || !info.isDirectory()) reject('private_directory_invalid');
+    if (path.resolve(current) === target) validatePrivateDirectoryStat(info);
     const git = await lstat(path.join(current, '.git')).catch(error => {
       if (error.code === 'ENOENT') return null;
       throw error;

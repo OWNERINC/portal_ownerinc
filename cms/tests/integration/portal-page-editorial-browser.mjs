@@ -6,14 +6,16 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { lstat, readFile, realpath, writeFile } from 'node:fs/promises'
+import { lstat, realpath } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { checkIntegrationDirectories, readIntegrationConfig } from '../support/integration-config.mjs'
+import { readPrivateEvidence, writePrivateEvidence } from '../support/private-evidence.mjs'
 import { runEditorialControlCases } from './portal-page-editorial-controls.mjs'
 import { runEditorialUploadCases } from './portal-page-editorial-upload.mjs'
+import { aggregateAcceptanceCases, expectedBrowserAcceptanceCases, notExecutedAcceptanceCases } from './portal-page-editorial-cases.mjs'
 
 const cmsRoot = fileURLToPath(new URL('../../', import.meta.url))
 const handoffName = 'portal-page-editorial-browser.json'
@@ -77,7 +79,7 @@ async function readHandoff(config) {
   try { info = await lstat(handoffPath) } catch { return null }
   if (!info.isFile() || info.isSymbolicLink()) throw Object.assign(new Error(), { code: 'browser_handoff_invalid' })
   let value
-  try { value = JSON.parse(await readFile(handoffPath, 'utf8')) } catch { throw Object.assign(new Error(), { code: 'browser_handoff_invalid' }) }
+  try { value = JSON.parse(await readPrivateEvidence(handoffPath)) } catch { throw Object.assign(new Error(), { code: 'browser_handoff_invalid' }) }
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).sort().join(',') !== 'baseURL,playwrightModule,runId,storageStateFile' ||
       value.runId !== config.runId) throw Object.assign(new Error(), { code: 'browser_handoff_invalid' })
@@ -106,7 +108,9 @@ async function readHandoff(config) {
   }
   const stateInfo = await lstat(value.storageStateFile).catch(() => null)
   if (!stateInfo?.isFile() || stateInfo.isSymbolicLink()) throw Object.assign(new Error(), { code: 'browser_storage_state_invalid' })
-  const state = JSON.parse(await readFile(value.storageStateFile, 'utf8'))
+  let state
+  try { state = JSON.parse(await readPrivateEvidence(value.storageStateFile)) }
+  catch { throw Object.assign(new Error(), { code: 'browser_storage_state_invalid' }) }
   if (!state || !Array.isArray(state.cookies) || state.cookies.length !== 1 ||
       state.cookies[0]?.name !== 'ownerinc-editorial-dev' || state.cookies[0]?.value !== config.runId) {
     throw Object.assign(new Error(), { code: 'browser_storage_state_invalid' })
@@ -255,8 +259,9 @@ async function main() {
   await checkIntegrationDirectories(checked)
   const handoff = await readHandoff(checked)
   if (!handoff) {
-    output(report('NOT_EXECUTED', [{ name: 'browser fixture handoff', status: 'NOT_EXECUTED',
-      detail: 'Native disposable fixture has not written the private browser handoff.' }]))
+    const aggregate = aggregateAcceptanceCases(expectedBrowserAcceptanceCases,
+      notExecutedAcceptanceCases(expectedBrowserAcceptanceCases, 'Native fixture handoff is unavailable.'))
+    output(report(aggregate.status, aggregate.cases))
     process.exitCode = 2
     return
   }
@@ -296,7 +301,8 @@ async function main() {
     await page.goto(new URL(href, handoff.baseURL).toString(), { waitUntil: 'domcontentloaded' })
     await page.getByRole('button', { name: 'Salvar versão', exact: true }).waitFor({ state: 'visible' })
 
-    const cases = []
+    const cases = [{ name: 'browser fixture starts with an authenticated Portal Pages editor', status: 'PASS',
+      detail: 'The guarded local editor session and synthetic Portal Pages document loaded.' }]
     try {
       await runExactPreview(page, context, handoff.baseURL)
       cases.push({ name: 'private dynamic exact preview stays on its immutable Version after a later save',
@@ -317,9 +323,20 @@ async function main() {
         cases.push({ name: suite[0], status: 'FAIL', detail: 'Browser suite stopped unexpectedly; sensitive request details were withheld.' })
       }
     }
-    const status = cases.some(item => item.status === 'FAIL') ? 'FAIL'
-      : cases.some(item => item.status === 'NOT_EXECUTED') ? 'NOT_EXECUTED' : 'PASS'
-    result = report(status, cases)
+    try {
+      await page.goto(`${handoff.baseURL}/editorial/admin/collections/news-articles/create`, { waitUntil: 'domcontentloaded' })
+      await page.waitForURL(/\/editorial\/admin\/collections\/news-articles\/[0-9a-f-]{36}/iu)
+      await page.getByRole('button', { name: 'Conferir prévia salva', exact: true }).waitFor({ state: 'visible' })
+      await page.getByRole('button', { name: 'Agendar revisão salva', exact: true }).waitFor({ state: 'visible' })
+      await page.getByText('Histórico anterior à migração', { exact: true }).waitFor({ state: 'visible' })
+      cases.push({ name: 'existing News controls smoke: preview, scheduling and legacy history render',
+        status: 'PASS', detail: 'A disposable News draft loaded all existing editorial control slots.' })
+    } catch {
+      cases.push({ name: 'existing News controls smoke: preview, scheduling and legacy history render',
+        status: 'FAIL', detail: 'Existing News control slots did not render in the disposable editor.' })
+    }
+    const aggregate = aggregateAcceptanceCases(expectedBrowserAcceptanceCases, cases)
+    result = report(aggregate.status, aggregate.cases)
     await context.close()
   } finally {
     try { await browser?.close() } finally {
@@ -327,7 +344,7 @@ async function main() {
       await new Promise(resolve => bridge.close(() => resolve()))
     }
   }
-  await writeFile(path.join(checked.evidenceDir, resultName), `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 })
+  await writePrivateEvidence(path.join(checked.evidenceDir, resultName), `${JSON.stringify(result, null, 2)}\n`)
   output(result)
   if (result.status !== 'PASS') process.exitCode = result.status === 'FAIL' ? 1 : 2
 }
@@ -336,7 +353,9 @@ try {
   await main()
 } catch (error) {
   const code = safeCode(error)
-  const value = report('NOT_EXECUTED', [{ name: 'browser fixture setup', status: 'NOT_EXECUTED', detail: code }])
+  const aggregate = aggregateAcceptanceCases(expectedBrowserAcceptanceCases,
+    notExecutedAcceptanceCases(expectedBrowserAcceptanceCases, code))
+  const value = report(aggregate.status, aggregate.cases)
   output(value)
   process.exitCode = 2
 }

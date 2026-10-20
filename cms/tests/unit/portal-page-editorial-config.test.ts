@@ -8,6 +8,7 @@ import { portalPageBlocks } from '../../src/portal-pages/native-blocks'
 
 const importMapURL = new URL('../../src/app/(payload)/editorial/admin/importMap.js', import.meta.url)
 const requiredTextComponent = '/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField'
+const requiredTextareaComponent = '/admin/portal-pages/PortalPageRequiredTextareaField#PortalPageRequiredTextareaField'
 const mediaFieldComponent = '/admin/portal-pages/PortalPageMediaField#PortalPageMediaField'
 const emptyControlComponent = '/admin/portal-pages/EmptyPortalPageControl#EmptyPortalPageControl'
 const controlsComponent = '/admin/portal-pages/PortalPageEditorialControls#PortalPageEditorialControls'
@@ -71,18 +72,23 @@ test('cover and all four native media destinations use typed Task 3 wrappers and
   assert.equal(gallery?.maxRows, 20)
 })
 
-test('every required title, slug and nested text field registers the Task 2 focus target wrapper', () => {
+test('single-line required fields use the text wrapper and the required callout textarea uses the native textarea wrapper', () => {
   const pageFields = fieldsOf(PortalPages.fields as unknown as Array<Record<string, unknown>>)
   const blockFields = portalPageBlocks.flatMap(block => fieldsOf(block.fields as unknown as Array<Record<string, unknown>>, `body.${block.slug}`))
   const all = [...pageFields, ...blockFields]
   for (const path of ['title', 'slug', 'body.heading.text', 'body.image.alt', 'body.gallery.images.alt',
-    'body.video.title', 'body.embed.url', 'body.embed.title', 'body.pdf.title', 'body.callout.text',
-    'body.link.label', 'body.link.url']) {
+    'body.video.title', 'body.embed.url', 'body.embed.title', 'body.pdf.title', 'body.link.label', 'body.link.url']) {
     const field = all.find(item => item.path === path)?.field
     assert.ok(field, `Missing required editor field ${path}`)
     assert.equal(field!.required, true, `${path} should remain required`)
     assert.equal(componentPath(field!), requiredTextComponent, `${path} must register its native input with editorial-focus-state`)
   }
+  const calloutText = all.find(item => item.path === 'body.callout.text')?.field
+  assert.ok(calloutText, 'Missing required editor field body.callout.text')
+  assert.equal(calloutText!.type, 'textarea')
+  assert.equal(calloutText!.required, true)
+  assert.equal(calloutText!.maxLength, 2000)
+  assert.equal(componentPath(calloutText!), requiredTextareaComponent)
 })
 
 test('News configuration and generated import map entries remain intact', async () => {
@@ -95,6 +101,7 @@ test('News configuration and generated import map entries remain intact', async 
     '/news/CreateArticleView#CreateArticleView', '/admin/EditorialMetadata#EditorialMetadata',
     controlsComponent, emptyControlComponent, mediaFieldComponent,
     '/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField',
+    requiredTextareaComponent,
   ]) assert.ok(importMap.includes(key), `Generated import map lost ${key}`)
   assert.match(importMap, /@payloadcms\/richtext-lexical\/client#BoldFeatureClient/u)
   assert.match(importMap, /\/news\/FlatLists\.client#FlatListsFeatureClient/u)

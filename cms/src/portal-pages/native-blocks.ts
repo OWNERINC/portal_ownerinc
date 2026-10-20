@@ -20,6 +20,10 @@ const requiredText = (name: string, label: string, maxLength?: number, required 
   name, label, type: 'text', required, ...(maxLength === undefined ? {} : { maxLength }),
   admin: { components: { Field: '/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField' } },
 })
+const requiredTextarea = (name: string, label: string, maxLength: number): Field => ({
+  name, label, type: 'textarea', required: true, maxLength,
+  admin: { components: { Field: '/admin/portal-pages/PortalPageRequiredTextareaField#PortalPageRequiredTextareaField' } },
+})
 const pageMedia = (label: string, kind: 'image' | 'video' | 'pdf', mimes: readonly string[] = PORTAL_PAGE_MEDIA_MIMES): Field => ({
   name: 'asset', label, type: 'relationship', relationTo: 'portal-page-media',
   filterOptions: { state: { equals: 'complete' }, mimeType: { in: [...mimes] } },
@@ -71,8 +75,7 @@ export const portalPageBlocks: Block[] = [
     slug: 'callout', labels: { singular: 'Aviso', plural: 'Avisos' },
     fields: [{ name: 'tone', label: 'Tipo do aviso', type: 'select', required: true, defaultValue: 'info',
       options: [{ label: 'Informação', value: 'info' }, { label: 'Atenção', value: 'warning' }, { label: 'Sucesso', value: 'success' }] },
-    text('title', 'Título', 200, false), { name: 'text', label: 'Texto do aviso', type: 'textarea', required: true, maxLength: 2000,
-      admin: { components: { Field: '/admin/portal-pages/PortalPageRequiredTextField#PortalPageRequiredTextField' } } }, layout],
+      text('title', 'Título', 200, false), requiredTextarea('text', 'Texto do aviso', 2000), layout],
   },
   {
     slug: 'link', labels: { singular: 'Link', plural: 'Links' },

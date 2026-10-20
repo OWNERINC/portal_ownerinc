@@ -15,8 +15,33 @@ const AMBIGUOUS_REVISION = {
   explicit: null,
 }
 
+export const expectedEditorialControlCases = Object.freeze([
+  'explicit save exposes only a safe new-tab preview link and confirmed version metadata',
+  'new-page validation keeps the native form and focuses its first invalid field',
+  'required callout text renders and focuses the native textarea field',
+  'modified fields wait for autosave and do not send an explicit POST early',
+  'confirmation shows title, version UUID and save time without a second native publish action',
+  'rapid double activation sends no duplicate explicit-save POST',
+  'a delayed revision response cannot activate confirmation after document switch',
+  'a local field edit during revision GET invalidates the response before POST',
+  'a delayed save response cannot confirm or replace the page after document switch',
+  '409 conflict preserves native fields and does not retry the POST',
+  'session expiry clears confirmation and prevents publication POST',
+  'an unrelated native modal blocks editorial actions; lock is covered by the independent gate test',
+  'native Versions and diff navigation remain available',
+  'native block insertion and reordering remain available and persist',
+])
+
 function assert(condition, detail) {
   if (!condition) throw new Error(detail)
+}
+
+function assertCaseRegistry(results) {
+  const actual = results.map(item => item.name)
+  if (actual.length !== expectedEditorialControlCases.length ||
+      actual.some((name, index) => name !== expectedEditorialControlCases[index])) {
+    throw new Error('editorial_control_case_registry_mismatch')
+  }
 }
 
 function deferred() {
@@ -94,6 +119,23 @@ export async function runEditorialControlCases(page) {
     assert(await page.getByLabel('Título', { exact: true }).evaluate(element => element === document.activeElement),
       'first_invalid_native_field_not_focused')
     assert(await page.getByLabel('Título', { exact: true }).inputValue() === '', 'native_title_value_was_replaced')
+  }))
+
+  results.push(await collect('required callout text renders and focuses the native textarea field', async () => {
+    await reset(page, createURL)
+    await page.getByLabel('Título', { exact: true }).fill(`Textarea focus ${Date.now()}`)
+    await page.getByLabel('Endereço canônico', { exact: true }).fill(`textarea-focus-${Date.now()}`)
+    const body = page.locator('[data-field-path="body"]')
+    await body.locator('.blocks-field__drawer-toggler').getByRole('button').click()
+    await page.getByRole('button', { name: 'Aviso', exact: true }).click()
+    const textarea = page.getByLabel('Texto do aviso', { exact: true })
+    await textarea.waitFor({ state: 'visible' })
+    assert.equal(await textarea.evaluate(element => element.tagName), 'TEXTAREA', 'callout_text_did_not_use_native_textarea')
+    assert.match(await textarea.getAttribute('name') || '', /body\.0\.text/u, 'callout_text_native_field_path_was_not_preserved')
+    await page.getByRole('button', { name: SAVE_BUTTON, exact: true }).click()
+    await page.getByRole('status').filter({ hasText: 'Corrija os campos inválidos' }).waitFor({ state: 'visible' })
+    assert.equal(await textarea.evaluate(element => element === document.activeElement), true,
+      'required_callout_textarea_was_not_registered_as_the_native_focus_target')
   }))
 
   results.push(await collect('modified fields wait for autosave and do not send an explicit POST early', async () => {
@@ -320,5 +362,34 @@ export async function runEditorialControlCases(page) {
     await page.getByText(/diferenças|changes|diff/iu).first().waitFor({ state: 'visible' })
   }))
 
+  results.push(await collect('native block insertion and reordering remain available and persist', async () => {
+    await reset(page, initialURL)
+    const body = page.locator('[data-field-path="body"]')
+    await body.waitFor({ state: 'visible' })
+    const rows = body.locator('.blocks-field__row')
+    const before = await rows.count()
+    assert(before >= 2, 'native_body_fixture_needs_two_blocks_for_reorder')
+    const firstLabel = await rows.nth(0).locator('.blocks-field__block-pill').innerText()
+    const secondLabel = await rows.nth(1).locator('.blocks-field__block-pill').innerText()
+    await rows.nth(0).locator('.array-actions__button').click()
+    await page.getByRole('button', { name: 'Mover para Baixo', exact: true }).click()
+    await page.waitForFunction(({ selector, expected }) =>
+      document.querySelector(`${selector} .blocks-field__row .blocks-field__block-pill`)?.textContent?.trim() === expected,
+    { selector: '[data-field-path="body"]', expected: secondLabel })
+    assert.notEqual(firstLabel, secondLabel, 'native_block_fixture_needs_distinct_adjacent_blocks')
+
+    await rows.nth(0).locator('.array-actions__button').click()
+    await page.getByRole('button', { name: 'Adicionar abaixo', exact: true }).click()
+    await page.getByRole('button', { name: 'Divisor', exact: true }).click()
+    assert.equal(await rows.count(), before + 1, 'native_block_insertion_did_not_add_the_selected_block')
+    await saveAndWaitForPreview(page)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    assert.equal(await body.locator('.blocks-field__row').count(), before + 1,
+      'native_block_insertion_or_reordering_was_not_persisted')
+    assert.equal(await body.locator('.blocks-field__row').nth(0).locator('.blocks-field__block-pill').innerText(), secondLabel,
+      'native_block_reordering_was_not_persisted')
+  }))
+
+  assertCaseRegistry(results)
   return results
 }

@@ -3,14 +3,24 @@
 // code reachable before `--execute`; it never reads .env, imports Payload/pg,
 // opens a socket, starts Docker, or falls back to runtime database settings.
 import { randomBytes } from 'node:crypto'
-import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { checkIntegrationDirectories, readIntegrationConfig } from '../support/integration-config.mjs'
+import { removeStalePrivateEvidenceFiles, writePrivateEvidence } from '../support/private-evidence.mjs'
+import { aggregateAcceptanceCases } from './portal-page-editorial-cases.mjs'
 
 const cmsRoot = fileURLToPath(new URL('../../', import.meta.url))
 const allowedArgs = new Set(['--check-config', '--execute'])
+const staleTask4Artifacts = Object.freeze([
+  'portal-page-editorial-browser.json',
+  'portal-page-editorial-storage-state.json',
+  'portal-page-editorial-browser-result.json',
+  'portal-page-editorial-native.json',
+  'portal-page-editorial-migration.json',
+  'portal-page-editorial-native-cases.json',
+  'portal-page-editorial-result.json',
+])
 const args = process.argv.slice(2)
 const runIDFromEnvironment = process.env.PAYLOAD_TEST_RUN_ID
 const fallbackRunID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(runIDFromEnvironment || '')
@@ -35,7 +45,7 @@ function minimalEnvironment() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => allowed.has(key.toUpperCase())))
 }
 
-const reportPath = config => path.join(config.evidenceDir, 'portal-page-editorial-native.json')
+const reportPath = config => path.join(config.evidenceDir, 'portal-page-editorial-result.json')
 
 async function runChild(label, command, childEnv, config) {
   const result = spawnSync(process.execPath, command, {
@@ -54,8 +64,8 @@ async function runChild(label, command, childEnv, config) {
   }
   // Keep no raw child output: adapter errors can contain a full database URI or
   // local paths. The structured result is sufficient for this committed report.
-  await writeFile(path.join(config.evidenceDir, `portal-page-editorial-${label}.json`),
-    `${JSON.stringify({ runId: config.runId, ...summary }, null, 2)}\n`, { mode: 0o600 })
+  await writePrivateEvidence(path.join(config.evidenceDir, `portal-page-editorial-${label}.json`),
+    `${JSON.stringify({ runId: config.runId, ...summary }, null, 2)}\n`)
   return summary
 }
 
@@ -75,6 +85,9 @@ try {
       emit(evidence('NOT_EXECUTED', [{ name: 'disposable fixture configuration', status: 'NOT_EXECUTED',
         detail: 'CONFIG_VALID; service and acceptance checks were not executed.' }], config.runId))
     } else {
+      // Validate then remove only exact prior Task 4 outputs before migration,
+      // Payload/adapter imports, or any browser/network activity can begin.
+      await removeStalePrivateEvidenceFiles(config.evidenceDir, staleTask4Artifacts)
       const childEnv = {
         ...minimalEnvironment(),
         NODE_ENV: 'test',
@@ -90,7 +103,9 @@ try {
         PAYLOAD_SECRET: randomBytes(36).toString('hex'),
         PAYLOAD_TO_PORTAL_SECRET: randomBytes(36).toString('hex'),
         PORTAL_TO_PAYLOAD_SECRET: randomBytes(36).toString('hex'),
-        PORTAL_PUBLIC_URL: 'http://127.0.0.1:3100',
+        // Native acceptance runs under NODE_ENV=test; use an HTTPS-only synthetic
+        // origin so Payload's non-development cookie policy remains intact.
+        PORTAL_PUBLIC_URL: 'https://portal-test.invalid',
         PORTAL_INTERNAL_URL: 'http://127.0.0.1:3101',
       }
       if (config.playwrightModule) childEnv.PAYLOAD_TEST_PLAYWRIGHT_MODULE = config.playwrightModule
@@ -112,12 +127,15 @@ try {
         { name: 'real Payload/PostgreSQL editorial acceptance', status: native.status, detail: native.detail },
         browser,
       ]
-      const status = cases.some(item => item.status === 'FAIL') ? 'FAIL'
-        : cases.some(item => item.status === 'NOT_EXECUTED') ? 'NOT_EXECUTED' : 'PASS'
-      const report = evidence(status, cases, config.runId)
-      await writeFile(reportPath(config), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+      const aggregate = aggregateAcceptanceCases([
+        'reviewed CMS migrations on the guarded CMS database',
+        'real Payload/PostgreSQL editorial acceptance',
+        'browser acceptance',
+      ], cases)
+      const report = evidence(aggregate.status, aggregate.cases, config.runId)
+      await writePrivateEvidence(reportPath(config), `${JSON.stringify(report, null, 2)}\n`)
       emit(report)
-      if (status !== 'PASS') process.exitCode = status === 'FAIL' ? 1 : 2
+      if (aggregate.status !== 'PASS') process.exitCode = aggregate.status === 'FAIL' ? 1 : 2
     }
   }
 } catch (error) {

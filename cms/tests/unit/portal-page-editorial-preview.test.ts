@@ -7,7 +7,8 @@ import { test } from 'node:test'
 import React from 'react'
 import { editorialFixture, nativePage, pageID, versionID } from '../fixtures/portal-page-editorial'
 import { PortalPagePreview, assetURL } from '../../src/admin/portal-pages/PortalPagePreview'
-import { loadEditorialPreview, readEditorialPreviewAsset } from '../../src/portal-pages/editorial-preview'
+import { createEditorialPreviewAssetReader, loadEditorialPreview, readEditorialPreviewAsset } from '../../src/portal-pages/editorial-preview'
+import { portalPageMediaResponse, type PortalPageDescriptor } from '../../src/portal-pages/read-file'
 import type { PortalPageDTO } from '../../src/portal-pages/contracts'
 
 const editorHeaders = new Headers({ 'sec-fetch-site': 'same-origin' })
@@ -29,10 +30,13 @@ function fixtureAssetRecord(overrides: Record<string, unknown> = {}) {
     sha256: 'a'.repeat(64), state: 'complete', uploadedBy: 'editor-uid', completedAt: '2026-10-19T10:00:00.000Z', ...overrides }
 }
 
-async function assetFixture(body: unknown[] = [{ blockType: 'image', asset: assetID, alt: 'Imagem de teste' }]) {
+async function assetFixture(
+  body: unknown[] = [{ blockType: 'image', asset: assetID, alt: 'Imagem de teste' }],
+  mediaOverrides: Record<string, unknown> = {},
+) {
   const f = editorialFixture()
   f.seedVersion(nativeVersion({ body }))
-  const media = fixtureAssetRecord()
+  const media = fixtureAssetRecord(mediaOverrides)
   const payload = f.req.payload as unknown as { findByID: (args: Record<string, unknown>) => Promise<unknown> }
   const findByID = payload.findByID.bind(payload)
   payload.findByID = async args => args.collection === 'portal-page-media' ? structuredClone(media) : findByID(args)
@@ -72,11 +76,52 @@ async function assetFixture(body: unknown[] = [{ blockType: 'image', asset: asse
   }
 }
 
+function countedDescriptor(bytes: Buffer) {
+  let reads = 0
+  let closes = 0
+  const handle: PortalPageDescriptor = {
+    stat: async () => ({ size: bytes.byteLength, isFile: () => true }),
+    read: async (buffer, offset, length, position) => {
+      reads++
+      const count = Math.min(length, Math.max(0, bytes.byteLength - position))
+      bytes.copy(buffer, offset, position, position + count)
+      return { bytesRead: count }
+    },
+    close: async () => { closes++ },
+  }
+  return { handle, get reads() { return reads }, get closes() { return closes } }
+}
+
 test('missing version is not replaced with published content', async () => {
   const f = editorialFixture()
   withEditorialHeaders(f.req)
   await assert.rejects(loadEditorialPreview(f.req, pageID, ''), { status: 400 })
   assert.equal(f.calls.some(call => call.operation === 'update'), false)
+})
+
+test('editorial asset endpoint replaces storage metadata in Content-Disposition and preserves safe range headers', async () => {
+  const secretStorageKey = '77777777-7777-4777-8777-777777777777.pdf'
+  const secretOriginalName = 'confidential-finance-name.pdf'
+  const f = await assetFixture([{ blockType: 'pdf', asset: assetID, title: 'Manual' }], {
+    originalName: secretOriginalName,
+    storageKey: secretStorageKey,
+    mimeType: 'application/pdf',
+  })
+  try {
+    f.req.headers = new Headers({ range: 'bytes=2-4', 'sec-fetch-site': 'same-origin' })
+    const response = await readEditorialPreviewAsset(f.req)
+    assert.equal(response.status, 206)
+    assert.equal(response.headers.get('content-type'), 'application/pdf')
+    assert.equal(response.headers.get('content-length'), '3')
+    assert.equal(response.headers.get('content-range'), 'bytes 2-4/8')
+    assert.equal(response.headers.get('accept-ranges'), 'bytes')
+    assert.equal(response.headers.get('cache-control'), 'private,no-store')
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(response.headers.get('content-disposition'), `inline; filename="portal-page-${assetID}.pdf"`)
+    const exposed = `${[...response.headers.entries()].map(([name, value]) => `${name}: ${value}`).join('\n')}\n${await response.text()}`
+    assert.equal(exposed.includes(secretStorageKey), false)
+    assert.equal(exposed.includes(secretOriginalName), false)
+  } finally { await f.restore() }
 })
 
 test('unknown or wrong-parent Version is not found and never falls back to the current page', async () => {
@@ -221,6 +266,26 @@ test('asset response streams with bounded reads and cancellation closes its desc
   } finally { await f.restore() }
 })
 
+test('editorial endpoint downstream cancellation closes its opened descriptor exactly once', async () => {
+  const f = await assetFixture([{ blockType: 'pdf', asset: assetID, title: 'Manual' }], {
+    mimeType: 'application/pdf', storageKey: '77777777-7777-4777-8777-777777777777.pdf',
+  })
+  const opened = countedDescriptor(Buffer.from('preview!'))
+  const endpoint = createEditorialPreviewAssetReader(options => portalPageMediaResponse({
+    media: options.media, range: options.range, signal: options.signal,
+    openDescriptor: async () => opened.handle,
+  }))
+  try {
+    const response = await endpoint(f.req)
+    assert.equal(response.status, 200)
+    const body = response.body!.getReader()
+    await body.cancel()
+    await body.cancel()
+    assert.equal(opened.reads, 0)
+    assert.equal(opened.closes, 1)
+  } finally { await f.restore() }
+})
+
 test('storage errors are sanitized and a commit failure cancels an already-open stream', async () => {
   const missing = await assetFixture()
   try {
@@ -233,13 +298,20 @@ test('storage errors are sanitized and a commit failure cancels an already-open 
 
   const failedCommit = await assetFixture()
   try {
+    const opened = countedDescriptor(Buffer.from('preview!'))
+    const endpoint = createEditorialPreviewAssetReader(options => portalPageMediaResponse({
+      media: options.media, range: options.range, signal: options.signal,
+      openDescriptor: async () => opened.handle,
+    }))
     const db = failedCommit.req.payload.db as unknown as { commitTransaction: (id: string) => Promise<void> }
     db.commitTransaction = async () => { throw new Error('synthetic_commit_failure') }
-    const response = await readEditorialPreviewAsset(failedCommit.req)
+    const response = await endpoint(failedCommit.req)
     assert.equal(response.status, 503)
     assert.deepEqual(await response.json(), {
       error: 'portal_page_editorial_unavailable', message: 'Não foi possível carregar a prévia agora.',
     })
+    assert.equal(opened.reads, 0)
+    assert.equal(opened.closes, 1)
     await rm(path.join(failedCommit.dir, 'portal-pages', `${assetID}.png`))
   } finally { await failedCommit.restore() }
 })

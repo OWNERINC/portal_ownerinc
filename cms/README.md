@@ -590,6 +590,16 @@ browser handoff and storage state under the evidence directory. The dedicated
 browser command validates that handoff and starts only its own loopback Next process
 and test-only V2 actor transport; it stops those processes in `finally`.
 
+Linux upload/evidence directories and evidence files must be owned by the current UID
+and deny group/other access; the media fixture subdirectory is enforced at `0700`,
+and JSON artifacts use exclusive temporary files, `0600`, `fsync` and atomic rename.
+Windows validation remains limited to isolated paths and regular non-symlink files,
+without a POSIX ownership/mode privacy claim. Before `--execute`, only the exact
+known prior Task 4 handoff, storage-state and result filenames are checked and removed.
+The native fixture creates a replacement handoff only in teardown after every named
+required native case passes. Native/browser registries reject missing, duplicate,
+unexpected and invalid-status cases; `NOT_EXECUTED` and `SKIP` prevent overall `PASS`.
+
 No integration or browser PASS is implied by unit tests, typecheck, generated
 imports or check-only config. An unprepared fixture, database, Playwright module or
 session remains `NOT_EXECUTED`; skipped acceptance cannot produce an overall PASS.

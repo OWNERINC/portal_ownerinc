@@ -12,21 +12,31 @@ preparada e opt-in explícito.
 
 | Caso/comando | Resultado | Observação |
 |---|---|---|
-| `node --import tsx --test tests/unit/portal-page-editorial-preview.test.ts` | PASS | 12 casos: UUID/Version exatos, autorização, assets privados/Range/cancelamento e renderer dos DTOs. |
-| `node --import tsx --test tests/unit/portal-page-editorial-config.test.ts tests/unit/portal-page-editorial-integration-guard.test.ts tests/unit/portal-page-editorial-preview.test.ts` | PASS | 20 testes; inclui preservação News/import map e guard offline. |
-| `node --import tsx --test tests/unit/portal-page-editorial-config.test.ts tests/unit/portal-page-editorial-integration-guard.test.ts` | PASS | 8 testes: slots, destinos de mídia, focus wrapper, News e 4 cenários do runner. |
+| `node --import tsx --test tests/unit/portal-page-editorial-config.test.ts tests/unit/portal-page-editorial-integration-guard.test.ts tests/unit/portal-page-editorial-preview.test.ts tests/unit/portal-page-media-reader.test.ts` | PASS | 36 testes: safe asset headers, cancellation/descriptor closure, Range/backpressure, textarea wrapper, filesystem privacy, strict environment, stale-run abort, handoff and exhaustive aggregation. |
 | `npm run typecheck` em `cms/` | PASS | TypeScript sem emissão. |
-| `npm run test:unit` em `cms/` | PASS | 687 casos: 676 PASS, 11 SKIP opcionais (PGlite indisponível), 0 FAIL. |
-| `npm run generate:importmap` com `CMS_BUILD_ONLY=true` e `NEXT_PHASE=phase-production-build` | PASS | Gerado pela CLI; imports anteriores mantidos e quatro entradas Portal Pages acrescentadas. |
+| `npm run test:unit` em `cms/` | PASS | 698 casos: 687 PASS, 11 SKIP opcionais (PGlite indisponível), 0 FAIL. |
+| `npm run generate:importmap` com `CMS_BUILD_ONLY=true` e `NEXT_PHASE=phase-production-build` | PASS | CLI informou `No new imports found`; o mapa gerado já contém o novo wrapper e preserva os imports anteriores. |
 | `npm run generate:types` com as mesmas variáveis | PASS | Executado pela CLI; nenhum delta de tipo necessário. |
-| `node --check` dos runners MJS e do guard MJS | PASS | Sintaxe local; não inicia Payload nem serviços. |
-| `npm run verify` | BLOCKED (ambiente) | Suite raiz: 1.960 PASS, 14 FAIL por `directory_overlaps_repository` nos testes preexistentes `payload-preview-https`/`payload-preview-preparation`: o temp autorizado está sob `C:\Users\Criação\.git` e o helper o recusa. Os testes CMS não são alcançados por esse runner; foram executados separadamente acima. Nenhum serviço foi iniciado. |
+| `node --check` dos runners MJS e dos helpers de integração | PASS | Sintaxe local; não inicia Payload nem serviços. |
+| `npm run verify` com `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Windows\Temp` | PASS | 1.993 testes raiz: 1.974 PASS, 19 SKIP, 0 FAIL; suíte CMS: 698 casos, 687 PASS, 11 SKIP, 0 FAIL; segurança e Compose passaram. Nenhum serviço foi iniciado. |
 | `git diff --check` | PASS | Sem erros de whitespace. |
+
+## RED/GREEN dos achados da revisão
+
+| Achado | RED observado antes da correção | GREEN após a correção |
+|---|---|---|
+| Metadados privados nos headers e evidência do ciclo do stream | O teste novo do endpoint falhou: `Content-Disposition` revelava o storage key em vez do filename opaco esperado. | Filename agora deriva somente de UUID/MIME, preservando Content-Type/Length/Range, cache privado e nosniff. Cancelamento downstream e erro de commit fecham exatamente uma vez; consumidor pausado lê sob demanda em chunks de 64 KiB. |
+| Propriedade/modo de diretórios e arquivos de evidência | Regressões falharam porque os validadores e writer ainda não existiam; a guarda anterior aceitava os cenários simulados. | Linux exige UID/modo privado e grava via arquivo temporário exclusivo `0600`, fsync e rename; entradas inseguras não são lidas. Windows reporta apenas validação portátil de caminho/tipo. |
+| Textarea de callout usando wrapper de input | A configuração apontava `body.callout.text` ao wrapper single-line; a asserção de campo falhou. | Callout usa `TextareaField` nativo e registra o `<textarea>` real para foco; demais single-line continuam no wrapper original. |
+| Aceitação sem casos exaustivos | Os testes para caso ausente/duplicado/status inválido falharam porque não existia agregador/registros esperados. | Registries native/browser nomeados: ausência, duplicidade, inesperado, `FAIL`, `NOT_EXECUTED` ou `SKIP` nunca agregam `PASS`. |
+| Ambiente e handoff reutilizável | A regressão observou `NODE_ENV=development` aceito onde a configuração do runner exigia test. | Exige exatamente `NODE_ENV=test`; remove apenas saídas Task 4 previamente validadas antes da migration, e cria handoff/storage state novos somente após todos os casos native passarem. |
+
+Os testes de ciclo do stream e de privacidade de filesystem adicionados nesta rodada agora passam. Não se registra uma falha funcional prévia de cancelamento que não foi observada; o RED de headers foi reproduzido diretamente no endpoint.
 
 ## Guard e integração nativa
 
 O novo runner dedicado é `npm --prefix cms run test:portal-pages:integration`.
-`--check-config` exige opt-in, URLs loopback distintas com nomes `test`/`dev`,
+`--check-config` exige opt-in, `NODE_ENV=test`, URLs loopback distintas com nomes `test`/`dev`,
 diretórios privados separados fora do checkout e UUIDv4. O preflight não lê `.env`,
 não importa Payload/pg, não abre conexão e responde `NOT_EXECUTED`; o teste unitário
 exercita recusa de opt-in ausente, argumento desconhecido, alvo remoto, aliases,
@@ -67,7 +77,8 @@ O checklist detalhado e as operações de mídia estão em
 
 ## Docker e recursos
 
-- Docker observado como disponível (`29.5.3`); nenhuma ação Docker foi executada.
+- O `npm run verify` consultou `docker compose version` (`29.5.3`); nenhum daemon,
+  container, serviço ou recurso Docker foi iniciado, alterado ou removido.
 - Nenhum container, volume, rede, banco, upload dir ou evidência de integração foi
   criado nesta sessão. Nenhum nome novo de recurso ou `runId` de aceite real existe.
 - Containers locais não relacionados que já estavam ativos foram deixados
