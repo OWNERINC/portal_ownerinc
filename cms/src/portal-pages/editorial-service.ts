@@ -8,7 +8,7 @@ import { assertPortalPageCategoryReferences, assertPortalPageMediaReferences, pr
 import { record, uuid } from './primitives'
 import { validatePortalPagePublicationInput } from './validation'
 import type { NativeEditable, PublicationResult, RevisionResult, SaveInput, SaveResult } from './editorial-contracts'
-import { editableHash, extractNativeEditable, stableValue, validateNativeEditable } from './editorial-native'
+import { creationEquivalenceHash, editableHash, extractNativeEditable, stableValue, validateNativeEditable } from './editorial-native'
 import { confirmEditorialMutation, type MutationReceipt } from './editorial-confirmation'
 import { requirePortalPageEditor } from './editorial-auth'
 
@@ -144,19 +144,24 @@ function validateSaveInput(raw: SaveInput): SaveInput {
   return { id, expected_latest_version_id: expectedVersionID, expected_snapshot_hash: input.expected_snapshot_hash }
 }
 
+type ReceiptExpectation = { mode: 'exact' | 'creation'; editable: NativeEditable }
+
 function normalizePublishedAt(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null
   return iso(value)
 }
 
-async function createReceipt(id: string, row: Record<string, unknown>, expected: NativeEditable): Promise<MutationReceipt> {
+async function createReceipt(id: string, row: Record<string, unknown>, expected: ReceiptExpectation): Promise<MutationReceipt> {
   const content = versionContent(row)
   const createdBy = content.createdBy
   const updatedBy = content.updatedBy
   if (typeof createdBy !== 'string' || !createdBy || typeof updatedBy !== 'string' || !updatedBy ||
     row.autosave !== false || parentID(row.parent) !== id) throw unavailable()
   const hash = await editableHash(content)
-  if (hash !== await editableHash(expected)) throw unavailable()
+  const expectedHash = await editableHash(expected.editable)
+  const comparisonHash = expected.mode === 'creation'
+    ? await creationEquivalenceHash(expected.editable, content) : hash
+  if (comparisonHash !== expectedHash) throw unavailable()
   const status = content._status
   if (status !== 'draft' && status !== 'published') throw unavailable()
   return { id, versionID: uuid(row.id, 'portal_page_editorial_unavailable'), editableHash: hash,
@@ -164,7 +169,7 @@ async function createReceipt(id: string, row: Record<string, unknown>, expected:
 }
 
 async function requireResultingVersion(req: PayloadRequest, id: string, sourceID: string | null,
-  expected: NativeEditable): Promise<MutationReceipt> {
+  expected: ReceiptExpectation): Promise<MutationReceipt> {
   const row = await latestVersion(req, id)
   if (!row || row.autosave !== false || row.id === sourceID || row.id === id) throw unavailable()
   return createReceipt(id, row, expected)
@@ -180,9 +185,11 @@ export async function saveEditorialVersion(req: PayloadRequest, rawInput: SaveIn
     let sourceID: string | null = null
     let principalStatus: PortalPageRevisionStatus
     let expected: NativeEditable
+    let receiptExpectation: ReceiptExpectation
 
     if (input.id === null) {
       expected = input.data
+      receiptExpectation = { mode: 'creation', editable: expected }
       const created = await transactionReq.payload.create({ collection: 'portal-pages', data: { ...expected, _status: 'draft' },
         req: transactionReq, draft: true, autosave: false, overrideAccess: false, depth: 0 } as never)
       id = uuid((created as unknown as Record<string, unknown>).id, 'portal_page_editorial_unavailable')
@@ -197,13 +204,14 @@ export async function saveEditorialVersion(req: PayloadRequest, rawInput: SaveIn
         await snapshotHash(current) !== input.expected_snapshot_hash) throw conflict()
       sourceID = String(current.id)
       expected = extractNativeEditable(versionContent(current))
+      receiptExpectation = { mode: 'exact', editable: expected }
       await transactionReq.payload.update({ collection: 'portal-pages', id,
         data: { ...expected, _status: 'draft' }, req: transactionReq, draft: true, autosave: false,
         overrideAccess: false, depth: 0 } as never)
     }
 
     // Create/update hooks must create a new persisted non-autosave Version through the public API.
-    const mutation = await requireResultingVersion(transactionReq, id, sourceID, expected)
+    const mutation = await requireResultingVersion(transactionReq, id, sourceID, receiptExpectation)
     if (mutation.status !== 'draft') throw unavailable()
     return { receipt: mutation, result: { id, version_id: mutation.versionID, saved_at: mutation.savedAt,
       editable_hash: mutation.editableHash, document_status: principalStatus } }
@@ -235,7 +243,7 @@ export async function transitionEditorialPublication(req: PayloadRequest,
     const status = input.operation === 'publish' ? 'published' : 'draft'
     await transactionReq.payload.update({ collection: 'portal-pages', id: input.id, req: transactionReq,
       data: { ...expected, _status: status }, draft: false, autosave: false, overrideAccess: false, depth: 0 })
-    const mutation = await requireResultingVersion(transactionReq, input.id, sourceID, expected)
+    const mutation = await requireResultingVersion(transactionReq, input.id, sourceID, { mode: 'exact', editable: expected })
     if (mutation.status !== status || (status === 'published' && mutation.publishedAt === null) ||
       (status === 'draft' && mutation.publishedAt !== null)) throw unavailable()
     const principal = await pageByID(transactionReq, input.id)

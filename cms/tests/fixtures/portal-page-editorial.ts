@@ -18,10 +18,27 @@ export function editorialFixture() {
   let lostCommit = false
   let versionAfterCommit = false
   let receiptCorruption: 'parent' | 'autosave' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'status' | 'publishedAt' | 'content' | null = null
+  let alterCreatedBlockName = false
   let clock = Date.parse('2026-10-19T10:00:00.000Z')
+  let nativeRowNumber = 0
   let state = { pages: new Map<string, Record<string, unknown>>(), versions: new Map<string, Record<string, unknown>>() }
   const staged = new Map<string, typeof state>()
   const nextID = () => `33333333-3333-4333-8333-${String(++transactionNumber).padStart(12, '0')}`
+  const nextNativeRowID = () => (++nativeRowNumber).toString(16).padStart(24, '0')
+  const materializeNativeRowIDs = (data: Record<string, unknown>) => {
+    if (!Array.isArray(data.body)) return
+    for (const rawBlock of data.body) {
+      if (!rawBlock || typeof rawBlock !== 'object' || Array.isArray(rawBlock)) continue
+      const block = rawBlock as Record<string, unknown>
+      if (block.id === undefined) block.id = nextNativeRowID()
+      if (block.blockType !== 'gallery' || !Array.isArray(block.images)) continue
+      for (const rawImage of block.images) {
+        if (!rawImage || typeof rawImage !== 'object' || Array.isArray(rawImage)) continue
+        const image = rawImage as Record<string, unknown>
+        if (image.id === undefined) image.id = nextNativeRowID()
+      }
+    }
+  }
   const stateFor = (req: { transactionID?: unknown }) => {
     const id = String(req.transactionID || '')
     return staged.get(id) || state
@@ -115,6 +132,10 @@ export function editorialFixture() {
       const current = stateFor(args.req as { transactionID?: unknown })
       const id = nextID()
       const data = copy(args.data as Record<string, unknown>)
+      materializeNativeRowIDs(data)
+      if (alterCreatedBlockName && Array.isArray(data.body) && data.body[0] && typeof data.body[0] === 'object') {
+        (data.body[0] as Record<string, unknown>).blockName = 'Payload alterou o nome'
+      }
       const author = (args.req as PayloadRequest | undefined)?.user as Record<string, unknown> | undefined
       data.createdBy = author?.portalUid || 'editor-uid'
       data.updatedBy = author?.portalUid || 'editor-uid'
@@ -179,6 +200,8 @@ export function editorialFixture() {
     },
     seedPage(record: Record<string, unknown>) { state.pages.set(String(record.id), copy(record)) },
     corruptReceipt(field: NonNullable<typeof receiptCorruption>) { receiptCorruption = field },
+    alterCreatedBlockName() { alterCreatedBlockName = true },
+    committedVersion(id: string) { return copy(state.versions.get(id) || null) },
     loseCommit() { lostCommit = true },
     addVersionAfterCommit() { versionAfterCommit = true },
   }

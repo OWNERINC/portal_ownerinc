@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { editableHash } from '../../src/portal-pages/editorial-native'
+import type { NativeEditable } from '../../src/portal-pages/editorial-contracts'
 import { readEditorialRevision, saveEditorialVersion, transitionEditorialPublication } from '../../src/portal-pages/editorial-service'
 import { pageID, versionID, nativePage, editorialFixture } from '../fixtures/portal-page-editorial'
 
@@ -123,6 +124,46 @@ test('create saves a draft, resolves the actual Version ID, and confirms it afte
   const confirmation = f.calls.find(call => call.operation === 'findVersionByID')
   assert.ok(confirmation?.transactionID !== undefined)
   assert.notEqual(confirmation?.transactionID, writerTx, 'fresh transaction confirms receipt')
+})
+
+test('first save accepts generated block/gallery ObjectIds and returns the exact persisted editable hash', async () => {
+  const input = { ...nativePage, body: [
+    { blockType: 'heading', blockName: 'Introdução', text: 'Bem-vindo', level: '2' },
+    { blockType: 'gallery', images: [
+      { asset: '77777777-7777-4777-8777-777777777777', alt: 'Primeira' },
+      { asset: '88888888-8888-4888-8888-888888888888', alt: 'Segunda', caption: 'Legenda' },
+    ] },
+  ] } satisfies NativeEditable
+  const f = editorialFixture()
+  const result = await saveEditorialVersion(f.req, { id: null, data: input })
+  const persisted = f.committedVersion(result.version_id)!
+  const content = persisted.version as Record<string, unknown>
+  const body = content.body as Array<Record<string, unknown>>
+  const gallery = body[1].images as Array<Record<string, unknown>>
+  assert.match(body[0].id as string, /^[0-9a-f]{24}$/u)
+  assert.match(gallery[0].id as string, /^[0-9a-f]{24}$/u)
+  assert.match(gallery[1].id as string, /^[0-9a-f]{24}$/u)
+  assert.equal(persisted.autosave, false)
+  assert.equal(result.editable_hash, await editableHash(content))
+  assert.notEqual(result.editable_hash, await editableHash(input), 'response hash includes the exact persisted row IDs')
+
+  const writerTx = f.calls.find(call => call.operation === 'create')!.transactionID
+  const confirmation = f.calls.find(call => call.operation === 'findVersionByID' &&
+    (call.args as Record<string, unknown>).id === result.version_id)
+  assert.ok(confirmation)
+  assert.notEqual(confirmation.transactionID, writerTx, 'the exact persisted receipt is confirmed after commit')
+})
+
+test('first save rejects Payload-altered blockName even when Payload generated the row ID', async () => {
+  const input = ({ ...nativePage,
+    body: [{ blockType: 'heading', blockName: 'Original', text: 'Conteúdo', level: '2' }] } satisfies NativeEditable)
+  const f = editorialFixture()
+  f.alterCreatedBlockName()
+  await assert.rejects(saveEditorialVersion(f.req, { id: null, data: input }), { status: 503 })
+  assert.equal(f.calls.some(call => call.operation === 'commit'), false)
+  assert.equal(f.calls.some(call => call.operation === 'rollback'), true)
+  assert.equal(f.calls.some(call => call.operation === 'findVersionByID'), false,
+    'writer-session content equivalence rejects before constructing a receipt')
 })
 
 test('publication copies the confirmed native source, including empty/null values, then returns a distinct Version receipt', async () => {

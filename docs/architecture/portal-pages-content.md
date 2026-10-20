@@ -30,6 +30,12 @@ inclusive uma autosave alterada in-place. O primeiro salvamento aceita os sete
 campos nativos editáveis, sem metadados de servidor. O limite de corpo é 16 KiB
 para salvamento existente, 8 MiB para criação e 5 MiB para o conteúdo projetado.
 Ambas as mutações criam snapshots nativos não-autosave pela Local API do Payload.
+IDs de linhas nativas de blocos e galerias usam o formato gerado por
+`baseIDField` do Payload 3.90.2 (24 caracteres hexadecimais minúsculos). Na
+primeira criação, a comparação com a Version persistida desconsidera somente
+esses IDs nas linhas em que o envio os omitiu; IDs enviados e todos os demais
+campos, tipos, nomes e ordens continuam comparados. O hash retornado é calculado
+do conteúdo exato persistido e confirmado depois do commit.
 
 A publicação/despublicação recebe somente `{id,expected_version_id,operation}` e
 exige que a versão esperada ainda seja a versão `latest` explícita. A transição

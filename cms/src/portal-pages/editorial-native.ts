@@ -32,8 +32,14 @@ function relationID(value: unknown): string | null {
 }
 
 function optionalNativeID(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === '') return undefined
-  return uuid(value)
+  if (value === undefined) return undefined
+  return nativeRowID(value)
+}
+
+/** Payload 3.90.2's baseIDField uses bson-objectid.toHexString() for native rows. */
+function nativeRowID(value: unknown): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{24}$/u.test(value)) invalid('invalid_portal_page_content')
+  return value
 }
 
 function optionalLayout(value: unknown): Record<string, unknown> {
@@ -168,6 +174,41 @@ export function stableValue(value: unknown): unknown {
 
 export function canonicalNativeEditable(raw: unknown): string {
   return JSON.stringify(stableValue(extractNativeEditable(raw)))
+}
+
+/**
+ * Canonical persisted content for a first-save comparison. Ignore a Payload row ID
+ * only where the corresponding submitted native block/gallery row omitted it.
+ */
+export function canonicalCreationEditable(submittedRaw: unknown, persistedRaw: unknown): string {
+  const submitted = extractNativeEditable(submittedRaw)
+  const persisted = extractNativeEditable(persistedRaw)
+  const submittedBody = submitted.body as unknown as Array<Record<string, unknown>>
+  const persistedBody = persisted.body as unknown as Array<Record<string, unknown>>
+  const body = persistedBody.map((rawBlock, index) => {
+    const block = { ...rawBlock }
+    const submittedBlock = submittedBody[index]
+    if (submittedBlock && !Object.hasOwn(submittedBlock, 'id')) delete block.id
+    if (block.blockType === 'gallery' && submittedBlock?.blockType === 'gallery' &&
+      Array.isArray(block.images) && Array.isArray(submittedBlock.images)) {
+      const images = block.images as Array<Record<string, unknown>>
+      const submittedImages = submittedBlock.images as Array<Record<string, unknown>>
+      block.images = images.map((rawImage, imageIndex) => {
+        const image = { ...rawImage }
+        const submittedImage = submittedImages[imageIndex]
+        if (submittedImage && !Object.hasOwn(submittedImage, 'id')) delete image.id
+        return image
+      })
+    }
+    return block
+  })
+  return canonicalNativeEditable({ ...persisted, body })
+}
+
+export async function creationEquivalenceHash(submittedRaw: unknown, persistedRaw: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalCreationEditable(submittedRaw, persistedRaw))
+  const hash = await globalThis.crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 export async function editableHash(raw: unknown): Promise<string> {
