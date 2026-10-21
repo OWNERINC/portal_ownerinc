@@ -35,23 +35,23 @@ Todos os registros usam o mesmo run ID, ambiente
 `disposable-local service/browser run NOT_EXECUTED (Docker Linux daemon unavailable; no stack started)`,
 browser/viewport `NOT_EXECUTED`, `artifact: null` e status `NOT_EXECUTED`.
 
-| Caso requerido | Status | Critério PASS exigido | Evidência ainda não obtida |
-| --- | --- | --- |
-| `live-auth-gate` | NOT_EXECUTED | `/users/me`, availability, list/detail autenticados; conta inativa negada; publicação `r1`→`r2` e despublicação coerentes. | HTTP real, CMS outage seguro e Auth Emulator. |
-| `catalog-routing` | NOT_EXECUTED | 13+ itens, 12 por página, filtro/página, slug direto, refresh, foco e Back/Forward sem shell reload. | Navegação em browser/serviços. |
-| `native-image` | NOT_EXECUTED | Emissão POST 204 bodyless, cookie com atributos/escopo corretos e GET nativo autorizado; Origin inválido negado. | Cookie/asset reais no Nginx. |
-| `native-range` | NOT_EXECUTED | GET 200, ranges prefix/suffix 206, range inválido/multi-range 416, headers corretos, streaming incremental e cancelamento. | Transporte Nginx/bytes/cancelamento reais. |
-| `long-video-renewal` | NOT_EXECUTED | Reprodução >6 min; renew perto de 4 min sem troca de `src`, reset de `currentTime` ou pausa. | Vídeo e sessão em browser real. |
-| `media-failure-recovery` | NOT_EXECUTED | Offline/online, 429 Retry-After, expiração e revisão substituída recuperam sem misturar blocos/IDs de `r1` e `r2`. | Falhas de rede/media reais. |
-| `large-pdf` | NOT_EXECUTED | PDF ≥20 MiB abre nativamente, usa Range; aba independente expira após 5 min e reabre via Portal. | Visualizador nativo e cookie expirado. |
-| `auth-exit-cross-tab` | NOT_EXECUTED | Logout/troca invalida duas abas via BroadcastChannel e storage fallback; emissão tardia não ativa sessão antiga; GET revogado negado. | Duas abas e cookies reais. |
-| `gallery-keyboard` | NOT_EXECUTED | Foco contido/restaurado, setas com wrap, Escape/backdrop, inert e scroll restaurados, vídeo pausado. | Sequência manual no browser. |
-| `screen-reader-gallery` | NOT_EXECUTED | Leitor anuncia diálogo, nome, alt/caption, índice e controles; fundo inert e foco restaurado. | Árvore/anúncio em tecnologia assistiva real. |
-| `embeds-effective-csp` | NOT_EXECUTED | CSP efetiva restringe origins canônicas; YouTube/Vimeo carregam e reproduzem sem wildcard ampliado. | Header Nginx e playback real. |
-| `layout-mobile` | NOT_EXECUTED | 10 tipos × 5 layouts + default omitido, em 320/375/768/1440, zoom 100/200%, touch e reduced motion sem overflow. | Matriz de screenshots/viewport. |
-| `bfcache-cleanup` | NOT_EXECUTED | 10 ciclos, ao menos um `pageshow.persisted=true`, cleanup idempotente e revalidação antes de reativar mídia. | BFCache do browser. |
-| `owner-news-regression` | NOT_EXECUTED | News/Academy/editor navegam e preservam shell, permissão e dados publicados; retorno a Conteúdos é funcional. | Browser smoke de News/Academy/editor. |
-| `editorial-accessibility` | NOT_EXECUTED | PDF marcado/ordem de leitura, headings/links/alt e legendas/transcrição/alternativa verificados manualmente. | Inspeção de PDF e mídia por leitor/ferramenta. |
+| Caso requerido | Status | Critério PASS exigido | Procedimento vinculante | Evidência ainda não obtida |
+| --- | --- | --- | --- | --- |
+| `live-auth-gate` | NOT_EXECUTED | Zero publications oculta apenas o nav link; deep link autenticado independe de gate/cache; publish revela link após navigation, visibility e online probes independentes; auth/revisions coerentes. | [Caso 1](../operations/portal-contents-reader.md#case-live-auth-gate) | HTTP real, CMS outage seguro e Auth Emulator. |
+| `catalog-routing` | NOT_EXECUTED | Category-only retry; modified/native new-tab gestures; duplicate/hostile query rejeitada e permitida canonizada; 12/page, history e slug direto. | [Caso 2](../operations/portal-contents-reader.md#case-catalog-routing) | Navegação em browser/serviços. |
+| `native-image` | NOT_EXECUTED | POST 204/cookie/GET nativo válidos; Origin inválido negado; caminho original `/uploads/cms-private` não entrega bytes. | [Caso 3](../operations/portal-contents-reader.md#case-native-image) | Cookie/asset reais no Nginx. |
+| `native-range` | NOT_EXECUTED | `bytes=0-1023`, `bytes=1024-` e `bytes=-1024` dão 206 exato; `bytes=N-`/multi-range dão 416; streaming/cancelamento. | [Caso 4](../operations/portal-contents-reader.md#case-native-range) | Transporte Nginx/bytes/cancelamento reais. |
+| `long-video-renewal` | NOT_EXECUTED | Renewal perto de 4 min durante playback mesmo hidden; seek autorizado >5 min sem reset de source/time. | [Caso 5](../operations/portal-contents-reader.md#case-long-video-renewal) | Vídeo e sessão em browser real. |
+| `media-failure-recovery` | NOT_EXECUTED | Suspend past expiry pausa vídeo/remove PDF href; retry medido 5/15/30, sem quarto automático; 429 e troca `r1`/`r2` seguras. | [Caso 6](../operations/portal-contents-reader.md#case-media-failure-recovery) | Falhas de rede/media reais. |
+| `large-pdf` | NOT_EXECUTED | Release da lease Portal precede expiry standalone; fresh Range negado; open/download e fallback sem viewer observados por browser. | [Caso 7](../operations/portal-contents-reader.md#case-large-pdf) | Visualizador nativo e cookie expirado. |
+| `auth-exit-cross-tab` | NOT_EXECUTED | Failed clear exige retry; revoke editorial negado; logout/troca invalida tabs por BroadcastChannel e storage real; emissão tardia não ativa. | [Caso 8](../operations/portal-contents-reader.md#case-auth-exit-cross-tab) | Duas abas e cookies reais. |
+| `gallery-keyboard` | NOT_EXECUTED | Failed-next persistente/reload, opener removido→heading fallback, browser Back, backdrop drag exclusion, drawer isolado e foco/inert restaurados. | [Caso 9](../operations/portal-contents-reader.md#case-gallery-keyboard) | Sequência manual no browser. |
+| `screen-reader-gallery` | NOT_EXECUTED | Leitor anuncia diálogo, nome, alt/caption, índice e controles; fundo inert e foco restaurado. | [Caso 10](../operations/portal-contents-reader.md#case-screen-reader-gallery) | Árvore/anúncio em tecnologia assistiva real. |
+| `embeds-effective-csp` | NOT_EXECUTED | CSP efetiva restringe origins canônicas; YouTube/Vimeo carregam e reproduzem sem wildcard ampliado. | [Caso 11](../operations/portal-contents-reader.md#case-embeds-effective-csp) | Header Nginx e playback real. |
+| `layout-mobile` | NOT_EXECUTED | Todas 10×5 células + 10 defaults; quatro larguras/2 zooms, sidebar expanded/collapsed e controles ≥44×44 CSS px. | [Caso 12](../operations/portal-contents-reader.md#case-layout-mobile) | Matriz de screenshots/viewport e medidas. |
+| `bfcache-cleanup` | NOT_EXECUTED | Dez ciclos com pelo menos um `pageshow.persisted===true`; revalidação e nova lease antes de reativar mídia. | [Caso 13](../operations/portal-contents-reader.md#case-bfcache-cleanup) | BFCache do browser. |
+| `owner-news-regression` | NOT_EXECUTED | Editorial logout/revoke funciona; Owner News/Academy/shell e publicação sem alteração antes/depois. | [Caso 14](../operations/portal-contents-reader.md#case-owner-news-regression) | Browser smoke de News/Academy/editor. |
+| `editorial-accessibility` | NOT_EXECUTED | PDF marcado/ordem de leitura, headings/links/alt e legendas/transcrição/alternativa verificados manualmente. | [Caso 15](../operations/portal-contents-reader.md#case-editorial-accessibility) | Inspeção de PDF e mídia por leitor/ferramenta. |
 
 Os procedimentos reproduzíveis, pré-requisitos, sequência e checks HTTP/Range
 completos estão no [runbook](../operations/portal-contents-reader.md#matriz-operacional-reproduzível--15-casos).

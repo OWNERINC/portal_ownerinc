@@ -187,3 +187,36 @@ the acceptance matrix is in
   persistent-navigation/auth-stability **55 passed**; `git diff --check`, public
   shell generation check, syntax verification and security verification all exit 0.
   The broad `npm run verify` was not rerun.
+
+## Fix round 2 — procedure-coverage closure (2026-10-21)
+
+- Expanded the existing 15 runbook cases in place with directly executable
+  preconditions, steps, and case-specific PASS criteria. Coverage now calls out
+  the zero-publication sidebar gate versus authenticated deep links, three
+  independent availability triggers, query canonicalization/hostile inputs and
+  native modified-link gestures; private original-path denial; prefix,
+  open-ended, suffix, unsatisfiable and multi-range requests; hidden-tab renewal,
+  post-five-minute seek, measured 5/15/30-second retries and retry exhaustion;
+  PDF lease-release/expiry/open/download fallback; failed logout clear and
+  editorial revoke; gallery recovery/focus/Back/backdrop/mobile-drawer behavior;
+  real assistive-technology checks; and Owner News/logout regression.
+- Replaced the abbreviated responsive fixture instruction with an explicit
+  ten-block × five-layout matrix plus one omitted-layout fixture per block (60
+  cells), and added 320/375/768/1440 widths, 100%/200% zoom, mobile sidebar states
+  and measured 44×44 CSS-pixel touch-control criteria. BFCache now requires a real
+  `pageshow.persisted === true` return among ten recorded cycles.
+- Added `tests/unit/portal-contents-reader-runbook.test.mjs` to bind all 15 case
+  anchors to the review matrix, assert the reviewer-identified procedure markers,
+  verify all layout cells, and protect the acceptance record schema/privacy
+  guidance. The review matrix now links each outcome to its runbook procedure.
+- Secret-safe evidence guidance now specifies sanitized `key=value` observations
+  (status, elapsed time, counts, booleans, viewport/layout and measured timings)
+  and explicitly prohibits credentials, IDs, full URLs/queries, private bodies,
+  HAR, storage/channel payloads and unsanitized screenshots.
+- Scope remained documentation, review references and tests only; no production
+  code was changed. The external acceptance manifest was left untouched and still
+  contains exactly 15 `NOT_EXECUTED` outcomes with null timestamps. No live
+  service/browser acceptance was performed; Docker's Linux daemon was unavailable.
+- **Checks:** focused acceptance/router/navigation suite — **60 passed, 0 failed**;
+  `node scripts/generate-public-shell.mjs --check` — exit 0;
+  `git diff --check` — exit 0. Broad `npm run verify` was not run.
