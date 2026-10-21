@@ -1,6 +1,7 @@
 import { APIError } from 'payload'
 
 export const MAX_PORTAL_PAGE_CONTENT_BYTES = 5 * 1024 * 1024
+export const MAX_PORTAL_PAGE_URL_LENGTH = 2048
 export const PORTAL_PAGE_LAYOUTS = ['content', 'wide', 'full', 'left', 'right'] as const
 export const PORTAL_PAGE_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const
 export const PORTAL_PAGE_MEDIA_MIMES = [
@@ -78,12 +79,14 @@ export function boolean(value: unknown, code?: string): boolean {
 }
 
 export function httpsURL(value: unknown, code = 'invalid_portal_page_url'): string {
-  if (typeof value !== 'string') invalid(code)
+  // String.length deliberately matches the API/browser contract (UTF-16 code units).
+  if (typeof value !== 'string' || value.length > MAX_PORTAL_PAGE_URL_LENGTH) invalid(code)
   const raw = value.trim()
   if (/[\p{Cc}\s\\]/u.test(raw)) invalid(code)
   try {
     const parsed = new URL(raw)
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !parsed.hostname) invalid(code)
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !parsed.hostname ||
+      parsed.href.length > MAX_PORTAL_PAGE_URL_LENGTH) invalid(code)
     return parsed.href
   } catch {
     invalid(code)

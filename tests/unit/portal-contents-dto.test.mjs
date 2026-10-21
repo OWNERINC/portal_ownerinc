@@ -184,6 +184,36 @@ test('strict browser matrix covers single-line controls, URL hazards, and the co
   invalid(() => browser.validatePortalPageDTO(tooManyNodes));
 });
 
+test('browser, API, and CMS accept 2048-unit HTTPS links and reject 2049 in both link forms', () => {
+  const prefix = 'https://example.test/';
+  const maxURL = `${prefix}${'a'.repeat(2048 - prefix.length)}`;
+  const overURL = `${maxURL}a`;
+  assert.equal(maxURL.length, 2048);
+  for (const content_blocks of [
+    [{ type: 'link', label: 'Link', url: maxURL, new_tab: false, style: 'primary' }],
+    [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [
+      { type: 'link', url: maxURL, new_tab: false, children: [{ type: 'text', text: 'Link', marks: [] }] },
+    ] }] }],
+  ]) {
+    const dto = pageFixture({ content_blocks });
+    browser.validatePortalPageDTO(dto);
+    apiDTO.validatePortalPageDTO(dto, 'portal-pages');
+  }
+  for (const url of [overURL, 'https://user:pass@example.test', 'http://example.test']) {
+    const blockForms = [
+      [{ type: 'link', label: 'Link', url, new_tab: false, style: 'primary' }],
+      [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [
+        { type: 'link', url, new_tab: false, children: [{ type: 'text', text: 'Link', marks: [] }] },
+      ] }] }],
+    ];
+    for (const content_blocks of blockForms) {
+      const dto = pageFixture({ content_blocks });
+      invalid(() => browser.validatePortalPageDTO(dto));
+      assert.throws(() => apiDTO.validatePortalPageDTO(dto, 'portal-pages'));
+    }
+  }
+});
+
 function contentBoundaryDTO(targetBytes) {
   const dto = pageFixture({ content_blocks: [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [
     { type: 'text', text: '', marks: [] },

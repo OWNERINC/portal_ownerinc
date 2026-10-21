@@ -87,6 +87,21 @@ evidência de execução.
   sem placeholder e getter/subscriber do harness passam na suíte direcionada; veja
   RED/GREEN e diagnóstico único de `smoke-origin` no relatório local detalhado.
 
+### Correção final P2 — contrato de URL CMS
+
+- O limite de 2.048 unidades UTF-16 (`String.length`) agora é aplicado pela
+  normalização CMS de links de bloco e links Lexical, tanto no valor submetido
+  quanto na URL HTTPS canonicalizada. URLs com credenciais e HTTP continuam
+  rejeitadas. Inputs de URL nativos de link/embed e o campo URL do editor rich text
+  expõem `maxLength=2048`.
+- Red/Green focado: CMS `portal-pages.test.ts` + `portal-page-editorial-config.test.ts`:
+  **20 aprovados**; Portal/API/browser `portal-contents-dto.test.mjs`:
+  **9 aprovados**, incluindo 2048 aceito e 2049/credenciais/HTTP rejeitados em
+  link de bloco e rich text. Nenhum CMS/PostgreSQL real foi iniciado.
+- Este resultado offline não muda o bloqueio de aceite HTTP/browser real acima;
+  o resultado da correção P1 e das verificações finais será acrescentado após a
+  execução efetiva.
+
 ## Conclusão e próximas ações
 
 Os testes offline cobrem identidade do shell, admissão de rota, loader/restauração,

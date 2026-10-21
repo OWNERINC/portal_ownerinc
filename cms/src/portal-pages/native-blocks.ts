@@ -65,7 +65,7 @@ export const portalPageBlocks: Block[] = [
     slug: 'embed', labels: { singular: 'Vídeo incorporado', plural: 'Vídeos incorporados' },
     fields: [{ name: 'provider', label: 'Provedor', type: 'select', required: true,
       options: [{ label: 'YouTube', value: 'youtube' }, { label: 'Vimeo', value: 'vimeo' }] },
-    requiredText('url', 'Endereço do vídeo'), requiredText('title', 'Título acessível', 200), layout],
+    requiredText('url', 'Endereço do vídeo', 2048), requiredText('title', 'Título acessível', 200), layout],
   },
   {
     slug: 'pdf', labels: { singular: 'Documento PDF', plural: 'Documentos PDF' },
@@ -79,7 +79,7 @@ export const portalPageBlocks: Block[] = [
   },
   {
     slug: 'link', labels: { singular: 'Link', plural: 'Links' },
-    fields: [requiredText('label', 'Texto do link', 200), requiredText('url', 'Endereço do link'),
+    fields: [requiredText('label', 'Texto do link', 200), requiredText('url', 'Endereço do link', 2048),
       { name: 'newTab', label: 'Abrir em nova aba', type: 'checkbox', defaultValue: false },
       { name: 'style', label: 'Estilo', type: 'select', required: true, defaultValue: 'primary',
         options: [{ label: 'Principal', value: 'primary' }, { label: 'Secundário', value: 'secondary' }] }, layout],

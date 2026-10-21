@@ -262,6 +262,26 @@ test('callout and link enforce exact tone/style, safe text and HTTPS destination
   ]) assert.throws(() => normalizePortalPageContent([block]))
 })
 
+test('CMS link normalization matches the 2048 UTF-16-unit URL contract for blocks and rich text', () => {
+  const prefix = 'https://example.test/'
+  const maxURL = `${prefix}${'a'.repeat(2048 - prefix.length)}`
+  const overURL = `${maxURL}a`
+  assert.equal(maxURL.length, 2048)
+  assert.equal(normalizePortalPageContent([{ type: 'link', label: 'Acessar', url: maxURL,
+    new_tab: false, style: 'primary' }])[0]?.url, maxURL)
+  assert.equal(normalizePortalPageContent([richText()])[0]?.type, 'rich_text')
+  assert.equal(normalizePortalPageContent([{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [
+    { type: 'link', url: maxURL, new_tab: false, children: [{ type: 'text', text: 'Link', marks: [] }] },
+  ] }] }])[0]?.type, 'rich_text')
+  for (const url of [overURL, 'https://user:pass@example.test', 'http://example.test']) {
+    assert.throws(() => normalizePortalPageContent([{ type: 'link', label: 'Acessar', url,
+      new_tab: false, style: 'primary' }]))
+    assert.throws(() => normalizePortalPageContent([{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [
+      { type: 'link', url, new_tab: false, children: [{ type: 'text', text: 'Link', marks: [] }] },
+    ] }] }]))
+  }
+})
+
 test('DTO boundary has exact keys and binds revision state to normal or preview asset scope', () => {
   const normalized = validatePortalPageDTO(page())
   assert.deepEqual(normalized, {

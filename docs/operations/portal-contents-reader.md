@@ -30,6 +30,11 @@
   página, offset até 1.000.000 e total até 100.000. Rich text usa estrutura
   permitida, não HTML arbitrário. Cada bloco admite `content`, `wide`, `full`,
   `left` ou `right`; todos permanecem dentro dos gutters do conteúdo principal.
+  Links de bloco e rich text precisam ser HTTPS, sem credenciais, e ter no máximo
+  2.048 unidades UTF-16 JavaScript (`String.length`). O CMS rejeita o valor bruto
+  acima do limite antes de salvar/publicar e também rejeita uma URL canônica que
+  ultrapasse o mesmo limite; os campos de URL nativos do editor expõem
+  `maxLength=2048` quando Payload oferece esse controle.
 
 ## Mídia e acessibilidade editorial
 

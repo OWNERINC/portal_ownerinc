@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { NewsArticles } from '../../src/collections/NewsArticles'
 import { PortalPages } from '../../src/collections/PortalPages'
+import { portalPageLinkFields } from '../../src/portal-pages/editor'
 import { portalPageBlocks } from '../../src/portal-pages/native-blocks'
 
 const importMapURL = new URL('../../src/app/(payload)/editorial/admin/importMap.js', import.meta.url)
@@ -89,6 +90,19 @@ test('single-line required fields use the text wrapper and the required callout 
   assert.equal(calloutText!.required, true)
   assert.equal(calloutText!.maxLength, 2000)
   assert.equal(componentPath(calloutText!), requiredTextareaComponent)
+})
+
+test('all Payload URL authoring controls expose the shared 2048-character limit', () => {
+  const blockFields = portalPageBlocks.flatMap(block => fieldsOf(block.fields as unknown as Array<Record<string, unknown>>, `body.${block.slug}`))
+  for (const path of ['body.embed.url', 'body.link.url']) {
+    assert.equal(blockFields.find(item => item.path === path)?.field.maxLength, 2048, path)
+  }
+
+  const defaults = [{ name: 'text', type: 'text' }, { name: 'url', type: 'text' }, { name: 'newTab', type: 'checkbox' }]
+  const fields = portalPageLinkFields({ defaultFields: defaults as never }) as Array<Record<string, unknown>>
+  assert.equal(fields.find(field => field.name === 'url')?.maxLength, 2048)
+  assert.equal(fields.find(field => field.name === 'text')?.maxLength, undefined)
+  assert.equal(fields.find(field => field.name === 'newTab')?.maxLength, undefined)
 })
 
 test('News configuration and generated import map entries remain intact', async () => {

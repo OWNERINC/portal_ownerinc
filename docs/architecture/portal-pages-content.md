@@ -262,6 +262,9 @@ Layout por bloco é `content|wide|full|left|right`; o conteúdo permanece no esp
 do `.main-content`, com quebra segura de texto e sem breakout horizontal. Rich
 text e links usam allowlists; DTO inválido falha por inteiro, sem renderização
 parcial ou interpretação de HTML.
+Links de blocos e rich text aceitam somente HTTPS sem credenciais e limitam a URL
+a 2.048 unidades UTF-16 (`String.length`), incluindo antes e depois da
+normalização; a validação CMS/API/browser usa o mesmo limite.
 
 ### Mídia privada, renovação e limites
 
