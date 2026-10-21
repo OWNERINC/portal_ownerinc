@@ -3,8 +3,28 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helpers/router-harness.mjs';
+import { pageFixture } from '../helpers/portal-contents-fixtures.mjs';
 
 const viewer = { uid: 'user-1', role: 'viewer', permissions: {} };
+
+test('a hidden Contents link is not an authorization gate for an authenticated direct slug', async () => {
+  const h = await createRouterHarness({ initialURL: 'https://portal.test/contents.html?slug=published-policy', user: viewer, autoStart: false });
+  h.page('/contents.html');
+  h.doc.querySelector('.contents-link').hidden = true;
+  h.context.contentsAvailability = 'unavailable';
+  const feature = await h.loadContentsModule({ request: async path => {
+    assert.equal(path, '/api/contents/published-policy');
+    return Response.json(pageFixture({ slug: 'published-policy', title: 'Direct route' }));
+  } });
+
+  await h.router.startRouter();
+  await h.scope.ready();
+  assert.equal(h.router.routeAllowed('/contents.html', viewer), true);
+  assert.equal(h.location.pathname, '/contents.html');
+  assert.equal(h.doc.querySelector('#contents-view h1').textContent, 'Direct route');
+  assert.deepEqual(feature.requests.map(request => request.path), ['/api/contents/published-policy']);
+  assert.equal(feature.requests.some(request => request.path === '/api/contents/availability'), false);
+});
 
 test('Owner News direct URL and invalid return state close locally, then session loss disposes its guard', async () => {
   const h = await createRouterHarness({ realUI: true });

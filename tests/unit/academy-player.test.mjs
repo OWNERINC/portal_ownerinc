@@ -416,6 +416,6 @@ test('Nginx permits only required YouTube origins and preserves referrer policy 
   const csp = defaultPolicy[1];
   const directives = Object.fromEntries(csp.split(';').map(value => value.trim().split(/\s+/)).map(([key, ...values]) => [key, values]));
   assert.deepEqual(directives['script-src'], ["'self'", 'https://unpkg.com', 'https://www.gstatic.com', 'https://cdnjs.cloudflare.com', 'https://www.youtube.com', 'https://s.ytimg.com']);
-  assert.deepEqual(directives['frame-src'], ['https://*.firebaseapp.com', 'blob:', 'https://www.youtube.com', 'https://www.youtube-nocookie.com']);
+  assert.deepEqual(directives['frame-src'], ['https://*.firebaseapp.com', 'blob:', 'https://www.youtube.com', 'https://www.youtube-nocookie.com', 'https://player.vimeo.com']);
   assert.match(config, /Referrer-Policy "strict-origin-when-cross-origin" always/);
 });

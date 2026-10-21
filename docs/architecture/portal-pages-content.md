@@ -244,12 +244,71 @@ documentação operacional e a matriz por execução ficam em
 [`docs/operations/portal-pages-editorial.md`](../operations/portal-pages-editorial.md)
 e [`docs/reviews/2026-10-19-portal-pages-editorial-acceptance.md`](../reviews/2026-10-19-portal-pages-editorial-acceptance.md).
 
+## Leitor publicado do Portal (Task 4)
+
+O leitor está em `/contents.html`, integrado ao shell persistente, e consome
+`GET /api/contents/`, `/categories` e `/:slug`. A API exige usuário Portal ativo
+em cada leitura, retorna apenas conteúdo publicado elegível e mantém respostas
+`private,no-store`. A disponibilidade usa `GET /availability` e responde somente
+`{available:boolean}`: `false` representa ausência de publicações; 503 representa
+dependência indisponível. O gate oculta/mostra o link da sidebar após validação
+da identidade, mas não é uma barreira de autorização da rota nem substitui a
+validação por requisição. Falha de categorias não apaga cards carregados.
+
+O browser valida estritamente a forma pública antes de montar DOM: até 100 blocos,
+10.000 nós, 5 MiB de conteúdo JSON, 6 MiB por detalhe, 16 MiB por coleção,
+catálogo de 12 itens, offset máximo de 1.000.000 e 100.000 como total máximo.
+Layout por bloco é `content|wide|full|left|right`; o conteúdo permanece no espaço
+do `.main-content`, com quebra segura de texto e sem breakout horizontal. Rich
+text e links usam allowlists; DTO inválido falha por inteiro, sem renderização
+parcial ou interpretação de HTML.
+
+### Mídia privada, renovação e limites
+
+`POST /api/contents/media-session` exige Bearer válido e Origin igual à origem
+configurada; não recebe body e só responde 204 após emitir cookie Firebase de
+cinco minutos. Em produção usa `__Secure-ownerinc-content-media`, `Secure`,
+`HttpOnly`, `SameSite=Strict`, `Path=/api/contents/assets`; HTTP loopback de
+desenvolvimento usa `ownerinc-content-media-dev`. `DELETE` limpa a sessão e
+também exige Origin. O cliente prepara um lease por vista que contenha assets,
+renova em quatro minutos quando a página está visível ou há vídeo reproduzindo,
+e mantém barreira de limpeza no logout/troca de conta. Falhas transitórias têm
+backoff limitado de 5/15/30 segundos e respeitam `Retry-After` para 429. Falha
+de rede entre abas invalida conteúdo local e exige nova validação da identidade.
+
+URLs nativas usam UUIDs de página, revisão publicada e mídia. O servidor revalida
+cookie Firebase com revogação, perfil ativo, referência e MIME em cada novo GET.
+Imagens são integrais; vídeo/PDF permitem um Range único, inclusive aberto e
+sufixo, com 206/416 segundo o intervalo. O leitor transmite em chunks de 64 KiB
+com backpressure/cancelamento; o limite por ativo é 500 MiB. Não há Blob nem
+download integral mantido em memória pelo JavaScript. Bytes já recebidos não
+podem ser revogados retroativamente. Abas de PDF abertas fora do Portal não
+renovam a cookie; se expirar, volte ao Portal e abra novamente.
+
+Vídeos locais usam controles nativos, sem autoplay, e uma falha pode renovar a
+sessão e recarregar apenas após ação de recuperação, preservando intenção de
+reprodução quando ainda válida. Vimeo e YouTube usam somente URLs canônicas e
+iframe sandbox fixo. O CSP Portal adiciona `https://player.vimeo.com` somente a
+`frame-src`; CSP editorial e demais diretivas não mudam. Carga do iframe não
+prova reprodução. PDFs e vídeos publicados continuam sujeitos às obrigações
+editoriais de acessibilidade; controles nativos não fornecem legendas ou
+transcrição ausentes.
+
+A galeria usa um `<dialog>` próprio, controla foco/teclado e restaura exatamente
+o estado de inert/rolagem que encontrou. Fechamento por rota/autenticação não
+devolve foco a um elemento que está saindo. Saída de página/BFCache descarta
+recursos privados e a restauração valida novamente identidade, disponibilidade
+e emissão de mídia; o DOM anterior não é autoridade. Aceite HTTP, Range,
+playback, leitor de tela e BFCache real permanecem casos de execução separados,
+registrados no [runbook](../operations/portal-contents-reader.md) e na
+[matriz por execução](../reviews/2026-10-20-portal-contents-reader-acceptance.md).
+
 ## Conteúdo e evolução
 
-Galerias exigem lightbox no leitor. A exposição de navegação depende da
-disponibilidade do conteúdo e será gated. Migrações podem fazer alterações
-aditivas e estreitas em relações internas do Payload, mas não podem modificar
-dados nem schema de domínio da Owner News.
+Galerias exigem lightbox no leitor. A exposição do link na navegação depende de
+probe autenticado de disponibilidade, enquanto a rota direta é independente do
+gate. Migrações podem fazer alterações aditivas e estreitas em relações internas
+do Payload, mas não podem modificar dados nem schema de domínio da Owner News.
 
 O contrato público limita conteúdo a 100 blocos e a 5 MiB de JSON UTF-8 da lista
 normalizada. Ricos são texto seguro estruturado, não HTML arbitrário. Cada bloco

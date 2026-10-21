@@ -333,3 +333,47 @@ test('Contents local forward anchors wait for the current load, focus its headin
   assert.equal(h.window.scrollY, 0, 'Forward restores the saved reader position rather than rerunning the forward reset');
   assert.ok(feature.modules.index);
 });
+
+test('same-route popstate starts the tracked Contents loader before restoring scroll and focus', async () => {
+  const dto = pageFixture({ content_blocks: [] });
+  let resolveReader;
+  let delayReader = false;
+  let readerStarted;
+  const readerStartedPromise = new Promise(resolve => { readerStarted = resolve; });
+  const h = await createRouterHarness({ initialURL: 'https://portal.test/contents.html?slug=published-policy', autoStart: false });
+  h.page('/contents.html');
+  const feature = await h.loadContentsModule({ request: async path => {
+    if (path === '/api/contents/categories') return Response.json([]);
+    if (path.startsWith('/api/contents/?')) return new Response(JSON.stringify([dto]), { headers: { 'X-Total-Count': '1' } });
+    if (path.endsWith('/published-policy') && delayReader) {
+      delayReader = false;
+      return new Promise(resolve => { resolveReader = resolve; readerStarted(); });
+    }
+    return Response.json({ ...dto, slug: 'published-policy', title: 'Página de leitura' });
+  } });
+  await h.router.startRouter();
+  await h.scope.ready();
+
+  const readerHeading = h.doc.querySelector('#contents-view h1');
+  readerHeading.focus();
+  h.window.scrollTo(0, 420);
+  await h.router.navigate('/contents.html');
+  await h.scope.ready();
+  h.window.scrollTo(0, 77);
+
+  delayReader = true;
+  h.history.back();
+  await readerStartedPromise;
+  await drain();
+  assert.equal(h.location.search, '?slug=published-policy');
+  assert.equal(typeof resolveReader, 'function', 'same-route traversal starts the new tracked detail loader');
+  assert.equal(h.window.scrollY, 77, 'the saved reader position is not restored before its loader settles');
+
+  resolveReader(Response.json({ ...dto, title: 'Página restaurada' }));
+  await h.scope.ready();
+  await drain();
+  assert.equal(h.window.scrollY, 420);
+  assert.equal(h.doc.querySelector('#contents-view h1').textContent, 'Página restaurada');
+  assert.equal(h.doc.activeElement.id, readerHeading.id);
+  assert.ok(feature.modules.index);
+});

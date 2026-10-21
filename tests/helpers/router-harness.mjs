@@ -15,6 +15,25 @@ export class TestEvent {
   stopImmediatePropagation() { this.stopped = true; }
 }
 
+function styleDeclaration() {
+  const values = new Map();
+  const camelCase = property => property.replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase());
+  return {
+    setProperty(property, value, priority = '') {
+      values.set(property, { value: String(value), priority: String(priority) });
+      this[camelCase(property)] = String(value);
+    },
+    getPropertyValue(property) { return values.get(property)?.value || this[camelCase(property)] || ''; },
+    getPropertyPriority(property) { return values.get(property)?.priority || ''; },
+    removeProperty(property) {
+      const previous = this.getPropertyValue(property);
+      values.delete(property);
+      delete this[camelCase(property)];
+      return previous;
+    },
+  };
+}
+
 class Events {
   listeners = new Map();
   addEventListener(type, fn, options = {}) {
@@ -39,7 +58,8 @@ class Events {
 export class Node extends Events {
   constructor(tag, owner, attrs = {}) {
     super(); this.tagName = tag.toUpperCase(); this.ownerDocument = owner;
-    this.children = []; this.dataset = {}; this.attrs = {}; this.className = ''; this.style = {};
+    this.children = []; this.dataset = {}; this.attrs = {}; this.className = ''; this.style = styleDeclaration();
+    if (this.tagName === 'DIALOG') this.open = false;
     Object.entries(attrs).forEach(([key, value]) => this.setAttribute(key, value));
     this.classList = {
       contains: name => this.className.split(/\s+/).includes(name),
@@ -107,6 +127,10 @@ export class Node extends Events {
   focus() { this.ownerDocument.activeElement = this; }
   click() { this.dispatchEvent(new TestEvent('click')); }
   scrollIntoView() { this.scrolled = true; }
+  showModal() { this.open = true; }
+  close() { this.open = false; this.dispatchEvent(new TestEvent('close')); }
+  pause() { this.pauseCount = (this.pauseCount || 0) + 1; this.paused = true; }
+  load() { this.loadCount = (this.loadCount || 0) + 1; }
 }
 
 function makeDocument(path, styles = [], dependencies = []) {
@@ -130,7 +154,7 @@ function makeDocument(path, styles = [], dependencies = []) {
   const sidebar = new Node('aside', doc, { class: 'sidebar' });
   const nav = new Node('ul', doc, { class: 'sidebar-nav' });
   for (const name of ['dashboard', 'knowledge', 'academy', 'announcements', 'contents', 'profile', 'admin', 'cms', 'autocard', 'cards-pos']) {
-    nav.append(new Node('a', doc, { href: `https://portal.test/${name}.html` }));
+    nav.append(new Node('a', doc, { href: `https://portal.test/${name}.html`, ...(name === 'contents' ? { class: 'contents-link' } : {}) }));
   }
   sidebar.append(nav);
   const outer = new Node('div', doc, { class: 'main-content' });
@@ -177,6 +201,19 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
   const modules = new Map(); const pages = new Map();
   const observers = [];
   let currentScope;
+  const defaultUser = { uid: 'user-1', role: 'admin', permissions: { superAdmin: true }, autocard_access: true, pos_cards_access: true };
+  const initialUser = user === undefined ? defaultUser : user;
+  const storageValues = new Map();
+  const sessionStorage = {
+    getItem(key) { return storageValues.get(key) ?? null; },
+    setItem(key, value) { storageValues.set(key, String(value)); },
+    removeItem(key) { storageValues.delete(key); },
+  };
+  const auth = {
+    currentUser: initialUser?.uid ? { uid: initialUser.uid, getIdToken: async () => `token-${initialUser.uid}` } : null,
+    app: { name: '[DEFAULT]', options: { apiKey: 'router-harness-key' } },
+    authStateReady: async () => {},
+  };
   const context = vm.createContext({
     document: doc, window, location, URL, URLSearchParams, AbortController, DOMException, TextEncoder, TextDecoder,
     Response, ReadableStream, Uint8Array, console,
@@ -188,8 +225,9 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
       disconnect() { this.target = null; }
     },
     can: (user, permission) => Boolean(user.permissions?.superAdmin || user.permissions?.[permission]),
-    user: user === undefined ? { uid: 'user-1', role: 'admin', permissions: { superAdmin: true }, autocard_access: true, pos_cards_access: true } : user,
-    auth: { currentUser: { uid: 'user-1' } },
+    user: initialUser,
+    auth,
+    sessionStorage,
     getCurrentUserDoc: async () => context.user,
     fetchAPI: async () => ({ linked: true }),
     logout: async () => { context.loggedOut = true; },
@@ -199,7 +237,7 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
     fetch: async (url, options) => {
       requests.push({ url, options });
       if (context.fetchOverride) return context.fetchOverride(url, options);
-      return { ok: true, headers: new Map([['content-type', 'text/html']]), text: async () => new URL(url).pathname };
+      return { ok: true, headers: new Map([['content-type', 'text/html']]), text: async () => new URL(url, location.href).pathname };
     },
     DOMParser: class { parseFromString(path) { return pages.get(path)?.() || makeDocument(path); } },
     loadModule: async name => {
@@ -213,6 +251,25 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
       return modules.get(name);
     },
   });
+  const authListeners = new Set();
+  context.onAuthStateChanged = (_auth, listener) => {
+    authListeners.add(listener);
+    listener(context.auth.currentUser);
+    return () => authListeners.delete(listener);
+  };
+  context.signOut = async () => {
+    context.auth.currentUser = null;
+    for (const listener of [...authListeners]) listener(null);
+  };
+  context.setAuthUser = next => {
+    context.auth.currentUser = next?.uid ? { uid: next.uid, getIdToken: async () => `token-${next.uid}` } : null;
+    for (const listener of [...authListeners]) listener(context.auth.currentUser);
+  };
+  context.notifyMutationObservers = () => {
+    for (const observer of observers) if (observer.target) observer.callback([], observer);
+  };
+  context.updateProfile = async () => {};
+  context.revokeEditorialSession = async () => {};
   window.confirm = () => context.confirmResult !== false;
   context.FormData = class {
     constructor(form) { this.form = form; this.parts = []; }
@@ -242,18 +299,41 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
   return {
     context, doc, window, location, history, entries, mounts, disposed, events, resources, requests, modules,
     router: context.router, moduleOverrides, get scope() { return currentScope; },
-    async loadContentsModule({ request = async path => path.endsWith('/categories')
-      ? Response.json([]) : path.includes('?') ? new Response('[]', { headers: { 'X-Total-Count': '0' } }) : Response.json({}) } = {}) {
+    async loadRealAuthHooks() {
+      const load = async (file, exports, namespace) => {
+        const source = (await readFile(file, 'utf8'))
+          .replace(/^import[^\n]*\n/gmu, '')
+          .replace(/^export\s+/gmu, '');
+        vm.runInContext(`(() => { ${source}\n globalThis.${namespace} = { ${exports} }; Object.assign(globalThis, globalThis.${namespace}); })();`,
+          context, { filename: file });
+      };
+      await load('public/js/content-length.js', 'parseContentLength', '__routerAuthDependencies');
+      await load('public/js/portal-contents/availability.js', 'configureContentsAvailability, probeContentsAvailability, resetContentsAvailability', '__routerAuthAvailability');
+      await load('public/js/portal-contents/media-session.js', 'configureContentsMediaSession, acquireContentsMediaLease, clearContentsMediaSession, invalidateContentsMediaSession, assetURL', '__routerAuthMedia');
+      const authSource = (await readFile('public/js/auth.js', 'utf8'))
+        .replace(/^import[\s\S]*?;\s*/gmu, '')
+        .replace(/^export\s+/gmu, '');
+      vm.runInContext(`(() => { ${authSource}\n globalThis.__routerAuth = { getCurrentUserDoc, getContentsIdentity, subscribeContentsIdentity,
+        authenticatedFetch, fetchAPI, fetchAPIPage, fetchAPIAsset, logout, requireAuth, can,
+        configureContentsAvailability, probeContentsAvailability, resetContentsAvailability,
+        configureContentsMediaSession, acquireContentsMediaLease, clearContentsMediaSession,
+        invalidateContentsMediaSession }; Object.assign(globalThis, globalThis.__routerAuth); })();`,
+        context, { filename: 'public/js/auth.js' });
+      return context.__routerAuth;
+    },
+    async loadContentsModule({ request, realModules = false } = {}) {
       const listeners = new Set();
-      let identity = { uid: context.user?.uid || 'user-1', generation: 1, validated: true };
       const requests = [];
-      context.getContentsIdentity = () => identity;
-      context.subscribeContentsIdentity = listener => { listeners.add(listener); return () => listeners.delete(listener); };
-      context.authenticatedFetch = (path, options = {}) => { requests.push({ path, options }); return request(path, options); };
-      // These route tests isolate persistent-router ownership. Dedicated media
-      // and gallery suites exercise their production implementations.
-      context.createContentsGallery = () => ({ open() {}, close() {}, dispose() {} });
-      context.activateContentsMedia = () => ({ dispose() {} });
+      if (!realModules) {
+        let identity = { uid: context.user?.uid || 'user-1', generation: 1, validated: true };
+        context.getContentsIdentity = () => identity;
+        context.subscribeContentsIdentity = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+        context.authenticatedFetch = (path, options = {}) => { requests.push({ path, options }); return request(path, options); };
+        // Isolated reader-router tests use explicit media doubles. Whole-shell
+        // integration opts into the complete production module graph below.
+        context.createContentsGallery = () => ({ open() {}, close() {}, dispose() {} });
+        context.activateContentsMedia = () => ({ dispose() {} });
+      }
       const moduleFiles = [
         ['dto', 'public/js/portal-contents/dto.js', 'validatePortalPageDTO, validateDetail, validateList, validateCategories, isCanonicalSlug, PAGE_SIZE, MAX_OFFSET, MAX_TOTAL, MAX_BLOCKS, MAX_NODES, MAX_CONTENT_BYTES, MAX_DETAIL_BYTES, MAX_COLLECTION_BYTES, LAYOUTS'],
         ['richText', 'public/js/portal-contents/rich-text.js', 'renderRichText'],
@@ -261,9 +341,18 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
         ['api', 'public/js/portal-contents/api.js', 'readBoundedJSON, createContentsAPI, contentsErrorMessage'],
         ['catalog', 'public/js/portal-contents/catalog.js', 'renderCatalog, renderCategories'],
         ['reader', 'public/js/portal-contents/reader.js', 'renderReader'],
-        ['index', 'public/js/portal-contents/index.js', 'parseContentsLocation, mount'],
       ];
       context.__contentsModules = {};
+      if (realModules) {
+        const ui = (await readFile('public/js/ui.js', 'utf8')).replace(/^export\s+/gmu, '');
+        vm.runInContext(`(() => { ${ui}\n globalThis.__contentsModules = globalThis.__contentsModules || {};\n globalThis.__contentsModules.ui = { registerPageDialog, closePageDialogs, openDialog };\n Object.assign(globalThis, globalThis.__contentsModules.ui); })();`,
+          context, { filename: 'public/js/ui.js' });
+        moduleFiles.push(
+          ['gallery', 'public/js/portal-contents/gallery.js', 'createContentsGallery'],
+          ['media', 'public/js/portal-contents/media.js', 'activateContentsMedia'],
+        );
+      }
+      moduleFiles.push(['index', 'public/js/portal-contents/index.js', 'parseContentsLocation, mount']);
       for (const [name, file, exports] of moduleFiles) {
         const feature = (await readFile(file, 'utf8')).replace(/^import[^\n]*\n/gmu, '').replace(/^export\s+/gmu, '');
         vm.runInContext(`(() => { ${feature}\n globalThis.__contentsModules.${name} = { ${exports} }; Object.assign(globalThis, globalThis.__contentsModules.${name}); })();`,
@@ -275,7 +364,7 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
       } };
       moduleOverrides['./portal-contents/index.js'] = contentsModule;
       return { module: contentsModule, modules: context.__contentsModules, requests,
-        notifyIdentity(next) { identity = next; for (const listener of [...listeners]) listener(next); } };
+        notifyIdentity(next) { for (const listener of [...listeners]) listener(next); } };
     },
     page(path, { styles = [], scripts = [], setup } = {}) {
       pages.set(path, () => { const doc = makeDocument(path, styles, scripts); setup?.(doc); return doc; });

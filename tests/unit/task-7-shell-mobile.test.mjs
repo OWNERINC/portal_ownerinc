@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { mountSource, activePageDouble } from '../helpers/page-mount.mjs';
 import { createFeedbackHarness, drain } from '../helpers/frontend-feedback-harness.mjs';
 
-const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cmsCss, profile, dashboard, knowledge, academy, announcements, renderer, nginx] = await Promise.all([
+const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cmsCss, profile, dashboard, knowledge, academy, announcements, renderer, nginx, portalContentsCss] = await Promise.all([
   readFile('public/js/ui.js', 'utf8'),
   readFile('public/js/sidebar.js', 'utf8'),
   readFile('public/css/tokens.css', 'utf8'),
@@ -21,6 +21,7 @@ const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cms
   readFile('public/js/announcements.js', 'utf8'),
   readFile('public/js/cms-block-renderer.js', 'utf8'),
   readFile('nginx/nginx.conf', 'utf8'),
+  readFile('public/css/portal-contents.css', 'utf8'),
 ]);
 
 function fakeElement(tag) {
@@ -759,7 +760,7 @@ test('catalog cards and dashboard stories never put CMS links inside another anc
 });
 
 test('mobile shell retains zoom, reflow, keyboard focus, and reduced-motion invariants', async () => {
-  const pages = await Promise.all(['dashboard', 'knowledge', 'academy', 'announcements', 'profile'].map(page => readFile(`public/${page}.html`, 'utf8')));
+  const pages = await Promise.all(['dashboard', 'knowledge', 'academy', 'announcements', 'contents', 'profile'].map(page => readFile(`public/${page}.html`, 'utf8')));
   for (const html of pages) {
     assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1\.0">/);
     assert.doesNotMatch(html, /user-scalable\s*=\s*no|maximum-scale\s*=\s*1/i);
@@ -775,6 +776,21 @@ test('mobile shell retains zoom, reflow, keyboard focus, and reduced-motion inva
   assert.match(components, /\.cms-pdf-frame\s*\{[^}]*height:\s*min\(80dvh/);
   assert.match(cmsCss, /\.cms-pdf-frame\s*\{[^}]*width:\s*100%/);
   assert.match(`${components}\n${knowledgeCss}`, /outline:\s*3px solid var\(--focus\)/);
+});
+
+test('Contents blocks and gallery controls retain narrow-view containment, zoom, touch targets, and reduced motion', async () => {
+  const html = await readFile('public/contents.html', 'utf8');
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1\.0">/);
+  assert.doesNotMatch(html, /user-scalable\s*=\s*no|maximum-scale\s*=\s*1/i);
+  assert.match(portalContentsCss, /\.portal-contents\s*\{[^}]*min-inline-size:\s*0/s);
+  assert.match(portalContentsCss, /\.portal-contents \.contents-block\s*\{[^}]*max-inline-size:\s*100%[^}]*overflow-wrap:\s*anywhere/s);
+  assert.match(portalContentsCss, /\.portal-contents \.contents-caption\s*\{[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/s);
+  assert.match(portalContentsCss, /\.portal-contents-lightbox \.contents-lightbox-controls button,[\s\S]*?min-inline-size:\s*44px;\s*min-block-size:\s*44px/s);
+  assert.match(portalContentsCss, /\.portal-contents-lightbox \.contents-lightbox-caption,[\s\S]*?max-block-size:\s*8rem;[\s\S]*?overflow:\s*auto/s);
+  assert.match(portalContentsCss, /@container \(max-width:\s*480px\)[\s\S]*?contents-gallery-list[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(portalContentsCss, /@media \(max-width:\s*760px\)[\s\S]*?contents-card-list[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(portalContentsCss, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition:\s*none;\s*animation:\s*none/);
+  assert.match(portalContentsCss, /\.portal-contents \.contents-embed\s*\{[^}]*inline-size:\s*100%[^}]*aspect-ratio:\s*16 \/ 9/s);
 });
 
 test('initial navigation keeps Benefits and Sólides out while Academy remains a catalog', async () => {

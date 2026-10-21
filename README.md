@@ -1,9 +1,9 @@
 # Portal Ownerinc
 
-Portal interno da Ownerinc para perfis, base de conhecimento, Academy (catálogo e
-jornada de aprendizagem interna), Owner News e
-lembretes. O catálogo de benefícios permanece disponível como rota futura, fora
-da navegação inicial.
+Portal interno da Ownerinc para perfis, base de conhecimento, Conteúdos (leitor
+de páginas publicadas), Academy (catálogo e jornada de aprendizagem interna),
+Owner News e lembretes. O catálogo de benefícios permanece disponível como rota
+futura, fora da navegação inicial.
 
 ## Arquitetura
 
@@ -11,6 +11,10 @@ da navegação inicial.
 - A navegação entre áreas mantém o shell no mesmo documento, com montagem e
   descarte explícitos por página; links diretos e histórico continuam usando as
   URLs `.html`. Contrato em [Arquitetura](docs/architecture/overview.md#navegação-persistente-do-frontend).
+- O leitor Conteúdos usa o shell autenticado, catálogo/categoria/paginação e
+  slugs diretos; a disponibilidade controla apenas a exposição do link, não a
+  admissão da rota. Mídia privada e aceite local estão descritos no
+  [runbook](docs/operations/portal-contents-reader.md).
 - `public/autocard.html`: página canônica do AutoCard dentro do shell do Portal;
   `/autocard/` permanece como redirect compatível para bookmarks antigos.
 - `public/cards-pos.html` e `public/cards-pos/`: página e módulo isolado dos
@@ -76,6 +80,15 @@ e não usa `DATABASE_URL` nem credenciais de runtime como fallback. A suíte gen
 [runbook editorial das páginas](docs/operations/portal-pages-editorial.md) e a
 [matriz de aceite Task 4](docs/reviews/2026-10-19-portal-pages-editorial-acceptance.md).
 
+O aceite de integração do leitor Conteúdos é separado dos testes offline:
+`node scripts/test-portal-contents-acceptance.mjs --check-config` valida somente
+opt-in, URL loopback, UUID e diretório externo, sempre retornando
+`NOT_EXECUTED`/código 2. `--aggregate` lê os registros explícitos guardados fora
+do checkout e só retorna PASS quando todos os casos de serviço/navegador têm
+evidência válida. Nenhum desses modos inicia serviços. Consulte o
+[runbook do leitor](docs/operations/portal-contents-reader.md) e a
+[matriz de aceite](docs/reviews/2026-10-20-portal-contents-reader-acceptance.md).
+
 ## Contratos de UI e prevenção de quebras
 
 Os scripts das páginas podem atender seções com estruturas diferentes. Um
@@ -105,6 +118,8 @@ HTML.
 - [Privacidade e retenção](docs/product/privacy-retention.md)
 - [Arquitetura](docs/architecture/overview.md)
 - [Páginas modulares do Portal](docs/architecture/portal-pages-content.md)
+- [Operação do leitor Conteúdos](docs/operations/portal-contents-reader.md)
+- [Aceite do leitor Conteúdos](docs/reviews/2026-10-20-portal-contents-reader-acceptance.md)
 - [Auditoria da plataforma](docs/reviews/2026-07-20-platform-audit.md)
 - [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)
 - [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)

@@ -337,7 +337,7 @@ dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
 
 - `public/js/router-bootstrap.js` inicia os links diretos e o router nativo de
   `router.js`. As URLs `.html` continuam sendo documentos estáticos completos.
-  Navegações entre as 12 áreas registradas preservam o documento, sidebar,
+  Navegações entre as 13 áreas registradas preservam o documento, sidebar,
   topbar, `.main-content` e o próprio `main#main-content`.
 - A preparação obtém o HTML, importa o módulo ES em cache e aguarda as folhas de
   estilo e bibliotecas necessárias. A API valida `/users/me` antes de montar;
@@ -389,6 +389,38 @@ Checks de comportamento: `tests/unit/persistent-navigation.test.mjs`,
 `tests/unit/navigation-review-regressions.test.mjs` e
 `tests/unit/auth-stability.test.mjs`, junto dos testes existentes de CMS, perfil,
 filtros, PDF, Owner News e AutoCard.
+
+### Leitor autenticado de Conteúdos
+
+`public/js/portal-contents/index.js` monta catálogo e leitor de slugs publicados
+dentro do shell persistente. A disponibilidade de navegação consulta
+`GET /api/contents/availability` sob identidade ativa, mas não autoriza a rota:
+links diretos continuam admitidos e cada leitura revalida o usuário no servidor.
+Zero publicações é um estado vazio; indisponibilidade do CMS permanece erro
+temporário e não é convertida em catálogo vazio. Categoria e conteúdo têm retry
+independentes.
+
+O cliente `api.js` limita e valida o JSON antes de compor DOM. `dto.js` aceita
+somente DTOs públicos da revisão publicada, com até 100 blocos, 10.000 nós,
+5 MiB de conteúdo, 6 MiB por detalhe e 16 MiB por coleção. Catálogo usa 12 itens,
+offset até 1.000.000 e query canônica; o router continua dono de navegação,
+Back/Forward, foco e restauração. Rich text é renderizado com elementos DOM
+permitidos e texto literal, sem HTML editorial arbitrário.
+
+`media-session.js`, `media.js` e `gallery.js` isolam a mídia privada do DTO e do
+catálogo. A preparação usa POST bodyless autenticado e só libera URLs nativas
+depois de 204 para identidade ainda válida; a cookie dura cinco minutos e não é
+renovada por uma aba PDF independente. Imagens/PDF/vídeo usam o endpoint privado
+revision-bound, sem Blob de corpo inteiro; PDF e vídeo mantêm Range. O lifecycle
+descarta fontes, player e diálogo ao sair, restaurar identidade ou receber
+invalidação entre abas. Esses contratos e limites de revogação estão em
+[`portal-pages-content.md`](portal-pages-content.md#leitor-publicado-do-portal-task-4).
+
+A CSP do Portal acrescenta Vimeo apenas a `frame-src`, conservando as fontes e
+restrições anteriores. Testes offline verificam os contratos e a integração do
+shell; não provam auth HTTP, Range pelo Nginx, reprodução de embeds, BFCache ou
+acessibilidade com leitor de tela. O resultado de cada execução fica na
+[matriz de aceite](../reviews/2026-10-20-portal-contents-reader-acceptance.md).
 
 ### Evidência local — 22/09/2026
 

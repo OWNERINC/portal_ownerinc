@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 import { createContentsHarness, createContentsClock, createContentsBroadcastBus } from '../helpers/portal-contents-harness.mjs';
 import { ASSET_ID, PAGE_ID, REVISION_ID, clone, pageFixture } from '../helpers/portal-contents-fixtures.mjs';
 import { TestEvent, deferred, drain } from '../helpers/frontend-feedback-harness.mjs';
@@ -841,6 +842,36 @@ test('embeds are lazy, canonical-provider-only, sandboxed and retain a provider 
   assert.equal(iframe.allowFullscreen, true);
   assert.equal(root.querySelector('.contents-embed-fallback').getAttribute('href'), dto.content_blocks[0].url);
   assert.equal(h.pendingIssues.length, 0, 'approved embeds do not require the private media cookie');
+});
+
+test('Portal CSP adds canonical Vimeo only to frame-src and preserves every other security directive', async () => {
+  const nginx = await readFile('nginx/nginx.conf', 'utf8');
+  const map = nginx.match(/map \$uri \$portal_csp\s*\{([^}]+)\}/u)?.[1];
+  assert.ok(map, 'the Portal CSP map must exist');
+  const policy = map.match(/\bdefault\s+"([^"]+)";/u)?.[1];
+  assert.ok(policy, 'the Portal CSP must have its default policy');
+  const directives = Object.fromEntries(policy.split(';').map(part => {
+    const [name, ...values] = part.trim().split(/\s+/u);
+    return [name, values];
+  }));
+
+  assert.deepEqual(directives, {
+    'default-src': ["'self'"],
+    'base-uri': ["'self'"],
+    'object-src': ["'none'"],
+    'frame-ancestors': ["'none'"],
+    'form-action': ["'self'"],
+    'script-src': ["'self'", 'https://unpkg.com', 'https://www.gstatic.com', 'https://cdnjs.cloudflare.com', 'https://www.youtube.com', 'https://s.ytimg.com'],
+    'style-src': ["'self'", "'unsafe-inline'"],
+    'font-src': ["'self'"],
+    'img-src': ["'self'", 'data:', 'blob:', 'https:'],
+    'media-src': ["'self'", 'blob:', 'https:'],
+    'connect-src': ["'self'", 'http://127.0.0.1:9099', 'http://localhost:9099', 'https://*.googleapis.com', 'https://*.firebaseio.com'],
+    'frame-src': ['https://*.firebaseapp.com', 'blob:', 'https://www.youtube.com', 'https://www.youtube-nocookie.com', 'https://player.vimeo.com'],
+    'upgrade-insecure-requests': [],
+  }, 'the only directive delta from the existing Portal policy is canonical Vimeo in frame-src');
+  assert.doesNotMatch(directives['script-src'].join(' '), /unsafe-eval|\*/u);
+  assert.match(nginx, /~\^\/editorial\(\?:\/\|\$\) "";/u, 'the editorial upstream CSP override remains intact');
 });
 
 test('embed-only disposal clears and removes its iframe and provider fallback', async () => {

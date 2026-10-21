@@ -357,6 +357,33 @@ test('real media issue and logout clear settle without a centralized-auth wait c
   }
 });
 
+test('BFCache-style same-account restoration revalidates /users/me and issues a fresh media lease', async () => {
+  let profileReads = 0;
+  let mediaIssues = 0;
+  const h = harness({ fetchImpl: (path, options = {}) => {
+    if (path === '/api/users/me') { profileReads += 1; return response(userDoc('a')); }
+    if (path === '/api/contents/media-session' && options.method === 'POST') {
+      mediaIssues += 1;
+      return new Response(null, { status: 204 });
+    }
+    return response({});
+  } });
+  await h.api.getCurrentUserDoc();
+  assert.equal(h.api.getContentsIdentity().validated, true);
+
+  const media = await connectRealMediaCoordinator(h);
+  const firstLease = media.acquire({ signal: new AbortController().signal, isCurrent: () => true });
+  await firstLease.ensureFresh();
+  firstLease.release();
+
+  await h.api.getCurrentUserDoc();
+  assert.equal(profileReads, 2, 'the restored document cannot rely on the prior live profile response');
+  const restoredLease = media.acquire({ signal: new AbortController().signal, isCurrent: () => true });
+  await restoredLease.ensureFresh();
+  assert.equal(mediaIssues, 2, 'a cookie that survived in the browser does not reuse an old preparation epoch');
+  restoredLease.release();
+});
+
 test('logout clears media and revokes editorial state together; a failed clear retains retry and blocks signOut', async () => {
   const calls = [];
   let clearAttempt = 0;

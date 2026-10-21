@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helpers/router-harness.mjs';
+import { ASSET_ID, pageFixture } from '../helpers/portal-contents-fixtures.mjs';
 
 test('editorial external and shell entry links respect cancelled global leave guards before navigation', async () => {
   for (const href of ['/editorial/', '/editorial/admin', '/editorial-entry.html']) {
@@ -124,6 +125,142 @@ test('contents is admitted by the active-user router without using availability 
   assert.equal(activeStylesheet?.media, 'all');
   await h.router.navigate('/knowledge.html');
   assert.equal(activeStylesheet.media, 'not all', 'the page-local reader stylesheet is disabled outside its route');
+});
+
+test('real Contents module crosses the persistent shell and a BFCache restore remounts only after live auth', { timeout: 10_000 }, async () => {
+  const viewer = { uid: 'user-1', role: 'viewer', permissions: {}, autocard_access: false, pos_cards_access: false };
+  const secondViewer = { uid: 'user-2', role: 'viewer', permissions: {}, autocard_access: false, pos_cards_access: false };
+  const h = await createRouterHarness({ initialURL: 'https://portal.test/contents.html?slug=published-policy', user: viewer, autoStart: false });
+  h.page('/contents.html');
+  let validations = 0;
+  let availabilityReads = 0;
+  let mediaIssues = 0;
+  let activeViewer = viewer;
+  h.context.fetchOverride = async (url, options = {}) => {
+    const pathname = new URL(url, h.location.href).pathname;
+    if (pathname === '/api/users/me') { validations += 1; return Response.json(activeViewer); }
+    if (pathname === '/api/contents/availability') { availabilityReads += 1; return Response.json({ available: true }); }
+    if (pathname === '/api/contents/media-session' && options.method === 'POST') {
+      mediaIssues += 1;
+      return new Response(null, { status: 204 });
+    }
+    if (pathname === '/api/contents/media-session' && options.method === 'DELETE') return new Response(null, { status: 204 });
+    if (pathname === '/api/contents/categories') return Response.json([]);
+    if (pathname === '/api/contents/published-policy') return Response.json(pageFixture({
+      slug: 'published-policy', title: 'Política publicada',
+      content_blocks: [
+        { type: 'image', asset_id: ASSET_ID, alt: 'Imagem de política' },
+        { type: 'gallery', images: [
+          { asset_id: ASSET_ID, alt: 'Imagem da galeria' },
+          { asset_id: ASSET_ID, alt: 'Segunda imagem da galeria' },
+        ] },
+        { type: 'video', asset_id: ASSET_ID, title: 'Vídeo de política' },
+      ],
+    }));
+    if (pathname.endsWith('.html')) return { ok: true, headers: new Map([['content-type', 'text/html']]), text: async () => pathname };
+    throw new Error(`unexpected ${pathname}`);
+  };
+
+  await h.loadRealAuthHooks();
+  const feature = await h.loadContentsModule({ realModules: true });
+  await h.router.startRouter();
+  await h.scope.ready();
+  await drain();
+
+  const shell = ['.sidebar', '.topbar', '.main-content', '#main-content'].map(selector => h.doc.querySelector(selector));
+  const hiddenLink = h.doc.querySelector('.contents-link');
+  assert.ok(hiddenLink);
+  hiddenLink.hidden = true;
+  assert.equal(hiddenLink.hidden, true, 'availability visibility can hide the nav while route access remains independent');
+  assert.equal(h.router.routeAllowed('/contents.html', viewer), true, 'navigation visibility is not route authorization');
+  assert.equal(h.doc.querySelector('#contents-view h1')?.textContent, 'Política publicada',
+    JSON.stringify({ main: h.doc.getElementById('main-content')?.textContent,
+      requests: h.requests.map(row => ({ url: row.url, status: row.options?.method })) }));
+  assert.ok(feature.modules.index, 'the real Contents module is in the router module graph');
+
+  const firstThumbnail = h.doc.querySelector('.contents-gallery-thumbnail');
+  const firstVideo = h.doc.querySelector('.contents-native-video');
+  assert.ok(firstThumbnail?.getAttribute('src'), 'the real gallery prepares native image URLs');
+  assert.ok(firstVideo?.getAttribute('src'), 'the real media module prepares a native video URL');
+  firstVideo.paused = false;
+  firstVideo.dispatchEvent(new TestEvent('play'));
+  h.doc.body.style.setProperty('overflow', 'clip');
+  h.doc.body.style.setProperty('padding-inline-end', '3px');
+  h.doc.documentElement.style.setProperty('overflow', 'auto');
+  h.doc.querySelector('.contents-gallery-trigger').click();
+  await drain();
+  const firstDialog = h.doc.querySelector('dialog[data-page-overlay]');
+  assert.equal(firstDialog?.open, true);
+  assert.equal(h.doc.body.style.getPropertyValue('overflow'), 'hidden', 'the active gallery owns its scroll lock');
+
+  let lastContentsVideo = firstVideo;
+  for (let iteration = 0; iteration < 10; iteration += 1) {
+    for (const path of ['/announcements.html', '/academy.html', '/contents.html?slug=published-policy']) {
+      assert.equal(await h.router.navigate(path), true, path);
+      await h.scope.ready();
+      await drain();
+      shell.forEach((node, index) => assert.equal(
+        h.doc.querySelector(['.sidebar', '.topbar', '.main-content', '#main-content'][index]), node,
+      ));
+      const contentsMounted = path.startsWith('/contents.html');
+      assert.equal(h.window.listeners.get('popstate').length, contentsMounted ? 2 : 1,
+        `${path} owns exactly its route-scoped popstate listener`);
+      assert.equal(h.doc.querySelectorAll('[data-page-overlay]').length, contentsMounted ? 1 : 0,
+        `${path} owns no overlays from another route`);
+      if (contentsMounted) {
+        lastContentsVideo = h.doc.querySelector('.contents-native-video');
+        assert.ok(lastContentsVideo?.getAttribute('src'), 'each Contents mount prepares its native video');
+      } else if (lastContentsVideo) {
+        assert.equal(lastContentsVideo.paused, true, 'every Contents exit pauses native playback');
+        assert.equal(lastContentsVideo.getAttribute('src'), null, 'every Contents exit clears the private source');
+        assert.equal(lastContentsVideo.listeners.get('play')?.length, 0, 'every Contents exit removes media listeners');
+        lastContentsVideo = null;
+      }
+      if (iteration === 0 && path === '/announcements.html') {
+        assert.equal(firstDialog.open, false, 'leaving Contents closes the gallery before removing its page');
+        assert.equal(firstDialog.isConnected, false, 'the owned overlay does not survive route disposal');
+        assert.equal(h.doc.body.style.getPropertyValue('overflow'), 'clip', 'the pre-existing body scroll style is restored');
+        assert.equal(h.doc.body.style.getPropertyValue('padding-inline-end'), '3px');
+        assert.equal(h.doc.documentElement.style.getPropertyValue('overflow'), 'auto');
+        assert.equal(firstVideo.paused, true, 'leaving Contents pauses native playback');
+        assert.ok(firstVideo.pauseCount > 0);
+        assert.equal(firstVideo.getAttribute('src'), null, 'leaving Contents clears the private native source');
+        assert.equal(firstVideo.listeners.get('play')?.length, 0, 'playback listeners are removed with the page');
+        assert.equal(firstThumbnail.listeners.get('load')?.length, 0, 'gallery listeners are removed with the page');
+        assert.equal(firstThumbnail.listeners.get('error')?.length, 0);
+        assert.equal(h.window.listeners.get('popstate').length, 1, 'only the persistent router listener remains outside Contents');
+      }
+    }
+  }
+  assert.equal(mediaIssues, 11, 'each new Contents mount prepares a new lease');
+
+  const priorScope = h.scope;
+  const validationsBeforeRestore = validations;
+  const issuesBeforeRestore = mediaIssues;
+  const availabilityBeforeRestore = availabilityReads;
+  h.window.dispatchEvent(new TestEvent('pagehide'));
+  assert.equal(priorScope.active, false);
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  await drain();
+  await h.scope.ready();
+  await drain();
+  assert.notEqual(h.scope, priorScope, 'the router listener remounts instead of reusing cached DOM');
+  assert.ok(validations > validationsBeforeRestore, 'restoration performs fresh /users/me validation');
+  assert.ok(availabilityReads > availabilityBeforeRestore, 'a restored document rechecks availability, not just identity');
+  assert.ok(mediaIssues > issuesBeforeRestore, 'restoration obtains a fresh media issuance');
+  assert.equal(h.window.listeners.get('pageshow').length, 1, 'no feature-specific BFCache boot listener is installed');
+  assert.equal(h.doc.querySelectorAll('[data-page-overlay]').length, 1, 'only the current Contents mount owns an overlay');
+  assert.equal(h.doc.querySelector('dialog[data-page-overlay]').open, false, 'the current gallery dialog is closed');
+
+  const oldHeading = h.doc.querySelector('#contents-view h1');
+  activeViewer = secondViewer;
+  h.context.setAuthUser({ uid: secondViewer.uid });
+  h.context.notifyMutationObservers();
+  assert.equal(oldHeading.isConnected, false, 'an identity change cannot retain the prior account DOM');
+  assert.equal(h.scope.active, false, 'identity invalidation disposes the previous route lifecycle');
+  assert.equal(h.doc.querySelectorAll('[data-page-overlay]').length, 0, 'identity invalidation removes the current overlay too');
+  assert.equal(h.window.listeners.get('popstate').length, 1, 'identity invalidation releases the Contents listener');
+  h.scope.dispose();
 });
 
 test('signed-out direct links keep the destination query and fragment through login', async () => {
