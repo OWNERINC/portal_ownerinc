@@ -301,14 +301,38 @@ async function handleAuthenticationFailure(path, response, bodyLimit = null) {
   throw new APIError(body.error || `A solicitação falhou (${response.status}).`, response.status, body.reason, body.requestId);
 }
 
+function notifyRawTransportSettled(callback, status) {
+  if (typeof callback !== 'function') return;
+  try { callback({ status: Number.isInteger(status) ? status : null }); }
+  catch { /* Internal settlement observers cannot alter centralized auth handling. */ }
+}
+
+function createRawTransportSettlement(callback) {
+  let settled = false;
+  return status => {
+    if (settled) return;
+    settled = true;
+    notifyRawTransportSettled(callback, status);
+  };
+}
+
 // Guards the token/request against account changes. Raw Response consumers must
 // still respect their page lifecycle while asynchronously decoding the body.
 export async function authenticatedFetch(path, options = {}) {
-  const session = await readySession();
-  return fetchForSession(path, options, session);
+  const settleRawTransport = createRawTransportSettlement(options?.onRawTransportSettled);
+  try {
+    const session = await readySession();
+    return await fetchForSession(path, options, session, settleRawTransport);
+  } catch (error) {
+    // A request rejected before fetch begins has no HTTP status, but still needs
+    // to release any coordinator clear barrier waiting for this attempt.
+    settleRawTransport(null);
+    throw error;
+  }
 }
 
-async function fetchForSession(path, options, session) {
+async function fetchForSession(path, options, session, rawTransportSettled = null) {
+  const settleRawTransport = rawTransportSettled || createRawTransportSettlement(options?.onRawTransportSettled);
   syncSession();
   if (!session.uid || sessionDenied) {
     redirectToLogin('session');
@@ -321,11 +345,12 @@ async function fetchForSession(path, options, session) {
   } catch (error) {
     assertCurrentSession(session);
     if (!INVALID_TOKEN_CODES.has(error.code)) throw error;
+    settleRawTransport(null);
     await endSession('session');
     throw new APIError('Sessão encerrada.', 401, 'session');
   }
   assertCurrentSession(session);
-  const { authErrorBodyLimit, ...fetchOptions } = options;
+  const { authErrorBodyLimit, onRawTransportSettled, ...fetchOptions } = options;
   const boundedAuthErrorLimit = Number.isSafeInteger(authErrorBodyLimit) && authErrorBodyLimit > 0
     ? Math.min(authErrorBodyLimit, 16 * 1024) : null;
   const headers = {
@@ -337,9 +362,13 @@ async function fetchForSession(path, options, session) {
   try {
     response = await fetch(path, { ...fetchOptions, headers });
   } catch (error) {
+    settleRawTransport(null);
     assertCurrentSession(session);
     throw error;
   }
+  // The raw transport boundary must settle before auth error handling can await
+  // logout revocation, which itself may be waiting for this media issue request.
+  settleRawTransport(response?.status);
   assertCurrentSession(session);
   await handleAuthenticationFailure(path, response, boundedAuthErrorLimit);
   assertCurrentSession(session);

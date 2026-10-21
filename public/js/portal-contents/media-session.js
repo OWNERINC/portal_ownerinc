@@ -16,7 +16,7 @@ const STALE = Symbol('stale-contents-media');
 let configuration = null;
 let configured = false;
 let leases = new Set();
-let playingLeases = new Set();
+let playingResources = new Set();
 let generation = 0;
 let expiresAt = 0;
 let renewAt = 0;
@@ -90,7 +90,12 @@ function isVisible() {
   return document?.visibilityState !== 'hidden' && document?.hidden !== true;
 }
 
-function canProactivelyRenew() { return isVisible() || playingLeases.size > 0; }
+function canProactivelyRenew() { return isVisible() || playingResources.size > 0; }
+
+function currentLease(identity = currentIdentity()) {
+  if (!identityIsValid(identity)) return null;
+  return [...leases].find(lease => leaseIsCurrent(lease) && sameIdentity(lease.identity, identity)) || null;
+}
 
 function clearScheduledTimer() {
   if (timer === null) return;
@@ -121,14 +126,16 @@ function onTimer() {
   timer = null;
   if (!leases.size || clearing) return;
   expireLease();
+  const owner = currentLease();
+  if (!owner) { scheduleTimer(); return; }
   if (retryAt > 0 && now() >= retryAt && canProactivelyRenew()) {
     retryAt = 0;
-    void startIssue([...leases][0], { force: true, automatic: true }).catch(() => {});
+    void startIssue(owner, { force: true, automatic: true }).catch(() => {});
     scheduleTimer();
     return;
   }
   if (renewAt > 0 && now() >= renewAt && canProactivelyRenew()) {
-    void startIssue([...leases][0], { force: true, automatic: true }).catch(() => {});
+    void startIssue(owner, { force: true, automatic: true }).catch(() => {});
   }
   scheduleTimer();
 }
@@ -167,14 +174,17 @@ function clearRequestTimeout(entry) {
   entry.timeout = null;
 }
 
-function markTransportSettled(entry, response = null, error = null) {
-  entry.transportSettled = true;
+function markTransportSettled(entry, status = null, response = null, error = null) {
+  if (!entry.transportSettled) {
+    entry.transportSettled = true;
+    entry.transportStatus = Number.isInteger(status) ? status : null;
+    entry.resolveRawSettlement({ status: entry.transportStatus });
+  }
   if (response) {
     entry.response = response;
     entry.responseIssued = response.status === 204;
   }
-  entry.transportError = error;
-  if (inFlight === entry) inFlight = null;
+  if (error && !entry.transportError) entry.transportError = error;
   scheduleTimer();
 }
 
@@ -197,15 +207,16 @@ function requestIssue(entry) {
       cache: 'no-store',
       signal: timeoutController.signal,
       authErrorBodyLimit: AUTH_ERROR_BODY_LIMIT,
+      onRawTransportSettled: metadata => markTransportSettled(entry, metadata?.status),
     });
   } catch (error) {
     request = Promise.reject(error);
   }
   entry.transportPromise = Promise.resolve(request).then(response => {
-    markTransportSettled(entry, response);
+    markTransportSettled(entry, response?.status, response);
     return response;
   }, error => {
-    markTransportSettled(entry, null, error);
+    markTransportSettled(entry, null, null, error);
     throw error;
   });
 
@@ -254,6 +265,8 @@ function startIssue(lease, { force = false, automatic = false } = {}) {
     return Promise.resolve(pending.transportPromise).catch(() => {}).then(() => startIssue(lease, { force, automatic }));
   }
 
+  let resolveRawSettlement;
+  const rawSettlementPromise = new Promise(resolve => { resolveRawSettlement = resolve; });
   const entry = {
     owner: lease,
     generation,
@@ -263,6 +276,9 @@ function startIssue(lease, { force = false, automatic = false } = {}) {
     timeout: null,
     transportPromise: null,
     transportSettled: false,
+    transportStatus: null,
+    rawSettlementPromise,
+    resolveRawSettlement,
     response: null,
     responseIssued: false,
     promise: null,
@@ -405,14 +421,14 @@ export function configureContentsMediaSession(options = {}) {
 }
 
 function recheck(reason) {
-  if (!leases.size || clearing || !isVisible() && playingLeases.size === 0) return;
+  if (!leases.size || clearing || !isVisible() && playingResources.size === 0) return;
   if (!identityIsValid(currentIdentity()) || requiresValidation) return;
-  if (retryAt > 0 || (expiresAt && (now() >= renewAt || now() >= expiresAt))) {
+  const owner = currentLease();
+  if (!owner) return;
+  if (retryAt > 0 || !expiresAt || now() >= renewAt || now() >= expiresAt) {
     retryAt = 0;
     retryIndex = 0;
-    void startIssue([...leases][0], { force: true }).catch(() => {});
-  } else if (reason === 'online' && !expiresAt) {
-    void startIssue([...leases][0], { force: true }).catch(() => {});
+    void startIssue(owner, { force: true }).catch(() => {});
   }
   scheduleTimer();
 }
@@ -427,19 +443,26 @@ export function acquireContentsMediaLease({ signal, isCurrent, onStatus } = {}) 
     isCurrent,
     onStatus,
     status: null,
+    playingOwners: new Set(),
     ensureFresh(options = {}) { return startIssue(lease, options); },
     isPrepared() { return leaseIsCurrent(lease) && expiresAt > now(); },
     needsRenewal() { return leaseIsCurrent(lease) && (!expiresAt || now() >= renewAt || now() >= expiresAt); },
-    setPlaying(value) {
+    setPlaying(value, owner = lease) {
       if (!lease.active) return;
-      if (value) playingLeases.add(lease);
-      else playingLeases.delete(lease);
+      if (value) {
+        playingResources.add(owner);
+        lease.playingOwners.add(owner);
+      } else {
+        playingResources.delete(owner);
+        lease.playingOwners.delete(owner);
+      }
       scheduleTimer();
     },
     release() {
       if (!lease.active) return;
       lease.active = false;
-      playingLeases.delete(lease);
+      for (const owner of lease.playingOwners) playingResources.delete(owner);
+      lease.playingOwners.clear();
       leases.delete(lease);
       signal?.removeEventListener?.('abort', onAbort);
       if (!leases.size) stopLastLease();
@@ -484,9 +507,12 @@ export function clearContentsMediaSession() {
   const barrier = (async () => {
     let failure = null;
     try { await timedClearRequest(); } catch (error) { failure = error; }
-    if (oldIssue?.transportPromise) {
+    if (oldIssue?.rawSettlementPromise) {
+      try { await oldIssue.rawSettlementPromise; } catch { /* Settlement is metadata-only and should not reject. */ }
+    } else if (oldIssue?.transportPromise) {
       try { await oldIssue.transportPromise; } catch { /* An aborted issue is settled without a cookie. */ }
     }
+    if (inFlight === oldIssue) inFlight = null;
     // Aborting a browser fetch cannot prove the server did not complete the POST
     // after the first DELETE. Clear again after the same-tab transport settles.
     if (oldIssue) {

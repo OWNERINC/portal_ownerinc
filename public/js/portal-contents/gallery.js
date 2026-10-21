@@ -51,13 +51,43 @@ export function createContentsGallery({ page, rootHeading } = {}) {
   let savedScroll = null;
   let backdropPointerDown = null;
   let imageGeneration = 0;
-  let imageFailureGeneration = 0;
-  let retriedImageFailures = new Set();
+  let recoveryContext = null;
+  const assetRecoveries = new Map();
   let disposed = false;
 
   function currentView(context, lease) {
     return !disposed && !context?.signal?.aborted && (!context?.isCurrent || context.isCurrent())
       && lease?.isPrepared?.();
+  }
+
+  function bindRecoveryContext(context) {
+    if (recoveryContext && recoveryContext !== context) assetRecoveries.clear();
+    recoveryContext = context;
+  }
+
+  function recoveryFor(dto, image) {
+    const key = `${dto.id.toLowerCase()}:${dto.revision.id.toLowerCase()}:${image.asset_id.toLowerCase()}`;
+    if (!assetRecoveries.has(key)) assetRecoveries.set(key, { forcedAttempted: false, reloadCalled: false });
+    return assetRecoveries.get(key);
+  }
+
+  function contextIsLive(context) {
+    if (disposed || context?.signal?.aborted) return false;
+    try { return !context?.isCurrent || context.isCurrent(); } catch { return false; }
+  }
+
+  function appendReloadAction(status, recovery, context, className) {
+    if (recovery.reloadCalled || typeof context?.onReload !== 'function' || !contextIsLive(context)) return;
+    const reload = element(document, 'button', className, 'Recarregar conteúdo');
+    reload.type = 'button'; reload.tabIndex = 0;
+    reload.addEventListener('click', () => {
+      if (recovery.reloadCalled || !contextIsLive(context) || typeof context.onReload !== 'function') return;
+      recovery.reloadCalled = true;
+      reload.disabled = true;
+      try { void Promise.resolve(context.onReload()).catch(() => {}); }
+      catch { /* Reload navigation cannot escape an image failure handler. */ }
+    });
+    status.append(reload);
   }
 
   function createDialog() {
@@ -239,8 +269,6 @@ export function createContentsGallery({ page, rootHeading } = {}) {
     const next = dialog.querySelector('.contents-lightbox-next');
     imageGeneration += 1;
     const currentGeneration = imageGeneration;
-    imageFailureGeneration = 0;
-    retriedImageFailures = new Set();
     releaseLightboxImage();
     large.setAttribute('alt', image.alt);
     caption.textContent = image.caption ?? '';
@@ -263,10 +291,15 @@ export function createContentsGallery({ page, rootHeading } = {}) {
   async function loadCurrentImage(force, expectedGeneration = imageGeneration) {
     if (!opened) return;
     const view = opened;
+    const image = view.images[view.index];
+    const recovery = recoveryFor(view.dto, image);
+    if (force) {
+      if (recovery.forcedAttempted) return;
+      recovery.forcedAttempted = true;
+    }
     try {
       await view.lease.ensureFresh(force ? { force: true } : {});
       if (opened !== view || expectedGeneration !== imageGeneration || !currentView(view.context, view.lease)) return;
-      const image = view.images[view.index];
       dialog.querySelector('.contents-lightbox-image').setAttribute('src', assetURL(view.dto, image.asset_id));
       dialog.querySelector('.contents-lightbox-status').textContent = `Imagem ${view.index + 1} de ${view.images.length} — carregando.`;
     } catch (error) {
@@ -277,14 +310,19 @@ export function createContentsGallery({ page, rootHeading } = {}) {
 
   function showLightboxFailure(message, expectedGeneration) {
     if (!opened || !dialog || expectedGeneration !== imageGeneration) return;
-    const failure = ++imageFailureGeneration;
+    const view = opened;
+    const image = view.images[view.index];
+    const recovery = recoveryFor(view.dto, image);
     const status = dialog.querySelector('.contents-lightbox-status');
     status.textContent = message;
+    if (recovery.forcedAttempted) {
+      appendReloadAction(status, recovery, view.context, 'contents-lightbox-reload');
+      return;
+    }
     const retry = element(document, 'button', 'contents-lightbox-retry', 'Tentar novamente');
     retry.type = 'button'; retry.tabIndex = 0;
     retry.addEventListener('click', () => {
-      if (!opened || expectedGeneration !== imageGeneration || retriedImageFailures.has(failure)) return;
-      retriedImageFailures.add(failure);
+      if (!opened || expectedGeneration !== imageGeneration || recovery.forcedAttempted) return;
       void loadCurrentImage(true, expectedGeneration);
     });
     status.append(retry);
@@ -320,6 +358,7 @@ export function createContentsGallery({ page, rootHeading } = {}) {
   async function open(view = {}) {
     const { dto, images, index = 0, opener, lease, context } = view;
     if (disposed || !Array.isArray(images) || !images.length || !lease) return;
+    bindRecoveryContext(context);
     const targetIndex = Number.isInteger(index) ? (index % images.length + images.length) % images.length : 0;
     try {
       await lease.ensureFresh();
@@ -340,6 +379,7 @@ export function createContentsGallery({ page, rootHeading } = {}) {
 
   function mount({ dto, images, host, lease, context } = {}) {
     if (disposed || !host || !Array.isArray(images)) return;
+    bindRecoveryContext(context);
     createDialog();
     const list = element(document, 'ol', 'contents-gallery-list');
     const status = element(document, 'p', 'contents-gallery-status');
@@ -363,24 +403,28 @@ export function createContentsGallery({ page, rootHeading } = {}) {
       else figure.append(button);
       item.append(figure);
       list.append(item);
-      const record = { image, button, thumbnail, index, failureGeneration: 0, lastRetriedGeneration: 0,
-        retryButton: null, failureStatus: null };
+      const record = { image, button, thumbnail, index, retryButton: null, failureStatus: null,
+        loadHandler: null, errorHandler: null };
       gallery.items.push(record);
       button.addEventListener('click', () => {
         void open({ dto, images, index, opener: button, lease, context });
       });
-      thumbnail.addEventListener('error', () => {
+      record.errorHandler = () => {
+        if (disposed || !contextIsLive(context)) return;
         thumbnail.removeAttribute('src');
         button.setAttribute('aria-label', `Imagem ${index + 1} de ${images.length}: ${image.alt}. Não foi possível carregar.`);
         showThumbnailFailure(gallery, record, figure, `Não foi possível carregar a imagem ${index + 1} de ${images.length}.`);
-      });
-      thumbnail.addEventListener('load', () => {
+      };
+      record.loadHandler = () => {
+        if (disposed || !contextIsLive(context)) return;
         record.retryButton?.remove();
         record.failureStatus?.remove();
         record.retryButton = null;
         record.failureStatus = null;
         button.setAttribute('aria-label', `Abrir imagem ${index + 1} de ${images.length} — ${image.alt}`);
-      });
+      };
+      thumbnail.addEventListener('error', record.errorHandler);
+      thumbnail.addEventListener('load', record.loadHandler);
     });
     galleries.push(gallery);
     host.replaceChildren(list, status);
@@ -388,11 +432,17 @@ export function createContentsGallery({ page, rootHeading } = {}) {
   }
 
   async function prepareThumbnail(gallery, record, force = false) {
+    const recovery = recoveryFor(gallery.dto, record.image);
+    if (force) {
+      if (recovery.forcedAttempted) return false;
+      recovery.forcedAttempted = true;
+    }
     try {
       await gallery.lease.ensureFresh(force ? { force: true } : {});
       if (disposed || gallery.context?.signal?.aborted || (gallery.context?.isCurrent && !gallery.context.isCurrent())
         || !gallery.lease.isPrepared() || !record.thumbnail.isConnected) return false;
-      record.thumbnail.setAttribute('src', assetURL(gallery.dto, record.image.asset_id));
+      const url = assetURL(gallery.dto, record.image.asset_id);
+      if (record.thumbnail.getAttribute('src') !== url) record.thumbnail.setAttribute('src', url);
       return true;
     } catch (error) {
       if (error?.name !== 'AbortError' && !disposed && record.thumbnail.isConnected) {
@@ -405,19 +455,25 @@ export function createContentsGallery({ page, rootHeading } = {}) {
 
   function showThumbnailFailure(gallery, record, figure, message) {
     if (!figure || disposed) return;
-    record.failureGeneration += 1;
     record.failureStatus?.remove();
     record.retryButton?.remove();
     const status = element(document, 'p', 'contents-gallery-image-status', message);
     status.setAttribute('role', 'status');
     record.failureStatus = status;
+    const recovery = recoveryFor(gallery.dto, record.image);
+    if (recovery.forcedAttempted) {
+      appendReloadAction(status, recovery, gallery.context, 'contents-gallery-reload');
+      figure.append(status);
+      return;
+    }
     const retry = element(document, 'button', 'contents-media-retry', 'Tentar novamente');
     retry.type = 'button'; retry.tabIndex = 0;
-    const failure = record.failureGeneration;
     retry.addEventListener('click', event => {
       event.stopPropagation?.();
-      if (record.lastRetriedGeneration === failure) return;
-      record.lastRetriedGeneration = failure;
+      if (recovery.forcedAttempted) {
+        showThumbnailFailure(gallery, record, figure, message);
+        return;
+      }
       void prepareThumbnail(gallery, record, true);
     });
     record.retryButton = retry;
@@ -425,6 +481,7 @@ export function createContentsGallery({ page, rootHeading } = {}) {
   }
 
   function prepare(descriptor, lease, context) {
+    bindRecoveryContext(context);
     const gallery = galleries.find(candidate => candidate.dto === descriptor.dto && candidate.list.parentNode
       && candidate.images === descriptor.images);
     if (!gallery) return;
@@ -441,6 +498,8 @@ export function createContentsGallery({ page, rootHeading } = {}) {
     unregister = null;
     for (const gallery of galleries) {
       for (const record of gallery.items) {
+        record.thumbnail.removeEventListener('load', record.loadHandler);
+        record.thumbnail.removeEventListener('error', record.errorHandler);
         record.thumbnail.onload = null;
         record.thumbnail.onerror = null;
         record.thumbnail.removeAttribute('src');
@@ -450,6 +509,7 @@ export function createContentsGallery({ page, rootHeading } = {}) {
       gallery.status.remove();
     }
     galleries.length = 0;
+    assetRecoveries.clear();
     dialog?.remove();
     dialog = null;
   }

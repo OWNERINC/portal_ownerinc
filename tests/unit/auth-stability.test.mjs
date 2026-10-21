@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const authSource = await readFile(new URL('../../public/js/auth.js', import.meta.url), 'utf8');
+const mediaSessionSource = await readFile(new URL('../../public/js/portal-contents/media-session.js', import.meta.url), 'utf8');
 const shellSource = await readFile(new URL('../../public/js/auth-shell.js', import.meta.url), 'utf8');
 const contentLengthSource = await readFile(new URL('../../public/js/content-length.js', import.meta.url), 'utf8').catch(() => '');
 const snapshotKey = 'ownerinc-auth-snapshot';
@@ -186,6 +187,28 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
   };
 }
 
+async function connectRealMediaCoordinator(h) {
+  h.context.clearTimeout = clearTimeout;
+  h.context.AbortController = AbortController;
+  const source = mediaSessionSource.replace(/^import[^\n]*\n/gmu, '').replace(/^export /gmu, '');
+  vm.runInContext(`${source}\nObject.assign(globalThis, { configureContentsMediaSession, acquireContentsMediaLease, clearContentsMediaSession, invalidateContentsMediaSession });`,
+    h.context, { filename: 'public/js/portal-contents/media-session.js' });
+  h.context.configureContentsMediaSession(h.mediaConfigurations[0]);
+  return {
+    acquire: h.context.acquireContentsMediaLease,
+    clear: h.context.clearContentsMediaSession,
+    invalidate: h.context.invalidateContentsMediaSession,
+  };
+}
+
+async function waitForCondition(predicate, label) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (predicate()) return;
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  throw new Error(`${label} did not occur`);
+}
+
 test('early shell retains old same-account navigation, but rejects legacy, mismatched and signed-out snapshots', () => {
   const valid = harness({ loadModule: false });
   assert.equal(valid.document.documentElement.dataset.authSnapshot, 'true');
@@ -258,6 +281,80 @@ test('media coordinator receives authenticated issue, raw bodyless clear transpo
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.api.getContentsIdentity().validated, true);
   assert.equal(h.signouts, 0);
+});
+
+test('authenticatedFetch strips and signals raw transport settlement before terminal 401/403 handling', async () => {
+  for (const [status, body] of [[401, {}], [403, {}]]) {
+    const events = [];
+    let rawOptions;
+    const h = harness({ fetchImpl: (_path, options) => {
+      rawOptions = options;
+      return response(body, status);
+    } });
+    await assert.rejects(h.api.authenticatedFetch('/api/users/me', {
+      authErrorBodyLimit: CONTENTS_AUTH_BODY_LIMIT,
+      onRawTransportSettled: metadata => {
+        events.push(`raw:${metadata.status}`);
+        assert.equal(h.mediaClearCalls.length, 0, 'the raw boundary precedes centralized logout clearing');
+      },
+    }), error => error.status === status);
+    assert.equal(Object.hasOwn(rawOptions, 'onRawTransportSettled'), false,
+      'the private callback is not forwarded to native fetch');
+    assert.deepEqual(events, [`raw:${status}`]);
+    assert.equal(h.mediaClearCalls.length, 1);
+    assert.equal(h.signouts, 1);
+  }
+
+  const settled = [];
+  let rawOptions;
+  const offline = harness({ fetchImpl: (_path, options) => {
+    rawOptions = options;
+    return Promise.reject(new TypeError('offline'));
+  } });
+  await assert.rejects(offline.api.authenticatedFetch('/api/contents/media-session', {
+    onRawTransportSettled: metadata => settled.push(metadata.status),
+  }), /offline/u);
+  assert.deepEqual(settled, [null], 'transport errors also produce one status-only settlement event');
+  assert.equal(Object.hasOwn(rawOptions, 'onRawTransportSettled'), false);
+});
+
+test('real media issue and logout clear settle without a centralized-auth wait cycle', async () => {
+  for (const status of [401, 403, 'expired-token']) {
+    const issues = [];
+    const clears = [];
+    const h = harness({ fetchImpl: (path, options = {}) => {
+      if (path === '/api/contents/media-session' && options.method === 'POST') {
+        const item = deferred(); issues.push(item); return item.promise;
+      }
+      if (path === '/api/contents/media-session' && options.method === 'DELETE') {
+        const item = deferred(); clears.push(item); return item.promise;
+      }
+      return response(userDoc('a'));
+    } });
+    await h.api.getCurrentUserDoc();
+    if (status === 'expired-token') {
+      h.auth.currentUser.getIdToken = async () => { throw Object.assign(new Error('expired'), { code: 'auth/user-token-expired' }); };
+    }
+    const media = await connectRealMediaCoordinator(h);
+    const lease = media.acquire({ signal: new AbortController().signal, isCurrent: () => true });
+    const issuing = lease.ensureFresh();
+    const issueRejected = assert.rejects(issuing, error => error.name === 'AbortError');
+    if (status !== 'expired-token') {
+      await waitForCondition(() => issues.length === 1, 'authenticated media POST');
+      const deniedBody = status === 403 ? { reason: 'account-disabled' } : {};
+      issues[0].resolve(response(deniedBody, status));
+    }
+    await waitForCondition(() => clears.length === 1, 'the first raw media clear');
+    clears[0].resolve(new Response(null, { status: 204 }));
+    await waitForCondition(() => clears.length === 2, 'the post-settlement media clear');
+    clears[1].resolve(new Response(null, { status: 204 }));
+    await settleWithin(issueRejected, `${status} media issue`);
+
+    assert.equal(h.signouts, 1, 'centralized terminal auth handling still signs out after both clears');
+    assert.equal(clears.length, 2, 'the late-cookie barrier remains a double DELETE');
+    assert.ok(h.redirects.some(url => url.includes('login.html')));
+    lease.release();
+  }
 });
 
 test('logout clears media and revokes editorial state together; a failed clear retains retry and blocks signOut', async () => {

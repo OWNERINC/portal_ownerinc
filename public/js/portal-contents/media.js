@@ -32,12 +32,23 @@ function visibleStatus(document, resource, message, { retry = false, action = nu
     reload ? 'Recarregar conteúdo' : 'Tentar novamente');
   button.type = 'button'; button.tabIndex = 0;
   const click = () => {
-    if (reload) resource.context.onReload?.();
+    if (reload) {
+      if (resource.reloadCalled || !canReloadContext(resource.context)) return;
+      resource.reloadCalled = true;
+      button.disabled = true;
+      try { void Promise.resolve(resource.context.onReload()).catch(() => {}); }
+      catch { /* Reload navigation cannot escape a disposed media event handler. */ }
+    }
     else action?.();
   };
   button.addEventListener('click', click);
   resource.cleanup.push(() => button.removeEventListener('click', click));
   status.append(button);
+}
+
+function canReloadContext(context) {
+  if (typeof context?.onReload !== 'function' || context.signal?.aborted) return false;
+  try { return !context.isCurrent || context.isCurrent(); } catch { return false; }
 }
 
 function removeStatus(resource) {
@@ -66,6 +77,7 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   const disposed = { value: false };
   const listeners = [];
   const resources = [];
+  const embeds = [];
   const galleryDescriptors = [];
   let lease = null;
 
@@ -74,13 +86,15 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     listeners.push(() => node.removeEventListener(type, callback));
   };
   const resourceFor = descriptor => ({ descriptor, host: descriptor.host, context, lease, cleanup: [], statusNode: null,
-    element: null, generation: 0, retryUsed: false, source: '', playingIntent: false, pendingRestore: null });
+    element: null, generation: 0, retryUsed: false, reloadCalled: false, source: '', playingIntent: false,
+    pauseCause: null, pendingRestore: null });
 
   function live(resource) { return contextIsCurrent(context, lease, disposed); }
 
   function setImageSource(resource) {
     if (!live(resource) || !resource.element || !lease.isPrepared()) return;
     const url = assetURL(resource.descriptor.dto, resource.descriptor.assetId);
+    if (resource.element.getAttribute('src') === url) { removeStatus(resource); return; }
     resource.source = url;
     appendNativeSource(resource.element, url);
     removeStatus(resource);
@@ -99,10 +113,9 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     const failureGeneration = resource.generation;
     void lease.ensureFresh({ force: true }).then(() => {
       if (!live(resource) || failureGeneration !== resource.generation) return;
-      resource.element.removeAttribute('src');
-      setImageSource(resource);
+      if (!resource.element.hasAttribute('src')) setImageSource(resource);
     }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource)) {
+      if (error?.name !== 'AbortError' && live(resource) && failureGeneration === resource.generation) {
         visibleStatus(document, resource, 'Não foi possível preparar a imagem.', { retry: true, action: () => recoverImage(resource) });
       }
     });
@@ -120,6 +133,10 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
       if (disposed.value) return;
       resource.generation += 1;
       image.removeAttribute('src');
+      if (resource.retryUsed) {
+        showPersistentFailure(resource);
+        return;
+      }
       visibleStatus(document, resource, 'Não foi possível carregar esta imagem.', {
         retry: true,
         action: () => recoverImage(resource),
@@ -137,8 +154,12 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     if (!live(resource) || !resource.element || !lease.isPrepared()) return;
     const video = resource.element;
     const url = assetURL(resource.descriptor.dto, resource.descriptor.assetId);
+    if (!preserveTime && video.getAttribute('src') === url) { removeStatus(resource); return; }
     resource.source = url;
-    if (preserveTime) video.removeAttribute('src');
+    if (preserveTime) {
+      video.removeAttribute('src');
+      if (resource.pendingRestore?.generation === resource.generation) resource.pendingRestore.sourceReady = true;
+    }
     appendNativeSource(video, url);
     if (preserveTime) video.load();
     removeStatus(resource);
@@ -149,10 +170,14 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     const video = resource.element;
     try {
       await Promise.resolve(video.play());
-      if (!live(resource) || generation !== resource.generation) { video.pause(); return; }
-      lease.setPlaying(true);
+      if (!live(resource)) { pauseVideo(resource, 'stale'); return; }
+      // A newer user action owns the element now. Do not let an older play()
+      // completion pause or otherwise overwrite that newer intent.
+      if (generation !== resource.generation) return;
+      lease.setPlaying(true, resource);
     } catch {
-      lease.setPlaying(false);
+      if (!live(resource) || generation !== resource.generation) return;
+      lease.setPlaying(false, resource);
       visibleStatus(document, resource, 'A reprodução não pôde ser iniciada. Use os controles para tentar novamente.', {
         retry: true,
         action: () => { void resumeVideo(resource, resource.generation); },
@@ -164,15 +189,16 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     const video = resource.element;
     const token = ++resource.generation;
     resource.playingIntent = intendedPlaying;
-    video.pause();
-    lease.setPlaying(false);
+    resource.pendingRestore = null;
+    pauseVideo(resource, 'recovery');
+    lease.setPlaying(false, resource);
     void lease.ensureFresh().then(() => {
       if (!live(resource) || token !== resource.generation) return;
       removeStatus(resource);
       if (desiredTime !== null) video.currentTime = clampTime(desiredTime, video.duration);
       if (resource.playingIntent) void resumeVideo(resource, token);
     }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource)) {
+      if (error?.name !== 'AbortError' && live(resource) && token === resource.generation) {
         visibleStatus(document, resource, 'A sessão de mídia expirou. Tente novamente para continuar.', {
           retry: true,
           action: () => renewForVideoAction(resource, resource.playingIntent, desiredTime),
@@ -186,24 +212,32 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     const savedTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
     const resume = !video.paused || resource.playingIntent;
     if (resource.retryUsed) {
-      video.pause(); lease.setPlaying(false); showPersistentFailure(resource); return;
+      resource.generation += 1;
+      resource.playingIntent = false;
+      resource.pendingRestore = null;
+      pauseVideo(resource, 'failure'); lease.setPlaying(false, resource); showPersistentFailure(resource); return;
     }
     resource.retryUsed = true;
     const token = ++resource.generation;
-    resource.pendingRestore = { time: savedTime, resume, generation: token };
+    resource.pendingRestore = { time: savedTime, resume, generation: token, sourceReady: false };
     resource.playingIntent = resume;
-    video.pause(); lease.setPlaying(false);
+    pauseVideo(resource, 'recovery'); lease.setPlaying(false, resource);
     video.removeAttribute('src');
     video.load();
     void lease.ensureFresh({ force: true }).then(() => {
       if (!live(resource) || token !== resource.generation) return;
-      setVideoSource(resource, { preserveTime: true });
+      if (!video.hasAttribute('src')) setVideoSource(resource, { preserveTime: true });
       // Native loadedmetadata performs the clamped restore. No autoplay is introduced.
     }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource)) {
+      if (error?.name !== 'AbortError' && live(resource) && token === resource.generation) {
         visibleStatus(document, resource, 'Não foi possível recuperar este vídeo.', { retry: true, action: () => recoverVideo(resource) });
       }
     });
+  }
+
+  function pauseVideo(resource, cause) {
+    resource.pauseCause = cause;
+    resource.element?.pause?.();
   }
 
   function buildVideo(descriptor) {
@@ -220,15 +254,34 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     descriptor.host.replaceChildren(video);
     listen(video, 'play', () => {
       if (disposed.value) return;
+      resource.pauseCause = null;
       resource.playingIntent = true;
       if (!lease.isPrepared() || lease.needsRenewal?.()) {
         renewForVideoAction(resource, true);
         return;
       }
-      lease.setPlaying(true);
+      lease.setPlaying(true, resource);
     });
-    listen(video, 'pause', () => { if (video.paused) lease.setPlaying(false); });
-    listen(video, 'ended', () => { resource.playingIntent = false; lease.setPlaying(false); });
+    listen(video, 'pause', () => {
+      if (!video.paused) return;
+      const cause = resource.pauseCause;
+      resource.pauseCause = null;
+      if (cause === 'recovery' || cause === 'stale') {
+        lease.setPlaying(false, resource);
+        return;
+      }
+      resource.generation += 1;
+      resource.pendingRestore = null;
+      resource.playingIntent = false;
+      lease.setPlaying(false, resource);
+    });
+    listen(video, 'ended', () => {
+      resource.generation += 1;
+      resource.pendingRestore = null;
+      resource.playingIntent = false;
+      resource.pauseCause = null;
+      lease.setPlaying(false, resource);
+    });
     listen(video, 'seeking', () => {
       if (disposed.value || resource.pendingRestore || resource.restoring) return;
       if (!lease.isPrepared() || lease.needsRenewal?.()) {
@@ -239,7 +292,7 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     listen(video, 'error', () => { if (!disposed.value && video.hasAttribute('src')) recoverVideo(resource); });
     listen(video, 'loadedmetadata', () => {
       const restore = resource.pendingRestore;
-      if (!restore || restore.generation !== resource.generation || !live(resource)) return;
+      if (!restore || !restore.sourceReady || restore.generation !== resource.generation || !live(resource)) return;
       resource.pendingRestore = null;
       resource.retryUsed = false;
       resource.restoring = true;
@@ -254,6 +307,10 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   function exposePDF(resource) {
     if (!live(resource) || !lease.isPrepared()) return;
     const url = assetURL(resource.descriptor.dto, resource.descriptor.assetId);
+    if (resource.anchors.every(anchor => anchor.getAttribute('href') === url)) {
+      removeStatus(resource);
+      return;
+    }
     resource.source = url;
     for (const anchor of resource.anchors) {
       anchor.setAttribute('href', url);
@@ -350,17 +407,40 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     link.setAttribute('target', '_blank');
     link.setAttribute('rel', 'noopener noreferrer');
     descriptor.host.replaceChildren(frame, link);
+    embeds.push({ iframe, frame, link });
+  }
+
+  function activatePreparedResource(resource) {
+    if (!live(resource)) return;
+    if (resource.descriptor.kind === 'image' && !resource.element.hasAttribute('src')) setImageSource(resource);
+    else if (resource.descriptor.kind === 'video' && !resource.element.hasAttribute('src')) {
+      const restore = resource.pendingRestore;
+      setVideoSource(resource, { preserveTime: Boolean(restore && restore.generation === resource.generation) });
+    } else if (resource.descriptor.kind === 'pdf') exposePDF(resource);
+    else removeStatus(resource);
+  }
+
+  function activatePreparedResources() {
+    for (const resource of resources) activatePreparedResource(resource);
+    for (const descriptor of galleryDescriptors) gallery?.prepare?.(descriptor, lease, context);
   }
 
   if (native.length) {
     lease = acquireContentsMediaLease({ signal: context.signal, isCurrent: context.isCurrent,
       onStatus: status => {
+        if (status === 'ready') {
+          activatePreparedResources();
+          return;
+        }
         for (const resource of resources) {
-          if (status === 'renewing' || status === 'ready') continue;
+          if (status === 'renewing') continue;
           if (status === 'expired') {
             if (resource.descriptor.kind === 'video') {
-              resource.element.pause();
-              lease.setPlaying(false);
+              resource.generation += 1;
+              resource.pendingRestore = null;
+              resource.playingIntent = false;
+              pauseVideo(resource, 'expired');
+              lease.setPlaying(false, resource);
             }
             if (resource.descriptor.kind === 'pdf') {
               for (const anchor of resource.anchors) {
@@ -380,9 +460,7 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
                 retry: true,
                 action: () => lease.ensureFresh({ force: true }).then(() => {
                   if (!live(resource)) return;
-                  if (resource.descriptor.kind === 'image') setImageSource(resource);
-                  else if (resource.descriptor.kind === 'video') setVideoSource(resource);
-                  else if (resource.descriptor.kind === 'pdf') exposePDF(resource);
+                  activatePreparedResources();
                 }).catch(() => {}),
               });
           }
@@ -405,12 +483,7 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   if (lease) {
     void lease.ensureFresh().then(() => {
       if (disposed.value || !contextIsCurrent(context, lease, disposed)) return;
-      for (const resource of resources) {
-        if (resource.descriptor.kind === 'image') setImageSource(resource);
-        else if (resource.descriptor.kind === 'video') setVideoSource(resource);
-        else if (resource.descriptor.kind === 'pdf') exposePDF(resource);
-      }
-      for (const descriptor of galleryDescriptors) gallery.prepare(descriptor, lease, context);
+      activatePreparedResources();
     }).catch(error => {
       if (error?.name === 'AbortError' || disposed.value || context.signal?.aborted) return;
       for (const resource of resources) {
@@ -419,9 +492,7 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
           retry: true,
           action: () => lease.ensureFresh({ force: true }).then(() => {
             if (!contextIsCurrent(context, lease, disposed)) return;
-            if (resource.descriptor.kind === 'image') setImageSource(resource);
-            else if (resource.descriptor.kind === 'video') setVideoSource(resource);
-            else if (resource.descriptor.kind === 'pdf') exposePDF(resource);
+            activatePreparedResources();
           }).catch(() => {}),
         });
       }
@@ -436,7 +507,7 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
       for (const remove of resource.cleanup.splice(0)) remove();
       if (resource.descriptor.kind === 'video' && resource.element) {
         resource.element.pause();
-        lease?.setPlaying(false);
+        lease?.setPlaying(false, resource);
         resource.element.removeAttribute('src');
         resource.element.replaceChildren();
         resource.element.load();
@@ -447,6 +518,12 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
         for (const anchor of resource.anchors || []) anchor.removeAttribute('href');
       }
       removeStatus(resource);
+    }
+    for (const embed of embeds.splice(0)) {
+      embed.iframe.removeAttribute('src');
+      embed.iframe.remove();
+      embed.frame.remove();
+      embed.link.remove();
     }
     gallery?.close?.({ restoreFocus: false });
     lease?.release();

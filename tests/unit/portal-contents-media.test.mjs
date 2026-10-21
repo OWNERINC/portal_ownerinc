@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createContentsHarness, createContentsClock, createContentsBroadcastBus } from '../helpers/portal-contents-harness.mjs';
 import { ASSET_ID, PAGE_ID, REVISION_ID, clone, pageFixture } from '../helpers/portal-contents-fixtures.mjs';
-import { TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
+import { TestEvent, deferred, drain } from '../helpers/frontend-feedback-harness.mjs';
 
 const ok = () => new Response(null, { status: 204 });
 const errorResponse = (status, headers = {}) => new Response(null, { status, headers });
@@ -98,6 +98,26 @@ test('hidden paused views do not renew proactively, but hidden playing video doe
   assert.equal(playing.pendingIssues.length, 2);
 });
 
+test('two playing videos in one lease keep hidden proactive renewal active when only one pauses', async () => {
+  const h = await createContentsHarness({ clock: createContentsClock() });
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'video', asset_id: ASSET_ID, title: 'Aula A' },
+    { type: 'video', asset_id: ASSET_ID, title: 'Aula B' },
+  ] }), {}, {});
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: contextFor(new AbortController().signal) });
+  h.pendingIssues[0].resolve(ok()); await drain();
+  const [videoA, videoB] = root.querySelectorAll('video');
+  videoA.paused = false; videoA.dispatchEvent(new TestEvent('play'));
+  videoB.paused = false; videoB.dispatchEvent(new TestEvent('play'));
+  videoB.paused = true; videoB.dispatchEvent(new TestEvent('pause'));
+  h.visibility(true);
+  await h.advance(240_000);
+  assert.equal(h.pendingIssues.length, 2, 'pausing B does not unregister A from the playing-resource set');
+  h.pendingIssues[1].resolve(ok()); await drain();
+  activation.dispose();
+});
+
 test('visibility, focus and online recovery recheck an overdue visible lease', async () => {
   const h = await createContentsHarness({ clock: createContentsClock() });
   const { lease } = await acquire(h);
@@ -119,6 +139,38 @@ test('visibility, focus and online recovery recheck an overdue visible lease', a
   assert.equal(h.pendingIssues.length, 4);
   h.pendingIssues[3].resolve(ok());
   await drain();
+});
+
+test('visibility recovery reissues a lease whose expiry was cleared while hidden, but not an old identity', async () => {
+  const h = await createContentsHarness({ clock: createContentsClock() });
+  const { lease } = await acquire(h);
+  const initial = lease.ensureFresh();
+  h.pendingIssues[0].resolve(ok()); await initial;
+  h.visibility(true);
+  await h.advance(300_000);
+  assert.equal(lease.isPrepared(), false);
+  assert.equal(h.pendingIssues.length, 1, 'a hidden paused lease does not renew on its timer');
+  h.visibility(false);
+  assert.equal(h.pendingIssues.length, 2, 'visible recovery reissues after hidden expiry cleared expiresAt');
+  h.pendingIssues[1].resolve(ok()); await drain();
+  h.visibility(true);
+  await h.advance(300_000);
+  h.notifyIdentity({ uid: 'user-b', generation: 2, validated: false });
+  h.visibility(false);
+  h.window.dispatchEvent(new TestEvent('focus'));
+  assert.equal(h.pendingIssues.length, 2, 'old identity generations cannot issue on visibility or focus');
+  lease.release();
+
+  const disposed = await createContentsHarness({ clock: createContentsClock() });
+  const disposedLease = (await acquire(disposed)).lease;
+  const prepared = disposedLease.ensureFresh();
+  disposed.pendingIssues[0].resolve(ok()); await prepared;
+  disposedLease.release();
+  disposed.visibility(true);
+  await disposed.advance(300_000);
+  disposed.visibility(false);
+  disposed.window.dispatchEvent(new TestEvent('focus'));
+  assert.equal(disposed.pendingIssues.length, 1, 'disposed views cannot reissue even after the hidden lease expires');
 });
 
 test('Retry-After seconds is a minimum, retry delays are bounded, and online starts a stopped sequence', async () => {
@@ -216,6 +268,27 @@ test('late same-tab POST completion after DELETE requires a second DELETE before
   assert.equal(h.pendingIssues.length, 2);
   h.pendingIssues[1].resolve(ok());
   await nextIssue;
+});
+
+test('clear follows raw issue settlement without waiting for centralized auth handling to finish', async () => {
+  const h = await createContentsHarness();
+  const { lease } = await acquire(h);
+  const issue = lease.ensureFresh();
+  const issueAssertion = assert.rejects(issue, { name: 'AbortError' });
+  h.pendingIssues[0].ignoreAbort = true;
+  const clear = h.modules.mediaSession.clearContentsMediaSession();
+  assert.equal(h.pendingClears.length, 1);
+  h.pendingClears[0].resolve(ok());
+  await drain();
+  assert.equal(typeof h.pendingIssues[0].options.onRawTransportSettled, 'function',
+    'the coordinator exposes a private settlement seam for authenticatedFetch');
+  h.pendingIssues[0].options.onRawTransportSettled({ status: 204 });
+  await drain();
+  assert.equal(h.pendingClears.length, 2, 'the second DELETE can run while the authenticated request promise remains pending');
+  h.pendingClears[1].resolve(ok());
+  await clear;
+  h.pendingIssues[0].resolve(ok());
+  await issueAssertion;
 });
 
 test('aborted in-flight POST is followed by a second DELETE because abort cannot prove non-issuance', async () => {
@@ -340,6 +413,74 @@ test('image failure keeps accessible alt and caption and offers bounded recovery
   activation.dispose();
 });
 
+test('a repeatedly failing native image offers one current-view content reload', async () => {
+  const h = await createContentsHarness();
+  let reloadCalls = 0;
+  const viewContext = { ...contextFor(new AbortController().signal), onReload() { reloadCalls += 1; } };
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'image', asset_id: ASSET_ID, alt: 'Imagem persistente', caption: 'Legenda da imagem' },
+  ] }), {}, viewContext);
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: viewContext });
+  h.pendingIssues[0].resolve(ok()); await drain();
+  const image = root.querySelector('.contents-native-image');
+  image.dispatchEvent(new TestEvent('error'));
+  root.querySelector('.contents-media-retry').click();
+  h.pendingIssues[1].resolve(ok()); await drain();
+  image.dispatchEvent(new TestEvent('error'));
+
+  const reload = root.querySelector('.contents-media-reload');
+  assert.ok(reload);
+  assert.equal(reload.textContent, 'Recarregar conteúdo');
+  viewContext.isCurrent = () => false;
+  reload.click();
+  assert.equal(reloadCalls, 0, 'a stale media view cannot reload content');
+  viewContext.isCurrent = () => true;
+  reload.click(); reload.click();
+  assert.equal(reloadCalls, 1, 'the current activation invokes onReload at most once');
+  activation.dispose();
+});
+
+test('automatic recovery activates pending image, gallery, video and PDF once, without resetting an active video', async () => {
+  const h = await createContentsHarness({ clock: createContentsClock() });
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'image', asset_id: ASSET_ID, alt: 'Capa de aula' },
+    { type: 'gallery', images: [
+      { asset_id: ASSET_ID, alt: 'Miniatura' },
+      { asset_id: '018f47a2-7b3c-7a11-8a2c-000000000001', alt: 'Segunda miniatura' },
+    ] },
+    { type: 'video', asset_id: ASSET_ID, title: 'Aula' },
+    { type: 'pdf', asset_id: ASSET_ID, title: 'Material' },
+  ] }), {}, contextFor(new AbortController().signal));
+  const gallery = h.modules.gallery.createContentsGallery({ page: h.page, rootHeading: () => view.heading });
+  const activation = h.modules.media.activateContentsMedia(view.media,
+    { context: contextFor(new AbortController().signal), gallery });
+  h.pendingIssues[0].resolve(errorResponse(503)); await drain();
+  await h.advance(5_000);
+  assert.equal(h.pendingIssues.length, 2, 'the coordinator performs its bounded automatic retry');
+  h.pendingIssues[1].resolve(ok()); await drain();
+
+  const image = root.querySelector('.contents-native-image');
+  const thumbnail = root.querySelector('.contents-gallery-thumbnail');
+  const video = root.querySelector('video');
+  const pdf = root.querySelector('.contents-pdf-open');
+  assert.equal(image.hasAttribute('src'), true);
+  assert.equal(thumbnail.hasAttribute('src'), true);
+  assert.equal(video.hasAttribute('src'), true);
+  assert.equal(pdf.hasAttribute('href'), true);
+  assert.equal(root.querySelectorAll('.contents-gallery-thumbnail').length, 2, 'ready notifications do not duplicate gallery markup');
+
+  video.currentTime = 37;
+  const source = video.getAttribute('src');
+  const renewal = activation.lease.ensureFresh({ force: true });
+  assert.equal(h.pendingIssues.length, 3);
+  h.pendingIssues[2].resolve(ok()); await renewal;
+  assert.equal(video.getAttribute('src'), source, 'a repeated ready notification does not replace an active video source');
+  assert.equal(video.currentTime, 37, 'a repeated ready notification does not reset playback position');
+  activation.dispose(); gallery.dispose();
+});
+
 test('native video preserves source during renewal, clamps recovery time, handles rejected play and disposes sound', async () => {
   const h = await createContentsHarness({ clock: createContentsClock() });
   const root = h.document.createElement('section'); h.document.body.append(root);
@@ -384,6 +525,89 @@ test('native video preserves source during renewal, clamps recovery time, handle
   assert.equal(video.paused, true);
   assert.equal(video.hasAttribute('src'), false);
   assert.ok(video.loadCount >= 1);
+});
+
+test('user pause clears recovery intent and stale loadedmetadata cannot restore until fresh-source generation', async () => {
+  const h = await createContentsHarness({ clock: createContentsClock() });
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'video', asset_id: ASSET_ID, title: 'Aula com pausa manual' },
+  ] }), {}, {});
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: contextFor(new AbortController().signal) });
+  h.pendingIssues[0].resolve(ok()); await drain();
+  const video = root.querySelector('video');
+
+  video.paused = false;
+  video.dispatchEvent(new TestEvent('play'));
+  video.paused = true;
+  video.dispatchEvent(new TestEvent('pause'));
+  video.currentTime = 18;
+  video.dispatchEvent(new TestEvent('error'));
+  await drain();
+  assert.equal(h.pendingIssues.length, 2);
+  video.dispatchEvent(new TestEvent('loadedmetadata'));
+  assert.equal(video.paused, true, 'a stale metadata event cannot resume before the replacement source is ready');
+
+  h.pendingIssues[1].resolve(ok()); await drain();
+  video.dispatchEvent(new TestEvent('loadedmetadata'));
+  await drain();
+  assert.equal(video.currentTime, 18);
+  assert.equal(video.paused, true, 'a user pause remains authoritative after recovery');
+  activation.dispose();
+});
+
+test('a recovery pause preserves current play intent until matching metadata, then resumes once', async () => {
+  const h = await createContentsHarness({ clock: createContentsClock() });
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'video', asset_id: ASSET_ID, title: 'Aula em recuperação' },
+  ] }), {}, {});
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: contextFor(new AbortController().signal) });
+  h.pendingIssues[0].resolve(ok()); await drain();
+  const video = root.querySelector('video');
+  video.paused = false;
+  video.currentTime = 12;
+  video.dispatchEvent(new TestEvent('play'));
+  video.dispatchEvent(new TestEvent('error'));
+  video.dispatchEvent(new TestEvent('pause'));
+  assert.equal(video.paused, true);
+  h.pendingIssues[1].resolve(ok()); await drain();
+  video.dispatchEvent(new TestEvent('loadedmetadata'));
+  await drain();
+  assert.equal(video.currentTime, 12);
+  assert.equal(video.paused, false, 'the recovery pause did not erase the active play intent');
+  activation.dispose();
+});
+
+test('a stale play promise cannot pause a newer user playback generation', async () => {
+  const h = await createContentsHarness({ clock: createContentsClock() });
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'video', asset_id: ASSET_ID, title: 'Aula com duas intenções' },
+  ] }), {}, {});
+  const activation = h.modules.media.activateContentsMedia(view.media,
+    { context: contextFor(new AbortController().signal) });
+  h.pendingIssues[0].resolve(ok()); await drain();
+  const video = root.querySelector('video');
+  video.paused = false;
+  video.currentTime = 9;
+  video.dispatchEvent(new TestEvent('play'));
+  video.dispatchEvent(new TestEvent('error'));
+  h.pendingIssues[1].resolve(ok()); await drain();
+
+  const pendingPlay = deferred();
+  video.playResult = pendingPlay.promise;
+  video.dispatchEvent(new TestEvent('loadedmetadata'));
+  video.paused = true;
+  video.dispatchEvent(new TestEvent('pause'));
+  video.playResult = null;
+  video.paused = false;
+  video.dispatchEvent(new TestEvent('play'));
+  pendingPlay.resolve();
+  await drain();
+
+  assert.equal(video.paused, false, 'the old play completion cannot pause the newer user playback');
+  activation.dispose();
 });
 
 test('PDF hrefs remain absent until prepared and expired ordinary clicks renew without popup creation', async () => {
@@ -434,6 +658,24 @@ test('embeds are lazy, canonical-provider-only, sandboxed and retain a provider 
   assert.equal(iframe.allowFullscreen, true);
   assert.equal(root.querySelector('.contents-embed-fallback').getAttribute('href'), dto.content_blocks[0].url);
   assert.equal(h.pendingIssues.length, 0, 'approved embeds do not require the private media cookie');
+});
+
+test('embed-only disposal clears and removes its iframe and provider fallback', async () => {
+  const h = await createContentsHarness();
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'embed', provider: 'youtube', url: 'https://www.youtube.com/embed/abcdefghijk', title: 'Apresentação' },
+  ] }), {}, {});
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: contextFor(new AbortController().signal) });
+  const iframe = root.querySelector('iframe');
+  const frame = root.querySelector('.contents-embed');
+  assert.ok(iframe);
+  assert.ok(frame);
+  activation.dispose();
+  assert.equal(iframe.hasAttribute('src'), false);
+  assert.equal(iframe.isConnected, false);
+  assert.equal(frame.isConnected, false);
+  assert.equal(root.querySelector('.contents-embed-fallback'), null);
 });
 
 test('known expiry pauses video, disables PDF, and renewal does not silently resume playback', async () => {

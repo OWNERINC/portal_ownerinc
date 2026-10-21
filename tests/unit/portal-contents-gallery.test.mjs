@@ -7,12 +7,12 @@ import { TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
 const ready = () => new Response(null, { status: 204 });
 const context = () => ({ signal: new AbortController().signal, isCurrent: () => true, onReload() {} });
 
-async function mountGallery(h, contentBlocks) {
+async function mountGallery(h, contentBlocks, viewContext = context()) {
   const root = h.document.createElement('section'); h.document.body.append(root);
   const dto = pageFixture({ content_blocks: contentBlocks });
-  const view = h.modules.reader.renderReader(root, dto, {}, context());
+  const view = h.modules.reader.renderReader(root, dto, {}, viewContext);
   const gallery = h.modules.gallery.createContentsGallery({ page: h.page, rootHeading: () => view.heading });
-  const activation = h.modules.media.activateContentsMedia(view.media, { context: context(), gallery });
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: viewContext, gallery });
   if (h.pendingIssues.length) h.pendingIssues[0].resolve(ready());
   await drain();
   return { root, dto, view, gallery, activation };
@@ -174,7 +174,7 @@ test('gallery image failure is announced and can be bypassed; backdrop requires 
   activation.dispose(); gallery.dispose();
 });
 
-test('thumbnail and lightbox allow one forced retry per fresh image failure generation', async () => {
+test('thumbnail and lightbox allow one forced recovery per asset activation', async () => {
   const h = await createContentsHarness();
   const { root, gallery, activation } = await mountGallery(h, [{ type: 'gallery', images: pair() }]);
   const thumbnail = root.querySelector('.contents-gallery-thumbnail');
@@ -189,26 +189,66 @@ test('thumbnail and lightbox allow one forced retry per fresh image failure gene
   assert.equal(root.querySelector('.contents-media-retry'), null);
 
   thumbnail.dispatchEvent(new TestEvent('error'));
-  retry = root.querySelector('.contents-media-retry');
-  retry.click();
-  assert.equal(h.pendingIssues.length, 3, 'a later failure generation gets its own retry');
-  h.pendingIssues[2].resolve(ready()); await drain();
+  assert.ok(root.querySelector('.contents-gallery-reload'), 'a repeated native failure falls back to full content reload');
+  assert.equal(h.pendingIssues.length, 2, 'a second thumbnail error cannot consume another forced issue');
 
   root.querySelector('[data-contents-gallery-trigger]').click(); await drain();
   const image = h.document.querySelector('.contents-lightbox-image');
   image.onerror();
-  retry = h.document.querySelector('.contents-lightbox-retry');
-  retry.click();
-  assert.equal(h.pendingIssues.length, 4);
-  retry.click();
-  assert.equal(h.pendingIssues.length, 4, 'the same lightbox failure generation is retried at most once');
-  h.pendingIssues[3].resolve(ready()); await drain();
-  image.onerror();
-  retry = h.document.querySelector('.contents-lightbox-retry');
-  retry.click();
-  assert.equal(h.pendingIssues.length, 5, 'a subsequent native image failure can be recovered once');
-  h.pendingIssues[4].resolve(ready()); await drain();
+  assert.ok(h.document.querySelector('.contents-lightbox-reload'), 'lightbox uses the same per-asset recovery record');
+  assert.equal(h.pendingIssues.length, 2);
   activation.dispose(); gallery.dispose();
+});
+
+test('thumbnail and lightbox share one asset recovery budget and offer one validated content reload', async () => {
+  const h = await createContentsHarness();
+  let reloadCalls = 0;
+  const viewContext = { ...context(), onReload() { reloadCalls += 1; } };
+  const { root, gallery, activation } = await mountGallery(h, [{ type: 'gallery', images: pair() }], viewContext);
+  const thumbnail = root.querySelector('.contents-gallery-thumbnail');
+  thumbnail.dispatchEvent(new TestEvent('error'));
+  root.querySelector('.contents-media-retry').click();
+  assert.equal(h.pendingIssues.length, 2);
+  h.pendingIssues[1].resolve(ready()); await drain();
+
+  root.querySelector('[data-contents-gallery-trigger]').click(); await drain();
+  const dialog = h.document.querySelector('dialog[data-page-overlay]');
+  const image = dialog.querySelector('.contents-lightbox-image');
+  image.dispatchEvent(new TestEvent('error'));
+  const reload = dialog.querySelector('.contents-lightbox-reload');
+  assert.ok(reload, 'the repeated native failure offers the content-level recovery');
+  assert.equal(reload.textContent, 'Recarregar conteúdo');
+  assert.equal(h.pendingIssues.length, 2, 'thumbnail recovery suppresses a second forced issue for the same asset');
+  viewContext.isCurrent = () => false;
+  reload.click();
+  assert.equal(reloadCalls, 0, 'stale view contexts cannot invoke a reload callback');
+  viewContext.isCurrent = () => true;
+  reload.click();
+  reload.click();
+  assert.equal(reloadCalls, 1, 'the validated onReload callback runs at most once per activation');
+  activation.dispose(); gallery.dispose();
+});
+
+test('a newly mounted view gets a fresh per-asset recovery budget', async () => {
+  const h = await createContentsHarness();
+  const first = await mountGallery(h, [{ type: 'gallery', images: pair() }]);
+  const firstThumb = first.root.querySelector('.contents-gallery-thumbnail');
+  firstThumb.dispatchEvent(new TestEvent('error'));
+  first.root.querySelector('.contents-media-retry').click();
+  h.pendingIssues[1].resolve(ready()); await drain();
+  firstThumb.dispatchEvent(new TestEvent('error'));
+  assert.ok(first.root.querySelector('.contents-gallery-reload'));
+  first.activation.dispose(); first.gallery.dispose();
+
+  const next = await createContentsHarness();
+  const remount = await mountGallery(next, [{ type: 'gallery', images: pair() }]);
+  const nextThumb = remount.root.querySelector('.contents-gallery-thumbnail');
+  nextThumb.dispatchEvent(new TestEvent('error'));
+  assert.ok(remount.root.querySelector('.contents-media-retry'), 'a new activation can attempt one fresh issuance');
+  remount.root.querySelector('.contents-media-retry').click();
+  assert.equal(next.pendingIssues.length, 2);
+  next.pendingIssues[1].resolve(ready()); await drain();
+  remount.activation.dispose(); remount.gallery.dispose();
 });
 
 test('opening closes the mobile drawer before inerting; route close does not restore focus into departing content', async () => {
@@ -263,9 +303,16 @@ test('repeated gallery mount/dispose leaves one dialog at most and no lightbox D
     const { root, gallery, activation } = await mountGallery(h, [{ type: 'gallery', images: pair() }]);
     root.querySelector('[data-contents-gallery-trigger]').click(); await drain();
     assert.equal(h.document.querySelectorAll('dialog[data-page-overlay]').length, 1);
+    const thumbnail = root.querySelector('.contents-gallery-thumbnail');
+    assert.equal(thumbnail.listeners.get('load')?.length, 1);
+    assert.equal(thumbnail.listeners.get('error')?.length, 1);
     activation.dispose(); gallery.dispose(); root.remove();
     assert.equal(h.document.querySelectorAll('dialog[data-page-overlay]').length, 0);
     assert.equal(h.document.querySelectorAll('dialog img[src]').length, 0);
+    assert.equal(thumbnail.listeners.get('load')?.length, 0, 'dispose removes the exact load listener');
+    assert.equal(thumbnail.listeners.get('error')?.length, 0, 'dispose removes the exact error listener');
+    thumbnail.dispatchEvent(new TestEvent('error'));
+    assert.equal(root.querySelector('.contents-gallery-image-status'), null, 'late detached events cannot mutate disposed gallery DOM');
   }
 });
 
