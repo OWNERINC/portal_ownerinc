@@ -30,7 +30,11 @@
   atualiza `lock_timeout` e `statement_timeout` transaction-local para no máximo o
   tempo restante, sem aumentar o timeout corrente. Os valores expiram com a
   transação; erros operacionais, timeout, abort ou limite excedido retornam 503
-  sanitizado, nunca contagem/lista/categorias parciais.
+  sanitizado, nunca contagem/lista/categorias parciais. O caller também deixa de
+  aguardar `beginTransaction()` quando deadline/abort vencer: retorna 503 e, se o
+  adapter entregar um ID depois, faz rollback uma vez sem iniciar leituras. Isso
+  não cancela `BEGIN` no PostgreSQL; se o adapter nunca resolver, a conexão pode
+  permanecer ocupada até o driver terminar.
 - **Elegibilidade e paginação:** o total e os offsets contam somente páginas que
   passam status publicado, Version publicada salva exata, igualdade dos campos
   públicos atuais, projeção e validação integral de referências de categoria/mídia.
@@ -41,16 +45,21 @@
   conserva os microssegundos nativos do PostgreSQL e não é arredondado via
   JavaScript `Date`, inclusive entre batches. Detalhe mantém comportamento
   fail-closed se houver drift.
-- **Consistência entre batches:** catálogo, categorias e disponibilidade abrem um
-  holder `REPEATABLE READ, READ ONLY` de até 4 s, sem `CMS_REFERENCE_LOCK`, exportam
-  um snapshot PostgreSQL e fazem rollback/liberam o holder ao final. Cada batch
-  importa o mesmo snapshot antes de ler dados, adquire seu próprio
-  `CMS_REFERENCE_LOCK` e o libera no fim; portanto publicação/despublicação durante
-  o scan não aparece apenas nos batches posteriores. Disponibilidade conserva o
-  early exit na primeira página elegível e não calcula count. O holder retém um
-  horizonte MVCC enquanto aberto e pode atrasar vacuum de tuplas mortas: monitorar
-  transações antigas/autovacuum, especialmente em leitura próxima do limite, e
-  confirmar encerramento do holder após falha.
+- **Consistência do snapshot e locks:** catálogo, detalhe publicado, categorias,
+  disponibilidade e JSON de prévia editorial abrem um holder `REPEATABLE READ,
+  READ ONLY` de até 4 s, sem `CMS_REFERENCE_LOCK`, exportam um snapshot PostgreSQL
+  e fazem rollback/liberam o holder ao final. Cada transação de projeção importa o
+  mesmo snapshot antes de ler dados, instala timeouts locais finitos antes da
+  importação e não adquire `CMS_REFERENCE_LOCK` nem `FOR SHARE`. Publicação,
+  despublicação ou mutação durante um scan não aparece apenas nas operações/batches
+  posteriores; o resultado representa o estado MVCC do snapshot. Disponibilidade
+  conserva early exit na primeira página elegível e não calcula count. O holder
+  retém um horizonte MVCC enquanto aberto e pode atrasar vacuum de tuplas mortas:
+  monitorar transações antigas/autovacuum e confirmar encerramento após falha.
+  Snapshot não reserva autorização futura de asset: cada request de bytes volta a
+  conferir revisão e referências exatas sob `CMS_REFERENCE_LOCK` e locks de linha;
+  publicação/reference churn entre DTO e GET de asset pode legitimamente retornar
+  404.
 - **Conteúdo:** o browser valida o DTO público inteiro antes de renderizar. São
   aceitos até 100 blocos, 10.000 nós, 5 MiB de blocos, 6 MiB por detalhe, 16 MiB
   por coleção, 20 categorias por página, 20 imagens por galeria, 12 itens por
@@ -114,8 +123,8 @@ real:
 2. Registre somente elapsed monotônico, SQLSTATE observado pelo harness/driver
    (`57014` esperado para `statement_timeout`) e status CMS (503 sanitizado). O
    harness deve provar que uma segunda query marcada após o `pg_sleep` não foi
-   enviada, que o rollback liberou `CMS_REFERENCE_LOCK` e que a transação holder
-   (se usada pelo cenário) foi encerrada.
+   enviada, que a transação de projeção não adquiriu `CMS_REFERENCE_LOCK` e que
+   tanto ela quanto o holder snapshot (se usado pelo cenário) foram encerrados.
 3. Em uma conexão/transação nova, compare os `current_setting('statement_timeout')`
    e `current_setting('lock_timeout')` com os defaults observados antes do caso;
    os `SET LOCAL`/`set_config(..., true)` anteriores não podem vazar. Não copie

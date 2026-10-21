@@ -30,6 +30,7 @@ type CmsReadBudgetState = {
 }
 
 const cmsReadBudgetSessions = new WeakMap<object, CmsReadBudgetState>()
+const cmsSnapshotReadSessions = new WeakSet<object>()
 const READ_TIMEOUT_CODES = new Set(['40001', '55P03', '57014'])
 
 function hasReadBudget(options: CmsTransactionOptions): boolean {
@@ -47,6 +48,73 @@ function remainingBudget(options: CmsTransactionOptions): number | undefined {
 
 function assertReadBudget(options: CmsTransactionOptions): void {
   remainingBudget(options)
+}
+
+function scheduleTransactionRollback(payload: Payload, id: string): void {
+  void Promise.resolve().then(() => payload.db.rollbackTransaction(id)).catch(() => undefined)
+}
+
+type BeginTransactionOutcome = { kind: 'begun'; id: string } | { kind: 'failed'; error: unknown }
+
+/** Race only the caller's wait. Payload/Drizzle exposes no server-side BEGIN cancellation handle. */
+async function beginTransactionWithinBudget(payload: Payload, options: CmsTransactionOptions): Promise<string> {
+  assertReadBudget(options)
+  if (!hasReadBudget(options)) {
+    const id = await payload.db.beginTransaction()
+    if (typeof id !== 'string' || id.length === 0) throw new APIError('cms_transaction_required', 503, undefined, true)
+    return id
+  }
+
+  const waitMs = options.deadlineAt === undefined
+    ? undefined : options.deadlineAt - (options.now?.() ?? Date.now())
+  if (waitMs !== undefined && waitMs < 1) throw new APIError('portal_pages_unavailable', 503, undefined, true)
+
+  const starting = Promise.resolve().then(async (): Promise<BeginTransactionOutcome> => {
+    try {
+      const id = await payload.db.beginTransaction()
+      if (typeof id !== 'string' || id.length === 0) throw new APIError('cms_transaction_required', 503, undefined, true)
+      return { kind: 'begun', id }
+    } catch (error) { return { kind: 'failed', error } }
+  })
+
+  let loseBudget!: () => void
+  const budgetLost = new Promise<{ kind: 'budget' }>(resolve => { loseBudget = () => resolve({ kind: 'budget' }) })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let abortListener: (() => void) | undefined
+  if (waitMs !== undefined) {
+    const checkDeadline = () => {
+      const remaining = options.deadlineAt! - (options.now?.() ?? Date.now())
+      if (remaining < 1) loseBudget()
+      else timer = setTimeout(checkDeadline, Math.min(2_147_483_647, Math.max(1, Math.ceil(remaining))))
+    }
+    timer = setTimeout(checkDeadline, Math.min(2_147_483_647, Math.max(1, Math.ceil(waitMs))))
+  }
+  if (options.signal) {
+    abortListener = loseBudget
+    options.signal.addEventListener('abort', abortListener, { once: true })
+    if (options.signal.aborted) loseBudget()
+  }
+
+  let outcome: Awaited<typeof starting> | { kind: 'budget' }
+  try { outcome = await Promise.race([starting, budgetLost]) }
+  finally {
+    if (timer !== undefined) clearTimeout(timer)
+    if (abortListener) options.signal?.removeEventListener('abort', abortListener)
+  }
+
+  if (outcome.kind === 'budget') {
+    void starting.then(late => {
+      if (late.kind === 'begun') scheduleTransactionRollback(payload, late.id)
+    }).catch(() => undefined)
+    throw new APIError('portal_pages_unavailable', 503, undefined, true)
+  }
+  if (outcome.kind === 'failed') throw outcome.error
+  try { assertReadBudget(options) }
+  catch (error) {
+    scheduleTransactionRollback(payload, outcome.id)
+    throw error
+  }
+  return outcome.id
 }
 
 function databaseErrorCode(error: unknown): string | null {
@@ -90,6 +158,11 @@ export async function withCmsReadOperation<T>(options: CmsTransactionOptions | u
 
 function transactionSession(db: CmsDrizzleDatabase): object | null {
   return db.session && typeof db.session === 'object' ? db.session : null
+}
+
+function isSnapshotReadTransaction(db: CmsDrizzleDatabase): boolean {
+  const session = transactionSession(db)
+  return !!session && cmsSnapshotReadSessions.has(session)
 }
 
 function timeoutValue(options: CmsTransactionOptions, previous?: number): string {
@@ -225,6 +298,10 @@ async function executeTransactionCommand(payload: Payload, req: PayloadRequest, 
   } catch (error) { throw readOperationError(error, options) }
 }
 
+function isValidSnapshotID(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 128 && /^[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+$/u.test(value)
+}
+
 async function initializeReadTransaction(payload: Payload, req: PayloadRequest, options: CmsTransactionOptions): Promise<void> {
   const statementTimeout = timeoutValue(options)
   await executeTransactionCommand(payload, req, sql.raw(`SET LOCAL statement_timeout = '${statementTimeout}'`), options)
@@ -233,13 +310,13 @@ async function initializeReadTransaction(payload: Payload, req: PayloadRequest, 
 }
 
 async function importReadSnapshot(payload: Payload, req: PayloadRequest, options: CmsTransactionOptions): Promise<void> {
-  if (!options.snapshotID) return
+  if (options.snapshotID === undefined) throw new APIError('portal_pages_unavailable', 503, undefined, true)
   const snapshotID = options.snapshotID
-  if (snapshotID.length > 128 || !/^[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+$/u.test(snapshotID)) {
+  if (!isValidSnapshotID(snapshotID)) {
     throw new APIError('portal_pages_unavailable', 503, undefined, true)
   }
   await executeTransactionCommand(payload, req,
-    sql.raw('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'), options)
+    sql.raw('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'), options)
   await executeTransactionCommand(payload, req,
     sql.raw(`SET TRANSACTION SNAPSHOT '${snapshotID}'`), options)
 }
@@ -264,6 +341,9 @@ async function setTransactionTimeouts(payload: Payload, req: PayloadRequest, tim
 
 export async function lockCmsReferences(payload: Payload, req: PayloadRequest, timeoutMs?: number) {
   const db = await requireCmsTransaction(payload, req)
+  if (isSnapshotReadTransaction(db as unknown as CmsDrizzleDatabase)) {
+    throw new APIError('cms_reference_lock_not_allowed_in_snapshot_read', 503, undefined, true)
+  }
   if (!transactionSession(db as unknown as CmsDrizzleDatabase) ||
     !cmsReadBudgetSessions.has(transactionSession(db as unknown as CmsDrizzleDatabase)!)) {
     if (timeoutMs === undefined) await db.execute(sql`SET LOCAL lock_timeout = '5s'`)
@@ -280,11 +360,12 @@ export async function withCmsTransaction<T>(payload: Payload, incoming: PayloadR
   remainingBudget(options)
   if (incoming?.transactionID) {
     try {
+      const db = await requireCmsTransaction(payload, incoming)
+      const snapshotRead = isSnapshotReadTransaction(db as unknown as CmsDrizzleDatabase)
       if (hasReadBudget(options)) {
-        const db = await requireCmsTransaction(payload, incoming)
         installReadBudget(payload, incoming, options, db as unknown as CmsDrizzleDatabase)
       }
-      await lockCmsReferences(payload, incoming, remainingBudget(options))
+      if (!snapshotRead) await lockCmsReferences(payload, incoming, remainingBudget(options))
       const result = await work(incoming)
       assertReadBudget(options)
       const failure = hasReadBudget(options) ? await drainReadBudget(incoming) : undefined
@@ -299,12 +380,14 @@ export async function withCmsTransaction<T>(payload: Payload, incoming: PayloadR
     }
   }
   const req = await createLocalReq({ req: incoming ? { ...incoming, context: { ...incoming.context } } : {} }, payload)
-  const id = await payload.db.beginTransaction()
+  if (options.snapshotID) throw new APIError('portal_pages_unavailable', 503, undefined, true)
+  let id: string
+  try { id = await beginTransactionWithinBudget(payload, options) }
+  catch (error) { throw hasReadBudget(options) ? readOperationError(error, options) : error }
   if (!id) throw new APIError('cms_transaction_required', 503, undefined, true)
   req.transactionID = id
   try {
     if (hasReadBudget(options)) {
-      await importReadSnapshot(payload, req, options)
       await initializeReadTransaction(payload, req, options)
       const db = await requireCmsTransaction(payload, req)
       installReadBudget(payload, req, options, db as unknown as CmsDrizzleDatabase)
@@ -334,18 +417,70 @@ export async function withCmsTransaction<T>(payload: Payload, incoming: PayloadR
   }
 }
 
+/** Own a read-only repeatable-read transaction imported from an already exported snapshot. */
+export async function withCmsReadTransaction<T>(payload: Payload, incoming: PayloadRequest | undefined,
+  options: CmsTransactionOptions & { snapshotID: string }, work: (req: PayloadRequest) => Promise<T>): Promise<T> {
+  if (!isValidSnapshotID(options.snapshotID)) throw new APIError('portal_pages_unavailable', 503, undefined, true)
+  assertReadBudget(options)
+  const req = await createLocalReq({ req: incoming ? { ...incoming, context: { ...incoming.context }, transactionID: undefined } : {} }, payload)
+  assertReadBudget(options)
+  let id: string
+  try { id = await beginTransactionWithinBudget(payload, options) }
+  catch (error) { throw readOperationError(error, options) }
+  if (!id) throw new APIError('cms_transaction_required', 503, undefined, true)
+  req.transactionID = id
+  let readSession: object | undefined
+  try {
+    // SET LOCAL does not acquire a snapshot; it bounds the following transaction/snapshot setup.
+    await initializeReadTransaction(payload, req, options)
+    await importReadSnapshot(payload, req, options)
+    const db = await requireCmsTransaction(payload, req) as unknown as CmsDrizzleDatabase
+    readSession = transactionSession(db) || undefined
+    if (!readSession) throw new APIError('portal_pages_unavailable', 503, undefined, true)
+    installReadBudget(payload, req, options, db)
+    cmsSnapshotReadSessions.add(readSession)
+    const result = await work(req)
+    assertReadBudget(options)
+    const failure = await drainReadBudget(req)
+    if (failure !== undefined) throw failure
+    await requireCmsTransaction(payload, req)
+    cmsSnapshotReadSessions.delete(readSession)
+    disposeReadBudget(req)
+    await payload.db.commitTransaction(id)
+    return result
+  } catch (error) {
+    try { await drainReadBudget(req) }
+    finally {
+      if (readSession) cmsSnapshotReadSessions.delete(readSession)
+      try { disposeReadBudget(req) }
+      finally { await payload.db.rollbackTransaction(id) }
+    }
+    throw readOperationError(error, options)
+  } finally {
+    try { await drainReadBudget(req) }
+    finally {
+      if (readSession) cmsSnapshotReadSessions.delete(readSession)
+      try { disposeReadBudget(req) }
+      finally { delete req.transactionID }
+    }
+  }
+}
+
 /** Hold a short repeatable-read snapshot without the application reference lock across batches. */
 export async function withCmsReadSnapshot<T>(payload: Payload, incoming: PayloadRequest | undefined,
   options: CmsTransactionOptions, work: (snapshotID: string) => Promise<T>): Promise<T> {
   assertReadBudget(options)
   const req = await createLocalReq({ req: incoming ? { ...incoming, context: { ...incoming.context }, transactionID: undefined } : {} }, payload)
-  const id = await payload.db.beginTransaction()
+  assertReadBudget(options)
+  let id: string
+  try { id = await beginTransactionWithinBudget(payload, options) }
+  catch (error) { throw readOperationError(error, options) }
   if (!id) throw new APIError('cms_transaction_required', 503, undefined, true)
   req.transactionID = id
   try {
+    await initializeReadTransaction(payload, req, options)
     await executeTransactionCommand(payload, req,
       sql.raw('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'), options)
-    await initializeReadTransaction(payload, req, options)
     const db = await requireCmsTransaction(payload, req)
     installReadBudget(payload, req, options, db as unknown as CmsDrizzleDatabase)
     const result = await db.execute(sql`SELECT pg_export_snapshot() AS snapshot_id`)
@@ -353,7 +488,7 @@ export async function withCmsReadSnapshot<T>(payload: Payload, incoming: Payload
     const rows = result && typeof result === 'object' ? (result as { rows?: unknown }).rows : undefined
     const snapshotID = Array.isArray(rows) && rows[0] && typeof rows[0] === 'object'
       ? (rows[0] as { snapshot_id?: unknown }).snapshot_id : undefined
-    if (typeof snapshotID !== 'string' || snapshotID.length > 128 || !/^[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+$/u.test(snapshotID)) {
+    if (!isValidSnapshotID(snapshotID)) {
       throw new APIError('portal_pages_unavailable', 503, undefined, true)
     }
     const value = await work(snapshotID)

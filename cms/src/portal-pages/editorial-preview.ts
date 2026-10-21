@@ -6,7 +6,7 @@ import type { PortalPageDTO } from './contracts'
 import { assertEditorialReadHeaders, requirePortalPageEditor } from './editorial-auth'
 import { openPortalPageMedia } from './read-file'
 import type { PortalPageAssetResponse } from './read-file'
-import { resolvePreviewPortalPageForAsset, queryPortalPagePreview } from './reader'
+import { resolvePreviewPortalPageForAsset, queryPortalPagePreviewWithSavedAt } from './reader'
 import type { PortalPageReadActor } from './reader'
 import { withCmsTransaction } from '../publication/transaction'
 import { uuid } from './primitives'
@@ -26,13 +26,7 @@ function strictUUID(value: unknown): string {
   return uuid(value, 'invalid_request')
 }
 
-function savedAt(value: unknown): string {
-  const date = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null
-  if (!date || !Number.isFinite(date.getTime())) throw unavailable()
-  return date.toISOString()
-}
-
-/** Read a specific saved version and its timestamp under the same locked Payload transaction. */
+/** Read a specific saved version and its timestamp under one lock-free imported snapshot. */
 export async function loadEditorialPreview(req: PayloadRequest, rawPageID: string, rawVersionID: string):
 Promise<{ dto: PortalPageDTO; savedAt: string }> {
   assertEditorialReadHeaders(req.headers)
@@ -40,25 +34,9 @@ Promise<{ dto: PortalPageDTO; savedAt: string }> {
   const pageID = strictUUID(rawPageID)
   const versionID = strictUUID(rawVersionID)
 
-  return withCmsTransaction(req.payload, req, async transactionReq => {
-    // queryPortalPagePreview recognizes the request's transaction and therefore
-    // projects the exact Version, category references and media under this lock.
-    const dto = await queryPortalPagePreview(transactionReq, pageID, versionID, actor)
-    if (!dto || dto.id !== pageID || dto.revision.id !== versionID) throw notFound()
-
-    const result = await transactionReq.payload.findVersions({
-      collection: 'portal-pages', req: transactionReq, depth: 0, overrideAccess: true,
-      pagination: false, limit: 2,
-      where: { and: [{ id: { equals: versionID } }, { parent: { equals: pageID } }] },
-    })
-    if (result.docs.length === 0) throw notFound()
-    if (result.docs.length !== 1) throw unavailable()
-    const version = result.docs[0] as unknown as Record<string, unknown>
-    if (version.id !== versionID || version.parent !== pageID) throw notFound()
-    const content = version.version as Record<string, unknown> | undefined
-    if (!content || content._status !== dto.revision.status) throw unavailable()
-    return { dto, savedAt: savedAt(version.updatedAt) }
-  })
+  const result = await queryPortalPagePreviewWithSavedAt(req, pageID, versionID, actor)
+  if (!result || result.dto.id !== pageID || result.dto.revision.id !== versionID) throw notFound()
+  return result
 }
 
 function safeAssetError(error: unknown): Response {

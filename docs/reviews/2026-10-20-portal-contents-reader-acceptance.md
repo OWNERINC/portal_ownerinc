@@ -169,6 +169,40 @@ evidência de execução.
   serviço/browser mantêm `NOT_EXECUTED`. Os checks offline não substituem aceite
   HTTP, PostgreSQL ou browser real.
 
+### Round 3 — lock-free projeções e início de transação limitado
+
+- A decisão da Round 2 de adquirir `CMS_REFERENCE_LOCK` em cada batch foi
+  substituída para projeções: catálogo/lista, detalhe publicado, disponibilidade,
+  categorias e JSON de prévia editorial usam transações read-only que importam o
+  snapshot PostgreSQL exportado e não adquirem advisory nem `FOR SHARE`. O holder
+  também continua read-only, sem lock e sempre encerrado por rollback.
+- Autorização exata e abertura de asset mantêm `CMS_REFERENCE_LOCK` e locks de
+  linha; publicação e mutação de mídia/referências preservam suas serializações.
+  Um asset requisitado depois de publicação ou alteração de referência entre DTO
+  e GET de bytes pode legitimamente retornar 404.
+- O caller limita sua espera por `beginTransaction()` ao deadline/abort e retorna
+  503 sanitizado; se o adapter resolver depois, o ID tardio é rolado de volta uma
+  vez e nenhuma importação, leitura ou aquisição de lock começa. Isso não cancela
+  `BEGIN` no servidor; se nunca resolver, a conexão pode permanecer ocupada até o
+  driver terminar.
+- Transações leitoras instalam `statement_timeout` e `lock_timeout` finitos antes
+  do isolamento e da importação de snapshot, sem query de dados anterior ao
+  `SET TRANSACTION SNAPSHOT`. Os testes offline verificam essa ordem, deadline e
+  abort durante startup, cleanup tardio, ausência/presença de locks nos caminhos
+  correspondentes e regressões de elegibilidade/snapshot. A suíte CMS completa
+  encontrou 727 testes: 716 aprovados, 0 falhas e 11 skips opcionais; o conjunto
+  focado de leitor/preview/asset/publicação/mídia/contrato passou com 82/82. CMS
+  typecheck passou. Os testes públicos/API/DTO/rotas/runbook passaram com 88/88.
+- Scanner de segredos (`node scripts/verify.mjs security`), audit de dependências
+  (`npm run security`, zero vulnerabilidades), shell gerado e `git diff --check`
+  passaram. O root `npm run verify` não foi executado novamente nesta rodada; a
+  tentativa falha da Round 2 permanece registrada acima e no relatório local.
+- `SELECT pg_sleep(1)` em PostgreSQL descartável, SQLSTATE `57014`, ausência de
+  query seguinte, fim do holder e reset dos `SET LOCAL` continuam
+  **NOT_EXECUTED**. Testes fake e inspeção do adapter não são evidência de runtime
+  PostgreSQL; os 15 casos reais de serviço/browser também permanecem
+  `NOT_EXECUTED`.
+
 ## Conclusão e próximas ações
 
 Os testes offline cobrem identidade do shell, admissão de rota, loader/restauração,

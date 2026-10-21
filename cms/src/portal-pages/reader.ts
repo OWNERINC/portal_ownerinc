@@ -4,6 +4,7 @@ import {
   requireCmsTransaction,
   withCmsReadOperation,
   withCmsReadSnapshot,
+  withCmsReadTransaction,
   withCmsTransaction,
   type CmsTransactionOptions,
 } from '../publication/transaction'
@@ -36,6 +37,7 @@ export type PortalPageListInput = { limit: number; offset: number; category?: st
 export type PortalPagePageResult = { rows: PortalPageDTO[]; count: number }
 export type PortalPageCategoryDTO = { id: string; slug: string; name: string; count: number }
 export type PortalPageReadResult = { dto: PortalPageDTO; media: Map<string, PortalPageMediaReadRecord> }
+export type PortalPagePreviewReadResult = { dto: PortalPageDTO; savedAt: string }
 export type PortalPageReadOptions = { signal?: AbortSignal; deadlineAt?: number; now?: () => number }
 
 function effectiveReadOptions(options: PortalPageReadOptions = {}): CmsTransactionOptions & { deadlineAt: number } {
@@ -47,17 +49,17 @@ function assertReadBudget(options: CmsTransactionOptions & { deadlineAt: number 
   if (options.signal?.aborted || (options.now?.() ?? Date.now()) >= options.deadlineAt) throw UNAVAILABLE()
 }
 
-async function withReadBatch<T>(req: PayloadRequest, options: CmsTransactionOptions & { deadlineAt: number },
+async function withReadBatch<T>(req: PayloadRequest, options: CmsTransactionOptions & { deadlineAt: number; snapshotID: string },
   work: (transactionReq: PayloadRequest) => Promise<T>): Promise<T> {
   assertReadBudget(options)
   // Read batches own short transactions even when Payload supplied an outer request transaction.
   const isolatedRequest = { ...req, transactionID: undefined } as PayloadRequest
-  return withCmsTransaction(req.payload, isolatedRequest, async transactionReq => {
+  return withCmsReadTransaction(req.payload, isolatedRequest, options, async transactionReq => {
     assertReadBudget(options)
     const result = await work(transactionReq)
     assertReadBudget(options)
     return result
-  }, options)
+  })
 }
 
 function fail(status: number, code: string): never {
@@ -303,7 +305,7 @@ async function readPublishedPageByID(payload: Payload, req: PayloadRequest, id: 
   return publishedPage(payload, req, { id, page }, options, true)
 }
 
-async function scanEligiblePublished(req: PayloadRequest, options: CmsTransactionOptions & { deadlineAt: number },
+async function scanEligiblePublished(req: PayloadRequest, options: CmsTransactionOptions & { deadlineAt: number; snapshotID: string },
   visit: (page: PortalPageReadResult, eligibleIndex: number) => boolean | void | Promise<boolean | void>, category?: string): Promise<number> {
   let cursor: PublishedPageCursor | null = null
   let scanned = 0
@@ -392,12 +394,13 @@ export function queryPortalPagePublishedDetail(req: PayloadRequest, rawSlug: str
   if (!actorIsValid(actor)) return Promise.reject(new APIError('invalid_request', 400, undefined, true))
   const slug = canonicalSlug(rawSlug)
   const options = effectiveReadOptions(rawOptions)
-  return withCmsTransaction(req.payload, req, async transactionReq => {
-    assertReadBudget(options)
-    const result = await findPublishedBySlug(req.payload, transactionReq, slug, options)
-    assertReadBudget(options)
-    return result?.dto ?? null
-  }, options)
+  return withCmsReadSnapshot(req.payload, req, options, snapshotID => withCmsReadTransaction(req.payload, req,
+    { ...options, snapshotID }, async transactionReq => {
+      assertReadBudget(options)
+      const result = await findPublishedBySlug(req.payload, transactionReq, slug, { ...options, snapshotID })
+      assertReadBudget(options)
+      return result?.dto ?? null
+    }))
 }
 
 export function queryPortalPageCategories(req: PayloadRequest, actor: PortalPageReadActor,
@@ -422,30 +425,40 @@ export function queryPortalPageCategories(req: PayloadRequest, actor: PortalPage
   })
 }
 
-export function queryPortalPagePreview(req: PayloadRequest, rawPageID: string, rawVersionID: string,
-  actor: PortalPageReadActor, rawOptions: PortalPageReadOptions = {}): Promise<PortalPageDTO | null> {
+export function queryPortalPagePreviewWithSavedAt(req: PayloadRequest, rawPageID: string, rawVersionID: string,
+  actor: PortalPageReadActor, rawOptions: PortalPageReadOptions = {}): Promise<PortalPagePreviewReadResult | null> {
   if (!actorIsValid(actor)) return Promise.reject(new APIError('invalid_request', 400, undefined, true))
   if (!actor.canManageKnowledge) return Promise.reject(new APIError('permission_denied', 403, undefined, true))
   const pageID = uuid(rawPageID, 'invalid_request'), versionID = uuid(rawVersionID, 'invalid_request')
   const options = effectiveReadOptions(rawOptions)
-  return withCmsTransaction(req.payload, req, async transactionReq => {
-    assertReadBudget(options)
-    const result = await withCmsReadOperation(options, () => req.payload.findVersions({ collection: 'portal-pages', req: transactionReq, depth: 1, overrideAccess: true,
-      pagination: false, limit: 2, where: { and: [{ id: { equals: versionID } }, { parent: { equals: pageID } }] } })
-    )
-    if (result.docs.length === 0) return null
-    if (result.docs.length !== 1) throw UNAVAILABLE()
-    const saved = result.docs[0] as unknown as Record<string, unknown>
-    if (saved.id !== versionID || saved.parent !== pageID) return null
-    const source = record(saved.version, 'invalid_portal_page_version')
-    if (!['draft', 'published'].includes(String(source._status))) return null
-    const dto = await projectPage(req.payload, transactionReq, pageID, source, 'portal-pages-preview',
-      { id: versionID, status: source._status as 'draft' | 'published' }, options)
-    await resolveMedia(req.payload, transactionReq, dto, false, options)
-    assertReadBudget(options)
-    if (Buffer.byteLength(JSON.stringify(dto), 'utf8') > 6 * 1024 * 1024) throw UNAVAILABLE()
-    return dto
-  }, options)
+  return withCmsReadSnapshot(req.payload, req, options, snapshotID => withCmsReadTransaction(req.payload, req,
+    { ...options, snapshotID }, async transactionReq => {
+      assertReadBudget(options)
+      const result = await withCmsReadOperation(options, () => req.payload.findVersions({ collection: 'portal-pages', req: transactionReq, depth: 1, overrideAccess: true,
+        pagination: false, limit: 2, where: { and: [{ id: { equals: versionID } }, { parent: { equals: pageID } }] } })
+      )
+      if (result.docs.length === 0) return null
+      if (result.docs.length !== 1) throw UNAVAILABLE()
+      const saved = result.docs[0] as unknown as Record<string, unknown>
+      if (saved.id !== versionID || saved.parent !== pageID) return null
+      let savedAt: string | null
+      try { savedAt = isoDate(saved.updatedAt) } catch { savedAt = null }
+      if (!savedAt) throw UNAVAILABLE()
+      const source = record(saved.version, 'invalid_portal_page_version')
+      if (!['draft', 'published'].includes(String(source._status))) return null
+      const dto = await projectPage(req.payload, transactionReq, pageID, source, 'portal-pages-preview',
+        { id: versionID, status: source._status as 'draft' | 'published' }, { ...options, snapshotID })
+      await resolveMedia(req.payload, transactionReq, dto, false, { ...options, snapshotID })
+      assertReadBudget(options)
+      if (Buffer.byteLength(JSON.stringify(dto), 'utf8') > 6 * 1024 * 1024) throw UNAVAILABLE()
+      return { dto, savedAt }
+    }))
+}
+
+export function queryPortalPagePreview(req: PayloadRequest, rawPageID: string, rawVersionID: string,
+  actor: PortalPageReadActor, rawOptions: PortalPageReadOptions = {}): Promise<PortalPageDTO | null> {
+  return queryPortalPagePreviewWithSavedAt(req, rawPageID, rawVersionID, actor, rawOptions)
+    .then(result => result?.dto ?? null)
 }
 
 export async function resolvePublishedPortalPageForAsset(req: PayloadRequest, pageID: string, revisionID: string): Promise<PortalPageReadResult | null> {

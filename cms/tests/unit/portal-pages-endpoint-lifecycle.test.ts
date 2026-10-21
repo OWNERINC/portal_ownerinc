@@ -27,6 +27,20 @@ const reader = { uid: 'reader-id', email: 'reader@example.test', name: 'Reader',
 const actor = { uid: reader.uid, email: reader.email, name: reader.name, canManageKnowledge: false }
 const pdf = Buffer.from('%PDF-1.7\nendpoint fixture\n%%EOF\n')
 
+function queryText(query: unknown): string {
+  if (typeof query === 'string') return query
+  let text = ''
+  const visit = (chunk: unknown) => {
+    if (chunk && typeof chunk === 'object' && Array.isArray((chunk as { queryChunks?: unknown }).queryChunks)) {
+      for (const child of (chunk as { queryChunks: unknown[] }).queryChunks) visit(child)
+    } else if (chunk && typeof chunk === 'object' && (chunk as { constructor?: { name?: string } }).constructor?.name === 'StringChunk') {
+      text += ((chunk as { value?: unknown }).value as string[] | undefined)?.join('') || ''
+    } else text += '?'
+  }
+  visit(query)
+  return text
+}
+
 const runtimeEnv = {
   CMS_DATABASE_URL: 'postgresql://cms:secret@localhost:5432/editorial',
   PAYLOAD_SECRET: 'payload-runtime-secret-for-test-only',
@@ -107,7 +121,11 @@ async function endpointFixture(options: { commitFailure?: boolean; mediaMime?: s
     collections: Object.fromEntries(config.collections.map(collection => [collection.slug, { config: collection }])),
     db: {
       sessions,
-      beginTransaction: async () => { calls.push('begin'); sessions.owned = { db: { execute: async () => { calls.push('lock') } } }; return 'owned' },
+      beginTransaction: async () => {
+        calls.push('begin')
+        sessions.owned = { db: { execute: async (query: unknown) => { calls.push(`sql:${queryText(query)}`) } } }
+        return 'owned'
+      },
       commitTransaction: async () => {
         calls.push('commit')
         delete sessions.owned
@@ -135,7 +153,10 @@ async function endpointFixture(options: { commitFailure?: boolean; mediaMime?: s
   } as unknown as Payload
 
   const makeOpenAsset = (fixture: ReturnType<typeof descriptor>) => async ({ media: openedMedia, signal }: any) => {
-    return portalPageMediaResponse({ media: openedMedia, signal, openDescriptor: async () => fixture.handle })
+    return portalPageMediaResponse({ media: openedMedia, signal, openDescriptor: async () => {
+      calls.push('open')
+      return fixture.handle
+    } })
   }
   const request = (input: Record<string, unknown>, signal = new AbortController().signal) => {
     const webRequest = new Request('https://payload.example.test/editorial/api/portal-pages/asset', {
@@ -160,7 +181,15 @@ test('asset endpoint cancels an opened media descriptor when transaction commit 
     const response = await f.endpoint(open)(f.request({ pageId: pageID, revisionId: revisionID, assetId: assetBID, preview: false, range: null }))
     assert.equal(response.status, 503)
     assert.equal(opened.closed, 1, 'unhanded-off body cancellation closes its descriptor once')
-    assert.deepEqual(f.calls.slice(0, 2), ['begin', 'lock'])
+    const advisoryLock = 'sql:SELECT pg_advisory_xact_lock(7194030)'
+    assert.ok(f.calls.includes(advisoryLock), 'asset authorization retains the exact CMS_REFERENCE_LOCK')
+    assert.ok(f.calls.indexOf(advisoryLock) < f.calls.findIndex(call => call.startsWith('findByID:')),
+      'asset authorization acquires the global lock before reading page/reference state')
+    const mediaRowLock = f.calls.findIndex(call => call.includes('portal_page_media') && call.includes('FOR SHARE'))
+    assert.ok(mediaRowLock > f.calls.indexOf(advisoryLock) && mediaRowLock < f.calls.indexOf('open'),
+      'asset authorization retains a row lock on the exact media record through private descriptor open')
+    assert.ok(f.calls.indexOf(advisoryLock) < f.calls.indexOf('open'),
+      'the exact asset is authorized under the lock before opening its private descriptor')
     assert.ok(f.calls.includes('commit'))
     assert.ok(f.calls.includes('rollback'))
   })

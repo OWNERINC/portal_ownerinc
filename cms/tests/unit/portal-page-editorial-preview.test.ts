@@ -118,6 +118,10 @@ test('editorial asset endpoint replaces storage metadata in Content-Disposition 
     assert.equal(response.headers.get('cache-control'), 'private,no-store')
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
     assert.equal(response.headers.get('content-disposition'), `inline; filename="portal-page-${assetID}.pdf"`)
+    assert.ok(f.sqlStatements().some(statement => statement.includes('pg_advisory_xact_lock(7194030)')),
+      'editorial asset authorization retains CMS_REFERENCE_LOCK')
+    assert.ok(f.sqlStatements().some(statement => statement.includes('portal_page_media') && statement.includes('FOR SHARE')),
+      'editorial asset authorization retains the exact media row lock')
     const exposed = `${[...response.headers.entries()].map(([name, value]) => `${name}: ${value}`).join('\n')}\n${await response.text()}`
     assert.equal(exposed.includes(secretStorageKey), false)
     assert.equal(exposed.includes(secretOriginalName), false)
@@ -145,6 +149,12 @@ test('an old preview stays bound to its immutable Version after the current docu
   assert.equal(result.dto.revision.id, versionID)
   assert.equal(result.dto.revision.status, 'draft')
   assert.equal(result.savedAt, '2026-10-19T10:00:00.000Z')
+  assert.equal(f.sqlStatements().some(statement => statement.includes('pg_advisory_xact_lock')),
+    false, 'editorial preview JSON uses a lock-free snapshot transaction')
+  assert.ok(f.sqlStatements().some(statement => statement.includes('SET TRANSACTION SNAPSHOT')),
+    'editorial preview DTO and saved timestamp are read from an imported snapshot')
+  assert.equal(f.sqlStatements().some(statement => statement.includes('FOR SHARE')),
+    false, 'editorial preview JSON validates references through snapshot MVCC, without row locks')
 })
 
 test('preview requires current manageKnowledge authority and a live V2 session', async () => {

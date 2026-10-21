@@ -142,7 +142,7 @@ function mediaMimeRequirements(page: PortalPageRefInput): PortalPageMediaUsage[]
   return requirements
 }
 
-/** Validate all selected categories under row locks while the shared CMS lock is held. */
+/** Validate categories under snapshot MVCC for readers and row/reference locks for mutation or asset callers. */
 export async function assertPortalPageCategoryReferences(payload: Payload, values: unknown, req: PayloadRequest,
   readOptions?: CmsTransactionOptions): Promise<string[]> {
   const categories = values == null ? [] : Array.isArray(values) ? values : [values]
@@ -155,7 +155,7 @@ export async function assertPortalPageCategoryReferences(payload: Payload, value
   return withCmsTransaction(payload, req, async transactionReq => {
     const db = await requireCmsTransaction(payload, transactionReq)
     for (const id of ids) {
-      await db.execute(sql`SELECT id FROM portal_page_categories WHERE id = ${id}::uuid FOR SHARE`)
+      if (!readOptions?.snapshotID) await db.execute(sql`SELECT id FROM portal_page_categories WHERE id = ${id}::uuid FOR SHARE`)
       const category = await withCmsReadOperation(readOptions, () => payload.findByID({ collection: 'portal-page-categories', id,
         req: transactionReq, overrideAccess: true, depth: 0, disableErrors: true }))
       if (!category) throw new APIError('invalid_portal_page_category_reference', 400, undefined, true)
@@ -164,7 +164,7 @@ export async function assertPortalPageCategoryReferences(payload: Payload, value
   }, readOptions)
 }
 
-/** Load each selected media row under the shared reference lock and validate every usage role. */
+/** Validate media under snapshot MVCC for readers, retaining row/reference locks for mutation and asset callers. */
 export async function loadPortalPageMediaReferences(payload: Payload, page: PortalPageRefInput, req: PayloadRequest,
   options: { requireComplete?: boolean; readOptions?: CmsTransactionOptions } = {}): Promise<Map<string, PortalPageMediaReadRecord>> {
   return withCmsTransaction(payload, req, async transactionReq => {
@@ -174,7 +174,7 @@ export async function loadPortalPageMediaReferences(payload: Payload, page: Port
     for (const { id, allowedMimes } of requirements) {
       let record = checked.get(id)
       if (!record) {
-        await db.execute(sql`SELECT id FROM portal_page_media WHERE id = ${id}::uuid FOR SHARE`)
+        if (!options.readOptions?.snapshotID) await db.execute(sql`SELECT id FROM portal_page_media WHERE id = ${id}::uuid FOR SHARE`)
         const media = await withCmsReadOperation(options.readOptions, () => payload.findByID({ collection: 'portal-page-media', id,
           req: transactionReq, overrideAccess: true, depth: 0, disableErrors: true })) as Record<string, unknown> | null
         if (!media) throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)

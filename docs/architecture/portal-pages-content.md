@@ -226,10 +226,14 @@ Ela revalida a sessão V2 `manageKnowledge` e nunca troca UUID ausente, inválid
 de outro pai pelo documento publicado/atual. O aviso deixa explícito que abrir a
 prévia não publica a página. Texto, rich text, embeds e todos os tipos de bloco
 passam pelas allowlists do DTO; a página não usa o shell público do Portal.
+O DTO de prévia e seu `savedAt` são lidos juntos em snapshot exportado
+`REPEATABLE READ, READ ONLY`, sem `CMS_REFERENCE_LOCK` ou `FOR SHARE`; uma mudança
+concorrente depois desse snapshot não altera parcialmente a resposta.
 
 Cada URL privada de mídia inclui UUID de página, Version e mídia. O novo GET
 editorial revalida a sessão em toda requisição, confirma a referência e o MIME
-específico do bloco, abre o descriptor seguro somente após a transação e devolve
+específico do bloco sob `CMS_REFERENCE_LOCK` e lock de linha, abre o descriptor
+seguro antes do commit e o entrega somente após a transação, devolvendo
 `private,no-store`/`nosniff`. Imagens são integrais; PDF e vídeo mantêm a faixa
 única (inclusive aberta e sufixo), backpressure de 64 KiB e cancelamento do leitor
 existente. A URL e o DTO não contêm caminho de disco, `storageKey` ou token. Os
@@ -265,6 +269,11 @@ das operações da Local API Payload que podem emitir várias instruções SQL. 
 abort, falha operacional ou limite excedido retorna 503 sanitizado; catálogo e
 categorias nunca retornam resultado parcial. As configurações são `SET LOCAL` ou
 `set_config(..., true)` e não sobrevivem ao rollback/commit da transação.
+O início de `BEGIN` também é aguardado somente até o deadline/abort do chamador:
+se o limite vencer primeiro, retorna 503 sanitizado e uma transação que resolver
+mais tarde é rolada de volta uma vez, sem importar snapshot nem executar leituras.
+O adapter não expõe cancelamento servidor de um `BEGIN` pendente; se nunca
+resolver, sua conexão pode permanecer ocupada até o driver terminar.
 
 Catálogo, disponibilidade e agregação de categorias compartilham uma validação de
 elegibilidade: status publicado, documento principal válido, Version publicada
@@ -281,19 +290,26 @@ PostgreSQL em UTC; não passa por `Date` antes da próxima comparação/keyset, 
 lacunas quando vários candidatos diferem apenas abaixo do milissegundo. Exceder o
 limite ou o budget falha por inteiro.
 
-Para dar consistência entre esses batches, cada leitura de catálogo, disponibilidade
-ou categorias mantém um holder PostgreSQL `REPEATABLE READ, READ ONLY`, sem
-`CMS_REFERENCE_LOCK`, exporta um snapshot e o encerra em rollback. Cada batch abre
-sua própria transação, importa esse mesmo snapshot antes de qualquer leitura de
-dados e então adquire `CMS_REFERENCE_LOCK`; o lock é liberado no fim do batch, antes
-do próximo. Assim, publicação/despublicação concorrente durante o scan não mistura
-estados: o resultado representa a elegibilidade observável no snapshot exportado.
-O holder permanece aberto somente pelo budget CMS de até 4 s; enquanto ativo, ele
-retém um horizonte MVCC e pode atrasar vacuum de tuplas mortas. Operação deve
-monitorar transações antigas/autovacuum e confirmar que nenhum holder ficou aberto
-após erro; abort, deadline e falha sempre encerram batch/holder sem resultado
-parcial. A disponibilidade conserva o early exit no primeiro DTO elegível e não
-calcula contagem nem monta catálogo.
+Para dar consistência, catálogo, disponibilidade, categorias, detalhe publicado e
+JSON de prévia editorial usam um holder PostgreSQL `REPEATABLE READ, READ ONLY`,
+sem `CMS_REFERENCE_LOCK`, exportam um snapshot e o encerram em rollback. Cada
+transação de projeção importa esse snapshot antes de qualquer leitura de dados e
+não adquire o advisory global nem `FOR SHARE`: elegibilidade e referências são
+avaliadas pelo mesmo estado MVCC, sem serializar scans com publicação/mutação.
+Transações de projeção instalam `SET LOCAL statement_timeout` e `lock_timeout`
+finitos, depois definem isolamento read-only e importam o snapshot antes de SQL de
+dados. A disponibilidade conserva o early exit no primeiro DTO elegível e não
+calcula contagem nem monta catálogo. O holder permanece aberto somente pelo budget
+CMS de até 4 s; enquanto ativo, retém horizonte MVCC e pode atrasar vacuum de
+tuplas mortas. Operação deve monitorar transações antigas/autovacuum e confirmar
+que nenhum holder ficou aberto após erro; abort, deadline e falha encerram batch e
+holder sem resultado parcial.
+
+As leituras JSON representam a elegibilidade no snapshot exportado, não uma
+autorização futura de bytes. Cada request de asset revalida a revisão e referências
+exatas sob `CMS_REFERENCE_LOCK` e locks de linha antes de abrir o descriptor;
+publicação/despublicação ou alteração de referência entre a projeção e o request
+posterior pode fazer a URL de asset retornar 404.
 
 O browser valida estritamente a forma pública antes de montar DOM: até 100 blocos,
 10.000 nós, 5 MiB de conteúdo JSON, 6 MiB por detalhe, 16 MiB por coleção,

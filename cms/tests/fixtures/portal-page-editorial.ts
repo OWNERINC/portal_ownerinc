@@ -2,6 +2,20 @@ import type { Payload, PayloadRequest } from 'payload'
 
 export const pageID = '11111111-1111-4111-8111-111111111111'
 export const versionID = '22222222-2222-4222-8222-222222222222'
+
+function queryText(query: unknown): string {
+  if (typeof query === 'string') return query
+  let text = ''
+  const visit = (chunk: unknown) => {
+    if (chunk && typeof chunk === 'object' && Array.isArray((chunk as { queryChunks?: unknown }).queryChunks)) {
+      for (const child of (chunk as { queryChunks: unknown[] }).queryChunks) visit(child)
+    } else if (chunk && typeof chunk === 'object' && (chunk as { constructor?: { name?: string } }).constructor?.name === 'StringChunk') {
+      text += ((chunk as { value?: unknown }).value as string[] | undefined)?.join('') || ''
+    } else text += '?'
+  }
+  visit(query)
+  return text
+}
 export const nativePage = {
   title: 'Guia', slug: 'guia', summary: '', cover: null, coverAlt: null, categories: [], body: [],
 }
@@ -20,6 +34,7 @@ export function editorialFixture() {
   }
   const sessions: Record<string, { db: FixtureDB }> = {}
   let transactionNumber = 0
+  let snapshotNumber = 0
   let lostCommit = false
   let versionAfterCommit = false
   let receiptCorruption: 'parent' | 'autosave' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'status' | 'publishedAt' | 'content' | null = null
@@ -55,6 +70,9 @@ export function editorialFixture() {
   const sessionFor = (id: string) => {
     const runQuery = async (query: unknown): Promise<FixtureResult> => {
       calls.push({ operation: 'sql', transactionID: id, args: query })
+      if (queryText(query).includes('SELECT pg_export_snapshot() AS snapshot_id')) {
+        return { rows: [{ snapshot_id: `00000001-00000002-${++snapshotNumber}` }] }
+      }
       return { rows: [] }
     }
     const session: FixtureDB['session'] = {
@@ -193,6 +211,7 @@ export function editorialFixture() {
 
   return {
     req, calls,
+    sqlStatements() { return calls.filter(call => call.operation === 'sql').map(call => queryText(call.args)) },
     seedLatest(record: Record<string, unknown>) {
       const row = copy(record)
       const id = String(row.parent)

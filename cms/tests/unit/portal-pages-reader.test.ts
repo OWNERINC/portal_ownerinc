@@ -74,9 +74,15 @@ function fixture() {
   let transactionBegins = 0
   let transactionCommits = 0
   let transactionRollbacks = 0
-  let lockedPageReadMaximum = 0
+  let maxPageReadsPerTransaction = 0
   let afterCommit: (() => void) | undefined
   let onDatabaseQuery: ((text: string) => void) | undefined
+  let beginGate: Promise<void> | undefined
+  let beginAttempts = 0
+  let beginAttemptResolve: (() => void) | undefined
+  let rollbackResolve: (() => void) | undefined
+  const beginAttemptObserved = new Promise<void>(resolve => { beginAttemptResolve = resolve })
+  const rollbackObserved = new Promise<void>(resolve => { rollbackResolve = resolve })
   let fakeNow = Date.now()
   const media = { id: assetID, originalName: 'guide.pdf', storageKey: '018f47a2-7b3c-7a11-8a2c-1234567890b3.pdf',
     mimeType: 'application/pdf', filesize: 20, sha256: 'a'.repeat(64), state: 'complete', uploadedBy: 'editor',
@@ -116,7 +122,7 @@ function fixture() {
     sessionState.set(id, state)
     const runQuery = async (query: unknown) => {
       const { text, params } = queryParts(query)
-      calls.push(`sql:${text}`)
+      calls.push(`sql:${id}:${text}`)
       onDatabaseQuery?.(text)
       if (text.includes('set_config(')) {
         const values = timeoutValues.get(id) || []
@@ -125,7 +131,6 @@ function fixture() {
         return { rows: [{}] }
       }
       if (text.includes('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')) {
-        Object.assign(state, { snapshotHolder: true })
         return { rows: [] }
       }
       const imported = text.match(/SET TRANSACTION SNAPSHOT '([0-9A-Fa-f-]+)'/u)
@@ -150,7 +155,7 @@ function fixture() {
         return { rows: [] }
       }
       if (text.includes('SELECT page.id AS id') && text.includes('AS published_at') && text.includes('FROM portal_pages AS page')) {
-        assert.equal(state.locked, true, 'published candidate query must acquire the reference lock first')
+        assert.equal(state.locked, false, 'pure published projection batches must not acquire the global reference lock')
         assert.ok(state.snapshotID && snapshots.has(state.snapshotID), 'each bounded reader batch must import the exported snapshot')
         calls.push(`published-query:${id}`)
         const categorySlug = params.find(value => typeof value === 'string' && !/^[0-9a-f-]{36}$/iu.test(value) && !Number.isFinite(Date.parse(value))) as string | undefined
@@ -183,8 +188,12 @@ function fixture() {
     db: {
       sessions,
       beginTransaction: async () => {
+        beginAttempts += 1
+        beginAttemptResolve?.()
+        if (beginGate) await beginGate
         const id = `read-${++transactionNumber}`
         sessions[id] = makeSession(id)
+        calls.push(`BEGIN:${id}`)
         transactionBegins += 1
         return id
       },
@@ -193,7 +202,7 @@ function fixture() {
         sessionRestoredAtFinish.push(sessions[id]?.db.session.prepareQuery === originalPrepareQueries.get(id))
         const state = sessionState.get(id)
         if (state?.locked) referenceLocks -= 1
-        lockedPageReadMaximum = Math.max(lockedPageReadMaximum, state?.pageReads || 0)
+        maxPageReadsPerTransaction = Math.max(maxPageReadsPerTransaction, state?.pageReads || 0)
         delete sessions[id]
         sessionState.delete(id)
         afterCommit?.()
@@ -206,6 +215,7 @@ function fixture() {
         if (state?.snapshotHolder) for (const snapshotID of snapshots.keys()) snapshots.delete(snapshotID)
         delete sessions[id]
         sessionState.delete(id)
+        rollbackResolve?.()
       },
     },
     find: async (args: Record<string, any>) => {
@@ -237,7 +247,7 @@ function fixture() {
       const transaction = sessions[String(args.req.transactionID)] as unknown as { db: { execute: (query: unknown) => Promise<unknown> } }
       await transaction.db.execute('SELECT 1 AS payload_find_versions')
       if (String(args.req.transactionID).startsWith('read-')) {
-        assert.equal(state.locked, true, 'published revision validation must hold the reference lock')
+        assert.equal(state.locked, false, 'published revision projection must use its snapshot without the global lock')
       }
       let docs = docsFor(state).versions
       const filters = args.where?.and || []
@@ -260,7 +270,7 @@ function fixture() {
       const transaction = sessions[String(args.req.transactionID)] as unknown as { db: { execute: (query: unknown) => Promise<unknown> } }
       await transaction.db.execute('SELECT 1 AS payload_find_by_id')
       if (String(args.req.transactionID).startsWith('read-')) {
-        assert.equal(state.locked, true, 'published page/reference reads must hold the reference lock')
+        assert.equal(state.locked, false, 'page/reference projection must use its snapshot without the global lock')
       }
       if (args.collection === 'portal-pages') state.pageReads += 1
       if (args.collection === 'portal-pages') return docsFor(state).pages.find(doc => doc.id === args.id) || null
@@ -277,15 +287,19 @@ function fixture() {
     get transactionBegins() { return transactionBegins },
     get transactionCommits() { return transactionCommits },
     get transactionRollbacks() { return transactionRollbacks },
-    get lockedPageReadMaximum() { return lockedPageReadMaximum },
+    get maxPageReadsPerTransaction() { return maxPageReadsPerTransaction },
     get activeReferenceLocks() { return referenceLocks },
     get activeTransactionIDs() { return Object.keys(sessions) },
     get timeoutValues() { return timeoutValues },
     get sessionRestoredAtFinish() { return sessionRestoredAtFinish },
+    get beginAttempts() { return beginAttempts },
+    get beginAttemptObserved() { return beginAttemptObserved },
+    get rollbackObserved() { return rollbackObserved },
     get now() { return fakeNow },
     set now(value: number) { fakeNow = value },
     set afterCommit(callback: (() => void) | undefined) { afterCommit = callback },
     set onDatabaseQuery(callback: ((text: string) => void) | undefined) { onDatabaseQuery = callback },
+    set beginGate(value: Promise<void> | undefined) { beginGate = value },
     addPublished(index: number) {
       const id = `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
       const versionID = `00000000-0000-4000-8001-${String(index + 1).padStart(12, '0')}`
@@ -315,7 +329,9 @@ test('published catalog excludes drafts, returns exact saved Version IDs, counts
   const second = await queryPortalPages(f.req, { limit: 1, offset: 1, category: 'policies' }, reader)
   assert.equal(second.count, 2)
   assert.equal(second.rows[0]?.id, pageID)
-  assert.ok(f.calls.includes('reference-lock'))
+  assert.equal(f.peakReferenceLocks, 0, 'catalog projection reads never acquire CMS_REFERENCE_LOCK')
+  assert.equal(f.calls.some(call => call.includes('FOR SHARE')), false,
+    'snapshot-backed category and media reference validation relies on MVCC rather than row locks')
 })
 
 test('catalog keyset cursor preserves PostgreSQL microseconds across a bounded batch boundary', async () => {
@@ -361,19 +377,22 @@ test('availability returns false only after the published cursor is exhausted', 
   assert.equal(f.calls.includes('catalog-count'), false)
 })
 
-test('category aggregation releases the exclusive reference lock between bounded batches', async () => {
+test('category aggregation uses lock-free bounded batches under one exported snapshot', async () => {
   const f = fixture()
   for (let index = 0; index < 12; index++) f.addPublished(index)
   const result = await queryPortalPageCategories(f.req, reader, {
     signal: new AbortController().signal, deadlineAt: Date.now() + 4000,
   })
   assert.equal(result[0]?.count, 14)
-  assert.equal(f.peakReferenceLocks, 1)
-  assert.equal(f.lockedPageReadMaximum <= 10, true, 'one lock covers no more than one bounded batch')
+  assert.equal(f.peakReferenceLocks, 0, 'projection batches never acquire CMS_REFERENCE_LOCK')
+  assert.equal(f.maxPageReadsPerTransaction <= 10, true, 'each imported transaction reads at most one bounded batch')
   assert.equal(f.transactionCommits, 2, '14 candidate pages require two committed bounded batches')
+  assert.equal(f.transactionRollbacks, 1, 'the lock-free read-only snapshot holder is always rolled back')
+  assertSetupBeforeSnapshot(f, 'read-1', true)
+  assertSetupBeforeSnapshot(f, 'read-2', false)
 })
 
-test('category batches reuse one exported snapshot when publication changes between batches', async () => {
+test('category batches reuse one exported snapshot and never hold the shared advisory lock', async () => {
   const f = fixture()
   for (let index = 0; index < 12; index++) f.addPublished(index)
   let publishedDuringScan = false
@@ -388,12 +407,12 @@ test('category batches reuse one exported snapshot when publication changes betw
   })
   assert.equal(result[0]?.count, 14, 'the second batch excludes a publication committed after snapshot export')
   assert.equal(f.transactionCommits, 2)
-  assert.equal(f.peakReferenceLocks, 1)
-  assert.equal(f.activeReferenceLocks, 0, 'batch locks and the holder transaction are released')
+  assert.equal(f.peakReferenceLocks, 0, 'snapshot projection transactions do not serialize on the global lock')
+  assert.equal(f.activeReferenceLocks, 0)
   assert.equal(f.activeTransactionIDs.length, 1, 'the caller-owned fixture transaction remains untouched')
 })
 
-test('abort after one category batch prevents opening the next lock or scan query', async () => {
+test('abort after one category batch prevents opening the next snapshot transaction or scan query', async () => {
   const f = fixture()
   for (let index = 0; index < 12; index++) f.addPublished(index)
   const controller = new AbortController()
@@ -402,7 +421,83 @@ test('abort after one category batch prevents opening the next lock or scan quer
     signal: controller.signal, deadlineAt: Date.now() + 4000,
   }), error => (error as { status?: number }).status === 503)
   assert.equal(f.transactionCommits, 1)
+  assert.equal(f.peakReferenceLocks, 0)
   assert.equal(f.calls.filter(call => call.startsWith('published-query:')).length, 1)
+})
+
+function assertSetupBeforeSnapshot(f: ReturnType<typeof fixture>, transactionID: string, exportsSnapshot: boolean): void {
+  const commands = f.calls.filter(call => call.startsWith(`sql:${transactionID}:`)).map(call => call.slice(`sql:${transactionID}:`.length))
+  const statementTimeout = commands.findIndex(command => command.includes('SET LOCAL statement_timeout'))
+  const lockTimeout = commands.findIndex(command => command.includes('SET LOCAL lock_timeout'))
+  const isolation = commands.findIndex(command => command.includes('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'))
+  assert.ok(statementTimeout >= 0 && lockTimeout > statementTimeout && isolation > lockTimeout,
+    'finite SET LOCAL timeouts precede repeatable-read setup before any data query')
+  const snapshotCommand = exportsSnapshot
+    ? commands.findIndex(command => command.includes('SELECT pg_export_snapshot() AS snapshot_id'))
+    : commands.findIndex(command => command.includes('SET TRANSACTION SNAPSHOT'))
+  assert.ok(snapshotCommand > isolation, 'snapshot export/import follows transaction isolation setup')
+  assert.ok(commands.slice(0, snapshotCommand).every(command =>
+    command.includes('SET LOCAL statement_timeout') || command.includes('SET LOCAL lock_timeout') ||
+    command.includes('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY') ||
+    (exportsSnapshot && command.includes('set_config('))),
+  'no data query or modification precedes snapshot import (holder export is its first read)')
+  if (exportsSnapshot) {
+    assert.ok(commands.find(command => command.includes('SELECT pg_export_snapshot() AS snapshot_id')))
+    assert.equal(commands.some(command => command.includes('pg_advisory_xact_lock')), false,
+      'snapshot holder never acquires the shared lock')
+  } else {
+    const dataQuery = commands.findIndex(command => command.includes('SELECT page.id AS id'))
+    assert.ok(dataQuery > snapshotCommand, 'the first data query follows snapshot import')
+    assert.equal(commands.some(command => command.includes('pg_advisory_xact_lock')), false,
+      'projection transaction never acquires the shared lock')
+  }
+}
+
+test('deadline during transaction startup returns 503 and rolls back late success without reader SQL', async () => {
+  const f = fixture()
+  let releaseBegin!: () => void
+  f.beginGate = new Promise<void>(resolve => { releaseBegin = resolve })
+  const pending = queryPortalPageAvailability(f.req, reader, { deadlineAt: Date.now() + 40 })
+  await f.beginAttemptObserved
+  await assert.rejects(pending, error => (error as { status?: number }).status === 503)
+  assert.equal(f.transactionRollbacks, 0, 'no transaction ID exists yet when the caller deadline is reported')
+
+  releaseBegin()
+  await f.rollbackObserved
+  assert.equal(f.transactionRollbacks, 1, 'late transaction ID is rolled back exactly once')
+  assert.equal(f.calls.filter(call => call.startsWith('sql:')).length, 0,
+    'late begin cleanup runs no timeout setup, snapshot import, data, or advisory-lock query')
+  assert.deepEqual(f.activeTransactionIDs, ['live'])
+})
+
+test('abort during transaction startup also rolls back late success and never starts reader SQL', async () => {
+  const f = fixture()
+  let releaseBegin!: () => void
+  f.beginGate = new Promise<void>(resolve => { releaseBegin = resolve })
+  const controller = new AbortController()
+  const pending = queryPortalPageCategories(f.req, reader, { signal: controller.signal, deadlineAt: Date.now() + 5000 })
+  await f.beginAttemptObserved
+  controller.abort()
+  await assert.rejects(pending, error => (error as { status?: number }).status === 503)
+  releaseBegin()
+  await f.rollbackObserved
+  assert.equal(f.transactionRollbacks, 1)
+  assert.equal(f.calls.filter(call => call.startsWith('sql:')).length, 0)
+  assert.deepEqual(f.activeTransactionIDs, ['live'])
+})
+
+test('late begin rejection is handled after the caller deadline without a pending rejection leak', async () => {
+  const f = fixture()
+  let rejectBegin!: (error: Error) => void
+  f.beginGate = new Promise<void>((_resolve, reject) => { rejectBegin = reject })
+  const pending = queryPortalPageAvailability(f.req, reader, { deadlineAt: Date.now() + 40 })
+  await f.beginAttemptObserved
+  await assert.rejects(pending, error => (error as { status?: number }).status === 503)
+  rejectBegin(new Error('late adapter begin failure'))
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(f.transactionRollbacks, 0)
+  assert.equal(f.calls.filter(call => call.startsWith('sql:')).length, 0)
+  assert.deepEqual(f.activeTransactionIDs, ['live'])
 })
 
 test('category scan budget exhaustion fails with 503 instead of returning truncated counts', async () => {
@@ -420,6 +515,11 @@ test('published detail is canonical-slug-only and never reads the draft with the
   assert.equal(result?.id, pageID)
   assert.equal(result?.revision.id, versionID)
   assert.equal(await queryPortalPagePublishedDetail(f.req, 'draft-only', reader), null)
+  assert.equal(f.peakReferenceLocks, 0, 'published detail projections never acquire CMS_REFERENCE_LOCK')
+  assert.ok(f.calls.some(call => call.includes('SET TRANSACTION SNAPSHOT')),
+    'published detail uses an imported exported snapshot')
+  assert.equal(f.calls.some(call => call.includes('FOR SHARE')), false,
+    'published detail reference validation uses the imported snapshot rather than row locks')
 })
 
 test('categories include only eligible published pages and count each page once per category', async () => {
@@ -481,7 +581,7 @@ test('per-operation timeout refresh uses a fake clock and stops issuing SQL when
   }), error => (error as { status?: number }).status === 503)
   assert.equal(expiring.transactionCommits, 1)
   assert.equal(expiring.transactionRollbacks, 1, 'the exported-snapshot holder rolls back during cleanup')
-  assert.equal(expiring.activeReferenceLocks, 0, 'the committed batch releases its transaction lock')
+  assert.equal(expiring.activeReferenceLocks, 0, 'projection batch and holder never acquire CMS_REFERENCE_LOCK')
   assert.equal(expiring.calls.filter(call => call.startsWith('published-query:')).length, 1,
     'expiry prevents opening a later batch or issuing another candidate query')
 
@@ -512,7 +612,7 @@ test('operational Payload query failure becomes sanitized 503 rather than an ine
     assert.equal((error as Error).message.includes('synthetic database connection detail'), false)
     return true
   })
-  assert.equal(f.activeReferenceLocks, 1, 'the caller-owned transaction retains its reference lock until its owner ends it')
+  assert.equal(f.activeReferenceLocks, 0, 'published detail failure never acquires the reference lock')
   assert.ok(f.sessionRestoredAtFinish.every(Boolean))
 })
 
@@ -522,6 +622,9 @@ test('preview uses only the exact saved Version for its parent and requires edit
   assert.equal(result?.title, 'Unpublished edit')
   assert.deepEqual(result?.revision, { id: draftVersionID, status: 'draft' })
   assert.equal(result?.asset_scope, 'portal-pages-preview')
+  assert.equal(f.peakReferenceLocks, 0, 'editorial preview JSON uses an imported snapshot without the shared lock')
+  assert.equal(f.calls.some(call => call.includes('FOR SHARE')), false,
+    'snapshot-backed preview reference validation uses MVCC rather than row locks')
   assert.equal(await queryPortalPagePreview(f.req, pageID, otherPageVersionID, editor), null)
   await assert.rejects(queryPortalPagePreview(f.req, pageID, draftVersionID, reader), /permission_denied/)
 })
