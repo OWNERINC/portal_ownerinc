@@ -37,6 +37,11 @@ function version(id: string, parent: string, document: Record<string, unknown>, 
   return { id, parent, version: { ...document, _status: status }, updatedAt: document.publishedAt }
 }
 
+function cursorTimestamp(value: string | null): string | null {
+  if (value === null) return null
+  return value.replace(/(?:\.(\d{1,6}))?Z$/u, (_match, fraction: string | undefined) => `.${(fraction || '').padEnd(6, '0')}Z`)
+}
+
 function fixture() {
   const publishedAt = '2026-10-19T10:00:00.000Z'
   const newerPublishedAt = publishedAt // Equal timestamps assert the UUID descending tie-breaker.
@@ -50,21 +55,44 @@ function fixture() {
     version(versionID, pageID, published),
   ]
   const calls: string[] = []
-  const sessions: Record<string, { db: { execute: (query: unknown) => Promise<{ rows: Array<Record<string, unknown>> }> } }> = {}
-  const sessionState = new Map<string, { locked: boolean; pageReads: number }>()
+  const timeoutValues = new Map<string, number[]>()
+  const originalPrepareQueries = new Map<string, FakeDatabase['session']['prepareQuery']>()
+  const sessionRestoredAtFinish: boolean[] = []
+  type FakeQueryResult = { rows: Array<Record<string, unknown>> }
+  type FakeDatabase = {
+    execute: (query: unknown) => Promise<FakeQueryResult>
+    session: { prepareQuery: (query: unknown) => { execute: () => Promise<FakeQueryResult>; all: () => Promise<FakeQueryResult> } }
+  }
+  const sessions: Record<string, { db: FakeDatabase }> = {}
+  type FakeTransactionState = { locked: boolean; pageReads: number; snapshotID?: string; snapshotHolder?: boolean }
+  const sessionState = new Map<string, FakeTransactionState>()
+  const snapshots = new Map<string, { pages: typeof pages; versions: typeof versions }>()
   let transactionNumber = 0
+  let snapshotNumber = 0
   let referenceLocks = 0
   let peakReferenceLocks = 0
   let transactionBegins = 0
   let transactionCommits = 0
+  let transactionRollbacks = 0
   let lockedPageReadMaximum = 0
   let afterCommit: (() => void) | undefined
+  let onDatabaseQuery: ((text: string) => void) | undefined
+  let fakeNow = Date.now()
   const media = { id: assetID, originalName: 'guide.pdf', storageKey: '018f47a2-7b3c-7a11-8a2c-1234567890b3.pdf',
     mimeType: 'application/pdf', filesize: 20, sha256: 'a'.repeat(64), state: 'complete', uploadedBy: 'editor',
     completedAt: publishedAt }
 
-  const filterCategory = (slug: string | undefined) => pages.filter(value => value._status === 'published' &&
+  const docsFor = (state: Pick<FakeTransactionState, 'snapshotID'>) => state.snapshotID ? snapshots.get(state.snapshotID) || { pages, versions } : { pages, versions }
+  const filterCategory = (slug: string | undefined, state: Pick<FakeTransactionState, 'snapshotID'>) => docsFor(state).pages.filter(value => value._status === 'published' &&
     (slug === undefined || value.categories.some(category => category.slug === slug)))
+  const compareCatalog = (left: { id: string; publishedAt: string | null }, right: { id: string; publishedAt: string | null }) => {
+    if (left.publishedAt === null && right.publishedAt !== null) return -1
+    if (left.publishedAt !== null && right.publishedAt === null) return 1
+    if (left.publishedAt !== null && right.publishedAt !== null) {
+      if (left.publishedAt !== right.publishedAt) return left.publishedAt > right.publishedAt ? -1 : 1
+    }
+    return right.id.localeCompare(left.id)
+  }
   const queryParts = (query: unknown) => {
     let text = ''
     const params: unknown[] = []
@@ -78,16 +106,40 @@ function fixture() {
         params.push(chunk)
       }
     }
-    visit(query)
+    if (typeof query === 'string') text = query
+    else visit(query)
     return { text, params }
   }
 
   const makeSession = (id: string) => {
-    const state = { locked: false, pageReads: 0 }
+    const state: FakeTransactionState = { locked: false, pageReads: 0 }
     sessionState.set(id, state)
-    return { db: { execute: async (query: unknown) => {
+    const runQuery = async (query: unknown) => {
       const { text, params } = queryParts(query)
       calls.push(`sql:${text}`)
+      onDatabaseQuery?.(text)
+      if (text.includes('set_config(')) {
+        const values = timeoutValues.get(id) || []
+        for (const value of params) if (typeof value === 'string' && /^\d+ms$/u.test(value)) values.push(Number(value.slice(0, -2)))
+        timeoutValues.set(id, values)
+        return { rows: [{}] }
+      }
+      if (text.includes('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')) {
+        Object.assign(state, { snapshotHolder: true })
+        return { rows: [] }
+      }
+      const imported = text.match(/SET TRANSACTION SNAPSHOT '([0-9A-Fa-f-]+)'/u)
+      if (imported) {
+        Object.assign(state, { snapshotID: imported[1] })
+        assert.ok(snapshots.has(imported[1]!), 'batch must import a currently held exported snapshot')
+        return { rows: [] }
+      }
+      if (text.includes('SELECT pg_export_snapshot() AS snapshot_id')) {
+        const snapshotID = `00000001-00000002-${++snapshotNumber}`
+        snapshots.set(snapshotID, structuredClone({ pages, versions }))
+        Object.assign(state, { snapshotHolder: true })
+        return { rows: [{ snapshot_id: snapshotID }] }
+      }
       if (text.includes('pg_advisory_xact_lock')) {
         calls.push('reference-lock')
         if (!state.locked) {
@@ -97,30 +149,32 @@ function fixture() {
         }
         return { rows: [] }
       }
-      if (text.includes('SELECT count(*)::bigint AS count')) {
-        assert.equal(state.locked, true, 'catalog count must acquire the reference lock first')
-        calls.push('catalog-count')
-        const categorySlug = text.includes('category.slug =') ? params.find(value => typeof value === 'string') as string : undefined
-        return { rows: [{ count: BigInt(filterCategory(categorySlug).length) }] }
-      }
-      if (text.includes('SELECT page.id AS id')) {
+      if (text.includes('SELECT page.id AS id') && text.includes('AS published_at') && text.includes('FROM portal_pages AS page')) {
         assert.equal(state.locked, true, 'published candidate query must acquire the reference lock first')
+        assert.ok(state.snapshotID && snapshots.has(state.snapshotID), 'each bounded reader batch must import the exported snapshot')
         calls.push(`published-query:${id}`)
-        const categorySlug = text.includes('category.slug =') ? params.find(value => typeof value === 'string' && !/^[0-9a-f-]{36}$/u.test(value)) as string : undefined
-        let selected = filterCategory(categorySlug)
-        if (text.includes('ORDER BY page.id ASC')) {
-          const cursor = params.find(value => typeof value === 'string' && /^[0-9a-f-]{36}$/u.test(value)) as string | undefined
-          selected = selected.filter(value => cursor === undefined || value.id > cursor).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-          const limit = params.filter((value): value is number => typeof value === 'number').at(-1) as number
-          return { rows: selected.slice(0, limit).map(value => ({ id: value.id })) }
+        const categorySlug = params.find(value => typeof value === 'string' && !/^[0-9a-f-]{36}$/iu.test(value) && !Number.isFinite(Date.parse(value))) as string | undefined
+        const cursorID = params.find(value => typeof value === 'string' && /^[0-9a-f-]{36}$/iu.test(value)) as string | undefined
+        const cursorDate = params.find(value => typeof value === 'string' && Number.isFinite(Date.parse(value))) as string | undefined
+        let selected = filterCategory(categorySlug, state).map(value => ({ id: value.id, publishedAt: cursorTimestamp(value.publishedAt) }))
+        if (cursorID) {
+          const cursor = { id: cursorID, publishedAt: cursorDate || null }
+          selected = selected.filter(value => {
+            if (cursor.publishedAt === null) return value.publishedAt !== null || value.id < cursor.id
+            if (value.publishedAt === null) return false
+            return value.publishedAt < cursor.publishedAt || (value.publishedAt === cursor.publishedAt && value.id < cursor.id)
+          })
         }
-        selected.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt) || b.id.localeCompare(a.id))
-        const numericParams = params.filter(value => typeof value === 'number') as number[]
-        const [limit, offset] = numericParams.slice(-2)
-        return { rows: selected.slice(offset, offset + limit).map(value => ({ id: value.id })) }
+        selected.sort(compareCatalog)
+        const limit = params.filter((value): value is number => typeof value === 'number').at(-1) as number
+        return { rows: selected.slice(0, limit).map(value => ({ id: value.id, published_at: value.publishedAt })) }
       }
       return { rows: [] }
-    } } }
+    }
+    const session = { prepareQuery: (query: unknown) => ({ execute: () => runQuery(query), all: () => runQuery(query) }) }
+    originalPrepareQueries.set(id, session.prepareQuery)
+    const db = { session, execute: (query: unknown) => session.prepareQuery(query).execute() }
+    return { db }
   }
   sessions.live = makeSession('live')
   const payload = {
@@ -136,6 +190,7 @@ function fixture() {
       },
       commitTransaction: async (id: string) => {
         transactionCommits += 1
+        sessionRestoredAtFinish.push(sessions[id]?.db.session.prepareQuery === originalPrepareQueries.get(id))
         const state = sessionState.get(id)
         if (state?.locked) referenceLocks -= 1
         lockedPageReadMaximum = Math.max(lockedPageReadMaximum, state?.pageReads || 0)
@@ -144,16 +199,21 @@ function fixture() {
         afterCommit?.()
       },
       rollbackTransaction: async (id: string) => {
+        transactionRollbacks += 1
+        sessionRestoredAtFinish.push(sessions[id]?.db.session.prepareQuery === originalPrepareQueries.get(id))
         const state = sessionState.get(id)
         if (state?.locked) referenceLocks -= 1
+        if (state?.snapshotHolder) for (const snapshotID of snapshots.keys()) snapshots.delete(snapshotID)
         delete sessions[id]
         sessionState.delete(id)
       },
     },
     find: async (args: Record<string, any>) => {
       calls.push(`find:${args.collection}`)
-      assert.ok(sessions[String(args.req.transactionID)], 'Payload find must use an active transaction')
-      let docs = args.collection === 'portal-pages' ? [...pages] : []
+      const transaction = sessions[String(args.req.transactionID)] as unknown as { db: { execute: (query: unknown) => Promise<unknown> } } | undefined
+      assert.ok(transaction, 'Payload find must use an active transaction')
+      await transaction.db.execute('SELECT 1 AS payload_find')
+      let docs = args.collection === 'portal-pages' ? [...docsFor(sessionState.get(String(args.req.transactionID)) as { snapshotID?: string }).pages] : []
       const filters = args.where?.and || [args.where || {}]
       const slug = filters.find((filter: any) => filter.slug)?.slug?.equals
       const id = filters.find((filter: any) => filter.id)?.id?.equals
@@ -174,10 +234,12 @@ function fixture() {
       calls.push(`findVersions:${JSON.stringify(args.sort || null)}`)
       const state = sessionState.get(String(args.req.transactionID))
       assert.ok(state, 'Payload version lookup must use an active transaction')
+      const transaction = sessions[String(args.req.transactionID)] as unknown as { db: { execute: (query: unknown) => Promise<unknown> } }
+      await transaction.db.execute('SELECT 1 AS payload_find_versions')
       if (String(args.req.transactionID).startsWith('read-')) {
         assert.equal(state.locked, true, 'published revision validation must hold the reference lock')
       }
-      let docs = versions
+      let docs = docsFor(state).versions
       const filters = args.where?.and || []
       const parent = filters.find((filter: any) => filter.parent)?.parent?.equals
       const id = filters.find((filter: any) => filter.id)?.id?.equals
@@ -195,11 +257,13 @@ function fixture() {
       calls.push(`findByID:${args.collection}`)
       const state = sessionState.get(String(args.req.transactionID))
       assert.ok(state, 'Payload findByID must use an active transaction')
+      const transaction = sessions[String(args.req.transactionID)] as unknown as { db: { execute: (query: unknown) => Promise<unknown> } }
+      await transaction.db.execute('SELECT 1 AS payload_find_by_id')
       if (String(args.req.transactionID).startsWith('read-')) {
         assert.equal(state.locked, true, 'published page/reference reads must hold the reference lock')
       }
       if (args.collection === 'portal-pages') state.pageReads += 1
-      if (args.collection === 'portal-pages') return pages.find(doc => doc.id === args.id) || null
+      if (args.collection === 'portal-pages') return docsFor(state).pages.find(doc => doc.id === args.id) || null
       if (args.collection === 'portal-page-categories' && args.id === categoryID) return { id: categoryID, slug: 'policies', name: 'Policies' }
       if (args.collection === 'portal-page-media' && args.id === assetID) return media
       return null
@@ -212,8 +276,16 @@ function fixture() {
     get peakReferenceLocks() { return peakReferenceLocks },
     get transactionBegins() { return transactionBegins },
     get transactionCommits() { return transactionCommits },
+    get transactionRollbacks() { return transactionRollbacks },
     get lockedPageReadMaximum() { return lockedPageReadMaximum },
+    get activeReferenceLocks() { return referenceLocks },
+    get activeTransactionIDs() { return Object.keys(sessions) },
+    get timeoutValues() { return timeoutValues },
+    get sessionRestoredAtFinish() { return sessionRestoredAtFinish },
+    get now() { return fakeNow },
+    set now(value: number) { fakeNow = value },
     set afterCommit(callback: (() => void) | undefined) { afterCommit = callback },
+    set onDatabaseQuery(callback: ((text: string) => void) | undefined) { onDatabaseQuery = callback },
     addPublished(index: number) {
       const id = `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
       const versionID = `00000000-0000-4000-8001-${String(index + 1).padStart(12, '0')}`
@@ -234,12 +306,36 @@ test('published catalog excludes drafts, returns exact saved Version IDs, counts
   assert.equal(result.rows[0]?.revision.status, 'published')
   assert.equal(result.rows[0]?.asset_scope, 'portal-pages')
   assert.ok(!JSON.stringify(result).includes('Private draft'))
-  assert.equal(f.calls.filter(call => call.includes("set_config('statement_timeout'")).length, 2,
-    'the database statement timeout is refreshed after reference-lock acquisition')
+  const timeoutSequences = [...f.timeoutValues.values()]
+  assert.ok(timeoutSequences.reduce((sum, values) => sum + values.length, 0) > 2,
+    'the statement and lock timeouts refresh before each transaction database operation')
+  assert.ok(timeoutSequences.every(values => values.every((value, index) => index === 0 || value <= values[index - 1]!)),
+    'transaction-local timeouts never increase within one transaction')
+  assert.ok(f.sessionRestoredAtFinish.every(Boolean), 'the pinned session instrumentation is removed before commit/rollback')
   const second = await queryPortalPages(f.req, { limit: 1, offset: 1, category: 'policies' }, reader)
   assert.equal(second.count, 2)
   assert.equal(second.rows[0]?.id, pageID)
   assert.ok(f.calls.includes('reference-lock'))
+})
+
+test('catalog keyset cursor preserves PostgreSQL microseconds across a bounded batch boundary', async () => {
+  const f = fixture()
+  const expectedIDs: string[] = []
+  for (let index = 0; index < 12; index++) {
+    const suffix = String(100 + index).padStart(12, '0')
+    const id = `00000000-0000-4000-8000-${suffix}`
+    const versionID = `00000000-0000-4000-8001-${suffix}`
+    const timestamp = `2026-10-19T10:00:00.${String(123456 + index).padStart(6, '0')}Z`
+    const document = page(id, `microsecond-${index}`, `Microsecond ${index}`, timestamp)
+    f.pages.push(document)
+    f.versions.push(version(versionID, id, document))
+    expectedIDs.unshift(id)
+  }
+
+  const result = await queryPortalPages(f.req, { limit: 50, offset: 0 }, reader)
+  assert.equal(result.count, 14, 'both sub-millisecond rows after the first ten remain eligible and counted')
+  assert.deepEqual(result.rows.slice(0, 12).map(row => row.id), expectedIDs,
+    'keyset order retains PostgreSQL microseconds rather than collapsing to JavaScript milliseconds')
 })
 
 test('availability uses a dedicated early-exit existence path and stops after the first eligible publication', async () => {
@@ -277,7 +373,7 @@ test('category aggregation releases the exclusive reference lock between bounded
   assert.equal(f.transactionCommits, 2, '14 candidate pages require two committed bounded batches')
 })
 
-test('a publication committed between category batches is observed after the cursor without holding the prior lock', async () => {
+test('category batches reuse one exported snapshot when publication changes between batches', async () => {
   const f = fixture()
   for (let index = 0; index < 12; index++) f.addPublished(index)
   let publishedDuringScan = false
@@ -290,9 +386,11 @@ test('a publication committed between category batches is observed after the cur
   const result = await queryPortalPageCategories(f.req, reader, {
     signal: new AbortController().signal, deadlineAt: Date.now() + 4000,
   })
-  assert.equal(result[0]?.count, 15, 'the fresh second batch includes the publication committed after the first batch')
+  assert.equal(result[0]?.count, 14, 'the second batch excludes a publication committed after snapshot export')
   assert.equal(f.transactionCommits, 2)
   assert.equal(f.peakReferenceLocks, 1)
+  assert.equal(f.activeReferenceLocks, 0, 'batch locks and the holder transaction are released')
+  assert.equal(f.activeTransactionIDs.length, 1, 'the caller-owned fixture transaction remains untouched')
 })
 
 test('abort after one category batch prevents opening the next lock or scan query', async () => {
@@ -328,6 +426,94 @@ test('categories include only eligible published pages and count each page once 
   const f = fixture()
   const result = await queryPortalPageCategories(f.req, reader)
   assert.deepEqual(result, [{ id: categoryID, slug: 'policies', name: 'Policies', count: 2 }])
+})
+
+test('catalog offset and eligible total skip Version drift and broken category/media references', async () => {
+  const f = fixture()
+  const driftedSavedVersion = f.versions.find(row => row.id === otherPageVersionID)!.version as Record<string, unknown>
+  driftedSavedVersion.title = 'Drifted published title'
+
+  const eligibleOffsetPage = page('00000000-0000-4000-8000-000000000001', 'eligible-offset', 'Eligible offset page',
+    '2026-10-19T10:00:00.000Z')
+  f.pages.push(eligibleOffsetPage)
+  f.versions.push(version('00000000-0000-4000-8001-000000000001', eligibleOffsetPage.id, eligibleOffsetPage))
+
+  const missingVersionPage = page('00000000-0000-4000-8000-000000000004', 'missing-version', 'Missing version',
+    '2026-10-19T10:00:00.000Z')
+  f.pages.push(missingVersionPage)
+
+  const missingCategoryPage = page('00000000-0000-4000-8000-000000000002', 'missing-category', 'Missing category',
+    '2026-10-19T10:00:00.000Z')
+  missingCategoryPage.categories = [{ id: '00000000-0000-4000-8000-000000000099', slug: 'gone', name: 'Gone' }]
+  f.pages.push(missingCategoryPage)
+  f.versions.push(version('00000000-0000-4000-8001-000000000002', missingCategoryPage.id, missingCategoryPage))
+
+  const missingMediaPage = page('00000000-0000-4000-8000-000000000003', 'missing-media', 'Missing media',
+    '2026-10-19T10:00:00.000Z')
+  missingMediaPage.body = [{ blockType: 'image', asset: assetAID, alt: 'Broken media' }] as any
+  f.pages.push(missingMediaPage)
+  f.versions.push(version('00000000-0000-4000-8001-000000000003', missingMediaPage.id, missingMediaPage))
+
+  const result = await queryPortalPages(f.req, { limit: 1, offset: 1 }, reader)
+  assert.equal(result.count, 2, 'only the two pages with exact, valid saved Versions count')
+  assert.deepEqual(result.rows.map(row => row.id), [eligibleOffsetPage.id], 'offset is applied after eligibility validation')
+})
+
+test('per-operation timeout refresh uses a fake clock and stops issuing SQL when the deadline expires', async () => {
+  const f = fixture()
+  f.now = 10_000
+  f.onDatabaseQuery = () => { f.now += 5 }
+  const deadlineAt = f.now + 2_000
+  const result = await queryPortalPageAvailability(f.req, reader, { now: () => f.now, deadlineAt })
+  assert.equal(result, true)
+  const sequences = [...f.timeoutValues.values()].filter(values => values.length > 0)
+  assert.ok(sequences.some(values => new Set(values).size > 1), 'the fake clock makes successive per-operation timeouts decrease')
+  assert.ok(sequences.every(values => values.every((value, index) => index === 0 || value <= values[index - 1]!)),
+    'no timeout refresh increases within a transaction')
+
+  const expiring = fixture()
+  for (let index = 0; index < 12; index++) expiring.addPublished(index)
+  expiring.now = 20_000
+  const controller = new AbortController()
+  expiring.afterCommit = () => { expiring.now = 20_100 }
+  await assert.rejects(queryPortalPageCategories(expiring.req, reader, {
+    signal: controller.signal, now: () => expiring.now, deadlineAt: 20_100,
+  }), error => (error as { status?: number }).status === 503)
+  assert.equal(expiring.transactionCommits, 1)
+  assert.equal(expiring.transactionRollbacks, 1, 'the exported-snapshot holder rolls back during cleanup')
+  assert.equal(expiring.activeReferenceLocks, 0, 'the committed batch releases its transaction lock')
+  assert.equal(expiring.calls.filter(call => call.startsWith('published-query:')).length, 1,
+    'expiry prevents opening a later batch or issuing another candidate query')
+
+  const beforeQuery = fixture()
+  beforeQuery.now = 30_000
+  const deadline = 30_050
+  beforeQuery.onDatabaseQuery = text => { if (text.includes('set_config(')) beforeQuery.now = deadline }
+  await assert.rejects(queryPortalPageAvailability(beforeQuery.req, reader, {
+    now: () => beforeQuery.now, deadlineAt: deadline,
+  }), error => (error as { status?: number }).status === 503)
+  assert.equal(beforeQuery.calls.some(call => call.includes('pg_export_snapshot()')), false,
+    'a deadline reached while refreshing settings prevents the following statement')
+  assert.equal(beforeQuery.calls.filter(call => call.includes('set_config(')).length, 1)
+  assert.equal(beforeQuery.transactionRollbacks, 1)
+  assert.equal(beforeQuery.activeReferenceLocks, 0)
+  assert.ok(beforeQuery.sessionRestoredAtFinish.every(Boolean))
+})
+
+test('operational Payload query failure becomes sanitized 503 rather than an ineligible row', async () => {
+  const f = fixture()
+  f.onDatabaseQuery = text => {
+    if (text.includes('payload_find_versions')) throw new Error('synthetic database connection detail')
+  }
+  await assert.rejects(queryPortalPagePublishedDetail(f.req, 'older-policy', reader, {
+    deadlineAt: Date.now() + 2_000,
+  }), error => {
+    assert.equal((error as { status?: number }).status, 503)
+    assert.equal((error as Error).message.includes('synthetic database connection detail'), false)
+    return true
+  })
+  assert.equal(f.activeReferenceLocks, 1, 'the caller-owned transaction retains its reference lock until its owner ends it')
+  assert.ok(f.sessionRestoredAtFinish.every(Boolean))
 })
 
 test('preview uses only the exact saved Version for its parent and requires editor capability', async () => {

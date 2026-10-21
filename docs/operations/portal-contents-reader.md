@@ -25,19 +25,32 @@
   carregados. Não substitua erro do CMS por catálogo vazio e não contorne 404 de
   conteúdo despublicado.
 - **Budget do leitor:** requests JSON têm deadline total de 4,2 s na API e máximo
-  de 4 s no CMS. O deadline/cancelamento é propagado ao serviço; locks e statements
-  PostgreSQL recebem timeout pelo tempo restante. Uma página de catálogo usa uma
-  transação determinística para contagem, IDs e validação dos DTOs. Disponibilidade
-  usa probe separado de existência e para na primeira publicação elegível. A
-  agregação de categorias lê IDs em ordem crescente, no máximo dez candidatos por
-  transação/lock e 100.000 candidatos por scan; o lock é liberado entre lotes.
-  Essa agregação não tem snapshot global entre lotes, então mudanças editoriais
-  concorrentes podem aparecer em batches diferentes: uma publicação após a
-  posição já percorrida pode só aparecer na leitura seguinte; uma publicação à
-  frente do cursor pode entrar no resultado atual. A contagem do catálogo usa as
-  linhas publicadas no banco, mas cada DTO retornado passa pela validação exata de
-  revisão/referências/projeção. Abort, deadline, falha ou limite excedido resulta
-  em 503 sanitizado, nunca em contagem/catálogo parcial.
+  de 4 s no CMS. Antes/depois de cada operação SQL do leitor (inclusive cada SQL
+  emitido por uma operação da Local API Payload), o CMS verifica abort/deadline e
+  atualiza `lock_timeout` e `statement_timeout` transaction-local para no máximo o
+  tempo restante, sem aumentar o timeout corrente. Os valores expiram com a
+  transação; erros operacionais, timeout, abort ou limite excedido retornam 503
+  sanitizado, nunca contagem/lista/categorias parciais.
+- **Elegibilidade e paginação:** o total e os offsets contam somente páginas que
+  passam status publicado, Version publicada salva exata, igualdade dos campos
+  públicos atuais, projeção e validação integral de referências de categoria/mídia.
+  Drift, Version ausente/malformada, projeção inválida e referências quebradas são
+  ineligíveis e não inflam total nem offset; falha de banco continua fatal para a
+  request. A seleção usa keyset na ordem pública `publishedAt DESC, id DESC`, no
+  máximo dez candidatos por batch e 100.000 candidatos por leitura. O cursor UTC
+  conserva os microssegundos nativos do PostgreSQL e não é arredondado via
+  JavaScript `Date`, inclusive entre batches. Detalhe mantém comportamento
+  fail-closed se houver drift.
+- **Consistência entre batches:** catálogo, categorias e disponibilidade abrem um
+  holder `REPEATABLE READ, READ ONLY` de até 4 s, sem `CMS_REFERENCE_LOCK`, exportam
+  um snapshot PostgreSQL e fazem rollback/liberam o holder ao final. Cada batch
+  importa o mesmo snapshot antes de ler dados, adquire seu próprio
+  `CMS_REFERENCE_LOCK` e o libera no fim; portanto publicação/despublicação durante
+  o scan não aparece apenas nos batches posteriores. Disponibilidade conserva o
+  early exit na primeira página elegível e não calcula count. O holder retém um
+  horizonte MVCC enquanto aberto e pode atrasar vacuum de tuplas mortas: monitorar
+  transações antigas/autovacuum, especialmente em leitura próxima do limite, e
+  confirmar encerramento do holder após falha.
 - **Conteúdo:** o browser valida o DTO público inteiro antes de renderizar. São
   aceitos até 100 blocos, 10.000 nós, 5 MiB de blocos, 6 MiB por detalhe, 16 MiB
   por coleção, 20 categorias por página, 20 imagens por galeria, 12 itens por
@@ -86,6 +99,32 @@
   Nginx, não apenas existência do iframe.
 
 ## Aceite local, guardas e evidência
+
+### Regressão PostgreSQL opcional do timeout por operação — `NOT_EXECUTED`
+
+Este caso é somente para um PostgreSQL **descartável local, nomeado e explicitamente
+autorizado**; não inicia serviço, não usa URL de runtime nem executa SQL em banco
+remoto. O resultado permanece `NOT_EXECUTED` até a execução autorizada e evidência
+real:
+
+1. Com o runner CMS de leitor configurado apenas para o banco descartável guardado,
+   inicie uma leitura com deadline de aproximadamente 150 ms e execute, dentro do
+   transaction helper de leitura, `SELECT pg_sleep(1)`. Não use banco ou dados de
+   produção.
+2. Registre somente elapsed monotônico, SQLSTATE observado pelo harness/driver
+   (`57014` esperado para `statement_timeout`) e status CMS (503 sanitizado). O
+   harness deve provar que uma segunda query marcada após o `pg_sleep` não foi
+   enviada, que o rollback liberou `CMS_REFERENCE_LOCK` e que a transação holder
+   (se usada pelo cenário) foi encerrada.
+3. Em uma conexão/transação nova, compare os `current_setting('statement_timeout')`
+   e `current_setting('lock_timeout')` com os defaults observados antes do caso;
+   os `SET LOCAL`/`set_config(..., true)` anteriores não podem vazar. Não copie
+   connection strings, SQL com dados, credenciais ou logs brutos para a evidência.
+
+Sem adapter/harness que exponha SQLSTATE e prova de “nenhuma segunda query”, não
+improvise conexão nem marque PASS: registre `NOT_EXECUTED` e a limitação. A suíte
+offline fake-clock testa timeout decrescente, deadline, bloqueio de operações
+subsequentes e cleanup, mas não substitui este teste PostgreSQL.
 
 O aceite de serviços é manual e separado de `npm run verify`. Não inicie Docker,
 Nginx, API, CMS, migrations ou browser sem autorização explícita para o projeto

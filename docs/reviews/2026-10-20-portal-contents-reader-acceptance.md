@@ -104,32 +104,57 @@ evidência de execução.
 
 ### Correção final P1 — consultas bounded/canceláveis
 
-- O catálogo calcula a contagem e busca somente os IDs da página solicitada em
-  uma transação determinística sob `CMS_REFERENCE_LOCK`; cada DTO continua
-  vinculado à Version publicada exata, e divergência na página selecionada falha
-  fechada. A disponibilidade usa ação CMS própria, sem count/list, e termina no
-  primeiro DTO publicado elegível.
-- Categorias percorrem cursor UUID crescente, no máximo dez candidatos por
-  transação/lock e 100.000 candidatos por leitura. O lock é liberado entre lotes;
-  não existe snapshot global de categorias durante publicação concorrente. Abort,
-  deadline, falha ou exceder limites resulta em 503 sanitizado, nunca em resultado
-  parcial. JSON requests têm deadline de 4,2 s na API e clamp de até 4 s no CMS,
-  com `lock_timeout`/`statement_timeout` pelo tempo restante.
-- Regressões offline cobrem ordem/offset do catálogo (inclusive desempate por UUID),
-  caminho de existência e early exit, exaustão `available:false`, lock isolado por
-  lote, publicação entre lotes, abort antes do próximo lote, orçamento esgotado,
-  validação do body deadline, stream abortado, DTO estrito e limite da resposta.
-- CMS `npm run test:unit`: **720 descobertos, 709 aprovados, 0 falhas, 11 skips
-  opcionais** antes do último ajuste de timeout após lock. Depois desse ajuste,
-  `node --import tsx --test tests/unit/portal-pages-reader.test.ts
-  tests/unit/portal-pages-service-access.test.ts` passou (**17 aprovados, 0
-  falhas**) e CMS `npm run typecheck` passou novamente.
-- API bridge + Payload client + browser/API DTO: **36 aprovados, 0 falhas**.
-  Testes CMS URL-focused: **20 aprovados, 0 falhas**.
-  `node scripts/generate-public-shell.mjs --check` passou; `npm run security`
-  encontrou **0 vulnerabilidades** nos três pacotes. Após o ajuste final, o modo
-  de secret scan `node scripts/verify.mjs security` e `git diff --check` também
-  passaram; este modo de verificação de segredos não repete o audit de dependências.
+- Round 1 era parcial: catálogo contava linhas publicadas brutas e categorias não
+  compartilhavam snapshot entre batches. Round 2 fecha os dois bloqueios: catálogo,
+  disponibilidade e categorias usam um snapshot PostgreSQL exportado por holder
+  `REPEATABLE READ, READ ONLY` sem `CMS_REFERENCE_LOCK`; cada batch de até dez
+  candidatos importa esse snapshot antes de qualquer leitura, adquire seu próprio
+  lock e libera-o ao terminar. O holder permanece limitado ao budget CMS de 4 s.
+- O catálogo percorre a keyset `publishedAt DESC, id DESC` até 100.000 candidatos;
+  só status publicado, documento principal, Version salva publicada exata,
+  igualdade de campos públicos e referências de categoria/mídia íntegros contam
+  para total e offset. Drift, Version ausente/malformada, projeção inválida e
+  referência quebrada são inelegíveis. Falha de banco/operacional, abort, timeout
+  ou limite excedido falha a request inteira com 503 sanitizado. Detalhe mantém
+  falha fechada em drift; disponibilidade preserva early exit na primeira página
+  elegível. Cursor UTC conserva a precisão PostgreSQL de microssegundos sem
+  arredondamento por JavaScript `Date`, com regressão que cruza o limite de batch.
+  Snapshots garantem que mudanças concorrentes não apareçam em somente parte dos
+  batches; o holder pode prolongar o horizonte MVCC enquanto aberto.
+- Antes/depois de cada query no limite `prepareQuery` do adapter Node/Postgres e
+  de cada operação Local API multi-query, deadline/abort são verificados. O CMS
+  atualiza `lock_timeout` e `statement_timeout` transaction-local a cada operação
+  para valor não maior que o restante e nunca crescente dentro da transação. As
+  configurações são eliminadas pelo fim da transação; sessões instrumentadas são
+  restauradas antes de commit/rollback. Testes fake-clock cobrem timeout
+  decrescente, expiração antes da próxima query, bloqueio de operações seguintes,
+  rollback e liberação de locks.
+- `node --import tsx --test tests/unit/portal-pages-reader.test.ts` cobre elegibilidade,
+  offset após linhas inválidas, drift/Version/referências quebradas, snapshot
+  importado entre batches, mutação durante scan, early exit, abort/budget, erro
+  operacional sanitizado e cleanup. A suíte CMS final (`npm run test:unit`, em
+  `cms/`) descobriu **724 testes: 713 aprovados, 0 falhas, 11 skips opcionais**;
+  dois cenários indicaram explicitamente PGlite ausente; os demais são skips
+  opcionais da suíte.
+  Um primeiro run pós-alteração descobriu dois doubles editoriais sem o `session`
+  Drizzle exigido pelo adapter instrumentado; o fixture foi atualizado e o run
+  completo final passou.
+- CMS focado
+  (`node --import tsx --test tests/unit/portal-pages-reader.test.ts
+  tests/unit/portal-pages-service-access.test.ts tests/unit/portal-pages-api-contract.test.ts
+  tests/unit/portal-pages-endpoint-lifecycle.test.ts`): **27 aprovados, 0 falhas**;
+  `npm run typecheck` passou. Portal/API/browser público (bridge, Payload client,
+  DTO, API, availability, leitor, roteamento e teste deste runbook): **88
+  aprovados, 0 falhas**.
+- `node scripts/verify.mjs security`, `npm run security` (API/cron/CMS: **0
+  vulnerabilidades**), `node scripts/generate-public-shell.mjs --check` e
+  `git diff --check` passaram. O root `npm run verify` **não foi repetido**; o
+  único run anterior continua registrado como falho acima e no relatório local.
+- PostgreSQL real não foi iniciado: o cenário documentado `SELECT pg_sleep(1)` com
+  deadline curto, SQLSTATE esperado `57014`, nenhuma segunda query, rollback/lock
+  release e ausência de vazamento de `SET LOCAL` permanece **NOT_EXECUTED**. A
+  inspeção do adapter instalado só confirma o caminho de execução; não prova
+  behavior PostgreSQL/runtime. Veja limitações detalhadas no relatório local.
 - `npm run verify` foi executado uma vez nesta rodada: **2.154 descobertos,
   2.113 aprovados, 22 falhas e 19 skips**, exit 1 após cerca de 249 s. A etapa de
   typecheck CMS passou antes da etapa de testes. As falhas observadas foram

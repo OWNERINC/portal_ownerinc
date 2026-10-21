@@ -256,25 +256,44 @@ da identidade, mas não é uma barreira de autorização da rota nem substitui a
 validação por requisição. Falha de categorias não apaga cards carregados.
 
 As leituras JSON têm budget total de 4,2 s na API; o CMS limita cada request a no
-máximo 4 s, propagando deadline e cancelamento, com `lock_timeout` e
-`statement_timeout` no tempo restante. Esgotamento ou falha operacional retorna
-503 sanitizado; lista e agregação de categorias nunca retornam resultados
-parciais. Uma página do catálogo calcula a contagem e busca IDs/DTOs na mesma
-transação determinística, sob `CMS_REFERENCE_LOCK`, ordenada por
-`publishedAt DESC, id DESC`. O probe de disponibilidade usa ação própria: percorre
-em lotes curtos de dez candidatos, valida a revisão publicada e para no primeiro
-DTO elegível, sem calcular contagem ou montar catálogo.
+máximo 4 s, propagando deadline e cancelamento. No limite de execução do Drizzle
+Node/Postgres (Payload 3.90.2 / Drizzle 0.45.2), cada operação SQL de leitura
+confere o budget antes e depois do await e atualiza `lock_timeout` e
+`statement_timeout` transaction-local para no máximo o tempo restante, nunca
+aumentando os valores já aplicados naquela transação. Também há guardas antes/depois
+das operações da Local API Payload que podem emitir várias instruções SQL. Timeout,
+abort, falha operacional ou limite excedido retorna 503 sanitizado; catálogo e
+categorias nunca retornam resultado parcial. As configurações são `SET LOCAL` ou
+`set_config(..., true)` e não sobrevivem ao rollback/commit da transação.
 
-A agregação de categorias percorre IDs crescentes em lotes de até dez candidatos;
-cada lote abre sua própria transação e lock, liberados antes do próximo lote. O
-scan é limitado a 100.000 candidatos e ao budget. Não há snapshot transacional
-global entre lotes: publicação/despublicação concorrente pode ser observada por
-lotes diferentes. Uma publicação que entra depois da posição já percorrida pode
-ficar para a próxima leitura; uma publicação à frente do cursor pode entrar no
-resultado atual. O cursor determinístico evita repetir IDs e nenhum resultado
-parcial é devolvido se o scan for interrompido. A contagem do catálogo usa as
-linhas publicadas no banco; cada DTO da página selecionada ainda exige revisão,
-referências e projeção consistentes, e uma divergência falha com 503.
+Catálogo, disponibilidade e agregação de categorias compartilham uma validação de
+elegibilidade: status publicado, documento principal válido, Version publicada
+salva exata ainda correspondente aos campos públicos atuais e todas as referências
+de categoria/mídia resolvidas e válidas. Drift, Version ausente/malformada,
+projeção inválida e referência quebrada tornam a página inelegível e não entram no
+total; falha de banco, timeout/abort e falha operacional continuam falhando toda a
+requisição com 503. Detalhe publicado mantém a semântica fail-closed para drift.
+Paginação e `offset` são aplicados sobre a ordem determinística dos candidatos,
+mas contagem/offset são de páginas elegíveis, não de linhas brutas publicadas.
+Uma consulta de catálogo pode examinar até 100.000 candidatos em keyset batches de
+até dez. O cursor de `publishedAt` preserva a precisão de microssegundos do
+PostgreSQL em UTC; não passa por `Date` antes da próxima comparação/keyset, evitando
+lacunas quando vários candidatos diferem apenas abaixo do milissegundo. Exceder o
+limite ou o budget falha por inteiro.
+
+Para dar consistência entre esses batches, cada leitura de catálogo, disponibilidade
+ou categorias mantém um holder PostgreSQL `REPEATABLE READ, READ ONLY`, sem
+`CMS_REFERENCE_LOCK`, exporta um snapshot e o encerra em rollback. Cada batch abre
+sua própria transação, importa esse mesmo snapshot antes de qualquer leitura de
+dados e então adquire `CMS_REFERENCE_LOCK`; o lock é liberado no fim do batch, antes
+do próximo. Assim, publicação/despublicação concorrente durante o scan não mistura
+estados: o resultado representa a elegibilidade observável no snapshot exportado.
+O holder permanece aberto somente pelo budget CMS de até 4 s; enquanto ativo, ele
+retém um horizonte MVCC e pode atrasar vacuum de tuplas mortas. Operação deve
+monitorar transações antigas/autovacuum e confirmar que nenhum holder ficou aberto
+após erro; abort, deadline e falha sempre encerram batch/holder sem resultado
+parcial. A disponibilidade conserva o early exit no primeiro DTO elegível e não
+calcula contagem nem monta catálogo.
 
 O browser valida estritamente a forma pública antes de montar DOM: até 100 blocos,
 10.000 nós, 5 MiB de conteúdo JSON, 6 MiB por detalhe, 16 MiB por coleção,

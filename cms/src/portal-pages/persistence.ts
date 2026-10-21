@@ -5,7 +5,12 @@ import { canManagePortalPages } from '../auth/portal-pages-access'
 import type { PortalPageBlock } from './blocks'
 import type { PortalPagePublicationInput } from './contracts'
 import { assertReferenceStoreCoverage } from '../media/references'
-import { requireCmsTransaction, withCmsTransaction } from '../publication/transaction'
+import {
+  requireCmsTransaction,
+  withCmsReadOperation,
+  withCmsTransaction,
+  type CmsTransactionOptions,
+} from '../publication/transaction'
 import { array, record, uuid } from './primitives'
 import { PORTAL_PAGE_IMAGE_MIMES, PORTAL_PAGE_MEDIA_MIMES } from './primitives'
 import {
@@ -138,7 +143,8 @@ function mediaMimeRequirements(page: PortalPageRefInput): PortalPageMediaUsage[]
 }
 
 /** Validate all selected categories under row locks while the shared CMS lock is held. */
-export async function assertPortalPageCategoryReferences(payload: Payload, values: unknown, req: PayloadRequest): Promise<string[]> {
+export async function assertPortalPageCategoryReferences(payload: Payload, values: unknown, req: PayloadRequest,
+  readOptions?: CmsTransactionOptions): Promise<string[]> {
   const categories = values == null ? [] : Array.isArray(values) ? values : [values]
   const ids = [...new Set(categories.map(value => {
     const id = relationID(value)
@@ -150,17 +156,17 @@ export async function assertPortalPageCategoryReferences(payload: Payload, value
     const db = await requireCmsTransaction(payload, transactionReq)
     for (const id of ids) {
       await db.execute(sql`SELECT id FROM portal_page_categories WHERE id = ${id}::uuid FOR SHARE`)
-      const category = await payload.findByID({ collection: 'portal-page-categories', id, req: transactionReq,
-        overrideAccess: true, depth: 0, disableErrors: true })
+      const category = await withCmsReadOperation(readOptions, () => payload.findByID({ collection: 'portal-page-categories', id,
+        req: transactionReq, overrideAccess: true, depth: 0, disableErrors: true }))
       if (!category) throw new APIError('invalid_portal_page_category_reference', 400, undefined, true)
     }
     return ids
-  })
+  }, readOptions)
 }
 
 /** Load each selected media row under the shared reference lock and validate every usage role. */
 export async function loadPortalPageMediaReferences(payload: Payload, page: PortalPageRefInput, req: PayloadRequest,
-  options: { requireComplete?: boolean } = {}): Promise<Map<string, PortalPageMediaReadRecord>> {
+  options: { requireComplete?: boolean; readOptions?: CmsTransactionOptions } = {}): Promise<Map<string, PortalPageMediaReadRecord>> {
   return withCmsTransaction(payload, req, async transactionReq => {
     const db = await requireCmsTransaction(payload, transactionReq)
     const requirements = mediaMimeRequirements(page)
@@ -169,8 +175,8 @@ export async function loadPortalPageMediaReferences(payload: Payload, page: Port
       let record = checked.get(id)
       if (!record) {
         await db.execute(sql`SELECT id FROM portal_page_media WHERE id = ${id}::uuid FOR SHARE`)
-        const media = await payload.findByID({ collection: 'portal-page-media', id, req: transactionReq,
-          overrideAccess: true, depth: 0, disableErrors: true }) as Record<string, unknown> | null
+        const media = await withCmsReadOperation(options.readOptions, () => payload.findByID({ collection: 'portal-page-media', id,
+          req: transactionReq, overrideAccess: true, depth: 0, disableErrors: true })) as Record<string, unknown> | null
         if (!media) throw new APIError('invalid_portal_page_media_reference', 400, undefined, true)
         let metadata: ReturnType<typeof validatePortalPageMediaMetadata>
         try {
@@ -191,7 +197,7 @@ export async function loadPortalPageMediaReferences(payload: Payload, page: Port
       }
     }
     return checked
-  })
+  }, options.readOptions)
 }
 
 /** Validate existence, completeness (when required), and block-specific MIME under row locks. */

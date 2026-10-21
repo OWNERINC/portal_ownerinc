@@ -13,7 +13,12 @@ function copy<T>(value: T): T { return structuredClone(value) }
 /** Transaction-aware Payload fake. Commit can deliberately resolve without persistence. */
 export function editorialFixture() {
   const calls: EditorialCall[] = []
-  const sessions: Record<string, { db: { execute: (query: unknown) => Promise<{ rows: unknown[] }> } }> = {}
+  type FixtureResult = { rows: unknown[] }
+  type FixtureDB = {
+    execute: (query: unknown) => Promise<FixtureResult>
+    session: { prepareQuery: (query: unknown) => { execute: () => Promise<FixtureResult>; all: () => Promise<FixtureResult> } }
+  }
+  const sessions: Record<string, { db: FixtureDB }> = {}
   let transactionNumber = 0
   let lostCommit = false
   let versionAfterCommit = false
@@ -47,9 +52,16 @@ export function editorialFixture() {
     const req = args && typeof args === 'object' ? (args as { req?: { transactionID?: unknown } }).req : undefined
     calls.push({ operation, transactionID: req?.transactionID, args })
   }
-  const sessionFor = (id: string) => ({ db: {
-    execute: async (query: unknown) => { calls.push({ operation: 'sql', transactionID: id, args: query }); return { rows: [] } },
-  } })
+  const sessionFor = (id: string) => {
+    const runQuery = async (query: unknown): Promise<FixtureResult> => {
+      calls.push({ operation: 'sql', transactionID: id, args: query })
+      return { rows: [] }
+    }
+    const session: FixtureDB['session'] = {
+      prepareQuery: (query: unknown) => ({ execute: () => runQuery(query), all: () => runQuery(query) }),
+    }
+    return { db: { session, execute: (query: unknown) => session.prepareQuery(query).execute() } }
+  }
   const payload = {
     config: { i18n: { fallbackLanguage: 'pt' }, admin: { user: 'portal-editors' }, collections: {} }, collections: {},
     db: {
