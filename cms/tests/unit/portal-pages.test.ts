@@ -267,8 +267,10 @@ test('CMS link normalization matches the 2048 UTF-16-unit URL contract for block
   const maxURL = `${prefix}${'a'.repeat(2048 - prefix.length)}`
   const overURL = `${maxURL}a`
   assert.equal(maxURL.length, 2048)
-  assert.equal(normalizePortalPageContent([{ type: 'link', label: 'Acessar', url: maxURL,
-    new_tab: false, style: 'primary' }])[0]?.url, maxURL)
+  const normalizedLink = normalizePortalPageContent([{ type: 'link', label: 'Acessar', url: maxURL,
+    new_tab: false, style: 'primary' }])[0]
+  assert.ok(normalizedLink && normalizedLink.type === 'link')
+  assert.equal(normalizedLink.url, maxURL)
   assert.equal(normalizePortalPageContent([richText()])[0]?.type, 'rich_text')
   assert.equal(normalizePortalPageContent([{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [
     { type: 'link', url: maxURL, new_tab: false, children: [{ type: 'text', text: 'Link', marks: [] }] },

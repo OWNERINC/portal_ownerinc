@@ -14,7 +14,9 @@ import {
 import type { LinkFeatureServerProps } from '@payloadcms/richtext-lexical'
 import { MAX_PORTAL_PAGE_URL_LENGTH } from './primitives'
 
-export function portalPageLinkFields({ defaultFields }: Parameters<NonNullable<LinkFeatureServerProps['fields']>>[0]) {
+type LinkFeatureFieldsCallback = Exclude<NonNullable<LinkFeatureServerProps['fields']>, unknown[]>
+
+export function portalPageLinkFields({ defaultFields }: Parameters<LinkFeatureFieldsCallback>[0]) {
   return defaultFields.map(field => field.name === 'url'
     ? { ...field, maxLength: MAX_PORTAL_PAGE_URL_LENGTH }
     : field)

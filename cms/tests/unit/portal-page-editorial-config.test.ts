@@ -99,7 +99,7 @@ test('all Payload URL authoring controls expose the shared 2048-character limit'
   }
 
   const defaults = [{ name: 'text', type: 'text' }, { name: 'url', type: 'text' }, { name: 'newTab', type: 'checkbox' }]
-  const fields = portalPageLinkFields({ defaultFields: defaults as never }) as Array<Record<string, unknown>>
+  const fields = portalPageLinkFields({ config: {} as never, defaultFields: defaults as never }) as Array<Record<string, unknown>>
   assert.equal(fields.find(field => field.name === 'url')?.maxLength, 2048)
   assert.equal(fields.find(field => field.name === 'text')?.maxLength, undefined)
   assert.equal(fields.find(field => field.name === 'newTab')?.maxLength, undefined)
