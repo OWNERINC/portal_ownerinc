@@ -24,6 +24,20 @@
   oferecem retry; erro de categorias pode ser repetido sem descartar cards já
   carregados. Não substitua erro do CMS por catálogo vazio e não contorne 404 de
   conteúdo despublicado.
+- **Budget do leitor:** requests JSON têm deadline total de 4,2 s na API e máximo
+  de 4 s no CMS. O deadline/cancelamento é propagado ao serviço; locks e statements
+  PostgreSQL recebem timeout pelo tempo restante. Uma página de catálogo usa uma
+  transação determinística para contagem, IDs e validação dos DTOs. Disponibilidade
+  usa probe separado de existência e para na primeira publicação elegível. A
+  agregação de categorias lê IDs em ordem crescente, no máximo dez candidatos por
+  transação/lock e 100.000 candidatos por scan; o lock é liberado entre lotes.
+  Essa agregação não tem snapshot global entre lotes, então mudanças editoriais
+  concorrentes podem aparecer em batches diferentes: uma publicação após a
+  posição já percorrida pode só aparecer na leitura seguinte; uma publicação à
+  frente do cursor pode entrar no resultado atual. A contagem do catálogo usa as
+  linhas publicadas no banco, mas cada DTO retornado passa pela validação exata de
+  revisão/referências/projeção. Abort, deadline, falha ou limite excedido resulta
+  em 503 sanitizado, nunca em contagem/catálogo parcial.
 - **Conteúdo:** o browser valida o DTO público inteiro antes de renderizar. São
   aceitos até 100 blocos, 10.000 nós, 5 MiB de blocos, 6 MiB por detalhe, 16 MiB
   por coleção, 20 categorias por página, 20 imagens por galeria, 12 itens por

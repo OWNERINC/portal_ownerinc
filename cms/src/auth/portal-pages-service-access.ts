@@ -3,7 +3,7 @@ import { APIError } from 'payload'
 import { uuid } from '../portal-pages/primitives'
 import type { PortalPageReadActor } from '../portal-pages/reader'
 
-export const portalPageActions = ['list', 'categories', 'detail', 'preview', 'asset'] as const
+export const portalPageActions = ['list', 'categories', 'availability', 'detail', 'preview', 'asset'] as const
 export type PortalPageAction = typeof portalPageActions[number]
 
 const invalid = () => { throw new APIError('invalid_request', 400, undefined, true) }
@@ -59,6 +59,7 @@ export function readPortalPageInput(action: PortalPageAction, value: unknown): R
           !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value.category)))) invalid()
       break
     case 'categories': keys(value, []); break
+    case 'availability': keys(value, []); break
     case 'detail':
       keys(value, ['slug'])
       if (typeof value.slug !== 'string' || value.slug.length > 160 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value.slug)) invalid()

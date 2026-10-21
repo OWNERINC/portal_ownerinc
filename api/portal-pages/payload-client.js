@@ -5,7 +5,7 @@ const { MIME_EXTENSIONS, readPortalPageResult, unavailable } = require('./payloa
 
 const MiB = 1024 * 1024;
 const MAX_ASSET_BYTES = 500 * MiB;
-const actions = Object.freeze(['list', 'categories', 'detail', 'preview', 'asset']);
+const actions = Object.freeze(['list', 'categories', 'availability', 'detail', 'preview', 'asset']);
 const requestIDPattern = /^[A-Za-z0-9._:-]{1,128}$/u;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
@@ -28,6 +28,7 @@ function validInput(action, input) {
     && Number.isSafeInteger(input.offset) && input.offset >= 0 && input.offset <= 1_000_000
     && (!Object.hasOwn(input, 'category') || (typeof input.category === 'string' && input.category.length <= 160 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(input.category)));
   if (action === 'categories') return exact([]);
+  if (action === 'availability') return exact([]);
   if (action === 'detail') return exact(['slug']) && typeof input.slug === 'string' && input.slug.length <= 160 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(input.slug);
   if (action === 'preview') return exact(['pageId', 'versionId']) && id(input.pageId) && id(input.versionId);
   if (action === 'asset') return exact(['pageId', 'revisionId', 'assetId', 'preview', 'range']) && id(input.pageId) && id(input.revisionId) && id(input.assetId)
@@ -59,9 +60,16 @@ function readWithIdleTimeout(reader, controller, idleTimeoutMs, timers = null) {
     }, idleTimeoutMs);
     timers?.add(timer);
   });
-  return Promise.race([reader.read(), timeout]).finally(() => {
+  let abortListener;
+  const aborted = new Promise((_, reject) => {
+    abortListener = () => reject(unavailable());
+    if (controller.signal.aborted) abortListener();
+    else controller.signal.addEventListener('abort', abortListener, { once: true });
+  });
+  return Promise.race([reader.read(), timeout, aborted]).finally(() => {
     clearTimeout(timer);
     timers?.delete(timer);
+    if (abortListener) controller.signal.removeEventListener('abort', abortListener);
   });
 }
 
@@ -98,8 +106,9 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
     origin = url.origin;
   } catch { throw unavailable(); }
 
-  async function request(action, input, actor, { signal, requestId } = {}) {
+  async function request(action, input, actor, { signal, requestId, deadlineAt } = {}) {
     if (!actions.includes(action) || !validInput(action, input) || !validActor(actor)) throw unavailable();
+    if (deadlineAt !== undefined && (!Number.isSafeInteger(deadlineAt) || deadlineAt <= Date.now())) throw unavailable();
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
@@ -108,10 +117,14 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
     const body = JSON.stringify({ actor, input });
     if (Buffer.byteLength(body, 'utf8') > 16 * 1024) { signal?.removeEventListener('abort', abort); throw unavailable(); }
     let timer;
+    let deadlineTimer;
     let response;
     let fetchPromise;
+    const deadlineHeaders = deadlineAt === undefined ? {} : { 'X-Request-Deadline': String(deadlineAt) };
+    const requestTimeoutMs = deadlineAt === undefined ? headerTimeoutMs : Math.min(headerTimeoutMs, deadlineAt - Date.now());
+    if (deadlineAt !== undefined) deadlineTimer = setTimeout(() => controller.abort(), Math.max(0, deadlineAt - Date.now()));
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => { controller.abort(); reject(unavailable()); }, headerTimeoutMs);
+      timer = setTimeout(() => { controller.abort(); reject(unavailable()); }, requestTimeoutMs);
     });
     let externalAbortListener;
     const externalAbort = signal ? new Promise((_, reject) => {
@@ -123,6 +136,7 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
       fetchPromise = Promise.resolve().then(() => fetchImpl(`${origin}/editorial/api/portal-pages/${action}`, {
         method: 'POST', cache: 'no-store', redirect: 'error', signal: controller.signal,
         headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json', 'X-Request-ID': correlation,
+          ...deadlineHeaders,
           Accept: action === 'asset' ? 'application/octet-stream' : 'application/json', 'Accept-Encoding': 'identity' },
         body,
       }));
@@ -130,11 +144,12 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
       clearTimeout(timer);
       if (controller.signal.aborted) throw unavailable();
       return { response, controller, cleanup: () => {
-        clearTimeout(timer); signal?.removeEventListener('abort', abort);
+        clearTimeout(timer); clearTimeout(deadlineTimer); signal?.removeEventListener('abort', abort);
         if (externalAbortListener) signal?.removeEventListener('abort', externalAbortListener);
       } };
     } catch (error) {
       clearTimeout(timer);
+      clearTimeout(deadlineTimer);
       controller.abort();
       signal?.removeEventListener('abort', abort);
       if (externalAbortListener) signal?.removeEventListener('abort', externalAbortListener);
@@ -153,7 +168,7 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
         await response.body?.cancel().catch(() => {});
         throw safeError([400, 403, 404].includes(response.status) ? response.status : 503);
       }
-      const maxBytes = action === 'list' || action === 'categories' ? 16 * MiB : 6 * MiB;
+      const maxBytes = action === 'availability' ? 1024 : action === 'list' || action === 'categories' ? 16 * MiB : 6 * MiB;
       const result = await readJSONResponse(response, controller, maxBytes, idleTimeoutMs);
       if (controller.signal.aborted) throw unavailable();
       return readPortalPageResult(action, result, input);
@@ -305,6 +320,7 @@ function createPortalPagesClient({ baseURL, secret, fetchImpl = globalThis.fetch
   return {
     list: (input, actor, options) => query('list', input, actor, options),
     categories: (input, actor, options) => query('categories', input, actor, options),
+    availability: (input, actor, options) => query('availability', input, actor, options),
     detail: (input, actor, options) => query('detail', input, actor, options),
     preview: (input, actor, options) => query('preview', input, actor, options),
     asset,

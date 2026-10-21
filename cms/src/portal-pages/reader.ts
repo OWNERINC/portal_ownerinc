@@ -1,5 +1,6 @@
 import { APIError, type Payload, type PayloadRequest } from 'payload'
-import { withCmsTransaction } from '../publication/transaction'
+import { sql } from '@payloadcms/db-postgres'
+import { requireCmsTransaction, withCmsTransaction, type CmsTransactionOptions } from '../publication/transaction'
 import {
   assertPortalPageCategoryReferences,
   loadPortalPageMediaReferences,
@@ -10,8 +11,10 @@ import { record, uuid } from './primitives'
 import { projectPortalPageContent } from './projection'
 import { normalizeSlug, validatePortalPageDTO } from './validation'
 
-const PAGE_BATCH_SIZE = 100
-const PAGE_SCAN_MAX = 1000
+const PAGE_BATCH_SIZE = 10
+const PAGE_SCAN_MAX = Math.ceil(100_000 / PAGE_BATCH_SIZE) + 1
+const PAGE_SCAN_MAX_ROWS = 100_000
+const DEFAULT_READ_BUDGET_MS = 4_000
 const PAGE_JSON_MAX_BYTES = 16 * 1024 * 1024
 const INVALID_PUBLISHED_PAGE = new APIError('portal_page_projection_invalid', 400, undefined, true)
 const NOT_FOUND = () => new APIError('not_found', 404, undefined, true)
@@ -27,6 +30,28 @@ export type PortalPageListInput = { limit: number; offset: number; category?: st
 export type PortalPagePageResult = { rows: PortalPageDTO[]; count: number }
 export type PortalPageCategoryDTO = { id: string; slug: string; name: string; count: number }
 export type PortalPageReadResult = { dto: PortalPageDTO; media: Map<string, PortalPageMediaReadRecord> }
+export type PortalPageReadOptions = { signal?: AbortSignal; deadlineAt?: number }
+
+function effectiveReadOptions(options: PortalPageReadOptions = {}): CmsTransactionOptions & { deadlineAt: number } {
+  return { signal: options.signal, deadlineAt: options.deadlineAt ?? Date.now() + DEFAULT_READ_BUDGET_MS }
+}
+
+function assertReadBudget(options: CmsTransactionOptions & { deadlineAt: number }): void {
+  if (options.signal?.aborted || Date.now() >= options.deadlineAt) throw UNAVAILABLE()
+}
+
+async function withReadBatch<T>(req: PayloadRequest, options: CmsTransactionOptions & { deadlineAt: number },
+  work: (transactionReq: PayloadRequest) => Promise<T>): Promise<T> {
+  assertReadBudget(options)
+  // Read batches own short transactions even when Payload supplied an outer request transaction.
+  const isolatedRequest = { ...req, transactionID: undefined } as PayloadRequest
+  return withCmsTransaction(req.payload, isolatedRequest, async transactionReq => {
+    assertReadBudget(options)
+    const result = await work(transactionReq)
+    assertReadBudget(options)
+    return result
+  }, options)
+}
 
 function fail(status: number, code: string): never {
   throw new APIError(code, status, undefined, true)
@@ -167,24 +192,79 @@ async function findPublishedBySlug(payload: Payload, req: PayloadRequest, slug: 
   return publishedPage(payload, req, { id: page.id, page })
 }
 
-async function scanPublished(payload: Payload, req: PayloadRequest, visit: (page: PortalPageReadResult) => void | Promise<void>) {
-  for (let pageNumber = 1; pageNumber <= PAGE_SCAN_MAX; pageNumber++) {
-    const result = await payload.find({ collection: 'portal-pages', req, depth: 1, draft: false, overrideAccess: true,
-      limit: PAGE_BATCH_SIZE, page: pageNumber, sort: ['-publishedAt', '-id'],
-      where: { _status: { equals: 'published' } } })
-    for (const row of result.docs) {
-      const value = row as unknown as Record<string, unknown>
-      if (value._status !== 'published' || typeof value.id !== 'string') continue
-      try {
-        const eligible = await publishedPage(payload, req, { id: value.id, page: value })
-        if (eligible) await visit(eligible)
-      } catch (error) {
-        // Invalid editorial snapshots are not catalog entries; operational failures remain visible.
-        if (error instanceof APIError && error.status === 400) continue
-        throw error
+function publishedPageFilter(category?: string) {
+  if (category === undefined) return sql`page._status = 'published'`
+  return sql`page._status = 'published' AND EXISTS (
+    SELECT 1 FROM portal_pages_rels AS relation
+    INNER JOIN portal_page_categories AS category ON category.id = relation.portal_page_categories_id
+    WHERE relation.parent_id = page.id AND relation.path = 'categories' AND category.slug = ${category}
+  )`
+}
+
+function databaseRows(result: unknown): Array<Record<string, unknown>> {
+  if (!result || typeof result !== 'object' || !Array.isArray((result as { rows?: unknown }).rows)) throw UNAVAILABLE()
+  return (result as { rows: Array<Record<string, unknown>> }).rows
+}
+
+function pageIDsFromRows(rows: Array<Record<string, unknown>>): string[] {
+  try { return rows.map(row => uuid(row.id, 'invalid_portal_page_reference')) }
+  catch { throw UNAVAILABLE() }
+}
+
+function compareText(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0 }
+
+async function selectNextPublishedIDs(payload: Payload, req: PayloadRequest, cursor: string | null, limit: number) {
+  const db = await requireCmsTransaction(payload, req)
+  const where = cursor === null
+    ? sql`page._status = 'published'`
+    : sql`page._status = 'published' AND page.id > ${cursor}::uuid`
+  const result = await db.execute(sql`SELECT page.id AS id FROM portal_pages AS page WHERE ${where}
+    ORDER BY page.id ASC LIMIT ${limit}`)
+  return pageIDsFromRows(databaseRows(result))
+}
+
+async function readPublishedPageByID(payload: Payload, req: PayloadRequest, id: string): Promise<PortalPageReadResult | null> {
+  const raw = await payload.findByID({ collection: 'portal-pages', id, req, overrideAccess: true, depth: 1,
+    draft: false, disableErrors: true }) as unknown
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const page = raw as Record<string, unknown>
+  if (page.id !== id || page._status !== 'published') return null
+  return publishedPage(payload, req, { id, page })
+}
+
+async function scanPublished(req: PayloadRequest, options: CmsTransactionOptions & { deadlineAt: number },
+  visit: (page: PortalPageReadResult) => void | Promise<void>) {
+  let cursor: string | null = null
+  let scanned = 0
+  for (let pageNumber = 0; pageNumber < PAGE_SCAN_MAX; pageNumber++) {
+    assertReadBudget(options)
+    const batch = await withReadBatch(req, options, async transactionReq => {
+      const ids = await selectNextPublishedIDs(req.payload, transactionReq, cursor, PAGE_BATCH_SIZE)
+      assertReadBudget(options)
+      if (ids.length > PAGE_BATCH_SIZE || (ids.length && ids.at(-1)! <= (cursor || ''))) throw UNAVAILABLE()
+      if (scanned + ids.length > PAGE_SCAN_MAX_ROWS) throw UNAVAILABLE()
+      const pages: PortalPageReadResult[] = []
+      for (const id of ids) {
+        assertReadBudget(options)
+        try {
+          const eligible = await readPublishedPageByID(req.payload, transactionReq, id)
+          if (eligible) pages.push(eligible)
+        } catch (error) {
+          // Malformed published authoring data is not a public row; revision/reference failures stay fatal.
+          if (error instanceof APIError && error.status === 400) continue
+          throw error
+        }
       }
+      return { ids, pages }
+    })
+    if (batch.ids.length === 0) return
+    scanned += batch.ids.length
+    cursor = batch.ids.at(-1)!
+    for (const page of batch.pages) {
+      assertReadBudget(options)
+      await visit(page)
     }
-    if (!result.hasNextPage) return
+    if (batch.ids.length < PAGE_BATCH_SIZE) return
   }
   throw UNAVAILABLE()
 }
@@ -197,52 +277,120 @@ function checkListInput(input: PortalPageListInput): PortalPageListInput {
   return input
 }
 
-export function queryPortalPages(req: PayloadRequest, rawInput: PortalPageListInput, actor: PortalPageReadActor): Promise<PortalPagePageResult> {
+export function queryPortalPages(req: PayloadRequest, rawInput: PortalPageListInput, actor: PortalPageReadActor,
+  rawOptions: PortalPageReadOptions = {}): Promise<PortalPagePageResult> {
   if (!actorIsValid(actor)) return Promise.reject(new APIError('invalid_request', 400, undefined, true))
   const input = checkListInput(rawInput)
-  return withCmsTransaction(req.payload, req, async transactionReq => {
-    let count = 0
+  const options = effectiveReadOptions(rawOptions)
+  return withReadBatch(req, options, async transactionReq => {
+    const db = await requireCmsTransaction(req.payload, transactionReq)
+    const filter = publishedPageFilter(input.category)
+    const countResult = await db.execute(sql`SELECT count(*)::bigint AS count FROM portal_pages AS page WHERE ${filter}`)
+    assertReadBudget(options)
+    const countValue = databaseRows(countResult)[0]?.count
+    const count = typeof countValue === 'bigint' || typeof countValue === 'number' || typeof countValue === 'string'
+      ? Number(countValue) : Number.NaN
+    if (!Number.isSafeInteger(count) || count < 0 || count > PAGE_SCAN_MAX_ROWS) throw UNAVAILABLE()
+    const selectedResult = await db.execute(sql`SELECT page.id AS id FROM portal_pages AS page WHERE ${filter}
+      ORDER BY page.published_at DESC, page.id DESC LIMIT ${input.limit} OFFSET ${input.offset}`)
+    assertReadBudget(options)
+    const ids = pageIDsFromRows(databaseRows(selectedResult))
+    if (ids.length > input.limit) throw UNAVAILABLE()
     const rows: PortalPageDTO[] = []
-    await scanPublished(req.payload, transactionReq, page => {
-      if (input.category && !page.dto.categories.some(category => category.slug === input.category)) return
-      const index = count++
-      if (index >= input.offset && index < input.offset + input.limit) rows.push(page.dto)
-    })
+    for (const id of ids) {
+      assertReadBudget(options)
+      try {
+        const page = await readPublishedPageByID(req.payload, transactionReq, id)
+        if (!page) throw UNAVAILABLE()
+        rows.push(page.dto)
+      } catch (error) {
+        if (error instanceof APIError && error.status === 400) throw UNAVAILABLE()
+        throw error
+      }
+    }
+    if (new Set(rows.map(row => row.id)).size !== rows.length) throw UNAVAILABLE()
     const result = { rows, count }
     if (rows.length > input.limit || Buffer.byteLength(JSON.stringify(result), 'utf8') > PAGE_JSON_MAX_BYTES) throw UNAVAILABLE()
     return result
   })
 }
 
-export function queryPortalPagePublishedDetail(req: PayloadRequest, rawSlug: string, actor: PortalPageReadActor): Promise<PortalPageDTO | null> {
-  if (!actorIsValid(actor)) return Promise.reject(new APIError('invalid_request', 400, undefined, true))
-  const slug = canonicalSlug(rawSlug)
-  return withCmsTransaction(req.payload, req, async transactionReq => (await findPublishedBySlug(req.payload, transactionReq, slug))?.dto ?? null)
+export async function queryPortalPageAvailability(req: PayloadRequest, actor: PortalPageReadActor,
+  rawOptions: PortalPageReadOptions = {}): Promise<boolean> {
+  if (!actorIsValid(actor)) throw new APIError('invalid_request', 400, undefined, true)
+  const options = effectiveReadOptions(rawOptions)
+  let cursor: string | null = null
+  let scanned = 0
+  for (let pageNumber = 0; pageNumber < PAGE_SCAN_MAX; pageNumber++) {
+    assertReadBudget(options)
+    const batch = await withReadBatch(req, options, async transactionReq => {
+      const ids = await selectNextPublishedIDs(req.payload, transactionReq, cursor, PAGE_BATCH_SIZE)
+      assertReadBudget(options)
+      if (ids.length > PAGE_BATCH_SIZE || (ids.length && ids.at(-1)! <= (cursor || '')) || scanned + ids.length > PAGE_SCAN_MAX_ROWS) {
+        throw UNAVAILABLE()
+      }
+      for (const id of ids) {
+        assertReadBudget(options)
+        try {
+          const eligible = await readPublishedPageByID(req.payload, transactionReq, id)
+          if (eligible) return { available: true, ids, lastID: id, exhausted: false }
+        } catch (error) {
+          if (error instanceof APIError && error.status === 400) continue
+          throw error
+        }
+      }
+      return { available: false, ids, lastID: ids.at(-1) || cursor, exhausted: ids.length < PAGE_BATCH_SIZE }
+    })
+    if (batch.available) return true
+    if (batch.ids.length === 0 || batch.exhausted) return false
+    scanned += batch.ids.length
+    cursor = batch.lastID
+  }
+  throw UNAVAILABLE()
 }
 
-export function queryPortalPageCategories(req: PayloadRequest, actor: PortalPageReadActor): Promise<PortalPageCategoryDTO[]> {
+export function queryPortalPagePublishedDetail(req: PayloadRequest, rawSlug: string, actor: PortalPageReadActor,
+  rawOptions: PortalPageReadOptions = {}): Promise<PortalPageDTO | null> {
   if (!actorIsValid(actor)) return Promise.reject(new APIError('invalid_request', 400, undefined, true))
+  const slug = canonicalSlug(rawSlug)
+  const options = effectiveReadOptions(rawOptions)
   return withCmsTransaction(req.payload, req, async transactionReq => {
+    assertReadBudget(options)
+    const result = await findPublishedBySlug(req.payload, transactionReq, slug)
+    assertReadBudget(options)
+    return result?.dto ?? null
+  }, options)
+}
+
+export function queryPortalPageCategories(req: PayloadRequest, actor: PortalPageReadActor,
+  rawOptions: PortalPageReadOptions = {}): Promise<PortalPageCategoryDTO[]> {
+  if (!actorIsValid(actor)) return Promise.reject(new APIError('invalid_request', 400, undefined, true))
+  const options = effectiveReadOptions(rawOptions)
+  return (async () => {
     const counts = new Map<string, PortalPageCategoryDTO>()
-    await scanPublished(req.payload, transactionReq, page => {
+    await scanPublished(req, options, page => {
       for (const category of page.dto.categories) {
         const value = counts.get(category.id)
         if (value) value.count++
         else counts.set(category.id, { ...category, count: 1 })
       }
     })
-    const result = [...counts.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    assertReadBudget(options)
+    const result = [...counts.values()].sort((a, b) => compareText(a.name, b.name) || compareText(a.id, b.id))
+    assertReadBudget(options)
     if (result.length > 10_000 || Buffer.byteLength(JSON.stringify(result), 'utf8') > PAGE_JSON_MAX_BYTES) throw UNAVAILABLE()
     return result
-  })
+  })()
 }
 
 export function queryPortalPagePreview(req: PayloadRequest, rawPageID: string, rawVersionID: string,
-  actor: PortalPageReadActor): Promise<PortalPageDTO | null> {
+  actor: PortalPageReadActor, rawOptions: PortalPageReadOptions = {}): Promise<PortalPageDTO | null> {
   if (!actorIsValid(actor)) return Promise.reject(new APIError('invalid_request', 400, undefined, true))
   if (!actor.canManageKnowledge) return Promise.reject(new APIError('permission_denied', 403, undefined, true))
   const pageID = uuid(rawPageID, 'invalid_request'), versionID = uuid(rawVersionID, 'invalid_request')
+  const options = effectiveReadOptions(rawOptions)
   return withCmsTransaction(req.payload, req, async transactionReq => {
+    assertReadBudget(options)
     const result = await req.payload.findVersions({ collection: 'portal-pages', req: transactionReq, depth: 1, overrideAccess: true,
       pagination: false, limit: 2, where: { and: [{ id: { equals: versionID } }, { parent: { equals: pageID } }] } })
     if (result.docs.length === 0) return null
@@ -254,9 +402,10 @@ export function queryPortalPagePreview(req: PayloadRequest, rawPageID: string, r
     const dto = await projectPage(req.payload, transactionReq, pageID, source, 'portal-pages-preview',
       { id: versionID, status: source._status as 'draft' | 'published' })
     await resolveMedia(req.payload, transactionReq, dto, false)
+    assertReadBudget(options)
     if (Buffer.byteLength(JSON.stringify(dto), 'utf8') > 6 * 1024 * 1024) throw UNAVAILABLE()
     return dto
-  })
+  }, options)
 }
 
 export async function resolvePublishedPortalPageForAsset(req: PayloadRequest, pageID: string, revisionID: string): Promise<PortalPageReadResult | null> {

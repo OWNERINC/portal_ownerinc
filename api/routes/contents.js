@@ -15,6 +15,7 @@ const {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const ERROR_STATUS = new Set([400, 401, 403, 404, 416, 503]);
+const CONTENTS_REQUEST_BUDGET_MS = 4200;
 
 function requestHasBody(req) {
   const length = req.headers['content-length'];
@@ -74,12 +75,30 @@ function sendError(error, req, res) {
   return res.status(status).json({ error: reason, reason, requestId: req.id });
 }
 
-function createRequestSignal(req, res) {
+function createRequestSignal(req, res, budgetMs = CONTENTS_REQUEST_BUDGET_MS) {
   const controller = new AbortController();
   const abort = () => { if (!res.writableFinished) controller.abort(); };
+  const deadlineAt = budgetMs === null ? undefined : Date.now() + budgetMs;
+  let deadlineExpired = false;
+  const deadlineTimer = budgetMs === null ? undefined : setTimeout(() => {
+    deadlineExpired = true;
+    controller.abort();
+  }, budgetMs);
   req.on('aborted', abort);
   res.on('close', abort);
-  return { controller, cleanup: () => { req.removeListener('aborted', abort); res.removeListener('close', abort); } };
+  return { controller, deadlineAt, deadlineExpired: () => deadlineExpired,
+    cleanup: () => {
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      req.removeListener('aborted', abort); res.removeListener('close', abort);
+    } };
+}
+
+function sendDeadlineOrStop({ controller, deadlineExpired, req, res }) {
+  if (!controller.signal.aborted) return false;
+  if (deadlineExpired() && !req.aborted && !res.destroyed && !res.headersSent) {
+    sendError({ status: 503 }, req, res);
+  }
+  return true;
 }
 
 async function mediaActor(req, { db, firebaseAuth, env, preview }) {
@@ -129,15 +148,22 @@ function createContentsRouter({ db = pool, firebaseAuth = defaultFirebaseAuth, a
       if (action === 'preview' && !can(req.user, 'manageKnowledge')) {
         return res.status(403).json({ error: 'forbidden', reason: 'forbidden', requestId: req.id });
       }
-      const { controller, cleanup } = createRequestSignal(req, res);
+      const { controller, deadlineAt, deadlineExpired, cleanup } = createRequestSignal(req, res);
       try {
-        const result = await getPayloadClient()[action](input, portalActor(req.user), { signal: controller.signal, requestId: req.id });
-        if (controller.signal.aborted) { await result?.body?.cancel().catch(() => {}); return; }
+        const result = await getPayloadClient()[action](input, portalActor(req.user), {
+          signal: controller.signal, requestId: req.id, ...(deadlineAt === undefined ? {} : { deadlineAt }),
+        });
+        if (controller.signal.aborted) { await result?.body?.cancel().catch(() => {}); return sendDeadlineOrStop({ controller, deadlineExpired, req, res }); }
+        if (action === 'availability') {
+          if (!result || typeof result !== 'object' || Array.isArray(result) || Object.keys(result).length !== 1 ||
+            typeof result.available !== 'boolean') throw new Error('invalid availability response');
+          return res.json({ available: result.available });
+        }
         if (result === null) return res.status(404).json({ error: 'not_found', reason: 'not_found', requestId: req.id });
         if (action === 'list') return res.set('X-Total-Count', String(result.count)).json(result.rows);
         return res.json(result);
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) return sendDeadlineOrStop({ controller, deadlineExpired, req, res });
         return sendError(error, req, res);
       } finally { cleanup(); }
     };
@@ -153,7 +179,7 @@ function createContentsRouter({ db = pool, firebaseAuth = defaultFirebaseAuth, a
       if (!pageId || !revisionId || !assetId || (range !== null && range.length > 200)) {
         return res.status(400).json({ error: 'invalid_request', reason: 'invalid_request', requestId: req.id });
       }
-      const { controller, cleanup } = createRequestSignal(req, res);
+      const { controller, cleanup } = createRequestSignal(req, res, null);
       let result;
       try {
         const actor = await mediaActor(req, { db, firebaseAuth, env, preview });
@@ -171,22 +197,7 @@ function createContentsRouter({ db = pool, firebaseAuth = defaultFirebaseAuth, a
   }
 
   router.get('/', authenticate, rejectBody, queryRoute('list', parseList));
-  router.get('/availability', authenticate, rejectBody, async (req, res) => {
-    if (!strictQuery(req.query, [])) return sendError({ status: 400 }, req, res);
-    const { controller, cleanup } = createRequestSignal(req, res);
-    try {
-      const result = await getPayloadClient().list({ limit: 1, offset: 0 }, portalActor(req.user),
-        { signal: controller.signal, requestId: req.id });
-      if (controller.signal.aborted) return;
-      if (!result || !Array.isArray(result.rows) || !Number.isSafeInteger(result.count)
-        || result.count < 0 || result.count > 100000 || result.rows.length > 1
-        || (result.count === 0 && result.rows.length !== 0)
-        || (result.count > 0 && result.rows.length !== 1)) throw new Error('unavailable');
-      return res.json({ available: result.count > 0 });
-    } catch (error) {
-      if (!controller.signal.aborted) return sendError(error, req, res);
-    } finally { cleanup(); }
-  });
+  router.get('/availability', authenticate, rejectBody, queryRoute('availability', req => strictQuery(req.query, []) ? {} : null));
   router.get('/categories', authenticate, rejectBody, queryRoute('categories', req => strictQuery(req.query, []) ? {} : null));
   router.get('/preview/:pageId', authenticate, rejectBody, queryRoute('preview', req => {
     const pageId = canonicalUUID(req.params.pageId);

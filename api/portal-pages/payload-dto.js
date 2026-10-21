@@ -168,7 +168,13 @@ function readPortalPageCategories(value) {
   return value;
 }
 
+function readPortalPageAvailability(value) {
+  assert(hasKeys(value, ['available']) && typeof value.available === 'boolean');
+  return value;
+}
+
 function readPortalPageResult(action, value, input) {
+  if (action === 'availability') return readPortalPageAvailability(value);
   if (action === 'list') return readPortalPageList(value, input);
   if (action === 'categories') return readPortalPageCategories(value);
   if (value === null) return null;
@@ -181,6 +187,6 @@ function readPortalPageResult(action, value, input) {
 }
 
 module.exports = {
-  MIME_EXTENSIONS, readPortalPageCategories, readPortalPageList, readPortalPageResult,
+  MIME_EXTENSIONS, readPortalPageAvailability, readPortalPageCategories, readPortalPageList, readPortalPageResult,
   validatePortalPageDTO, unavailable,
 };

@@ -179,7 +179,7 @@ e rejeita links de uma publicação anterior. Se a projeção salva publicada di
 do documento principal, o CMS falha fechado em vez de fabricar uma revisão.
 
 O serviço mantém POSTs internos somente leitura em
-`/editorial/api/portal-pages/{list,categories,detail,preview,asset}`. Essa lista de
+`/editorial/api/portal-pages/{list,categories,availability,detail,preview,asset}`. Essa lista de
 paths e o segredo `PORTAL_TO_PAYLOAD_SECRET` são próprios das páginas modulares;
 não compartilham allowlist nem autoridade da Owner News. O CMS recusa `Origin`,
 `Cookie` e `Sec-Fetch-Site`; o Nginx responde 404 para os paths internos públicos.
@@ -254,6 +254,27 @@ em cada leitura, retorna apenas conteúdo publicado elegível e mantém resposta
 dependência indisponível. O gate oculta/mostra o link da sidebar após validação
 da identidade, mas não é uma barreira de autorização da rota nem substitui a
 validação por requisição. Falha de categorias não apaga cards carregados.
+
+As leituras JSON têm budget total de 4,2 s na API; o CMS limita cada request a no
+máximo 4 s, propagando deadline e cancelamento, com `lock_timeout` e
+`statement_timeout` no tempo restante. Esgotamento ou falha operacional retorna
+503 sanitizado; lista e agregação de categorias nunca retornam resultados
+parciais. Uma página do catálogo calcula a contagem e busca IDs/DTOs na mesma
+transação determinística, sob `CMS_REFERENCE_LOCK`, ordenada por
+`publishedAt DESC, id DESC`. O probe de disponibilidade usa ação própria: percorre
+em lotes curtos de dez candidatos, valida a revisão publicada e para no primeiro
+DTO elegível, sem calcular contagem ou montar catálogo.
+
+A agregação de categorias percorre IDs crescentes em lotes de até dez candidatos;
+cada lote abre sua própria transação e lock, liberados antes do próximo lote. O
+scan é limitado a 100.000 candidatos e ao budget. Não há snapshot transacional
+global entre lotes: publicação/despublicação concorrente pode ser observada por
+lotes diferentes. Uma publicação que entra depois da posição já percorrida pode
+ficar para a próxima leitura; uma publicação à frente do cursor pode entrar no
+resultado atual. O cursor determinístico evita repetir IDs e nenhum resultado
+parcial é devolvido se o scan for interrompido. A contagem do catálogo usa as
+linhas publicadas no banco; cada DTO da página selecionada ainda exige revisão,
+referências e projeção consistentes, e uma divergência falha com 503.
 
 O browser valida estritamente a forma pública antes de montar DOM: até 100 blocos,
 10.000 nós, 5 MiB de conteúdo JSON, 6 MiB por detalhe, 16 MiB por coleção,

@@ -102,6 +102,48 @@ evidência de execução.
   o resultado da correção P1 e das verificações finais será acrescentado após a
   execução efetiva.
 
+### Correção final P1 — consultas bounded/canceláveis
+
+- O catálogo calcula a contagem e busca somente os IDs da página solicitada em
+  uma transação determinística sob `CMS_REFERENCE_LOCK`; cada DTO continua
+  vinculado à Version publicada exata, e divergência na página selecionada falha
+  fechada. A disponibilidade usa ação CMS própria, sem count/list, e termina no
+  primeiro DTO publicado elegível.
+- Categorias percorrem cursor UUID crescente, no máximo dez candidatos por
+  transação/lock e 100.000 candidatos por leitura. O lock é liberado entre lotes;
+  não existe snapshot global de categorias durante publicação concorrente. Abort,
+  deadline, falha ou exceder limites resulta em 503 sanitizado, nunca em resultado
+  parcial. JSON requests têm deadline de 4,2 s na API e clamp de até 4 s no CMS,
+  com `lock_timeout`/`statement_timeout` pelo tempo restante.
+- Regressões offline cobrem ordem/offset do catálogo (inclusive desempate por UUID),
+  caminho de existência e early exit, exaustão `available:false`, lock isolado por
+  lote, publicação entre lotes, abort antes do próximo lote, orçamento esgotado,
+  validação do body deadline, stream abortado, DTO estrito e limite da resposta.
+- CMS `npm run test:unit`: **720 descobertos, 709 aprovados, 0 falhas, 11 skips
+  opcionais** antes do último ajuste de timeout após lock. Depois desse ajuste,
+  `node --import tsx --test tests/unit/portal-pages-reader.test.ts
+  tests/unit/portal-pages-service-access.test.ts` passou (**17 aprovados, 0
+  falhas**) e CMS `npm run typecheck` passou novamente.
+- API bridge + Payload client + browser/API DTO: **36 aprovados, 0 falhas**.
+  Testes CMS URL-focused: **20 aprovados, 0 falhas**.
+  `node scripts/generate-public-shell.mjs --check` passou; `npm run security`
+  encontrou **0 vulnerabilidades** nos três pacotes. Após o ajuste final, o modo
+  de secret scan `node scripts/verify.mjs security` e `git diff --check` também
+  passaram; este modo de verificação de segredos não repete o audit de dependências.
+- `npm run verify` foi executado uma vez nesta rodada: **2.154 descobertos,
+  2.113 aprovados, 22 falhas e 19 skips**, exit 1 após cerca de 249 s. A etapa de
+  typecheck CMS passou antes da etapa de testes. As falhas observadas foram
+  restrições do ambiente Windows/recursos: `EPERM` ao criar diretórios `C:\Users\payload-*`,
+  falhas de memória/alocação nos testes Academy e fixtures Python, erro de cópia
+  Cygwin (`Win32 error 299`), processos auxiliares com exit `3221225773`/
+  `3221226505` e falha de compilação PowerShell por `OutOfMemoryException` nos
+  checks de smoke/ownership. O agregador do processo completo não chegou às etapas
+  posteriores; a suíte CMS foi executada separadamente e passou. Estes resultados
+  não são classificados como alheios sem prova.
+- Nenhum stack, banco, API/CMS runtime ou browser foi iniciado; os 15 casos de
+  serviço/browser mantêm `NOT_EXECUTED`. Os checks offline não substituem aceite
+  HTTP, PostgreSQL ou browser real.
+
 ## Conclusão e próximas ações
 
 Os testes offline cobrem identidade do shell, admissão de rota, loader/restauração,

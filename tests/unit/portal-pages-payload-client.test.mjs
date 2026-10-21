@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { createPortalPagesClient } = require('../../api/portal-pages/payload-client');
+const { createPortalPagesClient, validInput } = require('../../api/portal-pages/payload-client');
 const { readPortalPageResult } = require('../../api/portal-pages/payload-dto');
 
 const pageID = '018f47a2-7b3c-7a11-8a2c-1234567890ab';
@@ -198,6 +198,58 @@ test('asset CMS JSON errors map only exact bounded forbidden/not_found bodies an
   await assert.rejects(oversizedClient.asset({ pageId: pageID, revisionId: versionID, assetId: assetID, preview: false, range: null }, actor),
     error => error.status === 503);
   assert.equal(oversizedBodyCancelled, 1, 'oversized CMS error bodies are cancelled before returning the safe 503');
+});
+
+test('availability DTO is exact, distinct from list pagination, and carries the caller deadline into CMS', async () => {
+  const seen = [];
+  const client = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret,
+    fetchImpl: async (url, init) => {
+      seen.push({ url, init });
+      return jsonResponse({ available: true });
+    },
+  });
+  const deadlineAt = Date.now() + 4000;
+  assert.deepEqual(await client.availability({}, actor, { signal: new AbortController().signal,
+    requestId: 'availability-01', deadlineAt }), { available: true });
+  assert.equal(seen[0].url, 'https://cms.invalid/editorial/api/portal-pages/availability');
+  assert.deepEqual(JSON.parse(seen[0].init.body), { actor, input: {} });
+  assert.equal(seen[0].init.headers['X-Request-Deadline'], String(deadlineAt));
+  assert.equal(seen[0].init.signal.aborted, false);
+  assert.equal(validInput('availability', {}), true);
+  assert.equal(validInput('availability', { limit: 1 }), false);
+
+  for (const value of [{ available: 1 }, { available: true, count: 1 }, [], null]) {
+    const invalid = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret,
+      fetchImpl: async () => jsonResponse(value),
+    });
+    await assert.rejects(invalid.availability({}, actor), error => error.status === 503);
+  }
+});
+
+test('caller deadline bounds the CMS header wait and aborts the service request', async () => {
+  let signal;
+  const client = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret, headerTimeoutMs: 5000,
+    fetchImpl: (_url, init) => {
+      signal = init.signal;
+      return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+    },
+  });
+  await assert.rejects(client.availability({}, actor, { deadlineAt: Date.now() + 20 }), error => error.status === 503);
+  assert.equal(signal.aborted, true);
+});
+
+test('caller deadline aborts a stalled JSON response body instead of waiting for the idle timeout', async () => {
+  let cancelled = false;
+  const client = createPortalPagesClient({ baseURL: 'https://cms.invalid', secret, idleTimeoutMs: 5000,
+    fetchImpl: async () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(Buffer.from('{"available":')); },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }), { headers: { 'content-type': 'application/json' } }),
+  });
+  const startedAt = Date.now();
+  await assert.rejects(client.availability({}, actor, { deadlineAt: startedAt + 30 }), error => error.status === 503);
+  assert.ok(Date.now() - startedAt < 1000, 'the read budget interrupts a stalled body well before idle timeout');
+  assert.equal(cancelled, true);
 });
 
 test('asset stream reaches exact EOF once, releases request listeners, and clears its idle timeout without aborting', async () => {

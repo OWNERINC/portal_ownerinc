@@ -87,11 +87,17 @@ function fixture(settings = env) {
   state.payloadCalls = [];
   state.payloadCallOptions = [];
   state.listImpl = null;
+  state.availabilityImpl = null;
   state.payloadClient = {
     async list(input, actor, options) {
       state.payloadCalls.push({ action: 'list', input, actor });
       state.payloadCallOptions.push(options);
       return state.listImpl ? state.listImpl(input, actor, options) : { rows: [page], count: 9 };
+    },
+    async availability(input, actor, options) {
+      state.payloadCalls.push({ action: 'availability', input, actor });
+      state.payloadCallOptions.push(options);
+      return state.availabilityImpl ? state.availabilityImpl(input, actor, options) : { available: true };
     },
     async categories(input, actor) { state.payloadCalls.push({ action: 'categories', input, actor }); return [{ id: pageID, slug: 'policies', name: 'Policies', count: 2 }]; },
     async detail(input, actor) { state.payloadCalls.push({ action: 'detail', input, actor }); return input.slug === page.slug ? page : null; },
@@ -149,11 +155,12 @@ test('availability is authenticated, exact, bodyless, and independent of editori
   assert.deepEqual(response.body, { available: true });
   assert.deepEqual(Object.keys(response.body), ['available']);
   assert.equal(response.headers['cache-control'], 'private,no-store');
-  assert.deepEqual(state.payloadCalls[0].input, { limit: 1, offset: 0 });
+  assert.deepEqual(state.payloadCalls[0].input, {});
   assert.equal(state.payloadCalls[0].actor.canManageKnowledge, false);
   assert.equal(state.payloadCallOptions[0].signal instanceof AbortSignal, true);
   assert.equal(typeof state.payloadCallOptions[0].requestId, 'string');
-  assert.equal(state.payloadCalls[0].action, 'list');
+  assert.equal(Number.isSafeInteger(state.payloadCallOptions[0].deadlineAt), true);
+  assert.equal(state.payloadCalls[0].action, 'availability');
 
   for (const url of ['/api/contents/availability?extra=1', '/api/contents/availability?x=1&x=2']) {
     assert.equal((await state.withBearer(state.request.get(url))).status, 400, url);
@@ -165,21 +172,20 @@ test('availability is authenticated, exact, bodyless, and independent of editori
 
 test('availability distinguishes empty from inconsistent and unavailable Payload results', async () => {
   const state = fixture();
-  state.listImpl = async () => ({ rows: [], count: 0 });
+  state.availabilityImpl = async () => ({ available: false });
   const empty = await state.withBearer(state.request.get('/api/contents/availability'));
   assert.equal(empty.status, 200);
   assert.deepEqual(empty.body, { available: false });
 
   const invalidResults = [
     null,
-    { rows: [], count: 1 },
-    { rows: [page], count: 0 },
-    { rows: [page, page], count: 2 },
-    { rows: [page], count: 1.5 },
-    { rows: [page], count: 100001 },
+    { available: 'true' },
+    { available: true, count: 1 },
+    { available: false, rows: [] },
+    [],
   ];
   for (const invalid of invalidResults) {
-    state.listImpl = async () => invalid;
+    state.availabilityImpl = async () => invalid;
     const response = await state.withBearer(state.request.get('/api/contents/availability'));
     assert.equal(response.status, 503);
     assert.equal(response.body.reason, 'portal_pages_unavailable');
@@ -187,7 +193,7 @@ test('availability distinguishes empty from inconsistent and unavailable Payload
     assert.equal(response.text.includes('content_blocks'), false);
   }
 
-  state.listImpl = async () => { throw new Error('private Payload client exception'); };
+  state.availabilityImpl = async () => { throw new Error('private Payload client exception'); };
   const failed = await state.withBearer(state.request.get('/api/contents/availability'));
   assert.equal(failed.status, 503);
   assert.equal(failed.body.reason, 'portal_pages_unavailable');
@@ -223,7 +229,7 @@ test('availability factory failures and client timeouts fail closed without disc
   assert.equal(factoryError.body.reason, 'portal_pages_unavailable');
   assert.doesNotMatch(factoryError.text, /secret factory|client|actor|reader-a/u);
 
-  state.listImpl = async () => { throw Object.assign(new Error('private timeout details'), { code: 'ETIMEDOUT', status: 504 }); };
+  state.availabilityImpl = async () => { throw Object.assign(new Error('private timeout details'), { code: 'ETIMEDOUT', status: 504 }); };
   const timeout = await state.withBearer(state.request.get('/api/contents/availability'));
   assert.equal(timeout.status, 503);
   assert.equal(timeout.body.reason, 'portal_pages_unavailable');
@@ -232,7 +238,7 @@ test('availability factory failures and client timeouts fail closed without disc
 
 test('availability aborts Payload work on client disconnect and static route precedes slug detail', async () => {
   const state = fixture();
-  state.listImpl = (_input, _actor, options) => new Promise((_resolve, reject) => {
+  state.availabilityImpl = (_input, _actor, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener('abort', () => {
       state.disconnectedSignalAborted = options.signal.aborted;
       reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }));
@@ -251,7 +257,7 @@ test('availability aborts Payload work on client disconnect and static route pre
     for (let attempt = 0; attempt < 20 && !state.disconnectReady; attempt += 1) {
       await new Promise(resolve => setImmediate(resolve));
     }
-    assert.equal(state.disconnectReady, true, 'availability must dispatch a bounded Payload list request');
+    assert.equal(state.disconnectReady, true, 'availability must dispatch the existence query');
     controller.abort();
     await responsePromise;
     for (let attempt = 0; attempt < 20 && !state.disconnectedSignalAborted; attempt += 1) {
@@ -268,7 +274,7 @@ test('availability aborts Payload work on client disconnect and static route pre
   const staticState = fixture();
   const staticResponse = await staticState.withBearer(staticState.request.get('/api/contents/availability'));
   assert.equal(staticResponse.status, 200);
-  assert.equal(staticState.payloadCalls[0].action, 'list', 'availability must not fall through to /:slug detail');
+  assert.equal(staticState.payloadCalls[0].action, 'availability', 'availability must use the dedicated early-exit CMS action');
 });
 
 function cookieFor(response, expectedName) {

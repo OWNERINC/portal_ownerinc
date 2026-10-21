@@ -45,6 +45,7 @@ test('service actor and all action inputs are exact, bounded primitive contracts
   assert.deepEqual(readPortalPageInput('list', { limit: 1, offset: 0, category: 'people-policy' }),
     { limit: 1, offset: 0, category: 'people-policy' })
   assert.deepEqual(readPortalPageInput('categories', {}), {})
+  assert.deepEqual(readPortalPageInput('availability', {}), {})
   assert.deepEqual(readPortalPageInput('detail', { slug: 'people-policy' }), { slug: 'people-policy' })
   assert.deepEqual(readPortalPageInput('preview', { pageId: pageID, versionId: versionID }), { pageId: pageID, versionId: versionID })
   assert.deepEqual(readPortalPageInput('asset', { pageId: pageID, revisionId: versionID, assetId: assetID, preview: false, range: null }),
@@ -62,20 +63,21 @@ test('request ID accepts only the bounded correlation header grammar', () => {
   assert.equal(validPortalPageRequestID('bad id'), false)
 })
 
-test('CMS publishes only the five exact POST read endpoints and rejects browser headers, bad IDs, and oversized JSON before reads', async () => {
+test('CMS publishes only the six exact POST read endpoints and rejects browser headers, bad IDs, and oversized JSON before reads', async () => {
   const previousToPayload = process.env.PORTAL_TO_PAYLOAD_SECRET
   const previousToPortal = process.env.PAYLOAD_TO_PORTAL_SECRET
   process.env.PORTAL_TO_PAYLOAD_SECRET = secret
   process.env.PAYLOAD_TO_PORTAL_SECRET = 'q'.repeat(40)
   try {
     assert.deepEqual(portalPageReadEndpoints.map(endpoint => [endpoint.path, endpoint.method]), [
-      ['/portal-pages/list', 'post'], ['/portal-pages/categories', 'post'], ['/portal-pages/detail', 'post'],
+      ['/portal-pages/list', 'post'], ['/portal-pages/categories', 'post'], ['/portal-pages/availability', 'post'],
+      ['/portal-pages/detail', 'post'],
       ['/portal-pages/preview', 'post'], ['/portal-pages/asset', 'post'],
     ])
     const endpoint = portalPageReadEndpoints.find(value => value.path === '/portal-pages/categories')!
-    const request = (headers: Headers, body?: ReadableStream<Uint8Array>) => ({
+    const request = (headers: Headers, body?: ReadableStream<Uint8Array>, signal?: AbortSignal) => ({
       url: 'https://cms.invalid/editorial/api/portal-pages/categories', method: 'POST', headers,
-      body,
+      body, signal,
     }) as unknown as PayloadRequest
     const validHeaders = () => new Headers({ authorization: `Bearer ${secret}`, 'content-type': 'application/json',
       'x-request-id': 'request-01' })
@@ -89,6 +91,12 @@ test('CMS publishes only the five exact POST read endpoints and rejects browser 
     const invalidID = validHeaders()
     invalidID.set('x-request-id', 'bad id')
     assert.equal((await endpoint.handler(request(invalidID))).status, 400)
+    const invalidDeadline = validHeaders()
+    invalidDeadline.set('x-request-deadline', 'not-a-deadline')
+    assert.equal((await endpoint.handler(request(invalidDeadline))).status, 400)
+    const expiredDeadline = validHeaders()
+    expiredDeadline.set('x-request-deadline', String(Date.now() - 1))
+    assert.equal((await endpoint.handler(request(expiredDeadline))).status, 503)
     const tooLarge = validHeaders()
     tooLarge.set('content-length', '16385')
     assert.equal((await endpoint.handler(request(tooLarge))).status, 413)
@@ -101,6 +109,21 @@ test('CMS publishes only the five exact POST read endpoints and rejects browser 
     const response = await endpoint.handler(request(validHeaders(), oversizedBody))
     assert.equal(response.status, 413)
     assert.equal(cancelled, true)
+
+    let bodyPull: (() => void) | undefined
+    let stalledBodyCancelled = false
+    const pullStarted = new Promise<void>(resolve => { bodyPull = resolve })
+    const stalledBody = new ReadableStream<Uint8Array>({
+      pull() { bodyPull?.() },
+      cancel() { stalledBodyCancelled = true },
+    })
+    const requestController = new AbortController()
+    const pendingBody = endpoint.handler(request(validHeaders(), stalledBody, requestController.signal))
+    await pullStarted
+    requestController.abort()
+    const aborted = await pendingBody
+    assert.equal(aborted.status, 503)
+    assert.equal(stalledBodyCancelled, true, 'an aborted internal request cancels a stalled body read')
   } finally {
     if (previousToPayload === undefined) delete process.env.PORTAL_TO_PAYLOAD_SECRET
     else process.env.PORTAL_TO_PAYLOAD_SECRET = previousToPayload
