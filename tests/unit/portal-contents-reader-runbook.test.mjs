@@ -3,9 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { REQUIRED_CASES } from '../../scripts/test-portal-contents-acceptance.mjs';
 
-const [runbook, review] = await Promise.all([
+const [runbook, review, architecture] = await Promise.all([
   readFile(new URL('../../docs/operations/portal-contents-reader.md', import.meta.url), 'utf8'),
   readFile(new URL('../../docs/reviews/2026-10-20-portal-contents-reader-acceptance.md', import.meta.url), 'utf8'),
+  readFile(new URL('../../docs/architecture/portal-pages-content.md', import.meta.url), 'utf8'),
 ]);
 
 function runbookCase(caseName) {
@@ -63,6 +64,40 @@ test('the reviewer-identified binding procedures are explicit in their existing 
     for (const phrase of phrases) {
       assert.ok(section.includes(phrase.toLowerCase()), `${caseName} must specify ${phrase}`);
     }
+  }
+});
+
+test('reader deadline documentation defines a cooperative budget, not a 4-second release guarantee', () => {
+  const normalized = text => text.replace(/\s+/gu, ' ').toLowerCase();
+  const architectureText = normalized(architecture);
+  const runbookText = normalized(runbook);
+  const reviewText = normalized(review);
+
+  for (const [name, text] of [['architecture', architectureText], ['runbook', runbookText], ['acceptance', reviewText]]) {
+    assert.ok(text.includes('prazo cooperativo'), `${name} defines the deadline as cooperative`);
+    assert.ok(text.includes('não cancela'), `${name} explicitly disclaims in-flight cancellation`);
+    assert.ok(text.includes('4 s'), `${name} names the 4-second budget`);
+    assert.doesNotMatch(text, /holder permanece limitado ao budget cms de 4 s/u,
+      `${name} must not claim a strict holder cap`);
+  }
+
+  for (const phrase of [
+    'pool.connect', '`begin`', '`set local` inicial', 'importação de snapshot', 'refresh',
+    'uma conexão', 'um snapshot', 'cliente api', 'headers/resposta', 'cms_reference_lock',
+  ]) {
+    assert.ok(architectureText.includes(phrase), `architecture records in-flight boundary ${phrase}`);
+  }
+
+  const acceptanceStart = runbookText.indexOf('### regressão postgresql opcional:');
+  const acceptanceEnd = runbookText.indexOf('o aceite de serviços é manual', acceptanceStart);
+  assert.ok(acceptanceStart >= 0 && acceptanceEnd > acceptanceStart, 'the guarded PostgreSQL case has an explicit boundary');
+  const acceptanceCase = runbookText.slice(acceptanceStart, acceptanceEnd);
+  for (const phrase of [
+    'select pg_sleep(1)', 'nenhuma nova operação de dados nem tentativa de advisory lock',
+    'rollback eventual e único', 'não use “concluído em até 4 s” como critério',
+    'not_executed', 'medir stalls/settlement', 'salvaguardas',
+  ]) {
+    assert.ok(acceptanceCase.includes(phrase), `PostgreSQL acceptance defines ${phrase}`);
   }
 });
 

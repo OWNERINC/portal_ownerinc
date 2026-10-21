@@ -56,7 +56,7 @@ function scheduleTransactionRollback(payload: Payload, id: string): void {
 
 type BeginTransactionOutcome = { kind: 'begun'; id: string } | { kind: 'failed'; error: unknown }
 
-/** Race only the caller's wait. Payload/Drizzle exposes no server-side BEGIN cancellation handle. */
+/** Race only the caller's wait; Payload/Drizzle cannot cancel pool acquisition or server-side BEGIN. */
 async function beginTransactionWithinBudget(payload: Payload, options: CmsTransactionOptions): Promise<string> {
   assertReadBudget(options)
   if (!hasReadBudget(options)) {
@@ -431,7 +431,7 @@ export async function withCmsReadTransaction<T>(payload: Payload, incoming: Payl
   req.transactionID = id
   let readSession: object | undefined
   try {
-    // SET LOCAL does not acquire a snapshot; it bounds the following transaction/snapshot setup.
+    // These settings apply after each SET LOCAL settles; the cooperative deadline cannot cancel a setup call already in flight.
     await initializeReadTransaction(payload, req, options)
     await importReadSnapshot(payload, req, options)
     const db = await requireCmsTransaction(payload, req) as unknown as CmsDrizzleDatabase
@@ -466,7 +466,8 @@ export async function withCmsReadTransaction<T>(payload: Payload, incoming: Payl
   }
 }
 
-/** Hold a short repeatable-read snapshot without the application reference lock across batches. */
+/** Hold a repeatable-read snapshot under a cooperative budget, without the application reference lock across batches.
+ * Expiry prevents later guarded work; rollback runs only after any awaited driver/server operation settles. */
 export async function withCmsReadSnapshot<T>(payload: Payload, incoming: PayloadRequest | undefined,
   options: CmsTransactionOptions, work: (snapshotID: string) => Promise<T>): Promise<T> {
   assertReadBudget(options)

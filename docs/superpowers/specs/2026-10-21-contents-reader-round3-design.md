@@ -25,7 +25,9 @@ request return 404. No bytes are opened by a projection transaction.
   category/media validation omits its existing `FOR SHARE` row-lock queries;
   MVCC supplies the stable reference view. Non-snapshot mutation and asset paths
   retain those row locks.
-- Keep the exported-snapshot holder read-only, lock-free, and always rolled back.
+- Keep the exported-snapshot holder read-only and lock-free; cleanup rolls it back
+  after awaited operations settle, but the cooperative deadline does not guarantee
+  release time for an in-flight adapter/server call.
   Both holder and imported batch transactions use a caller-facing race around
   `beginTransaction()` using remaining budget and `AbortSignal`.
 - If the budget wins before the adapter returns a transaction ID, return sanitized
@@ -56,10 +58,18 @@ setup order is therefore:
 
 The two `SET LOCAL` utility commands precede any query/DML and do not take a
 transaction snapshot; an offline command-order test protects this prerequisite.
-Live PostgreSQL acceptance remains outstanding. Per-operation timeout refreshes
-remain in place for data operations; each refresh statement is bounded by the
-previous server-side timeout, and projection scans hold no global reference lock
-while setup/control SQL runs or completes late.
+The 4 s CMS value is a cooperative admission/remaining-budget deadline, not a hard
+cap on connection/transaction/snapshot lifetime. It prevents later guarded data
+operations after expiry is observed and supplies decreasing PostgreSQL timeouts
+after setup, but it cannot cancel in-flight pool acquisition, `BEGIN`, initial
+`SET LOCAL`, snapshot import, or timeout-refresh SQL. Such work may retain its
+connection and (after export/import) snapshot until driver/server settlement;
+cleanup/rollback then follows. The API caller separately has a response/header
+abort, which does not establish server-side cancellation. Projection scans hold no
+global reference lock during this wait. Live PostgreSQL acceptance remains
+outstanding and must measure settlement/rollback behavior and determine appropriate
+infrastructure/database safeguards from evidence, without assuming configuration
+values in advance.
 
 ## Lock ownership
 
@@ -77,12 +87,15 @@ while setup/control SQL runs or completes late.
 
 ## Failure and cleanup behavior
 
-Deadline or abort before a transaction ID is available produces sanitized 503;
-when a late ID arrives, its transaction is rolled back/released once and the
-abandoned promise cannot become an unhandled rejection. After a successful begin,
-all setup and data stages check the caller budget. Imported readers issue no later
-query after budget failure, restore prepared-query instrumentation, drain pending
-operations, and finish their owned transaction. No partial counts or DTOs escape.
+Deadline or abort before a transaction ID is available produces sanitized 503 to
+the caller; when a late ID arrives, its transaction is scheduled for one rollback
+without starting reader work, once the adapter supplies the ID. After a successful
+begin, all setup and data stages check the cooperative caller budget. Imported
+readers start no later data operation after budget failure is observed, restore
+prepared-query instrumentation, drain pending operations, and attempt transaction
+cleanup after in-flight calls settle. A call that never settles may retain a
+connection/snapshot; no hard release time is promised. No partial counts or DTOs
+escape.
 
 ## Verification boundary
 

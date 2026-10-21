@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Execute inline in the current session. Keep changes within the reader transaction boundary, run each listed test before committing, and do not claim server-side cancellation of `BEGIN`.
 
-**Goal:** Make pure published/editorial DTO reads snapshot-consistent and lock-free, and return promptly when a budget expires during Payload transaction startup while cleaning up any late transaction.
+**Goal:** Make pure published/editorial DTO reads snapshot-consistent and lock-free, and bound the caller's wait when a budget expires during Payload transaction startup while cleaning up any late transaction after the adapter settles.
 
 **Architecture:** Preserve `withCmsTransaction` as the existing advisory-lock default. Add an explicit imported-snapshot read transaction with finite setup timeouts before snapshot import, and race transaction startup against the remaining deadline/abort signal; late successful starts are rolled back without running reader work. Retain the snapshot holder's read-only/no-lock/rollback contract and retain locks on asset and mutation paths.
 
@@ -12,10 +12,10 @@
 
 - Public catalog, published detail, availability, categories, and editorial preview JSON must use a stable exported repeatable-read snapshot and must not acquire `CMS_REFERENCE_LOCK`.
 - Asset authorization/open and publication/media mutation retain existing reference-lock behavior.
-- `beginTransaction()` cannot be interrupted server-side by this adapter; deadline/abort returns promptly and late success is rolled back once without follow-on work.
+- `beginTransaction()` cannot be interrupted server-side by this adapter; deadline/abort ends the caller's wait promptly and late success is rolled back once without follow-on work after the adapter returns it.
 - Set finite transaction-local statement/lock timeouts before snapshot import and data reads; do not run a query/DML before `SET TRANSACTION SNAPSHOT`.
 - Preserve eligible-only counts, exact saved-Version/current-field/reference checks, bounded keyset scans, no partial results, and microsecond cursor precision.
-- Holder remains read-only, takes no advisory lock, and always rolls back; real PostgreSQL `pg_sleep` remains `NOT_EXECUTED`.
+- Holder remains read-only and takes no advisory lock; its cooperative deadline is not a hard lifetime cap, and rollback follows settlement of in-flight work. Real PostgreSQL `pg_sleep` remains `NOT_EXECUTED`.
 - Do not rerun root `npm run verify`; update and preserve the local ignored final-fix report.
 
 ---

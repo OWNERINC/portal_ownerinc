@@ -259,21 +259,31 @@ dependência indisponível. O gate oculta/mostra o link da sidebar após valida�
 da identidade, mas não é uma barreira de autorização da rota nem substitui a
 validação por requisição. Falha de categorias não apaga cards carregados.
 
-As leituras JSON têm budget total de 4,2 s na API; o CMS limita cada request a no
-máximo 4 s, propagando deadline e cancelamento. No limite de execução do Drizzle
-Node/Postgres (Payload 3.90.2 / Drizzle 0.45.2), cada operação SQL de leitura
-confere o budget antes e depois do await e atualiza `lock_timeout` e
-`statement_timeout` transaction-local para no máximo o tempo restante, nunca
-aumentando os valores já aplicados naquela transação. Também há guardas antes/depois
-das operações da Local API Payload que podem emitir várias instruções SQL. Timeout,
-abort, falha operacional ou limite excedido retorna 503 sanitizado; catálogo e
-categorias nunca retornam resultado parcial. As configurações são `SET LOCAL` ou
-`set_config(..., true)` e não sobrevivem ao rollback/commit da transação.
-O início de `BEGIN` também é aguardado somente até o deadline/abort do chamador:
-se o limite vencer primeiro, retorna 503 sanitizado e uma transação que resolver
-mais tarde é rolada de volta uma vez, sem importar snapshot nem executar leituras.
-O adapter não expõe cancelamento servidor de um `BEGIN` pendente; se nunca
-resolver, sua conexão pode permanecer ocupada até o driver terminar.
+As leituras JSON têm budget total de 4,2 s no pedido da API; o cliente API que chama
+o CMS também tem seu próprio limite de espera por headers/resposta e aborta o fetch
+upstream. O limite de 4 s do CMS é um prazo cooperativo de admissão e budget
+restante, não um teto rígido para a duração da conexão, transação ou snapshot. As
+guardas impedem que novas operações leitoras de dados comecem depois de observar
+expiração e, após o setup, fornecem valores decrescentes de `lock_timeout` e
+`statement_timeout` transaction-local para operações PostgreSQL seguintes. Antes e
+depois de cada SQL guardada, e das operações da Local API Payload que podem emitir
+várias instruções, o CMS verifica abort/deadline; os timeouts não aumentam dentro da
+transação. Um timeout/abort/falha é convertido em 503 sanitizado quando o controle
+retorna ao handler; catálogo e categorias nunca retornam resultado parcial. As
+configurações são `SET LOCAL`/`set_config(..., true)` e não sobrevivem ao
+rollback/commit.
+
+O prazo cooperativo não cancela uma chamada já em voo a `pool.connect`, `BEGIN`,
+`SET LOCAL` inicial, importação de snapshot ou refresh dos timeouts. A corrida do
+início de transação limita a espera do caller e, se o ID chegar tarde, agenda um
+rollback sem iniciar leitura; isso não encerra o `BEGIN` no servidor. Uma conexão
+e, depois de criado, um snapshot podem permanecer retidos até o driver/servidor
+resolver a operação em voo; o cleanup/rollback ocorre quando o fluxo recupera o
+controle. O abort de headers/resposta do cliente API limita a espera do caller, mas
+não prova cancelamento do trabalho PostgreSQL. Esses caminhos JSON não adquirem
+`CMS_REFERENCE_LOCK`, inclusive enquanto aguardam setup ou cleanup. Os caminhos
+travados de asset e mutação mantêm seu comportamento existente e não são alterados
+por este contrato.
 
 Catálogo, disponibilidade e agregação de categorias compartilham uma validação de
 elegibilidade: status publicado, documento principal válido, Version publicada
@@ -292,18 +302,22 @@ limite ou o budget falha por inteiro.
 
 Para dar consistência, catálogo, disponibilidade, categorias, detalhe publicado e
 JSON de prévia editorial usam um holder PostgreSQL `REPEATABLE READ, READ ONLY`,
-sem `CMS_REFERENCE_LOCK`, exportam um snapshot e o encerram em rollback. Cada
-transação de projeção importa esse snapshot antes de qualquer leitura de dados e
+sem `CMS_REFERENCE_LOCK`, exportam um snapshot; cleanup tenta rollback após as
+operações aguardadas se resolverem. Cada transação de projeção importa esse
+snapshot antes de qualquer leitura de dados e
 não adquire o advisory global nem `FOR SHARE`: elegibilidade e referências são
 avaliadas pelo mesmo estado MVCC, sem serializar scans com publicação/mutação.
 Transações de projeção instalam `SET LOCAL statement_timeout` e `lock_timeout`
 finitos, depois definem isolamento read-only e importam o snapshot antes de SQL de
 dados. A disponibilidade conserva o early exit no primeiro DTO elegível e não
-calcula contagem nem monta catálogo. O holder permanece aberto somente pelo budget
-CMS de até 4 s; enquanto ativo, retém horizonte MVCC e pode atrasar vacuum de
-tuplas mortas. Operação deve monitorar transações antigas/autovacuum e confirmar
-que nenhum holder ficou aberto após erro; abort, deadline e falha encerram batch e
-holder sem resultado parcial.
+calcula contagem nem monta catálogo. O holder usa o mesmo prazo cooperativo de até
+4 s para admissão/remaining budget, não um limite rígido de vida: um comando de
+setup ou refresh em voo pode reter conexão e horizonte MVCC até resolver, podendo
+atrasar vacuum de tuplas mortas. Operação deve medir e monitorar transações antigas,
+conexões ocupadas e autovacuum, e avaliar salvaguardas de infraestrutura/banco
+apropriadas; o cleanup tenta rollback quando a operação pendente se resolve. Abort,
+deadline e falha impedem trabalho leitor subsequente após o controle retornar, sem
+resultado parcial, mas não garantem encerramento do holder em 4 s.
 
 As leituras JSON representam a elegibilidade no snapshot exportado, não uma
 autorização futura de bytes. Cada request de asset revalida a revisão e referências

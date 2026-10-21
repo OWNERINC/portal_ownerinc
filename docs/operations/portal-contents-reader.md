@@ -24,17 +24,23 @@
   oferecem retry; erro de categorias pode ser repetido sem descartar cards já
   carregados. Não substitua erro do CMS por catálogo vazio e não contorne 404 de
   conteúdo despublicado.
-- **Budget do leitor:** requests JSON têm deadline total de 4,2 s na API e máximo
-  de 4 s no CMS. Antes/depois de cada operação SQL do leitor (inclusive cada SQL
-  emitido por uma operação da Local API Payload), o CMS verifica abort/deadline e
-  atualiza `lock_timeout` e `statement_timeout` transaction-local para no máximo o
-  tempo restante, sem aumentar o timeout corrente. Os valores expiram com a
-  transação; erros operacionais, timeout, abort ou limite excedido retornam 503
-  sanitizado, nunca contagem/lista/categorias parciais. O caller também deixa de
-  aguardar `beginTransaction()` quando deadline/abort vencer: retorna 503 e, se o
-  adapter entregar um ID depois, faz rollback uma vez sem iniciar leituras. Isso
-  não cancela `BEGIN` no PostgreSQL; se o adapter nunca resolver, a conexão pode
-  permanecer ocupada até o driver terminar.
+- **Budget cooperativo do leitor:** requests JSON têm budget total de 4,2 s na API;
+  o cliente API tem seu próprio limite de espera por headers/resposta e aborta o
+  fetch upstream. O prazo CMS de até 4 s é de admissão/remaining budget, não uma
+  garantia de que conexão, transação ou snapshot serão liberados nesse intervalo.
+  Antes/depois das operações SQL guardadas (inclusive cada SQL emitida por uma
+  operação Local API Payload), o CMS verifica abort/deadline; depois do setup,
+  instala/atualiza `lock_timeout` e `statement_timeout` transaction-local com
+  valores não crescentes baseados no restante. Depois que a guarda observa a
+  expiração, nenhuma nova operação leitora de dados começa; timeout/abort/falha vira
+  503 sanitizado quando o controle retorna, nunca contagem/lista/categorias
+  parciais. O prazo não cancela chamada já em voo a `pool.connect`, `BEGIN`, `SET
+  LOCAL` inicial, importação de snapshot ou refresh de timeout: essas operações
+  podem manter conexão e snapshot até driver/servidor resolver, e rollback/cleanup
+  só pode ocorrer depois. O abort do cliente API limita sua própria espera, não
+  cancela o trabalho PostgreSQL. O caminho JSON leitor não adquire
+  `CMS_REFERENCE_LOCK`; os caminhos travados de asset/mutação mantêm seu
+  comportamento existente, sem mudança nesta rodada.
 - **Elegibilidade e paginação:** o total e os offsets contam somente páginas que
   passam status publicado, Version publicada salva exata, igualdade dos campos
   públicos atuais, projeção e validação integral de referências de categoria/mídia.
@@ -47,15 +53,22 @@
   fail-closed se houver drift.
 - **Consistência do snapshot e locks:** catálogo, detalhe publicado, categorias,
   disponibilidade e JSON de prévia editorial abrem um holder `REPEATABLE READ,
-  READ ONLY` de até 4 s, sem `CMS_REFERENCE_LOCK`, exportam um snapshot PostgreSQL
-  e fazem rollback/liberam o holder ao final. Cada transação de projeção importa o
-  mesmo snapshot antes de ler dados, instala timeouts locais finitos antes da
-  importação e não adquire `CMS_REFERENCE_LOCK` nem `FOR SHARE`. Publicação,
+  READ ONLY` sob o prazo cooperativo de 4 s, sem `CMS_REFERENCE_LOCK`, exportam um
+  snapshot PostgreSQL e tentam rollback/cleanup ao final, depois que operações em
+  voo se resolvam. O prazo não é um hard cap de vida do holder: startup, setup,
+  importação ou refresh pendente podem prolongar retenção de conexão/snapshot; o
+  abort de resposta do cliente não prova encerramento no banco. Cada transação de
+  projeção importa o mesmo snapshot antes de ler dados, instala timeouts locais
+  finitos antes da importação e não adquire `CMS_REFERENCE_LOCK` nem `FOR SHARE`. Publicação,
   despublicação ou mutação durante um scan não aparece apenas nas operações/batches
   posteriores; o resultado representa o estado MVCC do snapshot. Disponibilidade
   conserva early exit na primeira página elegível e não calcula count. O holder
   retém um horizonte MVCC enquanto aberto e pode atrasar vacuum de tuplas mortas:
-  monitorar transações antigas/autovacuum e confirmar encerramento após falha.
+  medir esse efeito e monitorar transações antigas/conexões/autovacuum. A aceitação
+  de produção deve medir duração até settlement e configurar salvaguardas de
+  conexão/query de infraestrutura ou banco conforme evidência; não se presume nem
+  inventa um valor de configuração aqui. Os testes locais devem observar rollback
+  eventual após settlement, não exigir liberação em 4 s.
   Snapshot não reserva autorização futura de asset: cada request de bytes volta a
   conferir revisão e referências exatas sob `CMS_REFERENCE_LOCK` e locks de linha;
   publicação/reference churn entre DTO e GET de asset pode legitimamente retornar
@@ -109,7 +122,7 @@
 
 ## Aceite local, guardas e evidência
 
-### Regressão PostgreSQL opcional do timeout por operação — `NOT_EXECUTED`
+### Regressão PostgreSQL opcional: prazo cooperativo, timeout SQL e cleanup — `NOT_EXECUTED`
 
 Este caso é somente para um PostgreSQL **descartável local, nomeado e explicitamente
 autorizado**; não inicia serviço, não usa URL de runtime nem executa SQL em banco
@@ -117,23 +130,34 @@ remoto. O resultado permanece `NOT_EXECUTED` até a execução autorizada e evid
 real:
 
 1. Com o runner CMS de leitor configurado apenas para o banco descartável guardado,
-   inicie uma leitura com deadline de aproximadamente 150 ms e execute, dentro do
-   transaction helper de leitura, `SELECT pg_sleep(1)`. Não use banco ou dados de
-   produção.
-2. Registre somente elapsed monotônico, SQLSTATE observado pelo harness/driver
-   (`57014` esperado para `statement_timeout`) e status CMS (503 sanitizado). O
-   harness deve provar que uma segunda query marcada após o `pg_sleep` não foi
-   enviada, que a transação de projeção não adquiriu `CMS_REFERENCE_LOCK` e que
-   tanto ela quanto o holder snapshot (se usado pelo cenário) foram encerrados.
-3. Em uma conexão/transação nova, compare os `current_setting('statement_timeout')`
-   e `current_setting('lock_timeout')` com os defaults observados antes do caso;
-   os `SET LOCAL`/`set_config(..., true)` anteriores não podem vazar. Não copie
-   connection strings, SQL com dados, credenciais ou logs brutos para a evidência.
+   inicie uma leitura com prazo curto (por exemplo, 150 ms) e lance um `SELECT
+   pg_sleep(1)` marcado como operação de dados já iniciada. Registre deadline,
+   início/fim observado e SQLSTATE (`57014` é esperado quando `statement_timeout`
+   instalado pelo setup o interrompe). Não exija que o handler CMS, transação ou
+   holder já estejam liberados na marca de 150 ms ou em 4 s.
+2. Em cenário separado, use somente um adapter/harness de teste que possa atrasar
+   deliberadamente pool acquisition/`BEGIN`, o `SET LOCAL` inicial, a importação do
+   snapshot ou um refresh de timeout. Meça separadamente expiração/admissão do
+   caller, abort de headers/resposta do cliente API e settlement real do comando.
+   Enquanto a operação atrasada estiver em voo, prove que depois da expiração não
+   começa nenhuma nova operação de dados nem tentativa de advisory lock. Libere o
+   stall (ou aguarde o settlement natural) e então observe o rollback eventual e
+   único; não use “concluído em até 4 s” como critério. Se o harness não expuser
+   essas fases, mantenha essa parte `NOT_EXECUTED` e registre a limitação.
+3. Em ambos os cenários, prove que o caminho JSON leitor nunca adquiriu
+   `CMS_REFERENCE_LOCK`; quando holder/importação forem usados, observe cleanup após
+   settlement. Em uma conexão/transação nova, compare `current_setting('statement_timeout')`
+   e `current_setting('lock_timeout')` com defaults observados antes do caso; os
+   `SET LOCAL`/`set_config(..., true)` não podem vazar. Não copie connection
+   strings, SQL com dados, credenciais ou logs brutos para a evidência.
 
-Sem adapter/harness que exponha SQLSTATE e prova de “nenhuma segunda query”, não
-improvise conexão nem marque PASS: registre `NOT_EXECUTED` e a limitação. A suíte
-offline fake-clock testa timeout decrescente, deadline, bloqueio de operações
-subsequentes e cleanup, mas não substitui este teste PostgreSQL.
+Sem adapter/harness que exponha as fases, SQLSTATE e prova de “nenhuma operação
+subsequente”, não improvise conexão nem marque PASS: registre `NOT_EXECUTED` e a
+limitação. A suíte offline fake-clock testa timeout decrescente, deadline,
+bloqueio de operações subsequentes e cleanup após settlement do double, mas não
+prova cancelamento nem liberação no servidor PostgreSQL. Antes do aceite de
+produção, medir stalls/settlement e configurar salvaguardas de infraestrutura e
+banco apropriadas; este runbook não prescreve valores que ainda não foram medidos.
 
 O aceite de serviços é manual e separado de `npm run verify`. Não inicie Docker,
 Nginx, API, CMS, migrations ou browser sem autorização explícita para o projeto

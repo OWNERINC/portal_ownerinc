@@ -453,7 +453,7 @@ function assertSetupBeforeSnapshot(f: ReturnType<typeof fixture>, transactionID:
   }
 }
 
-test('deadline during transaction startup returns 503 and rolls back late success without reader SQL', async () => {
+test('reader caller deadline expires during transaction startup and late success rolls back without reader SQL', async () => {
   const f = fixture()
   let releaseBegin!: () => void
   f.beginGate = new Promise<void>(resolve => { releaseBegin = resolve })
@@ -470,7 +470,7 @@ test('deadline during transaction startup returns 503 and rolls back late succes
   assert.deepEqual(f.activeTransactionIDs, ['live'])
 })
 
-test('abort during transaction startup also rolls back late success and never starts reader SQL', async () => {
+test('reader caller abort during transaction startup also cleans up late success without reader SQL', async () => {
   const f = fixture()
   let releaseBegin!: () => void
   f.beginGate = new Promise<void>(resolve => { releaseBegin = resolve })

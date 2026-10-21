@@ -102,14 +102,16 @@ evidência de execução.
   o resultado da correção P1 e das verificações finais será acrescentado após a
   execução efetiva.
 
-### Correção final P1 — consultas bounded/canceláveis
+### Correção final P1 — consultas com budget cooperativo
 
 - Round 1 era parcial: catálogo contava linhas publicadas brutas e categorias não
   compartilhavam snapshot entre batches. Round 2 fecha os dois bloqueios: catálogo,
   disponibilidade e categorias usam um snapshot PostgreSQL exportado por holder
   `REPEATABLE READ, READ ONLY` sem `CMS_REFERENCE_LOCK`; cada batch de até dez
   candidatos importa esse snapshot antes de qualquer leitura, adquire seu próprio
-  lock e libera-o ao terminar. O holder permanece limitado ao budget CMS de 4 s.
+  lock e libera-o ao terminar. O budget CMS de 4 s do holder é cooperativo: controla
+  admissão/operações seguintes e tempos locais após setup, mas não garante release em
+  4 s se pool acquisition, `BEGIN`, setup, importação ou refresh permanecerem em voo.
 - O catálogo percorre a keyset `publishedAt DESC, id DESC` até 100.000 candidatos;
   só status publicado, documento principal, Version salva publicada exata,
   igualdade de campos públicos e referências de categoria/mídia íntegros contam
@@ -124,11 +126,14 @@ evidência de execução.
 - Antes/depois de cada query no limite `prepareQuery` do adapter Node/Postgres e
   de cada operação Local API multi-query, deadline/abort são verificados. O CMS
   atualiza `lock_timeout` e `statement_timeout` transaction-local a cada operação
-  para valor não maior que o restante e nunca crescente dentro da transação. As
-  configurações são eliminadas pelo fim da transação; sessões instrumentadas são
-  restauradas antes de commit/rollback. Testes fake-clock cobrem timeout
-  decrescente, expiração antes da próxima query, bloqueio de operações seguintes,
-  rollback e liberação de locks.
+  para valor não maior que o restante e nunca crescente dentro da transação. Isso
+  é um prazo cooperativo de admissão/remaining budget, não uma garantia de que uma
+  conexão ou transação encerrará em 4 s: chamadas de pool/`BEGIN`/setup/refresh já
+  iniciadas não são canceladas por esse prazo. As configurações são eliminadas pelo
+  fim da transação; sessões instrumentadas são restauradas antes de commit/rollback.
+  Testes fake-clock cobrem expiração antes da próxima operação admitida, bloqueio
+  de operações seguintes e cleanup depois que o double pendente resolve; não
+  demonstram cancelamento nem liberação PostgreSQL no prazo.
 - `node --import tsx --test tests/unit/portal-pages-reader.test.ts` cobre elegibilidade,
   offset após linhas inválidas, drift/Version/referências quebradas, snapshot
   importado entre batches, mutação durante scan, early exit, abort/budget, erro
@@ -151,10 +156,11 @@ evidência de execução.
   `git diff --check` passaram. O root `npm run verify` **não foi repetido**; o
   único run anterior continua registrado como falho acima e no relatório local.
 - PostgreSQL real não foi iniciado: o cenário documentado `SELECT pg_sleep(1)` com
-  deadline curto, SQLSTATE esperado `57014`, nenhuma segunda query, rollback/lock
-  release e ausência de vazamento de `SET LOCAL` permanece **NOT_EXECUTED**. A
-  inspeção do adapter instalado só confirma o caminho de execução; não prova
-  behavior PostgreSQL/runtime. Veja limitações detalhadas no relatório local.
+  prazo cooperativo curto, verificação de nenhuma nova operação após expiração,
+  settlement/rollback eventual, ausência de lock e de vazamento de `SET LOCAL`
+  permanece **NOT_EXECUTED**. Não se exige cancelamento/liberação em 4 s. A inspeção
+  do adapter instalado só confirma o caminho de execução; não prova behavior
+  PostgreSQL/runtime. Veja limitações detalhadas no relatório local.
 - `npm run verify` foi executado uma vez nesta rodada: **2.154 descobertos,
   2.113 aprovados, 22 falhas e 19 skips**, exit 1 após cerca de 249 s. A etapa de
   typecheck CMS passou antes da etapa de testes. As falhas observadas foram
@@ -169,13 +175,14 @@ evidência de execução.
   serviço/browser mantêm `NOT_EXECUTED`. Os checks offline não substituem aceite
   HTTP, PostgreSQL ou browser real.
 
-### Round 3 — lock-free projeções e início de transação limitado
+### Round 3 — lock-free projeções e espera do caller limitada no startup
 
 - A decisão da Round 2 de adquirir `CMS_REFERENCE_LOCK` em cada batch foi
   substituída para projeções: catálogo/lista, detalhe publicado, disponibilidade,
   categorias e JSON de prévia editorial usam transações read-only que importam o
   snapshot PostgreSQL exportado e não adquirem advisory nem `FOR SHARE`. O holder
-  também continua read-only, sem lock e sempre encerrado por rollback.
+  também continua read-only e sem lock; cleanup tenta rollback após operações em
+  voo se resolverem.
 - Autorização exata e abertura de asset mantêm `CMS_REFERENCE_LOCK` e locks de
   linha; publicação e mutação de mídia/referências preservam suas serializações.
   Um asset requisitado depois de publicação ou alteração de referência entre DTO
@@ -189,7 +196,9 @@ evidência de execução.
   do isolamento e da importação de snapshot, sem query de dados anterior ao
   `SET TRANSACTION SNAPSHOT`. Os testes offline verificam essa ordem, deadline e
   abort durante startup, cleanup tardio, ausência/presença de locks nos caminhos
-  correspondentes e regressões de elegibilidade/snapshot. A suíte CMS completa
+  correspondentes e regressões de elegibilidade/snapshot. No startup, “deadline”
+  descreve a espera do caller; os doubles liberam `beginTransaction()` para provar
+  rollback tardio, não cancelamento rígido. A suíte CMS completa
   encontrou 727 testes: 716 aprovados, 0 falhas e 11 skips opcionais; o conjunto
   focado de leitor/preview/asset/publicação/mídia/contrato passou com 82/82. CMS
   typecheck passou. Os testes públicos/API/DTO/rotas/runbook passaram com 88/88.
@@ -197,11 +206,45 @@ evidência de execução.
   (`npm run security`, zero vulnerabilidades), shell gerado e `git diff --check`
   passaram. O root `npm run verify` não foi executado novamente nesta rodada; a
   tentativa falha da Round 2 permanece registrada acima e no relatório local.
-- `SELECT pg_sleep(1)` em PostgreSQL descartável, SQLSTATE `57014`, ausência de
-  query seguinte, fim do holder e reset dos `SET LOCAL` continuam
-  **NOT_EXECUTED**. Testes fake e inspeção do adapter não são evidência de runtime
-  PostgreSQL; os 15 casos reais de serviço/browser também permanecem
-  `NOT_EXECUTED`.
+- `SELECT pg_sleep(1)`/setup stall em PostgreSQL descartável, SQLSTATE esperado
+  `57014` quando o timeout já foi instalado, nenhuma operação de dados/advisory
+  iniciada depois da expiração, rollback após settlement e reset dos `SET LOCAL`
+  continuam **NOT_EXECUTED**. A medida não exige que um comando já em voo seja
+  cancelado nem que holder/conexão sejam liberados em 4 s. Testes fake e inspeção do
+  adapter não são evidência de runtime PostgreSQL; os 15 casos reais de
+  serviço/browser também permanecem `NOT_EXECUTED`.
+
+### Round 4 — semântica do budget cooperativo e aceite de setup stalls
+
+- O valor CMS de 4 s é um prazo cooperativo de admissão/remaining budget: guardas
+  impedem iniciar novas operações leitoras após observar expiração e os timeouts
+  PostgreSQL decrescentes são instalados/atualizados após setup. Não é hard cap da
+  duração de `pool.connect`, `BEGIN`, `SET LOCAL` inicial, importação do snapshot ou
+  refresh SQL já em voo. Uma chamada dessas pode reter conexão e snapshot até
+  settlement do driver/servidor; rollback/cleanup ocorre após o fluxo recuperar
+  controle. O caminho JSON não adquire `CMS_REFERENCE_LOCK`; asset/mutation paths
+  locked não foram alterados.
+- O cliente API tem seu limite independente de espera por headers/resposta e aborta
+  o fetch/request upstream, mas esse abort não prova cancelamento do trabalho DB.
+  A aceitação real deve medir duração de expiração, abort do caller e settlement/
+  rollback separadamente; avaliar salvaguardas de conexão/query em infraestrutura e
+  banco com base na medição, sem presumir valores ainda não definidos.
+- A matriz local `pg_sleep`/setup stall foi reescrita para verificar que nenhuma
+  operação de dados/advisory começa depois da expiração cooperativa, e para observar
+  rollback eventual quando o comando pendente settle. Não se usa “liberado em 4 s”
+  como critério. PostgreSQL live, setup-stall harness, SQLSTATE, settlement e
+  rollback seguem **NOT_EXECUTED**; serviço/browser continua **NOT_EXECUTED**.
+- Round 4 modifica somente comentários/docs/tests de contrato; valores, elegibilidade,
+  URL, MVCC e implementação lock-free permanecem intocados. Os checks desta rodada
+  passaram:
+  - `node --import tsx --test tests/unit/portal-pages-reader.test.ts` (`cms/`):
+    **20 aprovados, 0 falhas**.
+  - `node --test tests/unit/portal-contents-reader-runbook.test.mjs`: **5 aprovados,
+    0 falhas**, incluindo invariantes de linguagem do budget e setup stall.
+  - `npm run typecheck` (`cms/`): **passou**; `git diff --check`: **passou**.
+  - Root `npm run verify` **não executado**. Nenhum serviço/banco/browser foi
+    iniciado; nenhuma medição de produção ou PostgreSQL foi feita e evidência live
+    permanece `NOT_EXECUTED`.
 
 ## Conclusão e próximas ações
 
