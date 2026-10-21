@@ -324,8 +324,9 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
     async loadContentsModule({ request, realModules = false } = {}) {
       const listeners = new Set();
       const requests = [];
+      let identity = null;
       if (!realModules) {
-        let identity = { uid: context.user?.uid || 'user-1', generation: 1, validated: true };
+        identity = { uid: context.user?.uid || 'user-1', generation: 1, validated: true };
         context.getContentsIdentity = () => identity;
         context.subscribeContentsIdentity = listener => { listeners.add(listener); return () => listeners.delete(listener); };
         context.authenticatedFetch = (path, options = {}) => { requests.push({ path, options }); return request(path, options); };
@@ -364,7 +365,10 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
       } };
       moduleOverrides['./portal-contents/index.js'] = contentsModule;
       return { module: contentsModule, modules: context.__contentsModules, requests,
-        notifyIdentity(next) { for (const listener of [...listeners]) listener(next); } };
+        notifyIdentity(next) {
+          identity = next;
+          for (const listener of [...listeners]) listener(identity);
+        } };
     },
     page(path, { styles = [], scripts = [], setup } = {}) {
       pages.set(path, () => { const doc = makeDocument(path, styles, scripts); setup?.(doc); return doc; });

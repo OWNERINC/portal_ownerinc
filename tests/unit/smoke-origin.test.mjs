@@ -178,7 +178,8 @@ async function ownedTestProcess(command,args,{env=process.env,cwd=process.cwd(),
   return {code,bodyCode:ready?.bodyCode??code,signal,stdout,stderr,proof,cleanupFailure:injectCleanupFailure};
 }
 
-test('native ownership handshake proves live members, early parent exit and surviving owned descendant termination (no HTTP or files)',async t=>{
+test('native ownership handshake proves live members, early parent exit and surviving owned descendant termination (no HTTP or files)',
+  { skip: Boolean(process.env.PORTAL_CONTENTS_SMOKE_ORIGIN_CASE) }, async t=>{
   const leaf=String.raw`
     process.on('disconnect',()=>{});
     setInterval(()=>{},60000);
@@ -253,6 +254,7 @@ test('native ownership handshake proves live members, early parent exit and surv
 });
 
 test('real smoke checks route HTML and the delivered local module graph, health, readiness and Origin', async t => {
+  const focusedCase = process.env.PORTAL_CONTENTS_SMOKE_ORIGIN_CASE;
   const bash = process.platform === 'win32'
     ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git/bin/bash.exe') : 'bash';
   const available = spawnSync(bash, ['--version'], { encoding: 'utf8' });
@@ -345,7 +347,7 @@ test('real smoke checks route HTML and the delivered local module graph, health,
     return {code:result.code,signal:result.signal,output:result.stdout+result.stderr,ownership:result.proof};
   };
 
-  await t.test('transient liveness failure retries then accepts the same complete checkout graph on the configured second attempt', async () => {
+  if (!focusedCase) await t.test('transient liveness failure retries then accepts the same complete checkout graph on the configured second attempt', async () => {
     transientLivenessFailures=1;
     const accepted = await run({attempts:'2'});
     assert.equal(accepted.code, 0, `${accepted.output}\nrequests: ${requests.join(' ')}`);
@@ -365,7 +367,7 @@ test('real smoke checks route HTML and the delivered local module graph, health,
     assert.deepEqual(origins, [origin,origin]);
   });
 
-  await t.test('rejects browser Origin even when plain health and readiness pass', async () => {
+  if (!focusedCase) await t.test('rejects browser Origin even when plain health and readiness pass', async () => {
     rejectOrigin = true;
     try {
       const rejected = await run();
@@ -423,7 +425,11 @@ test('real smoke checks route HTML and the delivered local module graph, health,
     }],
     ['absolute editorial redirect', '/editorial', { status: 308, headers: { Location: `${origin}/editorial/admin` } }],
   ];
+  if (focusedCase && !failures.some(([name]) => name === focusedCase)) {
+    throw new Error('unknown PORTAL_CONTENTS_SMOKE_ORIGIN_CASE');
+  }
   for (const [name, url, response] of failures) {
+    if (focusedCase && name !== focusedCase) continue;
     await t.test(`rejects ${name}`, async () => {
       overrides.set(url, response);
       try {
@@ -444,6 +450,8 @@ test('real smoke checks route HTML and the delivered local module graph, health,
       } finally { overrides.clear(); }
     });
   }
+
+  if (focusedCase) return;
 
   await t.test('unchanged curl HTTP timeout rejects a partial legacy body instead of accepting its valid prefix',async()=>{
     overrides.set('/autocard/',{stall:true,body:files.get('/autocard/')});

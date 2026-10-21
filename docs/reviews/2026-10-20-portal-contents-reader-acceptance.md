@@ -1,9 +1,11 @@
 # Aceite do leitor Portal Conteúdos — Task 4
 
 **Status: PARTIAL / BLOCKED.** Os testes offline direcionados passaram. `npm run
-verify` foi executado, mas falhou em testes Windows/Academy/smoke não relacionados
-abaixo. Os 15 casos reais de serviço/browser continuam `NOT_EXECUTED`; o agregado
-permanece código 2. Isto não é aceite de produção ou prova de transporte real.
+verify` foi executado e falhou; a falha anterior de `smoke-origin` foi reproduzida
+uma vez, de forma isolada e com limite finito, e passou. A causa da falha observada
+somente no conjunto completo continua sem prova; ela não é classificada como
+“não relacionada”. Os 15 casos reais de serviço/browser continuam `NOT_EXECUTED`;
+o agregado permanece código 2. Isto não é aceite de produção ou prova de transporte real.
 
 ## Identificação e autorização
 
@@ -27,29 +29,34 @@ permanece código 2. Isto não é aceite de produção ou prova de transporte re
   Nenhum resultado local/emulado é extrapolado para Firebase real.
 - Browser/versão/viewport: não executados / não aplicável; sem handoff local.
 
-## Resultado dos casos obrigatórios
+## Resultado e critérios dos casos obrigatórios
 
 Todos os registros usam o mesmo run ID, ambiente
 `disposable-local service/browser run NOT_EXECUTED (Docker Linux daemon unavailable; no stack started)`,
 browser/viewport `NOT_EXECUTED`, `artifact: null` e status `NOT_EXECUTED`.
 
-| Caso requerido | Status | Evidência / bloqueador |
+| Caso requerido | Status | Critério PASS exigido | Evidência ainda não obtida |
 | --- | --- | --- |
-| `live-auth-gate` | NOT_EXECUTED | Sem Portal/API/Auth Emulator; Docker indisponível. |
-| `catalog-routing` | NOT_EXECUTED | Sem browser/serviços; não confundir testes de harness com navegação real. |
-| `native-image` | NOT_EXECUTED | Sem emissão HTTP 204/cookie ou GET nativo real. |
-| `native-range` | NOT_EXECUTED | Sem Nginx/streaming; nenhum Range 206/416 real medido. |
-| `long-video-renewal` | NOT_EXECUTED | Sem vídeo real >6 min nem renovação em browser. |
-| `media-failure-recovery` | NOT_EXECUTED | Sem falhas de rede/429/expiração em browser real. |
-| `large-pdf` | NOT_EXECUTED | Sem PDF nativo de fixture/visualizador independente. |
-| `auth-exit-cross-tab` | NOT_EXECUTED | Sem duas abas, logout/troca de usuário ou cookie real. |
-| `gallery-keyboard` | NOT_EXECUTED | Harness não substitui sequência manual em browser real. |
-| `screen-reader-gallery` | NOT_EXECUTED | Nenhum leitor de tela/browser foi usado. |
-| `embeds-effective-csp` | NOT_EXECUTED | Sem headers efetivos do Nginx ou playback YouTube/Vimeo. |
-| `layout-mobile` | NOT_EXECUTED | Sem screenshots/viewport/zoom/touch reais. |
-| `bfcache-cleanup` | NOT_EXECUTED | BFCache `pageshow.persisted` não observado; harness não satisfaz o caso. |
-| `owner-news-regression` | NOT_EXECUTED | Testes offline executados; smoke de News/Academy/editor no browser não executado. |
-| `editorial-accessibility` | NOT_EXECUTED | PDF/vídeo de fixture não examinados manualmente. |
+| `live-auth-gate` | NOT_EXECUTED | `/users/me`, availability, list/detail autenticados; conta inativa negada; publicação `r1`→`r2` e despublicação coerentes. | HTTP real, CMS outage seguro e Auth Emulator. |
+| `catalog-routing` | NOT_EXECUTED | 13+ itens, 12 por página, filtro/página, slug direto, refresh, foco e Back/Forward sem shell reload. | Navegação em browser/serviços. |
+| `native-image` | NOT_EXECUTED | Emissão POST 204 bodyless, cookie com atributos/escopo corretos e GET nativo autorizado; Origin inválido negado. | Cookie/asset reais no Nginx. |
+| `native-range` | NOT_EXECUTED | GET 200, ranges prefix/suffix 206, range inválido/multi-range 416, headers corretos, streaming incremental e cancelamento. | Transporte Nginx/bytes/cancelamento reais. |
+| `long-video-renewal` | NOT_EXECUTED | Reprodução >6 min; renew perto de 4 min sem troca de `src`, reset de `currentTime` ou pausa. | Vídeo e sessão em browser real. |
+| `media-failure-recovery` | NOT_EXECUTED | Offline/online, 429 Retry-After, expiração e revisão substituída recuperam sem misturar blocos/IDs de `r1` e `r2`. | Falhas de rede/media reais. |
+| `large-pdf` | NOT_EXECUTED | PDF ≥20 MiB abre nativamente, usa Range; aba independente expira após 5 min e reabre via Portal. | Visualizador nativo e cookie expirado. |
+| `auth-exit-cross-tab` | NOT_EXECUTED | Logout/troca invalida duas abas via BroadcastChannel e storage fallback; emissão tardia não ativa sessão antiga; GET revogado negado. | Duas abas e cookies reais. |
+| `gallery-keyboard` | NOT_EXECUTED | Foco contido/restaurado, setas com wrap, Escape/backdrop, inert e scroll restaurados, vídeo pausado. | Sequência manual no browser. |
+| `screen-reader-gallery` | NOT_EXECUTED | Leitor anuncia diálogo, nome, alt/caption, índice e controles; fundo inert e foco restaurado. | Árvore/anúncio em tecnologia assistiva real. |
+| `embeds-effective-csp` | NOT_EXECUTED | CSP efetiva restringe origins canônicas; YouTube/Vimeo carregam e reproduzem sem wildcard ampliado. | Header Nginx e playback real. |
+| `layout-mobile` | NOT_EXECUTED | 10 tipos × 5 layouts + default omitido, em 320/375/768/1440, zoom 100/200%, touch e reduced motion sem overflow. | Matriz de screenshots/viewport. |
+| `bfcache-cleanup` | NOT_EXECUTED | 10 ciclos, ao menos um `pageshow.persisted=true`, cleanup idempotente e revalidação antes de reativar mídia. | BFCache do browser. |
+| `owner-news-regression` | NOT_EXECUTED | News/Academy/editor navegam e preservam shell, permissão e dados publicados; retorno a Conteúdos é funcional. | Browser smoke de News/Academy/editor. |
+| `editorial-accessibility` | NOT_EXECUTED | PDF marcado/ordem de leitura, headings/links/alt e legendas/transcrição/alternativa verificados manualmente. | Inspeção de PDF e mídia por leitor/ferramenta. |
+
+Os procedimentos reproduzíveis, pré-requisitos, sequência e checks HTTP/Range
+completos estão no [runbook](../operations/portal-contents-reader.md#matriz-operacional-reproduzível--15-casos).
+O status desta tabela permanece `NOT_EXECUTED`; critérios escritos não são
+evidência de execução.
 
 ## Verificação offline
 
@@ -75,6 +82,10 @@ browser/viewport `NOT_EXECUTED`, `artifact: null` e status `NOT_EXECUTED`.
 - `node scripts/test-portal-contents-acceptance.mjs --aggregate`: manifest externo
   presente, 15 registros `NOT_EXECUTED`, status `NOT_EXECUTED`, exit 2, sem erros;
   o resultado permanece bloqueado, nunca PASS.
+- Round 1: regression do bypass `NOT_EXECUTED` em todos os campos PASS, matriz de
+  separadores/placeholder, PASS provenance legítima, timestamps, artifact opcional
+  sem placeholder e getter/subscriber do harness passam na suíte direcionada; veja
+  RED/GREEN e diagnóstico único de `smoke-origin` no relatório local detalhado.
 
 ## Conclusão e próximas ações
 

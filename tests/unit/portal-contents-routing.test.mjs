@@ -9,6 +9,24 @@ function responseForDetail(slug = 'published-policy', status = 200) {
   return Response.json(pageFixture({ slug, title: slug === 'published-policy' ? 'Política publicada' : 'Outra página', content_blocks: [] }));
 }
 
+test('isolated identity notifications update the getter before notifying; real auth remains the authority', async () => {
+  const isolated = await createRouterHarness({ user: { uid: 'user-a' }, autoStart: false });
+  const feature = await isolated.loadContentsModule({ request: async () => Response.json([]) });
+  let notified = null;
+  isolated.context.subscribeContentsIdentity(identity => { notified = identity; });
+  const nextIdentity = { uid: 'user-b', generation: 2, validated: false };
+
+  feature.notifyIdentity(nextIdentity);
+  assert.deepEqual(JSON.parse(JSON.stringify(isolated.context.getContentsIdentity())), nextIdentity);
+  assert.deepEqual(JSON.parse(JSON.stringify(notified)), nextIdentity);
+
+  const realAuth = await createRouterHarness({ user: { uid: 'firebase-user-a' }, autoStart: false });
+  await realAuth.loadRealAuthHooks();
+  assert.equal(realAuth.context.getContentsIdentity().uid, 'firebase-user-a');
+  realAuth.context.setAuthUser({ uid: 'firebase-user-b' });
+  assert.equal(realAuth.context.getContentsIdentity().uid, 'firebase-user-b');
+});
+
 test('route parser canonicalizes accepted reader/catalog routes and rejects malformed recognized parameters', async () => {
   const h = await createContentsHarness();
   const parse = search => JSON.parse(JSON.stringify(h.modules.index.parseContentsLocation(search)));

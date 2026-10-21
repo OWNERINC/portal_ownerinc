@@ -25,10 +25,19 @@ export const REQUIRED_CASES = Object.freeze([
 ]);
 
 const RECORD_KEYS = Object.freeze([
-  'case', 'commit', 'runId', 'environment', 'browser', 'viewport', 'scenario', 'status', 'artifact', 'notes',
+  'case', 'commit', 'runId', 'environment', 'startedAt', 'finishedAt', 'browser', 'viewport', 'scenario', 'status',
+  'artifact', 'notes',
 ]);
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const COMMIT = /^[0-9a-f]{40}$/iu;
+const BROWSER_VERSION = /\b\d+(?:\.\d+)+\b/u;
+const VIEWPORT_SIZE = /\b\d{2,5}\s*[x×]\s*\d{2,5}\b/u;
+const PLACEHOLDER_WORDS = new Set(['todo', 'tbd', 'unknown', 'unexecuted', 'pending', 'placeholder', 'skip', 'skipped']);
+const PLACEHOLDER_COMPACT = new Set(['notexecuted', 'unexecuted', 'notrun', 'notperformed', 'nottested',
+  'notapplicable', 'na', 'todo', 'tbd', 'unknown', 'empty', 'none', 'unset', 'pending', 'placeholder', 'skip', 'skipped']);
+const PLACEHOLDER_PAIRS = Object.freeze([
+  ['not', 'executed'], ['not', 'run'], ['not', 'performed'], ['not', 'tested'], ['not', 'applicable'], ['n', 'a'],
+]);
 const RECORD_FILE = 'portal-contents-acceptance.json';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -98,6 +107,18 @@ function artifactPathIsSafe(value) {
   return segments.every(segment => segment && segment !== '.' && segment !== '..');
 }
 
+function containsPlaceholder(value) {
+  if (typeof value !== 'string' || !value.trim()) return true;
+  const words = value.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (words.some(word => PLACEHOLDER_WORDS.has(word)) || PLACEHOLDER_COMPACT.has(words.join(''))) return true;
+  return PLACEHOLDER_PAIRS.some(pair => words.some((word, index) => word === pair[0] && words[index + 1] === pair[1]));
+}
+
+function isCanonicalTimestamp(value) {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) return false;
+  try { return new Date(value).toISOString() === value; } catch { return false; }
+}
+
 function validateRecord(record, expectedRunId, context) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return 'record_not_object';
   const keys = Object.keys(record).sort();
@@ -110,11 +131,26 @@ function validateRecord(record, expectedRunId, context) {
   if (!['PASS', 'FAIL', 'NOT_EXECUTED'].includes(record.status)) return 'status_invalid';
   for (const key of ['environment', 'browser', 'viewport', 'scenario', 'notes']) {
     if (typeof record[key] !== 'string' || !record[key].trim()) return `${key}_missing`;
+    if (record.status !== 'NOT_EXECUTED' && containsPlaceholder(record[key])) return `${key}_placeholder`;
   }
-  if (record.artifact !== null && !artifactPathIsSafe(record.artifact)) return 'artifact_path_invalid';
+  if (record.status === 'NOT_EXECUTED') {
+    const noExecutionTimes = record.startedAt === null && record.finishedAt === null;
+    const validRecordedTimes = isCanonicalTimestamp(record.startedAt) && isCanonicalTimestamp(record.finishedAt)
+      && Date.parse(record.finishedAt) >= Date.parse(record.startedAt);
+    if (!noExecutionTimes && !validRecordedTimes) return 'unexecuted_timestamps_invalid';
+  } else {
+    if (!isCanonicalTimestamp(record.startedAt) || !isCanonicalTimestamp(record.finishedAt)) return 'timestamps_invalid';
+    if (Date.parse(record.finishedAt) < Date.parse(record.startedAt)) return 'timestamp_order_invalid';
+    if (!BROWSER_VERSION.test(record.browser)) return 'browser_version_missing';
+    if (!VIEWPORT_SIZE.test(record.viewport)) return 'viewport_size_missing';
+  }
+  if (record.artifact !== null
+    && (!artifactPathIsSafe(record.artifact) || (record.status !== 'NOT_EXECUTED' && containsPlaceholder(record.artifact)))) {
+    return 'artifact_path_invalid';
+  }
   if (record.status === 'PASS') {
     if (!/\bdisposable[- ]local\b/iu.test(record.environment)) return 'pass_environment_not_disposable_local';
-    if (/\b(mock(?:ed)?|unit[- ]test|test[- ]harness|offline|not[- ]executed)\b/iu.test(`${record.environment} ${record.browser}`)) {
+    if (/\b(mock(?:ed)?|unit[- ]test|test[- ]harness|offline)\b/iu.test(`${record.environment} ${record.browser}`)) {
       return 'mocked_or_offline_pass_forbidden';
     }
   }
@@ -169,6 +205,8 @@ export function createNotExecutedEvidence({ commit, runId, environment, reason }
     commit,
     runId,
     environment,
+    startedAt: null,
+    finishedAt: null,
     browser: 'NOT_EXECUTED',
     viewport: 'NOT_EXECUTED',
     scenario: `${caseName}: required local service/browser scenario was not executed.`,

@@ -10,6 +10,8 @@ import {
 const COMMIT = '55bd6c66ba2bb49a3e9cf5c3768538bde5c471d5';
 const RUN_ID = 'c965d4c0-5fbe-47ef-949d-23e5cc6fbacc';
 const VALID_ENVIRONMENT = 'disposable-local; Docker stack; Firebase Auth Emulator (not production)';
+const STARTED_AT = '2026-10-21T12:00:00.000Z';
+const FINISHED_AT = '2026-10-21T12:00:01.000Z';
 
 function evidence(caseName, status = 'PASS', overrides = {}) {
   return {
@@ -17,6 +19,8 @@ function evidence(caseName, status = 'PASS', overrides = {}) {
     commit: COMMIT,
     runId: RUN_ID,
     environment: VALID_ENVIRONMENT,
+    startedAt: STARTED_AT,
+    finishedAt: FINISHED_AT,
     browser: 'Chromium 140.0; manual DevTools',
     viewport: '1440x900',
     scenario: `Executed ${caseName} against the disposable local services.`,
@@ -52,6 +56,61 @@ test('an unexecuted required browser case prevents aggregate PASS', () => {
   records.find(row => row.case === 'screen-reader-gallery').status = 'NOT_EXECUTED';
   assert.equal(aggregateEvidence(records).status, 'NOT_EXECUTED');
   assert.equal(aggregateEvidence(records).exitCode, 2);
+});
+
+test('complete real PASS provenance aggregates successfully', () => {
+  const records = REQUIRED_CASES.map(name => evidence(name));
+  assert.equal(aggregateEvidence(records).status, 'PASS');
+  assert.equal(aggregateEvidence(records).exitCode, 0);
+});
+
+test('the review exploit cannot PASS with placeholder provenance across every required row', () => {
+  const records = REQUIRED_CASES.map(name => evidence(name, 'PASS', {
+    browser: 'NOT_EXECUTED',
+    viewport: 'NOT EXECUTED',
+    scenario: 'NOT-EXECUTED',
+    notes: 'not_executed',
+  }));
+  const result = aggregateEvidence(records);
+  assert.equal(result.status, 'FAIL');
+  assert.equal(result.exitCode, 1);
+  assert.ok(result.errors.some(error => error.endsWith(':browser_placeholder')),
+    'rejection must come from placeholder validation, not an unrelated shape/configuration error');
+});
+
+test('executed evidence rejects placeholder spellings in every provenance field', () => {
+  const fields = ['environment', 'browser', 'viewport', 'scenario', 'notes'];
+  const placeholders = ['NOT_EXECUTED', 'not executed', 'Not-Executed', 'not__executed',
+    'TODO', 'TBD', 'unknown', 'n-a', 'n/a', 'empty', '', '   '];
+  for (const field of fields) {
+    for (const value of placeholders) {
+      const records = REQUIRED_CASES.map(name => evidence(name));
+      records[0][field] = field === 'environment' && !['', '   ', 'empty'].includes(value.toLowerCase())
+        ? `${VALID_ENVIRONMENT}; ${value}` : value;
+      assert.equal(aggregateEvidence(records).exitCode, 1, `${field}=${JSON.stringify(value)}`);
+    }
+  }
+});
+
+test('PASS timestamps are required, canonical UTC timestamps and ordered', () => {
+  for (const [field, value] of [
+    ['startedAt', null], ['startedAt', 'TBD'], ['startedAt', '2026-10-21T12:00:00Z'],
+    ['finishedAt', null], ['finishedAt', 'unknown'], ['finishedAt', '2026-10-21T11:59:59.000Z'],
+  ]) {
+    const records = REQUIRED_CASES.map(name => evidence(name));
+    records[0][field] = value;
+    assert.equal(aggregateEvidence(records).exitCode, 1, `${field}=${JSON.stringify(value)}`);
+  }
+});
+
+test('executed evidence rejects placeholder artifact paths but keeps artifacts optional', () => {
+  const records = REQUIRED_CASES.map(name => evidence(name));
+  assert.equal(aggregateEvidence(records).status, 'PASS', 'an artifact is optional when no artifact is recorded');
+  for (const value of ['NOT_EXECUTED', 'not executed', 'not-executed', 'not_executed', 'TODO', 'unknown']) {
+    const changed = structuredClone(records);
+    changed[0].artifact = `evidence/${value}.png`;
+    assert.equal(aggregateEvidence(changed).exitCode, 1, value);
+  }
 });
 
 test('the aggregate rejects missing, duplicate, and extra cases with FAIL precedence', () => {
@@ -106,7 +165,8 @@ test('check-only evidence is always NOT_EXECUTED and can never satisfy the aggre
     reason: 'docker_engine_unavailable',
   });
   assert.equal(records.length, REQUIRED_CASES.length);
-  assert.ok(records.every(row => row.status === 'NOT_EXECUTED' && row.artifact === null));
+  assert.ok(records.every(row => row.status === 'NOT_EXECUTED' && row.artifact === null
+    && row.startedAt === null && row.finishedAt === null));
   assert.equal(aggregateEvidence(records).status, 'NOT_EXECUTED');
   assert.equal(aggregateEvidence(records).exitCode, 2);
 });

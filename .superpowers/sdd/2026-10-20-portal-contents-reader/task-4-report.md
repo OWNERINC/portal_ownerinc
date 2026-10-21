@@ -1,9 +1,11 @@
 # Task 4 — completion and evidence report
 
 **Delivery status: PARTIAL / BLOCKED.** Task 4 source, tests and docs are committed;
-offline focused checks pass. Full `npm run verify` fails in unrelated
-Windows/Academy/smoke test areas, and every real service/browser case is
-`NOT_EXECUTED`. This is not acceptance or production readiness.
+offline focused checks pass. The prior full `npm run verify` failed on Windows
+temporary-directory and Academy issues, and its smoke-origin metadata discrepancy
+passed in one isolated run but remains unexplained in the full-suite context. Every
+real service/browser case is `NOT_EXECUTED`. This is not acceptance or production
+readiness.
 
 ## Scope and commit
 
@@ -27,7 +29,8 @@ Windows/Academy/smoke test areas, and every real service/browser case is
 | `node scripts/test-portal-contents-acceptance.mjs --aggregate` | manifest has 15 records, all `NOT_EXECUTED`; status `NOT_EXECUTED`, exit 2; no errors |
 | `npm run verify` with `NODE_OPTIONS="--test-skip-pattern=^Academy initial/repeated error focuses usable retry"` | exit 1; 2,139 discovered tests: 2,103 pass, 17 fail, 19 skipped; syntax and CMS typecheck completed before root tests |
 
-The `npm run verify` failures were recorded, not fixed out of scope:
+The previous `npm run verify` failures were recorded; this follow-up did not rerun
+the broad suite:
 
 1. Four `EPERM` temporary-directory failures in `payload-preview-https.test.mjs`
    and ten in `payload-preview-preparation.test.mjs`, attempting `mkdtemp` under
@@ -35,10 +38,11 @@ The `npm run verify` failures were recorded, not fixed out of scope:
 2. `academy-frontend.test.mjs` / “catalog restores the initiating filter focus
    after remount…” failed after about 154 seconds with
    `RangeError: Array buffer allocation failed`.
-3. `smoke-origin.test.mjs` / “rejects entry without mount export” returned null
-   metadata where the test expected
-   `{check:'autocard_entry',reason:'module',httpStatus:200}`; its parent real-smoke
-   suite also failed because of that subcase.
+3. The prior full-suite observation for `smoke-origin.test.mjs` / “rejects entry
+   without mount export” returned null metadata where the test expected
+   `{check:'autocard_entry',reason:'module',httpStatus:200}`. In the Task 4 round 1
+   isolated run, that exact case passed; the original full-suite discrepancy is
+   not reproduced, but its cause remains unproven and is not called unrelated.
 
 The 17 failing count includes the failed parent suite. `npm run verify` stopped
 before CMS unit tests, secret scanning, DHO naming and Compose validation. Root
@@ -94,7 +98,8 @@ browser state or Nginx reload were created. No `docker compose down`, `down -v` 
 deletion command was run. The external evidence directory is retained with only
 the sanitized NOT_EXECUTED manifest; no fixture cleanup is pending.
 
-Remaining blockers are the failed `npm run verify` cases and unavailable named
+Remaining blockers are the previously failed broad `npm run verify` conditions,
+the unproven cause of its smoke-origin discrepancy and unavailable named
 stack/browser prerequisites. Real HTTP authorization, native Range streaming,
 effective CSP/playback, PDF behavior, screen-reader output and BFCache remain
 unproven. Procedure and cleanup instructions are in
@@ -113,3 +118,72 @@ the acceptance matrix is in
   guarded disposable-local test configuration: **status `NOT_EXECUTED`, exit 2**,
   all 15 cases `NOT_EXECUTED`, and no errors. Aggregate acceptance remains
   blocked; this is not a PASS.
+
+## Task 4 fix round 1 — RED/GREEN and smoke diagnosis
+
+### Acceptance metadata and router harness
+
+- **RED:** `node --test --test-timeout=30000 tests/unit/portal-contents-acceptance.test.mjs tests/unit/portal-contents-routing.test.mjs`
+  initially reported **25 passed / 5 failed** after adding execution timestamps
+  and the isolated-identity regression. The valid PASS fixture and the current
+  `NOT_EXECUTED` fixture failed the old exact-key validator; the real isolated
+  getter remained at user A after notifying user B. The placeholder regression
+  was tightened to require a `*_placeholder` reason, so a shape/configuration
+  error cannot satisfy the exploit test.
+- **GREEN:** after the validator and harness changes, the same focused suites
+  reported **31 passed / 0 failed / 0 skipped**. Coverage includes the all-PASS
+  exploit using `NOT_EXECUTED`, `NOT EXECUTED`, `NOT-EXECUTED` and
+  `not_executed` across browser/viewport/scenario/notes; empty/TODO/TBD/unknown/
+  n-a variants across provenance fields; real PASS metadata; canonical ordered
+  timestamps; generated `NOT_EXECUTED` records; non-placeholder optional artifact
+  paths; and getter/subscriber agreement. A separate real-auth harness check
+  confirms Firebase auth remains the identity source of truth.
+- Record schema now requires `startedAt`/`finishedAt` for executed PASS/FAIL,
+  permits both `null` only for an unexecuted case, requires browser/version and
+  viewport dimensions for executed evidence, and scans all required provenance
+  fields for placeholders. `NOT_EXECUTED` aggregation still returns exit 2.
+
+### One-case smoke-origin diagnosis
+
+- A first test-name-pattern attempt matched the containing parent and ran sibling
+  HTTP cases; it hit the parent's 30-second timeout before the target. The test
+  runner process ended after 59,232 ms (exit 1; 34 reported, 8 passed, 24 failed,
+  2 cancelled). A `--test-only` selector probe then emitted only a file-level
+  result and no nested-case name, so it was not treated as diagnosis. Captures:
+  `C:\Users\Criação\AppData\Local\Temp\opencode\portal-contents-smoke-round1-stdout.txt`
+  and `...-stderr.txt` (stderr empty).
+- Added a test-only environment selector that skips sibling smoke cases without
+  changing production source, parser or deploy behavior. The **single qualifying
+  target run** used `PORTAL_CONTENTS_SMOKE_ORIGIN_CASE='entry without mount export'`
+  and `node --test --test-timeout=30000 tests/unit/smoke-origin.test.mjs`.
+- Captured runner metadata: start `2026-10-21T18:06:07.8213875Z`; wall time
+  6,462 ms; Node test timeout 30,000 ms; exit 0. Runner stdout:
+  `rejects entry without mount export (6174.7121ms)`, parent 6,240.0608 ms,
+  `tests 3 / pass 2 / fail 0 / skipped 1`; runner stderr was empty. Captures:
+  `C:\Users\Criação\AppData\Local\Temp\opencode\portal-contents-smoke-round1-actual-stdout.txt`
+  and `...-actual-stderr.txt`.
+- The target assertion parsed the actual smoke failure diagnostic as
+  `{check:'autocard_entry',reason:'module',httpStatus:200}` from the intentional
+  fixture with `export function mount` removed. `scripts/smoke.sh` reports this
+  sanitized failure on stderr; its accepted canonical record is
+  `{"check":"smoke","status":"failed","attempts":1,"diagnostic":{"check":"autocard_entry","reason":"module","httpStatus":200}}`.
+  No response body, URL, header, token or cookie is included. The parser and
+  expectation agree in the isolated run; the old full-suite-only discrepancy is
+  unresolved. No production source or parser semantics were changed.
+
+### Operational handoff and remaining status
+
+- Expanded the tracked runbook with shared fixture/prerequisite rules, exact
+  steps/PASS criteria for all 15 service/browser/manual cases (including 10 block
+  types × five layouts plus default, Range variants/streaming, renewals, both
+  cross-tab transports, late issuance, BFCache and accessibility), and a
+  sanitized JSON shape-only record. The review matrix records matching criteria.
+- The live-service/browser/manual result remains **15 × `NOT_EXECUTED`**. Docker,
+  Portal services, Nginx and a real browser were not started; this follow-up only
+  ran the named unit smoke case's ephemeral loopback fixture. Cleanup for test
+  fixtures was handled by the test harness; the captured sanitized logs remain
+  outside the checkout.
+- Final scoped checks after the follow-up edits: acceptance/router **31 passed**;
+  persistent-navigation/auth-stability **55 passed**; `git diff --check`, public
+  shell generation check, syntax verification and security verification all exit 0.
+  The broad `npm run verify` was not rerun.
