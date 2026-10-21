@@ -9,8 +9,8 @@ permanece código 2. Isto não é aceite de produção ou prova de transporte re
 
 - Data: 2026-10-21.
 - Ambiente de trabalho: Windows, Node `v24.15.0`.
-- Base sob teste: `55bd6c66ba2bb49a3e9cf5c3768538bde5c471d5` mais o diff Task 4;
-  o SHA do commit de código Task 4 será registrado no relatório complementar.
+- Base sob teste: `55bd6c66ba2bb49a3e9cf5c3768538bde5c471d5` mais o commit de código
+  Task 4 `19d9c2fdd90140df6a453f4bdeb09462236e556f`.
 - Run ID: `a72e87b2-f750-4d51-88e3-ffe8d92a6a68`.
 - Referência de autorização: apenas um stack **LOCAL descartável e nomeado** foi
   autorizado pela sessão supervisora. Nenhum projeto/stack ou recurso foi
@@ -72,7 +72,8 @@ browser/viewport `NOT_EXECUTED`, `artifact: null` e status `NOT_EXECUTED`.
   não foram alcançados após a falha do conjunto root.
 - O teste completo incluiu todos `tests/unit/owner-news*.test.mjs`; nenhum está
   entre as falhas. O focused ampliado também executou `owner-news-reader`.
-- `--aggregate`: 15 registros reais ausentes de execução são `NOT_EXECUTED`, exit 2;
+- `node scripts/test-portal-contents-acceptance.mjs --aggregate`: manifest externo
+  presente, 15 registros `NOT_EXECUTED`, status `NOT_EXECUTED`, exit 2, sem erros;
   o resultado permanece bloqueado, nunca PASS.
 
 ## Conclusão e próximas ações
