@@ -264,24 +264,41 @@ completa, cenário, status e bloqueadores da execução são registrados na
 <a id="case-long-video-renewal"></a>
 5. **`long-video-renewal` — hidden-tab playing renewal and authorized seek after minute five.**
    - **Precondições:** vídeo seekable sintético >8 min, conta A ativa, relógio
-     real e DevTools Network aberto; não manipule relógio do cliente.
+     real e DevTools Network com Preserve log; não manipule relógio do cliente.
+     Use somente telemetria de método/path padrão, status e timestamps; não abra,
+     copie nem exporte headers, cookies, bodies ou HAR. Um observador DevTools
+     Protocol que não traga a aba ao foreground pode anotar também somente os
+     booleanos de visibilidade e playback necessários para este aceite.
    - **Passos:**
-     1. Inicie playback por gesto do usuário e confirme estado playing/lease ativo.
-        Coloque a aba em background/minimize sem pausar o vídeo; mantenha-a hidden
-        ao cruzar o renew alvo de 4 min. Ao retornar confira request de renewal
-        feito enquanto hidden ou no `visibilitychange`/focus, e que playback
-        avançou sem reset de source/time.
-     2. Em ciclo separado registre `performance.now()`, `currentTime` e source na
+     1. Inicie playback por gesto do usuário. Coloque a aba em background/minimize
+        sem pausar o vídeo e mantenha o documento hidden ao cruzar o renew alvo de
+        4 min. **Antes de qualquer retorno/focus**, observe na Network uma renovação
+        `POST /api/contents/media-session` com status `204`; seus timestamps de
+        request e resposta precisam cair dentro do intervalo em que
+        `document.visibilityState === 'hidden'`. No envio e na resposta, verifique
+        `video.paused === false` e `video.ended === false`; ao voltar confirme que
+        `currentTime` avançou e source/time não foram resetados. Capture somente
+        método, path sem UUID/segredo, status, timestamps e os booleanos
+        visibility/playing — nunca cookies, Authorization, headers completos ou body.
+     2. Em observação separada, retorne do background e anote eventual recheck/
+        renewal disparada por `visibilitychange`/focus. **Foreground-return recovery
+        is separate** e não satisfaz nem substitui o subcaso de renewal bem-sucedida
+        enquanto hidden.
+     3. Em ciclo separado registre `performance.now()`, `currentTime` e source na
         emissão. Depois de **mais de cinco minutos** desde a emissão, acione seek
         pelo player para marcador sintético 6:00. Observe session renewal e confirme
         seek/playback autorizado no marcador; não reutilize URLs/cookies antigos.
-     3. Como controle negativo, faça expirar/negue a sessão no ambiente autorizado;
+     4. Como controle negativo, faça expirar/negue a sessão no ambiente autorizado;
         confirme que ação negada não entrega nova mídia nem é registrada como PASS.
-   - **PASS:** o POST de renewal ocorre por volta de 4 min com vídeo ainda playing
-     em aba hidden ou no primeiro recheck após retorno; source/time não resetam e
-     o vídeo não pausa. Seek do usuário após minuto cinco renova/revalida e chega
-     ao marcador sem trocar identidade/revisão. Registre tempo monotônico real;
-     ausência do trigger/evento fica FAIL ou `NOT_EXECUTED`, nunca inferida.
+   - **PASS:** o POST de renewal recebe `204` enquanto o documento permanece hidden
+     e o vídeo continua playing no request e na resposta; renewal/recovery somente
+     após foreground é observação separada e não cobre esse critério. Seek do usuário
+     após minuto cinco renova/revalida e chega ao marcador sem trocar identidade/
+     revisão. Guarde apenas método/path redigido/status/timestamps e estados
+     booleanos sanitizados. Se suspensão do browser impedir observar request,
+     resposta, hidden e playing juntos, marque esse subcaso e o caso completo
+     `NOT_EXECUTED` (mesmo que seek/foreground passe); renewal observada com status
+     diferente de 204 ou playback interrompido é FAIL, não `NOT_EXECUTED`.
 
 <a id="case-media-failure-recovery"></a>
 6. **`media-failure-recovery` — suspend past expiry, PDF href removal and measured bounded retries.**
@@ -505,25 +522,51 @@ completa, cenário, status e bloqueadores da execução são registrados na
 
 <a id="case-owner-news-regression"></a>
 14. **`owner-news-regression` — editorial logout and Owner News unchanged.**
-    - **Precondições:** notícia sintética já publicada, Academy item sintético,
-      editor acessível a `manageKnowledge` e browser Portal autenticado; anote
+    - **Precondições:** notícia sintética publicada com imagem/vídeo/PDF original
+      em asset privado, item Academy sintético, editor acessível a `manageKnowledge`
+      e viewer Portal A ativo (sem exigir `manageKnowledge` para ler item publicado);
+      anote
       estado Owner News anterior por rota/status/count de fixture, sem título/body
       ou dado pessoal.
     - **Passos:**
       1. Navegue Owner News lista→detalhe→retorno, Academy→aula e editor→lista/
          visualização; percorra links nativos, refresh e Back/Forward e retorne a
          Conteúdos sem editar/publicar/substituir dados preexistentes.
-      2. Em sessão sintética `manageKnowledge`, confirme acesso editorial; execute
+      2. Pelo fluxo normal de `/announcements.html`, abra o card sintético e acione
+         a ação de mídia já existente no artigo (imagem, Play do vídeo, ou
+         **Consultar edição completa em PDF**). Sem montar URL manual nem chamar
+         Contents/CMS asset endpoints, confirme em Network o GET autenticado
+         `GET /api/announcements/assets/:id` para `asset_scope=owner-news`, status
+         `200`, MIME esperado da fixture, `Cache-Control: private,no-store`,
+         `X-Content-Type-Options: nosniff` e disposição inline. Anote apenas o nome
+         lógico do endpoint, status, MIME e tempos — redija o UUID da rota; não
+         registre URL completa, filename, corpo, Authorization, cookies ou HAR.
+         Confirme o comportamento original do browser: o renderer recebe a resposta
+         privada via `fetchAPIAsset`, aplica um `blob:` URL ao `<img>`, `<video
+         controls>` ou PDF iframe/link, e a ação escolhida renderiza/toca/abre/baixa
+         pelo controle nativo esperado. A interface normal faz GET de mídia como
+         Blob; não exija Range no request HTTP se o browser não o enviar.
+      3. Como controle negativo separado, repita somente a leitura do asset
+         sintético sem Authorization e depois de logout/revoke pelo fluxo normal;
+         espere status `401`, sem bytes privados nem imagem/player reaproveitado.
+         Leitura publicada para viewer A ativo não deve ser negada por não ter
+         `manageKnowledge`; não use endpoint de preview para simular o asset
+         público publicado.
+      4. Em sessão sintética `manageKnowledge`, confirme acesso editorial; execute
          logout/revoke editorial existente. Confirme sessão editorial revogada e
          que o Portal auth permanece no estado esperado; tente uma ação/leitura
          protegida do editor e registre negação/redirect sem cookie.
-      3. Abra novamente Owner News via fluxo normal e compare endpoints/status,
+      5. Abra novamente Owner News via fluxo normal e compare endpoints/status,
          número de fixtures e acesso pré/pós editorial logout. Não rode migration,
          não altere dados, não reuse session cookie. Se for necessário testar Portal
          logout completo, faça-o em ciclo separado e depois autentique A novamente.
-   - **PASS:** logout/revoke editorial bloqueia sessão editorial antiga, sem
-     quebrar sessão Portal ou alterar publicação/rota/permissão de Owner News;
-     Owner News, Academy e editor seguem seus fluxos normais e nenhum dado muda.
+    - **PASS:** o item publicado mantém seu contrato de mídia privado: viewer A
+      autorizado recebe 200 pelo endpoint normal, headers private/no-store e MIME
+      esperado; a mídia é consumida pelo elemento/ação nativa existente. Sem sessão
+      e após logout/revoke, nova leitura recebe negação sem bytes. Logout/revoke
+      editorial bloqueia sessão editorial antiga sem mudar o acesso publicado,
+      quebrar sessão Portal ou alterar publicação/rota/permissão de Owner News;
+      Owner News, Academy e editor seguem seus fluxos e nenhum dado muda.
      Se logout editorial não puder ser isolado do logout Portal no stack usado,
      registre essa separação `NOT_EXECUTED`, não conclua Owner News unchanged por
      uma simples renderização offline.

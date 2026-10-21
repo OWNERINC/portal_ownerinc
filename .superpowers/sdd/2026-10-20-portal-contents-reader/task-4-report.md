@@ -220,3 +220,32 @@ the acceptance matrix is in
 - **Checks:** focused acceptance/router/navigation suite — **60 passed, 0 failed**;
   `node scripts/generate-public-shell.mjs --check` — exit 0;
   `git diff --check` — exit 0. Broad `npm run verify` was not run.
+
+## Fix round 3 — hidden renewal and Owner News media contract (2026-10-21)
+
+- Tightened `long-video-renewal`: PASS now requires the authenticated
+  `POST /api/contents/media-session` to return 204 with request/response observed
+  while the document is still hidden and the video is still playing. A later
+  visibility/focus recovery is a separate observation and cannot satisfy hidden
+  renewal. The runbook limits capture to redacted method/path, status, timestamps
+  and necessary boolean playback/visibility state; it forbids request/response
+  headers, cookies, body and HAR. If suspension prevents observing the complete
+  hidden-playing response, both the subcase and whole case remain
+  `NOT_EXECUTED`; an observed unsuccessful renewal is `FAIL`.
+- Expanded `owner-news-regression` to open a synthetic published News article and
+  invoke its existing private image/video/PDF action through the regular UI. It
+  now requires the `owner-news` scope to resolve to the authenticated
+  `GET /api/announcements/assets/:id` contract, expected 200/MIME and
+  `private,no-store`/`nosniff` headers, plus the existing native image/video/PDF
+  rendering/open/download behavior. It distinguishes the UI's authenticated
+  Blob-to-native-element flow from HTTP Range testing, verifies unauthenticated
+  or post-logout denial without bytes, and preserves published reader access for
+  active viewers without `manageKnowledge`.
+- Updated the review row and the runbook invariant test to require these semantic
+  markers, including hidden+playing 204, foreground separation, suspension
+  handling, private News endpoint/status/headers, native element use, and
+  unauthorized/logout denial. Acceptance outcomes remain **15 × `NOT_EXECUTED`**;
+  no production code or external manifest was changed and no live service/browser
+  acceptance was performed.
+- **Checks:** focused documentation/acceptance tests — **19 passed, 0 failed**;
+  `git diff --check` — exit 0. Broad `npm run verify` was not run.

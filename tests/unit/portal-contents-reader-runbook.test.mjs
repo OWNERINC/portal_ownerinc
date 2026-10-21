@@ -31,7 +31,13 @@ test('the reviewer-identified binding procedures are explicit in their existing 
     'catalog-routing': ['categories-only', 'Ctrl+click', 'Meta+click', '__proto__', 'page=01', 'utm_source=fixture'],
     'native-image': ['/uploads/cms-private', 'sem bytes'],
     'native-range': ['bytes=0-1023', 'bytes=1024-', 'bytes=-1024', 'bytes=N-', 'bytes */N'],
-    'long-video-renewal': ['hidden', 'mais de cinco minutos', '6:00'],
+    'long-video-renewal': [
+      'POST /api/contents/media-session', 'status `204`', "document.visibilityState === 'hidden'",
+      'video.paused === false', 'timestamps de request e resposta', 'foreground-return recovery is separate',
+      'browser impedir observar', 'caso completo `NOT_EXECUTED`', 'path sem UUID/segredo',
+      'Authorization', 'cookies', 'headers completos', 'body', 'HAR',
+      'mais de cinco minutos', '6:00',
+    ],
     'media-failure-recovery': ['t0 + 5 s', '+15 s', '+30 s', '60 s', 'aria-disabled=true'],
     'large-pdf': ['lease release', '5+ min', 'Baixar PDF', 'sem viewer'],
     'auth-exit-cross-tab': ['DELETE', 'revokeEditorialSession', 'BroadcastChannel', '`storage` event', 'emissão tardia'],
@@ -40,12 +46,20 @@ test('the reviewer-identified binding procedures are explicit in their existing 
     'embeds-effective-csp': ['header CSP efetivo', '`frame-src`', 'sem wildcard ampliado'],
     'layout-mobile': ['sidebar mobile **expanded** e **collapsed**', 'W ≥44 CSS px e H ≥44 CSS px'],
     'bfcache-cleanup': ['dez ciclos', 'pageshow.persisted === true', 'não force `persisted`'],
-    'owner-news-regression': ['logout/revoke editorial', 'Owner News', 'nenhum dado muda'],
+    'owner-news-regression': [
+      'viewer Portal A ativo', 'sem exigir `manageKnowledge`', 'GET /api/announcements/assets/:id',
+      '`asset_scope=owner-news`', 'status `200`', '`Cache-Control: private,no-store`',
+      '`X-Content-Type-Options: nosniff`', 'fetchAPIAsset', '`blob:` URL', '`<img>`',
+      '`<video controls>`', 'PDF iframe/link', 'controle nativo esperado', 'range no request HTTP',
+      'sem Authorization', 'logout/revoke', 'status `401`', 'sem bytes', 'URL completa',
+      'filename', 'corpo', 'cookies', 'HAR', 'não use endpoint de preview',
+      'logout/revoke editorial', 'Owner News', 'nenhum dado muda',
+    ],
     'editorial-accessibility': ['PDF marcado', 'legendas/transcrição', 'ordem de headings/links/alt/captions'],
   };
 
   for (const [caseName, phrases] of Object.entries(requirements)) {
-    const section = runbookCase(caseName).toLowerCase();
+    const section = runbookCase(caseName).replace(/\s+/gu, ' ').toLowerCase();
     for (const phrase of phrases) {
       assert.ok(section.includes(phrase.toLowerCase()), `${caseName} must specify ${phrase}`);
     }
