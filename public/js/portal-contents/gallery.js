@@ -67,8 +67,18 @@ export function createContentsGallery({ page, rootHeading } = {}) {
 
   function recoveryFor(dto, image) {
     const key = `${dto.id.toLowerCase()}:${dto.revision.id.toLowerCase()}:${image.asset_id.toLowerCase()}`;
-    if (!assetRecoveries.has(key)) assetRecoveries.set(key, { forcedAttempted: false, reloadCalled: false });
+    if (!assetRecoveries.has(key)) assetRecoveries.set(key, {
+      lifecycleState: 'pendingInitialActivation', generation: 0, forcedAttempted: false,
+      preparationFailures: 0, reloadCalled: false,
+    });
     return assetRecoveries.get(key);
+  }
+
+  function markTerminal(recovery) {
+    if (recovery.lifecycleState !== 'terminalAssetFailure') {
+      recovery.lifecycleState = 'terminalAssetFailure';
+      recovery.generation += 1;
+    }
   }
 
   function contextIsLive(context) {
@@ -275,10 +285,21 @@ export function createContentsGallery({ page, rootHeading } = {}) {
     status.textContent = `Imagem ${index + 1} de ${images.length} — carregando.`;
     large.onload = () => {
       if (!opened || currentGeneration !== imageGeneration) return;
+      const recovery = recoveryFor(opened.dto, opened.images[opened.index]);
+      if (recovery.lifecycleState === 'terminalAssetFailure') return;
+      recovery.lifecycleState = 'active';
+      recovery.preparationFailures = 0;
+      recovery.generation += 1;
       status.textContent = `Imagem ${index + 1} de ${images.length}`;
     };
     large.onerror = () => {
       if (!opened || currentGeneration !== imageGeneration) return;
+      large.removeAttribute('src');
+      const recovery = recoveryFor(opened.dto, opened.images[opened.index]);
+      if (recovery.lifecycleState !== 'terminalAssetFailure') {
+        recovery.lifecycleState = 'recovering';
+        recovery.generation += 1;
+      }
       showLightboxFailure(`Imagem ${index + 1} de ${images.length} — Não foi possível carregar esta imagem.`, currentGeneration);
     };
     previous.disabled = false;
@@ -293,17 +314,33 @@ export function createContentsGallery({ page, rootHeading } = {}) {
     const view = opened;
     const image = view.images[view.index];
     const recovery = recoveryFor(view.dto, image);
+    if (recovery.lifecycleState === 'terminalAssetFailure') {
+      showLightboxFailure('Esta imagem não pôde ser recuperada.', expectedGeneration);
+      return;
+    }
+    if (!force && recovery.lifecycleState === 'recovering') {
+      showLightboxFailure('Não foi possível carregar esta imagem. Tente novamente ou recarregue o conteúdo.', expectedGeneration);
+      return;
+    }
     if (force) {
       if (recovery.forcedAttempted) return;
       recovery.forcedAttempted = true;
+      recovery.lifecycleState = 'recovering';
+      recovery.generation += 1;
     }
+    const recoveryGeneration = recovery.generation;
     try {
       await view.lease.ensureFresh(force ? { force: true } : {});
-      if (opened !== view || expectedGeneration !== imageGeneration || !currentView(view.context, view.lease)) return;
+      if (opened !== view || expectedGeneration !== imageGeneration || recoveryGeneration !== recovery.generation
+        || recovery.lifecycleState === 'terminalAssetFailure' || !currentView(view.context, view.lease)) return;
       dialog.querySelector('.contents-lightbox-image').setAttribute('src', assetURL(view.dto, image.asset_id));
+      if (recovery.lifecycleState === 'pendingInitialActivation') recovery.lifecycleState = 'active';
+      recovery.preparationFailures = 0;
       dialog.querySelector('.contents-lightbox-status').textContent = `Imagem ${view.index + 1} de ${view.images.length} — carregando.`;
     } catch (error) {
       if (error?.name === 'AbortError' || opened !== view || expectedGeneration !== imageGeneration) return;
+      recovery.preparationFailures += 1;
+      if (force || recovery.forcedAttempted || recovery.preparationFailures >= 2) markTerminal(recovery);
       showLightboxFailure('Não foi possível preparar esta imagem. Tente novamente ou feche a galeria.', expectedGeneration);
     }
   }
@@ -315,7 +352,8 @@ export function createContentsGallery({ page, rootHeading } = {}) {
     const recovery = recoveryFor(view.dto, image);
     const status = dialog.querySelector('.contents-lightbox-status');
     status.textContent = message;
-    if (recovery.forcedAttempted) {
+    if (recovery.lifecycleState === 'terminalAssetFailure' || recovery.forcedAttempted) {
+      markTerminal(recovery);
       appendReloadAction(status, recovery, view.context, 'contents-lightbox-reload');
       return;
     }
@@ -413,10 +451,20 @@ export function createContentsGallery({ page, rootHeading } = {}) {
         if (disposed || !contextIsLive(context)) return;
         thumbnail.removeAttribute('src');
         button.setAttribute('aria-label', `Imagem ${index + 1} de ${images.length}: ${image.alt}. Não foi possível carregar.`);
+        const recovery = recoveryFor(dto, image);
+        if (recovery.lifecycleState !== 'terminalAssetFailure') {
+          recovery.lifecycleState = 'recovering';
+          recovery.generation += 1;
+        }
         showThumbnailFailure(gallery, record, figure, `Não foi possível carregar a imagem ${index + 1} de ${images.length}.`);
       };
       record.loadHandler = () => {
         if (disposed || !contextIsLive(context)) return;
+        const recovery = recoveryFor(dto, image);
+        if (recovery.lifecycleState === 'terminalAssetFailure') return;
+        recovery.lifecycleState = 'active';
+        recovery.preparationFailures = 0;
+        recovery.generation += 1;
         record.retryButton?.remove();
         record.failureStatus?.remove();
         record.retryButton = null;
@@ -433,19 +481,29 @@ export function createContentsGallery({ page, rootHeading } = {}) {
 
   async function prepareThumbnail(gallery, record, force = false) {
     const recovery = recoveryFor(gallery.dto, record.image);
+    if (recovery.lifecycleState === 'terminalAssetFailure') return false;
+    if (!force && recovery.lifecycleState !== 'pendingInitialActivation') return false;
     if (force) {
       if (recovery.forcedAttempted) return false;
       recovery.forcedAttempted = true;
+      recovery.lifecycleState = 'recovering';
+      recovery.generation += 1;
     }
+    const recoveryGeneration = recovery.generation;
     try {
       await gallery.lease.ensureFresh(force ? { force: true } : {});
       if (disposed || gallery.context?.signal?.aborted || (gallery.context?.isCurrent && !gallery.context.isCurrent())
-        || !gallery.lease.isPrepared() || !record.thumbnail.isConnected) return false;
+        || !gallery.lease.isPrepared() || !record.thumbnail.isConnected
+        || recovery.generation !== recoveryGeneration || recovery.lifecycleState === 'terminalAssetFailure') return false;
       const url = assetURL(gallery.dto, record.image.asset_id);
       if (record.thumbnail.getAttribute('src') !== url) record.thumbnail.setAttribute('src', url);
+      if (recovery.lifecycleState === 'pendingInitialActivation') recovery.lifecycleState = 'active';
+      recovery.preparationFailures = 0;
       return true;
     } catch (error) {
       if (error?.name !== 'AbortError' && !disposed && record.thumbnail.isConnected) {
+        recovery.preparationFailures += 1;
+        if (force || recovery.forcedAttempted || recovery.preparationFailures >= 2) markTerminal(recovery);
         const figure = record.button.parentElement;
         showThumbnailFailure(gallery, record, figure, 'Não foi possível preparar esta imagem.');
       }
@@ -461,7 +519,8 @@ export function createContentsGallery({ page, rootHeading } = {}) {
     status.setAttribute('role', 'status');
     record.failureStatus = status;
     const recovery = recoveryFor(gallery.dto, record.image);
-    if (recovery.forcedAttempted) {
+    if (recovery.lifecycleState === 'terminalAssetFailure' || recovery.forcedAttempted) {
+      markTerminal(recovery);
       appendReloadAction(status, recovery, gallery.context, 'contents-gallery-reload');
       figure.append(status);
       return;

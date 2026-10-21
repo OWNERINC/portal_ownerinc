@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createContentsHarness } from '../helpers/portal-contents-harness.mjs';
+import { createContentsHarness, createContentsClock } from '../helpers/portal-contents-harness.mjs';
 import { ASSET_ID, PAGE_ID, REVISION_ID, pageFixture } from '../helpers/portal-contents-fixtures.mjs';
 import { TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
 
@@ -175,7 +175,7 @@ test('gallery image failure is announced and can be bypassed; backdrop requires 
 });
 
 test('thumbnail and lightbox allow one forced recovery per asset activation', async () => {
-  const h = await createContentsHarness();
+  const h = await createContentsHarness({ clock: createContentsClock() });
   const { root, gallery, activation } = await mountGallery(h, [{ type: 'gallery', images: pair() }]);
   const thumbnail = root.querySelector('.contents-gallery-thumbnail');
   thumbnail.dispatchEvent(new TestEvent('error'));
@@ -189,14 +189,25 @@ test('thumbnail and lightbox allow one forced recovery per asset activation', as
   assert.equal(root.querySelector('.contents-media-retry'), null);
 
   thumbnail.dispatchEvent(new TestEvent('error'));
+  const thumbnailReload = root.querySelector('.contents-gallery-reload');
+  assert.ok(thumbnailReload);
+  assert.equal(thumbnail.hasAttribute('src'), false);
   assert.ok(root.querySelector('.contents-gallery-reload'), 'a repeated native failure falls back to full content reload');
   assert.equal(h.pendingIssues.length, 2, 'a second thumbnail error cannot consume another forced issue');
 
   root.querySelector('[data-contents-gallery-trigger]').click(); await drain();
   const image = h.document.querySelector('.contents-lightbox-image');
-  image.onerror();
-  assert.ok(h.document.querySelector('.contents-lightbox-reload'), 'lightbox uses the same per-asset recovery record');
-  assert.equal(h.pendingIssues.length, 2);
+  const lightboxReload = h.document.querySelector('.contents-lightbox-reload');
+  assert.ok(lightboxReload, 'lightbox presents the shared per-asset terminal fallback');
+  assert.equal(image.hasAttribute('src'), false, 'opening terminal content does not assign a protected URL');
+  await h.advance(240_000);
+  assert.equal(h.pendingIssues.length, 3);
+  h.pendingIssues[2].resolve(ready()); await drain();
+  assert.equal(thumbnail.hasAttribute('src'), false, 'routine ready preserves terminal thumbnail failure');
+  assert.equal(root.querySelector('.contents-gallery-reload'), thumbnailReload);
+  assert.equal(image.hasAttribute('src'), false, 'routine ready does not revive terminal lightbox content');
+  assert.equal(h.document.querySelector('.contents-lightbox-reload'), lightboxReload);
+  assert.equal(h.pendingIssues.length, 3);
   activation.dispose(); gallery.dispose();
 });
 
@@ -217,6 +228,7 @@ test('thumbnail and lightbox share one asset recovery budget and offer one valid
   image.dispatchEvent(new TestEvent('error'));
   const reload = dialog.querySelector('.contents-lightbox-reload');
   assert.ok(reload, 'the repeated native failure offers the content-level recovery');
+  assert.equal(image.hasAttribute('src'), false, 'terminal native failure removes the failed protected URL');
   assert.equal(reload.textContent, 'Recarregar conteúdo');
   assert.equal(h.pendingIssues.length, 2, 'thumbnail recovery suppresses a second forced issue for the same asset');
   viewContext.isCurrent = () => false;
@@ -240,14 +252,16 @@ test('a newly mounted view gets a fresh per-asset recovery budget', async () => 
   assert.ok(first.root.querySelector('.contents-gallery-reload'));
   first.activation.dispose(); first.gallery.dispose();
 
-  const next = await createContentsHarness();
-  const remount = await mountGallery(next, [{ type: 'gallery', images: pair() }]);
+  const nextContext = context();
+  const remount = await mountGallery(h, [{ type: 'gallery', images: pair() }], nextContext);
+  assert.equal(h.pendingIssues.length, 3);
+  h.pendingIssues[2].resolve(ready()); await drain();
   const nextThumb = remount.root.querySelector('.contents-gallery-thumbnail');
   nextThumb.dispatchEvent(new TestEvent('error'));
   assert.ok(remount.root.querySelector('.contents-media-retry'), 'a new activation can attempt one fresh issuance');
   remount.root.querySelector('.contents-media-retry').click();
-  assert.equal(next.pendingIssues.length, 2);
-  next.pendingIssues[1].resolve(ready()); await drain();
+  assert.equal(h.pendingIssues.length, 4);
+  h.pendingIssues[3].resolve(ready()); await drain();
   remount.activation.dispose(); remount.gallery.dispose();
 });
 

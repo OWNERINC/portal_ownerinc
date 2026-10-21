@@ -72,15 +72,15 @@ function hasCurrentLease(identity) {
   return false;
 }
 
-function emit(lease, status, force = false) {
+function emit(lease, status, force = false, details = null) {
   if (!lease?.active) return;
   if (!force && lease.status === status) return;
   lease.status = status;
-  try { lease.onStatus?.(status); } catch { /* Media status cannot interrupt the view coordinator. */ }
+  try { lease.onStatus?.(status, details); } catch { /* Media status cannot interrupt the view coordinator. */ }
 }
 
-function emitCurrent(status) {
-  for (const lease of leases) emit(lease, status);
+function emitCurrent(status, details = null, force = false) {
+  for (const lease of leases) emit(lease, status, force, details);
 }
 
 function now() { return configuration?.now?.() ?? Date.now(); }
@@ -174,6 +174,13 @@ function clearRequestTimeout(entry) {
   entry.timeout = null;
 }
 
+function retireIssueIfComplete(entry) {
+  if (!entry || entry.retired || !entry.processingDone || !entry.transportSettled) return;
+  entry.retired = true;
+  if (inFlight === entry) inFlight = null;
+  entry.resolveRetirement();
+}
+
 function markTransportSettled(entry, status = null, response = null, error = null) {
   if (!entry.transportSettled) {
     entry.transportSettled = true;
@@ -185,6 +192,7 @@ function markTransportSettled(entry, status = null, response = null, error = nul
     entry.responseIssued = response.status === 204;
   }
   if (error && !entry.transportError) entry.transportError = error;
+  retireIssueIfComplete(entry);
   scheduleTimer();
 }
 
@@ -240,12 +248,13 @@ function requestIssue(entry) {
     if (error === STALE || !hasCurrentLease(entry.identity) || entry.generation !== generation) throw abortError();
     const safe = error?.status === 401 || error?.status === 403
       ? safeError(error.status) : safeRequestError(error, entry.response);
-    emitCurrent(safe.status === 401 || safe.status === 403 ? 'denied' : 'unavailable');
+    emitCurrent(safe.status === 401 || safe.status === 403 ? 'denied' : 'unavailable', { issue: entry }, true);
     if (safe.status !== 401 && safe.status !== 403) scheduleRetry(entry.response);
     throw safe;
   }).finally(() => {
     clearRequestTimeout(entry);
-    if (entry.transportSettled && inFlight === entry) inFlight = null;
+    entry.processingDone = true;
+    retireIssueIfComplete(entry);
     scheduleTimer();
   });
 }
@@ -262,11 +271,13 @@ function startIssue(lease, { force = false, automatic = false } = {}) {
   if (inFlight) {
     const pending = inFlight;
     if (pending.generation === generation && sameIdentity(pending.identity, lease.identity)) return pending.promise;
-    return Promise.resolve(pending.transportPromise).catch(() => {}).then(() => startIssue(lease, { force, automatic }));
+    return pending.retirementPromise.then(() => startIssue(lease, { force, automatic }));
   }
 
   let resolveRawSettlement;
   const rawSettlementPromise = new Promise(resolve => { resolveRawSettlement = resolve; });
+  let resolveRetirement;
+  const retirementPromise = new Promise(resolve => { resolveRetirement = resolve; });
   const entry = {
     owner: lease,
     generation,
@@ -275,6 +286,8 @@ function startIssue(lease, { force = false, automatic = false } = {}) {
     controller: null,
     timeout: null,
     transportPromise: null,
+    retirementPromise,
+    resolveRetirement,
     transportSettled: false,
     transportStatus: null,
     rawSettlementPromise,
@@ -283,6 +296,8 @@ function startIssue(lease, { force = false, automatic = false } = {}) {
     responseIssued: false,
     promise: null,
     timedOut: false,
+    processingDone: false,
+    retired: false,
   };
   inFlight = entry;
   emitCurrent('renewing');
@@ -501,9 +516,9 @@ function timedClearRequest() {
 
 export function clearContentsMediaSession() {
   if (clearPromise) return clearPromise;
+  const oldIssue = inFlight;
   invalidateContentsMediaSession({ broadcast: true });
   clearing = true;
-  const oldIssue = inFlight;
   const barrier = (async () => {
     let failure = null;
     try { await timedClearRequest(); } catch (error) { failure = error; }
@@ -512,6 +527,9 @@ export function clearContentsMediaSession() {
     } else if (oldIssue?.transportPromise) {
       try { await oldIssue.transportPromise; } catch { /* An aborted issue is settled without a cookie. */ }
     }
+    // Detach only the old generation's single-flight slot so a new lease may
+    // issue after the clear barrier. The entry itself retires only after both
+    // its coordinator processing and raw transport have settled.
     if (inFlight === oldIssue) inFlight = null;
     // Aborting a browser fetch cannot prove the server did not complete the POST
     // after the first DELETE. Clear again after the same-tab transport settles.

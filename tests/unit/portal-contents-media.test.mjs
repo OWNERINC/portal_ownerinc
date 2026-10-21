@@ -55,6 +55,30 @@ test('only an exact 204 grants media preparation; issue timeout and JSON success
   assert.ok(statuses.includes('unavailable'));
 });
 
+test('late raw settlement retires timed-out processing and permits a force retry in either order', async () => {
+  for (const settleRawFirst of [false, true]) {
+    const h = await createContentsHarness({ clock: createContentsClock() });
+    const { lease } = await acquire(h);
+    const first = lease.ensureFresh();
+    const firstRejected = assert.rejects(first);
+    h.pendingIssues[0].ignoreAbort = true;
+
+    if (settleRawFirst) h.pendingIssues[0].options.onRawTransportSettled({ status: 204 });
+    await h.advance(15_000);
+    await firstRejected;
+    if (!settleRawFirst) h.pendingIssues[0].options.onRawTransportSettled({ status: 204 });
+
+    const retry = lease.ensureFresh({ force: true });
+    assert.equal(h.pendingIssues.length, 2, 'both completion orders release only the timed-out issue entry');
+    h.pendingIssues[1].resolve(ok());
+    await retry;
+    assert.equal(lease.isPrepared(), true, 'the new exact-204 issue prepares the current lease');
+    h.pendingIssues[0].resolve(ok());
+    await drain();
+    lease.release();
+  }
+});
+
 test('leases share an issuance, disposing one does not cancel another, and a remount issues again', async () => {
   const h = await createContentsHarness();
   const first = await acquire(h);
@@ -291,6 +315,34 @@ test('clear follows raw issue settlement without waiting for centralized auth ha
   await issueAssertion;
 });
 
+test('old clear processing cannot retire a newer issue after its barrier completes', async () => {
+  const h = await createContentsHarness();
+  const { lease: oldLease } = await acquire(h);
+  const oldIssue = oldLease.ensureFresh();
+  const oldIssueAssertion = assert.rejects(oldIssue, { name: 'AbortError' });
+  h.pendingIssues[0].ignoreAbort = true;
+
+  const clear = h.modules.mediaSession.clearContentsMediaSession();
+  h.pendingClears[0].resolve(ok());
+  h.pendingIssues[0].options.onRawTransportSettled({ status: 204 });
+  await drain();
+  assert.equal(h.pendingClears.length, 2);
+  h.pendingClears[1].resolve(ok());
+  await clear;
+
+  const { lease: nextLease } = await acquire(h);
+  const nextIssue = nextLease.ensureFresh();
+  assert.equal(h.pendingIssues.length, 2);
+  h.pendingIssues[0].resolve(ok());
+  await oldIssueAssertion;
+  const joined = nextLease.ensureFresh();
+  assert.equal(h.pendingIssues.length, 2, 'old finally does not clear the newer in-flight entry');
+  h.pendingIssues[1].resolve(ok());
+  await Promise.all([nextIssue, joined]);
+  oldLease.release();
+  nextLease.release();
+});
+
 test('aborted in-flight POST is followed by a second DELETE because abort cannot prove non-issuance', async () => {
   const h = await createContentsHarness();
   const { lease } = await acquire(h);
@@ -414,7 +466,7 @@ test('image failure keeps accessible alt and caption and offers bounded recovery
 });
 
 test('a repeatedly failing native image offers one current-view content reload', async () => {
-  const h = await createContentsHarness();
+  const h = await createContentsHarness({ clock: createContentsClock() });
   let reloadCalls = 0;
   const viewContext = { ...contextFor(new AbortController().signal), onReload() { reloadCalls += 1; } };
   const root = h.document.createElement('section'); h.document.body.append(root);
@@ -432,12 +484,143 @@ test('a repeatedly failing native image offers one current-view content reload',
   const reload = root.querySelector('.contents-media-reload');
   assert.ok(reload);
   assert.equal(reload.textContent, 'Recarregar conteúdo');
+  assert.equal(image.hasAttribute('src'), false);
+  await h.advance(240_000);
+  assert.equal(h.pendingIssues.length, 3, 'the current lease performs its routine 240-second renewal');
+  h.pendingIssues[2].resolve(ok()); await drain();
+  assert.equal(image.hasAttribute('src'), false, 'routine ready never reassigns a terminal asset URL');
+  assert.equal(root.querySelector('.contents-media-reload'), reload, 'routine ready preserves the terminal reload action');
   viewContext.isCurrent = () => false;
   reload.click();
   assert.equal(reloadCalls, 0, 'a stale media view cannot reload content');
   viewContext.isCurrent = () => true;
   reload.click(); reload.click();
   assert.equal(reloadCalls, 1, 'the current activation invokes onReload at most once');
+  activation.dispose();
+});
+
+test('a terminal video failure stays terminal through routine ready and a fresh media activation resets it', async () => {
+  const clock = createContentsClock();
+  const h = await createContentsHarness({ clock });
+  let viewContext = contextFor(new AbortController().signal);
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const dto = pageFixture({ content_blocks: [{ type: 'video', asset_id: ASSET_ID, title: 'Aula terminal' }] });
+  let view = h.modules.reader.renderReader(root, dto, {}, viewContext);
+  let activation = h.modules.media.activateContentsMedia(view.media, { context: viewContext });
+  h.pendingIssues[0].resolve(ok()); await drain();
+  const video = root.querySelector('video');
+  video.paused = false;
+  video.dispatchEvent(new TestEvent('play'));
+  video.dispatchEvent(new TestEvent('error'));
+  h.pendingIssues[1].resolve(ok()); await drain();
+  video.dispatchEvent(new TestEvent('error'));
+  const reload = root.querySelector('.contents-media-reload');
+  assert.ok(reload);
+  assert.equal(video.hasAttribute('src'), false);
+
+  await h.advance(240_000);
+  assert.equal(h.pendingIssues.length, 3);
+  h.pendingIssues[2].resolve(ok()); await drain();
+  assert.equal(video.hasAttribute('src'), false, 'routine ready cannot revive a terminal video');
+  assert.equal(root.querySelector('.contents-media-reload'), reload);
+
+  activation.dispose();
+  viewContext = contextFor(new AbortController().signal);
+  view = h.modules.reader.renderReader(root, dto, {}, viewContext);
+  activation = h.modules.media.activateContentsMedia(view.media, { context: viewContext });
+  assert.equal(h.pendingIssues.length, 4);
+  const remounted = root.querySelector('video');
+  assert.equal(remounted.hasAttribute('src'), false, 'the new view starts pending until its own 204');
+  h.pendingIssues[3].resolve(ok()); await drain();
+  assert.equal(remounted.hasAttribute('src'), true, 'a fresh view resets terminal resource state');
+  activation.dispose();
+});
+
+test('play intent during initial video preparation does not suppress pending source activation', async () => {
+  const h = await createContentsHarness();
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const viewContext = contextFor(new AbortController().signal);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'video', asset_id: ASSET_ID, title: 'Aula inicial' },
+  ] }), {}, viewContext);
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: viewContext });
+  const video = root.querySelector('video');
+
+  video.paused = false;
+  video.dispatchEvent(new TestEvent('play'));
+  assert.equal(video.hasAttribute('src'), false, 'protected video stays pending before a 204');
+  h.pendingIssues[0].resolve(ok()); await drain();
+  assert.equal(video.hasAttribute('src'), true, 'the initial ready activates the source despite the pending play intent');
+  assert.equal(video.paused, false, 'the current play intent resumes after source activation');
+  activation.dispose();
+});
+
+test('repeated PDF lease-preparation failure is terminal and survives routine renewal', async () => {
+  const clock = createContentsClock();
+  const h = await createContentsHarness({ clock });
+  let reloadCalls = 0;
+  const viewContext = { ...contextFor(new AbortController().signal), onReload() { reloadCalls += 1; } };
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'pdf', asset_id: ASSET_ID, title: 'Material terminal' },
+  ] }), {}, viewContext);
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: viewContext });
+  h.pendingIssues[0].resolve(errorResponse(503)); await drain();
+  const firstRetry = root.querySelector('.contents-media-retry');
+  assert.ok(firstRetry, 'initial transient preparation remains retryable');
+  firstRetry.click();
+  assert.equal(h.pendingIssues.length, 2);
+  h.pendingIssues[1].resolve(errorResponse(503)); await drain();
+
+  const reload = root.querySelector('.contents-media-reload');
+  assert.ok(reload, 'a repeated PDF preparation failure reaches terminal state');
+  assert.equal(root.querySelector('.contents-pdf-open').hasAttribute('href'), false);
+  const unrelatedReady = activation.lease.ensureFresh({ force: true });
+  assert.equal(h.pendingIssues.length, 3);
+  h.pendingIssues[2].resolve(ok()); await unrelatedReady;
+  await h.advance(240_000);
+  assert.equal(h.pendingIssues.length, 4, 'the valid lease still performs its routine renewal');
+  h.pendingIssues[3].resolve(ok()); await drain();
+  assert.equal(root.querySelector('.contents-pdf-open').hasAttribute('href'), false,
+    'ready cannot expose a terminally failed PDF');
+  assert.equal(root.querySelector('.contents-media-reload'), reload, 'renewal preserves the validated reload action');
+  reload.click();
+  reload.click();
+  assert.equal(reloadCalls, 1);
+  activation.dispose();
+
+  const nextContext = contextFor(new AbortController().signal);
+  const nextView = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'pdf', asset_id: ASSET_ID, title: 'Material terminal' },
+  ] }), {}, nextContext);
+  const remount = h.modules.media.activateContentsMedia(nextView.media, { context: nextContext });
+  assert.equal(h.pendingIssues.length, 5);
+  const newPDF = root.querySelector('.contents-pdf-open');
+  assert.equal(newPDF.hasAttribute('href'), false);
+  h.pendingIssues[4].resolve(ok()); await drain();
+  assert.equal(newPDF.hasAttribute('href'), true, 'a new view generation resets the PDF terminal state');
+  remount.dispose();
+});
+
+test('repeated automatic PDF preparation failures become terminal but first 503 remains pending', async () => {
+  const h = await createContentsHarness({ clock: createContentsClock() });
+  const root = h.document.createElement('section'); h.document.body.append(root);
+  const viewContext = contextFor(new AbortController().signal);
+  const view = h.modules.reader.renderReader(root, pageFixture({ content_blocks: [
+    { type: 'pdf', asset_id: ASSET_ID, title: 'Material com falha repetida' },
+  ] }), {}, viewContext);
+  const activation = h.modules.media.activateContentsMedia(view.media, { context: viewContext });
+
+  h.pendingIssues[0].resolve(errorResponse(503)); await drain();
+  assert.equal(root.querySelector('.contents-media-reload'), null,
+    'one transient lease failure stays pending/recoverable');
+  assert.ok(root.querySelector('.contents-media-retry'));
+
+  await h.advance(5_000);
+  assert.equal(h.pendingIssues.length, 2, 'the coordinator performs its first bounded automatic retry');
+  h.pendingIssues[1].resolve(errorResponse(503)); await drain();
+  assert.ok(root.querySelector('.contents-media-reload'),
+    'a distinct repeated automatic lease failure transitions the PDF to terminal state');
   activation.dispose();
 });
 

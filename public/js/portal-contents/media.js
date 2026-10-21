@@ -60,9 +60,13 @@ function appendNativeSource(element, url) {
   element.setAttribute('src', url);
 }
 
-function contextIsCurrent(context, lease, disposed) {
-  if (disposed.value || context?.signal?.aborted || !lease?.isPrepared?.()) return false;
+function viewContextIsCurrent(context, disposed) {
+  if (disposed.value || context?.signal?.aborted) return false;
   try { return !context?.isCurrent || context.isCurrent(); } catch { return false; }
+}
+
+function contextIsCurrent(context, lease, disposed) {
+  return viewContextIsCurrent(context, disposed) && Boolean(lease?.isPrepared?.());
 }
 
 function clampTime(value, duration) {
@@ -87,7 +91,8 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   };
   const resourceFor = descriptor => ({ descriptor, host: descriptor.host, context, lease, cleanup: [], statusNode: null,
     element: null, generation: 0, retryUsed: false, reloadCalled: false, source: '', playingIntent: false,
-    pauseCause: null, pendingRestore: null });
+    pauseCause: null, pendingRestore: null, lifecycleState: 'pendingInitialActivation', pdfPreparationFailures: 0,
+    pdfFailureIssues: new WeakSet() });
 
   function live(resource) { return contextIsCurrent(context, lease, disposed); }
 
@@ -101,21 +106,28 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   }
 
   function showPersistentFailure(resource) {
+    if (resource.lifecycleState !== 'terminalAssetFailure') {
+      resource.lifecycleState = 'terminalAssetFailure';
+      resource.generation += 1;
+      resource.pendingRestore = null;
+    }
     visibleStatus(document, resource, 'Não foi possível carregar esta mídia nesta versão.', {
       reload: true,
     });
   }
 
   function recoverImage(resource) {
-    if (disposed.value || !resource.element) return;
+    if (disposed.value || !resource.element || resource.lifecycleState === 'terminalAssetFailure') return;
     if (resource.retryUsed) { showPersistentFailure(resource); return; }
     resource.retryUsed = true;
-    const failureGeneration = resource.generation;
+    resource.lifecycleState = 'recovering';
+    const failureGeneration = ++resource.generation;
     void lease.ensureFresh({ force: true }).then(() => {
-      if (!live(resource) || failureGeneration !== resource.generation) return;
+      if (!live(resource) || failureGeneration !== resource.generation || resource.lifecycleState !== 'recovering') return;
       if (!resource.element.hasAttribute('src')) setImageSource(resource);
     }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource) && failureGeneration === resource.generation) {
+      if (error?.name !== 'AbortError' && viewContextIsCurrent(context, disposed) && failureGeneration === resource.generation
+        && resource.lifecycleState !== 'terminalAssetFailure') {
         visibleStatus(document, resource, 'Não foi possível preparar a imagem.', { retry: true, action: () => recoverImage(resource) });
       }
     });
@@ -133,16 +145,20 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
       if (disposed.value) return;
       resource.generation += 1;
       image.removeAttribute('src');
+      if (resource.lifecycleState === 'terminalAssetFailure') return;
       if (resource.retryUsed) {
         showPersistentFailure(resource);
         return;
       }
+      resource.lifecycleState = 'recovering';
       visibleStatus(document, resource, 'Não foi possível carregar esta imagem.', {
         retry: true,
         action: () => recoverImage(resource),
       });
     });
     listen(image, 'load', () => {
+      if (resource.lifecycleState === 'terminalAssetFailure') return;
+      resource.lifecycleState = 'active';
       resource.retryUsed = false;
       resource.generation += 1;
       removeStatus(resource);
@@ -151,7 +167,8 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   }
 
   function setVideoSource(resource, { preserveTime = false } = {}) {
-    if (!live(resource) || !resource.element || !lease.isPrepared()) return;
+    if (!live(resource) || !resource.element || !lease.isPrepared()
+      || resource.lifecycleState === 'terminalAssetFailure') return;
     const video = resource.element;
     const url = assetURL(resource.descriptor.dto, resource.descriptor.assetId);
     if (!preserveTime && video.getAttribute('src') === url) { removeStatus(resource); return; }
@@ -166,7 +183,8 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   }
 
   async function resumeVideo(resource, generation) {
-    if (!live(resource) || generation !== resource.generation) return;
+    if (!live(resource) || generation !== resource.generation
+      || resource.lifecycleState === 'terminalAssetFailure') return;
     const video = resource.element;
     try {
       await Promise.resolve(video.play());
@@ -186,8 +204,10 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   }
 
   function renewForVideoAction(resource, intendedPlaying, desiredTime = null) {
+    if (resource.lifecycleState === 'terminalAssetFailure') return;
     const video = resource.element;
     const token = ++resource.generation;
+    if (resource.lifecycleState !== 'pendingInitialActivation') resource.lifecycleState = 'recovering';
     resource.playingIntent = intendedPlaying;
     resource.pendingRestore = null;
     pauseVideo(resource, 'recovery');
@@ -195,10 +215,12 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     void lease.ensureFresh().then(() => {
       if (!live(resource) || token !== resource.generation) return;
       removeStatus(resource);
+      if (resource.lifecycleState === 'pendingInitialActivation') activatePreparedResource(resource);
       if (desiredTime !== null) video.currentTime = clampTime(desiredTime, video.duration);
+      resource.lifecycleState = 'active';
       if (resource.playingIntent) void resumeVideo(resource, token);
     }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource) && token === resource.generation) {
+      if (error?.name !== 'AbortError' && viewContextIsCurrent(context, disposed) && token === resource.generation) {
         visibleStatus(document, resource, 'A sessão de mídia expirou. Tente novamente para continuar.', {
           retry: true,
           action: () => renewForVideoAction(resource, resource.playingIntent, desiredTime),
@@ -209,16 +231,21 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
 
   function recoverVideo(resource) {
     const video = resource.element;
+    if (resource.lifecycleState === 'terminalAssetFailure') return;
     const savedTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
     const resume = !video.paused || resource.playingIntent;
     if (resource.retryUsed) {
       resource.generation += 1;
       resource.playingIntent = false;
       resource.pendingRestore = null;
-      pauseVideo(resource, 'failure'); lease.setPlaying(false, resource); showPersistentFailure(resource); return;
+      pauseVideo(resource, 'failure');
+      video.removeAttribute('src');
+      video.load();
+      lease.setPlaying(false, resource); showPersistentFailure(resource); return;
     }
     resource.retryUsed = true;
     const token = ++resource.generation;
+    resource.lifecycleState = 'recovering';
     resource.pendingRestore = { time: savedTime, resume, generation: token, sourceReady: false };
     resource.playingIntent = resume;
     pauseVideo(resource, 'recovery'); lease.setPlaying(false, resource);
@@ -229,7 +256,7 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
       if (!video.hasAttribute('src')) setVideoSource(resource, { preserveTime: true });
       // Native loadedmetadata performs the clamped restore. No autoplay is introduced.
     }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource) && token === resource.generation) {
+      if (error?.name !== 'AbortError' && viewContextIsCurrent(context, disposed) && token === resource.generation) {
         visibleStatus(document, resource, 'Não foi possível recuperar este vídeo.', { retry: true, action: () => recoverVideo(resource) });
       }
     });
@@ -254,6 +281,10 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     descriptor.host.replaceChildren(video);
     listen(video, 'play', () => {
       if (disposed.value) return;
+      if (resource.lifecycleState === 'terminalAssetFailure') {
+        pauseVideo(resource, 'failure');
+        return;
+      }
       resource.pauseCause = null;
       resource.playingIntent = true;
       if (!lease.isPrepared() || lease.needsRenewal?.()) {
@@ -293,8 +324,10 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
     listen(video, 'loadedmetadata', () => {
       const restore = resource.pendingRestore;
       if (!restore || !restore.sourceReady || restore.generation !== resource.generation || !live(resource)) return;
+      if (resource.lifecycleState === 'terminalAssetFailure') return;
       resource.pendingRestore = null;
       resource.retryUsed = false;
+      resource.lifecycleState = 'active';
       resource.restoring = true;
       video.currentTime = clampTime(restore.time, video.duration);
       resource.restoring = false;
@@ -305,9 +338,11 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   }
 
   function exposePDF(resource) {
-    if (!live(resource) || !lease.isPrepared()) return;
+    if (!live(resource) || !lease.isPrepared() || resource.lifecycleState === 'terminalAssetFailure') return;
     const url = assetURL(resource.descriptor.dto, resource.descriptor.assetId);
     if (resource.anchors.every(anchor => anchor.getAttribute('href') === url)) {
+      resource.lifecycleState = 'active';
+      resource.pdfPreparationFailures = 0;
       removeStatus(resource);
       return;
     }
@@ -316,12 +351,35 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
       anchor.setAttribute('href', url);
       anchor.setAttribute('aria-disabled', 'false');
     }
+    resource.lifecycleState = 'active';
+    resource.pdfPreparationFailures = 0;
     resource.status.textContent = 'PDF pronto. As ações usam a mídia nativa do Portal.';
     removeStatus(resource);
   }
 
+  function failPDFPreparation(resource, issue, message = 'Não foi possível preparar este PDF.') {
+    if (resource.lifecycleState === 'terminalAssetFailure') return;
+    if (issue && resource.pdfFailureIssues.has(issue)) return;
+    if (issue) resource.pdfFailureIssues.add(issue);
+    resource.pdfPreparationFailures += 1;
+    if (resource.pdfPreparationFailures >= 2) {
+      for (const action of resource.anchors) {
+        action.removeAttribute('href');
+        action.setAttribute('aria-disabled', 'true');
+      }
+      showPersistentFailure(resource);
+      return;
+    }
+    if (resource.lifecycleState !== 'pendingInitialActivation') resource.lifecycleState = 'recovering';
+    visibleStatus(document, resource, message, {
+      retry: true,
+      action: () => preparePDF(resource, true),
+    });
+  }
+
   function preparePDFAction(resource, anchor, event) {
     const modified = event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button > 0;
+    if (resource.lifecycleState === 'terminalAssetFailure') { event.preventDefault(); return; }
     const current = lease.isPrepared();
     if (current) return;
     event.preventDefault();
@@ -333,28 +391,25 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
       resource.status.textContent = 'Volte ao Portal para renovar o PDF antes de abri-lo em outra aba.';
       return;
     }
-    void lease.ensureFresh().then(() => {
-      if (!live(resource)) return;
+    const token = ++resource.generation;
+    if (resource.lifecycleState === 'active') resource.lifecycleState = 'recovering';
+    const preparation = lease.ensureFresh();
+    void preparation.then(() => {
+      if (!live(resource) || token !== resource.generation || resource.lifecycleState === 'terminalAssetFailure') return;
       exposePDF(resource);
       resource.status.textContent = 'PDF pronto. Clique novamente para abrir.';
-    }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource)) {
-        visibleStatus(document, resource, 'Não foi possível preparar este PDF.', {
-          retry: true,
-          action: () => preparePDF(resource, true),
-        });
-      }
-    });
+    }).catch(() => {});
   }
 
   function preparePDF(resource, force = false) {
-    void lease.ensureFresh(force ? { force: true } : {}).then(() => {
-      if (live(resource)) exposePDF(resource);
-    }).catch(error => {
-      if (error?.name !== 'AbortError' && live(resource)) {
-        visibleStatus(document, resource, 'Não foi possível preparar este PDF.', { retry: true, action: () => preparePDF(resource, true) });
-      }
-    });
+    if (resource.lifecycleState === 'terminalAssetFailure') return;
+    const token = ++resource.generation;
+    if (resource.lifecycleState === 'active') resource.lifecycleState = 'recovering';
+    const preparation = lease.ensureFresh(force ? { force: true } : {});
+    void preparation.then(() => {
+      if (!live(resource) || token !== resource.generation || resource.lifecycleState === 'terminalAssetFailure') return;
+      exposePDF(resource);
+    }).catch(() => {});
   }
 
   function buildPDF(descriptor) {
@@ -412,12 +467,25 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
 
   function activatePreparedResource(resource) {
     if (!live(resource)) return;
-    if (resource.descriptor.kind === 'image' && !resource.element.hasAttribute('src')) setImageSource(resource);
-    else if (resource.descriptor.kind === 'video' && !resource.element.hasAttribute('src')) {
+    if (resource.lifecycleState === 'terminalAssetFailure') return;
+    if (resource.lifecycleState === 'active') return;
+    if (resource.lifecycleState !== 'pendingInitialActivation') return;
+    if (resource.descriptor.kind === 'image') {
+      if (!resource.element.hasAttribute('src')) setImageSource(resource);
+      if (resource.element.hasAttribute('src')) {
+        resource.lifecycleState = 'active';
+        removeStatus(resource);
+      }
+    } else if (resource.descriptor.kind === 'video') {
+      if (resource.element.hasAttribute('src')) {
+        resource.lifecycleState = 'active';
+        removeStatus(resource);
+        return;
+      }
       const restore = resource.pendingRestore;
       setVideoSource(resource, { preserveTime: Boolean(restore && restore.generation === resource.generation) });
+      if (resource.element.hasAttribute('src')) resource.lifecycleState = 'active';
     } else if (resource.descriptor.kind === 'pdf') exposePDF(resource);
-    else removeStatus(resource);
   }
 
   function activatePreparedResources() {
@@ -427,14 +495,16 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
 
   if (native.length) {
     lease = acquireContentsMediaLease({ signal: context.signal, isCurrent: context.isCurrent,
-      onStatus: status => {
+      onStatus: (status, details) => {
         if (status === 'ready') {
           activatePreparedResources();
           return;
         }
         for (const resource of resources) {
+          if (resource.lifecycleState === 'terminalAssetFailure') continue;
           if (status === 'renewing') continue;
           if (status === 'expired') {
+            if (resource.lifecycleState === 'active') resource.lifecycleState = 'pendingInitialActivation';
             if (resource.descriptor.kind === 'video') {
               resource.generation += 1;
               resource.pendingRestore = null;
@@ -455,13 +525,27 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
                 : resource.descriptor.kind === 'pdf' ? preparePDF(resource, true) : recoverImage(resource),
             });
           } else {
+            if (resource.descriptor.kind === 'pdf') {
+              if (resource.lifecycleState === 'active') continue;
+              failPDFPreparation(resource, details?.issue,
+                status === 'denied'
+                  ? 'Sua sessão precisa ser validada novamente para abrir este PDF.'
+                  : 'Não foi possível preparar este PDF.');
+              continue;
+            }
             visibleStatus(document, resource,
               status === 'denied' ? 'Sua sessão precisa ser validada novamente para abrir esta mídia.' : 'Não foi possível preparar esta mídia.', {
                 retry: true,
-                action: () => lease.ensureFresh({ force: true }).then(() => {
-                  if (!live(resource)) return;
-                  activatePreparedResources();
-                }).catch(() => {}),
+                action: () => {
+                  if (resource.lifecycleState === 'recovering') {
+                    if (resource.descriptor.kind === 'video') recoverVideo(resource);
+                    else if (resource.descriptor.kind === 'image') recoverImage(resource);
+                    return;
+                  }
+                  void lease.ensureFresh({ force: true }).then(() => {
+                    if (live(resource)) activatePreparedResources();
+                  }).catch(() => {});
+                },
               });
           }
         }
@@ -481,19 +565,30 @@ export function activateContentsMedia(descriptors, { context = {}, gallery = nul
   }
 
   if (lease) {
-    void lease.ensureFresh().then(() => {
+    const initialPreparation = lease.ensureFresh();
+    void initialPreparation.then(() => {
       if (disposed.value || !contextIsCurrent(context, lease, disposed)) return;
       activatePreparedResources();
     }).catch(error => {
-      if (error?.name === 'AbortError' || disposed.value || context.signal?.aborted) return;
+      if (error?.name === 'AbortError' || !viewContextIsCurrent(context, disposed)) return;
       for (const resource of resources) {
+        if (resource.lifecycleState === 'terminalAssetFailure') continue;
+        if (resource.descriptor.kind === 'pdf') {
+          continue;
+        }
         visibleStatus(document, resource, error?.status === 401 || error?.status === 403
           ? 'Sua sessão precisa ser validada novamente para abrir esta mídia.' : 'Não foi possível preparar esta mídia.', {
           retry: true,
-          action: () => lease.ensureFresh({ force: true }).then(() => {
-            if (!contextIsCurrent(context, lease, disposed)) return;
-            activatePreparedResources();
-          }).catch(() => {}),
+          action: () => {
+            if (resource.lifecycleState === 'recovering') {
+              if (resource.descriptor.kind === 'video') recoverVideo(resource);
+              else if (resource.descriptor.kind === 'image') recoverImage(resource);
+              return;
+            }
+            void lease.ensureFresh({ force: true }).then(() => {
+              if (contextIsCurrent(context, lease, disposed)) activatePreparedResources();
+            }).catch(() => {});
+          },
         });
       }
     });
