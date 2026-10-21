@@ -31,7 +31,7 @@ const ownerDefaults = {
   heroBrand: 'Owntime',
   salutation: 'Olá,',
   greeting: 'Você é nosso convidado para viver uma experiência <strong>Owntime Home Club Gramado:</strong>',
-  stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx\nCortesia: um almoço.',
+  stayInfo: 'Responsável:\nHóspede: X adultos e X crianças\nUnidade: casa/apto número / ocupação máxima: X\nCheck-in:xx/xx\nCheck-out: xx/xx',
   address: '<strong>Como chegar:</strong> Rua João XXIII, 222, Centro - Gramado',
   includedIntro: 'Para que sua estada seja a mais confortável e transparente possível, alinhamos abaixo os serviços que já estão inclusos na sua hospedagem e as despesas que são contabilizadas à parte.',
   includedTitle: 'O que já está INCLUSO na sua estadia :',
