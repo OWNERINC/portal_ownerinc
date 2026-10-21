@@ -118,7 +118,10 @@ test('authenticated requests centralize auth redirects without treating permissi
   assert.match(authenticatedFetch, /response\.status === 401/);
   assert.match(authenticatedFetch, /response\.clone\(\)/);
   assert.match(authenticatedFetch, /clearVerifiedRole\(\)/);
-  assert.match(authenticatedFetch, /await revokeEditorialSession\(\)/);
+  assert.match(authenticatedFetch, /const outcomes = await Promise\.allSettled\(\[/);
+  assert.match(authenticatedFetch, /start\(\(\) => revokeEditorialSession\(\)\)/);
+  assert.match(authenticatedFetch, /start\(\(\) => clearContentsMediaSession\(\)\)/);
+  assert.match(authenticatedFetch, /if \(failed\) throw failed\.reason/);
   assert.match(authenticatedFetch, /auth\.currentUser\?\.uid === uid\) await signOut\(auth\)/);
   assert.match(authenticatedFetch, /redirectToLogin\(/);
   assert.match(authenticatedFetch, /body\?\.reason === 'email-not-verified'\) return 'email'/);

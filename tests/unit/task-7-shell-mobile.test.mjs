@@ -490,7 +490,7 @@ function loadUiHarness() {
     Set,
     Symbol,
   };
-  const source = ui.replace(/^export /gm, '') + '\nglobalThis.openDialog = openDialog; globalThis.closeDialog = closeDialog; globalThis.canCloseDialog = canCloseDialog; globalThis.setDialogCloseGuard = setDialogCloseGuard;';
+  const source = ui.replace(/^export /gm, '') + '\nglobalThis.openDialog = openDialog; globalThis.closeDialog = closeDialog; globalThis.canCloseDialog = canCloseDialog; globalThis.setDialogCloseGuard = setDialogCloseGuard; globalThis.registerPageDialog = registerPageDialog; globalThis.closePageDialogs = closePageDialogs;';
   vm.runInNewContext(source, context, { filename: 'ui.js' });
   return { context, document, trigger, dialog, form };
 }
@@ -1588,4 +1588,29 @@ test('portal close-sidebar event closes synchronously without overriding the cal
   assert.equal(harness.document.body.classList.contains('sidebar-open'), false);
   assert.equal(harness.mainContent.inert, false);
   assert.equal(harness.document.activeElement, harness.mobileToggle, 'explicit restoration retains drawer return-focus behavior');
+});
+
+test('portal close-drawer event closes the mobile menu without restoring focus before lightbox focus', () => {
+  const harness = loadSidebarHarness({ includeToggle: false, linkOptions: [{}] });
+  harness.mobileToggle.focus();
+  harness.mobileToggle.dispatch('click');
+  assert.equal(harness.mainContent.inert, true);
+  harness.document.dispatchEvent({ type: 'portal:close-drawer' });
+  assert.equal(harness.document.body.classList.contains('sidebar-open'), false);
+  assert.equal(harness.mainContent.inert, false);
+  assert.equal(harness.document.activeElement, harness.links[0], 'the drawer yields; the lightbox owns the next focus move');
+});
+
+test('registered native page dialogs close alongside legacy dialogs and unregister idempotently', () => {
+  const { context, document } = loadUiHarness();
+  const calls = [];
+  const nativeDialog = { open: true, close() { this.open = false; calls.push('native'); } };
+  const unregister = context.registerPageDialog({ close: () => nativeDialog.close() });
+  context.closePageDialogs();
+  assert.equal(nativeDialog.open, false);
+  assert.deepEqual(calls, ['native']);
+  unregister(); unregister();
+  context.closePageDialogs();
+  assert.deepEqual(calls, ['native']);
+  assert.equal(document.body.classList.contains('modal-open'), false, 'native dialog ownership avoids legacy modal-body mutation');
 });

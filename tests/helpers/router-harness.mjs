@@ -250,6 +250,10 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
       context.getContentsIdentity = () => identity;
       context.subscribeContentsIdentity = listener => { listeners.add(listener); return () => listeners.delete(listener); };
       context.authenticatedFetch = (path, options = {}) => { requests.push({ path, options }); return request(path, options); };
+      // These route tests isolate persistent-router ownership. Dedicated media
+      // and gallery suites exercise their production implementations.
+      context.createContentsGallery = () => ({ open() {}, close() {}, dispose() {} });
+      context.activateContentsMedia = () => ({ dispose() {} });
       const moduleFiles = [
         ['dto', 'public/js/portal-contents/dto.js', 'validatePortalPageDTO, validateDetail, validateList, validateCategories, isCanonicalSlug, PAGE_SIZE, MAX_OFFSET, MAX_TOTAL, MAX_BLOCKS, MAX_NODES, MAX_CONTENT_BYTES, MAX_DETAIL_BYTES, MAX_COLLECTION_BYTES, LAYOUTS'],
         ['richText', 'public/js/portal-contents/rich-text.js', 'renderRichText'],

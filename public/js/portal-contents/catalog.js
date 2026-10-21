@@ -58,7 +58,7 @@ function card(document, dto, media) {
     article.append(cover);
     media.push({ kind: 'image', dto, host: cover, assetId: dto.cover.asset_id, alt: dto.cover.alt, eager: false });
   }
-  if (dto.summary) article.append(element(document, 'p', 'contents-card-summary', dto.summary));
+  if (dto.summary) article.append(element(document, 'p', 'contents-card-summary contents-multiline', dto.summary));
   if (dto.categories.length) {
     article.append(element(document, 'p', 'contents-card-categories', dto.categories.map(category => category.name).join(', ')));
   }

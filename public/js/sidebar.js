@@ -118,6 +118,7 @@
     document.addEventListener('portal:close-sidebar', function (event) {
       closeDrawer(event.detail?.restoreFocus === true);
     });
+    document.addEventListener('portal:close-drawer', function () { closeDrawer(false); });
     document.addEventListener('portal:navigated', function () { closeDrawer(false); });
   }
 

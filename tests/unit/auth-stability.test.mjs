@@ -113,11 +113,15 @@ function storage(entries = {}) {
   };
 }
 
-function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid), ready, fetchImpl, signOutImpl, loadModule = true } = {}) {
+function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid), ready, fetchImpl, signOutImpl,
+  revokeImpl, clearMediaImpl, loadModule = true } = {}) {
   const listeners = [];
   const redirects = [];
   const requests = [];
   const availabilityConfigurations = [];
+  const mediaConfigurations = [];
+  const mediaInvalidations = [];
+  const mediaClearCalls = [];
   let signouts = 0;
   const main = { children: ['existing content'], replaceChildren(...children) { this.children = children; } };
   const auth = {
@@ -130,7 +134,16 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
   const document = {
     documentElement: { dataset: {} }, body: main,
     querySelector: selector => selector === 'main' ? main : null,
-    createElement: () => ({ setAttribute() {}, addEventListener() {}, append() {} }),
+    createElement: () => {
+      const listeners = new Map();
+      return {
+        children: [], attrs: {},
+        setAttribute(name, value) { this.attrs[name] = String(value); },
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        append(...children) { this.children.push(...children); },
+        click() { listeners.get('click')?.({ target: this }); },
+      };
+    },
   };
   const location = {
     href: 'https://portal.example.test/admin.html',
@@ -147,8 +160,11 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
     onAuthStateChanged: (_auth, callback) => { listeners.push(callback); return () => {}; },
     signOut: async () => { signouts += 1; changeUser(null); await signOutImpl?.(); },
     updateProfile: async () => {},
-    revokeEditorialSession: async () => {}, // Transport covered by editorial-entry tests.
-    fetch: async (...args) => {
+    revokeEditorialSession: (...args) => revokeImpl ? revokeImpl(...args) : Promise.resolve(), // Transport covered by editorial-entry tests.
+    configureContentsMediaSession: options => mediaConfigurations.push(options),
+    invalidateContentsMediaSession: options => mediaInvalidations.push(options),
+    clearContentsMediaSession: () => { mediaClearCalls.push(true); return clearMediaImpl ? clearMediaImpl() : Promise.resolve(); },
+     fetch: async (...args) => {
       requests.push(args);
       return fetchImpl ? fetchImpl(...args) : response(userDoc(auth.currentUser.uid));
     },
@@ -164,7 +180,8 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
     vm.runInContext(`${source}\nglobalThis.api = { requireAuth, getCurrentUserDoc, getCachedUserSnapshot, authenticatedFetch, fetchAPI, fetchAPIPage, fetchAPIAsset, logout, getContentsIdentity: typeof getContentsIdentity === 'function' ? getContentsIdentity : null, subscribeContentsIdentity: typeof subscribeContentsIdentity === 'function' ? subscribeContentsIdentity : null };`, context);
   }
   return {
-    api: context.api, auth, sessionStorage, localStorage, document, main, requests, redirects, location, availabilityConfigurations,
+    api: context.api, auth, sessionStorage, localStorage, document, main, requests, redirects, location, availabilityConfigurations, context,
+    mediaConfigurations, mediaInvalidations, mediaClearCalls,
     changeUser, listeners, get signouts() { return signouts; },
   };
 }
@@ -212,6 +229,61 @@ test('contents identity is live-validation-only; visual snapshots cannot validat
   assert.equal(changed.validated, false, 'identity changes synchronously clear the validated gate');
   assert.ok(changed.generation > validated.generation);
   assert.equal(identities.at(-1).validated, false);
+});
+
+test('media coordinator receives authenticated issue, raw bodyless clear transport and auth-owned revalidation', async () => {
+  let holdValidation = false;
+  const revalidation = deferred();
+  const h = harness({ fetchImpl: (path, options) => {
+    if (path === '/api/users/me' && holdValidation) return revalidation.promise;
+    return response(userDoc(h?.auth.currentUser.uid || 'a'));
+  } });
+  assert.equal(h.mediaConfigurations.length, 1);
+  const media = h.mediaConfigurations[0];
+  assert.equal(media.request, h.api.authenticatedFetch);
+  assert.equal(media.clearRequest, h.context.fetch);
+  assert.equal(media.getIdentity, h.api.getContentsIdentity);
+  await h.api.getCurrentUserDoc();
+  assert.equal(h.api.getContentsIdentity().validated, true);
+  const before = h.mediaInvalidations.length;
+  holdValidation = true;
+  media.invalidateIdentity();
+  assert.equal(h.api.getContentsIdentity().validated, false, 'remote invalidation is synchronous');
+  assert.ok(h.api.getContentsIdentity().generation > 0);
+  assert.equal(h.mediaInvalidations.length, before, 'receiving a broadcast does not echo another broadcast');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.requests.filter(([path]) => path === '/api/users/me').length, 2,
+    'the receiving tab starts fresh /users/me identity validation before new media use');
+  revalidation.resolve(response(userDoc('a')));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.api.getContentsIdentity().validated, true);
+  assert.equal(h.signouts, 0);
+});
+
+test('logout clears media and revokes editorial state together; a failed clear retains retry and blocks signOut', async () => {
+  const calls = [];
+  let clearAttempt = 0;
+  let signOuts = 0;
+  const failedClear = deferred();
+  const h = harness({
+    revokeImpl: () => { calls.push('editorial'); return Promise.resolve(); },
+    clearMediaImpl: () => { calls.push('media'); return clearAttempt++ === 0 ? failedClear.promise : Promise.resolve(); },
+    signOutImpl: async () => { signOuts += 1; },
+  });
+  const logout = h.api.logout();
+  assert.deepEqual(calls, ['editorial', 'media'], 'both revocations start before either is awaited');
+  assert.equal(h.api.getContentsIdentity().validated, false);
+  failedClear.reject(new Error('private clear detail'));
+  await logout;
+  assert.equal(signOuts, 0, 'Firebase signOut waits for successful media and editorial clearing');
+  assert.match(h.main.children[0].children[0].textContent, /conteúdo foi ocultado/u);
+  assert.equal(h.main.children[0].children[1].textContent, 'Tentar encerrar novamente');
+
+  calls.length = 0;
+  h.main.children[0].children[1].click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['editorial', 'media']);
+  assert.equal(signOuts, 1);
 });
 
 test('cached helper waits for Firebase identity and exposes only same-account visual data', async () => {

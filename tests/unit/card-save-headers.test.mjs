@@ -44,6 +44,8 @@ function authenticatedClient(h, base) {
   const context = vm.createContext({
     auth, document: h.doc, URL, URLSearchParams, DOMException, console,
     configureContentsAvailability() {},
+    configureContentsMediaSession() {}, invalidateContentsMediaSession() {},
+    clearContentsMediaSession: async () => {},
     window: { location: { href: `${base}/autocard.html`, replace() {} } },
     sessionStorage: { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) },
     onAuthStateChanged: () => () => {}, signOut: async () => { auth.currentUser = null; }, updateProfile: async () => {},

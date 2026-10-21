@@ -2,6 +2,8 @@ import { auth } from './firebase-config.js';
 import { revokeEditorialSession } from './editorial-session-watch.js';
 import { parseContentLength } from './content-length.js';
 import { configureContentsAvailability } from './portal-contents/availability.js';
+import { clearContentsMediaSession, configureContentsMediaSession, invalidateContentsMediaSession }
+  from './portal-contents/media-session.js';
 import { onAuthStateChanged, signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
@@ -133,6 +135,7 @@ function applyNavigation(user) {
 }
 
 function clearVerifiedRole() {
+  invalidateContentsMediaSession({ broadcast: true });
   sessionValidated = false;
   sessionEpoch += 1;
   sessionDenied = true;
@@ -220,7 +223,16 @@ async function endSession(reason) {
 
 async function finishSessionExit(uid, redirect, signOutPortal = true) {
   try {
-    await revokeEditorialSession();
+    const start = request => {
+      try { return Promise.resolve(request()); }
+      catch (error) { return Promise.reject(error); }
+    };
+    const outcomes = await Promise.allSettled([
+      start(() => revokeEditorialSession()),
+      start(() => clearContentsMediaSession()),
+    ]);
+    const failed = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failed) throw failed.reason;
     // No second signOut against an account that changed during DELETE/retry.
     if (signOutPortal && auth.currentUser?.uid === uid) await signOut(auth);
     if (!auth.currentUser || auth.currentUser.uid === uid || !signOutPortal) redirect();
@@ -233,6 +245,15 @@ async function finishSessionExit(uid, redirect, signOutPortal = true) {
     retry.addEventListener('click', () => { retry.disabled = true; void finishSessionExit(uid, redirect, signOutPortal); });
     status.append(text, retry); main.replaceChildren(status);
   }
+}
+
+function invalidateContentsIdentityFromRemote() {
+  if (!sessionUid || sessionDenied) return;
+  sessionValidated = false;
+  sessionEpoch += 1;
+  pendingValidation = null;
+  notifyContentsIdentity();
+  void getCurrentUserDoc().catch(() => {});
 }
 
 async function readBoundedAuthenticationBody(response, maxBytes) {
@@ -485,3 +506,6 @@ export function updateAuthDisplayName(name) {
 
 configureContentsAvailability({ request: authenticatedFetch, getIdentity: getContentsIdentity,
   subscribeIdentity: subscribeContentsIdentity, document, window });
+configureContentsMediaSession({ request: authenticatedFetch, clearRequest: fetch,
+  getIdentity: getContentsIdentity, subscribeIdentity: subscribeContentsIdentity,
+  invalidateIdentity: invalidateContentsIdentityFromRemote, document, window });

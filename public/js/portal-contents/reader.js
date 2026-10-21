@@ -17,7 +17,7 @@ function appendPublication(document, parent, publishedAt) {
 
 function addCaption(document, figure, caption) {
   if (caption === undefined) return;
-  figure.append(element(document, 'figcaption', 'contents-caption', caption));
+  figure.append(element(document, 'figcaption', 'contents-caption contents-multiline', caption));
 }
 
 function mediaBlock(document, block, dto, blockIndex, media) {
@@ -29,7 +29,7 @@ function mediaBlock(document, block, dto, blockIndex, media) {
     figure.append(host);
     addCaption(document, figure, block.caption);
     media.push({ kind: 'image', dto, host, assetId: block.asset_id, alt: block.alt,
-      ...(Object.hasOwn(block, 'caption') ? { caption: block.caption } : {}), eager: true });
+      ...(Object.hasOwn(block, 'caption') ? { caption: block.caption } : {}), eager: false });
     return figure;
   }
   if (block.type === 'gallery') {
@@ -59,7 +59,7 @@ function mediaBlock(document, block, dto, blockIndex, media) {
     host.setAttribute('role', 'group');
     host.setAttribute('aria-label', `${type}: ${block.title}`);
     host.textContent = `${type}: ${block.title}`;
-    figure.append(host, element(document, 'figcaption', 'contents-caption', block.title));
+    figure.append(host, element(document, 'figcaption', 'contents-caption contents-multiline', block.title));
     media.push({ kind: block.type, dto, host, assetId: block.asset_id, title: block.title });
     return figure;
   }
@@ -68,7 +68,7 @@ function mediaBlock(document, block, dto, blockIndex, media) {
   host.setAttribute('role', 'group');
   host.setAttribute('aria-label', `Vídeo incorporado: ${block.title}`);
   host.textContent = `Vídeo incorporado: ${block.title}`;
-  figure.append(host, element(document, 'figcaption', 'contents-caption', block.title));
+  figure.append(host, element(document, 'figcaption', 'contents-caption contents-multiline', block.title));
   media.push({ kind: 'embed', dto, host, provider: block.provider, url: block.url, title: block.title });
   return figure;
 }
@@ -90,7 +90,7 @@ function renderBlock(document, block, dto, blockIndex, media) {
     aside.setAttribute('aria-labelledby', label.id);
     aside.append(label);
     if (block.title) aside.append(element(document, 'h2', '', block.title));
-    aside.append(element(document, 'p', 'contents-callout-text', block.text));
+    aside.append(element(document, 'p', 'contents-callout-text contents-multiline', block.text));
     section.append(aside);
   } else if (block.type === 'link') {
     const link = element(document, 'a', `contents-block-link contents-link-${block.style}`, block.label);
@@ -119,7 +119,7 @@ export function renderReader(root, input, { returnHref = '/contents.html' } = {}
   const back = element(document, 'a', 'contents-back-link', 'Voltar ao catálogo');
   back.setAttribute('href', returnHref);
   top.append(back, heading);
-  if (dto.summary) top.append(element(document, 'p', 'contents-summary', dto.summary));
+  if (dto.summary) top.append(element(document, 'p', 'contents-summary contents-multiline', dto.summary));
   if (dto.categories.length) {
     const categories = element(document, 'p', 'contents-reader-categories');
     categories.setAttribute('aria-label', 'Categorias');

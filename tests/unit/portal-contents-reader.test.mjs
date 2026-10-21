@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createContentsHarness } from '../helpers/portal-contents-harness.mjs';
-import { ASSET_ID, clone, pageFixture } from '../helpers/portal-contents-fixtures.mjs';
+import { ASSET_ID, blockFixtures, clone, pageFixture } from '../helpers/portal-contents-fixtures.mjs';
 
 function emptyRoot(h) {
   const root = h.document.createElement('section');
@@ -35,6 +36,8 @@ test('ordinary reader renders safe semantic content and returns inert media desc
   assert.equal(root.querySelectorAll('.contents-layout-content').length, 10, 'omitted layouts default to the content layout');
   assert.equal(root.querySelectorAll('.contents-block').length, 10);
   assert.equal(root.querySelector('.contents-back-link').getAttribute('href'), '/contents.html?page=2');
+  assert.equal(root.querySelector('.contents-summary').classList.contains('contents-multiline'), true);
+  assert.equal(root.querySelector('.contents-caption').classList.contains('contents-multiline'), true);
   assert.equal(root.querySelectorAll('[style]').length, 0);
   assert.equal(root.querySelectorAll('[srcdoc]').length, 0);
   assert.equal(root.querySelectorAll('iframe, img, video, object').length, 0);
@@ -108,6 +111,49 @@ test('reader supports cover, null dates, categories, empty rich arrays, and ever
   assert.equal(root.querySelectorAll('h1').length, 1);
 });
 
+test('all ten block kinds get all five contained layouts and responsive CSS stays feature-scoped', async () => {
+  const h = await createContentsHarness();
+  const root = emptyRoot(h);
+  const blocks = ['content', 'wide', 'full', 'left', 'right'].flatMap(layout =>
+    blockFixtures().map(block => ({ ...block, layout })));
+  h.modules.reader.renderReader(root, pageFixture({ content_blocks: blocks }), {}, {});
+  for (const layout of ['content', 'wide', 'full', 'left', 'right']) {
+    assert.equal(root.querySelectorAll(`.contents-layout-${layout}`).length, 10,
+      `every supported block kind renders in the ${layout} layout`);
+  }
+
+  const css = (await readFile('public/css/portal-contents.css', 'utf8')).replace(/\/\*[\s\S]*?\*\//gu, '');
+  const selectors = [];
+  let start = 0;
+  for (let index = 0; index < css.length; index += 1) {
+    if (css[index] === '{') {
+      const prelude = css.slice(start, index).trim();
+      if (prelude && !prelude.startsWith('@')) selectors.push(...prelude.split(',').map(item => item.trim()));
+      start = index + 1;
+    } else if (css[index] === '}') start = index + 1;
+  }
+  assert.ok(selectors.length > 0);
+  for (const selector of selectors) {
+    assert.match(selector, /^(?:\.portal-contents(?:\b|\s|[.#:\[]).*|\.portal-contents-lightbox(?:\b|\s|[.#:\[]).*)$/u,
+      `feature stylesheet selector is scoped: ${selector}`);
+  }
+  assert.match(css, /\.portal-contents\s*\{[^}]*container-type:\s*inline-size/u);
+  assert.match(css, /\.portal-contents\s+\.contents-article\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
+  assert.match(css, /\.portal-contents\s+\.contents-layout-content\s*\{[^}]*72ch/u);
+  assert.match(css, /\.portal-contents\s+\.contents-layout-wide\s*\{[^}]*1100px/u);
+  assert.match(css, /\.portal-contents\s+\.contents-layout-full\s*\{[^}]*inline-size:\s*100%/u);
+  assert.match(css, /\.portal-contents\s+\.contents-layout-left\s*\{[^}]*margin-inline-start:\s*max\(0px/u);
+  assert.match(css, /\.portal-contents\s+\.contents-layout-right\s*\{[^}]*margin-inline-end:\s*max\(0px/u);
+  assert.match(css, /@container\s*\(max-width:\s*1100px\)/u);
+  assert.match(css, /\.portal-contents\s+\.contents-gallery-list\s*\{[^}]*repeat\(auto-fit,\s*minmax\(min\(100%,\s*180px\),\s*1fr\)\)/u);
+  assert.match(css, /\.portal-contents\s+\.contents-multiline\s*\{[^}]*white-space:\s*pre-wrap/u);
+  assert.match(css, /\.portal-contents\s+\.contents-embed\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9/u);
+  assert.match(css, /\.portal-contents-lightbox\s*\{[^}]*100dvw[^}]*100dvh/u);
+  assert.match(css, /\.portal-contents-lightbox\s+\.contents-lightbox-controls\s+button[^}]*min-inline-size:\s*44px/u);
+  assert.match(css, /@container\s*\(max-width:\s*480px\)/u, 'gallery collapses to one column at narrow container sizes');
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/u);
+});
+
 test('invalid DTO is rejected atomically before content DOM or media descriptors are created', async () => {
   const h = await createContentsHarness();
   const root = emptyRoot(h);
@@ -145,6 +191,7 @@ test('catalog uses semantic list/article cards, safe titles, stable covers and c
   assert.equal(root.querySelector('.contents-page-current').textContent, 'Página 2 de 3');
   assert.equal(root.querySelector('.contents-page-previous').getAttribute('href'), '/contents.html?category=people');
   assert.equal(root.querySelector('.contents-page-next').getAttribute('href'), '/contents.html?category=people&page=3');
+  assert.equal(root.querySelector('.contents-card-summary').classList.contains('contents-multiline'), true);
   assert.equal(categories.querySelector('a[aria-current="page"]').textContent, 'Pessoas (30)');
 });
 

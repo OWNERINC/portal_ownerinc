@@ -2,6 +2,8 @@ import { getContentsIdentity, subscribeContentsIdentity } from '../auth.js';
 import { contentsErrorMessage, createContentsAPI } from './api.js';
 import { renderCatalog, renderCategories } from './catalog.js';
 import { MAX_OFFSET, PAGE_SIZE, isCanonicalSlug } from './dto.js';
+import { createContentsGallery } from './gallery.js';
+import { activateContentsMedia } from './media.js';
 import { renderReader } from './reader.js';
 
 export function parseContentsLocation(search) {
@@ -73,6 +75,8 @@ export function mount(page) {
   let generation = 0;
   let active = null;
   let renderedView = null;
+  let activeMedia = null;
+  let activeGallery = null;
   let lastCatalogHref = '/contents.html';
   let categories = [];
   let categoriesLoaded = false;
@@ -80,6 +84,11 @@ export function mount(page) {
   let knownIdentity = getContentsIdentity();
 
   function clearView() {
+    try { activeMedia?.dispose?.(); } catch { /* Native media cannot outlive a replaced view. */ }
+    activeMedia = null;
+    try { activeGallery?.close?.({ restoreFocus: false }); } catch { /* Route teardown never restores departing focus. */ }
+    try { activeGallery?.dispose?.(); } catch { /* A gallery lock cannot survive view teardown. */ }
+    activeGallery = null;
     active?.controller.abort();
     active = null;
     try { renderedView?.dispose?.(); } catch { /* A view cleanup cannot retain the prior route. */ }
@@ -186,6 +195,8 @@ export function mount(page) {
       if (!current(run)) throw abortError();
       shellHeading?.remove();
       renderedView = renderReader(root, dto, { returnHref: lastCatalogHref }, context);
+      activeGallery = createContentsGallery({ page, rootHeading: () => renderedView?.heading || shellHeading });
+      activeMedia = activateContentsMedia(renderedView.media, { context, gallery: activeGallery });
       if (!current(run)) throw abortError();
       document.title = `${dto.title} — Conteúdos — Portal Ownerinc`;
       container?.removeAttribute('aria-busy');
@@ -196,6 +207,7 @@ export function mount(page) {
     if (!current(run)) throw abortError();
     shellHeading?.remove();
     renderedView = renderCatalog(root, { ...result, category: run.state.category, page: run.state.page }, context);
+    activeMedia = activateContentsMedia(renderedView.media, { context });
     if (!current(run)) throw abortError();
     if (categoriesLoaded) renderCategories(root.querySelector('#contents-categories'), categories, run.state.category, context);
     if (categoriesFailed) setCategoryFailure(root.querySelector('#contents-categories'), startCategoriesOnly);

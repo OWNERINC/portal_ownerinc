@@ -74,6 +74,18 @@ const dialogLeaveGuards = new WeakMap();
 const dialogDiscards = new WeakMap();
 const initialValues = new WeakMap();
 const guardedForms = new Map();
+const ownedPageDialogs = new Set();
+
+export function registerPageDialog({ close } = {}) {
+  if (typeof close !== 'function') throw new TypeError('A native page dialog needs a close callback.');
+  ownedPageDialogs.add(close);
+  let registered = true;
+  return () => {
+    if (!registered) return;
+    registered = false;
+    ownedPageDialogs.delete(close);
+  };
+}
 
 function serializeForm(form) {
   return JSON.stringify([...new FormData(form).entries()]);
@@ -197,6 +209,9 @@ export function disposePageUI() {
 
 export function closePageDialogs() {
   if (activeDialog) closeDialog(activeDialog, true);
+  for (const close of [...ownedPageDialogs]) {
+    try { close(); } catch (_) { /* An independently owned dialog cannot block its siblings from closing. */ }
+  }
 }
 
 document.addEventListener('keydown', event => {

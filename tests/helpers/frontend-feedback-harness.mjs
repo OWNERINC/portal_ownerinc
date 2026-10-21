@@ -3,7 +3,8 @@ import vm from 'node:vm';
 import { Node, TestEvent, deferred, drain } from './router-harness.mjs';
 
 export { TestEvent, deferred, drain };
-const booleans = new Set(['hidden', 'disabled', 'checked', 'selected', 'inert', 'open']);
+const booleans = new Set(['allowfullscreen', 'autoplay', 'checked', 'controls', 'disabled', 'hidden', 'inert', 'loop',
+  'multiple', 'muted', 'open', 'playsinline', 'readonly', 'required', 'selected']);
 const decode = text => text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 export function parseInto(root, html) {
   const stack = [root];
@@ -31,7 +32,23 @@ export class FixtureNode extends Node {
     this.hidden = false; this.disabled = false; this.open = false;
     this.clientWidth = 420; this.clientHeight = 420; this.scrollWidth = 0; this.scrollHeight = 0;
     this.naturalWidth = 800; this.naturalHeight = 800; this.complete = true;
-    this.style = { setProperty(name, value) { this[name] = String(value); }, getPropertyValue(name) { return this[name] || ''; }, removeProperty(name) { delete this[name]; } };
+    this.currentTime = 0; this.duration = NaN; this.paused = true; this.loadCount = 0;
+    this.style = {
+      priorities: new Map(),
+      setProperty(name, value, priority = '') {
+        const camel = name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        this[name] = String(value); this[camel] = String(value); this.priorities.set(name, String(priority));
+      },
+      getPropertyValue(name) {
+        const camel = name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        return this[name] || this[camel] || '';
+      },
+      getPropertyPriority(name) { return this.priorities.get(name) || ''; },
+      removeProperty(name) {
+        const camel = name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        const previous = this.getPropertyValue(name); delete this[name]; delete this[camel]; this.priorities.delete(name); return previous;
+      },
+    };
   }
   get nodeType() { return this.tagName === '#TEXT' ? 3 : this.tagName === '#FRAGMENT' ? 11 : 1; }
   get textContent() { return (this._text || '') + this.children.map(node => node.textContent).join(''); }
@@ -47,6 +64,8 @@ export class FixtureNode extends Node {
     if (name === 'style') { this.attrs[name] = String(value); return; }
     super.setAttribute(name, value);
     if (booleans.has(name)) this[name] = true;
+    if (name === 'playsinline') this.playsInline = true;
+    if (name === 'allowfullscreen') this.allowFullscreen = true;
   }
   append(...nodes) {
     for (const node of nodes) {
@@ -58,7 +77,13 @@ export class FixtureNode extends Node {
       super.append(node);
     }
   }
-  removeAttribute(name) { super.removeAttribute(name); if (booleans.has(name)) this[name] = false; }
+  removeAttribute(name) {
+    super.removeAttribute(name);
+    if (booleans.has(name)) this[name] = false;
+    if (name === 'playsinline') this.playsInline = false;
+    if (name === 'allowfullscreen') this.allowFullscreen = false;
+    if (name === 'src' || name === 'href') delete this[name];
+  }
   getAttribute(name) {
     if (name.startsWith('data-')) return this.dataset[name.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase())] ?? null;
     return super.getAttribute(name);
@@ -66,6 +91,8 @@ export class FixtureNode extends Node {
   hasAttribute(name) { return this.getAttribute(name) !== null; }
   matches(selector) {
     if (selector.includes(',')) return selector.split(',').some(part => this.matches(part.trim()));
+    const tagClass = /^([\w-]+)\.([\w-]+)$/.exec(selector);
+    if (tagClass) return this.tagName === tagClass[1].toUpperCase() && this.classList.contains(tagClass[2]);
     if (selector.includes(' > ')) { const [parent, child] = selector.split(' > '); return this.matches(child) && this.parentNode?.matches(parent); }
     if (/^\.[\w-]+\.[\w-]+$/.test(selector)) return selector.slice(1).split('.').every(name => this.classList.contains(name));
     return super.matches(selector);
@@ -75,6 +102,20 @@ export class FixtureNode extends Node {
   replaceWith(node) { this.parentNode?.insertBefore(node, this); this.remove(); }
   getBoundingClientRect() { return { width: this.clientWidth, height: this.clientHeight, top: 0, left: 0 }; }
   decode() { return Promise.resolve(); }
+  focus() {
+    for (let current = this; current; current = current.parentNode) {
+      if (current.hidden || current.inert || current.disabled || current.getAttribute?.('aria-hidden') === 'true') return;
+    }
+    this.ownerDocument.activeElement = this;
+    this.focused = true;
+  }
+  pause() { this.paused = true; this.pauseCount = (this.pauseCount || 0) + 1; }
+  play() {
+    if (this.playResult) return this.playResult;
+    this.paused = false;
+    return Promise.resolve();
+  }
+  load() { this.loadCount += 1; }
   showModal() { this.open = true; }
   close() { this.open = false; this.dispatchEvent(new TestEvent('close')); }
   dispatchEvent(event) {
@@ -101,16 +142,22 @@ export async function installAuthTransport(h, uid = 'editor-a') {
   const changeUser = uid => { auth.currentUser = account(uid); listeners.forEach(fn => fn(auth.currentUser)); };
   h.window.location.replace = url => redirects.push(url);
   h.context.URL.createObjectURL = () => { const url = `blob:auth-${created.length}`; created.push(url); return url; };
+  const mediaConfigurations = [];
+  const mediaInvalidations = [];
+  const clearCalls = [];
   Object.assign(h.context, { auth,
     sessionStorage: { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) },
     onAuthStateChanged: (_auth, fn) => { listeners.push(fn); return () => {}; },
     signOut: async () => changeUser(null), updateProfile: async () => {}, revokeEditorialSession: async () => {},
     configureContentsAvailability() {},
+    configureContentsMediaSession: options => mediaConfigurations.push(options),
+    invalidateContentsMediaSession: options => mediaInvalidations.push(options),
+    clearContentsMediaSession: () => { clearCalls.push(true); return h.context.clearContentsMedia?.() ?? Promise.resolve(); },
     fetch: (path, options = {}) => { const request = { path, options, ...deferred() }; requests.push(request); return request.promise; },
   });
   const source = (await readFile('public/js/auth.js', 'utf8')).replace(/^import[\s\S]*?;\s*/gm, '').replace(/^export /gm, '');
   vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { fetchAPI, fetchAPIAsset, can }); })();`, h.context);
-  return { requests, changeUser, created, redirects };
+  return { requests, changeUser, created, redirects, mediaConfigurations, mediaInvalidations, clearCalls };
 }
 
 export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [], url = `https://portal.test/${name}.html` } = {}) {
@@ -163,7 +210,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
     vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
-  await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard');
+  await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard, registerPageDialog, closePageDialogs');
   await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope');
   await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
   await load('public/js/owner-news/content-contract.js', 'validateNewsBlocks, validateRichNodes, newsBlocksToText');
