@@ -465,3 +465,15 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
     'retain all esbuild platform packages in the lockfile while unifying their versions');
   for (const [path, entry] of esbuildPackages) assert.equal(entry.version, '0.28.2', path);
 });
+
+test('CMS pins the audited Next and DOMPurify security releases', async () => {
+  const [manifest, lockfile] = await Promise.all([
+    read('cms/package.json').then(JSON.parse),
+    read('cms/package-lock.json').then(JSON.parse),
+  ]);
+
+  assert.equal(manifest.dependencies.next, '16.4.2');
+  assert.equal(manifest.overrides['monaco-editor@0.57.0'].dompurify, '3.4.17');
+  assert.equal(lockfile.packages['node_modules/next'].version, '16.4.2');
+  assert.equal(lockfile.packages['node_modules/dompurify'].version, '3.4.17');
+});
