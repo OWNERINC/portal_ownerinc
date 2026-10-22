@@ -355,6 +355,24 @@ Trivy. `npm run security` não examina a stdlib desse executável estático Go.
 Inspeção do manifesto e testes offline **não** são build nem scan da imagem nova:
 o gate continua fechado até o scan CI passar, antes de retomar a recuperação Linux.
 
+### Gate de segurança Go de 2026-10-22 — CVE-2026-111943
+
+O job `validate` da PR #63 (run `39670953652`, job `119468373876`)
+falhou no scan Trivy da imagem CMS. O target
+`app/cms/node_modules/@esbuild/linux-x64/bin/esbuild`, recompilado com Go
+`1.26.9`, contém `CVE-2026-111943` HIGH em `crypto/x509`; o scanner informa
+correção em Go `1.26.10` ou `1.27.3`.
+
+O patch mantém esbuild `0.28.2` e a linha Go 1.26, elevando somente o toolchain
+para o release oficial Go `1.26.10`, publicado em 2026-10-19 com correção de
+segurança em `crypto/x509`. A imagem oficial
+`golang:1.26.10-alpine3.23` foi inspecionada e pinada no índice OCI
+`sha256:107301490755aa2ea1b0b43788b6e62cff2faae45a538028b193becc06aaffba`;
+o manifesto `linux/amd64` observado é
+`sha256:9d1e2c4fda593efb2c405e1c855c75ec17fe42dc02f6b7142a5ea7af7f386bf4`.
+O gate Trivy permanece inalterado e não recebe exceções. Testes locais não
+substituem o scan hospedado; o gate permanece pendente até o novo CI passar.
+
 ## Guard portátil implementado
 
 `scripts/test-payload-integration.mjs` não lê `.env`, state/env privados dos antigos
