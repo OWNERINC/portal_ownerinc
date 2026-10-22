@@ -10,7 +10,7 @@ export const CI_BASE_PINS = Object.freeze([
   ['nginx', 'alpine', '4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752'],
   ['node', '24.12.0-alpine3.23', 'c921b97d4b74f51744057454b306b418cf693865e73b8100559189605f6955b8'],
   ['node', '24-alpine3.23', '9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2'],
-  ['golang', '1.26.9-alpine3.23', '96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888'],
+  ['golang', '1.26.10-alpine3.23', '107301490755aa2ea1b0b43788b6e62cff2faae45a538028b193becc06aaffba'],
 ].map(row => Object.freeze(row)));
 const fail = code => { throw new Error(code); };
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
