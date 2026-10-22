@@ -366,7 +366,7 @@ correção em Go `1.26.10` ou `1.27.3`.
 O patch mantém esbuild `0.28.2` e a linha Go 1.26, elevando somente o toolchain
 para o release oficial Go `1.26.10`, publicado em 2026-10-19 com correção de
 segurança em `crypto/x509`. A imagem oficial
-`golang:1.26.10-alpine3.23` usa o índice OCI
+`golang:1.26.10-alpine3.23` foi inspecionada e pinada no índice OCI
 `sha256:107301490755aa2ea1b0b43788b6e62cff2faae45a538028b193becc06aaffba`;
 o manifesto `linux/amd64` observado é
 `sha256:9d1e2c4fda593efb2c405e1c855c75ec17fe42dc02f6b7142a5ea7af7f386bf4`.
