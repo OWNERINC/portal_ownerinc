@@ -946,11 +946,17 @@ test('candidate-only CI gate retains exact native preparation discovery without 
   assert.deepEqual(deployStart.length, 1, 'deploy job boundary must remain unique');
   const deployEnd = jobStarts.find(index => index > deployStart[0]) ?? lines.length;
   const deploy = lines.slice(deployStart[0], deployEnd);
-  assert.deepEqual(deploy.slice(0, 4), [
+  assert.deepEqual(deploy.slice(0, 10), [
     '  deploy-production:',
     '    name: Deploy production',
     '    needs: validate',
-    "    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true",
+    '    if: >-',
+    '      !cancelled() &&',
+    "      needs.validate.result == 'success' &&",
+    "      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&",
+    "      github.ref == 'refs/heads/main' &&",
+    '      inputs.cms_image_only != true &&',
+    '      inputs.publish_candidate_only != true',
   ]);
 });
 

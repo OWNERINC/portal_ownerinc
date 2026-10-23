@@ -409,7 +409,7 @@ test('green main revisions deploy through a restricted serialized production gat
     read('ops/compose.production.yaml'),
   ]);
   assert.doesNotMatch(workflow, /deploy-staging:|PORTAL_STAGING_VPS_/);
-  assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: validate\n    if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: validate\n    if: >-\n      !cancelled\(\) &&\n      needs\.validate\.result == 'success' &&/);
   assert.match(workflow, /deploy-production:[\s\S]*environment: production/);
   assert.match(workflow, /"\$VPS_USER@\$VPS_HOST" "\$GITHUB_SHA" < portal-release\.tar\.gz/);
   assert.match(workflow, /workflow_dispatch:/);

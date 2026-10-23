@@ -43,6 +43,23 @@ function condition(block, indentation) {
   return expression.join(' ');
 }
 
+function evaluateDeployCondition(expression, context) {
+  const replacements = new Map([
+    ['cancelled()', String(Number(context.cancelled ?? false))],
+    ["needs.validate.result == 'success'", String(Number(context.validateResult === 'success'))],
+    ["github.event_name == 'push'", String(Number(context.eventName === 'push'))],
+    ["github.event_name == 'workflow_dispatch'", String(Number(context.eventName === 'workflow_dispatch'))],
+    ["github.ref == 'refs/heads/main'", String(Number(context.ref === 'refs/heads/main'))],
+    ['inputs.cms_image_only != true', String(Number(context.cmsImageOnly !== true))],
+    ['inputs.publish_candidate_only != true', String(Number(context.publishCandidateOnly !== true))],
+  ]);
+  let resolved = expression;
+  for (const [token, value] of replacements) resolved = resolved.replaceAll(token, value);
+  assert.doesNotMatch(resolved, /[A-Za-z_$]/u, `unsupported token remains in deploy condition: ${resolved}`);
+  assert.match(resolved, /^[\s!()&|01]+$/u, 'deploy condition contains unsupported syntax');
+  return Boolean(Function(`"use strict"; return (${resolved});`)());
+}
+
 test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication modes isolated', async () => {
   const [workflow, dockerfile, deployment] = await Promise.all([
     read('.github/workflows/ci.yml'), read('cms/Dockerfile'), read('docs/operations/deployment.md'),
@@ -142,8 +159,21 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     'CMS metadata must not alter the existing API/cron digest artifact');
 
   const productionDeploy = workflow.slice(workflow.indexOf('  deploy-production:'));
-  assert.equal(condition(productionDeploy, 4), normalMainCondition,
-    'production deployment must remain normal-main-only and never run for either manual candidate mode');
+  const productionDeployCondition = "!cancelled() && needs.validate.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true";
+  assert.equal(condition(productionDeploy, 4), productionDeployCondition,
+    'production deployment must override skipped-ancestor propagation and require successful normal-main validation');
+  for (const [name, context, expected] of [
+    ['main push', { validateResult: 'success', eventName: 'push', ref: 'refs/heads/main' }, true],
+    ['normal main dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main' }, true],
+    ['pull request', { validateResult: 'success', eventName: 'pull_request', ref: 'refs/pull/64/merge' }, false],
+    ['non-main dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/fix/deploy' }, false],
+    ['CMS-only dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main', cmsImageOnly: true }, false],
+    ['candidate-only dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main', publishCandidateOnly: true }, false],
+    ['failed validation', { validateResult: 'failure', eventName: 'push', ref: 'refs/heads/main' }, false],
+    ['cancelled workflow', { cancelled: true, validateResult: 'success', eventName: 'push', ref: 'refs/heads/main' }, false],
+  ]) {
+    assert.equal(evaluateDeployCondition(condition(productionDeploy, 4), context), expected, name);
+  }
   assert.doesNotMatch(productionDeploy, /cms_image(?!_only)|cms-image/,
     'the production receiver must continue receiving only its existing API/cron release contract');
   assert.match(productionDeploy, /printf '%s\\n%s\\n' "\$API_IMAGE" "\$CRON_IMAGE" > \.ci-images/,
