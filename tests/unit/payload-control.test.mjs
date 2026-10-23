@@ -20,6 +20,17 @@ test('first go-live plan keeps future orchestration separate from current author
   assert.match(plan, /importação base em sombra sob `legacy`/u);
   assert.match(plan, /`release_not_preflighted` permanece incondicional/u);
   assert.doesNotMatch(plan, /CAS curto `legacy -> payload`/u);
+
+  const task12 = plan.match(/### Task 12:[\s\S]+?(?=\n---\n\n### Task 13:)/u)?.[0];
+  assert.ok(task12, 'Task 12 contract must remain present');
+  const shadowImport = task12.match(/\*\*Step 2:[\s\S]+?(?=\*\*Step 3:)/u)?.[0];
+  assert.ok(shadowImport, 'Task 12 shadow-import step must remain present');
+  assert.doesNotMatch(shadowImport, /reconcili/u,
+    'legacy authority permits only the bounded base shadow import, not reconciliation');
+  const freezeCas = task12.indexOf('CAS `legacy -> frozen`');
+  const reconciliation = task12.search(/reconcili/u);
+  assert.ok(freezeCas >= 0 && reconciliation > freezeCas,
+    'reconciliation must occur only after the legacy -> frozen CAS');
 });
 
 test('preauthority state, signed proof, grant floors and worker hold fail closed', async t => {

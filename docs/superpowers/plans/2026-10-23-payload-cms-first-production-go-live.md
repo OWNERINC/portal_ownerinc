@@ -822,10 +822,9 @@ autenticada; tráfego privado de readiness/controle/importação não publica o 
 
 **Step 2: importar acervo em sombra**
 
-Executar importação base e reconciliação enquanto o Portal continua disponível.
-Nenhuma divergência de IDs, bytes, contagens, referências, versões ou agendas pode
-ser aceita. A importação base em sombra exige binding exato a source snapshot, run,
-manifest e epoch. Falha encerra antes do freeze.
+Executar somente a importação base em sombra enquanto o Portal continua disponível.
+Ela exige binding exato a source snapshot, run, manifest e epoch e preserva todas as
+agendas como `suspended`. Falha encerra antes do freeze.
 
 **Step 3: iniciar freeze editorial**
 
@@ -837,7 +836,9 @@ reconciliação e seal exigem essa autoridade `frozen`.
 **Step 4: backup final e delta**
 
 Capturar backup coordenado `payload-v1`, validar manifestos e restaurabilidade;
-importar delta final; reconciliar novamente. Seal só pode usar o run/delta exatos.
+importar o delta final e executar a reconciliação integral de IDs, bytes, contagens,
+referências, versões e agendas. Nenhuma divergência pode ser aceita. Seal só pode
+usar o run/delta e a reconciliação exatos.
 
 **Step 5: selar e trocar authority**
 
