@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -9,6 +9,18 @@ import { createRecoveryFailureReportFields } from '../../scripts/integration/pay
 
 const pythonCandidates = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
 const python = pythonCandidates.find(command => spawnSync(command, ['--version'], { encoding: 'utf8' }).status === 0);
+
+test('first go-live plan keeps future orchestration separate from current authority and preauthority contracts', async () => {
+  const plan = await readFile('docs/superpowers/plans/2026-10-23-payload-cms-first-production-go-live.md', 'utf8');
+  assert.match(plan, /projeção futura, não exaustiva, de orquestração e marcos/u);
+  assert.match(plan, /legacy -> frozen -> payload/u);
+  assert.match(plan, /CAS de ativação é `frozen -> payload`/u);
+  assert.match(plan, /`payload_frozen` é um modo válido da autoridade Portal fora desse happy path/u);
+  assert.match(plan, /estado futuro de orquestração desconhecido é recusado sem efeitos/u);
+  assert.match(plan, /importação base em sombra sob `legacy`/u);
+  assert.match(plan, /`release_not_preflighted` permanece incondicional/u);
+  assert.doesNotMatch(plan, /CAS curto `legacy -> payload`/u);
+});
 
 test('preauthority state, signed proof, grant floors and worker hold fail closed', async t => {
   if (!python) return t.skip('Python 3 unavailable; production controller requires Python 3');
@@ -174,9 +186,25 @@ S.validate_proof_body(proof)
 unknown = copy.deepcopy(proof)
 unknown['unreviewedField'] = True
 expect('unsupported_proof_shape', lambda: S.validate_proof_body(unknown))
+for field, value in [
+    ('orchestrationState', 'payload_installed_closed'),
+    ('sealSha256', 'a' * 64),
+    ('workerReleased', True),
+]:
+    projected = copy.deepcopy(proof)
+    projected[field] = value
+    expect('unsupported_proof_shape', lambda projected=projected: S.validate_proof_body(projected))
 unsupported = copy.deepcopy(proof)
 unsupported['phase'] = 'cutover'
 expect('unsupported_proof_phase', lambda: S.validate_proof_body(unsupported))
+for phase in ('payload_installed_closed', 'payload_sealed', 'payload_active'):
+    projected = copy.deepcopy(proof)
+    projected['phase'] = phase
+    expect('unsupported_proof_phase', lambda projected=projected: S.validate_proof_body(projected))
+for mode, epoch in [('frozen', 1), ('payload', 1), ('payload_frozen', 1), ('legacy', 0), ('legacy', 2)]:
+    drifted = copy.deepcopy(proof)
+    drifted['authority'] = {'mode': mode, 'epoch': epoch}
+    expect('unsupported_proof_authority', lambda drifted=drifted: S.validate_proof_body(drifted))
 wrong_database = copy.deepcopy(proof)
 wrong_database['source']['portal']['databaseName'] = 'ownerinc_cms'
 expect('invalid_proof_source', lambda: S.validate_proof_body(wrong_database))
@@ -215,6 +243,22 @@ state = {
     'nativeCatalogFingerprint': None, 'inventoryIdentity': '9' * 64,
 }
 S.validate_state_body(state)
+for field, value in [
+    ('orchestrationState', 'payload_installed_closed'),
+    ('sealSha256', 'a' * 64),
+    ('workerReleased', True),
+]:
+    projected = copy.deepcopy(state)
+    projected[field] = value
+    expect('unsupported_state_shape', lambda projected=projected: S.validate_state_body(projected))
+for phase in ('payload_installed_closed', 'payload_importing_frozen', 'payload_active'):
+    projected = copy.deepcopy(state)
+    projected['phase'] = phase
+    expect('unsupported_state_phase', lambda projected=projected: S.validate_state_body(projected))
+for mode, epoch in [('frozen', 1), ('payload', 1), ('payload_frozen', 1), ('legacy', 0), ('legacy', 2)]:
+    drifted = copy.deepcopy(state)
+    drifted['authority'] = {'mode': mode, 'epoch': epoch}
+    expect('unsupported_authority_state', lambda drifted=drifted: S.validate_state_body(drifted))
 state_root = os.path.join(fixture, 'private-runtime')
 os.mkdir(state_root, 0o700)
 S.initialize(state_root, '9' * 64)
@@ -257,6 +301,14 @@ restore_state['restoreIntent'] = {
     'releaseImages': payload_images,
 }
 S.validate_state_body(restore_state)
+# migrated is only an installation/recovery status in the current preauthority
+# schema. It neither completes the Owner News import nor changes authority/worker.
+assert restore_state['phase'] == 'preauthority'
+assert restore_state['authority'] == {'mode': 'legacy', 'epoch': 1}
+assert restore_state['workerHold'] is True
+completed_import = copy.deepcopy(restore_state)
+completed_import['ownerNewsImportCompleted'] = True
+expect('unsupported_state_shape', lambda: S.validate_state_body(completed_import))
 for stage in ('restoring', 'portal_restored', 'portal_grants_restored'):
     staged = copy.deepcopy(restore_state)
     staged['restoreIntent']['stage'] = stage

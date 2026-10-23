@@ -1,5 +1,33 @@
 # Runtime Payload e recuperação coordenada
 
+## Fronteira congelada do primeiro go-live
+
+`legacy_active`, `payload_installed_closed`, `payload_importing_frozen`,
+`payload_sealed`, `payload_active_worker_held` e `payload_active` são somente uma
+projeção futura, não exaustiva, de orquestração/marcos. Não pertencem ao schema
+assinado atual e não descrevem toda a recovery machine. Até a implementação positiva
+da Task 5, fields/phases dessa projeção, seal, worker release, autoridade não-legacy e
+epoch diferente de `1` são recusados pelos contratos preauthority existentes.
+
+A autoridade Portal progride `legacy -> frozen -> payload`; o CAS de ativação é
+`frozen -> payload`. `payload_frozen` é modo válido fora desse happy path, não um
+estado desconhecido. Projeção futura desconhecida recusa sem efeitos, sem coerção
+para “closed”. A Task 6 deve implementar base-import bounded sob `legacy`, vinculada
+a source snapshot/run/manifest/epoch; delta, reconciliação e seal exigem `frozen`.
+
+Readiness/controle/importação privados autenticados podem operar antes do seal quando
+seus gates futuros autorizarem, mas leitor público, browser/editor, manutenção e
+worker permanecem gates separados. Readiness não publica rota nem libera worker. O
+rollback possui floor de compatibilidade da aplicação; após ativação, retorno da
+autoridade exige prova completa de nenhuma mutação Payload-authoritative. Histórico
+desconhecido/divergente recupera no floor Payload.
+
+Hoje `cmsStatus=migrated` continua sendo somente status de instalação/recovery, não
+conclusão de importação Owner News. State/proof permanecem preauthority,
+`legacy`/epoch `1`, worker held. Não há receipts novos nesta tarefa; P2–P8/B0 e todos
+os campos de autorização permanecem inalterados/falsos, e
+`release_not_preflighted` permanece incondicional.
+
 ## P3 — inspeção de plano não é autorização de instalação
 
 ### B0-01a — envelope mínimo autenticado de contexto (TEST local/native; host pendente)

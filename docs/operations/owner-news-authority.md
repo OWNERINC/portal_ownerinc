@@ -13,6 +13,12 @@ freeze CMS e ativação de agendas dependem da integração das Tasks10/11/12/13
 | payload | Payload | Payload |
 | payload_frozen | Payload | Nenhuma |
 
+A progressão de ativação é `legacy -> frozen -> payload`; o CAS final é
+`frozen -> payload`. `payload_frozen` é um modo válido para congelamento posterior,
+fora do happy path de primeira ativação. Os seis rótulos de orquestração do
+[plano do primeiro go-live](../superpowers/plans/2026-10-23-payload-cms-first-production-go-live.md#contrato-terminológico-congelado)
+não são modos desta tabela nem valores do state/proof preauthority.
+
 O backend não faz fallback para legado se Payload falhar. A API consulta a
 autoridade corrente, sem cache duradouro. Ausência de autoridade falha fechada.
 
@@ -38,7 +44,8 @@ continua permitido. Respostas de arquivos legados usam private,no-store.
 
 ## CLI parcial / CAS
 
-`scripts/owner-news-payload/cutover.mjs` aceita os seis nomes do plano e exige
+`scripts/owner-news-payload/cutover.mjs` aceita seis nomes de **comando** do plano
+(não os seis rótulos futuros de orquestração) e exige
 `--epoch N`. O padrão apenas retorna o plano, sem conectar ao banco; não é um
 check de readiness. Exemplo sintético sem mutação:
 

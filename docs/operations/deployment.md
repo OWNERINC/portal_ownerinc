@@ -77,6 +77,34 @@ Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se nec
 
 ## Fluxo de release
 
+### Primeiro go-live: nomes e gates ainda não implementados
+
+Os seis rótulos `legacy_active` → `payload_installed_closed` →
+`payload_importing_frozen` → `payload_sealed` → `payload_active_worker_held` →
+`payload_active` são uma projeção futura, não exaustiva, de orquestração/marcos. Não
+são modos da autoridade Portal, não são valores do journal/proof preauthority atual e
+não constituem uma recovery machine completa. A implementação positiva pertence à
+Task 5 do [plano do primeiro go-live](../superpowers/plans/2026-10-23-payload-cms-first-production-go-live.md).
+
+A autoridade Portal progride `legacy -> frozen -> payload`; a ativação usa CAS
+`frozen -> payload`. `payload_frozen` é válido fora do happy path. Uma projeção
+desconhecida deve recusar sem efeitos, não ser convertida em “closed”. A Task 6
+futura deve fornecer base-import bounded sob `legacy`, vinculada a source
+snapshot/run/manifest/epoch; delta, reconciliação e seal exigem `frozen`.
+
+Leitor público, browser/editor, readiness/controle/importação privados, manutenção e
+worker têm gates independentes. Antes do seal, tráfego privado autenticado pode ser
+permitido pelo gate correspondente sem publicar CMS, abrir editor ou liberar worker;
+o leitor público continua no legado. Rollback respeita o floor de compatibilidade da
+aplicação e, depois da ativação, só retorna autoridade com prova completa de zero
+mutação Payload-authoritative; histórico desconhecido/divergente usa recovery
+Payload.
+
+Este texto não concede autoridade. State/proof atuais continuam preauthority,
+`legacy`/epoch `1`, worker held; `cmsStatus=migrated` não conclui importação Owner
+News. Todos os campos de instalação/deployment/produção/operação destrutiva continuam
+falsos e `release_not_preflighted` permanece incondicional.
+
 ### Receiver Payload: admissão somente (sem instalação)
 
 O receiver possui uma rota explícita de admissão, anterior à inspeção do runtime

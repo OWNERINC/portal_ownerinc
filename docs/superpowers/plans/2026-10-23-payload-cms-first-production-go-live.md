@@ -13,9 +13,8 @@ escritas editoriais a 30 minutos e ativar o worker de agendamentos no mesmo cuto
 worker em um plano privado sem autoridade editorial; importar e validar o acervo em
 sombra; durante o cutover, congelar somente escritas editoriais, aplicar o delta
 final, selar o run e trocar a autoridade por CAS. Publicar rota e liberar worker
-somente após confirmação durável. Antes de mutações nativas, rollback retorna ao
-legado; depois delas, recuperação permanece no floor Payload e nunca descarta
-edições.
+somente após confirmação durável. A recuperação respeita os dois floors definidos
+abaixo e nunca descarta edições.
 
 **Tech stack:** GitHub Actions, Bash/Python operacional, Docker Compose, PostgreSQL
 16, Payload/Next.js/TypeScript, API Express, Nginx e testes Node sem dependências.
@@ -45,6 +44,48 @@ edições.
   approval vinculada ao commit/candidato. O cutover exige um go/no-go explícito
   depois do ensaio, pois evidência antiga não autoriza bytes novos.
 
+### Contrato terminológico congelado
+
+Os seis nomes abaixo formam uma **projeção futura, não exaustiva, de orquestração e marcos**.
+Não são modos da autoridade Portal, não são valores aceitos pelo journal/proof
+assinado atual e não formam uma máquina completa de recuperação:
+
+```text
+legacy_active
+  -> payload_installed_closed
+  -> payload_importing_frozen
+  -> payload_sealed
+  -> payload_active_worker_held
+  -> payload_active
+```
+
+A progressão literal da autoridade Portal é `legacy -> frozen -> payload`: a
+importação base em sombra sob `legacy` pertence à Task 6; delta, reconciliação e
+seal exigem `frozen`; o CAS de ativação é `frozen -> payload`. O modo
+`payload_frozen` é um modo válido da autoridade Portal fora desse happy path. Um
+estado futuro de orquestração desconhecido é recusado sem efeitos; ele não é
+convertido em um estado sintético “closed”.
+
+Os planos de tráfego são independentes. Antes do seal, o leitor público continua no
+legado e writes de browser/editor permanecem fechados quando a autoridade está
+`frozen`; readiness, controle e importação privados autenticados podem operar nos
+gates explicitamente autorizados. Manutenção e execução do worker têm gates próprios;
+o worker permanece held até seu aceite. Readiness privada não publica rota, não abre
+editor e não libera worker.
+
+Rollback tem dois pisos estritos. A compatibilidade da aplicação fica limitada no
+floor commit. Depois da ativação, retorno da autoridade só é admissível com prova
+completa de que nenhuma mutação Payload-authoritative ocorreu; histórico desconhecido
+ou divergente exige recuperação no floor Payload. Receipts dessa decisão ainda não
+existem e não são implementados nesta tarefa.
+
+O state/proof atual continua exclusivamente `preauthority`, autoridade
+`legacy`/epoch `1` e worker held. `cmsStatus=migrated` significa somente o marco de
+instalação/recuperação existente; não conclui importação Owner News, não sela run e
+não autoriza tráfego. P2–P8 e B0 permanecem pendentes. Todos os campos de autorização
+de instalação, deployment, produção e operação destrutiva continuam falsos, e
+`release_not_preflighted` permanece incondicional.
+
 ## 2. Estratégia de PRs e gates
 
 | PR | Resultado | Produção ao final |
@@ -52,7 +93,7 @@ edições.
 | 1 | Contratos B0 reais: source, segurança e fence | Somente observação; mutações recusadas |
 | 2 | Backup/restore B0 e rollback legado | Somente prova; instalação recusada |
 | 3 | Instalação recuperável, floor, B1 e dispatch | CMS privado/parado; sem autoridade |
-| 4 | Estados operacionais e recuperação populated | CMS privado; authority legacy |
+| 4 | Estados operacionais e recuperação populated | Projeção futura implementada; sem ativação |
 | 5 | Importador integral e reconciliação | Importação sombra; agendas suspensas |
 | 6 | Cobertura, drain, seal, CAS e worker | Mecânica pronta; cutover ainda desautorizado |
 | 7 | Ensaio blue-green completo | Candidato qualificável; produção inalterada |
@@ -91,59 +132,51 @@ acionado com autorização correspondente.
 **PR 1 — primeiro commit documental/contratual**
 
 **Files:**
+- Modify: `docs/superpowers/plans/2026-10-23-payload-cms-first-production-go-live.md`
 - Modify: `docs/operations/payload-pendencias-e-plano-de-conclusao-2026-10-14.md`
 - Modify: `docs/operations/deployment.md`
 - Modify: `docs/operations/payload-runtime-recovery.md`
-- Modify: `tests/unit/payload-operations.test.mjs`
+- Modify: `docs/operations/owner-news-authority.md` only for terminology/cross-reference if needed
 - Modify: `tests/unit/payload-control.test.mjs`
+- Modify: `tests/unit/payload-operations.test.mjs` only if a genuine no-effects boundary is missing
 
-**Step 1: escrever testes de contrato que falham**
+**Step 1: escrever testes negativos de contrato**
 
-Cobrir a máquina de estados esperada, sem implementar transições ainda:
-
-```text
-legacy_active
-  -> payload_installed_closed
-  -> payload_importing_frozen
-  -> payload_sealed
-  -> payload_active_worker_held
-  -> payload_active
-
-qualquer estado ambíguo/desconhecido -> closed
-```
-
-Exigir invariantes:
-
-- autoridade permanece `legacy` até CAS selado;
-- CMS/worker não recebem tráfego antes de readiness e seal;
-- agendas importadas entram `suspended`;
-- worker só sai de held após aceite próprio;
-- fallback para legacy é proibido após primeira mutação nativa;
-- freeze editorial e quiescência de quatro stores são provas distintas.
+Sem implementar transições positivas, testar os validadores reais de state/proof
+atuais. Eles devem recusar campos/fases da projeção operacional, autoridade diferente
+de `legacy` no preauthority, epoch diferente de `1`, campos de seal e worker liberado.
+Também provar que nenhum state atual reinterpreta `cmsStatus=migrated` como conclusão
+da importação Owner News. Preservar separadamente o teste do grafo real de autoridade,
+inclusive `payload_frozen`.
 
 Rodar:
 
 ```sh
-node --test tests/unit/payload-operations.test.mjs tests/unit/payload-control.test.mjs
+node --test tests/unit/payload-control.test.mjs tests/unit/payload-operations.test.mjs \
+  tests/unit/owner-news-cutover.test.mjs
 ```
 
-Confirmar RED por estados/transições ainda ausentes, não por erro de fixture.
+Confirmar RED primeiro pela terminologia incorreta deste documento, não por erro de
+fixture nem pela ausência intencional das transições positivas futuras.
 
 **Step 2: documentar o contrato operacional**
 
-Registrar os estados, atores autorizados, entradas, saídas, receipts e motivos de
-recusa. Marcar explicitamente P2–P8/B0 como pendentes; esta tarefa não muda
-`deploymentAuthorized`, `productionAuthorized` ou `release_not_preflighted`.
+Registrar a separação entre projeção de orquestração, autoridade Portal, state/proof
+preauthority e planos de tráfego. Marcar explicitamente P2–P8/B0 como pendentes; esta
+tarefa não muda `deploymentAuthorized`, `productionAuthorized` ou
+`release_not_preflighted`.
 
-**Step 3: ajustar somente validadores puros necessários para materializar o contrato**
+**Step 3: preservar a fronteira de implementação**
 
-Não adicionar dispatch nem mutação. Testes devem provar que campos extras, estado
-desconhecido, epoch regressivo, seal divergente e worker liberado cedo recusam.
+Não ajustar validadores, production code, dispatch, journal/proofs, CMS, Portal,
+workflows, Compose, Nginx, receiver ou deploy. A implementação positiva da projeção e
+suas transições pertence integralmente à Task 5.
 
 **Step 4: verificar e commitar**
 
 ```sh
-node --test tests/unit/payload-operations.test.mjs tests/unit/payload-control.test.mjs
+node --test tests/unit/payload-control.test.mjs tests/unit/payload-operations.test.mjs \
+  tests/unit/owner-news-cutover.test.mjs
 npm run verify
 git diff --check
 git commit -m "docs(payload): freeze first go-live state contract"
@@ -335,9 +368,11 @@ Reentrada deve distinguir criado, confirmado, desconhecido e incompatível.
 
 **Step 3: implementar floor e B1**
 
-Após floor durável, criar backup B1 coerente dos quatro stores. Recuperação
-pós-floor nunca restaura aplicação incompatível nem autoridade legacy sobre dados
-nativos. `data_verified_readiness_pending` continua fechado.
+Após floor durável, criar backup B1 coerente dos quatro stores. Recuperação pós-floor
+nunca restaura aplicação abaixo do floor de compatibilidade. Retorno de autoridade
+depois da ativação requer prova completa de zero mutação Payload-authoritative;
+histórico desconhecido/divergente usa recovery Payload. `data_verified_readiness_pending`
+continua fechado.
 
 **Step 4: substituir a negação incondicional por gate fechado**
 
@@ -394,9 +429,11 @@ aceitos.
 
 **Step 1: escrever transições e negativos**
 
-Versionar separadamente host schema, install binding, fingerprint, protocolo V2 e
-extensão operacional. Testar os estados definidos na Task 1 e recusar skip, replay,
-epoch regressivo, proof antigo e combinação desconhecida.
+Implementar aqui, e não na Task 1, a projeção futura de orquestração. Versionar
+separadamente host schema, install binding, fingerprint, protocolo V2 e extensão
+operacional. Testar os seis marcos definidos na Task 1 e recusar skip, replay, epoch
+regressivo, proof antigo e combinação desconhecida sem efeitos. Não duplicar nem
+substituir os modos reais `legacy`, `frozen`, `payload` e `payload_frozen`.
 
 **Step 2: implementar proofs assinadas e reentrada**
 
@@ -408,7 +445,8 @@ reconciliação; nunca repete mutação cegamente.
 
 Em Linux isolado, criar conteúdo, versões, mídia e agendas; executar backup e dois
 restores; comparar os quatro stores e ledgers. Worker fica held. Simular falha após
-mutação nativa e provar que recovery não faz downgrade para legacy.
+ativação e provar que retorno de autoridade exige evidência completa de zero mutação
+Payload-authoritative; resultado desconhecido/divergente permanece no floor Payload.
 
 **Step 4: verificar e commitar**
 
@@ -450,6 +488,12 @@ git commit -m "feat(payload): add recoverable operational phases"
 Testar e implementar RPC bootstrap com target físico e source instance distintos,
 lock `7194030`, grants mínimos e COMMIT confirmado antes da transação Payload. O
 runtime/importador não recebe INSERT direto indevido nas tabelas de controle.
+
+Esta Task também implementa a capacidade bounded de importação base em sombra sob
+autoridade `legacy`, sempre vinculada ao source snapshot, run, manifest e epoch
+exatos. Esse caminho não publica rota, não abre writes e não libera worker. Depois do
+CAS `legacy -> frozen`, somente delta, reconciliação e seal do mesmo binding podem
+prosseguir; seal e CAS de ativação continuam fora desta Task.
 
 **Step 2: corrigir runs e hashes**
 
@@ -627,9 +671,10 @@ Não substituir dependência real por double não declarado.
 **Step 3: ensaiar falhas e rollback**
 
 Injetar falha em backup final, delta, seal, CAS, readiness, publicação da rota,
-smoke e liberação do worker. Antes da primeira mutação nativa, provar fallback
-legacy; depois, provar recuperação no floor Payload. Medir freeze editorial e
-exigir `<= 30 minutos`.
+smoke e liberação do worker. Provar compatibilidade da aplicação no floor commit e,
+após ativação, permitir retorno de autoridade somente com prova completa de zero
+mutação Payload-authoritative; histórico desconhecido/divergente deve recuperar no
+floor Payload. Medir freeze editorial e exigir `<= 30 minutos`.
 
 **Step 4: publicar evidência sanitizada no candidate-only**
 
@@ -771,20 +816,23 @@ cancelar, abrir nova PR e qualificar novo candidato.
 **Step 1: iniciar e manter o Portal em legacy**
 
 Acionar o dispatch protegido com os seletores exatos do candidato. Adquirir lease.
-Instalar CMS blue-green privado, banco e mídia; manter rota pública fechada, worker
-held e authority legacy. Confirmar readiness privada.
+Instalar CMS blue-green privado, banco e mídia; manter rota pública do CMS fechada,
+browser/editor fechado, worker held e authority legacy. Confirmar readiness privada
+autenticada; tráfego privado de readiness/controle/importação não publica o CMS.
 
 **Step 2: importar acervo em sombra**
 
 Executar importação base e reconciliação enquanto o Portal continua disponível.
 Nenhuma divergência de IDs, bytes, contagens, referências, versões ou agendas pode
-ser aceita. Falha encerra antes do freeze.
+ser aceita. A importação base em sombra exige binding exato a source snapshot, run,
+manifest e epoch. Falha encerra antes do freeze.
 
 **Step 3: iniciar freeze editorial**
 
 Registrar timestamp monotônico. Bloquear somente criação/edição/publicação de Owner
 News; manter leituras e demais áreas do Portal. Drenar writers em andamento e provar
-o fence antes de qualquer etapa destrutiva.
+o fence antes de qualquer etapa destrutiva. Executar CAS `legacy -> frozen`; delta,
+reconciliação e seal exigem essa autoridade `frozen`.
 
 **Step 4: backup final e delta**
 
@@ -793,7 +841,7 @@ importar delta final; reconciliar novamente. Seal só pode usar o run/delta exat
 
 **Step 5: selar e trocar authority**
 
-Executar seal, CAS curto `legacy -> payload`, confirmação durável fresca e auditoria.
+Executar seal, CAS de ativação `frozen -> payload`, confirmação durável fresca e auditoria.
 Se o resultado do COMMIT for desconhecido, manter escrita fechada e reconciliar em
 nova sessão; nunca repetir CAS cegamente.
 
@@ -810,9 +858,9 @@ Publicar `/editorial` para o CMS ready. Executar:
 - leitura independente no Portal;
 - validação de TLS, headers, assets e permissões.
 
-Falha antes de mutação nativa permite fallback legacy testado. Falha depois de
-mutação nativa usa recovery Payload; não fazer downgrade de autoridade que descarte
-edições.
+Falha respeita o floor de compatibilidade da aplicação. Depois da ativação, retorno
+da autoridade exige prova completa de nenhuma mutação Payload-authoritative; estado
+desconhecido ou divergente usa recovery Payload, sem downgrade que descarte edições.
 
 **Step 7: liberar worker e reabrir escritas**
 

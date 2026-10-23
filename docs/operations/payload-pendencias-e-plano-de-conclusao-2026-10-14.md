@@ -20,6 +20,38 @@ local revisada. Não houve nova consulta ao CI, browser público ou VPS nesta
 atualização; nenhum serviço, SSH, banco, Docker, deploy ou ambiente produtivo foi
 alterado.
 
+### Contrato congelado do primeiro go-live
+
+Os rótulos `legacy_active`, `payload_installed_closed`,
+`payload_importing_frozen`, `payload_sealed`, `payload_active_worker_held` e
+`payload_active` são uma projeção futura e não exaustiva de orquestração/marcos. Não
+são modos da autoridade Portal, valores aceitos pelo state/proof assinado atual nem
+uma máquina completa de recovery. A implementação positiva pertence a P4/Task 5;
+esta edição mantém somente o contrato documental e regressões negativas.
+
+A autoridade Portal progride literalmente `legacy -> frozen -> payload`. A base pode
+ser importada em sombra sob `legacy` somente pela capacidade bounded futura de
+P5/Task 6, vinculada a source snapshot, run, manifest e epoch. Delta, reconciliação e
+seal exigem `frozen`, e o CAS de ativação é `frozen -> payload`. `payload_frozen`
+continua um modo válido fora do happy path. Projeção futura desconhecida é recusada
+sem efeitos, nunca convertida em “closed”.
+
+Leitor público, writes de browser/editor, readiness/controle/importação privados,
+manutenção e worker são gates distintos. Readiness/controle/importação privados
+autenticados podem ser permitidos antes do seal; isso não publica o CMS, não abre
+editor e não libera worker. O leitor público permanece no legado antes da ativação;
+sob `frozen`, writes editoriais ficam fechados.
+
+Há dois floors de rollback: compatibilidade de aplicação no floor commit e retorno
+de autoridade depois da ativação somente com prova completa de zero mutação
+Payload-authoritative. Histórico desconhecido/divergente exige recovery no floor
+Payload. Receipts dessa decisão ainda não existem. O state/proof existente permanece
+somente preauthority, autoridade `legacy`/epoch `1` e worker held;
+`cmsStatus=migrated` não significa importação Owner News concluída.
+
+Nada nesta edição muda P2–P8/B0, instalação, deployment ou produção. Todos os campos
+de autorização continuam `false` e `release_not_preflighted` continua incondicional.
+
 ### Legenda de estado e prioridade
 
 - **CONFIRMADO:** evidência identificada para aquele commit/ambiente/escopo.
@@ -115,14 +147,14 @@ identificada por commit, ambiente, resultado e caminho privado/sanitizado adequa
 
 | ID / prioridade / estado | Dependência | Próxima ação e entregável | Aceite exato / evidência |
 | --- | --- | --- | --- |
-| P4-01 · A · PENDENTE | P3 | Estender estado/proofs para protocolo instalado, preparação frozen, ativação sealed, Payload active e Payload frozen. | Transições assinadas exatas; estados desconhecidos recusados; schema host, binding, fingerprint, protocolo V2 e extensão operacional versionados separadamente. R01/R02/R05. |
-| P4-02 · A · BLOQUEADO | P4-01 | Qualificar backup/restore populated e active em Linux isolado. | Quatro stores, histórico, uploads, ledger e agendas preservados; worker held; não voltar a autoridade legacy depois de edições nativas. R01/R02/R05. |
+| P4-01 · A · PENDENTE | P3 | Implementar a projeção futura de orquestração sem duplicar os modos de autoridade Portal. | Transições assinadas exatas na Task 5; estados desconhecidos recusados sem efeitos; schema host, binding, fingerprint, protocolo V2 e extensão operacional versionados separadamente. R01/R02/R05. |
+| P4-02 · A · BLOQUEADO | P4-01 | Qualificar backup/restore populated e active em Linux isolado. | Quatro stores, histórico, uploads, ledger e agendas preservados; worker held; compatibilidade limitada no floor e retorno de autoridade pós-ativação somente com prova completa de zero mutação Payload-authoritative. R01/R02/R05. |
 
 ### P5 — importação fiel e reconciliação real
 
 | ID / prioridade / estado | Dependência | Próxima ação e entregável | Aceite exato / evidência |
 | --- | --- | --- | --- |
-| P5-01 · A · PENDENTE | P4-01 | Integrar caller controller: bootstrap RPC e COMMIT confirmado antes da transação Payload. | Identidade física target + source instance distintas; lock 7194030 sem bloqueio circular; grants reais; controller/runtime sem INSERT direto indevido. R05. |
+| P5-01 · A · PENDENTE | P4-01 | Integrar caller controller e capacidade bounded de base-import em sombra sob `legacy`, vinculada a source snapshot/run/manifest/epoch. | Identidade física target + source instance distintas; lock 7194030 sem bloqueio circular; grants reais; controller/runtime sem INSERT direto indevido; nenhum tráfego público/editor ou worker aberto. Delta/reconciliação/seal permanecem sob `frozen`. R05. |
 | P5-02 · A · PENDENTE | P5-01 | Corrigir criação/atualização incompatível de `news-migration-runs`, incluindo `updatedAt`. | Fluxo real respeita ACLs, hooks e protocolo; não remover guards nem conceder acesso amplo para passar. `cms/src/migration/import-news.ts`, coleções e R05. |
 | P5-03 · A · PENDENTE | P5-02 | Alinhar projeções/hashes de conteúdo, representação nativa e legado. | Hash esperado e observado usam a mesma projeção; hashes históricos/proveniência/snapshot nativo permanecem distintos e verificáveis. `plan.ts`, `destination.ts`, R05/R06. |
 | P5-04 · B · PENDENTE | P5-03 | Fechar `publishedAt`, precisão temporal e comportamento para home ausente. | Datas originais preservadas, sem fabricar publicação; exceções explícitas para precisão; decidir ausência versus home vazio sem descarte silencioso. R05/R06. |
