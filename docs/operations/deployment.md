@@ -205,6 +205,13 @@ não publica API/cron, não gera o artefato legacy `image-digests` e nunca inici
 permanece: push para `main` ou dispatch na `main` com a opção omitida/desativada.
 Pull requests e refs que não sejam branches não publicam imagens.
 
+No modo normal, espera-se que o job `isolated-b0-recovery` seja ignorado. Por
+isso, `Deploy production` usa deliberadamente `!cancelled()` e a exigência direta
+de `needs.validate.result == 'success'`, evitando que a propagação implícita do
+ancestral ignorado impeça o deploy depois de uma validação bem-sucedida.
+Validação com falha ou cancelada e os modos especiais `cms_image_only` e
+`publish_candidate_only` continuam inelegíveis para produção.
+
 #### Candidato completo com aceite da sessão editorial API v2
 
 Para validar o contrato API v2 e publicar, sem implantar, um conjunto candidato
