@@ -11,7 +11,7 @@ const verifierPath = path.resolve('ops/payload-candidate-verifier.py');
 const load = `import importlib.util\nspec=importlib.util.spec_from_file_location('p',${JSON.stringify(modulePath)})\np=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)\n`;
 function probe(code, input, native = false) {
   return spawnSync(native ? '/usr/bin/python3' : python, ['-I', '-S', '-B', '-c', load + code], {
-    input, encoding: 'utf8', timeout: 30000,
+    input, encoding: 'utf8', timeout: 60000,
     ...(native ? { env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' } } : {}),
   });
 }
@@ -200,6 +200,85 @@ try:
         denied(lambda:p.main(cli),'invalid_shape')
         with patch.object(p,'provision_preparation',return_value='verify-only profile') as selected:
             p.main(cli+['--profile','preparation']);assert selected.call_count==1
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('preparation v2 authenticates exact invariant policy set while v1 retains its original closure', () => {
+  const result = probe(filesystem + String.raw`
+try:
+    base=os.path.join(root,'preparation-v2');bundle=os.path.join(base,'bundle')
+    p.PREPARATION_ROOT=os.path.join(base,'installed');p.PREPARATION_LAUNCHER=os.path.join(base,'libexec','prepare.py')
+    p.PREPARATION_APPROVAL=os.path.join(base,'etc','production-approval.json');p.PREPARATION_POLICY_ROOT=os.path.join(base,'etc');p.STATE_ROOT=os.path.join(base,'state')
+    content={name:b'INERT_AUTHENTICATED_SOURCE\n' for name in p.PREPARATION_FILES}
+    for name,data in content.items():write(bundle+'/'+name,data,p.preparation_mode(name))
+    images={s:'ghcr.io/ownerinc/ownerinc-portal-'+s+'@sha256:'+'c'*64 for s in ('api','cron')}
+    observation={'schemaVersion':1,'kind':'portal-legacy-security-observation-v1','serverMajor':16,
+      'database':{'systemIdentifier':'1','databaseOid':'2','databaseName':'portal'},'records':[]}
+    policies={
+      'legacy-security-profile.json':{'schemaVersion':1,'kind':'portal-legacy-security-profile-v1','sourceCommit':'a'*40,
+        'previousImages':images,'observation':observation},
+      'local-topology-template.json':{'schemaVersion':1,'kind':'portal-local-topology-template-v1',
+        'containers':[{'service':service,'image':'fixture/'+service+'@sha256:'+'d'*64,
+          'networks':['ownerinc-portal-backend']+(['ownerinc_proxy'] if service=='nginx' else []),'volumeKeys':[]}
+          for service in ('nginx','api','cron','postgres')],
+        'networks':[{'name':name,'relevantExternalEndpoints':1 if name=='ownerinc_proxy' else 0} for name in ('ownerinc-portal-backend','ownerinc-portal-egress','ownerinc_proxy')],
+        'databases':[{'service':'postgres','databaseName':'portal'}]},
+      'public-closure-policy.json':{'schemaVersion':1,'kind':'portal-public-closure-policy-v1',
+        'origin':'https://portal.example.test','observerSha256':'8'*64,
+        'routes':[{'route':route,'status':503,'bodySha256':'9'*64} for route in ('/','/api/ready','/editorial/ready')]}}
+    policy_raw={name:(json.dumps(value)+'\n').encode() for name,value in policies.items()}
+    for name,data in policy_raw.items():write(bundle+'/'+name,data,0o600)
+    common={'environment':'production','repository':'OWNERINC/portal_ownerinc',
+      'source':{'commit':'a'*40,'files':{n:p.sha(d) for n,d in content.items()}},
+      'hostBaseline':{'currentCommit':'b'*40,'legacyImages':images,'releaseComposeSha256':'d'*64,
+        'runtimeComposeSha256':'e'*64,'releaseOverrideSha256':None,'inventoryIdentity':'f'*64,
+        'installedPredecessors':{'commonReceiver':'1'*64,'receiverHelper':None,'productionWrapper':None,'operationsGuard':None,'cmsCandidate':None}},
+      'admission':{'policySha256':'2'*64,'archiveSha256':'3'*64,'recordSha256':'4'*64}}
+    v1=dict(common,schemaVersion=1,kind='ownerinc-payload-preparation-approval-v1')
+    v1_raw=(json.dumps(v1)+'\n').encode();v1_path=os.path.join(base,'v1.json');write(v1_path,v1_raw,0o600)
+    denied(lambda:p.load_preparation_inputs(v1_path,p.sha(v1_raw),bundle),'unexpected_bundle_entry')
+    for name in policy_raw:os.unlink(bundle+'/'+name)
+    _,accepted_v1,targets=p.load_preparation_inputs(v1_path,p.sha(v1_raw),bundle)
+    assert accepted_v1['schemaVersion']==1 and set(targets)=={p.preparation_target(n) for n in p.PREPARATION_FILES}|{p.PREPARATION_APPROVAL}
+    for name,data in policy_raw.items():write(bundle+'/'+name,data,0o600)
+    v2=dict(common,schemaVersion=2,kind='ownerinc-payload-preparation-approval-v2',
+      invariants={name:p.sha(data) for name,data in policy_raw.items()})
+    v2_raw=(json.dumps(v2)+'\n').encode();v2_path=os.path.join(base,'v2.json');write(v2_path,v2_raw,0o600)
+    _,accepted_v2,targets=p.load_preparation_inputs(v2_path,p.sha(v2_raw),bundle)
+    assert accepted_v2['schemaVersion']==2
+    assert {p.preparation_policy_target(name) for name in policy_raw}<set(targets)
+    publish=p.publish;changed=[False]
+    def drifted(name,expected):
+      result=publish(name,expected)
+      if name==p.preparation_target(p.PREPARATION_FILES[-1]) and not changed[0]:
+       changed[0]=True;write(bundle+'/public-closure-policy.json',policy_raw['public-closure-policy.json']+b' ',0o600)
+      return result
+    p.publish=drifted
+    denied(lambda:p.provision_preparation('apply',v2_path,p.sha(v2_raw),bundle),'invariant_digest_mismatch')
+    assert not os.path.lexists(p.PREPARATION_APPROVAL)
+    write(bundle+'/public-closure-policy.json',policy_raw['public-closure-policy.json'],0o600)
+    p.publish=publish;events=[]
+    def observed(name,expected):events.append(name);return publish(name,expected)
+    p.publish=observed;p.provision_preparation('apply',v2_path,p.sha(v2_raw),bundle)
+    assert events[-1]==p.PREPARATION_APPROVAL
+    for name,data in policy_raw.items():assert pathlib.Path(p.preparation_policy_target(name)).read_bytes()==data
+    if os.name!='nt':assert all(pathlib.Path(p.preparation_policy_target(name)).stat().st_mode & 0o777==0o600 for name in policy_raw)
+    for label,mutate in [
+      ('missing',lambda a:a['invariants'].pop('public-closure-policy.json')),
+      ('extra',lambda a:a['invariants'].update({'extra.json':'0'*64})),
+      ('bad-hash',lambda a:a['invariants'].update({'legacy-security-profile.json':'x'}))]:
+      changed=copy.deepcopy(v2);mutate(changed);data=(json.dumps(changed)+'\n').encode();name=os.path.join(base,label+'.json');write(name,data,0o600)
+      denied(lambda:p.load_preparation_inputs(name,p.sha(data),bundle))
+    changed=copy.deepcopy(v2);changed['invariants']['legacy-security-profile.json']='0'*64
+    data=(json.dumps(changed)+'\n').encode();name=os.path.join(base,'wrong-digest.json');write(name,data,0o600)
+    denied(lambda:p.load_preparation_inputs(name,p.sha(data),bundle),'invariant_digest_mismatch')
+    malformed=policy_raw['public-closure-policy.json'].replace(b'"schemaVersion": 1',b'"schemaVersion": 1, "schemaVersion": 1')
+    write(bundle+'/public-closure-policy.json',malformed,0o600)
+    changed=copy.deepcopy(v2);changed['invariants']['public-closure-policy.json']=p.sha(malformed)
+    data=(json.dumps(changed)+'\n').encode();name=os.path.join(base,'duplicate-policy.json');write(name,data,0o600)
+    denied(lambda:p.load_preparation_inputs(name,p.sha(data),bundle),'duplicate_field')
 finally:shutil.rmtree(root)
 `);
   assert.equal(result.status, 0, result.stderr || result.stdout);

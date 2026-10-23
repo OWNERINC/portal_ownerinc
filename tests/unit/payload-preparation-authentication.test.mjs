@@ -160,6 +160,66 @@ with patch.object(l.os,'name','posix'),patch.object(l.os,'geteuid',return_value=
 `);
 });
 
+test('fixed-path invariant loader grants no authority to v1 and validates digest-bound v2 material only', () => {
+  probe(String.raw`
+assert approval['schemaVersion']==1
+try:l.load_invariant_material(approval,p)
+except l.VerificationError:pass
+else:raise AssertionError('v1 approval gained invariant authority')
+policies={
+ 'legacy-security-profile.json':{'schemaVersion':1,'kind':'portal-legacy-security-profile-v1','sourceCommit':'1'*40,
+  'previousImages':{k:images[k] for k in ('api','cron')},
+  'observation':{'schemaVersion':1,'kind':'portal-legacy-security-observation-v1','serverMajor':16,
+   'database':{'systemIdentifier':'1','databaseOid':'2','databaseName':'portal'},'records':[]}},
+ 'local-topology-template.json':{'schemaVersion':1,'kind':'portal-local-topology-template-v1',
+  'containers':[{'service':service,'image':'fixture/'+service+'@sha256:'+'d'*64,'networks':['ownerinc-portal-backend'],'volumeKeys':[]} for service in ('nginx','api','cron','postgres')],
+  'networks':[{'name':name,'relevantExternalEndpoints':0} for name in ('ownerinc-portal-backend','ownerinc-portal-egress','ownerinc_proxy')],
+  'databases':[{'service':'postgres','databaseName':'portal'}]},
+ 'public-closure-policy.json':{'schemaVersion':1,'kind':'portal-public-closure-policy-v1','origin':'https://portal.example.test',
+  'observerSha256':'8'*64,'routes':[{'route':route,'status':503,'bodySha256':'9'*64} for route in ('/','/api/ready','/editorial/ready')]}}
+approval['schemaVersion']=2;approval['kind']='ownerinc-payload-preparation-approval-v2';approval['invariants']={}
+p.PREPARATION_POLICY_ROOT='/etc/ownerinc/payload-preparation'
+for name,value in policies.items():
+ data=raw(value);put(p.preparation_policy_target(name),data,0o600);approval['invariants'][name]=p.sha(data)
+loaded=l.load_invariant_material(approval,p)
+assert loaded==policies and all(not any(key in value for key in ('profileMatches','observationsMatched','credentialVerified','nonDockerCoverageVerified','installationExecuted','deploymentAuthorized','productionAuthorized','destructiveOperationAuthorized')) for value in loaded.values())
+assert all(name not in str(loaded) for name in ('nonce','processStart','installBindingSha256','containerId'))
+saved=store[p.preparation_policy_target('public-closure-policy.json')]
+put(p.preparation_policy_target('public-closure-policy.json'),saved[0]+b' ',0o600)
+denied(lambda:l.load_invariant_material(approval,p));store[p.preparation_policy_target('public-closure-policy.json')]=saved
+bad=copy.deepcopy(policies['local-topology-template.json']);bad['nonce']='0'*64;data=raw(bad)
+put(p.preparation_policy_target('local-topology-template.json'),data,0o600);approval['invariants']['local-topology-template.json']=p.sha(data)
+denied(lambda:l.load_invariant_material(approval,p))
+`);
+});
+
+test('full v2 authentication binds installed invariants with approval and closure and rechecks their bytes', () => {
+  probe(String.raw`
+policies={
+ 'legacy-security-profile.json':{'schemaVersion':1,'kind':'portal-legacy-security-profile-v1','sourceCommit':'1'*40,
+  'previousImages':{k:images[k] for k in ('api','cron')},'observation':{'schemaVersion':1,
+  'kind':'portal-legacy-security-observation-v1','serverMajor':16,'database':{'systemIdentifier':'1','databaseOid':'2','databaseName':'portal'},'records':[]}},
+ 'local-topology-template.json':{'schemaVersion':1,'kind':'portal-local-topology-template-v1',
+  'containers':[{'service':service,'image':'fixture/'+service+'@sha256:'+'d'*64,'networks':['ownerinc-portal-backend'],'volumeKeys':[]} for service in ('nginx','api','cron','postgres')],
+  'networks':[{'name':name,'relevantExternalEndpoints':0} for name in ('ownerinc-portal-backend','ownerinc-portal-egress','ownerinc_proxy')],
+  'databases':[{'service':'postgres','databaseName':'portal'}]},
+ 'public-closure-policy.json':{'schemaVersion':1,'kind':'portal-public-closure-policy-v1','origin':'https://portal.example.test',
+  'observerSha256':'8'*64,'routes':[{'route':route,'status':503,'bodySha256':'9'*64} for route in ('/','/api/ready','/editorial/ready')]}}
+approval['schemaVersion']=2;approval['kind']='ownerinc-payload-preparation-approval-v2';approval['invariants']={}
+for name,value in policies.items():
+ data=raw(value);put(p.preparation_policy_target(name),data,0o600);approval['invariants'][name]=p.sha(data)
+bind()
+identity=types.SimpleNamespace(validate_portal_legacy_security_profile=lambda value:value,
+ validate_portal_local_topology_template=lambda value:value,validate_portal_public_closure_policy=lambda value:value)
+l.load_runtime_captured=lambda captured:identity
+material=l._authenticated_material();assert material[7]==policies
+name=p.preparation_policy_target('public-closure-policy.json');saved=store[name];put(name,saved[0]+b' ',0o600)
+denied(l._authenticated_material);store[name]=saved
+changed=copy.deepcopy(approval);changed['invariants']['public-closure-policy.json']='0'*64;put(l.APPROVAL,raw(changed),0o600)
+denied(l._authenticated_material)
+`);
+});
+
 test('root host fixture still rejects unsafe POSIX runtime metadata and invalid signed journals (observation doubles)', () => {
   probe(hostModel + String.raw`
 install_state(initial);run_host()

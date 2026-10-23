@@ -62,7 +62,7 @@ rows.append({'kind':'acl',**default,'grantor':'portal_owner','grantee':'PUBLIC',
 for row in rows:
  if row['kind']=='effective' and row.get('objectType')=='column' and row['name']=='user_import_jobs' and row['role']=='portal_cron' and row['privilege']=='SELECT':row['allowed']=True
 observation={'schemaVersion':1,'kind':'portal-legacy-security-observation-v1','serverMajor':16,'database':database,'records':rows}
-profile={'kind':'portal-legacy-security-profile-v1','sourceCommit':binding['sourceCommit'],
+profile={'schemaVersion':1,'kind':'portal-legacy-security-profile-v1','sourceCommit':binding['sourceCommit'],
  'previousImages':copy.deepcopy(binding['previousImages']),'observation':copy.deepcopy(observation)}
 def check(value=observation,expected=profile):
  return r.check_portal_legacy_security_baseline(value,body,approval,record,inventory,authority,expected)
@@ -124,6 +124,18 @@ for key in ('credentialVerified','clusterRoleMutationAuthorized','rollbackAuthor
 assert 'legacy_capability_profile_unapproved' in check(expected=None)['blockers']
 assert 'legacy_security_pg16_qualification_required' in result['blockers']
 assert 'records' not in result and 'legacy_credentials_unverified' in result['blockers']
+`);
+});
+
+test('legacy invariant profile is separately versioned, strict and carries no authorization claims', () => {
+  probe(String.raw`
+validated=r.validate_portal_legacy_security_profile(profile)
+assert {k:validated[k] for k in ('schemaVersion','kind','sourceCommit','previousImages')}=={k:profile[k] for k in ('schemaVersion','kind','sourceCommit','previousImages')}
+assert validated['observation']==r.validate_portal_legacy_security_observation(profile['observation'])
+for name in ('profileMatches','credentialVerified','rollbackAuthorized','installationExecuted','deploymentAuthorized','productionAuthorized'):
+ assert name not in validated
+for mutate in (lambda p:p.update(schemaVersion=2),lambda p:p.update(nonce='0'*64),lambda p:p.pop('previousImages')):
+ wrong=copy.deepcopy(profile);mutate(wrong);rejected(lambda:r.validate_portal_legacy_security_profile(wrong))
 `);
 });
 

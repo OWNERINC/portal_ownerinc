@@ -30,18 +30,18 @@ host.extend({'id':i*64,'portalProject':False,'portalNameClaim':False,'portalVolu
 snapshot={'host':host,'containers':containers,'networks':networks}
 database={'service':'postgres','containerId':'4'*64,'database':{'systemIdentifier':'123','databaseOid':'456','databaseName':'portal'},
  'clients':0,'activeQueries':0,'openTransactions':0,'preparedTransactions':0,'backgroundWriters':0,'backgroundCoverageComplete':True}
-closure={'kind':'portal-public-closure-profile-v1','context':copy.deepcopy(context),'origin':'https://portal.example.test',
- 'observerSha256':'8'*64,'nonDockerCoverageVerified':True,
+closure={'schemaVersion':1,'kind':'portal-public-closure-policy-v1','origin':'https://portal.example.test',
+ 'observerSha256':'8'*64,
  'routes':[{'route':route,'status':503,'bodySha256':'9'*64} for route in r.FENCE_ROUTES]}
 external={'observerSha256':'8'*64,'independent':True,'nonce':context['nonce'],'started':110,'ended':140,
  'requests':[dict(item,origin=closure['origin'],method='GET',tlsVerified=True,redirected=False,transportError='none') for item in closure['routes']]}
 observation={'kind':'portal-fence-observation-v1','mode':'destructive','context':copy.deepcopy(context),'started':100,'ended':150,
  'passes':[copy.deepcopy(snapshot),copy.deepcopy(snapshot)],'databases':[copy.deepcopy(database)],'external':external}
-identity_fields=('id','service','imageId','image','receiptSha256','networks','volumeKeys')
-topology={'kind':'portal-fence-topology-v1','context':copy.deepcopy(context),
- 'containers':[{k:copy.deepcopy(c[k]) for k in identity_fields} for c in containers],
- 'networks':[{'name':n['name'],'id':n['id'],'relevantEndpointIds':[ep['id'] for ep in n['endpoints'] if ep['relevant']]} for n in networks],
- 'databases':[{k:copy.deepcopy(database[k]) for k in ('service','containerId','database')}]}
+topology={'schemaVersion':1,'kind':'portal-local-topology-template-v1',
+ 'containers':[{'service':c['service'],'image':c['image'],'networks':[n['name'] for n in networks if n['id'] in c['networks']],
+  'volumeKeys':copy.deepcopy(c['volumeKeys'])} for c in containers],
+ 'networks':[{'name':n['name'],'relevantExternalEndpoints':sum(1 for ep in n['endpoints'] if ep['relevant'] and ep['id'] not in {c['id'] for c in containers})} for n in networks],
+ 'databases':[{'service':'postgres','databaseName':'portal'}]}
 def check(value=observation,top=topology,public=closure,now=175):
  return r.check_portal_destructive_fence(value,context,top,public,now_monotonic=now)
 def rejected(callback):
@@ -64,7 +64,8 @@ test('pure fence matches fixed synthetic projections without authorizing effects
   probe(String.raw`
 before=copy.deepcopy(observation)
 with patch.object(r,'Runtime',side_effect=AssertionError('constructor forbidden')),patch.object(r.subprocess,'run',side_effect=AssertionError('IO forbidden')),patch.object(r.STATE,'transition',side_effect=AssertionError('write forbidden')):
- result=check();assert result['observationsMatched'] and result['blockers']==[]
+ result=check();assert result['observationsMatched'] is False
+ assert result['blockers']==['fence_external_topology_unverified'],result
  assert check(r.STATE.canonical(observation))==result
  shuffled=copy.deepcopy(observation)
  for p in shuffled['passes']:
@@ -81,6 +82,26 @@ assert 'fence_external_topology_unverified' in check(public=None)['blockers']
 `);
 });
 
+test('invariant fence templates exclude ephemeral observation identity and remain non-authorizing', () => {
+  probe(String.raw`
+template={'schemaVersion':1,'kind':'portal-local-topology-template-v1',
+ 'containers':[{'service':c['service'],'image':c['image'],'networks':[n['name'] for n in networks if n['id'] in c['networks']],
+  'volumeKeys':copy.deepcopy(c['volumeKeys'])} for c in containers],
+ 'networks':[{'name':n['name'],'relevantExternalEndpoints':sum(1 for ep in n['endpoints'] if ep['relevant'] and ep['id'] not in {c['id'] for c in containers})} for n in networks],
+ 'databases':[{'service':'postgres','databaseName':'portal'}]}
+policy={'schemaVersion':1,'kind':'portal-public-closure-policy-v1','origin':closure['origin'],
+ 'observerSha256':closure['observerSha256'],'routes':copy.deepcopy(closure['routes'])}
+assert r.validate_portal_local_topology_template(template)==template
+assert r.validate_portal_public_closure_policy(policy)==policy
+encoded=json.dumps([template,policy])
+for forbidden in ('nonce','pid','processStart','device','inode','stateSha256','sequence','installBindingSha256','containerId','imageId','receiptSha256','nonDockerCoverageVerified'):
+ assert forbidden not in encoded
+for malformed in (dict(template,nonce='0'*64),dict(policy,nonDockerCoverageVerified=True),dict(template,schemaVersion=2)):
+ rejected(lambda:r.validate_portal_local_topology_template(malformed) if malformed.get('kind')==template['kind'] else r.validate_portal_public_closure_policy(malformed))
+assert not any('fence' in action for action in r.ACTION_SET)
+`);
+});
+
 test('writer states and a sentinel or absent ports cannot substitute for actual stopped nginx and bound writers', () => {
   probe(String.raw`
 for status,flags in [('running',{'running':True}),('paused',{'paused':True}),('restarting',{'restarting':True}),('dead',{'dead':True})]:
@@ -93,7 +114,7 @@ for mutate,blocker in [
  (lambda p:p['containers'][1].update(networkMode='container'),'fence_alternative_ingress_detected'),
  (lambda p:p['containers'][1].update(publishedPorts=True),'fence_alternative_ingress_detected'),
  (lambda p:p['containers'][1]['networks'].append('c'*64),'fence_alternative_ingress_detected'),
- (lambda p:p['containers'][1].update(receiptSha256='0'*64),'fence_container_receipt_mismatch'),
+  (lambda p:p['containers'][1].update(image='fixture/api@sha256:'+'0'*64),'fence_container_template_mismatch'),
  (lambda p:p['containers'].pop(0),'fence_nginx_identity_mismatch'),
  (lambda p:p['containers'][1].update(service='nginx'),'fence_unaccounted_container'),
  (lambda p:p['host'].append({'id':'0'*64,'portalProject':False,'portalNameClaim':False,'portalVolumeConsumer':True}),'fence_unaccounted_container')]:
@@ -106,7 +127,7 @@ value['sentinel']=True;rejected(lambda:check(value))
 
 test('network identities, endpoint relevance and exact two-pass context fail closed without rejecting unrelated proxy projects', () => {
   probe(String.raw`
-assert check()['observationsMatched'] # Existing unrelated shared-proxy endpoint is permitted.
+assert check()['blockers']==['fence_external_topology_unverified'],check() # Existing unrelated shared-proxy endpoint is permitted.
 for mutate,blocker in [
  (lambda p:p['networks'][0].update(id='0'*64),'fence_network_identity_mismatch'),
  (lambda p:p['networks'][0].update(internal=False),'fence_network_identity_mismatch'),
@@ -136,7 +157,7 @@ for field,item in [('independent',False),('nonce','0'*64),('observerSha256','0'*
 value=copy.deepcopy(observation);value['external']=None
 assert 'fence_public_probe_missing' in check(value)['blockers']
 public=copy.deepcopy(closure);public['nonDockerCoverageVerified']=False
-assert 'fence_external_topology_unverified' in check(public=public)['blockers']
+rejected(lambda:check(public=public))
 public['routes'][0]['status']=200;rejected(lambda:check(public=public))
 value=copy.deepcopy(observation);value['external']['requests'].pop()
 assert 'fence_public_probe_mismatch' in check(value)['blockers']
@@ -150,8 +171,7 @@ for field in ('clients','activeQueries','openTransactions','preparedTransactions
  assert 'fence_database_not_quiescent' in check(value)['blockers']
 value=copy.deepcopy(observation);value['databases'][0]['backgroundCoverageComplete']=False
 assert 'fence_background_writers_unverified' in check(value)['blockers']
-for mutate in (lambda v:v['databases'][0].update(containerId='0'*64),
- lambda v:v['databases'][0]['database'].update(databaseOid='999'),lambda v:v.update(databases=[])):
+for mutate in (lambda v:v['databases'][0].update(containerId='0'*64),lambda v:v.update(databases=[])):
  value=copy.deepcopy(observation);mutate(value)
  assert 'fence_database_identity_mismatch' in check(value)['blockers']
 `);

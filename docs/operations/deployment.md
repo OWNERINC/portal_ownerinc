@@ -105,6 +105,26 @@ Este texto não concede autoridade. State/proof atuais continuam preauthority,
 News. Todos os campos de instalação/deployment/produção/operação destrutiva continuam
 falsos e `release_not_preflighted` permanece incondicional.
 
+#### Políticas invariantes B0 autenticadas (Task 2A; sem coleta host)
+
+O provisioning de preparação aceita o approval v1 sem alteração, apenas para a
+closure histórica. O approval v2 acrescenta hashes exatos de três JSONs privados,
+instalados como root:root `0600` em paths fixos sob
+`/etc/ownerinc/payload-preparation/`: perfil de segurança legacy, template lógico
+de topologia local e política de closure pública. A publicação é no-replace,
+approval-last e reautentica approval, source e políticas antes do passo final;
+destinos conflitantes não são corrigidos.
+
+Esses documentos contêm somente invariantes aprovados. Nonce, PID/process start,
+FD9, state/hash/sequência, install binding, IDs de containers/redes e identidades
+dinâmicas de banco pertencem a observações frescas futuras. Material de fixture
+prova apenas validadores e publicação local; não é evidência do host produtivo.
+Task 2A não executa SQL, Docker, HTTP, sockets, probes ou descoberta `/proc`, não
+adiciona ação ao dispatcher e não fornece comando de execução host. As coletas de
+segurança (2B), inventário local com Portal disponível (2C) e observer externo com
+aprovação host própria (2D) continuam pendentes. B0-01–03 e toda autorização de
+instalação/deploy/produção/destrutiva permanecem falsos.
+
 ### Receiver Payload: admissão somente (sem instalação)
 
 O receiver possui uma rota explícita de admissão, anterior à inspeção do runtime

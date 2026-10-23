@@ -28,6 +28,22 @@ conclusão de importação Owner News. State/proof permanecem preauthority,
 os campos de autorização permanecem inalterados/falsos, e
 `release_not_preflighted` permanece incondicional.
 
+### Task 2A — invariantes autenticadas não são observações
+
+O approval de preparação v2 vincula três documentos privados em paths fixos: perfil
+legacy, template lógico da topologia local e política de closure pública. O v1
+continua aceito somente para sua closure original. O loader interno lê apenas esses
+paths root-owned `0600`, exige JSON estrito, schema/kind suportados e os hashes do
+approval; caller não fornece path nem JSON.
+
+As políticas excluem valores efêmeros (nonce, processo, FD9, state, install binding,
+IDs de containers/redes e identidades observadas). Portanto, política válida não
+prova `profileMatches`, `observationsMatched`, credenciais, cobertura não-Docker ou
+B0. Evidência de teste valida apenas a fixture. Evidência produtiva exige observação
+fresca separada: segurança em 2B, topologia local Portal-available em 2C e observer
+externo/execução host separadamente aprovada em 2D. Nenhuma dessas coletas ou
+execuções é parte da Task 2A.
+
 ## P3 — inspeção de plano não é autorização de instalação
 
 ### B0-01a — envelope mínimo autenticado de contexto (TEST local/native; host pendente)

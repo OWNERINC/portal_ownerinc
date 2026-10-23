@@ -200,6 +200,19 @@ git commit -m "docs(payload): freeze first go-live state contract"
 - Modify: `.github/workflows/ci.yml`
 - Modify: `docs/operations/deployment.md`
 
+Esta tarefa é obrigatoriamente sequenciada em quatro fatias. **Task 2A** autentica
+somente políticas invariantes: approval de preparação v2, perfil de segurança
+legacy, template lógico da topologia local e política de closure pública. O approval
+v1 conserva estritamente sua closure anterior e não ganha autoridade sobre esses
+arquivos. Nonce, PID/process start, FD9, state, install binding e IDs de containers
+pertencem à observação fresca, nunca à política durável. Esta fatia não executa
+collector nem aceita B0-01, B0-02 ou B0-03.
+
+**Task 2B** implementará a coleta fresca de segurança; **Task 2C**, o inventário
+local do fence enquanto o Portal permanece disponível; **Task 2D**, o observer
+externo e a execução host separadamente aprovada. Só depois das quatro fatias e da
+evidência completa no host o gate da PR 1 pode declarar B0-01–03 aceitos.
+
 **Step 1: adicionar negativos antes da implementação**
 
 Testar source/commit divergente, lease FD9 ausente/reutilizada, approval/policy/record
@@ -212,13 +225,13 @@ installationExecuted=false
 deploymentAuthorized=false
 ```
 
-**Step 2: implementar collector bounded autenticado**
+**Step 2 (Task 2B): implementar collector bounded autenticado**
 
 Partir do envelope B0-01a existente. Vincular request/response a nonce, processo,
 FD9, source, inventory e estado; limitar tamanho; usar arquivos root-owned com
 `0700/0600`, no-follow e single-link. Observação manual copiada nunca vira approval.
 
-**Step 3: implementar perfil pré-grants e fence externo**
+**Step 3 (Tasks 2C/2D): implementar inventário local e fence externo**
 
 Observar owners, ACLs/defaults, memberships, privilégios efetivos, consumidores de
 roles e credenciais sem revelar valores. Cobrir ingress Docker, host e não-Docker
@@ -250,7 +263,8 @@ programa bloqueado.
 git commit -m "feat(payload): qualify production source and fence"
 ```
 
-**Gate PR 1:** B0-01, B0-02 e B0-03 aceitos; zero mutação produtiva.
+**Gate PR 1, somente após 2A–2D e prova host:** B0-01, B0-02 e B0-03 aceitos;
+zero mutação produtiva. A conclusão isolada da Task 2A não satisfaz esse gate.
 
 ---
 

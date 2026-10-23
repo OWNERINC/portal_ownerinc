@@ -22,6 +22,9 @@ MAX_BINARY = 200 * MAX_JSON
 PREPARATION_ROOT = '/opt/ownerinc/lib/payload-preparation'
 PREPARATION_LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
 PREPARATION_APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
+PREPARATION_POLICY_ROOT = '/etc/ownerinc/payload-preparation'
+PREPARATION_INVARIANTS = (
+    'legacy-security-profile.json', 'local-topology-template.json', 'public-closure-policy.json')
 PREPARATION_FILES = (
     'ops/prepare-cms-infrastructure.sh', 'ops/prepare-cms-infrastructure-private.py',
     'ops/payload-control-inventory.py', 'ops/payload-control-state.py',
@@ -41,10 +44,18 @@ def preparation_mode(relative):
     return 0o644 if relative.endswith(('.yaml', '.yml')) else 0o755
 
 
+def preparation_policy_target(name):
+    require(name in PREPARATION_INVARIANTS, 'invalid_invariant_name')
+    return PREPARATION_POLICY_ROOT + '/' + name
+
+
 def validate_preparation_approval(value):
-    shape(value, ('schemaVersion', 'kind', 'environment', 'repository', 'source', 'hostBaseline', 'admission'))
-    require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
-            and value['kind'] == 'ownerinc-payload-preparation-approval-v1'
+    require(isinstance(value, dict), 'invalid_preparation_approval')
+    version = value.get('schemaVersion')
+    common = ('schemaVersion', 'kind', 'environment', 'repository', 'source', 'hostBaseline', 'admission')
+    shape(value, common if version == 1 else common + ('invariants',))
+    require(type(version) is int and version in (1, 2)
+            and value['kind'] == 'ownerinc-payload-preparation-approval-v' + str(version)
             and value['environment'] == 'production' and value['repository'] == 'OWNERINC/portal_ownerinc',
             'invalid_preparation_approval')
     shape(value['source'], ('commit', 'files'))
@@ -67,7 +78,102 @@ def validate_preparation_approval(value):
             'invalid_predecessor_hash')
     shape(value['admission'], ('policySha256', 'archiveSha256', 'recordSha256'))
     require(all(hash64(v) for v in value['admission'].values()), 'invalid_admission_binding')
+    if version == 2:
+        shape(value['invariants'], PREPARATION_INVARIANTS)
+        require(all(hash64(v) for v in value['invariants'].values()), 'invalid_invariant_hash')
     return value
+
+
+def _invariant_keys(value, names):
+    shape(value, names)
+
+
+def _invariant_text(value, pattern=None, maximum=512):
+    require(isinstance(value, str) and 0 < len(value.encode('utf-8')) <= maximum
+            and (pattern is None or re.fullmatch(pattern, value) is not None), 'invalid_invariant')
+
+
+def validate_legacy_security_profile(value):
+    _invariant_keys(value, ('schemaVersion', 'kind', 'sourceCommit', 'previousImages', 'observation'))
+    require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
+            and value['kind'] == 'portal-legacy-security-profile-v1'
+            and matches(value['sourceCommit'], r'[0-9a-f]{40}'), 'invalid_invariant')
+    _invariant_keys(value['previousImages'], ('api', 'cron'))
+    for service, image in value['previousImages'].items():
+        _invariant_text(image, r'ghcr\.io/ownerinc/ownerinc-portal-' + service + r'@sha256:[0-9a-f]{64}')
+    observation = value['observation']
+    _invariant_keys(observation, ('schemaVersion', 'kind', 'serverMajor', 'database', 'records'))
+    require(type(observation['schemaVersion']) is int and observation['schemaVersion'] == 1
+            and observation['kind'] == 'portal-legacy-security-observation-v1'
+            and type(observation['serverMajor']) is int and observation['serverMajor'] == 16
+            and isinstance(observation['records'], list) and len(observation['records']) <= 20000,
+            'invalid_invariant')
+    _invariant_keys(observation['database'], ('systemIdentifier', 'databaseOid', 'databaseName'))
+    require(observation['database']['databaseName'] == 'portal', 'invalid_invariant')
+    for field in ('systemIdentifier', 'databaseOid'):
+        _invariant_text(observation['database'][field], r'[1-9][0-9]{0,19}')
+    return value
+
+
+def validate_local_topology_template(value):
+    _invariant_keys(value, ('schemaVersion', 'kind', 'containers', 'networks', 'databases'))
+    require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
+            and value['kind'] == 'portal-local-topology-template-v1', 'invalid_invariant')
+    require(isinstance(value['containers'], list) and 1 <= len(value['containers']) <= 64, 'invalid_invariant')
+    services = set()
+    network_names = {'ownerinc-portal-backend', 'ownerinc-portal-egress', 'ownerinc_proxy'}
+    volume_keys = {'portalPostgres', 'portalUploads', 'cmsPostgres', 'cmsMedia'}
+    for row in value['containers']:
+        _invariant_keys(row, ('service', 'image', 'networks', 'volumeKeys'))
+        _invariant_text(row['service'], r'[a-z][a-z0-9-]{0,63}')
+        _invariant_text(row['image'], r'[a-z0-9./_:-]+@sha256:[0-9a-f]{64}')
+        require(row['service'] not in services and isinstance(row['networks'], list)
+                and len(row['networks']) <= 3 and len(set(row['networks'])) == len(row['networks'])
+                and set(row['networks']) <= network_names and isinstance(row['volumeKeys'], list)
+                and len(row['volumeKeys']) <= 4 and len(set(row['volumeKeys'])) == len(row['volumeKeys'])
+                and set(row['volumeKeys']) <= volume_keys, 'invalid_invariant')
+        services.add(row['service'])
+    require({'nginx', 'api', 'cron', 'postgres'} <= services, 'invalid_invariant')
+    require(isinstance(value['networks'], list) and len(value['networks']) == 3, 'invalid_invariant')
+    for row in value['networks']:
+        _invariant_keys(row, ('name', 'relevantExternalEndpoints'))
+        require(type(row['relevantExternalEndpoints']) is int and 0 <= row['relevantExternalEndpoints'] <= 256,
+                'invalid_invariant')
+    require({row['name'] for row in value['networks']} == network_names, 'invalid_invariant')
+    require(isinstance(value['databases'], list) and 1 <= len(value['databases']) <= 2, 'invalid_invariant')
+    seen = set()
+    for row in value['databases']:
+        _invariant_keys(row, ('service', 'databaseName'))
+        require(row['service'] in ('postgres', 'cms-postgres') and row['service'] not in seen
+                and row['databaseName'] == ('portal' if row['service'] == 'postgres' else 'ownerinc_cms'),
+                'invalid_invariant')
+        seen.add(row['service'])
+    require('postgres' in seen, 'invalid_invariant')
+    return value
+
+
+def validate_public_closure_policy(value):
+    _invariant_keys(value, ('schemaVersion', 'kind', 'origin', 'observerSha256', 'routes'))
+    require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
+            and value['kind'] == 'portal-public-closure-policy-v1' and hash64(value['observerSha256']),
+            'invalid_invariant')
+    _invariant_text(value['origin'], r'https://[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?', 253)
+    require(isinstance(value['routes'], list) and len(value['routes']) == 3, 'invalid_invariant')
+    for row in value['routes']:
+        _invariant_keys(row, ('route', 'status', 'bodySha256'))
+        require(row['route'] in ('/', '/api/ready', '/editorial/ready')
+                and type(row['status']) is int and 400 <= row['status'] <= 599 and hash64(row['bodySha256']),
+                'invalid_invariant')
+    require({row['route'] for row in value['routes']} == {'/', '/api/ready', '/editorial/ready'}, 'invalid_invariant')
+    return value
+
+
+def validate_preparation_invariant(name, value):
+    validators = {'legacy-security-profile.json': validate_legacy_security_profile,
+                  'local-topology-template.json': validate_local_topology_template,
+                  'public-closure-policy.json': validate_public_closure_policy}
+    require(name in validators, 'invalid_invariant_name')
+    return validators[name](value)
 
 
 def load_preparation_inputs(approval_path, expected_hash, bundle):
@@ -75,13 +181,20 @@ def load_preparation_inputs(approval_path, expected_hash, bundle):
     raw = read_protected(approval_path, 0o600, MAX_JSON)
     require(sha(raw) == expected_hash, 'approval_digest_mismatch')
     approval = validate_preparation_approval(strict_json(raw))
-    bundle_layout(bundle, PREPARATION_FILES)
+    names = PREPARATION_FILES + (PREPARATION_INVARIANTS if approval['schemaVersion'] == 2 else ())
+    bundle_layout(bundle, names)
     targets = {}
     for relative in PREPARATION_FILES:
         mode = preparation_mode(relative)
         content = read_protected(bundle + '/' + relative, mode, 2 * MAX_JSON)
         require(sha(content) == approval['source']['files'][relative], 'preparation_source_mismatch')
         targets[preparation_target(relative)] = (content, mode, 2 * MAX_JSON)
+    if approval['schemaVersion'] == 2:
+        for name in PREPARATION_INVARIANTS:
+            content = read_protected(bundle + '/' + name, 0o600, MAX_JSON)
+            require(sha(content) == approval['invariants'][name], 'invariant_digest_mismatch')
+            validate_preparation_invariant(name, strict_json(content))
+            targets[preparation_policy_target(name)] = (content, 0o600, MAX_JSON)
     targets[PREPARATION_APPROVAL] = (raw, 0o600, MAX_JSON)
     return raw, approval, targets
 

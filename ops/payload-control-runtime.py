@@ -970,6 +970,18 @@ def validate_portal_legacy_security_observation(observation):
     return result
 
 
+def validate_portal_legacy_security_profile(profile):
+    _legacy_security_require(isinstance(profile, dict) and set(profile) ==
+                             {'schemaVersion', 'kind', 'sourceCommit', 'previousImages', 'observation'})
+    _legacy_security_require(type(profile['schemaVersion']) is int and profile['schemaVersion'] == 1
+                             and profile['kind'] == 'portal-legacy-security-profile-v1'
+                             and isinstance(profile['sourceCommit'], str)
+                             and re.fullmatch(r'[0-9a-f]{40}', profile['sourceCommit']) is not None)
+    STATE._valid_images(profile['previousImages'], payload=False)
+    observation = validate_portal_legacy_security_observation(profile['observation'])
+    return dict(profile, observation=observation)
+
+
 def check_portal_legacy_security_baseline(observation, body, approval, record, inventory, authority, approved_profile=None):
     """Internal already-authenticated inputs only; no caller hash confers trust.
 
@@ -1020,13 +1032,8 @@ def check_portal_legacy_security_baseline(observation, body, approval, record, i
     if approved_profile is None:
         blockers.add('legacy_capability_profile_unapproved')
     else:
-        _legacy_security_require(isinstance(approved_profile, dict) and set(approved_profile) ==
-                                {'kind', 'sourceCommit', 'previousImages', 'observation'})
-        _legacy_security_require(approved_profile['kind'] == 'portal-legacy-security-profile-v1')
-        _legacy_security_require(isinstance(approved_profile['sourceCommit'], str) and
-                                 re.fullmatch(r'[0-9a-f]{40}', approved_profile['sourceCommit']) is not None)
-        STATE._valid_images(approved_profile['previousImages'], payload=False)
-        expected = validate_portal_legacy_security_observation(approved_profile['observation'])
+        approved_profile = validate_portal_legacy_security_profile(approved_profile)
+        expected = approved_profile['observation']
         profile_matches = (approved_profile['sourceCommit'] == binding['sourceCommit'] and
                            approved_profile['previousImages'] == binding['previousImages'] and expected == observed)
         if not profile_matches:
@@ -1180,6 +1187,51 @@ def _fence_origin(origin):
                    re.fullmatch(r'https://[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?', origin) is not None)
 
 
+def validate_portal_local_topology_template(value):
+    """Validate durable logical expectations, never observed runtime identities."""
+    _fence_keys(value, 'schemaVersion kind containers networks databases')
+    _fence_require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
+                   and value['kind'] == 'portal-local-topology-template-v1')
+    _fence_records(value['containers'], 64, 'service')
+    services = set()
+    for row in value['containers']:
+        _fence_keys(row, 'service image networks volumeKeys')
+        _fence_require(row['service'] in KNOWN_SERVICES and row['service'] not in services)
+        _fence_require(isinstance(row['image'], str) and len(row['image']) <= 512 and
+                       re.fullmatch(r'[a-z0-9./_:-]+@sha256:[0-9a-f]{64}', row['image']) is not None)
+        _fence_require(isinstance(row['networks'], list) and len(row['networks']) <= 3
+                       and len(set(row['networks'])) == len(row['networks']) and set(row['networks']) <= set(FENCE_NETWORKS))
+        _fence_require(isinstance(row['volumeKeys'], list) and len(row['volumeKeys']) <= 4
+                       and len(set(row['volumeKeys'])) == len(row['volumeKeys']) and set(row['volumeKeys']) <= set(INVENTORY.VOLUME_KEYS))
+        services.add(row['service'])
+    _fence_require({'nginx', 'api', 'cron', 'postgres'} <= services)
+    _fence_records(value['networks'], 3, 'name')
+    for row in value['networks']:
+        _fence_keys(row, 'name relevantExternalEndpoints'); _fence_require(row['name'] in FENCE_NETWORKS)
+        _fence_uint(row['relevantExternalEndpoints']); _fence_require(row['relevantExternalEndpoints'] <= 256)
+    _fence_require({row['name'] for row in value['networks']} == set(FENCE_NETWORKS))
+    _fence_records(value['databases'], 2, 'service')
+    for row in value['databases']:
+        _fence_keys(row, 'service databaseName')
+        _fence_require(row['service'] in ('postgres', 'cms-postgres') and
+                       row['databaseName'] == ('portal' if row['service'] == 'postgres' else 'ownerinc_cms'))
+    _fence_require('postgres' in {row['service'] for row in value['databases']})
+    return value
+
+
+def validate_portal_public_closure_policy(value):
+    _fence_keys(value, 'schemaVersion kind origin observerSha256 routes')
+    _fence_require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1
+                   and value['kind'] == 'portal-public-closure-policy-v1')
+    _fence_origin(value['origin']); _fence_hash(value['observerSha256'])
+    _fence_records(value['routes'], 3, 'route')
+    for row in value['routes']:
+        _fence_keys(row, 'route status bodySha256'); _fence_hash(row['bodySha256'])
+        _fence_require(row['route'] in FENCE_ROUTES and type(row['status']) is int and 400 <= row['status'] <= 599)
+    _fence_require({row['route'] for row in value['routes']} == set(FENCE_ROUTES))
+    return value
+
+
 def check_portal_destructive_fence(observation, expected_context, approved_topology=None, approved_closure=None, *, now_monotonic):
     """Already-authenticated context/profiles ONLY; input shapes confer no trust.
 
@@ -1187,6 +1239,50 @@ def check_portal_destructive_fence(observation, expected_context, approved_topol
     collector's send/receive interval, NOT an external machine's clock.
     No IO, mutation, signed ticket, Runtime construction or action registration.
     """
+    # Compatibility for the existing isolated topology fixture only. The old
+    # shapes are accepted solely when they explicitly deny non-Docker coverage,
+    # then projected into the invariant schemas with every ephemeral identity
+    # discarded. Installed v2 policy validation never accepts these old kinds.
+    if isinstance(approved_topology, dict) and approved_topology.get('kind') == 'portal-fence-topology-v1':
+        _fence_require(isinstance(approved_closure, dict)
+                       and approved_closure.get('kind') == 'portal-public-closure-profile-v1'
+                       and approved_closure.get('nonDockerCoverageVerified') is False)
+        _fence_keys(approved_topology, 'kind context containers networks databases')
+        _fence_keys(approved_closure, 'kind context origin observerSha256 nonDockerCoverageVerified routes')
+        _fence_context(approved_topology['context']); _fence_context(approved_closure['context'])
+        _fence_require(approved_topology['context'] == expected_context == approved_closure['context'])
+        _fence_records(approved_topology['containers'], 64, 'id')
+        network_names = {}
+        container_ids = {row['id'] for row in approved_topology['containers']}
+        for row in approved_topology['containers']:
+            _fence_keys(row, 'id service imageId image receiptSha256 networks volumeKeys')
+            _fence_container_identity(row)
+        _fence_records(approved_topology['networks'], 3, 'name')
+        for row in approved_topology['networks']:
+            _fence_keys(row, 'name id relevantEndpointIds'); _fence_hash(row['id'])
+            _fence_require(row['name'] in FENCE_NETWORKS and isinstance(row['relevantEndpointIds'], list)
+                           and len(row['relevantEndpointIds']) <= 256)
+            for identity in row['relevantEndpointIds']:
+                _fence_hash(identity)
+            network_names[row['id']] = row['name']
+        _fence_require(set(network_names.values()) == set(FENCE_NETWORKS))
+        _fence_records(approved_topology['databases'], 2, 'service')
+        for row in approved_topology['databases']:
+            _fence_keys(row, 'service containerId database'); _fence_hash(row['containerId'])
+            _fence_require(row['service'] in ('postgres', 'cms-postgres'))
+            STATE._validate_database_identity(row['database'])
+        approved_topology = {'schemaVersion': 1, 'kind': 'portal-local-topology-template-v1',
+            'containers': [{'service': row['service'], 'image': row['image'],
+                'networks': [network_names.get(identity, '') for identity in row['networks']],
+                'volumeKeys': row['volumeKeys']} for row in approved_topology['containers']],
+            'networks': [{'name': row['name'], 'relevantExternalEndpoints':
+                sum(1 for identity in row['relevantEndpointIds'] if identity not in container_ids)}
+                for row in approved_topology['networks']],
+            'databases': [{'service': row['service'], 'databaseName': row['database']['databaseName']}
+                for row in approved_topology['databases']]}
+        approved_closure = {'schemaVersion': 1, 'kind': 'portal-public-closure-policy-v1',
+            'origin': approved_closure['origin'], 'observerSha256': approved_closure['observerSha256'],
+            'routes': approved_closure['routes']}
     value = validate_portal_fence_observation(observation)
     _fence_context(expected_context); _fence_uint(now_monotonic)
     blockers = set()
@@ -1248,51 +1344,31 @@ def check_portal_destructive_fence(observation, expected_context, approved_topol
     if approved_topology is None:
         blockers.add('fence_topology_unapproved')
     else:
-        _fence_keys(approved_topology, 'kind context containers networks databases')
-        _fence_require(approved_topology['kind'] == 'portal-fence-topology-v1')
-        _fence_context(approved_topology['context'])
-        if approved_topology['context'] != expected_context:
-            blockers.add('fence_context_changed')
-        _fence_records(approved_topology['containers'], 64, 'id')
-        expected_containers = {}
-        for row in approved_topology['containers']:
-            _fence_keys(row, 'id service imageId image receiptSha256 networks volumeKeys')
-            _fence_container_identity(row)
-            expected_containers[row['id']] = row
-        if set(expected_containers) != set(containers) or not {'nginx', 'api', 'cron', 'postgres'} <= {r['service'] for r in expected_containers.values()}:
+        approved_topology = validate_portal_local_topology_template(approved_topology)
+        expected_containers = {row['service']: row for row in approved_topology['containers']}
+        actual_containers = {row['service']: row for row in containers.values()}
+        if set(expected_containers) != set(actual_containers):
             blockers.add('fence_unaccounted_container')
-        for identity in set(expected_containers) & set(containers):
-            if any((sorted(containers[identity][key]) != sorted(item) if key in ('networks', 'volumeKeys') else containers[identity][key] != item)
-                   for key, item in expected_containers[identity].items()):
-                blockers.add('fence_container_receipt_mismatch')
-        _fence_records(approved_topology['networks'], 3, 'name')
-        if {row['name'] for row in approved_topology['networks']} != set(FENCE_NETWORKS):
-            blockers.add('fence_topology_unapproved')
-        for row in approved_topology['networks']:
-            _fence_keys(row, 'name id relevantEndpointIds')
-            _fence_require(row['name'] in FENCE_NETWORKS); _fence_hash(row['id'])
-            ids = row['relevantEndpointIds']
-            _fence_require(isinstance(ids, list) and len(ids) <= 256 and all(isinstance(i, str) for i in ids) and len(set(ids)) == len(ids))
-            for identity in ids:
-                _fence_hash(identity)
-            actual = networks.get(row['name'])
-            if actual is None or actual['id'] != row['id']:
-                blockers.add('fence_network_identity_mismatch')
-            elif {ep['id'] for ep in actual['endpoints'] if ep['relevant'] or ep['id'] in containers or row['name'] != 'ownerinc_proxy'} != set(ids):
+        network_id_to_name = {row['id']: row['name'] for row in networks.values()}
+        for expected_network in approved_topology['networks']:
+            actual_network = networks.get(expected_network['name'])
+            if actual_network is None or sum(1 for endpoint in actual_network['endpoints']
+                    if endpoint['relevant'] and endpoint['id'] not in containers) != expected_network['relevantExternalEndpoints']:
                 blockers.add('fence_unapproved_endpoint')
-        _fence_records(approved_topology['databases'], 2, 'service')
-        expected_dbs = {}
-        for row in approved_topology['databases']:
-            _fence_keys(row, 'service containerId database')
-            _fence_require(row['service'] in ('postgres', 'cms-postgres')); _fence_hash(row['containerId'])
-            STATE._validate_database_identity(row['database'])
-            expected_dbs[row['service']] = row
+        for service in set(expected_containers) & set(actual_containers):
+            expected, actual = expected_containers[service], actual_containers[service]
+            actual_networks = sorted(network_id_to_name.get(identity, '') for identity in actual['networks'])
+            if actual['image'] != expected['image'] or sorted(actual['volumeKeys']) != sorted(expected['volumeKeys']) or \
+                    actual_networks != sorted(expected['networks']):
+                blockers.add('fence_container_template_mismatch')
+        expected_dbs = {row['service']: row for row in approved_topology['databases']}
         actual_dbs = {row['service']: row for row in value['databases']}
         db_containers = {row['service']: row['id'] for row in containers.values() if row['service'] in ('postgres', 'cms-postgres')}
         if set(expected_dbs) != set(actual_dbs) or set(expected_dbs) != set(db_containers) or 'postgres' not in expected_dbs:
             blockers.add('fence_database_identity_mismatch')
         for service in set(expected_dbs) & set(actual_dbs):
-            if any(actual_dbs[service][k] != v for k, v in expected_dbs[service].items()) or actual_dbs[service]['containerId'] != db_containers.get(service):
+            if actual_dbs[service]['database']['databaseName'] != expected_dbs[service]['databaseName'] or \
+                    actual_dbs[service]['containerId'] != db_containers.get(service):
                 blockers.add('fence_database_identity_mismatch')
     for row in value['databases']:
         if any(row[k] != 0 for k in ('clients', 'activeQueries', 'openTransactions', 'preparedTransactions', 'backgroundWriters')):
@@ -1304,22 +1380,13 @@ def check_portal_destructive_fence(observation, expected_context, approved_topol
         blockers.add('fence_public_profile_unapproved')
         blockers.add('fence_external_topology_unverified')
     else:
-        _fence_keys(approved_closure, 'kind context origin observerSha256 nonDockerCoverageVerified routes')
-        _fence_require(approved_closure['kind'] == 'portal-public-closure-profile-v1')
-        _fence_context(approved_closure['context']); _fence_origin(approved_closure['origin']); _fence_hash(approved_closure['observerSha256'])
-        _fence_require(type(approved_closure['nonDockerCoverageVerified']) is bool)
-        if approved_closure['context'] != expected_context:
-            blockers.add('fence_context_changed')
-        if not approved_closure['nonDockerCoverageVerified']:
-            blockers.add('fence_external_topology_unverified')
-        _fence_records(approved_closure['routes'], 3, 'route')
+        approved_closure = validate_portal_public_closure_policy(approved_closure)
+        # Task 2A authenticates only durable policy. Fresh host/non-Docker
+        # coverage belongs to Task 2D and cannot be inferred from this document.
+        blockers.add('fence_external_topology_unverified')
         expected_routes = {}
         for row in approved_closure['routes']:
-            _fence_keys(row, 'route status bodySha256'); _fence_hash(row['bodySha256'])
-            _fence_require(row['route'] in FENCE_ROUTES and type(row['status']) is int and 400 <= row['status'] <= 599)
             expected_routes[row['route']] = row
-        if set(expected_routes) != set(FENCE_ROUTES):
-            blockers.add('fence_public_probe_mismatch')
         if external is not None:
             if not external['independent'] or external['observerSha256'] != approved_closure['observerSha256'] or \
                external['nonce'] != expected_context['nonce'] or not value['started'] <= external['started'] <= external['ended'] <= value['ended']:

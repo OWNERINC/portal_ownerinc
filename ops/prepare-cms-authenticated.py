@@ -326,6 +326,9 @@ def _authenticated_material():
     support = load_authenticated(captured['ops/provision-payload-candidate-trust.py'],
                                  ROOT + '/ops/provision-payload-candidate-trust.py')
     approval = support.validate_preparation_approval(support.strict_json(approval_raw))
+    invariant_runtime = load_runtime_captured(captured) if approval['schemaVersion'] == 2 else None
+    invariants = load_invariant_material(approval, support, invariant_runtime) \
+        if approval['schemaVersion'] == 2 else None
     policy_raw = support.read_protected(support.POLICY_PATH, 0o600, support.MAX_JSON)
     require(support.sha(policy_raw) == approval['admission']['policySha256'])
     policy = support.validate_policy(support.strict_json(policy_raw))
@@ -358,7 +361,34 @@ def _authenticated_material():
     verifier.verify_installed_tools(policy)
     for relative, raw in captured.items():
         require(protected(support.preparation_target(relative), support.preparation_mode(relative), 2 * support.MAX_JSON) == raw)
-    return approval, captured, record['images']['cms'], support, support.sha(approval_raw), record, verifier
+    if invariants is not None:
+        require(load_invariant_material(approval, support, invariant_runtime) == invariants)
+    return approval, captured, record['images']['cms'], support, support.sha(approval_raw), record, verifier, invariants
+
+
+def load_invariant_material(approval, support, runtime=None):
+    """Load only the three fixed, digest-bound v2 invariant documents.
+
+    This deliberately accepts neither paths nor JSON bytes from a caller. A v1
+    approval retains precisely its original preparation-closure authority.
+    """
+    require(isinstance(approval, dict) and approval.get('schemaVersion') == 2
+            and approval.get('kind') == 'ownerinc-payload-preparation-approval-v2')
+    hashes = approval.get('invariants')
+    require(isinstance(hashes, dict) and set(hashes) == set(support.PREPARATION_INVARIANTS))
+    result = {}
+    for name in support.PREPARATION_INVARIANTS:
+        raw = support.read_protected(support.preparation_policy_target(name), 0o600, support.MAX_JSON)
+        require(support.sha(raw) == hashes[name])
+        result[name] = support.validate_preparation_invariant(name, support.strict_json(raw))
+    if runtime is not None:
+        result['legacy-security-profile.json'] = runtime.validate_portal_legacy_security_profile(
+            result['legacy-security-profile.json'])
+        result['local-topology-template.json'] = runtime.validate_portal_local_topology_template(
+            result['local-topology-template.json'])
+        result['public-closure-policy.json'] = runtime.validate_portal_public_closure_policy(
+            result['public-closure-policy.json'])
+    return result
 
 
 def authenticate():
@@ -729,7 +759,7 @@ def collect_context():
 def check_install_plan(receipt_id):
     require(isinstance(receipt_id, str) and re.fullmatch(r'payload-[a-z0-9_]{8}', receipt_id) is not None)
     with deployment_lease() as reaffirm, ExitStack() as b0_evidence:
-        approval, captured, _, support, digest, record, verifier = _authenticated_material()
+        approval, captured, _, support, digest, record, verifier, _ = _authenticated_material()
         receiver = load_authenticated(captured['ops/payload-receiver-admission.py'], ROOT + '/ops/payload-receiver-admission.py')
         receipt = receiver.INCOMING + '/' + receipt_id
         receiver.protected_directory(receipt, private=True)
