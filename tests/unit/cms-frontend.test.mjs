@@ -334,7 +334,7 @@ test('safe renderer validates the allowlist and never uses raw HTML sinks', asyn
   assert.match(renderer, /TextEncoder\(\)\.encode\(JSON\.stringify\(blocks\)\)/);
   assert.match(renderer, /textContent/);
   assert.match(renderer, /fetchAPIAsset/);
-  assert.match(renderer, /fetchAPIAsset\(cmsAssetEndpoint\(assetId, state\.assetScope\)/);
+  assert.match(renderer, /fetchAPIAsset\(cmsAssetEndpoint\(assetId, state\.assetScope, state\.assetSource\)/);
   const { cmsAssetEndpoint } = await import('../../public/js/owner-news/asset-path.mjs');
   assert.equal(cmsAssetEndpoint('11111111-1111-4111-8111-111111111111'), '/api/cms/assets/11111111-1111-4111-8111-111111111111');
   assert.doesNotMatch(renderer, /innerHTML|outerHTML|insertAdjacentHTML/);
@@ -605,10 +605,10 @@ test('published CMS blocks integrate with legacy fallbacks and dashboard announc
   }
   assert.match(reminders, /renderBlocks\(content, reminder\.content_blocks/);
   assert.match(announcementsHtml, /id="main-content"/);
-  assert.match(dashboard, /\/api\/announcements\?kind=article&limit=3&offset=0/);
+  assert.match(dashboard, /\/api\/announcements\?kind=article&limit=3/);
   assert.match(dashboard, /announcements-preview/);
   assert.match(announcements, /\/api\/announcements\/\$\{encodeURIComponent\(id\)\}/);
   assert.match(announcements, /renderNewsArticle\(reader, article/);
   const catalog = await readFile('public/js/owner-news/catalog.js', 'utf8');
-  assert.match(catalog, /href: `\.\/announcements\.html\?id=\$\{encodeURIComponent\(article\.id\)\}`/);
+  assert.match(catalog, /new URLSearchParams\(\{ id, source \}\)/);
 });

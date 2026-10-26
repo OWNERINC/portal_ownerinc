@@ -8,7 +8,8 @@ const viewer = { uid: 'user-1', role: 'viewer', permissions: {} };
 
 test('Owner News direct URL and invalid return state close locally, then session loss disposes its guard', async () => {
   const h = await createRouterHarness({ realUI: true });
-  await h.router.navigate('/announcements.html?id=direct');
+  const id = '11111111-1111-4111-8111-111111111111';
+  await h.router.navigate(`/announcements.html?id=${id}`);
   const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
   vm.runInContext(`${source}\nglobalThis.createNewsNavigation = createNewsNavigation;`, h.context);
   const overlay = new Node('div', h.doc, { class: 'hidden', 'data-page-overlay': '' });
@@ -23,7 +24,7 @@ test('Owner News direct URL and invalid return state close locally, then session
   assert.equal(h.history.state.ownerNews, undefined);
   assert.equal(h.entries.length, length);
   assert.ok(overlay.classList.contains('hidden'));
-  await navigation.open('again');
+  await navigation.open({ source: 'payload', id: '22222222-2222-4222-8222-222222222222' });
   const page = h.scope;
   delete h.doc.documentElement.dataset.authSnapshot;
   h.context.auth.currentUser = null; h.notifyAuthChange(); await drain();

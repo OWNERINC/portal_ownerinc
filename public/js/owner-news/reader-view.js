@@ -9,12 +9,20 @@ import { getNewsPresentation, normalizeEditorial, estimateNewsReadTime } from '.
 export function renderNewsArticle(root, article, { signal, preview = false } = {}) {
   // Validate before deriving CSS classes or separating media from their blocks.
   const blocks = validateNewsBlocks(article.content_blocks || [], article.content_version);
-  const assetScope = validateAssetScope(article.asset_scope === undefined ? 'legacy' : article.asset_scope);
+  const source = article.source === undefined ? 'legacy' : article.source;
+  const declaredAssetScope = validateAssetScope(article.asset_scope === undefined ? 'legacy' : article.asset_scope);
+  const assetScope = preview && declaredAssetScope === 'legacy' && source === 'legacy'
+    ? 'owner-news-preview' : declaredAssetScope;
+  // Owner News media is fail-closed on inconsistent source/scope pairs.
+  // The endpoint helper also handles preview's separate namespace.
+  if ((assetScope === 'legacy' && source !== 'legacy')
+    || (assetScope === 'owner-news' && source !== 'payload')
+    || !['legacy', 'payload'].includes(source)) throw new Error('invalid_asset_source_scope');
   const editorial = normalizeEditorial(article.editorial);
   const presentation = getNewsPresentation({ ...article, content_blocks: blocks, editorial });
   const containers = [];
   const controller = new AbortController();
-  const mediaOptions = { signal: controller.signal, assetScope };
+  const mediaOptions = { signal: controller.signal, assetScope, assetSource: source };
   let disposed = false;
   const dispose = () => {
     if (disposed) return;

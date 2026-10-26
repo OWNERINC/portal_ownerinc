@@ -19,7 +19,7 @@ test('legacy reader exposes source-aware DTOs and applies the global keyset boun
   assert.match(source, /published_at/u);
 });
 test('anterior/próxima mantém um único retorno ao catálogo', async () => {
-  const base = 'https://portal.test/announcements.html?category=Cultura&offset=24';
+  const base = 'https://portal.test/announcements.html?category=Cultura';
   const h = await createFeedbackHarness('announcements', { mount: false, url: base, modules: [
     { path: 'public/js/owner-news/navigation.js', exports: 'createNewsNavigation' },
   ] });
@@ -29,12 +29,13 @@ test('anterior/próxima mantém um único retorno ao catálogo', async () => {
     onRoute: async route => { routes.push(route); },
   });
   h.page.history.replaceState({ retained: 'state' }, '', base);
-  await navigation.open(asset);
+  await navigation.open({ source: 'legacy', id: asset });
   const length = h.window.history.length;
-  await navigation.jump(pdf);
+  await navigation.jump({ source: 'payload', id: pdf });
   assert.equal(h.window.history.length, length);
   assert.equal(h.window.history.state.retained, 'state');
   assert.equal(new URL(h.page.location.href).searchParams.get('id'), pdf);
+  assert.equal(new URL(h.page.location.href).searchParams.get('source'), 'payload');
   navigation.close(); navigation.close(); await drain();
   assert.equal(h.page.location.href, base);
   assert.equal(routes.at(-1).id, null);
@@ -43,6 +44,29 @@ test('anterior/próxima mantém um único retorno ao catálogo', async () => {
   assert.equal(new URL(h.page.location.href).searchParams.get('id'), pdf);
   assert.equal(h.node('news-reader-overlay').classList.contains('hidden'), false);
   navigation.dispose(); h.page.dispose();
+});
+
+test('bookmark legado omite source; origem explícita inválida não solicita nem altera history', async () => {
+  const legacy = await createFeedbackHarness('announcements', { mount: false, url: `https://portal.test/announcements.html?id=${asset}`, modules: [
+    { path: 'public/js/owner-news/navigation.js', exports: 'createNewsNavigation' },
+  ] });
+  const routes = [];
+  const navigation = legacy.context.createNewsNavigation({ page: legacy.page, overlay: legacy.node('news-reader-overlay'), onRoute: async route => routes.push(route) });
+  await navigation.sync();
+  assert.deepEqual({ source: routes.at(-1).source, id: routes.at(-1).id }, { source: 'legacy', id: asset });
+  legacy.page.dispose();
+
+  const invalidURL = `https://portal.test/announcements.html?id=${asset}&source=remote`;
+  const invalid = await createFeedbackHarness('announcements', { mount: false, url: invalidURL, modules: [
+    { path: 'public/js/owner-news/navigation.js', exports: 'createNewsNavigation' },
+  ] });
+  const invalidRoutes = [];
+  const invalidNavigation = invalid.context.createNewsNavigation({ page: invalid.page, overlay: invalid.node('news-reader-overlay'), onRoute: async route => invalidRoutes.push(route) });
+  await invalidNavigation.sync();
+  assert.equal(invalid.page.location.href, invalidURL);
+  assert.equal(invalid.window.history.length, 1);
+  assert.equal(invalidRoutes.some(route => route.id), false);
+  invalid.page.dispose();
 });
 
 test('retry de imagem e PDF preserva o corpo e revoga respostas tardias', async () => {
@@ -76,26 +100,26 @@ test('retry de imagem e PDF preserva o corpo e revoga respostas tardias', async 
 });
 
 for (const firstReady of [false, true]) test(`leitor montado preserva catálogo e descarta detalhe/mídia tardios (primeiro pronto: ${firstReady})`, async () => {
-  const base = 'https://portal.test/announcements.html?category=Cultura&offset=24';
+  const base = 'https://portal.test/announcements.html?category=Cultura';
   const h = await createFeedbackHarness('announcements', { url: base });
   const story = (id, title, content_blocks = []) => ({ id, title, editorial, content_blocks, category: 'Cultura' });
   h.requests.find(r => r.kind === 'list').resolve({ data: [story(asset, 'Primeira')], total: 25 });
-  h.latest('/home').resolve(null); h.latest('limit=1&offset=0').resolve([]);
+  h.latest('/home').resolve(null); h.latest('limit=1').resolve([]);
   h.latest('/categories').resolve({ total: 25, categories: [{ name: 'Cultura', count: 25 }] }); await drain();
-  const card = h.node(`news-card-${asset}`), link = card.querySelector('a');
+  const card = h.node(`news-card-legacy-${asset}`), link = card.querySelector('a');
   h.window.scrollY = 720; link.focus(); link.click();
   assert.equal(h.node('news-reader-dialog').getAttribute('aria-label'), 'Leitura da Owner News');
   assert.equal(h.doc.activeElement, h.node('news-reader-close'));
-  const first = h.requests.find(r => r.path === `/api/announcements/${asset}`);
+  const first = h.requests.find(r => r.path === `/api/announcements/${asset}?source=legacy`);
   const firstArticle = story(asset, 'Primeira', [{ type: 'image', asset_id: asset, alt: 'Capa', usage: 'cover' }]);
   if (firstReady) { first.resolve(firstArticle); await drain(); }
-  h.latest('/navigation').resolve({ previous: null, next: { id: pdf, title: 'Segunda' } }); await drain();
+  h.latest('/navigation').resolve({ previous: null, next: { source: 'payload', id: pdf, title: 'Segunda' } }); await drain();
   const oldMedia = h.requests.find(r => r.kind === 'asset');
   const next = h.node('news-reader-next'); next.focus(); next.click();
   if (!firstReady) assert.equal(first.options.signal.aborted, true);
   if (oldMedia) assert.equal(oldMedia.options.signal.aborted, true);
-  const second = h.requests.find(r => r.path === `/api/announcements/${pdf}`);
-  second.resolve(story(pdf, 'Segunda', [{ type: 'paragraph', text: 'Corpo da segunda.' }])); await drain();
+  const second = h.requests.find(r => r.path === `/api/announcements/${pdf}?source=payload`);
+  second.resolve({ ...story(pdf, 'Segunda', [{ type: 'paragraph', text: 'Corpo da segunda.' }]), source: 'payload', asset_scope: 'owner-news' }); await drain();
   const title = h.node('news-reader-title');
   assert.equal(title.textContent, 'Segunda');
   assert.equal(title.tagName, 'H1');
@@ -103,7 +127,7 @@ for (const firstReady of [false, true]) test(`leitor montado preserva catálogo 
   h.latest('/navigation').reject(new Error('offline')); await drain();
   assert.match(h.node('news-reader-content').textContent, /Corpo da segunda/);
   h.node('news-reader-navigation-status').querySelector('button').click();
-  h.latest('/navigation').resolve({ previous: { id: asset }, next: null }); await drain();
+  h.latest('/navigation').resolve({ previous: { source: 'legacy', id: asset }, next: null }); await drain();
   assert.equal(h.node('news-reader-title'), title, 'navigation retry preserves composition');
   if (!firstReady) first.resolve(firstArticle);
   else oldMedia.resolve('blob:late-first-cover');
@@ -113,7 +137,7 @@ for (const firstReady of [false, true]) test(`leitor montado preserva catálogo 
   h.doc.dispatchEvent(new TestEvent('keydown', { key: 'Escape' }));
   h.node('news-reader-close').click(); await drain();
   assert.equal(h.page.location.href, base);
-  assert.equal(h.node(`news-card-${asset}`), card);
+  assert.equal(h.node(`news-card-legacy-${asset}`), card);
   assert.equal(h.requests.filter(r => r.kind === 'list').length, 1);
   assert.equal(h.doc.activeElement, link);
   assert.equal(h.window.scrollY, 720);
@@ -122,18 +146,18 @@ for (const firstReady of [false, true]) test(`leitor montado preserva catálogo 
   assert.equal(new URL(h.page.location.href).searchParams.get('id'), pdf);
   assert.equal(h.node('news-reader-overlay').classList.contains('hidden'), false);
   h.page.dispose();
-  assert.equal(h.requests.filter(r => r.path === `/api/announcements/${pdf}`).at(-1).options.signal.aborted, true);
+  assert.equal(h.requests.filter(r => r.path === `/api/announcements/${pdf}?source=payload`).at(-1).options.signal.aborted, true);
   assert.equal(h.latest('/navigation').options.signal.aborted, true);
 });
 
 test('URL direta mantém Voltar durante loader/404, retry de detalhe e fallback de foco', async () => {
   const h = await createFeedbackHarness('announcements', { url: `https://portal.test/announcements.html?id=${asset}` });
   h.requests.find(r => r.kind === 'list').resolve({ data: [], total: 0 });
-  h.latest('/home').resolve(null); h.latest('limit=1&offset=0').resolve([]); h.latest('/categories').resolve({ total: 0, categories: [] });
-  h.requests.find(r => r.path === `/api/announcements/${asset}`).reject(new Error('offline'));
+  h.latest('/home').resolve(null); h.latest('limit=1').resolve([]); h.latest('/categories').resolve({ total: 0, categories: [] });
+  h.requests.find(r => r.path === `/api/announcements/${asset}?source=legacy`).reject(new Error('offline'));
   h.latest('/navigation').resolve({ previous: null, next: null }); await drain();
   h.node('news-reader-content').querySelector('button').click();
-  h.requests.filter(r => r.path === `/api/announcements/${asset}`).at(-1).reject(Object.assign(new Error('gone'), { status: 404 }));
+  h.requests.filter(r => r.path === `/api/announcements/${asset}?source=legacy`).at(-1).reject(Object.assign(new Error('gone'), { status: 404 }));
   h.latest('/navigation').resolve({ previous: null, next: null }); await drain();
   assert.match(h.node('news-reader-content').textContent, /Esta matéria não está mais disponível/);
   assert.equal(h.node('news-reader-content').querySelector('button'), null);
@@ -153,7 +177,7 @@ for (const interacted of [false, true]) test(`retorno aguarda catálogo e respei
   const navigation = h.context.createNewsNavigation({ page: h.page, overlay: h.node('news-reader-overlay'),
     onRoute: route => route.id ? Promise.resolve() : pending.promise });
   h.window.scrollY = 500;
-  await navigation.open(asset);
+  await navigation.open({ source: 'legacy', id: asset });
   navigation.close(); await drain();
   assert.notEqual(h.doc.activeElement, h.node('news-catalog-title'), 'catalog loading must settle first');
   if (interacted) { h.window.dispatchEvent(new TestEvent('wheel')); h.window.scrollY = 100; }

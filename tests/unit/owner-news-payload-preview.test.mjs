@@ -55,7 +55,7 @@ test('source=legacy accepts the unchanged v1 body and legacy private-media defau
   ] }); await drain();
   assert.match(h.node('news-preview-status').textContent, /Histórico anterior à migração/);
   assert.match(h.node('news-preview-content').textContent, /Texto legado/);
-  assert.equal(h.requests.at(-1).path, `/api/cms/assets/${id}`); h.page.dispose();
+  assert.equal(h.requests.at(-1).path, `/api/announcements/preview/assets/${id}?source=legacy`); h.page.dispose();
 });
 test('exact persisted URL, private cover and honest status for draft/published/legacy/absent metadata', async () => {
   for (const [status, source, expected] of [['draft', 'payload', /Conteúdo não publicado/], ['published', 'payload', /salva como publicada/],
@@ -70,7 +70,7 @@ test('exact persisted URL, private cover and honest status for draft/published/l
     assert.equal(h.doc.querySelectorAll('h1').length, 1);
     assert.equal(h.node('news-preview-title').tagName, 'H2');
     assert.match(h.node('news-preview-content').textContent, /Texto salvo/);
-    assert.equal(h.requests.at(-1).path, `/api/announcements/preview/assets/${id}`);
+    assert.equal(h.requests.at(-1).path, `/api/announcements/preview/assets/${id}${source === 'legacy' ? '?source=legacy' : ''}`);
     h.page.dispose(); h.requests.at(-1).resolve('blob:late-preview'); await drain();
     assert.ok(h.revoked.includes('blob:late-preview')); assert.equal(h.node('news-preview-content').children.length, 0);
   }

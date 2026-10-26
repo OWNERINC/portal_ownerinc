@@ -106,7 +106,9 @@ function renderHero(announcement, state = announcement ? 'populated' : 'empty') 
   const link = document.querySelector('.dashboard-hero-copy a');
   if (link) {
     link.hidden = state === 'loading' || state === 'error';
-    link.href = announcement ? `./announcements.html?id=${encodeURIComponent(announcement.id)}` : '#quick-links';
+    const source = announcement?.source === undefined ? 'legacy' : announcement.source;
+    const query = announcement ? new URLSearchParams({ id: String(announcement.id).toLowerCase(), source }) : null;
+    link.href = announcement ? `./announcements.html?${query}` : '#quick-links';
     link.textContent = announcement ? 'Ler publicação' : 'Acessar áreas';
   }
   const retry = document.getElementById('dashboard-hero-retry');
@@ -133,7 +135,12 @@ function loadNewsImage(image, announcement) {
   const cover = blocks.find(block => block.type === 'image' && block.usage === 'cover') || blocks.find(block => block.type === 'image');
   if (!cover) return;
   let endpoint;
-  try { endpoint = cmsAssetEndpoint(cover.asset_id, announcement.asset_scope); } catch { return; }
+  try {
+    endpoint = cmsAssetEndpoint(cover.asset_id, {
+      source: announcement.source === undefined ? 'legacy' : announcement.source,
+      asset_scope: announcement.asset_scope === undefined ? 'legacy' : announcement.asset_scope,
+    });
+  } catch { return; }
   fetchAPIAsset(endpoint).then(url => {
     if (requestToken !== announcementsRequest || !image.isConnected) {
       URL.revokeObjectURL(url);
@@ -158,7 +165,7 @@ async function loadAnnouncements() {
   renderHero(null, 'loading');
   setBusy(announcementsPreview, true);
   try {
-    const announcements = (await fetchAPI('/api/announcements?kind=article&limit=3&offset=0')).slice(0, 3);
+    const announcements = (await fetchAPI('/api/announcements?kind=article&limit=3')).slice(0, 3);
     if (requestToken !== announcementsRequest) return;
     releaseNewsImages();
     renderHero(announcements[0]);
@@ -169,7 +176,7 @@ async function loadAnnouncements() {
       title: announcement.title,
       category: announcement.category || 'Comunicado',
       description: announcement.editorial?.summary || newsBlocksToText(announcement.content_blocks).replace(/\s+/g, ' ').slice(0, 180),
-      href: `./announcements.html?id=${encodeURIComponent(announcement.id)}`,
+       href: `./announcements.html?${new URLSearchParams({ id: String(announcement.id).toLowerCase(), source: announcement.source || 'legacy' })}`,
       image: './assets/logo-branco.svg',
       alt: 'Owner News',
       meta: formatDate(announcement.published_at),

@@ -157,7 +157,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   await load('public/js/owner-news/content-contract.js', 'validateNewsBlocks, validateRichNodes, newsBlocksToText');
   await load('public/js/owner-news/rich-content.js', 'renderRichContent');
   if (name === 'announcements' && mount) {
-    await load('public/js/pagination.js', 'readOffset, renderPagination, setPaginationBusy');
+    await load('public/js/pagination.js', 'readOffset, renderPagination, renderCursorPagination, setPaginationBusy');
     await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
     await load('public/js/owner-news/model.js', 'getNewsPresentation, normalizeEditorial, estimateNewsReadTime');
     await load('public/js/owner-news/catalog.js', 'renderNewsCard, composeNewsFeed, renderNewsCategories, renderNewsOpening');

@@ -88,17 +88,17 @@ test('public percentages reject nonfinite/out-of-range values and render editori
 test('current loader interleaves after three articles, keeps page totals and voting preserves card identity', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   const value = { ...poll('open', 2), viewer_option_id: null };
-  const articles = Array.from({ length: 4 }, (_, i) => ({ id: String(i), title: `Sintética ${i}`, content_blocks: [] }));
-  h.requests.find(r => r.kind === 'list').resolve({ data: articles, total: 48 });
+  const articles = Array.from({ length: 4 }, (_, i) => ({ id: `${i + 1}1111111-1111-4111-8111-111111111111`, source: 'legacy', asset_scope: 'legacy', title: `Sintética ${i}`, content_blocks: [] }));
+  h.requests.find(r => r.kind === 'list').resolve({ data: articles, total: 48, nextCursor: 'page-two' });
   h.latest('/polls/current').resolve({ poll: value }); await drain();
-  const list = h.node('announcements-list'), card = h.node('news-card-0');
+  const list = h.node('announcements-list'), card = h.node(`news-card-legacy-${articles[0].id}`);
   assert.equal(list.children[3].className, 'news-poll-slot');
-  const pager = h.node('announcements-pagination'); assert.match(pager.textContent, /Página 1 de 2/);
+  const pager = h.node('announcements-pagination'); assert.match(pager.textContent, /Página 1/);
   list.querySelector('.news-poll-option').click(); h.latest('/votes').resolve(voted(value)); await drain();
-  assert.ok(h.node('news-card-0') === card);
+  assert.ok(h.node(`news-card-legacy-${articles[0].id}`) === card);
   pager.querySelectorAll('button').at(-1).click();
   assert.equal(list.querySelector('.news-poll'), null);
-  assert.match(h.requests.filter(r => r.kind === 'list').at(-1).path, /offset=24/);
+  assert.match(h.requests.filter(r => r.kind === 'list').at(-1).path, /cursor=page-two/);
   h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: articles.slice(0, 1), total: 25 }); await drain();
   h.popstate('/announcements.html', {});
   h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: articles, total: 25 }); await drain();
@@ -109,10 +109,10 @@ test('current loader interleaves after three articles, keeps page totals and vot
 
 test('poll loader error/retry, null and stale pageshow requests stay independent of articles and reader', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-  const article = { id: 'story', title: 'Sintética', content_blocks: [] };
+  const article = { id: '11111111-1111-4111-8111-111111111111', source: 'legacy', asset_scope: 'legacy', title: 'Sintética', content_blocks: [] };
   h.requests.find(r => r.kind === 'list').resolve({ data: [article], total: 1 });
   h.latest('/polls/current').reject(new Error('offline')); await drain();
-  const card = h.node('news-card-story'); assert.ok(card);
+  const card = h.node(`news-card-legacy-${article.id}`); assert.ok(card);
   const staleRetry = h.node('announcements-list').querySelector('.news-poll-slot').querySelector('button');
   staleRetry.click(); const old = h.latest('/polls/current');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
@@ -122,7 +122,7 @@ test('poll loader error/retry, null and stale pageshow requests stay independent
   assert.equal(h.node('announcements-list').querySelector('.news-poll-slot'), null);
   const count = h.requests.length; staleRetry.click(); assert.equal(h.requests.length, count);
   card.querySelector('a').click(); await drain();
-  h.requests.find(r => r.path === '/api/announcements/story').resolve(article); await drain();
+  h.requests.find(r => r.path === `/api/announcements/${article.id}?source=legacy`).resolve(article); await drain();
   assert.match(h.node('news-reader-content').textContent, /Sintética/);
   h.page.dispose();
 });

@@ -2,9 +2,9 @@ import { element } from '../ui.js';
 import { renderBlocks, cleanupRenderedBlocks } from '../cms-block-renderer.js';
 import { getNewsPresentation, estimateNewsReadTime } from './model.js';
 
-export function composeNewsFeed(articles, pollNode, { offset = 0, category = '' } = {}) {
+export function composeNewsFeed(articles, pollNode, { pageDepth = 0, category = '' } = {}) {
   const items = [...articles];
-  if (pollNode && offset === 0 && !category) items.splice(Math.min(3, items.length), 0, pollNode);
+  if (pollNode && pageDepth === 0 && !category) items.splice(Math.min(3, items.length), 0, pollNode);
   return items;
 }
 
@@ -14,8 +14,12 @@ export function renderNewsCard(article, { index = 0, signal } = {}) {
   const date = article.published_at && Number.isFinite(Date.parse(article.published_at))
     ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(article.published_at)) : '';
   const minutes = article.read_time_minutes ?? estimateNewsReadTime(article.content_blocks || [], article.editorial);
-  const node = element('article', { className: 'news-card', id: `news-card-${article.id}`, 'data-variant': String(index % 8) }, [
-    element('a', { href: `./announcements.html?id=${encodeURIComponent(article.id)}` }, [
+  const source = article.source === undefined ? 'legacy' : article.source;
+  if (!['legacy', 'payload'].includes(source)) throw new Error('invalid_news_source');
+  const id = String(article.id).toLowerCase();
+  const query = new URLSearchParams({ id, source });
+  const node = element('article', { className: 'news-card', id: `news-card-${source}-${id}`, 'data-variant': String(index % 8) }, [
+    element('a', { href: `./announcements.html?${query}` }, [
       cover, element('h2', { text: article.title }),
     ]),
     element('p', { className: 'news-meta', text: [article.category, date,
@@ -32,7 +36,7 @@ export function renderNewsCard(article, { index = 0, signal } = {}) {
   if (signal?.aborted) dispose();
   else if (presentation.cover) {
     const { asset_id, alt } = presentation.cover;
-    renderBlocks(cover, [{ type: 'image', asset_id, alt }], { signal, assetScope: article.asset_scope });
+    renderBlocks(cover, [{ type: 'image', asset_id, alt }], { signal, assetScope: article.asset_scope, assetSource: source });
   } else cover.append(element('span', { className: 'news-card-brand', text: 'Owner News', 'aria-hidden': 'true' }));
   return { node, dispose };
 }

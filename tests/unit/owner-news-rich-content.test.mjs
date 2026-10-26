@@ -34,7 +34,7 @@ test('media URLs use only a closed scope and UUID', async () => {
 });
 test('rich DOM preserves marks, safe links, lists, text-only XSS and mixed order', async () => {
   const { h, root } = await setup();
-  h.context.renderNewsArticle(root, { title: 'Título', content_version: 2, asset_scope: 'owner-news', content_blocks: [
+  h.context.renderNewsArticle(root, { title: 'Título', source: 'payload', content_version: 2, asset_scope: 'owner-news', content_blocks: [
     { type: 'paragraph', text: 'Antes.' }, rich, { type: 'quote', text: 'Depois.' },
   ] }, { signal: h.page.signal });
   assert.equal(root.querySelectorAll('h1').length, 1);
@@ -90,7 +90,7 @@ test('every article media type and catalog cover uses scope; retries and late bl
     { type: 'profile', name: 'Pessoa', asset_id: asset, alt: 'Retrato' },
     { type: 'video', asset_id: asset }, { type: 'image', asset_id: asset, alt: 'Inline' },
     { type: 'pdf', asset_id: asset, title: 'Arquivo' }, { type: 'pdf', asset_id: asset, title: 'Edição', usage: 'edition' }];
-  const story = { title: 'Mídias', content_version: 2, asset_scope: 'owner-news-preview', content_blocks: blocks };
+  const story = { title: 'Mídias', source: 'payload', content_version: 2, asset_scope: 'owner-news-preview', content_blocks: blocks };
   h.context.renderNewsArticle(root, story, { signal: h.page.signal });
   root.querySelector('details').open = true; root.querySelector('details').dispatchEvent(new TestEvent('toggle'));
   assert.equal(h.requests.length, 6);
@@ -111,7 +111,7 @@ test('every article media type and catalog cover uses scope; retries and late bl
 
 test('Dashboard hero and all cards use published media scope, rich fallback and dispose late assets', async () => {
   const h = await createFeedbackHarness('dashboard');
-  h.latest('/api/announcements?').resolve([{ id: asset, title: 'Destaque', content_version: 2, asset_scope: 'owner-news', content_blocks: [
+  h.latest('/api/announcements?').resolve([{ id: asset, source: 'payload', title: 'Destaque', content_version: 2, asset_scope: 'owner-news', content_blocks: [
     { type: 'image', asset_id: asset, alt: 'Capa', usage: 'cover' }, rich,
   ] }]);
   await drain();

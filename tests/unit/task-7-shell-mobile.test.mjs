@@ -711,7 +711,7 @@ test('requests keep current content pending and reject stale filtered responses'
   }
   assert.doesNotMatch(knowledge.slice(knowledge.indexOf('async function loadArticles'), knowledge.indexOf('\n\nfunction newArticle')), /showState\(listNode, 'Carregando artigos/);
   assert.match(knowledge, /if \(!articles\.length && offset > 0\)/);
-  assert.match(announcements, /if \(!announcements\.length && offset > 0\)/);
+  assert.match(announcements, /news_page_restart_required/);
   assert.match(knowledge, /function normalizeCategories/);
   assert.match(academy, /mountAcademy\(page\)/);
   assert.match(profile, /const initialFocus = document\.activeElement/);
@@ -813,18 +813,18 @@ test('Academy initial/repeated error focuses usable retry, then successful retry
 test('Announcements preserves pagination focus and boundary buttons after a deferred page load', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   h.requests.find(r => r.kind === 'list').resolve({
-    data: [{ id: 'announcement-1', title: 'Primeiro', category: 'Geral', content_blocks: [] }],
-    total: 48,
+    data: [{ id: '11111111-1111-4111-8111-111111111111', source: 'legacy', asset_scope: 'legacy', title: 'Primeiro', category: 'Geral', content_blocks: [] }],
+    total: 48, nextCursor: 'second-page',
   });
   await drain();
   const pagination = h.node('announcements-pagination');
   const oldNext = pagination.querySelectorAll('button')[1];
   oldNext.focus();
   oldNext.click();
-  assert.match(h.page.location.href, /offset=24/);
+  assert.match(h.page.location.href, /cursor=second-page/);
   assert.equal(h.requests.filter(r => r.kind === 'list').length, 2);
   h.requests.filter(r => r.kind === 'list').at(-1).resolve({
-    data: [{ id: 'announcement-2', title: 'Segundo', category: 'Geral', content_blocks: [] }], total: 30,
+    data: [{ id: '22222222-2222-4222-8222-222222222222', source: 'payload', asset_scope: 'owner-news', title: 'Segundo', category: 'Geral', content_blocks: [] }], total: 30, nextCursor: null,
   }); await drain();
   assert.match(h.doc.activeElement.textContent, /Segundo/);
   assert.deepEqual(pagination.querySelectorAll('button').map(button => button.disabled), [false, true]);
@@ -833,10 +833,10 @@ test('Announcements preserves pagination focus and boundary buttons after a defe
 test('Announcements restores pagination focus to the list or empty state when controls disappear', async t => {
   for (const empty of [false, true]) {
     const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-    h.requests.find(r => r.kind === 'list').resolve({ data: [{ id: 'one', title: 'Primeiro', content_blocks: [] }], total: 48 }); await drain();
+    h.requests.find(r => r.kind === 'list').resolve({ data: [{ id: '11111111-1111-4111-8111-111111111111', source: 'legacy', asset_scope: 'legacy', title: 'Primeiro', content_blocks: [] }], total: 48, nextCursor: 'next' }); await drain();
     h.node('announcements-pagination').querySelectorAll('button').find(button => !button.disabled).focus();
     h.popstate('/announcements.html?category=Outra', null);
-    h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: empty ? [] : [{ id: 'last', title: 'Último', content_blocks: [] }], total: empty ? 0 : 1 }); await drain();
+    h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: empty ? [] : [{ id: '22222222-2222-4222-8222-222222222222', source: 'legacy', asset_scope: 'legacy', title: 'Último', content_blocks: [] }], total: empty ? 0 : 1, nextCursor: null }); await drain();
     assert.match(h.doc.activeElement.textContent, empty ? /Nenhuma publicação nesta editoria/ : /Último/);
     if (!empty) assert.equal(h.doc.activeElement.tagName, 'A');
   }

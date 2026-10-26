@@ -276,7 +276,15 @@ async function requestAPI(path, options = {}, session) {
   const data = res.status === 204 ? null : await res.json();
   assertCurrentSession(session);
   const totalHeader = res.headers.get('X-Total-Count');
-  return { data, total: totalHeader === null ? null : Number(totalHeader) };
+  const totalValue = totalHeader === null ? null : Number(totalHeader);
+  const nextCursorHeader = res.headers.get('X-Owner-News-Next-Cursor');
+  const readStateHeader = res.headers.get('X-Owner-News-Read-State');
+  return {
+    data,
+    total: Number.isFinite(totalValue) && totalValue >= 0 ? totalValue : null,
+    nextCursor: typeof nextCursorHeader === 'string' && nextCursorHeader ? nextCursorHeader : null,
+    readState: ['complete', 'degraded'].includes(readStateHeader) ? readStateHeader : null,
+  };
 }
 
 export async function fetchAPIAsset(path, options = {}) {

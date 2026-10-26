@@ -258,7 +258,7 @@ function retryableAsset(node, assetId, label, state, { status, apply, reset }) {
     if (pending || token !== state.token || signal.aborted) return;
     pending = true;
     status.textContent = 'Carregando mídia…';
-    fetchAPIAsset(cmsAssetEndpoint(assetId, state.assetScope), { signal }).then(url => {
+    fetchAPIAsset(cmsAssetEndpoint(assetId, state.assetScope, state.assetSource), { signal }).then(url => {
       if (!current()) { URL.revokeObjectURL(url); return; }
       currentURL = url; state.urls.add(url);
       apply(url); status.hidden = true;
@@ -305,11 +305,12 @@ function renderPdf(container, block, state) {
   });
 }
 
-export function renderBlocks(container, blocks, { fallbackText = '', signal, assetScope = 'legacy' } = {}) {
+export function renderBlocks(container, blocks, { fallbackText = '', signal, assetScope = 'legacy', assetSource } = {}) {
   validateAssetScope(assetScope);
   cleanupRenderedBlocks(container);
   const state = renderState(container);
   state.assetScope = assetScope;
+  state.assetSource = assetSource;
   state.controller = new AbortController();
   if (signal) {
     const dispose = () => cleanupRenderedBlocks(container);
