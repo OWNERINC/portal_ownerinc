@@ -289,10 +289,18 @@ export async function main(env = process.env) {
     if (!unavailable) throw new Error('manual_runtime_database_unavailable_readiness_not_observed')
     await stopCms();
     await docker(['start', container], { timeout: 120_000 });
+    const restartedBinding = await docker(['port', container, '5432/tcp']);
+    const restartedMatch = /^127\.0\.0\.1:(\d+)$/u.exec(restartedBinding)
+    if (!restartedMatch) throw new Error('manual_runtime_restart_port_binding_invalid')
+    port = Number(restartedMatch[1])
+    let adminReady = false;
     for (let attempt = 0; attempt < 90; attempt++) {
-      try { const check = await connect(url('cms_runtime', passwords.runtime, 'ownerinc_cms')); await check.end(); break }
-      catch { if (attempt === 89) throw new Error('manual_runtime_restart_readiness_timeout'); await new Promise(resolve => setTimeout(resolve, 1000)); }
+      try { const check = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms')); await check.end(); adminReady = true; break }
+      catch { if (attempt === 89) throw new Error('manual_runtime_restart_admin_readiness_timeout'); await new Promise(resolve => setTimeout(resolve, 1000)); }
     }
+    if (!adminReady) throw new Error('manual_runtime_restart_admin_readiness_timeout')
+    try { const check = await connect(url('cms_runtime', passwords.runtime, 'ownerinc_cms')); await check.end() }
+    catch { throw new Error('manual_runtime_restart_runtime_connection_failed') }
     cmsOrigin = await startCms();
     if ((await fetch(`${cmsOrigin}/editorial/api/news-schedule`, { method: 'POST', headers, body: '{}' })).status !== 404) {
       throw new Error('manual_runtime_schedule_endpoint_present_after_restart')
