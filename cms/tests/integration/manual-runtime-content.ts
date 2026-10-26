@@ -22,6 +22,7 @@ const editor = { uid: `manual-editor-${marker}`, email: `manual-${marker}@exampl
 
 test(`manual-only persisted content ${mode}`, async () => {
   const originalFetch = globalThis.fetch
+  let stage = 'config'
   globalThis.fetch = async url => {
     if (String(url).endsWith('/authority')) return Response.json({ mode: 'payload', epoch: 1 })
     return Response.json({ actor: editor, expiresAt: new Date(Date.now() + 3_600_000).toISOString() })
@@ -33,19 +34,24 @@ test(`manual-only persisted content ${mode}`, async () => {
     assert.equal(config.endpoints.some(endpoint => endpoint.path === '/news-schedule'), false)
     assert.deepEqual(config.jobs?.tasks, [])
     config.typescript.autoGenerate = false
+    stage = 'payload-init'
     await payload.init({ config, disableOnInit: true })
+    stage = 'readiness'
     await payload.find({ collection: 'portal-editors', limit: 1, depth: 0, pagination: false, overrideAccess: true })
     await assertCmsStorageReady(uploadDir)
 
     if (mode === 'prepare') {
+      stage = 'preflight'
       const preflight = await queryGoLivePreflight(await createLocalReq({}, payload), {
         publicationMode: 'manual', getAuthority: async () => ({ mode: 'frozen', epoch: 1 }),
       })
       assert.equal(preflight.newsEmpty, true); assert.equal(preflight.mutation.sequence, '0')
+      stage = 'editor-projection'
       const projection = await payload.create({ collection: 'portal-editors', overrideAccess: true,
         data: { portalUid: editor.uid, email: editor.email } })
       assert.equal(projection.portalUid, editor.uid)
     } else if (mode === 'capture') {
+      stage = 'capture'
       const evidence = JSON.parse(await readFile(evidenceFile, 'utf8'))
       const version = await payload.findVersions({ collection: 'news-articles', overrideAccess: true,
         where: { parent: { equals: evidence.articleId } }, sort: '-updatedAt', depth: 0, limit: 1 })
@@ -55,6 +61,7 @@ test(`manual-only persisted content ${mode}`, async () => {
       assert.equal(digest(await readFile(path.join(uploadDir, evidence.filename))), evidence.mediaSha256)
       await writeFile(evidenceFile, JSON.stringify(evidence), { mode: 0o600 })
     } else {
+      stage = 'verify'
       const evidence = JSON.parse(await readFile(evidenceFile, 'utf8'))
       assert.equal(evidence.schemaVersion, 1)
       const article = await payload.findByID({ collection: 'news-articles', id: evidence.articleId, overrideAccess: true, draft: false, depth: 0 })
@@ -67,6 +74,9 @@ test(`manual-only persisted content ${mode}`, async () => {
       assert.equal(version.docs[0].version._status, evidence.versionStatus)
       assert.equal(digest(await readFile(path.join(uploadDir, evidence.filename))), evidence.mediaSha256)
     }
+  } catch (error) {
+    process.stderr.write(`MANUAL_RUNTIME_CONTENT_DIAGNOSTIC action=${mode} stage=${stage}\n`)
+    throw error
   } finally {
     globalThis.fetch = originalFetch
     await payload.destroy().catch(() => {})
