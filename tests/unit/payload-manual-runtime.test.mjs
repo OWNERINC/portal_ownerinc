@@ -25,7 +25,7 @@ test('manual runtime plan is ordered, manual-only and includes independent resto
     'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
     'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-start',
     'restore-target-readiness', 'restore-target-provision', 'restore-target-control', 'restore-target-observer',
-    'restore-protection-backup', 'restore-cms-database', 'restore-portal-database', 'restore-runtime-grants',
+    'restore-protection-backup', 'restore-cms-database', 'restore-portal-database', 'restore-runtime-verify',
     'restore-control-verify', 'restore-protocol-audit', 'restore-storage',
     'restored-verification', 'owned-cleanup',
   ]);
