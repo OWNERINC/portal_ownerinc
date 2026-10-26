@@ -19,7 +19,8 @@ export const manualRuntimeStages = Object.freeze([
   'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
   'empty-database-provision', 'protocol-finalizer', 'protocol-baseline', 'protocol-qualification',
   'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
-  'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-provision',
+  'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-start',
+  'restore-target-readiness', 'restore-target-provision', 'restore-target-control', 'restore-target-observer',
   'restore-protection-backup', 'independent-restore',
   'restored-verification', 'owned-cleanup',
 ]);
@@ -321,7 +322,7 @@ export async function main(env = process.env) {
     await writeFile(path.join(backup, 'backup.format'), 'payload-v1\n');
     await command('bash', ['-c', '. "$1/scripts/release-manifest.sh"; write_payload_backup_manifest "$2"; verify_storage_archive "$2/uploads.tar.gz"; verify_storage_archive "$2/cms-uploads.tar.gz"', 'fixture', root, backup]);
 
-    step('restore-target-provision');
+    step('restore-target-start');
     await docker(['volume', 'create', '--label', `ownerinc.manual-runtime=${marker}`, targetVolume]);
     await writeFile(postgresEnv, `POSTGRES_DB=ownerinc_cms\nPOSTGRES_USER=cms_admin\nPOSTGRES_PASSWORD=${passwords.admin}\n`, { mode: 0o600 });
     await docker(['run', '--detach', '--pull', 'never', '--name', targetContainer, '--label', `ownerinc.manual-runtime=${marker}`,
@@ -333,6 +334,7 @@ export async function main(env = process.env) {
     const targetBinding = await docker(['port', targetContainer, '5432/tcp']);
     const targetMatch = /^127\.0\.0\.1:(\d+)$/u.exec(targetBinding); if (!targetMatch) throw new Error('manual_runtime_target_port_binding_invalid');
     const targetPort = Number(targetMatch[1]);
+    step('restore-target-readiness');
     let targetAdmin;
     for (let attempt = 0; attempt < 90; attempt++) {
       try { targetAdmin = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms', targetPort)); break }
@@ -340,8 +342,11 @@ export async function main(env = process.env) {
     }
     if (!targetAdmin) throw new Error('manual_runtime_target_readiness_timeout');
     try { await targetAdmin.query('CREATE DATABASE portal_manual_runtime OWNER cms_admin') } finally { await targetAdmin.end() }
+    step('restore-target-provision');
     await provision(targetPort);
+    step('restore-target-control');
     await controlRoles('--bootstrap-control', targetPort);
+    step('restore-target-observer');
     await protocolProof('provision-observer', targetPort);
     step('restore-protection-backup');
     const targetDump = async database => docker(['exec', '-i', targetContainer, 'pg_dump', '--format=custom',

@@ -23,7 +23,8 @@ test('manual runtime plan is ordered, manual-only and includes independent resto
     'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
     'empty-database-provision', 'protocol-finalizer', 'protocol-baseline', 'protocol-qualification',
     'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
-    'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-provision',
+    'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-start',
+    'restore-target-readiness', 'restore-target-provision', 'restore-target-control', 'restore-target-observer',
     'restore-protection-backup', 'independent-restore',
     'restored-verification', 'owned-cleanup',
   ]);
