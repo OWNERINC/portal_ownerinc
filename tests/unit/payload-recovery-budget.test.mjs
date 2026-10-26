@@ -38,7 +38,7 @@ test('candidate-only outer budget covers measured prefix, existing coordinator c
   // observations, not successful-run timing guarantees (remaining: 8.68 min).
   assert.ok(candidateMinutes - recoveryMinutes - observedOutsideRecoveryMinutes - pg16Minutes - fenceMinutes >= 8);
   assert.match(workflow, /  deploy-production:[\s\S]*?timeout-minutes: 25/);
-  assert.deepEqual([...workflow.matchAll(/^        timeout-minutes: (\d+)$/gm)].map(m => Number(m[1])), [5, 6, 5, 15, 6, 6, 10, 15, 120]);
+  assert.deepEqual([...workflow.matchAll(/^        timeout-minutes: (\d+)$/gm)].map(m => Number(m[1])), [8, 10, 5, 6, 5, 15, 6, 6, 10, 15, 120]);
 });
 
 test('B0 prerequisite is separately capped, required natively, and does not skip ordinary validation', () => {
@@ -54,17 +54,21 @@ test('B0 prerequisite is separately capped, required natively, and does not skip
   const candidate = "github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true";
   assert.ok(b0.includes(`if: ${candidate}`));
   const gate = workflow.split('  validate:\n')[1].split('\n    timeout-minutes:')[0];
-  assert.equal(gate, `    needs: isolated-b0-recovery\n    if: \${{ !cancelled() && (needs.isolated-b0-recovery.result == 'success' || (!(${candidate}) && needs.isolated-b0-recovery.result == 'skipped')) }}`);
+  assert.equal(gate, `    needs: [dispatch-input-contract, isolated-b0-recovery]\n    if: \${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.manual_runtime_only == true) && (needs.isolated-b0-recovery.result == 'success' || (!(${candidate}) && needs.isolated-b0-recovery.result == 'skipped')) }}`);
   // Evaluate the exact expression after substituting GitHub context references.
-  for (const event of ['push', 'pull_request', 'workflow_dispatch']) for (const publish of [false, true]) for (const cms of [false, true]) {
+  for (const event of ['push', 'pull_request', 'workflow_dispatch']) for (const publish of [false, true]) for (const cms of [false, true]) for (const manual of [false, true]) {
     const selected = event === 'workflow_dispatch' && publish && !cms;
+    const manualSelected = event === 'workflow_dispatch' && manual;
     for (const cancelled of [false, true]) for (const result of ['success', 'skipped', 'failure', 'cancelled']) {
       const expression = gate.split('if: ${{ ')[1].split(' }}')[0]
         .replaceAll('!cancelled()', String(!cancelled)).replaceAll('needs.isolated-b0-recovery.result', JSON.stringify(result))
         .replaceAll('github.event_name', JSON.stringify(event)).replaceAll("startsWith(github.ref, 'refs/heads/')", 'true')
-        .replaceAll('inputs.publish_candidate_only', String(publish)).replaceAll('inputs.cms_image_only', String(cms));
-      assert.equal(Function(`return (${expression})`)(), !cancelled && (result === 'success' || (!selected && result === 'skipped')));
+        .replaceAll('inputs.publish_candidate_only', String(publish)).replaceAll('inputs.cms_image_only', String(cms))
+        .replaceAll('inputs.manual_runtime_only', String(manual));
+      assert.equal(Function(`return (${expression})`)(), !cancelled && !manualSelected &&
+        (result === 'success' || (!selected && result === 'skipped')));
     }
   }
-  assert.match(workflow, /name: Reject conflicting publication modes\n        if: github.event_name == 'workflow_dispatch' && inputs.cms_image_only == true && inputs.publish_candidate_only == true/);
+  assert.match(workflow, /dispatch-input-contract:[\s\S]*?selected > 1[\s\S]*?exit 1/u);
+  assert.match(b0, /needs: dispatch-input-contract/u);
 });
