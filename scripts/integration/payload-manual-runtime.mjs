@@ -382,7 +382,7 @@ export async function main(env = process.env) {
     await copyFile(path.join(directory, 'content-proof.json'), path.join(restored, 'content-proof.json'));
     step('restored-verification');
     cmsOrigin = await startCms('ownerinc_cms', restored, targetPort);
-    if ((await fetch(`${cmsOrigin}/editorial/api/news-schedule`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status !== 404) {
+    if ((await fetch(`${cmsOrigin}/editorial/api/news-schedule`, { method: 'POST', headers, body: '{}' })).status !== 404) {
       throw new Error('manual_runtime_schedule_endpoint_present_after_restore')
     }
     await command(process.execPath, ['--import', 'tsx', '--test', '--test-reporter=tap', '--test-force-exit',
