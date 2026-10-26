@@ -124,7 +124,12 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
       if (hasCursor) throw controlled(503, 'news_page_restart_required');
       logDegraded(action, failed.map(result => result.source).join(','), options);
     }
-    return { value: combine(results), readState: failed.length ? 'degraded' : 'complete' };
+    const value = combine(results);
+    if (failed.length && action === 'list') {
+      value.count = null;
+      value.nextCursor = null;
+    }
+    return { value, readState: failed.length ? 'degraded' : 'complete' };
   }
 
   async function runCompositeRead(action, input, actor, options, currentAuthority) {

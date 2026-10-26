@@ -53,6 +53,7 @@ test('composite reads coexist in every authority mode and one-source failures de
     });
     const result = await backend.list({ limit: 24, offset: 0 }, actor, { requestId: 'dual-read' });
     assert.equal(result.readState, 'complete');
+    assert.equal(result.value.count, 2, 'complete composition retains the exact total from both sources');
     assert.deepEqual(result.value.rows.map(row => row.source), ['legacy', 'payload']);
     assert.equal(calls.filter(sql => sql.includes('owner_news_authority')).length, 1);
     assert.equal(calls.some(sql => /UPDATE|INSERT/u.test(sql)), false, 'reads never transition authority or release a writer');
@@ -67,6 +68,7 @@ test('composite reads coexist in every authority mode and one-source failures de
   });
   const first = await degraded.list({ limit: 1, offset: 0 }, actor, { requestId: 'safe-id' });
   assert.equal(first.readState, 'degraded');
+  assert.equal(first.value.count, null, 'a partial source count is not an exact composite total');
   assert.equal(first.value.nextCursor, null);
   assert.deepEqual(logs, [{ code: 'owner_news_read_degraded', action: 'list', source: 'payload', requestId: 'safe-id' }]);
 
@@ -78,6 +80,7 @@ test('composite reads coexist in every authority mode and one-source failures de
   });
   const second = await payloadOnly.list({ limit: 1, offset: 0 }, actor);
   assert.equal(second.readState, 'degraded');
+  assert.equal(second.value.count, null, 'a partial source count is not an exact composite total');
   assert.deepEqual(second.value.rows.map(row => row.source), ['payload']);
   assert.equal(second.value.nextCursor, null);
 });
@@ -288,6 +291,18 @@ test('Express omits informational total when bounded dual-source lookahead canno
   assert.equal(response.headers['x-total-count'], undefined);
   assert.equal(response.headers['x-owner-news-read-state'], 'complete');
   assert.deepEqual(response.body.map(row => row.id), [id(1)]);
+});
+test('Express omits total and continuation on a degraded first page while complete pages retain exact totals', async () => {
+  const degraded = appFor(async () => Response.json({ private: 'dependency detail' }, { status: 503 })).api;
+  const partial = await degraded.get('/api/announcements?limit=1&offset=0').set('Authorization', 'Bearer reader').expect(200);
+  assert.equal(partial.headers['x-owner-news-read-state'], 'degraded');
+  assert.equal(partial.headers['x-total-count'], undefined);
+  assert.equal(partial.headers['x-owner-news-next-cursor'], undefined);
+
+  const complete = appFor(async () => Response.json({ rows: [dto(2)], count: 1 })).api;
+  const whole = await complete.get('/api/announcements?limit=100&offset=0&kind=article').set('Authorization', 'Bearer reader').expect(200);
+  assert.equal(whole.headers['x-owner-news-read-state'], 'complete');
+  assert.equal(whole.headers['x-total-count'], '2');
 });
 test('asset stream enforces headers, byte limits, Range and cancellation without JSON buffering', async () => {
   const headers = { 'content-type': 'application/pdf', 'content-length': '4', 'content-disposition': 'inline; filename="test.pdf"', 'accept-ranges': 'bytes', 'content-range': 'bytes 1-4/10' };
