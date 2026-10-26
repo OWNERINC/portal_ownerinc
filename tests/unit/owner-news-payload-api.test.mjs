@@ -96,7 +96,7 @@ test('cursor degradation requires restart, double failure is unavailable, and un
     legacyReader: { async listPublishedAnnouncements() { return { rows: [], count: 0 }; } } };
   const partial = createNewsBackend({ ...base, payloadClient: { async query() { throw new Error('offline'); } }, logger() {} });
   await assert.rejects(partial.list({ limit: 10, offset: 0, boundary: require('../../api/owner-news/feed.js').decodeNewsCursor(cursor, filters) }, actor), e => e.status === 503 && e.code === 'news_page_restart_required');
-  await assert.rejects(partial.list({ limit: 10, offset: 1 }, actor), e => e.status === 503 && e.code === 'news_page_restart_required');
+  await assert.rejects(partial.list({ limit: 10, offset: 1 }, actor), e => e.status === 400 && e.code === 'invalid_request');
   await assert.rejects(partial.list({ limit: 10, offset: 1, boundary: require('../../api/owner-news/feed.js').decodeNewsCursor(cursor, filters) }, actor), e => e.status === 400 && e.code === 'invalid_request');
   const double = createNewsBackend({ ...base, legacyReader: { async listPublishedAnnouncements() { throw new Error('db'); } }, payloadClient: { async query() { throw new Error('cms'); } }, logger() {} });
   await assert.rejects(double.list({ limit: 10, offset: 0 }, actor), e => e.status === 503 && e.code === 'news_unavailable');
@@ -142,7 +142,7 @@ test('Payload runtime configuration distinguishes intentional inactivity, partia
   assert.equal(payloadRuntimeState({ mode: 'payload_frozen', baseURL: 'http://cms.invalid', secret }), 'active');
   assert.equal(payloadRuntimeState({ mode: 'legacy', suppliedClient: true }), 'active');
 });
-test('intentionally inactive Payload preserves bounded legacy offset pagination', async () => {
+test('intentionally inactive Payload still rejects public offset pagination', async () => {
   const calls = [];
   const backend = createNewsBackend({
     pool: { async query() { return { rows: [{ mode: 'legacy', epoch: 1 }] }; } },
@@ -155,8 +155,11 @@ test('intentionally inactive Payload preserves bounded legacy offset pagination'
       ] };
     } },
   });
-  const result = await backend.list({ limit: 2, offset: 200 }, actor);
-  assert.deepEqual(calls, [{ limit: 3, offset: 200 }]);
+  await assert.rejects(backend.list({ limit: 2, offset: 200 }, actor),
+    error => error.status === 400 && error.code === 'invalid_request');
+  assert.deepEqual(calls, []);
+  const result = await backend.list({ limit: 2, offset: 0 }, actor);
+  assert.deepEqual(calls, [{ limit: 3, offset: 0 }]);
   assert.deepEqual(result.value.rows.map(row => row.id), [id(201), id(202)]);
   assert.ok(result.value.nextCursor);
   assert.equal(result.readState, 'complete');
@@ -235,7 +238,7 @@ test('duplicate source identities are source failures: degrade first pages, rest
   assert.equal(first.value.count, null); assert.equal(first.value.nextCursor, null);
   assert.deepEqual(logs, [{ code: 'owner_news_read_degraded', action: 'list', source: 'legacy', requestId: 'duplicate-legacy' }]);
   await assert.rejects(backend.list({ limit: 10, offset: 1 }, actor),
-    error => error.status === 503 && error.code === 'news_page_restart_required');
+    error => error.status === 400 && error.code === 'invalid_request');
 
   const none = createNewsBackend({
     pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },

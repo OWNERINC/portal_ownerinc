@@ -112,10 +112,10 @@ function appFor(pool) {
 
 test('category filtering precedes pagination and total count over validated stable publications', async () => {
   const api = appFor(poolFor());
-  const result = await api.get('/api/announcements?limit=1&offset=1&category=News')
+  const result = await api.get('/api/announcements?limit=1&offset=0&category=News')
     .set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(result.headers['x-total-count'], '2');
-  assert.deepEqual(result.body.map(row => row.id), [id(8)]);
+  assert.deepEqual(result.body.map(row => row.id), [id(5)]);
   assert.deepEqual(Object.keys(result.body[0]).sort(), ['asset_scope', 'category', 'content_blocks', 'editorial', 'id', 'published_at', 'read_time_minutes', 'source', 'title']);
   assert.equal(result.body[0].source, 'legacy');
   assert.equal(result.body[0].asset_scope, 'legacy');
@@ -153,7 +153,7 @@ test('list query strictly validates category type, length, pagination and unknow
   const api = appFor(pool);
   for (const query of [
     `category=${'x'.repeat(101)}`, 'category=News&category=Other', 'category[x]=News',
-    'unexpected=value', 'limit=0', 'offset=-1', 'limit=101',
+    'unexpected=value', 'limit=0', 'offset=-1', 'offset=1', 'limit=101',
   ]) {
     await api.get(`/api/announcements?${query}`).set('Authorization', 'Bearer test-user').expect(400);
   }
