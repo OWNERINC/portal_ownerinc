@@ -353,10 +353,11 @@ antes do isolamento; durante a fixture, as rotas default IPv4/IPv6 são removida
 restauradas por trap. Esse dispatch não publica imagens e não executa deploy.
 
 Evidência de aceite da Task 7: o run CI
-[`40392088380`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/40392088380)
-concluiu a fixture com `PASS` no commit `7704094`. Foram provados publicação manual
+[`40396685569`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/40396685569)
+concluiu a fixture com `PASS` no commit `b4dd8d1`. Foram provados publicação manual
 via HTTP, autenticação e negativa 403 para ator válido sem permissão, ausência de
-schedule, readiness 503 com o banco parado, restart, persistência, backup
+schedule, persistência explícita da Version em estado draft antes da publicação,
+readiness 503 com o banco parado, restart, backup
 `payload-v1`, backup de proteção completo e recuperável, restore em cluster
 independente, bytes dos uploads Portal/CMS, ACLs/owners e catálogo do protocolo pelo
 `cms_observer`, além da igualdade de IDs, Version, status e SHA-256. O guard
