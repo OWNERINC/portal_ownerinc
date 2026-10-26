@@ -180,6 +180,11 @@ real continua sendo uma operação manual sujeita a autorização separada.
    keyset, no máximo 1.000 chunks/101.000 linhas cruas, sem varrer o restante para
    inventar total. `X-Total-Count` só existe quando todas as fontes provam um
    inteiro exato. Total desconhecido é omitido mesmo em resposta `complete`.
+   Offset não zero sem cursor existe apenas como compatibilidade limitada: no modo
+   dual, o merge recebe no máximo 101 candidatos por fonte antes do slice global,
+   então offset profundo pode truncar/esvaziar apesar de haver mais registros.
+   Travessia composta completa e autoritativa exige cursor. No modo Payload
+   intencionalmente inativo, o offset legacy-only e seu total exato são preservados.
 6. Com as duas fontes saudáveis a API emite
    `X-Owner-News-Read-State: complete`; falha de uma fonte na primeira página
    permite os itens saudáveis com `degraded`, mas omite tanto `X-Total-Count`

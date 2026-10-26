@@ -75,15 +75,20 @@ em 100, enquanto a lista privada de cada fonte aceita no máximo 101 itens para 
 o lookahead necessário sem produzir uma página terminal falsa.
 
 Cursor exige `offset` ausente ou zero; combinar cursor e offset não zero retorna
-`400 invalid_request`. Offset sem cursor permanece compatível, mas é continuação:
-perder qualquer fonte configurada exige reinício, nunca uma fatia parcial. Quando
-Payload está intencionalmente inativo (`legacy`/`frozen` e ambos os envs ausentes),
-o offset legado e seu total exato permanecem intactos. Em composição dual, o cursor
-é o contrato autoritativo. A UI do PR 1 já usa Anterior/Próxima, guarda uma pilha de
-cursores canônicos por categoria/tipo em `history.state`, invalida a pilha ao trocar
-filtro e restaura URL/foco em Voltar/Avançar. Um cursor vindo diretamente na URL
-não fabrica página anterior; `news_page_restart_required` remove o cursor e reinicia
-atomicamente na primeira página.
+`400 invalid_request`. Offset não zero sem cursor é aceito somente como
+compatibilidade retroativa limitada. Em leitura dual configurada, o backend busca
+no máximo 101 candidatos de cada fonte antes de fazer o merge e aplicar o offset
+global; portanto offsets profundos podem truncar ou esvaziar a resposta mesmo
+quando ainda existem registros. Cursor é obrigatório para travessia completa e
+autoritativa do feed composto. Qualquer continuação que perde uma fonte configurada
+exige reinício, nunca uma fatia parcial. Quando Payload está intencionalmente inativo
+(`legacy`/`frozen` e ambos os envs ausentes), a compatibilidade legacy-only por
+offset e seu total exato permanecem intactos como implementado. A UI do PR 1 já usa
+Anterior/Próxima, guarda uma pilha de cursores canônicos por categoria/tipo em
+`history.state`, invalida a pilha ao trocar filtro e restaura URL/foco em
+Voltar/Avançar. Um cursor vindo diretamente na URL não fabrica página anterior;
+`news_page_restart_required` remove o cursor e reinicia atomicamente na primeira
+página.
 
 O adapter legado consulta chunks crus determinísticos com `LIMIT 101` e keyset
 `published_at/id`. No SQL, seleção, ordenação e todos os predicados de fronteira usam

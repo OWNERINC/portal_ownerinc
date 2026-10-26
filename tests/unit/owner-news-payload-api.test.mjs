@@ -301,6 +301,7 @@ test('Express omits total and continuation on a degraded first page while comple
 
   const complete = appFor(async () => Response.json({ rows: [dto(2)], count: 1 })).api;
   const whole = await complete.get('/api/announcements?limit=100&offset=0&kind=article').set('Authorization', 'Bearer reader').expect(200);
+  assert.equal(whole.headers['cache-control'], 'private,no-store');
   assert.equal(whole.headers['x-owner-news-read-state'], 'complete');
   assert.equal(whole.headers['x-total-count'], '2');
 });

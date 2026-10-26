@@ -259,18 +259,50 @@ test('nginx protects the edge without shadowing uploads', async () => {
 
 test('Owner News read composition observes authority but cannot invoke writers or transitions', async () => {
   const backend = await read('api/owner-news/backend.js');
-  const imports = backend.slice(0, backend.indexOf('function createNewsBackend'));
-  const orchestration = backend.slice(backend.indexOf('function createNewsBackend'));
+  const topLevel = backend.slice(0, backend.indexOf('const missing'));
+  const requirePaths = source => [...source.matchAll(/\brequire\((['"])([^'"]+)\1\)/gu)].map(match => match[2]);
+  const allowedReadDependencies = [
+    '../cms/locks',
+    '../cms/reader',
+    './authority',
+    './editorial',
+    './feed',
+    './home',
+    './payload-client',
+    './payload-dto',
+    'node:fs',
+    'node:fs/promises',
+    'node:path',
+    'node:stream',
+  ].sort();
+  const topLevelDependencies = requirePaths(topLevel).sort();
+  assert.deepEqual(topLevelDependencies, allowedReadDependencies,
+    'the complete top-level dependency set must stay on the reviewed read-only allowlist');
+  assert.equal((backend.match(/\brequire\s*\(/gu) || []).length, requirePaths(backend).length,
+    'every require call must use one static string literal so dynamic dependencies cannot bypass the allowlist');
+  assert.deepEqual(requirePaths(backend).sort(), topLevelDependencies,
+    'nested or dynamic-scope require calls cannot bypass the top-level dependency allowlist');
+  assert.equal((backend.match(/require\('\.\/authority'\)/gu) || []).length, 1);
+  assert.match(topLevel, /^const \{ getAuthority \} = require\('\.\/authority'\);$/mu,
+    'authority observation must import exactly getAuthority without aliasing or extra capabilities');
 
-  assert.match(imports, /require\('\.\/authority'\)/u, 'read orchestration may observe current authority');
-  assert.doesNotMatch(imports, /require\([^)]*(?:writer|transition|mutation)[^)]*\)/iu,
-    'the read backend must not import a writer, transition, or mutation module');
-  assert.doesNotMatch(orchestration,
-    /\b(?:assertNewsWriter|transitionAuthority|writerAllowed|setAuthority|createAnnouncement|updateAnnouncement|deleteAnnouncement|publishAnnouncement|scheduleAnnouncement)\b/u);
-  assert.doesNotMatch(orchestration, /\.(?:create|update|delete|publish|schedule|transition|mutate)\s*\(/u,
-    'fallback/composition must not call direct mutation APIs');
-  assert.doesNotMatch(orchestration, /\b(?:INSERT\s+INTO|UPDATE\s+owner_news_authority|DELETE\s+FROM)\b/iu,
-    'fallback/composition must not issue direct mutation SQL');
+  const identifiers = backend.match(/[A-Za-z_$][\w$]*/gu) || [];
+  const forbiddenIdentifiers = new Set([
+    'assertNewsWriter', 'transitionAuthority', 'writerAllowed', 'setAuthority',
+    'createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement',
+    'publishAnnouncement', 'scheduleAnnouncement', 'promoteDueScheduledForPool',
+  ]);
+  assert.deepEqual(identifiers.filter(identifier => /(?:writer|transition|mutation)/iu.test(identifier)
+    || forbiddenIdentifiers.has(identifier)), [],
+  'writer, transition, mutation and direct publication API identifiers are forbidden anywhere in the backend');
+  assert.doesNotMatch(backend, /\.(?:create|update|delete|publish|schedule|promote|transition|mutate)\s*\(/iu,
+    'helpers and aliases must not call direct mutation APIs');
+
+  const stringLiterals = [...backend.matchAll(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/gsu)]
+    .map(match => match[0].toUpperCase()).join('\n');
+  const mutatingSql = /\b(?:INSERT|UPDATE|DELETE|MERGE|UPSERT|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE|COPY|CALL|DO|VACUUM|ANALYZE|CLUSTER|REINDEX|REFRESH|COMMENT|REASSIGN|ATTACH|DETACH|SET|RESET|DISCARD|SECURITY\s+LABEL|IMPORT\s+FOREIGN\s+SCHEMA)\b/u;
+  assert.doesNotMatch(stringLiterals, mutatingSql,
+    'backend SQL may read and use BEGIN/COMMIT/ROLLBACK controls, but cannot mutate data, schema, or privileges');
 });
 
 test('Docker build context excludes environment files recursively', async () => {
