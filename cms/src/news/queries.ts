@@ -94,6 +94,9 @@ async function boundedPublishedPage(req: PayloadRequest, input: NewsInputs['list
   budget: ScanBudget = { batches: 0, rawRows: 0 }): Promise<NewsPage> {
   const target = input.offset + input.limit
   if (!Number.isSafeInteger(target) || target < 1) return unavailable()
+  const initial = { batches: budget.batches, rawRows: budget.rawRows }
+  const finish = (rows: NewsDTO[], count: number | null): NewsPage => ({ rows, count,
+    ...(input.scan ? { scan: { batches: budget.batches - initial.batches, rawRows: budget.rawRows - initial.rawRows } } : {}) })
   const retained: NewsDTO[] = []
   let validCount = 0
   let phase: ScanPhase = input.boundary?.published_at === null ? 'null' : 'dated'
@@ -124,15 +127,15 @@ async function boundedPublishedPage(req: PayloadRequest, input: NewsInputs['list
     if (result.docs.length) boundary = rawBoundary(result.docs.at(-1), phase)
     const targetReached = retained.length >= target
     if (result.hasNextPage) {
-      if (targetReached) return { rows: retained.slice(input.offset, target), count: null }
+      if (targetReached) return finish(retained.slice(input.offset, target), null)
       continue
     }
     if (phase === 'dated') {
-      if (targetReached) return { rows: retained.slice(input.offset, target), count: null }
+      if (targetReached) return finish(retained.slice(input.offset, target), null)
       phase = 'null'; boundary = null
       continue
     }
-    return { rows: retained.slice(input.offset, target), count: validCount }
+    return finish(retained.slice(input.offset, target), validCount)
   }
   return unavailable()
 }

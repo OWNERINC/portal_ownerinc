@@ -7,6 +7,8 @@ const { compareNews, encodeNewsCursor, decodeNewsCursor, mergeNewsPages } = requ
 const { createNewsBackend } = require('../../api/owner-news/backend.js');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const item = (source, n, published_at = '2026-10-01T00:00:00.000Z') => ({ source, id: id(n), published_at });
+const navItem = (source, n, published_at = '2026-10-01T00:00:00.000Z') => ({ ...item(source, n, published_at), title: `${source} ${n}`, editorial: null, content_blocks: [] });
+const scannedPage = (rows, count = rows.length, rawRows = rows.length, batches = 1) => ({ rows, count, scan: { rawRows, batches } });
 const filters = { category: 'Updates', kind: 'article' };
 
 test('canonical comparator sorts date descending, null last, then source and lowercase UUID ascending', () => {
@@ -76,25 +78,35 @@ test('composite categories sum exact normalized names and home prefers valid Pay
   assert.deepEqual((await backend.home({}, actor)).value, { content: home });
 });
 
-test('global navigation keeps colliding UUIDs distinct and degrades only when the non-current source fails', async () => {
+test('global navigation streams only source neighbors, keeps colliding UUIDs distinct and stops after first next', async () => {
   const shared = id(7);
-  const legacyRows = [{ source: 'legacy', id: shared, title: 'Legacy twin', published_at: '2026-10-02T00:00:00.000Z' }];
+  const legacyRows = [
+    { source: 'legacy', id: shared, title: 'Legacy twin', published_at: '2026-10-02T00:00:00.000Z' },
+    { source: 'legacy', id: id(6), title: 'Legacy older', published_at: '2026-10-01T00:00:00.000Z' },
+  ];
   const payloadRows = [
     { source: 'payload', id: shared, title: 'Payload twin', published_at: '2026-10-02T00:00:00.000Z', editorial: null },
     { source: 'payload', id: id(8), title: 'Older', published_at: '2026-10-01T00:00:00.000Z', editorial: null },
   ];
+  const calls = { legacy: 0, payload: 0 };
   const backend = createNewsBackend({
     pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
     legacyReader: {
       async getPublishedAnnouncement() { return legacyRows[0]; },
-      async listPublishedAnnouncements() { return { rows: legacyRows, count: 1 }; },
+      async listPublishedAnnouncements(_pool, limit, offset, category, kind, boundary, options) {
+        calls.legacy++; assert.equal(limit, 101); assert.equal(offset, 0); assert.equal(category, 'Team'); assert.equal(kind, 'article');
+        assert.equal(boundary, null); assert.equal(options.includeScanCost, true);
+        return scannedPage(legacyRows);
+      },
     },
     payloadClient: {
       async query(action, input) {
         if (action === 'detail') { assert.deepEqual(input, { id: shared }); return payloadRows[0]; }
+        calls.payload++;
         assert.equal(input.kind, 'article');
         assert.equal(input.category, 'Team');
-        return { rows: payloadRows, count: 2 };
+        assert.equal(input.scan, true);
+        return scannedPage(payloadRows);
       },
     },
   });
@@ -102,8 +114,98 @@ test('global navigation keeps colliding UUIDs distinct and degrades only when th
   assert.equal(result.readState, 'complete');
   assert.deepEqual(result.value, {
     previous: { source: 'legacy', id: shared, title: 'Legacy twin' },
-    next: { source: 'payload', id: id(8), title: 'Older' },
+    next: { source: 'legacy', id: id(6), title: 'Legacy older' },
   });
+  assert.deepEqual(calls, { legacy: 1, payload: 1 }, 'each source stops once its first candidate after current is known');
+});
+
+test('global navigation returns null neighbors for an edition without starting source scans', async () => {
+  let scans = 0;
+  const edition = { ...navItem('payload', 10), editorial: { version: 1, kind: 'edition' } };
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { scans++; throw new Error('must not scan'); } },
+    payloadClient: { async query(action) { if (action !== 'detail') scans++; return edition; } },
+  });
+  assert.deepEqual(await backend.navigation({ id: edition.id, source: 'payload' }, actor),
+    { value: { previous: null, next: null }, readState: 'complete' });
+  assert.equal(scans, 0);
+});
+
+test('global navigation proves current/category participation, exhausts to null next, and degrades only the non-current source', async () => {
+  const current = navItem('payload', 5, '2026-10-02T00:00:00.000Z');
+  const previous = navItem('payload', 4, '2026-10-03T00:00:00.000Z');
+  let payloadRows = [previous, current], payloadFailure = false;
+  const logs = [];
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { throw new Error('legacy unavailable'); } },
+    payloadClient: { async query(action, input) {
+      if (action === 'detail') return current;
+      if (payloadFailure) throw new Error('payload scan unavailable');
+      assert.ok(['Team', 'Other'].includes(input.category));
+      return scannedPage(payloadRows);
+    } },
+    logger: line => logs.push(JSON.parse(line)),
+  });
+  const result = await backend.navigation({ id: current.id, source: 'payload', category: 'Team' }, actor, { requestId: 'nav' });
+  assert.equal(result.readState, 'degraded');
+  assert.deepEqual(result.value, { previous: { source: 'payload', id: previous.id, title: previous.title }, next: null });
+  assert.deepEqual(logs, [{ code: 'owner_news_read_degraded', action: 'navigation', source: 'legacy', requestId: 'nav' }]);
+
+  payloadRows = [previous];
+  await assert.rejects(backend.navigation({ id: current.id, source: 'payload', category: 'Other' }, actor),
+    error => error.status === 404 && error.code === 'not_found');
+  payloadFailure = true;
+  await assert.rejects(backend.navigation({ id: current.id, source: 'payload', category: 'Team' }, actor),
+    error => error.status === 503 && error.code === 'news_unavailable');
+});
+
+test('global navigation rejects cross-page duplicate/no-progress and one accumulated sparse scan budget', async () => {
+  const current = navItem('payload', 999, '2026-01-01T00:00:00.000Z');
+  const firstRows = Array.from({ length: 101 }, (_, index) => navItem('payload', index + 1, '2026-12-01T00:00:00.000Z'));
+  const makeBackend = responder => createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { return scannedPage([]); } },
+    payloadClient: { async query(action, input) { return action === 'detail' ? current : responder(input); } },
+    logger() {},
+  });
+
+  let calls = 0;
+  const duplicate = makeBackend(input => {
+    calls++;
+    if (calls === 1) return scannedPage(firstRows, null, 101, 1);
+    assert.deepEqual(input.boundary, { published_at: firstRows.at(-1).published_at, source: 'payload', id: firstRows.at(-1).id });
+    return scannedPage([{ ...firstRows[0], published_at: '2026-11-01T00:00:00.000Z' }], 1, 1, 1);
+  });
+  await assert.rejects(duplicate.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  const noProgress = makeBackend(() => {
+    calls++;
+    return calls === 1 ? scannedPage(firstRows, null, 101, 1)
+      : scannedPage([firstRows.at(-1)], 1, 1, 1);
+  });
+  await assert.rejects(noProgress.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
+
+  calls = 0;
+  const overRawBudget = makeBackend(() => {
+    calls++;
+    return calls === 1 ? scannedPage(firstRows, null, 101000, 1)
+      : scannedPage([navItem('payload', 102, '2026-11-01T00:00:00.000Z')], 1, 1, 1);
+  });
+  await assert.rejects(overRawBudget.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
+  assert.equal(calls, 2, 'scan cost is accumulated across private pages instead of refreshing per call');
+
+  calls = 0;
+  const overBatchBudget = makeBackend(() => {
+    calls++;
+    return calls === 1 ? scannedPage(firstRows, null, 101, 999)
+      : scannedPage([navItem('payload', 102, '2026-11-01T00:00:00.000Z')], 1, 1, 2);
+  });
+  await assert.rejects(overBatchBudget.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
+  assert.equal(calls, 2);
 });
 
 const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false };

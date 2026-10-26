@@ -47,13 +47,16 @@ export type NewsDTO = {
   /** Status of the exact saved revision, NOT a claim about current publication. */
   preview_revision?: { id: string; source: 'payload' | 'legacy'; status: 'draft' | 'published' | 'scheduled' | 'archived' }
 }
-export type NewsPage = { rows: NewsDTO[]; count: number | null }
+export type NewsScanCost = { rawRows: number; batches: number }
+export type NewsPage = { rows: NewsDTO[]; count: number | null; scan?: NewsScanCost }
 export type NewsQuery = {
   limit: number
   offset: number
   category?: string
   kind?: 'article' | 'edition'
   boundary?: NewsBoundary
+  /** Private bridge-only accounting; never accepted by the public Portal API. */
+  scan?: true
 }
 export type NewsBoundary = { published_at: string | null; source: 'legacy' | 'payload'; id: string }
 export type NewsNavigation = {

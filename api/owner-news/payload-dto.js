@@ -23,7 +23,7 @@ function validInput(action, value) {
   const optional = (name, validate) => !Object.hasOwn(value, name) || validate(value[name]);
   if (!record(value)) return false;
   switch (action) {
-    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind', 'boundary'], ['limit', 'offset']) && integer(value.limit, 1, PRIVATE_LIST_MAX) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind) && optional('boundary', boundary);
+    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind', 'boundary', 'scan'], ['limit', 'offset']) && integer(value.limit, 1, PRIVATE_LIST_MAX) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind) && optional('boundary', boundary) && optional('scan', v => v === true);
     case 'detail': return keys(value, ['id']) && uuid(value.id);
     case 'categories': return keys(value, ['kind', 'withCounts'], ['withCounts']) && typeof value.withCounts === 'boolean' && optional('kind', kind);
     case 'navigation': return keys(value, ['id', 'category'], ['id']) && uuid(value.id) && optional('category', v => text(v, 100));
@@ -34,7 +34,7 @@ function validInput(action, value) {
   }
 }
 function validPublicInput(action, value) {
-  if (action === 'list') return validInput(action, value) && (!Object.hasOwn(value, 'boundary') || value.offset === 0);
+  if (action === 'list') return validInput(action, value) && !Object.hasOwn(value, 'scan') && (!Object.hasOwn(value, 'boundary') || value.offset === 0);
   if (!['detail', 'navigation', 'asset'].includes(action)) return validInput(action, value);
   if (!record(value) || !['legacy', 'payload'].includes(value.source)) return false;
   return validInput(action, Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'source')));
@@ -99,9 +99,12 @@ function readNewsDTO(json) {
   assert(json.content_blocks.filter(b => b.type === 'image' && b.usage === 'cover').length <= 1 && json.content_blocks.filter(b => b.type === 'pdf' && b.usage === 'edition').length <= 1);
   return json;
 }
-function readNewsPage(json) {
-  assert(keys(json, ['rows', 'count']) && Array.isArray(json.rows) && json.rows.length <= PRIVATE_LIST_MAX
+function readNewsPage(json, { scan = false } = {}) {
+  const names = scan ? ['rows', 'count', 'scan'] : ['rows', 'count'];
+  assert(keys(json, names) && Array.isArray(json.rows) && json.rows.length <= PRIVATE_LIST_MAX
     && (json.count === null || integer(json.count, json.rows.length)));
+  if (scan) assert(keys(json.scan, ['rawRows', 'batches']) && integer(json.scan.rawRows, json.rows.length, 101000)
+    && integer(json.scan.batches, 1, 1000));
   const seen = new Set();
   for (const row of json.rows) {
     readNewsDTO(row);
@@ -111,7 +114,7 @@ function readNewsPage(json) {
   return json;
 }
 function readResult(action, json, input) {
-  if (action === 'list') { readNewsPage(json); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }
+  if (action === 'list') { readNewsPage(json, { scan: input.scan === true }); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }
   else if (action === 'detail' || action === 'preview') {
     readNewsDTO(json); assert(json.id === input.id && json.asset_scope === (action === 'preview' ? 'owner-news-preview' : 'owner-news'));
     if (json.preview_revision) assert(json.preview_revision.id === input.versionId && json.preview_revision.source === input.source);

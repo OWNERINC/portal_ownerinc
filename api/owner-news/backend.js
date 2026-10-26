@@ -77,6 +77,11 @@ const controlled = (status, code) => Object.assign(new Error(code), { status, co
 const safeRequestId = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : null;
 const withoutSource = input => Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'source'));
 const sourceOf = input => ['legacy', 'payload'].includes(input?.source) ? input.source : null;
+const NAVIGATION_PAGE_SIZE = 101;
+const NAVIGATION_MAX_PAGES = 1000;
+const NAVIGATION_MAX_BATCHES = 1000;
+const NAVIGATION_MAX_RAW_ROWS = NAVIGATION_PAGE_SIZE * NAVIGATION_MAX_BATCHES;
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeReader = getPublishedHome,
   legacyPreviewReader = legacyPreview, legacyAssetReader = legacyAsset, logger = console.error } = {}) {
@@ -218,20 +223,51 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
     }
   }
 
-  async function collectSource(source, input, actor, options, currentAuthority) {
-    const rows = []; let boundary = null;
-    for (let batch = 0; batch < 1000; batch++) {
-      const sourceInput = { limit: 101, offset: 0, ...(input.category === undefined ? {} : { category: input.category }), kind: 'article', ...(boundary ? { boundary } : {}) };
-      const page = source === 'legacy'
-        ? await legacyReader.listPublishedAnnouncements(pool, 101, 0, input.category, 'article', boundary, { exactTotal: false })
+  function navigationPage(source, page, boundary, seen, budget) {
+    if (!record(page) || Object.keys(page).length !== 3 || !Array.isArray(page.rows) || page.rows.length > NAVIGATION_PAGE_SIZE
+      || !(page.count === null || (Number.isSafeInteger(page.count) && page.count >= page.rows.length))
+      || !record(page.scan) || Object.keys(page.scan).length !== 2
+      || !Number.isSafeInteger(page.scan.rawRows) || page.scan.rawRows < page.rows.length || page.scan.rawRows > NAVIGATION_MAX_RAW_ROWS
+      || !Number.isSafeInteger(page.scan.batches) || page.scan.batches < 1 || page.scan.batches > NAVIGATION_MAX_BATCHES) throw unavailable();
+    if (page.count === null && page.rows.length !== NAVIGATION_PAGE_SIZE) throw unavailable();
+    budget.pages++;
+    budget.rawRows += page.scan.rawRows;
+    budget.batches += page.scan.batches;
+    if (budget.pages > NAVIGATION_MAX_PAGES || budget.rawRows > NAVIGATION_MAX_RAW_ROWS
+      || budget.batches > NAVIGATION_MAX_BATCHES) throw unavailable();
+    try { assertUniqueNewsRows(source, page.rows); } catch { throw unavailable(); }
+    let previous = boundary;
+    for (const row of page.rows) {
+      const identity = row.id.toLowerCase();
+      if (typeof row.title !== 'string' || row.title.length > 200 || seen.has(identity)) throw unavailable();
+      seen.add(identity);
+      if (seen.size > NAVIGATION_MAX_RAW_ROWS || (previous && compareNews(row, previous) <= 0)) throw unavailable();
+      previous = row;
+    }
+    return page;
+  }
+
+  async function scanSourceNeighbors(source, input, current, actor, options, currentAuthority) {
+    const seen = new Set();
+    const budget = { pages: 0, rawRows: 0, batches: 0 };
+    let boundary = null, previous = null, currentFound = false;
+    while (budget.pages < NAVIGATION_MAX_PAGES) {
+      const sourceInput = { limit: NAVIGATION_PAGE_SIZE, offset: 0,
+        ...(input.category === undefined ? {} : { category: input.category }), kind: 'article', scan: true,
+        ...(boundary ? { boundary } : {}) };
+      const rawPage = source === 'legacy'
+        ? await legacyReader.listPublishedAnnouncements(pool, NAVIGATION_PAGE_SIZE, 0, input.category, 'article', boundary,
+          { exactTotal: false, includeScanCost: true })
         : await payloadComposite('list', sourceInput, actor, options, currentAuthority);
-      rows.push(...page.rows);
-      assertUniqueNewsRows(source, rows);
-      if (page.rows.length < 101) return rows;
-      const last = page.rows.at(-1);
-      const next = { published_at: last.published_at, source: last.source, id: last.id };
-      if (boundary && compareNews(next, boundary) === 0) throw unavailable();
-      boundary = next;
+      const page = navigationPage(source, rawPage, boundary, seen, budget);
+      for (const row of page.rows) {
+        const order = compareNews(row, current);
+        if (order < 0) previous = row;
+        else if (order === 0) currentFound = true;
+        else return { previous, next: row, currentFound };
+      }
+      if (page.count !== null) return { previous, next: null, currentFound };
+      boundary = page.rows.at(-1);
     }
     throw unavailable();
   }
@@ -242,17 +278,17 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
     if (!current) throw controlled(404, 'not_found');
     if (announcementKind(current) === 'edition') return { value: { previous: null, next: null }, readState: 'complete' };
     const results = await Promise.all([
-      capture('legacy', () => collectSource('legacy', input, actor, options, currentAuthority)),
-      capture('payload', () => collectSource('payload', input, actor, options, currentAuthority)),
+      capture('legacy', () => scanSourceNeighbors('legacy', input, current, actor, options, currentAuthority)),
+      capture('payload', () => scanSourceNeighbors('payload', input, current, actor, options, currentAuthority)),
     ]);
     const own = results.find(result => result.source === currentSource);
     if (!own.ok) throw unavailable();
+    if (!own.value.currentFound) throw controlled(404, 'not_found');
     return finishComposite('navigation', results, options, values => {
-      const rows = values.filter(v => v.ok).flatMap(v => v.value).sort(compareNews);
-      const at = rows.findIndex(row => row.source === currentSource && row.id === input.id);
-      if (at < 0) throw controlled(404, 'not_found');
+      const previous = values.filter(v => v.ok && v.value.previous).map(v => v.value.previous).sort(compareNews).at(-1);
+      const next = values.filter(v => v.ok && v.value.next).map(v => v.value.next).sort(compareNews)[0];
       const reference = row => row ? { source: row.source, id: row.id, title: row.title } : null;
-      return { previous: reference(rows[at - 1]), next: reference(rows[at + 1]) };
+      return { previous: reference(previous), next: reference(next) };
     });
   }
 

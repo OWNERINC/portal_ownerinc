@@ -423,7 +423,7 @@ async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = n
     const result = await publishedAnnouncementBatch(pool, rawBoundary);
     rawRows += result.rows.length;
     if (rawRows > ANNOUNCEMENT_MAX_RAW_ROWS) throw new Error('announcement_scan_limit');
-    if (!result.rows.length) return { rows: stable, exhausted: true };
+    if (!result.rows.length) return { rows: stable, exhausted: true, scan: { rawRows, batches: batch + 1 } };
     const last = result.rows.at(-1);
     rawBoundary = { published_at: normalizePublishedAt(announcementPublishedAt(last)), source: 'legacy', id: String(last.id).toLowerCase() };
 
@@ -436,9 +436,10 @@ async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = n
 
     const exhausted = result.rows.length < ANNOUNCEMENT_BATCH_SIZE;
     if (maxRows !== null && stable.length >= maxRows) {
-      return { rows: stable.slice(0, maxRows), exhausted: exhausted && stable.length === maxRows };
+      return { rows: stable.slice(0, maxRows), exhausted: exhausted && stable.length === maxRows,
+        scan: { rawRows, batches: batch + 1 } };
     }
-    if (exhausted) return { rows: stable, exhausted: true };
+    if (exhausted) return { rows: stable, exhausted: true, scan: { rawRows, batches: batch + 1 } };
   }
   throw new Error('announcement_scan_limit');
 }
@@ -465,12 +466,13 @@ async function listPublishedAnnouncementCategories(pool, { kind, withCounts = fa
   return withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
 }
 
-async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true } = {}) {
+async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true, includeScanCost = false } = {}) {
   const result = await stablePublishedAnnouncements(pool, { boundary, category, kind,
     maxRows: exactTotal ? null : offset + limit });
   return {
     count: result.exhausted ? result.rows.length : null,
     rows: result.rows.slice(offset, offset + limit),
+    ...(includeScanCost ? { scan: result.scan } : {}),
   };
 }
 

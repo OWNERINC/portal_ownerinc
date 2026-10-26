@@ -26,7 +26,10 @@ function appFor(fetchImpl, mode = 'payload', overrides = {}) {
   const calls = [], pool = { async query(sql) { calls.push(sql); return { rows: [{ mode, epoch: 1 }] }; } };
   const legacyDto = { ...dto(), source: 'legacy', asset_scope: 'legacy' };
   const legacyReader = overrides.legacyReader || {
-    async listPublishedAnnouncements(_pool, limit, _offset, _category, kind) { return { rows: kind === 'article' && limit === 101 ? [legacyDto] : [], count: kind === 'article' && limit === 101 ? 1 : 0 }; },
+    async listPublishedAnnouncements(_pool, limit, _offset, _category, kind, _boundary, options = {}) {
+      const page = { rows: kind === 'article' && limit === 101 ? [legacyDto] : [], count: kind === 'article' && limit === 101 ? 1 : 0 };
+      return options.includeScanCost ? { ...page, scan: { rawRows: page.rows.length, batches: 1 } } : page;
+    },
     async listPublishedAnnouncementCategories(_pool, input) { return input.withCounts ? { total: 0, categories: [] } : []; },
     async getPublishedAnnouncement() { return legacyDto; },
   };
@@ -169,8 +172,18 @@ test('JSON transport uses fixed POST paths, exact actor/input, isolated headers 
   assert.throws(() => readNewsPage({ rows: [dto()], count: 0 }), /news_unavailable/);
   assert.equal(readNewsPage({ rows: [dto()], count: null }).count, null);
   assert.throws(() => readNewsPage({ rows: [dto(), dto()], count: null }), /news_unavailable/);
+  const scanned = { rows: [dto()], count: null, scan: { rawRows: 101, batches: 2 } };
+  assert.deepEqual(readResult('list', scanned, { limit: 1, offset: 0, scan: true }).scan, scanned.scan);
+  for (const malformed of [
+    { rows: [dto()], count: null },
+    { ...scanned, scan: { rawRows: 101, batches: 0 } },
+    { ...scanned, scan: { rawRows: 101, batches: 2, extra: true } },
+    { ...scanned, scan: { rawRows: -1, batches: 1 } },
+  ]) assert.throws(() => readResult('list', malformed, { limit: 1, offset: 0, scan: true }), /news_unavailable/);
+  assert.throws(() => readResult('list', scanned, { limit: 1, offset: 0 }), /news_unavailable/);
   await assert.rejects(client.query('../news-articles', {}, actor), /news_unavailable/);
   await assert.rejects(client.query('list', { limit: 102, offset: 0 }, actor), /news_unavailable/);
+  await assert.rejects(client.query('list', { limit: 1, offset: 0, scan: false }, actor), /news_unavailable/);
 });
 test('duplicate source identities fail closed in backend composition and Express transport', async () => {
   const duplicateLegacy = { ...dto(7), source: 'legacy', asset_scope: 'legacy' };

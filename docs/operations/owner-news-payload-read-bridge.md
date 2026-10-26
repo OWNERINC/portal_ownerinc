@@ -151,7 +151,15 @@ Conteúdo/referências/arquivos e `kind` são validados durante o avanço, reten
 o necessário para `offset + limit`; total fica null até a exaustão comprovar exatidão.
 A agregação de categorias mantém sua varredura separada em lotes de 100. Categoria
 vazia é filtro válido, mas não entra no catálogo de nomes. Navegação exclui edições;
-uma edição retorna previous/next null. Falha
+uma edição retorna previous/next null. A navegação global percorre cada fonte por
+keyset e retém somente o vizinho anterior, o primeiro posterior, a fronteira e IDs
+vistos para integridade; para assim que conhece o primeiro posterior. Cada página
+privada solicitada para essa travessia inclui custo estrito `{rawRows,batches}`. Esse
+campo nunca integra DTO/header/resposta pública e é somado pelo Portal em um único
+limite de 1.000 lotes/101.000 candidatos crus por fonte durante toda a requisição,
+impedindo que novas chamadas privadas renovem o orçamento. Duplicata, desordem,
+falta de progresso, metadata de custo inválida ou orçamento excedido falham fechados.
+Falha
 operacional de arquivo/storage/DB não é convertida em feed vazio. Apenas conteúdo
 malformado ou referência com shape/tipo inválido exclui aquela publicação.
 

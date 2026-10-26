@@ -80,10 +80,11 @@ test('list pushes canonical filters, keyset order and storage limit without mate
     },
   } as unknown as PayloadRequest['payload']
   const boundary = { published_at: '2026-10-01T00:00:00.000Z', source: 'payload' as const, id: id(1) }
-  const page = await queryPublishedNews(req, { limit: 101, offset: 0, category: 'News', kind: 'article', boundary }, actor)
+  const page = await queryPublishedNews(req, { limit: 101, offset: 0, category: 'News', kind: 'article', boundary, scan: true }, actor)
   assert.equal(page.rows.length, 101)
   assert.equal(page.rows[0].id, id(2)); assert.equal(page.rows.at(-1)?.id, id(102))
   assert.equal(page.count, null)
+  assert.deepEqual(page.scan, { rawRows: 101, batches: 1 })
   assert.equal(calls.length, 1)
   assert.equal(calls[0].limit, 101)
   assert.equal(calls[0].page, 1)
@@ -113,10 +114,11 @@ test('list scans invalid rows with moving bounded raw keysets and exact exhausti
       return calls.length === 1 ? { docs: invalid, hasNextPage: true } : { docs: final, hasNextPage: false }
     },
   } as unknown as PayloadRequest['payload']
-  const result = await queryPublishedNews(req, { limit: 2, offset: 0, category: 'News',
+  const result = await queryPublishedNews(req, { limit: 2, offset: 0, category: 'News', scan: true,
     boundary: { published_at: null, source: 'legacy', id: id(999) } }, actor)
   assert.deepEqual(result.rows.map(row => row.id), [id(102), id(103)])
   assert.equal(result.count, 2)
+  assert.deepEqual(result.scan, { rawRows: 103, batches: 2 })
   assert.equal(calls.length, 2)
   assert.ok(calls.every(call => call.limit === 101 && call.page === 1 && call.sort === 'id'))
   assert.deepEqual(calls[0].where, { and: [
@@ -225,6 +227,8 @@ test('exact service POST allowlist is separate from login and refuses browser/cr
   assert.throws(() => readNewsActor({ ...actor, role: 'admin' }))
   assert.equal(readNewsActor({ ...actor, uid: 'original-usuário', name: 'a'.repeat(201) }).uid, 'original-usuário')
   assert.throws(() => readNewsInput('list', { limit: 102, offset: 0 }))
+  assert.equal(readNewsInput('list', { limit: 1, offset: 0, scan: true }).scan, true)
+  for (const scan of [false, 0, 1, 'true', null, {}]) assert.throws(() => readNewsInput('list', { limit: 1, offset: 0, scan }))
   assert.throws(() => readNewsInput('home', { draft: true }))
 })
 test('I1 enum validation accepts only primitive exact strings and never coerces objects', () => {

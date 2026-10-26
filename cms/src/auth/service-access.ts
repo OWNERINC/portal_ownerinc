@@ -40,8 +40,9 @@ export function readNewsInput<A extends NewsAction>(action: A, value: unknown): 
   const kind = () => { if (Object.hasOwn(input, 'kind')) oneOf(input.kind, ['article', 'edition']) }
   switch (action) {
     case 'list':
-      keys(input, ['limit', 'offset', 'category', 'kind', 'boundary']); category(); kind()
+      keys(input, ['limit', 'offset', 'category', 'kind', 'boundary', 'scan']); category(); kind()
       if (!Number.isSafeInteger(input.limit) || Number(input.limit) < 1 || Number(input.limit) > PRIVATE_LIST_MAX || !Number.isSafeInteger(input.offset) || Number(input.offset) < 0 || Number(input.offset) > 1000000) fail()
+      if (Object.hasOwn(input, 'scan') && input.scan !== true) fail()
       if (Object.hasOwn(input, 'boundary')) {
         const boundary = record(input.boundary); keys(boundary, ['published_at', 'source', 'id'])
         if (!(boundary.published_at === null || (typeof boundary.published_at === 'string' && Number.isFinite(Date.parse(boundary.published_at))))) fail()

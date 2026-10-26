@@ -441,9 +441,10 @@ test('legacy lookahead uses bounded keyset chunks and continues past invalid and
       } };
     },
   };
-  const result = await listPublishedAnnouncements(pool, 2, 0, undefined, undefined, null, { exactTotal: false });
+  const result = await listPublishedAnnouncements(pool, 2, 0, undefined, undefined, null, { exactTotal: false, includeScanCost: true });
   assert.deepEqual(result.rows.map(row => row.id), [newsId(101), newsId(103)]);
   assert.equal(result.count, 2);
+  assert.deepEqual(result.scan, { rawRows: 103, batches: 2 });
   assert.equal(reads, 2);
   const selects = calls.filter(call => call.sql.includes('SELECT d.id, d.title'));
   assert.equal(selects.length, 2);
