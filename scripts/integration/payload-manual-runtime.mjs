@@ -263,7 +263,8 @@ export async function main(env = process.env) {
     const create = await fetch(`${cmsOrigin}/editorial/api/news-articles?draft=true`, { method: 'POST', headers,
       body: JSON.stringify({ title: 'Manual runtime article', category: 'Manual runtime',
         editorial: { version: 1, kind: 'article', summary: 'Synthetic runtime proof', author: '', source_label: '', source_date: null },
-        body: [{ blockType: 'pdf', media: uploaded.id, title: 'Proof' }], _status: 'draft' }) })
+        body: [{ blockType: 'paragraph', text: 'Manual publication body.' },
+          { blockType: 'pdf', media: uploaded.id, title: 'Proof' }], _status: 'draft' }) })
     const draft = create.status === 201 ? (await create.json()).doc : null
     if (!draft?.id) throw new Error('manual_runtime_http_create_failed')
     const save = await fetch(`${cmsOrigin}/editorial/api/news-articles/${draft.id}?draft=true`, { method: 'PATCH', headers,
