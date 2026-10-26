@@ -373,7 +373,7 @@ e `zlib` para `1.3.2-r1`; npm fica em
 `12.2.0`, cuja engine requer Node `^24.15.0` ou superior e é compatível com essa
 base; como esse release ainda embute `brace-expansion@5.0.9` e `undici@6.28.0`,
 cada estágio substitui somente esses pacotes por upstreams corrigidos `5.0.11` e
-`6.28.1` (CVE-2026-19534), sem remover npm. O build omite
+`6.29.1` (CVE-2026-19534 e CVE-2026-109869), sem remover npm. O build omite
 opcionais apenas no grafo API embutido e restaura Sharp musl `0.35.5`/
 libvips `1.3.4`, versões travadas pelo lockfile API. O grafo API atualiza somente
 os transitivos Firebase Admin `@grpc/grpc-js` `1.14.4`→`1.14.5` e
