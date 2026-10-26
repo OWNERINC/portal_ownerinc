@@ -72,7 +72,7 @@ function testConfig() {
   return { payload, locked, preferences, portalEditors }
 }
 
-test('Payload 3.90.2 generated lock collection filters denied reads without weakening lock mutations', async () => {
+test('Payload 3.92.0 generated lock collection filters denied reads without weakening lock mutations', async () => {
   const { payload, locked } = testConfig()
   const lockConfig = locked as unknown as {
     slug: string; lockDocuments: boolean; fields: Array<{ name: string; relationTo?: string[] }>
@@ -167,7 +167,7 @@ test('getAccessResults keeps a Benefits-only v2 actor out of News and confines l
   assert.deepEqual(forcedOwner, { relationTo: genericUser.collection, value: genericUser.id })
 })
 
-test('pinned Payload 3.90.2 DashboardView global-lock query completes with no lock metadata for a v2-only actor', async () => {
+test('pinned Payload 3.92.0 DashboardView global-lock query completes with no lock metadata for a v2-only actor', async () => {
   const { payload, locked } = testConfig()
   const lockConfig = locked as unknown as Record<string, unknown> & {
     fields: Array<Record<string, unknown>>

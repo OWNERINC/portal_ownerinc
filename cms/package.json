@@ -17,13 +17,13 @@
     "jobs:run": "payload jobs:run --cron \"* * * * *\" --queue owner-news"
   },
   "dependencies": {
-    "payload": "3.90.2",
-    "@payloadcms/next": "3.90.2",
-    "@payloadcms/db-postgres": "3.90.2",
-    "@payloadcms/richtext-lexical": "3.90.2",
-    "@payloadcms/translations": "3.90.2",
-    "@payloadcms/ui": "3.90.2",
-    "next": "16.4.2",
+    "payload": "3.92.0",
+    "@payloadcms/next": "3.92.0",
+    "@payloadcms/db-postgres": "3.92.0",
+    "@payloadcms/richtext-lexical": "3.92.0",
+    "@payloadcms/translations": "3.92.0",
+    "@payloadcms/ui": "3.92.0",
+    "next": "16.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "graphql": "16.11.0",
@@ -34,12 +34,10 @@
   "overrides": {
     "esbuild": "0.28.2",
     "tsx": "$tsx",
-    "@payloadcms/next@3.90.2": {
+    "@payloadcms/next@3.92.0": {
       "sass": "1.105.1"
     },
-    "payload@3.90.2": {
-      "undici": "7.30.0"
-    },
+    "happy-dom": "21.0.4",
     "monaco-editor@0.57.0": {
       "dompurify": "3.4.17"
     }

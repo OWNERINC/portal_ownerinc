@@ -496,14 +496,22 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
   for (const [path, entry] of esbuildPackages) assert.equal(entry.version, '0.28.2', path);
 });
 
-test('CMS pins the audited Next and DOMPurify security releases', async () => {
+test('CMS pins the audited Payload, Next, DOMPurify and transitive security releases', async () => {
   const [manifest, lockfile] = await Promise.all([
     read('cms/package.json').then(JSON.parse),
     read('cms/package-lock.json').then(JSON.parse),
   ]);
 
-  assert.equal(manifest.dependencies.next, '16.4.2');
+  const payloadPackages = ['payload', '@payloadcms/next', '@payloadcms/db-postgres',
+    '@payloadcms/richtext-lexical', '@payloadcms/translations', '@payloadcms/ui'];
+  for (const name of payloadPackages) assert.equal(manifest.dependencies[name], '3.92.0', name);
+  assert.equal(manifest.dependencies.next, '16.4.3');
+  assert.equal(manifest.overrides['happy-dom'], '21.0.4');
   assert.equal(manifest.overrides['monaco-editor@0.57.0'].dompurify, '3.4.17');
-  assert.equal(lockfile.packages['node_modules/next'].version, '16.4.2');
+  for (const name of payloadPackages) assert.equal(lockfile.packages[`node_modules/${name}`].version, '3.92.0', name);
+  assert.equal(lockfile.packages['node_modules/next'].version, '16.4.3');
+  assert.equal(lockfile.packages['node_modules/happy-dom'].version, '21.0.4');
+  assert.equal(lockfile.packages['node_modules/undici'].version, '7.30.1');
+  assert.equal(lockfile.packages['node_modules/fast-uri'].version, '3.1.9');
   assert.equal(lockfile.packages['node_modules/dompurify'].version, '3.4.17');
 });
