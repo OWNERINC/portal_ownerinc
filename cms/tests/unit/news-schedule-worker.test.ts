@@ -34,6 +34,7 @@ function fixture(t: TestContext, overrides: Record<string, unknown> = {}) {
   const req = { payload, transactionID: 'live', context: {}, user: null } as unknown as PayloadRequest
 
   const env = {
+    CMS_PUBLICATION_MODE: 'manual',
     CMS_DATABASE_URL: 'postgres://cms.invalid/synthetic',
     PAYLOAD_SECRET: 'synthetic-payload-secret-not-production-32chars',
     PORTAL_PUBLIC_URL: 'https://portal.invalid',

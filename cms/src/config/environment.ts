@@ -3,6 +3,7 @@ import path from 'node:path'
 type Environment = Record<string, string | undefined>
 
 export type CmsEnvironment = {
+  publicationMode: 'manual'
   databaseURL: string
   payloadSecret: string
   portalPublicURL: string
@@ -55,6 +56,8 @@ export function readPortalPublicURL(env: Environment): string {
 }
 
 export function readCmsEnvironment(env: Environment): CmsEnvironment {
+  const publicationMode = required(env, 'CMS_PUBLICATION_MODE')
+  if (publicationMode !== 'manual') invalid('CMS_PUBLICATION_MODE')
   const database = url(env, 'CMS_DATABASE_URL')
   if (!['postgres:', 'postgresql:'].includes(database.protocol) || !database.hostname ||
     database.pathname.length <= 1 || database.href.includes('#')) invalid('CMS_DATABASE_URL')
@@ -69,6 +72,7 @@ export function readCmsEnvironment(env: Environment): CmsEnvironment {
   if (!path.isAbsolute(uploadDir) || uploadDir.includes('\0')) invalid('CMS_UPLOAD_DIR')
 
   return {
+    publicationMode,
     databaseURL: database.href,
     payloadSecret,
     portalPublicURL,
@@ -87,6 +91,7 @@ export function readCmsConfigEnvironment(env: Environment): CmsEnvironment {
     // Explicit non-routable build inputs; never fall back to operational credentials.
     // These configure the adapter only. Dynamic routes must not initialize Payload at build.
     return readCmsEnvironment({
+      CMS_PUBLICATION_MODE: 'manual',
       CMS_DATABASE_URL: 'postgresql://cms-build.invalid/editorial_build_only',
       PAYLOAD_SECRET: 'build-only-payload-not-a-runtime-secret',
       PORTAL_PUBLIC_URL: 'https://portal-build.invalid',

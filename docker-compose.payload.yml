@@ -7,6 +7,7 @@ x-cms-image: &cms-image
     dockerfile: cms/Dockerfile
 x-cms-environment: &cms-environment
   NODE_ENV: production
+  CMS_PUBLICATION_MODE: manual
   CMS_DATABASE_URL: ${CMS_RUNTIME_DATABASE_URL:?Set CMS_RUNTIME_DATABASE_URL}
   PAYLOAD_SECRET: ${PAYLOAD_SECRET:?Set PAYLOAD_SECRET}
   PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:?Set PORTAL_PUBLIC_URL}
@@ -105,6 +106,7 @@ services:
 
   cms-worker:
     <<: *cms-image
+    profiles: [scheduled-publication]
     environment: *cms-environment
     command: [sh, -ec, 'node --import tsx scripts/provision-db.ts --verify-runtime && exec node node_modules/payload/bin.js jobs:run --cron "* * * * *" --queue owner-news']
     volumes:

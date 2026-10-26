@@ -10,7 +10,9 @@ import { scheduleKey } from '../../../scripts/owner-news-payload/contract.mjs'
 
 export const NewsSchedules: CollectionConfig = {
   slug: 'news-schedules',
-  admin: { useAsTitle: 'scheduledAt', defaultColumns: ['documentId', 'action', 'scheduledAt', 'state', 'generation'] },
+  // Defense in depth: the manual runtime omits this collection entirely. If a
+  // future scheduled profile mounts it, it remains server-managed and hidden.
+  admin: { hidden: true, useAsTitle: 'scheduledAt', defaultColumns: ['documentId', 'action', 'scheduledAt', 'state', 'generation'] },
   access: { read: newsAreaReadAccess, create: () => false, update: () => false, delete: () => false },
   hooks: { beforeOperation: [async ({ operation, req, args }) => {
     if (!['create', 'update', 'delete'].includes(operation)) return

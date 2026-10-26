@@ -76,7 +76,7 @@ async function fixture(t: { after: (fn: () => void | Promise<void>) => void }, o
   const runtimeURL = options.runtimeURL ?? cmsURL
   const runtimeUploadDir = options.runtimeUploadDir ?? targetUploadDir
   const payloadUploadDir = options.payloadUploadDir ?? targetUploadDir
-  setEnvironment(t, { CMS_DATABASE_URL: runtimeURL,
+  setEnvironment(t, { CMS_PUBLICATION_MODE: 'manual', CMS_DATABASE_URL: runtimeURL,
     PAYLOAD_SECRET: 'synthetic-payload-secret-not-production',
     PORTAL_PUBLIC_URL: 'https://portal.invalid', PORTAL_INTERNAL_URL: 'https://portal-internal.invalid',
     PAYLOAD_TO_PORTAL_SECRET: 'synthetic-payload-to-portal-not-production',

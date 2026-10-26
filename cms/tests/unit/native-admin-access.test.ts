@@ -47,6 +47,7 @@ function equalIds(where: unknown, output: string[] = []): string[] {
 
 function testConfig() {
   const environment: CmsEnvironment = {
+    publicationMode: 'manual',
     databaseURL: 'postgresql://cms.example.test/payload_test', payloadSecret: 'synthetic-payload-secret',
     portalPublicURL: 'https://portal.example.test', portalInternalURL: 'http://portal-api:3000',
     payloadToPortalSecret: 'synthetic-payload-to-portal-secret', portalToPayloadSecret: 'synthetic-portal-to-payload-secret',

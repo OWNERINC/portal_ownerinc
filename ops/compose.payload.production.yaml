@@ -51,6 +51,7 @@ services:
     logging: *cms_production_logs
 
   cms-worker:
+    profiles: [scheduled-publication]
     cpus: 0.50
     mem_limit: 512m
     security_opt: ["no-new-privileges:true"]
