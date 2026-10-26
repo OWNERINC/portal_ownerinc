@@ -142,6 +142,68 @@
 Essa divergência preexistente foi identificada pela leitura do código; o lote
 de linguagem não muda esse contrato nem comprova arquivos grandes por HTTP.
 
+## Owner News — leitura dual do PR 1
+
+Este é o comportamento implementado no PR 1. Ele **não** instala runtime, não
+altera Nginx/deploy, não ativa Payload e não executa cutover. Os perfis de runtime
+manual do PR 2 e o cutover protegido do PR 3 ainda não estão ativos; o cutover
+real continua sendo uma operação manual sujeita a autorização separada.
+
+1. A API relê `owner_news_authority` em cada operação. Os modos duráveis
+   `legacy`, `frozen`, `payload` e `payload_frozen` continuam controlando somente
+   quem pode escrever. Eles não escolhem uma fonte única de leitura: lista,
+   categorias, home e navegação consultam e compõem legado + Payload sempre que
+   a configuração Payload está ativa. Ausência/valor inválido da autoridade falha
+   fechado antes de tocar uma fonte e nenhuma falha de leitura muda autoridade,
+   libera writer ou chama transição.
+2. A identidade pública é o par `(source,id)`, com `source=legacy|payload` e UUID
+   original lowercase. Cards, detalhe, navegação, dashboard, links e
+   `history.state` preservam os dois campos; não existe UUID sintético nem busca
+   nas duas fontes por colisão. A única compatibilidade de bookmark sem `source`
+   é o detalhe legado: `/announcements.html?id=<uuid>` resolve como `legacy`.
+   Links novos sempre incluem a origem.
+3. Detalhe, asset e prévia são source-directed. `404`/`403` não consultam a outra
+   fonte. Assets legados usam scope/rota `/api/cms/assets/:id`, publicados Payload
+   usam `/api/announcements/assets/:id` e prévias usam a rota própria; combinação
+   incoerente de `source`/`asset_scope`, UUID inválido, referência não publicada,
+   symlink, metadata/tamanho inválido ou Range inválido falha fechado. Streams têm
+   headers allowlisted, teto de 50 MiB, cancelamento e Range simples apenas para
+   PDF/vídeo.
+4. O feed ordena `published_at` descendente (null por último), depois `source`
+   crescente (`legacy`, `payload`) e UUID lowercase crescente. O legado trunca
+   seleção, keyset e DTO para milissegundos, a mesma precisão canônica do cursor e
+   comparador. O cursor base64url v1 contém a fronteira `(published_at,source,id)`
+   e os filtros normalizados `category`/`kind`; replay com filtros diferentes,
+   campos extras, timestamp/UUID inválido, versão desconhecida ou cursor com
+   `offset>0` retorna `400 invalid_request` antes das fontes.
+5. Cada origem fornece lookahead limitado a 101 itens; o legado avança em chunks
+   keyset, no máximo 1.000 chunks/101.000 linhas cruas, sem varrer o restante para
+   inventar total. `X-Total-Count` só existe quando todas as fontes provam um
+   inteiro exato. Total desconhecido é omitido mesmo em resposta `complete`.
+6. Com as duas fontes saudáveis a API emite
+   `X-Owner-News-Read-State: complete`; falha de uma fonte na primeira página
+   permite os itens saudáveis com `degraded`, mas omite tanto `X-Total-Count`
+   quanto `X-Owner-News-Next-Cursor`. Perder uma fonte durante continuação por
+   cursor ou offset retorna `503 news_page_restart_required`; a UI remove cursor
+   e reinicia atomicamente na primeira página. Falha dupla retorna
+   `503 news_unavailable`.
+7. A UI usa Anterior/Próxima e mantém pilhas de cursores por filtros em
+   `history.state`; troca de categoria/tipo invalida a pilha. Cursor recebido por
+   deep link não fabrica página anterior. Voltar/Avançar restaura URL, origem,
+   filtros e foco sem aceitar estado não canônico.
+8. Respostas autenticadas públicas usam `Cache-Control: private,no-store`. DTO,
+   headers, erro e log nunca carregam URL/credencial/stack/conteúdo/razão interna
+   do upstream. O log de degradação contém somente código fixo, ação, fonte e
+   `requestId` sanitizado. O browser nunca chama o bridge privado; Nginx nega por
+   `404` o path exato `/editorial/api/portal-news` e todo seu prefixo.
+
+O reader legado herdado ainda pode promover schedules vencidos conforme o contrato
+anterior descrito acima. A invariante deste PR é mais estreita: o orquestrador de
+fallback/composição em `api/owner-news/backend.js` não importa nem chama guards de
+writer, transições de autoridade ou APIs diretas de mutação. O sucessor/decisão
+para promoção agendada legada foi adiado; não se afirma que todo o call graph do
+reader legado seja livre de efeitos.
+
 ## Evidência e ambiente
 
 Os fluxos acima descrevem o código. Testes com doubles de transporte/banco não

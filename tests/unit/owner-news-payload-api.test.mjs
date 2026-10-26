@@ -39,7 +39,7 @@ function appFor(fetchImpl, mode = 'payload', overrides = {}) {
   mod.require = name => name === '../db' ? pool : name === '../middleware/auth' ? { authMiddleware: authenticate } : name === './owner-news-polls' ? express.Router().get('/', (_req, res) => res.json({ polls: true })) : local(name);
   mod._compile(readFileSync(filename, 'utf8'), filename);
   const app = express();
-  app.use('/api/announcements', mod.exports.createAnnouncementsRouter({ backend: createNewsBackend({ pool, payloadClient: clientFor(fetchImpl), legacyReader, homeReader: async () => null }), authenticate }));
+  app.use('/api/announcements', mod.exports.createAnnouncementsRouter({ backend: createNewsBackend({ pool, payloadClient: clientFor(fetchImpl), legacyReader, homeReader: async () => null, logger: overrides.logger }), authenticate }));
   app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code || 'safe' }));
   return { app, api: supertest(app), calls };
 }
@@ -303,6 +303,39 @@ test('Express omits total and continuation on a degraded first page while comple
   const whole = await complete.get('/api/announcements?limit=100&offset=0&kind=article').set('Authorization', 'Bearer reader').expect(200);
   assert.equal(whole.headers['x-owner-news-read-state'], 'complete');
   assert.equal(whole.headers['x-total-count'], '2');
+});
+test('public read responses stay private and sanitize DTOs, headers and degradation logs', async () => {
+  const upstreamURL = 'http://cms.internal.invalid/editorial/api/portal-news/list';
+  const credential = 'Bearer private-service-credential';
+  const internalReason = 'postgres socket /private/content failed';
+  const stack = `Error: ${internalReason}\n    at ${upstreamURL}:1:1`;
+  const forbidden = /cms\.internal\.invalid|private-service-credential|private\/content|Error:|at http/u;
+  const logs = [];
+  const { api } = appFor(async () => {
+    const error = new Error(internalReason);
+    error.stack = stack;
+    error.url = upstreamURL;
+    error.authorization = credential;
+    throw error;
+  }, 'payload', { logger: line => logs.push(line) });
+
+  const degraded = await api.get('/api/announcements?limit=1&offset=0')
+    .set('Authorization', 'Bearer reader').expect(200);
+  assert.equal(degraded.headers['cache-control'], 'private,no-store');
+  assert.equal(degraded.headers['x-owner-news-read-state'], 'degraded');
+  assert.equal(degraded.headers['x-total-count'], undefined);
+  assert.equal(degraded.headers['x-owner-news-next-cursor'], undefined);
+  assert.doesNotMatch(JSON.stringify({ body: degraded.body, headers: degraded.headers, logs }), forbidden);
+  assert.deepEqual(logs.map(JSON.parse), [{ code: 'owner_news_read_degraded', action: 'list', source: 'payload', requestId: 'test-request' }]);
+
+  const unavailable = appFor(async () => Response.json({ url: upstreamURL, credential, stack, content: internalReason, reason: 'db_timeout' }, { status: 503 })).api;
+  const failure = await unavailable.get(`/api/announcements/${id(1)}?source=payload`)
+    .set('Authorization', 'Bearer reader').expect(503);
+  assert.equal(failure.headers['cache-control'], 'private,no-store');
+  assert.deepEqual(failure.body, { error: 'Owner News indisponível.', reason: 'news_unavailable', requestId: 'test-request' });
+  assert.doesNotMatch(JSON.stringify({ body: failure.body, headers: failure.headers }), forbidden);
+
+  assert.throws(() => readNewsDTO({ ...dto(), upstreamURL, credential, stack, content: internalReason, internalReason }), /news_unavailable/);
 });
 test('asset stream enforces headers, byte limits, Range and cancellation without JSON buffering', async () => {
   const headers = { 'content-type': 'application/pdf', 'content-length': '4', 'content-disposition': 'inline; filename="test.pdf"', 'accept-ranges': 'bytes', 'content-range': 'bytes 1-4/10' };

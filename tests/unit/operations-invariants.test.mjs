@@ -215,6 +215,17 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/users\/bulk[\s\S]*client_max_body_size 1m;[\s\S]*proxy_pass \$api_upstream/);
+  const privateBridgeExact = nginxLocationBlock(nginx, 'location = /editorial/api/portal-news {');
+  const privateBridgePrefix = nginxLocationBlock(nginx, 'location ^~ /editorial/api/portal-news/ {');
+  assert.equal((nginx.match(/location = \/editorial\/api\/portal-news \{/gu) || []).length, 1,
+    'the private bridge exact path must have one explicit edge denial');
+  assert.equal((nginx.match(/location \^~ \/editorial\/api\/portal-news\/ \{/gu) || []).length, 1,
+    'the private bridge descendants must have one explicit longest-prefix denial');
+  for (const block of [privateBridgeExact, privateBridgePrefix]) {
+    assert.ok(block, 'both private bridge denial locations must remain present');
+    assert.match(block, /^\s*return 404;\s*$/u);
+    assert.doesNotMatch(block, /proxy_pass|try_files|alias|root/u);
+  }
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
   assert.match(nginx, /media-src 'self' blob: https:/);
@@ -244,6 +255,22 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(jsCssLocation, /\bdefault_type\s+application\/javascript\s*;/);
   assert.doesNotMatch(jsCssLocation, /\badd_header\b/, 'JS/MJS/CSS must inherit server security headers');
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
+});
+
+test('Owner News read composition observes authority but cannot invoke writers or transitions', async () => {
+  const backend = await read('api/owner-news/backend.js');
+  const imports = backend.slice(0, backend.indexOf('function createNewsBackend'));
+  const orchestration = backend.slice(backend.indexOf('function createNewsBackend'));
+
+  assert.match(imports, /require\('\.\/authority'\)/u, 'read orchestration may observe current authority');
+  assert.doesNotMatch(imports, /require\([^)]*(?:writer|transition|mutation)[^)]*\)/iu,
+    'the read backend must not import a writer, transition, or mutation module');
+  assert.doesNotMatch(orchestration,
+    /\b(?:assertNewsWriter|transitionAuthority|writerAllowed|setAuthority|createAnnouncement|updateAnnouncement|deleteAnnouncement|publishAnnouncement|scheduleAnnouncement)\b/u);
+  assert.doesNotMatch(orchestration, /\.(?:create|update|delete|publish|schedule|transition|mutate)\s*\(/u,
+    'fallback/composition must not call direct mutation APIs');
+  assert.doesNotMatch(orchestration, /\b(?:INSERT\s+INTO|UPDATE\s+owner_news_authority|DELETE\s+FROM)\b/iu,
+    'fallback/composition must not issue direct mutation SQL');
 });
 
 test('Docker build context excludes environment files recursively', async () => {

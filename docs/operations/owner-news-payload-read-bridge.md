@@ -1,8 +1,11 @@
 # Owner News — ponte de leitura, prévia salva e composição dual
 
-Esta entrega é local e não faz cutover. **Solicitar autorização antes de qualquer
-deploy na VPS.** Não ativar Payload para leitores reais antes das tarefas de
-migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
+Este documento descreve o **PR 1 implementado** até o commit de compatibilidade de
+runtime `db9e160`. A entrega é local e não faz cutover. **Solicitar autorização
+antes de qualquer deploy na VPS.** O runtime manual-only do PR 2, o caminho de
+cutover do PR 3 e o cutover operacional real ainda não estão ativos. Nenhuma
+configuração de deploy/Nginx foi alterada e a autoridade de escrita existente
+permanece como estava.
 
 ## Interfaces
 
@@ -38,9 +41,12 @@ migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
 - No POST privado, `kind` e `source` exigem strings primitivas com enum exato.
   Arrays, objetos e valores coercíveis retornam 400 antes de consultar conteúdo
   ou selecionar a fonte de prévia; não há coerção via `String(...)`.
-- Nas rotas públicas, detalhe e navegação sem `source` resolvem somente para legado
-  por compatibilidade de bookmark. `source` explícito em detalhe/navegação/asset e
-  a origem da prévia dirigem uma única fonte; `404`/`403` não acionam fallback.
+- A compatibilidade pública de bookmark sem `source` é somente o detalhe legado:
+  `/announcements.html?id=<uuid>` resolve como `legacy`. O endpoint de navegação
+  conserva um default defensivo legado, mas o frontend source-aware sempre propaga
+  a origem e não publica bookmark de navegação. `source` explícito em
+  detalhe/navegação/asset e a origem da prévia dirigem uma única fonte; `404`/`403`
+  não acionam fallback.
 - Tipos CMS: `src/contracts/news.ts`; API: validação JSON independente de Next e
   Payload em `payload-dto.js`. Formatos nativos nunca atravessam a fronteira.
 - DTOs públicos do bridge Payload carregam obrigatoriamente `source: 'payload'`;
@@ -50,6 +56,10 @@ migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
 - DTOs legados publicados carregam `source: 'legacy'`, `asset_scope: 'legacy'` e
   `published_at` canônico ISO (ou null). Tipos/data inválidos falham fechados antes
   de comparador ou cursor. Referências legadas de navegação também carregam origem.
+- Toda resposta pública autenticada do router usa
+  `Cache-Control: private,no-store`. O edge nega com `404` tanto o path privado
+  exato `/editorial/api/portal-news` quanto seu prefixo `/editorial/api/portal-news/`;
+  somente a API server-side chama os sete POSTs privados.
 
 ### Fronteira source-aware da lista
 
@@ -69,7 +79,11 @@ Cursor exige `offset` ausente ou zero; combinar cursor e offset não zero retorn
 perder qualquer fonte configurada exige reinício, nunca uma fatia parcial. Quando
 Payload está intencionalmente inativo (`legacy`/`frozen` e ambos os envs ausentes),
 o offset legado e seu total exato permanecem intactos. Em composição dual, o cursor
-é o contrato autoritativo; a UI migra para ele na Task 3.
+é o contrato autoritativo. A UI do PR 1 já usa Anterior/Próxima, guarda uma pilha de
+cursores canônicos por categoria/tipo em `history.state`, invalida a pilha ao trocar
+filtro e restaura URL/foco em Voltar/Avançar. Um cursor vindo diretamente na URL
+não fabrica página anterior; `news_page_restart_required` remove o cursor e reinicia
+atomicamente na primeira página.
 
 O adapter legado consulta chunks crus determinísticos com `LIMIT 101` e keyset
 `published_at/id`. No SQL, seleção, ordenação e todos os predicados de fronteira usam
@@ -86,8 +100,33 @@ As exceções de Origin existem **tanto no proxy Next quanto no boundary REST**,
 somente nos sete paths exatos e método POST com segredo válido, sem Origin,
 Cookie ou Sec-Fetch-Site. Não autenticam coleções genéricas, admin ou Server Actions.
 Chamadas privadas também validam segredo/actor/input no handler. Corpo de entrada
-tem teto de 16 KiB. Nginx deve bloquear os paths privados no futuro rollout;
+tem teto de 16 KiB. O Nginx existente já bloqueia o path exato e seu prefixo;
 nenhuma configuração de deploy foi alterada aqui.
+
+### Privacidade, degradação e limite do writer
+
+Respostas públicas e logs são sanitizados por allowlist: DTOs, headers, erros e o
+evento `owner_news_read_degraded` não expõem URL interna, segredo, stack, conteúdo
+ou reason interno. O evento registra apenas código fixo, ação, fonte indisponível e
+`requestId` validado. Em lista degradada, `count` e `nextCursor` são anulados antes
+da rota, portanto `X-Total-Count` e `X-Owner-News-Next-Cursor` são omitidos. Mesmo
+com estado `complete`, total desconhecido por lookahead limitado continua omitido.
+
+A garantia de ausência de escrita é deliberadamente limitada ao orquestrador de
+fallback/composição de `api/owner-news/backend.js`: ele observa `getAuthority`, mas
+não importa/chama `assertNewsWriter`, `transitionAuthority`, `writerAllowed`, APIs
+diretas de mutação ou SQL de transição. O reader legado herdado pode continuar a
+promoção de schedule vencido; este PR não declara seu call graph side-effect-free.
+A decisão e o sucessor desse comportamento permanecem adiados pelo design aprovado.
+
+### Estado das dependências compatíveis
+
+Onde o bridge executa no CMS, os seis pacotes Payload diretos permanecem alinhados
+exatamente em `3.90.2` e Next em `16.4.2`, compatíveis com a imagem Node `24.21.0`
+já pinada. O lock resolve os transitivos corrigidos `undici 7.30.1`,
+`happy-dom 21.0.4` e `fast-uri 3.1.9`; preserva Sass `1.105.1`, DOMPurify `3.4.17`,
+TSX `4.23.15` e esbuild `0.28.2`. Isso é estado de dependência, não instrução de
+deploy nem evidência de imagem executada.
 
 ## Publicação, limites e falhas
 

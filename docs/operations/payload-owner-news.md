@@ -11,6 +11,33 @@ integrado ou autorização de produção. Resultados por cenário ficam na
 O PASS observado antes desta atualização não valida o novo RPC V2 nem substitui
 as duas fixtures novas descritas abaixo.
 
+### Estado atual do PR 1 de leitura dual
+
+O PR 1 está limitado a contratos de leitura e frontend. Ele separa leitura de
+autoridade de escrita: `legacy`, `frozen`, `payload` e `payload_frozen` continuam
+decidindo writers, enquanto lista/categorias/home/navegação compõem as duas fontes
+quando Payload está configurado. Identidade pública é `(source,id)`; detalhe,
+asset e prévia são dirigidos pela origem e não fazem fallback. O bookmark antigo
+de detalhe sem `source` resolve somente como legado.
+
+O feed usa cursor v1 ligado a filtros, ordem canônica por timestamp/source/UUID e
+timestamp legado truncado a milissegundos. A UI mantém pilhas de cursor em
+`history.state`; filtros invalidam a pilha e falha de fonte numa continuação exige
+reinício. Lookahead por fonte é limitado a 101: total não comprovado é omitido.
+Primeira página parcial emite `degraded` sem total/cursor; falha dupla emite 503.
+Respostas públicas permanecem `private,no-store`, e o bridge privado continua
+negado no Nginx por path exato e prefixo.
+
+O limite de writer é específico ao orquestrador em `api/owner-news/backend.js`,
+que não chama transição, guard de writer ou mutação direta. Isso não afirma que o
+reader legado herdado seja side-effect-free: sua promoção de schedules vencidos
+foi preservada e sua substituição foi adiada.
+
+**PR 2 não está ativo:** não há perfil runtime manual-only instalado por este PR,
+nem remoção de worker/schedules. **PR 3 não está ativo:** não há preflight/floor de
+cutover ou dispatch manual habilitado. Nenhum merge deste PR autoriza deploy,
+ativação ou cutover; a operação real continua separada e explicitamente aprovada.
+
 ## Checks separados
 
 Com Node 24 e autorização para instalar dependências, `npm run bootstrap` instala
@@ -35,6 +62,14 @@ O snapshot histórico de 05/10/2026 registrou CMS 17 pacotes afetados
 (5 high/10 moderate/2 low); não é audit atual. Remediação requer análise atual por
 caminho transitivo, atualização deliberada e repetição dos checks atingidos. Não
 usar ignore global ou force/downgrade automático para produzir verde.
+
+O estado final de dependências deste PR mantém todos os seis pacotes Payload
+diretos exatamente em `3.90.2` e Next em `16.4.2`, para respeitar a imagem CMS
+Node `24.21.0` existente. O lock resolve `undici 7.30.1`, `happy-dom 21.0.4` e
+`fast-uri 3.1.9`; preserva Sass `1.105.1`, DOMPurify `3.4.17`, TSX `4.23.15` e
+esbuild `0.28.2`. O scan de engine floors não encontrou mínimo superior a
+Node `24.21.0`. Esses pins não são instruções de publicação e não tornam PR 2/PR 3
+ativos.
 
 ### Auditoria do protocolo Owner News instalado (read-only)
 
@@ -453,7 +488,8 @@ Guardar troca de documento/área, menu e entrada Payload; cancelar saída não r
 Sessão editorial dura duas horas; logout editorial preserva Firebase, logout Portal
 revoga antes de signOut com rechecagem de UID. Falha de DELETE não é logout confirmado.
 
-Após cutover, Owner News legado fica read-only com guards server-side, demais
+Quando o cutover futuro e separadamente aprovado ocorrer, Owner News legado ficará
+read-only com guards server-side; esse estado **não está ativo no PR 1**. As demais
 áreas seguem operantes. Preparação → reconciliação → seal → ativação é o contrato
 coordenado das Tasks10–12; agendas importadas ficam suspensas até ativação válida.
 Ator desconhecido e agenda vencida exigem decisão explícita; não são ignorados.
