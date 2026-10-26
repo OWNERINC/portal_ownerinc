@@ -424,7 +424,7 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
     'keep the required npm CLI while replacing the vulnerable bundled npm version');
   assert.equal((dockerfile.match(/brace-expansion@5\.0\.11/g) || []).length, 3,
     'replace npm 12.2.0 bundled brace-expansion in every independent image stage');
-  assert.equal((dockerfile.match(/undici@6\.28\.1/g) || []).length, 3,
+  assert.equal((dockerfile.match(/undici@6\.29\.1/g) || []).length, 3,
     'replace npm 12.2.0 bundled undici with its Trivy-fixed compatible release');
   assert.match(dockerfile, /npm ci --omit=dev --omit=optional/,
     'the embedded API graph must omit optional Firebase/Firestore dependencies');

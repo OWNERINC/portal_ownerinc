@@ -6,7 +6,7 @@ FROM node:24-alpine3.23@sha256:9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f36
 WORKDIR /app/cms
 RUN apk upgrade --no-cache \
  && npm install --global npm@12.2.0 \
- && npm install --prefix /tmp/npm-security-fix --no-save --ignore-scripts --package-lock=false brace-expansion@5.0.11 undici@6.28.1 \
+ && npm install --prefix /tmp/npm-security-fix --no-save --ignore-scripts --package-lock=false brace-expansion@5.0.11 undici@6.29.1 \
  && rm -rf /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
  && cp -R /tmp/npm-security-fix/node_modules/brace-expansion /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
  && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici \
@@ -14,7 +14,7 @@ RUN apk upgrade --no-cache \
  && rm -rf /tmp/npm-security-fix \
  && test "$(npm --version)" = "12.2.0" \
  && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json").version')" = "5.0.11" \
- && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/undici/package.json").version')" = "6.28.1"
+ && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/undici/package.json").version')" = "6.29.1"
 COPY cms/package.json cms/package-lock.json ./
 RUN npm ci
 
@@ -24,7 +24,7 @@ WORKDIR /app/api
 # Install that locked production graph explicitly; no accidental CMS hoist/symlink.
 RUN apk upgrade --no-cache \
  && npm install --global npm@12.2.0 \
- && npm install --prefix /tmp/npm-security-fix --no-save --ignore-scripts --package-lock=false brace-expansion@5.0.11 undici@6.28.1 \
+ && npm install --prefix /tmp/npm-security-fix --no-save --ignore-scripts --package-lock=false brace-expansion@5.0.11 undici@6.29.1 \
  && rm -rf /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
  && cp -R /tmp/npm-security-fix/node_modules/brace-expansion /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
  && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici \
@@ -32,7 +32,7 @@ RUN apk upgrade --no-cache \
  && rm -rf /tmp/npm-security-fix \
  && test "$(npm --version)" = "12.2.0" \
  && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json").version')" = "5.0.11" \
- && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/undici/package.json").version')" = "6.28.1"
+ && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/undici/package.json").version')" = "6.29.1"
 COPY api/package.json api/package-lock.json ./
 RUN npm ci --omit=dev --omit=optional \
  && npm install --no-save --ignore-scripts --omit=dev --omit=optional \
@@ -81,7 +81,7 @@ WORKDIR /app/cms
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 RUN apk upgrade --no-cache \
  && npm install --global npm@12.2.0 \
- && npm install --prefix /tmp/npm-security-fix --no-save --ignore-scripts --package-lock=false brace-expansion@5.0.11 undici@6.28.1 \
+ && npm install --prefix /tmp/npm-security-fix --no-save --ignore-scripts --package-lock=false brace-expansion@5.0.11 undici@6.29.1 \
  && rm -rf /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
  && cp -R /tmp/npm-security-fix/node_modules/brace-expansion /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
  && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici \
@@ -89,7 +89,7 @@ RUN apk upgrade --no-cache \
  && rm -rf /tmp/npm-security-fix \
  && test "$(npm --version)" = "12.2.0" \
  && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json").version')" = "5.0.11" \
- && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/undici/package.json").version')" = "6.28.1"
+ && test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/undici/package.json").version')" = "6.29.1"
 COPY --from=build --chown=node:node /app/cms/package.json /app/cms/package-lock.json ./
 # Keep the official Payload CLI and its TypeScript loader; do not standalone-prune.
 COPY --from=runtime-dependencies --chown=node:node /app/cms/node_modules ./node_modules
