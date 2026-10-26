@@ -5,7 +5,7 @@ import { createFeedbackHarness, installAuthTransport, deferred, drain, TestEvent
 const id = '11111111-1111-4111-8111-111111111111';
 const version = '22222222-2222-4222-8222-222222222222';
 const user = { uid: 'editor-a', role: 'admin', permissions: { manageKnowledge: true } };
-const story = (status, source = 'payload') => ({ id, title: 'Revisão exata', content_version: 2, asset_scope: 'owner-news-preview',
+const story = (status, source = 'payload') => ({ id, source, title: 'Revisão exata', content_version: 2, asset_scope: 'owner-news-preview',
   preview_revision: { id: version, source, status }, content_blocks: [
     { type: 'image', asset_id: id, alt: 'Privada', usage: 'cover' },
     { type: 'rich_text', nodes: [{ type: 'paragraph', children: [{ type: 'text', text: 'Texto salvo.', marks: ['bold'] }] }] },
@@ -47,10 +47,10 @@ for (const phase of ['json', 'blob']) test(`real auth epoch blocks cross-account
   h.page.dispose();
 });
 
-test('source=legacy accepts the unchanged v1 body and legacy private-media default', async () => {
+test('source=legacy accepts a v1 body with exact legacy preview metadata', async () => {
   const h = await setup(`?id=${id}&version=${version}&source=legacy`);
   h.latest('/api/users/me').resolve(user); await drain();
-  h.latest('/preview/').resolve({ id, title: 'Legado', editorial: null, content_blocks: [
+  h.latest('/preview/').resolve({ id, source: 'legacy', asset_scope: 'owner-news-preview', title: 'Legado', editorial: null, content_blocks: [
     { type: 'image', asset_id: id, alt: 'Legada' }, { type: 'paragraph', text: 'Texto legado.' },
   ] }); await drain();
   assert.match(h.node('news-preview-status').textContent, /Histórico anterior à migração/);
@@ -92,7 +92,7 @@ test('permission loss clears content and media; local retry preserves query and 
   assert.ok(h.requests.every(r => !r.options.method || r.options.method === 'GET')); h.page.dispose();
 });
 test('preview refuses mismatched metadata, revoked permission and late old-account responses', async () => {
-  for (const data of [story('draft', 'legacy'), { ...story('draft'), id: version }, { ...story('draft'), asset_scope: 'owner-news' },
+  for (const data of [story('draft', 'legacy'), { ...story('draft'), id: version }, { ...story('draft'), source: undefined }, { ...story('draft'), asset_scope: 'owner-news' },
     { ...story('draft'), preview_revision: { id, source: 'payload', status: 'draft' } }]) {
     const h = await setup(); h.latest('/api/users/me').resolve(user); await drain(); h.latest('/preview/').resolve(data); await drain();
     assert.equal(h.node('news-preview-content').children.length, 0); assert.equal(h.requests.filter(r => r.kind === 'asset').length, 0); h.page.dispose();

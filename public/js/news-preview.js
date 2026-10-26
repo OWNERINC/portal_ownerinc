@@ -47,10 +47,10 @@ export function mountNewsPreview(page) {
       const search = new URLSearchParams({ version: query.version, source: query.source });
       const article = await api.fetchAPI(`/api/announcements/preview/${query.id}?${search}`, { signal });
       if (!active()) return;
-      if (article?.id !== query.id || !validateNewsBlocks(article.content_blocks, article.content_version)
-        || (article.asset_scope !== 'owner-news-preview' && !(query.source === 'legacy' && article.asset_scope === undefined && (article.content_version === undefined || article.content_version === 1)))) throw new Error('invalid_preview');
+      if (article?.id !== query.id || article.source !== query.source || article.asset_scope !== 'owner-news-preview'
+        || !validateNewsBlocks(article.content_blocks, article.content_version)) throw new Error('invalid_preview');
       const message = banner(article, query);
-      disposeArticle = renderNewsArticle(root, { ...article, source: query.source }, { signal, preview: true });
+      disposeArticle = renderNewsArticle(root, article, { signal, preview: true });
       status.replaceChildren(element('p', { text: message }));
     } catch (error) {
       if (!active() || error.name === 'AbortError') return;

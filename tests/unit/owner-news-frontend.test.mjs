@@ -94,6 +94,33 @@ test('cursor direto não inventa anterior e restart requerido volta atomicamente
   assert.equal(h.node('announcements-pagination').children.length, 0);
 });
 
+test('estado de cursor só confia em pilha canônica e cursor direto não inventa retorno', async t => {
+  const malformed = [
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, null, 'opaque'] },
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, 'not+base64'] },
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, 'a'.repeat(1025)] },
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, 'different'] },
+  ];
+  for (const ownerNewsPagination of malformed) {
+    const h = await createFeedbackHarness('announcements', {
+      url: 'https://portal.test/announcements.html?cursor=opaque', state: { ownerNewsPagination },
+    });
+    t.after(() => h.page.dispose());
+    h.requests.find(request => request.kind === 'list').resolve({ data: [], nextCursor: 'next_cursor' }); await drain();
+    const buttons = h.node('announcements-pagination').querySelectorAll('button');
+    assert.equal(buttons[0].disabled, true); assert.equal(buttons[1].disabled, false);
+  }
+
+  const direct = await createFeedbackHarness('announcements', { url: 'https://portal.test/announcements.html?cursor=opaque' });
+  t.after(() => direct.page.dispose());
+  direct.requests.find(request => request.kind === 'list').resolve({ data: [], nextCursor: 'next_cursor' }); await drain();
+  direct.node('announcements-pagination').querySelectorAll('button')[1].click();
+  direct.requests.filter(request => request.kind === 'list').at(-1).resolve({ data: [], nextCursor: null }); await drain();
+  assert.equal(direct.node('announcements-pagination').children.length, 0, 'no fabricated Previous button after a direct continuation');
+  direct.window.history.back(); await drain();
+  assert.equal(new URL(direct.page.location.href).searchParams.get('cursor'), 'opaque');
+});
+
 test('home independente usa fallback e retry sem apagar feed/categorias', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   h.latest('/categories').resolve({ total: 1, categories: [{ name: 'Cultura', count: 1 }] });
@@ -182,7 +209,7 @@ test('dashboard protected covers revoke stale and retained object URLs', async (
   });
   vm.runInContext(section(dashboard, 'function releaseNewsImages(', "page.listen(window, 'pagehide'"), context);
   const image = { isConnected: true };
-  context.loadNewsImage(image, { content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Fotografia' }] });
+  context.loadNewsImage(image, syntheticStory('cover', { content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Fotografia' }] }));
   context.announcementsRequest++;
   pending.resolve('blob:stale');
   await pending.promise;
@@ -208,10 +235,10 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assert.equal(link.hidden, true);
   assert.match(h.node('dashboard-hero-description').textContent, /Carregando/);
   assert.equal(h.latest('/api/announcements?').path, '/api/announcements?kind=article&limit=3');
-  const story = { id: 'old', title: 'Old story', editorial: { summary: 'Resumo editorial sintético' }, published_at: '2026-09-29T12:00:00Z', content_blocks: [
+  const story = syntheticStory('old', { title: 'Old story', editorial: { summary: 'Resumo editorial sintético' }, published_at: '2026-09-29T12:00:00Z', content_blocks: [
     { type: 'image', asset_id: imageID, alt: 'Corpo' },
     { type: 'image', asset_id: coverID, alt: 'Capa', usage: 'cover' },
-  ] };
+  ] });
   h.latest('/api/announcements?').resolve([story]); await drain();
   assert.equal(hero.dataset.state, 'populated');
   assert.equal(h.node('dashboard-hero-title').textContent, 'Old story');
@@ -226,9 +253,10 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assets[0].resolve('blob:hero'); assets[1].resolve('blob:rail'); await drain();
   assert.equal(cover.src, 'blob:hero');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
-  assert.equal(hero.dataset.state, 'loading');
-  assert.ok(h.revoked.includes('blob:hero') && h.revoked.includes('blob:rail'));
+  assert.equal(hero.dataset.state, 'populated');
+  assert.equal(h.revoked.includes('blob:hero') || h.revoked.includes('blob:rail'), false);
   h.latest('/api/announcements?').resolve([]); await drain();
+  assert.ok(h.revoked.includes('blob:hero') && h.revoked.includes('blob:rail'));
   assert.equal(hero.dataset.state, 'empty');
   assert.equal(h.node('dashboard-hero-title').textContent, 'Owner News');
   assert.equal(link.href, '#quick-links'); assert.equal(link.textContent, 'Acessar áreas');
@@ -267,11 +295,40 @@ test('dashboard initial markup is loading, empty styles are compact and a query 
   assert.equal(hero.dataset.state, 'empty'); assert.equal(hero.getAttribute('aria-busy'), 'false');
 });
 
+test('dashboard mantém conteúdo válido quando refresh recebe DTO sem source ou scope coerente', async t => {
+  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
+  const valid = syntheticStory(imageID, { title: 'Conteúdo preservado' });
+  h.latest('/api/announcements?').resolve([valid]); await drain();
+  const hero = h.node('dashboard-hero-title'); assert.equal(hero.textContent, 'Conteúdo preservado');
+  for (const malformed of [
+    { ...valid, source: undefined },
+    { ...valid, source: 'payload', asset_scope: 'legacy' },
+    { ...valid, source: 'remote' },
+  ]) {
+    h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+    h.latest('/api/announcements?').resolve([malformed]); await drain();
+    assert.equal(hero.textContent, 'Conteúdo preservado');
+    assert.match(h.node('announcements-preview').textContent, /Conteúdo preservado/);
+  }
+});
+
+test('feed mantém cards válidos quando refresh recebe DTO sem source', async t => {
+  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
+  h.requests.find(request => request.kind === 'list').resolve({ data: [syntheticStory(imageID)], nextCursor: null }); await drain();
+  const card = h.node(`news-card-legacy-${imageID}`);
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  h.requests.filter(request => request.kind === 'list').at(-1).resolve({
+    data: [{ ...syntheticStory(coverID), source: undefined }], nextCursor: null,
+  }); await drain();
+  assert.equal(h.node(`news-card-legacy-${imageID}`), card);
+  assert.equal(h.node(`news-card-legacy-${coverID}`), null);
+});
+
 for (const outcome of ['success', 'failure']) test(`dashboard ignores stale ${outcome} and disposes pending private covers`, async t => {
   const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
   const old = h.latest('/api/announcements?');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
-  h.latest('/api/announcements?').resolve([{ id: 'new', title: 'Current', content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Capa' }] }]); await drain();
+  h.latest('/api/announcements?').resolve([syntheticStory('new', { title: 'Current', content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Capa' }] })]); await drain();
   if (outcome === 'success') old.resolve([]); else old.reject(new Error('old error'));
   await drain(); assert.equal(h.node('dashboard-hero-title').textContent, 'Current');
   const assets = h.requests.filter(item => item.kind === 'asset');
@@ -287,7 +344,8 @@ test('reader preserves pagination/category URLs, retry, history and private medi
   assert.match(news, /requestToken !== announcementsRequest/);
   assert.match(news, /forEach\(cleanupRenderedBlocks\)/);
   assert.match(news, /requestToken === announcementsRequest\) loadAnnouncements\(\)/);
-  assert.match(dashboard, /source: announcement\.source \|\| 'legacy'/);
+  assert.match(dashboard, /source: announcement\.source/);
+  assert.doesNotMatch(dashboard, /source: announcement\.source \|\| 'legacy'/);
 });
 
 test('mosaico substitui display grid legado e mantém quebras responsivas', async () => {
@@ -323,12 +381,14 @@ test('links mantêm Ctrl/Cmd nativos e detalhe atual retorna ao filtro', async t
   t.after(() => h.page.dispose());
   h.requests.find(r => r.kind === 'list').resolve({ data: [syntheticStory(imageID)], total: 1 }); await drain();
   const link = h.node(`news-card-legacy-${imageID}`).querySelector('a');
+  link.href = `./announcements.html?id=${imageID}`;
   for (const modifier of ['ctrlKey', 'metaKey']) {
     const click = new TestEvent('click', { bubbles: true, button: 0, [modifier]: true });
     link.dispatchEvent(click); assert.equal(click.defaultPrevented, false);
     assert.equal(h.window.history.length, 1);
   }
   link.click();
+  assert.equal(new URL(h.page.location.href).searchParams.get('source'), 'legacy');
   assert.equal(new URL(h.page.location.href).searchParams.get('category'), 'Cultura');
   h.requests.find(r => r.path === `/api/announcements/${imageID}?source=legacy`).resolve(syntheticStory(imageID, { content_blocks: [{ type: 'paragraph', text: 'Corpo sintético do detalhe.' }] })); await drain();
   assert.match(h.node('news-reader-content').textContent, /Corpo sintético/);
@@ -336,6 +396,17 @@ test('links mantêm Ctrl/Cmd nativos e detalhe atual retorna ao filtro', async t
   h.node('news-reader-close').click(); await drain();
   assert.equal(new URL(h.page.location.href).searchParams.has('id'), false);
   assert.equal(new URL(h.page.location.href).searchParams.get('category'), 'Cultura');
+});
+
+test('link interceptado com source explícita inválida não solicita nem altera history', async t => {
+  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
+  h.requests.find(request => request.kind === 'list').resolve({ data: [syntheticStory(imageID)], nextCursor: null }); await drain();
+  const link = h.node(`news-card-legacy-${imageID}`).querySelector('a');
+  link.href = `./announcements.html?id=${imageID}&source=remote`;
+  const before = h.page.location.href, requestCount = h.requests.length, historyLength = h.window.history.length;
+  link.click(); await drain();
+  assert.equal(h.page.location.href, before); assert.equal(h.window.history.length, historyLength);
+  assert.equal(h.requests.length, requestCount);
 });
 
 test('sem home ou publicações, abertura usa copy contratada sem reserva vazia', async t => {

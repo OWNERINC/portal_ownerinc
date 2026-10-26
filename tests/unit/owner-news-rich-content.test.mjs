@@ -19,6 +19,7 @@ const modules = [
   { path: 'public/js/owner-news/reader-view.js', exports: 'renderNewsArticle' },
   { path: 'public/js/owner-news/catalog.js', exports: 'renderNewsCard' },
 ];
+const legacyArticle = article => ({ source: 'legacy', asset_scope: 'legacy', ...article });
 async function setup() {
   const h = await createFeedbackHarness('announcements', { mount: false, modules });
   const root = h.doc.createElement('article'); h.doc.body.append(root);
@@ -70,7 +71,7 @@ test('unknown or malformed rich trees reject the whole body before DOM/media, no
     root.textContent = 'Original';
     assert.throws(() => h.context.renderRichContent(root, [rich.nodes[0], node]), /invalid_rich_text/);
     assert.equal(root.textContent, 'Original');
-    const dispose = h.context.renderNewsArticle(root, { title: 'Inválido', content_version: 2, content_blocks: blocks });
+    const dispose = h.context.renderNewsArticle(root, legacyArticle({ title: 'Inválido', content_version: 2, content_blocks: blocks }));
     assert.equal(root.querySelector('.news-article-body'), null);
     assert.match(root.textContent, /Conteúdo indisponível/);
     dispose();
@@ -134,7 +135,7 @@ test('all eleven legacy blocks retain validation and DOM behavior in v1 and mixe
   for (const version of [1, 2]) {
     const { h, root } = await setup();
     assert.equal(JSON.stringify(h.context.validateNewsBlocks(blocks, version)), JSON.stringify(h.context.validateBlocks(blocks)));
-    h.context.renderNewsArticle(root, { title: 'Legacy', content_version: version, content_blocks: blocks }, { signal: h.page.signal });
+    h.context.renderNewsArticle(root, legacyArticle({ title: 'Legacy', content_version: version, content_blocks: blocks }), { signal: h.page.signal });
     for (const [selector, count] of [['h1', 1], ['h2', 1], ['ul li', 1], ['.cms-callout', 1], ['img', 2], ['hr', 1],
       ['.cms-link', 1], ['.cms-pdf-frame', 1], ['video', 1], ['blockquote', 1], ['.cms-profile', 1]]) assert.equal(root.querySelectorAll(selector).length, count, `${version}: ${selector}`);
     assert.equal(h.requests.length, 4); assert.ok(h.requests.every(r => r.path === `/api/cms/assets/${asset}`));

@@ -107,6 +107,16 @@ test('current loader interleaves after three articles, keeps page totals and vot
   assert.equal(list.querySelector('.news-poll'), null);
 });
 
+test('cursor direto nunca recebe enquete exclusiva da primeira página', async t => {
+  const h = await createFeedbackHarness('announcements', { url: 'https://portal.test/announcements.html?cursor=opaque' });
+  t.after(() => h.page.dispose());
+  h.requests.find(request => request.kind === 'list').resolve({ data: [{
+    id: '11111111-1111-4111-8111-111111111111', source: 'legacy', asset_scope: 'legacy', title: 'Continuação', content_blocks: [],
+  }], nextCursor: null });
+  h.latest('/polls/current').resolve({ poll: { ...poll('open', 2), viewer_option_id: null } }); await drain();
+  assert.equal(h.node('announcements-list').querySelector('.news-poll-slot'), null);
+});
+
 test('poll loader error/retry, null and stale pageshow requests stay independent of articles and reader', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   const article = { id: '11111111-1111-4111-8111-111111111111', source: 'legacy', asset_scope: 'legacy', title: 'Sintética', content_blocks: [] };

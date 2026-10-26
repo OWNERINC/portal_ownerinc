@@ -102,7 +102,7 @@ export async function installAuthTransport(h, uid = 'editor-a') {
   return { requests, changeUser, created, redirects };
 }
 
-export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [], url = `https://portal.test/${name}.html` } = {}) {
+export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [], state = null, url = `https://portal.test/${name}.html` } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
@@ -114,7 +114,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   doc.documentElement = doc.querySelector('html'); doc.body = doc.querySelector('body'); doc.activeElement = doc.body;
   const window = new FixtureNode('window', doc);
   let currentURL = new URL(url), cursor = 0;
-  const entries = [{ url: currentURL.href, state: null }];
+  const entries = [{ url: currentURL.href, state }];
   const location = {};
   for (const key of ['href', 'origin', 'pathname', 'search', 'hash']) Object.defineProperty(location, key, { get: () => currentURL[key] });
   const popstate = (next, state) => {
@@ -152,7 +152,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard');
-  await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope');
+  await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope, validateNewsSourceScope');
   await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
   await load('public/js/owner-news/content-contract.js', 'validateNewsBlocks, validateRichNodes, newsBlocksToText');
   await load('public/js/owner-news/rich-content.js', 'renderRichContent');

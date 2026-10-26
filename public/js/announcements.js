@@ -67,23 +67,26 @@ function catalogRouteKey() {
 
 function cursorStateKey(category = '') { return JSON.stringify({ category, kind: 'article' }); }
 
+function validCursor(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{1,1024}$/.test(value); }
+
 function cursorPageState(query) {
   const cursor = query.get('cursor') || null;
   const key = cursorStateKey(query.get('category') || '');
   const saved = window.history.state?.ownerNewsPagination;
   if (saved?.key === key && Array.isArray(saved.stack) && saved.stack.length && saved.stack.length <= 1000
-    && saved.stack.every(value => value === null || (typeof value === 'string' && value.length > 0 && value.length <= 4096))
+    && saved.stack[0] === null && saved.stack.slice(1).every(validCursor)
     && saved.stack.at(-1) === cursor) {
-    return { key, stack: [...saved.stack] };
+    return { key, stack: [...saved.stack], trusted: true };
   }
-  return { key, stack: [cursor] };
+  return cursor === null ? { key, stack: [null], trusted: true } : { key, stack: [cursor], trusted: false };
 }
 
 function updateCursorURL(cursor, cursorState, mode = 'push') {
   const url = new URL(location.href);
   url.searchParams.delete('offset');
   if (cursor) url.searchParams.set('cursor', cursor); else url.searchParams.delete('cursor');
-  const state = { ...window.history.state, ownerNewsPagination: cursorState };
+  const state = { ...window.history.state };
+  if (cursorState) state.ownerNewsPagination = cursorState; else delete state.ownerNewsPagination;
   history[`${mode}State`](state, '', url);
 }
 
@@ -157,7 +160,7 @@ function positionPoll() {
   const query = new URLSearchParams(location.search);
   const cards = [...list.querySelectorAll('.news-card')];
   const feed = composeNewsFeed(cards, pollAbsent ? null : pollSlot, {
-    pageDepth: cursorPageState(query).stack.length - 1, category: query.get('category') || '',
+    pageDepth: query.has('cursor') ? 1 : 0, category: query.get('category') || '',
   });
   const index = feed.indexOf(pollSlot);
   if (index < 0) pollSlot.remove();
@@ -317,26 +320,31 @@ async function loadAnnouncements() {
     const result = await fetchAPIPage(`/api/announcements?${params}`);
     if (requestToken !== announcementsRequest) return;
     const announcements = Array.isArray(result.data) ? result.data : [];
+    const renderedCards = [];
+    try {
+      announcements.forEach((announcement, articleIndex) => {
+        renderedCards.push(renderNewsCard(announcement, { index: ((cursorState.stack.length - 1) * PAGE_SIZE) + articleIndex, signal: page.signal }));
+      });
+    } catch (error) {
+      renderedCards.forEach(card => card.dispose());
+      throw error;
+    }
     clearContent(list);
     list.classList.add('news-mosaic');
     const state = !announcements.length ? showState(list, 'Nenhuma publicação nesta editoria.') : null;
-    announcements.forEach((announcement, articleIndex) => {
-      const card = renderNewsCard(announcement, { index: ((cursorState.stack.length - 1) * PAGE_SIZE) + articleIndex, signal: page.signal });
-      cardDisposers.push(card.dispose);
-      list.append(card.node);
-    });
+    renderedCards.forEach(card => { cardDisposers.push(card.dispose); list.append(card.node); });
     positionPoll();
     renderCursorPagination(pagination, {
-      canPrevious: cursorState.stack.length > 1,
+      canPrevious: cursorState.trusted && cursorState.stack.length > 1,
       canNext: Boolean(result.nextCursor),
       page: cursorState.stack.length,
     }, direction => {
       if (requestToken !== announcementsRequest) return;
-      const stack = direction === 'previous'
-        ? cursorState.stack.slice(0, -1)
-        : [...cursorState.stack, result.nextCursor];
+      if (direction === 'previous' && !cursorState.trusted) return;
+      const stack = direction === 'previous' ? cursorState.stack.slice(0, -1) : [...cursorState.stack, result.nextCursor];
       if (!stack.length || (direction === 'next' && !result.nextCursor)) return;
-      updateCursorURL(stack.at(-1), { key: cursorState.key, stack });
+      const nextState = cursorState.trusted ? { key: cursorState.key, stack } : null;
+      updateCursorURL(stack.at(-1), nextState);
       void navigation.sync();
     });
     restorePaginationFocus(requestedFocus, state);
@@ -368,7 +376,7 @@ page.listen(document.getElementById('main-content'), 'click', event => {
   if (url.origin !== location.origin || url.pathname !== location.pathname || url.hash) return;
   event.preventDefault();
   if (url.searchParams.has('id')) {
-    void navigation.open({ source: url.searchParams.get('source'), id: url.searchParams.get('id') });
+    void navigation.open({ source: url.searchParams.has('source') ? url.searchParams.get('source') : 'legacy', id: url.searchParams.get('id') });
     return;
   }
   history.pushState({ ...window.history.state }, '', url);

@@ -1,6 +1,7 @@
 import { element } from '../ui.js';
 import { renderBlocks, cleanupRenderedBlocks } from '../cms-block-renderer.js';
 import { getNewsPresentation, estimateNewsReadTime } from './model.js';
+import { validateNewsSourceScope } from './asset-path.mjs';
 
 export function composeNewsFeed(articles, pollNode, { pageDepth = 0, category = '' } = {}) {
   const items = [...articles];
@@ -14,8 +15,8 @@ export function renderNewsCard(article, { index = 0, signal } = {}) {
   const date = article.published_at && Number.isFinite(Date.parse(article.published_at))
     ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(article.published_at)) : '';
   const minutes = article.read_time_minutes ?? estimateNewsReadTime(article.content_blocks || [], article.editorial);
-  const source = article.source === undefined ? 'legacy' : article.source;
-  if (!['legacy', 'payload'].includes(source)) throw new Error('invalid_news_source');
+  const source = article.source;
+  validateNewsSourceScope(source, article.asset_scope);
   const id = String(article.id).toLowerCase();
   const query = new URLSearchParams({ id, source });
   const node = element('article', { className: 'news-card', id: `news-card-${source}-${id}`, 'data-variant': String(index % 8) }, [

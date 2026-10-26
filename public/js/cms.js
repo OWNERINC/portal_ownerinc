@@ -565,7 +565,7 @@ function renderPreview(blocks, fallbackText) {
     const content = serializeBlocks(blocks);
     if (!content) { showState(previewRoot, fallbackText); return; }
     const editorial = editorialFields?.getValue() ?? null;
-    previewCleanup = renderNewsArticle(previewRoot, { ...documentView.document, content_blocks: content, editorial,
+    previewCleanup = renderNewsArticle(previewRoot, { ...documentView.document, source: 'legacy', asset_scope: 'legacy', content_blocks: content, editorial,
       read_time_minutes: estimateNewsReadTime(content, editorial) }, { preview: true, signal: page.signal });
   } else renderBlocks(previewRoot, blocks, { fallbackText });
 }

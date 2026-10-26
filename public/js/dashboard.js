@@ -1,7 +1,7 @@
 import { fetchAPI, fetchAPIAsset } from './auth.js';
 import { renderBlocks } from './cms-block-renderer.js';
 import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
-import { cmsAssetEndpoint } from './owner-news/asset-path.mjs';
+import { cmsAssetEndpoint, validateNewsSourceScope } from './owner-news/asset-path.mjs';
 import { newsBlocksToText, validateNewsBlocks } from './owner-news/content-contract.js';
 
 const requests = { fetchAPI, fetchAPIAsset };
@@ -63,7 +63,13 @@ function icon(name) {
   return svg;
 }
 
-function storyCard({ title, category, description, blocks, href, newTab, image, alt, meta }) {
+function validateNewsAnnouncement(announcement) {
+  if (!announcement || typeof announcement !== 'object') throw new Error('invalid_news_dto');
+  validateNewsSourceScope(announcement.source, announcement.asset_scope);
+  return announcement;
+}
+
+function storyCard({ title, category, description, blocks, href, newTab, image, alt, meta, assetSource, assetScope }) {
   const titleNode = href
     ? element('a', {
       className: 'dashboard-story-card-title', href,
@@ -76,7 +82,7 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
   ]);
   if (blocks || description) {
     const copy = element('div', { className: 'dashboard-story-card-copy' });
-    if (blocks) renderBlocks(copy, blocks, { fallbackText: description || '' });
+    if (blocks) renderBlocks(copy, blocks, { fallbackText: description || '', assetSource, assetScope });
     else copy.append(element('p', { text: description }));
     body.append(copy);
   }
@@ -87,6 +93,7 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
 }
 
 function renderHero(announcement, state = announcement ? 'populated' : 'empty') {
+  if (announcement) validateNewsAnnouncement(announcement);
   const hero = document.querySelector('.dashboard-hero');
   if (hero) hero.dataset.state = state;
   setBusy(hero, state === 'loading');
@@ -106,7 +113,7 @@ function renderHero(announcement, state = announcement ? 'populated' : 'empty') 
   const link = document.querySelector('.dashboard-hero-copy a');
   if (link) {
     link.hidden = state === 'loading' || state === 'error';
-    const source = announcement?.source === undefined ? 'legacy' : announcement.source;
+    const source = announcement?.source;
     const query = announcement ? new URLSearchParams({ id: String(announcement.id).toLowerCase(), source }) : null;
     link.href = announcement ? `./announcements.html?${query}` : '#quick-links';
     link.textContent = announcement ? 'Ler publicação' : 'Acessar áreas';
@@ -137,8 +144,8 @@ function loadNewsImage(image, announcement) {
   let endpoint;
   try {
     endpoint = cmsAssetEndpoint(cover.asset_id, {
-      source: announcement.source === undefined ? 'legacy' : announcement.source,
-      asset_scope: announcement.asset_scope === undefined ? 'legacy' : announcement.asset_scope,
+      source: announcement.source,
+      asset_scope: announcement.asset_scope,
     });
   } catch { return; }
   fetchAPIAsset(endpoint).then(url => {
@@ -160,32 +167,41 @@ if (heroRetry) page.listen(heroRetry, 'click', () => {
 async function loadAnnouncements() {
   if (!announcementsPreview) return;
   const requestToken = ++announcementsRequest;
-  releaseNewsImages();
-  clear(announcementsPreview);
-  renderHero(null, 'loading');
+  const preserveCurrent = document.querySelector('.dashboard-hero')?.dataset.state === 'populated';
+  if (!preserveCurrent) {
+    releaseNewsImages();
+    clear(announcementsPreview);
+    renderHero(null, 'loading');
+  }
   setBusy(announcementsPreview, true);
   try {
     const announcements = (await fetchAPI('/api/announcements?kind=article&limit=3')).slice(0, 3);
     if (requestToken !== announcementsRequest) return;
+    announcements.forEach(validateNewsAnnouncement);
     releaseNewsImages();
     renderHero(announcements[0]);
-    if (!announcements.length) return;
+    if (!announcements.length) {
+      clear(announcementsPreview);
+      return;
+    }
     clear(announcementsPreview);
     announcements.forEach(announcement => {
       const card = storyCard({
       title: announcement.title,
       category: announcement.category || 'Comunicado',
       description: announcement.editorial?.summary || newsBlocksToText(announcement.content_blocks).replace(/\s+/g, ' ').slice(0, 180),
-       href: `./announcements.html?${new URLSearchParams({ id: String(announcement.id).toLowerCase(), source: announcement.source || 'legacy' })}`,
+       href: `./announcements.html?${new URLSearchParams({ id: String(announcement.id).toLowerCase(), source: announcement.source })}`,
       image: './assets/logo-branco.svg',
       alt: 'Owner News',
       meta: formatDate(announcement.published_at),
+      assetSource: announcement.source,
+      assetScope: announcement.asset_scope,
       });
       announcementsPreview.append(card);
       loadNewsImage(card.querySelector('img'), announcement);
     });
   } catch {
-    if (requestToken === announcementsRequest) renderHero(null, 'error');
+    if (requestToken === announcementsRequest && !preserveCurrent) renderHero(null, 'error');
   } finally {
     if (requestToken === announcementsRequest) setBusy(announcementsPreview, false);
   }
