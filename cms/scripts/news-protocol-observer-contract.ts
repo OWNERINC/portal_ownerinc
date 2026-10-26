@@ -9,17 +9,30 @@ function quoteLiteral(value: string): string {
  * Privileged, one-time provisioning SQL for a human-reviewed operation only.
  * The read-only audit CLI never imports or executes this builder.
  */
-export function buildNewsProtocolObserverProvisioningSQL(password: string): string {
+function observerRoleProvisioningStatements(password: string): string {
   if (typeof password !== 'string' || password.length < 32
     || /[\x00-\x1f\\]/u.test(password) || /example|placeholder|change-me/i.test(password)) {
     throw new Error('invalid_observer_password')
   }
 
-  return `BEGIN;
-CREATE ROLE ${OBSERVER_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
+  return `CREATE ROLE ${OBSERVER_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
   PASSWORD ${quoteLiteral(password)};
 GRANT CONNECT ON DATABASE ownerinc_cms TO ${OBSERVER_ROLE};
 GRANT USAGE ON SCHEMA public TO ${OBSERVER_ROLE};
+`
+}
+
+/** Creates only the cluster role and baseline database/schema privileges needed
+ * before restoring a reviewed archive whose ACLs reference cms_observer. */
+export function buildNewsProtocolObserverRoleProvisioningSQL(password: string): string {
+  return `BEGIN;
+${observerRoleProvisioningStatements(password)}COMMIT;
+`
+}
+
+export function buildNewsProtocolObserverProvisioningSQL(password: string): string {
+  return `BEGIN;
+${observerRoleProvisioningStatements(password)}
 GRANT SELECT ON TABLE public.payload_migrations, public.owner_news_mutation_head TO ${OBSERVER_ROLE};
 COMMIT;
 `

@@ -6,6 +6,7 @@ import {
 } from '../../scripts/finalize-news-protocol'
 import {
   buildNewsProtocolObserverProvisioningSQL,
+  buildNewsProtocolObserverRoleProvisioningSQL,
   newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
   newsProtocolObserverPrivilegesVerificationSQL,
   newsProtocolObserverRoleVerificationSQL,
@@ -29,6 +30,14 @@ test('observer provisioning creates only a least-privileged cms_observer without
   assert.doesNotMatch(sql, /news_articles|news_media|news_schedules|news_mutation_events|owner_news_seal_run/u)
   assert.doesNotMatch(sql, /CMS_(?:ADMIN|RUNTIME)_DATABASE_URL/u)
   assert.ok(sql.includes(password))
+})
+
+test('pre-restore observer role provisioning omits relation grants restored from the archive', () => {
+  const sql = buildNewsProtocolObserverRoleProvisioningSQL(`observer-secret-${'x'.repeat(24)}-end`)
+  assert.match(sql, /CREATE ROLE cms_observer LOGIN/u)
+  assert.match(sql, /GRANT CONNECT ON DATABASE ownerinc_cms/u)
+  assert.match(sql, /GRANT USAGE ON SCHEMA public/u)
+  assert.doesNotMatch(sql, /GRANT SELECT ON TABLE/u)
 })
 
 test('observer provisioning safely SQL-quotes punctuation in the caller-supplied password', () => {
