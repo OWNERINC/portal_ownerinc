@@ -16,7 +16,8 @@ const { Client } = require('pg');
 const postgresImage = 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777';
 
 export const manualRuntimeStages = Object.freeze([
-  'preflight', 'resolved-compose-isolation', 'empty-database-provision', 'protocol-qualification',
+  'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
+  'empty-database-provision', 'protocol-qualification',
   'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
   'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-provision',
   'restore-protection-backup', 'independent-restore',
@@ -96,9 +97,11 @@ export async function main(env = process.env) {
     await assertHostNetworkIsolated();
     await docker(['version', '--format', '{{.Server.Version}}'], { timeout: 15_000 });
     await docker(['image', 'inspect', postgresImage], { timeout: 15_000 });
-    step('resolved-compose-isolation');
+    step('source-network-create');
     await docker(['network', 'create', '--internal', '--label', `ownerinc.manual-runtime=${marker}`, network]);
+    step('source-volume-create');
     await docker(['volume', 'create', '--label', `ownerinc.manual-runtime=${marker}`, volume]);
+    step('source-database-start');
     await docker(['run', '--detach', '--pull', 'never', '--name', container, '--label', `ownerinc.manual-runtime=${marker}`,
       '--network', network, '--publish', '127.0.0.1::5432', '--mount', `type=volume,source=${volume},target=/var/lib/postgresql/data`,
       '--env-file', postgresEnv,
