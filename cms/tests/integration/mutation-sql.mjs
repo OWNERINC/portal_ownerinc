@@ -290,11 +290,13 @@ async function run() {
     await target.query("UPDATE public.news_articles SET marker='after' WHERE id=$1", [article])
     await target.query("UPDATE public.news_articles SET marker='before' WHERE id=$1", [article])
     await target.query('DELETE FROM public.news_articles WHERE id=$1', [article])
+    await target.query('INSERT INTO public.news_media(id,marker) VALUES ($1,$2)', ['a2000000-0000-4000-8000-000000000003', 'draft-upload'])
+    await target.query('INSERT INTO public.news_home(id,marker) VALUES ($1,$2)', ['a2000000-0000-4000-8000-000000000004', 'published-home'])
     await target.query('BEGIN')
     await target.query('INSERT INTO public.news_articles(id,marker) VALUES ($1,$2)', ['a2000000-0000-4000-8000-000000000002', 'rollback'])
     await target.query('ROLLBACK')
     const headAfterWrites = await one(target, 'SELECT sequence::text,chain_sha256,coverage_version FROM public.owner_news_mutation_head WHERE singleton')
-    assert(headAfterWrites.sequence === '5' && headAfterWrites.coverage_version === 0, 'mutation_sequence_or_coverage_incorrect')
+    assert(headAfterWrites.sequence === '7' && headAfterWrites.coverage_version === 0, 'mutation_sequence_or_coverage_incorrect')
     await target.query('RESET SESSION AUTHORIZATION')
     await target.query(`CREATE FUNCTION public.protocol_test_bookkeeping(value bigint, hash text) RETURNS void
       LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
@@ -322,7 +324,7 @@ async function run() {
       encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.jsonb_build_array(1,previous_sha256,sequence::text,
         event_id::text,table_name,operation,row_key,transaction_id,before_sha256,after_sha256)::text,'UTF8')),'hex') AS recomputed
       FROM public.owner_news_mutation_events ORDER BY sequence`)
-    assert(events.rows.length === 6, 'rollback_or_runtime_bookkeeping_mutation_not_logged')
+    assert(events.rows.length === 8, 'rollback_or_runtime_bookkeeping_mutation_not_logged')
     let previous = zero
     for (let index = 0; index < events.rows.length; index++) {
       const event = events.rows[index]

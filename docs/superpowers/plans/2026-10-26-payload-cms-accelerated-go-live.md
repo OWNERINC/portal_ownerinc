@@ -543,7 +543,7 @@ type GoLivePreflight = {
   publicationMode: 'manual'
   authority: { mode: 'frozen' | 'payload_frozen'; epoch: number }
   newsEmpty: boolean
-  mutation: { sequence: number; chainSha256: string; writeBarrier: string }
+  mutation: { sequence: string; chainSha256: string; writeBarrier: string }
   counts: { articles: number; media: number; homePublished: number; schedules: number }
 }
 ```

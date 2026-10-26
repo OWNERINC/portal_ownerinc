@@ -3,6 +3,7 @@ import { hasNewsServiceAccess, newsActions, readNewsActor, readNewsInput } from 
 import { keys, record } from '../news/primitives'
 import { openNewsMedia } from '../media/read-file'
 import { queryPublishedNews, queryNewsDetail, queryNewsCategories, queryNewsNavigation, queryNewsHome, queryNewsPreview } from '../news/queries'
+import { queryGoLivePreflight } from '../publication/go-live-preflight'
 
 async function body(req: PayloadRequest) {
   if (!/^application\/json(?:;|$)/iu.test(req.headers.get('content-type') || '')) throw new APIError('invalid_request', 400)
@@ -25,7 +26,13 @@ export const portalNewsEndpoints: Endpoint[] = newsActions.map(action => ({ path
   try {
     if (!hasNewsServiceAccess(req)) throw new APIError('forbidden', 403)
     if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(req.headers.get('x-request-id') || '')) throw new APIError('invalid_request', 400)
-    const request = record(await body(req)); keys(request, ['actor', 'input'])
+    const request = record(await body(req))
+    if (action === 'preflight') {
+      keys(request, ['input'])
+      readNewsInput(action, request.input)
+      return Response.json(await queryGoLivePreflight(req), { headers })
+    }
+    keys(request, ['actor', 'input'])
     const actor = readNewsActor(request.actor)
     switch (action) {
       case 'asset': {
