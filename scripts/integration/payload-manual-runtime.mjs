@@ -51,7 +51,7 @@ async function command(program, args, { env = cleanEnvironment(), cwd = root, in
     child.once('close', (code, signal) => {
       clearTimeout(timer);
       if (timedOut || signal || code !== 0) {
-        const safe = safeStderrPattern ? stderr.toString('utf8').match(safeStderrPattern)?.[0] : undefined;
+        const safe = safeStderrPattern ? `${stdout.toString('utf8')}\n${stderr.toString('utf8')}`.match(safeStderrPattern)?.[0] : undefined;
         reject(new Error(timedOut ? 'manual_runtime_process_timeout' : safe || 'manual_runtime_process_failed'));
       }
       else resolve(binary ? stdout : stdout.toString('utf8').trim());
