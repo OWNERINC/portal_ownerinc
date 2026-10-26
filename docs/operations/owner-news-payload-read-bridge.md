@@ -1,4 +1,4 @@
-# Owner News — ponte de leitura e prévia salva (Tasks 7–8)
+# Owner News — ponte de leitura, prévia salva e composição dual
 
 Esta entrega é local e não faz cutover. **Solicitar autorização antes de qualquer
 deploy na VPS.** Não ativar Payload para leitores reais antes das tarefas de
@@ -7,18 +7,28 @@ migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
 ## Interfaces
 
 - `createAnnouncementsRouter({backend,authenticate,pollsRouter})` mantém o export
-  padrão, `/polls` primeiro, array + `X-Total-Count`, `{content}` e `{previous,next}`.
+  padrão e `/polls` primeiro. As listas públicas continuam como array; emitem
+  `X-Owner-News-Read-State: complete|degraded`, `X-Owner-News-Next-Cursor` somente
+  quando existe continuação completa e `X-Total-Count` somente quando o total
+  informativo é comprovadamente exato. Detalhe/home/navegação mantêm seus envelopes.
 - `createNewsBackend({pool,payloadClient})` resolve `owner_news_authority` a cada
-  operação. `legacy`/`frozen` usam o leitor legado; `payload`/`payload_frozen` usam
-  exclusivamente Payload. Controle ausente ou dependência indisponível: **503
-  `news_unavailable`**, sem fallback. A prévia legada antes do cutover consulta a
-  revisão exata no banco legado; após o cutover consulta a coleção de histórico.
+  operação, mas autoridade de escrita não seleciona mais uma única origem de leitura.
+  Lista, categorias, navegação e home compõem legado + Payload; detalhe, asset e
+  prévia são source-directed e nunca consultam a outra origem. Internamente cada
+  operação retorna `{value,readState}`; somente a rota converte `readState` em header.
+  Controle ilegível falha antes de consultar fontes. Uma primeira página pode usar a
+  origem saudável como `degraded`; dupla falha retorna `503 news_unavailable` e uma
+  continuação por cursor/offset que perde fonte configurada retorna
+  `503 news_page_restart_required`. Nenhum desses estados muda autoridade ou writer.
 - `createPayloadNewsClient({baseURL,secret,fetchImpl,timeoutMs=5000})` expõe
   `query(action,input,actor,{signal,requestId}={})` e `asset(input,actor,options)`.
   `requestId` é uma extensão opcional para correlação; ausente/inválido gera UUID.
   A configuração padrão é lazy: `CMS_INTERNAL_URL` (somente origem HTTP(S), sem
   path/query/credenciais) e `PORTAL_TO_PAYLOAD_SECRET` não são exigidos no boot
   legado. Segredos são exclusivamente server-side e distintos nas duas direções.
+  Em `legacy`/`frozen`, ambos ausentes significam Payload intencionalmente inativo
+  (saudável-vazio); configuração parcial sempre falha. Em `payload`/`payload_frozen`,
+  ausência também falha fechada. Um client injetado conta como configuração ativa.
 - Sete POSTs somente leitura sob `/editorial/api/portal-news`: `list`, `detail`,
   `categories`, `navigation`, `home`, `preview`, `asset`. Corpo exato `{actor,input}`,
   Authorization Bearer dedicado, `X-Request-ID`. Sem encaminhar cookie, token do
@@ -28,12 +38,18 @@ migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
 - No POST privado, `kind` e `source` exigem strings primitivas com enum exato.
   Arrays, objetos e valores coercíveis retornam 400 antes de consultar conteúdo
   ou selecionar a fonte de prévia; não há coerção via `String(...)`.
+- Nas rotas públicas, detalhe e navegação sem `source` resolvem somente para legado
+  por compatibilidade de bookmark. `source` explícito em detalhe/navegação/asset e
+  a origem da prévia dirigem uma única fonte; `404`/`403` não acionam fallback.
 - Tipos CMS: `src/contracts/news.ts`; API: validação JSON independente de Next e
   Payload em `payload-dto.js`. Formatos nativos nunca atravessam a fronteira.
 - DTOs públicos do bridge Payload carregam obrigatoriamente `source: 'payload'`;
   referências `previous`/`next` também carregam a origem. O `source` opcional de
   `preview_revision` identifica a revisão salva e não substitui a origem pública
   Payload do documento.
+- DTOs legados publicados carregam `source: 'legacy'`, `asset_scope: 'legacy'` e
+  `published_at` canônico ISO (ou null). Tipos/data inválidos falham fechados antes
+  de comparador ou cursor. Referências legadas de navegação também carregam origem.
 
 ### Fronteira source-aware da lista
 
@@ -48,6 +64,21 @@ POST privado. O CMS a valida novamente, filtra antes do limite e ordena Payload 
 em 100, enquanto a lista privada de cada fonte aceita no máximo 101 itens para obter
 o lookahead necessário sem produzir uma página terminal falsa.
 
+Cursor exige `offset` ausente ou zero; combinar cursor e offset não zero retorna
+`400 invalid_request`. Offset sem cursor permanece compatível, mas é continuação:
+perder qualquer fonte configurada exige reinício, nunca uma fatia parcial. Quando
+Payload está intencionalmente inativo (`legacy`/`frozen` e ambos os envs ausentes),
+o offset legado e seu total exato permanecem intactos. Em composição dual, o cursor
+é o contrato autoritativo; a UI migra para ele na Task 3.
+
+O adapter legado consulta chunks crus determinísticos com `LIMIT 101` e keyset
+`published_at/id`, valida revisão e mídia, faz o recheck estável sob lock e avança
+até preencher apenas o lookahead válido pedido. São no máximo 1.000 chunks/101.000
+linhas cruas por operação; exceder falha fechado. Leituras limitadas não varrem o
+restante para fabricar total: quando alguma origem não prova total exato, a rota
+omite `X-Total-Count`. Categorias e o modo legado intencionalmente inativo continuam
+calculando totais exatos dentro do mesmo limite operacional.
+
 As exceções de Origin existem **tanto no proxy Next quanto no boundary REST**,
 somente nos sete paths exatos e método POST com segredo válido, sem Origin,
 Cookie ou Sec-Fetch-Site. Não autenticam coleções genéricas, admin ou Server Actions.
@@ -61,9 +92,11 @@ Leituras Local API usam explicitamente `overrideAccess:true` apenas depois da
 autenticação privada, `depth:0`, `draft:false`, filtro `_status=published` e o mesmo
 `req`/transação sob lock 7194030. Editor normal também vê somente a publicação.
 Prévia nativa consulta ID da versão **e parent**; prévia legada usa a identidade
-composta original, sem fallback de fonte. Homepage usa o Global publicado.
+composta original, sem fallback de fonte. Home prefere o Global Payload somente
+quando há conteúdo publicado válido; ausência legítima usa o home legado, enquanto
+falha de uma origem produz estado degradado.
 
-O piloto varre lotes de 100, máximo 1000 lotes (exceder retorna 503), valida
+O leitor Payload varre lotes de 100, máximo 1000 lotes (exceder retorna 503), valida
 conteúdo/referências/arquivos antes de contar/paginar e ordena publishedAt DESC,
 updatedAt DESC, UUID ASC. Categoria vazia é filtro válido, mas não entra no catálogo
 de nomes. Navegação exclui edições; uma edição retorna previous/next null. Falha

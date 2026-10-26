@@ -77,7 +77,7 @@ function poolFor({ document, blocks = [], assets = [], sourceExists = true, sour
           && (document.published_revision_status || 'published') === 'published';
         return {
           rows: published
-            ? [{ id: document.id, title: document.title, category: '', published_at: null,
+            ? [{ id: document.id, title: document.title, category: '', published_at: document.published_at ?? null,
               published_revision_id: document.published_revision_id, blocks, editorial: document.editorial }]
             : [],
         };
@@ -398,6 +398,59 @@ test('announcement detail returns normalized published blocks', async () => {
   });
   const result = await getPublishedAnnouncement(pool, 'announcement-1');
   assert.deepEqual(result.content_blocks, [{ type: 'heading', text: 'Visible', level: 2 }]);
+});
+
+test('legacy announcement DTO canonicalizes PostgreSQL Date timestamps and rejects invalid timestamp types', async () => {
+  const instant = new Date('2026-10-26T12:34:56.789Z');
+  const valid = poolFor({ document: { id: 'announcement-date', title: 'Dated', published_at: instant,
+    published_revision_id: 'published-date', published_revision_status: 'published' }, blocks: [{ type: 'paragraph', text: 'Body' }] });
+  assert.equal((await listPublishedAnnouncements(valid, 1, 0)).rows[0].published_at, instant.toISOString());
+
+  const invalid = poolFor({ document: { id: 'announcement-date', title: 'Dated', published_at: 123,
+    published_revision_id: 'published-date', published_revision_status: 'published' }, blocks: [{ type: 'paragraph', text: 'Body' }] });
+  await assert.rejects(listPublishedAnnouncements(invalid, 1, 0), /invalid_published_at/);
+});
+
+test('legacy lookahead uses bounded keyset chunks and continues past invalid and unstable rows', async () => {
+  const newsId = n => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const raw = Array.from({ length: 103 }, (_, index) => ({
+    id: newsId(index + 1), title: `Row ${index + 1}`, category: 'News',
+    published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -index)),
+    published_revision_id: newsId(index + 1000), editorial: null,
+    blocks: index < 100 ? [{ type: 'unknown' }] : [{ type: 'paragraph', text: `Body ${index + 1}` }],
+  }));
+  let reads = 0;
+  const calls = [];
+  const pool = {
+    async connect() {
+      return { release() {}, async query(sql, params = []) {
+        calls.push({ sql, params });
+        if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+        if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+        if (sql.includes('SELECT d.id, d.title')) {
+          reads++;
+          return { rows: reads === 1 ? raw.slice(0, 101) : raw.slice(101) };
+        }
+        if (sql.includes('FOR UPDATE OF d, r')) {
+          return { rows: params[0].filter(value => value !== newsId(102)).map(value => ({
+            id: value, published_revision_id: raw.find(row => row.id === value).published_revision_id,
+          })) };
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      } };
+    },
+  };
+  const result = await listPublishedAnnouncements(pool, 2, 0, undefined, undefined, null, { exactTotal: false });
+  assert.deepEqual(result.rows.map(row => row.id), [newsId(101), newsId(103)]);
+  assert.equal(result.count, 2);
+  assert.equal(reads, 2);
+  const selects = calls.filter(call => call.sql.includes('SELECT d.id, d.title'));
+  assert.equal(selects.length, 2);
+  assert.ok(selects.every(call => /ORDER BY d\.published_at DESC NULLS LAST, d\.id\s+LIMIT \$\d+/u.test(call.sql)));
+  assert.ok(selects.every(call => call.params.at(-1) === 101));
+  assert.match(selects[1].sql, /d\.published_at < \$1::timestamptz/u);
+  assert.doesNotMatch(selects[1].sql, /OFFSET/u);
 });
 
 test('announcement list discards rows unpublished before the final locked recheck', async () => {

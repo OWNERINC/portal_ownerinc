@@ -140,7 +140,7 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
           return { rows, count: legacyPage.count,
             nextCursor: legacyPage.rows.length > input.limit && rows.length
               ? encodeNewsCursor(rows.at(-1), { category: input.category, kind: input.kind }) : null };
-        }, { hasCursor: Boolean(input.boundary) });
+        }, { hasCursor: Boolean(input.boundary) || input.offset > 0 });
       }
       const wanted = Math.min(101, input.offset + input.limit + 1);
       const sourceInput = { limit: wanted, offset: 0,
@@ -148,7 +148,7 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
         ...(input.kind === undefined ? {} : { kind: input.kind }),
         ...(input.boundary ? { boundary: input.boundary } : {}) };
       const results = await Promise.all([
-        capture('legacy', () => legacyReader.listPublishedAnnouncements(pool, wanted, 0, input.category, input.kind, input.boundary)),
+        capture('legacy', () => legacyReader.listPublishedAnnouncements(pool, wanted, 0, input.category, input.kind, input.boundary, { exactTotal: false })),
         capture('payload', () => payloadComposite('list', sourceInput, actor, options, currentAuthority)),
       ]);
       return finishComposite(action, results, options, values => {
@@ -156,9 +156,11 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
         const rows = [...(bySource.legacy?.rows || []), ...(bySource.payload?.rows || [])].sort(compareNews);
         const start = input.offset, page = rows.slice(start, start + input.limit);
         const hasMore = rows.length > start + input.limit;
-        return { rows: page, count: (bySource.legacy?.count || 0) + (bySource.payload?.count || 0),
+        const counts = Object.values(bySource).map(result => result.count);
+        const count = counts.every(Number.isSafeInteger) ? counts.reduce((sum, value) => sum + value, 0) : null;
+        return { rows: page, count,
           nextCursor: hasMore && page.length ? encodeNewsCursor(page.at(-1), { category: input.category, kind: input.kind }) : null };
-      }, { hasCursor: Boolean(input.boundary) });
+      }, { hasCursor: Boolean(input.boundary) || input.offset > 0 });
     }
     if (action === 'categories') {
       const sourceInput = { withCounts: true, ...(input.kind === undefined ? {} : { kind: input.kind }) };
@@ -194,7 +196,7 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
       if (source === 'payload') {
         if (payloadState(currentAuthority) !== 'active') throw unavailable();
         return action === 'asset' ? await client().asset(withoutSource(input), actor, options)
-          : await client().query(action, action === 'preview' ? input : withoutSource(input), actor, options);
+          : await client().query(action, action === 'preview' ? input : action === 'detail' ? { id: input.id } : withoutSource(input), actor, options);
       }
       if (action === 'detail') return await legacyReader.getPublishedAnnouncement(pool, input.id);
       if (action === 'preview') return await legacyPreviewReader(pool, input);
@@ -211,7 +213,7 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
     for (let batch = 0; batch < 1000; batch++) {
       const sourceInput = { limit: 101, offset: 0, ...(input.category === undefined ? {} : { category: input.category }), kind: 'article', ...(boundary ? { boundary } : {}) };
       const page = source === 'legacy'
-        ? await legacyReader.listPublishedAnnouncements(pool, 101, 0, input.category, 'article', boundary)
+        ? await legacyReader.listPublishedAnnouncements(pool, 101, 0, input.category, 'article', boundary, { exactTotal: false })
         : await payloadComposite('list', sourceInput, actor, options, currentAuthority);
       rows.push(...page.rows);
       if (page.rows.length < 101) return rows;

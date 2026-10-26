@@ -91,13 +91,14 @@ test('global navigation keeps colliding UUIDs distinct and degrades only when th
     },
     payloadClient: {
       async query(action, input) {
-        if (action === 'detail') return payloadRows[0];
+        if (action === 'detail') { assert.deepEqual(input, { id: shared }); return payloadRows[0]; }
         assert.equal(input.kind, 'article');
+        assert.equal(input.category, 'Team');
         return { rows: payloadRows, count: 2 };
       },
     },
   });
-  const result = await backend.navigation({ id: shared, source: 'payload' }, actor);
+  const result = await backend.navigation({ id: shared, source: 'payload', category: 'Team' }, actor);
   assert.equal(result.readState, 'complete');
   assert.deepEqual(result.value, {
     previous: { source: 'legacy', id: shared, title: 'Legacy twin' },

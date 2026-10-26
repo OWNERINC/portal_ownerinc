@@ -62,7 +62,8 @@ function poolFor(extended = false) {
             if (sql.includes('WHERE d.id = $1')) published = published.filter(row => row.id === params[0]);
             else {
               assert.match(sql, /ORDER BY d\.published_at DESC/);
-              assert.doesNotMatch(sql, /LIMIT|OFFSET/);
+              assert.match(sql, /LIMIT \$\d+/);
+              assert.doesNotMatch(sql, /OFFSET/);
             }
             return { rows: published.map(({ status, unstable, ...row }) => row) };
           }

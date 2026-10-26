@@ -22,10 +22,10 @@ const secret = 'synthetic-task7-service-secret-not-real';
 const dto = (n = 1) => ({ source: 'payload', id: id(n), title: `Article ${n}`, category: '', published_at: '2026-10-01T00:00:00.000Z', editorial: null,
   content_version: 2, asset_scope: 'owner-news', content_blocks: [{ type: 'paragraph', text: 'Published A' }], read_time_minutes: 1 });
 const clientFor = (fetchImpl, options = {}) => createPayloadNewsClient({ baseURL: 'http://cms.invalid', secret, fetchImpl, ...options });
-function appFor(fetchImpl, mode = 'payload') {
+function appFor(fetchImpl, mode = 'payload', overrides = {}) {
   const calls = [], pool = { async query(sql) { calls.push(sql); return { rows: [{ mode, epoch: 1 }] }; } };
   const legacyDto = { ...dto(), source: 'legacy', asset_scope: 'legacy' };
-  const legacyReader = {
+  const legacyReader = overrides.legacyReader || {
     async listPublishedAnnouncements(_pool, limit, _offset, _category, kind) { return { rows: kind === 'article' && limit === 101 ? [legacyDto] : [], count: kind === 'article' && limit === 101 ? 1 : 0 }; },
     async listPublishedAnnouncementCategories(_pool, input) { return input.withCounts ? { total: 0, categories: [] } : []; },
     async getPublishedAnnouncement() { return legacyDto; },
@@ -88,6 +88,8 @@ test('cursor degradation requires restart, double failure is unavailable, and un
     legacyReader: { async listPublishedAnnouncements() { return { rows: [], count: 0 }; } } };
   const partial = createNewsBackend({ ...base, payloadClient: { async query() { throw new Error('offline'); } }, logger() {} });
   await assert.rejects(partial.list({ limit: 10, offset: 0, boundary: require('../../api/owner-news/feed.js').decodeNewsCursor(cursor, filters) }, actor), e => e.status === 503 && e.code === 'news_page_restart_required');
+  await assert.rejects(partial.list({ limit: 10, offset: 1 }, actor), e => e.status === 503 && e.code === 'news_page_restart_required');
+  await assert.rejects(partial.list({ limit: 10, offset: 1, boundary: require('../../api/owner-news/feed.js').decodeNewsCursor(cursor, filters) }, actor), e => e.status === 400 && e.code === 'invalid_request');
   const double = createNewsBackend({ ...base, legacyReader: { async listPublishedAnnouncements() { throw new Error('db'); } }, payloadClient: { async query() { throw new Error('cms'); } }, logger() {} });
   await assert.rejects(double.list({ limit: 10, offset: 0 }, actor), e => e.status === 503 && e.code === 'news_unavailable');
   let touched = 0;
@@ -266,12 +268,26 @@ test('Express list emits an opaque next cursor, sends only its typed boundary up
   const first = await api.get('/api/announcements?limit=1&offset=0').set('Authorization', 'Bearer reader').expect(200);
   const cursor = first.headers['x-owner-news-next-cursor'];
   assert.deepEqual(decodeNewsCursor(cursor, {}), { source: 'payload', id: id(1), published_at: dto(1).published_at });
+  const beforeInvalid = calls;
+  const invalid = await api.get(`/api/announcements?limit=1&offset=1&cursor=${encodeURIComponent(cursor)}`).set('Authorization', 'Bearer reader').expect(400);
+  assert.equal(invalid.body.reason, 'invalid_request');
+  assert.equal(calls, beforeInvalid, 'cursor plus offset is rejected before either source');
   await api.get(`/api/announcements?limit=1&offset=0&cursor=${encodeURIComponent(cursor)}`).set('Authorization', 'Bearer reader').expect(200);
 
   const unavailable = appFor(async () => Response.json({ private: 'no' }, { status: 500 })).api;
   const restart = await unavailable.get(`/api/announcements?limit=1&offset=0&cursor=${encodeURIComponent(cursor)}`).set('Authorization', 'Bearer reader').expect(503);
   assert.equal(restart.body.reason, 'news_page_restart_required');
   assert.equal(restart.headers['x-owner-news-next-cursor'], undefined);
+});
+test('Express omits informational total when bounded dual-source lookahead cannot prove it exact', async () => {
+  const legacyReader = {
+    async listPublishedAnnouncements() { return { rows: [], count: null }; },
+  };
+  const { api } = appFor(async () => Response.json({ rows: [dto()], count: 500 }), 'payload', { legacyReader });
+  const response = await api.get('/api/announcements?limit=1&offset=0').set('Authorization', 'Bearer reader').expect(200);
+  assert.equal(response.headers['x-total-count'], undefined);
+  assert.equal(response.headers['x-owner-news-read-state'], 'complete');
+  assert.deepEqual(response.body.map(row => row.id), [id(1)]);
 });
 test('asset stream enforces headers, byte limits, Range and cancellation without JSON buffering', async () => {
   const headers = { 'content-type': 'application/pdf', 'content-length': '4', 'content-disposition': 'inline; filename="test.pdf"', 'accept-ranges': 'bytes', 'content-range': 'bytes 1-4/10' };

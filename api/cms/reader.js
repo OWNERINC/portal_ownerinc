@@ -31,6 +31,9 @@ const ASSET_MIMES = {
   pdf: new Set(['application/pdf']),
   video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
 };
+const ANNOUNCEMENT_BATCH_SIZE = 101;
+const ANNOUNCEMENT_MAX_BATCHES = 1000;
+const ANNOUNCEMENT_MAX_RAW_ROWS = ANNOUNCEMENT_BATCH_SIZE * ANNOUNCEMENT_MAX_BATCHES;
 
 function assetReferences(blocks) {
   const references = new Map();
@@ -375,11 +378,19 @@ function legacyBoundarySql(boundary, values) {
   return ` AND (d.published_at IS NULL OR d.published_at < ${date}::timestamptz${sameDate})`;
 }
 
-async function stablePublishedAnnouncements(pool, { boundary = null } = {}) {
-  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
-  const visible = await withTransaction(pool, async (db) => {
+function normalizePublishedAt(value) {
+  if (value === null) return null;
+  if (!(value instanceof Date) && typeof value !== 'string') throw new Error('invalid_published_at');
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(parsed.getTime())) throw new Error('invalid_published_at');
+  return parsed.toISOString();
+}
+
+async function publishedAnnouncementBatch(pool, boundary) {
+  return withTransaction(pool, async (db) => {
     const values = [];
     const boundarySql = legacyBoundarySql(boundary, values);
+    values.push(ANNOUNCEMENT_BATCH_SIZE);
     const { rows } = await db.query(
       `SELECT d.id, d.title, d.category, d.published_at,
               r.id AS published_revision_id, r.blocks, r.editorial
@@ -387,7 +398,8 @@ async function stablePublishedAnnouncements(pool, { boundary = null } = {}) {
          JOIN cms_revisions r
            ON r.id = d.published_revision_id AND r.status = 'published'
          WHERE d.content_type = 'announcement'${boundarySql}
-         ORDER BY d.published_at DESC NULLS LAST, d.id`,
+         ORDER BY d.published_at DESC NULLS LAST, d.id
+         LIMIT $${values.length}`,
       values,
     );
     const validations = await validatePublishedBlocksBatch(db, rows.map(row => row.blocks));
@@ -395,18 +407,42 @@ async function stablePublishedAnnouncements(pool, { boundary = null } = {}) {
       const revision = validateNewsRevision(row.blocks, row.editorial ?? null, { publishing: true });
       return validations[index].blocks === null || !revision ? [] : [{ ...row, ...revision }];
     });
-    return visible;
+    return { rows, visible };
   });
-  const stableIds = await recheckPublishedAnnouncements(pool, visible.map(row => ({
-    id: row.id,
-    publishedRevisionId: row.published_revision_id,
-  })));
-  return visible.filter(row => stableIds.has(String(row.id).toLowerCase())).map(articleDTO);
+}
+
+async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = null, category, kind } = {}) {
+  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
+  const stable = [];
+  let rawBoundary = boundary;
+  let rawRows = 0;
+  for (let batch = 0; batch < ANNOUNCEMENT_MAX_BATCHES; batch++) {
+    const result = await publishedAnnouncementBatch(pool, rawBoundary);
+    rawRows += result.rows.length;
+    if (rawRows > ANNOUNCEMENT_MAX_RAW_ROWS) throw new Error('announcement_scan_limit');
+    if (!result.rows.length) return { rows: stable, exhausted: true };
+    const last = result.rows.at(-1);
+    rawBoundary = { published_at: normalizePublishedAt(last.published_at), source: 'legacy', id: String(last.id).toLowerCase() };
+
+    const candidates = selectAnnouncements(result.visible, category, kind);
+    const stableIds = await recheckPublishedAnnouncements(pool, candidates.map(row => ({
+      id: row.id,
+      publishedRevisionId: row.published_revision_id,
+    })));
+    stable.push(...candidates.filter(row => stableIds.has(String(row.id).toLowerCase())).map(articleDTO));
+
+    const exhausted = result.rows.length < ANNOUNCEMENT_BATCH_SIZE;
+    if (maxRows !== null && stable.length >= maxRows) {
+      return { rows: stable.slice(0, maxRows), exhausted: exhausted && stable.length === maxRows };
+    }
+    if (exhausted) return { rows: stable, exhausted: true };
+  }
+  throw new Error('announcement_scan_limit');
 }
 
 function articleDTO({ blocks, published_revision_id: _publishedRevisionId, ...row }) {
   const editorial = row.editorial ?? null;
-  return { ...row, source: 'legacy', id: String(row.id).toLowerCase(), editorial,
+  return { ...row, published_at: normalizePublishedAt(row.published_at), source: 'legacy', id: String(row.id).toLowerCase(), editorial,
     asset_scope: 'legacy', content_blocks: blocks,
     read_time_minutes: estimateNewsReadTime(blocks, editorial) };
 }
@@ -417,7 +453,7 @@ function selectAnnouncements(rows, category, kind) {
 }
 
 async function listPublishedAnnouncementCategories(pool, { kind, withCounts = false } = {}) {
-  const rows = selectAnnouncements(await stablePublishedAnnouncements(pool), undefined, kind);
+  const { rows } = await stablePublishedAnnouncements(pool, { kind });
   const counts = new Map();
   for (const { category } of rows) {
     if (typeof category === 'string' && category.trim()) counts.set(category, (counts.get(category) || 0) + 1);
@@ -426,17 +462,18 @@ async function listPublishedAnnouncementCategories(pool, { kind, withCounts = fa
   return withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
 }
 
-async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null) {
-  const stable = selectAnnouncements(await stablePublishedAnnouncements(pool, { boundary }), category, kind);
+async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true } = {}) {
+  const result = await stablePublishedAnnouncements(pool, { boundary, category, kind,
+    maxRows: exactTotal ? null : offset + limit });
   return {
-    count: stable.length,
-    rows: stable.slice(offset, offset + limit),
+    count: result.exhausted ? result.rows.length : null,
+    rows: result.rows.slice(offset, offset + limit),
   };
 }
 
 async function getPublishedAnnouncementNavigation(pool, id, category) {
   id = String(id).toLowerCase();
-  const rows = await stablePublishedAnnouncements(pool);
+  const { rows } = await stablePublishedAnnouncements(pool);
   const current = rows.find(row => row.id === id);
   if (!current) return null;
   if (announcementKind(current) === 'edition') return { previous: null, next: null };

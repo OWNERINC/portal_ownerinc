@@ -45,7 +45,10 @@ function createAnnouncementsRouter({ backend = createNewsBackend({ pool }), auth
           res.status(result.status).set(result.headers);
           if (!result.body) return res.end();
           await pipeline(Readable.fromWeb(result.body), res, { signal: controller.signal });
-        } else if (action === 'list') res.set('X-Total-Count', String(result.count)).json(result.rows);
+        } else if (action === 'list') {
+          if (Number.isSafeInteger(result.count) && result.count >= 0) res.set('X-Total-Count', String(result.count));
+          res.json(result.rows);
+        }
         else res.json(result);
       } catch (error) {
         if (controller.signal.aborted) return;
