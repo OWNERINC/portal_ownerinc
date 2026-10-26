@@ -32,20 +32,28 @@ const cleanEnvironment = () => Object.fromEntries(Object.entries(process.env).fi
   ['path', 'home', 'lang', 'lc_all', 'tz'].includes(key.toLowerCase())));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function command(program, args, { env = cleanEnvironment(), cwd = root, input, binary = false, timeout = 300_000 } = {}) {
+async function command(program, args, { env = cleanEnvironment(), cwd = root, input, binary = false,
+  timeout = 300_000, safeStderrPattern } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = Buffer.alloc(0), stderrBytes = 0, timedOut = false;
+    let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), stderrBytes = 0, timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeout);
     child.stdout.on('data', chunk => {
       if (stdout.length + chunk.length > 512 * 1024 * 1024) child.kill('SIGKILL');
       else stdout = Buffer.concat([stdout, chunk]);
     });
-    child.stderr.on('data', chunk => { stderrBytes += chunk.length; if (stderrBytes > 4 * 1024 * 1024) child.kill('SIGKILL'); });
+    child.stderr.on('data', chunk => {
+      stderrBytes += chunk.length;
+      if (safeStderrPattern && stderr.length + chunk.length <= 64 * 1024) stderr = Buffer.concat([stderr, chunk]);
+      if (stderrBytes > 4 * 1024 * 1024) child.kill('SIGKILL');
+    });
     child.once('error', () => { clearTimeout(timer); reject(new Error('manual_runtime_process_unavailable')); });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
-      if (timedOut || signal || code !== 0) reject(new Error(timedOut ? 'manual_runtime_process_timeout' : 'manual_runtime_process_failed'));
+      if (timedOut || signal || code !== 0) {
+        const safe = safeStderrPattern ? stderr.toString('utf8').match(safeStderrPattern)?.[0] : undefined;
+        reject(new Error(timedOut ? 'manual_runtime_process_timeout' : safe || 'manual_runtime_process_failed'));
+      }
       else resolve(binary ? stdout : stdout.toString('utf8').trim());
     });
     child.stdin.on('error', () => {}); child.stdin.end(input);
@@ -194,7 +202,8 @@ export async function main(env = process.env) {
 
     step('protocol-finalizer');
     await command(process.execPath, ['--import', 'tsx', 'scripts/finalize-news-protocol.ts', '--finalize-protocol'], {
-      cwd: path.join(root, 'cms'), env: { ...cleanEnvironment(), CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms') } });
+      cwd: path.join(root, 'cms'), env: { ...cleanEnvironment(), CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms') },
+      safeStderrPattern: /CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})(?: operation=[a-z0-9_-]+ ddl_source=mutation-ledger expected_owner=cms_admin)?/u });
     step('protocol-baseline');
     const qualify = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms'));
     try {
@@ -357,7 +366,7 @@ export async function main(env = process.env) {
     completed = true;
     process.stdout.write('payload-manual-runtime: PASS; disposable manual publication, restart, backup and independent restore verified\n');
     return 0;
-  } catch {
+  } catch (error) {
     await rm(postgresEnv, { force: true }).catch(() => {});
     if (cmsChild) {
       cmsChild.kill('SIGTERM');
@@ -367,7 +376,9 @@ export async function main(env = process.env) {
     if (portalServer) await new Promise(resolve => portalServer.close(resolve)).catch(() => {});
     if (created) await docker(['stop', '--time', '30', container], { timeout: 45_000 }).catch(() => {});
     if (targetCreated) await docker(['stop', '--time', '30', targetContainer], { timeout: 45_000 }).catch(() => {});
-    process.stderr.write(`payload-manual-runtime: FAIL stage=${stage}; owned services stopped; private evidence retained\n`);
+    const diagnostic = error instanceof Error && /^CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})/u.test(error.message)
+      ? ` diagnostic=${error.message}` : '';
+    process.stderr.write(`payload-manual-runtime: FAIL stage=${stage}; owned services stopped; private evidence retained${diagnostic}\n`);
     return 1;
   } finally {
     if (completed && portalServer) await new Promise(resolve => portalServer.close(resolve)).catch(() => {});
