@@ -241,6 +241,7 @@ export async function main(env = process.env) {
           CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms', selectedPort),
           CMS_OBSERVER_DATABASE_URL: url('cms_observer', passwords.observer, 'ownerinc_cms', selectedPort),
           CMS_OBSERVER_PASSWORD: passwords.observer },
+        safeStderrPattern: /MANUAL_RUNTIME_PROTOCOL_DIAGNOSTIC action=(?:provision-observer|audit) stage=(?:connect|provision|audit) sqlstate=(?:none|[0-9A-Z]{5})/u,
       });
     await protocolProof('provision-observer');
     await proof('prepare', 'ownerinc_cms', directory);
@@ -398,7 +399,7 @@ export async function main(env = process.env) {
     if (portalServer) await new Promise(resolve => portalServer.close(resolve)).catch(() => {});
     if (created) await docker(['stop', '--time', '30', container], { timeout: 45_000 }).catch(() => {});
     if (targetCreated) await docker(['stop', '--time', '30', targetContainer], { timeout: 45_000 }).catch(() => {});
-    const diagnostic = error instanceof Error && /^(?:manual_runtime_[a-z0-9_]+|CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_CONTENT_DIAGNOSTIC action=(?:prepare|capture|verify) stage=(?:config|payload-init|readiness|preflight|editor-projection|capture|verify)|MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+)$/u.test(error.message)
+    const diagnostic = error instanceof Error && /^(?:manual_runtime_[a-z0-9_]+|CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_PROTOCOL_DIAGNOSTIC action=(?:provision-observer|audit) stage=(?:connect|provision|audit) sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_CONTENT_DIAGNOSTIC action=(?:prepare|capture|verify) stage=(?:config|payload-init|readiness|preflight|editor-projection|capture|verify)|MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+)$/u.test(error.message)
       ? ` diagnostic=${error.message}` : '';
     process.stderr.write(`payload-manual-runtime: FAIL stage=${stage}; owned services stopped; private evidence retained${diagnostic}\n`);
     return 1;

@@ -18,22 +18,34 @@ if (!/^[0-9a-f]{32}$/u.test(marker || '') || !['provision-observer', 'audit'].in
 }
 
 test(`manual runtime protocol ${action}`, async () => {
-  if (action === 'audit') {
-    const report = await runNewsProtocolAudit(process.env)
-    assert.equal(report.status, 'PASS')
-    assert.equal(report.catalogValid, true)
-    assert.equal(report.installed, true)
-    assert.equal(report.observedCoverageVersion, 1)
-    assert.equal(report.observerRole, 'cms_observer')
-    return
-  }
-  const require = createRequire(import.meta.url)
-  const { Client } = require('pg') as { Client: new (options: object) => {
-    connect(): Promise<void>; query(sql: string): Promise<unknown>; end(): Promise<void>
-  } }
-  const client = new Client({ connectionString: adminURL.href, connectionTimeoutMillis: 5000 })
+  let stage = action === 'audit' ? 'audit' : 'connect'
   try {
-    await client.connect()
-    await client.query(buildNewsProtocolObserverProvisioningSQL(observerPassword))
-  } finally { await client.end() }
+    if (action === 'audit') {
+      const report = await runNewsProtocolAudit(process.env)
+      assert.equal(report.status, 'PASS')
+      assert.equal(report.catalogValid, true)
+      assert.equal(report.installed, true)
+      assert.equal(report.observedCoverageVersion, 1)
+      assert.equal(report.observerRole, 'cms_observer')
+      return
+    }
+    const require = createRequire(import.meta.url)
+    const { Client } = require('pg') as { Client: new (options: object) => {
+      connect(): Promise<void>; query(sql: string): Promise<unknown>; end(): Promise<void>
+    } }
+    const client = new Client({ connectionString: adminURL.href, connectionTimeoutMillis: 5000 })
+    try {
+      await client.connect()
+      stage = 'provision'
+      await client.query(buildNewsProtocolObserverProvisioningSQL(observerPassword))
+    } finally { await client.end() }
+  } catch (error) {
+    let sqlstate = 'none'
+    try {
+      const value = error && typeof error === 'object' ? Object.getOwnPropertyDescriptor(error, 'code')?.value : null
+      if (typeof value === 'string' && /^[0-9A-Z]{5}$/u.test(value)) sqlstate = value
+    } catch { /* Keep the bounded fallback. */ }
+    process.stderr.write(`MANUAL_RUNTIME_PROTOCOL_DIAGNOSTIC action=${action} stage=${stage} sqlstate=${sqlstate}\n`)
+    throw error
+  }
 })
