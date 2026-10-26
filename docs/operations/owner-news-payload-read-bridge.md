@@ -30,6 +30,21 @@ migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
   ou selecionar a fonte de prévia; não há coerção via `String(...)`.
 - Tipos CMS: `src/contracts/news.ts`; API: validação JSON independente de Next e
   Payload em `payload-dto.js`. Formatos nativos nunca atravessam a fronteira.
+- DTOs públicos do bridge Payload carregam obrigatoriamente `source: 'payload'`;
+  referências `previous`/`next` também carregam a origem. O `source` opcional de
+  `preview_revision` identifica a revisão salva e não substitui a origem pública
+  Payload do documento.
+
+### Fronteira source-aware da lista
+
+O Portal usa ordem canônica por `published_at` decrescente (datas nulas por último),
+depois origem `legacy`/`payload` e UUID lowercase crescente. O cursor público é
+base64url, versão 1, tem no máximo 1024 caracteres e contém exatamente a fronteira
+e os filtros normalizados: `{v,published_at,source,id,category,kind}`. Categoria e
+tipo ausentes são serializados como `null`; replay sob filtros diferentes falha com
+`invalid_request`. Somente a fronteira tipada `{published_at,source,id}` atravessa o
+POST privado. O CMS a valida novamente, filtra antes do limite e ordena Payload por
+`publishedAt` e UUID; o cursor opaco nunca é enviado ao CMS.
 
 As exceções de Origin existem **tanto no proxy Next quanto no boundary REST**,
 somente nos sete paths exatos e método POST com segredo válido, sem Origin,

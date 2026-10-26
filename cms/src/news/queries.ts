@@ -21,7 +21,7 @@ async function visible(req: PayloadRequest, document: unknown, preview = false):
 /** Authenticated private bridge only: explicit bypass with current-publication filter.
  * Every candidate and media check shares lock 7194030 + the same live req/session. */
 async function published(req: PayloadRequest, signal?: AbortSignal): Promise<NewsDTO[]> {
-  const candidates: { dto: NewsDTO; updatedAt: string }[] = []
+  const candidates: NewsDTO[] = []
   for (let page = 1; page <= 1000; page++) {
     if (signal?.aborted) throw new APIError('news_unavailable', 503, undefined, true)
     await requireCmsTransaction(req.payload, req)
@@ -31,11 +31,14 @@ async function published(req: PayloadRequest, signal?: AbortSignal): Promise<New
       if (signal?.aborted) throw new APIError('news_unavailable', 503, undefined, true)
       if (document._status !== 'published') continue
       const dto = await visible(req, document)
-      if (dto) candidates.push({ dto, updatedAt: document.updatedAt })
+      if (dto) candidates.push(dto)
     }
     if (!result.hasNextPage) {
       const stamp = (v: string | null) => v === null ? -Infinity : Date.parse(v)
-      return candidates.sort((a, b) => (stamp(b.dto.published_at) - stamp(a.dto.published_at) || stamp(b.updatedAt) - stamp(a.updatedAt) || (a.dto.id < b.dto.id ? -1 : a.dto.id > b.dto.id ? 1 : 0))).map(item => item.dto)
+      return candidates.sort((a, b) => {
+        const aStamp = stamp(a.published_at), bStamp = stamp(b.published_at)
+        return aStamp !== bStamp ? (bStamp > aStamp ? 1 : -1) : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      })
     }
   }
   throw new APIError('news_unavailable', 503, undefined, true)
@@ -43,12 +46,21 @@ async function published(req: PayloadRequest, signal?: AbortSignal): Promise<New
 function select(rows: NewsDTO[], input: { category?: string; kind?: string }) {
   return rows.filter(row => (input.category === undefined || row.category === input.category) && (input.kind === undefined || kind(row) === input.kind))
 }
+function afterBoundary(row: NewsDTO, boundary: NonNullable<NewsInputs['list']['boundary']>) {
+  const stamp = (value: string | null) => value === null ? -Infinity : Date.parse(value)
+  const rowStamp = stamp(row.published_at), boundaryStamp = stamp(boundary.published_at)
+  if (rowStamp !== boundaryStamp) return rowStamp < boundaryStamp
+  if (boundary.source === 'legacy') return true
+  return row.id > boundary.id
+}
 function guard(actor: VerifiedPortalActor) { readNewsActor(actor) }
 export function queryPublishedNews(req: PayloadRequest, input: NewsInputs['list'], actor: VerifiedPortalActor): Promise<NewsPage> {
   guard(actor); input = readNewsInput('list', input)
   const signal = req.signal
   return withCmsTransaction(req.payload, req, async req => {
-    const rows = select(await published(req, signal), input); return { rows: rows.slice(input.offset, input.offset + input.limit), count: rows.length }
+    const selected = select(await published(req, signal), input)
+    const rows = input.boundary ? selected.filter(row => afterBoundary(row, input.boundary!)) : selected
+    return { rows: rows.slice(input.offset, input.offset + input.limit), count: rows.length }
   })
 }
 export function queryNewsDetail(req: PayloadRequest, input: NewsInputs['detail'], actor: VerifiedPortalActor): Promise<NewsDTO> {
@@ -79,7 +91,7 @@ export function queryNewsNavigation(req: PayloadRequest, input: NewsInputs['navi
     if (kind(current) === 'edition') return { previous: null, next: null }
     const articles = select(rows, { ...input, kind: 'article' }), index = articles.findIndex(row => row.id === input.id)
     if (index < 0) notFound()
-    const item = (row?: NewsDTO) => row ? { id: row.id, title: row.title } : null
+    const item = (row?: NewsDTO) => row ? { source: 'payload' as const, id: row.id, title: row.title } : null
     return { previous: item(articles[index - 1]), next: item(articles[index + 1]) }
   })
 }

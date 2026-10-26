@@ -35,8 +35,18 @@ test('published readers validate before count/pagination/category; stable timest
   assert.equal((await queryPublishedNews(req, { limit: 1, offset: 0, category: '' }, actor)).rows[0].id, id(3))
   assert.equal((await queryNewsDetail(req, { id: id(1) }, editor)).title, 'Published 1')
   await assert.rejects(queryNewsDetail(req, { id: id(4) }, actor), e => (e as APIError).status === 404)
-  assert.deepEqual(await queryNewsNavigation(req, { id: id(1), category: 'News' }, actor), { previous: null, next: { id: id(2), title: 'Published 2' } })
+  assert.deepEqual(await queryNewsNavigation(req, { id: id(1), category: 'News' }, actor), { previous: null, next: { source: 'payload', id: id(2), title: 'Published 2' } })
   assert.equal((await queryNewsHome(req, {}, actor)).content?.headline, 'Home A')
+})
+test('list boundary is strict, source-aware and applied before the deterministic limit', async () => {
+  const { req } = fixture()
+  const boundary = { published_at: '2026-10-01T00:00:00.000Z', source: 'payload' as const, id: id(1) }
+  assert.deepEqual((await queryPublishedNews(req, { limit: 1, offset: 0, boundary }, actor)).rows.map(row => row.id), [id(2)])
+  assert.equal((await queryPublishedNews(req, { limit: 10, offset: 0, boundary }, actor)).rows[0].source, 'payload')
+  for (const value of [
+    { ...boundary, source: 'other' }, { ...boundary, id: 'bad' }, { ...boundary, published_at: 'bad' },
+    { ...boundary, extra: true }, { source: 'payload', id: id(1) }, null,
+  ]) assert.throws(() => readNewsInput('list', { limit: 10, offset: 0, boundary: value } as unknown as NewsInputs['list']))
 })
 test('operational failure never becomes an empty page/count; preview parent/source cannot fall back', async () => {
   const { req, fail } = fixture()
@@ -53,6 +63,7 @@ test('preview metadata reflects the exact saved revision status, not a generic d
   for (const status of ['draft', 'published'] as const) {
     req.payload.findVersions = (async () => ({ docs: [{ id: id(99), parent: id(1), version: document(1, { _status: status }) }] })) as any
     const dto = await queryNewsPreview(req, { id: id(1), versionId: id(99), source: 'payload' }, editor)
+    assert.equal(dto.source, 'payload')
     assert.deepEqual(dto.preview_revision, { id: id(99), source: 'payload', status })
   }
   assert.equal((await queryNewsDetail(req, { id: id(1) }, editor)).preview_revision, undefined)
@@ -60,6 +71,7 @@ test('preview metadata reflects the exact saved revision status, not a generic d
     originalTitle: 'History', originalCategory: '', originalBody: [{ type: 'paragraph', text: 'Original' }], originalEditorial: null }] })) as any
   assert.deepEqual((await queryNewsPreview(req, { id: id(1), versionId: id(99), source: 'legacy' }, editor)).preview_revision,
     { id: id(99), source: 'legacy', status: 'archived' })
+  assert.equal((await queryNewsPreview(req, { id: id(1), versionId: id(99), source: 'legacy' }, editor)).source, 'payload')
 })
 test('exact service POST allowlist is separate from login and refuses browser/cross-site/other-secret requests', () => {
   const env = { PORTAL_TO_PAYLOAD_SECRET: 'synthetic-private-news-secret-32-chars', PAYLOAD_TO_PORTAL_SECRET: 'synthetic-opposite-direction-secret' }

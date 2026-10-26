@@ -63,7 +63,7 @@ function readRich(block, budget) {
   return block;
 }
 function readNewsDTO(json) {
-  const required = ['id', 'title', 'category', 'published_at', 'editorial', 'content_version', 'asset_scope', 'content_blocks', 'read_time_minutes'];
+  const required = ['source', 'id', 'title', 'category', 'published_at', 'editorial', 'content_version', 'asset_scope', 'content_blocks', 'read_time_minutes'];
   assert(keys(json, [...required, 'preview_revision'], required));
   if (Object.hasOwn(json, 'preview_revision')) {
     const revision = json.preview_revision;
@@ -71,7 +71,7 @@ function readNewsDTO(json) {
       && ['payload', 'legacy'].includes(revision.source) && ['draft', 'published', 'scheduled', 'archived'].includes(revision.status)
       && (revision.source !== 'payload' || ['draft', 'published'].includes(revision.status)));
   }
-  assert(uuid(json.id) && text(json.title, 200) && text(json.category, 100) && date(json.published_at));
+  assert(json.source === 'payload' && uuid(json.id) && text(json.title, 200) && text(json.category, 100) && date(json.published_at));
   assert(plain(json.title) && plain(json.category));
   assert(json.content_version === 2 && ['owner-news', 'owner-news-preview'].includes(json.asset_scope));
   assert(json.editorial === null || normalizeEditorial(json.editorial));
@@ -102,7 +102,7 @@ function readResult(action, json, input) {
   }
   else if (action === 'navigation') {
     assert(keys(json, ['previous', 'next']));
-    for (const v of Object.values(json)) assert(v === null || (keys(v, ['id', 'title']) && uuid(v.id) && text(v.title, 200)));
+    for (const v of Object.values(json)) assert(v === null || (keys(v, ['source', 'id', 'title']) && v.source === 'payload' && uuid(v.id) && text(v.title, 200)));
   } else if (action === 'home') {
     assert(keys(json, ['content'])); const v = json.content;
     assert(v === null || (keys(v, ['version', 'eyebrow', 'headline', 'summary']) && normalizeHome(v)));

@@ -20,7 +20,7 @@ export function toNewsDTO(document: unknown, { preview }: { preview: boolean }):
   const { title, category, editorial, blocks } = normalizeNewsDocument(d, !preview)
   const publishedAt = d.publishedAt ?? null
   if (publishedAt !== null && (typeof publishedAt !== 'string' || !Number.isFinite(Date.parse(publishedAt)))) invalid()
-  return { id: uuid(d.id), title, category, published_at: publishedAt, editorial,
+  return { source: 'payload', id: uuid(d.id), title, category, published_at: publishedAt, editorial,
     content_version: 2, asset_scope: preview ? 'owner-news-preview' : 'owner-news', content_blocks: blocks,
     read_time_minutes: estimateNewsMinutes(blocks, editorial) }
 }

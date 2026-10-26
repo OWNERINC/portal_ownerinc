@@ -34,6 +34,7 @@ export type LegacyBlock = Record<string, unknown>
 /** CMS input is validated at runtime; Payload generates the persisted Blocks types. */
 export type NewsContent = (LegacyBlock | RichBlock)[]
 export type NewsDTO = {
+  source: 'payload'
   id: string
   title: string
   category: string
@@ -52,10 +53,12 @@ export type NewsQuery = {
   offset: number
   category?: string
   kind?: 'article' | 'edition'
+  boundary?: NewsBoundary
 }
+export type NewsBoundary = { published_at: string | null; source: 'legacy' | 'payload'; id: string }
 export type NewsNavigation = {
-  previous: { id: string; title: string } | null
-  next: { id: string; title: string } | null
+  previous: { source: 'payload'; id: string; title: string } | null
+  next: { source: 'payload'; id: string; title: string } | null
 }
 export type PreviewQuery = {
   id: string

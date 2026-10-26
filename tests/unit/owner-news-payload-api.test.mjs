@@ -17,7 +17,7 @@ const apiRequire = createRequire(new URL('../../api/package.json', import.meta.u
 const express = apiRequire('express'), supertest = apiRequire('supertest');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const secret = 'synthetic-task7-service-secret-not-real';
-const dto = (n = 1) => ({ id: id(n), title: `Article ${n}`, category: '', published_at: '2026-10-01T00:00:00.000Z', editorial: null,
+const dto = (n = 1) => ({ source: 'payload', id: id(n), title: `Article ${n}`, category: '', published_at: '2026-10-01T00:00:00.000Z', editorial: null,
   content_version: 2, asset_scope: 'owner-news', content_blocks: [{ type: 'paragraph', text: 'Published A' }], read_time_minutes: 1 });
 const clientFor = (fetchImpl, options = {}) => createPayloadNewsClient({ baseURL: 'http://cms.invalid', secret, fetchImpl, ...options });
 function appFor(fetchImpl, mode = 'payload') {
@@ -217,4 +217,32 @@ test('optional preview revision metadata is exact, source-bound and never leaks 
     assert.throws(() => readResult('preview', { ...preview, preview_revision: meta }, input), /news_unavailable/);
   }
   assert.throws(() => readNewsDTO({ ...dto(), preview_revision: { id: id(2), source: 'payload', status: 'published' } }), /news_unavailable/);
+});
+
+test('Payload DTOs and navigation references require exact public source identity', () => {
+  assert.equal(readNewsDTO(dto()).source, 'payload');
+  for (const value of [
+    Object.fromEntries(Object.entries(dto()).filter(([key]) => key !== 'source')),
+    { ...dto(), source: 'legacy' },
+    { ...dto(), source: 'unknown' },
+    { ...dto(), source: 'payload', asset_scope: 'legacy' },
+    { ...dto(), id: 'not-a-uuid' },
+    { ...dto(), extra: true },
+  ]) assert.throws(() => readNewsDTO(value), /news_unavailable/);
+
+  const input = { id: id(1), category: '' };
+  const reference = { source: 'payload', id: id(2), title: 'Next' };
+  assert.deepEqual(readResult('navigation', { previous: reference, next: null }, input).previous, reference);
+  for (const value of [
+    { id: id(2), title: 'Next' },
+    { ...reference, source: 'legacy' },
+    { ...reference, source: 'unknown' },
+    { ...reference, id: 'not-a-uuid' },
+    { ...reference, extra: true },
+  ]) assert.throws(() => readResult('navigation', { previous: value, next: null }, input), /news_unavailable/);
+});
+
+test('preview revision source remains independent from the public Payload document source', () => {
+  const preview = { ...dto(), asset_scope: 'owner-news-preview', preview_revision: { id: id(2), source: 'legacy', status: 'archived' } };
+  assert.equal(readResult('preview', preview, { id: id(1), versionId: id(2), source: 'legacy' }).source, 'payload');
 });

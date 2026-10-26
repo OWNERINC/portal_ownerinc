@@ -365,7 +365,7 @@ test('DTO is an explicit projection with flat IDs, null metadata and separate pr
   const legacy = { ...document(legacyToPayloadBlocks(legacyBlocks)), editorial: null,
     secret: 'internal-only', legacySourceId: null, publishedAt: '2020-01-02T03:04:05.000Z' }
   const dto = toNewsDTO(legacy, { preview: false })
-  assert.deepEqual(dto, { id: articleID, title: 'Título', category: '', editorial: null,
+  assert.deepEqual(dto, { source: 'payload', id: articleID, title: 'Título', category: '', editorial: null,
     published_at: '2020-01-02T03:04:05.000Z', content_version: 2, asset_scope: 'owner-news',
     content_blocks: legacyBlocks, read_time_minutes: null })
   assert.equal(toNewsDTO(legacy, { preview: true }).asset_scope, 'owner-news-preview')
