@@ -198,9 +198,10 @@ export async function main(env = process.env) {
       }
       throw new Error(lastStatus === 503 ? 'manual_runtime_cms_readiness_unavailable' : 'manual_runtime_cms_readiness_timeout')
     };
-    const migrate = async database => command(process.execPath, ['node_modules/payload/bin.js', 'migrate'], {
-      cwd: path.join(root, 'cms'), env: { ...cmsEnv(database, database === 'ownerinc_cms' ? directory : restored),
-        CMS_DATABASE_URL: url('cms_migrator', passwords.migrator, database) }, timeout: 300_000 });
+    const migrate = async (database, selectedPort = port, evidenceDirectory = directory) => command(process.execPath,
+      ['node_modules/payload/bin.js', 'migrate'], {
+        cwd: path.join(root, 'cms'), env: { ...cmsEnv(database, evidenceDirectory, selectedPort),
+          CMS_DATABASE_URL: url('cms_migrator', passwords.migrator, database, selectedPort) }, timeout: 300_000 });
     await migrate('ownerinc_cms');
 
     step('protocol-finalizer');
@@ -344,6 +345,7 @@ export async function main(env = process.env) {
     try { await targetAdmin.query('CREATE DATABASE portal_manual_runtime OWNER cms_admin') } finally { await targetAdmin.end() }
     step('restore-target-provision');
     await provision(targetPort);
+    await migrate('ownerinc_cms', targetPort, restored);
     step('restore-target-control');
     await controlRoles('--bootstrap-control', targetPort);
     step('restore-target-observer');
