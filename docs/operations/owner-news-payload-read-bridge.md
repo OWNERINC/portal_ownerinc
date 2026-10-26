@@ -72,7 +72,10 @@ o offset legado e seu total exato permanecem intactos. Em composição dual, o c
 é o contrato autoritativo; a UI migra para ele na Task 3.
 
 O adapter legado consulta chunks crus determinísticos com `LIMIT 101` e keyset
-`published_at/id`, valida revisão e mídia, faz o recheck estável sob lock e avança
+`published_at/id`. No SQL, seleção, ordenação e todos os predicados de fronteira usam
+`date_trunc('milliseconds', d.published_at)`; assim storage, DTO/cursor e comparador
+global compartilham a mesma precisão, com null por último e UUID crescente. O leitor
+valida revisão e mídia, faz o recheck estável sob lock e avança
 até preencher apenas o lookahead válido pedido. São no máximo 1.000 chunks/101.000
 linhas cruas por operação; exceder falha fechado. Leituras limitadas não varrem o
 restante para fabricar total: quando alguma origem não prova total exato, a rota

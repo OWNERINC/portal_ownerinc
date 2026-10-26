@@ -447,10 +447,73 @@ test('legacy lookahead uses bounded keyset chunks and continues past invalid and
   assert.equal(reads, 2);
   const selects = calls.filter(call => call.sql.includes('SELECT d.id, d.title'));
   assert.equal(selects.length, 2);
-  assert.ok(selects.every(call => /ORDER BY d\.published_at DESC NULLS LAST, d\.id\s+LIMIT \$\d+/u.test(call.sql)));
+  assert.ok(selects.every(call => /date_trunc\('milliseconds', d\.published_at\) AS published_at_ms/u.test(call.sql)));
+  assert.ok(selects.every(call => /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id\s+LIMIT \$\d+/u.test(call.sql)));
   assert.ok(selects.every(call => call.params.at(-1) === 101));
-  assert.match(selects[1].sql, /d\.published_at < \$1::timestamptz/u);
+  assert.match(selects[1].sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
   assert.doesNotMatch(selects[1].sql, /OFFSET/u);
+});
+
+test('legacy keysets canonicalize sub-millisecond timestamps without skips or duplicates across cursors', async () => {
+  const newsId = n => `20000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const canonical = '2026-10-26T12:34:56.789Z';
+  const rows = Array.from({ length: 103 }, (_, index) => ({
+    id: newsId(index + 1), title: `Micro ${index + 1}`, category: 'News',
+    // These represent distinct PostgreSQL values that collapse to one public millisecond.
+    database_published_at: `2026-10-26T12:34:56.789${String(999 - index).padStart(3, '0')}Z`,
+    published_at_ms: new Date(canonical), published_revision_id: newsId(index + 1000),
+    editorial: null, blocks: [{ type: 'paragraph', text: `Body ${index + 1}` }],
+  }));
+  assert.equal(new Set(rows.map(row => row.database_published_at)).size, 103);
+  assert.ok(rows.every(row => new Date(row.database_published_at).toISOString() === canonical));
+  const listCalls = [];
+  const pool = {
+    async connect() {
+      return { release() {}, async query(sql, params = []) {
+        if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+        if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+        if (sql.includes('SELECT d.id, d.title')) {
+          listCalls.push({ sql, params });
+          assert.match(sql, /date_trunc\('milliseconds', d\.published_at\) AS published_at_ms/u);
+          assert.match(sql, /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id/u);
+          const boundaryId = params.length === 3 ? params[1] : null;
+          return { rows: rows.filter(row => boundaryId === null || row.id > boundaryId).slice(0, params.at(-1))
+            .map(({ database_published_at: _databaseTimestamp, ...row }) => row) };
+        }
+        if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({
+          id: value, published_revision_id: rows.find(row => row.id === value).published_revision_id,
+        })) };
+        throw new Error(`Unexpected query: ${sql}`);
+      } };
+    },
+  };
+
+  const first = await listPublishedAnnouncements(pool, 101, 0, undefined, undefined, null, { exactTotal: false });
+  assert.equal(first.count, null);
+  assert.equal(first.rows.length, 101);
+  assert.ok(first.rows.every(row => row.published_at === canonical));
+  const last = first.rows.at(-1);
+  const boundary = { published_at: last.published_at, source: last.source, id: last.id };
+  const second = await listPublishedAnnouncements(pool, 101, 0, undefined, undefined, boundary, { exactTotal: false });
+  assert.equal(second.count, 2);
+  assert.deepEqual([...first.rows, ...second.rows].map(row => row.id), rows.map(row => row.id));
+  assert.equal(new Set([...first.rows, ...second.rows].map(row => row.id)).size, 103);
+
+  const continued = listCalls.at(-1);
+  assert.deepEqual(continued.params.slice(0, 2), [canonical, newsId(101)]);
+  assert.match(continued.sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
+  assert.match(continued.sql, /date_trunc\('milliseconds', d\.published_at\) = \$1::timestamptz AND d\.id > \$2::uuid/u);
+  assert.doesNotMatch(continued.sql, /(?<!date_trunc\('milliseconds', )d\.published_at\s*[<=]/u);
+
+  await listPublishedAnnouncements(pool, 1, 0, undefined, undefined,
+    { published_at: '2026-10-26T12:34:56.789999Z', source: 'legacy', id: newsId(101) }, { exactTotal: false });
+  assert.equal(listCalls.at(-1).params[0], canonical, 'incoming legacy boundaries use the same millisecond precision');
+
+  await listPublishedAnnouncements(pool, 1, 0, undefined, undefined,
+    { published_at: null, source: 'legacy', id: newsId(1) }, { exactTotal: false });
+  const nullBoundary = listCalls.at(-1);
+  assert.match(nullBoundary.sql, /date_trunc\('milliseconds', d\.published_at\) IS NULL AND d\.id > \$1::uuid/u);
 });
 
 test('announcement list discards rows unpublished before the final locked recheck', async () => {

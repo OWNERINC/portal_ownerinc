@@ -61,7 +61,7 @@ function poolFor(extended = false) {
             }
             if (sql.includes('WHERE d.id = $1')) published = published.filter(row => row.id === params[0]);
             else {
-              assert.match(sql, /ORDER BY d\.published_at DESC/);
+              assert.match(sql, /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id/);
               assert.match(sql, /LIMIT \$\d+/);
               assert.doesNotMatch(sql, /OFFSET/);
             }

@@ -34,6 +34,7 @@ const ASSET_MIMES = {
 const ANNOUNCEMENT_BATCH_SIZE = 101;
 const ANNOUNCEMENT_MAX_BATCHES = 1000;
 const ANNOUNCEMENT_MAX_RAW_ROWS = ANNOUNCEMENT_BATCH_SIZE * ANNOUNCEMENT_MAX_BATCHES;
+const ANNOUNCEMENT_PUBLISHED_AT_SQL = "date_trunc('milliseconds', d.published_at)";
 
 function assetReferences(blocks) {
   const references = new Map();
@@ -366,16 +367,16 @@ function legacyBoundarySql(boundary, values) {
   if (boundary.published_at === null) {
     if (boundary.source !== 'legacy') return ' AND FALSE';
     values.push(boundary.id);
-    return ` AND d.published_at IS NULL AND d.id > $${values.length}::uuid`;
+    return ` AND ${ANNOUNCEMENT_PUBLISHED_AT_SQL} IS NULL AND d.id > $${values.length}::uuid`;
   }
-  values.push(boundary.published_at);
+  values.push(normalizePublishedAt(boundary.published_at));
   const date = `$${values.length}`;
   let sameDate = '';
   if (boundary.source === 'legacy') {
     values.push(boundary.id);
-    sameDate = ` OR (d.published_at = ${date}::timestamptz AND d.id > $${values.length}::uuid)`;
+    sameDate = ` OR (${ANNOUNCEMENT_PUBLISHED_AT_SQL} = ${date}::timestamptz AND d.id > $${values.length}::uuid)`;
   }
-  return ` AND (d.published_at IS NULL OR d.published_at < ${date}::timestamptz${sameDate})`;
+  return ` AND (${ANNOUNCEMENT_PUBLISHED_AT_SQL} IS NULL OR ${ANNOUNCEMENT_PUBLISHED_AT_SQL} < ${date}::timestamptz${sameDate})`;
 }
 
 function normalizePublishedAt(value) {
@@ -385,6 +386,7 @@ function normalizePublishedAt(value) {
   if (!Number.isFinite(parsed.getTime())) throw new Error('invalid_published_at');
   return parsed.toISOString();
 }
+const announcementPublishedAt = row => row.published_at_ms === undefined ? row.published_at : row.published_at_ms;
 
 async function publishedAnnouncementBatch(pool, boundary) {
   return withTransaction(pool, async (db) => {
@@ -392,13 +394,14 @@ async function publishedAnnouncementBatch(pool, boundary) {
     const boundarySql = legacyBoundarySql(boundary, values);
     values.push(ANNOUNCEMENT_BATCH_SIZE);
     const { rows } = await db.query(
-      `SELECT d.id, d.title, d.category, d.published_at,
+      `SELECT d.id, d.title, d.category,
+              ${ANNOUNCEMENT_PUBLISHED_AT_SQL} AS published_at_ms,
               r.id AS published_revision_id, r.blocks, r.editorial
          FROM cms_documents d
          JOIN cms_revisions r
            ON r.id = d.published_revision_id AND r.status = 'published'
          WHERE d.content_type = 'announcement'${boundarySql}
-         ORDER BY d.published_at DESC NULLS LAST, d.id
+         ORDER BY ${ANNOUNCEMENT_PUBLISHED_AT_SQL} DESC NULLS LAST, d.id
          LIMIT $${values.length}`,
       values,
     );
@@ -422,7 +425,7 @@ async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = n
     if (rawRows > ANNOUNCEMENT_MAX_RAW_ROWS) throw new Error('announcement_scan_limit');
     if (!result.rows.length) return { rows: stable, exhausted: true };
     const last = result.rows.at(-1);
-    rawBoundary = { published_at: normalizePublishedAt(last.published_at), source: 'legacy', id: String(last.id).toLowerCase() };
+    rawBoundary = { published_at: normalizePublishedAt(announcementPublishedAt(last)), source: 'legacy', id: String(last.id).toLowerCase() };
 
     const candidates = selectAnnouncements(result.visible, category, kind);
     const stableIds = await recheckPublishedAnnouncements(pool, candidates.map(row => ({
@@ -440,9 +443,9 @@ async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = n
   throw new Error('announcement_scan_limit');
 }
 
-function articleDTO({ blocks, published_revision_id: _publishedRevisionId, ...row }) {
+function articleDTO({ blocks, published_revision_id: _publishedRevisionId, published_at_ms: publishedAtMs, ...row }) {
   const editorial = row.editorial ?? null;
-  return { ...row, published_at: normalizePublishedAt(row.published_at), source: 'legacy', id: String(row.id).toLowerCase(), editorial,
+  return { ...row, published_at: normalizePublishedAt(publishedAtMs === undefined ? row.published_at : publishedAtMs), source: 'legacy', id: String(row.id).toLowerCase(), editorial,
     asset_scope: 'legacy', content_blocks: blocks,
     read_time_minutes: estimateNewsReadTime(blocks, editorial) };
 }
@@ -488,7 +491,8 @@ async function getPublishedAnnouncement(pool, id) {
   await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const result = await withTransaction(pool, async (db) => {
     const { rows } = await db.query(
-      `SELECT d.id, d.title, d.category, d.published_at,
+      `SELECT d.id, d.title, d.category,
+              ${ANNOUNCEMENT_PUBLISHED_AT_SQL} AS published_at_ms,
               r.id AS published_revision_id, r.blocks, r.editorial
          FROM cms_documents d
          JOIN cms_revisions r
