@@ -21,7 +21,8 @@ export const manualRuntimeStages = Object.freeze([
   'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
   'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-start',
   'restore-target-readiness', 'restore-target-provision', 'restore-target-control', 'restore-target-observer',
-  'restore-protection-backup', 'independent-restore',
+  'restore-protection-backup', 'restore-cms-database', 'restore-portal-database', 'restore-runtime-grants',
+  'restore-control-verify', 'restore-protocol-audit', 'restore-storage',
   'restored-verification', 'owned-cleanup',
 ]);
 
@@ -361,15 +362,20 @@ export async function main(env = process.env) {
     await writeFile(path.join(protection, 'manifest.sha256'), (await Promise.all(protectionNames.map(async name =>
       `${sha256(await readFile(path.join(protection, name)))}  ${name}`))).join('\n') + '\n');
     await command('bash', ['-c', 'cd "$1" && sha256sum --check --strict manifest.sha256 >/dev/null', 'fixture', protection]);
-    step('independent-restore');
+    step('restore-cms-database');
     await docker(['exec', '-i', targetContainer, 'pg_restore', '--single-transaction', '--clean', '--if-exists',
       '--username=cms_admin', '--dbname=ownerinc_cms'], { input: await readFile(path.join(backup, 'cms-postgres.dump')) });
+    step('restore-portal-database');
     await docker(['exec', '-i', targetContainer, 'pg_restore', '--single-transaction', '--clean', '--if-exists', '--no-owner', '--no-privileges',
       '--username=cms_admin', '--dbname=portal_manual_runtime'], { input: await readFile(path.join(backup, 'postgres.dump')) });
+    step('restore-runtime-grants');
     await command(process.execPath, ['--import', 'tsx', 'scripts/provision-db.ts', '--grants'], { cwd: path.join(root, 'cms'),
       env: { ...cmsEnv('ownerinc_cms', restored, targetPort), CMS_DATABASE_URL: url('cms_migrator', passwords.migrator, 'ownerinc_cms', targetPort) } });
+    step('restore-control-verify');
     await controlRoles('--verify-control', targetPort);
+    step('restore-protocol-audit');
     await protocolProof('audit', targetPort);
+    step('restore-storage');
     await command('tar', ['-xzf', path.join(backup, 'cms-uploads.tar.gz'), '-C', path.join(restored, 'uploads')]);
     await copyFile(path.join(directory, 'content-proof.json'), path.join(restored, 'content-proof.json'));
     step('restored-verification');
