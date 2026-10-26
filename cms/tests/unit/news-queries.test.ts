@@ -4,6 +4,7 @@ import { APIError, type PayloadRequest } from 'payload'
 import { queryPublishedNews, queryNewsCategories, queryNewsDetail, queryNewsNavigation, queryNewsPreview, queryNewsHome } from '../../src/news/queries.js'
 import { hasNewsServiceAccess, newsActions, readNewsInput, readNewsActor, type NewsInputs } from '../../src/auth/service-access.js'
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const fullScan = { maxRawRows: 101000, maxBatches: 1000 } as const
 const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false }
 const editor = { ...actor, canManageNews: true }
 const document = (n: number, extra = {}) => ({ id: id(n), title: `Published ${n}`, category: '', editorial: null,
@@ -80,7 +81,7 @@ test('list pushes canonical filters, keyset order and storage limit without mate
     },
   } as unknown as PayloadRequest['payload']
   const boundary = { published_at: '2026-10-01T00:00:00.000Z', source: 'payload' as const, id: id(1) }
-  const page = await queryPublishedNews(req, { limit: 101, offset: 0, category: 'News', kind: 'article', boundary, scan: true }, actor)
+  const page = await queryPublishedNews(req, { limit: 101, offset: 0, category: 'News', kind: 'article', boundary, scan: fullScan }, actor)
   assert.equal(page.rows.length, 101)
   assert.equal(page.rows[0].id, id(2)); assert.equal(page.rows.at(-1)?.id, id(102))
   assert.equal(page.count, null)
@@ -114,7 +115,7 @@ test('list scans invalid rows with moving bounded raw keysets and exact exhausti
       return calls.length === 1 ? { docs: invalid, hasNextPage: true } : { docs: final, hasNextPage: false }
     },
   } as unknown as PayloadRequest['payload']
-  const result = await queryPublishedNews(req, { limit: 2, offset: 0, category: 'News', scan: true,
+  const result = await queryPublishedNews(req, { limit: 2, offset: 0, category: 'News', scan: fullScan,
     boundary: { published_at: null, source: 'legacy', id: id(999) } }, actor)
   assert.deepEqual(result.rows.map(row => row.id), [id(102), id(103)])
   assert.equal(result.count, 2)
@@ -177,6 +178,23 @@ test('list fails closed when a storage page claims continuation without raw keys
     error => error instanceof APIError && error.status === 503)
   assert.equal(calls, 1)
 })
+test('private scan allowance limits storage work before the next batch or raw row', async () => {
+  for (const scan of [{ maxRawRows: 1, maxBatches: 1 }, { maxRawRows: 101, maxBatches: 1 }] as const) {
+    const calls: any[] = []
+    const req = { transactionID: 'live' } as PayloadRequest
+    req.payload = {
+      db: { sessions: { live: { db: { async execute() {} } } } },
+      async find(options: any) {
+        calls.push(options)
+        return { docs: [document(1, { body: [{ blockType: 'unknown' }] })], hasNextPage: false }
+      },
+    } as unknown as PayloadRequest['payload']
+    await assert.rejects(queryPublishedNews(req, { limit: 1, offset: 0, scan }, actor),
+      error => error instanceof APIError && error.status === 503)
+    assert.equal(calls.length, 1, 'dated exhaustion cannot start the null phase after the batch allowance is consumed')
+    assert.equal(calls[0].limit, Math.min(101, scan.maxRawRows))
+  }
+})
 test('navigation confirms detail then advances through the same bounded list query', async () => {
   const { req, findCalls } = fixture()
   assert.deepEqual(await queryNewsNavigation(req, { id: id(1), category: 'News' }, actor),
@@ -227,8 +245,10 @@ test('exact service POST allowlist is separate from login and refuses browser/cr
   assert.throws(() => readNewsActor({ ...actor, role: 'admin' }))
   assert.equal(readNewsActor({ ...actor, uid: 'original-usuário', name: 'a'.repeat(201) }).uid, 'original-usuário')
   assert.throws(() => readNewsInput('list', { limit: 102, offset: 0 }))
-  assert.equal(readNewsInput('list', { limit: 1, offset: 0, scan: true }).scan, true)
-  for (const scan of [false, 0, 1, 'true', null, {}]) assert.throws(() => readNewsInput('list', { limit: 1, offset: 0, scan }))
+  assert.deepEqual(readNewsInput('list', { limit: 1, offset: 0, scan: fullScan }).scan, fullScan)
+  for (const scan of [true, false, 0, 1, 'true', null, {}, { maxRawRows: 1 }, { maxRawRows: 0, maxBatches: 1 },
+    { maxRawRows: 1, maxBatches: 0 }, { maxRawRows: 101001, maxBatches: 1 }, { maxRawRows: 1, maxBatches: 1001 },
+    { maxRawRows: 1, maxBatches: 1, extra: true }]) assert.throws(() => readNewsInput('list', { limit: 1, offset: 0, scan }))
   assert.throws(() => readNewsInput('home', { draft: true }))
 })
 test('I1 enum validation accepts only primitive exact strings and never coerces objects', () => {

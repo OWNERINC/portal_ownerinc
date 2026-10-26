@@ -48,6 +48,7 @@ export type NewsDTO = {
   preview_revision?: { id: string; source: 'payload' | 'legacy'; status: 'draft' | 'published' | 'scheduled' | 'archived' }
 }
 export type NewsScanCost = { rawRows: number; batches: number }
+export type NewsScanBudget = { maxRawRows: number; maxBatches: number }
 export type NewsPage = { rows: NewsDTO[]; count: number | null; scan?: NewsScanCost }
 export type NewsQuery = {
   limit: number
@@ -56,7 +57,7 @@ export type NewsQuery = {
   kind?: 'article' | 'edition'
   boundary?: NewsBoundary
   /** Private bridge-only accounting; never accepted by the public Portal API. */
-  scan?: true
+  scan?: NewsScanBudget
 }
 export type NewsBoundary = { published_at: string | null; source: 'legacy' | 'payload'; id: string }
 export type NewsNavigation = {

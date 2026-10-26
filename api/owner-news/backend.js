@@ -223,12 +223,12 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
     }
   }
 
-  function navigationPage(source, page, boundary, seen, budget) {
+  function navigationPage(source, page, boundary, seen, budget, allowance) {
     if (!record(page) || Object.keys(page).length !== 3 || !Array.isArray(page.rows) || page.rows.length > NAVIGATION_PAGE_SIZE
-      || !(page.count === null || (Number.isSafeInteger(page.count) && page.count >= page.rows.length))
+      || !(page.count === null || page.count === page.rows.length)
       || !record(page.scan) || Object.keys(page.scan).length !== 2
-      || !Number.isSafeInteger(page.scan.rawRows) || page.scan.rawRows < page.rows.length || page.scan.rawRows > NAVIGATION_MAX_RAW_ROWS
-      || !Number.isSafeInteger(page.scan.batches) || page.scan.batches < 1 || page.scan.batches > NAVIGATION_MAX_BATCHES) throw unavailable();
+      || !Number.isSafeInteger(page.scan.rawRows) || page.scan.rawRows < page.rows.length || page.scan.rawRows > allowance.maxRawRows
+      || !Number.isSafeInteger(page.scan.batches) || page.scan.batches < 1 || page.scan.batches > allowance.maxBatches) throw unavailable();
     if (page.count === null && page.rows.length !== NAVIGATION_PAGE_SIZE) throw unavailable();
     budget.pages++;
     budget.rawRows += page.scan.rawRows;
@@ -252,14 +252,17 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
     const budget = { pages: 0, rawRows: 0, batches: 0 };
     let boundary = null, previous = null, currentFound = false;
     while (budget.pages < NAVIGATION_MAX_PAGES) {
+      const allowance = { maxRawRows: NAVIGATION_MAX_RAW_ROWS - budget.rawRows,
+        maxBatches: NAVIGATION_MAX_BATCHES - budget.batches };
+      if (allowance.maxRawRows < 1 || allowance.maxBatches < 1) throw unavailable();
       const sourceInput = { limit: NAVIGATION_PAGE_SIZE, offset: 0,
-        ...(input.category === undefined ? {} : { category: input.category }), kind: 'article', scan: true,
+        ...(input.category === undefined ? {} : { category: input.category }), kind: 'article', scan: allowance,
         ...(boundary ? { boundary } : {}) };
       const rawPage = source === 'legacy'
         ? await legacyReader.listPublishedAnnouncements(pool, NAVIGATION_PAGE_SIZE, 0, input.category, 'article', boundary,
-          { exactTotal: false, includeScanCost: true })
+          { exactTotal: false, scan: allowance })
         : await payloadComposite('list', sourceInput, actor, options, currentAuthority);
-      const page = navigationPage(source, rawPage, boundary, seen, budget);
+      const page = navigationPage(source, rawPage, boundary, seen, budget, allowance);
       for (const row of page.rows) {
         const order = compareNews(row, current);
         if (order < 0) previous = row;

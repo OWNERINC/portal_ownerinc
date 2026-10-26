@@ -95,7 +95,7 @@ test('global navigation streams only source neighbors, keeps colliding UUIDs dis
       async getPublishedAnnouncement() { return legacyRows[0]; },
       async listPublishedAnnouncements(_pool, limit, offset, category, kind, boundary, options) {
         calls.legacy++; assert.equal(limit, 101); assert.equal(offset, 0); assert.equal(category, 'Team'); assert.equal(kind, 'article');
-        assert.equal(boundary, null); assert.equal(options.includeScanCost, true);
+        assert.equal(boundary, null); assert.deepEqual(options.scan, { maxRawRows: 101000, maxBatches: 1000 });
         return scannedPage(legacyRows);
       },
     },
@@ -105,7 +105,7 @@ test('global navigation streams only source neighbors, keeps colliding UUIDs dis
         calls.payload++;
         assert.equal(input.kind, 'article');
         assert.equal(input.category, 'Team');
-        assert.equal(input.scan, true);
+        assert.deepEqual(input.scan, { maxRawRows: 101000, maxBatches: 1000 });
         return scannedPage(payloadRows);
       },
     },
@@ -176,6 +176,7 @@ test('global navigation rejects cross-page duplicate/no-progress and one accumul
     calls++;
     if (calls === 1) return scannedPage(firstRows, null, 101, 1);
     assert.deepEqual(input.boundary, { published_at: firstRows.at(-1).published_at, source: 'payload', id: firstRows.at(-1).id });
+    assert.deepEqual(input.scan, { maxRawRows: 100899, maxBatches: 999 });
     return scannedPage([{ ...firstRows[0], published_at: '2026-11-01T00:00:00.000Z' }], 1, 1, 1);
   });
   await assert.rejects(duplicate.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
@@ -190,22 +191,38 @@ test('global navigation rejects cross-page duplicate/no-progress and one accumul
   await assert.rejects(noProgress.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
 
   calls = 0;
-  const overRawBudget = makeBackend(() => {
+  const exactRawBudget = makeBackend(() => {
     calls++;
-    return calls === 1 ? scannedPage(firstRows, null, 101000, 1)
-      : scannedPage([navItem('payload', 102, '2026-11-01T00:00:00.000Z')], 1, 1, 1);
+    return scannedPage(firstRows, null, 101000, 1);
   });
-  await assert.rejects(overRawBudget.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
-  assert.equal(calls, 2, 'scan cost is accumulated across private pages instead of refreshing per call');
+  await assert.rejects(exactRawBudget.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
+  assert.equal(calls, 1, 'an exhausted raw allowance refuses before a second private source call');
 
   calls = 0;
-  const overBatchBudget = makeBackend(() => {
+  const exactBatchBudget = makeBackend(() => {
     calls++;
-    return calls === 1 ? scannedPage(firstRows, null, 101, 999)
-      : scannedPage([navItem('payload', 102, '2026-11-01T00:00:00.000Z')], 1, 1, 2);
+    return scannedPage(firstRows, null, 101, 1000);
   });
-  await assert.rejects(overBatchBudget.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
-  assert.equal(calls, 2);
+  await assert.rejects(exactBatchBudget.navigation({ id: current.id, source: 'payload' }, actor), error => error.status === 503);
+  assert.equal(calls, 1, 'an exhausted batch allowance refuses before a second private source call');
+});
+
+test('navigation rejects false exact-count exhaustion before current-source 404 semantics', async () => {
+  const current = navItem('payload', 5);
+  for (const page of [
+    scannedPage([], 1, 0, 1),
+    scannedPage([current], 2, 1, 1),
+    scannedPage([current], 0, 1, 1),
+  ]) {
+    const backend = createNewsBackend({
+      pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+      legacyReader: { async listPublishedAnnouncements() { throw new Error('non-current unavailable'); } },
+      payloadClient: { async query(action) { return action === 'detail' ? current : page; } },
+      logger() {},
+    });
+    await assert.rejects(backend.navigation({ id: current.id, source: 'payload' }, actor),
+      error => error.status === 503 && error.code === 'news_unavailable');
+  }
 });
 
 const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false };

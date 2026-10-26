@@ -14,6 +14,8 @@ const plain = value => !/[\r\n]|<\/?[a-z][^>]*>|<\s*(script|style|iframe|object|
 const kind = value => ['article', 'edition'].includes(value);
 const boundary = value => keys(value, ['published_at', 'source', 'id']) && date(value.published_at)
   && ['legacy', 'payload'].includes(value.source) && uuid(value.id);
+const scanBudget = value => keys(value, ['maxRawRows', 'maxBatches'])
+  && integer(value.maxRawRows, 1, 101000) && integer(value.maxBatches, 1, 1000);
 function assert(value) { if (!value) throw unavailable(); }
 function validActor(value) {
   return keys(value, ['uid', 'email', 'name', 'canManageNews']) && typeof value.uid === 'string' && value.uid.length > 0 && value.uid.length <= 128
@@ -23,7 +25,7 @@ function validInput(action, value) {
   const optional = (name, validate) => !Object.hasOwn(value, name) || validate(value[name]);
   if (!record(value)) return false;
   switch (action) {
-    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind', 'boundary', 'scan'], ['limit', 'offset']) && integer(value.limit, 1, PRIVATE_LIST_MAX) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind) && optional('boundary', boundary) && optional('scan', v => v === true);
+    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind', 'boundary', 'scan'], ['limit', 'offset']) && integer(value.limit, 1, PRIVATE_LIST_MAX) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind) && optional('boundary', boundary) && optional('scan', scanBudget);
     case 'detail': return keys(value, ['id']) && uuid(value.id);
     case 'categories': return keys(value, ['kind', 'withCounts'], ['withCounts']) && typeof value.withCounts === 'boolean' && optional('kind', kind);
     case 'navigation': return keys(value, ['id', 'category'], ['id']) && uuid(value.id) && optional('category', v => text(v, 100));
@@ -99,12 +101,13 @@ function readNewsDTO(json) {
   assert(json.content_blocks.filter(b => b.type === 'image' && b.usage === 'cover').length <= 1 && json.content_blocks.filter(b => b.type === 'pdf' && b.usage === 'edition').length <= 1);
   return json;
 }
-function readNewsPage(json, { scan = false } = {}) {
+function readNewsPage(json, { scan = null } = {}) {
   const names = scan ? ['rows', 'count', 'scan'] : ['rows', 'count'];
   assert(keys(json, names) && Array.isArray(json.rows) && json.rows.length <= PRIVATE_LIST_MAX
     && (json.count === null || integer(json.count, json.rows.length)));
-  if (scan) assert(keys(json.scan, ['rawRows', 'batches']) && integer(json.scan.rawRows, json.rows.length, 101000)
-    && integer(json.scan.batches, 1, 1000));
+  if (scan) assert((json.count === null || json.count === json.rows.length)
+    && keys(json.scan, ['rawRows', 'batches']) && integer(json.scan.rawRows, json.rows.length, scan.maxRawRows)
+    && integer(json.scan.batches, 1, scan.maxBatches));
   const seen = new Set();
   for (const row of json.rows) {
     readNewsDTO(row);
@@ -114,7 +117,7 @@ function readNewsPage(json, { scan = false } = {}) {
   return json;
 }
 function readResult(action, json, input) {
-  if (action === 'list') { readNewsPage(json, { scan: input.scan === true }); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }
+  if (action === 'list') { readNewsPage(json, { scan: input.scan || null }); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }
   else if (action === 'detail' || action === 'preview') {
     readNewsDTO(json); assert(json.id === input.id && json.asset_scope === (action === 'preview' ? 'owner-news-preview' : 'owner-news'));
     if (json.preview_revision) assert(json.preview_revision.id === input.versionId && json.preview_revision.source === input.source);

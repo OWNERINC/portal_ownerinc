@@ -95,6 +95,9 @@ async function boundedPublishedPage(req: PayloadRequest, input: NewsInputs['list
   const target = input.offset + input.limit
   if (!Number.isSafeInteger(target) || target < 1) return unavailable()
   const initial = { batches: budget.batches, rawRows: budget.rawRows }
+  const maximum = input.scan
+    ? { batches: initial.batches + input.scan.maxBatches, rawRows: initial.rawRows + input.scan.maxRawRows }
+    : { batches: LIST_MAX_BATCHES, rawRows: LIST_MAX_RAW_ROWS }
   const finish = (rows: NewsDTO[], count: number | null): NewsPage => ({ rows, count,
     ...(input.scan ? { scan: { batches: budget.batches - initial.batches, rawRows: budget.rawRows - initial.rawRows } } : {}) })
   const retained: NewsDTO[] = []
@@ -103,15 +106,17 @@ async function boundedPublishedPage(req: PayloadRequest, input: NewsInputs['list
   let boundary: PayloadBoundary | null = input.boundary
     ? { ...input.boundary, published_at: input.boundary.published_at === null ? null : canonicalDate(input.boundary.published_at) }
     : null
-  while (budget.batches < LIST_MAX_BATCHES) {
+  while (budget.batches < maximum.batches && budget.rawRows < maximum.rawRows) {
     if (signal?.aborted) return unavailable()
+    const storageLimit = Math.min(LIST_CHUNK_SIZE, maximum.rawRows - budget.rawRows)
+    if (storageLimit < 1) return unavailable()
     budget.batches++
     await requireCmsTransaction(req.payload, req)
     const result = await req.payload.find({ collection: 'news-articles', req, overrideAccess: true, draft: false, depth: 0,
-      limit: LIST_CHUNK_SIZE, page: 1, sort: phase === 'dated' ? ['-publishedAt', 'id'] : 'id', where: listWhere(input, phase, boundary) })
-    if (!Array.isArray(result.docs) || result.docs.length > LIST_CHUNK_SIZE || typeof result.hasNextPage !== 'boolean') return unavailable()
+      limit: storageLimit, page: 1, sort: phase === 'dated' ? ['-publishedAt', 'id'] : 'id', where: listWhere(input, phase, boundary) })
+    if (!Array.isArray(result.docs) || result.docs.length > storageLimit || typeof result.hasNextPage !== 'boolean') return unavailable()
     budget.rawRows += result.docs.length
-    if (budget.rawRows > LIST_MAX_RAW_ROWS || (!result.docs.length && result.hasNextPage)) return unavailable()
+    if (budget.rawRows > maximum.rawRows || (!result.docs.length && result.hasNextPage)) return unavailable()
     let previous = boundary
     for (const document of result.docs) {
       if (signal?.aborted) return unavailable()

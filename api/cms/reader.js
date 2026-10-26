@@ -388,11 +388,11 @@ function normalizePublishedAt(value) {
 }
 const announcementPublishedAt = row => row.published_at_ms === undefined ? row.published_at : row.published_at_ms;
 
-async function publishedAnnouncementBatch(pool, boundary) {
+async function publishedAnnouncementBatch(pool, boundary, limit = ANNOUNCEMENT_BATCH_SIZE) {
   return withTransaction(pool, async (db) => {
     const values = [];
     const boundarySql = legacyBoundarySql(boundary, values);
-    values.push(ANNOUNCEMENT_BATCH_SIZE);
+    values.push(limit);
     const { rows } = await db.query(
       `SELECT d.id, d.title, d.category,
               ${ANNOUNCEMENT_PUBLISHED_AT_SQL} AS published_at_ms,
@@ -414,15 +414,19 @@ async function publishedAnnouncementBatch(pool, boundary) {
   });
 }
 
-async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = null, category, kind } = {}) {
+async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = null, category, kind, scan = null } = {}) {
   await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const stable = [];
   let rawBoundary = boundary;
   let rawRows = 0;
-  for (let batch = 0; batch < ANNOUNCEMENT_MAX_BATCHES; batch++) {
-    const result = await publishedAnnouncementBatch(pool, rawBoundary);
+  const maxRawRows = scan?.maxRawRows ?? ANNOUNCEMENT_MAX_RAW_ROWS;
+  const maxBatches = scan?.maxBatches ?? ANNOUNCEMENT_MAX_BATCHES;
+  for (let batch = 0; batch < maxBatches && rawRows < maxRawRows; batch++) {
+    const storageLimit = Math.min(ANNOUNCEMENT_BATCH_SIZE, maxRawRows - rawRows);
+    if (storageLimit < 1) throw new Error('announcement_scan_limit');
+    const result = await publishedAnnouncementBatch(pool, rawBoundary, storageLimit);
     rawRows += result.rows.length;
-    if (rawRows > ANNOUNCEMENT_MAX_RAW_ROWS) throw new Error('announcement_scan_limit');
+    if (rawRows > maxRawRows) throw new Error('announcement_scan_limit');
     if (!result.rows.length) return { rows: stable, exhausted: true, scan: { rawRows, batches: batch + 1 } };
     const last = result.rows.at(-1);
     rawBoundary = { published_at: normalizePublishedAt(announcementPublishedAt(last)), source: 'legacy', id: String(last.id).toLowerCase() };
@@ -434,7 +438,7 @@ async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = n
     })));
     stable.push(...candidates.filter(row => stableIds.has(String(row.id).toLowerCase())).map(articleDTO));
 
-    const exhausted = result.rows.length < ANNOUNCEMENT_BATCH_SIZE;
+    const exhausted = result.rows.length < storageLimit;
     if (maxRows !== null && stable.length >= maxRows) {
       return { rows: stable.slice(0, maxRows), exhausted: exhausted && stable.length === maxRows,
         scan: { rawRows, batches: batch + 1 } };
@@ -466,13 +470,16 @@ async function listPublishedAnnouncementCategories(pool, { kind, withCounts = fa
   return withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
 }
 
-async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true, includeScanCost = false } = {}) {
-  const result = await stablePublishedAnnouncements(pool, { boundary, category, kind,
+async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true, scan = null } = {}) {
+  if (scan !== null && (typeof scan !== 'object' || Array.isArray(scan) || Object.keys(scan).length !== 2
+    || !Number.isSafeInteger(scan.maxRawRows) || scan.maxRawRows < 1 || scan.maxRawRows > ANNOUNCEMENT_MAX_RAW_ROWS
+    || !Number.isSafeInteger(scan.maxBatches) || scan.maxBatches < 1 || scan.maxBatches > ANNOUNCEMENT_MAX_BATCHES)) throw new Error('announcement_scan_limit');
+  const result = await stablePublishedAnnouncements(pool, { boundary, category, kind, scan,
     maxRows: exactTotal ? null : offset + limit });
   return {
     count: result.exhausted ? result.rows.length : null,
     rows: result.rows.slice(offset, offset + limit),
-    ...(includeScanCost ? { scan: result.scan } : {}),
+    ...(scan ? { scan: result.scan } : {}),
   };
 }
 

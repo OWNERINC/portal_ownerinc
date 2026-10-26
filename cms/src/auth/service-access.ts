@@ -42,7 +42,12 @@ export function readNewsInput<A extends NewsAction>(action: A, value: unknown): 
     case 'list':
       keys(input, ['limit', 'offset', 'category', 'kind', 'boundary', 'scan']); category(); kind()
       if (!Number.isSafeInteger(input.limit) || Number(input.limit) < 1 || Number(input.limit) > PRIVATE_LIST_MAX || !Number.isSafeInteger(input.offset) || Number(input.offset) < 0 || Number(input.offset) > 1000000) fail()
-      if (Object.hasOwn(input, 'scan') && input.scan !== true) fail()
+      if (Object.hasOwn(input, 'scan')) {
+        const scan = record(input.scan); keys(scan, ['maxRawRows', 'maxBatches'])
+        if (!Number.isSafeInteger(scan.maxRawRows) || Number(scan.maxRawRows) < 1 || Number(scan.maxRawRows) > 101000
+          || !Number.isSafeInteger(scan.maxBatches) || Number(scan.maxBatches) < 1 || Number(scan.maxBatches) > 1000) fail()
+        input.scan = scan
+      }
       if (Object.hasOwn(input, 'boundary')) {
         const boundary = record(input.boundary); keys(boundary, ['published_at', 'source', 'id'])
         if (!(boundary.published_at === null || (typeof boundary.published_at === 'string' && Number.isFinite(Date.parse(boundary.published_at))))) fail()

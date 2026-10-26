@@ -441,7 +441,8 @@ test('legacy lookahead uses bounded keyset chunks and continues past invalid and
       } };
     },
   };
-  const result = await listPublishedAnnouncements(pool, 2, 0, undefined, undefined, null, { exactTotal: false, includeScanCost: true });
+  const result = await listPublishedAnnouncements(pool, 2, 0, undefined, undefined, null,
+    { exactTotal: false, scan: { maxRawRows: 101000, maxBatches: 1000 } });
   assert.deepEqual(result.rows.map(row => row.id), [newsId(101), newsId(103)]);
   assert.equal(result.count, 2);
   assert.deepEqual(result.scan, { rawRows: 103, batches: 2 });
@@ -453,6 +454,23 @@ test('legacy lookahead uses bounded keyset chunks and continues past invalid and
   assert.ok(selects.every(call => call.params.at(-1) === 101));
   assert.match(selects[1].sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
   assert.doesNotMatch(selects[1].sql, /OFFSET/u);
+});
+
+test('legacy private scan allowance caps SQL limit and stops before a second batch', async () => {
+  const row = { id: '10000000-0000-4000-8000-000000000001', title: 'Invalid', category: '', published_at: new Date('2026-10-01T00:00:00Z'),
+    published_revision_id: '10000000-0000-4000-8000-000000001001', editorial: null, blocks: [{ type: 'unknown' }] };
+  const selects = [];
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) { selects.push({ sql, params }); return { rows: [row].slice(0, params.at(-1)) }; }
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  await assert.rejects(listPublishedAnnouncements(pool, 101, 0, undefined, 'article', null,
+    { exactTotal: false, scan: { maxRawRows: 1, maxBatches: 1 } }), /announcement_scan_limit/);
+  assert.equal(selects.length, 1);
+  assert.equal(selects[0].params.at(-1), 1);
 });
 
 test('legacy keysets canonicalize sub-millisecond timestamps without skips or duplicates across cursors', async () => {

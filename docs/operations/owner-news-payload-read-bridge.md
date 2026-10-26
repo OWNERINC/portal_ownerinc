@@ -153,12 +153,17 @@ A agregação de categorias mantém sua varredura separada em lotes de 100. Cate
 vazia é filtro válido, mas não entra no catálogo de nomes. Navegação exclui edições;
 uma edição retorna previous/next null. A navegação global percorre cada fonte por
 keyset e retém somente o vizinho anterior, o primeiro posterior, a fronteira e IDs
-vistos para integridade; para assim que conhece o primeiro posterior. Cada página
-privada solicitada para essa travessia inclui custo estrito `{rawRows,batches}`. Esse
-campo nunca integra DTO/header/resposta pública e é somado pelo Portal em um único
-limite de 1.000 lotes/101.000 candidatos crus por fonte durante toda a requisição,
-impedindo que novas chamadas privadas renovem o orçamento. Duplicata, desordem,
-falta de progresso, metadata de custo inválida ou orçamento excedido falham fechados.
+vistos para integridade; para assim que conhece o primeiro posterior. Antes de cada
+chamada, o Portal envia o orçamento privado restante exato
+`scan:{maxRawRows,maxBatches}`; Payload/legado limitam o trabalho de storage a esses
+máximos e respondem com custo estrito `{rawRows,batches}` não superior ao solicitado.
+Esses campos nunca integram DTO/header/resposta pública. O Portal os soma em um único
+limite de 1.000 lotes/101.000 candidatos crus por fonte durante toda a requisição e
+recusa antes da próxima chamada quando qualquer saldo termina. Em páginas de
+navegação com offset zero, `count` não nulo deve ser exatamente `rows.length`;
+qualquer divergência falha como contrato privado indisponível, não como exaustão/404.
+Duplicata, desordem, falta de progresso, metadata de custo inválida ou orçamento
+excedido falham fechados.
 Falha
 operacional de arquivo/storage/DB não é convertida em feed vazio. Apenas conteúdo
 malformado ou referência com shape/tipo inválido exclui aquela publicação.
