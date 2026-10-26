@@ -18,8 +18,9 @@ export function estimateNewsMinutes(blocks: Parameters<typeof newsText>[0], edit
 export function toNewsDTO(document: unknown, { preview }: { preview: boolean }): NewsDTO {
   const d = record(document)
   const { title, category, editorial, blocks } = normalizeNewsDocument(d, !preview)
-  const publishedAt = d.publishedAt ?? null
-  if (publishedAt !== null && (typeof publishedAt !== 'string' || !Number.isFinite(Date.parse(publishedAt)))) invalid()
+  const rawPublishedAt = d.publishedAt ?? null
+  if (rawPublishedAt !== null && (typeof rawPublishedAt !== 'string' || !Number.isFinite(Date.parse(rawPublishedAt)))) invalid()
+  const publishedAt = rawPublishedAt === null ? null : new Date(rawPublishedAt as string).toISOString()
   return { source: 'payload', id: uuid(d.id), title, category, published_at: publishedAt, editorial,
     content_version: 2, asset_scope: preview ? 'owner-news-preview' : 'owner-news', content_blocks: blocks,
     read_time_minutes: estimateNewsMinutes(blocks, editorial) }

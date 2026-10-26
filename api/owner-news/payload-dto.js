@@ -100,8 +100,15 @@ function readNewsDTO(json) {
   return json;
 }
 function readNewsPage(json) {
-  assert(keys(json, ['rows', 'count']) && Array.isArray(json.rows) && json.rows.length <= PRIVATE_LIST_MAX && integer(json.count, json.rows.length));
-  json.rows.forEach(readNewsDTO); return json;
+  assert(keys(json, ['rows', 'count']) && Array.isArray(json.rows) && json.rows.length <= PRIVATE_LIST_MAX
+    && (json.count === null || integer(json.count, json.rows.length)));
+  const seen = new Set();
+  for (const row of json.rows) {
+    readNewsDTO(row);
+    if (seen.has(row.id)) throw Object.assign(unavailable(), { code: 'news_duplicate_identity' });
+    seen.add(row.id);
+  }
+  return json;
 }
 function readResult(action, json, input) {
   if (action === 'list') { readNewsPage(json); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }

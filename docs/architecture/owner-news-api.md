@@ -1,25 +1,50 @@
 # API editorial da Owner News
 
-Todas as rotas de leitura exigem sessão autenticada. Lista, categorias e
-navegação usam as mesmas publicações validadas (blocos, editorial e mídia), com
-rechecagem da revisão publicada antes da resposta. A ordem é publicação
-decrescente, atualização decrescente e ID. Rascunhos não participam da seleção.
+Todas as rotas de leitura exigem sessão autenticada. Lista, categorias, home e
+navegação compõem publicações validadas das fontes `legacy` e `payload`; autoridade
+de escrita não escolhe uma fonte exclusiva de leitura. Detalhe, asset e prévia são
+source-directed e nunca fazem fallback. A ordem global é `published_at` decrescente
+(null por último), fonte (`legacy` antes de `payload`) e UUID lowercase crescente.
+Rascunhos não participam da seleção pública.
 
-- `GET /api/announcements`: preserva array e `X-Total-Count`; aceita `limit`,
-  `offset`, `category` e `kind=article|edition`. Filtros precedem contagem/paginação.
-- DTO de lista/detalhe: `id`, `title`, `category`, `published_at`,
-  `content_blocks`, `editorial` (objeto ou null) e `read_time_minutes` (inteiro ou
-  null). Edições têm tempo null. A estimativa usa texto nativo a 200 palavras/minuto.
+- `GET /api/announcements`: preserva o array e aceita `limit`, `offset`, `category`,
+  `kind=article|edition` e cursor opaco. O cursor contém a fronteira source-aware e
+  os filtros normalizados; com cursor, `offset` deve estar ausente ou ser zero.
+  Offset sem cursor é somente compatibilidade limitada; a travessia autoritativa do
+  feed dual usa cursor.
+- Toda resposta composta informa `X-Owner-News-Read-State: complete|degraded`.
+  `X-Owner-News-Next-Cursor` existe somente em página completa com continuação.
+  `X-Total-Count` é informativo e opcional: aparece somente quando todas as fontes
+  comprovam o total exato filtrado/validado; lookahead limitado e degradação o omitem.
+- DTO de lista/detalhe: `source`, `id`, `title`, `category`, `published_at`,
+  `content_blocks`, `editorial`, `read_time_minutes` e `asset_scope`. A fonte é
+  `legacy|payload`; `asset_scope` publicado é `legacy|owner-news` e a prévia usa
+  `owner-news-preview`. Edições têm tempo null. A estimativa usa texto nativo a
+  200 palavras/minuto.
 - Conteúdo legado com PDF é edição; sem PDF é matéria. Editorial explícito
   determina a classificação quando presente.
 - `GET /api/announcements/categories`: mantém string[]; aceita `kind` e
   `with_counts=true|false`. Com true retorna `{ total, categories: [{name,count}] }`.
   O total inclui publicações sem categoria; nomes vazios não aparecem na lista.
-- `GET /api/announcements/:id/navigation?category=...`: vizinhos da lista completa
-  de matérias, `{previous,next}`, cada qual `{id,title}` ou null. Uma edição válida
-  retorna ambos null. Publicação ausente/inválida ou matéria fora do filtro: 404.
-- `GET /api/announcements/:id`: preserva acesso a edições. UUIDs são normalizados
-  para minúsculas; queries desconhecidas, duplicadas ou inválidas retornam 400.
+- `GET /api/announcements/:id/navigation?source=...&category=...`: vizinhos globais
+  da lista de matérias, `{previous,next}`, cada referência com `{source,id,title}`
+  ou null. Uma edição válida retorna ambos null. O item corrente é confirmado apenas
+  na fonte solicitada; publicação ausente/inválida ou fora do filtro retorna 404.
+- `GET /api/announcements/:id?source=...`: preserva acesso a edições e dirige uma
+  única fonte. Por compatibilidade de bookmarks, omitir `source` em detalhe ou
+  navegação significa somente `legacy`; não há tentativa automática em Payload.
+  UUIDs são normalizados para minúsculas; queries desconhecidas, duplicadas ou
+  inválidas retornam 400.
+- Assets publicados/prévios aceitam `source=legacy|payload`; a origem e o
+  `asset_scope` do DTO determinam qual rota deve ser usada, sem fallback entre
+  storages.
+
+Uma fonte configurada indisponível na primeira página pode produzir a fatia da fonte
+saudável com estado `degraded`, sem total ou cursor. Em qualquer continuação por
+cursor ou offset não zero, perder uma fonte retorna `503 news_page_restart_required`;
+falha dupla ou autoridade ilegível retorna `503 news_unavailable`. Quando Payload
+está intencionalmente inativo antes do cutover, a paginação offset legacy-only e seu
+total exato permanecem compatíveis.
 
 ## Abertura editorial
 

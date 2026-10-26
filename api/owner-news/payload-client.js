@@ -57,7 +57,11 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
       }
       if (controller.signal.aborted) throw unavailable();
       return readResult(action, JSON.parse(Buffer.concat(chunks).toString('utf8')), input);
-    } catch { controller.abort(); if (reader) await reader.cancel().catch(() => {}); else await response.body?.cancel().catch(() => {}); throw unavailable(); }
+    } catch (error) {
+      controller.abort(); if (reader) await reader.cancel().catch(() => {}); else await response.body?.cancel().catch(() => {});
+      if (error?.code === 'news_duplicate_identity') throw error;
+      throw unavailable();
+    }
     finally { controller.signal.removeEventListener('abort', abortRead); reader?.releaseLock(); clean(); }
   }
   async function asset(input, actor, options) {

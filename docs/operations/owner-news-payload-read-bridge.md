@@ -143,10 +143,15 @@ composta original, sem fallback de fonte. Home prefere o Global Payload somente
 quando há conteúdo publicado válido; ausência legítima usa o home legado, enquanto
 falha de uma origem produz estado degradado.
 
-O leitor Payload varre lotes de 100, máximo 1000 lotes (exceder retorna 503), valida
-conteúdo/referências/arquivos antes de contar/paginar e ordena publishedAt DESC,
-updatedAt DESC, UUID ASC. Categoria vazia é filtro válido, mas não entra no catálogo
-de nomes. Navegação exclui edições; uma edição retorna previous/next null. Falha
+Para listas, o leitor Payload consulta chunks de no máximo 101 linhas, máximo 1.000
+chunks/101.000 linhas cruas (exceder retorna 503), com `_status`, categoria quando
+presente, keyset e limite no `find`. A ordem é `publishedAt` decrescente, null por
+último e UUID Payload crescente; no merge global, fonte fica entre publicação e UUID.
+Conteúdo/referências/arquivos e `kind` são validados durante o avanço, retendo apenas
+o necessário para `offset + limit`; total fica null até a exaustão comprovar exatidão.
+A agregação de categorias mantém sua varredura separada em lotes de 100. Categoria
+vazia é filtro válido, mas não entra no catálogo de nomes. Navegação exclui edições;
+uma edição retorna previous/next null. Falha
 operacional de arquivo/storage/DB não é convertida em feed vazio. Apenas conteúdo
 malformado ou referência com shape/tipo inválido exclui aquela publicação.
 

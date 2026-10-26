@@ -167,8 +167,27 @@ test('JSON transport uses fixed POST paths, exact actor/input, isolated headers 
   assert.equal((await client.query('list', { limit: 24, offset: 0 }, actor)).count, 1);
   for (const value of [{ ...dto(), secret: 'private' }, { ...dto(), asset_scope: 'legacy' }, { ...dto(), content_blocks: [{ type: 'script' }] }, { ...dto(), editorial: {} }]) assert.throws(() => readNewsDTO(value), /news_unavailable/);
   assert.throws(() => readNewsPage({ rows: [dto()], count: 0 }), /news_unavailable/);
+  assert.equal(readNewsPage({ rows: [dto()], count: null }).count, null);
+  assert.throws(() => readNewsPage({ rows: [dto(), dto()], count: null }), /news_unavailable/);
   await assert.rejects(client.query('../news-articles', {}, actor), /news_unavailable/);
   await assert.rejects(client.query('list', { limit: 102, offset: 0 }, actor), /news_unavailable/);
+});
+test('duplicate source identities fail closed in backend composition and Express transport', async () => {
+  const duplicateLegacy = { ...dto(7), source: 'legacy', asset_scope: 'legacy' };
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { return { rows: [duplicateLegacy, { ...duplicateLegacy }], count: null }; } },
+    payloadClient: { async query() { return { rows: [], count: 0 }; } },
+  });
+  await assert.rejects(backend.list({ limit: 10, offset: 0 }, actor), error => error.status === 400 && error.code === 'invalid_request');
+
+  const { api } = appFor(async () => Response.json({ rows: [dto(8), dto(8)], count: null }), 'payload', {
+    legacyReader: { async listPublishedAnnouncements() { return { rows: [], count: 0 }; } },
+  });
+  const response = await api.get('/api/announcements?limit=10&offset=0').set('Authorization', 'Bearer reader').expect(503);
+  assert.equal(response.body.reason, 'news_unavailable');
+  assert.equal(response.headers['x-owner-news-next-cursor'], undefined);
+  assert.equal(response.headers['x-total-count'], undefined);
 });
 test('private list forwards only an exact decoded boundary and permits the 101-row source lookahead', async () => {
   const boundary = { published_at: null, source: 'legacy', id: id(9) };

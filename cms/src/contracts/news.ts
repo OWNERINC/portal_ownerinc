@@ -47,7 +47,7 @@ export type NewsDTO = {
   /** Status of the exact saved revision, NOT a claim about current publication. */
   preview_revision?: { id: string; source: 'payload' | 'legacy'; status: 'draft' | 'published' | 'scheduled' | 'archived' }
 }
-export type NewsPage = { rows: NewsDTO[]; count: number }
+export type NewsPage = { rows: NewsDTO[]; count: number | null }
 export type NewsQuery = {
   limit: number
   offset: number

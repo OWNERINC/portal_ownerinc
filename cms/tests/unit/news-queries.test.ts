@@ -10,23 +10,41 @@ const document = (n: number, extra = {}) => ({ id: id(n), title: `Published ${n}
   body: [{ blockType: 'paragraph', text: 'Published A' }], _status: 'published', publishedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z', ...extra })
 function fixture() {
   const docs = [document(3), document(2, { category: 'News' }), document(1, { category: 'News' }), document(4, { body: [{ blockType: 'unknown' }], category: 'Invalid' }), document(5, { _status: 'draft' })]
-  let fault = false
+  let fault = false; const findCalls: any[] = []
   const req = { transactionID: 'live' } as PayloadRequest
   const payload = {
     db: { sessions: { live: { db: { async execute() {} } } } },
     async find(options: any) {
+      findCalls.push(options)
       assert.equal(options.req, req); assert.equal(options.overrideAccess, true); assert.equal(options.depth, 0)
       if (fault) throw new APIError('storage unavailable', 503)
       if (options.collection === 'legacy-news-revisions') return { docs: [], hasNextPage: false }
       assert.equal(options.draft, false); assert.ok(options.where)
-      const requested = options.where.and?.[0]?.id.equals
-      return { docs: requested ? docs.filter(row => row.id === requested) : docs, hasNextPage: false }
+      const match = (row: any, where: any): boolean => Object.entries(where).every(([field, condition]: [string, any]) => {
+        if (field === 'and') return condition.every((entry: any) => match(row, entry))
+        if (field === 'or') return condition.some((entry: any) => match(row, entry))
+        const value = row[field]
+        if ('equals' in condition && value !== condition.equals) return false
+        if ('exists' in condition && condition.exists !== (value !== null && value !== undefined)) return false
+        if ('less_than' in condition && !(value < condition.less_than)) return false
+        if ('greater_than' in condition && !(value > condition.greater_than)) return false
+        return true
+      })
+      const selected = docs.filter(row => match(row, options.where)).sort((a, b) => {
+        if (Array.isArray(options.sort)) {
+          const stamp = (value: string | null) => value === null ? -Infinity : Date.parse(value)
+          const difference = stamp(b.publishedAt) - stamp(a.publishedAt)
+          if (difference) return difference
+        }
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+      })
+      return { docs: selected.slice(0, options.limit), hasNextPage: selected.length > options.limit }
     },
     async findVersions(options: any) { assert.equal(options.req, req); assert.equal(options.overrideAccess, true); return { docs: [{ id: id(99), parent: id(1), version: document(1, { title: 'Draft B' }) }] } },
     async findGlobal(options: any) { assert.equal(options.draft, false); assert.equal(options.req, req); assert.equal(options.overrideAccess, true); return { _status: 'published', eyebrow: 'Owner', headline: 'Home A', summary: 'Summary' } },
   }
   req.payload = payload as unknown as PayloadRequest['payload']
-  return { req, docs, fail: () => { fault = true } }
+  return { req, docs, findCalls, fail: () => { fault = true } }
 }
 test('published readers validate before count/pagination/category; stable timestamp/UUID order and same req/lock', async () => {
   const { req } = fixture()
@@ -50,6 +68,126 @@ test('list boundary is strict, source-aware and applied before the deterministic
   assert.equal(readNewsInput('list', { limit: 101, offset: 0 }).limit, 101)
   assert.throws(() => readNewsInput('list', { limit: 102, offset: 0 }))
   assert.ok((await queryPublishedNews(req, { limit: 101, offset: 0 }, actor)).rows.length > 0)
+})
+test('list pushes canonical filters, keyset order and storage limit without materializing all publications', async () => {
+  const calls: any[] = []
+  const req = { transactionID: 'live' } as PayloadRequest
+  req.payload = {
+    db: { sessions: { live: { db: { async execute() {} } } } },
+    async find(options: any) {
+      calls.push(options)
+      return { docs: Array.from({ length: 101 }, (_, index) => document(index + 2, { category: 'News' })), hasNextPage: true }
+    },
+  } as unknown as PayloadRequest['payload']
+  const boundary = { published_at: '2026-10-01T00:00:00.000Z', source: 'payload' as const, id: id(1) }
+  const page = await queryPublishedNews(req, { limit: 101, offset: 0, category: 'News', kind: 'article', boundary }, actor)
+  assert.equal(page.rows.length, 101)
+  assert.equal(page.rows[0].id, id(2)); assert.equal(page.rows.at(-1)?.id, id(102))
+  assert.equal(page.count, null)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].limit, 101)
+  assert.equal(calls[0].page, 1)
+  assert.deepEqual(calls[0].sort, ['-publishedAt', 'id'])
+  assert.deepEqual(calls[0].where, { and: [
+    { _status: { equals: 'published' } },
+    { category: { equals: 'News' } },
+    { publishedAt: { exists: true } },
+    { or: [
+      { publishedAt: { less_than: boundary.published_at } },
+      { and: [{ publishedAt: { equals: boundary.published_at } }, { id: { greater_than: boundary.id } }] },
+    ] },
+  ] })
+  assert.equal(calls[0].req, req)
+})
+test('list scans invalid rows with moving bounded raw keysets and exact exhaustion only at completion', async () => {
+  const calls: any[] = []
+  const invalid = Array.from({ length: 101 }, (_, index) => document(index + 1, {
+    publishedAt: null, body: [{ blockType: 'unknown' }], category: 'News',
+  }))
+  const final = [document(102, { publishedAt: null, category: 'News' }), document(103, { publishedAt: null, category: 'News' })]
+  const req = { transactionID: 'live' } as PayloadRequest
+  req.payload = {
+    db: { sessions: { live: { db: { async execute() {} } } } },
+    async find(options: any) {
+      calls.push(options)
+      return calls.length === 1 ? { docs: invalid, hasNextPage: true } : { docs: final, hasNextPage: false }
+    },
+  } as unknown as PayloadRequest['payload']
+  const result = await queryPublishedNews(req, { limit: 2, offset: 0, category: 'News',
+    boundary: { published_at: null, source: 'legacy', id: id(999) } }, actor)
+  assert.deepEqual(result.rows.map(row => row.id), [id(102), id(103)])
+  assert.equal(result.count, 2)
+  assert.equal(calls.length, 2)
+  assert.ok(calls.every(call => call.limit === 101 && call.page === 1 && call.sort === 'id'))
+  assert.deepEqual(calls[0].where, { and: [
+    { _status: { equals: 'published' } }, { category: { equals: 'News' } }, { publishedAt: { equals: null } },
+  ] })
+  assert.deepEqual(calls[1].where.and.at(-1), { id: { greater_than: id(101) } })
+  assert.equal(new Set(result.rows.map(row => row.id)).size, 2)
+})
+test('list transitions from dated to null rows and honors legacy/Payload equal-timestamp boundary phases', async () => {
+  const calls: any[] = []
+  const req = { transactionID: 'live' } as PayloadRequest
+  req.payload = {
+    db: { sessions: { live: { db: { async execute() {} } } } },
+    async find(options: any) {
+      calls.push(options)
+      if (calls.length === 1) return { docs: [document(1)], hasNextPage: false }
+      return { docs: [document(2, { publishedAt: null })], hasNextPage: false }
+    },
+  } as unknown as PayloadRequest['payload']
+  const result = await queryPublishedNews(req, { limit: 2, offset: 0 }, actor)
+  assert.deepEqual(result.rows.map(row => row.id), [id(1), id(2)])
+  assert.equal(result.count, 2)
+  assert.deepEqual(calls.map(call => call.sort), [['-publishedAt', 'id'], 'id'])
+  assert.deepEqual(calls[1].where.and.at(-1), { publishedAt: { equals: null } })
+
+  for (const [source, expected] of [
+    ['legacy', { or: [{ publishedAt: { less_than: '2026-10-01T00:00:00.000Z' } }, { publishedAt: { equals: '2026-10-01T00:00:00.000Z' } }] }],
+    ['payload', { or: [{ publishedAt: { less_than: '2026-10-01T00:00:00.000Z' } }, { and: [{ publishedAt: { equals: '2026-10-01T00:00:00.000Z' } }, { id: { greater_than: id(1) } }] }] }],
+  ] as const) {
+    const seen: any[] = []
+    req.payload.find = (async (options: any) => { seen.push(options); return { docs: [document(2)], hasNextPage: true } }) as any
+    await queryPublishedNews(req, { limit: 1, offset: 0,
+      boundary: { published_at: '2026-10-01T00:00:00.000Z', source, id: id(1) } }, actor)
+    assert.deepEqual(seen[0].where.and.at(-1), expected)
+  }
+
+  for (const [source, expectedLast] of [
+    ['legacy', { publishedAt: { equals: null } }],
+    ['payload', { id: { greater_than: id(1) } }],
+  ] as const) {
+    const seen: any[] = []
+    req.payload.find = (async (options: any) => { seen.push(options); return { docs: [document(2, { publishedAt: null })], hasNextPage: true } }) as any
+    await queryPublishedNews(req, { limit: 1, offset: 0,
+      boundary: { published_at: null, source, id: id(1) } }, actor)
+    assert.deepEqual(seen[0].where.and.at(-1), expectedLast)
+  }
+})
+test('list fails closed when a storage page claims continuation without raw keyset progress', async () => {
+  let calls = 0
+  const req = { transactionID: 'live' } as PayloadRequest
+  req.payload = {
+    db: { sessions: { live: { db: { async execute() {} } } } },
+    async find() { calls++; return { docs: [], hasNextPage: true } },
+  } as unknown as PayloadRequest['payload']
+  await assert.rejects(queryPublishedNews(req, { limit: 1, offset: 0 }, actor),
+    error => error instanceof APIError && error.status === 503)
+  assert.equal(calls, 1)
+})
+test('navigation confirms detail then advances through the same bounded list query', async () => {
+  const { req, findCalls } = fixture()
+  assert.deepEqual(await queryNewsNavigation(req, { id: id(1), category: 'News' }, actor),
+    { previous: null, next: { source: 'payload', id: id(2), title: 'Published 2' } })
+  assert.equal(findCalls.length, 3, 'detail plus dated/null bounded list phases; no all-publication materializer pages')
+  assert.equal(findCalls[0].limit, 1)
+  assert.deepEqual(findCalls[1].sort, ['-publishedAt', 'id'])
+  assert.equal(findCalls[1].limit, 101)
+  assert.deepEqual(findCalls[1].where.and.slice(0, 2), [
+    { _status: { equals: 'published' } }, { category: { equals: 'News' } },
+  ])
+  assert.equal(findCalls[2].sort, 'id')
+  assert.deepEqual(findCalls[2].where.and.at(-1), { publishedAt: { equals: null } })
 })
 test('operational failure never becomes an empty page/count; preview parent/source cannot fall back', async () => {
   const { req, fail } = fixture()

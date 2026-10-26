@@ -3,7 +3,7 @@ const legacy = require('../cms/reader');
 const { getPublishedHome } = require('./home');
 const { createPayloadNewsClient, payloadRuntimeState } = require('./payload-client');
 const { validPublicInput, unavailable } = require('./payload-dto');
-const { compareNews, encodeNewsCursor } = require('./feed');
+const { compareNews, encodeNewsCursor, assertUniqueNewsRows } = require('./feed');
 const { validateNewsRevision, announcementKind, estimateNewsReadTime } = require('./editorial');
 const { lockCmsAssets } = require('../cms/locks');
 const { open, lstat } = require('node:fs/promises');
@@ -100,7 +100,10 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
 
   async function capture(source, work) {
     try { return { source, ok: true, value: await work() }; }
-    catch { return { source, ok: false }; }
+    catch (error) {
+      if (error?.code === 'news_duplicate_identity') throw error;
+      return { source, ok: false };
+    }
   }
 
   function inactiveValue(action, input) {
@@ -141,6 +144,7 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
         ]);
         return finishComposite(action, results, options, values => {
           const legacyPage = values.find(value => value.source === 'legacy' && value.ok)?.value || { rows: [], count: 0 };
+          assertUniqueNewsRows('legacy', legacyPage.rows);
           const rows = legacyPage.rows.slice(0, input.limit);
           return { rows, count: legacyPage.count,
             nextCursor: legacyPage.rows.length > input.limit && rows.length
@@ -158,6 +162,7 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
       ]);
       return finishComposite(action, results, options, values => {
         const bySource = Object.fromEntries(values.filter(v => v.ok).map(v => [v.source, v.value]));
+        for (const source of ['legacy', 'payload']) if (bySource[source]) assertUniqueNewsRows(source, bySource[source].rows);
         const rows = [...(bySource.legacy?.rows || []), ...(bySource.payload?.rows || [])].sort(compareNews);
         const start = input.offset, page = rows.slice(start, start + input.limit);
         const hasMore = rows.length > start + input.limit;
@@ -221,6 +226,7 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
         ? await legacyReader.listPublishedAnnouncements(pool, 101, 0, input.category, 'article', boundary, { exactTotal: false })
         : await payloadComposite('list', sourceInput, actor, options, currentAuthority);
       rows.push(...page.rows);
+      assertUniqueNewsRows(source, rows);
       if (page.rows.length < 101) return rows;
       const last = page.rows.at(-1);
       const next = { published_at: last.published_at, source: last.source, id: last.id };

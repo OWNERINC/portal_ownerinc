@@ -57,23 +57,26 @@ function decodeNewsCursor(value, expectedFilters = {}) {
   return point;
 }
 
+function assertUniqueNewsRows(source, rows) {
+  if (!SOURCES.includes(source) || !Array.isArray(rows)) throw invalid();
+  const seen = new Set();
+  for (const row of rows) {
+    const point = boundary(row);
+    if (point.source !== source || seen.has(point.id)) throw invalid();
+    seen.add(point.id);
+  }
+  return rows;
+}
+
 function mergeNewsPages({ legacy, payload, limit, boundary: after, filters = {} }) {
   if (!Array.isArray(legacy) || !Array.isArray(payload) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw invalid();
   normalizedFilters(filters);
-  const seen = new Set();
-  for (const [source, rows] of [['legacy', legacy], ['payload', payload]]) {
-    for (const row of rows) {
-      const point = boundary(row);
-      if (point.source !== source) throw invalid();
-      const identity = `${point.source}:${point.id}`;
-      if (seen.has(identity)) throw invalid();
-      seen.add(identity);
-    }
-  }
+  assertUniqueNewsRows('legacy', legacy);
+  assertUniqueNewsRows('payload', payload);
   const point = after === undefined || after === null ? null : boundary(after);
   const candidates = [...legacy, ...payload].sort(compareNews).filter(row => point === null || compareNews(row, point) > 0);
   const rows = candidates.slice(0, limit);
   return { rows, nextCursor: candidates.length > limit ? encodeNewsCursor(rows.at(-1), filters) : null };
 }
 
-module.exports = { compareNews, encodeNewsCursor, decodeNewsCursor, mergeNewsPages };
+module.exports = { compareNews, encodeNewsCursor, decodeNewsCursor, mergeNewsPages, assertUniqueNewsRows };
