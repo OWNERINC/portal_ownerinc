@@ -54,3 +54,11 @@ test('limit plus one controls nextCursor and duplicate identities within one sou
   assert.equal(final.nextCursor, null);
   assert.throws(() => mergeNewsPages({ legacy: [item('legacy', 1), item('legacy', 1)], payload: [], limit: 2, filters: {} }), /invalid_request/);
 });
+
+test('101 source rows preserve continuation at the public maximum page size of 100', () => {
+  const sourceRows = Array.from({ length: 101 }, (_, index) => item('legacy', index + 1));
+  const page = mergeNewsPages({ legacy: sourceRows, payload: [], limit: 100, filters: {} });
+  assert.equal(page.rows.length, 100);
+  assert.deepEqual(decodeNewsCursor(page.nextCursor, {}), page.rows[99]);
+  assert.equal(page.rows.at(-1).id, id(100));
+});

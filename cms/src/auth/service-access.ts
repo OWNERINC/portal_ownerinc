@@ -11,6 +11,7 @@ export type NewsInputs = {
   asset: { id: string; preview: boolean; range: string | null }
 }
 const fail = (status = 400): never => { throw new APIError(status === 400 ? 'invalid_request' : 'forbidden', status, undefined, true) }
+const PRIVATE_LIST_MAX = 101
 export function isPrivateNewsPath(url: string, method: string) {
   const parsed = new URL(url)
   return method === 'POST' && !parsed.search && newsActions.some(action => parsed.pathname === `/editorial/api/portal-news/${action}`)
@@ -40,7 +41,7 @@ export function readNewsInput<A extends NewsAction>(action: A, value: unknown): 
   switch (action) {
     case 'list':
       keys(input, ['limit', 'offset', 'category', 'kind', 'boundary']); category(); kind()
-      if (!Number.isSafeInteger(input.limit) || Number(input.limit) < 1 || Number(input.limit) > 100 || !Number.isSafeInteger(input.offset) || Number(input.offset) < 0 || Number(input.offset) > 1000000) fail()
+      if (!Number.isSafeInteger(input.limit) || Number(input.limit) < 1 || Number(input.limit) > PRIVATE_LIST_MAX || !Number.isSafeInteger(input.offset) || Number(input.offset) < 0 || Number(input.offset) > 1000000) fail()
       if (Object.hasOwn(input, 'boundary')) {
         const boundary = record(input.boundary); keys(boundary, ['published_at', 'source', 'id'])
         if (!(boundary.published_at === null || (typeof boundary.published_at === 'string' && Number.isFinite(Date.parse(boundary.published_at))))) fail()

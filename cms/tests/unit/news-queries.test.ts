@@ -47,6 +47,9 @@ test('list boundary is strict, source-aware and applied before the deterministic
     { ...boundary, source: 'other' }, { ...boundary, id: 'bad' }, { ...boundary, published_at: 'bad' },
     { ...boundary, extra: true }, { source: 'payload', id: id(1) }, null,
   ]) assert.throws(() => readNewsInput('list', { limit: 10, offset: 0, boundary: value } as unknown as NewsInputs['list']))
+  assert.equal(readNewsInput('list', { limit: 101, offset: 0 }).limit, 101)
+  assert.throws(() => readNewsInput('list', { limit: 102, offset: 0 }))
+  assert.ok((await queryPublishedNews(req, { limit: 101, offset: 0 }, actor)).rows.length > 0)
 })
 test('operational failure never becomes an empty page/count; preview parent/source cannot fall back', async () => {
   const { req, fail } = fixture()
@@ -83,7 +86,7 @@ test('exact service POST allowlist is separate from login and refuses browser/cr
   assert.equal(hasNewsServiceAccess(request('list'), { ...env, PORTAL_TO_PAYLOAD_SECRET: env.PAYLOAD_TO_PORTAL_SECRET }), false)
   assert.throws(() => readNewsActor({ ...actor, role: 'admin' }))
   assert.equal(readNewsActor({ ...actor, uid: 'original-usuário', name: 'a'.repeat(201) }).uid, 'original-usuário')
-  assert.throws(() => readNewsInput('list', { limit: 101, offset: 0 }))
+  assert.throws(() => readNewsInput('list', { limit: 102, offset: 0 }))
   assert.throws(() => readNewsInput('home', { draft: true }))
 })
 test('I1 enum validation accepts only primitive exact strings and never coerces objects', () => {

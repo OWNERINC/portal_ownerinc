@@ -3,6 +3,7 @@ const { validateBlocks } = require('../cms/blocks');
 const { normalizeEditorial } = require('./editorial');
 const { normalizeHome } = require('./home');
 const MiB = 1024 * 1024;
+const PRIVATE_LIST_MAX = 101;
 const unavailable = () => Object.assign(new Error('news_unavailable'), { status: 503, code: 'news_unavailable' });
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, names, required = names) => record(value) && Object.keys(value).every(key => names.includes(key)) && required.every(key => Object.hasOwn(value, key));
@@ -11,6 +12,8 @@ const text = (value, max, empty = true) => typeof value === 'string' && value.le
 const date = value => value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
 const plain = value => !/[\r\n]|<\/?[a-z][^>]*>|<\s*(script|style|iframe|object|embed)\b|\bon[a-z]+\s*=|javascript\s*:/iu.test(value);
 const kind = value => ['article', 'edition'].includes(value);
+const boundary = value => keys(value, ['published_at', 'source', 'id']) && date(value.published_at)
+  && ['legacy', 'payload'].includes(value.source) && uuid(value.id);
 function assert(value) { if (!value) throw unavailable(); }
 function validActor(value) {
   return keys(value, ['uid', 'email', 'name', 'canManageNews']) && typeof value.uid === 'string' && value.uid.length > 0 && value.uid.length <= 128
@@ -20,7 +23,7 @@ function validInput(action, value) {
   const optional = (name, validate) => !Object.hasOwn(value, name) || validate(value[name]);
   if (!record(value)) return false;
   switch (action) {
-    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind'], ['limit', 'offset']) && integer(value.limit, 1, 100) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind);
+    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind', 'boundary'], ['limit', 'offset']) && integer(value.limit, 1, PRIVATE_LIST_MAX) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind) && optional('boundary', boundary);
     case 'detail': return keys(value, ['id']) && uuid(value.id);
     case 'categories': return keys(value, ['kind', 'withCounts'], ['withCounts']) && typeof value.withCounts === 'boolean' && optional('kind', kind);
     case 'navigation': return keys(value, ['id', 'category'], ['id']) && uuid(value.id) && optional('category', v => text(v, 100));
@@ -91,7 +94,7 @@ function readNewsDTO(json) {
   return json;
 }
 function readNewsPage(json) {
-  assert(keys(json, ['rows', 'count']) && Array.isArray(json.rows) && json.rows.length <= 100 && integer(json.count, json.rows.length));
+  assert(keys(json, ['rows', 'count']) && Array.isArray(json.rows) && json.rows.length <= PRIVATE_LIST_MAX && integer(json.count, json.rows.length));
   json.rows.forEach(readNewsDTO); return json;
 }
 function readResult(action, json, input) {

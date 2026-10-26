@@ -44,7 +44,9 @@ e os filtros normalizados: `{v,published_at,source,id,category,kind}`. Categoria
 tipo ausentes são serializados como `null`; replay sob filtros diferentes falha com
 `invalid_request`. Somente a fronteira tipada `{published_at,source,id}` atravessa o
 POST privado. O CMS a valida novamente, filtra antes do limite e ordena Payload por
-`publishedAt` e UUID; o cursor opaco nunca é enviado ao CMS.
+`publishedAt` e UUID; o cursor opaco nunca é enviado ao CMS. O limite público segue
+em 100, enquanto a lista privada de cada fonte aceita no máximo 101 itens para obter
+o lookahead necessário sem produzir uma página terminal falsa.
 
 As exceções de Origin existem **tanto no proxy Next quanto no boundary REST**,
 somente nos sete paths exatos e método POST com segredo válido, sem Origin,

@@ -71,7 +71,23 @@ test('JSON transport uses fixed POST paths, exact actor/input, isolated headers 
   for (const value of [{ ...dto(), secret: 'private' }, { ...dto(), asset_scope: 'legacy' }, { ...dto(), content_blocks: [{ type: 'script' }] }, { ...dto(), editorial: {} }]) assert.throws(() => readNewsDTO(value), /news_unavailable/);
   assert.throws(() => readNewsPage({ rows: [dto()], count: 0 }), /news_unavailable/);
   await assert.rejects(client.query('../news-articles', {}, actor), /news_unavailable/);
-  await assert.rejects(client.query('list', { limit: 101, offset: 0 }, actor), /news_unavailable/);
+  await assert.rejects(client.query('list', { limit: 102, offset: 0 }, actor), /news_unavailable/);
+});
+test('private list forwards only an exact decoded boundary and permits the 101-row source lookahead', async () => {
+  const boundary = { published_at: null, source: 'legacy', id: id(9) };
+  let fetches = 0;
+  const client = clientFor(async (_url, init) => {
+    fetches++;
+    assert.deepEqual(JSON.parse(init.body).input, { limit: 101, offset: 0, category: '', kind: 'article', boundary });
+    return Response.json({ rows: Array.from({ length: 101 }, (_, index) => dto(index + 1)), count: 101 });
+  });
+  assert.equal((await client.query('list', { limit: 101, offset: 0, category: '', kind: 'article', boundary }, actor)).rows.length, 101);
+  for (const malformed of [
+    null, [], {}, { ...boundary, extra: true }, { published_at: null, source: 'legacy' },
+    { ...boundary, published_at: 'bad' }, { ...boundary, source: 'other' }, { ...boundary, id: 'bad' },
+  ]) await assert.rejects(client.query('list', { limit: 101, offset: 0, boundary: malformed }, actor), /news_unavailable/);
+  await assert.rejects(client.query('list', { limit: 102, offset: 0, boundary }, actor), /news_unavailable/);
+  assert.equal(fetches, 1, 'malformed private inputs must be rejected before fetch');
 });
 test('full multi-document page >6MiB is accepted; rich body is not silently omitted', async () => {
   const rows = [dto(), dto(2)].map(value => ({ ...value, content_blocks: [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [{ type: 'text', marks: ['bold'], text: 'a'.repeat(4 * 1024 * 1024) }] }] }] }));
