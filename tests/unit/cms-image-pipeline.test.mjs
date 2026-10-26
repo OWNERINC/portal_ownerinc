@@ -504,12 +504,12 @@ test('CMS pins the audited Payload, Next, DOMPurify and transitive security rele
 
   const payloadPackages = ['payload', '@payloadcms/next', '@payloadcms/db-postgres',
     '@payloadcms/richtext-lexical', '@payloadcms/translations', '@payloadcms/ui'];
-  for (const name of payloadPackages) assert.equal(manifest.dependencies[name], '3.92.0', name);
-  assert.equal(manifest.dependencies.next, '16.4.3');
+  for (const name of payloadPackages) assert.equal(manifest.dependencies[name], '3.90.2', name);
+  assert.equal(manifest.dependencies.next, '16.4.2');
   assert.equal(manifest.overrides['happy-dom'], '21.0.4');
   assert.equal(manifest.overrides['monaco-editor@0.57.0'].dompurify, '3.4.17');
-  for (const name of payloadPackages) assert.equal(lockfile.packages[`node_modules/${name}`].version, '3.92.0', name);
-  assert.equal(lockfile.packages['node_modules/next'].version, '16.4.3');
+  for (const name of payloadPackages) assert.equal(lockfile.packages[`node_modules/${name}`].version, '3.90.2', name);
+  assert.equal(lockfile.packages['node_modules/next'].version, '16.4.2');
   assert.equal(lockfile.packages['node_modules/happy-dom'].version, '21.0.4');
   assert.equal(lockfile.packages['node_modules/undici'].version, '7.30.1');
   assert.equal(lockfile.packages['node_modules/fast-uri'].version, '3.1.9');
