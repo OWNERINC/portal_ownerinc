@@ -18,7 +18,7 @@ test('manual runtime fixture has one exact disposable opt-in and otherwise perfo
   assert.doesNotMatch(result.stdout, /PASS/u);
 });
 
-test('manual runtime plan is ordered, manual-only and includes independent restore evidence', () => {
+test('manual runtime plan is ordered, manual-only and includes independent restore evidence', async () => {
   assert.deepEqual(manualRuntimeStages, [
     'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
     'empty-database-provision', 'protocol-finalizer', 'protocol-baseline', 'protocol-qualification',
@@ -29,6 +29,13 @@ test('manual runtime plan is ordered, manual-only and includes independent resto
     'restore-control-verify', 'restore-protocol-audit', 'restore-storage',
     'restored-verification', 'owned-cleanup',
   ]);
+  const [fixture, contentProof] = await Promise.all([
+    readFile('scripts/integration/payload-manual-runtime.mjs', 'utf8'),
+    readFile('cms/tests/integration/manual-runtime-content.ts', 'utf8'),
+  ]);
+  assert.match(fixture, /save\.json\(\)\)\.doc\?\._status !== 'draft'/u);
+  assert.match(contentProof, /assert\.equal\(version\.docs\[0\]\.version\._status, 'draft'\)/u);
+  assert.match(contentProof, /assert\.equal\(evidence\.versionStatus, 'draft'\)/u);
 });
 
 test('manual runtime rejects a host with any IPv4 or IPv6 default egress route', async () => {

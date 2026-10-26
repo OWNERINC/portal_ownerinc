@@ -56,6 +56,7 @@ test(`manual-only persisted content ${mode}`, async () => {
       const version = await payload.findVersions({ collection: 'news-articles', overrideAccess: true,
         where: { parent: { equals: evidence.articleId } }, sort: '-updatedAt', depth: 0, limit: 1 })
       assert.ok(version.docs[0]?.id)
+      assert.equal(version.docs[0].version._status, 'draft')
       evidence.versionId = version.docs[0].id; evidence.versionTitle = version.docs[0].version.title
       evidence.versionStatus = version.docs[0].version._status
       assert.equal(digest(await readFile(path.join(uploadDir, evidence.filename))), evidence.mediaSha256)
@@ -71,6 +72,7 @@ test(`manual-only persisted content ${mode}`, async () => {
       assert.equal(article._status, 'published'); assert.equal(article.title, evidence.title)
       assert.equal(media.filename, evidence.filename); assert.equal(version.docs.length, 1)
       assert.equal(version.docs[0].version.title, evidence.versionTitle)
+      assert.equal(evidence.versionStatus, 'draft')
       assert.equal(version.docs[0].version._status, evidence.versionStatus)
       assert.equal(digest(await readFile(path.join(uploadDir, evidence.filename))), evidence.mediaSha256)
     }

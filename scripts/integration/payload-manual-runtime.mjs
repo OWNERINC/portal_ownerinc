@@ -285,6 +285,7 @@ export async function main(env = process.env) {
     const save = await fetch(`${cmsOrigin}/editorial/api/news-articles/${draft.id}?draft=true`, { method: 'PATCH', headers,
       body: JSON.stringify({ title }) })
     if (save.status !== 200) throw new Error('manual_runtime_http_draft_save_failed')
+    if ((await save.json()).doc?._status !== 'draft') throw new Error('manual_runtime_http_draft_status_invalid')
     await writeFile(path.join(directory, 'content-proof.json'), JSON.stringify({ schemaVersion: 1, articleId: draft.id,
       mediaId: uploaded.id, filename: uploaded.filename, title, mediaSha256: sha256(mediaBytes) }), { mode: 0o600 })
     await proof('capture', 'ownerinc_cms', directory)

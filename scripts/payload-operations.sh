@@ -168,6 +168,14 @@ else
   stop_writers
   protection="$PRE_RESTORE_BACKUP_DIR/$(date -u +%Y%m%dT%H%M%SZ)"
   capture "$protection"
+  step restore_protection_portal_archive
+  verify_storage_archive "$protection/uploads.tar.gz"
+  step restore_protection_cms_archive
+  verify_storage_archive "$protection/cms-uploads.tar.gz"
+  step restore_protection_portal_dump
+  compose exec -T postgres pg_restore --list < "$protection/postgres.dump" >/dev/null 2>/dev/null
+  step restore_protection_cms_dump
+  compose exec -T cms-postgres pg_restore --list < "$protection/cms-postgres.dump" >/dev/null 2>/dev/null
   destructive=true
   # The guard confirms compatible schemas/application floor and safe restore
   # targets, including extra objects pg_restore --clean would otherwise retain.
