@@ -39,7 +39,7 @@ function validInput(action, value) {
 }
 function validPublicInput(action, value) {
   if (action === 'preflight') return false;
-  if (action === 'list') return validInput(action, value) && !Object.hasOwn(value, 'scan') && (!Object.hasOwn(value, 'boundary') || value.offset === 0);
+  if (action === 'list') return validInput(action, value) && value.offset === 0 && !Object.hasOwn(value, 'scan');
   if (!['detail', 'navigation', 'asset'].includes(action)) return validInput(action, value);
   if (!record(value) || !['legacy', 'payload'].includes(value.source)) return false;
   return validInput(action, Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'source')));

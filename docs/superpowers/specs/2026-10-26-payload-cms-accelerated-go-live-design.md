@@ -1,7 +1,7 @@
 # Payload CMS — go-live acelerado sem migração inicial
 
-**Data:** 26 de outubro de 2026  
-**Status:** aprovado para planejamento  
+**Data:** 26 de outubro de 2026
+**Status:** aprovado para planejamento
 **Escopo:** Portal Ownerinc e Owner News; sem Ownerinc Brain, n8n ou
 `ownerinc-novo-agente/`
 
