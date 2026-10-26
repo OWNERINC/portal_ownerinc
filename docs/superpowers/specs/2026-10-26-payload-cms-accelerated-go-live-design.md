@@ -25,7 +25,7 @@ backup, autenticação, isolamento, autorização, recuperação ou aceite real.
   o cutover; as demais áreas e as leituras do Portal permanecem disponíveis.
 - O deploy inicial do Payload é acionado manualmente e protegido; não é acoplado ao
   push normal de `main`.
-- Depois da primeira publicação criada no Payload, não é permitido reabrir o legado
+- Depois da primeira mutação aceita no Payload, não é permitido reabrir o legado
   como autoridade de escrita.
 
 ## 3. Escopo da primeira entrega
@@ -66,15 +66,21 @@ O desenho deve permitir adicioná-las posteriormente sem reabrir escrita no lega
 
 ## 4. Autoridade editorial
 
-O Portal mantém um estado persistente e auditável com apenas duas condições válidas:
+O Portal mantém a máquina de autoridade já existente. Os dois estados estáveis de
+escrita são:
 
 ```text
 legacy_writable
 payload_writable
 ```
 
-Estado ausente, desconhecido, contraditório ou ilegível deve fechar as escritas dos
-dois lados. A transição permitida no primeiro go-live é somente:
+Esses nomes descrevem o comportamento; no schema e no código existentes eles
+correspondem, respectivamente, aos modos `legacy` e `payload`.
+
+Os estados transitórios existentes `frozen` e `payload_frozen` permanecem válidos e
+fecham as escritas dos dois lados durante ativação ou recuperação. Estado ausente,
+desconhecido, contraditório ou ilegível também deve fechar ambas as escritas. A
+transição estável concluída pelo primeiro go-live é:
 
 ```text
 legacy_writable -> payload_writable
@@ -84,11 +90,11 @@ Todos os endpoints, jobs e caminhos internos capazes de criar, editar, publicar 
 excluir conteúdo legado devem verificar o estado no servidor. Ocultar controles no
 frontend não satisfaz o bloqueio.
 
-Antes da primeira publicação nativa, uma falha de ativação pode autorizar retorno
-controlado a `legacy_writable`, desde que nenhuma mutação Payload tenha sido aceita e
-que a reversão seja registrada. Depois da primeira publicação nativa, o floor é
-`payload_writable`: recuperação deve restaurar o Payload, nunca criar duas
-autoridades nem descartar o novo conteúdo.
+Antes da primeira mutação nativa aceita — inclusive criação de draft ou upload — uma
+falha de ativação pode autorizar retorno controlado a `legacy_writable`, desde que a
+ausência de mutações Payload seja comprovada e a reversão seja registrada. Depois da
+primeira mutação nativa, o floor é `payload_writable`: recuperação deve restaurar o
+Payload, nunca criar duas autoridades nem descartar o novo conteúdo.
 
 ## 5. Feed unificado
 
@@ -181,7 +187,7 @@ ambígua.
 - implementar a transição fechada de autoridade;
 - publicar `/editorial/admin` somente após readiness;
 - adicionar o dispatch manual protegido;
-- registrar o ponto de não retorno após a primeira publicação;
+- registrar o ponto de não retorno após a primeira mutação aceita;
 - documentar backup, restore, ativação, smoke e recuperação;
 - executar os checks automatizados e preparar a jornada real de aceite.
 
@@ -201,7 +207,8 @@ no mesmo ambiente.
 8. Publicar `/editorial/admin` e confirmar autenticação, autorização e readiness.
 9. Criar uma notícia de aceite, enviar mídia, salvar draft e publicar manualmente.
 10. Ler a notícia em sessão independente e conferir sua posição junto ao legado.
-11. Registrar a primeira mutação Payload como ponto de não retorno.
+11. Registrar a primeira mutação Payload aceita, incluindo draft ou upload, como
+    ponto de não retorno.
 12. Encerrar a janela, exigindo duração de no máximo 30 minutos.
 
 O GitHub deployment só recebe sucesso depois da jornada de editor e leitor. Falhas
