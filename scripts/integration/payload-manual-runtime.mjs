@@ -185,15 +185,17 @@ export async function main(env = process.env) {
       cmsChild = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(httpPort)], {
         cwd: path.join(root, 'cms'), env: cmsEnv(database, evidenceDirectory, selectedPort), stdio: ['ignore', 'ignore', 'ignore'],
       });
+      let lastStatus = 0;
       for (let attempt = 0; attempt < 180; attempt++) {
         if (cmsChild.exitCode !== null) throw new Error('manual_runtime_cms_start_failed')
         try {
           const response = await fetch(`http://127.0.0.1:${httpPort}/editorial/ready`, { signal: AbortSignal.timeout(1000) })
+          lastStatus = response.status
           if (response.status === 200 && (await response.json()).status === 'ready') return `http://127.0.0.1:${httpPort}`
         } catch { /* Retry only the owned loopback process. */ }
         await new Promise(resolve => setTimeout(resolve, 500))
       }
-      throw new Error('manual_runtime_cms_readiness_timeout')
+      throw new Error(lastStatus === 503 ? 'manual_runtime_cms_readiness_unavailable' : 'manual_runtime_cms_readiness_timeout')
     };
     const migrate = async database => command(process.execPath, ['node_modules/payload/bin.js', 'migrate'], {
       cwd: path.join(root, 'cms'), env: { ...cmsEnv(database, database === 'ownerinc_cms' ? directory : restored),
@@ -378,7 +380,7 @@ export async function main(env = process.env) {
     if (portalServer) await new Promise(resolve => portalServer.close(resolve)).catch(() => {});
     if (created) await docker(['stop', '--time', '30', container], { timeout: 45_000 }).catch(() => {});
     if (targetCreated) await docker(['stop', '--time', '30', targetContainer], { timeout: 45_000 }).catch(() => {});
-    const diagnostic = error instanceof Error && /^(?:CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+)$/u.test(error.message)
+    const diagnostic = error instanceof Error && /^(?:manual_runtime_[a-z0-9_]+|CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+)$/u.test(error.message)
       ? ` diagnostic=${error.message}` : '';
     process.stderr.write(`payload-manual-runtime: FAIL stage=${stage}; owned services stopped; private evidence retained${diagnostic}\n`);
     return 1;
