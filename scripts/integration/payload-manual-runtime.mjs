@@ -98,7 +98,11 @@ export async function main(env = process.env) {
     await docker(['version', '--format', '{{.Server.Version}}'], { timeout: 15_000 });
     await docker(['image', 'inspect', postgresImage], { timeout: 15_000 });
     step('source-network-create');
-    await docker(['network', 'create', '--internal', '--label', `ownerinc.manual-runtime=${marker}`, network]);
+    // Port publication is unavailable on a Docker --internal network. The
+    // dedicated bridge is created only after assertHostNetworkIsolated proves
+    // the Linux namespace has no IPv4/IPv6 default route, so it has no external
+    // egress path while still exposing random loopback ports to this driver.
+    await docker(['network', 'create', '--label', `ownerinc.manual-runtime=${marker}`, network]);
     step('source-volume-create');
     await docker(['volume', 'create', '--label', `ownerinc.manual-runtime=${marker}`, volume]);
     step('source-database-start');

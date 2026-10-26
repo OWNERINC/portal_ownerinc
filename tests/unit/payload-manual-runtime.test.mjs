@@ -52,6 +52,8 @@ test('Compose separates liveness from readiness and gates Nginx on CMS readiness
   assert.match(fixture, /PAYLOAD_MANUAL_RUNTIME_DISPOSABLE/u);
   assert.match(fixture, /next', 'start'/u);
   assert.match(fixture, /assertHostNetworkIsolated/u);
+  assert.match(fixture, /network', 'create', '--label'/u);
+  assert.doesNotMatch(fixture, /network', 'create', '--internal'/u);
   assert.match(nginx, /location = \/editorial\/ready \{ return 404; \}/u);
   assert.match(nginx, /location = \/editorial\/health \{ return 404; \}/u);
   assert.doesNotMatch(fixture, /compose[^\n]*down[^\n]*-v|system prune|volume prune/u);

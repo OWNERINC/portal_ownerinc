@@ -319,8 +319,10 @@ literal `PAYLOAD_MANUAL_RUNTIME_DISPOSABLE=1` e nunca imprime `PASS` nesse caso.
 Com opt-in, aceita somente Linux, recusa um namespace host com rota default IPv4
 ou IPv6, exige a imagem PostgreSQL 16 pinada já presente (`--pull never`) e cria
 nomes aleatórios rotulados para dois clusters/volumes próprios: origem e restore
-independente. A rede Docker é interna; as únicas portas publicadas são aleatórias
-em loopback. Senhas ficam em arquivos 0600 efêmeros, não em argv ou logs. O CMS é
+independente. A bridge Docker é exclusiva e criada somente após comprovar que o
+namespace host não possui rota default; assim ela não tem caminho de egress. As
+únicas portas publicadas são aleatórias em loopback. Senhas ficam em arquivos 0600
+efêmeros, não em argv ou logs. O CMS é
 compilado e servido com `next start`; o transporte loopback do actor Portal é um
 double bounded, enquanto cookie, autorização CMS e mutações REST Payload usam o
 servidor HTTP de produção.
