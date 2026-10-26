@@ -358,17 +358,37 @@ function publishedBodyText(row, legacyField = 'content') {
   return typeof row?.[legacyField] === 'string' ? row[legacyField] : '';
 }
 
-async function stablePublishedAnnouncements(pool) {
+function legacyBoundarySql(boundary, values) {
+  if (!boundary) return '';
+  if (boundary.published_at === null) {
+    if (boundary.source !== 'legacy') return ' AND FALSE';
+    values.push(boundary.id);
+    return ` AND d.published_at IS NULL AND d.id > $${values.length}::uuid`;
+  }
+  values.push(boundary.published_at);
+  const date = `$${values.length}`;
+  let sameDate = '';
+  if (boundary.source === 'legacy') {
+    values.push(boundary.id);
+    sameDate = ` OR (d.published_at = ${date}::timestamptz AND d.id > $${values.length}::uuid)`;
+  }
+  return ` AND (d.published_at IS NULL OR d.published_at < ${date}::timestamptz${sameDate})`;
+}
+
+async function stablePublishedAnnouncements(pool, { boundary = null } = {}) {
   await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const visible = await withTransaction(pool, async (db) => {
+    const values = [];
+    const boundarySql = legacyBoundarySql(boundary, values);
     const { rows } = await db.query(
       `SELECT d.id, d.title, d.category, d.published_at,
               r.id AS published_revision_id, r.blocks, r.editorial
          FROM cms_documents d
          JOIN cms_revisions r
            ON r.id = d.published_revision_id AND r.status = 'published'
-        WHERE d.content_type = 'announcement'
-        ORDER BY d.published_at DESC NULLS LAST, d.updated_at DESC, d.id`,
+         WHERE d.content_type = 'announcement'${boundarySql}
+         ORDER BY d.published_at DESC NULLS LAST, d.id`,
+      values,
     );
     const validations = await validatePublishedBlocksBatch(db, rows.map(row => row.blocks));
     const visible = rows.flatMap((row, index) => {
@@ -386,7 +406,8 @@ async function stablePublishedAnnouncements(pool) {
 
 function articleDTO({ blocks, published_revision_id: _publishedRevisionId, ...row }) {
   const editorial = row.editorial ?? null;
-  return { ...row, id: String(row.id).toLowerCase(), editorial, content_blocks: blocks,
+  return { ...row, source: 'legacy', id: String(row.id).toLowerCase(), editorial,
+    asset_scope: 'legacy', content_blocks: blocks,
     read_time_minutes: estimateNewsReadTime(blocks, editorial) };
 }
 
@@ -405,8 +426,8 @@ async function listPublishedAnnouncementCategories(pool, { kind, withCounts = fa
   return withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
 }
 
-async function listPublishedAnnouncements(pool, limit, offset, category, kind) {
-  const stable = selectAnnouncements(await stablePublishedAnnouncements(pool), category, kind);
+async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null) {
+  const stable = selectAnnouncements(await stablePublishedAnnouncements(pool, { boundary }), category, kind);
   return {
     count: stable.length,
     rows: stable.slice(offset, offset + limit),
@@ -422,7 +443,7 @@ async function getPublishedAnnouncementNavigation(pool, id, category) {
   const articles = selectAnnouncements(rows, category, 'article');
   const at = articles.findIndex(row => row.id === id);
   if (at < 0) return null;
-  const item = row => row ? { id: row.id, title: row.title } : null;
+  const item = row => row ? { source: 'legacy', id: row.id, title: row.title } : null;
   return { previous: item(articles[at - 1]), next: item(articles[at + 1]) };
 }
 

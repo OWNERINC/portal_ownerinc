@@ -12,7 +12,9 @@ const require = createRequire(import.meta.url);
 const { createNewsBackend } = require('../../api/owner-news/backend.js');
 const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false };
 const { createPayloadNewsClient } = require('../../api/owner-news/payload-client.js');
+const { payloadRuntimeState } = require('../../api/owner-news/payload-client.js');
 const { readNewsDTO, readNewsPage, readResult } = require('../../api/owner-news/payload-dto.js');
+const { decodeNewsCursor } = require('../../api/owner-news/feed.js');
 const apiRequire = createRequire(new URL('../../api/package.json', import.meta.url));
 const express = apiRequire('express'), supertest = apiRequire('supertest');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -22,6 +24,12 @@ const dto = (n = 1) => ({ source: 'payload', id: id(n), title: `Article ${n}`, c
 const clientFor = (fetchImpl, options = {}) => createPayloadNewsClient({ baseURL: 'http://cms.invalid', secret, fetchImpl, ...options });
 function appFor(fetchImpl, mode = 'payload') {
   const calls = [], pool = { async query(sql) { calls.push(sql); return { rows: [{ mode, epoch: 1 }] }; } };
+  const legacyDto = { ...dto(), source: 'legacy', asset_scope: 'legacy' };
+  const legacyReader = {
+    async listPublishedAnnouncements(_pool, limit, _offset, _category, kind) { return { rows: kind === 'article' && limit === 101 ? [legacyDto] : [], count: kind === 'article' && limit === 101 ? 1 : 0 }; },
+    async listPublishedAnnouncementCategories(_pool, input) { return input.withCounts ? { total: 0, categories: [] } : []; },
+    async getPublishedAnnouncement() { return legacyDto; },
+  };
   const filename = fileURLToPath(new URL('../../api/routes/announcements.js', import.meta.url));
   const mod = new Module(filename), local = createRequire(filename);
   const authenticate = (req, res, next) => {
@@ -31,19 +39,75 @@ function appFor(fetchImpl, mode = 'payload') {
   mod.require = name => name === '../db' ? pool : name === '../middleware/auth' ? { authMiddleware: authenticate } : name === './owner-news-polls' ? express.Router().get('/', (_req, res) => res.json({ polls: true })) : local(name);
   mod._compile(readFileSync(filename, 'utf8'), filename);
   const app = express();
-  app.use('/api/announcements', mod.exports.createAnnouncementsRouter({ backend: createNewsBackend({ pool, payloadClient: clientFor(fetchImpl) }), authenticate }));
+  app.use('/api/announcements', mod.exports.createAnnouncementsRouter({ backend: createNewsBackend({ pool, payloadClient: clientFor(fetchImpl), legacyReader, homeReader: async () => null }), authenticate }));
   app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code || 'safe' }));
   return { app, api: supertest(app), calls };
 }
-test('Payload outage never falls back to legacy content', async () => {
-  let legacyQueries = 0;
-  const pool = { async query(sql) {
-    if (sql.includes('owner_news_authority')) return { rows: [{ mode: 'payload', epoch: 2 }] };
-    legacyQueries++; throw new Error('legacy read forbidden');
-  } };
-  const backend = createNewsBackend({ pool, payloadClient: { async query() { throw new Error('private storage path'); } } });
-  await assert.rejects(backend.list({ limit: 24, offset: 0 }, actor), error => error.status === 503 && error.message === 'news_unavailable');
-  assert.equal(legacyQueries, 0);
+test('composite reads coexist in every authority mode and one-source failures degrade without changing authority', async () => {
+  for (const mode of ['legacy', 'payload']) {
+    const calls = [];
+    const pool = { async query(sql) { calls.push(sql); return { rows: [{ mode, epoch: 2 }] }; } };
+    const backend = createNewsBackend({ pool,
+      legacyReader: { async listPublishedAnnouncements() { return { rows: [{ ...dto(1), source: 'legacy', asset_scope: 'legacy' }], count: 1 }; } },
+      payloadClient: { async query(action) { assert.equal(action, 'list'); return { rows: [dto(2)], count: 1 }; } },
+    });
+    const result = await backend.list({ limit: 24, offset: 0 }, actor, { requestId: 'dual-read' });
+    assert.equal(result.readState, 'complete');
+    assert.deepEqual(result.value.rows.map(row => row.source), ['legacy', 'payload']);
+    assert.equal(calls.filter(sql => sql.includes('owner_news_authority')).length, 1);
+    assert.equal(calls.some(sql => /UPDATE|INSERT/u.test(sql)), false, 'reads never transition authority or release a writer');
+  }
+
+  const logs = [];
+  const degraded = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 3 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { return { rows: [{ ...dto(3), source: 'legacy', asset_scope: 'legacy' }], count: 1 }; } },
+    payloadClient: { async query() { throw new Error('private storage path'); } },
+    logger: line => logs.push(JSON.parse(line)),
+  });
+  const first = await degraded.list({ limit: 1, offset: 0 }, actor, { requestId: 'safe-id' });
+  assert.equal(first.readState, 'degraded');
+  assert.equal(first.value.nextCursor, null);
+  assert.deepEqual(logs, [{ code: 'owner_news_read_degraded', action: 'list', source: 'payload', requestId: 'safe-id' }]);
+
+  const payloadOnly = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'legacy', epoch: 4 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { throw new Error('private database detail'); } },
+    payloadClient: { async query() { return { rows: [dto(4)], count: 1 }; } },
+    logger() {},
+  });
+  const second = await payloadOnly.list({ limit: 1, offset: 0 }, actor);
+  assert.equal(second.readState, 'degraded');
+  assert.deepEqual(second.value.rows.map(row => row.source), ['payload']);
+  assert.equal(second.value.nextCursor, null);
+});
+
+test('cursor degradation requires restart, double failure is unavailable, and unreadable authority touches no source', async () => {
+  const filters = {}, cursor = require('../../api/owner-news/feed.js').encodeNewsCursor({ source: 'legacy', id: id(1), published_at: null }, filters);
+  const base = { pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { return { rows: [], count: 0 }; } } };
+  const partial = createNewsBackend({ ...base, payloadClient: { async query() { throw new Error('offline'); } }, logger() {} });
+  await assert.rejects(partial.list({ limit: 10, offset: 0, boundary: require('../../api/owner-news/feed.js').decodeNewsCursor(cursor, filters) }, actor), e => e.status === 503 && e.code === 'news_page_restart_required');
+  const double = createNewsBackend({ ...base, legacyReader: { async listPublishedAnnouncements() { throw new Error('db'); } }, payloadClient: { async query() { throw new Error('cms'); } }, logger() {} });
+  await assert.rejects(double.list({ limit: 10, offset: 0 }, actor), e => e.status === 503 && e.code === 'news_unavailable');
+  let touched = 0;
+  const closed = createNewsBackend({ pool: { async query() { throw new Error('authority'); } }, legacyReader: { async listPublishedAnnouncements() { touched++; } }, payloadClient: { async query() { touched++; } } });
+  await assert.rejects(closed.list({ limit: 10, offset: 0 }, actor), e => e.status === 503);
+  assert.equal(touched, 0);
+});
+
+test('detail and asset reads are source-directed and preserve 404/403 without fallback', async () => {
+  const calls = [];
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async getPublishedAnnouncement() { calls.push('legacy-detail'); return null; } },
+    payloadClient: { async query() { calls.push('payload-detail'); throw Object.assign(new Error('not_found'), { status: 404 }); }, async asset() { calls.push('payload-asset'); throw Object.assign(new Error('forbidden'), { status: 403 }); } },
+    legacyAssetReader: async () => { calls.push('legacy-asset'); return {}; },
+  });
+  await assert.rejects(backend.detail({ id: id(1), source: 'payload' }, actor), e => e.status === 404);
+  assert.deepEqual(calls, ['payload-detail']);
+  await assert.rejects(backend.asset({ id: id(1), preview: false, range: null, source: 'payload' }, actor), e => e.status === 403);
+  assert.deepEqual(calls, ['payload-detail', 'payload-asset']);
 });
 test('authority is refreshed each operation; missing/invalid control fails closed', async () => {
   let mode = 'payload', reads = 0;
@@ -52,12 +116,40 @@ test('authority is refreshed each operation; missing/invalid control fails close
   mode = 'missing'; await assert.rejects(backend.home({}, actor), e => e.status === 503);
   assert.equal(reads, 2);
 });
-test('legacy dependency failures are also controlled 503 without private database diagnostics', async () => {
+test('legacy dependency failure returns intentionally inactive Payload as degraded empty', async () => {
   const pool = { async query(sql) {
     if (sql.includes('owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
     throw new Error('postgres private detail');
   } };
-  await assert.rejects(createNewsBackend({ pool }).home({}, actor), e => e.status === 503 && e.message === 'news_unavailable');
+  const result = await createNewsBackend({ pool, logger() {} }).home({}, actor);
+  assert.deepEqual(result, { value: { content: null }, readState: 'degraded' });
+});
+test('Payload runtime configuration distinguishes intentional inactivity, partial config and fail-closed modes', () => {
+  assert.equal(payloadRuntimeState({ mode: 'legacy' }), 'inactive');
+  assert.equal(payloadRuntimeState({ mode: 'frozen', baseURL: '', secret: '' }), 'inactive');
+  assert.equal(payloadRuntimeState({ mode: 'legacy', baseURL: 'http://cms.invalid' }), 'unavailable');
+  assert.equal(payloadRuntimeState({ mode: 'payload' }), 'unavailable');
+  assert.equal(payloadRuntimeState({ mode: 'payload_frozen', baseURL: 'http://cms.invalid', secret }), 'active');
+  assert.equal(payloadRuntimeState({ mode: 'legacy', suppliedClient: true }), 'active');
+});
+test('intentionally inactive Payload preserves bounded legacy offset pagination', async () => {
+  const calls = [];
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'legacy', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements(_pool, limit, offset) {
+      calls.push({ limit, offset });
+      return { count: 500, rows: [
+        { ...dto(201), source: 'legacy', asset_scope: 'legacy' },
+        { ...dto(202), source: 'legacy', asset_scope: 'legacy' },
+        { ...dto(203), source: 'legacy', asset_scope: 'legacy' },
+      ] };
+    } },
+  });
+  const result = await backend.list({ limit: 2, offset: 200 }, actor);
+  assert.deepEqual(calls, [{ limit: 3, offset: 200 }]);
+  assert.deepEqual(result.value.rows.map(row => row.id), [id(201), id(202)]);
+  assert.ok(result.value.nextCursor);
+  assert.equal(result.readState, 'complete');
 });
 test('JSON transport uses fixed POST paths, exact actor/input, isolated headers and strict DTOs', async () => {
   const client = clientFor(async (url, init) => {
@@ -128,24 +220,25 @@ test('Express HTTP preserves list/envelopes/filter validation and uses current u
     const request = JSON.parse(init.body); seen.push(request); const action = url.split('/').at(-1);
     assert.equal(request.actor.uid, 'verified-user'); assert.equal(init.headers['X-Request-ID'], 'test-request');
     if (action === 'list') return Response.json({ rows: [dto()], count: 7 });
-    if (action === 'categories') return Response.json([]);
+    if (action === 'categories') return Response.json({ total: 0, categories: [] });
     if (action === 'home') return Response.json({ content: null });
     if (action === 'navigation') return Response.json({ previous: null, next: null });
     return Response.json({ ...dto(), asset_scope: action === 'preview' ? 'owner-news-preview' : 'owner-news' });
   });
   const get = (path, who = 'reader') => api.get(`/api/announcements${path}`).set('Authorization', `Bearer ${who}`);
-  const page = await get('?limit=1&offset=2&category=&kind=article').expect(200);
+  const page = await get('?limit=1&offset=0&category=&kind=article').expect(200);
   assert.equal(page.headers['x-total-count'], '7'); assert.equal(page.body.length, 1);
-  assert.deepEqual(seen[0].input, { limit: 1, offset: 2, category: '', kind: 'article' });
+  assert.deepEqual(seen[0].input, { limit: 2, offset: 0, category: '', kind: 'article' });
+  assert.equal(page.headers['x-owner-news-read-state'], 'complete');
   await get('/categories').expect(200); assert.deepEqual((await get('/home').expect(200)).body, { content: null });
   await get(`/${id(1)}/navigation`).expect(200);
-  assert.equal((await get(`/${id(1)}`, 'editor').expect(200)).body.content_blocks[0].text, 'Published A');
+  assert.equal((await get(`/${id(1)}?source=payload`, 'editor').expect(200)).body.content_blocks[0].text, 'Published A');
   assert.equal(seen.at(-1).actor.canManageNews, true);
   await get(`/preview/${id(1)}?version=${id(2)}`).expect(403);
-  await get(`/preview/${id(1)}?version=${id(2)}&source=legacy`, 'editor').expect(200);
-  assert.equal(seen.at(-1).input.source, 'legacy');
+  await get(`/preview/${id(1)}?version=${id(2)}&source=payload`, 'editor').expect(200);
+  assert.equal(seen.at(-1).input.source, 'payload');
   const before = seen.length;
-  for (const path of ['?limit=0', '?category=x&category=y', '?actor=evil', '/home?draft=true', '/assets/bad', `/${id(1)}?source=legacy`, `/preview/${id(1)}`, `/preview/${id(1)}?version=${id(2)}&source=other`]) await get(path, 'editor').expect(400);
+  for (const path of ['?limit=0', '?category=x&category=y', '?actor=evil', '/home?draft=true', '/assets/bad', `/${id(1)}?source=other`, `/preview/${id(1)}`, `/preview/${id(1)}?version=${id(2)}&source=other`]) await get(path, 'editor').expect(400);
   await get('').send({ actor: { canManageNews: true } }).expect(400);
   await api.get('/api/announcements').expect(401);
   assert.equal(seen.length, before);
@@ -154,9 +247,31 @@ test('Express HTTP preserves list/envelopes/filter validation and uses current u
 test('Express HTTP maps missing publication and dependency failure without exposing private CMS error', async () => {
   for (const status of [404, 500, 503]) {
     const { api } = appFor(async () => Response.json({ private: 'storage/secret' }, { status }));
-    const response = await api.get(`/api/announcements/${id(1)}`).set('Authorization', 'Bearer reader').expect(status === 404 ? 404 : 503);
+    const response = await api.get(`/api/announcements/${id(1)}?source=payload`).set('Authorization', 'Bearer reader').expect(status === 404 ? 404 : 503);
     assert.equal(response.body.reason, status === 404 ? 'not_found' : 'news_unavailable'); assert.doesNotMatch(JSON.stringify(response.body), /storage\/secret/);
   }
+});
+test('Express list emits an opaque next cursor, sends only its typed boundary upstream, and requires restart on degradation', async () => {
+  let calls = 0;
+  const { api } = appFor(async (_url, init) => {
+    calls++;
+    const input = JSON.parse(init.body).input;
+    if (calls === 1) {
+      assert.equal(Object.hasOwn(input, 'boundary'), false);
+      return Response.json({ rows: [dto(1), dto(2)], count: 2 });
+    }
+    assert.deepEqual(input.boundary, { source: 'payload', id: id(1), published_at: dto(1).published_at });
+    return Response.json({ rows: [], count: 2 });
+  });
+  const first = await api.get('/api/announcements?limit=1&offset=0').set('Authorization', 'Bearer reader').expect(200);
+  const cursor = first.headers['x-owner-news-next-cursor'];
+  assert.deepEqual(decodeNewsCursor(cursor, {}), { source: 'payload', id: id(1), published_at: dto(1).published_at });
+  await api.get(`/api/announcements?limit=1&offset=0&cursor=${encodeURIComponent(cursor)}`).set('Authorization', 'Bearer reader').expect(200);
+
+  const unavailable = appFor(async () => Response.json({ private: 'no' }, { status: 500 })).api;
+  const restart = await unavailable.get(`/api/announcements?limit=1&offset=0&cursor=${encodeURIComponent(cursor)}`).set('Authorization', 'Bearer reader').expect(503);
+  assert.equal(restart.body.reason, 'news_page_restart_required');
+  assert.equal(restart.headers['x-owner-news-next-cursor'], undefined);
 });
 test('asset stream enforces headers, byte limits, Range and cancellation without JSON buffering', async () => {
   const headers = { 'content-type': 'application/pdf', 'content-length': '4', 'content-disposition': 'inline; filename="test.pdf"', 'accept-ranges': 'bytes', 'content-range': 'bytes 1-4/10' };
@@ -205,16 +320,16 @@ test('legacy/frozen preview uses exact original IDs only; public asset never gai
   const editor = { ...actor, canManageNews: true }, backend = createNewsBackend({ pool });
   try {
     await mkdir(path.join(directory, 'cms-private')); await writeFile(path.join(directory, 'cms-private', asset.storage_key), '%PDF-12345');
-    const preview = await backend.preview({ id: id(1), versionId: id(2), source: 'legacy' }, editor);
+    const preview = (await backend.preview({ id: id(1), versionId: id(2), source: 'legacy' }, editor)).value;
     assert.equal(preview.id, id(1)); assert.equal(preview.asset_scope, 'owner-news-preview'); assert.equal(preview.read_time_minutes, null);
     assert.deepEqual(preview.preview_revision, { id: id(2), source: 'legacy', status: 'published' });
-    await assert.rejects(backend.preview({ id: id(1), versionId: id(2), source: 'payload' }, editor), e => e.status === 404);
+    await assert.rejects(backend.preview({ id: id(1), versionId: id(2), source: 'payload' }, editor), e => e.status === 503);
     await assert.rejects(backend.preview({ id: id(3), versionId: id(2), source: 'legacy' }, editor), e => e.status === 404);
-    const result = await backend.asset({ id: asset.id, preview: false, range: 'bytes=0-4' }, editor);
+    const result = (await backend.asset({ id: asset.id, preview: false, range: 'bytes=0-4', source: 'legacy' }, editor)).value;
     assert.equal(result.status, 206); assert.equal(await new Response(result.body).text(), '%PDF-');
-    assert.equal((await backend.asset({ id: asset.id, preview: false, range: 'bytes=-0' }, actor)).status, 416);
+    assert.equal((await backend.asset({ id: asset.id, preview: false, range: 'bytes=-0', source: 'legacy' }, actor)).value.status, 416);
     const before = calls.length;
-    await assert.rejects(backend.asset({ id: asset.id, preview: true, range: null }, actor), e => e.status === 403);
+    await assert.rejects(backend.asset({ id: asset.id, preview: true, range: null, source: 'legacy' }, actor), e => e.status === 403);
     assert.equal(calls.length, before);
   } finally { if (previous === undefined) delete process.env.UPLOAD_DIR; else process.env.UPLOAD_DIR = previous; await rm(directory, { recursive: true, force: true }); }
 });

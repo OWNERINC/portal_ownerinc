@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createFeedbackHarness, deferred, drain, TestEvent } from '../helpers/frontend-feedback-harness.mjs';
+import { readFile } from 'node:fs/promises';
 
 const modules = [
   { path: 'public/js/cms-block-renderer.js', exports: 'renderBlocks, cleanupRenderedBlocks, validateBlocks' },
@@ -10,6 +11,13 @@ const modules = [
 const asset = '11111111-1111-4111-8111-111111111111';
 const pdf = '22222222-2222-4222-8222-222222222222';
 const editorial = { version: 1, kind: 'article', summary: 'Resumo.', author: 'Redação', source_label: '', source_date: null };
+test('legacy reader exposes source-aware DTOs and applies the global keyset boundary before slicing', async () => {
+  const source = await readFile('api/cms/reader.js', 'utf8');
+  assert.match(source, /source:\s*'legacy'/u);
+  assert.match(source, /asset_scope:\s*'legacy'/u);
+  assert.match(source, /boundary/u);
+  assert.match(source, /published_at/u);
+});
 test('anterior/próxima mantém um único retorno ao catálogo', async () => {
   const base = 'https://portal.test/announcements.html?category=Cultura&offset=24';
   const h = await createFeedbackHarness('announcements', { mount: false, url: base, modules: [

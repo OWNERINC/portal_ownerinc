@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { compareNews, encodeNewsCursor, decodeNewsCursor, mergeNewsPages } = require('../../api/owner-news/feed.js');
+const { createNewsBackend } = require('../../api/owner-news/backend.js');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const item = (source, n, published_at = '2026-10-01T00:00:00.000Z') => ({ source, id: id(n), published_at });
 const filters = { category: 'Updates', kind: 'article' };
@@ -62,3 +63,46 @@ test('101 source rows preserve continuation at the public maximum page size of 1
   assert.deepEqual(decodeNewsCursor(page.nextCursor, {}), page.rows[99]);
   assert.equal(page.rows.at(-1).id, id(100));
 });
+
+test('composite categories sum exact normalized names and home prefers valid Payload content', async () => {
+  const home = { version: 1, eyebrow: 'Payload', headline: 'Principal', summary: 'Resumo' };
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'legacy', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncementCategories() { return { total: 3, categories: [{ name: 'A', count: 2 }, { name: 'B', count: 1 }] }; } },
+    homeReader: async () => ({ version: 1, eyebrow: 'Legado', headline: 'Anterior', summary: 'Resumo' }),
+    payloadClient: { async query(action) { return action === 'categories' ? { total: 4, categories: [{ name: 'A', count: 1 }, { name: 'C', count: 3 }] } : { content: home }; } },
+  });
+  assert.deepEqual((await backend.categories({ withCounts: true }, actor)).value, { total: 7, categories: [{ name: 'A', count: 3 }, { name: 'B', count: 1 }, { name: 'C', count: 3 }] });
+  assert.deepEqual((await backend.home({}, actor)).value, { content: home });
+});
+
+test('global navigation keeps colliding UUIDs distinct and degrades only when the non-current source fails', async () => {
+  const shared = id(7);
+  const legacyRows = [{ source: 'legacy', id: shared, title: 'Legacy twin', published_at: '2026-10-02T00:00:00.000Z' }];
+  const payloadRows = [
+    { source: 'payload', id: shared, title: 'Payload twin', published_at: '2026-10-02T00:00:00.000Z', editorial: null },
+    { source: 'payload', id: id(8), title: 'Older', published_at: '2026-10-01T00:00:00.000Z', editorial: null },
+  ];
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: {
+      async getPublishedAnnouncement() { return legacyRows[0]; },
+      async listPublishedAnnouncements() { return { rows: legacyRows, count: 1 }; },
+    },
+    payloadClient: {
+      async query(action, input) {
+        if (action === 'detail') return payloadRows[0];
+        assert.equal(input.kind, 'article');
+        return { rows: payloadRows, count: 2 };
+      },
+    },
+  });
+  const result = await backend.navigation({ id: shared, source: 'payload' }, actor);
+  assert.equal(result.readState, 'complete');
+  assert.deepEqual(result.value, {
+    previous: { source: 'legacy', id: shared, title: 'Legacy twin' },
+    next: { source: 'payload', id: id(8), title: 'Older' },
+  });
+});
+
+const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false };

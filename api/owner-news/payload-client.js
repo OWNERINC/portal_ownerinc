@@ -3,6 +3,13 @@ const { validInput, validActor, readResult, unavailable } = require('./payload-d
 const MiB = 1024 * 1024;
 const paths = Object.freeze(Object.fromEntries(['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset'].map(action => [action, `/editorial/api/portal-news/${action}`])));
 const safeError = status => Object.assign(new Error(status === 503 ? 'news_unavailable' : status === 404 ? 'not_found' : 'forbidden'), { status, code: status === 503 ? 'news_unavailable' : status === 404 ? 'not_found' : 'forbidden' });
+function payloadRuntimeState({ mode, baseURL, secret, suppliedClient = false }) {
+  if (suppliedClient) return 'active';
+  const hasURL = typeof baseURL === 'string' && baseURL.length > 0;
+  const hasSecret = typeof secret === 'string' && secret.length > 0;
+  if (!hasURL && !hasSecret && ['legacy', 'frozen'].includes(mode)) return 'inactive';
+  return hasURL && hasSecret ? 'active' : 'unavailable';
+}
 function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch, timeoutMs = 5000 }) {
   let origin;
   try {
@@ -91,4 +98,4 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
   }
   return { query, asset };
 }
-module.exports = { createPayloadNewsClient };
+module.exports = { createPayloadNewsClient, payloadRuntimeState };

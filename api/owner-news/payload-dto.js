@@ -33,6 +33,11 @@ function validInput(action, value) {
     default: return false;
   }
 }
+function validPublicInput(action, value) {
+  if (!['detail', 'navigation', 'asset'].includes(action)) return validInput(action, value);
+  if (!record(value) || !['legacy', 'payload'].includes(value.source)) return false;
+  return validInput(action, Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'source')));
+}
 function https(value) {
   assert(text(value, 2048, false));
   let url; try { url = new URL(value); } catch { throw unavailable(); }
@@ -121,4 +126,4 @@ function readResult(action, json, input) {
   } else throw unavailable();
   return json;
 }
-module.exports = { readNewsDTO, readNewsPage, readResult, validInput, validActor, unavailable };
+module.exports = { readNewsDTO, readNewsPage, readResult, validInput, validPublicInput, validActor, unavailable };
