@@ -89,10 +89,18 @@ test('API fixtures are GET/HEAD-only, explicit, and include visible page content
   assert.deepEqual(benefitCategories.body, ['Synthetic QA']);
   assert.equal(benefitCategories.total, undefined);
 
+  const announcements = resolveRouteRecoveryAPI({
+    url: 'http://127.0.0.1:8080/api/announcements?kind=article&limit=3',
+  });
+  assert.equal(announcements.body[0].source, 'legacy');
+  assert.equal(announcements.body[0].asset_scope, 'legacy');
+
   const preview = resolveRouteRecoveryAPI({
     url: `http://127.0.0.1:8080/api/announcements/preview/${PREVIEW_ID}?version=${PREVIEW_VERSION}&source=payload`,
   });
   assert.equal(preview.kind, 'fixture');
+  assert.equal(preview.body.source, 'payload');
+  assert.equal(preview.body.asset_scope, 'owner-news-preview');
   assert.equal(preview.body.content_blocks[0].nodes[0].children[0].text, 'Synthetic saved preview body.');
 
   const punches = resolveRouteRecoveryAPI({
