@@ -2,7 +2,7 @@ const { getAuthority } = require('./authority');
 const legacy = require('../cms/reader');
 const { getPublishedHome } = require('./home');
 const { createPayloadNewsClient, payloadRuntimeState } = require('./payload-client');
-const { validPublicInput, unavailable } = require('./payload-dto');
+const { validPublicInput, readResult, unavailable } = require('./payload-dto');
 const { compareNews, encodeNewsCursor, assertUniqueNewsRows } = require('./feed');
 const { validateNewsRevision, announcementKind, estimateNewsReadTime } = require('./editorial');
 const { lockCmsAssets } = require('../cms/locks');
@@ -105,10 +105,19 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
 
   async function capture(source, work) {
     try { return { source, ok: true, value: await work() }; }
-    catch (error) {
-      if (error?.code === 'news_duplicate_identity') throw error;
-      return { source, ok: false };
-    }
+    catch { return { source, ok: false }; }
+  }
+
+  async function captureList(source, work) {
+    return capture(source, async () => {
+      const value = await work();
+      assertUniqueNewsRows(source, value?.rows);
+      return value;
+    });
+  }
+
+  async function captureCategories(source, work, input) {
+    return capture(source, async () => readResult('categories', await work(), input));
   }
 
   function inactiveValue(action, input) {
@@ -144,12 +153,11 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
     if (action === 'list') {
       if (payloadState(currentAuthority) === 'inactive') {
         const results = await Promise.all([
-          capture('legacy', () => legacyReader.listPublishedAnnouncements(pool, input.limit + 1, input.offset, input.category, input.kind, input.boundary)),
+          captureList('legacy', () => legacyReader.listPublishedAnnouncements(pool, input.limit + 1, input.offset, input.category, input.kind, input.boundary)),
           Promise.resolve({ source: 'payload', ok: true, value: { rows: [], count: 0 } }),
         ]);
         return finishComposite(action, results, options, values => {
           const legacyPage = values.find(value => value.source === 'legacy' && value.ok)?.value || { rows: [], count: 0 };
-          assertUniqueNewsRows('legacy', legacyPage.rows);
           const rows = legacyPage.rows.slice(0, input.limit);
           return { rows, count: legacyPage.count,
             nextCursor: legacyPage.rows.length > input.limit && rows.length
@@ -162,12 +170,11 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
         ...(input.kind === undefined ? {} : { kind: input.kind }),
         ...(input.boundary ? { boundary: input.boundary } : {}) };
       const results = await Promise.all([
-        capture('legacy', () => legacyReader.listPublishedAnnouncements(pool, wanted, 0, input.category, input.kind, input.boundary, { exactTotal: false })),
-        capture('payload', () => payloadComposite('list', sourceInput, actor, options, currentAuthority)),
+        captureList('legacy', () => legacyReader.listPublishedAnnouncements(pool, wanted, 0, input.category, input.kind, input.boundary, { exactTotal: false })),
+        captureList('payload', () => payloadComposite('list', sourceInput, actor, options, currentAuthority)),
       ]);
       return finishComposite(action, results, options, values => {
         const bySource = Object.fromEntries(values.filter(v => v.ok).map(v => [v.source, v.value]));
-        for (const source of ['legacy', 'payload']) if (bySource[source]) assertUniqueNewsRows(source, bySource[source].rows);
         const rows = [...(bySource.legacy?.rows || []), ...(bySource.payload?.rows || [])].sort(compareNews);
         const start = input.offset, page = rows.slice(start, start + input.limit);
         const hasMore = rows.length > start + input.limit;
@@ -180,8 +187,8 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
     if (action === 'categories') {
       const sourceInput = { withCounts: true, ...(input.kind === undefined ? {} : { kind: input.kind }) };
       const results = await Promise.all([
-        capture('legacy', () => legacyReader.listPublishedAnnouncementCategories(pool, sourceInput)),
-        capture('payload', () => payloadComposite('categories', sourceInput, actor, options, currentAuthority)),
+        captureCategories('legacy', () => legacyReader.listPublishedAnnouncementCategories(pool, sourceInput), sourceInput),
+        captureCategories('payload', () => payloadComposite('categories', sourceInput, actor, options, currentAuthority), sourceInput),
       ]);
       return finishComposite(action, results, options, values => {
         const counts = new Map(); let total = 0;
@@ -190,6 +197,8 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
           for (const category of result.value.categories) counts.set(category.name, (counts.get(category.name) || 0) + category.count);
         }
         const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, count]) => ({ name, count }));
+        if (!Number.isSafeInteger(total) || categories.length > 10000
+          || Buffer.byteLength(JSON.stringify({ total, categories }), 'utf8') > 1024 * 1024) throw unavailable();
         return input.withCounts ? { total, categories } : categories.map(category => category.name);
       });
     }
@@ -248,6 +257,9 @@ function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeRea
   }
 
   async function scanSourceNeighbors(source, input, current, actor, options, currentAuthority) {
+    if (source === 'payload' && payloadState(currentAuthority) === 'inactive') {
+      return { previous: null, next: null, currentFound: false };
+    }
     const seen = new Set();
     const budget = { pages: 0, rawRows: 0, batches: 0 };
     let boundary = null, previous = null, currentFound = false;

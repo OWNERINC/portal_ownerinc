@@ -77,7 +77,8 @@ test('list pushes canonical filters, keyset order and storage limit without mate
     db: { sessions: { live: { db: { async execute() {} } } } },
     async find(options: any) {
       calls.push(options)
-      return { docs: Array.from({ length: 101 }, (_, index) => document(index + 2, { category: 'News' })), hasNextPage: true }
+      const start = 2 + (calls.length - 1) * 4
+      return { docs: Array.from({ length: 4 }, (_, index) => document(start + index, { category: 'News' })), hasNextPage: true }
     },
   } as unknown as PayloadRequest['payload']
   const boundary = { published_at: '2026-10-01T00:00:00.000Z', source: 'payload' as const, id: id(1) }
@@ -85,10 +86,9 @@ test('list pushes canonical filters, keyset order and storage limit without mate
   assert.equal(page.rows.length, 101)
   assert.equal(page.rows[0].id, id(2)); assert.equal(page.rows.at(-1)?.id, id(102))
   assert.equal(page.count, null)
-  assert.deepEqual(page.scan, { rawRows: 101, batches: 1 })
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].limit, 101)
-  assert.equal(calls[0].page, 1)
+  assert.deepEqual(page.scan, { rawRows: 104, batches: 26 })
+  assert.equal(calls.length, 26)
+  assert.ok(calls.every(call => call.limit === 4 && call.page === 1))
   assert.deepEqual(calls[0].sort, ['-publishedAt', 'id'])
   assert.deepEqual(calls[0].where, { and: [
     { _status: { equals: 'published' } },
@@ -103,10 +103,10 @@ test('list pushes canonical filters, keyset order and storage limit without mate
 })
 test('list scans invalid rows with moving bounded raw keysets and exact exhaustion only at completion', async () => {
   const calls: any[] = []
-  const invalid = Array.from({ length: 101 }, (_, index) => document(index + 1, {
+  const invalid = Array.from({ length: 4 }, (_, index) => document(index + 1, {
     publishedAt: null, body: [{ blockType: 'unknown' }], category: 'News',
   }))
-  const final = [document(102, { publishedAt: null, category: 'News' }), document(103, { publishedAt: null, category: 'News' })]
+  const final = [document(5, { publishedAt: null, category: 'News' }), document(6, { publishedAt: null, category: 'News' })]
   const req = { transactionID: 'live' } as PayloadRequest
   req.payload = {
     db: { sessions: { live: { db: { async execute() {} } } } },
@@ -117,15 +117,15 @@ test('list scans invalid rows with moving bounded raw keysets and exact exhausti
   } as unknown as PayloadRequest['payload']
   const result = await queryPublishedNews(req, { limit: 2, offset: 0, category: 'News', scan: fullScan,
     boundary: { published_at: null, source: 'legacy', id: id(999) } }, actor)
-  assert.deepEqual(result.rows.map(row => row.id), [id(102), id(103)])
+  assert.deepEqual(result.rows.map(row => row.id), [id(5), id(6)])
   assert.equal(result.count, 2)
-  assert.deepEqual(result.scan, { rawRows: 103, batches: 2 })
+  assert.deepEqual(result.scan, { rawRows: 6, batches: 2 })
   assert.equal(calls.length, 2)
-  assert.ok(calls.every(call => call.limit === 101 && call.page === 1 && call.sort === 'id'))
+  assert.ok(calls.every(call => call.limit === 4 && call.page === 1 && call.sort === 'id'))
   assert.deepEqual(calls[0].where, { and: [
     { _status: { equals: 'published' } }, { category: { equals: 'News' } }, { publishedAt: { equals: null } },
   ] })
-  assert.deepEqual(calls[1].where.and.at(-1), { id: { greater_than: id(101) } })
+  assert.deepEqual(calls[1].where.and.at(-1), { id: { greater_than: id(4) } })
   assert.equal(new Set(result.rows.map(row => row.id)).size, 2)
 })
 test('list transitions from dated to null rows and honors legacy/Payload equal-timestamp boundary phases', async () => {
@@ -178,6 +178,62 @@ test('list fails closed when a storage page claims continuation without raw keys
     error => error instanceof APIError && error.status === 503)
   assert.equal(calls, 1)
 })
+test('list enforces the fixed aggregate DTO budget while storage reads stay at four raw documents', async () => {
+  const largeBody = Array.from({ length: 100 }, () => ({ blockType: 'paragraph', text: 'x'.repeat(5000) }))
+  const docs = Array.from({ length: 70 }, (_, index) => document(index + 1, { body: largeBody }))
+  const calls: any[] = []
+  const req = { transactionID: 'live' } as PayloadRequest
+  req.payload = {
+    db: { sessions: { live: { db: { async execute() {} } } } },
+    async find(options: any) {
+      calls.push(options); const start = (calls.length - 1) * 4
+      return { docs: docs.slice(start, start + 4), hasNextPage: start + 4 < docs.length }
+    },
+  } as unknown as PayloadRequest['payload']
+  await assert.rejects(queryPublishedNews(req, { limit: 101, offset: 0 }, actor),
+    error => error instanceof APIError && error.status === 503)
+  assert.ok(calls.length > 1)
+  assert.ok(calls.every(call => call.limit === 4), 'one Payload find never materializes 101 maximum-size documents')
+})
+test('categories stream bounded keyset chunks, discard bodies, and reject non-progress', async () => {
+  const docs = Array.from({ length: 9 }, (_, index) => document(index + 1, { category: index % 2 ? 'B' : 'A' }))
+  const calls: any[] = []
+  const req = { transactionID: 'live' } as PayloadRequest
+  req.payload = {
+    db: { sessions: { live: { db: { async execute() {} } } } },
+    async find(options: any) {
+      calls.push(options); const start = (calls.length - 1) * 4
+      return { docs: docs.slice(start, start + 4), hasNextPage: start + 4 < docs.length }
+    },
+  } as unknown as PayloadRequest['payload']
+  assert.deepEqual(await queryNewsCategories(req, { withCounts: true }, actor), {
+    total: 9, categories: [{ name: 'A', count: 5 }, { name: 'B', count: 4 }],
+  })
+  assert.equal(calls.length, 3)
+  assert.ok(calls.every(call => call.limit === 4 && call.page === 1 && call.sort === 'id'))
+  assert.deepEqual(calls[1].where.and.at(-1), { id: { greater_than: id(4) } })
+
+  let stalled = 0
+  req.payload.find = (async () => { stalled++; return { docs: [], hasNextPage: true } }) as any
+  await assert.rejects(queryNewsCategories(req, { withCounts: true }, actor),
+    error => error instanceof APIError && error.status === 503)
+  assert.equal(stalled, 1)
+})
+test('categories fail closed at the cumulative raw-row and batch budget', async () => {
+  let calls = 0
+  const req = { transactionID: 'live' } as PayloadRequest
+  req.payload = {
+    db: { sessions: { live: { db: { async execute() {} } } } },
+    async find(options: any) {
+      calls++
+      const start = (calls - 1) * 4 + 1
+      return { docs: Array.from({ length: 4 }, (_, index) => document(start + index, { category: 'A' })), hasNextPage: true }
+    },
+  } as unknown as PayloadRequest['payload']
+  await assert.rejects(queryNewsCategories(req, { withCounts: true }, actor),
+    error => error instanceof APIError && error.status === 503)
+  assert.equal(calls, 1000)
+})
 test('private scan allowance limits storage work before the next batch or raw row', async () => {
   for (const scan of [{ maxRawRows: 1, maxBatches: 1 }, { maxRawRows: 101, maxBatches: 1 }] as const) {
     const calls: any[] = []
@@ -192,7 +248,7 @@ test('private scan allowance limits storage work before the next batch or raw ro
     await assert.rejects(queryPublishedNews(req, { limit: 1, offset: 0, scan }, actor),
       error => error instanceof APIError && error.status === 503)
     assert.equal(calls.length, 1, 'dated exhaustion cannot start the null phase after the batch allowance is consumed')
-    assert.equal(calls[0].limit, Math.min(101, scan.maxRawRows))
+    assert.equal(calls[0].limit, Math.min(4, scan.maxRawRows))
   }
 })
 test('navigation confirms detail then advances through the same bounded list query', async () => {
@@ -202,7 +258,7 @@ test('navigation confirms detail then advances through the same bounded list que
   assert.equal(findCalls.length, 3, 'detail plus dated/null bounded list phases; no all-publication materializer pages')
   assert.equal(findCalls[0].limit, 1)
   assert.deepEqual(findCalls[1].sort, ['-publishedAt', 'id'])
-  assert.equal(findCalls[1].limit, 101)
+  assert.equal(findCalls[1].limit, 4)
   assert.deepEqual(findCalls[1].where.and.slice(0, 2), [
     { _status: { equals: 'published' } }, { category: { equals: 'News' } },
   ])

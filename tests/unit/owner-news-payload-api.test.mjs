@@ -42,7 +42,9 @@ function appFor(fetchImpl, mode = 'payload', overrides = {}) {
   mod.require = name => name === '../db' ? pool : name === '../middleware/auth' ? { authMiddleware: authenticate } : name === './owner-news-polls' ? express.Router().get('/', (_req, res) => res.json({ polls: true })) : local(name);
   mod._compile(readFileSync(filename, 'utf8'), filename);
   const app = express();
-  app.use('/api/announcements', mod.exports.createAnnouncementsRouter({ backend: createNewsBackend({ pool, payloadClient: clientFor(fetchImpl), legacyReader, homeReader: async () => null, logger: overrides.logger }), authenticate }));
+  const backendOptions = { pool, legacyReader, homeReader: async () => null, logger: overrides.logger };
+  if (!overrides.inactivePayload) backendOptions.payloadClient = clientFor(fetchImpl);
+  app.use('/api/announcements', mod.exports.createAnnouncementsRouter({ backend: createNewsBackend(backendOptions), authenticate }));
   app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code || 'safe' }));
   return { app, api: supertest(app), calls };
 }
@@ -159,6 +161,34 @@ test('intentionally inactive Payload preserves bounded legacy offset pagination'
   assert.ok(result.value.nextCursor);
   assert.equal(result.readState, 'complete');
 });
+test('intentionally inactive Payload is a healthy-empty navigation source in backend and HTTP without degradation logs', async () => {
+  const rows = [1, 2, 3].map(n => ({ ...dto(n), source: 'legacy', asset_scope: 'legacy' }));
+  const logs = []; let payloadFetches = 0;
+  const legacyReader = {
+    async getPublishedAnnouncement(_pool, value) { return rows.find(row => row.id === value) || null; },
+    async listPublishedAnnouncements(_pool, limit, offset, _category, kind, _boundary, options = {}) {
+      assert.equal(limit, 101); assert.equal(offset, 0); assert.equal(kind, 'article');
+      return { rows, count: rows.length, ...(options.scan ? { scan: { rawRows: rows.length, batches: 1 } } : {}) };
+    },
+  };
+  const pool = { async query() { return { rows: [{ mode: 'legacy', epoch: 1 }] }; } };
+  const backend = createNewsBackend({ pool, legacyReader, logger: line => logs.push(line) });
+  const result = await backend.navigation({ id: id(2), source: 'legacy' }, actor, { requestId: 'inactive-navigation' });
+  assert.deepEqual(result, { value: {
+    previous: { source: 'legacy', id: id(1), title: 'Article 1' },
+    next: { source: 'legacy', id: id(3), title: 'Article 3' },
+  }, readState: 'complete' });
+  assert.deepEqual(logs, []);
+
+  const http = appFor(async () => { payloadFetches++; throw new Error('must not fetch'); }, 'legacy', {
+    inactivePayload: true, legacyReader, logger: line => logs.push(line),
+  }).api;
+  const response = await http.get(`/api/announcements/${id(2)}/navigation`)
+    .set('Authorization', 'Bearer reader').expect(200);
+  assert.equal(response.headers['x-owner-news-read-state'], 'complete');
+  assert.deepEqual(response.body, result.value);
+  assert.equal(payloadFetches, 0); assert.deepEqual(logs, []);
+});
 test('JSON transport uses fixed POST paths, exact actor/input, isolated headers and strict DTOs', async () => {
   const client = clientFor(async (url, init) => {
     assert.equal(url, 'http://cms.invalid/editorial/api/portal-news/list');
@@ -190,20 +220,45 @@ test('JSON transport uses fixed POST paths, exact actor/input, isolated headers 
     { maxRawRows: 101001, maxBatches: 1 }, { maxRawRows: 1, maxBatches: 1001 }, { maxRawRows: 1, maxBatches: 1, extra: true }])
     await assert.rejects(client.query('list', { limit: 1, offset: 0, scan }, actor), /news_unavailable/);
 });
-test('duplicate source identities fail closed in backend composition and Express transport', async () => {
+test('duplicate source identities are source failures: degrade first pages, restart continuations, and never become client 400', async () => {
   const duplicateLegacy = { ...dto(7), source: 'legacy', asset_scope: 'legacy' };
+  const logs = [];
   const backend = createNewsBackend({
     pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
     legacyReader: { async listPublishedAnnouncements() { return { rows: [duplicateLegacy, { ...duplicateLegacy }], count: null }; } },
-    payloadClient: { async query() { return { rows: [], count: 0 }; } },
+    payloadClient: { async query() { return { rows: [dto(9)], count: 1 }; } },
+    logger: line => logs.push(JSON.parse(line)),
   });
-  await assert.rejects(backend.list({ limit: 10, offset: 0 }, actor), error => error.status === 400 && error.code === 'invalid_request');
+  const first = await backend.list({ limit: 10, offset: 0 }, actor, { requestId: 'duplicate-legacy' });
+  assert.equal(first.readState, 'degraded');
+  assert.deepEqual(first.value.rows.map(row => row.id), [id(9)]);
+  assert.equal(first.value.count, null); assert.equal(first.value.nextCursor, null);
+  assert.deepEqual(logs, [{ code: 'owner_news_read_degraded', action: 'list', source: 'legacy', requestId: 'duplicate-legacy' }]);
+  await assert.rejects(backend.list({ limit: 10, offset: 1 }, actor),
+    error => error.status === 503 && error.code === 'news_page_restart_required');
+
+  const none = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { return { rows: [duplicateLegacy, { ...duplicateLegacy }], count: null }; } },
+    payloadClient: { async query() { return { rows: [dto(8), dto(8)], count: null }; } }, logger() {},
+  });
+  await assert.rejects(none.list({ limit: 10, offset: 0 }, actor),
+    error => error.status === 503 && error.code === 'news_unavailable');
+
+  const inactive = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'legacy', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncements() { return { rows: [duplicateLegacy, { ...duplicateLegacy }], count: null }; } },
+    logger() {},
+  });
+  const inactiveFirst = await inactive.list({ limit: 10, offset: 0 }, actor);
+  assert.deepEqual(inactiveFirst, { value: { rows: [], count: null, nextCursor: null }, readState: 'degraded' });
 
   const { api } = appFor(async () => Response.json({ rows: [dto(8), dto(8)], count: null }), 'payload', {
     legacyReader: { async listPublishedAnnouncements() { return { rows: [], count: 0 }; } },
   });
-  const response = await api.get('/api/announcements?limit=10&offset=0').set('Authorization', 'Bearer reader').expect(503);
-  assert.equal(response.body.reason, 'news_unavailable');
+  const response = await api.get('/api/announcements?limit=10&offset=0').set('Authorization', 'Bearer reader').expect(200);
+  assert.equal(response.headers['x-owner-news-read-state'], 'degraded');
+  assert.deepEqual(response.body, []);
   assert.equal(response.headers['x-owner-news-next-cursor'], undefined);
   assert.equal(response.headers['x-total-count'], undefined);
 });
@@ -227,6 +282,21 @@ test('full multi-document page >6MiB is accepted; rich body is not silently omit
   const rows = [dto(), dto(2)].map(value => ({ ...value, content_blocks: [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [{ type: 'text', marks: ['bold'], text: 'a'.repeat(4 * 1024 * 1024) }] }] }] }));
   const result = await clientFor(async () => Response.json({ rows, count: 2 })).query('list', { limit: 2, offset: 0 }, actor);
   assert.equal(result.rows[1].content_blocks[0].nodes[0].children[0].text.length, 4 * 1024 * 1024);
+});
+test('private list transport enforces one fixed 32 MiB cap from Content-Length and streamed bytes before parsing', async () => {
+  let metadataCancelled = false;
+  const metadataBody = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{}')); }, cancel() { metadataCancelled = true; } });
+  await assert.rejects(clientFor(async () => new Response(metadataBody, { headers: {
+    'content-type': 'application/json', 'content-length': String(32 * 1024 * 1024 + 1),
+  } })).query('list', { limit: 100, offset: 0 }, actor), /news_unavailable/);
+  assert.equal(metadataCancelled, true);
+
+  let streamedCancelled = false;
+  const chunk = new Uint8Array(4 * 1024 * 1024);
+  const stream = new ReadableStream({ pull(c) { c.enqueue(chunk); }, cancel() { streamedCancelled = true; } });
+  await assert.rejects(clientFor(async () => new Response(stream, { headers: { 'content-type': 'application/json' } }))
+    .query('list', { limit: 1, offset: 0 }, actor), /news_unavailable/);
+  assert.equal(streamedCancelled, true);
 });
 test('malformed JSON, redirects, internal errors, and metadata/stream byte excess are sanitized and cancelled', async () => {
   for (const response of [new Response('{', { headers: { 'content-type': 'application/json' } }), Response.redirect('http://other.invalid'), Response.json({ secret: '/private/path' }, { status: 500 }), Response.json(dto(), { headers: { 'content-length': String(7 * 1024 * 1024) } })]) {

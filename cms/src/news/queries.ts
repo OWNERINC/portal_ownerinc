@@ -9,9 +9,14 @@ import { historyDocument } from '../collections/LegacyNewsRevisions'
 
 const notFound = (): never => { throw new APIError('not_found', 404, undefined, true) }
 const unavailable = (): never => { throw new APIError('news_unavailable', 503, undefined, true) }
-const LIST_CHUNK_SIZE = 101
+const LIST_CHUNK_SIZE = 4
 const LIST_MAX_BATCHES = 1000
-const LIST_MAX_RAW_ROWS = LIST_CHUNK_SIZE * LIST_MAX_BATCHES
+const LIST_MAX_RAW_ROWS = 101000
+const LIST_RESPONSE_MAX_BYTES = 32 * 1024 * 1024
+const LIST_RESPONSE_ENVELOPE_BYTES = 1024
+const CATEGORY_MAX_RAW_ROWS = 4000
+const CATEGORY_MAX_BATCHES = 1000
+const CATEGORY_MAX_NAMES = 10000
 const kind = (dto: NewsDTO) => dto.editorial?.kind || (dto.content_blocks.some(block => block.type === 'pdf') ? 'edition' : 'article')
 /** Only malformed content/reference SHAPES are excluded. DB/file/storage failures propagate. */
 async function visible(req: PayloadRequest, document: unknown, preview = false): Promise<NewsDTO | null> {
@@ -21,34 +26,6 @@ async function visible(req: PayloadRequest, document: unknown, preview = false):
   try { await assertMediaReferences(req.payload, dto.content_blocks, req) }
   catch (error) { if (error instanceof InvalidMediaReferenceError) return null; throw error }
   return dto
-}
-/** Authenticated private bridge only: explicit bypass with current-publication filter.
- * Every candidate and media check shares lock 7194030 + the same live req/session. */
-async function published(req: PayloadRequest, signal?: AbortSignal): Promise<NewsDTO[]> {
-  const candidates: NewsDTO[] = []
-  for (let page = 1; page <= 1000; page++) {
-    if (signal?.aborted) throw new APIError('news_unavailable', 503, undefined, true)
-    await requireCmsTransaction(req.payload, req)
-    const result = await req.payload.find({ collection: 'news-articles', req, overrideAccess: true, draft: false, depth: 0,
-      limit: 100, page, sort: 'id', where: { _status: { equals: 'published' } } })
-    for (const document of result.docs) {
-      if (signal?.aborted) throw new APIError('news_unavailable', 503, undefined, true)
-      if (document._status !== 'published') continue
-      const dto = await visible(req, document)
-      if (dto) candidates.push(dto)
-    }
-    if (!result.hasNextPage) {
-      const stamp = (v: string | null) => v === null ? -Infinity : Date.parse(v)
-      return candidates.sort((a, b) => {
-        const aStamp = stamp(a.published_at), bStamp = stamp(b.published_at)
-        return aStamp !== bStamp ? (bStamp > aStamp ? 1 : -1) : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-      })
-    }
-  }
-  throw new APIError('news_unavailable', 503, undefined, true)
-}
-function select(rows: NewsDTO[], input: { category?: string; kind?: string }) {
-  return rows.filter(row => (input.category === undefined || row.category === input.category) && (input.kind === undefined || kind(row) === input.kind))
 }
 type PayloadBoundary = NonNullable<NewsInputs['list']['boundary']>
 type ScanPhase = 'dated' | 'null'
@@ -101,6 +78,7 @@ async function boundedPublishedPage(req: PayloadRequest, input: NewsInputs['list
   const finish = (rows: NewsDTO[], count: number | null): NewsPage => ({ rows, count,
     ...(input.scan ? { scan: { batches: budget.batches - initial.batches, rawRows: budget.rawRows - initial.rawRows } } : {}) })
   const retained: NewsDTO[] = []
+  let retainedBytes = LIST_RESPONSE_ENVELOPE_BYTES
   let validCount = 0
   let phase: ScanPhase = input.boundary?.published_at === null ? 'null' : 'dated'
   let boundary: PayloadBoundary | null = input.boundary
@@ -127,7 +105,11 @@ async function boundedPublishedPage(req: PayloadRequest, input: NewsInputs['list
       const dto = await visible(req, document)
       if (!dto || (input.kind !== undefined && kind(dto) !== input.kind)) continue
       validCount++
-      if (retained.length < target) retained.push(dto)
+      if (retained.length < target) {
+        const bytes = Buffer.byteLength(JSON.stringify(dto), 'utf8') + (retained.length ? 1 : 0)
+        if (retainedBytes + bytes > LIST_RESPONSE_MAX_BYTES) return unavailable()
+        retainedBytes += bytes; retained.push(dto)
+      }
     }
     if (result.docs.length) boundary = rawBoundary(result.docs.at(-1), phase)
     const targetReached = retained.length >= target
@@ -164,11 +146,46 @@ export function queryNewsCategories(req: PayloadRequest, input: NewsInputs['cate
   guard(actor); input = readNewsInput('categories', input)
   const signal = req.signal
   return withCmsTransaction(req.payload, req, async req => {
-    const rows = select(await published(req, signal), input), counts = new Map<string, number>()
-    for (const row of rows) if (row.category.trim()) counts.set(row.category, (counts.get(row.category) || 0) + 1)
-    if (counts.size > 10000) throw new APIError('news_unavailable', 503, undefined, true)
-    const names = [...counts.keys()].sort()
-    return input.withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name)! })) } : names
+    const counts = new Map<string, number>()
+    let total = 0, rawRows = 0, batches = 0, boundary: string | null = null
+    while (batches < CATEGORY_MAX_BATCHES && rawRows < CATEGORY_MAX_RAW_ROWS) {
+      if (signal?.aborted) return unavailable()
+      const storageLimit = Math.min(LIST_CHUNK_SIZE, CATEGORY_MAX_RAW_ROWS - rawRows)
+      await requireCmsTransaction(req.payload, req); batches++
+      const and: Where[] = [{ _status: { equals: 'published' } }]
+      if (boundary !== null) and.push({ id: { greater_than: boundary } })
+      const result = await req.payload.find({ collection: 'news-articles', req, overrideAccess: true, draft: false, depth: 0,
+        limit: storageLimit, page: 1, sort: 'id', where: { and } })
+      if (!Array.isArray(result.docs) || result.docs.length > storageLimit || typeof result.hasNextPage !== 'boolean'
+        || (!result.docs.length && result.hasNextPage)) return unavailable()
+      rawRows += result.docs.length
+      let previous: string | null = boundary
+      for (const document of result.docs) {
+        if (signal?.aborted) return unavailable()
+        if (!document || typeof document !== 'object' || Array.isArray(document)) return unavailable()
+        const rawDocument = document as unknown as Record<string, unknown>
+        const rawId = rawDocument.id
+        if (typeof rawId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(rawId)) return unavailable()
+        const current = rawId.toLowerCase()
+        if (previous !== null && current <= previous) return unavailable()
+        previous = current
+        if (rawDocument._status !== 'published') continue
+        const dto = await visible(req, document)
+        if (!dto || (input.kind !== undefined && kind(dto) !== input.kind)) continue
+        total++
+        if (dto.category.trim()) {
+          counts.set(dto.category, (counts.get(dto.category) || 0) + 1)
+          if (counts.size > CATEGORY_MAX_NAMES) return unavailable()
+        }
+      }
+      if (result.docs.length) boundary = previous
+      if (!result.hasNextPage) {
+        const names = [...counts.keys()].sort()
+        return input.withCounts ? { total, categories: names.map(name => ({ name, count: counts.get(name)! })) } : names
+      }
+      if (batches >= CATEGORY_MAX_BATCHES || rawRows >= CATEGORY_MAX_RAW_ROWS) return unavailable()
+    }
+    return unavailable()
   })
 }
 export function queryNewsNavigation(req: PayloadRequest, input: NewsInputs['navigation'], actor: VerifiedPortalActor): Promise<NewsNavigation> {

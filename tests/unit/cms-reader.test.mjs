@@ -6,7 +6,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const {
   addPublishedBlocks, getPublishedAnnouncement, getPublishedBlocksBatch,
-  isPublicCmsRow, listPublishedAnnouncements, publishedBodyText,
+  isPublicCmsRow, listPublishedAnnouncementCategories, listPublishedAnnouncements, publishedBodyText,
 } = require('../../api/cms/reader');
 
 function poolFor({ document, blocks = [], assets = [], sourceExists = true, sourceActive = true,
@@ -430,7 +430,7 @@ test('legacy lookahead uses bounded keyset chunks and continues past invalid and
         if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
         if (sql.includes('SELECT d.id, d.title')) {
           reads++;
-          return { rows: reads === 1 ? raw.slice(0, 101) : raw.slice(101) };
+          return { rows: raw.slice((reads - 1) * 4, reads * 4) };
         }
         if (sql.includes('FOR UPDATE OF d, r')) {
           return { rows: params[0].filter(value => value !== newsId(102)).map(value => ({
@@ -445,13 +445,13 @@ test('legacy lookahead uses bounded keyset chunks and continues past invalid and
     { exactTotal: false, scan: { maxRawRows: 101000, maxBatches: 1000 } });
   assert.deepEqual(result.rows.map(row => row.id), [newsId(101), newsId(103)]);
   assert.equal(result.count, 2);
-  assert.deepEqual(result.scan, { rawRows: 103, batches: 2 });
-  assert.equal(reads, 2);
+  assert.deepEqual(result.scan, { rawRows: 103, batches: 26 });
+  assert.equal(reads, 26);
   const selects = calls.filter(call => call.sql.includes('SELECT d.id, d.title'));
-  assert.equal(selects.length, 2);
+  assert.equal(selects.length, 26);
   assert.ok(selects.every(call => /date_trunc\('milliseconds', d\.published_at\) AS published_at_ms/u.test(call.sql)));
   assert.ok(selects.every(call => /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id\s+LIMIT \$\d+/u.test(call.sql)));
-  assert.ok(selects.every(call => call.params.at(-1) === 101));
+  assert.ok(selects.every(call => call.params.at(-1) === 4));
   assert.match(selects[1].sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
   assert.doesNotMatch(selects[1].sql, /OFFSET/u);
 });
@@ -471,6 +471,70 @@ test('legacy private scan allowance caps SQL limit and stops before a second bat
     { exactTotal: false, scan: { maxRawRows: 1, maxBatches: 1 } }), /announcement_scan_limit/);
   assert.equal(selects.length, 1);
   assert.equal(selects[0].params.at(-1), 1);
+});
+
+test('legacy list enforces aggregate DTO bytes and SQL never returns more than four raw documents', async () => {
+  const newsId = n => `30000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const largeBlocks = Array.from({ length: 100 }, () => ({ type: 'paragraph', text: 'x'.repeat(5000) }));
+  const rows = Array.from({ length: 70 }, (_, index) => ({ id: newsId(index + 1), title: `Large ${index + 1}`, category: 'News',
+    published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -index)), published_revision_id: newsId(index + 1000), editorial: null, blocks: largeBlocks }));
+  let reads = 0; const selects = [];
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) { selects.push({ sql, params }); const start = reads++ * 4; return { rows: rows.slice(start, start + 4) }; }
+    if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({ id: value,
+      published_revision_id: rows.find(row => row.id === value).published_revision_id })) };
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  await assert.rejects(listPublishedAnnouncements(pool, 101, 0, undefined, undefined, null, { exactTotal: false }), /announcement_response_limit/);
+  assert.ok(selects.length > 1);
+  assert.ok(selects.every(call => call.params.at(-1) === 4));
+});
+
+test('legacy categories stream and discard four-row SQL chunks while preserving exact validated counts', async () => {
+  const newsId = n => `40000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const rows = Array.from({ length: 9 }, (_, index) => ({ id: newsId(index + 1), title: `Category ${index + 1}`, category: index % 2 ? 'B' : 'A',
+    published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -index)), published_revision_id: newsId(index + 1000), editorial: null,
+    blocks: [{ type: 'paragraph', text: `Body ${index + 1}` }] }));
+  let reads = 0; const selects = [];
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) { selects.push({ sql, params }); const start = reads++ * 4; return { rows: rows.slice(start, start + 4) }; }
+    if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({ id: value,
+      published_revision_id: rows.find(row => row.id === value).published_revision_id })) };
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  assert.deepEqual(await listPublishedAnnouncementCategories(pool, { withCounts: true }), {
+    total: 9, categories: [{ name: 'A', count: 5 }, { name: 'B', count: 4 }],
+  });
+  assert.equal(selects.length, 3);
+  assert.ok(selects.every(call => call.params.at(-1) === 4));
+  assert.match(selects[1].sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
+});
+
+test('legacy categories fail closed at the cumulative raw-row and batch budget', async () => {
+  const newsId = n => `50000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  let reads = 0;
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) {
+      const start = reads++ * 4 + 1;
+      return { rows: Array.from({ length: 4 }, (_, index) => ({ id: newsId(start + index), title: 'Category', category: 'A',
+        published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -(start + index))), published_revision_id: newsId(start + index + 5000),
+        editorial: null, blocks: [{ type: 'paragraph', text: 'Body' }] })) };
+    }
+    if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({ id: value,
+      published_revision_id: newsId(Number(value.slice(-12)) + 5000) })) };
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  await assert.rejects(listPublishedAnnouncementCategories(pool, { withCounts: true }), /announcement_scan_limit/);
+  assert.equal(reads, 1000);
 });
 
 test('legacy keysets canonicalize sub-millisecond timestamps without skips or duplicates across cursors', async () => {
@@ -496,6 +560,7 @@ test('legacy keysets canonicalize sub-millisecond timestamps without skips or du
           listCalls.push({ sql, params });
           assert.match(sql, /date_trunc\('milliseconds', d\.published_at\) AS published_at_ms/u);
           assert.match(sql, /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id/u);
+          if (sql.includes("date_trunc('milliseconds', d.published_at) IS NULL AND d.id >")) return { rows: [] };
           const boundaryId = params.length === 3 ? params[1] : null;
           return { rows: rows.filter(row => boundaryId === null || row.id > boundaryId).slice(0, params.at(-1))
             .map(({ database_published_at: _databaseTimestamp, ...row }) => row) };

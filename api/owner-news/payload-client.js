@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { validInput, validActor, readResult, unavailable } = require('./payload-dto');
 const MiB = 1024 * 1024;
+const LIST_RESPONSE_MAX_BYTES = 32 * MiB;
 const paths = Object.freeze(Object.fromEntries(['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset'].map(action => [action, `/editorial/api/portal-news/${action}`])));
 const safeError = status => Object.assign(new Error(status === 503 ? 'news_unavailable' : status === 404 ? 'not_found' : 'forbidden'), { status, code: status === 503 ? 'news_unavailable' : status === 404 ? 'not_found' : 'forbidden' });
 function payloadRuntimeState({ mode, baseURL, secret, suppliedClient = false }) {
@@ -44,7 +45,7 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
     let reader;
     const abortRead = () => { if (reader) void reader.cancel().catch(() => {}); };
     try {
-      const max = action === 'list' ? (input.limit * 6 + 1) * MiB : ['detail', 'preview'].includes(action) ? 6 * MiB : action === 'categories' ? MiB : 64 * 1024;
+      const max = action === 'list' ? LIST_RESPONSE_MAX_BYTES : ['detail', 'preview'].includes(action) ? 6 * MiB : action === 'categories' ? MiB : 64 * 1024;
       const size = response.headers.get('content-length');
       if (size !== null && (!/^\d+$/u.test(size) || Number(size) > max)) throw unavailable();
       if (!/^application\/json(?:;|$)/iu.test(response.headers.get('content-type') || '') || !response.body) throw unavailable();
@@ -59,7 +60,6 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
       return readResult(action, JSON.parse(Buffer.concat(chunks).toString('utf8')), input);
     } catch (error) {
       controller.abort(); if (reader) await reader.cancel().catch(() => {}); else await response.body?.cancel().catch(() => {});
-      if (error?.code === 'news_duplicate_identity') throw error;
       throw unavailable();
     }
     finally { controller.signal.removeEventListener('abort', abortRead); reader?.releaseLock(); clean(); }

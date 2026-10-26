@@ -78,6 +78,17 @@ test('composite categories sum exact normalized names and home prefers valid Pay
   assert.deepEqual((await backend.home({}, actor)).value, { content: home });
 });
 
+test('composite categories fail closed before the strict 10,000-name response bound is exceeded', async () => {
+  const categories = Array.from({ length: 10000 }, (_, index) => ({ name: `C${String(index).padStart(5, '0')}`, count: 1 }));
+  const backend = createNewsBackend({
+    pool: { async query() { return { rows: [{ mode: 'payload', epoch: 1 }] }; } },
+    legacyReader: { async listPublishedAnnouncementCategories() { return { total: 10000, categories }; } },
+    payloadClient: { async query() { return { total: 1, categories: [{ name: 'Overflow', count: 1 }] }; } },
+  });
+  await assert.rejects(backend.categories({ withCounts: true }, actor),
+    error => error.status === 503 && error.code === 'news_unavailable');
+});
+
 test('global navigation streams only source neighbors, keeps colliding UUIDs distinct and stops after first next', async () => {
   const shared = id(7);
   const legacyRows = [

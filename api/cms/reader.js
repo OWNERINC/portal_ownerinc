@@ -31,9 +31,15 @@ const ASSET_MIMES = {
   pdf: new Set(['application/pdf']),
   video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
 };
-const ANNOUNCEMENT_BATCH_SIZE = 101;
-const ANNOUNCEMENT_MAX_BATCHES = 1000;
-const ANNOUNCEMENT_MAX_RAW_ROWS = ANNOUNCEMENT_BATCH_SIZE * ANNOUNCEMENT_MAX_BATCHES;
+const ANNOUNCEMENT_BATCH_SIZE = 4;
+const ANNOUNCEMENT_MAX_RAW_ROWS = 101000;
+const ANNOUNCEMENT_MAX_BATCHES = Math.ceil(ANNOUNCEMENT_MAX_RAW_ROWS / ANNOUNCEMENT_BATCH_SIZE);
+const ANNOUNCEMENT_PRIVATE_MAX_BATCHES = 1000;
+const ANNOUNCEMENT_CATEGORY_MAX_RAW_ROWS = 4000;
+const ANNOUNCEMENT_CATEGORY_MAX_BATCHES = 1000;
+const ANNOUNCEMENT_MAX_CATEGORIES = 10000;
+const ANNOUNCEMENT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+const ANNOUNCEMENT_RESPONSE_ENVELOPE_BYTES = 1024;
 const ANNOUNCEMENT_PUBLISHED_AT_SQL = "date_trunc('milliseconds', d.published_at)";
 
 function assetReferences(blocks) {
@@ -387,6 +393,23 @@ function normalizePublishedAt(value) {
   return parsed.toISOString();
 }
 const announcementPublishedAt = row => row.published_at_ms === undefined ? row.published_at : row.published_at_ms;
+function afterLegacyBoundary(point, boundary) {
+  if (!boundary) return true;
+  if (boundary.published_at === null) return point.published_at === null && boundary.source === 'legacy' && point.id > boundary.id;
+  if (point.published_at === null) return true;
+  const pointStamp = Date.parse(point.published_at), boundaryStamp = Date.parse(boundary.published_at);
+  return pointStamp < boundaryStamp || (pointStamp === boundaryStamp && boundary.source === 'legacy' && point.id > boundary.id);
+}
+function validateLegacyProgress(rows, boundary) {
+  let previous = boundary;
+  for (const row of rows) {
+    if (typeof row.id !== 'string' || !row.id) throw new Error('announcement_scan_limit');
+    const point = { published_at: normalizePublishedAt(announcementPublishedAt(row)), source: 'legacy', id: row.id.toLowerCase() };
+    if (!afterLegacyBoundary(point, previous)) throw new Error('announcement_scan_limit');
+    previous = point;
+  }
+  return previous;
+}
 
 async function publishedAnnouncementBatch(pool, boundary, limit = ANNOUNCEMENT_BATCH_SIZE) {
   return withTransaction(pool, async (db) => {
@@ -414,11 +437,11 @@ async function publishedAnnouncementBatch(pool, boundary, limit = ANNOUNCEMENT_B
   });
 }
 
-async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = null, category, kind, scan = null } = {}) {
+async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = null, retainRows = maxRows, category, kind, scan = null } = {}) {
   await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const stable = [];
   let rawBoundary = boundary;
-  let rawRows = 0;
+  let rawRows = 0, validCount = 0, retainedBytes = ANNOUNCEMENT_RESPONSE_ENVELOPE_BYTES;
   const maxRawRows = scan?.maxRawRows ?? ANNOUNCEMENT_MAX_RAW_ROWS;
   const maxBatches = scan?.maxBatches ?? ANNOUNCEMENT_MAX_BATCHES;
   for (let batch = 0; batch < maxBatches && rawRows < maxRawRows; batch++) {
@@ -427,23 +450,31 @@ async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = n
     const result = await publishedAnnouncementBatch(pool, rawBoundary, storageLimit);
     rawRows += result.rows.length;
     if (rawRows > maxRawRows) throw new Error('announcement_scan_limit');
-    if (!result.rows.length) return { rows: stable, exhausted: true, scan: { rawRows, batches: batch + 1 } };
-    const last = result.rows.at(-1);
-    rawBoundary = { published_at: normalizePublishedAt(announcementPublishedAt(last)), source: 'legacy', id: String(last.id).toLowerCase() };
+    if (!result.rows.length) return { rows: stable, count: validCount, exhausted: true, scan: { rawRows, batches: batch + 1 } };
+    rawBoundary = validateLegacyProgress(result.rows, rawBoundary);
 
     const candidates = selectAnnouncements(result.visible, category, kind);
     const stableIds = await recheckPublishedAnnouncements(pool, candidates.map(row => ({
       id: row.id,
       publishedRevisionId: row.published_revision_id,
     })));
-    stable.push(...candidates.filter(row => stableIds.has(String(row.id).toLowerCase())).map(articleDTO));
+    for (const row of candidates) {
+      if (!stableIds.has(String(row.id).toLowerCase())) continue;
+      validCount++;
+      if (retainRows === null || stable.length < retainRows) {
+        const dto = articleDTO(row);
+        const bytes = Buffer.byteLength(JSON.stringify(dto), 'utf8') + (stable.length ? 1 : 0);
+        if (retainedBytes + bytes > ANNOUNCEMENT_RESPONSE_MAX_BYTES) throw new Error('announcement_response_limit');
+        retainedBytes += bytes; stable.push(dto);
+      }
+    }
 
     const exhausted = result.rows.length < storageLimit;
-    if (maxRows !== null && stable.length >= maxRows) {
-      return { rows: stable.slice(0, maxRows), exhausted: exhausted && stable.length === maxRows,
+    if (maxRows !== null && validCount >= maxRows) {
+      return { rows: stable.slice(0, maxRows), count: validCount, exhausted: exhausted && validCount === maxRows,
         scan: { rawRows, batches: batch + 1 } };
     }
-    if (exhausted) return { rows: stable, exhausted: true, scan: { rawRows, batches: batch + 1 } };
+    if (exhausted) return { rows: stable, count: validCount, exhausted: true, scan: { rawRows, batches: batch + 1 } };
   }
   throw new Error('announcement_scan_limit');
 }
@@ -461,23 +492,44 @@ function selectAnnouncements(rows, category, kind) {
 }
 
 async function listPublishedAnnouncementCategories(pool, { kind, withCounts = false } = {}) {
-  const { rows } = await stablePublishedAnnouncements(pool, { kind });
+  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const counts = new Map();
-  for (const { category } of rows) {
-    if (typeof category === 'string' && category.trim()) counts.set(category, (counts.get(category) || 0) + 1);
+  let total = 0, rawRows = 0, boundary = null;
+  for (let batch = 0; batch < ANNOUNCEMENT_CATEGORY_MAX_BATCHES && rawRows < ANNOUNCEMENT_CATEGORY_MAX_RAW_ROWS; batch++) {
+    const storageLimit = Math.min(ANNOUNCEMENT_BATCH_SIZE, ANNOUNCEMENT_CATEGORY_MAX_RAW_ROWS - rawRows);
+    const result = await publishedAnnouncementBatch(pool, boundary, storageLimit);
+    rawRows += result.rows.length;
+    if (!result.rows.length) {
+      const names = [...counts.keys()].sort();
+      return withCounts ? { total, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
+    }
+    boundary = validateLegacyProgress(result.rows, boundary);
+    const candidates = selectAnnouncements(result.visible, undefined, kind);
+    const stableIds = await recheckPublishedAnnouncements(pool, candidates.map(row => ({ id: row.id, publishedRevisionId: row.published_revision_id })));
+    for (const row of candidates) {
+      if (!stableIds.has(String(row.id).toLowerCase())) continue;
+      const dto = articleDTO(row); total++;
+      if (typeof dto.category === 'string' && dto.category.trim()) {
+        counts.set(dto.category, (counts.get(dto.category) || 0) + 1);
+        if (counts.size > ANNOUNCEMENT_MAX_CATEGORIES) throw new Error('announcement_category_limit');
+      }
+    }
+    if (result.rows.length < storageLimit) {
+      const names = [...counts.keys()].sort();
+      return withCounts ? { total, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
+    }
   }
-  const names = [...counts.keys()].sort();
-  return withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
+  throw new Error('announcement_scan_limit');
 }
 
 async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true, scan = null } = {}) {
   if (scan !== null && (typeof scan !== 'object' || Array.isArray(scan) || Object.keys(scan).length !== 2
     || !Number.isSafeInteger(scan.maxRawRows) || scan.maxRawRows < 1 || scan.maxRawRows > ANNOUNCEMENT_MAX_RAW_ROWS
-    || !Number.isSafeInteger(scan.maxBatches) || scan.maxBatches < 1 || scan.maxBatches > ANNOUNCEMENT_MAX_BATCHES)) throw new Error('announcement_scan_limit');
+    || !Number.isSafeInteger(scan.maxBatches) || scan.maxBatches < 1 || scan.maxBatches > ANNOUNCEMENT_PRIVATE_MAX_BATCHES)) throw new Error('announcement_scan_limit');
   const result = await stablePublishedAnnouncements(pool, { boundary, category, kind, scan,
-    maxRows: exactTotal ? null : offset + limit });
+    maxRows: exactTotal ? null : offset + limit, retainRows: offset + limit });
   return {
-    count: result.exhausted ? result.rows.length : null,
+    count: result.exhausted ? result.count : null,
     rows: result.rows.slice(offset, offset + limit),
     ...(scan ? { scan: result.scan } : {}),
   };

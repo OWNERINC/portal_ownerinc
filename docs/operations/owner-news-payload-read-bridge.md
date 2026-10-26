@@ -90,13 +90,14 @@ Voltar/Avançar. Um cursor vindo diretamente na URL não fabrica página anterio
 `news_page_restart_required` remove o cursor e reinicia atomicamente na primeira
 página.
 
-O adapter legado consulta chunks crus determinísticos com `LIMIT 101` e keyset
+O adapter legado consulta chunks crus determinísticos com `LIMIT 4` e keyset
 `published_at/id`. No SQL, seleção, ordenação e todos os predicados de fronteira usam
 `date_trunc('milliseconds', d.published_at)`; assim storage, DTO/cursor e comparador
 global compartilham a mesma precisão, com null por último e UUID crescente. O leitor
 valida revisão e mídia, faz o recheck estável sob lock e avança
-até preencher apenas o lookahead válido pedido. São no máximo 1.000 chunks/101.000
-linhas cruas por operação; exceder falha fechado. Leituras limitadas não varrem o
+até preencher apenas o lookahead válido pedido. O teto absoluto é 101.000 linhas
+cruas/25.250 lotes; navegação privada recebe no máximo 1.000 lotes. Exceder falha
+fechado. Leituras limitadas não varrem o
 restante para fabricar total: quando alguma origem não prova total exato, a rota
 omite `X-Total-Count`. Categorias e o modo legado intencionalmente inativo continuam
 calculando totais exatos dentro do mesmo limite operacional.
@@ -143,14 +144,19 @@ composta original, sem fallback de fonte. Home prefere o Global Payload somente
 quando há conteúdo publicado válido; ausência legítima usa o home legado, enquanto
 falha de uma origem produz estado degradado.
 
-Para listas, o leitor Payload consulta chunks de no máximo 101 linhas, máximo 1.000
-chunks/101.000 linhas cruas (exceder retorna 503), com `_status`, categoria quando
+Para listas, Payload e legado consultam no máximo 4 documentos crus por chamada de
+storage, evitando materializar 101 corpos máximos de uma vez. Payload mantém tetos de
+1.000 lotes e 101.000 linhas cruas (o lote de 4 torna 4.000 o teto efetivo anterior).
+Exceder qualquer teto retorna 503. As consultas usam `_status`, categoria quando
 presente, keyset e limite no `find`. A ordem é `publishedAt` decrescente, null por
 último e UUID Payload crescente; no merge global, fonte fica entre publicação e UUID.
 Conteúdo/referências/arquivos e `kind` são validados durante o avanço, retendo apenas
 o necessário para `offset + limit`; total fica null até a exaustão comprovar exatidão.
-A agregação de categorias mantém sua varredura separada em lotes de 100. Categoria
-vazia é filtro válido, mas não entra no catálogo de nomes. Navegação exclui edições;
+A agregação de categorias de ambas as origens é streaming por keyset, em lotes crus
+de 4, no máximo 1.000 lotes/4.000 linhas e 10.000 nomes. Cada publicação ainda passa
+por validação completa de conteúdo/mídia, mas o corpo é descartado após atualizar
+somente total/mapa de contagem; exaustão, progresso e storage precisam ser provados.
+Categoria vazia é filtro válido, mas não entra no catálogo de nomes. Navegação exclui edições;
 uma edição retorna previous/next null. A navegação global percorre cada fonte por
 keyset e retém somente o vizinho anterior, o primeiro posterior, a fronteira e IDs
 vistos para integridade; para assim que conhece o primeiro posterior. Antes de cada
@@ -163,14 +169,25 @@ recusa antes da próxima chamada quando qualquer saldo termina. Em páginas de
 navegação com offset zero, `count` não nulo deve ser exatamente `rows.length`;
 qualquer divergência falha como contrato privado indisponível, não como exaustão/404.
 Duplicata, desordem, falta de progresso, metadata de custo inválida ou orçamento
-excedido falham fechados.
+excedido falham fechados. Quando Payload está intencionalmente inativo, navegação
+legada trata essa origem como saudável-vazia antes de construir `scan`: não fabrica
+nem valida custo, não chama o bridge e não registra degradação. Corrupção/duplicata
+dentro de qualquer resposta de lista é classificada na captura da própria origem
+como indisponibilidade, nunca como erro 400 do cliente. Na primeira página, a outra
+origem saudável pode produzir resposta degradada sem total/cursor; em continuação
+exige reinício e, sem origem utilizável, retorna 503. No modo intencionalmente
+inativo, legado corrompido resulta na escolha explícita de vazio degradado (com log
+do legado), não 400.
 Falha
 operacional de arquivo/storage/DB não é convertida em feed vazio. Apenas conteúdo
 malformado ou referência com shape/tipo inválido exclui aquela publicação.
 
 JSON de saída: detail/preview 6 MiB; home/navigation 64 KiB; categories 1 MiB e
-10.000 nomes; list `(limit*6+1) MiB`, limit 1..100. Não há truncamento de categorias
-nem omissão de corpos. Limites por metadata e bytes lidos; timeout cobre leitura
+10.000 nomes; list tem um único teto interno fixo de 32 MiB, independente de `limit`
+(1..100). O transporte rejeita `Content-Length` acima do teto antes do parse e conta
+bytes do stream durante a leitura. Os produtores contabilizam bytes UTF-8 dos DTOs
+retidos e falham antes de ultrapassar o mesmo orçamento; não truncam página/cursor.
+Não há truncamento de categorias nem omissão de corpos. Limites por metadata e bytes lidos; timeout cobre leitura
 completa e cancela streams. Assets usam streaming (não JSON), 50 MiB, headers
 allowlisted, Range simples para PDF/vídeo, 416 com Content-Range e cancelamento
 no disconnect. Falha depois de começar os bytes encerra a conexão, sem JSON

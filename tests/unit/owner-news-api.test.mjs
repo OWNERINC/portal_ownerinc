@@ -64,6 +64,15 @@ function poolFor(extended = false) {
               assert.match(sql, /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id/);
               assert.match(sql, /LIMIT \$\d+/);
               assert.doesNotMatch(sql, /OFFSET/);
+              const limit = params.at(-1);
+              if (params.length > 1 && sql.includes('IS NULL AND d.id > $1')) {
+                published = published.filter(row => row.published_at === null && row.id > params[0]);
+              } else if (params.length > 1) {
+                const boundary = Date.parse(params[0]), hasSameDateId = /d\.id > \$2::uuid/u.test(sql), boundaryId = hasSameDateId ? params[1] : null;
+                published = published.filter(row => row.published_at === null || Date.parse(row.published_at) < boundary
+                  || (hasSameDateId && Date.parse(row.published_at) === boundary && row.id > boundaryId));
+              }
+              published = published.slice(0, limit);
             }
             return { rows: published.map(({ status, unstable, ...row }) => row) };
           }
@@ -121,7 +130,7 @@ test('unfiltered signature remains compatible and excludes invalid, draft and un
   const result = await listPublishedAnnouncements(pool, 50, 0);
   assert.equal(result.count, 4);
   assert.deepEqual(result.rows.map(row => row.id), [id(1), id(5), id(8), id(9)]);
-  assert.deepEqual(pool.calls.find(call => call.sql.includes('FROM cms_assets')).params[0], [id(100), id(101)]);
+  assert.deepEqual([...new Set(pool.calls.filter(call => call.sql.includes('FROM cms_assets')).flatMap(call => call.params[0]))], [id(100), id(101)]);
 });
 
 test('categories returns unique nonempty strings from the same validated stable publications', async () => {
