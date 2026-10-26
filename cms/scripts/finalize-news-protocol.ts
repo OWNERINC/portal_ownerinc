@@ -1891,9 +1891,8 @@ async function verifyInstalled(client: FinalizerClient,
     p.proconfig AS config, r.rolname AS owner, p.oid = ANY(${approvedProtocolOidArray}) AS canonical_signature,
     pg_catalog.pg_get_function_result(p.oid) = 'TABLE(id uuid)' AS bootstrap_return_shape,
     p.proisstrict AS bootstrap_is_strict,
-    p.proargmodes::text[] = ARRAY['i','i','i','i','i','t']::text[] AS bootstrap_argument_modes,
-    p.proargnames = ARRAY['p_run_id','p_manifest_sha256','p_source_instance','p_source_fingerprint',
-      'p_authority_epoch','id']::text[] AS bootstrap_argument_names
+    p.proargmodes::text[] AS bootstrap_argument_modes,
+    p.proargnames::text[] AS bootstrap_argument_names
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
     WHERE n.nspname='public' AND p.proname = ANY($1::text[])`, [PROTOCOL_FUNCTION_NAMES])
   const expected = protocolFunctionBodies(options.protocolVersion)
