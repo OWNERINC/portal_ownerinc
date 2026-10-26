@@ -72,5 +72,6 @@ test('disposable restore captures and verifies target protection before first mu
   const protection = source.indexOf("step('restore-protection-backup')");
   const destructive = source.indexOf("'pg_restore', '--single-transaction'", protection);
   assert.ok(protection > 0 && destructive > protection);
-  assert.match(source.slice(protection, destructive), /targetDump\('ownerinc_cms'\)[\s\S]*?targetDump\('portal_manual_runtime'\)[\s\S]*?sha256sum --check --strict/u);
+  assert.match(source.slice(protection, destructive), /targetDump\('ownerinc_cms'\)[\s\S]*?targetDump\('portal_manual_runtime'\)[\s\S]*?uploads\.tar\.gz[\s\S]*?write_payload_backup_manifest[\s\S]*?pg_restore', '--list'/u);
+  assert.match(source.slice(destructive), /backup, 'uploads\.tar\.gz'[\s\S]*?restoredPortalUploads[\s\S]*?readdir\(restoredPortalUploads\)[\s\S]*?sha256\(await readFile/u);
 });

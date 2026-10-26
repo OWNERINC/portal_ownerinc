@@ -93,8 +93,14 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     'conflicting flags must fail before checkout, build, test or publication');
   assert.match(workflow, /publish_candidate_only:\n\s+description:[^\n]*\n\s+required: false\n\s+type: boolean\n\s+default: false/,
     'candidate publication must be an opt-in default-false boolean input');
-  assert.match(conflict, /inputs\.cms_image_only == true && inputs\.publish_candidate_only == true[\s\S]*exit 1/,
-    'the two manual publication modes must fail closed when selected together');
+  assert.match(conflict, /CMS_IMAGE_ONLY:[\s\S]*PUBLISH_CANDIDATE_ONLY:[\s\S]*MANUAL_RUNTIME_ONLY:[\s\S]*selected > 1[\s\S]*exit 1/u,
+    'manual CI modes must fail closed when selected together');
+  assert.match(workflow, /dispatch-input-contract:[\s\S]*?MANUAL_RUNTIME_ONLY: \$\{\{ inputs\.manual_runtime_only \}\}[\s\S]*?if \(\(selected > 1\)\); then[\s\S]*?exit 1/u,
+    'all manual dispatch modes must be rejected by an independent job when combined');
+  assert.match(workflow, /payload-manual-runtime:\n\s+needs: dispatch-input-contract/u);
+  assert.match(workflow, /isolated-b0-recovery:\n\s+needs: dispatch-input-contract/u);
+  assert.match(workflow, /validate:\n\s+needs: \[dispatch-input-contract, isolated-b0-recovery\]/u,
+    'every executable CI path must wait for the input contract');
   assert.ok(buildAt < integrationAt && integrationAt < scanAt && scanAt < publishAt,
     'candidate API-v2 HTTP acceptance must run after image build and before scans/publication');
   assert.ok(apiPublishAt < publishAt &&

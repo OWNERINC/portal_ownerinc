@@ -2,7 +2,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import net from 'node:net';
 import http from 'node:http';
@@ -91,7 +91,12 @@ export async function main(env = process.env) {
   const targetContainer = `${project}-target-postgres`, targetVolume = `${project}-target-postgres`;
   const directory = await mkdtemp(path.join(env.PAYLOAD_MANUAL_RUNTIME_PRIVATE_PARENT || os.tmpdir(), `${project}-`));
   await chmod(directory, 0o700); await mkdir(path.join(directory, 'uploads'), { mode: 0o700 });
+  const portalUploads = path.join(directory, 'portal-uploads'); await mkdir(portalUploads, { mode: 0o700 });
+  const portalUploadName = 'manual-runtime-portal.txt';
+  const portalUploadBytes = Buffer.from('Ownerinc Portal upload restore proof\n');
+  await writeFile(path.join(portalUploads, portalUploadName), portalUploadBytes, { mode: 0o600 });
   const restored = path.join(directory, 'restored'); await mkdir(path.join(restored, 'uploads'), { recursive: true, mode: 0o700 });
+  const restoredPortalUploads = path.join(restored, 'portal-uploads'); await mkdir(restoredPortalUploads, { mode: 0o700 });
   const backup = path.join(directory, 'backup'); await mkdir(backup, { mode: 0o700 });
   const protection = path.join(directory, 'restore-protection'); await mkdir(protection, { mode: 0o700 });
   const passwords = Object.fromEntries(['admin', 'migrator', 'runtime', 'controller', 'observer'].map(key => [key, randomBytes(32).toString('hex')]));
@@ -138,6 +143,7 @@ export async function main(env = process.env) {
 
     const payloadToPortal = secret(), portalToPayload = secret();
     const editor = { uid: `manual-editor-${marker}`, email: `manual-${marker}@example.invalid`, name: null, canManageNews: true };
+    const deniedEditor = { uid: `manual-reader-${marker}`, email: `reader-${marker}@example.invalid`, name: null, canManageNews: false };
     portalServer = http.createServer((request, response) => {
       let bytes = Buffer.alloc(0)
       request.on('data', chunk => { bytes = Buffer.concat([bytes, chunk]); if (bytes.length > 16 * 1024) request.destroy() })
@@ -146,8 +152,12 @@ export async function main(env = process.env) {
         let body = {}; try { body = bytes.length ? JSON.parse(bytes.toString('utf8')) : {} } catch { response.writeHead(400).end(); return }
         response.setHeader('Content-Type', 'application/json')
         if (request.url === '/api/internal/editorial/authority') response.end(JSON.stringify({ mode: 'payload', epoch: 1 }))
-        else if (request.url === '/api/internal/editorial/actor/check' && body.uid === editor.uid) response.end(JSON.stringify({ actor: editor }))
-        else if (request.url === '/api/internal/editorial/session/resolve' && body.cookie === `editor-${marker}`) response.end(JSON.stringify({ actor: editor, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }))
+        else if (request.url === '/api/internal/editorial/actor/check' && [editor.uid, deniedEditor.uid].includes(body.uid)) {
+          response.end(JSON.stringify({ actor: body.uid === editor.uid ? editor : deniedEditor }))
+        } else if (request.url === '/api/internal/editorial/session/resolve' && [`editor-${marker}`, `reader-${marker}`].includes(body.cookie)) {
+          response.end(JSON.stringify({ actor: body.cookie === `editor-${marker}` ? editor : deniedEditor,
+            expiresAt: new Date(Date.now() + 3_600_000).toISOString() }))
+        }
         else { response.writeHead(403); response.end(JSON.stringify({ reason: 'editorial_permission_denied' })) }
       })
     })
@@ -255,8 +265,9 @@ export async function main(env = process.env) {
     step('editor-authorization'); step('manual-publication'); step('schedule-absence');
     const me = await fetch(`${cmsOrigin}/editorial/api/portal-editors/me`, { headers: { Cookie: headers.Cookie } })
     if (me.status !== 200 || (await me.json()).user?.portalUid !== editor.uid) throw new Error('manual_runtime_http_authentication_failed')
-    const denied = await fetch(`${cmsOrigin}/editorial/api/news-articles`, { method: 'POST', headers: { ...headers, Cookie: '__Host-ownerinc-editorial=reader-denied' }, body: '{}' })
-    if (![401, 403].includes(denied.status)) throw new Error('manual_runtime_http_authorization_failed')
+    const denied = await fetch(`${cmsOrigin}/editorial/api/news-articles`, { method: 'POST',
+      headers: { ...headers, Cookie: `__Host-ownerinc-editorial=reader-${marker}` }, body: '{}' })
+    if (denied.status !== 403) throw new Error('manual_runtime_http_authorization_failed')
     const mediaBytes = Buffer.from('%PDF-1.7\nOwnerinc manual runtime proof\nxref\n0 1\n0000000000 65535 f\n%%EOF\n')
     const form = new FormData(); form.append('file', new Blob([mediaBytes], { type: 'application/pdf' }), 'manual-runtime.pdf'); form.append('_payload', '{}')
     const upload = await fetch(`${cmsOrigin}/editorial/api/news-media`, { method: 'POST', headers: { Cookie: headers.Cookie,
@@ -318,8 +329,7 @@ export async function main(env = process.env) {
     await writeFile(path.join(backup, 'cms-postgres.dump'), await dump('ownerinc_cms'));
     await writeFile(path.join(backup, 'postgres.dump'), await dump('portal_manual_runtime'));
     await command('tar', ['-czf', path.join(backup, 'cms-uploads.tar.gz'), '-C', path.join(directory, 'uploads'), '.']);
-    const empty = path.join(directory, 'portal-uploads'); await mkdir(empty, { mode: 0o700 });
-    await command('tar', ['-czf', path.join(backup, 'uploads.tar.gz'), '-C', empty, '.']);
+    await command('tar', ['-czf', path.join(backup, 'uploads.tar.gz'), '-C', portalUploads, '.']);
     await writeFile(path.join(backup, 'release.images'), `API_IMAGE=fixture.invalid/ownerinc-portal-api@sha256:${'a'.repeat(64)}\nCRON_IMAGE=fixture.invalid/ownerinc-portal-cron@sha256:${'b'.repeat(64)}\nCMS_IMAGE=fixture.invalid/ownerinc-portal-cms@sha256:${'c'.repeat(64)}\nRELEASE_FORMAT=payload-v1\n`);
     await writeFile(path.join(backup, 'operations-proof.json'), JSON.stringify({ schemaVersion: 1, fixture: 'manual-runtime', markerSha256: sha256(marker) }));
     await writeFile(path.join(backup, 'backup.format'), 'payload-v1\n');
@@ -358,10 +368,15 @@ export async function main(env = process.env) {
     await writeFile(path.join(protection, 'cms-postgres.dump'), await targetDump('ownerinc_cms'));
     await writeFile(path.join(protection, 'postgres.dump'), await targetDump('portal_manual_runtime'));
     await command('tar', ['-czf', path.join(protection, 'cms-uploads.tar.gz'), '-C', path.join(restored, 'uploads'), '.']);
-    const protectionNames = ['postgres.dump', 'cms-postgres.dump', 'cms-uploads.tar.gz'];
-    await writeFile(path.join(protection, 'manifest.sha256'), (await Promise.all(protectionNames.map(async name =>
-      `${sha256(await readFile(path.join(protection, name)))}  ${name}`))).join('\n') + '\n');
-    await command('bash', ['-c', 'cd "$1" && sha256sum --check --strict manifest.sha256 >/dev/null', 'fixture', protection]);
+    await command('tar', ['-czf', path.join(protection, 'uploads.tar.gz'), '-C', restoredPortalUploads, '.']);
+    await copyFile(path.join(backup, 'release.images'), path.join(protection, 'release.images'));
+    await writeFile(path.join(protection, 'operations-proof.json'), JSON.stringify({ schemaVersion: 1,
+      fixture: 'manual-runtime-restore-protection', markerSha256: sha256(marker) }));
+    await writeFile(path.join(protection, 'backup.format'), 'payload-v1\n');
+    await command('bash', ['-c', '. "$1/scripts/release-manifest.sh"; write_payload_backup_manifest "$2"; verify_storage_archive "$2/uploads.tar.gz"; verify_storage_archive "$2/cms-uploads.tar.gz"',
+      'fixture', root, protection]);
+    await docker(['exec', '-i', targetContainer, 'pg_restore', '--list'], { input: await readFile(path.join(protection, 'cms-postgres.dump')) });
+    await docker(['exec', '-i', targetContainer, 'pg_restore', '--list'], { input: await readFile(path.join(protection, 'postgres.dump')) });
     step('restore-cms-database');
     await docker(['exec', '-i', targetContainer, 'pg_restore', '--single-transaction', '--clean', '--if-exists',
       '--username=cms_admin', '--dbname=ownerinc_cms'], { input: await readFile(path.join(backup, 'cms-postgres.dump')) });
@@ -379,6 +394,11 @@ export async function main(env = process.env) {
     await protocolProof('audit', targetPort);
     step('restore-storage');
     await command('tar', ['-xzf', path.join(backup, 'cms-uploads.tar.gz'), '-C', path.join(restored, 'uploads')]);
+    await command('tar', ['-xzf', path.join(backup, 'uploads.tar.gz'), '-C', restoredPortalUploads]);
+    if ((await readdir(restoredPortalUploads)).join(',') !== portalUploadName ||
+      sha256(await readFile(path.join(restoredPortalUploads, portalUploadName))) !== sha256(portalUploadBytes)) {
+      throw new Error('manual_runtime_portal_upload_restore_mismatch')
+    }
     await copyFile(path.join(directory, 'content-proof.json'), path.join(restored, 'content-proof.json'));
     step('restored-verification');
     cmsOrigin = await startCms('ownerinc_cms', restored, targetPort);

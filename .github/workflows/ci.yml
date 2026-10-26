@@ -27,7 +27,28 @@ permissions:
   packages: write
 
 jobs:
+  dispatch-input-contract:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Reject conflicting publication modes
+        env:
+          CMS_IMAGE_ONLY: ${{ inputs.cms_image_only }}
+          PUBLISH_CANDIDATE_ONLY: ${{ inputs.publish_candidate_only }}
+          MANUAL_RUNTIME_ONLY: ${{ inputs.manual_runtime_only }}
+        run: |
+          set -euo pipefail
+          selected=0
+          for value in "$CMS_IMAGE_ONLY" "$PUBLISH_CANDIDATE_ONLY" "$MANUAL_RUNTIME_ONLY"; do
+            if [[ "$value" == true ]]; then selected=$((selected + 1)); fi
+          done
+          if ((selected > 1)); then
+            echo 'Select only one manual CI mode.' >&2
+            exit 1
+          fi
+
   payload-manual-runtime:
+    needs: dispatch-input-contract
     if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.manual_runtime_only == true && inputs.cms_image_only != true && inputs.publish_candidate_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -81,6 +102,7 @@ jobs:
             node scripts/integration/payload-manual-runtime.mjs
 
   isolated-b0-recovery:
+    needs: dispatch-input-contract
     if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -174,7 +196,7 @@ jobs:
           retention-days: 7
 
   validate:
-    needs: isolated-b0-recovery
+    needs: [dispatch-input-contract, isolated-b0-recovery]
     if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.manual_runtime_only == true) && (needs.isolated-b0-recovery.result == 'success' || (!(github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true) && needs.isolated-b0-recovery.result == 'skipped')) }}
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true && 150 || 90 }}
     outputs:
