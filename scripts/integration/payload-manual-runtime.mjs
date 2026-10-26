@@ -274,7 +274,8 @@ export async function main(env = process.env) {
     await proof('capture', 'ownerinc_cms', directory)
     const publication = await fetch(`${cmsOrigin}/editorial/api/news-articles/${draft.id}`, { method: 'PATCH', headers,
       body: JSON.stringify({ _status: 'published' }) })
-    if (publication.status !== 200 || (await publication.json()).doc?._status !== 'published') throw new Error('manual_runtime_http_publish_failed')
+    if (publication.status !== 200) throw new Error(`manual_runtime_http_publish_failed_${publication.status}`)
+    if ((await publication.json()).doc?._status !== 'published') throw new Error('manual_runtime_http_publish_status_invalid')
     step('runtime-restart');
     await docker(['stop', '--time', '30', container], { timeout: 45_000 });
     let unavailable = false;
