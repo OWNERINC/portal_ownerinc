@@ -33,10 +33,11 @@ que não chama transição, guard de writer ou mutação direta. Isso não afirm
 reader legado herdado seja side-effect-free: sua promoção de schedules vencidos
 foi preservada e sua substituição foi adiada.
 
-**PR 2 não está ativo:** não há perfil runtime manual-only instalado por este PR,
-nem remoção de worker/schedules. **PR 3 não está ativo:** não há preflight/floor de
-cutover ou dispatch manual habilitado. Nenhum merge deste PR autoriza deploy,
-ativação ou cutover; a operação real continua separada e explicitamente aprovada.
+**PR 2 continua inativo em produção:** o candidato exige modo `manual`, omite
+worker/schedules/jobs e possui preflight privado, mas ainda não foi implantado.
+**PR 3 não está ativo:** não há transição de cutover nem dispatch manual habilitado.
+Nenhum merge destes PRs autoriza deploy, ativação ou cutover; a operação real
+continua separada e explicitamente aprovada.
 
 ## Checks separados
 
@@ -54,6 +55,8 @@ audit, build, typecheck e geração exigem execução exclusiva coordenada.
 | `npm run security` | Audit produção API/cron/CMS, falha em high/critical |
 | `npm run sbom` | SPDX por lockfile: api, cron, cms |
 | `npm run test:payload` | Guard + bloqueio explícito enquanto a suíte real estiver incompleta |
+| `node --test tests/unit/payload-manual-runtime.test.mjs tests/unit/payload-operations.test.mjs` | Contratos offline do runtime manual e recovery |
+| `PAYLOAD_MANUAL_RUNTIME_DISPOSABLE=1 node scripts/integration/payload-manual-runtime.mjs` | Prova Linux/Docker descartável; exige autorização para iniciar containers |
 
 O audit CMS mantém opcionais no escopo; API/cron preservam a política anterior
 `--omit=dev --omit=optional`. SBOM inclui a árvore do lockfile, não somente a imagem
@@ -308,6 +311,44 @@ Integração real, migrations CMS repetidas, grants runtime e o release operacio
 Payload permanecem gates próprios de infraestrutura/operação; consulte
 [Deployment](deployment.md#fluxo-de-release).
 Os contratos de publish/backup não são definidos uma segunda vez neste documento.
+
+### Prova descartável do runtime manual-only
+
+`scripts/integration/payload-manual-runtime.mjs` não executa nada sem o opt-in
+literal `PAYLOAD_MANUAL_RUNTIME_DISPOSABLE=1` e nunca imprime `PASS` nesse caso.
+Com opt-in, aceita somente Linux, recusa um namespace host com rota default IPv4
+ou IPv6, exige a imagem PostgreSQL 16 pinada já presente (`--pull never`) e cria
+nomes aleatórios rotulados para dois clusters/volumes próprios: origem e restore
+independente. A rede Docker é interna; as únicas portas publicadas são aleatórias
+em loopback. Senhas ficam em arquivos 0600 efêmeros, não em argv ou logs. O CMS é
+compilado e servido com `next start`; o transporte loopback do actor Portal é um
+double bounded, enquanto cookie, autorização CMS e mutações REST Payload usam o
+servidor HTTP de produção.
+
+A execução provisiona roles separadas, migra banco vazio, instala o protocolo e
+qualifica `coverage_version=1` somente após confirmar head zero, chain inicial,
+barreira aberta e tabelas editoriais vazias. Em seguida prova readiness de banco,
+schema e escrita/fsync/remoção no volume, nega um usuário sem permissão, cria mídia,
+salva draft, publica manualmente e confirma que schedules/UI/jobs estão ausentes.
+Depois reinicia o PostgreSQL e uma nova instância Payload, compara IDs, Version,
+status e SHA-256 dos bytes, gera um conjunto `payload-v1`, chama os validadores
+canônicos de manifesto/archive e restaura bancos e mídia em um segundo cluster.
+
+Falha nunca vira aceite: containers próprios são parados e evidência privada é
+retida; nenhum volume é removido. Em sucesso, somente containers, volumes e rede
+com os nomes aleatórios daquela execução são removidos. Defina
+`PAYLOAD_MANUAL_RUNTIME_RETAIN_EVIDENCE=1` para preservar também a evidência de
+sucesso. A prova não usa produção, não muda authority real e não substitui cutover.
+
+O endpoint `/editorial/health` é liveness sem dependências. `/editorial/ready`
+continua privado e agora exige configuração manual válida, consulta real ao schema
+e prova gravável do storage. O Nginx só inicia após o healthcheck de readiness do
+CMS; uma porta TCP viva não publica o admin por si só.
+
+Em host sem Linux de usuário, o dispatch CI `manual_runtime_only=true` executa
+somente essa prova em `ubuntu-latest`. Dependências e a imagem pinada são obtidas
+antes do isolamento; durante a fixture, as rotas default IPv4/IPv6 são removidas e
+restauradas por trap. Esse dispatch não publica imagens e não executa deploy.
 
 O CI run `37782865173` falhou somente no scan HIGH/CRITICAL Trivy da imagem CMS;
 os scans API/cron passaram. A correção de imagem usa o índice de registry

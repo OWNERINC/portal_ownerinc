@@ -121,6 +121,11 @@ services:
     stop_grace_period: 120s
     restart: unless-stopped
 
+  nginx:
+    depends_on:
+      cms:
+        condition: service_healthy
+
 volumes:
   cms_postgres_data:
   cms_uploads_data:

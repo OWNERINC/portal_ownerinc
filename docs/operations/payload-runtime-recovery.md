@@ -1840,6 +1840,27 @@ papel fixo (`source`, `target`, `leaseTarget`): readiness CMS inicial, readiness
 writers após restart e estado da comparação de snapshots (`not_started`, `running`,
 `passed`, `failed`). Isso mantém visível uma comparação concluída mesmo se a
 restauração dos writers falhar depois.
+
+No candidato manual-only, liveness e readiness são endpoints distintos.
+`/editorial/health` confirma apenas que o processo HTTP responde;
+`/editorial/ready` confirma DB, schema, `CMS_PUBLICATION_MODE=manual` e escrita
+durável no volume de mídia por arquivo privado exclusivo imediatamente removido.
+O overlay Payload adiciona o CMS healthy como dependência do Nginx, portanto o
+admin não é exposto por mera aceitação TCP. DB indisponível, migration ausente,
+storage não gravável ou modo inválido mantêm readiness fechada.
+
+O formato coordenado permanece byte-compatível com `payload-v1`: `postgres.dump`,
+`uploads.tar.gz`, `cms-postgres.dump`, `cms-uploads.tar.gz`, `release.images`,
+`operations-proof.json`, `backup.format` e `manifest.sha256`. A fixture manual usa
+as mesmas funções `verify_backup_manifest` e `verify_storage_archive`, restaura em
+cluster PostgreSQL independente e só então compara IDs/status/Version/SHA/bytes.
+Antes da primeira mutação no destino, a fixture captura e verifica um backup de
+proteção. O restore CMS preserva owners e ACLs autenticados do archive, em vez de
+forçar tudo para `cms_migrator`; depois reaplica grants runtime e audita por
+`cms_observer` o catálogo, funções `SECURITY DEFINER`, triggers, ownership e ACLs.
+O restore operacional mantém o backup de proteção e writers parados em falha; foi
+removida uma chamada duplicada sem efeito a `prepare-restore` antes de `cms-migrate`,
+sem reduzir nenhum boundary destrutivo.
 Se a comparação e a restauração falharem na mesma passagem, o relatório mantém
 os dois resumos estáticos separados em vez de deixar a falha de restart ocultar a
 falha de snapshot. O `verify-release` seguinte à comparação usa stage por papel e

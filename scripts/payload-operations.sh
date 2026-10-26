@@ -130,9 +130,7 @@ capture() {
   printf 'payload-v1\n' > "$destination/backup.format"
   guard backup-metadata "$destination/operations-proof.json"
   step capture_manifest
-  (cd "$destination" && sha256sum postgres.dump uploads.tar.gz cms-postgres.dump cms-uploads.tar.gz release.images operations-proof.json backup.format > manifest.sha256)
-  step capture_verify_manifest
-  verify_backup_manifest "$destination"
+  write_payload_backup_manifest "$destination"
 }
 
 if [[ $action == backup ]]; then
@@ -187,7 +185,10 @@ else
   guard prepare-restore "$backup" guard_prepare_restore_cms
   # CMS ownership must remain cms_migrator so future DDL uses the same owner.
   step restore_cms_database
-  compose exec -T cms-postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --role=cms_migrator --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/cms-postgres.dump"
+  # The reviewed archive contains the cms_control-owned SECURITY DEFINER
+  # functions and their narrow cms_controller ACLs. Restore ownership/ACLs as
+  # cms_admin; forcing cms_migrator would silently weaken the protocol contract.
+  compose exec -T cms-postgres sh -c 'pg_restore --single-transaction --clean --if-exists --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/cms-postgres.dump"
   for service in api cms; do
     guard prepare-restore "$backup" "guard_prepare_restore_${service}_clear"
     artifact=uploads.tar.gz; storage=/app/uploads
@@ -199,11 +200,12 @@ else
     compose run --rm --no-deps -T --entrypoint tar "$service" -xzf - -C "$storage" < "$backup/$artifact"
   done
   guard prepare-restore "$backup" guard_prepare_restore_cms_migrate
-  guard prepare-restore "$backup" guard_prepare_restore_cms_migrate
   step restore_cms_migrate
   compose run --rm --no-deps cms-migrate
   step restore_cms_verify_runtime
   compose run --rm --no-deps --entrypoint node cms --import tsx scripts/provision-db.ts --verify-runtime
+  step restore_cms_verify_control
+  compose run --rm --no-deps cms-control-roles
   guard verify-restored "$backup"
   # Start API/CMS/Nginx for the readiness smoke with admission still closed.
   # Resume the originally stopped services only after smoke; cms-worker is never

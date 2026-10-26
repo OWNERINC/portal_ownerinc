@@ -274,7 +274,10 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.equal((await readFile(path.join(f.root, 'restores'), 'utf8')).trim().split('\n').length, 4);
   const calls = await readFile(path.join(f.root, 'calls'), 'utf8');
   assert.ok(calls.indexOf('pg_dump') < calls.indexOf('pg_restore'));
-  assert.match(calls, /--role=cms_migrator/);
+  const cmsRestore = calls.split('\n').find(line => line.includes('exec -T cms-postgres') && line.includes('pg_restore'));
+  assert.ok(cmsRestore);
+  assert.doesNotMatch(cmsRestore, /--no-owner|--no-privileges|--role=/u, 'CMS restore must preserve reviewed ownership and ACLs');
+  assert.match(calls, /run --rm --no-deps cms-control-roles/u);
   assert.match(calls, /--entrypoint tar cms -xzf - -C \/var\/lib\/ownerinc-cms\/media/);
   assert.match(calls, /--entrypoint tar api -xzf - -C \/app\/uploads/);
   assert.match(calls, /restore-files \/var\/lib\/ownerinc-cms\/media/);
@@ -283,7 +286,7 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.deepEqual(guardCalls, [
     'restore-preflight', 'observe-writers', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore',
     'portal-restore-intermediate', 'prepare-restore', 'prepare-restore', 'prepare-restore',
-    'prepare-restore', 'prepare-restore', 'prepare-restore', 'prepare-restore',
+    'prepare-restore', 'prepare-restore', 'prepare-restore',
     'verify-restored', 'resume-readiness-writers', 'resume-writers', 'verify-release', 'open-admission',
   ]);
   const timeline = (await readFile(path.join(f.root, 'timeline'), 'utf8')).trim().split('\n');

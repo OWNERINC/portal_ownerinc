@@ -158,7 +158,7 @@ resume_writers backup_destination backup_upload restore_confirmation restore_man
 restore_portal_archive restore_cms_archive restore_protection_destination restore_portal_database
 restore_portal_migrate restore_portal_verify_migrations restore_cms_database restore_api_storage_clear
 restore_api_storage_extract restore_cms_storage_clear restore_cms_storage_extract restore_cms_migrate
-restore_cms_verify_runtime restore_start_readiness restore_smoke`.trim().split(/\s+/u),
+  restore_cms_verify_runtime restore_cms_verify_control restore_start_readiness restore_smoke`.trim().split(/\s+/u),
   ...coordinatorGuardSteps,
 ]);
 const coordinatorSteps = new Set(coordinatorDiagnosticSteps);

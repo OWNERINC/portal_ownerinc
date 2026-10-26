@@ -109,6 +109,7 @@ export function nginxConfigSource(source, firebaseSource) {
   if (typeof firebaseSource !== 'string' || !source.includes('listen 80;') || !source.includes('http://api:3000') || !source.includes('http://cms:3001')) fail('functional_nginx_contract_changed');
   // Reuse all production route/CSP/Origin boundaries. TLS and emulator transport are fixture-only.
   return source.replace('listen 80;', 'listen 443 ssl;\n    ssl_certificate /fixture/cert.pem;\n    ssl_certificate_key /fixture/key.pem;')
+    .replace('location = /editorial/ready { return 404; }', 'location = /editorial/ready { proxy_pass $cms_upstream; }')
     .replace("connect-src 'self' http://127.0.0.1:9099 http://localhost:9099 https://*.googleapis.com https://*.firebaseio.com;", "connect-src 'self';")
     .replace('index index.html;', `index index.html;
     location = /js/firebase-config.js { default_type application/javascript; return 200 ${JSON.stringify(firebaseSource).replaceAll('$','\\$')}; }
