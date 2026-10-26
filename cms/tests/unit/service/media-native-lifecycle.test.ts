@@ -93,17 +93,18 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
       }
       mode = 'payload'
     })
-    await t.test('native single article PATCH and restore reach snapshot only after lock+authority; unsafe bulk updates denied', async () => {
-      for (const operation of ['update', 'restore']) {
-        events.length = 0
-        const args = { id: randomUUID(), collection: { config: articlesConfig }, overrideAccess: true, req: request() }
-        await assert.rejects(operation === 'update' ? updateByIDOperation({ ...args, data: {} }) : restoreVersionOperation(args), /native_snapshot_reached/)
-        assert.equal(events[0], 'begin')
-        assert.ok(events.indexOf('lock') < events.indexOf('authority'))
-        assert.ok(events.indexOf('authority') < events.indexOf('actor'))
-        assert.ok(events.indexOf('actor') < events.indexOf('snapshot'))
-        assert.equal(events.at(-1), 'rollback')
-      }
+    await t.test('native single article PATCH reaches snapshot after authority while restore is unavailable; unsafe bulk updates denied', async () => {
+      events.length = 0
+      const args = { id: randomUUID(), collection: { config: articlesConfig }, overrideAccess: true, req: request() }
+      await assert.rejects(updateByIDOperation({ ...args, data: {} }), /native_snapshot_reached/)
+      assert.equal(events[0], 'begin')
+      assert.ok(events.indexOf('lock') < events.indexOf('authority'))
+      assert.ok(events.indexOf('authority') < events.indexOf('actor'))
+      assert.ok(events.indexOf('actor') < events.indexOf('snapshot'))
+      assert.equal(events.at(-1), 'rollback')
+      events.length = 0
+      await assert.rejects(restoreVersionOperation(args), /news_version_restore_unavailable/)
+      assert.deepEqual(events, ['begin', 'rollback'])
       await assert.rejects(updateOperation({ collection: { config: articlesConfig }, req: request(), overrideAccess: true,
         data: {}, where: { id: { exists: true } } }), /news_update_requires_single_id/)
       assert.equal(Object.keys(sessions).length, 0)

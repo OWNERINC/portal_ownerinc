@@ -106,10 +106,11 @@ try {
   await page.getByRole('button', { name: 'Fechar', exact: true }).click()
   let releaseSave
   const holdSave = new Promise(resolve => { releaseSave = resolve })
+  let saveRequests = 0
   let sawSave
   const saveStarted = new Promise(resolve => { sawSave = resolve })
   await page.route(`**/editorial/api/news-articles/${fixture.articleId}*`, async route => {
-    if (route.request().method() === 'PATCH') { sawSave(); await holdSave }
+    if (route.request().method() === 'PATCH') { saveRequests++; sawSave(); await holdSave }
     await route.continue()
   })
   const title = page.getByLabel('Title', { exact: true })
@@ -117,14 +118,17 @@ try {
   const savedMarker = `Task6 native pending-save marker ${Date.now()}`
   await title.fill(savedMarker)
   assert.equal(await opener.isDisabled(), true, 'unsaved native form blocks scheduling')
-  await Promise.race([saveStarted, delay(15000).then(() => { throw new Error('native autosave did not start') })])
-  assert.equal(await opener.isDisabled(), true, 'native pending autosave blocks scheduling')
+  await delay(2500)
+  assert.equal(saveRequests, 0, 'manual profile never starts autosave')
+  await page.getByRole('button', { name: 'Salvar rascunho', exact: true }).click()
+  await Promise.race([saveStarted, delay(15000).then(() => { throw new Error('explicit draft save did not start') })])
+  assert.equal(await opener.isDisabled(), true, 'native pending explicit save blocks scheduling')
   const saved = page.waitForResponse(response => response.url().includes(`/news-articles/${fixture.articleId}`) && response.request().method() === 'PATCH')
   releaseSave(); assert.equal((await saved).status(), 200)
   await page.unroute(`**/editorial/api/news-articles/${fixture.articleId}*`)
   await opener.click()
   await page.getByText(`${savedMarker} — revisão`, { exact: false }).waitFor()
-  console.log('Native form: unsaved + in-flight autosave disabled schedule action; saved revision then updated correctly')
+  console.log('Native form: unsaved + in-flight explicit save disabled schedule action; saved revision then updated correctly')
   await page.setViewportSize({ width: 390, height: 844 })
   await page.waitForTimeout(500) // native drawer transition, not an application readiness substitute
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'mobile viewport has no horizontal overflow')

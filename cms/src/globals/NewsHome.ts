@@ -9,7 +9,7 @@ export const NewsHome: GlobalConfig = {
   slug: 'news-home',
   label: 'Abertura da Owner News',
   admin: {},
-  access: { read: newsAreaReadAccess, update: canWriteNews, readVersions: newsAreaReadAccess },
+  access: { read: newsAreaReadAccess, update: canWriteNews, readVersions: () => false },
   versions: { max: 0, drafts: { autosave: false, schedulePublish: false } },
   fields: [
     { name: 'eyebrow', label: 'Chamada', type: 'text', maxLength: 80, defaultValue: '' },

@@ -32,6 +32,7 @@ test(`manual-only persisted content ${mode}`, async () => {
     const config = await (await import('../../src/payload.config.js')).default
     assert.equal(config.collections.some(collection => collection.slug === 'news-schedules'), false)
     assert.equal(config.endpoints.some(endpoint => endpoint.path === '/news-schedule'), false)
+    assert.equal(config.endpoints.some(endpoint => endpoint.path === '/saved-preview' && endpoint.method === 'get'), true)
     assert.deepEqual(config.jobs?.tasks, [])
     config.typescript.autoGenerate = false
     stage = 'payload-init'

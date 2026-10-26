@@ -4,7 +4,7 @@ import { newsAreaReadAccess } from '../auth/news-area-access'
 import { newsFields } from '../news/fields'
 import { protectNewsIdentity, validateNewsBeforeChange, validateNewsPublicationMedia } from '../news/validation'
 import { protectArticleReferences } from '../publication/authority'
-import { beforeArticlePublication, prepareArticlePublication, afterArticlePublication } from '../publication/hooks'
+import { beforeArticlePublication, prepareArticlePublication, afterArticlePublication, refuseArticleVersionRestore } from '../publication/hooks'
 
 export const NewsArticles: CollectionConfig = {
   slug: 'news-articles',
@@ -14,9 +14,9 @@ export const NewsArticles: CollectionConfig = {
     components: { edit: { beforeDocumentControls: ['/admin/SavedPreview#SavedPreview', '/admin/LegacyHistory#LegacyHistory'] },
       views: { create: { Component: '/news/CreateArticleView#CreateArticleView', path: '/create', exact: true } } },
   },
-  access: { create: canWriteNews, read: newsAreaReadAccess, update: canWriteNews, delete: canWriteNews, readVersions: newsAreaReadAccess },
+  access: { create: canWriteNews, read: newsAreaReadAccess, update: canWriteNews, delete: canWriteNews, readVersions: () => false },
   versions: { maxPerDoc: 0, drafts: { autosave: false, schedulePublish: false } },
   fields: newsFields,
-  hooks: { beforeOperation: [protectArticleReferences, protectNewsIdentity, beforeArticlePublication],
+  hooks: { beforeOperation: [refuseArticleVersionRestore, protectArticleReferences, protectNewsIdentity, beforeArticlePublication],
     beforeChange: [prepareArticlePublication, validateNewsBeforeChange, validateNewsPublicationMedia], afterChange: [afterArticlePublication] },
 }

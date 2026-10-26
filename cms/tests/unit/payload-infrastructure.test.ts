@@ -4,7 +4,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { NextRequest } from 'next/server'
 import type { Payload } from 'payload'
-import { proxy, editorialPolicy } from '../../src/proxy'
+import { proxy, editorialPolicy, isNativeNewsRestoreRequest } from '../../src/proxy'
 import {
   buildProtocolRuntimeGrantsSQL, controlRolesBootstrapSQL, controlRolesNativePrivilegesVerificationSQL,
   controlRolePasswordPresenceSQL, controlRolesOwnershipVerificationSQL, controlRolesVerificationSQL,
@@ -40,6 +40,19 @@ test('origin guard remains enforced for native form/actions with CSP on denial',
     const response = proxy(new NextRequest('https://portal.example/editorial/admin', { method: 'POST', headers: { origin: 'https://portal.example' } }))
     assert.equal(response.status, 200)
   } finally { if (old === undefined) delete process.env.PORTAL_PUBLIC_URL; else process.env.PORTAL_PUBLIC_URL = old }
+})
+
+test('native article and home restore endpoints are unavailable before Payload dispatch', () => {
+  const article = '/editorial/api/news-articles/versions/11111111-1111-4111-8111-111111111111'
+  const home = '/editorial/api/globals/news-home/versions/22222222-2222-4222-8222-222222222222'
+  for (const pathname of [article, home]) {
+    assert.equal(isNativeNewsRestoreRequest(pathname, 'POST'), true)
+    const response = proxy(new NextRequest(`https://portal.example${pathname}`, { method: 'POST' }))
+    assert.equal(response.status, 404)
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store')
+  }
+  assert.equal(isNativeNewsRestoreRequest(article, 'GET'), false)
+  assert.equal(isNativeNewsRestoreRequest('/editorial/api/news-media/versions/id', 'POST'), false)
 })
 
 test('provisioning quotes passwords, rejects placeholder/control values and separates roles', () => {

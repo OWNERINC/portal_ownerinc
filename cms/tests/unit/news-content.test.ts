@@ -393,8 +393,12 @@ test('native configs protect CRUD/history, retain every block, keep manual draft
     portalActor: { uid: 'uid', canManageNews: true } } } as unknown as PayloadRequest
   for (const config of [NewsArticles, NewsHome]) for (const [name, access] of Object.entries(config.access!)) {
     assert.equal(await access!({ req }), false)
-    if (name === 'read' || name === 'readVersions') {
+    if (name === 'read') {
       assert.strictEqual(access, newsAreaReadAccess, `${config.slug} ${name} uses fresh News authority`)
+      continue
+    }
+    if (name === 'readVersions') {
+      assert.equal(await access!({ req: editorReq }), false, `${config.slug} Versions stay private in manual mode`)
       continue
     }
     assert.equal(await access!({ req: editorReq }), true)

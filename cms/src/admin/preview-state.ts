@@ -4,7 +4,7 @@ export const previewConflictMessage = 'Ainda não há uma revisão salva dispon�
 /** This endpoint only reads native Versions; it never creates a draft on GET. */
 export async function savedPreview(documentId: string, signal: AbortSignal, request: typeof fetch = fetch) {
   if (!uuid(documentId)) throw new Error('Salve o documento antes de abrir a prévia.')
-  const response = await request(`/editorial/api/news-schedule?target=article&documentId=${encodeURIComponent(documentId)}`,
+  const response = await request(`/editorial/api/saved-preview?target=article&documentId=${encodeURIComponent(documentId)}`,
     { credentials: 'same-origin', cache: 'no-store', signal })
   if (response.status === 409) throw new Error(previewConflictMessage)
   if (!response.ok) throw new Error('Não foi possível consultar a revisão salva. Confira sua permissão editorial.')
