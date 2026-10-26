@@ -1908,15 +1908,18 @@ async function verifyInstalled(client: FinalizerClient,
         'p_run_id', 'p_manifest_sha256', 'p_source_instance', 'p_source_fingerprint', 'p_authority_epoch', 'id',
       ])))) fail(`canonical_function_mismatch:${fns.rows.map(row => {
         const name = String(row.name)
-        const bootstrap = name !== 'owner_news_bootstrap_run' || (row.bootstrap_return_shape === true
-          && row.bootstrap_is_strict === false
-          && catalogTextArrayMatches(row.bootstrap_argument_modes, ['i', 'i', 'i', 'i', 'i', 't'])
-          && catalogTextArrayMatches(row.bootstrap_argument_names, [
+        const bootstrapReturn = name !== 'owner_news_bootstrap_run' || row.bootstrap_return_shape === true
+        const bootstrapStrict = name !== 'owner_news_bootstrap_run' || row.bootstrap_is_strict === false
+        const bootstrapModes = name !== 'owner_news_bootstrap_run'
+          || catalogTextArrayMatches(row.bootstrap_argument_modes, ['i', 'i', 'i', 'i', 'i', 't'])
+        const bootstrapNames = name !== 'owner_news_bootstrap_run'
+          || catalogTextArrayMatches(row.bootstrap_argument_names, [
             'p_run_id', 'p_manifest_sha256', 'p_source_instance', 'p_source_fingerprint', 'p_authority_epoch', 'id',
-          ]))
+          ])
         return `${name}:sig=${row.canonical_signature === true}:sec=${row.security_definer === (name !== 'owner_news_mutation_guard_stmt')}`
           + `:owner=${row.owner === 'cms_control'}:config=${Array.isArray(row.config) && row.config.includes('search_path=pg_catalog, public')}`
-          + `:source=${row.source === expected.get(name)}:bootstrap=${bootstrap}`
+          + `:source=${row.source === expected.get(name)}:return=${bootstrapReturn}:strict=${bootstrapStrict}`
+          + `:modes=${bootstrapModes}:names=${bootstrapNames}`
       }).join(',')}`)
 
   const triggers = await client.query(`SELECT t.tgname AS name, c.relname AS relation, n.nspname AS relation_schema,

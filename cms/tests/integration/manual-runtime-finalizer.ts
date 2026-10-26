@@ -16,7 +16,7 @@ test('manual runtime installs the canonical protocol', async () => {
   } catch (error) {
     let code: unknown
     try { code = error && typeof error === 'object' ? Object.getOwnPropertyDescriptor(error, 'code')?.value : null } catch { code = null }
-    if (typeof code === 'string' && /^canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|bootstrap)=(?:true|false)(?::(?:sig|sec|owner|config|source|bootstrap)=(?:true|false))*,?)+$/u.test(code)) {
+    if (typeof code === 'string' && /^canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+$/u.test(code)) {
       process.stderr.write(`MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=${code}\n`)
     }
     throw error

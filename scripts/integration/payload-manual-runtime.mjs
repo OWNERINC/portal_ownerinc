@@ -205,7 +205,7 @@ export async function main(env = process.env) {
       'tests/integration/manual-runtime-finalizer.ts'], {
       cwd: path.join(root, 'cms'), env: { ...cleanEnvironment(), PAYLOAD_MANUAL_RUNTIME_MARKER: marker,
         CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms') },
-      safeStderrPattern: /MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|bootstrap)=(?:true|false)(?::(?:sig|sec|owner|config|source|bootstrap)=(?:true|false))*,?)+/u });
+      safeStderrPattern: /MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+/u });
     step('protocol-baseline');
     const qualify = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms'));
     try {
@@ -378,7 +378,7 @@ export async function main(env = process.env) {
     if (portalServer) await new Promise(resolve => portalServer.close(resolve)).catch(() => {});
     if (created) await docker(['stop', '--time', '30', container], { timeout: 45_000 }).catch(() => {});
     if (targetCreated) await docker(['stop', '--time', '30', targetContainer], { timeout: 45_000 }).catch(() => {});
-    const diagnostic = error instanceof Error && /^(?:CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|bootstrap)=(?:true|false)(?::(?:sig|sec|owner|config|source|bootstrap)=(?:true|false))*,?)+)$/u.test(error.message)
+    const diagnostic = error instanceof Error && /^(?:CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+)$/u.test(error.message)
       ? ` diagnostic=${error.message}` : '';
     process.stderr.write(`payload-manual-runtime: FAIL stage=${stage}; owned services stopped; private evidence retained${diagnostic}\n`);
     return 1;
