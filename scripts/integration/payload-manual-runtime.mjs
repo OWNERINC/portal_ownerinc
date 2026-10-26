@@ -241,6 +241,7 @@ export async function main(env = process.env) {
           CMS_OBSERVER_PASSWORD: passwords.observer },
       });
     await protocolProof('provision-observer');
+    await proof('prepare', 'ownerinc_cms', directory);
     step('private-readiness'); let cmsOrigin = await startCms();
     const headers = { 'Content-Type': 'application/json', Cookie: `__Host-ownerinc-editorial=editor-${marker}`,
       Origin: 'https://portal.manual.invalid', 'Sec-Fetch-Site': 'same-origin' }
@@ -248,7 +249,6 @@ export async function main(env = process.env) {
       headers, body: '{}' });
     if (missingSchedule.status !== 404) throw new Error('manual_runtime_schedule_endpoint_present')
     step('editor-authorization'); step('manual-publication'); step('schedule-absence');
-    await proof('prepare', 'ownerinc_cms', directory);
     const me = await fetch(`${cmsOrigin}/editorial/api/portal-editors/me`, { headers: { Cookie: headers.Cookie } })
     if (me.status !== 200 || (await me.json()).user?.portalUid !== editor.uid) throw new Error('manual_runtime_http_authentication_failed')
     const denied = await fetch(`${cmsOrigin}/editorial/api/news-articles`, { method: 'POST', headers: { ...headers, Cookie: '__Host-ownerinc-editorial=reader-denied' }, body: '{}' })
