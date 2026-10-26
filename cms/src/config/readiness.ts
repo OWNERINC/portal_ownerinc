@@ -151,7 +151,8 @@ export async function assertCmsDatabaseReady(payload: Payload): Promise<void> {
       JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace
       JOIN pg_catalog.pg_proc AS procedure ON procedure.oid = trigger.tgfoid
       JOIN pg_catalog.pg_namespace AS procedure_namespace ON procedure_namespace.oid = procedure.pronamespace
-      WHERE NOT trigger.tgisinternal AND relation_namespace.nspname = 'public'`)
+      WHERE NOT trigger.tgisinternal AND relation_namespace.nspname = 'public'
+        AND trigger.tgname IN ('owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row')`)
     const coveredTriggerRows = triggerRows.rows.filter(row => row && typeof row === 'object'
       && NEWS_MUTATION_TABLES.includes((row as Record<string, unknown>).table_name as typeof NEWS_MUTATION_TABLES[number]))
     assertCmsRuntimeCatalog({ migrations: migrationRows.rows, columns: columnRows.rows,

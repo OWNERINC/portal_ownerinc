@@ -93,3 +93,8 @@ test('readiness requires exact migrations, essential columns and canonical enabl
   assert.throws(() => assertCmsRuntimeCatalog({ ...catalog, triggers: catalog.triggers.map((row, index) => index ? row : { ...row, enabled: 'O' }) }), /cms_readiness_triggers_incompatible/)
   assert.throws(() => assertCmsRuntimeCatalog({ ...catalog, triggers: catalog.triggers.map((row, index) => index ? row : { ...row, function_schema: 'attacker' }) }), /cms_readiness_triggers_incompatible/)
 })
+
+test('readiness SQL scopes the inventory to ledger triggers without rejecting independent integrity guards', async () => {
+  const source = await import('node:fs/promises').then(fs => fs.readFile(new URL('../../src/config/readiness.ts', import.meta.url), 'utf8'))
+  assert.match(source, /trigger\.tgname IN \('owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row'\)/u)
+})
