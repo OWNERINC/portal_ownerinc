@@ -353,14 +353,15 @@ antes do isolamento; durante a fixture, as rotas default IPv4/IPv6 são removida
 restauradas por trap. Esse dispatch não publica imagens e não executa deploy.
 
 Evidência de aceite da Task 7: o run CI
-[`40390199109`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/40390199109)
-concluiu a fixture com `PASS` no commit `6019ef5`. Foram provados publicação manual
-via HTTP, autorização, negativa autenticada de schedule, readiness 503 com o banco
-parado, restart, persistência, backup `payload-v1`, backup de proteção, restore em
-cluster independente, ACLs/owners e catálogo do protocolo pelo `cms_observer`, além
-da igualdade de IDs, Version, status, SHA-256 e bytes da mídia. `validate`, recovery
-B0 e deploy ficaram `skipped`; nenhuma imagem foi publicada e nenhum ambiente de
-produção foi alterado.
+[`40392088380`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/40392088380)
+concluiu a fixture com `PASS` no commit `7704094`. Foram provados publicação manual
+via HTTP, autenticação e negativa 403 para ator válido sem permissão, ausência de
+schedule, readiness 503 com o banco parado, restart, persistência, backup
+`payload-v1`, backup de proteção completo e recuperável, restore em cluster
+independente, bytes dos uploads Portal/CMS, ACLs/owners e catálogo do protocolo pelo
+`cms_observer`, além da igualdade de IDs, Version, status e SHA-256. O guard
+independente de inputs também passou; `validate`, recovery B0 e deploy ficaram
+`skipped`. Nenhuma imagem foi publicada e nenhum ambiente de produção foi alterado.
 
 O CI run `37782865173` falhou somente no scan HIGH/CRITICAL Trivy da imagem CMS;
 os scans API/cron passaram. A correção de imagem usa o índice de registry
