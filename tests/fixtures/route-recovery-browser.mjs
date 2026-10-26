@@ -105,6 +105,8 @@ export function syntheticUser(role = 'admin') {
 
 const article = Object.freeze({
   id: 'route-recovery-news-article',
+  source: 'legacy',
+  asset_scope: 'legacy',
   title: 'Synthetic Owner News Article',
   category: 'Synthetic QA',
   published_at: '2026-10-01T12:00:00.000Z',
