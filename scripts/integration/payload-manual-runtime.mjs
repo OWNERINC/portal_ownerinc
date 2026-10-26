@@ -17,7 +17,7 @@ const postgresImage = 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864d
 
 export const manualRuntimeStages = Object.freeze([
   'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
-  'empty-database-provision', 'protocol-qualification',
+  'empty-database-provision', 'protocol-finalizer', 'protocol-baseline', 'protocol-qualification',
   'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
   'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-provision',
   'restore-protection-backup', 'independent-restore',
@@ -192,9 +192,10 @@ export async function main(env = process.env) {
         CMS_DATABASE_URL: url('cms_migrator', passwords.migrator, database) }, timeout: 300_000 });
     await migrate('ownerinc_cms');
 
-    step('protocol-qualification');
+    step('protocol-finalizer');
     await command(process.execPath, ['--import', 'tsx', 'scripts/finalize-news-protocol.ts', '--finalize-protocol'], {
       cwd: path.join(root, 'cms'), env: { ...cleanEnvironment(), CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms') } });
+    step('protocol-baseline');
     const qualify = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms'));
     try {
       await qualify.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
@@ -212,6 +213,7 @@ export async function main(env = process.env) {
       await qualify.query('UPDATE owner_news_mutation_head SET coverage_version=1 WHERE singleton=true AND coverage_version=0');
       await qualify.query('COMMIT');
     } catch (error) { await qualify.query('ROLLBACK').catch(() => {}); throw error; } finally { await qualify.end(); }
+    step('protocol-qualification');
 
     const proof = async (mode, database, evidenceDirectory) => command(process.execPath,
       ['--import', 'tsx', '--test', '--test-reporter=tap', '--test-force-exit', 'tests/integration/manual-runtime-content.ts'],

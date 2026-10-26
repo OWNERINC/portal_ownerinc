@@ -21,7 +21,7 @@ test('manual runtime fixture has one exact disposable opt-in and otherwise perfo
 test('manual runtime plan is ordered, manual-only and includes independent restore evidence', () => {
   assert.deepEqual(manualRuntimeStages, [
     'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
-    'empty-database-provision', 'protocol-qualification',
+    'empty-database-provision', 'protocol-finalizer', 'protocol-baseline', 'protocol-qualification',
     'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
     'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-provision',
     'restore-protection-backup', 'independent-restore',
