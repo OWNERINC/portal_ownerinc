@@ -106,7 +106,9 @@ test('category filtering precedes pagination and total count over validated stab
     .set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(result.headers['x-total-count'], '2');
   assert.deepEqual(result.body.map(row => row.id), [id(8)]);
-  assert.deepEqual(Object.keys(result.body[0]).sort(), ['category', 'content_blocks', 'editorial', 'id', 'published_at', 'read_time_minutes', 'title']);
+  assert.deepEqual(Object.keys(result.body[0]).sort(), ['asset_scope', 'category', 'content_blocks', 'editorial', 'id', 'published_at', 'read_time_minutes', 'source', 'title']);
+  assert.equal(result.body[0].source, 'legacy');
+  assert.equal(result.body[0].asset_scope, 'legacy');
   assert.equal(result.body[0].editorial, null);
   const empty = await api.get('/api/announcements?category=Absent').set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(empty.headers['x-total-count'], '0');
@@ -156,7 +158,7 @@ test('detail preserves the published response format and hides draft or invalid 
   const result = await api.get(`/api/announcements/${id(5)}`).set('Authorization', 'Bearer test-user').expect(200);
   assert.deepEqual(result.body, {
     id: id(5), title: 'Article 5', category: 'News', published_at: '2026-09-18T00:00:00.000Z',
-    content_blocks: [{ type: 'paragraph', text: 'Body 5' }], editorial: null, read_time_minutes: 1,
+    source: 'legacy', asset_scope: 'legacy', content_blocks: [{ type: 'paragraph', text: 'Body 5' }], editorial: null, read_time_minutes: 1,
   });
   for (const n of [2, 3, 4, 6, 7]) {
     await api.get(`/api/announcements/${id(n)}`).set('Authorization', 'Bearer test-user').expect(404);
@@ -179,13 +181,13 @@ test('kind filters before pagination; counts and navigation share complete stabl
     { name: 'News', count: 2 }, { name: 'Other', count: 1 }, { name: 'People & Culture', count: 27 },
   ] });
   assert.deepEqual((await get(`/${id(1)}/navigation`).expect(200)).body,
-    { previous: null, next: { id: id(5), title: 'Article 5' } });
+    { previous: null, next: { source: 'legacy', id: id(5), title: 'Article 5' } });
   assert.deepEqual((await get(`/${id(5)}/navigation`).expect(200)).body,
-    { previous: { id: id(1), title: 'Article 1' }, next: { id: id(8), title: 'Article 8' } });
+    { previous: { source: 'legacy', id: id(1), title: 'Article 1' }, next: { source: 'legacy', id: id(8), title: 'Article 8' } });
   assert.deepEqual((await get(`/${id(38)}/navigation?category=People%20%26%20Culture`).expect(200)).body,
-    { previous: { id: id(37), title: 'Article 37' }, next: null });
+    { previous: { source: 'legacy', id: id(37), title: 'Article 37' }, next: null });
   assert.deepEqual((await get(`/${id(10)}/navigation?category=People%20%26%20Culture`).expect(200)).body,
-    { previous: null, next: { id: id(13), title: 'Article 13' } });
+    { previous: null, next: { source: 'legacy', id: id(13), title: 'Article 13' } });
   for (const n of [2, 4, 6, 12, 99]) await get(`/${id(n)}/navigation`).expect(404);
   await get('/invalid/navigation').expect(400);
 });
