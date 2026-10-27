@@ -273,7 +273,7 @@ release Payload `payload-v1`.
 1. Execute `npm run verify` e `npm run security`.
 2. Exporte os dois digests aprovados pelo CI e execute `bash deploy.sh` somente após revisar host e revisão.
 3. O servidor cria `releases/<commit>-<timestamp>`, valida o manifesto recebido e baixa somente as imagens por digest.
-4. Antes de trocar uma release existente, `scripts/backup.sh` interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
+4. Antes de trocar uma release existente, `scripts/backup.sh` valida toda a retenção, interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
 5. O serviço one-shot `migrate` aplica schema/grants e registra quantas migrations foram aplicadas; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `011_cron_alert_state` e `012_autocard_media_crop`, os privilégios mínimos do cron e o contrato não nulo do crop, antes dos smoke tests.
 6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Dados não sofrem rollback automático.
 
@@ -300,7 +300,27 @@ COMPOSE_ENV_FILE=/opt/ownerinc/secrets/portal-ownerinc/production.runtime.conf \
 BACKUP_DIR=/opt/ownerinc-portal/shared/backups RETENTION_DAYS=14 bash scripts/backup.sh "$PWD"
 ```
 
-Cada diretório UTC contém `postgres.dump`, `uploads.tar.gz` e hashes SHA-256. Copie backups periodicamente para outro host e teste restaurações fora de produção.
+Cada diretório UTC contém `postgres.dump`, `uploads.tar.gz` e hashes SHA-256. Para
+a retenção legacy, um backup válido é exclusivamente um diretório regular filho
+direto de `BACKUP_DIR`, sem symlink, com nome UTC `AAAAMMDDTHHMMSSZ` que represente
+uma data real. Ele deve conter `postgres.dump`, `uploads.tar.gz` e
+`manifest.sha256` como arquivos regulares não-link. O manifesto tem exatamente
+duas entradas SHA-256 estritas, uma para cada artefato, sem paths, opções, nomes
+duplicados ou linhas extras; `sha256sum --check --strict` deve validar ambos.
+Somente depois dessa validação o diretório participa da escolha do backup mais
+novo ou da retenção. Antes de consultar o Compose, parar serviços ou gerar dumps,
+o script enumera o root sem seguir links e recusa arquivos, links, tipos especiais,
+diretórios parciais/inesperados, artefatos ausentes/corrompidos e candidatos
+expirados sem permissões seguras de remoção. Uma dessas recusas não remove nem
+altera a entrada; o operador deve inspecioná-la.
+
+Depois de validar todos os candidatos, a retenção remove somente backups válidos
+expirados, um por vez, e falha explicitamente se algum mudou ou não pôde ser
+removido. O backup válido mais novo que já existia no início da tentativa é sempre
+preservado, mesmo expirado. Uma corrida de filesystem ainda pode fazer a remoção
+real falhar; nesse caso o status é não zero e não deve ser tratado como retenção
+completa. Copie backups periodicamente para outro host e teste restaurações fora
+de produção.
 
 Para enviar a cópia verificada a um bucket S3-compatible, configure `S3_BUCKET`,
 `S3_PREFIX`, `AWS_ENDPOINT_URL` quando necessário e execute com
@@ -333,6 +353,12 @@ S3_BUCKET=ownerinc-portal-backups S3_PREFIX=portal-ownerinc \
 bash scripts/backup-s3.sh "/opt/ownerinc-portal/shared/backups/AAAAMMDDTHHMMSSZ"
 ```
 
+Falha durante uma nova tentativa local também não apaga seu diretório parcial.
+O diagnóstico informa somente o basename UTC seguro (`Backup attempt preserved:
+AAAAMMDDTHHMMSSZ`), sem revelar o root. Revise e arquive ou remova essa evidência
+manualmente; enquanto permanecer como diretório sem manifesto válido, o próximo
+preflight falhará antes de acessar o Compose.
+
 ## Agendas systemd do Portal em produção
 
 Os arquivos em `ops/` entregam as agendas, **não as instalam nem as habilitam**.
@@ -364,8 +390,9 @@ Docker/Compose e systemd no host. Não altera o receptor, o cron ou o proxy.
   usa `source`/`eval`: o helper extrai e valida os digests API/cron.
 - Destino exclusivo: `/opt/ownerinc/backups/portal-ownerinc/daily`, modo `0700`;
   umask `0077`, arquivos novos `0600`. Retenção existente de **14 dias**
-  (`find -mtime +14`, em dias completos) somente dentro desse destino. Backups
-  pré-release não entram nessa limpeza. O helper pausa brevemente apenas nginx,
+  (idade `mtime`, em dias completos) somente dentro desse destino, com o mesmo
+  preflight fechado e preservação do backup válido mais novo descritos acima.
+  Backups pré-release não entram nessa limpeza. O helper pausa brevemente apenas nginx,
   cron e API que estavam ativos e tenta reiniciá-los; `LEAVE_STOPPED=false` é
   imposto mesmo se o ambiente herdar outro valor.
 - `BACKUP_UPLOAD_S3=false` é explícito e não sobrescrevível nessa agenda.
@@ -494,9 +521,11 @@ herde `BACKUP_UPLOAD_S3=true`. Esse backup deixa os serviços parados para a
 restauração; indisponibilidade de S3 não deve interromper essa transição. Envie
 a cópia de proteção separadamente se necessário.
 
-Falhas na criação ou retenção do backup de proteção acionam sua limpeza e a
-tentativa de reiniciar somente os serviços antes ativos, sem iniciar a
-restauração. Os traps de erro também cobrem falhas dentro das funções Compose.
+Falhas na criação do backup de proteção preservam o diretório parcial como
+evidência e tentam reiniciar somente os serviços antes ativos, sem iniciar a
+restauração. Falhas no preflight de retenção ocorrem antes de consultar ou parar
+serviços e também não iniciam a restauração. Os traps de erro também cobrem
+falhas dentro das funções Compose.
 Depois que a restauração começa, uma falha aciona a parada de Nginx, API e cron:
 inspecione os dados ou restaure o backup de proteção antes de reiniciar. Se o
 próprio Docker falhar na parada ou no reinício, confira o estado dos serviços
