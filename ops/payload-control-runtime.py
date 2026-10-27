@@ -29,6 +29,8 @@ INVENTORY = STATE.INVENTORY
 
 INVENTORY_FILENAME = 'payload-control-inventory.json'
 _INVENTORY_CACHE = None
+RUNTIME_CHILD_WAIT_SECONDS = 600
+RUNTIME_CHILD_CLEANUP_SECONDS = 3
 KNOWN_SERVICES = {
     'postgres', 'cms-postgres', 'api', 'cron', 'nginx', 'cms',
     'migrate', 'bootstrap-admin', 'cms-cluster-bootstrap', 'cms-provision', 'cms-control-roles', 'cms-migrate',
@@ -70,6 +72,7 @@ retry_boundary portal_grants_migrate portal_grants_verify portal_grants_postchec
 resources_boundary volume_create volume_receipt container_create container_receipt database_start
 database_readiness database_binding cms_provision cms_control_bootstrap cms_migrate
 floor_boundary floor_roles floor_runtime floor_native_catalog floor_pending floor_pointer_swap floor_postcheck floor_commit
+private_start private_readiness private_stop b1_capture b1_sign private_final
 '''.split())
 
 
@@ -129,6 +132,19 @@ class ControlError(Exception):
 
 def fail(code, native_catalog_diagnostic=None):
     raise ControlError(code, native_catalog_diagnostic)
+
+
+def _kill_and_reap_child(process, failure_code):
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    except OSError:
+        fail(failure_code)
+    try:
+        process.wait(timeout=RUNTIME_CHILD_CLEANUP_SECONDS)
+    except (subprocess.TimeoutExpired, OSError):
+        fail(failure_code)
 
 
 NATIVE_CATALOG_DIAGNOSTIC_STAGES = set('''
@@ -370,6 +386,22 @@ def _portal_database(config=None):
     if not isinstance(value, str) or not INVENTORY.DATABASE_IDENTIFIER.fullmatch(value) or value == 'ownerinc_cms':
         fail('invalid_inventory_database_cluster')
     return value
+
+
+def production_authorization_allows_resume(candidate, intent, now=None):
+    """Expiry gates reservation, not an exact signed continuation."""
+    STATE.validate_install_candidate(candidate)
+    authorization = candidate.get('authorization')
+    if authorization is None:
+        return False
+    current = int(time.time()) if now is None else now
+    if type(current) is not int:
+        return False
+    if current < int(authorization['expiresAt']):
+        return True
+    return isinstance(intent, dict) and intent.get('authorizationFreshAtReservation') is True and \
+        isinstance(intent.get('binding'), dict) and \
+        STATE.canonical(intent['binding'].get('candidate')) == STATE.canonical(candidate)
 
 
 def _expected_compose_override(release):
@@ -1509,20 +1541,14 @@ SELECT json_build_object(
         process.stdin.write(sql.encode('ascii'))
         process.stdin.close()
         fingerprint = _data_fingerprint_rows(relations, process.stdout)
-        status = process.wait()
+        status = process.wait(timeout=RUNTIME_CHILD_WAIT_SECONDS)
         if status != 0:
             fail('database_fingerprint_failed')
     except ControlError:
-        try:
-            process.kill()
-        except OSError:
-            pass
+        _kill_and_reap_child(process, 'database_fingerprint_failed')
         raise
-    except (OSError, BrokenPipeError):
-        try:
-            process.kill()
-        except OSError:
-            pass
+    except (OSError, BrokenPipeError, subprocess.TimeoutExpired):
+        _kill_and_reap_child(process, 'database_fingerprint_failed')
         fail('database_fingerprint_failed')
     return fingerprint
 
@@ -2171,7 +2197,7 @@ def _validate_pg_archives(directory, services, payload=True):
                 result = subprocess.run(['docker', 'exec', '-i', container, 'pg_restore', '--list'],
                                         stdin=stream, stdout=subprocess.DEVNULL,
                                         stderr=subprocess.DEVNULL, check=False)
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             fail('database_archive_validation_failed')
         if result.returncode != 0:
             fail('database_archive_validation_failed')
@@ -2662,14 +2688,12 @@ class Runtime:
         try:
             assert process.stdout is not None
             fingerprint = _tar_tree(process.stdout, compressed=False)
-            status = process.wait()
+            status = process.wait(timeout=RUNTIME_CHILD_WAIT_SECONDS)
         except ControlError:
-            process.kill()
-            process.wait()
+            _kill_and_reap_child(process, 'restored_storage_inspection_failed')
             raise
         except OSError:
-            process.kill()
-            process.wait()
+            _kill_and_reap_child(process, 'restored_storage_inspection_failed')
             fail('restored_storage_inspection_failed')
         if status != 0:
             fail('restored_storage_inspection_failed')
@@ -2965,10 +2989,9 @@ class Runtime:
         process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
             fingerprint = _tar_tree(process.stdout, compressed=False)
-            status = process.wait()
-        except (ControlError, OSError):
-            process.kill()
-            process.wait()
+            status = process.wait(timeout=RUNTIME_CHILD_WAIT_SECONDS)
+        except (ControlError, OSError, subprocess.TimeoutExpired):
+            _kill_and_reap_child(process, 'restored_storage_inspection_failed')
             raise
         if status != 0:
             fail('restored_storage_inspection_failed')
@@ -3065,7 +3088,8 @@ class Runtime:
         _assert_database_quiescent('postgres', portal_database)
         if cms_bound:
             _assert_database_quiescent('postgres', 'ownerinc_cms')
-        if intent['stage'] in ('provisioned', 'floor_commit_pending', 'floor_committed'):
+        if intent['stage'] in ('provisioned', 'private_started', 'private_ready', 'b1_committed',
+                               'floor_commit_pending', 'floor_committed'):
             self._install_role_verification()
             _assert_database_quiescent('postgres', 'ownerinc_cms')
         print('signed install retry boundary verified; admission remains closed and no next-step permission was issued')
@@ -3087,15 +3111,59 @@ class Runtime:
         # Purpose is a closed input type, not a permission/skip flag. Every
         # environment/lease/shape/identity/quiescence check still runs normally.
         config = self.inventory['document']
-        if not re.fullmatch(r'payload-preauth-[0-9]+-[0-9]+-[0-9a-f]{10}-(source|target|lease)', config['project']):
+        production = config['project'] == 'ownerinc-portal-prod'
+        if not production and not re.fullmatch(r'payload-preauth-[0-9]+-[0-9]+-[0-9a-f]{10}-(source|target|lease)', config['project']):
             fail('unsupported_compose_project')
-        self._initializer_local_daemon()
-        path = os.path.join(self.runtime_dir, 'payload-initialize-request.json')
+        path = self.evidence if production else os.path.join(self.runtime_dir, 'payload-initialize-request.json')
         if self.evidence != path:
             fail('invalid_cold_state')
+        if production:
+            preliminary = STATE.parse_canonical(_read_bytes(path, mode=0o600, owner_root=True), 'invalid_cold_state')
+            if not isinstance(preliminary, dict) or preliminary.get('kind') != 'payload-production-install-request-v1':
+                fail('unsupported_compose_project')
+        self._initializer_local_daemon()
         _safe_regular(config['paths']['currentRelease'], mode=0o600, owner_root=True)
         raw = _read_bytes(path, mode=0o600, owner_root=True)
         request = STATE.parse_canonical(raw, 'invalid_cold_state')
+        if production:
+            STATE._exact_keys(request, {'schemaVersion', 'kind', 'candidate', 'authority', 'inventoryIdentity',
+                                       'sourceCommit', 'expiresAt', 'nonce'}, 'invalid_cold_state')
+            existing = self.state.get('installIntent')
+            request_now = int(time.time())
+            current_release = self._current_release()
+            expected_source_commit = (existing['binding']['sourceCommit'] if existing is not None
+                                      else os.path.basename(current_release))
+            if type(request['schemaVersion']) is not int or request['schemaVersion'] != 1 or \
+               request['kind'] != 'payload-production-install-request-v1' or \
+               request['inventoryIdentity'] != self.inventory['identity'] or \
+               request['sourceCommit'] != expected_source_commit or \
+               not isinstance(request['expiresAt'], str) or not re.fullmatch(r'[1-9][0-9]{9}', request['expiresAt']) or \
+               not production_authorization_allows_resume(request['candidate'], existing, request_now) or \
+               not isinstance(request['nonce'], str) or not STATE.HEX_64.fullmatch(request['nonce']):
+                fail('invalid_cold_state')
+            STATE._exact_keys(request['authority'], {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
+            if any(not isinstance(value, str) or not STATE.HEX_64.fullmatch(value) for value in request['authority'].values()):
+                fail('invalid_cold_state')
+            candidate = STATE.validate_install_candidate(request['candidate'])
+            images, payload = _release(self.release_path, payload=True, owner_root=True)
+            if not payload or images != candidate['images'] or os.path.basename(self.release_path) != candidate['commit']:
+                fail('planned_release_mismatch')
+            source = existing['binding']['sourceRelease'] if existing is not None else current_release
+            if existing is not None and current_release not in (source, existing['binding']['candidateRelease']):
+                fail('current_release_invalid')
+            self.production_authorization_expires_at = request['expiresAt']
+            source_images, source_payload = _release(source, payload=False, owner_root=True)
+            if source_payload or os.path.basename(source) != request['sourceCommit']:
+                fail('preauthority_source_recovery_proof_mismatch')
+            lease = os.stat(config['paths']['lock'])
+            return {'bindingVersion': 4, 'candidate': candidate, 'candidateRelease': self.release_path,
+                    'sourceRelease': source, 'previousImages': source_images,
+                    'b0': {'directory': os.path.join(config['paths']['backupRoots'][0], '000-initial-install-b0'),
+                           'proofSha256': self.state['legacySourceProofSha256']},
+                    'inventoryIdentity': self.inventory['identity'], 'lease': {'device': lease.st_dev, 'inode': lease.st_ino},
+                    'authority': request['authority'], 'sourceCommit': request['sourceCommit'], 'project': config['project'],
+                    'sharedCluster': config['databaseCluster'],
+                    'portalTarget': self.state['installIntent']['binding']['portalTarget'] if self.state.get('installIntent') else self._install_target(False)[0]}
         STATE._exact_keys(request, {'schemaVersion', 'purpose', 'commit', 'runId', 'runAttempt', 'images'}, 'invalid_cold_state')
         if type(request['schemaVersion']) is not int or request['schemaVersion'] != 1 or \
            request['purpose'] != 'isolated-recovery-producer':
@@ -3387,22 +3455,154 @@ class Runtime:
         _assert_database_quiescent('postgres')
         return catalog['nativeCatalogFingerprint']
 
+    def _private_cms_readiness(self, start=True):
+        intent = self.state['installIntent']
+        receipt = intent['creation']['containers']['cms']
+        if start:
+            self._initializer_phase('private_start')
+            observed = self._creation_container('cms')
+            if observed != receipt:
+                fail('restore_target_changed')
+            status = self._initializer_command(['docker', 'inspect', '--format', '{{.State.Status}}', receipt['id']]).strip()
+            if status == b'created' or status == b'exited':
+                self._initializer_command(['docker', 'start', receipt['id']])
+            elif status != b'running':
+                fail('restore_target_changed')
+        self._initializer_phase('private_readiness')
+        for _attempt in range(180):
+            health = self._initializer_command(['docker', 'inspect', '--format', '{{.State.Status}} {{.State.Health.Status}}', receipt['id']]).strip()
+            if health == b'running healthy':
+                break
+            if not health.startswith(b'running starting'):
+                fail('private_readiness_failed')
+            time.sleep(1)
+        else:
+            fail('private_readiness_timeout')
+        containers = _container_inventory()
+        if any(item['service'] in ('api', 'cron', 'nginx') and item['state'] in ('running', 'restarting', 'paused')
+               for item in containers):
+            fail('writers_not_quiescent')
+
+    def _capture_install_b1(self):
+        intent = self.state['installIntent']
+        binding = intent['binding']
+        directory = os.path.join(self.inventory['document']['paths']['backupRoots'][0], '001-initial-install-b1')
+        portal_database = _portal_database(self.inventory['document'])
+        binding_sha256 = hashlib.sha256(STATE.canonical(binding)).hexdigest()
+        def sync_directory():
+            info = os.lstat(directory)
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or \
+               (os.name != 'nt' and (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o700)):
+                fail('unsafe_backup_artifact')
+            descriptor = os.open(directory, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        def completed_receipt():
+            proof_path = os.path.join(directory, 'b1-proof.json')
+            raw = _read_bytes(proof_path, mode=0o600, owner_root=True)
+            envelope = STATE.parse_canonical(raw, 'invalid_backup_proof')
+            body = STATE.verify_envelope(envelope, self.key, lambda value: value, 'invalid_backup_proof')
+            STATE._exact_keys(body, {'schemaVersion', 'kind', 'installBindingSha256', 'inventoryIdentity', 'candidate',
+                                    'authority', 'artifacts', 'portalDatabase', 'cmsDatabase', 'authorityState',
+                                    'workerHeld', 'routeReleased'}, 'invalid_backup_proof')
+            if type(body['schemaVersion']) is not int or body['schemaVersion'] != 1 or \
+               body['kind'] != 'payload-private-install-b1-v1' or body['installBindingSha256'] != binding_sha256 or \
+               body['inventoryIdentity'] != binding['inventoryIdentity'] or body['candidate'] != binding['candidate'] or \
+               body['authority'] != binding['authority'] or body['portalDatabase'] != _database_identity('postgres', portal_database) or \
+               body['cmsDatabase'] != _database_identity('postgres', 'ownerinc_cms') or \
+               body['authorityState'] != {'mode': 'legacy', 'epoch': 1} or body['workerHeld'] is not True or \
+               body['routeReleased'] is not False or not isinstance(body['artifacts'], list) or \
+               [item.get('name') for item in body['artifacts'] if isinstance(item, dict)] != STATE.PAYLOAD_ARTIFACTS:
+                fail('restore_target_changed')
+            for item in body['artifacts']:
+                STATE._exact_keys(item, {'name', 'sha256', 'size'}, 'invalid_backup_proof')
+                artifact_path = os.path.join(directory, item['name'])
+                info = os.lstat(artifact_path)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or \
+                   (os.name != 'nt' and (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o600)) or \
+                   _file_hash(artifact_path) != {'sha256': item['sha256'], 'size': item['size']}:
+                    fail('backup_artifact_mismatch')
+            return {'directory': directory, 'proofSha256': hashlib.sha256(raw).hexdigest()}
+        if os.path.lexists(directory):
+            sync_directory()
+            if os.path.lexists(os.path.join(directory, 'b1-proof.json')):
+                return completed_receipt()
+        else:
+            INVENTORY._verify_ancestry(os.path.join(os.path.dirname(directory), 'capture'), {0}, 'unsafe_inventory_ancestry')
+            os.mkdir(directory, 0o700)
+            sync_directory()
+        def capture(name, args):
+            destination = os.path.join(directory, name)
+            if os.path.lexists(destination):
+                info = os.lstat(destination)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or \
+                   (os.name != 'nt' and (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o600)):
+                    fail('unsafe_backup_artifact')
+                return
+            pending = os.path.join(directory, '.pending-' + name)
+            if os.path.lexists(pending):
+                info = os.lstat(pending)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or \
+                   (os.name != 'nt' and (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o600)):
+                    fail('unsafe_backup_artifact')
+                os.unlink(pending)
+                sync_directory()
+            with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                   getattr(os, 'O_NOFOLLOW', 0), 0o600), 'wb') as stream:
+                self._initializer_command(args, output=stream, evidence_prefix='payload-b1-command')
+                stream.flush(); os.fsync(stream.fileno())
+            os.rename(pending, destination)
+            sync_directory()
+        self._initializer_phase('b1_capture')
+        capture('postgres.dump', ['docker', 'exec', _container_id('postgres'), 'sh', '-ceu',
+            'pg_dump --format=custom --dbname="$1" --username="$POSTGRES_USER"', 'portal-database', portal_database])
+        capture('cms.dump', ['docker', 'exec', _container_id('postgres'), 'sh', '-ceu',
+            'pg_dump --format=custom --dbname=ownerinc_cms --username="$POSTGRES_USER"'])
+        for filename, key in (('uploads.tar.gz', 'portalUploads'), ('cms-uploads.tar.gz', 'cmsUploads')):
+            capture(filename, ['docker', 'run', '--rm', '--read-only', '--network', 'none', '--pull', 'never',
+                '--volume', self.inventory['document']['volumes'][key]['name'] + ':/data:ro',
+                'nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752',
+                'tar', '-czf', '-', '-C', '/data', '.'])
+        artifacts = [{'name': name, **_file_hash(os.path.join(directory, name))} for name in STATE.PAYLOAD_ARTIFACTS]
+        self._initializer_phase('b1_sign')
+        proof = {'schemaVersion': 1, 'kind': 'payload-private-install-b1-v1',
+                 'installBindingSha256': binding_sha256,
+                 'inventoryIdentity': binding['inventoryIdentity'], 'candidate': binding['candidate'],
+                 'authority': binding['authority'], 'artifacts': artifacts,
+                 'portalDatabase': _database_identity('postgres', portal_database),
+                 'cmsDatabase': _database_identity('postgres', 'ownerinc_cms'),
+                 'authorityState': {'mode': 'legacy', 'epoch': 1}, 'workerHeld': True, 'routeReleased': False}
+        path = os.path.join(directory, 'b1-proof.json')
+        digest = _write_private_proof(path, STATE.sign_envelope(proof, self.key))
+        sync_directory()
+        receipt = completed_receipt()
+        if receipt['proofSha256'] != digest:
+            fail('invalid_backup_proof')
+        return receipt
+
     def install_floor_commit(self):
         self._initializer_phase('floor_boundary')
         self._admission_closed()
         intent = self.state.get('installIntent')
-        if intent is None or intent['stage'] not in ('provisioned', 'floor_commit_pending', 'floor_committed'):
+        if intent is None or intent['stage'] not in ('provisioned', 'b1_committed', 'floor_commit_pending', 'floor_committed'):
             fail('invalid_cold_state')
         binding = intent['binding']
+        production = binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod'
         self.evidence = binding['b0']['directory']
-        fingerprint = self._initial_floor_observations()
         if intent['stage'] == 'floor_committed':
+            if production:
+                self._initializer_phase('private_final')
+                self._private_cms_readiness()
+            fingerprint = intent['floor']['nativeCatalogFingerprint']
             if fingerprint != intent['floor']['nativeCatalogFingerprint'] or \
                self.state['releaseImages'] != binding['candidate']['images'] or \
                self.state['nativeCatalogFingerprint'] != fingerprint:
                 fail('release_state_mismatch')
             print('exact signed committed floor reverified; admission remains closed and worker held')
             return
+        fingerprint = self._initial_floor_observations()
         if intent['stage'] == 'provisioned':
             self._initializer_phase('floor_pending')
             self.state = STATE.begin_install_floor(self.runtime_dir, binding, fingerprint)
@@ -3423,7 +3623,17 @@ class Runtime:
             fail('current_release_invalid')
         self._initializer_phase('floor_commit')
         self.state = STATE.commit_install_floor(self.runtime_dir, binding)
+        if production:
+            self._initializer_phase('private_final')
+            self._private_cms_readiness()
         print('native preauthority floor committed with signed audit; admission closed and worker held')
+
+    def _reserve_install_intent(self, template, proof, digest, creation):
+        production = template.get('bindingVersion') == 4 and template.get('project') == 'ownerinc-portal-prod'
+        expires_at = getattr(self, 'production_authorization_expires_at', None) if production else None
+        return STATE.reserve_install(
+            self.runtime_dir, template, proof, digest, creation=creation,
+            authorization_expires_at=expires_at)
 
     def initialize_isolated(self):
         self._initializer_phase('request_validation')
@@ -3453,14 +3663,15 @@ class Runtime:
             self._admission_closed()
             proof, digest = _parse_proof(template['b0']['directory'], self.key, payload=False)
             template['b0']['proofSha256'] = digest
-            template['authority']['sourceApprovalSha256'] = digest
+            if template['project'] != 'ownerinc-portal-prod':
+                template['authority']['sourceApprovalSha256'] = digest
             if digest != self.state['legacySourceProofSha256'] or digest != self.state['latestProofSha256']:
                 fail('preauthority_source_recovery_proof_mismatch')
             self._initializer_phase('install_reserve')
-            self.state = STATE.reserve_install(
-                self.runtime_dir, template, proof, digest,
-                creation=STATE.production_install_creation(template, secrets.token_hex(32)))
+            self.state = self._reserve_install_intent(
+                template, proof, digest, STATE.production_install_creation(template, secrets.token_hex(32)))
         binding = self.state['installIntent']['binding']
+        production = binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod'
         self.evidence = binding['b0']['directory']
         def advance(stage):
             self._initializer_phase('install_advance')
@@ -3508,6 +3719,23 @@ class Runtime:
             self._initializer_compose(['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-migrate'])
             self._initial_floor_observations()
             advance('provisioned')
+        if production and self.state['installIntent']['stage'] == 'provisioned':
+            self._private_cms_readiness()
+            advance('private_started')
+        if production and self.state['installIntent']['stage'] == 'private_started':
+            self._private_cms_readiness()
+            advance('private_ready')
+        if production and self.state['installIntent']['stage'] == 'private_ready':
+            self._initializer_phase('private_stop')
+            receipt = self.state['installIntent']['creation']['containers']['cms']
+            status = self._initializer_command(['docker', 'inspect', '--format', '{{.State.Status}}', receipt['id']]).strip()
+            if status == b'running':
+                self._initializer_command(['docker', 'stop', '--time', '120', receipt['id']])
+            elif status not in (b'exited', b'created'):
+                fail('restore_target_changed')
+            self.install_retry_check()
+            b1 = self._capture_install_b1()
+            self.state = STATE.advance_install(self.runtime_dir, binding, 'b1_committed', b1=b1)
         self.install_floor_commit()
 
     def run(self):

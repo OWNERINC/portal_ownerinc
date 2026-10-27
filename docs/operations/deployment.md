@@ -77,26 +77,31 @@ Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se nec
 
 ## Fluxo de release
 
-### Receiver Payload: admissão somente (sem instalação)
+### Receiver Payload v2: admissão, preflight e instalação privada separada
 
 O receiver possui uma rota explícita de admissão, anterior à inspeção do runtime
 e ao atalho `already_current`. O comando SSH é **uma única string**, com campos
 posicionais separados por exatamente um espaço ASCII, nesta ordem:
 
 ```text
-production:payload-v1 COMMIT RUN_ID RUN_ATTEMPT API_IMAGE CRON_IMAGE CMS_IMAGE CANDIDATE_ARTIFACT_ID QUALIFIED_ARTIFACT_ID REPORT_ARTIFACT_ID
+production:payload-v2 COMMIT RUN_ID RUN_ATTEMPT API_IMAGE CRON_IMAGE CMS_IMAGE CANDIDATE_ARTIFACT_ID QUALIFIED_ARTIFACT_ID REPORT_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST QUALIFIED_ARTIFACT_DIGEST REPORT_ARTIFACT_DIGEST CANDIDATE_SHA256 QUALIFIED_SHA256 REPORT_SHA256 APPROVAL_SHA256 INVENTORY_IDENTITY EXPIRES_AT NONCE
 ```
 
 Exemplo de transporte (não executado nesta implementação):
 
 ```sh
-ssh "$VPS_USER@$VPS_HOST" "production:payload-v1 $COMMIT $RUN_ID $RUN_ATTEMPT $API_IMAGE $CRON_IMAGE $CMS_IMAGE $CANDIDATE_ARTIFACT_ID $QUALIFIED_ARTIFACT_ID $REPORT_ARTIFACT_ID" < candidate.tar.gz
+ssh "$VPS_USER@$VPS_HOST" "production:payload-v2 ...campos exatos..." < candidate.tar.gz
 ```
 
 `COMMIT` contém 40 hexadecimais minúsculos; IDs e tentativa são decimais positivos
 de até 20 dígitos, sem zeros iniciais; os três IDs de artefatos são distintos.
 Cada imagem é a referência completa `ghcr.io/ownerinc/ownerinc-portal-SERVICE@sha256:`
 seguida de 64 hexadecimais minúsculos, com SERVICE `api`, `cron`, `cms`, nessa ordem.
+Os digests ZIP usam `sha256:<64 hex>`; hashes de conteúdo, approval, inventário e
+nonce usam 64 hex. `EXPIRES_AT` é epoch UTC de dez dígitos, futuro e no máximo 24
+horas adiante. `APPROVAL_SHA256` é o hash canônico do approval protegido sem o
+campo circular `admission`; policy, record e archive continuam ligados por hashes
+independentes no próprio approval.
 Não são aceitos flags adicionais, whitespace alternativo, campos extras, staging
 Payload, paths de política/ferramentas ou permissões indicadas pelo solicitante.
 `production:SHA`, `staging:SHA` e a normalização SHA-only do wrapper de produção
@@ -134,8 +139,8 @@ dele impede o resultado “already prepared”. Se já existente, uma cópia pri
 continua sem iniciar serviços nem abrir admissão. Isso não instala política,
 registro ou verifier de candidatos e não constitui execução real na VPS.
 
-Payload exige UID/EUID 0 e o diretório previamente provisionado
-`/var/lib/ownerinc/payload-candidate/incoming` root:root `0700`, com **toda** a
+Payload exige UID/EUID 0 e os diretórios previamente provisionados
+`/var/lib/ownerinc/payload-candidate/{incoming,nonces,locks}` root:root `0700`, com **toda** a
 cadeia até `/` root:root, sem links, bits especiais ou escrita por grupo/outros.
 O helper não corrige permissões/ownership automaticamente. Cada tentativa válida
 na sintaxe cria exclusivamente `incoming/payload-<aleatório>/`, `0700`, e um
@@ -153,10 +158,32 @@ diretórios, rejeita links, especiais, escapes, nomes/metadata duplicados e `.im
 recebido. Limites adicionais: 128 MiB descomprimidos e 20.000 membros. Commit e as
 três imagens devem coincidir exatamente com os seletores autenticados, inclusive
 na conferência dos arquivos extraídos. Nenhum conteúdo recebido é executado ou
-sourced. **Mesmo PASS termina com exit 2 `release_not_preflighted`**; a função
-`install_receiver_preflight()` existente permanece incondicionalmente fechada.
-Não há pulls, inspeção Docker, mudanças em serviços/bancos/volumes/pointers,
-instalação, recuperação ou ativação neste bloco.
+sourced. Um lock root privado dedicado serializa reap de nonces expirados, cálculo
+da quota agregada, reserva `O_EXCL` do nonce e criação do receipt. O lock permanece
+durante a materialização; antes de criar o receipt, o cálculo reserva o pior caso
+limitado e garante que concorrência não ultrapasse 256 MiB/128 receipts. Arquivos e
+diretórios são sincronizados antes de liberar a operação. A admissão chama somente
+`--check-install-plan` no launcher autenticado. Seus subprocessos drenam stdout
+incrementalmente até o cap, descartam stderr, não usam shell e matam/reaproveitam o
+grupo de processos em overflow ou timeout. O preflight reafirma approval, policy,
+record, archive/tree, expiry, inventário, source, state e lease. Não faz pull,
+migration, create/start, pointer, route ou authority transition. PASS retorna
+`preflighted-private`; falha preserva receipt/evidência sem instalação parcial.
+
+A instalação é uma segunda chamada fixa sem stdin:
+`production:payload-apply-v2 RECEIPT_ID NONCE`. Ela exige receipt preflighted e
+chama `--apply-install`. Retomadas reautenticam tudo e o journal: admission fecha,
+B0 é capturado, binding/receipts são reservados, roles e `ownerinc_cms` usam o
+PostgreSQL compartilhado, `cmsUploads` é criado, migrations/catálogo/grants são
+verificados, CMS sobe sozinho para readiness privada, B1 é capturado e floor e
+pointer são commitados. API/cron/nginx candidatos não iniciam; worker, rota e
+authority permanecem fechados em `legacy/1`.
+Uma autorização dentro da validade é obrigatória para gravar a primeira
+`installIntent`. Essa reserva assina `authorizationFreshAtReservation: true` junto
+ao binding completo. Depois disso, o mesmo receipt/request pode retomar após a
+expiração, mas somente se candidate, artifacts, nonce, approval, inventory, source,
+lease e journal continuarem idênticos. Expiração nunca permite criar uma intent
+nova ou trocar qualquer binding.
 
 Diagnósticos expõem apenas o basename gerado do recibo e códigos fechados, nunca
 request bruto, conteúdo de política/registro ou stderr do verificador. Negativas
@@ -164,9 +191,10 @@ do verificador aparecem como `candidate_admission_denied`. Recibos Payload,
 inclusive parciais, ficam preservados; PASS também preserva `admission.json` e a
 árvore privada. Falha do helper legacy preserva apenas seu archive limitado,
 enquanto a limpeza existente remove a staging parcial. Não se removem releases
-existentes nem registros assinados. Não há garbage collection automática: o
+existentes nem registros assinados. Somente markers de nonce expirados são
+recolhidos sob o lock; não há garbage collection automática de receipts. O
 operador deve revisar e arquivar recibos com acesso restrito e monitorar espaço;
-limite por tentativa não é uma quota agregada. Falhas de sintaxe/root/ancestrais
+a quota agregada recusa novas admissões, mas não executa garbage collection. Falhas de sintaxe/root/ancestrais
 antes da criação não geram recibo.
 
 Testes de transporte usam doubles explicitamente identificados; bindings
@@ -174,20 +202,26 @@ criptográficos usam a suíte existente `payload-candidate-admission`. A evidên
 local Windows não comprova permissões/FDs Linux, instalação no host ou deploy.
 O teste de identidade nativa Linux/root permanece pendente quando skipped.
 
-**Extensão Payload em preparação local:** o caminho legacy de duas imagens/dois
-artefatos abaixo permanece compatível. Releases `payload-v1` acrescentam CMS_IMAGE
-e exigem backup coordenado PortalDB/CMSDB/uploads/CMSmedia+staging, lease operacional
-e adapter durável de autoridade/ledger. Sem adapter integrado, operações CMS são
-recusadas. Ver [runtime e recuperação Payload](payload-runtime-recovery.md).
-Arquivos versionados não comprovam receiver/forced-command instalado; instalação,
-deploy e cutover dependem de nova autorização operacional explícita.
+**Compatibilidade histórica:** o caminho legacy de duas imagens continua separado;
+não é instrução para admissão Payload atual. O contrato produtivo corrente é
+`production:payload-v2`, com candidate/qualification schema 2 e authorization
+protegida. Ver [runtime e recuperação Payload](payload-runtime-recovery.md).
+O workflow separado `payload-install-production.yml` aceita dispatch somente em
+`main`, usa Environment `production`, concurrency compartilhada e SSH não-root
+para o sudo target fixo. Não recebe credenciais de banco e só aceita
+`installed-private`. **Não há host/receiver live autorizado**: sem secrets e
+aprovação do Environment o workflow é inexequível. Arquivos versionados não
+comprovam instalação; abertura de rota, deploy live e cutover exigem autorização
+operacional futura explícita.
 
 O job `validate` agora também constrói `ownerinc-portal-cms` pelo contexto raiz e
 `cms/Dockerfile`. A validação de empacotamento do runtime já incluída no Dockerfile
 é executada durante o build; o CI aplica ao CMS o mesmo scan Trivy bloqueante de
-`HIGH,CRITICAL` usado para API/cron. Em publicação autorizada na `main`, o CI envia
-a imagem com tag do commit para GHCR e expõe o digest validado em
-`needs.validate.outputs.cms_image`. O artefato separado `cms-image-digest` contém
+`HIGH,CRITICAL` usado para API/cron. Em publicação autorizada, `validate` permanece
+read-only e transfere somente imagens já testadas para o job mínimo
+`publish-images`. Apenas esse job recebe `packages: write`; ele envia a imagem com
+tag do commit para GHCR e expõe o digest validado em
+`needs.publish-images.outputs.cms_image`. O artefato separado `cms-image-digest` contém
 `cms-image-digest.txt` (referência completa `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:…`)
 e `cms-image-source.txt` (SHA do commit de origem).
 
@@ -206,31 +240,77 @@ permanece: push para `main` ou dispatch na `main` com a opção omitida/desativa
 Pull requests e refs que não sejam branches não publicam imagens.
 
 No modo normal, espera-se que o job `isolated-b0-recovery` seja ignorado. Por
-isso, `Deploy production` usa deliberadamente `!cancelled()` e a exigência direta
-de `needs.validate.result == 'success'`, evitando que a propagação implícita do
-ancestral ignorado impeça o deploy depois de uma validação bem-sucedida.
+isso, `Deploy production` usa deliberadamente `!cancelled()` e exige tanto
+`needs.validate.result == 'success'` quanto `needs.publish-images.result ==
+'success'`, evitando deploy sem os digests produzidos pelo job mínimo.
 Validação com falha ou cancelada e os modos especiais `cms_image_only` e
 `publish_candidate_only` continuam inelegíveis para produção.
 
 #### Candidato completo com aceite da sessão editorial API v2
 
 Para validar o contrato API v2 e publicar, sem implantar, um conjunto candidato
-com API, cron e CMS do mesmo commit, dispare `workflow_dispatch` em um branch:
+com API, cron e CMS do mesmo commit, dispare `workflow_dispatch` **somente em
+`main`**, fornecendo a autorização protegida completa:
 
 ```sh
-gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref feat/payload-cms-final -f publish_candidate_only=true
+gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref main \
+  -f publish_candidate_only=true \
+  -f production_approval_sha256="$APPROVAL_SHA256" \
+  -f production_inventory_identity="$INVENTORY_IDENTITY" \
+  -f request_expires_at="$EXPIRES_AT" \
+  -f request_nonce="$NONCE"
 ```
 
 `publish_candidate_only` é booleano e começa desativado. Ele é mutuamente
 exclusivo com `cms_image_only`; se ambos forem verdadeiros, o workflow falha
-antes do checkout, build ou publicação. Ambos os modos manuais exigem um ref de
-branch. O caminho de candidato constrói as imagens de produção, executa o teste
+antes do checkout, build ou publicação. `publish_candidate_only` exige exatamente
+`refs/heads/main`; branches de feature são recusados. O caminho de candidato constrói as imagens de produção, executa o teste
 da sessão antes de qualquer push ao GHCR, mantém os três scans Trivy bloqueantes,
 o audit de dependências e a geração de SBOMs, e só então publica API, cron e CMS.
 O artefato separado `payload-release-candidate` contém `candidate.json` com
-`schemaVersion: 1`, o SHA validado do commit, `runId`, `runAttempt` e as três
+`schemaVersion: 2`, o SHA validado do commit, `runId`, `runAttempt`, as três
 referências imutáveis `ghcr.io/ownerinc/ownerinc-portal-{api,cron,cms}@sha256:…`
-obtidas dos pushes daquele run. Não misture digests de execuções diferentes.
+obtidas dos pushes daquele run e `authorization` exata (`environment: production`,
+approval digest, inventory identity, expiry e nonce). Não misture digests ou
+autorizações de execuções diferentes.
+
+Ao terminar a qualificação, o job publica o artefato read-only
+`payload-private-install-dispatch`, contendo somente `install-dispatch.json`. O
+mesmo documento aparece integralmente no job summary e cada campo de `inputs` é
+também um output do job. Ele contém **todos e somente** os inputs do workflow
+separado `payload-install-production.yml`:
+
+- `commit`, `run_id` e `run_attempt`;
+- `api_image`, `cron_image` e `cms_image`, sempre referências por digest;
+- ID, `artifact-digest` fornecido pela plataforma e SHA-256 do conteúdo para
+  `candidate`, `qualified` e `report`;
+- `approval_sha256`, `inventory_identity`, `expires_at` e `nonce`.
+
+O contrato corrente não possui outro request token: o nonce é o token de request
+fechado pelo schema 2. Não invente, derive, renove ou substitua nenhum valor. O
+gerador revalida candidate, qualification e report antes de emitir o handoff e
+não lê nem grava secrets.
+
+Baixe o handoff pelo ID do run e verifique cada classe de valor antes de copiar o
+comando completo exibido no summary:
+
+```sh
+gh run download "$RUN_ID" --repo OWNERINC/portal_ownerinc \
+  --name payload-private-install-dispatch --dir ./payload-install-handoff
+jq -e '.schemaVersion == 1 and .kind == "payload-private-install-dispatch-v1" and
+  .qualificationContract == "payload-private-install-v2"' \
+  ./payload-install-handoff/install-dispatch.json
+```
+
+Confira `commit/run_id/run_attempt` contra o run aberto no Actions; compare as
+três imagens com `candidate.json`; para cada artifact ID consulte a API Actions e
+compare seu campo `digest` com o `*_artifact_digest`; baixe os três artifacts e
+execute `sha256sum` no JSON extraído para comparar `candidate_sha256`,
+`qualified_sha256` e `report_sha256`. Finalmente compare approval, inventory,
+expiry e nonce com a autorização protegida originalmente fornecida ao dispatch.
+Qualquer ausência ou diferença invalida o handoff; nunca complete um campo por
+inferência. Só então copie, sem edição, os dezenove `-f nome=valor` do summary para
+o workflow de instalação separado. O artefato e o summary não instalam nada.
 
 O teste usa a imagem API recém-construída, PostgreSQL 16 e o Dockerfile
 versionado do Firebase Auth Emulator em um projeto Compose e bancos descartáveis
@@ -764,9 +844,10 @@ de fsync/retomada **não simula power loss nem prova durabilidade de hardware**.
 Não há Docker, serviços, contas ou sudoers novos. Este gate não qualifica o
 launcher/sudo/SSH real da VPS, nem substitui registro autenticado e recovery.
 
-Para `production:payload-v1 <commit> <run-id> <run-attempt> <api-image>
-<cron-image> <cms-image> <candidate-artifact-id> <qualified-artifact-id>
-<report-artifact-id>`, o wrapper de produção passa **uma única string**, sem
+Para o contrato corrente `production:payload-v2 <commit> <run-id> <run-attempt>
+<api-image> <cron-image> <cms-image> <três artifact IDs> <três ZIP digests>
+<três content hashes> <approval digest> <inventory identity> <expiry> <nonce>`,
+o wrapper de produção passa **uma única string**, sem
 interpretação, para `/usr/bin/sudo -n --
 /usr/local/libexec/ownerinc-payload-receive`. Argumentos adicionais do wrapper
 são recusados. SHA isolado e `production:<sha>` continuam delegando ao receptor

@@ -928,7 +928,7 @@ test('candidate-only CI gate retains exact native preparation discovery without 
   const step = validate.slice(start[0], next);
   assert.deepEqual(step, [
     exactStepName,
-    "        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true",
+    "        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true",
     '        run: |',
     '          set -euo pipefail',
     '          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs',
@@ -949,10 +949,10 @@ test('candidate-only CI gate retains exact native preparation discovery without 
   assert.deepEqual(deploy.slice(0, 10), [
     '  deploy-production:',
     '    name: Deploy production',
-    '    needs: validate',
+    '    needs: [validate, publish-images]',
     '    if: >-',
     '      !cancelled() &&',
-    "      needs.validate.result == 'success' &&",
+    "      needs.validate.result == 'success' && needs.publish-images.result == 'success' &&",
     "      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&",
     "      github.ref == 'refs/heads/main' &&",
     '      inputs.cms_image_only != true &&',
@@ -977,6 +977,103 @@ test('Task 4 retains executable wrong-PID and returned process-context mismatch 
   assert.match(context, /if kind=='result':value\['context'\]\['stateSha256'\]='0'\*64/u);
   assert.match(context, /try:l\.collect_context\(\)\r?\n  except l\.VerificationError:pass\r?\n  else:raise AssertionError\(kind\+' drift accepted'\)/u);
   assert.match(context, /for kind in \('source','closure','approval','inventory','state','fd9','result'\):attempt\(kind\)/u);
+});
+
+test('authenticated preparation subprocess supervisor bounds finite, infinite and timed-out output while preserving JSON', () => {
+  const source = String.raw`
+import importlib.util,sys,time
+spec=importlib.util.spec_from_file_location('bounded_preparation',sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+ok=m.run_bounded_subprocess([sys.executable,'-I','-S','-c','print("{\\"status\\":\\"ok\\"}")'],1024,5)
+assert ok.returncode==0 and ok.stdout.strip()==b'{"status":"ok"}' and ok.stderr==b''
+inherited=m.run_bounded_subprocess([sys.executable,'-I','-S','-c','print("inherited")'],1024,5,group_mode='inherit')
+assert inherited.returncode==0 and inherited.stdout.strip()==b'inherited'
+for code,timeout in [
+ ('import sys;sys.stdout.buffer.write(b"x"*200000)',5),
+ ('import os\nwhile True: os.write(1,b"x"*8192)',5),
+ ('import sys,time;sys.stderr.write("private-do-not-echo");sys.stderr.flush();time.sleep(30)',1),
+]:
+ started=time.monotonic()
+ try:m.run_bounded_subprocess([sys.executable,'-I','-S','-c',code],1024,timeout)
+ except m.VerificationError as error:assert str(error)=='preparation_verification_denied'
+ else:raise AssertionError('unbounded child accepted')
+ assert time.monotonic()-started < 8
+`;
+  const result = spawnSync(python, ['-I', '-S', '-B', '-c', source, path.join(repo, 'ops', 'prepare-cms-authenticated.py')],
+    { encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.doesNotMatch(result.stderr + result.stdout, /private-do-not-echo/u);
+});
+
+test('apply runtime inherits the receiver group, has cleanup reserve, and no supervisor uses unbounded wait', () => {
+  const preparation = readFileSync(path.join(repo, 'ops', 'prepare-cms-authenticated.py'), 'utf8');
+  const receiver = readFileSync(path.join(repo, 'ops', 'payload-receiver-admission.py'), 'utf8');
+  const runtime = readFileSync(path.join(repo, 'ops', 'payload-control-runtime.py'), 'utf8');
+  assert.doesNotMatch(preparation, /process\.wait\(\)/u);
+  assert.doesNotMatch(receiver, /process\.wait\(\)/u);
+  assert.doesNotMatch(runtime, /process\.wait\(\)/u);
+  assert.match(preparation, /initialize-isolated[\s\S]*timeout=APPLY_RUNTIME_TIMEOUT_SECONDS,[\s\S]*group_mode='inherit'/u);
+  assert.match(preparation, /authenticated-' \+ mode[\s\S]*group_mode='new'/u);
+  const inner = Number(/APPLY_RUNTIME_TIMEOUT_SECONDS = (\d+)/u.exec(preparation)?.[1]);
+  const outer = Number(/APPLY_SUBPROCESS_TIMEOUT = (\d+)/u.exec(receiver)?.[1]);
+  const cleanup = Number(/SUBPROCESS_CLEANUP_SECONDS = (\d+)/u.exec(receiver)?.[1]);
+  assert.ok(inner > 0 && outer > inner && outer - inner > cleanup);
+});
+
+test('inherited runtime-like group leaves no nested child after timeout or output overflow', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'payload-inherited-group-'));
+  try {
+    for (const scenario of ['timeout', 'overflow']) {
+      const pidfile = path.join(root, `${scenario}.pid`);
+      const script = String.raw`
+import importlib.util,os,subprocess,sys,time
+spec=importlib.util.spec_from_file_location('bounded_inherited',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+mode,pidfile=sys.argv[2:]
+code='import os,subprocess,sys,time; p=subprocess.Popen([sys.executable,"-I","-S","-c","import time;time.sleep(60)"]); open(sys.argv[1],"w").write(str(p.pid)); time.sleep(.1); ' + ('time.sleep(60)' if mode=='timeout' else '[(os.write(1,b"x"*8192)) for _ in iter(int,1)]')
+m.run_bounded_subprocess([sys.executable,'-I','-S','-c',code,pidfile],1024,1,group_mode='inherit')
+`;
+      const result = spawnSync(python, ['-I', '-S', '-B', '-c', script,
+        path.join(repo, 'ops', 'prepare-cms-authenticated.py'), scenario, pidfile],
+      { encoding: 'utf8', timeout: 15000, detached: true });
+      assert.notEqual(result.status, 0, `${scenario} unexpectedly returned normally`);
+      const child = Number(readFileSync(pidfile, 'utf8'));
+      let alive = true;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        try { process.kill(child, 0); } catch { alive = false; break; }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+      assert.equal(alive, false, `${scenario} left nested child ${child}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('authenticated preparation supervisor kills and reaps the Linux child process group', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const source = String.raw`
+import importlib.util,os,sys,tempfile,time
+spec=importlib.util.spec_from_file_location('bounded_preparation_group',sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+ pidfile=os.path.join(root,'child.pid')
+ code='import subprocess,sys,time; p=subprocess.Popen([sys.executable,"-I","-S","-c","import time;time.sleep(60)"]);open(sys.argv[1],"w").write(str(p.pid));time.sleep(60)'
+ try:m.run_bounded_subprocess([sys.executable,'-I','-S','-c',code,pidfile],1024,1)
+ except m.VerificationError:pass
+ else:raise AssertionError('timeout accepted')
+ child=int(open(pidfile).read())
+ for _ in range(100):
+  try:os.kill(child,0)
+  except ProcessLookupError:break
+  time.sleep(.01)
+ else:raise AssertionError('orphan child survived')
+`;
+  const result = spawnSync(python, ['-I', '-S', '-B', '-c', source, path.join(repo, 'ops', 'prepare-cms-authenticated.py')],
+    { encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test('host-data reader retains exact deploy ownership, bounded stable bytes, and distinct trust ancestry (metadata doubles)', () => {
@@ -1021,16 +1118,15 @@ def lease(close_only=False):
  finally:held[0]=False;events.append('release')
 def baseline(*args):assert held[0];events.append('host')
 def child(args,**kwargs):
- assert held[0] and kwargs['pass_fds']==(9,) and kwargs['check'] is False
+ assert held[0] and kwargs['pass_fds']==(9,) and kwargs['group_mode']=='new'
  assert args==['/bin/bash','--noprofile','--norc',l.ROOT+'/ops/prepare-cms-infrastructure.sh','--authenticated-apply',material[4]]
- assert kwargs['env']=={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'}
  events.append('child');return types.SimpleNamespace(returncode=0)
-with patch.object(l,'deployment_lease',lease),patch.object(l,'verify_host_baseline',side_effect=baseline),patch.object(l.subprocess,'run',side_effect=child):
+with patch.object(l,'deployment_lease',lease),patch.object(l,'verify_host_baseline',side_effect=baseline),patch.object(l,'run_bounded_subprocess',side_effect=child):
  result=l.dispatch('apply');assert result['preparationExecuted'] is True and result['deploymentAuthorized'] is False
  assert events.index('host')<events.index('child')<events.index('release') and events.count('host')==2
- with patch.object(l.subprocess,'run',return_value=types.SimpleNamespace(returncode=2)):
+ with patch.object(l,'run_bounded_subprocess',return_value=types.SimpleNamespace(returncode=2)):
   denied(lambda:l.dispatch('apply'));assert not held[0]
- with patch.object(l,'authenticate',side_effect=[material,(*material[:4],'0'*64)]),patch.object(l.subprocess,'run') as run:
+ with patch.object(l,'authenticate',side_effect=[material,(*material[:4],'0'*64)]),patch.object(l,'run_bounded_subprocess') as run:
   denied(lambda:l.dispatch('apply'));run.assert_not_called();assert not held[0]
 # Inherited-context flags/digests do not replace independent authentication.
 with patch.object(l,'verify_inherited_lease') as inherited,patch.object(l,'verify_host_baseline'):
@@ -1174,7 +1270,8 @@ class Process:
   if scenario=='kill-wait-retry' and self.kill_calls==1:raise InterruptedError()
  def wait(self,timeout=None):
   self.wait_calls+=1;events.append('wait-timeout' if timeout is not None else 'wait-reap')
-  if timeout is None and scenario=='kill-wait-retry' and self.wait_calls==1:raise KeyboardInterrupt()
+  assert timeout is not None
+  if scenario=='kill-wait-retry' and self.wait_calls==1:raise KeyboardInterrupt()
   self.reaped=True;events.append('reaped');return 0
 class Selector:
  def __init__(self):self.close_calls=0;self.open=True
@@ -1209,7 +1306,8 @@ for scenario in ('popen','stdin-write','stdin-close','nonblocking','selector-cre
  events.clear();chunks=[frame,b''];process=Process();selector=Selector()
  with patch.object(l,'authenticate',return_value=material),patch.object(l.subprocess,'Popen',side_effect=popen), \
       patch.object(l.selectors,'DefaultSelector',side_effect=selector_factory),patch.object(l.os,'set_blocking',side_effect=set_blocking), \
-      patch.object(l.os,'read',side_effect=read),patch.object(l.time,'monotonic',return_value=0):
+      patch.object(l.os,'read',side_effect=read),patch.object(l.time,'monotonic',return_value=0), \
+      patch.object(l,'_observer_cleanup_fail_stop',side_effect=AssertionError('unexpected-fail-stop')):
   try:l.run_bounded_observer(request)
   except l.VerificationError as error:assert str(error)=='preparation_verification_denied'
   except BaseException as error:raise AssertionError((scenario,'unsanitized',type(error).__name__))
@@ -1260,8 +1358,9 @@ class Process:
   if mode=='kill-interrupt':raise KeyboardInterrupt()
  def wait(self,timeout=None):
   self.wait_calls+=1;events.append('wait')
-  if timeout is None and mode=='wait':raise OSError('persistent private wait failure')
-  if timeout is None and mode=='wait-interrupt':raise KeyboardInterrupt()
+  assert timeout is not None
+  if mode=='wait':raise OSError('persistent private wait failure')
+  if mode=='wait-interrupt':raise KeyboardInterrupt()
   return 0
 class Selector:
  def __init__(self):self.open=True

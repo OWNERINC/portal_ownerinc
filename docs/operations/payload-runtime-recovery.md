@@ -140,8 +140,63 @@ Esta fatia não persiste receipt ou observação, não cria approval, não captu
 não altera journal/state, policy/records, banco, roles, serviços, containers,
 redes, volumes, releases, pointers ou admission. Não fecha B0-01 produtivo, B0-02
 ou B0-03. `destructiveOperationAuthorized`, `installationExecuted`,
-`deploymentAuthorized` e `productionAuthorized` permanecem `false`;
-`release_not_preflighted` permanece obrigatório.
+`deploymentAuthorized` e `productionAuthorized` permanecem `false` nessa coleta.
+
+### Gate C — instalação privada recuperável (código portátil; host não executado)
+
+O protocolo produtivo novo é `payload-private-install-v2`: candidate e
+qualification schema 2 ligam commit/run/attempt, três image digests, IDs e hashes
+ZIP e de conteúdo dos três artifacts, approval binding digest, inventory,
+`production`, expiry e nonce. Schemas/contrato v1 continuam históricos e não são
+reinterpretados. O CI candidate-only agora exige `main`, publica/qualifica, possui
+`packages: write` somente no job que publica e nunca chama receiver ou instalação.
+O job final gera `payload-private-install-dispatch/install-dispatch.json`, revalidado
+contra candidate/qualification/report, com todos os dezenove inputs exatos do
+workflow de instalação (incluindo IDs, digests da plataforma e hashes de conteúdo).
+O summary e os outputs repetem esses valores não secretos; nenhum campo pode ser
+inferido ou misturado entre runs.
+
+Admission `production:payload-v2` persiste receipt e nonce privados e executa
+somente preflight autenticado. Apply usa `production:payload-apply-v2 RECEIPT NONCE`
+e o mesmo FD9 herdado. Um lock root privado cobre atomicamente reap de nonces
+expirados, quota agregada, reserva `O_EXCL` e receipt; subprocessos usam streaming
+bounded, process group e reap, sem shell ou stderr público. O journal mantém
+checkpoints para reservation/receipts,
+shared PostgreSQL/roles, `cmsUploads`, migrations, catálogo/grants,
+`private_started`, `private_ready`, B1 e floor. Em cada retomada um processo novo
+revalida source, approval/record, inventory, state, lease, B0 e recursos exatos;
+recurso sem creator receipt não é adotado. Readiness inicia somente CMS e confirma
+API/cron/nginx parados; B1 para CMS, captura os quatro stores, assina o binding e
+somente então permite floor/pointer. Ao final CMS volta privado, authority continua
+`legacy/1`, admission/rota ficam fechadas e o worker continua ausente.
+Somente uma autorização ainda válida pode criar a primeira `installIntent`; o
+julgamento é repetido contra o clock imediatamente antes da append de reservation,
+não apenas quando o request é lido. Se expirar nessa janela, nenhuma intent é
+gravada. O
+journal assina `authorizationFreshAtReservation: true`. Uma retomada do mesmo
+receipt/request pode atravessar a expiry depois dessa reserva, pois continua presa
+ao binding e checkpoints assinados. Sem intent, ou com qualquer diferença de
+artifacts, nonce, inventory, source, approval ou lease, a retomada é recusada.
+
+A checagem final recebe o `expiresAt`, não um booleano calculado pelo chamador:
+`reserve_install` relê e revalida state, proof e binding, prepara a transição e
+consulta o clock dentro da seção crítica imediatamente antes do primeiro write
+durável. O campo `authorizationFreshAtReservation` existe somente quando essa
+checagem interna permite a persistência.
+
+No apply produtivo, o receiver cria a única session/process group e o runtime
+filho a herda; não existe uma segunda `start_new_session` que o retire do alcance
+do kill externo. O deadline interno reserva margem estrita antes do deadline do
+receiver. Cleanup usa somente waits com timeout, TERM/KILL repetível e reap
+bounded. Se o kernel não permitir comprovar o reap dentro do prazo, o processo
+entra em fail-stop enquanto o FD9 ainda está retido: apply não continua e a lease
+não é liberada por unwinding normal.
+
+Esta entrega não executou Linux root, PostgreSQL, Docker, SSH ou VPS reais. As
+provas são testes portáteis/doubles e sintaxe. O workflow de instalação separado
+depende de Environment `production` aprovado e secrets de host ainda não
+autorizados; portanto não constitui deploy nem autorização live. Gates D/E,
+abertura de rota e transição de authority permanecem fora de escopo.
 
 ### Restore B0 isolado com checkpoints assinados (native TEST confirmado; host pendente)
 

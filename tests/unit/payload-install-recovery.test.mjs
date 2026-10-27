@@ -474,7 +474,7 @@ lines=b'["public.records", {"id":1,"body":"original"}]\n'
 def query(text):return json.dumps(inventory).encode() if 'unsupportedRelations' in text else lines
 class Process:
  def __init__(self):self.stdin=io.BytesIO();self.stdout=io.BytesIO(lines);self.killed=False
- def wait(self):return 0
+ def wait(self,timeout=None):return 0
  def kill(self):self.killed=True
 process=Process()
 with patch.object(R,'_psql_json',return_value=inventory),patch.object(R,'_container_id',return_value='fixture'),patch.object(R.subprocess,'Popen',return_value=process):

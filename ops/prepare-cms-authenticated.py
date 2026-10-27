@@ -8,8 +8,11 @@ import sys
 import types
 import builtins
 import subprocess
+import tempfile
 import re
 import selectors
+import signal
+import threading
 import time
 from contextlib import contextmanager, ExitStack
 
@@ -26,6 +29,10 @@ APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
 OBSERVER_TIMEOUT_SECONDS = 30
 OBSERVER_MAX_FRAME = 4096
 OBSERVER_CLEANUP_INTERRUPT_RETRIES = 3
+SUBPROCESS_MAX_OUTPUT = 64 * 1024
+SUBPROCESS_TIMEOUT_SECONDS = 7200
+APPLY_RUNTIME_TIMEOUT_SECONDS = 6900
+SUBPROCESS_CLEANUP_SECONDS = 3
 OBSERVER = ROOT + '/ops/payload-production-observer.py'
 FILES = (
     'ops/prepare-cms-infrastructure.sh', 'ops/prepare-cms-infrastructure-private.py',
@@ -44,6 +51,13 @@ class VerificationError(Exception):
 def require(condition):
     if not condition:
         raise VerificationError('preparation_verification_denied')
+
+
+def approval_binding_digest(approval):
+    require(isinstance(approval, dict) and 'admission' in approval)
+    body = {key: value for key, value in approval.items() if key != 'admission'}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':'),
+                                     ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
 def protected(filename, mode, limit):
@@ -393,12 +407,15 @@ def load_runtime_captured(captured):
     return runtime
 
 
-def verify_received_tree(receiver, destination, entries):
+def verify_received_tree(receiver, destination, entries, private_files=None, private_root=True):
     """Compare receiver extraction with authenticated archive, including empty files.
 
     This is a data reader, not the executable-trust reader. Never extract, merge,
     follow a link, import or execute anything in this tree.
     """
+    private_files = private_files or {}
+    require(isinstance(private_files, dict))
+    entries = {**entries, **private_files}
     children = {'': set()}
     files = {}
     for name, content in entries.items():
@@ -413,14 +430,15 @@ def verify_received_tree(receiver, destination, entries):
     identities = {}
     for relative, expected_names in children.items():
         filename = destination + ('/' + relative if relative else '')
-        receiver.protected_directory(filename, private=not relative)
+        receiver.protected_directory(filename, private=private_root and not relative)
         identities[filename] = receiver.identity(os.lstat(filename))
         require(set(os.listdir(filename)) == expected_names)
     for relative, expected in files.items():
         filename = destination + '/' + relative
         before = os.lstat(filename)
         require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
-                and (before.st_uid, before.st_gid) == (0, 0) and stat.S_IMODE(before.st_mode) == 0o644
+                and (before.st_uid, before.st_gid) == (0, 0)
+                and stat.S_IMODE(before.st_mode) == (0o600 if relative in private_files else 0o644)
                 and before.st_size == len(expected) and before.st_size <= receiver.MAX_EXPANDED)
         fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
@@ -566,39 +584,168 @@ def expected_context(approval, captured, approval_digest):
 
 def _terminate_and_reap(process):
     # Popen identifies the directly owned child; never signal by an externally
-    # supplied PID or process group. POSIX wait after SIGKILL is required for
-    # completed reaping, but is not a wall-clock time bound. Only a finite number
-    # of deliberate interruption retries is allowed; persistent failures fail-stop.
-    interruptions = 0
-    while True:
+    # supplied PID or process group. Every wait is deadline-bound; inability to
+    # prove reaping is a fail-stop condition while the caller still owns FD9.
+    for attempt in range(OBSERVER_CLEANUP_INTERRUPT_RETRIES):
         try:
             process.kill()
+            break
         except ProcessLookupError:
             break
         except (InterruptedError, KeyboardInterrupt):
-            interruptions += 1
-            if interruptions >= OBSERVER_CLEANUP_INTERRUPT_RETRIES:
+            if attempt + 1 == OBSERVER_CLEANUP_INTERRUPT_RETRIES:
                 raise
-            continue
-        else:
-            break
-    interruptions = 0
-    while True:
+    for attempt in range(OBSERVER_CLEANUP_INTERRUPT_RETRIES):
         try:
-            process.wait()
-        except (InterruptedError, KeyboardInterrupt):
-            interruptions += 1
-            if interruptions >= OBSERVER_CLEANUP_INTERRUPT_RETRIES:
-                raise
-            continue
-        else:
+            process.wait(timeout=SUBPROCESS_CLEANUP_SECONDS)
             return
+        except (InterruptedError, KeyboardInterrupt):
+            if attempt + 1 == OBSERVER_CLEANUP_INTERRUPT_RETRIES:
+                raise
+        except subprocess.TimeoutExpired:
+            raise VerificationError('preparation_verification_denied') from None
 
 
 def _observer_cleanup_fail_stop():
     # No normal unwinding may release the parent's lease when direct-child state
     # cannot be proven reaped. _exit emits no traceback or private diagnostic.
     os._exit(2)
+
+
+def _enable_linux_subreaper():
+    if sys.platform == 'linux':
+        import ctypes
+        require(ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0)
+
+
+def _signal_process_group(process, selected):
+    try:
+        if os.name == 'posix':
+            os.killpg(process.pid, selected)
+        elif process.poll() is None:
+            process.send_signal(selected)
+    except ProcessLookupError:
+        pass
+
+
+def _kill_and_reap_group(process):
+    deadline = time.monotonic() + SUBPROCESS_CLEANUP_SECONDS
+    _signal_process_group(process, signal.SIGTERM)
+    if process.poll() is None:
+        try:
+            process.wait(timeout=max(0.01, min(0.5, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
+    # Signal again even if the direct child exited: descendants may still own
+    # the session/process group and inherited output or mutation capability.
+    _signal_process_group(process, getattr(signal, 'SIGKILL', signal.SIGTERM))
+    if process.poll() is None:
+        remaining = deadline - time.monotonic()
+        require(remaining > 0)
+        try:
+            process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            raise VerificationError('preparation_verification_denied') from None
+    if os.name != 'posix':
+        return
+    while True:
+        try:
+            child, _ = os.waitpid(-process.pid, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if child == 0:
+            require(time.monotonic() < deadline)
+            time.sleep(0.01)
+
+
+def _kill_inherited_group_fail_stop(process):
+    # The receiver created this session and remains outside it. Killing our own
+    # inherited group intentionally terminates this supervisor too, so the outer
+    # receiver alone performs bounded reap while retaining the request boundary.
+    require(os.name == 'posix' and os.getpgid(process.pid) == os.getpgrp())
+    # One group-wide SIGKILL reaches this supervisor, the runtime and every
+    # nested mutator atomically. A preceding TERM could terminate this process
+    # before it issued the mandatory KILL to a TERM-resistant descendant.
+    try:
+        os.killpg(os.getpgrp(), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    _observer_cleanup_fail_stop()
+
+
+def run_bounded_subprocess(command, output_limit=SUBPROCESS_MAX_OUTPUT,
+                           timeout=SUBPROCESS_TIMEOUT_SECONDS, pass_fds=(), group_mode='new'):
+    require(isinstance(command, list) and command and
+            all(isinstance(value, str) and value for value in command))
+    require(type(output_limit) is int and 0 < output_limit <= SUBPROCESS_MAX_OUTPUT)
+    require(type(timeout) is int and 0 < timeout <= SUBPROCESS_TIMEOUT_SECONDS)
+    require(isinstance(pass_fds, tuple) and all(type(value) is int and value >= 0 for value in pass_fds))
+    require(group_mode in ('new', 'inherit'))
+    output_length = 0
+    exceeded = threading.Event()
+    reader_failed = threading.Event()
+    process = None
+    private_output = tempfile.TemporaryFile(mode='w+b')
+
+    def consume():
+        nonlocal output_length
+        try:
+            while True:
+                chunk = process.stdout.read(8192)
+                if not chunk:
+                    return
+                if output_length + len(chunk) > output_limit:
+                    exceeded.set()
+                    return
+                private_output.write(chunk)
+                output_length += len(chunk)
+        except BaseException:
+            reader_failed.set()
+
+    try:
+        _enable_linux_subreaper()
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}, pass_fds=pass_fds,
+            shell=False, bufsize=0, start_new_session=(os.name == 'posix' and group_mode == 'new'))
+        require(process.stdout is not None)
+        reader = threading.Thread(target=consume, name='payload-preparation-bounded-output', daemon=True)
+        reader.start()
+        deadline = time.monotonic() + timeout
+        while process.poll() is None and not exceeded.wait(0.01):
+            if time.monotonic() >= deadline:
+                raise VerificationError('preparation_verification_denied')
+        if exceeded.is_set():
+            raise VerificationError('preparation_verification_denied')
+        remaining = deadline - time.monotonic()
+        require(remaining > 0)
+        reader.join(remaining)
+        require(not reader.is_alive() and not reader_failed.is_set() and output_length <= output_limit)
+        private_output.flush()
+        private_output.seek(0)
+        output = private_output.read(output_limit + 1)
+        require(len(output) == output_length)
+        returncode = process.returncode
+        if group_mode == 'new':
+            _kill_and_reap_group(process)
+        return subprocess.CompletedProcess(command, returncode, output, b'')
+    except BaseException:
+        if process is not None:
+            try:
+                if group_mode == 'inherit' and os.name == 'posix':
+                    _kill_inherited_group_fail_stop(process)
+                else:
+                    _kill_and_reap_group(process)
+            except BaseException:
+                _observer_cleanup_fail_stop()
+        raise VerificationError('preparation_verification_denied') from None
+    finally:
+        if process is not None and process.stdout is not None:
+            try:
+                process.stdout.close()
+            except BaseException:
+                pass
+        private_output.close()
 
 
 def run_bounded_observer(request):
@@ -732,15 +879,25 @@ def collect_context():
         return result
 
 
-def check_install_plan(receipt_id):
+def check_install_plan(receipt_id, allow_reserved_expired=False):
     require(isinstance(receipt_id, str) and re.fullmatch(r'payload-[a-z0-9_]{8}', receipt_id) is not None)
+    require(type(allow_reserved_expired) is bool)
     with deployment_lease() as reaffirm, ExitStack() as b0_evidence:
         approval, captured, _, support, digest, record, verifier = _authenticated_material()
+        authorization = record.get('authorization')
+        require(record.get('schemaVersion') == 2 and isinstance(authorization, dict)
+                and set(authorization) == {'environment', 'approvalSha256', 'inventoryIdentity', 'expiresAt', 'nonce'}
+                and authorization['environment'] == 'production'
+                and authorization['approvalSha256'] == approval_binding_digest(approval)
+                and isinstance(authorization['expiresAt'], str) and re.fullmatch(r'[1-9][0-9]{9}', authorization['expiresAt']))
         receiver = load_authenticated(captured['ops/payload-receiver-admission.py'], ROOT + '/ops/payload-receiver-admission.py')
         receipt = receiver.INCOMING + '/' + receipt_id
         receiver.protected_directory(receipt, private=True)
         request = {key: record[key] for key in ('commit', 'runId', 'runAttempt', 'images')}
-        request['artifactIds'] = {role: entry['id'] for role, entry in record['artifacts'].items()}
+        request.update(artifactIds={role: entry['id'] for role, entry in record['artifacts'].items()},
+                       artifactDigests={role: entry['digest'] for role, entry in record['artifacts'].items()},
+                       contentDigests={'candidate': record['candidateSha256'], 'qualified': record['qualifiedManifestSha256'],
+                                       'report': record['recoveryReportSha256']}, authorization=authorization)
         archive = receipt + '/candidate.tar.gz'
         raw = support.read_protected(archive, 0o600, receiver.MAX_ARCHIVE)
         evidence = verifier.verify_candidate(archive, request)
@@ -750,6 +907,17 @@ def check_install_plan(receipt_id):
         entries = receiver.inspect_archive(raw, record['commit'], selected)
         verify_received_tree(receiver, receipt + '/release', entries)
         runtime, inventory, body, observations = inspect_install_host(approval, captured)
+        require(authorization['inventoryIdentity'] == runtime.INVENTORY.identity(inventory))
+        authority = {'sourceApprovalSha256': approval_binding_digest(approval),
+                     'policySha256': approval['admission']['policySha256'],
+                     'recordSha256': approval['admission']['recordSha256']}
+        fresh = int(time.time()) < int(authorization['expiresAt'])
+        if not fresh:
+            intent = body.get('installIntent')
+            require(allow_reserved_expired and intent is not None and
+                    intent.get('authorizationFreshAtReservation') is True)
+            runtime.STATE.validate_production_correspondence(
+                intent['binding'], approval, record, inventory, authority)
         key, _, rechecked_body, _ = runtime.STATE.read_state(RUNTIME, repair_head=False,
                                                           inventory_identity=runtime.INVENTORY.identity(inventory))
         require(rechecked_body == body)
@@ -765,8 +933,7 @@ def check_install_plan(receipt_id):
         observations['candidateReleasePresent'] = os.path.lexists(destination)
         if observations['candidateReleasePresent']:
             require(stat.S_ISDIR(os.lstat(destination).st_mode))
-        result = runtime.production_install_plan(record, {'sourceApprovalSha256': digest,
-            'policySha256': approval['admission']['policySha256'], 'recordSha256': approval['admission']['recordSha256']},
+        result = runtime.production_install_plan(record, authority,
             inventory, body, observations, approval=approval)
         result['b0Verification'] = b0_verification
         require(support.read_protected(archive, 0o600, receiver.MAX_ARCHIVE) == raw)
@@ -779,6 +946,182 @@ def check_install_plan(receipt_id):
         reaffirm()
         require(len(json.dumps(result).encode('utf-8')) <= 4096)
         return result
+
+
+def _write_exact_private(path, raw):
+    require(isinstance(raw, bytes) and 0 < len(raw) <= 1024 * 1024)
+    if os.path.lexists(path):
+        require(host_read(path, (0, 0), (0o600,), 1024 * 1024) == raw)
+        return
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        written = 0
+        while written < len(raw):
+            count = os.write(descriptor, raw[written:])
+            require(count > 0); written += count
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _release_directory(path, modes, owners=((0, 0),)):
+    host_ancestry(os.path.join(path, '.entry'))
+    info = os.lstat(path)
+    require(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+            and (info.st_uid, info.st_gid) in owners and stat.S_IMODE(info.st_mode) in modes)
+    return host_identity(info)
+
+
+def _sync_release_directory(path, modes, owners=((0, 0),)):
+    before = _release_directory(path, modes, owners)
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        require(host_identity(os.fstat(descriptor)) == before)
+        os.fsync(descriptor)
+        require(host_identity(os.fstat(descriptor)) == before and host_identity(os.lstat(path)) == before)
+    finally:
+        os.close(descriptor)
+
+
+def _release_file(path, expected, mode):
+    host_ancestry(path)
+    before = os.lstat(path)
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+            and (before.st_uid, before.st_gid) == (0, 0) and stat.S_IMODE(before.st_mode) == mode
+            and before.st_size == len(expected))
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        require(host_identity(os.fstat(descriptor)) == host_identity(before))
+        with os.fdopen(descriptor, 'rb', closefd=False) as stream:
+            raw = stream.read(len(expected) + 1)
+        require(raw == expected and host_identity(os.fstat(descriptor)) == host_identity(before)
+                and host_identity(os.lstat(path)) == host_identity(before))
+    finally:
+        os.close(descriptor)
+
+
+def _partial_release_directory(root, relative=''):
+    current = root
+    _release_directory(current, (0o700,))
+    for component in relative.split('/') if relative else ():
+        require(component not in ('', '.', '..'))
+        selected = os.path.join(current, component)
+        if not os.path.lexists(selected):
+            os.mkdir(selected, 0o755)
+            _sync_release_directory(current, (0o700,) if current == root else (0o755,))
+        _release_directory(selected, (0o755,))
+        current = selected
+    return current
+
+
+def _publish_candidate_release(receiver, entries, destination, images, nonce):
+    pending = RELEASES + '/.payload-install-' + nonce
+    host_ancestry(destination)
+    if os.path.lexists(destination):
+        require(not os.path.lexists(pending))
+        _release_directory(destination, (0o755,))
+    else:
+        if not os.path.lexists(pending):
+            os.mkdir(pending, 0o700)
+            _sync_release_directory(RELEASES, (0o755,), ((0, 0), (1000, 1000)))
+        _release_directory(pending, (0o700,))
+        for name, data in sorted(entries.items(), key=lambda item: (item[0].count('/'), item[0])):
+            filename = os.path.join(pending, *name.split('/'))
+            parent = _partial_release_directory(pending, os.path.dirname(name))
+            if data is None:
+                if not os.path.lexists(filename):
+                    os.mkdir(filename, 0o755)
+                    _sync_release_directory(parent, (0o700,) if parent == pending else (0o755,))
+                _release_directory(filename, (0o755,))
+                continue
+            if os.path.lexists(filename):
+                _release_file(filename, data, 0o644)
+            else:
+                descriptor = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+                try:
+                    written = 0
+                    while written < len(data):
+                        count = os.write(descriptor, data[written:]); require(count > 0); written += count
+                    os.fsync(descriptor)
+                finally: os.close(descriptor)
+                _release_file(filename, data, 0o644)
+                _sync_release_directory(parent, (0o700,) if parent == pending else (0o755,))
+        manifest = ('API_IMAGE=' + images['api'] + '\nCRON_IMAGE=' + images['cron'] + '\nCMS_IMAGE=' + images['cms'] +
+                    '\nRELEASE_FORMAT=payload-v1\n').encode('ascii')
+        _write_exact_private(pending + '/.image-env', manifest)
+        _sync_release_directory(pending, (0o700,))
+        verify_received_tree(receiver, pending, entries, private_files={'.image-env': manifest}, private_root=True)
+        os.chmod(pending, 0o755)
+        _sync_release_directory(pending, (0o755,))
+        os.rename(pending, destination)
+        _sync_release_directory(RELEASES, (0o755,), ((0, 0), (1000, 1000)))
+    manifest = ('API_IMAGE=' + images['api'] + '\nCRON_IMAGE=' + images['cron'] + '\nCMS_IMAGE=' + images['cms'] +
+                '\nRELEASE_FORMAT=payload-v1\n').encode('ascii')
+    require(host_read(destination + '/.image-env', (0, 0), (0o600,), 4096) == manifest)
+    verify_received_tree(receiver, destination, entries, private_files={'.image-env': manifest}, private_root=False)
+
+
+def apply_install(receipt_id):
+    plan = check_install_plan(receipt_id, allow_reserved_expired=True)
+    require(plan['classification'] in ('initial_cold', 'pre_floor_install_pending', 'floor_commit_pending', 'floor_committed'))
+    with deployment_lease() as reaffirm:
+        approval, captured, _, support, digest, record, verifier = _authenticated_material()
+        authorization = record['authorization']
+        require(authorization['approvalSha256'] == approval_binding_digest(approval))
+        receiver = load_authenticated(captured['ops/payload-receiver-admission.py'], ROOT + '/ops/payload-receiver-admission.py')
+        receipt = receiver.INCOMING + '/' + receipt_id
+        archive = receipt + '/candidate.tar.gz'
+        raw = support.read_protected(archive, 0o600, receiver.MAX_ARCHIVE)
+        request = {key: record[key] for key in ('commit', 'runId', 'runAttempt', 'images')}
+        request.update(artifactIds={role: item['id'] for role, item in record['artifacts'].items()},
+                       artifactDigests={role: item['digest'] for role, item in record['artifacts'].items()},
+                       contentDigests={'candidate': record['candidateSha256'], 'qualified': record['qualifiedManifestSha256'],
+                                       'report': record['recoveryReportSha256']}, authorization=authorization)
+        evidence = verifier.verify_candidate(archive, request)
+        require(evidence['admissionRecordSha256'] == approval['admission']['recordSha256'])
+        entries = receiver.inspect_archive(raw, record['commit'], {name + '-image': value for name, value in record['images'].items()})
+        destination = RELEASES + '/' + record['commit']
+        _publish_candidate_release(receiver, entries, destination, record['images'], authorization['nonce'])
+        runtime = load_runtime_captured(captured)
+        inventory = runtime._inventory(force=True)['document']
+        require(runtime.INVENTORY.identity(inventory) == authorization['inventoryIdentity'])
+        if int(time.time()) >= int(authorization['expiresAt']):
+            _, _, resumed, _ = runtime.STATE.read_state(
+                RUNTIME, repair_head=False, inventory_identity=authorization['inventoryIdentity'])
+            intent = resumed.get('installIntent')
+            authority = {'sourceApprovalSha256': approval_binding_digest(approval),
+                         'policySha256': approval['admission']['policySha256'],
+                         'recordSha256': approval['admission']['recordSha256']}
+            require(intent is not None and intent.get('authorizationFreshAtReservation') is True)
+            runtime.STATE.validate_production_correspondence(
+                intent['binding'], approval, record, inventory, authority)
+        ticket = {'schemaVersion': 1, 'kind': 'payload-production-install-request-v1',
+                  'candidate': runtime.STATE.production_candidate(record),
+                  'authority': {'sourceApprovalSha256': approval_binding_digest(approval),
+                                'policySha256': approval['admission']['policySha256'],
+                                'recordSha256': approval['admission']['recordSha256']},
+                  'inventoryIdentity': authorization['inventoryIdentity'],
+                  'sourceCommit': approval['hostBaseline']['currentCommit'],
+                  'expiresAt': authorization['expiresAt'], 'nonce': authorization['nonce']}
+        ticket_path = RUNTIME + '/payload-production-install-' + authorization['nonce'] + '.json'
+        ticket_raw = runtime.STATE.canonical(ticket) + b'\n'
+        _write_exact_private(ticket_path, ticket_raw)
+        reaffirm()
+        result = run_bounded_subprocess(
+            ['/usr/bin/python3', '-I', '-S', '-B', ROOT + '/ops/payload-control-runtime.py',
+             'initialize-isolated', destination, ticket_path], timeout=APPLY_RUNTIME_TIMEOUT_SECONDS,
+            pass_fds=(9,), group_mode='inherit')
+        require(result.returncode == 0)
+        reaffirm()
+        final = _authenticated_material()
+        require(final[4] == digest and final[5] == record)
+        _, _, body, _ = runtime.STATE.read_state(RUNTIME, repair_head=False,
+                                                 inventory_identity=authorization['inventoryIdentity'])
+        require(body['installIntent']['stage'] == 'floor_committed' and body['authority'] == {'mode': 'legacy', 'epoch': 1}
+                and body['admission'] == 'closed' and body['workerHold'] is True)
+        return {'kind': 'payload-production-install-result-v1', 'status': 'installed-private',
+                'authority': 'legacy', 'routeReleased': False, 'workerStarted': False,
+                'commit': record['commit'], 'nonce': authorization['nonce']}
 
 
 def verify():
@@ -868,10 +1211,9 @@ def dispatch(mode):
         require(digest == initial[4])
         verify_host_baseline(approval, captured, cms_image, support)
         reaffirm()
-        result = subprocess.run(['/bin/bash', '--noprofile', '--norc', ROOT + '/ops/prepare-cms-infrastructure.sh',
-                                 '--authenticated-' + mode, digest],
-                                env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'},
-                                pass_fds=(9,), check=False)
+        result = run_bounded_subprocess(
+            ['/bin/bash', '--noprofile', '--norc', ROOT + '/ops/prepare-cms-infrastructure.sh',
+             '--authenticated-' + mode, digest], pass_fds=(9,), group_mode='new')
         reaffirm()
         require(result.returncode == 0)
         # No runtime authorization is conferred by preparing inactive files.
@@ -886,7 +1228,7 @@ def dispatch(mode):
 def main():
     args = sys.argv[1:]
     require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in
-            ('--verify-context', '--create-inventory', '--check-install-plan', '--collect-context'))
+             ('--verify-context', '--create-inventory', '--check-install-plan', '--apply-install', '--collect-context'))
     require(sys.platform == 'linux' and os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 0)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode)
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'} and os.environ.get('PATH') == '/usr/bin:/bin'
@@ -897,6 +1239,8 @@ def main():
         print(json.dumps(collect_context(), sort_keys=True, separators=(',', ':')))
     elif args[0] == '--check-install-plan':
         print(json.dumps(check_install_plan(args[1]), sort_keys=True))
+    elif args[0] == '--apply-install':
+        print(json.dumps(apply_install(args[1]), sort_keys=True, separators=(',', ':')))
     elif args[0] == '--verify-context':
         print(verified_context(args[1]))
     elif args[0] == '--create-inventory':

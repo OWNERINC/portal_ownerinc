@@ -165,7 +165,7 @@ class Model:
             return real_stat(selected,*args,**kwargs)
         stack.enter_context(patch.object(R.os,'stat',descriptor_stat))
         stack.enter_context(patch.object(R.subprocess,'run',self.run))
-        stack.enter_context(patch.object(R.subprocess,'Popen',lambda *_a,**_k:SimpleNamespace(stdout=io.BytesIO(self.tar_plain),wait=lambda:0,kill=lambda:None)))
+        stack.enter_context(patch.object(R.subprocess,'Popen',lambda *_a,**_k:SimpleNamespace(stdout=io.BytesIO(self.tar_plain),wait=lambda timeout=None:0,kill=lambda:None)))
         stack.enter_context(patch.object(R,'_psql_json',self.psql))
         stack.enter_context(patch.object(R,'_database_identity',lambda service,database:portal if database == 'portal' else cms))
         stack.enter_context(patch.object(R,'_data_fingerprint',lambda _service,*_args,**_kwargs:'1' * 64))

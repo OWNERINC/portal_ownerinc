@@ -447,7 +447,7 @@ test('CI builds and publishes commit-addressed production images', async () => {
   ]);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /ownerinc-portal-api:\$\{GITHUB_SHA\}/);
-  assert.match(workflow, /docker push \$\{REGISTRY\}\/ownerinc-portal-api:\$\{GITHUB_SHA\}/);
+  assert.match(workflow, /for service in api cron; do[\s\S]*docker push \$\{REGISTRY\}\/ownerinc-portal-\$\{service\}:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
   assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
   assert.match(workflow, /Test migrations against PostgreSQL/);
@@ -468,14 +468,14 @@ test('green main revisions deploy through a restricted serialized production gat
     read('ops/compose.production.yaml'),
   ]);
   assert.doesNotMatch(workflow, /deploy-staging:|PORTAL_STAGING_VPS_/);
-  assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: validate\n    if: >-\n      !cancelled\(\) &&\n      needs\.validate\.result == 'success' &&/);
+  assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: \[validate, publish-images\]\n    if: >-\n      !cancelled\(\) &&\n      needs\.validate\.result == 'success' && needs\.publish-images\.result == 'success' &&/);
   assert.match(workflow, /deploy-production:[\s\S]*environment: production/);
   assert.match(workflow, /"\$VPS_USER@\$VPS_HOST" "\$GITHUB_SHA" < portal-release\.tar\.gz/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /group: portal-ownerinc-production[\s\S]*cancel-in-progress: false/);
   assert.match(workflow, /--add-virtual-file="\.ci-commit:\$\{GITHUB_SHA\}"/);
-  assert.match(workflow, /API_IMAGE: \$\{\{ needs\.validate\.outputs\.api_image \}\}/);
+  assert.match(workflow, /API_IMAGE: \$\{\{ needs\.publish-images\.outputs\.api_image \}\}/);
   assert.match(workflow, /tar --append --file=portal-release\.tar \.ci-images/);
   assert.match(workflow, /PORTAL_VPS_SSH_KEY/);
   assert.match(workflow, /StrictHostKeyChecking=yes/);
@@ -545,11 +545,15 @@ test('production SSH entrypoint normalizes legacy SHA commands without admitting
     assert.equal(result.stdout.replace(/\r/g, ''), `production:${sha}\nproduction\n`);
   }
   // Dispatch double only: the root launcher's existing helper validates selectors.
-  const payload = `production:payload-v1 ${sha} 123 1 ${['api', 'cron', 'cms'].map(service =>
-    `ghcr.io/ownerinc/ownerinc-portal-${service}@sha256:${'b'.repeat(64)}`).join(' ')} 11 12 13`;
+  const payload = `production:payload-v2 ${sha} 123 1 ${['api', 'cron', 'cms'].map(service =>
+    `ghcr.io/ownerinc/ownerinc-portal-${service}@sha256:${'b'.repeat(64)}`).join(' ')} 11 12 13 ${[4, 5, 6].map(value =>
+    `sha256:${String(value).repeat(64)}`).join(' ')} ${[7, 8, 9].map(value => String(value).repeat(64)).join(' ')} ${'a'.repeat(64)} ${'b'.repeat(64)} 1999999999 ${'c'.repeat(64)}`;
   const payloadResult = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: payload } });
   assert.equal(payloadResult.status, 0, payloadResult.stderr);
   assert.equal(payloadResult.stdout.replace(/\r/g, ''), `${payload}\nfixed-root-launcher\n`);
+  const legacyPayload = payload.replace('production:payload-v2', 'production:payload-v1');
+  const legacyResult = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: legacyPayload } });
+  assert.equal(legacyResult.status, 2);
   for (const command of [`staging:${sha}`, sha.slice(1), `${sha}; echo unsafe`, ` ${sha}`, sha.toUpperCase()]) {
     const result = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command } });
     assert.equal(result.status, 2, `must reject ${command}`);

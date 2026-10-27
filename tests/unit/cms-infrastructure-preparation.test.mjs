@@ -123,6 +123,8 @@ async function fixture(t, { failReceiverHelperInstall = false, tamperReceiverHel
     ['/usr/local/libexec', bashPath(paths.libexec)],
     ['/etc/sudoers.d', bashPath(paths.sudoers)],
     ['/var/lib/ownerinc/payload-candidate/incoming', bashPath(path.join(root, 'incoming'))],
+    ['/var/lib/ownerinc/payload-candidate/nonces', bashPath(path.join(root, 'nonces'))],
+    ['/var/lib/ownerinc/payload-candidate/locks', bashPath(path.join(root, 'locks'))],
     ['[[ -x /usr/bin/sudo && -x /usr/sbin/visudo ]]', 'true'],
     ['/usr/sbin/visudo', 'visudo'],
     ['chown 0:0 "$sudoers_temporary"', ':'],
@@ -171,7 +173,7 @@ async function fixture(t, { failReceiverHelperInstall = false, tamperReceiverHel
   // Privilege-path ownership is exercised separately with actual Python and
   // synthetic stat observations. This transport fixture may run on Windows.
   installer = installer.replace(/receiver_privilege_paths\(\) \{[\s\S]*?^\}/mu,
-    'receiver_privilege_paths() { [[ $1 != create ]] || mkdir -p -m 0700 -- "$receiver_incoming"; }');
+    'receiver_privilege_paths() { [[ $1 != create ]] || mkdir -p -m 0700 -- "$receiver_incoming" "$receiver_nonces" "$receiver_locks"; }');
   await writeFile(path.join(paths.bundle, 'ops', 'prepare-cms-infrastructure.sh'), installer);
 
   const dockerLog = path.join(root, 'docker.calls');
@@ -396,7 +398,7 @@ test('reviewed predecessor helper upgrades with a retained private copy, without
   const source = await readFile('ops/payload-receiver-admission.py', 'utf8');
   const previous = source.replace("INCOMING = '/var/lib/ownerinc/payload-candidate/incoming'",
     "INCOMING = '/opt/ownerinc/apps/portal-ownerinc-real/incoming'");
-  assert.equal(createHash('sha256').update(previous).digest('hex'), 'ffe1c2ed3fb086e156401063cdeaf9c6575a49e3458b202928df7f6794587bf8');
+  assert.equal(createHash('sha256').update(previous).digest('hex'), '7a5da50bbb36a6d0f95c66898e0c4e12bc0ba319fd7dd8d4ccbd4aac8c3ea2db');
   const helper = path.join(f.paths.libexec, 'payload-receiver-admission.py');
   await writeFile(helper, previous);
   const result = f.run(['--apply']);

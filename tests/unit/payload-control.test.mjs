@@ -400,7 +400,7 @@ class FakeProcess:
     def __init__(self, records):
         self.stdin = Sink()
         self.stdout = io.BytesIO(records)
-    def wait(self): return 0
+    def wait(self,timeout=None): return 0
     def kill(self): raise AssertionError('valid fingerprint input was killed')
 def fingerprint_for(value, sequence_state):
     records = b''.join([

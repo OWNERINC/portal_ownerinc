@@ -47,7 +47,8 @@ def build_current_contract(runtime, observation):
     body = {'schemaVersion': 2, 'phase': 'preauthority', 'cmsStatus': 'cold',
         'authority': {'mode': 'legacy', 'epoch': 1}, 'workerHold': True, 'admission': 'closed',
         'sequence': 1, 'previousStateSha256': '1' * 64, 'restoreIntent': None,
-        'installIntent': {'binding': binding, 'stage': 'reserved', 'cmsTarget': None, 'creation': creation},
+        'installIntent': {'binding': binding, 'stage': 'reserved', 'cmsTarget': None,
+                          'authorizationFreshAtReservation': True, 'creation': creation},
         'latestProofSha256': 'f' * 64, 'legacySourceProofSha256': 'f' * 64,
         'releaseImages': None, 'plannedReleaseImages': images, 'rollbackTargetImages': None,
         'nativeCatalogFingerprint': None, 'inventoryIdentity': binding['inventoryIdentity']}

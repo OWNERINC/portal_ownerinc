@@ -100,7 +100,8 @@ test('candidate PG16 gate runs before images without changing authenticated job/
   assert.match(harness, /--no-role-passwords/u);
   assert.match(harness, /normalizePgDumpForSnapshot/u);
   assert.doesNotMatch(harness, /prune|--publish|DATABASE_URL|supabase/u);
-  assert.match(packager, /for \(const name of requiredSteps\)/u); // Extra validate steps are allowed; no new job/report keys.
+  assert.match(packager, /for \(const name of \(production \? requiredValidationSteps : historicalRequiredSteps\)\)/u);
+  // Extra validate steps remain allowed while production authenticates the split publisher/qualifier jobs.
 });
 
 test('qualification bridge emits the actual runtime producer without contacting PostgreSQL', () => {

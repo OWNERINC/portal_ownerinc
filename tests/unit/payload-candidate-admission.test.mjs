@@ -17,7 +17,21 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 const bytes = value => Buffer.from(JSON.stringify(value) + '\n');
 const toolFiles = ['ops/payload-candidate-verifier.py', 'scripts/register-payload-candidate-admission.mjs',
   'scripts/package-payload-candidate.mjs', 'scripts/lib/payload-candidate-qualification.mjs'];
-const workflowBytes = Buffer.from('# synthetic reviewed workflow fixture, NOT a real producer approval\n');
+const workflowBytes = await readFile('.github/workflows/ci.yml');
+const workflowJobNames = (() => {
+  const lines = workflowBytes.toString('utf8').slice(workflowBytes.indexOf(Buffer.from('\njobs:\n')) + 7).split('\n');
+  const names = [];
+  for (let index = 0; index < lines.length;) {
+    const match = /^  ([a-z0-9_-]+):$/u.exec(lines[index]);
+    if (!match) { index += 1; continue; }
+    const id = match[1]; let next = index + 1;
+    while (next < lines.length && !/^  [a-z0-9_-]+:$/u.test(lines[next])) next += 1;
+    const explicit = lines.slice(index + 1, next).find(line => /^    name: /u.test(line));
+    names.push(explicit ? explicit.slice('    name: '.length) : id);
+    index = next;
+  }
+  return names;
+})();
 function policy(commit = 'a'.repeat(40)) {
   return {
     schemaVersion: 1, kind: 'ownerinc-payload-candidate-policy-v1', environment: 'production',
@@ -103,6 +117,19 @@ test('records bind exact schemas, identities, three images, artifact ZIP hashes 
   }
 });
 
+test('record v2 closes production approval, inventory, expiry, nonce and all artifact/content hashes', () => {
+  const value = record();
+  Object.assign(value, { schemaVersion: 2, kind: 'payload-candidate-admission-record-v2',
+    qualificationContract: 'payload-private-install-v2', authorization: { environment: 'production',
+      approvalSha256: '1'.repeat(64), inventoryIdentity: '2'.repeat(64), expiresAt: '1999999999', nonce: '3'.repeat(64) } });
+  assert.deepEqual(validateAdmissionRecord(value), value);
+  for (const mutate of [item => { item.authorization.environment = 'staging'; },
+    item => { item.authorization.expiresAt = '0999999999'; }, item => { item.authorization.nonce = 'A'.repeat(64); },
+    item => { item.artifacts.candidate.digest = '0'.repeat(64); }]) {
+    const changed = structuredClone(value); mutate(changed); assert.throws(() => validateAdmissionRecord(changed));
+  }
+});
+
 const metadata = (mode, uid = 0, gid = 0, nlink = 1) => ({ mode, uid, gid, nlink,
   isFile: () => (mode & 0o170000) === 0o100000, isDirectory: () => (mode & 0o170000) === 0o040000 });
 test('registrar POSIX metadata requires root:root exact modes and blocks links/writable ancestry', () => {
@@ -140,7 +167,7 @@ const requiredSteps = ['Build production images', 'Test editorial admin session 
 
 // Real disposable Git objects, synthetic reports and HTTP mocks. No live GitHub
 // authentication, project commit/ref, production policy or root record is created.
-async function transportFixture(t) {
+async function transportFixture(t, production = false) {
   const parent = process.platform === 'win32' && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : os.tmpdir();
   const root = await realpath(await mkdtemp(path.join(parent, 'candidate-admission-')));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -160,7 +187,10 @@ async function transportFixture(t) {
   const request = { repository: selectedPolicy.repository, commit, runId: '12345678901', runAttempt: '2',
     artifactIds: { candidate: '111', qualified: '112', report: '113' } };
   const identity = { commit, runId: request.runId, runAttempt: request.runAttempt }; const images = record().images;
-  const candidateBytes = bytes({ schemaVersion: 1, ...identity, images });
+  const authorization = { environment: 'production', approvalSha256: 'd'.repeat(64),
+    inventoryIdentity: 'e'.repeat(64), expiresAt: '1999999999', nonce: 'f'.repeat(64) };
+  const candidateBytes = bytes({ schemaVersion: production ? 2 : 1, ...identity, images,
+    ...(production ? { authorization } : {}) });
   const reportBytes = bytes({ schemaVersion: 1, status: 'passed', run: identity, images,
     sourceInventoryIdentity: 'b'.repeat(64), targetInventoryIdentity: 'c'.repeat(64),
     checks: Object.fromEntries(RECOVERY_CHECKS.map(key => [key, true])),
@@ -174,25 +204,49 @@ async function transportFixture(t) {
       [role, { coordinatorReturnedSuccessfully: true, fullSnapshotComparisonPassed: true }])),
     evidence: { kind: 'redacted-metadata-only', privateFixtureRetainedForRunnerLifetime: false },
   });
-  const qualifiedBytes = bytes(qualifyCandidate({ candidateBytes, reportBytes, expectedRun: identity, expectedImages: images }));
+  const qualifiedBytes = bytes(qualifyCandidate({ candidateBytes, reportBytes, expectedRun: identity, expectedImages: images,
+    ...(production ? { expectedAuthorization: authorization } : {}) }));
   const zips = { candidate: zipFile('candidate.json', candidateBytes), qualified: zipFile('qualified-candidate.json', qualifiedBytes),
     report: zipFile('payload-preauthority-recovery-report.json', reportBytes) };
+  if (production) Object.assign(request, {
+    artifactDigests: Object.fromEntries(Object.entries(zips).map(([role, value]) => [role, `sha256:${sha256(value)}`])),
+    contentDigests: { candidate: sha256(candidateBytes), qualified: sha256(qualifiedBytes), report: sha256(reportBytes) },
+    authorization,
+  });
   const names = { candidate: 'payload-release-candidate', qualified: 'payload-recovery-qualified-candidate', report: 'payload-preauthority-recovery-report' };
   const repository = { id: 7, full_name: selectedPolicy.repository, fork: false };
   const workflowMeta = { id: 8, path: selectedPolicy.workflow };
   const run = { id: Number(request.runId), run_attempt: 2, repository, head_repository: repository,
-    workflow_id: 8, path: selectedPolicy.workflow, head_sha: commit, head_branch: 'synthetic/fixture', event: 'workflow_dispatch',
+    workflow_id: 8, path: selectedPolicy.workflow, head_sha: commit, head_branch: production ? 'main' : 'synthetic/fixture', event: 'workflow_dispatch',
     status: 'completed', conclusion: 'success' };
-  const jobs = [{ name: 'validate', run_id: run.id, run_attempt: 2, head_sha: commit, status: 'completed', conclusion: 'success',
+  const jobIdentity = { run_id: run.id, run_attempt: 2, head_sha: commit, status: 'completed' };
+  const jobs = [{ name: 'validate', ...jobIdentity, conclusion: 'success',
     started_at: '2026-10-09T10:00:00Z', completed_at: '2026-10-09T11:00:00Z',
     steps: requiredSteps.map(name => ({ name, status: 'completed', conclusion: 'success' })),
-  }, { name: 'Deploy production', status: 'completed', conclusion: 'skipped' }];
-  jobs.push({ name: 'isolated-b0-recovery', run_id: run.id, run_attempt: 2, head_sha: commit, status: 'completed', conclusion: 'success',
+  }, { name: 'Deploy production', ...jobIdentity, conclusion: 'skipped' }];
+  jobs.push({ name: 'isolated-b0-recovery', ...jobIdentity, conclusion: 'success',
     started_at: '2026-10-09T09:50:00Z', completed_at: '2026-10-09T09:59:00Z',
     steps: ['Checkout exact B0 candidate', 'Set up B0 Node', 'Prepare pinned isolated B0 images', 'Run required native isolated B0 recovery']
       .map(name => ({ name, status: 'completed', conclusion: 'success' })) });
+  if (production) jobs.push({ name: 'dispatch-input-contract', ...jobIdentity,
+    conclusion: 'success', steps: [{ name: 'Require main and closed production binding for candidate publication',
+      status: 'completed', conclusion: 'success' }] });
+  if (production) jobs.push(
+    { name: 'payload-manual-runtime', ...jobIdentity, conclusion: 'skipped', steps: [] },
+    { name: 'Publish immutable images', ...jobIdentity,
+      conclusion: 'success', started_at: '2026-10-09T11:00:00Z', completed_at: '2026-10-09T11:20:00Z',
+      steps: [{ name: 'Push validated immutable digests only', status: 'completed', conclusion: 'success' }] },
+    { name: 'Qualify Payload candidate', ...jobIdentity,
+      conclusion: 'success', started_at: '2026-10-09T11:20:00Z', completed_at: '2026-10-09T12:00:00Z',
+      steps: ['Run disposable four-store preauthority recovery on published digests',
+        'Create recovery-qualified candidate manifest', 'Upload recovery-qualified candidate manifest',
+        'Create exact qualified private-install handoff', 'Upload exact qualified private-install handoff']
+        .map(name => ({ name, status: 'completed', conclusion: 'success' })) },
+  );
+  if (production) assert.deepEqual(new Set(jobs.map(job => job.name)), new Set(workflowJobNames));
   const artifacts = Object.fromEntries(Object.keys(zips).map(role => [role, { id: Number(request.artifactIds[role]), name: names[role],
-    expired: false, size_in_bytes: zips[role].length, digest: `sha256:${sha256(zips[role])}`, created_at: '2026-10-09T10:50:00Z',
+    expired: false, size_in_bytes: zips[role].length, digest: `sha256:${sha256(zips[role])}`,
+    created_at: production ? '2026-10-09T11:50:00Z' : '2026-10-09T10:50:00Z',
     workflow_run: { id: run.id, repository_id: 7, head_repository_id: 7, head_sha: commit } }]));
   const calls = []; const token = 'synthetic-test-token';
   const fetchImpl = async (url, options) => {
@@ -239,6 +293,28 @@ test('HTTP-mocked reconstruction authenticates same selection twice and compares
   await assert.rejects(reconstructAdmission(f.rawPolicy, f.request, { ...f.options('semantic-only'), bundleBytes: recompressed }), /admission_archive_not_reconstructed/u);
   const timestampChanged = Buffer.from(f.bundleBytes); timestampChanged.writeUInt32LE(1, 4);
   await assert.rejects(reconstructAdmission(f.rawPolicy, f.request, { ...f.options('timestamp'), bundleBytes: timestampChanged }), /admission_archive_not_reconstructed/u);
+});
+test('production reconstruction requires main dispatch gate and binds all artifact and authorization digests', async t => {
+  const f = await transportFixture(t, true);
+  const admitted = await reconstructAdmission(f.rawPolicy, f.request, f.options('production-second'));
+  assert.equal(admitted.schemaVersion, 2);
+  assert.equal(admitted.qualificationContract, 'payload-private-install-v2');
+  assert.deepEqual(admitted.authorization, f.request.authorization);
+  let negative = 0;
+  for (const mutate of [() => { f.jobs.at(-1).conclusion = 'failure'; },
+    () => { f.request.artifactDigests.candidate = `sha256:${'0'.repeat(64)}`; },
+    () => { f.request.contentDigests.report = '0'.repeat(64); }]) {
+    const jobs = structuredClone(f.jobs); const request = structuredClone(f.request);
+    mutate();
+    await assert.rejects(reconstructAdmission(f.rawPolicy, f.request, f.options(`production-denied-${negative++}`)));
+    f.jobs.splice(0, f.jobs.length, ...jobs); Object.assign(f.request, request);
+  }
+  const manual = f.jobs.find(job => job.name === 'payload-manual-runtime');
+  manual.conclusion = 'success';
+  await assert.rejects(reconstructAdmission(f.rawPolicy, f.request, f.options('production-manual-not-skipped')), /github_candidate_gate_not_passed/u);
+  manual.conclusion = 'skipped';
+  f.jobs.push({ ...manual, name: 'unexpected-candidate-job' });
+  await assert.rejects(reconstructAdmission(f.rawPolicy, f.request, f.options('production-unexpected-job')), /unexpected_candidate_jobs/u);
 });
 test('HTTP-mocked auth cannot be replaced by forged sidecars, consistent fake ZIP hashes or a failed gate', async t => {
   const f = await transportFixture(t);

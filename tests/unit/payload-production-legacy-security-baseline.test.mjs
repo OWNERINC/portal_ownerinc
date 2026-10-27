@@ -30,7 +30,7 @@ approval={'hostBaseline':{'currentCommit':'b'*40,'legacyImages':binding['previou
  'admission':{'policySha256':'a'*64,'recordSha256':'a'*64,'archiveSha256':'e'*64}}
 body={'schemaVersion':2,'phase':'preauthority','cmsStatus':'cold','authority':{'mode':'legacy','epoch':1},
  'workerHold':True,'admission':'closed','sequence':1,'previousStateSha256':'1'*64,'restoreIntent':None,
- 'installIntent':{'binding':binding,'stage':'reserved','cmsTarget':None,
+  'installIntent':{'binding':binding,'stage':'reserved','cmsTarget':None,'authorizationFreshAtReservation':True,
   'creation':{'receiptVersion':2,'fingerprintAlgorithm':'shared-cluster-container-mounts-v2',
    'resourceLifecycle':{'preexisting':['postgres','portalPostgres','portalUploads'],'created':['cmsUploads']},
    'nonce':'2'*64,'volumes':{},'containers':{}}},

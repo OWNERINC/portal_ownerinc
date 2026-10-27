@@ -27,7 +27,7 @@ S = load('install_state', 'payload-control-state.py')
 R = load('install_runtime', 'payload-control-runtime.py')
 def expect(code, callback):
     try: callback()
-    except (S.StateError, R.ControlError) as error:
+    except (S.StateError, R.STATE.StateError, R.ControlError) as error:
         assert str(error) == code, (str(error), code)
     else: raise AssertionError('expected ' + code)
 images = {name: 'ghcr.io/ownerinc/ownerinc-portal-' + name + '@sha256:' + letter * 64
@@ -128,6 +128,78 @@ S.transition(root,restore)
 body=S.read_state(root)[2];assert body['restoreIntent'] and body['installIntent']['stage']=='floor_committed'
 expect('invalid_cold_state',lambda:S.record_install_creation(root,binding,'containers','cron',receipt))
 before=snapshot();restarted.read_state(root);assert snapshot()==before
+`);
+});
+
+test('production v4 private readiness and B1 checkpoints resume in fresh processes before floor commit', async t => {
+  await fixture(t, String.raw`
+candidate['authorization']={'environment':'production','approvalSha256':'a'*64,
+ 'inventoryIdentity':binding['inventoryIdentity'],'expiresAt':'1999999999','nonce':'b'*64}
+binding.update(bindingVersion=4,sourceCommit='b'*40,project='ownerinc-portal-prod',
+ authority={name:'a'*64 for name in ('sourceApprovalSha256','policySha256','recordSha256')},
+ sharedCluster={'service':'postgres','volume':'portalPostgres','databases':{
+  'portal':{'name':'portal','owner':'portal_admin'},'cms':{'name':'ownerinc_cms','owner':'cms_admin'}}})
+creation=S.production_install_creation(binding,'b'*64)
+expiring=fresh('production-expired-before-reserve');runtime=object.__new__(R.Runtime)
+runtime.runtime_dir=expiring;runtime.production_authorization_expires_at='1999999999'
+before=S.read_state(expiring)[2]
+assert R.production_authorization_allows_resume(candidate,None,1999999998)
+with patch.object(S.time,'time',return_value=1999999999):
+ expect('invalid_cold_state',lambda:runtime._reserve_install_intent(binding,proof,'5'*64,creation))
+assert S.read_state(expiring)[2]==before and S.read_state(expiring)[2]['installIntent'] is None
+fresh_root=fresh('production-fresh-at-reserve');runtime.runtime_dir=fresh_root
+with patch.object(S.time,'time',return_value=1999999998):
+ runtime._reserve_install_intent(binding,proof,'5'*64,creation)
+assert S.read_state(fresh_root)[2]['installIntent']['authorizationFreshAtReservation'] is True
+root=fresh('production-v4-private')
+expect('invalid_cold_state',lambda:S.reserve_install(root,binding,proof,'5'*64,creation))
+clock={'now':1999999998}
+def expire_after_validation(): clock['now']=1999999999
+before=S.read_state(root)[2];state_dir=os.path.join(root,'payload-control-state');names=set(os.listdir(state_dir))
+expect('invalid_cold_state',lambda:S.reserve_install(root,binding,proof,'5'*64,creation,
+ '1999999999',lambda:clock['now'],expire_after_validation))
+assert S.read_state(root)[2]==before and set(os.listdir(state_dir))==names
+clock['now']=1999999998
+S.reserve_install(root,binding,proof,'5'*64,creation,'1999999999',lambda:clock['now'])
+assert S.read_state(root)[2]['installIntent']['authorizationFreshAtReservation'] is True
+# Bound retry remains valid after expiry because no new persistence occurs.
+before=S.read_state(root)[2]
+S.reserve_install(root,binding,proof,'5'*64,creation,'1999999999',lambda:1999999999)
+assert S.read_state(root)[2]==before
+for stage in ('portal_grants_pending','portal_grants_verified','cms_resources_pending'):
+ S.advance_install(root,binding,stage)
+S.record_install_creation(root,binding,'volumes','cmsUploads',cms_target['volumes']['cmsUploads'])
+for i,service in enumerate(('cms','api','cron')):
+ S.record_install_creation(root,binding,'containers',service,{'id':str(i+1)*64,'image':images[service],
+  'fingerprint':'e'*64,'releasePath':binding['candidateRelease'],'creationState':'created'})
+S.advance_install(root,binding,'cms_resources_bound',{'database':cms,'volumes':{'cmsUploads':cms_target['volumes']['cmsUploads']}})
+for stage in ('cms_provision_pending','provisioned','private_started','private_ready'):
+ before=S.read_state(root)[2]
+ with patch.object(S,'_atomic_replace',side_effect=S.StateError('private_state_write_failed')):
+  expect('private_state_write_failed',lambda:S.advance_install(root,binding,stage))
+ expect('state_head_mismatch',lambda:S.read_state(root))
+ restarted=load('private_restart_'+stage,'payload-control-state.py')
+ recovered=restarted.read_state(root,repair_head=True)[2]
+ assert recovered['installIntent']['stage']==stage and recovered['authority']=={'mode':'legacy','epoch':1}
+ assert recovered['admission']=='closed' and recovered['workerHold'] is True
+ assert recovered['installIntent']['authorizationFreshAtReservation'] is True
+ assert R.production_authorization_allows_resume(candidate,recovered['installIntent'],2000000000)
+ assert not R.production_authorization_allows_resume(candidate,None,2000000000)
+ changed=copy.deepcopy(candidate);changed['authorization']['nonce']='c'*64
+ assert not R.production_authorization_allows_resume(changed,recovered['installIntent'],2000000000)
+ changed_binding=copy.deepcopy(binding);changed_binding['inventoryIdentity']='0'*64
+ expect('planned_release_mismatch',lambda:S.assert_install_matches(recovered,changed_binding))
+ changed_binding=copy.deepcopy(binding);changed_binding['sourceCommit']='c'*40
+ changed_binding['sourceRelease']=os.path.join(directory,'releases','c'*40)
+ expect('planned_release_mismatch',lambda:S.assert_install_matches(recovered,changed_binding))
+b1={'directory':os.path.join(directory,'backup','b1'),'proofSha256':'f'*64}
+S.advance_install(root,binding,'b1_committed',b1=b1)
+restarted=load('b1_restart','payload-control-state.py');body=restarted.read_state(root)[2]
+assert body['installIntent']['b1']==b1 and body['installIntent']['stage']=='b1_committed'
+S.begin_install_floor(root,binding,'d'*64);S.commit_install_floor(root,binding)
+body=S.read_state(root)[2]
+assert body['installIntent']['stage']=='floor_committed' and body['installIntent']['b1']==b1
+assert body['authority']=={'mode':'legacy','epoch':1} and body['admission']=='closed' and body['workerHold'] is True
 `);
 });
 
@@ -606,7 +678,7 @@ with patch.object(R,'_compose_args',lambda _release:['docker','compose']), \
      patch.object(R.subprocess,'run',lambda *_args,**_kwargs:SimpleNamespace(returncode=2)):
     expect('native_catalog_verification_failed',runtime._install_role_verification)
 runtime.inventory = {'document':{'volumes':{'portalUploads':{'name':'isolated_portal_uploads'}}}}
-process = SimpleNamespace(stdout=object(),wait=lambda:0)
+process = SimpleNamespace(stdout=object(),wait=lambda timeout=None:0)
 with patch.object(R.subprocess,'Popen',lambda args,**_kwargs:calls.append(args) or process), \
      patch.object(R,'_tar_tree',lambda *_args,**_kwargs:'8' * 64):
     assert runtime._install_upload_fingerprint() == '8' * 64

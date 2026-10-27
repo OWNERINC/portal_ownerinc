@@ -16,6 +16,7 @@ import secrets
 import stat
 import sys
 import tempfile
+import time
 
 
 INVENTORY_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'payload-control-inventory.py')
@@ -61,7 +62,9 @@ INSTALL_STAGES = (
     'reserved', 'portal_grants_pending', 'portal_grants_verified',
     'cms_resources_pending', 'cms_resources_bound', 'cms_provision_pending', 'provisioned',
 )
+PRODUCTION_INSTALL_STAGES = INSTALL_STAGES + ('private_started', 'private_ready', 'b1_committed')
 INSTALL_TRANSITION_STAGES = INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')
+PRODUCTION_TRANSITION_STAGES = PRODUCTION_INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')
 INSTALL_RECOVERY_STAGES = ('reserved', 'database_restore_pending', 'database_restored',
                            'uploads_restore_pending', 'uploads_restored', 'data_verified_readiness_pending')
 
@@ -184,16 +187,29 @@ def validate_state_body(body):
                 names.add('recovery')
         if isinstance(install, dict) and install.get('stage') in ('floor_commit_pending', 'floor_committed'):
             names.add('floor')
+        if isinstance(install, dict) and (install.get('stage') == 'b1_committed' or
+           install.get('stage') in ('floor_commit_pending', 'floor_committed') and
+           install.get('binding', {}).get('bindingVersion') == 4 and install.get('binding', {}).get('project') == 'ownerinc-portal-prod'):
+            names.add('b1')
+        if isinstance(install, dict) and install.get('binding', {}).get('bindingVersion') == 4 and \
+           install.get('binding', {}).get('project') == 'ownerinc-portal-prod':
+            names.add('authorizationFreshAtReservation')
         _exact_keys(install, names, 'invalid_cold_state')
         validate_install_binding(install['binding'])
+        transition_stages = PRODUCTION_TRANSITION_STAGES if install['binding'].get('bindingVersion') == 4 and \
+            install['binding'].get('project') == 'ownerinc-portal-prod' else INSTALL_TRANSITION_STAGES
         stage = install['stage']
         terminal = stage == 'floor_committed'
-        status = 'migrated' if terminal else 'provisioned' if stage in ('provisioned', 'floor_commit_pending') else 'cold'
-        if stage not in INSTALL_TRANSITION_STAGES or body['cmsStatus'] != status or \
+        status = 'migrated' if terminal else 'provisioned' if stage in (
+            'provisioned', 'private_started', 'private_ready', 'b1_committed', 'floor_commit_pending') else 'cold'
+        if stage not in transition_stages or body['cmsStatus'] != status or \
            (not terminal and (body['admission'] != 'closed' or body['restoreIntent'] is not None)) or \
            body['rollbackTargetImages'] is not None:
             fail('invalid_cold_state')
         binding = install['binding']
+        if binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod' and \
+           install.get('authorizationFreshAtReservation') is not True:
+            fail('invalid_cold_state')
         if 'recovery' in install:
             validate_install_recovery(install['recovery'], install)
         if binding['inventoryIdentity'] != body['inventoryIdentity'] or \
@@ -203,7 +219,7 @@ def validate_state_body(body):
             fail('invalid_cold_state')
         if 'creation' in install:
             validate_install_creation(install['creation'], binding)
-            if INSTALL_TRANSITION_STAGES.index(stage) < INSTALL_TRANSITION_STAGES.index('cms_resources_pending') and \
+            if transition_stages.index(stage) < transition_stages.index('cms_resources_pending') and \
                (install['creation']['volumes'] or install['creation']['containers']):
                 fail('invalid_cold_state')
         if 'floor' in install:
@@ -212,7 +228,13 @@ def validate_state_body(body):
                not HEX_64.fullmatch(install['floor']['nativeCatalogFingerprint']) or \
                any(install['floor'][name] != binding[name] for name in ('sourceRelease', 'candidateRelease')):
                 fail('invalid_cold_state')
-        if INSTALL_TRANSITION_STAGES.index(stage) < INSTALL_TRANSITION_STAGES.index('cms_resources_bound'):
+        if 'b1' in install:
+            _exact_keys(install['b1'], {'directory', 'proofSha256'}, 'invalid_cold_state')
+            if (not isinstance(install['b1']['directory'], str) or not os.path.isabs(install['b1']['directory']) or
+                    os.path.normpath(install['b1']['directory']) != install['b1']['directory'] or
+                    not isinstance(install['b1']['proofSha256'], str) or not HEX_64.fullmatch(install['b1']['proofSha256'])):
+                fail('invalid_cold_state')
+        if transition_stages.index(stage) < transition_stages.index('cms_resources_bound'):
             if install['cmsTarget'] is not None:
                 fail('invalid_cold_state')
         else:
@@ -354,7 +376,9 @@ def production_candidate(record):
     """Reconstruct from an already authenticated full admission record."""
     candidate = {name: record[name] for name in ('commit', 'runId', 'runAttempt', 'images', 'candidateSha256')}
     candidate.update(reportSha256=record['recoveryReportSha256'],
-                     qualificationSha256=record['qualifiedManifestSha256'], bundleSha256=record['archiveSha256'])
+                      qualificationSha256=record['qualifiedManifestSha256'], bundleSha256=record['archiveSha256'])
+    if record.get('schemaVersion') == 2:
+        candidate['authorization'] = json.loads(json.dumps(record['authorization']))
     return validate_install_candidate(candidate)
 
 
@@ -396,6 +420,8 @@ def validate_install_candidate(candidate, producer=False):
     candidate_names = {'commit', 'runId', 'runAttempt', 'images'} | set(hashes)
     if producer:
         candidate_names |= {'schemaVersion', 'purpose'}
+    elif isinstance(candidate, dict) and 'authorization' in candidate:
+        candidate_names.add('authorization')
     _exact_keys(candidate, candidate_names, 'invalid_cold_state')
     if producer and (type(candidate['schemaVersion']) is not int or candidate['schemaVersion'] != 1 or \
                      candidate['purpose'] != 'isolated-recovery-producer'):
@@ -408,6 +434,13 @@ def validate_install_candidate(candidate, producer=False):
     for name in hashes:
         if not isinstance(candidate[name], str) or not HEX_64.fullmatch(candidate[name]):
             fail('invalid_cold_state')
+    if not producer and 'authorization' in candidate:
+        authorization = candidate['authorization']
+        _exact_keys(authorization, {'environment', 'approvalSha256', 'inventoryIdentity', 'expiresAt', 'nonce'}, 'invalid_cold_state')
+        if authorization['environment'] != 'production' or any(not isinstance(authorization[name], str) or not HEX_64.fullmatch(authorization[name])
+                for name in ('approvalSha256', 'inventoryIdentity', 'nonce')) or \
+           not isinstance(authorization['expiresAt'], str) or not re.fullmatch(r'[1-9][0-9]{9}', authorization['expiresAt']):
+            fail('invalid_cold_state')
     return candidate
 
 
@@ -419,7 +452,8 @@ def assert_install_matches(body, binding):
     return intent
 
 
-def reserve_install(directory, binding, proof, proof_sha256, creation=None):
+def reserve_install(directory, binding, proof, proof_sha256, creation=None,
+                    authorization_expires_at=None, clock=None, before_persist=None):
     """Internal persistence primitive. Caller must validate real B0/lease/targets
     first; a shape-valid JSON is not permission to install. Production admission
     qualification belongs to the outer deploy gate, not the recovery producer."""
@@ -430,6 +464,15 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None):
             fail('invalid_cold_state')
     elif creation is not None:
         fail('invalid_cold_state')
+    production = binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod'
+    if production:
+        if not isinstance(authorization_expires_at, str) or \
+           not re.fullmatch(r'[1-9][0-9]{9}', authorization_expires_at) or \
+           (clock is not None and not callable(clock)) or \
+           (before_persist is not None and not callable(before_persist)):
+            fail('invalid_cold_state')
+    elif authorization_expires_at is not None or clock is not None or before_persist is not None:
+        fail('invalid_cold_state')
     validate_proof_body(proof)
     if proof['kind'] != 'preauthority-legacy-source' or proof['inventoryIdentity'] != binding['inventoryIdentity'] or \
        proof['targetImages'] != binding['candidate']['images'] or proof['images'] != binding['previousImages'] or \
@@ -438,6 +481,8 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None):
     old = read_state(directory)[2]
     if old.get('installIntent') is not None:
         intent = assert_install_matches(old, binding)
+        if production and intent.get('authorizationFreshAtReservation') is not True:
+            fail('invalid_cold_state')
         if binding.get('bindingVersion') in (3, 4) and any(intent['creation'][name] != creation[name]
                 for name in (('receiptVersion', 'fingerprintAlgorithm', 'nonce', 'resourceLifecycle') if binding.get('bindingVersion') == 4 else ('receiptVersion', 'fingerprintAlgorithm', 'nonce'))):
             fail('restore_target_changed')
@@ -446,34 +491,68 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None):
        old['restoreIntent'] is not None or old['rollbackTargetImages'] is not None:
         fail('invalid_cold_state')
     def reserve(body):
+        # Revalidate against the state read by transition, not only the caller's
+        # earlier view. No authorization decision is accepted from the caller.
+        validate_install_binding(binding)
+        if binding.get('bindingVersion') in (2, 3, 4):
+            validate_install_creation(creation, binding)
+        elif creation is not None:
+            fail('invalid_cold_state')
+        validate_proof_body(proof)
+        if proof['kind'] != 'preauthority-legacy-source' or \
+           proof['inventoryIdentity'] != binding['inventoryIdentity'] or \
+           proof['targetImages'] != binding['candidate']['images'] or \
+           proof['images'] != binding['previousImages'] or \
+           proof['source']['portal'] != binding['portalTarget']['database'] or \
+           proof_sha256 != binding['b0']['proofSha256']:
+            fail('preauthority_source_recovery_proof_mismatch')
+        if body.get('installIntent') is not None or body['schemaVersion'] != 2 or \
+           body['cmsStatus'] != 'cold' or body['admission'] != 'closed' or \
+           body['restoreIntent'] is not None or body['rollbackTargetImages'] is not None:
+            fail('invalid_cold_state')
         body['installIntent'] = {'binding': json.loads(json.dumps(binding)), 'stage': 'reserved', 'cmsTarget': None}
         if creation is not None:
             body['installIntent']['creation'] = json.loads(json.dumps(creation))
-    return transition(directory, reserve)
+        if production:
+            body['installIntent']['authorizationFreshAtReservation'] = True
+    return transition(
+        directory, reserve,
+        authorization_expires_at=authorization_expires_at if production else None,
+        clock=clock, before_persist=before_persist)
 
 
-def advance_install(directory, binding, stage, cms_target=None):
+def advance_install(directory, binding, stage, cms_target=None, b1=None):
     """Persist one adjacent checkpoint; retry is exact and never clears evidence.
     cms_target is an explicit creator-bound record, never auto-learned on retry."""
     old = read_state(directory)[2]
     intent = assert_install_matches(old, binding)
-    if stage not in INSTALL_STAGES or stage in ('floor_commit_pending', 'floor_committed'):
+    stages = PRODUCTION_INSTALL_STAGES if binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod' else INSTALL_STAGES
+    if stage not in stages:
         fail('invalid_cold_state')
     if stage == 'cms_resources_bound':
         _validate_install_target(cms_target, 'ownerinc_cms', {'cmsUploads'} if binding.get('bindingVersion') == 4 else {'cmsPostgres', 'cmsUploads'})
     elif cms_target is not None:
         fail('invalid_cold_state')
+    if stage == 'b1_committed':
+        _exact_keys(b1, {'directory', 'proofSha256'}, 'invalid_cold_state')
+        if not isinstance(b1['directory'], str) or not os.path.isabs(b1['directory']) or os.path.normpath(b1['directory']) != b1['directory'] or \
+           not isinstance(b1['proofSha256'], str) or not HEX_64.fullmatch(b1['proofSha256']):
+            fail('invalid_cold_state')
+    elif b1 is not None:
+        fail('invalid_cold_state')
     if stage == intent['stage']:
         if stage == 'cms_resources_bound' and canonical(cms_target) != canonical(intent['cmsTarget']):
             fail('restore_target_changed')
         return old
-    if INSTALL_STAGES.index(stage) != INSTALL_STAGES.index(intent['stage']) + 1:
+    if stages.index(stage) != stages.index(intent['stage']) + 1:
         fail('invalid_cold_state')
     def advance(body):
         assert_install_matches(body, binding)
         body['installIntent']['stage'] = stage
         if stage == 'cms_resources_bound':
             body['installIntent']['cmsTarget'] = json.loads(json.dumps(cms_target))
+        if stage == 'b1_committed':
+            body['installIntent']['b1'] = json.loads(json.dumps(b1))
         if stage == 'provisioned':
             body['cmsStatus'] = 'provisioned'
     return transition(directory, advance)
@@ -618,7 +697,8 @@ def record_install_creation(directory, binding, kind, name, receipt):
 def begin_install_floor(directory, binding, fingerprint):
     def begin(body):
         intent = assert_install_matches(body, binding)
-        if intent['stage'] != 'provisioned':
+        required = 'b1_committed' if binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod' else 'provisioned'
+        if intent['stage'] != required:
             fail('invalid_cold_state')
         intent['stage'] = 'floor_commit_pending'
         intent['floor'] = {'nativeCatalogFingerprint': fingerprint,
@@ -845,7 +925,10 @@ def validate_state_transition(old, new):
     if old_install is not None:
         if new_install is None or canonical(old_install['binding']) != canonical(new_install['binding']):
             fail('planned_release_mismatch')
-        before, after = (INSTALL_TRANSITION_STAGES.index(item['stage']) for item in (old_install, new_install))
+        stages = (PRODUCTION_INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')) \
+            if old_install['binding'].get('bindingVersion') == 4 and old_install['binding'].get('project') == 'ownerinc-portal-prod' \
+            else (INSTALL_STAGES + ('floor_commit_pending', 'floor_committed'))
+        before, after = (stages.index(item['stage']) for item in (old_install, new_install))
         if after not in (before, before + 1):
             fail('invalid_cold_state')
         if old_install['cmsTarget'] is not None and canonical(old_install['cmsTarget']) != canonical(new_install['cmsTarget']):
@@ -1027,7 +1110,15 @@ def initialize(directory, inventory_identity, trusted_key=None):
     return body
 
 
-def transition(directory, mutate):
+def transition(directory, mutate, authorization_expires_at=None, clock=None, before_persist=None):
+    if authorization_expires_at is not None:
+        if not isinstance(authorization_expires_at, str) or \
+           not re.fullmatch(r'[1-9][0-9]{9}', authorization_expires_at) or \
+           (clock is not None and not callable(clock)) or \
+           (before_persist is not None and not callable(before_persist)):
+            fail('invalid_cold_state')
+    elif clock is not None or before_persist is not None:
+        fail('invalid_cold_state')
     key, state_dir, old, parent_hash = read_state(directory)
     new = json.loads(json.dumps(old))
     mutate(new)
@@ -1037,6 +1128,20 @@ def transition(directory, mutate):
     envelope = sign_envelope(new, key)
     raw = canonical(envelope) + b'\n'
     journal_path = os.path.join(state_dir, _journal_name(new['sequence']))
+    if authorization_expires_at is not None:
+        # The protected caller may use before_persist only as a deterministic
+        # race-test seam. Production supplies no callback. The actual clock
+        # decision is made here, after re-read/validation/signing and directly
+        # before the first durable journal write.
+        if before_persist is not None:
+            before_persist()
+        try:
+            now = (time.time if clock is None else clock)()
+        except BaseException:
+            fail('invalid_cold_state')
+        if isinstance(now, bool) or not isinstance(now, (int, float)) or \
+           int(now) >= int(authorization_expires_at):
+            fail('invalid_cold_state')
     _write_exclusive(journal_path, raw, 0o600)
     if os.name != 'nt':
         directory_fd = os.open(state_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))

@@ -47,6 +47,7 @@ function evaluateDeployCondition(expression, context) {
   const replacements = new Map([
     ['cancelled()', String(Number(context.cancelled ?? false))],
     ["needs.validate.result == 'success'", String(Number(context.validateResult === 'success'))],
+    ["needs.publish-images.result == 'success'", String(Number(context.publishResult === 'success'))],
     ["github.event_name == 'push'", String(Number(context.eventName === 'push'))],
     ["github.event_name == 'workflow_dispatch'", String(Number(context.eventName === 'workflow_dispatch'))],
     ["github.ref == 'refs/heads/main'", String(Number(context.ref === 'refs/heads/main'))],
@@ -69,25 +70,24 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   const integration = namedStep(workflow, 'Test editorial admin session v2 against disposable PostgreSQL and Firebase Auth');
   const failureReport = namedStep(workflow, 'Upload redacted API-v2 failure report');
   const scan = namedStep(workflow, 'Scan CMS image');
-  const publish = namedStep(workflow, 'Publish immutable images');
-  const publishCms = namedStep(workflow, 'Publish CMS immutable image');
+  const publish = namedStep(workflow, 'Push validated immutable digests only');
+  const publishCms = publish;
   const candidateManifest = namedStep(workflow, 'Capture complete immutable release candidate manifest');
   const recoveryPull = namedStep(workflow, 'Pull exact published candidate image digests for root-owned fixture');
   const recovery = namedStep(workflow, 'Run disposable four-store preauthority recovery on published digests');
   const recoveryReport = namedStep(workflow, 'Upload redacted preauthority recovery report');
   const qualifiedManifest = namedStep(workflow, 'Create recovery-qualified candidate manifest');
-  const authenticate = namedStep(workflow, 'Authenticate to GHCR');
-  const apiPublishAt = workflow.indexOf('      - name: Publish immutable images');
-  const publishAt = workflow.indexOf('      - name: Publish CMS immutable image');
+  const authenticate = namedStep(workflow, 'Authenticate isolated publisher to GHCR');
+  const apiPublishAt = workflow.indexOf('  publish-images:');
+  const publishAt = workflow.indexOf('      - name: Push validated immutable digests only');
   const scanAt = workflow.indexOf('      - name: Scan CMS image');
   const buildAt = workflow.indexOf('      - name: Build production images');
   const integrationAt = workflow.indexOf('      - name: Test editorial admin session v2 against disposable PostgreSQL and Firebase Auth');
   const normalMainCondition = "(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true";
   const cmsOnlyCondition = "(github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true)";
-  const candidateExpression = "github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true";
+  const candidateExpression = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true";
   const candidateCondition = `(${candidateExpression})`;
-  const cmsPublishCondition = `((${normalMainCondition}) || ${cmsOnlyCondition} || ${candidateCondition})`;
-  const apiPublishCondition = `((${normalMainCondition}) || ${candidateCondition})`;
+  const cmsPublishCondition = `!cancelled() && needs.validate.result == 'success' && ((((${normalMainCondition}) || ${cmsOnlyCondition} || ${candidateCondition})))`;
 
   assert.ok(workflow.indexOf('      - name: Reject conflicting publication modes') < workflow.indexOf('      - uses: actions/checkout@'),
     'conflicting flags must fail before checkout, build, test or publication');
@@ -101,10 +101,9 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   assert.match(workflow, /isolated-b0-recovery:\n\s+needs: dispatch-input-contract/u);
   assert.match(workflow, /validate:\n\s+needs: \[dispatch-input-contract, isolated-b0-recovery\]/u,
     'every executable CI path must wait for the input contract');
-  assert.ok(buildAt < integrationAt && integrationAt < scanAt && scanAt < publishAt,
+  assert.ok(buildAt < integrationAt && integrationAt < scanAt && scanAt < apiPublishAt && apiPublishAt < publishAt,
     'candidate API-v2 HTTP acceptance must run after image build and before scans/publication');
-  assert.ok(apiPublishAt < publishAt &&
-    publishAt < workflow.indexOf('      - name: Capture complete immutable release candidate manifest') &&
+  assert.ok(publishAt < workflow.indexOf('      - name: Capture complete immutable release candidate manifest') &&
     workflow.indexOf('      - name: Capture complete immutable release candidate manifest') < workflow.indexOf('      - name: Run disposable four-store preauthority recovery on published digests') &&
     workflow.indexOf('      - name: Pull exact published candidate image digests for root-owned fixture') < workflow.indexOf('      - name: Run disposable four-store preauthority recovery on published digests') &&
     workflow.indexOf('      - name: Run disposable four-store preauthority recovery on published digests') < workflow.indexOf('      - name: Create recovery-qualified candidate manifest'),
@@ -129,19 +128,18 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   assert.match(scan, /image-ref: ownerinc-portal-cms:\$\{\{ github\.sha \}\}/);
   assert.match(scan, /severity: HIGH,CRITICAL[\s\S]*ignore-unfixed: true[\s\S]*exit-code: 1/);
 
-  assert.match(workflow, /cms_image: \$\{\{ steps\.publish_cms\.outputs\.cms_image \}\}/,
-    'the CMS-only publication step must expose its digest as a validate job output');
+  assert.match(workflow, /publish-images:[\s\S]*permissions:\n\s+contents: read\n\s+packages: write[\s\S]*cms_image: \$\{\{ steps\.publish\.outputs\.cms_image \}\}/,
+    'only the isolated publisher exposes immutable digests with package write authority');
   assert.match(workflow, /api_image: \$\{\{ steps\.publish\.outputs\.api_image \}\}/);
   assert.match(workflow, /cron_image: \$\{\{ steps\.publish\.outputs\.cron_image \}\}/);
-  assert.equal(condition(authenticate, 8), cmsPublishCondition,
-    'GHCR authentication must be limited to normal main, CMS-only, or validated candidate publication');
-  assert.equal(condition(publish, 8), apiPublishCondition,
-    'API/cron publication must include branch candidates but stay disabled in CMS-only mode');
-  const legacyPublishCommands = publish.match(/        run: \|\n([\s\S]*)$/)?.[1] || '';
-  assert.doesNotMatch(legacyPublishCommands, /ownerinc-portal-cms|cms_image|cms-image/,
-    'the legacy publisher must publish only API and cron');
-  assert.equal(condition(publishCms, 8), cmsPublishCondition,
-    'CMS publication may run on normal main, CMS-only, or validated candidate dispatch');
+  assert.doesNotMatch(workflow.slice(workflow.indexOf('\n  validate:'), workflow.indexOf('\n  publish-images:')), /packages:\s*write/u);
+  assert.match(authenticate, /docker\/login-action/);
+  assert.match(publish, /if \[\[ "\$\{\{ inputs\.cms_image_only \}\}" != true \]\]; then[\s\S]*ownerinc-portal-api[\s\S]*ownerinc-portal-cron/u,
+    'API and cron publication must remain disabled in CMS-only mode');
+  const publisherCondition = condition(workflow.slice(workflow.indexOf('  publish-images:'), workflow.indexOf('  qualify-payload-candidate:')), 4);
+  assert.match(publisherCondition, /needs\.validate\.result == 'success'/u);
+  assert.match(publisherCondition, /github\.ref == 'refs\/heads\/main'[\s\S]*inputs\.publish_candidate_only == true/u,
+    'publisher job must be limited to successful authorized publication modes');
   assert.match(publishCms, /docker tag ownerinc-portal-cms:\$\{GITHUB_SHA\} \$\{REGISTRY\}\/ownerinc-portal-cms:\$\{GITHUB_SHA\}/);
   assert.match(publishCms, /docker push \$\{REGISTRY\}\/ownerinc-portal-cms:\$\{GITHUB_SHA\}/);
   assert.match(publishCms, /cms_image=\$\(docker inspect --format='\{\{index \.RepoDigests 0\}\}' \$\{REGISTRY\}\/ownerinc-portal-cms:\$\{GITHUB_SHA\}\)/);
@@ -156,21 +154,20 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     'the legacy release digest file must remain exactly API and cron');
 
   const upload = containingStep(workflow, 'name: cms-image-digest');
-  assert.equal(condition(upload, 8), cmsPublishCondition);
   assert.match(upload, /path:[\s\S]*cms-image-digest\.txt[\s\S]*cms-image-source\.txt/);
   const legacyUpload = containingStep(workflow, 'name: image-digests');
-  assert.equal(condition(legacyUpload, 8), normalMainCondition);
+  assert.match(legacyUpload, /inputs\.cms_image_only != true && inputs\.publish_candidate_only != true/);
   assert.match(legacyUpload, /path: image-digests\.txt/);
   assert.doesNotMatch(legacyUpload, /cms-image|cms_image(?!_only)/,
     'CMS metadata must not alter the existing API/cron digest artifact');
 
   const productionDeploy = workflow.slice(workflow.indexOf('  deploy-production:'));
-  const productionDeployCondition = "!cancelled() && needs.validate.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true";
+  const productionDeployCondition = "!cancelled() && needs.validate.result == 'success' && needs.publish-images.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true";
   assert.equal(condition(productionDeploy, 4), productionDeployCondition,
     'production deployment must override skipped-ancestor propagation and require successful normal-main validation');
   for (const [name, context, expected] of [
-    ['main push', { validateResult: 'success', eventName: 'push', ref: 'refs/heads/main' }, true],
-    ['normal main dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main' }, true],
+    ['main push', { validateResult: 'success', publishResult: 'success', eventName: 'push', ref: 'refs/heads/main' }, true],
+    ['normal main dispatch', { validateResult: 'success', publishResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main' }, true],
     ['pull request', { validateResult: 'success', eventName: 'pull_request', ref: 'refs/pull/64/merge' }, false],
     ['non-main dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/fix/deploy' }, false],
     ['CMS-only dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main', cmsImageOnly: true }, false],
@@ -187,35 +184,28 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   assert.match(deployment, /publicação e artefato de digest separados, ainda sem consumo pelo deploy automático/i);
   assert.match(deployment, /não ativa nem implanta o Payload CMS em produção/i);
 
-  assert.equal(condition(candidateManifest, 8), candidateExpression);
-  assert.match(candidateManifest, /API_IMAGE:[\s\S]*steps\.publish\.outputs\.api_image/);
-  assert.match(candidateManifest, /CRON_IMAGE:[\s\S]*steps\.publish\.outputs\.cron_image/);
-  assert.match(candidateManifest, /CMS_IMAGE:[\s\S]*steps\.publish_cms\.outputs\.cms_image/);
-  assert.match(candidateManifest, /ownerinc-portal-api@sha256:\[0-9a-f\]\{64\}/);
-  assert.match(candidateManifest, /ownerinc-portal-cron@sha256:\[0-9a-f\]\{64\}/);
-  assert.match(candidateManifest, /ownerinc-portal-cms@sha256:\[0-9a-f\]\{64\}/);
-  assert.match(candidateManifest, /schemaVersion: 1[\s\S]*commit: process\.env\.GITHUB_SHA[\s\S]*runId: process\.env\.GITHUB_RUN_ID[\s\S]*runAttempt: process\.env\.GITHUB_RUN_ATTEMPT[\s\S]*api: process\.env\.API_IMAGE[\s\S]*cron: process\.env\.CRON_IMAGE[\s\S]*cms: process\.env\.CMS_IMAGE/);
+  assert.match(workflow, /qualify-payload-candidate:[\s\S]*github\.ref == 'refs\/heads\/main'[\s\S]*packages: read/u);
+  assert.match(candidateManifest, /API_IMAGE:[\s\S]*needs\.publish-images\.outputs\.api_image/);
+  assert.match(candidateManifest, /CRON_IMAGE:[\s\S]*needs\.publish-images\.outputs\.cron_image/);
+  assert.match(candidateManifest, /CMS_IMAGE:[\s\S]*needs\.publish-images\.outputs\.cms_image/);
+  assert.match(candidateManifest, /ownerinc-portal-\(api\|cron\|cms\)@sha256:\[0-9a-f\]\{64\}/);
+  assert.match(candidateManifest, /schemaVersion: 2[\s\S]*commit: process\.env\.GITHUB_SHA[\s\S]*runId: process\.env\.GITHUB_RUN_ID[\s\S]*runAttempt: process\.env\.GITHUB_RUN_ATTEMPT[\s\S]*api: process\.env\.API_IMAGE[\s\S]*cron: process\.env\.CRON_IMAGE[\s\S]*cms: process\.env\.CMS_IMAGE[\s\S]*approvalSha256[\s\S]*inventoryIdentity[\s\S]*expiresAt[\s\S]*nonce/);
   const candidateUpload = containingStep(workflow, 'name: payload-release-candidate');
-  assert.equal(condition(candidateUpload, 8), candidateExpression);
   assert.match(candidateUpload, /path: candidate\.json/);
   assert.match(candidateUpload, /retention-days: 30/);
-  assert.equal(condition(recoveryPull, 8), candidateExpression);
   assert.match(recoveryPull, /docker pull "\$API_IMAGE"[\s\S]*docker pull "\$CRON_IMAGE"[\s\S]*docker pull "\$CMS_IMAGE"/);
-  assert.equal(condition(recovery, 8), candidateExpression);
   assert.match(recovery, /sudo env[\s\S]*API_IMAGE="\$API_IMAGE"[\s\S]*node scripts\/test-payload-preauthority-recovery\.mjs/);
   assert.match(recoveryReport, /always\(\)[\s\S]*payload-preauthority-recovery-report[\s\S]*retention-days: 30/);
-  assert.equal(condition(qualifiedManifest, 8), `success() && ${candidateExpression}`);
   assert.match(qualifiedManifest, /node scripts\/qualify-payload-candidate\.mjs[\s\S]*--candidate candidate\.json --report "\$RECOVERY_REPORT"[\s\S]*--output qualified-candidate\.json/);
   assert.doesNotMatch(qualifiedManifest, /node <<|JSON\.parse|const expectedChecks/u,
     'the workflow must invoke the executable, adversarially tested qualifier rather than duplicating it inline');
   const qualifiedUpload = containingStep(workflow, 'name: payload-recovery-qualified-candidate');
-  assert.equal(condition(qualifiedUpload, 8), `success() && ${candidateExpression}`);
   assert.match(qualifiedUpload, /path: qualified-candidate\.json/);
   assert.match(qualifiedUpload, /if-no-files-found: error/);
   assert.match(candidateUpload, /if-no-files-found: error/);
-  assert.match(workflow, /candidate_artifact_id: \$\{\{ steps\.upload_candidate\.outputs\.artifact-id \}\}/);
-  assert.match(workflow, /qualified_artifact_id: \$\{\{ steps\.upload_qualified\.outputs\.artifact-id \}\}/);
-  assert.match(workflow, /recovery_report_artifact_id: \$\{\{ steps\.upload_recovery_report\.outputs\.artifact-id \}\}/);
+  assert.match(workflow, /candidate_artifact_id: \$\{\{ steps\.install_handoff\.outputs\.candidate_artifact_id \}\}/);
+  assert.match(workflow, /qualified_artifact_id: \$\{\{ steps\.install_handoff\.outputs\.qualified_artifact_id \}\}/);
+  assert.match(workflow, /report_artifact_id: \$\{\{ steps\.install_handoff\.outputs\.report_artifact_id \}\}/);
 
   const policy = ({ event, ref, cmsImageOnly = false, publishCandidateOnly = false }) => {
     const conflict = event === 'workflow_dispatch' && cmsImageOnly === true && publishCandidateOnly === true;
@@ -224,7 +214,7 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
       && cmsImageOnly !== true && publishCandidateOnly !== true;
     const cmsOnly = event === 'workflow_dispatch' && ref.startsWith('refs/heads/')
       && cmsImageOnly === true && publishCandidateOnly !== true;
-    const candidate = event === 'workflow_dispatch' && ref.startsWith('refs/heads/')
+    const candidate = event === 'workflow_dispatch' && ref === 'refs/heads/main'
       && publishCandidateOnly === true && cmsImageOnly !== true;
     return {
       validationFails: false,
@@ -242,7 +232,7 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     [{ event: 'workflow_dispatch', ref: 'refs/heads/main', cmsImageOnly: true }, { validationFails: false, apiCron: false, cms: true, legacyArtifact: false, candidateArtifact: false, deploy: false }],
     [{ event: 'workflow_dispatch', ref: 'refs/heads/feat/payload-cms-final', cmsImageOnly: true }, { validationFails: false, apiCron: false, cms: true, legacyArtifact: false, candidateArtifact: false, deploy: false }],
     [{ event: 'workflow_dispatch', ref: 'refs/heads/feat/payload-cms-final' }, { validationFails: false, apiCron: false, cms: false, legacyArtifact: false, candidateArtifact: false, deploy: false }],
-    [{ event: 'workflow_dispatch', ref: 'refs/heads/feat/payload-cms-final', publishCandidateOnly: true }, { validationFails: false, apiCron: true, cms: true, legacyArtifact: false, candidateArtifact: true, deploy: false }],
+    [{ event: 'workflow_dispatch', ref: 'refs/heads/feat/payload-cms-final', publishCandidateOnly: true }, { validationFails: false, apiCron: false, cms: false, legacyArtifact: false, candidateArtifact: false, deploy: false }],
     [{ event: 'workflow_dispatch', ref: 'refs/heads/main', publishCandidateOnly: true }, { validationFails: false, apiCron: true, cms: true, legacyArtifact: false, candidateArtifact: true, deploy: false }],
     [{ event: 'workflow_dispatch', ref: 'refs/heads/feat/payload-cms-final', cmsImageOnly: true, publishCandidateOnly: true }, { validationFails: true, apiCron: false, cms: false, legacyArtifact: false, candidateArtifact: false, deploy: false }],
     [{ event: 'workflow_dispatch', ref: 'refs/tags/v1', cmsImageOnly: true }, { validationFails: false, apiCron: false, cms: false, legacyArtifact: false, candidateArtifact: false, deploy: false }],
@@ -260,7 +250,7 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
   const name = 'Test preauthority CI setup with native Linux root';
   const setup = namedStep(workflow, name);
   assert.equal(condition(setup, 8),
-    "github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true");
+    "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true");
   assert.match(workflow, /runs-on: ubuntu-latest/u);
   assert.ok(workflow.indexOf('node-version: 24') < workflow.indexOf(`      - name: ${name}`));
   assert.equal(setup.split('        run: |\n')[1]?.trim(),
@@ -299,7 +289,7 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
   assert.doesNotMatch(await read('ops/prepare-cms-authenticated.py'), /PAYLOAD_REQUIRE_NATIVE_PREPARATION/u);
   assert.doesNotMatch(setup, /continue-on-error|always\(|failure\(|\|\||\beval\b|secrets\.|\bcd\b|--test-name-pattern/u);
   assert.equal(workflow.split(`      - name: ${name}\n`).length - 1, 1);
-  for (const later of ['Build CMS with synthetic build-only configuration', 'Build production images', 'Publish immutable images', 'Publish CMS immutable image',
+  for (const later of ['Build CMS with synthetic build-only configuration', 'Build production images', 'Push validated immutable digests only',
     'Run disposable four-store preauthority recovery on published digests', 'Create recovery-qualified candidate manifest']) {
     assert.ok(workflow.indexOf(`      - name: ${name}`) < workflow.indexOf(`      - name: ${later}`), `${name} must precede ${later}`);
   }
@@ -310,7 +300,7 @@ test('candidate CI runs the complete native Linux root setup suite as a mandator
     'this dedicated suite must not have another skip path hidden from the Linux/root condition');
   // A+B requires successful named gates, not an exact count of workflow steps.
   // This additional mandatory step must not replace or weaken any existing gate.
-  assert.match(packager, /for \(const name of requiredSteps\)[\s\S]*job\.steps\.filter\(step => step\.name === name\)[\s\S]*steps\[0\]\.conclusion !== 'success'/u);
+  assert.match(packager, /for \(const name of \(production \? requiredValidationSteps : historicalRequiredSteps\)\)[\s\S]*job\.steps\.filter\(step => step\.name === name\)[\s\S]*steps\[0\]\.conclusion !== 'success'/u);
 });
 
 test('CI mirror covers all pinned Hub bases without changing production pins or weakening gates', async () => {

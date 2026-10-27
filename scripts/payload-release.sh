@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Manual archive path. CI uses ops/deploy-from-ci.sh; both share manifest/backup
-# and mandatory authority guard contracts. This script never changes authority.
+# Historical live/manual archive path. Gate C private installation MUST use the
+# fixed receiver -> authenticated preflight -> apply path instead. This script
+# is deliberately not a fallback for payload-v2 receipts because it starts
+# Nginx and opens admission near the end of the legacy flow.
 set -Eeuo pipefail
 umask 077
 root=${1:?}; release=${2:?}; release_id=${3:?}
