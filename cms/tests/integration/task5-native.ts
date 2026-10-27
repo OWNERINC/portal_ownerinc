@@ -219,31 +219,21 @@ test('real PostgreSQL + pinned native operations (Portal authority transport is 
       await assert.rejects(payload.delete({ collection: 'news-articles', id: document.id, req: await req() }), /news_history_retention_required/)
       const versions = await payload.findVersions({ collection: 'news-articles', depth: 0, where: { parent: { equals: document.id } } })
       const previous = versions.docs.find(row => row.version.body?.some(block => block.blockType === 'image'))!
-      const lock = await begin()
-      const restore = payload.restoreVersion({ collection: 'news-articles', id: previous.id, req: await req(), draft: true })
-      restore.catch(() => {})
-      try {
-        await waitForBlockedLock(); await commit(lock)
-        const restored = await restore
-        const block = restored.body?.[0]
-        assert.equal(block?.blockType, 'image')
-        assert.ok(block && 'media' in block)
-        assert.equal(typeof block.media === 'string' ? block.media : block.media?.id, media.id)
-        assert.ok(!('alt' in block) || !block.alt, 'restore retains the intentionally unfinished alt')
-      }
-      finally { if (lock.transactionID) await payload.db.rollbackTransaction((await lock.transactionID)!) }
+      await assert.rejects(payload.restoreVersion({ collection: 'news-articles', id: previous.id, req: await req(), draft: true }),
+        /news_version_restore_unavailable/)
+      assert.deepEqual((await payload.findByID({ collection: 'news-articles', id: document.id, draft: true, depth: 0 })).body, [])
       await assert.rejects(payload.delete({ collection: 'news-media', id: media.id, req: await req() }), /media_is_referenced/)
       assert.deepEqual(await readFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!)), image)
     })
 
-    await t.test('native restore still rejects an image referencing PDF; rejected restore rolls back without altering bytes', async () => {
+    await t.test('manual mode rejects native restore before content replay and leaves document and bytes unchanged', async () => {
       const media = await upload(), document = await article([{ blockType: 'image', media: media.id }])
       const versions = await payload.findVersions({ collection: 'news-articles', depth: 0, where: { parent: { equals: document.id } } })
       const incompatible = versions.docs.find(row => row.version.body?.some(block => block.blockType === 'image'))!
       assert.ok(incompatible)
       await payload.update({ collection: 'news-articles', id: document.id, req: await req(), draft: true, data: { body: [] } })
       await assert.rejects(payload.restoreVersion({ collection: 'news-articles', id: incompatible.id, req: await req(), draft: true }),
-        error => error instanceof Error && error.name === 'ValidationError' && error.message.includes('Media'))
+        /news_version_restore_unavailable/)
       const latest = await payload.findByID({ collection: 'news-articles', id: document.id, draft: true, depth: 0 })
       assert.deepEqual(latest.body, [])
       assert.deepEqual(await readFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!)), pdf)

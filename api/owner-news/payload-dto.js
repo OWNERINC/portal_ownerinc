@@ -3,6 +3,7 @@ const { validateBlocks } = require('../cms/blocks');
 const { normalizeEditorial } = require('./editorial');
 const { normalizeHome } = require('./home');
 const MiB = 1024 * 1024;
+const PRIVATE_LIST_MAX = 101;
 const unavailable = () => Object.assign(new Error('news_unavailable'), { status: 503, code: 'news_unavailable' });
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, names, required = names) => record(value) && Object.keys(value).every(key => names.includes(key)) && required.every(key => Object.hasOwn(value, key));
@@ -11,6 +12,11 @@ const text = (value, max, empty = true) => typeof value === 'string' && value.le
 const date = value => value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
 const plain = value => !/[\r\n]|<\/?[a-z][^>]*>|<\s*(script|style|iframe|object|embed)\b|\bon[a-z]+\s*=|javascript\s*:/iu.test(value);
 const kind = value => ['article', 'edition'].includes(value);
+const decimal = value => typeof value === 'string' && /^(0|[1-9][0-9]*)$/u.test(value) && BigInt(value) <= 9223372036854775807n;
+const boundary = value => keys(value, ['published_at', 'source', 'id']) && date(value.published_at)
+  && ['legacy', 'payload'].includes(value.source) && uuid(value.id);
+const scanBudget = value => keys(value, ['maxRawRows', 'maxBatches'])
+  && integer(value.maxRawRows, 1, 101000) && integer(value.maxBatches, 1, 1000);
 function assert(value) { if (!value) throw unavailable(); }
 function validActor(value) {
   return keys(value, ['uid', 'email', 'name', 'canManageNews']) && typeof value.uid === 'string' && value.uid.length > 0 && value.uid.length <= 128
@@ -20,15 +26,23 @@ function validInput(action, value) {
   const optional = (name, validate) => !Object.hasOwn(value, name) || validate(value[name]);
   if (!record(value)) return false;
   switch (action) {
-    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind'], ['limit', 'offset']) && integer(value.limit, 1, 100) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind);
+    case 'list': return keys(value, ['limit', 'offset', 'category', 'kind', 'boundary', 'scan'], ['limit', 'offset']) && integer(value.limit, 1, PRIVATE_LIST_MAX) && integer(value.offset, 0, 1000000) && optional('category', v => text(v, 100)) && optional('kind', kind) && optional('boundary', boundary) && optional('scan', scanBudget);
     case 'detail': return keys(value, ['id']) && uuid(value.id);
     case 'categories': return keys(value, ['kind', 'withCounts'], ['withCounts']) && typeof value.withCounts === 'boolean' && optional('kind', kind);
     case 'navigation': return keys(value, ['id', 'category'], ['id']) && uuid(value.id) && optional('category', v => text(v, 100));
     case 'home': return keys(value, []);
     case 'preview': return keys(value, ['id', 'versionId', 'source']) && uuid(value.id) && uuid(value.versionId) && ['payload', 'legacy'].includes(value.source);
     case 'asset': return keys(value, ['id', 'preview', 'range']) && uuid(value.id) && typeof value.preview === 'boolean' && (value.range === null || text(value.range, 200));
+    case 'preflight': return keys(value, []);
     default: return false;
   }
+}
+function validPublicInput(action, value) {
+  if (action === 'preflight') return false;
+  if (action === 'list') return validInput(action, value) && value.offset === 0 && !Object.hasOwn(value, 'scan');
+  if (!['detail', 'navigation', 'asset'].includes(action)) return validInput(action, value);
+  if (!record(value) || !['legacy', 'payload'].includes(value.source)) return false;
+  return validInput(action, Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'source')));
 }
 function https(value) {
   assert(text(value, 2048, false));
@@ -63,7 +77,7 @@ function readRich(block, budget) {
   return block;
 }
 function readNewsDTO(json) {
-  const required = ['id', 'title', 'category', 'published_at', 'editorial', 'content_version', 'asset_scope', 'content_blocks', 'read_time_minutes'];
+  const required = ['source', 'id', 'title', 'category', 'published_at', 'editorial', 'content_version', 'asset_scope', 'content_blocks', 'read_time_minutes'];
   assert(keys(json, [...required, 'preview_revision'], required));
   if (Object.hasOwn(json, 'preview_revision')) {
     const revision = json.preview_revision;
@@ -71,7 +85,7 @@ function readNewsDTO(json) {
       && ['payload', 'legacy'].includes(revision.source) && ['draft', 'published', 'scheduled', 'archived'].includes(revision.status)
       && (revision.source !== 'payload' || ['draft', 'published'].includes(revision.status)));
   }
-  assert(uuid(json.id) && text(json.title, 200) && text(json.category, 100) && date(json.published_at));
+  assert(json.source === 'payload' && uuid(json.id) && text(json.title, 200) && text(json.category, 100) && date(json.published_at));
   assert(plain(json.title) && plain(json.category));
   assert(json.content_version === 2 && ['owner-news', 'owner-news-preview'].includes(json.asset_scope));
   assert(json.editorial === null || normalizeEditorial(json.editorial));
@@ -90,19 +104,30 @@ function readNewsDTO(json) {
   assert(json.content_blocks.filter(b => b.type === 'image' && b.usage === 'cover').length <= 1 && json.content_blocks.filter(b => b.type === 'pdf' && b.usage === 'edition').length <= 1);
   return json;
 }
-function readNewsPage(json) {
-  assert(keys(json, ['rows', 'count']) && Array.isArray(json.rows) && json.rows.length <= 100 && integer(json.count, json.rows.length));
-  json.rows.forEach(readNewsDTO); return json;
+function readNewsPage(json, { scan = null } = {}) {
+  const names = scan ? ['rows', 'count', 'scan'] : ['rows', 'count'];
+  assert(keys(json, names) && Array.isArray(json.rows) && json.rows.length <= PRIVATE_LIST_MAX
+    && (json.count === null || integer(json.count, json.rows.length)));
+  if (scan) assert((json.count === null || json.count === json.rows.length)
+    && keys(json.scan, ['rawRows', 'batches']) && integer(json.scan.rawRows, json.rows.length, scan.maxRawRows)
+    && integer(json.scan.batches, 1, scan.maxBatches));
+  const seen = new Set();
+  for (const row of json.rows) {
+    readNewsDTO(row);
+    if (seen.has(row.id)) throw Object.assign(unavailable(), { code: 'news_duplicate_identity' });
+    seen.add(row.id);
+  }
+  return json;
 }
 function readResult(action, json, input) {
-  if (action === 'list') { readNewsPage(json); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }
+  if (action === 'list') { readNewsPage(json, { scan: input.scan || null }); assert(json.rows.length <= input.limit && json.rows.every(row => row.asset_scope === 'owner-news')); }
   else if (action === 'detail' || action === 'preview') {
     readNewsDTO(json); assert(json.id === input.id && json.asset_scope === (action === 'preview' ? 'owner-news-preview' : 'owner-news'));
     if (json.preview_revision) assert(json.preview_revision.id === input.versionId && json.preview_revision.source === input.source);
   }
   else if (action === 'navigation') {
     assert(keys(json, ['previous', 'next']));
-    for (const v of Object.values(json)) assert(v === null || (keys(v, ['id', 'title']) && uuid(v.id) && text(v.title, 200)));
+    for (const v of Object.values(json)) assert(v === null || (keys(v, ['source', 'id', 'title']) && v.source === 'payload' && uuid(v.id) && text(v.title, 200)));
   } else if (action === 'home') {
     assert(keys(json, ['content'])); const v = json.content;
     assert(v === null || (keys(v, ['version', 'eyebrow', 'headline', 'summary']) && normalizeHome(v)));
@@ -115,7 +140,15 @@ function readResult(action, json, input) {
       const name = input.withCounts ? v.name : v; assert(text(name, 100, false)); return name;
     });
     assert(new Set(names).size === names.length);
+  } else if (action === 'preflight') {
+    assert(keys(json, ['ready', 'publicationMode', 'authority', 'newsEmpty', 'mutation', 'counts']));
+    assert(json.ready === true && json.publicationMode === 'manual' && json.newsEmpty === true);
+    assert(keys(json.authority, ['mode', 'epoch']) && ['frozen', 'payload_frozen'].includes(json.authority.mode) && integer(json.authority.epoch, 1));
+    assert(keys(json.mutation, ['sequence', 'chainSha256', 'writeBarrier']) && decimal(json.mutation.sequence)
+      && json.mutation.sequence === '0' && json.mutation.chainSha256 === '0'.repeat(64) && json.mutation.writeBarrier === 'open');
+    assert(keys(json.counts, ['articles', 'media', 'homePublished', 'schedules'])
+      && Object.values(json.counts).every(value => integer(value, 0) && value === 0));
   } else throw unavailable();
   return json;
 }
-module.exports = { readNewsDTO, readNewsPage, readResult, validInput, validActor, unavailable };
+module.exports = { readNewsDTO, readNewsPage, readResult, validInput, validPublicInput, validActor, unavailable };

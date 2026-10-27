@@ -6,7 +6,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const {
   addPublishedBlocks, getPublishedAnnouncement, getPublishedBlocksBatch,
-  isPublicCmsRow, listPublishedAnnouncements, publishedBodyText,
+  isPublicCmsRow, listPublishedAnnouncementCategories, listPublishedAnnouncements, publishedBodyText,
 } = require('../../api/cms/reader');
 
 function poolFor({ document, blocks = [], assets = [], sourceExists = true, sourceActive = true,
@@ -77,7 +77,7 @@ function poolFor({ document, blocks = [], assets = [], sourceExists = true, sour
           && (document.published_revision_status || 'published') === 'published';
         return {
           rows: published
-            ? [{ id: document.id, title: document.title, category: '', published_at: null,
+            ? [{ id: document.id, title: document.title, category: '', published_at: document.published_at ?? null,
               published_revision_id: document.published_revision_id, blocks, editorial: document.editorial }]
             : [],
         };
@@ -398,6 +398,206 @@ test('announcement detail returns normalized published blocks', async () => {
   });
   const result = await getPublishedAnnouncement(pool, 'announcement-1');
   assert.deepEqual(result.content_blocks, [{ type: 'heading', text: 'Visible', level: 2 }]);
+});
+
+test('legacy announcement DTO canonicalizes PostgreSQL Date timestamps and rejects invalid timestamp types', async () => {
+  const instant = new Date('2026-10-26T12:34:56.789Z');
+  const valid = poolFor({ document: { id: 'announcement-date', title: 'Dated', published_at: instant,
+    published_revision_id: 'published-date', published_revision_status: 'published' }, blocks: [{ type: 'paragraph', text: 'Body' }] });
+  assert.equal((await listPublishedAnnouncements(valid, 1, 0)).rows[0].published_at, instant.toISOString());
+
+  const invalid = poolFor({ document: { id: 'announcement-date', title: 'Dated', published_at: 123,
+    published_revision_id: 'published-date', published_revision_status: 'published' }, blocks: [{ type: 'paragraph', text: 'Body' }] });
+  await assert.rejects(listPublishedAnnouncements(invalid, 1, 0), /invalid_published_at/);
+});
+
+test('legacy lookahead uses bounded keyset chunks and continues past invalid and unstable rows', async () => {
+  const newsId = n => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const raw = Array.from({ length: 103 }, (_, index) => ({
+    id: newsId(index + 1), title: `Row ${index + 1}`, category: 'News',
+    published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -index)),
+    published_revision_id: newsId(index + 1000), editorial: null,
+    blocks: index < 100 ? [{ type: 'unknown' }] : [{ type: 'paragraph', text: `Body ${index + 1}` }],
+  }));
+  let reads = 0;
+  const calls = [];
+  const pool = {
+    async connect() {
+      return { release() {}, async query(sql, params = []) {
+        calls.push({ sql, params });
+        if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+        if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+        if (sql.includes('SELECT d.id, d.title')) {
+          reads++;
+          return { rows: raw.slice((reads - 1) * 4, reads * 4) };
+        }
+        if (sql.includes('FOR UPDATE OF d, r')) {
+          return { rows: params[0].filter(value => value !== newsId(102)).map(value => ({
+            id: value, published_revision_id: raw.find(row => row.id === value).published_revision_id,
+          })) };
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      } };
+    },
+  };
+  const result = await listPublishedAnnouncements(pool, 2, 0, undefined, undefined, null,
+    { exactTotal: false, scan: { maxRawRows: 101000, maxBatches: 1000 } });
+  assert.deepEqual(result.rows.map(row => row.id), [newsId(101), newsId(103)]);
+  assert.equal(result.count, 2);
+  assert.deepEqual(result.scan, { rawRows: 103, batches: 26 });
+  assert.equal(reads, 26);
+  const selects = calls.filter(call => call.sql.includes('SELECT d.id, d.title'));
+  assert.equal(selects.length, 26);
+  assert.ok(selects.every(call => /date_trunc\('milliseconds', d\.published_at\) AS published_at_ms/u.test(call.sql)));
+  assert.ok(selects.every(call => /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id\s+LIMIT \$\d+/u.test(call.sql)));
+  assert.ok(selects.every(call => call.params.at(-1) === 4));
+  assert.match(selects[1].sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
+  assert.doesNotMatch(selects[1].sql, /OFFSET/u);
+});
+
+test('legacy private scan allowance caps SQL limit and stops before a second batch', async () => {
+  const row = { id: '10000000-0000-4000-8000-000000000001', title: 'Invalid', category: '', published_at: new Date('2026-10-01T00:00:00Z'),
+    published_revision_id: '10000000-0000-4000-8000-000000001001', editorial: null, blocks: [{ type: 'unknown' }] };
+  const selects = [];
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) { selects.push({ sql, params }); return { rows: [row].slice(0, params.at(-1)) }; }
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  await assert.rejects(listPublishedAnnouncements(pool, 101, 0, undefined, 'article', null,
+    { exactTotal: false, scan: { maxRawRows: 1, maxBatches: 1 } }), /announcement_scan_limit/);
+  assert.equal(selects.length, 1);
+  assert.equal(selects[0].params.at(-1), 1);
+});
+
+test('legacy list enforces aggregate DTO bytes and SQL never returns more than four raw documents', async () => {
+  const newsId = n => `30000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const largeBlocks = Array.from({ length: 100 }, () => ({ type: 'paragraph', text: 'x'.repeat(5000) }));
+  const rows = Array.from({ length: 70 }, (_, index) => ({ id: newsId(index + 1), title: `Large ${index + 1}`, category: 'News',
+    published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -index)), published_revision_id: newsId(index + 1000), editorial: null, blocks: largeBlocks }));
+  let reads = 0; const selects = [];
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) { selects.push({ sql, params }); const start = reads++ * 4; return { rows: rows.slice(start, start + 4) }; }
+    if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({ id: value,
+      published_revision_id: rows.find(row => row.id === value).published_revision_id })) };
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  await assert.rejects(listPublishedAnnouncements(pool, 101, 0, undefined, undefined, null, { exactTotal: false }), /announcement_response_limit/);
+  assert.ok(selects.length > 1);
+  assert.ok(selects.every(call => call.params.at(-1) === 4));
+});
+
+test('legacy categories stream and discard four-row SQL chunks while preserving exact validated counts', async () => {
+  const newsId = n => `40000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const rows = Array.from({ length: 9 }, (_, index) => ({ id: newsId(index + 1), title: `Category ${index + 1}`, category: index % 2 ? 'B' : 'A',
+    published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -index)), published_revision_id: newsId(index + 1000), editorial: null,
+    blocks: [{ type: 'paragraph', text: `Body ${index + 1}` }] }));
+  let reads = 0; const selects = [];
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) { selects.push({ sql, params }); const start = reads++ * 4; return { rows: rows.slice(start, start + 4) }; }
+    if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({ id: value,
+      published_revision_id: rows.find(row => row.id === value).published_revision_id })) };
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  assert.deepEqual(await listPublishedAnnouncementCategories(pool, { withCounts: true }), {
+    total: 9, categories: [{ name: 'A', count: 5 }, { name: 'B', count: 4 }],
+  });
+  assert.equal(selects.length, 3);
+  assert.ok(selects.every(call => call.params.at(-1) === 4));
+  assert.match(selects[1].sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
+});
+
+test('legacy categories fail closed at the cumulative raw-row and batch budget', async () => {
+  const newsId = n => `50000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  let reads = 0;
+  const pool = { async connect() { return { release() {}, async query(sql, params = []) {
+    if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+    if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+    if (sql.includes('SELECT d.id, d.title')) {
+      const start = reads++ * 4 + 1;
+      return { rows: Array.from({ length: 4 }, (_, index) => ({ id: newsId(start + index), title: 'Category', category: 'A',
+        published_at: new Date(Date.UTC(2026, 0, 2, 0, 0, 0, -(start + index))), published_revision_id: newsId(start + index + 5000),
+        editorial: null, blocks: [{ type: 'paragraph', text: 'Body' }] })) };
+    }
+    if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({ id: value,
+      published_revision_id: newsId(Number(value.slice(-12)) + 5000) })) };
+    throw new Error(`Unexpected query: ${sql}`);
+  } }; } };
+  await assert.rejects(listPublishedAnnouncementCategories(pool, { withCounts: true }), /announcement_scan_limit/);
+  assert.equal(reads, 1000);
+});
+
+test('legacy keysets canonicalize sub-millisecond timestamps without skips or duplicates across cursors', async () => {
+  const newsId = n => `20000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const canonical = '2026-10-26T12:34:56.789Z';
+  const rows = Array.from({ length: 103 }, (_, index) => ({
+    id: newsId(index + 1), title: `Micro ${index + 1}`, category: 'News',
+    // These represent distinct PostgreSQL values that collapse to one public millisecond.
+    database_published_at: `2026-10-26T12:34:56.789${String(999 - index).padStart(3, '0')}Z`,
+    published_at_ms: new Date(canonical), published_revision_id: newsId(index + 1000),
+    editorial: null, blocks: [{ type: 'paragraph', text: `Body ${index + 1}` }],
+  }));
+  assert.equal(new Set(rows.map(row => row.database_published_at)).size, 103);
+  assert.ok(rows.every(row => new Date(row.database_published_at).toISOString() === canonical));
+  const listCalls = [];
+  const pool = {
+    async connect() {
+      return { release() {}, async query(sql, params = []) {
+        if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
+        if (sql.includes("scheduled.status = 'scheduled'")) return { rows: [] };
+        if (sql.includes('SELECT d.id, d.title')) {
+          listCalls.push({ sql, params });
+          assert.match(sql, /date_trunc\('milliseconds', d\.published_at\) AS published_at_ms/u);
+          assert.match(sql, /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id/u);
+          if (sql.includes("date_trunc('milliseconds', d.published_at) IS NULL AND d.id >")) return { rows: [] };
+          const boundaryId = params.length === 3 ? params[1] : null;
+          return { rows: rows.filter(row => boundaryId === null || row.id > boundaryId).slice(0, params.at(-1))
+            .map(({ database_published_at: _databaseTimestamp, ...row }) => row) };
+        }
+        if (sql.includes('FOR UPDATE OF d, r')) return { rows: params[0].map(value => ({
+          id: value, published_revision_id: rows.find(row => row.id === value).published_revision_id,
+        })) };
+        throw new Error(`Unexpected query: ${sql}`);
+      } };
+    },
+  };
+
+  const first = await listPublishedAnnouncements(pool, 101, 0, undefined, undefined, null, { exactTotal: false });
+  assert.equal(first.count, null);
+  assert.equal(first.rows.length, 101);
+  assert.ok(first.rows.every(row => row.published_at === canonical));
+  const last = first.rows.at(-1);
+  const boundary = { published_at: last.published_at, source: last.source, id: last.id };
+  const second = await listPublishedAnnouncements(pool, 101, 0, undefined, undefined, boundary, { exactTotal: false });
+  assert.equal(second.count, 2);
+  assert.deepEqual([...first.rows, ...second.rows].map(row => row.id), rows.map(row => row.id));
+  assert.equal(new Set([...first.rows, ...second.rows].map(row => row.id)).size, 103);
+
+  const continued = listCalls.at(-1);
+  assert.deepEqual(continued.params.slice(0, 2), [canonical, newsId(101)]);
+  assert.match(continued.sql, /date_trunc\('milliseconds', d\.published_at\) < \$1::timestamptz/u);
+  assert.match(continued.sql, /date_trunc\('milliseconds', d\.published_at\) = \$1::timestamptz AND d\.id > \$2::uuid/u);
+  assert.doesNotMatch(continued.sql, /(?<!date_trunc\('milliseconds', )d\.published_at\s*[<=]/u);
+
+  await listPublishedAnnouncements(pool, 1, 0, undefined, undefined,
+    { published_at: '2026-10-26T12:34:56.789999Z', source: 'legacy', id: newsId(101) }, { exactTotal: false });
+  assert.equal(listCalls.at(-1).params[0], canonical, 'incoming legacy boundaries use the same millisecond precision');
+
+  await listPublishedAnnouncements(pool, 1, 0, undefined, undefined,
+    { published_at: null, source: 'legacy', id: newsId(1) }, { exactTotal: false });
+  const nullBoundary = listCalls.at(-1);
+  assert.match(nullBoundary.sql, /date_trunc\('milliseconds', d\.published_at\) IS NULL AND d\.id > \$1::uuid/u);
 });
 
 test('announcement list discards rows unpublished before the final locked recheck', async () => {

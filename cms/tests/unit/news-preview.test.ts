@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { savedPreview, previewConflictMessage } from '../../src/admin/preview-state.js'
 import { createNewsScheduleEndpoints } from '../../src/endpoints/news-schedule.js'
+import { createSavedPreviewEndpoint } from '../../src/endpoints/saved-preview.js'
 import { createNewsAreaAccess } from '../../src/auth/news-area-access.js'
 import type { PayloadRequest } from 'payload'
 
@@ -9,7 +10,7 @@ const documentId = '11111111-1111-4111-8111-111111111111', versionId = '22222222
 test('native preview looks up a persisted version, not document ID, date or draft write', async () => {
   const signal = new AbortController().signal
   const result = await savedPreview(documentId, signal, (async (path, options) => {
-    assert.equal(path, `/editorial/api/news-schedule?target=article&documentId=${documentId}`)
+    assert.equal(path, `/editorial/api/saved-preview?target=article&documentId=${documentId}`)
     assert.equal(options?.method, undefined); assert.equal(options?.credentials, 'same-origin'); assert.equal(options?.signal, signal)
     return Response.json({ versionId, savedAt: '2026-10-01T12:00:00.000Z' })
   }) as typeof fetch)
@@ -40,7 +41,7 @@ test('saved revision endpoint reads actual latest Versions without mutating, and
     },
     async find() { return { docs: [] } },
   } as unknown as PayloadRequest['payload']
-  const endpoint = createNewsScheduleEndpoints(access.canRead).find(e => e.method === 'get')!
+  const endpoint = createSavedPreviewEndpoint(access.canRead)
   const response = await endpoint.handler(req)
   assert.equal(response.status, 200); assert.equal((await response.json()).versionId, versionId)
   hasVersion = false

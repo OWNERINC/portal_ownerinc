@@ -17,9 +17,9 @@ function bindEditorialMetadataField(source) {
   return source.replace(original, updated)
 }
 
-function addSaveDraftOption(source) {
+function configureManualDrafts(source) {
   const previous = 'versions: { maxPerDoc: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } },'
-  const updated = 'versions: { maxPerDoc: 0, drafts: { autosave: { interval: 2000, showSaveDraftButton: true }, schedulePublish: false } },'
+  const updated = 'versions: { maxPerDoc: 0, drafts: { autosave: false, schedulePublish: false } },'
   if (source.split(previous).length !== 2) throw new Error('expected exactly one baseline NewsArticles autosave config')
   return source.replace(previous, updated)
 }
@@ -33,7 +33,7 @@ async function validateSnapshot(checkout, baselineCheckout, baselineOverrides = 
   const baselineValidation = baselineOverrides?.validation ?? await readFile(path.join(baselineCheckout, 'cms/src/news/validation.ts'), 'utf8')
   const baselineCollection = baselineOverrides?.collection ?? await readFile(path.join(baselineCheckout, 'cms/src/collections/NewsArticles.ts'), 'utf8')
   const expectedFields = bindEditorialMetadataField(baselineFields)
-  const expectedCollection = addSaveDraftOption(baselineCollection)
+  const expectedCollection = configureManualDrafts(baselineCollection)
   const actualFields = await readFile(path.join(checkout, 'cms/src/news/fields.ts'), 'utf8')
   const actualValidation = await readFile(path.join(checkout, 'cms/src/news/validation.ts'), 'utf8')
   const actualCollection = await readFile(path.join(checkout, 'cms/src/collections/NewsArticles.ts'), 'utf8')
@@ -119,7 +119,7 @@ for (const file of overlays) {
   const target = path.join(checkout, file)
   await mkdir(path.dirname(target), { recursive: true })
   if (file === 'cms/src/collections/NewsArticles.ts') {
-    await writeFile(target, addSaveDraftOption(baselineCollection))
+    await writeFile(target, configureManualDrafts(baselineCollection))
   } else {
     await copyFile(path.join(root, file), target)
   }
@@ -127,7 +127,7 @@ for (const file of overlays) {
 }
 // The editorial field gets only its admin UI Field binding; JSON shape, defaults,
 // validation and backend hooks remain baseline. NewsArticles gets the separate
-// explicit Save Draft option only. No history or staged-import code is copied.
+// manual explicit draft mode only. No history or staged-import code is copied.
 const scratchDeps = path.join(base, 'payload-deps-thread6-RRoANG', 'node_modules')
 await symlink(scratchDeps, path.join(checkout, 'cms/node_modules'), 'junction')
 await symlink(path.join(root, 'api/node_modules'), path.join(checkout, 'api/node_modules'), 'junction')
@@ -142,6 +142,6 @@ await writeFile(path.join(directory, 'snapshot-manifest.json'), JSON.stringify({
     newsArticlesSha256: sha256(baselineCollection),
   }, editorialAdminBinding: { key: '/admin/EditorialMetadata#EditorialMetadata', outputFieldsSha256: sha256(boundFields) },
   applied, validation,
-  boundary: 'Baseline editorial field/backend validation preserved byte-for-byte except one admin Field component binding; NewsArticles differs only by autosave.showSaveDraftButton. No import-map generator, backend/schema overlay, LegacyHistory or staged-import overlay.',
+  boundary: 'Baseline editorial field/backend validation preserved byte-for-byte except one admin Field component binding; NewsArticles differs only by autosave=false manual draft mode. No import-map generator, backend/schema overlay, LegacyHistory or staged-import overlay.',
 }, null, 2))
 console.log(JSON.stringify({ baseline, checkout, validation, applied }, null, 2))

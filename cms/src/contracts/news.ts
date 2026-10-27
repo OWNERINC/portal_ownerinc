@@ -34,6 +34,7 @@ export type LegacyBlock = Record<string, unknown>
 /** CMS input is validated at runtime; Payload generates the persisted Blocks types. */
 export type NewsContent = (LegacyBlock | RichBlock)[]
 export type NewsDTO = {
+  source: 'payload'
   id: string
   title: string
   category: string
@@ -46,16 +47,22 @@ export type NewsDTO = {
   /** Status of the exact saved revision, NOT a claim about current publication. */
   preview_revision?: { id: string; source: 'payload' | 'legacy'; status: 'draft' | 'published' | 'scheduled' | 'archived' }
 }
-export type NewsPage = { rows: NewsDTO[]; count: number }
+export type NewsScanCost = { rawRows: number; batches: number }
+export type NewsScanBudget = { maxRawRows: number; maxBatches: number }
+export type NewsPage = { rows: NewsDTO[]; count: number | null; scan?: NewsScanCost }
 export type NewsQuery = {
   limit: number
   offset: number
   category?: string
   kind?: 'article' | 'edition'
+  boundary?: NewsBoundary
+  /** Private bridge-only accounting; never accepted by the public Portal API. */
+  scan?: NewsScanBudget
 }
+export type NewsBoundary = { published_at: string | null; source: 'legacy' | 'payload'; id: string }
 export type NewsNavigation = {
-  previous: { id: string; title: string } | null
-  next: { id: string; title: string } | null
+  previous: { source: 'payload'; id: string; title: string } | null
+  next: { source: 'payload'; id: string; title: string } | null
 }
 export type PreviewQuery = {
   id: string

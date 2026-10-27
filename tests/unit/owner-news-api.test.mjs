@@ -61,8 +61,18 @@ function poolFor(extended = false) {
             }
             if (sql.includes('WHERE d.id = $1')) published = published.filter(row => row.id === params[0]);
             else {
-              assert.match(sql, /ORDER BY d\.published_at DESC/);
-              assert.doesNotMatch(sql, /LIMIT|OFFSET/);
+              assert.match(sql, /ORDER BY date_trunc\('milliseconds', d\.published_at\) DESC NULLS LAST, d\.id/);
+              assert.match(sql, /LIMIT \$\d+/);
+              assert.doesNotMatch(sql, /OFFSET/);
+              const limit = params.at(-1);
+              if (params.length > 1 && sql.includes('IS NULL AND d.id > $1')) {
+                published = published.filter(row => row.published_at === null && row.id > params[0]);
+              } else if (params.length > 1) {
+                const boundary = Date.parse(params[0]), hasSameDateId = /d\.id > \$2::uuid/u.test(sql), boundaryId = hasSameDateId ? params[1] : null;
+                published = published.filter(row => row.published_at === null || Date.parse(row.published_at) < boundary
+                  || (hasSameDateId && Date.parse(row.published_at) === boundary && row.id > boundaryId));
+              }
+              published = published.slice(0, limit);
             }
             return { rows: published.map(({ status, unstable, ...row }) => row) };
           }
@@ -102,11 +112,13 @@ function appFor(pool) {
 
 test('category filtering precedes pagination and total count over validated stable publications', async () => {
   const api = appFor(poolFor());
-  const result = await api.get('/api/announcements?limit=1&offset=1&category=News')
+  const result = await api.get('/api/announcements?limit=1&offset=0&category=News')
     .set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(result.headers['x-total-count'], '2');
-  assert.deepEqual(result.body.map(row => row.id), [id(8)]);
-  assert.deepEqual(Object.keys(result.body[0]).sort(), ['category', 'content_blocks', 'editorial', 'id', 'published_at', 'read_time_minutes', 'title']);
+  assert.deepEqual(result.body.map(row => row.id), [id(5)]);
+  assert.deepEqual(Object.keys(result.body[0]).sort(), ['asset_scope', 'category', 'content_blocks', 'editorial', 'id', 'published_at', 'read_time_minutes', 'source', 'title']);
+  assert.equal(result.body[0].source, 'legacy');
+  assert.equal(result.body[0].asset_scope, 'legacy');
   assert.equal(result.body[0].editorial, null);
   const empty = await api.get('/api/announcements?category=Absent').set('Authorization', 'Bearer test-user').expect(200);
   assert.equal(empty.headers['x-total-count'], '0');
@@ -118,7 +130,7 @@ test('unfiltered signature remains compatible and excludes invalid, draft and un
   const result = await listPublishedAnnouncements(pool, 50, 0);
   assert.equal(result.count, 4);
   assert.deepEqual(result.rows.map(row => row.id), [id(1), id(5), id(8), id(9)]);
-  assert.deepEqual(pool.calls.find(call => call.sql.includes('FROM cms_assets')).params[0], [id(100), id(101)]);
+  assert.deepEqual([...new Set(pool.calls.filter(call => call.sql.includes('FROM cms_assets')).flatMap(call => call.params[0]))], [id(100), id(101)]);
 });
 
 test('categories returns unique nonempty strings from the same validated stable publications', async () => {
@@ -141,7 +153,7 @@ test('list query strictly validates category type, length, pagination and unknow
   const api = appFor(pool);
   for (const query of [
     `category=${'x'.repeat(101)}`, 'category=News&category=Other', 'category[x]=News',
-    'unexpected=value', 'limit=0', 'offset=-1', 'limit=101',
+    'unexpected=value', 'limit=0', 'offset=-1', 'offset=1', 'limit=101',
   ]) {
     await api.get(`/api/announcements?${query}`).set('Authorization', 'Bearer test-user').expect(400);
   }
@@ -156,7 +168,7 @@ test('detail preserves the published response format and hides draft or invalid 
   const result = await api.get(`/api/announcements/${id(5)}`).set('Authorization', 'Bearer test-user').expect(200);
   assert.deepEqual(result.body, {
     id: id(5), title: 'Article 5', category: 'News', published_at: '2026-09-18T00:00:00.000Z',
-    content_blocks: [{ type: 'paragraph', text: 'Body 5' }], editorial: null, read_time_minutes: 1,
+    source: 'legacy', asset_scope: 'legacy', content_blocks: [{ type: 'paragraph', text: 'Body 5' }], editorial: null, read_time_minutes: 1,
   });
   for (const n of [2, 3, 4, 6, 7]) {
     await api.get(`/api/announcements/${id(n)}`).set('Authorization', 'Bearer test-user').expect(404);
@@ -179,13 +191,13 @@ test('kind filters before pagination; counts and navigation share complete stabl
     { name: 'News', count: 2 }, { name: 'Other', count: 1 }, { name: 'People & Culture', count: 27 },
   ] });
   assert.deepEqual((await get(`/${id(1)}/navigation`).expect(200)).body,
-    { previous: null, next: { id: id(5), title: 'Article 5' } });
+    { previous: null, next: { source: 'legacy', id: id(5), title: 'Article 5' } });
   assert.deepEqual((await get(`/${id(5)}/navigation`).expect(200)).body,
-    { previous: { id: id(1), title: 'Article 1' }, next: { id: id(8), title: 'Article 8' } });
+    { previous: { source: 'legacy', id: id(1), title: 'Article 1' }, next: { source: 'legacy', id: id(8), title: 'Article 8' } });
   assert.deepEqual((await get(`/${id(38)}/navigation?category=People%20%26%20Culture`).expect(200)).body,
-    { previous: { id: id(37), title: 'Article 37' }, next: null });
+    { previous: { source: 'legacy', id: id(37), title: 'Article 37' }, next: null });
   assert.deepEqual((await get(`/${id(10)}/navigation?category=People%20%26%20Culture`).expect(200)).body,
-    { previous: null, next: { id: id(13), title: 'Article 13' } });
+    { previous: null, next: { source: 'legacy', id: id(13), title: 'Article 13' } });
   for (const n of [2, 4, 6, 12, 99]) await get(`/${id(n)}/navigation`).expect(404);
   await get('/invalid/navigation').expect(400);
 });

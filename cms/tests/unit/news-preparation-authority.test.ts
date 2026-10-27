@@ -10,7 +10,7 @@ import { sealNewsPreparation } from '../../src/publication/seal'
 const identity = { runId: '11111111-1111-4111-8111-111111111111', manifestSha256: 'a'.repeat(64), expectedEpoch: 2 }
 const actor = { uid: 'synthetic-editor', email: 'synthetic@example.invalid', name: null, canManageNews: true }
 function fixture(t: TestContext) {
-  const env = { CMS_DATABASE_URL: 'postgres://cms.invalid/synthetic', PAYLOAD_SECRET: 'synthetic-payload-secret-not-production',
+  const env = { CMS_PUBLICATION_MODE: 'manual', CMS_DATABASE_URL: 'postgres://cms.invalid/synthetic', PAYLOAD_SECRET: 'synthetic-payload-secret-not-production',
     PORTAL_PUBLIC_URL: 'https://portal.invalid', PORTAL_INTERNAL_URL: 'https://portal-internal.invalid',
     PAYLOAD_TO_PORTAL_SECRET: 'synthetic-payload-to-portal-not-production', PORTAL_TO_PAYLOAD_SECRET: 'synthetic-portal-to-payload-not-production',
     CMS_UPLOAD_DIR: path.resolve('synthetic-unused-storage') }

@@ -16,6 +16,8 @@ test('editorial external and shell entry links respect cancelled global leave gu
 });
 
 test('Owner News reconciles the real router forced close before async Back/Forward and double close', async () => {
+  const first = '11111111-1111-4111-8111-111111111111';
+  const second = '22222222-2222-4222-8222-222222222222';
   const h = await createRouterHarness({ realUI: true });
   await h.router.navigate('/announcements.html?category=Cultura&offset=24');
   const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
@@ -23,8 +25,8 @@ test('Owner News reconciles the real router forced close before async Back/Forwa
   const overlay = new Node('div', h.doc, { id: 'news-reader-overlay', class: 'hidden', 'data-page-overlay': '' });
   overlay.append(new Node('button', h.doc, { id: 'news-reader-close' })); h.doc.body.append(overlay);
   const catalog = h.doc.getElementById('main-content');
-  const card = new Node('article', h.doc, { id: 'news-card-first' });
-  const link = new Node('a', h.doc, { href: './announcements.html?id=first' }); card.append(link); catalog.append(card);
+  const card = new Node('article', h.doc, { id: `news-card-legacy-${first}` });
+  const link = new Node('a', h.doc, { href: `./announcements.html?id=${first}&source=legacy` }); card.append(link); catalog.append(card);
   link.focus(); h.window.scrollY = 640;
   h.scope.history.replaceState({ retained: 'yes' }, '', h.location.href);
   const routes = [];
@@ -33,11 +35,11 @@ test('Owner News reconciles the real router forced close before async Back/Forwa
     routes.push(route);
     await Promise.allSettled([route.id ? Promise.resolve() : catalogReady.promise, Promise.resolve()]);
   } });
-  await navigation.open('first'); await navigation.jump('second');
+  await navigation.open({ source: 'legacy', id: first }); await navigation.jump({ source: 'payload', id: second });
   assert.equal(h.entries.length, 3);
   assert.equal(h.history.state.retained, 'yes');
   navigation.close(); navigation.close();
-  assert.match(h.location.search, /id=second/, 'native traversal is asynchronous');
+  assert.match(h.location.search, new RegExp(`id=${second}`), 'native traversal is asynchronous');
   await drain();
   assert.equal(h.location.search, '?category=Cultura&offset=24');
   assert.equal(h.doc.activeElement, catalog, 'router restores main for an ID-less origin while local onRoute is pending');
@@ -48,7 +50,7 @@ test('Owner News reconciles the real router forced close before async Back/Forwa
   assert.ok(overlay.classList.contains('hidden'));
   h.history.forward(); await drain();
   assert.equal(overlay.classList.contains('hidden'), false);
-  assert.equal(routes.at(-1).id, 'second');
+  assert.equal(routes.at(-1).id, second);
   assert.equal(h.doc.body.classList.contains('modal-open'), true);
   // Same-ID traversal still forces close in the router; sync must reopen it.
   h.scope.history.pushState({ ...h.history.state }, '', h.location.href + '&extra=1');
@@ -61,6 +63,7 @@ test('Owner News reconciles the real router forced close before async Back/Forwa
 });
 
 for (const action of ['missing-card', 'pointerdown', 'keydown']) test(`Owner News async return handles ${action} after router focus restoration`, async () => {
+  const first = '11111111-1111-4111-8111-111111111111';
   const h = await createRouterHarness({ realUI: true });
   await h.router.navigate('/announcements.html?category=Cultura&offset=24');
   const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
@@ -69,15 +72,15 @@ for (const action of ['missing-card', 'pointerdown', 'keydown']) test(`Owner New
   overlay.append(new Node('button', h.doc, { id: 'news-reader-close' })); h.doc.body.append(overlay);
   const catalog = h.doc.getElementById('main-content');
   const heading = new Node('h2', h.doc, { id: 'news-catalog-title', tabindex: '-1' });
-  const card = new Node('article', h.doc, { id: 'news-card-first' });
-  const link = new Node('a', h.doc, { href: './announcements.html?id=first' }); card.append(link);
+  const card = new Node('article', h.doc, { id: `news-card-legacy-${first}` });
+  const link = new Node('a', h.doc, { href: `./announcements.html?id=${first}&source=legacy` }); card.append(link);
   const other = new Node('button', h.doc, { id: 'another-control' }); catalog.append(heading, card, other);
   link.focus(); h.window.scrollY = 640;
   const ready = deferred();
   const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async route => {
     await Promise.allSettled([route.id ? Promise.resolve() : ready.promise, Promise.resolve()]);
   } });
-  await navigation.open('first');
+  await navigation.open({ source: 'legacy', id: first });
   if (action === 'missing-card') card.remove();
   navigation.close(); await drain();
   assert.equal(h.doc.activeElement, catalog);

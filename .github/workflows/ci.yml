@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      manual_runtime_only:
+        description: Run only the disposable Payload manual-runtime recovery proof; publish and deploy nothing
+        required: false
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main]
@@ -22,7 +27,82 @@ permissions:
   packages: write
 
 jobs:
+  dispatch-input-contract:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Reject conflicting publication modes
+        env:
+          CMS_IMAGE_ONLY: ${{ inputs.cms_image_only }}
+          PUBLISH_CANDIDATE_ONLY: ${{ inputs.publish_candidate_only }}
+          MANUAL_RUNTIME_ONLY: ${{ inputs.manual_runtime_only }}
+        run: |
+          set -euo pipefail
+          selected=0
+          for value in "$CMS_IMAGE_ONLY" "$PUBLISH_CANDIDATE_ONLY" "$MANUAL_RUNTIME_ONLY"; do
+            if [[ "$value" == true ]]; then selected=$((selected + 1)); fi
+          done
+          if ((selected > 1)); then
+            echo 'Select only one manual CI mode.' >&2
+            exit 1
+          fi
+
+  payload-manual-runtime:
+    needs: dispatch-input-contract
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.manual_runtime_only == true && inputs.cms_image_only != true && inputs.publish_candidate_only != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact manual-runtime candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            cms/package-lock.json
+      - name: Prepare dependencies and pinned PostgreSQL image
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test -z "${DOCKER_HOST:-}"
+          test -z "${DOCKER_CONTEXT:-}"
+          test "$(docker context show)" = default
+          npm --prefix api ci
+          npm --prefix cms ci
+          docker pull postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+          docker image inspect postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 >/dev/null
+      - name: Run isolated disposable manual runtime proof
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mapfile -t ipv4_defaults < <(ip -4 route show default)
+          mapfile -t ipv6_defaults < <(ip -6 route show default)
+          ((${#ipv4_defaults[@]} + ${#ipv6_defaults[@]} > 0))
+          restore_routes() {
+            local route
+            for route in "${ipv4_defaults[@]}"; do sudo ip -4 route replace $route; done
+            for route in "${ipv6_defaults[@]}"; do sudo ip -6 route replace $route; done
+          }
+          trap restore_routes EXIT
+          for route in "${ipv4_defaults[@]}"; do sudo ip -4 route del $route; done
+          for route in "${ipv6_defaults[@]}"; do sudo ip -6 route del $route; done
+          test -z "$(ip -4 route show default)"
+          test -z "$(ip -6 route show default)"
+          PAYLOAD_MANUAL_RUNTIME_PRIVATE_PARENT="$RUNNER_TEMP" \
+            PAYLOAD_MANUAL_RUNTIME_DISPOSABLE=1 \
+            node scripts/integration/payload-manual-runtime.mjs
+
   isolated-b0-recovery:
+    needs: dispatch-input-contract
     if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -116,8 +196,8 @@ jobs:
           retention-days: 7
 
   validate:
-    needs: isolated-b0-recovery
-    if: ${{ !cancelled() && (needs.isolated-b0-recovery.result == 'success' || (!(github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true) && needs.isolated-b0-recovery.result == 'skipped')) }}
+    needs: [dispatch-input-contract, isolated-b0-recovery]
+    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.manual_runtime_only == true) && (needs.isolated-b0-recovery.result == 'success' || (!(github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true) && needs.isolated-b0-recovery.result == 'skipped')) }}
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true && 150 || 90 }}
     outputs:
       api_image: ${{ steps.publish.outputs.api_image }}
@@ -144,7 +224,7 @@ jobs:
           --health-retries 10
     steps:
       - name: Reject conflicting publication modes
-        if: github.event_name == 'workflow_dispatch' && inputs.cms_image_only == true && inputs.publish_candidate_only == true
+        if: github.event_name == 'workflow_dispatch' && ((inputs.cms_image_only == true && inputs.publish_candidate_only == true) || (inputs.manual_runtime_only == true && (inputs.cms_image_only == true || inputs.publish_candidate_only == true)))
         run: |
           echo 'cms_image_only and publish_candidate_only cannot both be true' >&2
           exit 1

@@ -70,8 +70,8 @@ test('API and cron require shared Resend SMTP configuration', async () => {
 });
 
 test('API and cron lock Nodemailer to the approved safe policy', async () => {
-  const expectedRange = '^10.0.13';
-  const expectedResolvedVersion = '10.0.13';
+  const expectedRange = '^10.2.1';
+  const expectedResolvedVersion = '10.2.1';
 
   for (const service of ['api', 'cron']) {
     const manifest = JSON.parse(await read(`${service}/package.json`));
@@ -215,6 +215,17 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/users\/bulk[\s\S]*client_max_body_size 1m;[\s\S]*proxy_pass \$api_upstream/);
+  const privateBridgeExact = nginxLocationBlock(nginx, 'location = /editorial/api/portal-news {');
+  const privateBridgePrefix = nginxLocationBlock(nginx, 'location ^~ /editorial/api/portal-news/ {');
+  assert.equal((nginx.match(/location = \/editorial\/api\/portal-news \{/gu) || []).length, 1,
+    'the private bridge exact path must have one explicit edge denial');
+  assert.equal((nginx.match(/location \^~ \/editorial\/api\/portal-news\/ \{/gu) || []).length, 1,
+    'the private bridge descendants must have one explicit longest-prefix denial');
+  for (const block of [privateBridgeExact, privateBridgePrefix]) {
+    assert.ok(block, 'both private bridge denial locations must remain present');
+    assert.match(block, /^\s*return 404;\s*$/u);
+    assert.doesNotMatch(block, /proxy_pass|try_files|alias|root/u);
+  }
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
   assert.match(nginx, /media-src 'self' blob: https:/);
@@ -244,6 +255,54 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(jsCssLocation, /\bdefault_type\s+application\/javascript\s*;/);
   assert.doesNotMatch(jsCssLocation, /\badd_header\b/, 'JS/MJS/CSS must inherit server security headers');
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
+});
+
+test('Owner News read composition observes authority but cannot invoke writers or transitions', async () => {
+  const backend = await read('api/owner-news/backend.js');
+  const topLevel = backend.slice(0, backend.indexOf('const missing'));
+  const requirePaths = source => [...source.matchAll(/\brequire\((['"])([^'"]+)\1\)/gu)].map(match => match[2]);
+  const allowedReadDependencies = [
+    '../cms/locks',
+    '../cms/reader',
+    './authority',
+    './editorial',
+    './feed',
+    './home',
+    './payload-client',
+    './payload-dto',
+    'node:fs',
+    'node:fs/promises',
+    'node:path',
+    'node:stream',
+  ].sort();
+  const topLevelDependencies = requirePaths(topLevel).sort();
+  assert.deepEqual(topLevelDependencies, allowedReadDependencies,
+    'the complete top-level dependency set must stay on the reviewed read-only allowlist');
+  assert.equal((backend.match(/\brequire\s*\(/gu) || []).length, requirePaths(backend).length,
+    'every require call must use one static string literal so dynamic dependencies cannot bypass the allowlist');
+  assert.deepEqual(requirePaths(backend).sort(), topLevelDependencies,
+    'nested or dynamic-scope require calls cannot bypass the top-level dependency allowlist');
+  assert.equal((backend.match(/require\('\.\/authority'\)/gu) || []).length, 1);
+  assert.match(topLevel, /^const \{ getAuthority \} = require\('\.\/authority'\);$/mu,
+    'authority observation must import exactly getAuthority without aliasing or extra capabilities');
+
+  const identifiers = backend.match(/[A-Za-z_$][\w$]*/gu) || [];
+  const forbiddenIdentifiers = new Set([
+    'assertNewsWriter', 'transitionAuthority', 'writerAllowed', 'setAuthority',
+    'createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement',
+    'publishAnnouncement', 'scheduleAnnouncement', 'promoteDueScheduledForPool',
+  ]);
+  assert.deepEqual(identifiers.filter(identifier => /(?:writer|transition|mutation)/iu.test(identifier)
+    || forbiddenIdentifiers.has(identifier)), [],
+  'writer, transition, mutation and direct publication API identifiers are forbidden anywhere in the backend');
+  assert.doesNotMatch(backend, /\.(?:create|update|delete|publish|schedule|promote|transition|mutate)\s*\(/iu,
+    'helpers and aliases must not call direct mutation APIs');
+
+  const stringLiterals = [...backend.matchAll(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/gsu)]
+    .map(match => match[0].toUpperCase()).join('\n');
+  const mutatingSql = /\b(?:INSERT|UPDATE|DELETE|MERGE|UPSERT|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE|COPY|CALL|DO|VACUUM|ANALYZE|CLUSTER|REINDEX|REFRESH|COMMENT|REASSIGN|ATTACH|DETACH|SET|RESET|DISCARD|SECURITY\s+LABEL|IMPORT\s+FOREIGN\s+SCHEMA)\b/u;
+  assert.doesNotMatch(stringLiterals, mutatingSql,
+    'backend SQL may read and use BEGIN/COMMIT/ROLLBACK controls, but cannot mutate data, schema, or privileges');
 });
 
 test('Docker build context excludes environment files recursively', async () => {

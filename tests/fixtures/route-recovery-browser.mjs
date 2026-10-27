@@ -105,6 +105,8 @@ export function syntheticUser(role = 'admin') {
 
 const article = Object.freeze({
   id: 'route-recovery-news-article',
+  source: 'legacy',
+  asset_scope: 'legacy',
   title: 'Synthetic Owner News Article',
   category: 'Synthetic QA',
   published_at: '2026-10-01T12:00:00.000Z',
@@ -146,7 +148,7 @@ const fixtures = Object.freeze({
     job_title: 'Synthetic QA', state: 'active', permissions: {},
   }),
   previewArticle: Object.freeze({
-    id: PREVIEW_ID, title: 'Synthetic Saved Preview Fixture', category: 'Synthetic QA',
+    id: PREVIEW_ID, source: 'payload', title: 'Synthetic Saved Preview Fixture', category: 'Synthetic QA',
     content_version: 2, asset_scope: 'owner-news-preview',
     preview_revision: { id: PREVIEW_VERSION, source: 'payload', status: 'draft' },
     content_blocks: [{ type: 'rich_text', nodes: [{ type: 'paragraph', children: [

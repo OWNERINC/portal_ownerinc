@@ -12,7 +12,7 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
   const temporaryRoot = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : os.tmpdir()
   const directory = await mkdtemp(path.join(temporaryRoot, 'task5-native-unit-'))
   Object.assign(process.env, {
-    CMS_BUILD_ONLY: 'true', NEXT_PHASE: 'phase-production-build', NODE_ENV: 'development',
+    CMS_BUILD_ONLY: 'true', NEXT_PHASE: 'phase-production-build', NODE_ENV: 'development', CMS_PUBLICATION_MODE: 'manual',
     CMS_DATABASE_URL: 'postgresql://not-connected.invalid/task5', PAYLOAD_SECRET: 'synthetic-task5-payload-not-a-runtime-secret',
     PAYLOAD_TO_PORTAL_SECRET: 'synthetic-task5-outbound-not-a-runtime-secret', PORTAL_TO_PAYLOAD_SECRET: 'synthetic-task5-inbound-not-a-runtime-secret',
     PORTAL_PUBLIC_URL: 'http://localhost:18085', PORTAL_INTERNAL_URL: 'http://127.0.0.1:18085', CMS_UPLOAD_DIR: directory,
@@ -93,17 +93,18 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
       }
       mode = 'payload'
     })
-    await t.test('native single article PATCH and restore reach snapshot only after lock+authority; unsafe bulk updates denied', async () => {
-      for (const operation of ['update', 'restore']) {
-        events.length = 0
-        const args = { id: randomUUID(), collection: { config: articlesConfig }, overrideAccess: true, req: request() }
-        await assert.rejects(operation === 'update' ? updateByIDOperation({ ...args, data: {} }) : restoreVersionOperation(args), /native_snapshot_reached/)
-        assert.equal(events[0], 'begin')
-        assert.ok(events.indexOf('lock') < events.indexOf('authority'))
-        assert.ok(events.indexOf('authority') < events.indexOf('actor'))
-        assert.ok(events.indexOf('actor') < events.indexOf('snapshot'))
-        assert.equal(events.at(-1), 'rollback')
-      }
+    await t.test('native single article PATCH reaches snapshot after authority while restore is unavailable; unsafe bulk updates denied', async () => {
+      events.length = 0
+      const args = { id: randomUUID(), collection: { config: articlesConfig }, overrideAccess: true, req: request() }
+      await assert.rejects(updateByIDOperation({ ...args, data: {} }), /native_snapshot_reached/)
+      assert.equal(events[0], 'begin')
+      assert.ok(events.indexOf('lock') < events.indexOf('authority'))
+      assert.ok(events.indexOf('authority') < events.indexOf('actor'))
+      assert.ok(events.indexOf('actor') < events.indexOf('snapshot'))
+      assert.equal(events.at(-1), 'rollback')
+      events.length = 0
+      await assert.rejects(restoreVersionOperation(args), /news_version_restore_unavailable/)
+      assert.deepEqual(events, ['begin', 'rollback'])
       await assert.rejects(updateOperation({ collection: { config: articlesConfig }, req: request(), overrideAccess: true,
         data: {}, where: { id: { exists: true } } }), /news_update_requires_single_id/)
       assert.equal(Object.keys(sessions).length, 0)

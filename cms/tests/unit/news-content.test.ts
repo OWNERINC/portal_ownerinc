@@ -365,7 +365,7 @@ test('DTO is an explicit projection with flat IDs, null metadata and separate pr
   const legacy = { ...document(legacyToPayloadBlocks(legacyBlocks)), editorial: null,
     secret: 'internal-only', legacySourceId: null, publishedAt: '2020-01-02T03:04:05.000Z' }
   const dto = toNewsDTO(legacy, { preview: false })
-  assert.deepEqual(dto, { id: articleID, title: 'Título', category: '', editorial: null,
+  assert.deepEqual(dto, { source: 'payload', id: articleID, title: 'Título', category: '', editorial: null,
     published_at: '2020-01-02T03:04:05.000Z', content_version: 2, asset_scope: 'owner-news',
     content_blocks: legacyBlocks, read_time_minutes: null })
   assert.equal(toNewsDTO(legacy, { preview: true }).asset_scope, 'owner-news-preview')
@@ -384,17 +384,21 @@ test('reading time includes body text, excludes attribution/name/metadata, infer
   assert.equal(estimateNewsMinutes([{ type: 'profile', name: 'Name', role: 'Role' }], null), null)
 })
 
-test('native configs protect CRUD/history, retain every block, drafts/autosave, and restrict media to editors', async () => {
+test('native configs protect CRUD/history, retain every block, keep manual drafts, and restrict media to editors', async () => {
   assert.deepEqual(new Set(newsBlocks.map(block => block.slug)), new Set(['richText', ...legacyBlocks.map(block => block.type)]))
-  assert.deepEqual(NewsArticles.versions, { maxPerDoc: 0, drafts: { autosave: { interval: 2000, showSaveDraftButton: true }, schedulePublish: false } })
-  assert.deepEqual(NewsHome.versions, { max: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } })
+  assert.deepEqual(NewsArticles.versions, { maxPerDoc: 0, drafts: { autosave: false, schedulePublish: false } })
+  assert.deepEqual(NewsHome.versions, { max: 0, drafts: { autosave: false, schedulePublish: false } })
   const req = { user: null } as PayloadRequest
   const editorReq = { user: { id: articleID, collection: 'portal-editors', portalUid: 'uid',
     portalActor: { uid: 'uid', canManageNews: true } } } as unknown as PayloadRequest
   for (const config of [NewsArticles, NewsHome]) for (const [name, access] of Object.entries(config.access!)) {
     assert.equal(await access!({ req }), false)
-    if (name === 'read' || name === 'readVersions') {
+    if (name === 'read') {
       assert.strictEqual(access, newsAreaReadAccess, `${config.slug} ${name} uses fresh News authority`)
+      continue
+    }
+    if (name === 'readVersions') {
+      assert.equal(await access!({ req: editorReq }), false, `${config.slug} Versions stay private in manual mode`)
       continue
     }
     assert.equal(await access!({ req: editorReq }), true)

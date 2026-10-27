@@ -64,6 +64,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const artifact = claimImportPreflightArtifact(preflight)
   const bundle = artifact.bundle
   const environment = {
+    CMS_PUBLICATION_MODE: 'manual',
     CMS_DATABASE_URL: cmsURL,
     PAYLOAD_SECRET: 'synthetic-payload-secret-not-production',
     PORTAL_PUBLIC_URL: 'https://portal.invalid',

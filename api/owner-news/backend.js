@@ -1,9 +1,10 @@
 const { getAuthority } = require('./authority');
 const legacy = require('../cms/reader');
 const { getPublishedHome } = require('./home');
-const { createPayloadNewsClient } = require('./payload-client');
-const { validInput, unavailable } = require('./payload-dto');
-const { validateNewsRevision, estimateNewsReadTime } = require('./editorial');
+const { createPayloadNewsClient, payloadRuntimeState } = require('./payload-client');
+const { validPublicInput, readResult, unavailable } = require('./payload-dto');
+const { compareNews, encodeNewsCursor, assertUniqueNewsRows } = require('./feed');
+const { validateNewsRevision, announcementKind, estimateNewsReadTime } = require('./editorial');
 const { lockCmsAssets } = require('../cms/locks');
 const { open, lstat } = require('node:fs/promises');
 const { constants } = require('node:fs');
@@ -26,7 +27,7 @@ async function legacyPreview(pool, input) {
     const row = rows[0]; if (!row) throw missing();
     const revision = validateNewsRevision(row.blocks, row.editorial ?? null);
     if (!revision || !(await legacy.validatePublishedBlocks(db, revision.blocks)).blocks) throw missing();
-    return { id: row.id, title: row.title, category: row.category, published_at: row.published_at,
+    return { source: 'legacy', id: row.id, title: row.title, category: row.category, published_at: row.published_at,
       editorial: revision.editorial, content_version: 2, asset_scope: 'owner-news-preview', content_blocks: revision.blocks,
       read_time_minutes: estimateNewsReadTime(revision.blocks, revision.editorial),
       preview_revision: { id: input.versionId, source: 'legacy', status: row.status } };
@@ -72,31 +73,250 @@ async function legacyAsset(pool, input, { signal } = {}) {
   } catch (error) { await file?.close().catch(() => {}); if ([403, 404].includes(error.status)) throw error; throw unavailable(); }
 }
 
-function createNewsBackend({ pool, payloadClient }) {
-  // Lazy construction: a legacy deployment does not need any CMS credentials to boot.
+const controlled = (status, code) => Object.assign(new Error(code), { status, code });
+const safeRequestId = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : null;
+const withoutSource = input => Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'source'));
+const sourceOf = input => ['legacy', 'payload'].includes(input?.source) ? input.source : null;
+const NAVIGATION_PAGE_SIZE = 101;
+const NAVIGATION_MAX_PAGES = 1000;
+const NAVIGATION_MAX_BATCHES = 1000;
+const NAVIGATION_MAX_RAW_ROWS = NAVIGATION_PAGE_SIZE * NAVIGATION_MAX_BATCHES;
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function createNewsBackend({ pool, payloadClient, legacyReader = legacy, homeReader = getPublishedHome,
+  legacyPreviewReader = legacyPreview, legacyAssetReader = legacyAsset, logger = console.error } = {}) {
+  const suppliedPayloadClient = Boolean(payloadClient);
+  // Lazy construction: a legacy deployment with both values absent stays healthy.
   const client = () => payloadClient || (payloadClient = createPayloadNewsClient({ baseURL: process.env.CMS_INTERNAL_URL, secret: process.env.PORTAL_TO_PAYLOAD_SECRET }));
-  async function run(action, input, actor, options) {
-    if (!validInput(action, input)) throw Object.assign(new Error('invalid_request'), { status: 400 });
-    if (!actor?.uid) throw Object.assign(new Error('unauthorized'), { status: 401 });
-    if ((action === 'preview' || (action === 'asset' && input.preview)) && !actor.canManageNews) throw Object.assign(new Error('forbidden'), { status: 403 });
-    let authority;
-    try { authority = await getAuthority(pool); } catch { throw unavailable(); }
-    if (['payload', 'payload_frozen'].includes(authority.mode)) {
-      try { return action === 'asset' ? await client().asset(input, actor, options) : await client().query(action, input, actor, options); }
-      catch (error) { if ([403, 404].includes(error.status)) throw Object.assign(new Error(error.status === 404 ? 'not_found' : 'forbidden'), { status: error.status }); throw unavailable(); }
+
+  function payloadState(authority) {
+    return payloadRuntimeState({ mode: authority.mode, baseURL: process.env.CMS_INTERNAL_URL,
+      secret: process.env.PORTAL_TO_PAYLOAD_SECRET, suppliedClient: suppliedPayloadClient });
+  }
+
+  async function authority() {
+    try { return await getAuthority(pool); } catch { throw unavailable(); }
+  }
+
+  function logDegraded(action, source, options) {
+    try { logger(JSON.stringify({ code: 'owner_news_read_degraded', action, source, requestId: safeRequestId(options?.requestId) })); }
+    catch { /* Observability must not turn a healthy partial response into an outage. */ }
+  }
+
+  async function capture(source, work) {
+    try { return { source, ok: true, value: await work() }; }
+    catch { return { source, ok: false }; }
+  }
+
+  async function captureList(source, work) {
+    return capture(source, async () => {
+      const value = await work();
+      assertUniqueNewsRows(source, value?.rows);
+      return value;
+    });
+  }
+
+  async function captureCategories(source, work, input) {
+    return capture(source, async () => readResult('categories', await work(), input));
+  }
+
+  function inactiveValue(action, input) {
+    if (action === 'list') return { rows: [], count: 0 };
+    if (action === 'categories') return input.withCounts ? { total: 0, categories: [] } : [];
+    if (action === 'home') return { content: null };
+    return null;
+  }
+
+  async function payloadComposite(action, input, actor, options, currentAuthority) {
+    const state = payloadState(currentAuthority);
+    if (state === 'inactive') return inactiveValue(action, input);
+    if (state === 'unavailable') throw unavailable();
+    return client().query(action, input, actor, options);
+  }
+
+  function finishComposite(action, results, options, combine, { hasCursor = false } = {}) {
+    const failed = results.filter(result => !result.ok);
+    if (failed.length === results.length) throw unavailable();
+    if (failed.length) {
+      if (hasCursor) throw controlled(503, 'news_page_restart_required');
+      logDegraded(action, failed.map(result => result.source).join(','), options);
     }
-    try {
-      switch (action) {
-        case 'list': return await legacy.listPublishedAnnouncements(pool, input.limit, input.offset, input.category, input.kind);
-        case 'detail': return await legacy.getPublishedAnnouncement(pool, input.id);
-        case 'categories': return await legacy.listPublishedAnnouncementCategories(pool, input);
-        case 'navigation': return await legacy.getPublishedAnnouncementNavigation(pool, input.id, input.category);
-        case 'home': return { content: await getPublishedHome(pool) };
-        case 'preview': return await legacyPreview(pool, input);
-        case 'asset': return await legacyAsset(pool, input, options);
-        default: throw unavailable();
+    const value = combine(results);
+    if (failed.length && action === 'list') {
+      value.count = null;
+      value.nextCursor = null;
+    }
+    return { value, readState: failed.length ? 'degraded' : 'complete' };
+  }
+
+  async function runCompositeRead(action, input, actor, options, currentAuthority) {
+    if (action === 'list') {
+      if (payloadState(currentAuthority) === 'inactive') {
+        const results = await Promise.all([
+          captureList('legacy', () => legacyReader.listPublishedAnnouncements(pool, input.limit + 1, input.offset, input.category, input.kind, input.boundary)),
+          Promise.resolve({ source: 'payload', ok: true, value: { rows: [], count: 0 } }),
+        ]);
+        return finishComposite(action, results, options, values => {
+          const legacyPage = values.find(value => value.source === 'legacy' && value.ok)?.value || { rows: [], count: 0 };
+          const rows = legacyPage.rows.slice(0, input.limit);
+          return { rows, count: legacyPage.count,
+            nextCursor: legacyPage.rows.length > input.limit && rows.length
+              ? encodeNewsCursor(rows.at(-1), { category: input.category, kind: input.kind }) : null };
+        }, { hasCursor: Boolean(input.boundary) || input.offset > 0 });
       }
-    } catch (error) { if ([403, 404].includes(error.status)) throw error; throw unavailable(); }
+      const wanted = Math.min(101, input.offset + input.limit + 1);
+      const sourceInput = { limit: wanted, offset: 0,
+        ...(input.category === undefined ? {} : { category: input.category }),
+        ...(input.kind === undefined ? {} : { kind: input.kind }),
+        ...(input.boundary ? { boundary: input.boundary } : {}) };
+      const results = await Promise.all([
+        captureList('legacy', () => legacyReader.listPublishedAnnouncements(pool, wanted, 0, input.category, input.kind, input.boundary, { exactTotal: false })),
+        captureList('payload', () => payloadComposite('list', sourceInput, actor, options, currentAuthority)),
+      ]);
+      return finishComposite(action, results, options, values => {
+        const bySource = Object.fromEntries(values.filter(v => v.ok).map(v => [v.source, v.value]));
+        const rows = [...(bySource.legacy?.rows || []), ...(bySource.payload?.rows || [])].sort(compareNews);
+        const start = input.offset, page = rows.slice(start, start + input.limit);
+        const hasMore = rows.length > start + input.limit;
+        const counts = Object.values(bySource).map(result => result.count);
+        const count = counts.every(Number.isSafeInteger) ? counts.reduce((sum, value) => sum + value, 0) : null;
+        return { rows: page, count,
+          nextCursor: hasMore && page.length ? encodeNewsCursor(page.at(-1), { category: input.category, kind: input.kind }) : null };
+      }, { hasCursor: Boolean(input.boundary) || input.offset > 0 });
+    }
+    if (action === 'categories') {
+      const sourceInput = { withCounts: true, ...(input.kind === undefined ? {} : { kind: input.kind }) };
+      const results = await Promise.all([
+        captureCategories('legacy', () => legacyReader.listPublishedAnnouncementCategories(pool, sourceInput), sourceInput),
+        captureCategories('payload', () => payloadComposite('categories', sourceInput, actor, options, currentAuthority), sourceInput),
+      ]);
+      return finishComposite(action, results, options, values => {
+        const counts = new Map(); let total = 0;
+        for (const result of values.filter(v => v.ok)) {
+          total += result.value.total;
+          for (const category of result.value.categories) counts.set(category.name, (counts.get(category.name) || 0) + category.count);
+        }
+        const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, count]) => ({ name, count }));
+        if (!Number.isSafeInteger(total) || categories.length > 10000
+          || Buffer.byteLength(JSON.stringify({ total, categories }), 'utf8') > 1024 * 1024) throw unavailable();
+        return input.withCounts ? { total, categories } : categories.map(category => category.name);
+      });
+    }
+    if (action === 'home') {
+      const results = await Promise.all([
+        capture('legacy', async () => ({ content: await homeReader(pool) })),
+        capture('payload', () => payloadComposite('home', {}, actor, options, currentAuthority)),
+      ]);
+      return finishComposite(action, results, options, values => {
+        const bySource = Object.fromEntries(values.filter(v => v.ok).map(v => [v.source, v.value]));
+        return bySource.payload?.content ? bySource.payload : (bySource.legacy || { content: null });
+      });
+    }
+    throw unavailable();
+  }
+
+  async function directedSource(source, action, input, actor, options, currentAuthority) {
+    try {
+      if (source === 'payload') {
+        if (payloadState(currentAuthority) !== 'active') throw unavailable();
+        return action === 'asset' ? await client().asset(withoutSource(input), actor, options)
+          : await client().query(action, action === 'preview' ? input : action === 'detail' ? { id: input.id } : withoutSource(input), actor, options);
+      }
+      if (action === 'detail') return await legacyReader.getPublishedAnnouncement(pool, input.id);
+      if (action === 'preview') return await legacyPreviewReader(pool, input);
+      if (action === 'asset') return await legacyAssetReader(pool, withoutSource(input), options);
+      throw unavailable();
+    } catch (error) {
+      if ([403, 404].includes(error?.status)) throw controlled(error.status, error.status === 404 ? 'not_found' : 'forbidden');
+      throw unavailable();
+    }
+  }
+
+  function navigationPage(source, page, boundary, seen, budget, allowance) {
+    if (!record(page) || Object.keys(page).length !== 3 || !Array.isArray(page.rows) || page.rows.length > NAVIGATION_PAGE_SIZE
+      || !(page.count === null || page.count === page.rows.length)
+      || !record(page.scan) || Object.keys(page.scan).length !== 2
+      || !Number.isSafeInteger(page.scan.rawRows) || page.scan.rawRows < page.rows.length || page.scan.rawRows > allowance.maxRawRows
+      || !Number.isSafeInteger(page.scan.batches) || page.scan.batches < 1 || page.scan.batches > allowance.maxBatches) throw unavailable();
+    if (page.count === null && page.rows.length !== NAVIGATION_PAGE_SIZE) throw unavailable();
+    budget.pages++;
+    budget.rawRows += page.scan.rawRows;
+    budget.batches += page.scan.batches;
+    if (budget.pages > NAVIGATION_MAX_PAGES || budget.rawRows > NAVIGATION_MAX_RAW_ROWS
+      || budget.batches > NAVIGATION_MAX_BATCHES) throw unavailable();
+    try { assertUniqueNewsRows(source, page.rows); } catch { throw unavailable(); }
+    let previous = boundary;
+    for (const row of page.rows) {
+      const identity = row.id.toLowerCase();
+      if (typeof row.title !== 'string' || row.title.length > 200 || seen.has(identity)) throw unavailable();
+      seen.add(identity);
+      if (seen.size > NAVIGATION_MAX_RAW_ROWS || (previous && compareNews(row, previous) <= 0)) throw unavailable();
+      previous = row;
+    }
+    return page;
+  }
+
+  async function scanSourceNeighbors(source, input, current, actor, options, currentAuthority) {
+    if (source === 'payload' && payloadState(currentAuthority) === 'inactive') {
+      return { previous: null, next: null, currentFound: false };
+    }
+    const seen = new Set();
+    const budget = { pages: 0, rawRows: 0, batches: 0 };
+    let boundary = null, previous = null, currentFound = false;
+    while (budget.pages < NAVIGATION_MAX_PAGES) {
+      const allowance = { maxRawRows: NAVIGATION_MAX_RAW_ROWS - budget.rawRows,
+        maxBatches: NAVIGATION_MAX_BATCHES - budget.batches };
+      if (allowance.maxRawRows < 1 || allowance.maxBatches < 1) throw unavailable();
+      const sourceInput = { limit: NAVIGATION_PAGE_SIZE, offset: 0,
+        ...(input.category === undefined ? {} : { category: input.category }), kind: 'article', scan: allowance,
+        ...(boundary ? { boundary } : {}) };
+      const rawPage = source === 'legacy'
+        ? await legacyReader.listPublishedAnnouncements(pool, NAVIGATION_PAGE_SIZE, 0, input.category, 'article', boundary,
+          { exactTotal: false, scan: allowance })
+        : await payloadComposite('list', sourceInput, actor, options, currentAuthority);
+      const page = navigationPage(source, rawPage, boundary, seen, budget, allowance);
+      for (const row of page.rows) {
+        const order = compareNews(row, current);
+        if (order < 0) previous = row;
+        else if (order === 0) currentFound = true;
+        else return { previous, next: row, currentFound };
+      }
+      if (page.count !== null) return { previous, next: null, currentFound };
+      boundary = page.rows.at(-1);
+    }
+    throw unavailable();
+  }
+
+  async function runNavigation(input, actor, options, currentAuthority) {
+    const currentSource = input.source;
+    const current = await directedSource(currentSource, 'detail', input, actor, options, currentAuthority);
+    if (!current) throw controlled(404, 'not_found');
+    if (announcementKind(current) === 'edition') return { value: { previous: null, next: null }, readState: 'complete' };
+    const results = await Promise.all([
+      capture('legacy', () => scanSourceNeighbors('legacy', input, current, actor, options, currentAuthority)),
+      capture('payload', () => scanSourceNeighbors('payload', input, current, actor, options, currentAuthority)),
+    ]);
+    const own = results.find(result => result.source === currentSource);
+    if (!own.ok) throw unavailable();
+    if (!own.value.currentFound) throw controlled(404, 'not_found');
+    return finishComposite('navigation', results, options, values => {
+      const previous = values.filter(v => v.ok && v.value.previous).map(v => v.value.previous).sort(compareNews).at(-1);
+      const next = values.filter(v => v.ok && v.value.next).map(v => v.value.next).sort(compareNews)[0];
+      const reference = row => row ? { source: row.source, id: row.id, title: row.title } : null;
+      return { previous: reference(previous), next: reference(next) };
+    });
+  }
+
+  async function run(action, input, actor, options = {}) {
+    const publicSource = sourceOf(input);
+    if (!validPublicInput(action, input)) throw controlled(400, 'invalid_request');
+    if (!actor?.uid) throw controlled(401, 'unauthorized');
+    if ((action === 'preview' || (action === 'asset' && input.preview)) && !actor.canManageNews) throw controlled(403, 'forbidden');
+    const currentAuthority = await authority();
+    if (['list', 'categories', 'home'].includes(action)) return runCompositeRead(action, input, actor, options, currentAuthority);
+    if (action === 'navigation') return runNavigation(input, actor, options, currentAuthority);
+    const source = action === 'preview' ? input.source : publicSource;
+    return { value: await directedSource(source, action, input, actor, options, currentAuthority), readState: 'complete' };
   }
   return Object.fromEntries(['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset'].map(action => [action, (input, actor, options) => run(action, input, actor, options)]));
 }

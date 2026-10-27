@@ -93,8 +93,14 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     'conflicting flags must fail before checkout, build, test or publication');
   assert.match(workflow, /publish_candidate_only:\n\s+description:[^\n]*\n\s+required: false\n\s+type: boolean\n\s+default: false/,
     'candidate publication must be an opt-in default-false boolean input');
-  assert.match(conflict, /inputs\.cms_image_only == true && inputs\.publish_candidate_only == true[\s\S]*exit 1/,
-    'the two manual publication modes must fail closed when selected together');
+  assert.match(conflict, /CMS_IMAGE_ONLY:[\s\S]*PUBLISH_CANDIDATE_ONLY:[\s\S]*MANUAL_RUNTIME_ONLY:[\s\S]*selected > 1[\s\S]*exit 1/u,
+    'manual CI modes must fail closed when selected together');
+  assert.match(workflow, /dispatch-input-contract:[\s\S]*?MANUAL_RUNTIME_ONLY: \$\{\{ inputs\.manual_runtime_only \}\}[\s\S]*?if \(\(selected > 1\)\); then[\s\S]*?exit 1/u,
+    'all manual dispatch modes must be rejected by an independent job when combined');
+  assert.match(workflow, /payload-manual-runtime:\n\s+needs: dispatch-input-contract/u);
+  assert.match(workflow, /isolated-b0-recovery:\n\s+needs: dispatch-input-contract/u);
+  assert.match(workflow, /validate:\n\s+needs: \[dispatch-input-contract, isolated-b0-recovery\]/u,
+    'every executable CI path must wait for the input contract');
   assert.ok(buildAt < integrationAt && integrationAt < scanAt && scanAt < publishAt,
     'candidate API-v2 HTTP acceptance must run after image build and before scans/publication');
   assert.ok(apiPublishAt < publishAt &&
@@ -424,7 +430,7 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
     'keep the required npm CLI while replacing the vulnerable bundled npm version');
   assert.equal((dockerfile.match(/brace-expansion@5\.0\.11/g) || []).length, 3,
     'replace npm 12.2.0 bundled brace-expansion in every independent image stage');
-  assert.equal((dockerfile.match(/undici@6\.28\.1/g) || []).length, 3,
+  assert.equal((dockerfile.match(/undici@6\.29\.1/g) || []).length, 3,
     'replace npm 12.2.0 bundled undici with its Trivy-fixed compatible release');
   assert.match(dockerfile, /npm ci --omit=dev --omit=optional/,
     'the embedded API graph must omit optional Firebase/Firestore dependencies');
@@ -496,14 +502,22 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
   for (const [path, entry] of esbuildPackages) assert.equal(entry.version, '0.28.2', path);
 });
 
-test('CMS pins the audited Next and DOMPurify security releases', async () => {
+test('CMS pins the audited Payload, Next, DOMPurify and transitive security releases', async () => {
   const [manifest, lockfile] = await Promise.all([
     read('cms/package.json').then(JSON.parse),
     read('cms/package-lock.json').then(JSON.parse),
   ]);
 
+  const payloadPackages = ['payload', '@payloadcms/next', '@payloadcms/db-postgres',
+    '@payloadcms/richtext-lexical', '@payloadcms/translations', '@payloadcms/ui'];
+  for (const name of payloadPackages) assert.equal(manifest.dependencies[name], '3.90.2', name);
   assert.equal(manifest.dependencies.next, '16.4.2');
+  assert.equal(manifest.overrides['happy-dom'], '21.0.4');
   assert.equal(manifest.overrides['monaco-editor@0.57.0'].dompurify, '3.4.17');
+  for (const name of payloadPackages) assert.equal(lockfile.packages[`node_modules/${name}`].version, '3.90.2', name);
   assert.equal(lockfile.packages['node_modules/next'].version, '16.4.2');
+  assert.equal(lockfile.packages['node_modules/happy-dom'].version, '21.0.4');
+  assert.equal(lockfile.packages['node_modules/undici'].version, '7.30.1');
+  assert.equal(lockfile.packages['node_modules/fast-uri'].version, '3.1.9');
   assert.equal(lockfile.packages['node_modules/dompurify'].version, '3.4.17');
 });

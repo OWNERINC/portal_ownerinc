@@ -3,14 +3,16 @@ import { APIError } from 'payload'
 import type { NewsQuery, PreviewQuery, VerifiedPortalActor } from '../contracts/news'
 import { keys, oneOf, record, uuid } from '../news/primitives'
 
-export const newsActions = ['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset'] as const
+export const newsActions = ['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset', 'preflight'] as const
 export type NewsAction = typeof newsActions[number]
 export type NewsInputs = {
   list: NewsQuery; detail: { id: string }; categories: { kind?: 'article' | 'edition'; withCounts: boolean }
   navigation: { id: string; category?: string }; home: Record<string, never>; preview: PreviewQuery
   asset: { id: string; preview: boolean; range: string | null }
+  preflight: Record<string, never>
 }
 const fail = (status = 400): never => { throw new APIError(status === 400 ? 'invalid_request' : 'forbidden', status, undefined, true) }
+const PRIVATE_LIST_MAX = 101
 export function isPrivateNewsPath(url: string, method: string) {
   const parsed = new URL(url)
   return method === 'POST' && !parsed.search && newsActions.some(action => parsed.pathname === `/editorial/api/portal-news/${action}`)
@@ -39,13 +41,26 @@ export function readNewsInput<A extends NewsAction>(action: A, value: unknown): 
   const kind = () => { if (Object.hasOwn(input, 'kind')) oneOf(input.kind, ['article', 'edition']) }
   switch (action) {
     case 'list':
-      keys(input, ['limit', 'offset', 'category', 'kind']); category(); kind()
-      if (!Number.isSafeInteger(input.limit) || Number(input.limit) < 1 || Number(input.limit) > 100 || !Number.isSafeInteger(input.offset) || Number(input.offset) < 0 || Number(input.offset) > 1000000) fail()
+      keys(input, ['limit', 'offset', 'category', 'kind', 'boundary', 'scan']); category(); kind()
+      if (!Number.isSafeInteger(input.limit) || Number(input.limit) < 1 || Number(input.limit) > PRIVATE_LIST_MAX || !Number.isSafeInteger(input.offset) || Number(input.offset) < 0 || Number(input.offset) > 1000000) fail()
+      if (Object.hasOwn(input, 'scan')) {
+        const scan = record(input.scan); keys(scan, ['maxRawRows', 'maxBatches'])
+        if (!Number.isSafeInteger(scan.maxRawRows) || Number(scan.maxRawRows) < 1 || Number(scan.maxRawRows) > 101000
+          || !Number.isSafeInteger(scan.maxBatches) || Number(scan.maxBatches) < 1 || Number(scan.maxBatches) > 1000) fail()
+        input.scan = scan
+      }
+      if (Object.hasOwn(input, 'boundary')) {
+        const boundary = record(input.boundary); keys(boundary, ['published_at', 'source', 'id'])
+        if (!(boundary.published_at === null || (typeof boundary.published_at === 'string' && Number.isFinite(Date.parse(boundary.published_at))))) fail()
+        oneOf(boundary.source, ['legacy', 'payload']); boundary.id = uuid(boundary.id)
+        input.boundary = boundary
+      }
       break
     case 'detail': keys(input, ['id']); input.id = uuid(input.id); break
     case 'navigation': keys(input, ['id', 'category']); input.id = uuid(input.id); category(); break
     case 'categories': keys(input, ['kind', 'withCounts']); kind(); if (typeof input.withCounts !== 'boolean') fail(); break
     case 'home': keys(input, []); break
+    case 'preflight': keys(input, []); break
     case 'preview':
       keys(input, ['id', 'versionId', 'source']); input.id = uuid(input.id); input.versionId = uuid(input.versionId)
       oneOf(input.source, ['payload', 'legacy'])

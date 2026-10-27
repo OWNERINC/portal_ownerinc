@@ -4,6 +4,7 @@ import test from 'node:test'
 import { readCmsConfigEnvironment, readCmsEnvironment } from '../../src/config/environment.js'
 
 const valid = () => ({
+  CMS_PUBLICATION_MODE: 'manual',
   CMS_DATABASE_URL: 'postgresql://cms:fixture-password@localhost:5432/editorial_test',
   PAYLOAD_SECRET: 'fixture-payload-secret-'.repeat(2),
   PORTAL_PUBLIC_URL: 'https://portal.example.test',
@@ -14,8 +15,8 @@ const valid = () => ({
 })
 
 test('não aceita segredo ausente nem publica seu valor no erro', () => {
-  assert.throws(() => readCmsEnvironment({}), /CMS_DATABASE_URL/)
-  assert.throws(() => readCmsEnvironment({ CMS_DATABASE_URL: 'invalid-private-value' }),
+  assert.throws(() => readCmsEnvironment({}), /CMS_PUBLICATION_MODE/)
+  assert.throws(() => readCmsEnvironment({ CMS_PUBLICATION_MODE: 'manual', CMS_DATABASE_URL: 'invalid-private-value' }),
     error => error instanceof Error && !error.message.includes('invalid-private-value'))
 })
 
@@ -28,6 +29,7 @@ test('normaliza URLs e storage sem alterar os segredos', () => {
     CMS_UPLOAD_DIR: path.join(env.CMS_UPLOAD_DIR, '..', 'private-test-uploads'),
   })
   assert.deepEqual(result, {
+    publicationMode: 'manual',
     databaseURL: env.CMS_DATABASE_URL,
     payloadSecret: env.PAYLOAD_SECRET,
     portalPublicURL: 'https://portal.example.test',
@@ -48,6 +50,7 @@ for (const key of Object.keys(valid())) {
 }
 
 const invalidValues = {
+  CMS_PUBLICATION_MODE: ['', 'manual ', ' manual', 'scheduled', 'automatic', 'MANUAL'],
   CMS_DATABASE_URL: ['invalid-private-value', 'https://db.test/private', 'postgresql:///private', 'postgresql://db.test', 'postgresql://db.test/private#secret', 'postgresql://cms:private%GG@db.test/editorial'],
   PORTAL_PUBLIC_URL: ['invalid-private-value', 'ftp://portal.test', 'https://private:secret@portal.test', 'https://portal.test/private', 'https://portal.test/?private=secret', 'https://portal.test/#private', 'https://portal.test/?', 'https://portal.test/#'],
   PORTAL_INTERNAL_URL: ['invalid-private-value', 'file:///private', 'http://private:secret@portal-api:3000', 'http://portal-api:3000/?private=secret', 'http://portal-api:3000/#private'],
@@ -87,10 +90,11 @@ test('exige segredos distintos para as duas direções', () => {
 })
 
 test('build exige sinal explícito e usa somente entradas sintéticas', () => {
-  assert.throws(() => readCmsConfigEnvironment({ NEXT_PHASE: 'phase-production-build' }), /CMS_DATABASE_URL/)
+  assert.throws(() => readCmsConfigEnvironment({ NEXT_PHASE: 'phase-production-build' }), /CMS_PUBLICATION_MODE/)
   const env = { CMS_BUILD_ONLY: 'true', NEXT_PHASE: 'phase-production-build' }
   assert.deepEqual(readCmsConfigEnvironment({ ...valid(), ...env }), readCmsConfigEnvironment(env))
   assert.equal(new URL(readCmsConfigEnvironment(env).databaseURL).hostname, 'cms-build.invalid')
+  assert.equal(readCmsConfigEnvironment(env).publicationMode, 'manual')
 })
 
 test('runtime nunca aceita o sinal de build como fallback', () => {
@@ -98,5 +102,5 @@ test('runtime nunca aceita o sinal de build como fallback', () => {
     assert.throws(() => readCmsConfigEnvironment({ ...valid(), CMS_BUILD_ONLY: 'true', NEXT_PHASE: phase }), /CMS_BUILD_ONLY/)
   }
   assert.throws(() => readCmsConfigEnvironment({ CMS_BUILD_ONLY: 'false', NEXT_PHASE: 'phase-production-build' }), /CMS_BUILD_ONLY/)
-  assert.throws(() => readCmsConfigEnvironment({}), /CMS_DATABASE_URL/)
+  assert.throws(() => readCmsConfigEnvironment({}), /CMS_PUBLICATION_MODE/)
 })

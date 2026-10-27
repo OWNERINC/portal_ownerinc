@@ -11,52 +11,123 @@ const coverID = '22222222-2222-4222-8222-222222222222';
 const news = await readFile('public/js/announcements.js', 'utf8');
 const dashboard = await readFile('public/js/dashboard.js', 'utf8');
 const syntheticStory = (id, extra = {}) => ({ id, title: `Matéria ${id}`, category: 'Cultura',
-  published_at: '2026-09-30T01:00:00Z', content_blocks: [], ...extra });
+  published_at: '2026-09-30T01:00:00Z', content_blocks: [], source: 'legacy', asset_scope: 'legacy', ...extra });
 
-test('enquete não altera os offsets do catálogo', async t => {
+test('enquete aparece apenas na primeira página do cursor', async t => {
   const h = await createFeedbackHarness('announcements', { mount: false, modules: [
     { path: 'public/js/owner-news/catalog.js', exports: 'composeNewsFeed' },
   ] }); t.after(() => h.page.dispose());
   const articles = Array.from({ length: 5 }, (_, i) => ({ id: String(i) }));
   const poll = h.doc.createElement('article');
   assert.deepEqual(Array.from(h.context.composeNewsFeed(articles, poll)), [...articles.slice(0, 3), poll, ...articles.slice(3)]);
-  assert.equal(h.context.composeNewsFeed(articles, poll, { offset: 24 }).length, 5);
+  assert.equal(h.context.composeNewsFeed(articles, poll, { pageDepth: 1 }).length, 5);
   assert.equal(h.context.composeNewsFeed(articles, poll, { category: 'Cultura' }).length, 5);
   assert.equal(h.context.composeNewsFeed(articles.slice(0, 2), poll).at(-1), poll);
   assert.equal(articles.length, 5);
 });
 
+test('identidades públicas colidentes preservam origem em DOM, links e assets', async t => {
+  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
+  const id = imageID;
+  h.requests.find(r => r.kind === 'list').resolve({ data: [
+    syntheticStory(id, { source: 'legacy', asset_scope: 'legacy' }),
+    syntheticStory(id, { source: 'payload', asset_scope: 'owner-news' }),
+  ], total: 2, nextCursor: null, readState: 'complete' });
+  await drain();
+  const legacy = h.node(`news-card-legacy-${id}`);
+  const payload = h.node(`news-card-payload-${id}`);
+  assert.ok(legacy); assert.ok(payload); assert.notEqual(legacy.id, payload.id);
+  assert.equal(new URL(legacy.querySelector('a').href, h.page.location.href).searchParams.get('source'), 'legacy');
+  assert.equal(new URL(payload.querySelector('a').href, h.page.location.href).searchParams.get('source'), 'payload');
+  payload.querySelector('a').focus(); payload.querySelector('a').click();
+  const detail = h.requests.find(request => request.path === `/api/announcements/${id}?source=payload`);
+  assert.ok(detail, 'the selected source controls the detail request');
+  detail.resolve(syntheticStory(id, { source: 'payload', asset_scope: 'owner-news' }));
+  h.latest('/navigation').resolve({ previous: null, next: null }); await drain();
+  h.node('news-reader-close').click(); await drain();
+  assert.equal(h.doc.activeElement, payload.querySelector('a'));
+});
+
+test('asset routing fails closed on source/scope mismatch and propagates legacy preview source', () => {
+  assert.equal(cmsAssetEndpoint(imageID, { source: 'legacy', asset_scope: 'legacy' }), `/api/cms/assets/${imageID}`);
+  assert.equal(cmsAssetEndpoint(imageID, { source: 'payload', asset_scope: 'owner-news' }), `/api/announcements/assets/${imageID}`);
+  assert.equal(cmsAssetEndpoint(imageID, { source: 'legacy', asset_scope: 'owner-news-preview' }), `/api/announcements/preview/assets/${imageID}?source=legacy`);
+  assert.throws(() => cmsAssetEndpoint(imageID, { source: 'legacy', asset_scope: 'owner-news' }), /source_scope/);
+  assert.throws(() => cmsAssetEndpoint(imageID, { source: 'payload', asset_scope: 'legacy' }), /source_scope/);
+});
+
 test('montagem real filtra artigos, ignora categoria obsoleta e pagina/volta', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   const old = h.requests.find(r => r.kind === 'list');
-  assert.equal(old.path, '/api/announcements?kind=article&limit=24&offset=0');
+  assert.equal(old.path, '/api/announcements?kind=article&limit=24');
   h.latest('/categories').resolve({ total: 30, categories: [{ name: 'Cultura', count: 30 }] });
   h.latest('/home').resolve(null);
-  h.latest('limit=1&offset=0').resolve([syntheticStory('global', { editorial: { summary: 'Resumo global sintético' } })]);
+  h.latest('limit=1').resolve([syntheticStory('global', { editorial: { summary: 'Resumo global sintético' } })]);
   await drain();
   h.node('news-categories').querySelectorAll('a')[1].click();
   const filtered = h.requests.filter(r => r.kind === 'list').at(-1);
   assert.match(filtered.path, /category=Cultura/);
-  filtered.resolve({ data: [syntheticStory('current')], total: 30 }); await drain();
+  filtered.resolve({ data: [syntheticStory('current')], total: 30, nextCursor: 'cursor-2' }); await drain();
   old.resolve({ data: [syntheticStory('stale')], total: 30 }); await drain();
-  assert.ok(h.node('news-card-current')); assert.equal(h.node('news-card-stale'), null);
+  assert.ok(h.node('news-card-legacy-current')); assert.equal(h.node('news-card-legacy-stale'), null);
   assert.match(h.node('news-highlight').textContent, /Resumo global sintético/);
   h.node('announcements-pagination').querySelectorAll('button').at(-1).click();
-  assert.equal(new URL(h.page.location.href).searchParams.get('offset'), '24');
-  h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [syntheticStory('next')], total: 30 }); await drain();
-  h.window.history.back(); await drain();
-  assert.equal(new URL(h.page.location.href).searchParams.has('offset'), false);
+  assert.equal(new URL(h.page.location.href).searchParams.get('cursor'), 'cursor-2');
+  h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [syntheticStory('next')], total: 30, nextCursor: null }); await drain();
+  h.node('announcements-pagination').querySelectorAll('button')[0].click();
+  assert.equal(new URL(h.page.location.href).searchParams.has('cursor'), false);
   h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [syntheticStory('back')], total: 30 }); await drain();
-  assert.ok(h.node('news-card-back')); assert.equal(h.node('news-card-next'), null);
+  assert.ok(h.node('news-card-legacy-back')); assert.equal(h.node('news-card-legacy-next'), null);
+});
+
+test('cursor direto não inventa anterior e restart requerido volta atomicamente à primeira página', async t => {
+  const h = await createFeedbackHarness('announcements', { url: 'https://portal.test/announcements.html?cursor=opaque-direct' });
+  t.after(() => h.page.dispose());
+  const continuation = h.requests.find(request => request.kind === 'list');
+  assert.match(continuation.path, /cursor=opaque-direct/);
+  continuation.reject(Object.assign(new Error('restart'), { reason: 'news_page_restart_required' })); await drain();
+  assert.equal(new URL(h.page.location.href).searchParams.has('cursor'), false);
+  const restarted = h.requests.filter(request => request.kind === 'list').at(-1);
+  assert.doesNotMatch(restarted.path, /cursor=/);
+  restarted.resolve({ data: [syntheticStory('restarted')], nextCursor: null, readState: 'degraded' }); await drain();
+  assert.ok(h.node('news-card-legacy-restarted'));
+  assert.equal(h.node('announcements-pagination').children.length, 0);
+});
+
+test('estado de cursor só confia em pilha canônica e cursor direto não inventa retorno', async t => {
+  const malformed = [
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, null, 'opaque'] },
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, 'not+base64'] },
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, 'a'.repeat(1025)] },
+    { key: JSON.stringify({ category: '', kind: 'article' }), stack: [null, 'different'] },
+  ];
+  for (const ownerNewsPagination of malformed) {
+    const h = await createFeedbackHarness('announcements', {
+      url: 'https://portal.test/announcements.html?cursor=opaque', state: { ownerNewsPagination },
+    });
+    t.after(() => h.page.dispose());
+    h.requests.find(request => request.kind === 'list').resolve({ data: [], nextCursor: 'next_cursor' }); await drain();
+    const buttons = h.node('announcements-pagination').querySelectorAll('button');
+    assert.equal(buttons[0].disabled, true); assert.equal(buttons[1].disabled, false);
+  }
+
+  const direct = await createFeedbackHarness('announcements', { url: 'https://portal.test/announcements.html?cursor=opaque' });
+  t.after(() => direct.page.dispose());
+  direct.requests.find(request => request.kind === 'list').resolve({ data: [], nextCursor: 'next_cursor' }); await drain();
+  direct.node('announcements-pagination').querySelectorAll('button')[1].click();
+  direct.requests.filter(request => request.kind === 'list').at(-1).resolve({ data: [], nextCursor: null }); await drain();
+  assert.equal(direct.node('announcements-pagination').children.length, 0, 'no fabricated Previous button after a direct continuation');
+  direct.window.history.back(); await drain();
+  assert.equal(new URL(direct.page.location.href).searchParams.get('cursor'), 'opaque');
 });
 
 test('home independente usa fallback e retry sem apagar feed/categorias', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   h.latest('/categories').resolve({ total: 1, categories: [{ name: 'Cultura', count: 1 }] });
   h.requests.find(r => r.kind === 'list').resolve({ data: [syntheticStory('only')], total: 1 });
-  h.latest('limit=1&offset=0').resolve([syntheticStory('global')]);
+  h.latest('limit=1').resolve([syntheticStory('global')]);
   h.latest('/home').reject(new Error('offline')); await drain();
-  assert.ok(h.node('news-card-only')); assert.match(h.node('news-highlight').textContent, /Matéria global/);
+  assert.ok(h.node('news-card-legacy-only')); assert.match(h.node('news-highlight').textContent, /Matéria global/);
   const before = h.requests.filter(r => r.kind === 'list').length;
   h.node('news-opening-status').querySelector('button').click();
   h.latest('/home').resolve({ content: { version: 1, eyebrow: 'EDIÇÃO', headline: 'Abertura\naprovada', summary: 'Resumo da abertura' } }); await drain();
@@ -65,16 +136,13 @@ test('home independente usa fallback e retry sem apagar feed/categorias', async 
   assert.match(h.node('news-categories').textContent, /Cultura.*1/);
 });
 
-test('feed vazio, retry e recuperação de offset mantêm loaders independentes', async t => {
+test('offset legado é canonicalizado para a primeira página vazia', async t => {
   const h = await createFeedbackHarness('announcements', { url: 'https://portal.test/announcements.html?offset=48' });
   t.after(() => h.page.dispose());
   h.latest('/categories').resolve({ total: 0, categories: [] }); await drain();
-  h.requests.find(r => r.kind === 'list').reject(new Error('offline')); await drain();
+  h.requests.find(r => r.kind === 'list').resolve({ data: [], total: 0 }); await drain();
   assert.match(h.node('news-categories').textContent, /Todas/);
-  h.node('announcements-list').querySelector('button').click();
-  h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [], total: 0 }); await drain();
   assert.equal(new URL(h.page.location.href).searchParams.has('offset'), false);
-  h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [], total: 0 }); await drain();
   assert.match(h.node('announcements-list').textContent, /Nenhuma publicação/);
   assert.equal(h.node('announcements-pagination').children.length, 0);
 });
@@ -83,10 +151,10 @@ test('capas reais usam apenas mídia da capa e revogam blobs retidos/tardios', a
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   const image = { type: 'image', asset_id: '11111111-1111-4111-8111-111111111111', alt: 'Capa sintética', usage: 'cover', caption: 'Legenda privada', credit: 'Crédito privado' };
   h.requests.find(r => r.kind === 'list').resolve({ data: [syntheticStory('cover', { content_blocks: [image] }), syntheticStory('brand')], total: 2 }); await drain();
-  const card = h.node('news-card-cover');
-  assert.equal(card.dataset.variant, '0'); assert.equal(h.node('news-card-brand').dataset.variant, '1');
+  const card = h.node('news-card-legacy-cover');
+  assert.equal(card.dataset.variant, '0'); assert.equal(h.node('news-card-legacy-brand').dataset.variant, '1');
   assert.equal(card.querySelectorAll('a').length, 1); assert.equal(card.querySelector('figcaption'), null);
-  assert.match(h.node('news-card-brand').textContent, /Owner News/);
+  assert.match(h.node('news-card-legacy-brand').textContent, /Owner News/);
   const asset = h.requests.find(r => r.kind === 'asset'); asset.resolve('blob:cover'); await drain();
   assert.equal(card.querySelector('img').src, 'blob:cover');
   h.popstate('/announcements.html?category=Outra', {});
@@ -120,10 +188,10 @@ test('categorias codificam nomes, contagens e seleção sem carregar conteúdo',
 
 test('abertura publicada precede destaque global e respostas antigas são ignoradas', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-  const oldHome = h.latest('/home'), oldHighlight = h.latest('limit=1&offset=0');
+  const oldHome = h.latest('/home'), oldHighlight = h.latest('limit=1');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
   h.latest('/home').resolve({ content: { version: 1, eyebrow: 'EDIÇÃO', headline: 'Abertura atual', summary: 'Resumo aprovado' } });
-  h.latest('limit=1&offset=0').resolve([syntheticStory('global')]); await drain();
+  h.latest('limit=1').resolve([syntheticStory('global')]); await drain();
   oldHome.resolve({ headline: 'Obsoleta' }); oldHighlight.resolve([syntheticStory('old')]); await drain();
   assert.match(h.node('news-highlight').textContent, /Abertura atual/);
   assert.doesNotMatch(h.node('news-highlight').textContent, /Obsoleta|Matéria global/);
@@ -141,7 +209,7 @@ test('dashboard protected covers revoke stale and retained object URLs', async (
   });
   vm.runInContext(section(dashboard, 'function releaseNewsImages(', "page.listen(window, 'pagehide'"), context);
   const image = { isConnected: true };
-  context.loadNewsImage(image, { content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Fotografia' }] });
+  context.loadNewsImage(image, syntheticStory('cover', { content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Fotografia' }] }));
   context.announcementsRequest++;
   pending.resolve('blob:stale');
   await pending.promise;
@@ -166,17 +234,17 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assert.equal(hero.dataset.state, 'loading');
   assert.equal(link.hidden, true);
   assert.match(h.node('dashboard-hero-description').textContent, /Carregando/);
-  assert.equal(h.latest('/api/announcements?').path, '/api/announcements?kind=article&limit=3&offset=0');
-  const story = { id: 'old', title: 'Old story', editorial: { summary: 'Resumo editorial sintético' }, published_at: '2026-09-29T12:00:00Z', content_blocks: [
+  assert.equal(h.latest('/api/announcements?').path, '/api/announcements?kind=article&limit=3');
+  const story = syntheticStory('old', { title: 'Old story', editorial: { summary: 'Resumo editorial sintético' }, published_at: '2026-09-29T12:00:00Z', content_blocks: [
     { type: 'image', asset_id: imageID, alt: 'Corpo' },
     { type: 'image', asset_id: coverID, alt: 'Capa', usage: 'cover' },
-  ] };
+  ] });
   h.latest('/api/announcements?').resolve([story]); await drain();
   assert.equal(hero.dataset.state, 'populated');
   assert.equal(h.node('dashboard-hero-title').textContent, 'Old story');
   assert.equal(h.node('dashboard-hero-description').textContent, 'Resumo editorial sintético');
   assert.match(h.node('announcements-preview').textContent, /Resumo editorial sintético/);
-  assert.equal(link.href, './announcements.html?id=old');
+  assert.equal(new URL(link.href, h.page.location.href).searchParams.get('source'), 'legacy');
   assert.equal(link.hidden, false); assert.equal(cover.hidden, false);
   assert.equal(h.node('dashboard-news-section').hidden, false);
   const assets = h.requests.filter(item => item.kind === 'asset');
@@ -185,9 +253,10 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   assets[0].resolve('blob:hero'); assets[1].resolve('blob:rail'); await drain();
   assert.equal(cover.src, 'blob:hero');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
-  assert.equal(hero.dataset.state, 'loading');
-  assert.ok(h.revoked.includes('blob:hero') && h.revoked.includes('blob:rail'));
+  assert.equal(hero.dataset.state, 'populated');
+  assert.equal(h.revoked.includes('blob:hero') || h.revoked.includes('blob:rail'), false);
   h.latest('/api/announcements?').resolve([]); await drain();
+  assert.ok(h.revoked.includes('blob:hero') && h.revoked.includes('blob:rail'));
   assert.equal(hero.dataset.state, 'empty');
   assert.equal(h.node('dashboard-hero-title').textContent, 'Owner News');
   assert.equal(link.href, '#quick-links'); assert.equal(link.textContent, 'Acessar áreas');
@@ -201,7 +270,7 @@ test('dashboard clears a withdrawn hero on an empty refresh and restores it for 
   h.latest('/api/announcements?').resolve([{ ...story, id: 'new', title: 'New story', content_blocks: [] }]); await drain();
   assert.equal(hero.dataset.state, 'populated');
   assert.equal(h.node('dashboard-hero-title').textContent, 'New story');
-  assert.equal(link.href, './announcements.html?id=new');
+  assert.equal(new URL(link.href, h.page.location.href).searchParams.get('id'), 'new');
   assert.equal(cover.hidden, false); assert.equal(h.node('dashboard-news-section').hidden, false);
   assert.equal(h.node('announcements-preview').children.length, 1);
 });
@@ -226,11 +295,40 @@ test('dashboard initial markup is loading, empty styles are compact and a query 
   assert.equal(hero.dataset.state, 'empty'); assert.equal(hero.getAttribute('aria-busy'), 'false');
 });
 
+test('dashboard mantém conteúdo válido quando refresh recebe DTO sem source ou scope coerente', async t => {
+  const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
+  const valid = syntheticStory(imageID, { title: 'Conteúdo preservado' });
+  h.latest('/api/announcements?').resolve([valid]); await drain();
+  const hero = h.node('dashboard-hero-title'); assert.equal(hero.textContent, 'Conteúdo preservado');
+  for (const malformed of [
+    { ...valid, source: undefined },
+    { ...valid, source: 'payload', asset_scope: 'legacy' },
+    { ...valid, source: 'remote' },
+  ]) {
+    h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+    h.latest('/api/announcements?').resolve([malformed]); await drain();
+    assert.equal(hero.textContent, 'Conteúdo preservado');
+    assert.match(h.node('announcements-preview').textContent, /Conteúdo preservado/);
+  }
+});
+
+test('feed mantém cards válidos quando refresh recebe DTO sem source', async t => {
+  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
+  h.requests.find(request => request.kind === 'list').resolve({ data: [syntheticStory(imageID)], nextCursor: null }); await drain();
+  const card = h.node(`news-card-legacy-${imageID}`);
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  h.requests.filter(request => request.kind === 'list').at(-1).resolve({
+    data: [{ ...syntheticStory(coverID), source: undefined }], nextCursor: null,
+  }); await drain();
+  assert.equal(h.node(`news-card-legacy-${imageID}`), card);
+  assert.equal(h.node(`news-card-legacy-${coverID}`), null);
+});
+
 for (const outcome of ['success', 'failure']) test(`dashboard ignores stale ${outcome} and disposes pending private covers`, async t => {
   const h = await createFeedbackHarness('dashboard'); t.after(() => h.page.dispose());
   const old = h.latest('/api/announcements?');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
-  h.latest('/api/announcements?').resolve([{ id: 'new', title: 'Current', content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Capa' }] }]); await drain();
+  h.latest('/api/announcements?').resolve([syntheticStory('new', { title: 'Current', content_blocks: [{ type: 'image', asset_id: imageID, alt: 'Capa' }] })]); await drain();
   if (outcome === 'success') old.resolve([]); else old.reject(new Error('old error'));
   await drain(); assert.equal(h.node('dashboard-hero-title').textContent, 'Current');
   const assets = h.requests.filter(item => item.kind === 'asset');
@@ -246,7 +344,8 @@ test('reader preserves pagination/category URLs, retry, history and private medi
   assert.match(news, /requestToken !== announcementsRequest/);
   assert.match(news, /forEach\(cleanupRenderedBlocks\)/);
   assert.match(news, /requestToken === announcementsRequest\) loadAnnouncements\(\)/);
-  assert.match(dashboard, /announcements\.html\?id=\$\{encodeURIComponent\(announcement\.id\)\}/);
+  assert.match(dashboard, /source: announcement\.source/);
+  assert.doesNotMatch(dashboard, /source: announcement\.source \|\| 'legacy'/);
 });
 
 test('mosaico substitui display grid legado e mantém quebras responsivas', async () => {
@@ -261,12 +360,12 @@ test('refresh com falha conserva cards e categorias; retries antigos ficam inert
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
   h.requests.find(r => r.kind === 'list').resolve({ data: [syntheticStory('kept')], total: 1 });
   h.latest('/categories').resolve({ total: 1, categories: [{ name: 'Cultura', count: 1 }] }); await drain();
-  const card = h.node('news-card-kept');
+  const card = h.node('news-card-legacy-kept');
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
-  assert.equal(h.node('news-card-kept'), card);
+  assert.equal(h.node('news-card-legacy-kept'), card);
   h.requests.filter(r => r.kind === 'list').at(-1).reject(new Error('offline'));
   h.latest('/categories').reject(new Error('offline')); await drain();
-  assert.equal(h.node('news-card-kept'), card);
+  assert.equal(h.node('news-card-legacy-kept'), card);
   assert.match(h.node('news-categories').textContent, /Cultura/);
   const oldRetry = h.node('news-feed-status').querySelector('button');
   oldRetry.click();
@@ -274,22 +373,24 @@ test('refresh com falha conserva cards e categorias; retries antigos ficam inert
   oldRetry.click(); assert.equal(h.requests.length, count);
   h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: [], total: 0 }); await drain();
   oldRetry.click(); assert.equal(h.requests.length, count);
-  assert.equal(h.node('news-card-kept'), null);
+  assert.equal(h.node('news-card-legacy-kept'), null);
 });
 
 test('links mantêm Ctrl/Cmd nativos e detalhe atual retorna ao filtro', async t => {
   const h = await createFeedbackHarness('announcements', { url: 'https://portal.test/announcements.html?category=Cultura' });
   t.after(() => h.page.dispose());
-  h.requests.find(r => r.kind === 'list').resolve({ data: [syntheticStory('detail')], total: 1 }); await drain();
-  const link = h.node('news-card-detail').querySelector('a');
+  h.requests.find(r => r.kind === 'list').resolve({ data: [syntheticStory(imageID)], total: 1 }); await drain();
+  const link = h.node(`news-card-legacy-${imageID}`).querySelector('a');
+  link.href = `./announcements.html?id=${imageID}`;
   for (const modifier of ['ctrlKey', 'metaKey']) {
     const click = new TestEvent('click', { bubbles: true, button: 0, [modifier]: true });
     link.dispatchEvent(click); assert.equal(click.defaultPrevented, false);
     assert.equal(h.window.history.length, 1);
   }
   link.click();
+  assert.equal(new URL(h.page.location.href).searchParams.get('source'), 'legacy');
   assert.equal(new URL(h.page.location.href).searchParams.get('category'), 'Cultura');
-  h.requests.find(r => r.path === '/api/announcements/detail').resolve(syntheticStory('detail', { content_blocks: [{ type: 'paragraph', text: 'Corpo sintético do detalhe.' }] })); await drain();
+  h.requests.find(r => r.path === `/api/announcements/${imageID}?source=legacy`).resolve(syntheticStory(imageID, { content_blocks: [{ type: 'paragraph', text: 'Corpo sintético do detalhe.' }] })); await drain();
   assert.match(h.node('news-reader-content').textContent, /Corpo sintético/);
   assert.equal(h.node('announcements-pagination').children.length, 0);
   h.node('news-reader-close').click(); await drain();
@@ -297,9 +398,20 @@ test('links mantêm Ctrl/Cmd nativos e detalhe atual retorna ao filtro', async t
   assert.equal(new URL(h.page.location.href).searchParams.get('category'), 'Cultura');
 });
 
+test('link interceptado com source explícita inválida não solicita nem altera history', async t => {
+  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
+  h.requests.find(request => request.kind === 'list').resolve({ data: [syntheticStory(imageID)], nextCursor: null }); await drain();
+  const link = h.node(`news-card-legacy-${imageID}`).querySelector('a');
+  link.href = `./announcements.html?id=${imageID}&source=remote`;
+  const before = h.page.location.href, requestCount = h.requests.length, historyLength = h.window.history.length;
+  link.click(); await drain();
+  assert.equal(h.page.location.href, before); assert.equal(h.window.history.length, historyLength);
+  assert.equal(h.requests.length, requestCount);
+});
+
 test('sem home ou publicações, abertura usa copy contratada sem reserva vazia', async t => {
   const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-  h.latest('/home').resolve(null); h.latest('limit=1&offset=0').resolve([]);
+  h.latest('/home').resolve(null); h.latest('limit=1').resolve([]);
   h.requests.find(r => r.kind === 'list').resolve({ data: [], total: 0 }); await drain();
   assert.match(h.node('news-highlight').textContent, /Histórias que\nnos conectam/);
   assert.equal(h.node('news-opening-status').children.length, 0);

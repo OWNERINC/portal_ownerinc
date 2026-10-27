@@ -16,6 +16,7 @@ import { withEditorialBoundary } from '../../../src/auth/rest-boundary'
 // No connect, listener, migration, real database or real Firebase is used here.
 const origin = 'https://portal.example.test'
 const environment = {
+  publicationMode: 'manual' as const,
   portalPublicURL: origin, portalInternalURL: 'http://portal-api:3000',
   payloadToPortalSecret: 'fixture-payload-to-portal-'.repeat(2),
   portalToPayloadSecret: 'fixture-portal-to-payload-'.repeat(2),

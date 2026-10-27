@@ -145,7 +145,7 @@ export async function createMountedHarness(name = 'cms', { user = { permissions:
   }
   await loadModule('public/js/ui.js', ['clear', 'element', 'showState', 'safeHttpUrl', 'openDialog', 'closeDialog', 'setDialogCloseGuard', 'protectForm', 'canLeavePageUI']);
   await loadModule('public/js/page-lifecycle.js', ['createPageLifecycle']);
-  await loadModule('public/js/owner-news/asset-path.mjs', ['cmsAssetEndpoint', 'validateAssetScope']);
+  await loadModule('public/js/owner-news/asset-path.mjs', ['cmsAssetEndpoint', 'validateAssetScope', 'validateNewsSourceScope']);
   await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'cleanupRenderedBlocks', 'validateBlocks', 'BLOCK_TYPES']);
   await loadModule('public/js/owner-news/content-contract.js', ['validateNewsBlocks', 'validateRichNodes', 'newsBlocksToText']);
   await loadModule('public/js/owner-news/rich-content.js', ['renderRichContent']);

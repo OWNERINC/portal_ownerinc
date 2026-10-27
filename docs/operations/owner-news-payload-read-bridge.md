@@ -1,24 +1,37 @@
-# Owner News — ponte de leitura e prévia salva (Tasks 7–8)
+# Owner News — ponte de leitura, prévia salva e composição dual
 
-Esta entrega é local e não faz cutover. **Solicitar autorização antes de qualquer
-deploy na VPS.** Não ativar Payload para leitores reais antes das tarefas de
-migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
+Este documento descreve o **PR 1 implementado** até o commit de compatibilidade de
+runtime `db9e160`. A entrega é local e não faz cutover. **Solicitar autorização
+antes de qualquer deploy na VPS.** O runtime manual-only do PR 2, o caminho de
+cutover do PR 3 e o cutover operacional real ainda não estão ativos. Nenhuma
+configuração de deploy/Nginx foi alterada e a autoridade de escrita existente
+permanece como estava.
 
 ## Interfaces
 
 - `createAnnouncementsRouter({backend,authenticate,pollsRouter})` mantém o export
-  padrão, `/polls` primeiro, array + `X-Total-Count`, `{content}` e `{previous,next}`.
+  padrão e `/polls` primeiro. As listas públicas continuam como array; emitem
+  `X-Owner-News-Read-State: complete|degraded`, `X-Owner-News-Next-Cursor` somente
+  quando existe continuação completa e `X-Total-Count` somente quando o total
+  informativo é comprovadamente exato. Detalhe/home/navegação mantêm seus envelopes.
 - `createNewsBackend({pool,payloadClient})` resolve `owner_news_authority` a cada
-  operação. `legacy`/`frozen` usam o leitor legado; `payload`/`payload_frozen` usam
-  exclusivamente Payload. Controle ausente ou dependência indisponível: **503
-  `news_unavailable`**, sem fallback. A prévia legada antes do cutover consulta a
-  revisão exata no banco legado; após o cutover consulta a coleção de histórico.
+  operação, mas autoridade de escrita não seleciona mais uma única origem de leitura.
+  Lista, categorias, navegação e home compõem legado + Payload; detalhe, asset e
+  prévia são source-directed e nunca consultam a outra origem. Internamente cada
+  operação retorna `{value,readState}`; somente a rota converte `readState` em header.
+  Controle ilegível falha antes de consultar fontes. Uma primeira página pode usar a
+  origem saudável como `degraded`; dupla falha retorna `503 news_unavailable` e uma
+  continuação por cursor/offset que perde fonte configurada retorna
+  `503 news_page_restart_required`. Nenhum desses estados muda autoridade ou writer.
 - `createPayloadNewsClient({baseURL,secret,fetchImpl,timeoutMs=5000})` expõe
   `query(action,input,actor,{signal,requestId}={})` e `asset(input,actor,options)`.
   `requestId` é uma extensão opcional para correlação; ausente/inválido gera UUID.
   A configuração padrão é lazy: `CMS_INTERNAL_URL` (somente origem HTTP(S), sem
   path/query/credenciais) e `PORTAL_TO_PAYLOAD_SECRET` não são exigidos no boot
   legado. Segredos são exclusivamente server-side e distintos nas duas direções.
+  Em `legacy`/`frozen`, ambos ausentes significam Payload intencionalmente inativo
+  (saudável-vazio); configuração parcial sempre falha. Em `payload`/`payload_frozen`,
+  ausência também falha fechada. Um client injetado conta como configuração ativa.
 - Sete POSTs somente leitura sob `/editorial/api/portal-news`: `list`, `detail`,
   `categories`, `navigation`, `home`, `preview`, `asset`. Corpo exato `{actor,input}`,
   Authorization Bearer dedicado, `X-Request-ID`. Sem encaminhar cookie, token do
@@ -28,15 +41,98 @@ migração/aceite. Escritas legadas e freeze de mutações continuam na Task 12.
 - No POST privado, `kind` e `source` exigem strings primitivas com enum exato.
   Arrays, objetos e valores coercíveis retornam 400 antes de consultar conteúdo
   ou selecionar a fonte de prévia; não há coerção via `String(...)`.
+- A compatibilidade pública de bookmark sem `source` é somente o detalhe legado:
+  `/announcements.html?id=<uuid>` resolve como `legacy`. O endpoint de navegação
+  conserva um default defensivo legado, mas o frontend source-aware sempre propaga
+  a origem e não publica bookmark de navegação. `source` explícito em
+  detalhe/navegação/asset e a origem da prévia dirigem uma única fonte; `404`/`403`
+  não acionam fallback.
 - Tipos CMS: `src/contracts/news.ts`; API: validação JSON independente de Next e
   Payload em `payload-dto.js`. Formatos nativos nunca atravessam a fronteira.
+- DTOs públicos do bridge Payload carregam obrigatoriamente `source: 'payload'`;
+  referências `previous`/`next` também carregam a origem. O `source` opcional de
+  `preview_revision` identifica a revisão salva e não substitui a origem pública
+  Payload do documento.
+- DTOs legados publicados carregam `source: 'legacy'`, `asset_scope: 'legacy'` e
+  `published_at` canônico ISO (ou null). Tipos/data inválidos falham fechados antes
+  de comparador ou cursor. Referências legadas de navegação também carregam origem.
+- Toda resposta pública autenticada do router usa
+  `Cache-Control: private,no-store`. O edge nega com `404` tanto o path privado
+  exato `/editorial/api/portal-news` quanto seu prefixo `/editorial/api/portal-news/`;
+  somente a API server-side chama os sete POSTs privados.
+
+### Fronteira source-aware da lista
+
+O Portal usa ordem canônica por `published_at` decrescente (datas nulas por último),
+depois origem `legacy`/`payload` e UUID lowercase crescente. O cursor público é
+base64url, versão 1, tem no máximo 1024 caracteres e contém exatamente a fronteira
+e os filtros normalizados: `{v,published_at,source,id,category,kind}`. Categoria e
+tipo ausentes são serializados como `null`; replay sob filtros diferentes falha com
+`invalid_request`. Somente a fronteira tipada `{published_at,source,id}` atravessa o
+POST privado. O CMS a valida novamente, filtra antes do limite e ordena Payload por
+`publishedAt` e UUID; o cursor opaco nunca é enviado ao CMS. O limite público segue
+em 100, enquanto a lista privada de cada fonte aceita no máximo 101 itens para obter
+o lookahead necessário sem produzir uma página terminal falsa.
+
+Cursor exige `offset` ausente ou zero; combinar cursor e offset não zero retorna
+`400 invalid_request`. Offset não zero sem cursor é aceito somente como
+compatibilidade retroativa limitada. Em leitura dual configurada, o backend busca
+no máximo 101 candidatos de cada fonte antes de fazer o merge e aplicar o offset
+global; portanto offsets profundos podem truncar ou esvaziar a resposta mesmo
+quando ainda existem registros. Cursor é obrigatório para travessia completa e
+autoritativa do feed composto. Qualquer continuação que perde uma fonte configurada
+exige reinício, nunca uma fatia parcial. Quando Payload está intencionalmente inativo
+(`legacy`/`frozen` e ambos os envs ausentes), a compatibilidade legacy-only por
+offset e seu total exato permanecem intactos como implementado. A UI do PR 1 já usa
+Anterior/Próxima, guarda uma pilha de cursores canônicos por categoria/tipo em
+`history.state`, invalida a pilha ao trocar filtro e restaura URL/foco em
+Voltar/Avançar. Um cursor vindo diretamente na URL não fabrica página anterior;
+`news_page_restart_required` remove o cursor e reinicia atomicamente na primeira
+página.
+
+O adapter legado consulta chunks crus determinísticos com `LIMIT 4` e keyset
+`published_at/id`. No SQL, seleção, ordenação e todos os predicados de fronteira usam
+`date_trunc('milliseconds', d.published_at)`; assim storage, DTO/cursor e comparador
+global compartilham a mesma precisão, com null por último e UUID crescente. O leitor
+valida revisão e mídia, faz o recheck estável sob lock e avança
+até preencher apenas o lookahead válido pedido. O teto absoluto é 101.000 linhas
+cruas/25.250 lotes; navegação privada recebe no máximo 1.000 lotes. Exceder falha
+fechado. Leituras limitadas não varrem o
+restante para fabricar total: quando alguma origem não prova total exato, a rota
+omite `X-Total-Count`. Categorias e o modo legado intencionalmente inativo continuam
+calculando totais exatos dentro do mesmo limite operacional.
 
 As exceções de Origin existem **tanto no proxy Next quanto no boundary REST**,
 somente nos sete paths exatos e método POST com segredo válido, sem Origin,
 Cookie ou Sec-Fetch-Site. Não autenticam coleções genéricas, admin ou Server Actions.
 Chamadas privadas também validam segredo/actor/input no handler. Corpo de entrada
-tem teto de 16 KiB. Nginx deve bloquear os paths privados no futuro rollout;
+tem teto de 16 KiB. O Nginx existente já bloqueia o path exato e seu prefixo;
 nenhuma configuração de deploy foi alterada aqui.
+
+### Privacidade, degradação e limite do writer
+
+Respostas públicas e logs são sanitizados por allowlist: DTOs, headers, erros e o
+evento `owner_news_read_degraded` não expõem URL interna, segredo, stack, conteúdo
+ou reason interno. O evento registra apenas código fixo, ação, fonte indisponível e
+`requestId` validado. Em lista degradada, `count` e `nextCursor` são anulados antes
+da rota, portanto `X-Total-Count` e `X-Owner-News-Next-Cursor` são omitidos. Mesmo
+com estado `complete`, total desconhecido por lookahead limitado continua omitido.
+
+A garantia de ausência de escrita é deliberadamente limitada ao orquestrador de
+fallback/composição de `api/owner-news/backend.js`: ele observa `getAuthority`, mas
+não importa/chama `assertNewsWriter`, `transitionAuthority`, `writerAllowed`, APIs
+diretas de mutação ou SQL de transição. O reader legado herdado pode continuar a
+promoção de schedule vencido; este PR não declara seu call graph side-effect-free.
+A decisão e o sucessor desse comportamento permanecem adiados pelo design aprovado.
+
+### Estado das dependências compatíveis
+
+Onde o bridge executa no CMS, os seis pacotes Payload diretos permanecem alinhados
+exatamente em `3.90.2` e Next em `16.4.2`, compatíveis com a imagem Node `24.21.0`
+já pinada. O lock resolve os transitivos corrigidos `undici 7.30.1`,
+`happy-dom 21.0.4` e `fast-uri 3.1.9`; preserva Sass `1.105.1`, DOMPurify `3.4.17`,
+TSX `4.23.15` e esbuild `0.28.2`. Isso é estado de dependência, não instrução de
+deploy nem evidência de imagem executada.
 
 ## Publicação, limites e falhas
 
@@ -44,18 +140,54 @@ Leituras Local API usam explicitamente `overrideAccess:true` apenas depois da
 autenticação privada, `depth:0`, `draft:false`, filtro `_status=published` e o mesmo
 `req`/transação sob lock 7194030. Editor normal também vê somente a publicação.
 Prévia nativa consulta ID da versão **e parent**; prévia legada usa a identidade
-composta original, sem fallback de fonte. Homepage usa o Global publicado.
+composta original, sem fallback de fonte. Home prefere o Global Payload somente
+quando há conteúdo publicado válido; ausência legítima usa o home legado, enquanto
+falha de uma origem produz estado degradado.
 
-O piloto varre lotes de 100, máximo 1000 lotes (exceder retorna 503), valida
-conteúdo/referências/arquivos antes de contar/paginar e ordena publishedAt DESC,
-updatedAt DESC, UUID ASC. Categoria vazia é filtro válido, mas não entra no catálogo
-de nomes. Navegação exclui edições; uma edição retorna previous/next null. Falha
+Para listas, Payload e legado consultam no máximo 4 documentos crus por chamada de
+storage, evitando materializar 101 corpos máximos de uma vez. Payload mantém tetos de
+1.000 lotes e 101.000 linhas cruas (o lote de 4 torna 4.000 o teto efetivo anterior).
+Exceder qualquer teto retorna 503. As consultas usam `_status`, categoria quando
+presente, keyset e limite no `find`. A ordem é `publishedAt` decrescente, null por
+último e UUID Payload crescente; no merge global, fonte fica entre publicação e UUID.
+Conteúdo/referências/arquivos e `kind` são validados durante o avanço, retendo apenas
+o necessário para `offset + limit`; total fica null até a exaustão comprovar exatidão.
+A agregação de categorias de ambas as origens é streaming por keyset, em lotes crus
+de 4, no máximo 1.000 lotes/4.000 linhas e 10.000 nomes. Cada publicação ainda passa
+por validação completa de conteúdo/mídia, mas o corpo é descartado após atualizar
+somente total/mapa de contagem; exaustão, progresso e storage precisam ser provados.
+Categoria vazia é filtro válido, mas não entra no catálogo de nomes. Navegação exclui edições;
+uma edição retorna previous/next null. A navegação global percorre cada fonte por
+keyset e retém somente o vizinho anterior, o primeiro posterior, a fronteira e IDs
+vistos para integridade; para assim que conhece o primeiro posterior. Antes de cada
+chamada, o Portal envia o orçamento privado restante exato
+`scan:{maxRawRows,maxBatches}`; Payload/legado limitam o trabalho de storage a esses
+máximos e respondem com custo estrito `{rawRows,batches}` não superior ao solicitado.
+Esses campos nunca integram DTO/header/resposta pública. O Portal os soma em um único
+limite de 1.000 lotes/101.000 candidatos crus por fonte durante toda a requisição e
+recusa antes da próxima chamada quando qualquer saldo termina. Em páginas de
+navegação com offset zero, `count` não nulo deve ser exatamente `rows.length`;
+qualquer divergência falha como contrato privado indisponível, não como exaustão/404.
+Duplicata, desordem, falta de progresso, metadata de custo inválida ou orçamento
+excedido falham fechados. Quando Payload está intencionalmente inativo, navegação
+legada trata essa origem como saudável-vazia antes de construir `scan`: não fabrica
+nem valida custo, não chama o bridge e não registra degradação. Corrupção/duplicata
+dentro de qualquer resposta de lista é classificada na captura da própria origem
+como indisponibilidade, nunca como erro 400 do cliente. Na primeira página, a outra
+origem saudável pode produzir resposta degradada sem total/cursor; em continuação
+exige reinício e, sem origem utilizável, retorna 503. No modo intencionalmente
+inativo, legado corrompido resulta na escolha explícita de vazio degradado (com log
+do legado), não 400.
+Falha
 operacional de arquivo/storage/DB não é convertida em feed vazio. Apenas conteúdo
 malformado ou referência com shape/tipo inválido exclui aquela publicação.
 
 JSON de saída: detail/preview 6 MiB; home/navigation 64 KiB; categories 1 MiB e
-10.000 nomes; list `(limit*6+1) MiB`, limit 1..100. Não há truncamento de categorias
-nem omissão de corpos. Limites por metadata e bytes lidos; timeout cobre leitura
+10.000 nomes; list tem um único teto interno fixo de 32 MiB, independente de `limit`
+(1..100). O transporte rejeita `Content-Length` acima do teto antes do parse e conta
+bytes do stream durante a leitura. Os produtores contabilizam bytes UTF-8 dos DTOs
+retidos e falham antes de ultrapassar o mesmo orçamento; não truncam página/cursor.
+Não há truncamento de categorias nem omissão de corpos. Limites por metadata e bytes lidos; timeout cobre leitura
 completa e cancela streams. Assets usam streaming (não JSON), 50 MiB, headers
 allowlisted, Range simples para PDF/vídeo, 416 com Content-Range e cancelamento
 no disconnect. Falha depois de começar os bytes encerra a conexão, sem JSON

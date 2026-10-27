@@ -36,3 +36,20 @@ export function renderPagination(node, total, offset, limit, onPage) {
   next.addEventListener('click', () => onPage((page + 1) * limit));
   node.append(previous, status, next);
 }
+
+export function renderCursorPagination(node, { canPrevious = false, canNext = false, page = 1 } = {}, onPage) {
+  if (!node) return;
+  node.replaceChildren();
+  if (!canPrevious && !canNext) return;
+  const previous = document.createElement('button');
+  previous.className = 'btn btn-ghost'; previous.type = 'button'; previous.textContent = 'Anterior';
+  previous.disabled = !canPrevious; previous.dataset.paginationBoundaryDisabled = String(previous.disabled);
+  previous.addEventListener('click', () => onPage('previous'));
+  const status = document.createElement('span');
+  status.textContent = `Página ${page}`; status.setAttribute('aria-label', `Página ${page}`);
+  const next = document.createElement('button');
+  next.className = 'btn btn-ghost'; next.type = 'button'; next.textContent = 'Próxima';
+  next.disabled = !canNext; next.dataset.paginationBoundaryDisabled = String(next.disabled);
+  next.addEventListener('click', () => onPage('next'));
+  node.append(previous, status, next);
+}

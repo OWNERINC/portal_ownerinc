@@ -31,6 +31,16 @@ const ASSET_MIMES = {
   pdf: new Set(['application/pdf']),
   video: new Set(['video/mp4', 'video/webm', 'video/quicktime']),
 };
+const ANNOUNCEMENT_BATCH_SIZE = 4;
+const ANNOUNCEMENT_MAX_RAW_ROWS = 101000;
+const ANNOUNCEMENT_MAX_BATCHES = Math.ceil(ANNOUNCEMENT_MAX_RAW_ROWS / ANNOUNCEMENT_BATCH_SIZE);
+const ANNOUNCEMENT_PRIVATE_MAX_BATCHES = 1000;
+const ANNOUNCEMENT_CATEGORY_MAX_RAW_ROWS = 4000;
+const ANNOUNCEMENT_CATEGORY_MAX_BATCHES = 1000;
+const ANNOUNCEMENT_MAX_CATEGORIES = 10000;
+const ANNOUNCEMENT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+const ANNOUNCEMENT_RESPONSE_ENVELOPE_BYTES = 1024;
+const ANNOUNCEMENT_PUBLISHED_AT_SQL = "date_trunc('milliseconds', d.published_at)";
 
 function assetReferences(blocks) {
   const references = new Map();
@@ -358,35 +368,121 @@ function publishedBodyText(row, legacyField = 'content') {
   return typeof row?.[legacyField] === 'string' ? row[legacyField] : '';
 }
 
-async function stablePublishedAnnouncements(pool) {
-  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
-  const visible = await withTransaction(pool, async (db) => {
+function legacyBoundarySql(boundary, values) {
+  if (!boundary) return '';
+  if (boundary.published_at === null) {
+    if (boundary.source !== 'legacy') return ' AND FALSE';
+    values.push(boundary.id);
+    return ` AND ${ANNOUNCEMENT_PUBLISHED_AT_SQL} IS NULL AND d.id > $${values.length}::uuid`;
+  }
+  values.push(normalizePublishedAt(boundary.published_at));
+  const date = `$${values.length}`;
+  let sameDate = '';
+  if (boundary.source === 'legacy') {
+    values.push(boundary.id);
+    sameDate = ` OR (${ANNOUNCEMENT_PUBLISHED_AT_SQL} = ${date}::timestamptz AND d.id > $${values.length}::uuid)`;
+  }
+  return ` AND (${ANNOUNCEMENT_PUBLISHED_AT_SQL} IS NULL OR ${ANNOUNCEMENT_PUBLISHED_AT_SQL} < ${date}::timestamptz${sameDate})`;
+}
+
+function normalizePublishedAt(value) {
+  if (value === null) return null;
+  if (!(value instanceof Date) && typeof value !== 'string') throw new Error('invalid_published_at');
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(parsed.getTime())) throw new Error('invalid_published_at');
+  return parsed.toISOString();
+}
+const announcementPublishedAt = row => row.published_at_ms === undefined ? row.published_at : row.published_at_ms;
+function afterLegacyBoundary(point, boundary) {
+  if (!boundary) return true;
+  if (boundary.published_at === null) return point.published_at === null && boundary.source === 'legacy' && point.id > boundary.id;
+  if (point.published_at === null) return true;
+  const pointStamp = Date.parse(point.published_at), boundaryStamp = Date.parse(boundary.published_at);
+  return pointStamp < boundaryStamp || (pointStamp === boundaryStamp && boundary.source === 'legacy' && point.id > boundary.id);
+}
+function validateLegacyProgress(rows, boundary) {
+  let previous = boundary;
+  for (const row of rows) {
+    if (typeof row.id !== 'string' || !row.id) throw new Error('announcement_scan_limit');
+    const point = { published_at: normalizePublishedAt(announcementPublishedAt(row)), source: 'legacy', id: row.id.toLowerCase() };
+    if (!afterLegacyBoundary(point, previous)) throw new Error('announcement_scan_limit');
+    previous = point;
+  }
+  return previous;
+}
+
+async function publishedAnnouncementBatch(pool, boundary, limit = ANNOUNCEMENT_BATCH_SIZE) {
+  return withTransaction(pool, async (db) => {
+    const values = [];
+    const boundarySql = legacyBoundarySql(boundary, values);
+    values.push(limit);
     const { rows } = await db.query(
-      `SELECT d.id, d.title, d.category, d.published_at,
+      `SELECT d.id, d.title, d.category,
+              ${ANNOUNCEMENT_PUBLISHED_AT_SQL} AS published_at_ms,
               r.id AS published_revision_id, r.blocks, r.editorial
          FROM cms_documents d
          JOIN cms_revisions r
            ON r.id = d.published_revision_id AND r.status = 'published'
-        WHERE d.content_type = 'announcement'
-        ORDER BY d.published_at DESC NULLS LAST, d.updated_at DESC, d.id`,
+         WHERE d.content_type = 'announcement'${boundarySql}
+         ORDER BY ${ANNOUNCEMENT_PUBLISHED_AT_SQL} DESC NULLS LAST, d.id
+         LIMIT $${values.length}`,
+      values,
     );
     const validations = await validatePublishedBlocksBatch(db, rows.map(row => row.blocks));
     const visible = rows.flatMap((row, index) => {
       const revision = validateNewsRevision(row.blocks, row.editorial ?? null, { publishing: true });
       return validations[index].blocks === null || !revision ? [] : [{ ...row, ...revision }];
     });
-    return visible;
+    return { rows, visible };
   });
-  const stableIds = await recheckPublishedAnnouncements(pool, visible.map(row => ({
-    id: row.id,
-    publishedRevisionId: row.published_revision_id,
-  })));
-  return visible.filter(row => stableIds.has(String(row.id).toLowerCase())).map(articleDTO);
 }
 
-function articleDTO({ blocks, published_revision_id: _publishedRevisionId, ...row }) {
+async function stablePublishedAnnouncements(pool, { boundary = null, maxRows = null, retainRows = maxRows, category, kind, scan = null } = {}) {
+  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
+  const stable = [];
+  let rawBoundary = boundary;
+  let rawRows = 0, validCount = 0, retainedBytes = ANNOUNCEMENT_RESPONSE_ENVELOPE_BYTES;
+  const maxRawRows = scan?.maxRawRows ?? ANNOUNCEMENT_MAX_RAW_ROWS;
+  const maxBatches = scan?.maxBatches ?? ANNOUNCEMENT_MAX_BATCHES;
+  for (let batch = 0; batch < maxBatches && rawRows < maxRawRows; batch++) {
+    const storageLimit = Math.min(ANNOUNCEMENT_BATCH_SIZE, maxRawRows - rawRows);
+    if (storageLimit < 1) throw new Error('announcement_scan_limit');
+    const result = await publishedAnnouncementBatch(pool, rawBoundary, storageLimit);
+    rawRows += result.rows.length;
+    if (rawRows > maxRawRows) throw new Error('announcement_scan_limit');
+    if (!result.rows.length) return { rows: stable, count: validCount, exhausted: true, scan: { rawRows, batches: batch + 1 } };
+    rawBoundary = validateLegacyProgress(result.rows, rawBoundary);
+
+    const candidates = selectAnnouncements(result.visible, category, kind);
+    const stableIds = await recheckPublishedAnnouncements(pool, candidates.map(row => ({
+      id: row.id,
+      publishedRevisionId: row.published_revision_id,
+    })));
+    for (const row of candidates) {
+      if (!stableIds.has(String(row.id).toLowerCase())) continue;
+      validCount++;
+      if (retainRows === null || stable.length < retainRows) {
+        const dto = articleDTO(row);
+        const bytes = Buffer.byteLength(JSON.stringify(dto), 'utf8') + (stable.length ? 1 : 0);
+        if (retainedBytes + bytes > ANNOUNCEMENT_RESPONSE_MAX_BYTES) throw new Error('announcement_response_limit');
+        retainedBytes += bytes; stable.push(dto);
+      }
+    }
+
+    const exhausted = result.rows.length < storageLimit;
+    if (maxRows !== null && validCount >= maxRows) {
+      return { rows: stable.slice(0, maxRows), count: validCount, exhausted: exhausted && validCount === maxRows,
+        scan: { rawRows, batches: batch + 1 } };
+    }
+    if (exhausted) return { rows: stable, count: validCount, exhausted: true, scan: { rawRows, batches: batch + 1 } };
+  }
+  throw new Error('announcement_scan_limit');
+}
+
+function articleDTO({ blocks, published_revision_id: _publishedRevisionId, published_at_ms: publishedAtMs, ...row }) {
   const editorial = row.editorial ?? null;
-  return { ...row, id: String(row.id).toLowerCase(), editorial, content_blocks: blocks,
+  return { ...row, published_at: normalizePublishedAt(publishedAtMs === undefined ? row.published_at : publishedAtMs), source: 'legacy', id: String(row.id).toLowerCase(), editorial,
+    asset_scope: 'legacy', content_blocks: blocks,
     read_time_minutes: estimateNewsReadTime(blocks, editorial) };
 }
 
@@ -396,33 +492,59 @@ function selectAnnouncements(rows, category, kind) {
 }
 
 async function listPublishedAnnouncementCategories(pool, { kind, withCounts = false } = {}) {
-  const rows = selectAnnouncements(await stablePublishedAnnouncements(pool), undefined, kind);
+  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const counts = new Map();
-  for (const { category } of rows) {
-    if (typeof category === 'string' && category.trim()) counts.set(category, (counts.get(category) || 0) + 1);
+  let total = 0, rawRows = 0, boundary = null;
+  for (let batch = 0; batch < ANNOUNCEMENT_CATEGORY_MAX_BATCHES && rawRows < ANNOUNCEMENT_CATEGORY_MAX_RAW_ROWS; batch++) {
+    const storageLimit = Math.min(ANNOUNCEMENT_BATCH_SIZE, ANNOUNCEMENT_CATEGORY_MAX_RAW_ROWS - rawRows);
+    const result = await publishedAnnouncementBatch(pool, boundary, storageLimit);
+    rawRows += result.rows.length;
+    if (!result.rows.length) {
+      const names = [...counts.keys()].sort();
+      return withCounts ? { total, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
+    }
+    boundary = validateLegacyProgress(result.rows, boundary);
+    const candidates = selectAnnouncements(result.visible, undefined, kind);
+    const stableIds = await recheckPublishedAnnouncements(pool, candidates.map(row => ({ id: row.id, publishedRevisionId: row.published_revision_id })));
+    for (const row of candidates) {
+      if (!stableIds.has(String(row.id).toLowerCase())) continue;
+      const dto = articleDTO(row); total++;
+      if (typeof dto.category === 'string' && dto.category.trim()) {
+        counts.set(dto.category, (counts.get(dto.category) || 0) + 1);
+        if (counts.size > ANNOUNCEMENT_MAX_CATEGORIES) throw new Error('announcement_category_limit');
+      }
+    }
+    if (result.rows.length < storageLimit) {
+      const names = [...counts.keys()].sort();
+      return withCounts ? { total, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
+    }
   }
-  const names = [...counts.keys()].sort();
-  return withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
+  throw new Error('announcement_scan_limit');
 }
 
-async function listPublishedAnnouncements(pool, limit, offset, category, kind) {
-  const stable = selectAnnouncements(await stablePublishedAnnouncements(pool), category, kind);
+async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true, scan = null } = {}) {
+  if (scan !== null && (typeof scan !== 'object' || Array.isArray(scan) || Object.keys(scan).length !== 2
+    || !Number.isSafeInteger(scan.maxRawRows) || scan.maxRawRows < 1 || scan.maxRawRows > ANNOUNCEMENT_MAX_RAW_ROWS
+    || !Number.isSafeInteger(scan.maxBatches) || scan.maxBatches < 1 || scan.maxBatches > ANNOUNCEMENT_PRIVATE_MAX_BATCHES)) throw new Error('announcement_scan_limit');
+  const result = await stablePublishedAnnouncements(pool, { boundary, category, kind, scan,
+    maxRows: exactTotal ? null : offset + limit, retainRows: offset + limit });
   return {
-    count: stable.length,
-    rows: stable.slice(offset, offset + limit),
+    count: result.exhausted ? result.count : null,
+    rows: result.rows.slice(offset, offset + limit),
+    ...(scan ? { scan: result.scan } : {}),
   };
 }
 
 async function getPublishedAnnouncementNavigation(pool, id, category) {
   id = String(id).toLowerCase();
-  const rows = await stablePublishedAnnouncements(pool);
+  const { rows } = await stablePublishedAnnouncements(pool);
   const current = rows.find(row => row.id === id);
   if (!current) return null;
   if (announcementKind(current) === 'edition') return { previous: null, next: null };
   const articles = selectAnnouncements(rows, category, 'article');
   const at = articles.findIndex(row => row.id === id);
   if (at < 0) return null;
-  const item = row => row ? { id: row.id, title: row.title } : null;
+  const item = row => row ? { source: 'legacy', id: row.id, title: row.title } : null;
   return { previous: item(articles[at - 1]), next: item(articles[at + 1]) };
 }
 
@@ -430,7 +552,8 @@ async function getPublishedAnnouncement(pool, id) {
   await promoteDueScheduledForPool(pool, new Date(), 'announcement');
   const result = await withTransaction(pool, async (db) => {
     const { rows } = await db.query(
-      `SELECT d.id, d.title, d.category, d.published_at,
+      `SELECT d.id, d.title, d.category,
+              ${ANNOUNCEMENT_PUBLISHED_AT_SQL} AS published_at_ms,
               r.id AS published_revision_id, r.blocks, r.editorial
          FROM cms_documents d
          JOIN cms_revisions r

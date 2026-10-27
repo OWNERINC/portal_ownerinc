@@ -279,6 +279,18 @@ test('restore protection backup ignores inherited S3 upload even when AWS would 
   assert.equal(await readFile(path.join(f.root, 'smoke.log'), 'utf8'), 'http://restore.invalid\n');
 });
 
+test('top-level backup and restore delegate payload-v1 to the coordinated validator path', async () => {
+  const [backupSource, restoreSource, operations] = await Promise.all([
+    readFile('scripts/backup.sh', 'utf8'), readFile('scripts/restore.sh', 'utf8'), readFile('scripts/payload-operations.sh', 'utf8'),
+  ]);
+  assert.match(backupSource, /RELEASE_FORMAT == payload-v1[\s\S]*?exec bash "\$root\/scripts\/payload-operations\.sh" backup "\$root"/u);
+  assert.match(restoreSource, /RELEASE_FORMAT == payload-v1[\s\S]*?exec bash "\$root\/scripts\/payload-operations\.sh" restore "\$root" "\$backup" --confirm RESTORE/u);
+  assert.match(operations, /verify_backup_manifest "\$backup"/u);
+  assert.match(operations, /write_payload_backup_manifest "\$destination"/u);
+  assert.match(operations, /verify_storage_archive "\$backup\/uploads\.tar\.gz"[\s\S]*?verify_storage_archive "\$backup\/cms-uploads\.tar\.gz"/u);
+  assert.match(operations, /restore_protection_destination[\s\S]*?capture "\$protection"[\s\S]*?destructive=true/u);
+});
+
 for (const failure of ['pg_dump', 'retention']) {
   test(`failed restore protection backup (${failure}) restarts only previously running services before any restore`, async t => {
     const f = await fixture(t); if (!f) return;
