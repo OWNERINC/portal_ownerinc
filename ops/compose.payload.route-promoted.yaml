@@ -1,0 +1,12 @@
+# Gate D only. Mount the whole private host directory so Nginx observes new
+# generation dentries/inodes after the atomic active.conf rename.
+services:
+  nginx:
+    # Initialization is a mandatory prior command. This start guard prevents an
+    # empty/torn host directory from becoming an active Nginx configuration.
+    command:
+      - /bin/sh
+      - -ec
+      - test -s /etc/nginx/editorial-route-state/active.conf && nginx -t && exec nginx -g 'daemon off;'
+    volumes:
+      - /var/lib/ownerinc/payload-route:/etc/nginx/editorial-route-state:ro

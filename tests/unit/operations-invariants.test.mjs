@@ -186,7 +186,10 @@ test('Sólides upstream traffic has per-user read and probe budgets', async () =
 });
 
 test('nginx protects the edge without shadowing uploads', async () => {
-  const nginx = await read('nginx/nginx.conf');
+  const [baseline, promoted] = await Promise.all([
+    read('nginx/nginx.conf'), read('nginx/editorial-route.promoted.conf'),
+  ]);
+  const nginx = baseline.replace('include /etc/nginx/editorial-route-state/active.conf;', promoted);
   for (const header of ['Content-Security-Policy', 'Strict-Transport-Security', 'X-Content-Type-Options', 'X-Frame-Options']) {
     assert.match(nginx, new RegExp(`add_header ${header}`));
   }
@@ -215,8 +218,8 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/users\/bulk[\s\S]*client_max_body_size 1m;[\s\S]*proxy_pass \$api_upstream/);
-  const privateBridgeExact = nginxLocationBlock(nginx, 'location = /editorial/api/portal-news {');
-  const privateBridgePrefix = nginxLocationBlock(nginx, 'location ^~ /editorial/api/portal-news/ {');
+  const privateBridgeExact = nginxLocationBlock(promoted, 'location = /editorial/api/portal-news {');
+  const privateBridgePrefix = nginxLocationBlock(promoted, 'location ^~ /editorial/api/portal-news/ {');
   assert.equal((nginx.match(/location = \/editorial\/api\/portal-news \{/gu) || []).length, 1,
     'the private bridge exact path must have one explicit edge denial');
   assert.equal((nginx.match(/location \^~ \/editorial\/api\/portal-news\/ \{/gu) || []).length, 1,

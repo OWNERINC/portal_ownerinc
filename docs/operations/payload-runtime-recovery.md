@@ -192,11 +192,97 @@ bounded. Se o kernel não permitir comprovar o reap dentro do prazo, o processo
 entra em fail-stop enquanto o FD9 ainda está retido: apply não continua e a lease
 não é liberada por unwinding normal.
 
-Esta entrega não executou Linux root, PostgreSQL, Docker, SSH ou VPS reais. As
-provas são testes portáteis/doubles e sintaxe. O workflow de instalação separado
-depende de Environment `production` aprovado e secrets de host ainda não
-autorizados; portanto não constitui deploy nem autorização live. Gates D/E,
-abertura de rota e transição de authority permanecem fora de escopo.
+### Gate D: promoção local e explícita da rota editorial
+
+O Gate D implementado permanece desligado por padrão. `nginx/nginx.conf` inclui
+`/etc/nginx/editorial-route-state/active.conf`. O Compose monta **o diretório**
+`nginx/editorial-route-state/`, nunca um arquivo isolado: assim o namespace do
+mount observa os novos dentries/inodes publicados por rename. O estado base aponta
+para `baseline-inactive/include.conf`, materializado com hash no manifest versionado;
+`/editorial` e `/_next` retornam 404 e nenhum request alcança `cms:3001`. Os
+templates promovido e unavailable continuam versionados fora do state directory.
+Em produção o overlay monta o diretório privado inteiro
+`/var/lib/ownerinc/payload-route/` no mesmo destino do container.
+
+O diretório persistente pode começar vazio, mas o overlay não pode ser aplicado
+nesse estado. Sob a lease exclusiva FD9, o operador deve executar primeiro a ação
+`initialize` de `ops/payload-route-promotion.py`, informando runtime, template
+inactive da current release, template unavailable e correlation ID. A ação valida
+root `0700`, current release e hashes dos templates; materializa
+`baseline-inactive/{include.conf,receipt.json}` com receipt assinado pela chave do
+journal, faz todos os fsyncs e ativa o pointer exato `baseline-inactive`. Retry é
+idempotente somente quando pointer, include, assinatura e hash continuam exatos;
+baseline parcial ou adulterado é recusado. A ordem obrigatória é:
+
+1. criar/verificar o diretório privado vazio em modo `0700`;
+2. adquirir e manter a lease exclusiva no FD9;
+3. executar `initialize` e exigir exit 0 / `durability=committed`;
+4. somente então aplicar o overlay e validar/recarregar Nginx.
+
+O overlay reforça essa ordem com um start guard: exige `active.conf` não vazio e
+`nginx -t` bem-sucedido antes de executar o master. Assim um diretório vazio ou um
+pointer que não resolve nunca se torna um Nginx ativo. Esse guard não substitui a
+validação criptográfica feita por `initialize` sob FD9.
+
+`ops/payload-route-promotion.py` é um protocolo posterior e separado do Gate C.
+Uma promoção explícita relê o journal assinado, exige o install v4 de produção em
+`floor_committed`, preserva `authority=legacy/1`, `workerHold=true` e
+`routeReleased=false`, exige a mesma lease operacional em FD9 durante toda a
+observação/publicação, confere current release, receipt do container CMS, imagem
+por digest, container real `running/healthy` e resposta privada exata de
+`/editorial/ready`. Em Linux, FD9 deve já deter `flock(LOCK_EX|LOCK_NB)`: um probe
+separado recusa lease unlocked/shared e a reafirmação no próprio FD recusa lock de
+outro open description. Owner, path, dev/inode, nlink e modo `0600` são conferidos
+na entrada, antes/depois da observação e imediatamente antes/depois do swap; FD9
+permanece aberto. Replacement do pathname também fecha a operação.
+
+O template deve ser exatamente o da release candidate. A publicação cria uma
+generation privada, sela o diretório em modo `0500` e `include.conf`/`receipt.json`
+em `0400`, faz fsync dos dois arquivos e do diretório, renomeia a
+generation, faz fsync do parent e só então cria/fsynca um pointer Nginx temporário.
+Há um único swap atômico desse pointer para `active.conf`, seguido de fsync do
+parent. O receipt contém o hash do include e ambos são revalidados antes/depois da
+ativação; portanto não existe promoted ativo sem receipt correspondente completo.
+Falha antes do swap preserva o estado ativo anterior. Legibilidade do pointer não
+é prova de durabilidade. A publicação só retorna sucesso depois de comprovar o
+fsync do parent posterior ao swap. Qualquer erro/ambiguidade pós-swap sem esse fsync
+recusa o promoted e publica uma **nova** generation unavailable sob a mesma lease,
+com novo swap e fsync completo. Se nem a unavailable comprovar durabilidade, o
+resultado é fail-stop `durability_indeterminate`, nunca success ou
+`route_promoted`. O overlay apenas
+monta o diretório; não publica porta, inicia serviço, recarrega Nginx ou autoriza
+cutover.
+
+Na configuração promovida, `/editorial` redireciona a `/editorial/admin`;
+`/editorial/admin` e `/editorial/api` usam apenas o upstream CMS privado.
+`/editorial/ready`, `/editorial/health`, a bridge `/editorial/api/portal-news`,
+rotas internas e o image optimizer continuam 404. Uploads têm limites próprios,
+cross-site é recusado, headers internos conhecidos são apagados e somente
+`/_next/static/` é encaminhado. Erros 502/503/504 viram o 503 JSON controlado
+`editorial_unavailable`, sem fallback.
+
+O modo `recover` não tenta promover: sob a lease exclusiva ele sempre materializa,
+ativa e revalida uma generation completa do template fechado
+`editorial-route.unavailable.conf`, cujo hash é fixado pelo controlador. O contrato
+responde 503 e não faz proxy. Recovery só retorna sucesso com
+`durability=committed`; pointer legível após fsync falho permanece indeterminado.
+Recovery e promotion exigem que a generation autenticada `baseline-inactive`
+criada por `initialize` ainda exista intacta, mesmo quando o pointer ativo já
+aponta para uma generation posterior.
+Validação/reload Nginx continua operação separada e
+explicitamente aprovada; o Gate C nunca chama este protocolo.
+
+Os eventos são JSON fechado. O controlador registra commit, release lógico (o
+commit, nunca path), digest, readiness/motivo, authority mode/epoch e correlation
+ID. Readiness CMS registra apenas `ready`, `database_unavailable` ou
+`storage_unavailable` com request ID. O runtime classifica backup, restore, banco,
+storage e divergência; writer recusado registra `legacy_write_refused`. Secrets,
+cookies, tokens, credentials e paths privados não fazem parte desses schemas.
+
+O smoke local permitido é `npm run smoke:payload-route:static`. Ele retorna
+`status=implemented` e `routePromoted=false`. HTTPS/browser e Linux/Docker
+descartáveis continuam evidência pendente. Esta entrega não executou Docker, SSH,
+VPS, browser live, promoção, cutover ou Gate E.
 
 ### Restore B0 isolado com checkpoints assinados (native TEST confirmado; host pendente)
 

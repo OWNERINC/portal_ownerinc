@@ -1298,3 +1298,18 @@ release, puxar imagem, criar recurso, mudar pointer ou reparar journal. Ambos os
 denials finais `release_not_preflighted` continuam incondicionais. Native
 preparation end-to-end, recuperação de instalação e aceite de host permanecem
 gates separados; uma classificação não substitui esses gates.
+### Rota editorial Payload (Gate D)
+
+A instalação privada não publica `/editorial`: o Compose base monta o diretório
+de state materializado com a generation inativa. Produção monta o diretório host
+privado inteiro, não `active.conf` ou outro arquivo individual; file bind isolado
+pode fixar inode antigo e é proibido. A política promovida requer o protocolo em
+`payload-runtime-recovery.md`, com generations imutáveis contendo include+receipt
+assinado e um único swap atômico do pointer `active.conf`, seguido de
+validação/reload operacional separado. Não copie manualmente templates ou pointers
+nem use o overlay sem o receipt correspondente. Recovery sempre ativa generation
+unavailable completa; nunca faça fallback para proxy não verificado ou legado.
+Antes da primeira aplicação do overlay, a ação `initialize` deve terminar com
+baseline assinado e durabilidade comprovada sob FD9. O start guard do overlay exige
+`active.conf` e `nginx -t`; diretório vazio não inicia Nginx. Falha do fsync do
+parent pós-swap nunca é convertida em sucesso por leitura posterior do pointer.

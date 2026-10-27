@@ -30,7 +30,12 @@ async function getAuthority(db, { forUpdate = false } = {}) {
 
 async function assertNewsWriter(db, writer) {
   const authority = await getAuthority(db, { forUpdate: true });
-  if (!writerAllowed(authority.mode, writer)) throw new AuthorityError(409, 'news_read_only');
+  if (!writerAllowed(authority.mode, writer)) {
+    console.error(JSON.stringify({ service: 'api', event: 'legacy_write_refused', reason: 'news_read_only',
+      authorityMode: authority.mode, authorityEpoch: authority.epoch,
+      writer: ['legacy', 'payload'].includes(writer) ? writer : 'unknown', requestId: 'unassigned' }));
+    throw new AuthorityError(409, 'news_read_only');
+  }
   return authority;
 }
 

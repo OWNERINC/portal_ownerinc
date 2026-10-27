@@ -323,7 +323,26 @@ def _parse_native_catalog_diagnostic(stderr, release=None):
 
 
 def _emit_control_error(error, release):
+    reason = str(error)
     print(str(error), file=sys.stderr)
+    correlation = os.environ.get('PAYLOAD_CORRELATION_ID', 'unassigned')
+    if not isinstance(correlation, str) or not re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', correlation):
+        correlation = 'unassigned'
+    if reason in ('restore_target_changed', 'current_release_invalid', 'release_image_mismatch'):
+        category = 'release_container_divergence'
+    elif reason.startswith('backup_') or reason.startswith('unsafe_backup'):
+        category = 'backup_failure'
+    elif reason.startswith('restore_') or reason.startswith('restored_'):
+        category = 'restore_failure'
+    elif 'database' in reason or 'postgres' in reason:
+        category = 'database_unavailable'
+    elif 'storage' in reason or 'upload' in reason:
+        category = 'storage_unavailable'
+    else:
+        category = 'control_refused'
+    if category != 'control_refused':
+        print(json.dumps({'service': 'payload-control', 'event': 'operation_failed', 'category': category,
+                          'reason': reason, 'correlationId': correlation}, sort_keys=True, separators=(',', ':')), file=sys.stderr)
     diagnostic = getattr(error, 'native_catalog_diagnostic', None)
     if not isinstance(diagnostic, dict):
         return

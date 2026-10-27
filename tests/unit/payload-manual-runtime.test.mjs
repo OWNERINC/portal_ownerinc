@@ -48,11 +48,12 @@ test('manual runtime rejects a host with any IPv4 or IPv6 default egress route',
     'Iface Destination Gateway Flags\n'), /manual_runtime_host_egress_route_present/u);
 });
 
-test('Compose separates liveness from readiness and gates Nginx on CMS readiness', async () => {
-  const [compose, production, route, fixture, nginx] = await Promise.all([
+test('Compose separates liveness from readiness while baseline Nginx keeps CMS ingress inactive', async () => {
+  const [compose, production, route, fixture, nginx, inactive, promoted] = await Promise.all([
     readFile('docker-compose.payload.yml', 'utf8'), readFile('ops/compose.payload.production.yaml', 'utf8'),
     readFile('cms/src/app/editorial/ready/route.ts', 'utf8'), readFile('scripts/integration/payload-manual-runtime.mjs', 'utf8'),
-    readFile('nginx/nginx.conf', 'utf8'),
+    readFile('nginx/nginx.conf', 'utf8'), readFile('nginx/editorial-route.inactive.conf', 'utf8'),
+    readFile('nginx/editorial-route.promoted.conf', 'utf8'),
   ]);
   assert.match(compose, /fetch\("http:\/\/127\.0\.0\.1:3001\/editorial\/ready"\)/u);
   assert.match(compose, /nginx:[\s\S]*?cms:[\s\S]*?condition: service_healthy/u);
@@ -64,8 +65,11 @@ test('Compose separates liveness from readiness and gates Nginx on CMS readiness
   assert.match(fixture, /assertHostNetworkIsolated/u);
   assert.match(fixture, /network', 'create', '--label'/u);
   assert.doesNotMatch(fixture, /network', 'create', '--internal'/u);
-  assert.match(nginx, /location = \/editorial\/ready \{ return 404; \}/u);
-  assert.match(nginx, /location = \/editorial\/health \{ return 404; \}/u);
+  assert.match(nginx, /include \/etc\/nginx\/editorial-route-state\/active\.conf;/u);
+  assert.match(inactive, /location = \/editorial \{ return 404; \}/u);
+  assert.doesNotMatch(inactive, /proxy_pass|return 308/u);
+  assert.match(promoted, /location = \/editorial\/ready \{ return 404; \}/u);
+  assert.match(promoted, /location = \/editorial\/health \{ return 404; \}/u);
   assert.doesNotMatch(fixture, /compose[^\n]*down[^\n]*-v|system prune|volume prune/u);
   assert.match(fixture, /docker\(\['volume', 'rm', volume\]\)/u, 'cleanup is restricted to the generated owned volume');
 });
