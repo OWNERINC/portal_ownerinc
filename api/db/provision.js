@@ -58,6 +58,7 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT, INSERT, UPDATE, DELETE ON owner_news_polls, owner_news_poll_options, owner_news_poll_votes TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON cms_editor_sessions TO portal_api;
     GRANT SELECT, UPDATE ON owner_news_authority TO portal_api;
+    GRANT SELECT, INSERT ON owner_news_authority_transitions TO portal_api;
     GRANT SELECT ON owner_news_authority TO portal_cron;
     GRANT SELECT, INSERT, UPDATE ON audit_log TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON user_import_jobs, user_import_rows TO portal_api;

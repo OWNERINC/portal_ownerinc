@@ -42,7 +42,7 @@ test('permission denial and mismatched projected identity do not call Portal aut
   let clients = 0, calls = 0
   const access = createNewsAreaAccess(() => {
     clients++
-    return { getAuthority: async () => { calls++; return { mode: 'payload', epoch: 1 } as Authority } }
+    return { getAuthority: async () => { calls++; return { mode: 'payload', epoch: 1, activationObserved: true } as Authority } }
   })
   assert.equal(await access.canRead(request(null)), false)
   assert.equal(await access.canRead(request({ ...editor, portalActor: { ...editor.portalActor, canManageNews: false } })), false)

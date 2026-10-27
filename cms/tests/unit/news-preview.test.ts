@@ -29,7 +29,7 @@ test('native preview rejects body decoded after disposal', async () => {
 })
 test('saved revision endpoint reads actual latest Versions without mutating, and missing revision is 409', async () => {
   let hasVersion = true
-  const access = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode: 'payload_frozen', epoch: 1 }) }))
+  const access = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode: 'payload_frozen', epoch: 1, activationObserved: false }) }))
   const req = { transactionID: 'live', user: { collection: 'portal-editors', portalUid: 'editor', portalActor: { uid: 'editor', canManageNews: true } },
     searchParams: new URLSearchParams({ target: 'article', documentId }) } as unknown as PayloadRequest
   req.payload = {

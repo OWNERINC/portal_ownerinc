@@ -205,7 +205,7 @@ test('internal client rejects malformed actor/expiry, expired session, mismatche
   ] as const) await assert.rejects(createPortalClient(settings, async () => response(value)).resolvePortalEditor('a'), { status })
   await assert.rejects(createPortalClient(settings, async () => response({ actor })).checkPortalActor('b'), { status: 503 })
   await assert.rejects(createPortalClient(settings, async () => response({ mode: 'missing', epoch: 1 })).getAuthority(), { status: 503 })
-  assert.deepEqual(await createPortalClient(settings, async () => response({ mode: 'payload', epoch: 2 })).getAuthority(), { mode: 'payload', epoch: 2 })
+  assert.deepEqual(await createPortalClient(settings, async () => response({ mode: 'payload', epoch: 2, activationObserved: true })).getAuthority(), { mode: 'payload', epoch: 2, activationObserved: true })
 })
 
 test('timeout aborts dependency resolution after five seconds and never retries', async () => {

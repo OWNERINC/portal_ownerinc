@@ -28,7 +28,7 @@ test('pinned native early lifecycle rejects before snapshot/filesystem; DB and a
     if (String(input).endsWith('/actor/check')) {
       events.push('actor'); return Response.json({ actor: { uid: 'test', email: 'test@example.invalid', name: null, canManageNews: true } })
     }
-    events.push('authority'); return Response.json({ mode, epoch: 1 })
+    events.push('authority'); return Response.json({ mode, epoch: 1, activationObserved: mode === 'payload' })
   }
   const sessions: Record<string, { db: { execute: () => Promise<void> } }> = {}
   const payload = {

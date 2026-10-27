@@ -88,7 +88,8 @@ export async function assertCmsWriteAuthority(req: PayloadRequest) {
   assertInteractiveSession()
   const client = createPortalClient(readCmsEnvironment(process.env))
   const authority = await client.getAuthority()
-  if (preparation ? authority.mode !== 'frozen' || authority.epoch !== preparation.identity.expectedEpoch : authority.mode !== 'payload') {
+  if (preparation ? authority.mode !== 'frozen' || authority.epoch !== preparation.identity.expectedEpoch
+    : authority.mode !== 'payload' || authority.activationObserved !== true) {
     throw new APIError('cms_authority_read_only', 409, undefined, true)
   }
   await client.checkPortalActor(requestingWorker || (req.user as PortalRuntimeUser).portalActor!.uid)

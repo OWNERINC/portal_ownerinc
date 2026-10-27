@@ -174,7 +174,7 @@ test('malformed/mismatched strict actor and unexpected frozen epoch fail before 
   const wrongEpoch = await fixture(t)
   t.mock.method(globalThis, 'fetch', async (input: string) => {
     wrongEpoch.state.portalCalls.push(input)
-    return input.endsWith('/authority') ? Response.json({ mode: 'frozen', epoch: 3 })
+    return input.endsWith('/authority') ? Response.json({ mode: 'frozen', epoch: 3, activationObserved: false })
       : Response.json({ actor: { uid: actorUid, email: 'operator@example.invalid', name: null, canManageNews: true } })
   })
   await assert.rejects(applyFrozenNewsImport(importInput(wrongEpoch)), /cms_preparation_authority_conflict/)
@@ -219,7 +219,7 @@ test('admission snapshots every caller field once across the delayed Portal chec
       startActorCheck()
       return actorResponse
     }
-    if (input.endsWith('/authority')) return Response.json({ mode: 'frozen', epoch: 2 })
+    if (input.endsWith('/authority')) return Response.json({ mode: 'frozen', epoch: 2, activationObserved: false })
     throw new Error('unexpected Portal request')
   })
 
