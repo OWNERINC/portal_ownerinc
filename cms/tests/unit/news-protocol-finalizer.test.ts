@@ -836,6 +836,15 @@ test('bootstrap RPC SQL is a controller-bound contract and an offline source ass
   assert.equal(parseProtocolFinalizerArguments(['--unknown']), null)
 })
 
+test('installed protocol verification reads bootstrap argument metadata as arrays', async () => {
+  const { client, statements } = fakeClient({ protocolVersion: 2 })
+  await finalizeNewsProtocol(client)
+  const inventory = statements.find(sql => sql.includes('p.proargmodes::text[] AS bootstrap_argument_modes'))
+  assert.ok(inventory)
+  assert.match(inventory, /p\.proargnames::text\[\] AS bootstrap_argument_names/u)
+  assert.doesNotMatch(inventory, /p\.proargmodes::text\[\]\s*=\s*ARRAY/u)
+})
+
 test('observer audit accepts no public pgcrypto baseline without confusing SQL NULL for effective EXECUTE', async () => {
   const { client, statements } = fakeClient({ readOnly: true, existing: true })
   configureReadOnlyAuditClient(client, statements, { pgcryptoBaselineAbsent: true })

@@ -49,7 +49,7 @@ async function fixture(t: TestContext) {
     manifestSha256: binding.manifestSha256, authorityEpoch: binding.expectedEpoch },
     asset: { id: assetId, mime: 'application/pdf', size: pdf.length, sha256, relativePath: 'asset.pdf' } })
   const staged = await promoteImportAsset(stagedBase)
-  const env = { CMS_DATABASE_URL: 'postgres://cms.invalid/synthetic', PAYLOAD_SECRET: 'synthetic-payload-secret-not-production-32chars',
+  const env = { CMS_PUBLICATION_MODE: 'manual', CMS_DATABASE_URL: 'postgres://cms.invalid/synthetic', PAYLOAD_SECRET: 'synthetic-payload-secret-not-production-32chars',
     PORTAL_PUBLIC_URL: 'https://portal.invalid', PORTAL_INTERNAL_URL: 'https://portal-internal.invalid',
     PAYLOAD_TO_PORTAL_SECRET: 'synthetic-payload-to-portal-not-production-32chars',
     PORTAL_TO_PAYLOAD_SECRET: 'synthetic-portal-to-payload-not-production-32chars', CMS_UPLOAD_DIR: storageRoot }

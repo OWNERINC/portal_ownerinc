@@ -223,28 +223,26 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
       assert.deepEqual(await runScheduledRevision(await worker(), { scheduleId: pending.id }), { state: 'already_processed' })
       assert.equal((await live(a.id))._status, 'draft')
     })
-    await t.test('native article and GLOBAL restore validate effective content and never restore stale publication metadata', async () => {
+    await t.test('manual mode rejects article and GLOBAL restore without changing publication metadata', async () => {
       const a = await article('Historical article'), source = await saved(a.id)
-      const published = await payload.update({ collection: 'news-articles', id: a.id, req: await req(), data: { _status: 'published' } })
-      // The pinned Local restore wrapper ignores `draft`; these are the public native
-      // operations used by REST/Server Actions, where draft is actually forwarded.
-      const restored = await restoreVersionOperation({ collection: payload.collections['news-articles'], id: source.id, req: await req(), draft: true, overrideAccess: false })
-      assert.equal(restored.title, 'Historical article'); assert.equal(restored._status, 'draft')
-      assert.equal((await live(a.id))._status, 'published'); assert.equal(restored.publishedAt, published.publishedAt)
+      await payload.update({ collection: 'news-articles', id: a.id, req: await req(), data: { _status: 'published' } })
+      const articleLive = await live(a.id), articleDraft = await draft(a.id), articleAudit = await audits(a.id)
+      await assert.rejects(restoreVersionOperation({ collection: payload.collections['news-articles'], id: source.id,
+        req: await req(), draft: true, overrideAccess: false }), /news_version_restore_unavailable/)
+      assert.deepEqual(await live(a.id), articleLive); assert.deepEqual(await draft(a.id), articleDraft)
+      assert.deepEqual(await audits(a.id), articleAudit)
       await payload.updateGlobal({ slug: 'news-home', req: await req(), draft: true, data: { eyebrow: 'Owner', headline: 'Home A', summary: 'Home summary A' } })
       const homeSource = (await payload.findGlobalVersions({ slug: 'news-home', limit: 1, sort: '-updatedAt' })).docs[0]
-      const homePublished = await payload.updateGlobal({ slug: 'news-home', req: await req(), data: { _status: 'published', headline: 'Home live' } })
-      const homeRestored = await restoreVersionOperationGlobal({ globalConfig: payload.globals.config.find(g => g.slug === 'news-home')!, id: homeSource.id, req: await req(), draft: true, overrideAccess: false })
-      assert.equal(homeRestored.headline, 'Home A')
-      assert.equal((await payload.findGlobal({ slug: 'news-home', draft: false })).headline, 'Home live')
-      assert.equal((await payload.findGlobal({ slug: 'news-home', draft: true })).headline, 'Home A')
-      assert.equal(homeRestored.publishedAt, homePublished.publishedAt)
-      const liveHome = await payload.restoreGlobalVersion({ slug: 'news-home', id: homeSource.id, req: await req(), overrideAccess: false })
-      assert.equal(liveHome._status, 'draft')
-      assert.equal(liveHome.publicationGeneration, 1)
-      assert.equal(liveHome.publishedAt, homePublished.publishedAt)
-      assert.equal((await audits('news-home')).at(-1)?.action, 'unpublished')
-      t.diagnostic(`global source ${homeSource.id}: restore-as-draft kept live Home live + draft Home A; native restore withdrawal generation=1`)
+      await payload.updateGlobal({ slug: 'news-home', req: await req(), data: { _status: 'published', headline: 'Home live' } })
+      const homeLive = await payload.findGlobal({ slug: 'news-home', draft: false })
+      const homeDraft = await payload.findGlobal({ slug: 'news-home', draft: true }), homeAudit = await audits('news-home')
+      await assert.rejects(restoreVersionOperationGlobal({ globalConfig: payload.globals.config.find(g => g.slug === 'news-home')!,
+        id: homeSource.id, req: await req(), draft: true, overrideAccess: false }), /news_version_restore_unavailable/)
+      await assert.rejects(payload.restoreGlobalVersion({ slug: 'news-home', id: homeSource.id, req: await req(), overrideAccess: false }),
+        /news_version_restore_unavailable/)
+      assert.deepEqual(await payload.findGlobal({ slug: 'news-home', draft: false }), homeLive)
+      assert.deepEqual(await payload.findGlobal({ slug: 'news-home', draft: true }), homeDraft)
+      assert.deepEqual(await audits('news-home'), homeAudit)
     })
     await t.test('real global Versions: scheduled home A publishes, later home B survives; scheduled withdrawal preserves B', async () => {
       await payload.updateGlobal({ slug: 'news-home', req: await req(), draft: true, data: { eyebrow: 'Owner', headline: 'Scheduled home A', summary: 'Summary A' } })
@@ -350,7 +348,8 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
       const homeAudit = await audits('news-home'), holder = await begin()
       try {
         await (await requireCmsTransaction(payload, holder)).execute(sql`SELECT set_config('owner_news.test_audit_fail', 'on', true)`)
-        await assert.rejects(payload.restoreGlobalVersion({ slug: 'news-home', id: versions.docs.at(-1)!.id, req: holder }))
+        await assert.rejects(payload.restoreGlobalVersion({ slug: 'news-home', id: versions.docs.at(-1)!.id, req: holder }),
+          /news_version_restore_unavailable/)
       } finally { await rollback(holder) }
       assert.deepEqual(await payload.findGlobal({ slug: 'news-home', draft: false }), homeBefore)
       assert.deepEqual(await payload.findGlobal({ slug: 'news-home', draft: true }), homeDraftBefore)
@@ -378,7 +377,7 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
       } finally { await rollback(holder) }
       assert.deepEqual(await readFile(path.join(process.env.CMS_UPLOAD_DIR!, media.filename!)), bytes)
     })
-    await t.test('invalid GLOBAL restored content is checked before native bypass; preparation imports keep provenance and a revalidated UID', async () => {
+    await t.test('invalid GLOBAL history cannot be restored; preparation imports keep provenance and a revalidated UID', async () => {
       const prior = await payload.findGlobal({ slug: 'news-home', draft: false })
       const holder = await begin()
       let malformedId: string
@@ -386,7 +385,7 @@ test('Task6 real PostgreSQL/native Versions/Jobs; Portal transport explicitly do
         const malformed = await payload.db.createGlobalVersion({ globalSlug: 'news-home', req: holder, autosave: false,
           versionData: { ...prior, headline: '', _status: 'published' }, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
         malformedId = String(malformed.id)
-        await assert.rejects(payload.restoreGlobalVersion({ slug: 'news-home', id: malformedId, req: holder }), /invalid_news_content/)
+        await assert.rejects(payload.restoreGlobalVersion({ slug: 'news-home', id: malformedId, req: holder }), /news_version_restore_unavailable/)
       } finally { await rollback(holder) }
       assert.deepEqual(await payload.findGlobal({ slug: 'news-home', draft: false }), prior)
       mode = 'legacy'

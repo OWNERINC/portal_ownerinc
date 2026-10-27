@@ -68,3 +68,14 @@ test('missing session, malformed head and caller hash without covered baseline d
   await assert.rejects(readNewsMutationHead(req), /news_mutation_ledger_unavailable/)
   await assert.rejects(assertNoNewsMutationsSince(req, { sequence: '0', chainSha256: zero } as NewsMutationHead), /news_mutation_coverage_incomplete/)
 })
+
+test('ledger sequence accepts only canonical exact decimal text through bigint range', async () => {
+  for (const sequence of ['0', '1', '9007199254740993', '9223372036854775807']) {
+    const { req, state } = fixture(); state.head.sequence = sequence
+    assert.equal((await readNewsMutationHead(req)).sequence, sequence)
+  }
+  for (const sequence of [0, 1, '', '00', '01', '-1', '+1', '1.0', ' 1', '9223372036854775808']) {
+    const { req, state } = fixture(); state.head.sequence = sequence as unknown as string
+    await assert.rejects(readNewsMutationHead(req), /news_mutation_ledger_unavailable/)
+  }
+})

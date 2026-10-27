@@ -12,6 +12,7 @@ const text = (value, max, empty = true) => typeof value === 'string' && value.le
 const date = value => value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
 const plain = value => !/[\r\n]|<\/?[a-z][^>]*>|<\s*(script|style|iframe|object|embed)\b|\bon[a-z]+\s*=|javascript\s*:/iu.test(value);
 const kind = value => ['article', 'edition'].includes(value);
+const decimal = value => typeof value === 'string' && /^(0|[1-9][0-9]*)$/u.test(value) && BigInt(value) <= 9223372036854775807n;
 const boundary = value => keys(value, ['published_at', 'source', 'id']) && date(value.published_at)
   && ['legacy', 'payload'].includes(value.source) && uuid(value.id);
 const scanBudget = value => keys(value, ['maxRawRows', 'maxBatches'])
@@ -32,10 +33,12 @@ function validInput(action, value) {
     case 'home': return keys(value, []);
     case 'preview': return keys(value, ['id', 'versionId', 'source']) && uuid(value.id) && uuid(value.versionId) && ['payload', 'legacy'].includes(value.source);
     case 'asset': return keys(value, ['id', 'preview', 'range']) && uuid(value.id) && typeof value.preview === 'boolean' && (value.range === null || text(value.range, 200));
+    case 'preflight': return keys(value, []);
     default: return false;
   }
 }
 function validPublicInput(action, value) {
+  if (action === 'preflight') return false;
   if (action === 'list') return validInput(action, value) && value.offset === 0 && !Object.hasOwn(value, 'scan');
   if (!['detail', 'navigation', 'asset'].includes(action)) return validInput(action, value);
   if (!record(value) || !['legacy', 'payload'].includes(value.source)) return false;
@@ -137,6 +140,14 @@ function readResult(action, json, input) {
       const name = input.withCounts ? v.name : v; assert(text(name, 100, false)); return name;
     });
     assert(new Set(names).size === names.length);
+  } else if (action === 'preflight') {
+    assert(keys(json, ['ready', 'publicationMode', 'authority', 'newsEmpty', 'mutation', 'counts']));
+    assert(json.ready === true && json.publicationMode === 'manual' && json.newsEmpty === true);
+    assert(keys(json.authority, ['mode', 'epoch']) && ['frozen', 'payload_frozen'].includes(json.authority.mode) && integer(json.authority.epoch, 1));
+    assert(keys(json.mutation, ['sequence', 'chainSha256', 'writeBarrier']) && decimal(json.mutation.sequence)
+      && json.mutation.sequence === '0' && json.mutation.chainSha256 === '0'.repeat(64) && json.mutation.writeBarrier === 'open');
+    assert(keys(json.counts, ['articles', 'media', 'homePublished', 'schedules'])
+      && Object.values(json.counts).every(value => integer(value, 0) && value === 0));
   } else throw unavailable();
   return json;
 }

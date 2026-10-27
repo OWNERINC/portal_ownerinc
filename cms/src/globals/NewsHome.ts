@@ -8,9 +8,9 @@ import { beforeHomePublication, prepareHomePublication, afterHomePublication } f
 export const NewsHome: GlobalConfig = {
   slug: 'news-home',
   label: 'Abertura da Owner News',
-  admin: { components: { elements: { beforeDocumentControls: ['/admin/ScheduleRevision#ScheduleRevision'] } } },
-  access: { read: newsAreaReadAccess, update: canWriteNews, readVersions: newsAreaReadAccess },
-  versions: { max: 0, drafts: { autosave: { interval: 2000 }, schedulePublish: false } },
+  admin: {},
+  access: { read: newsAreaReadAccess, update: canWriteNews, readVersions: () => false },
+  versions: { max: 0, drafts: { autosave: false, schedulePublish: false } },
   fields: [
     { name: 'eyebrow', label: 'Chamada', type: 'text', maxLength: 80, defaultValue: '' },
     { name: 'headline', label: 'Título de abertura', type: 'textarea', maxLength: 160, defaultValue: '' },

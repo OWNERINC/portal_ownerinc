@@ -14,6 +14,11 @@ export function editorialPolicy(nonce: string, development = false) {
     "frame-src https://*.firebaseapp.com", "worker-src 'self' blob:"].join('; ')
 }
 
+export function isNativeNewsRestoreRequest(pathname: string, method: string): boolean {
+  return method === 'POST' && (/^\/editorial\/api\/news-articles\/versions\/[^/]+$/u.test(pathname)
+    || /^\/editorial\/api\/globals\/news-home\/versions\/[^/]+$/u.test(pathname))
+}
+
 // Native Payload layout actions do not all pass through our serverFunction.
 // Guard the complete editorial namespace before Next dispatches any action,
 // including form POSTs without a next-action header. Authorization stays per request.
@@ -31,6 +36,7 @@ export function proxy(request: NextRequest) {
     return response
   }
   const next = () => finish(NextResponse.next({ request: { headers } }))
+  if (isNativeNewsRestoreRequest(request.nextUrl.pathname, request.method)) return finish(new NextResponse(null, { status: 404 }))
   if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return next()
   if (hasNewsServiceAccess(request)) return next()
   try {

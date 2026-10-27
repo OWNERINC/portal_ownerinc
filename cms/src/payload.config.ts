@@ -15,6 +15,7 @@ import { NewsSchedules } from './collections/NewsSchedules'
 import { NewsAudit } from './collections/NewsAudit'
 import { publishNewsSnapshot } from './jobs/publish-snapshot'
 import { newsScheduleEndpoints } from './endpoints/news-schedule'
+import { savedPreviewEndpoint } from './endpoints/saved-preview'
 import { portalNewsEndpoints } from './endpoints/portal-news'
 import { LegacyNewsRevisions } from './collections/LegacyNewsRevisions'
 import { NewsMigrationRuns } from './collections/NewsMigrationRuns'
@@ -25,6 +26,7 @@ import { scopePayloadLockAccess } from './auth/native-admin-access'
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const environment = readCmsConfigEnvironment(process.env)
 const PortalEditors = createPortalEditors(environment)
+const manualPublication = environment.publicationMode === 'manual'
 
 // Only the separate trusted import process passes the server-only capability.
 // Each call creates a new adapter config; a running runtime adapter is never toggled.
@@ -49,9 +51,10 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   routes: { admin: '/editorial/admin', api: '/editorial/api' },
   serverURL: environment.portalPublicURL,
-  collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext), NewsSchedules, NewsAudit, LegacyNewsRevisions, NewsMigrationRuns, NewsMigrationItems],
+  collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext),
+    ...(manualPublication ? [] : [NewsSchedules]), NewsAudit, LegacyNewsRevisions, NewsMigrationRuns, NewsMigrationItems],
   globals: [NewsHome],
-  endpoints: [...newsScheduleEndpoints, ...portalNewsEndpoints, ...portalPollEndpoints],
+  endpoints: [savedPreviewEndpoint, ...(manualPublication ? [] : newsScheduleEndpoints), ...portalNewsEndpoints, ...portalPollEndpoints],
   i18n: { supportedLanguages: { pt }, fallbackLanguage: 'pt' },
   editor: newsEditor,
   secret: environment.payloadSecret,
@@ -67,7 +70,7 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
     // prodMigrations would run DDL during runtime initialization in Payload 3.90.2.
   }),
   graphQL: { disable: true },
-  jobs: { autoRun: [], tasks: [publishNewsSnapshot], deleteJobOnComplete: false, enableConcurrencyControl: true,
+  jobs: { autoRun: [], tasks: manualPublication ? [] : [publishNewsSnapshot], deleteJobOnComplete: false, enableConcurrencyControl: true,
     access: { queue: () => false, run: () => false, cancel: () => false },
     jobsCollectionOverrides: ({ defaultJobsCollection }) => ({ ...defaultJobsCollection,
       fields: defaultJobsCollection.fields.map(field => 'name' in field && field.name === 'concurrencyKey' ? { ...field, unique: true } : field),

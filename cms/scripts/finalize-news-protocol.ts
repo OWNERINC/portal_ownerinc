@@ -1891,9 +1891,8 @@ async function verifyInstalled(client: FinalizerClient,
     p.proconfig AS config, r.rolname AS owner, p.oid = ANY(${approvedProtocolOidArray}) AS canonical_signature,
     pg_catalog.pg_get_function_result(p.oid) = 'TABLE(id uuid)' AS bootstrap_return_shape,
     p.proisstrict AS bootstrap_is_strict,
-    p.proargmodes::text[] = ARRAY['i','i','i','i','i','t']::text[] AS bootstrap_argument_modes,
-    p.proargnames = ARRAY['p_run_id','p_manifest_sha256','p_source_instance','p_source_fingerprint',
-      'p_authority_epoch','id']::text[] AS bootstrap_argument_names
+    p.proargmodes::text[] AS bootstrap_argument_modes,
+    p.proargnames::text[] AS bootstrap_argument_names
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
     WHERE n.nspname='public' AND p.proname = ANY($1::text[])`, [PROTOCOL_FUNCTION_NAMES])
   const expected = protocolFunctionBodies(options.protocolVersion)
@@ -1906,7 +1905,21 @@ async function verifyInstalled(client: FinalizerClient,
       || !catalogTextArrayMatches(row.bootstrap_argument_modes, ['i', 'i', 'i', 'i', 'i', 't'])
       || !catalogTextArrayMatches(row.bootstrap_argument_names, [
         'p_run_id', 'p_manifest_sha256', 'p_source_instance', 'p_source_fingerprint', 'p_authority_epoch', 'id',
-      ])))) fail(`canonical_function_mismatch:${fns.rows.map(row => `${String(row.name)}:${row.source === expected.get(String(row.name))}`).join(',')}`)
+      ])))) fail(`canonical_function_mismatch:${fns.rows.map(row => {
+        const name = String(row.name)
+        const bootstrapReturn = name !== 'owner_news_bootstrap_run' || row.bootstrap_return_shape === true
+        const bootstrapStrict = name !== 'owner_news_bootstrap_run' || row.bootstrap_is_strict === false
+        const bootstrapModes = name !== 'owner_news_bootstrap_run'
+          || catalogTextArrayMatches(row.bootstrap_argument_modes, ['i', 'i', 'i', 'i', 'i', 't'])
+        const bootstrapNames = name !== 'owner_news_bootstrap_run'
+          || catalogTextArrayMatches(row.bootstrap_argument_names, [
+            'p_run_id', 'p_manifest_sha256', 'p_source_instance', 'p_source_fingerprint', 'p_authority_epoch', 'id',
+          ])
+        return `${name}:sig=${row.canonical_signature === true}:sec=${row.security_definer === (name !== 'owner_news_mutation_guard_stmt')}`
+          + `:owner=${row.owner === 'cms_control'}:config=${Array.isArray(row.config) && row.config.includes('search_path=pg_catalog, public')}`
+          + `:source=${row.source === expected.get(name)}:return=${bootstrapReturn}:strict=${bootstrapStrict}`
+          + `:modes=${bootstrapModes}:names=${bootstrapNames}`
+      }).join(',')}`)
 
   const triggers = await client.query(`SELECT t.tgname AS name, c.relname AS relation, n.nspname AS relation_schema,
     t.tgenabled AS enabled, t.tgtype::integer AS event_mask,

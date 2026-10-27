@@ -232,5 +232,20 @@ ALTER FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,tex
 `
 }
 
+export function expectedNewsMutationTriggerFunctionBodies(): ReadonlyMap<string, string> {
+  const ddl = buildNewsMutationTriggersDDL()
+  const names = ['owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row'] as const
+  return new Map(names.map(name => {
+    const declaration = `CREATE OR REPLACE FUNCTION public.${name}()`
+    const start = ddl.indexOf(declaration)
+    const delimiter = '$owner_news$'
+    const opening = ddl.indexOf(delimiter, start)
+    const bodyStart = opening + delimiter.length
+    const bodyEnd = ddl.indexOf(delimiter, bodyStart)
+    if (start < 0 || opening < start || bodyEnd < bodyStart) throw new Error('canonical_mutation_function_missing')
+    return [name, ddl.slice(bodyStart, bodyEnd)]
+  }))
+}
+
 /** Immutable view of the required relation inventory for migration tests. */
 export const NEWS_MUTATION_TRIGGER_TABLES: readonly string[] = NEWS_MUTATION_TABLES

@@ -1,5 +1,7 @@
 import config from '@payload-config'
 import { getPayload } from 'payload'
+import { readCmsEnvironment } from '../../../config/environment'
+import { assertCmsDatabaseReady, assertCmsStorageReady } from '../../../config/readiness'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +17,9 @@ export async function GET(): Promise<Response> {
       // Server-only readiness probe; no identity data is returned to the caller.
       overrideAccess: true,
     })
+    await assertCmsDatabaseReady(payload)
+    const environment = readCmsEnvironment(process.env)
+    await assertCmsStorageReady(environment.uploadDir)
     return Response.json({ status: 'ready' })
   } catch {
     return Response.json({ status: 'unavailable' }, { status: 503 })

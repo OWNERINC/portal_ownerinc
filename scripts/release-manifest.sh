@@ -51,6 +51,14 @@ verify_backup_manifest() {
   BACKUP_FORMAT=$format
 }
 
+write_payload_backup_manifest() {
+  local directory=$1
+  [[ -d $directory && ! -L $directory ]] || return 2
+  (cd "$directory" && sha256sum postgres.dump uploads.tar.gz cms-postgres.dump cms-uploads.tar.gz \
+    release.images operations-proof.json backup.format > manifest.sha256)
+  verify_backup_manifest "$directory"
+}
+
 verify_storage_archive() {
   local archive=$1 members types member
   # Refuse links/devices and traversal BEFORE deleting any target storage. The

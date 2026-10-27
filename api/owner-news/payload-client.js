@@ -2,7 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { validInput, validActor, readResult, unavailable } = require('./payload-dto');
 const MiB = 1024 * 1024;
 const LIST_RESPONSE_MAX_BYTES = 32 * MiB;
-const paths = Object.freeze(Object.fromEntries(['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset'].map(action => [action, `/editorial/api/portal-news/${action}`])));
+const paths = Object.freeze(Object.fromEntries(['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset', 'preflight'].map(action => [action, `/editorial/api/portal-news/${action}`])));
 const safeError = status => Object.assign(new Error(status === 503 ? 'news_unavailable' : status === 404 ? 'not_found' : 'forbidden'), { status, code: status === 503 ? 'news_unavailable' : status === 404 ? 'not_found' : 'forbidden' });
 function payloadRuntimeState({ mode, baseURL, secret, suppliedClient = false }) {
   if (suppliedClient) return 'active';
@@ -19,7 +19,7 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
     origin = url.origin;
   } catch { throw unavailable(); }
   async function request(action, input, actor, { signal, requestId } = {}) {
-    if (!validInput(action, input) || !validActor(actor)) throw unavailable();
+    if (!validInput(action, input) || (action === 'preflight' ? actor !== undefined : !validActor(actor))) throw unavailable();
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
@@ -30,7 +30,7 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
     try {
       response = await fetchImpl(`${origin}${paths[action]}`, { method: 'POST', cache: 'no-store', redirect: 'error', signal: controller.signal,
         headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json', 'X-Request-ID': typeof requestId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/u.test(requestId) ? requestId : randomUUID() },
-        body: JSON.stringify({ actor, input }) });
+        body: JSON.stringify(action === 'preflight' ? { input } : { actor, input }) });
       if (controller.signal.aborted) throw unavailable();
       if (!response.ok && !(action === 'asset' && response.status === 416)) {
         await response.body?.cancel().catch(() => {});
@@ -40,7 +40,7 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
     } catch (error) { controller.abort(); clean(); await response?.body?.cancel().catch(() => {}); throw [403, 404].includes(error.status) ? error : unavailable(); }
   }
   async function query(action, input, actor, options) {
-    if (!Object.hasOwn(paths, action) || action === 'asset') throw unavailable();
+    if (!Object.hasOwn(paths, action) || action === 'asset' || action === 'preflight') throw unavailable();
     const { response, controller, clean } = await request(action, input, actor, options);
     let reader;
     const abortRead = () => { if (reader) void reader.cancel().catch(() => {}); };
@@ -100,6 +100,26 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
       return { status: response.status, headers, body };
     } catch { await cancel(); throw unavailable(); }
   }
-  return { query, asset };
+  async function preflight(options) {
+    const { response, controller, clean } = await request('preflight', {}, undefined, options);
+    let reader;
+    const abortRead = () => { if (reader) void reader.cancel().catch(() => {}); };
+    try {
+      const max = 16 * 1024, size = response.headers.get('content-length');
+      if (size !== null && (!/^\d+$/u.test(size) || Number(size) > max)) throw unavailable();
+      if (!/^application\/json(?:;|$)/iu.test(response.headers.get('content-type') || '') || !response.body) throw unavailable();
+      reader = response.body.getReader(); controller.signal.addEventListener('abort', abortRead, { once: true });
+      if (controller.signal.aborted) throw unavailable();
+      const chunks = []; let bytes = 0;
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break;
+        bytes += value.byteLength; if (bytes > max || controller.signal.aborted) throw unavailable(); chunks.push(Buffer.from(value));
+      }
+      if (controller.signal.aborted) throw unavailable();
+      return readResult('preflight', JSON.parse(Buffer.concat(chunks).toString('utf8')), {});
+    } catch { controller.abort(); await reader?.cancel().catch(() => {}); await response.body?.cancel().catch(() => {}); throw unavailable(); }
+    finally { controller.signal.removeEventListener('abort', abortRead); reader?.releaseLock(); clean(); }
+  }
+  return { query, asset, preflight };
 }
 module.exports = { createPayloadNewsClient, payloadRuntimeState };

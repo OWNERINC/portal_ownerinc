@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
-test('optional Compose overlay renders isolated roles, volumes and one CMS image without starting Docker', t => {
+test('optional Compose overlay renders the manual runtime without the scheduled worker', t => {
   const parserEnvironment = Object.fromEntries(['PATH', 'SystemRoot', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)']
     .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
   const result = spawnSync('docker', ['compose', '--profile', 'cms-control-roles', '--env-file', '.env.example',
@@ -17,13 +17,13 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
   assert.equal(result.status, 0, 'Compose parse failed (configuration output intentionally withheld)');
   const config = JSON.parse(result.stdout);
   const s = config.services;
-  for (const service of ['cms-postgres', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.ok(s[service]);
-  for (const service of ['cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker']) assert.equal(s[service].image, s.cms.image);
+  for (const service of ['cms-postgres', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms']) assert.ok(s[service]);
+  assert.equal(s['cms-worker'], undefined, 'manual runtime must not resolve the scheduled worker');
+  for (const service of ['cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms']) assert.equal(s[service].image, s.cms.image);
   assert.equal(s['cms-postgres'].ports, undefined);
   assert.equal(s.cms.ports, undefined);
   assert.equal(s.cms.build.context.replaceAll('\\', '/'), path.resolve('.').replaceAll('\\', '/'));
   assert.equal(s.cms.build.dockerfile, 'cms/Dockerfile');
-  assert.equal(s['cms-worker'].deploy.replicas, 1);
   assert.match(s['cms-migrate'].environment.CMS_DATABASE_URL, /cms_migrator:/);
   assert.equal(s['cms-control-roles'].environment.CMS_CONTROLLER_PASSWORD,
     'placeholder-cms-controller-password-for-explicit-bootstrap-only');
@@ -31,8 +31,8 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
     ['node', '--import', 'tsx', 'scripts/provision-db.ts', '--verify-control']);
   assert.deepEqual(s['cms-control-roles'].profiles, ['cms-control-roles']);
   assert.match(s.cms.environment.CMS_DATABASE_URL, /cms_runtime:/);
-  assert.equal(s.cms.environment.CMS_DATABASE_URL, s['cms-worker'].environment.CMS_DATABASE_URL);
-  for (const service of ['cms', 'cms-worker']) {
+  assert.equal(s.cms.environment.CMS_PUBLICATION_MODE, 'manual');
+  for (const service of ['cms']) {
     assert.equal(s[service].environment.CMS_ADMIN_DATABASE_URL, undefined);
     assert.equal(s[service].environment.CMS_MIGRATOR_PASSWORD, undefined);
     assert.equal(s[service].environment.DATABASE_URL, undefined);
@@ -51,6 +51,16 @@ test('optional Compose overlay renders isolated roles, volumes and one CMS image
   assert.equal(s['cms-preauthority-verify'].environment.CMS_DATABASE_URL, undefined);
   assert.equal(s['cms-preauthority-verify'].restart, 'no');
   assert.equal(s.cron.environment.CRON_BOOTSTRAP_ONLY, 'false', 'production Compose must retain the normal cron default');
+
+  const scheduledResult = spawnSync('docker', ['compose', '--profile', 'scheduled-publication', '--env-file', '.env.example',
+    '-f', 'docker-compose.yml', '-f', 'docker-compose.payload.yml', 'config', '--format', 'json'], {
+    encoding: 'utf8', timeout: 20000, env: parserEnvironment,
+  });
+  assert.equal(scheduledResult.status, 0, 'scheduled profile parse failed (configuration output intentionally withheld)');
+  const scheduled = JSON.parse(scheduledResult.stdout).services['cms-worker'];
+  assert.ok(scheduled);
+  assert.deepEqual(scheduled.profiles, ['scheduled-publication']);
+  assert.equal(scheduled.environment.CMS_PUBLICATION_MODE, 'manual');
 
   const fixtureResult = spawnSync('docker', ['compose', '--env-file', '.env.example', '-f', 'docker-compose.yml',
     '-f', 'docker-compose.payload.yml', '-f', 'scripts/integration/payload-preauthority-fixture.compose.yml',

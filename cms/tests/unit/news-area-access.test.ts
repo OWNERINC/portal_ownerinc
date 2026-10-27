@@ -72,13 +72,13 @@ test('create presentation requires writable Payload mode while native reads incl
   }
 })
 
-test('every native News collection/global read and both Versions stores use the dedicated gate', () => {
+test('native News reads use the dedicated gate while manual Versions stores stay private', async () => {
   for (const collection of [NewsArticles, NewsSchedules, NewsAudit, LegacyNewsRevisions, NewsMigrationRuns, NewsMigrationItems]) {
     assert.strictEqual(collection.access?.read, newsAreaReadAccess, `${collection.slug} read`)
   }
   assert.strictEqual(NewsHome.access?.read, newsAreaReadAccess, 'news-home read')
-  assert.strictEqual(NewsArticles.access?.readVersions, newsAreaReadAccess, 'news-articles Versions')
-  assert.strictEqual(NewsHome.access?.readVersions, newsAreaReadAccess, 'news-home Versions')
+  assert.equal(await NewsArticles.access?.readVersions?.({} as never), false, 'news-articles Versions')
+  assert.equal(await NewsHome.access?.readVersions?.({} as never), false, 'news-home Versions')
 
   const media = createNewsMedia({ uploadDir: 'unused-test-upload-dir' })
   assert.equal(typeof media.access?.read, 'function', 'native media collection has an async read gate')

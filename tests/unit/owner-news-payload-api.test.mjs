@@ -13,7 +13,7 @@ const { createNewsBackend } = require('../../api/owner-news/backend.js');
 const actor = { uid: 'reader', email: 'reader@example.invalid', name: null, canManageNews: false };
 const { createPayloadNewsClient } = require('../../api/owner-news/payload-client.js');
 const { payloadRuntimeState } = require('../../api/owner-news/payload-client.js');
-const { readNewsDTO, readNewsPage, readResult } = require('../../api/owner-news/payload-dto.js');
+const { readNewsDTO, readNewsPage, readResult, validPublicInput } = require('../../api/owner-news/payload-dto.js');
 const { decodeNewsCursor } = require('../../api/owner-news/feed.js');
 const apiRequire = createRequire(new URL('../../api/package.json', import.meta.url));
 const express = apiRequire('express'), supertest = apiRequire('supertest');
@@ -223,6 +223,32 @@ test('JSON transport uses fixed POST paths, exact actor/input, isolated headers 
     { maxRawRows: 101001, maxBatches: 1 }, { maxRawRows: 1, maxBatches: 1001 }, { maxRawRows: 1, maxBatches: 1, extra: true }])
     await assert.rejects(client.query('list', { limit: 1, offset: 0, scan }, actor), /news_unavailable/);
 });
+
+test('private preflight uses the fixed service path and validates exact empty-state evidence', async () => {
+  const result = { ready: true, publicationMode: 'manual', authority: { mode: 'frozen', epoch: 9 }, newsEmpty: true,
+    mutation: { sequence: '0', chainSha256: '0'.repeat(64), writeBarrier: 'open' },
+    counts: { articles: 0, media: 0, homePublished: 0, schedules: 0 } };
+  const client = clientFor(async (url, init) => {
+    assert.equal(url, 'http://cms.invalid/editorial/api/portal-news/preflight');
+    assert.deepEqual(JSON.parse(init.body), { input: {} });
+    return Response.json(result);
+  });
+  assert.deepEqual(await client.preflight(), result);
+  await assert.rejects(client.query('preflight', {}, actor), /news_unavailable/);
+  assert.equal(validPublicInput('preflight', {}), false);
+  for (const malformed of [
+    { ...result, extra: true },
+    { ...result, ready: false },
+    { ...result, publicationMode: 'scheduled' },
+    { ...result, authority: { mode: 'payload', epoch: 9 } },
+    { ...result, newsEmpty: false },
+    { ...result, mutation: { ...result.mutation, sequence: 0 } },
+    { ...result, mutation: { ...result.mutation, sequence: '01' } },
+    { ...result, mutation: { ...result.mutation, chainSha256: 'A'.repeat(64) } },
+    { ...result, mutation: { ...result.mutation, writeBarrier: 'sealed' } },
+    { ...result, counts: { ...result.counts, articles: -1 } },
+  ]) await assert.rejects(clientFor(async () => Response.json(malformed)).preflight(), /news_unavailable/);
+});
 test('duplicate source identities are source failures: degrade first pages, restart continuations, and never become client 400', async () => {
   const duplicateLegacy = { ...dto(7), source: 'legacy', asset_scope: 'legacy' };
   const logs = [];
@@ -321,13 +347,14 @@ test('timeout and caller abort propagate into fetch', async () => {
   const controller = new AbortController(), pending = clientFor(fetchImpl).query('home', {}, actor, { signal: controller.signal });
   controller.abort(); await assert.rejects(pending, /news_unavailable/);
 });
-test('JSON and asset timeout actively cancel a stalled response body, including an idle stream', async () => {
+test('JSON, preflight and asset timeout actively cancel a stalled response body, including an idle stream', async () => {
   let cancelled = 0;
   const stall = () => new ReadableStream({ cancel() { cancelled++; } });
   await assert.rejects(clientFor(async () => new Response(stall(), { headers: { 'content-type': 'application/json' } }), { timeoutMs: 15 }).query('home', {}, actor), /news_unavailable/);
+  await assert.rejects(clientFor(async () => new Response(stall(), { headers: { 'content-type': 'application/json' } }), { timeoutMs: 15 }).preflight(), /news_unavailable/);
   const result = await clientFor(async () => new Response(stall(), { headers: { 'content-type': 'application/pdf', 'content-length': '4', 'content-disposition': 'inline; filename="x.pdf"' } }), { timeoutMs: 15 }).asset({ id: id(1), preview: false, range: null }, actor);
   await assert.rejects(result.body.getReader().read(), /news_unavailable/);
-  assert.equal(cancelled, 2);
+  assert.equal(cancelled, 3);
 });
 test('Express HTTP preserves list/envelopes/filter validation and uses current user/policy, not body/query identity', async () => {
   let seen = [];

@@ -31,6 +31,8 @@ test('row trigger hashes all mutations in the declared PostgreSQL JSONB domain',
   assert.match(ddl, /TG_TABLE_NAME, TG_OP, row_key, pg_catalog\.txid_current\(\)::text/)
   assert.match(ddl, /UPDATE public\.owner_news_mutation_head\s+SET sequence = next_sequence, chain_sha256 = event_hash/u)
   assert.match(ddl, /old_json IS DISTINCT FROM new_json/)
+  for (const table of ['news_articles', 'news_media', 'news_home']) assert.ok(NEWS_MUTATION_TABLES.includes(table))
+  assert.ok(NEWS_MUTATION_TABLES.includes('news_schedules'), 'manual preflight proves this covered table stays empty')
 })
 
 test('actual mutation-ledger DDL creates no control sequence or nextval default', () => {
@@ -110,4 +112,8 @@ test('integration probe imports production grants SQL and checks memberships in 
   assert.match(probe, /seal_text_bigint_match_reached_coverage_zero_denial_without_function_mutation/u)
   assert.match(probe, /VALUES \(\$1::uuid,\$2::text,'protocol-fixture',\$2::text,1,'reconciled','open','acknowledged','0',\$3::text,\$2::text,\$2::text/u)
   assert.doesNotMatch(probe, /NEWS_MIGRATION_CONTROL_COLUMNS_DDL/u)
+  assert.match(probe, /INSERT INTO public\.news_media/u)
+  assert.match(probe, /INSERT INTO public\.news_home/u)
+  assert.match(probe, /ROLLBACK[\s\S]*?headAfterWrites\.sequence === '7'/u)
+  assert.match(probe, /DELETE FROM public\.news_articles/u)
 })
