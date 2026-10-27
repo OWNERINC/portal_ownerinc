@@ -13,15 +13,15 @@ import { normalizePgDumpForSnapshot } from './payload-preauthority-fixture.mjs';
 export const nodeImage = 'node:24.12.0-alpine3.23@sha256:c921b97d4b74f51744057454b306b418cf693865e73b8100559189605f6955b8';
 const scope = 'payload-fence';
 const logical = ['ownerinc-portal-backend', 'ownerinc-portal-egress', 'ownerinc_proxy'];
-const roles = ['nginx', 'api', 'cms', 'cron', 'postgres', 'cms-postgres', 'proxy', 'probe', 'foreign'];
+const roles = ['nginx', 'api', 'cms', 'cron', 'postgres', 'proxy', 'probe', 'foreign'];
 const routes = ['/', '/api/ready', '/editorial/ready'];
 const origin = 'https://fence.invalid:8443';
 const closedBody = 'fixture-upstream-unavailable\n';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const now = () => Math.floor(performance.now());
 const bridge = fileURLToPath(new URL('./payload-fence-topology-bridge.py', import.meta.url));
-const database = role => role === 'postgres' ? 'portal' : 'ownerinc_cms';
-const dbRoles = ['postgres', 'cms-postgres'];
+const databaseNames = ['portal', 'ownerinc_cms'];
+const dbRoles = ['postgres'];
 const imageFor = role => dbRoles.includes(role) ? postgresImage : role === 'nginx' ? nginxImage : nodeImage;
 const attachments = role => role === 'nginx' ? [0, 2] : ['api', 'cron'].includes(role) ? [0, 1] : ['proxy', 'probe', 'foreign'].includes(role) ? [2] : [0];
 
@@ -125,10 +125,10 @@ const r=https.get(process.argv[1],{ca:fs.readFileSync('/fixture/cert.pem'),rejec
 });r.on('timeout',()=>r.destroy());r.on('error',()=>process.exit(2));`;
 
 export function projectSnapshot(rawContainers, rawNetworks, fixture) {
-  assert.equal(rawContainers.length, 9); assert.equal(rawNetworks.length, 3);
-  const byId = new Map(rawContainers.map(v => [v.Id, v]));
-  assert.equal(byId.size, 9);
   const entries = Object.values(fixture.containers);
+  assert.equal(rawContainers.length, entries.length); assert.equal(rawNetworks.length, 3);
+  const byId = new Map(rawContainers.map(v => [v.Id, v]));
+  assert.equal(byId.size, entries.length);
   for (const e of entries) assertOwnedContainer(byId.get(e.id), e, fixture);
   const netIds = fixture.networks.map(n => n.id);
   const containers = entries.filter(e => !['proxy', 'probe', 'foreign'].includes(e.role)).map(e => {
@@ -236,7 +236,7 @@ export async function qualify({ env = process.env, platform = process.platform, 
   const inspectForCleanup = e => inspectConfigured(e, true);
   const inspectNetwork = async e => assertOwnedNetwork(JSON.parse(await docker(['network', 'inspect', e.id || e.name]))[0], e, fixture);
   const exec = async (role, args, input) => { const e = fixture.containers[role]; await inspect(e); return docker(['exec', '-i', e.id, ...args], { input, timeout: 10000 }); };
-  const sql = (role, input) => exec(role, ['psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', database(role)], input);
+  const sql = (databaseName, input) => exec('postgres', ['psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', databaseName], input);
   const write = (role, name, input) => exec(role, ['sh', '-ceu', `umask 077; cat > /fixture/${name}`], input);
   const stop = async role => { const e = fixture.containers[role]; await inspect(e); await docker(['stop', '--time', '3', e.id], { timeout: 6000 }); };
   const observe = async () => {
@@ -250,7 +250,8 @@ export async function qualify({ env = process.env, platform = process.platform, 
   };
   const dbObserve = async () => {
     const rows = [];
-    for (const role of dbRoles) rows.push({ service: role, containerId: fixture.containers[role].id, ...JSON.parse(await sql(role, observationSQL)) });
+    for (const databaseName of databaseNames) rows.push({ service: `postgres:${databaseName}`, containerId: fixture.containers.postgres.id,
+      ...JSON.parse(await sql(databaseName, observationSQL)) });
     return rows;
   };
   const probe = async () => {
@@ -300,7 +301,7 @@ export async function qualify({ env = process.env, platform = process.platform, 
         '--read-only', '--security-opt', 'no-new-privileges:true', '--memory', dbRoles.includes(role) ? '256m' : '96m',
         '--cpus', '0.5', '--pids-limit', '64', '--tmpfs', '/fixture:rw,nosuid,nodev,size=8m,mode=1777'];
       if (dbRoles.includes(role)) args.push('--tmpfs', '/var/lib/postgresql/data:rw,nosuid,nodev,size=128m', '--tmpfs', '/var/run/postgresql:rw,nosuid,nodev,size=8m',
-        '--env', 'POSTGRES_HOST_AUTH_METHOD=trust', '--env', `POSTGRES_DB=${database(role)}`, imageFor(role), '-c', 'max_prepared_transactions=4', '-c', 'shared_buffers=16MB');
+        '--env', 'POSTGRES_HOST_AUTH_METHOD=trust', '--env', 'POSTGRES_DB=portal', imageFor(role), '-c', 'max_prepared_transactions=4', '-c', 'shared_buffers=16MB');
       else if (role === 'nginx') args.push('--entrypoint', 'sh', imageFor(role), '-c', 'while [ ! -f /fixture/start ]; do sleep 0.1; done; exec nginx -c /fixture/nginx.conf -g "daemon off;"');
       else args.push('--entrypoint', 'node', imageFor(role), '-e', 'setInterval(()=>{},1000)');
       phase = 'create_container_command'; e.id = await docker(args);
@@ -319,10 +320,15 @@ export async function qualify({ env = process.env, platform = process.platform, 
     const upstream = Object.values(nginx.NetworkSettings.Networks).find(n => n.NetworkID === fixture.networks[2].id).IPAddress;
     await docker(['exec', '-d', '--env', `FIXTURE_UPSTREAM=${upstream}`, fixture.containers.proxy.id, 'node', '-e', proxyScript]);
     phase = 'readiness';
-    let ready = false;
+    let ready = false, cmsDatabaseCreated = false;
     for (let attempt = 0; attempt < 20; attempt++) {
       assert.ok(!interrupted && now() - started < 260000);
-      try { for (const role of dbRoles) await sql(role, 'SELECT 1;'); const rs = await probe(); assert.ok(rs.every(r => r.status === 200)); ready = true; break; }
+      try {
+        await sql('portal', 'SELECT 1;');
+        if (!cmsDatabaseCreated) { await sql('portal', 'CREATE DATABASE ownerinc_cms;'); cmsDatabaseCreated = true; }
+        await sql('ownerinc_cms', 'SELECT 1;');
+        const rs = await probe(); assert.ok(rs.every(r => r.status === 200)); ready = true; break;
+      }
       catch { await delay(500); }
     }
     assert.ok(ready);
@@ -334,10 +340,9 @@ export async function qualify({ env = process.env, platform = process.platform, 
     const foreignBefore = await foreignFingerprint();
     const fingerprints = async () => {
       const data = [];
-      for (const role of dbRoles) {
-        data.push(normalizePgDumpForSnapshot(await exec(role, ['pg_dumpall', '-U', 'postgres', '--roles-only', '--no-role-passwords'])));
-        data.push(normalizePgDumpForSnapshot(await exec(role, ['pg_dump', '-U', 'postgres', '-d', database(role)])));
-      }
+      data.push(normalizePgDumpForSnapshot(await exec('postgres', ['pg_dumpall', '-U', 'postgres', '--roles-only', '--no-role-passwords'])));
+      for (const databaseName of databaseNames) data.push(normalizePgDumpForSnapshot(
+        await exec('postgres', ['pg_dump', '-U', 'postgres', '-d', databaseName])));
       return hash(data.join('\n'));
     };
     const ctx = Object.fromEntries(['inventoryIdentity', 'stateSha256', 'installBindingSha256', 'sourceApprovalSha256', 'policySha256', 'recordSha256', 'nonce'].map(k => [k, hash(`TEST:${fixture.nonce}:${k}`)]));
@@ -349,7 +354,7 @@ export async function qualify({ env = process.env, platform = process.platform, 
     const identityKeys = ['id', 'service', 'imageId', 'image', 'receiptSha256', 'networks', 'volumeKeys'];
     const topology = { kind: 'portal-fence-topology-v1', context: ctx,
       containers: first.containers.map(c => Object.fromEntries(identityKeys.map(k => [k, c[k]]))),
-      networks: fixture.networks.map(n => ({ name: logical[n.index], id: n.id, relevantEndpointIds: n.index === 0 ? dbRoles.map(r => fixture.containers[r].id) : n.index === 2 ? ['proxy', 'probe'].map(r => fixture.containers[r].id) : [] })),
+      networks: fixture.networks.map(n => ({ name: logical[n.index], id: n.id, relevantEndpointIds: n.index === 0 ? [fixture.containers.postgres.id] : n.index === 2 ? ['proxy', 'probe'].map(r => fixture.containers[r].id) : [] })),
       databases: (await dbObserve()).map(({ service, containerId, database: d }) => ({ service, containerId, database: d })) };
     const check = async (mode = 'destructive') => {
       assert.ok(!interrupted);
@@ -382,7 +387,8 @@ export async function qualify({ env = process.env, platform = process.platform, 
     const before = await fingerprints();
     phase = 'baseline_database_identity';
     const physical = await dbObserve();
-    assert.notEqual(physical[0].database.systemIdentifier, physical[1].database.systemIdentifier);
+    assert.equal(physical[0].database.systemIdentifier, physical[1].database.systemIdentifier);
+    assert.notEqual(physical[0].database.databaseOid, physical[1].database.databaseOid);
     assert.ok(physical.every(d => d.backgroundCoverageComplete && d.clients === 0 && d.preparedTransactions === 0));
     phase = 'baseline_fence_classifier';
     assert.deepEqual((await check()).blockers, ['fence_external_topology_unverified']);
@@ -411,7 +417,7 @@ done
     };
     const assertHeld = async () => {
       await exec('postgres', ['sh', '-ceu', 'test ! -f /fixture/hold-expired; test ! -f /fixture/hold-done']);
-      const observed = JSON.parse(await sql('postgres', observationSQL));
+       const observed = JSON.parse(await sql('portal', observationSQL));
       assert.equal(observed.clients, 1); assert.equal(observed.openTransactions, 1);
     };
     await withHeldTransaction({
@@ -427,10 +433,10 @@ done
     });
     phase = 'prepared_transaction';
     const gid = `fence_${fixture.nonce}`;
-    await sql('postgres', `BEGIN; SELECT 1; PREPARE TRANSACTION '${gid}';`);
-    assert.equal(JSON.parse(await sql('postgres', observationSQL)).preparedTransactions, 1);
+    await sql('portal', `BEGIN; SELECT 1; PREPARE TRANSACTION '${gid}';`);
+    assert.equal(JSON.parse(await sql('portal', observationSQL)).preparedTransactions, 1);
     assert.ok((await check()).blockers.includes('fence_database_not_quiescent'));
-    await sql('postgres', `ROLLBACK PREPARED '${gid}';`);
+    await sql('portal', `ROLLBACK PREPARED '${gid}';`);
     phase = 'final_observation';
     assert.deepEqual((await check()).blockers, ['fence_external_topology_unverified']);
     assert.equal(await fingerprints(), before); assert.equal(await foreignFingerprint(), foreignBefore);

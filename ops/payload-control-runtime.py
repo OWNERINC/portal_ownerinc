@@ -30,8 +30,8 @@ INVENTORY = STATE.INVENTORY
 INVENTORY_FILENAME = 'payload-control-inventory.json'
 _INVENTORY_CACHE = None
 KNOWN_SERVICES = {
-    'postgres', 'cms-postgres', 'api', 'cron', 'nginx', 'cms', 'cms-worker',
-    'migrate', 'bootstrap-admin', 'cms-provision', 'cms-control-roles', 'cms-migrate',
+    'postgres', 'cms-postgres', 'api', 'cron', 'nginx', 'cms',
+    'migrate', 'bootstrap-admin', 'cms-cluster-bootstrap', 'cms-provision', 'cms-control-roles', 'cms-migrate',
     'cms-preauthority-verify',
 }
 NEWS_TABLES = [
@@ -61,6 +61,7 @@ ACTION_SET = {
     'install-retry-check', 'install-receiver-preflight',
     'initialize-isolated', 'install-floor-commit',
     'observe-writers', 'resume-writers', 'resume-readiness-writers',
+    'portal-database-target',
 }
 INITIALIZER_DIAGNOSTIC_PHASES = set('''
 runtime_validation request_validation source_preflight close_admission stop_writers quiescence
@@ -72,7 +73,7 @@ floor_boundary floor_roles floor_runtime floor_native_catalog floor_pending floo
 '''.split())
 
 
-QUIESCENCE_DIAGNOSTIC_SERVICES = ('api', 'cms', 'cms-postgres', 'cron', 'nginx', 'unknown')
+QUIESCENCE_DIAGNOSTIC_SERVICES = ('api', 'cms', 'postgres', 'cron', 'nginx', 'unknown')
 
 
 def _quiescence_failure_summary(cms_status, running, allowed):
@@ -349,8 +350,26 @@ def _paths():
 def _verify_environment_file(config):
     try:
         INVENTORY.verify_environment_file(config['paths']['environmentFile'], config['environmentFileOwner'])
+        environment_database = INVENTORY.portal_database_from_environment(
+            config['paths']['environmentFile'], config['environmentFileOwner'])
     except INVENTORY.InventoryError as error:
         fail(str(error))
+    inventory_database = _portal_database(config)
+    if environment_database != inventory_database:
+        fail('portal_database_configuration_mismatch')
+    return inventory_database
+
+
+def _portal_database(config=None):
+    if config is None:
+        config = _inventory()['document']
+    try:
+        value = config['databaseCluster']['databases']['portal']['name']
+    except (KeyError, TypeError):
+        fail('invalid_inventory_database_cluster')
+    if not isinstance(value, str) or not INVENTORY.DATABASE_IDENTIFIER.fullmatch(value) or value == 'ownerinc_cms':
+        fail('invalid_inventory_database_cluster')
+    return value
 
 
 def _expected_compose_override(release):
@@ -586,14 +605,12 @@ def _check_container_shape(cms_status, quiescent=False):
     containers = _container_inventory()
     running = [c for c in containers if c['state'] == 'running']
     for container in containers:
-        if container['service'] in ('migrate', 'bootstrap-admin', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify') and container['state'] == 'running':
-            fail('one_shot_container_running')
-        if container['service'] == 'cms-worker' and container['state'] == 'running':
+        if container['service'] == 'cms-worker':
             fail('worker_admission_forbidden')
+        if container['service'] in ('migrate', 'bootstrap-admin', 'cms-cluster-bootstrap', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify') and container['state'] == 'running':
+            fail('one_shot_container_running')
     if quiescent:
         allowed = {'postgres'}
-        if cms_status == 'migrated':
-            allowed.add('cms-postgres')
         if any(c['service'] not in allowed for c in running):
             error = ControlError('writers_not_quiescent')
             # Same observation as the failed predicate: never issue a second
@@ -603,10 +620,10 @@ def _check_container_shape(cms_status, quiescent=False):
     else:
         if not any(c['service'] == 'postgres' and c['state'] == 'running' for c in containers):
             fail('portal_database_container_unavailable')
-        if cms_status == 'migrated' and not any(c['service'] == 'cms-postgres' and c['state'] == 'running' for c in containers):
+        if cms_status == 'migrated' and not any(c['service'] == 'postgres' and c['state'] == 'running' for c in containers):
             fail('cms_database_container_unavailable')
         if cms_status == 'cold':
-            cms_services = {'cms-postgres', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms', 'cms-worker'}
+            cms_services = {'cms-postgres', 'cms-cluster-bootstrap', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify', 'cms'}
             if any(c['service'] in cms_services for c in containers):
                 fail('unexpected_cold_cms_container')
             project = _inventory()['document']['project']
@@ -622,12 +639,17 @@ def _container_id(service, running=True):
     return containers[0]['id']
 
 
-def _psql_json(service, sql):
+def _psql_json(service, sql, database=None):
     container = _container_id(service)
     command = [
         'docker', 'exec', '-i', container, 'sh', '-ceu',
-        'psql -XqAt -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"',
+        'psql -XqAt -v ON_ERROR_STOP=1 --dbname="${1:-$POSTGRES_DB}" --username="${2:-$POSTGRES_USER}"',
     ]
+    if database is not None:
+        portal_database = _portal_database()
+        if database not in (portal_database, 'ownerinc_cms'):
+            fail('database_identity_mismatch')
+        command += ['database-target', database, 'cms_admin' if database == 'ownerinc_cms' else 'portal_admin']
     result = subprocess.run(command, input=sql, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, check=False, text=True)
     if result.returncode != 0 or not result.stdout.strip():
@@ -645,7 +667,7 @@ SELECT json_build_object(
   'databaseOid', (SELECT oid::text FROM pg_catalog.pg_database WHERE datname=pg_catalog.current_database()),
   'databaseName', pg_catalog.current_database()
 )::text;
-""")
+""", expected_name)
     identity = {
         'systemIdentifier': value.get('systemIdentifier'),
         'databaseOid': value.get('databaseOid'),
@@ -723,8 +745,7 @@ SET LOCAL lock_timeout = '2s';
 SET LOCAL timezone = 'UTC';
 SET LOCAL datestyle = 'ISO, YMD';
 WITH
-scope AS MATERIALIZED (SELECT pg_catalog.current_database()='portal' AND
- pg_catalog.current_setting('server_version_num')::integer/10000=16 AS ok),
+scope AS MATERIALIZED (SELECT pg_catalog.current_setting('server_version_num')::integer/10000=16 AS ok),
 db AS MATERIALIZED (SELECT oid, datname, datdba, datacl FROM pg_catalog.pg_database WHERE datname=pg_catalog.current_database()),
 roles AS MATERIALIZED (SELECT oid, rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
   rolinherit, rolreplication, rolbypassrls, rolconnlimit, rolvaliduntil
@@ -847,7 +868,7 @@ def _legacy_security_require(condition):
         fail('legacy_security_observation_invalid')
 
 
-def validate_portal_legacy_security_observation(observation):
+def validate_portal_legacy_security_observation(observation, expected_database='portal'):
     """Pure bounded validator/canonicalizer. No catalog execution or authority."""
     if isinstance(observation, bytes):
         _legacy_security_require(len(observation) <= LEGACY_SECURITY_MAX_BYTES)
@@ -858,7 +879,10 @@ def validate_portal_legacy_security_observation(observation):
         type(observation['serverMajor']) is int and observation['serverMajor'] == 16 and
         observation['kind'] == 'portal-legacy-security-observation-v1')
     STATE._validate_database_identity(observation['database'])
-    _legacy_security_require(observation['database']['databaseName'] == 'portal')
+    _legacy_security_require(isinstance(expected_database, str) and
+                             INVENTORY.DATABASE_IDENTIFIER.fullmatch(expected_database) is not None and
+                             expected_database != 'ownerinc_cms' and
+                             observation['database']['databaseName'] == expected_database)
     records = observation['records']
     _legacy_security_require(isinstance(records, list) and len(records) <= LEGACY_SECURITY_MAX_RECORDS)
     shapes = {
@@ -922,7 +946,7 @@ def validate_portal_legacy_security_observation(observation):
             _legacy_security_require(row['schema'] in ('', 'public') and bool(row['name']))
             if row['objectType'] in ('database', 'schema'):
                 _legacy_security_require(row['schema'] == row['subname'] == '' and
-                    row['name'] == ('portal' if row['objectType'] == 'database' else 'public'))
+                    row['name'] == (expected_database if row['objectType'] == 'database' else 'public'))
             elif row['objectType'] == 'default':
                 _legacy_security_require(row['subname'] in ('r', 'S', 'f', 'T', 'n', 'L'))
             else:
@@ -952,7 +976,7 @@ def validate_portal_legacy_security_observation(observation):
             dependencies.add(('sequence', row['schema'], row['name'], ''))
     _legacy_security_require(roles == settings == set(LEGACY_SECURITY_ROLES) and guards ==
                             {'externalRoleDependencies', 'outsidePublicObjects', 'largeObjects'})
-    _legacy_security_require(('database', '', 'portal', '') in objects and ('schema', '', 'public', '') in objects and
+    _legacy_security_require(('database', '', expected_database, '') in objects and ('schema', '', 'public', '') in objects and
                             ('table', 'public', 'cms_editor_sessions', '') in objects)
     expected_effective = {key + (role, privilege) for key in objects for role in LEGACY_SECURITY_ROLES
                           for privilege in LEGACY_SECURITY_PRIVILEGES.get(key[0], ())}
@@ -976,12 +1000,13 @@ def check_portal_legacy_security_baseline(observation, body, approval, record, i
     A profile is independently authenticated by a future caller. There is no
     built-in profile or production collector/repair dispatcher in this slice.
     """
-    observed = validate_portal_legacy_security_observation(observation)
     STATE.validate_state_body(body)
     intent = body.get('installIntent')
-    _legacy_security_require(intent is not None and intent['binding'].get('bindingVersion') == 3)
+    _legacy_security_require(intent is not None and intent['binding'].get('bindingVersion') == 4)
     binding = intent['binding']
     STATE.validate_production_correspondence(binding, approval, record, inventory, authority)
+    expected_database = binding['sharedCluster']['databases']['portal']['name']
+    observed = validate_portal_legacy_security_observation(observation, expected_database)
     _legacy_security_require(observed['database'] == binding['portalTarget']['database'])
     blockers = {'legacy_security_host_collection_not_integrated', 'legacy_security_pg16_qualification_required',
                 'legacy_role_exclusivity_unverified', 'legacy_credentials_unverified', 'legacy_recovery_executor_not_integrated'}
@@ -1026,7 +1051,7 @@ def check_portal_legacy_security_baseline(observation, body, approval, record, i
         _legacy_security_require(isinstance(approved_profile['sourceCommit'], str) and
                                  re.fullmatch(r'[0-9a-f]{40}', approved_profile['sourceCommit']) is not None)
         STATE._valid_images(approved_profile['previousImages'], payload=False)
-        expected = validate_portal_legacy_security_observation(approved_profile['observation'])
+        expected = validate_portal_legacy_security_observation(approved_profile['observation'], expected_database)
         profile_matches = (approved_profile['sourceCommit'] == binding['sourceCommit'] and
                            approved_profile['previousImages'] == binding['previousImages'] and expected == observed)
         if not profile_matches:
@@ -1148,10 +1173,10 @@ def validate_portal_fence_observation(observation):
     _fence_records(observation['databases'], 2, 'service')
     for row in observation['databases']:
         _fence_keys(row, 'service containerId database clients activeQueries openTransactions preparedTransactions backgroundWriters backgroundCoverageComplete')
-        _fence_require(row['service'] in ('postgres', 'cms-postgres'))
+        _fence_require(row['service'] in ('postgres:portal', 'postgres:ownerinc_cms'))
         _fence_hash(row['containerId'])
         STATE._validate_database_identity(row['database'])
-        _fence_require(row['database']['databaseName'] == ('portal' if row['service'] == 'postgres' else 'ownerinc_cms'))
+        _fence_require(row['database']['databaseName'] == row['service'].split(':', 1)[1])
         for key in ('clients', 'activeQueries', 'openTransactions', 'preparedTransactions', 'backgroundWriters'):
             _fence_uint(row[key])
         _fence_require(type(row['backgroundCoverageComplete']) is bool)
@@ -1213,7 +1238,7 @@ def check_portal_destructive_fence(observation, expected_context, approved_topol
     for row in containers.values():
         if row['oneOff'] or not row['projectMatches']:
             blockers.add('fence_unaccounted_container')
-        db = row['service'] in ('postgres', 'cms-postgres')
+        db = row['service'] == 'postgres'
         consistent = (row['status'] == 'running' and row['running']) if db else (row['status'] in ('created', 'exited') and not row['running'])
         if not consistent or any(row[k] for k in ('paused', 'restarting', 'dead')):
             blockers.add('fence_nginx_not_stopped' if row['service'] == 'nginx' else 'fence_writer_not_stopped')
@@ -1284,12 +1309,14 @@ def check_portal_destructive_fence(observation, expected_context, approved_topol
         expected_dbs = {}
         for row in approved_topology['databases']:
             _fence_keys(row, 'service containerId database')
-            _fence_require(row['service'] in ('postgres', 'cms-postgres')); _fence_hash(row['containerId'])
+            _fence_require(row['service'] in ('postgres:portal', 'postgres:ownerinc_cms')); _fence_hash(row['containerId'])
             STATE._validate_database_identity(row['database'])
             expected_dbs[row['service']] = row
         actual_dbs = {row['service']: row for row in value['databases']}
-        db_containers = {row['service']: row['id'] for row in containers.values() if row['service'] in ('postgres', 'cms-postgres')}
-        if set(expected_dbs) != set(actual_dbs) or set(expected_dbs) != set(db_containers) or 'postgres' not in expected_dbs:
+        postgres_containers = [row['id'] for row in containers.values() if row['service'] == 'postgres']
+        db_containers = {service: postgres_containers[0] for service in expected_dbs} if len(postgres_containers) == 1 else {}
+        if set(expected_dbs) != set(actual_dbs) or set(expected_dbs) != set(db_containers) or \
+           set(expected_dbs) != {'postgres:portal', 'postgres:ownerinc_cms'}:
             blockers.add('fence_database_identity_mismatch')
         for service in set(expected_dbs) & set(actual_dbs):
             if any(actual_dbs[service][k] != v for k, v in expected_dbs[service].items()) or actual_dbs[service]['containerId'] != db_containers.get(service):
@@ -1373,7 +1400,9 @@ SELECT json_build_object(
     return value
 
 
-def _assert_database_quiescent(service):
+def _assert_database_quiescent(service, database=None):
+    if database is None:
+        database = _portal_database()
     value = _psql_json(service, """
 SELECT json_build_object(
   'clientBackends', count(*)::integer,
@@ -1383,7 +1412,7 @@ SELECT json_build_object(
 FROM pg_catalog.pg_stat_activity
 WHERE datid=(SELECT oid FROM pg_catalog.pg_database WHERE datname=pg_catalog.current_database())
   AND backend_type='client backend' AND pid <> pg_catalog.pg_backend_pid();
-""")
+""", database)
     if not isinstance(value, dict) or set(value) != {'clientBackends', 'activeQueries', 'openTransactions'} or \
        any(not STATE._safe_int(value[name]) for name in ('clientBackends', 'activeQueries', 'openTransactions')) or \
        value != {'clientBackends': 0, 'activeQueries': 0, 'openTransactions': 0}:
@@ -1406,7 +1435,7 @@ SELECT json_build_object(
   'newsRows', (SELECT COALESCE(sum(row_count),0) FROM (""" + union + """) AS news_row_counts)
 )::text;
 """
-    value = _psql_json('cms-postgres', sql)
+    value = _psql_json('postgres', sql, 'ownerinc_cms')
     if value.get('migrations') != STATE.CMS_MIGRATIONS:
         fail('cms_migration_floor_mismatch')
     if value.get('protocolRelations') != 0 or value.get('protocolFunctions') != 0 or value.get('protocolTriggers') != 0:
@@ -1416,7 +1445,9 @@ SELECT json_build_object(
     return value
 
 
-def _data_fingerprint(service, *, isolated_query=None):
+def _data_fingerprint(service, database=None, *, isolated_query=None):
+    if database is None:
+        database = _portal_database()
     # Internal disposable executor may supply a bounded query transport. It uses
     # these SAME SQL/ordering/canonical bytes, never a different proof algorithm.
     inventory_sql = """
@@ -1437,7 +1468,7 @@ SELECT json_build_object(
     WHERE n.nspname='public' AND c.relkind='S')
 )::text;
 """
-    rows = _psql_json(service, inventory_sql) if isolated_query is None else json.loads(isolated_query(inventory_sql))
+    rows = _psql_json(service, inventory_sql, database) if isolated_query is None else json.loads(isolated_query(inventory_sql))
     tables = rows.get('tables')
     sequences = rows.get('sequences')
     unsupported = rows.get('unsupportedRelations')
@@ -1470,7 +1501,8 @@ SELECT json_build_object(
         return _data_fingerprint_rows(relations, isolated_query(sql).splitlines(keepends=True))
     container = _container_id(service)
     command = ['docker', 'exec', '-i', container, 'sh', '-ceu',
-               'psql -XqAt -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"']
+               'psql -XqAt -v ON_ERROR_STOP=1 --dbname="$1" --username="$2"',
+               'database-target', database, 'cms_admin' if database == 'ownerinc_cms' else 'portal_admin']
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         assert process.stdin is not None and process.stdout is not None
@@ -1568,8 +1600,8 @@ def _target_binding():
     if existing != expected:
         fail('target_volume_inventory_mismatch')
     _verify_inventory_mounts(config)
-    portal = _database_identity('postgres', 'portal')
-    cms = _database_identity('cms-postgres', 'ownerinc_cms')
+    portal = _database_identity('postgres', _portal_database(config))
+    cms = _database_identity('postgres', 'ownerinc_cms')
     volumes = {
         key: _volume_info(entry['name']) for key, entry in config['volumes'].items()
     }
@@ -1615,7 +1647,7 @@ def _same_target(expected, actual):
 
 def _manifest_hashes(directory, payload=True, read_bytes=None, file_hash=None):
     expected = [
-        'postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz',
+        'postgres.dump', 'uploads.tar.gz', 'cms.dump', 'cms-uploads.tar.gz',
         'release.images', 'operations-proof.json', 'backup.format',
     ] if payload else ['postgres.dump', 'uploads.tar.gz']
     path = os.path.join(directory, 'manifest.sha256')
@@ -2034,7 +2066,7 @@ def _verify_portal(release, grant_mode):
 
 
 def _verify_cms(release, catalog=True):
-    _database_identity('cms-postgres', 'ownerinc_cms')
+    _database_identity('postgres', 'ownerinc_cms')
     _cms_state()
     return _run_catalog_verifier(release) if catalog else None
 
@@ -2112,7 +2144,7 @@ def _parse_proof(directory, key, payload=True):
     if payload:
         _manifest_hashes(directory, payload=True)
         format_raw = _read_bytes(os.path.join(directory, 'backup.format'))
-        if format_raw != b'payload-v1\n':
+        if format_raw != b'payload-v2-shared-postgres\n':
             fail('backup_format_invalid')
         images, is_payload = _manifest(os.path.join(directory, 'release.images'))
         if not is_payload or images != body['images']:
@@ -2129,7 +2161,7 @@ def _parse_proof(directory, key, payload=True):
 
 
 def _validate_pg_archives(directory, services, payload=True):
-    names = ['postgres.dump', 'cms-postgres.dump'] if payload else ['postgres.dump']
+    names = ['postgres.dump', 'cms.dump'] if payload else ['postgres.dump']
     for name, service in zip(names, services):
         container = _container_id(service)
         path = os.path.join(directory, name)
@@ -2219,7 +2251,7 @@ def production_install_plan(record, trust, inventory, body, observations, approv
        observations['b0Status'] not in ('absent', 'unbound', 'partial', 'present_unverified', 'integrity_verified'):
         fail('invalid_cold_state')
     candidate = STATE.production_candidate(record)
-    production = body.get('installIntent') is not None and body['installIntent']['binding'].get('bindingVersion') == 3
+    production = body.get('installIntent') is not None and body['installIntent']['binding'].get('bindingVersion') == 4
     blockers = ['production_initializer_not_enabled',
                 'production_creation_execution_not_integrated' if production else 'production_creation_binding_unsupported',
                 'physical_resource_observations_required', 'closed_b1_ingress_readiness_not_integrated']
@@ -2257,8 +2289,8 @@ def production_install_plan(record, trust, inventory, body, observations, approv
                 except STATE.StateError:
                     blockers.append('production_binding_context_mismatch')
         creation = intent.get('creation')
-        if creation is None or set(creation['volumes']) != {'cmsPostgres', 'cmsUploads'} or \
-           set(creation['containers']) != ({'cms-postgres', 'cms', 'api', 'cron'} if production else {'cms-postgres', 'cms'}):
+        if creation is None or set(creation['volumes']) != ({'cmsUploads'} if production else {'cmsPostgres', 'cmsUploads'}) or \
+           set(creation['containers']) != ({'cms', 'api', 'cron'} if production else {'postgres', 'cms'}):
             blockers.append('creation_receipts_incomplete')
         blockers.append('install_intent_retained')
     if body.get('restoreIntent') is not None:
@@ -2400,7 +2432,7 @@ class Runtime:
             # container inside the quiescence boundary.
             if cms['migrations'] != STATE.CMS_MIGRATIONS:
                 fail('cms_migration_floor_mismatch')
-            _assert_database_quiescent('cms-postgres')
+            _assert_database_quiescent('postgres', 'ownerinc_cms')
         print('preauthority quiescence verified; only databases may remain running')
 
     def backup_metadata(self):
@@ -2413,7 +2445,8 @@ class Runtime:
         _check_container_shape(self.state['cmsStatus'], quiescent=True)
         _verify_portal(self.release_path, 'legacy' if self.state['cmsStatus'] == 'cold' else 'strict')
         _assert_database_quiescent('postgres')
-        portal_identity = _database_identity('postgres', 'portal')
+        portal_database = _portal_database(self.inventory['document'])
+        portal_identity = _database_identity('postgres', portal_database)
         portal_data = _data_fingerprint('postgres')
         portal_versions = {'versions': STATE.PORTAL_MIGRATIONS,
                            'fingerprint': hashlib.sha256(STATE.canonical(STATE.PORTAL_MIGRATIONS)).hexdigest()}
@@ -2452,21 +2485,21 @@ class Runtime:
                 fail('active_release_state_mismatch')
             backup_images, backup_payload = _manifest(os.path.join(directory, 'release.images'))
             if not backup_payload or backup_images != images or \
-               _read_bytes(os.path.join(directory, 'backup.format')) != b'payload-v1\n':
+               _read_bytes(os.path.join(directory, 'backup.format')) != b'payload-v2-shared-postgres\n':
                 fail('backup_image_manifest_mismatch')
-            _validate_pg_archives(directory, ('postgres', 'cms-postgres'), payload=True)
-            cms_identity = _database_identity('cms-postgres', 'ownerinc_cms')
+            _validate_pg_archives(directory, ('postgres',) * 2, payload=True)
+            cms_identity = _database_identity('postgres', 'ownerinc_cms')
             cms_state = _cms_state()
             catalog = _run_catalog_verifier(self.release_path)
-            _assert_database_quiescent('cms-postgres')
-            cms_data = _data_fingerprint('cms-postgres')
+            _assert_database_quiescent('postgres', 'ownerinc_cms')
+            cms_data = _data_fingerprint('postgres', 'ownerinc_cms')
             cms_uploads = _archive_tree(os.path.join(directory, 'cms-uploads.tar.gz'))
             artifacts = [{'name': name, **_file_hash(os.path.join(directory, name))} for name in STATE.PAYLOAD_ARTIFACTS]
             fingerprints = {'portalDatabase': portal_data, 'cmsDatabase': cms_data,
                             'portalUploads': _archive_tree(os.path.join(directory, 'uploads.tar.gz')),
                             'cmsUploads': cms_uploads}
+            _assert_database_quiescent('postgres', 'ownerinc_cms')
             _assert_database_quiescent('postgres')
-            _assert_database_quiescent('cms-postgres')
             body = _proof_body(
                 'preauthority-four-store-backup', images, None,
                 {'portal': portal_identity, 'cms': cms_identity},
@@ -2506,7 +2539,7 @@ class Runtime:
         images, payload = _release(self.release_path, payload=True)
         if not payload or images != body['images']:
             fail('backup_release_mismatch')
-        _validate_pg_archives(directory, ('postgres', 'cms-postgres'), payload=True)
+        _validate_pg_archives(directory, ('postgres',) * 2, payload=True)
         return body, proof_hash
 
     def restore_preflight(self):
@@ -2527,7 +2560,7 @@ class Runtime:
             fail('unsupported_protocol_state')
         target_fingerprints = {
             'portalDatabase': _data_fingerprint('postgres'),
-            'cmsDatabase': _data_fingerprint('cms-postgres'),
+            'cmsDatabase': _data_fingerprint('postgres', 'ownerinc_cms'),
             'portalUploads': self._storage_tree_fingerprint('api'),
             'cmsUploads': self._storage_tree_fingerprint('cms'),
         }
@@ -2558,12 +2591,12 @@ class Runtime:
         _verify_portal(self.release_path, grant_mode)
         actual = _target_binding()
         _same_target(intent['target'], actual)
+        _assert_database_quiescent('postgres', 'ownerinc_cms')
         _assert_database_quiescent('postgres')
-        _assert_database_quiescent('cms-postgres')
         if intent['stage'] == 'reserved':
             actual_fingerprints = {
                 'portalDatabase': _data_fingerprint('postgres'),
-                'cmsDatabase': _data_fingerprint('cms-postgres'),
+                'cmsDatabase': _data_fingerprint('postgres', 'ownerinc_cms'),
                 'portalUploads': self._storage_tree_fingerprint('api'),
                 'cmsUploads': self._storage_tree_fingerprint('cms'),
             }
@@ -2573,7 +2606,7 @@ class Runtime:
 
     def prepare_restore(self):
         self._recheck_restore_boundary()
-        _validate_pg_archives(self.evidence, ('postgres', 'cms-postgres'), payload=True)
+        _validate_pg_archives(self.evidence, ('postgres',) * 2, payload=True)
         if self.state['restoreIntent']['stage'] == 'reserved':
             def mark_destructive_boundary(state):
                 state['restoreIntent']['stage'] = 'restoring'
@@ -2609,7 +2642,7 @@ class Runtime:
            catalog.get('nativeCatalogFingerprint') != body['migrations']['nativeCatalogFingerprint']:
             fail('restored_native_catalog_fingerprint_mismatch')
         if _data_fingerprint('postgres') != body['dataFingerprints']['portalDatabase'] or \
-           _data_fingerprint('cms-postgres') != body['dataFingerprints']['cmsDatabase']:
+           _data_fingerprint('postgres', 'ownerinc_cms') != body['dataFingerprints']['cmsDatabase']:
             fail('restored_database_fingerprint_mismatch')
         if self._storage_tree_fingerprint('api') != body['dataFingerprints']['portalUploads'] or \
            self._storage_tree_fingerprint('cms') != body['dataFingerprints']['cmsUploads']:
@@ -2683,8 +2716,8 @@ class Runtime:
             fail('rollback_cms_image_floor_mismatch')
         _verify_portal(self.release_path, 'strict')
         _verify_cms(self.release_path, catalog=True)
-        _assert_database_quiescent('postgres')
-        _assert_database_quiescent('cms-postgres')
+        _assert_database_quiescent('postgres', _portal_database(self.inventory['document']))
+        _assert_database_quiescent('postgres', 'ownerinc_cms')
         print('rollback target remains within the same preauthority Payload floor')
 
     def _verify_container_image(self, images, service, running=None):
@@ -2887,38 +2920,39 @@ class Runtime:
         # floor/pointer intent, fenced rollback and the B1 publication barrier.
         fail('release_not_preflighted')
 
+    def portal_database_target(self):
+        # Output is intentionally limited to the authenticated, identifier-safe
+        # inventory value after the protected environment correspondence check.
+        print(_verify_environment_file(self.inventory['document']))
+
     def _install_target(self, cms_bound):
         config = self.inventory['document']
         names = {'portalPostgres', 'portalUploads'}
         if cms_bound:
-            names |= {'cmsPostgres', 'cmsUploads'}
+            names.add('cmsUploads')
         if _project_volumes() != sorted(config['volumes'][key]['name'] for key in names):
             fail('target_volume_inventory_mismatch')
-        _verify_inventory_mounts(config, required_services={'postgres', 'cms-postgres'} if cms_bound else {'postgres'})
-        portal = {'database': _database_identity('postgres', 'portal'),
+        _verify_inventory_mounts(config, required_services={'postgres', 'cms'} if cms_bound else {'postgres'})
+        portal = {'database': _database_identity('postgres', _portal_database(config)),
                   'volumes': {key: _volume_info(config['volumes'][key]['name'])
                               for key in ('portalPostgres', 'portalUploads')}}
         cms = None
         if cms_bound:
-            cms = {'database': _database_identity('cms-postgres', 'ownerinc_cms'),
-                   'volumes': {key: _volume_info(config['volumes'][key]['name'])
-                               for key in ('cmsPostgres', 'cmsUploads')}}
+            cms = {'database': _database_identity('postgres', 'ownerinc_cms'),
+                    'volumes': {'cmsUploads': _volume_info(config['volumes']['cmsUploads']['name'])}}
         return portal, cms
 
     def _install_role_verification(self):
-        # Explicit read-only verifiers; never fallback to --provision/bootstrap.
-        probes = [
-            ('cms-control-roles', '--verify-control'),
-            ('cms-migrate', '--verify-migrator'),
+        # One public-catalog, read-only contract covers all six CMS roles,
+        # exact memberships and the configured Portal CONNECT fence. Never
+        # fallback to --provision/bootstrap or fragmented role probes.
+        args = _compose_args(self.release_path) + [
+            'run', '--rm', '--no-deps', '--pull', 'never', '-T',
+            'cms-provision', 'node', '--import', 'tsx', 'scripts/provision-db.ts', '--verify-cluster-roles',
         ]
-        for service, mode in probes:
-            args = _compose_args(self.release_path) + [
-                '--profile', 'cms-control-roles', 'run', '--rm', '--no-deps', '--pull', 'never', '-T',
-                service, 'node', '--import', 'tsx', 'scripts/provision-db.ts', mode,
-            ]
-            result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            if result.returncode != 0:
-                fail('native_catalog_verification_failed')
+        result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        if result.returncode != 0:
+            fail('native_catalog_verification_failed')
 
     def _install_upload_fingerprint(self):
         # No candidate entrypoint and no writable mount. Bind the same live
@@ -2974,7 +3008,8 @@ class Runtime:
         source_images, source_payload = _release(binding['sourceRelease'], payload=False, owner_root=True)
         if source_payload or source_images != binding['previousImages']:
             fail('preauthority_source_recovery_proof_mismatch')
-        if binding.get('bindingVersion') == 2:
+        if binding.get('bindingVersion') == 2 or \
+           binding.get('bindingVersion') == 4 and binding.get('project', '').startswith('payload-preauth-'):
             self._initializer_local_daemon()
             _safe_regular(self.inventory['document']['paths']['currentRelease'], mode=0o600, owner_root=True)
             source_raw = _read_bytes(os.path.join(binding['sourceRelease'], '.image-env'), mode=0o600, owner_root=True)
@@ -3021,17 +3056,18 @@ class Runtime:
         mode = 'legacy' if intent['stage'] == 'reserved' else \
                'recovery' if intent['stage'] == 'portal_grants_pending' else 'strict'
         _verify_portal(self.release_path, mode)
-        _assert_database_quiescent('postgres')
+        portal_database = binding['portalTarget']['database']['databaseName']
+        _assert_database_quiescent('postgres', portal_database)
         if _data_fingerprint('postgres') != proof['dataFingerprints']['portalDatabase']:
             fail('preauthority_source_database_changed')
         if self._install_upload_fingerprint() != proof['dataFingerprints']['portalUploads']:
             fail('restored_storage_fingerprint_mismatch')
-        _assert_database_quiescent('postgres')
+        _assert_database_quiescent('postgres', portal_database)
         if cms_bound:
-            _assert_database_quiescent('cms-postgres')
+            _assert_database_quiescent('postgres', 'ownerinc_cms')
         if intent['stage'] in ('provisioned', 'floor_commit_pending', 'floor_committed'):
             self._install_role_verification()
-            _assert_database_quiescent('cms-postgres')
+            _assert_database_quiescent('postgres', 'ownerinc_cms')
         print('signed install retry boundary verified; admission remains closed and no next-step permission was issued')
         return intent['stage']
 
@@ -3080,15 +3116,23 @@ class Runtime:
         # capture. No placeholder digest is ever signed or used as a receipt.
         STATE.validate_install_candidate(candidate, producer=True)
         lease = os.stat(self.inventory['document']['paths']['lock'])
-        template = {'bindingVersion': 2, 'candidate': candidate, 'candidateRelease': self.release_path,
+        template = {'bindingVersion': 4, 'candidate': candidate, 'candidateRelease': self.release_path,
                     'sourceRelease': source, 'previousImages': source_images,
                     # Sort before coordinated timestamp backups; existing
                     # newestBackup selection must never accidentally pick B0.
                     'b0': {'directory': os.path.join(config['paths']['backupRoots'][0], '000-initial-install-b0'),
                            'proofSha256': self.state['legacySourceProofSha256']},
                     'inventoryIdentity': self.inventory['identity'],
-                    'lease': {'device': lease.st_dev, 'inode': lease.st_ino},
-                    'portalTarget': intent['binding']['portalTarget'] if intent else self._install_target(False)[0]}
+                     'lease': {'device': lease.st_dev, 'inode': lease.st_ino},
+                     'authority': {
+                         'sourceApprovalSha256': self.state['legacySourceProofSha256'] or '0' * 64,
+                         'policySha256': self.inventory['identity'],
+                         'recordSha256': candidate['candidateSha256'],
+                     },
+                     'sourceCommit': os.path.basename(source),
+                     'project': config['project'],
+                     'sharedCluster': config['databaseCluster'],
+                     'portalTarget': intent['binding']['portalTarget'] if intent else self._install_target(False)[0]}
         return template
 
     def _initializer_command(self, args, output=None, evidence_prefix='payload-initialize-command'):
@@ -3163,7 +3207,8 @@ class Runtime:
                 os.fsync(stream.fileno())
         self._initializer_phase('b0_database_capture')
         capture('postgres.dump', ['docker', 'exec', _container_id('postgres'), 'sh', '-ceu',
-                                 'pg_dump --format=custom --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"'])
+                                 'pg_dump --format=custom --dbname="$1" --username="$POSTGRES_USER"',
+                                 'portal-database', _portal_database(self.inventory['document'])])
         self._initializer_phase('b0_storage_capture')
         capture('uploads.tar.gz', ['docker', 'run', '--rm', '--read-only', '--network', 'none', '--pull', 'never',
                 '--volume', self.inventory['document']['volumes']['portalUploads']['name'] + ':/data:ro',
@@ -3180,8 +3225,10 @@ class Runtime:
 
     def _creation_overlay(self):
         nonce = self.state['installIntent']['creation']['nonce']
+        shared = self.state['installIntent']['binding'].get('bindingVersion') == 4
+        services = ('cms', 'api', 'cron') if shared else ('cms-postgres', 'cms')
         document = {'services': {service: {'labels': {'io.ownerinc.install-reservation': nonce}}
-                                for service in ('cms-postgres', 'cms')}}
+                                for service in services}}
         raw = STATE.canonical(document) + b'\n'
         path = os.path.join(self.runtime_dir, 'payload-initialize-compose.json')
         if os.path.lexists(path):
@@ -3211,8 +3258,9 @@ class Runtime:
         value = inspected[0]
         labels = value.get('Config', {}).get('Labels', {})
         image = value.get('Config', {}).get('Image')
-        expected_image = intent['binding']['candidate']['images']['cms'] if service == 'cms' else \
-            'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'
+        expected_image = intent['binding']['candidate']['images'].get(service)
+        if service == 'cms-postgres':
+            expected_image = 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'
         if not isinstance(value.get('Id'), str) or not STATE.HEX_64.fullmatch(value['Id']) or \
            image != expected_image or labels.get('com.docker.compose.project') != self.inventory['document']['project'] or \
            labels.get('com.docker.compose.service') != service or \
@@ -3222,12 +3270,15 @@ class Runtime:
             'id': value['Id'], 'image': image, 'labels': labels,
             'created': value.get('Created'), 'mounts': value.get('Mounts'),
         })).hexdigest()
-        return {'id': value['Id'], 'image': image, 'fingerprint': fingerprint}
+        receipt = {'id': value['Id'], 'image': image, 'fingerprint': fingerprint}
+        if intent['binding'].get('bindingVersion') in (3, 4):
+            receipt.update(releasePath=intent['binding']['candidateRelease'], creationState='created')
+        return receipt
 
     def _creation_boundary(self):
         intent, proof, images, source_images = self._install_origin_check()
         _verify_portal(self.release_path, 'strict')
-        if _database_identity('postgres', 'portal') != intent['binding']['portalTarget']['database'] or \
+        if _database_identity('postgres', _portal_database(self.inventory['document'])) != intent['binding']['portalTarget']['database'] or \
            any(_volume_info(self.inventory['document']['volumes'][key]['name']) != value
                for key, value in intent['binding']['portalTarget']['volumes'].items()):
             fail('restore_target_changed')
@@ -3237,12 +3288,13 @@ class Runtime:
             fail('preauthority_source_database_changed')
         intent = self.state['installIntent']
         receipts = intent['creation']
+        shared = intent['binding'].get('bindingVersion') == 4
         config = self.inventory['document']
         expected = {config['volumes'][name]['name'] for name in ('portalPostgres', 'portalUploads')}
         expected |= {value['name'] for value in receipts['volumes'].values()}
         if set(_project_volumes()) != expected:
             fail('restore_target_changed')
-        for key in ('cmsPostgres', 'cmsUploads'):
+        for key in (('cmsUploads',) if shared else ('cmsPostgres', 'cmsUploads')):
             name = config['volumes'][key]['name']
             if key not in receipts['volumes'] and name in _all_volume_names():
                 fail('restore_target_changed')
@@ -3250,7 +3302,7 @@ class Runtime:
         for container in containers:
             if container['service'].startswith('cms') and container['service'] not in receipts['containers']:
                 fail('restore_target_changed')
-            if container['state'] in ('running', 'restarting', 'paused') and container['service'] not in ('postgres', 'cms-postgres'):
+            if container['state'] in ('running', 'restarting', 'paused') and container['service'] not in ({'postgres'} if shared else {'postgres', 'cms-postgres'}):
                 fail('writers_not_quiescent')
         self._install_container_images(containers, images, source_images)
         for key, receipt in receipts['volumes'].items():
@@ -3261,8 +3313,8 @@ class Runtime:
                 fail('restore_target_changed')
         _assert_database_quiescent('postgres')
 
-    def _wait_initial_database(self):
-        container = _container_id('cms-postgres', running=False)
+    def _wait_initial_database(self, service):
+        container = _container_id(service, running=False)
         for _attempt in range(180):
             result = self._initializer_command(['docker', 'inspect', '--format', '{{.State.Health.Status}}', container])
             if result.strip() == b'healthy':
@@ -3273,9 +3325,10 @@ class Runtime:
     def _initialize_resources(self):
         intent = self.state['installIntent']
         binding = intent['binding']
+        shared = binding.get('bindingVersion') == 4
         self._initializer_phase('resources_boundary')
         self._creation_boundary()
-        for key in ('cmsPostgres', 'cmsUploads'):
+        for key in (('cmsUploads',) if shared else ('cmsPostgres', 'cmsUploads')):
             if key not in self.state['installIntent']['creation']['volumes']:
                 entry = self.inventory['document']['volumes'][key]
                 self._initializer_phase('resources_boundary')
@@ -3289,7 +3342,7 @@ class Runtime:
                     fail('restore_target_changed')
                 self._initializer_phase('volume_receipt')
                 self.state = STATE.record_install_creation(self.runtime_dir, binding, 'volumes', key, self._creation_volume(key))
-        for service in ('cms-postgres', 'cms'):
+        for service in (('cms', 'api', 'cron') if shared else ('cms-postgres', 'cms')):
             if service not in self.state['installIntent']['creation']['containers']:
                 self._initializer_phase('resources_boundary')
                 self._creation_boundary()
@@ -3303,9 +3356,12 @@ class Runtime:
         self._initializer_phase('resources_boundary')
         self._creation_boundary()
         self._initializer_phase('database_start')
-        self._initializer_command(['docker', 'start', self.state['installIntent']['creation']['containers']['cms-postgres']['id']])
+        if shared:
+            self._initializer_compose(['--profile', 'cms-bootstrap', 'run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-cluster-bootstrap'])
+        else:
+            self._initializer_command(['docker', 'start', self.state['installIntent']['creation']['containers']['cms-postgres']['id']])
         self._initializer_phase('database_readiness')
-        self._wait_initial_database()
+        self._wait_initial_database('postgres' if shared else 'cms-postgres')
         self._initializer_phase('database_binding')
         portal, cms = self._install_target(True)
         if portal != binding['portalTarget']:
@@ -3327,8 +3383,8 @@ class Runtime:
                                   'node', '--import', 'tsx', 'scripts/provision-db.ts', '--verify-runtime'])
         self._initializer_phase('floor_native_catalog')
         catalog = _verify_cms(self.release_path, catalog=True)
+        _assert_database_quiescent('postgres', 'ownerinc_cms')
         _assert_database_quiescent('postgres')
-        _assert_database_quiescent('cms-postgres')
         return catalog['nativeCatalogFingerprint']
 
     def install_floor_commit(self):
@@ -3389,7 +3445,7 @@ class Runtime:
                 if not os.path.lexists(self.closed):
                     STATE._write_exclusive(self.closed, b'', 0o600)
                 self._initializer_phase('stop_writers')
-                self._initializer_compose(['stop', '--timeout', '120', 'nginx', 'api', 'cron', 'cms', 'cms-worker'])
+                self._initializer_compose(['stop', '--timeout', '120', 'nginx', 'api', 'cron', 'cms'])
                 self._initializer_phase('quiescence')
                 self.quiescence_proof()
                 self._capture_initial_b0(template['b0']['directory'])
@@ -3397,11 +3453,13 @@ class Runtime:
             self._admission_closed()
             proof, digest = _parse_proof(template['b0']['directory'], self.key, payload=False)
             template['b0']['proofSha256'] = digest
+            template['authority']['sourceApprovalSha256'] = digest
             if digest != self.state['legacySourceProofSha256'] or digest != self.state['latestProofSha256']:
                 fail('preauthority_source_recovery_proof_mismatch')
             self._initializer_phase('install_reserve')
-            self.state = STATE.reserve_install(self.runtime_dir, template, proof, digest,
-                creation={'nonce': secrets.token_hex(32), 'volumes': {}, 'containers': {}})
+            self.state = STATE.reserve_install(
+                self.runtime_dir, template, proof, digest,
+                creation=STATE.production_install_creation(template, secrets.token_hex(32)))
         binding = self.state['installIntent']['binding']
         self.evidence = binding['b0']['directory']
         def advance(stage):
@@ -3453,6 +3511,7 @@ class Runtime:
         self.install_floor_commit()
 
     def run(self):
+        if self.action == 'portal-database-target': return self.portal_database_target()
         if self.action == 'observe-writers': return self.observe_writers()
         if self.action == 'resume-writers': return self.resume_writers()
         if self.action == 'resume-readiness-writers': return self.resume_writers(readiness=True)

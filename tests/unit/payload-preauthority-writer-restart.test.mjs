@@ -243,14 +243,15 @@ test('runner observes IDs before stop and invokes tested restart producer under 
   assert.match(section,/await awaitFixtureProxy\(runtime, observedWriters\.nginx\)/u);
 });
 
-test('actual Compose service model requires the removed one-shot dependency, while initializer persists only receipted database/CMS services', async () => {
+test('actual Compose service model gates CMS and shared-cluster initializer receipts only created candidate services', async () => {
   const compose = await readFile('docker-compose.payload.yml','utf8');
-  const cms = compose.slice(compose.indexOf('\n  cms:\n'),compose.indexOf('\n  cms-worker:\n'));
+  const cms = compose.slice(compose.indexOf('\n  cms:\n'),compose.indexOf('\nvolumes:\n'));
   assert.match(cms,/cms-migrate:\n\s+condition: service_completed_successfully/u);
   const runtime = await readFile('ops/payload-control-runtime.py','utf8');
   const create = runtime.slice(runtime.indexOf('def _initialize_resources'),runtime.indexOf('def _initial_floor_observations'));
   assert.match(create,/\['up', '--no-start', '--no-recreate', '--no-build', '--no-deps', '--pull', 'never', service\]/u);
-  assert.match(create,/for service in \('cms-postgres', 'cms'\)/u);
+  assert.match(create,/\(\('cms', 'api', 'cron'\) if shared else \('cms-postgres', 'cms'\)\)/u);
+  assert.doesNotMatch(compose,/\n  cms-postgres:|cms_postgres_data|\n  cms-worker:/u);
   assert.match(runtime,/\['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-migrate'\]/u);
 });
 

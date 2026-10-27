@@ -57,7 +57,8 @@ test('Compose separates liveness from readiness and gates Nginx on CMS readiness
   assert.match(compose, /fetch\("http:\/\/127\.0\.0\.1:3001\/editorial\/ready"\)/u);
   assert.match(compose, /nginx:[\s\S]*?cms:[\s\S]*?condition: service_healthy/u);
   assert.match(route, /assertCmsStorageReady/u);
-  assert.match(production, /cms-postgres:[\s\S]*?no-new-privileges:true/u);
+  assert.match(production, /cms-cluster-bootstrap:[\s\S]*?no-new-privileges:true/u);
+  assert.doesNotMatch(production, /cms-postgres|cms-worker|scheduled-publication/u);
   assert.match(fixture, /PAYLOAD_MANUAL_RUNTIME_DISPOSABLE/u);
   assert.match(fixture, /next', 'start'/u);
   assert.match(fixture, /assertHostNetworkIsolated/u);
@@ -79,6 +80,8 @@ test('disposable restore captures and verifies target protection before first mu
   const protection = source.indexOf("step('restore-protection-backup')");
   const destructive = source.indexOf("'pg_restore', '--single-transaction'", protection);
   assert.ok(protection > 0 && destructive > protection);
-  assert.match(source.slice(protection, destructive), /targetDump\('ownerinc_cms'\)[\s\S]*?targetDump\('portal_manual_runtime'\)[\s\S]*?uploads\.tar\.gz[\s\S]*?write_payload_backup_manifest[\s\S]*?pg_restore', '--list'/u);
+  assert.match(source.slice(protection, destructive), /cms\.dump[\s\S]*?targetDump\('ownerinc_cms'\)[\s\S]*?targetDump\('portal_manual_runtime'\)[\s\S]*?uploads\.tar\.gz[\s\S]*?write_payload_backup_manifest[\s\S]*?pg_restore', '--list'/u);
+  assert.match(source, /--bootstrap-database[\s\S]*?await clusterBootstrap\(port\)[\s\S]*?await provision\(port\)/u);
+  assert.doesNotMatch(source, /cms-postgres\.dump|--username=cms_admin[^\n]*pg_(?:dump|restore)/u);
   assert.match(source.slice(destructive), /backup, 'uploads\.tar\.gz'[\s\S]*?restoredPortalUploads[\s\S]*?readdir\(restoredPortalUploads\)[\s\S]*?sha256\(await readFile/u);
 });

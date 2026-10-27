@@ -14,8 +14,8 @@ function fixture() {
   for (const image of [nodeImage, postgresImage, nginxImage]) f.images[image] = 'sha256:' + 'd'.repeat(64);
   for (let index = 0; index < 3; index++) f.networks.push({ index, id: String(index + 1).repeat(64), name: `${f.project}-net-${index}` });
   const cs = [];
-  for (const [i, role] of ['nginx', 'api', 'cms', 'cron', 'postgres', 'cms-postgres', 'proxy', 'probe', 'foreign'].entries()) {
-    const db = ['postgres', 'cms-postgres'].includes(role), external = ['proxy', 'probe', 'foreign'].includes(role);
+  for (const [i, role] of ['nginx', 'api', 'cms', 'cron', 'postgres', 'proxy', 'probe', 'foreign'].entries()) {
+    const db = role === 'postgres', external = ['proxy', 'probe', 'foreign'].includes(role);
     const e = { id: (i + 4).toString(16).repeat(64), role, project: external ? f.project + '-external' : f.project, name: f.project + '-' + role, receipt: 'e'.repeat(64) };
     f.containers[role] = e;
     const nets = role === 'nginx' ? [0, 2] : ['api', 'cron'].includes(role) ? [0, 1] : external ? [2] : [0];
@@ -45,7 +45,7 @@ test('fence environment guard refuses before any command effect', async () => {
 test('actual-inspect projection double preserves states, full IDs, mounts and relevant foreign boundaries', () => {
   const { f, cs, ns } = fixture();
   const p = projectSnapshot(cs, ns, f);
-  assert.equal(p.containers.length, 6); assert.equal(p.host.length, 9);
+  assert.equal(p.containers.length, 5); assert.equal(p.host.length, 8);
   assert.equal(p.networks[2].endpoints.find(e => e.id === f.containers.foreign.id).relevant, false);
   assert.ok(p.containers.every(c => c.volumeKeys.length === 0 && !c.publishedPorts));
   assert.equal(p.containers.find(c => c.service === 'nginx').running, false);
@@ -69,8 +69,8 @@ test('real runtime bridge accepts synthetic projection only with the explicit no
   const { f, cs, ns } = fixture(), snapshot = projectSnapshot(cs, ns, f);
   const context = Object.fromEntries(['inventoryIdentity', 'stateSha256', 'installBindingSha256', 'sourceApprovalSha256', 'policySha256', 'recordSha256', 'nonce'].map(k => [k, 'a'.repeat(64)]));
   Object.assign(context, { sequence: 1, pid: 1, processStart: 1, device: 1, inode: 1 });
-  const databases = ['postgres', 'cms-postgres'].map(service => ({ service, containerId: f.containers[service].id,
-    database: { systemIdentifier: '123', databaseOid: '123', databaseName: service === 'postgres' ? 'portal' : 'ownerinc_cms' },
+  const databases = ['portal', 'ownerinc_cms'].map(databaseName => ({ service: `postgres:${databaseName}`, containerId: f.containers.postgres.id,
+    database: { systemIdentifier: '123', databaseOid: databaseName === 'portal' ? '123' : '124', databaseName },
     clients: 0, activeQueries: 0, openTransactions: 0, preparedTransactions: 0, backgroundWriters: 0, backgroundCoverageComplete: true }));
   const routes = ['/', '/api/ready', '/editorial/ready'].map(route => ({ route, status: 502, bodySha256: 'b'.repeat(64) }));
   const closure = { kind: 'portal-public-closure-profile-v1', context, origin: 'https://fence.invalid:8443', observerSha256: 'c'.repeat(64), nonDockerCoverageVerified: false, routes };
@@ -118,7 +118,7 @@ test('cleanup double refuses replaced resources, continues own cleanup and alway
     docker: async args => removed.push(args), removePrivate: async () => { privateRemoved = true; },
   }));
   assert.equal(privateRemoved, true);
-  assert.equal(removed.filter(a => a[0] === 'rm').length, 8);
+  assert.equal(removed.filter(a => a[0] === 'rm').length, 7);
   assert.ok(!removed.some(a => a.includes(f.containers.nginx.id)));
   assert.ok(removed.every(a => /^[a-f0-9]{64}$/u.test(a.at(-1))));
 });

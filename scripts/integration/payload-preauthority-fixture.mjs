@@ -10,12 +10,8 @@ const mountDefinitions = Object.freeze({
     { service: 'api', destination: '/app/uploads', required: true },
     { service: 'cron', destination: '/app/uploads', required: true },
   ] },
-  cmsPostgres: { composeKey: 'cms_postgres_data', mounts: [
-    { service: 'cms-postgres', destination: '/var/lib/postgresql/data', required: true },
-  ] },
   cmsUploads: { composeKey: 'cms_uploads_data', mounts: [
     { service: 'cms', destination: '/var/lib/ownerinc-cms/media', required: true },
-    { service: 'cms-worker', destination: '/var/lib/ownerinc-cms/media', required: false },
   ] },
 });
 
@@ -117,7 +113,7 @@ export function createInventory({ project, root, trustedSourceInventoryIdentitie
     mounts: definition.mounts.map(mount => ({ ...mount })),
   }]));
   const document = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     environmentFileOwner: { uid: 0, gid: 0 },
     project,
     paths: {
@@ -134,6 +130,17 @@ export function createInventory({ project, root, trustedSourceInventoryIdentitie
       payloadOverride: path.join(runtime, 'compose.payload.production.yaml'),
     },
     volumes,
+    databaseCluster: {
+      service: 'postgres', volume: 'portalPostgres',
+      databases: {
+        portal: { name: 'portal', owner: 'portal_admin' },
+        cms: { name: 'ownerinc_cms', owner: 'cms_admin' },
+      },
+    },
+    resourceLifecycle: {
+      preexistingVolumes: ['portalPostgres', 'portalUploads'],
+      createdVolumes: ['cmsUploads'],
+    },
     trustedSourceInventoryIdentities: [...trustedSourceInventoryIdentities].sort(),
   };
   // The inventory helper canonicalizes recursively; mirror Python's sorted-key compact JSON.

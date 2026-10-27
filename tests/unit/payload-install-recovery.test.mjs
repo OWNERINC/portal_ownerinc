@@ -478,8 +478,8 @@ class Process:
  def kill(self):self.killed=True
 process=Process()
 with patch.object(R,'_psql_json',return_value=inventory),patch.object(R,'_container_id',return_value='fixture'),patch.object(R.subprocess,'Popen',return_value=process):
- historical=R._data_fingerprint('postgres')
-isolated=R._data_fingerprint('postgres',isolated_query=query)
+ historical=R._data_fingerprint('postgres','portal')
+ isolated=R._data_fingerprint('postgres','portal',isolated_query=query)
 expected=H(S.canonical([
  {'relation':'public.records','kind':'table','rowCount':1,'rowContentsSha256':H(S.canonical({'id':1,'body':'original'})+b'\n')},
  {'relation':'public.serial','kind':'sequence','rowCount':0,'rowContentsSha256':H(b'')}]))

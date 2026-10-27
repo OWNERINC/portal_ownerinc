@@ -45,7 +45,7 @@ rollback() {
   local status=$?
   trap - ERR INT TERM
   set +e
-  compose "$release" stop --timeout 120 nginx api cron cms cms-worker
+  compose "$release" stop --timeout 120 nginx api cron cms
   if [[ ! -e $PORTAL_OPERATION_LOCK.admission-closed && ! -L $PORTAL_OPERATION_LOCK.admission-closed ]]; then
     guard close-admission || {
       echo 'Unable to establish Payload admission fence; writers remain stopped.' >&2
@@ -82,8 +82,9 @@ fi
 guard quiescence-proof
 compose "$release" run --rm migrate
 compose "$release" run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/verify-migrations.js
-compose "$release" up -d --no-deps cms-postgres
-compose "$release" run --rm cms-provision
+compose "$release" up -d --no-deps postgres
+compose "$release" --profile cms-bootstrap run --rm --no-deps cms-cluster-bootstrap
+compose "$release" run --rm --no-deps cms-provision
 if ! compose "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles; then
   compose "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles \
     node --import tsx scripts/provision-db.ts --bootstrap-control

@@ -205,9 +205,12 @@ def verify_host_baseline(approval, captured, cms_image, support, metadata_only=F
     require(type(metadata_only) is bool)
     baseline = approval['hostBaseline']
     inventory = load_authenticated(captured['ops/payload-control-inventory.py'], ROOT + '/ops/payload-control-inventory.py')
+    portal_database = inventory.portal_database_from_environment(
+        ENVIRONMENT, inventory.PRODUCTION_ENVIRONMENT_OWNER,
+        lambda path: host_read(path, (1000, 1000), (0o600,), 1024 * 1024))
     expected = inventory.production_inventory(HOST_ROOT, RUNTIME, RELEASES, HOST_ROOT + '/current-release', LOCK,
         '/opt/ownerinc/backups/portal-ownerinc/daily', PRODUCTION_BACKUP, PRODUCTION_BACKUP + '/restore-protection',
-        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml')
+        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml', portal_database)
     identity = inventory.identity(expected)
     require(identity == baseline['inventoryIdentity'])
     observed = {}
@@ -439,9 +442,12 @@ def inspect_install_host(approval, captured, metadata_only=False):
     runtime = load_runtime_captured(captured)
     state, inventory = runtime.STATE, runtime.INVENTORY
     baseline = approval['hostBaseline']
+    portal_database = inventory.portal_database_from_environment(
+        ENVIRONMENT, inventory.PRODUCTION_ENVIRONMENT_OWNER,
+        lambda path: host_read(path, (1000, 1000), (0o600,), 1024 * 1024))
     expected = inventory.production_inventory(HOST_ROOT, RUNTIME, RELEASES, HOST_ROOT + '/current-release', LOCK,
         '/opt/ownerinc/backups/portal-ownerinc/daily', PRODUCTION_BACKUP, PRODUCTION_BACKUP + '/restore-protection',
-        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml')
+        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml', portal_database)
     require(inventory.identity(expected) == baseline['inventoryIdentity'])
     reads = {}
     absent = set()
@@ -840,9 +846,12 @@ def create_inventory(expected_digest):
     # One fixed helper operation; no caller-selected module, destination or paths.
     approval, captured, _, _, _ = context_material(expected_digest)
     inventory = load_authenticated(captured['ops/payload-control-inventory.py'], ROOT + '/ops/payload-control-inventory.py')
+    portal_database = inventory.portal_database_from_environment(
+        ENVIRONMENT, inventory.PRODUCTION_ENVIRONMENT_OWNER,
+        lambda path: host_read(path, (1000, 1000), (0o600,), 1024 * 1024))
     value = inventory.production_inventory(HOST_ROOT, RUNTIME, RELEASES, HOST_ROOT + '/current-release', LOCK,
         '/opt/ownerinc/backups/portal-ownerinc/daily', PRODUCTION_BACKUP, PRODUCTION_BACKUP + '/restore-protection',
-        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml')
+        ENVIRONMENT, RUNTIME + '/compose.production.yaml', RUNTIME + '/compose.payload.production.yaml', portal_database)
     require(inventory.identity(value) == approval['hostBaseline']['inventoryIdentity'])
     inventory.verify_environment_file(ENVIRONMENT, value['environmentFileOwner'])
     verify_inherited_lease()

@@ -12,6 +12,7 @@ import tempfile
 
 HEX_64 = re.compile(r'^[0-9a-f]{64}$')
 PROJECT = re.compile(r'^[a-z0-9][a-z0-9_-]{0,62}$')
+DATABASE_IDENTIFIER = re.compile(r'^[a-z_][a-z0-9_]{0,62}$')
 # These are reviewed identities, never values learned from filesystem metadata
 # or environment/CLI overrides. Disposable non-production inventories use root.
 PRODUCTION_ENVIRONMENT_OWNER = {'uid': 1000, 'gid': 1000}
@@ -22,12 +23,11 @@ PATH_KEYS = {
     'backupRoots', 'preRestoreBackupRoot', 'environmentFile', 'composeOverride',
     'payloadOverride',
 }
-VOLUME_KEYS = {'portalPostgres', 'portalUploads', 'cmsPostgres', 'cmsUploads'}
+VOLUME_KEYS = {'portalPostgres', 'portalUploads', 'cmsUploads'}
 MOUNT_SHAPE = {
     'portalPostgres': {'composeKey': 'postgres_data', 'mounts': [('postgres', '/var/lib/postgresql/data', True)]},
     'portalUploads': {'composeKey': 'uploads_data', 'mounts': [('api', '/app/uploads', True), ('cron', '/app/uploads', True)]},
-    'cmsPostgres': {'composeKey': 'cms_postgres_data', 'mounts': [('cms-postgres', '/var/lib/postgresql/data', True)]},
-    'cmsUploads': {'composeKey': 'cms_uploads_data', 'mounts': [('cms', '/var/lib/ownerinc-cms/media', True), ('cms-worker', '/var/lib/ownerinc-cms/media', False)]},
+    'cmsUploads': {'composeKey': 'cms_uploads_data', 'mounts': [('cms', '/var/lib/ownerinc-cms/media', True)]},
 }
 
 
@@ -66,11 +66,11 @@ def _same_path(left, right):
 
 
 def validate(value):
-    if isinstance(value, dict) and (type(value.get('schemaVersion')) is not int or value['schemaVersion'] != 2):
+    if isinstance(value, dict) and (type(value.get('schemaVersion')) is not int or value['schemaVersion'] != 3):
         fail('unsupported_inventory_version')
     if not isinstance(value, dict) or set(value) != {
         'schemaVersion', 'project', 'paths', 'volumes', 'trustedSourceInventoryIdentities',
-        'environmentFileOwner',
+        'environmentFileOwner', 'databaseCluster', 'resourceLifecycle',
     }:
         fail('invalid_inventory_shape')
     project = value['project']
@@ -127,6 +127,23 @@ def validate(value):
         names.append(entry['name'])
     if len(set(names)) != len(names):
         fail('invalid_inventory_volume_name')
+    cluster = value['databaseCluster']
+    if not isinstance(cluster, dict) or set(cluster) != {'service', 'volume', 'databases'} or \
+       cluster.get('service') != 'postgres' or cluster.get('volume') != 'portalPostgres' or \
+       not isinstance(cluster.get('databases'), dict) or set(cluster['databases']) != {'portal', 'cms'} or \
+       not isinstance(cluster['databases']['portal'], dict) or \
+       set(cluster['databases']['portal']) != {'name', 'owner'} or \
+       not isinstance(cluster['databases']['portal']['name'], str) or \
+       not DATABASE_IDENTIFIER.fullmatch(cluster['databases']['portal']['name']) or \
+       cluster['databases']['portal']['name'] == 'ownerinc_cms' or \
+       cluster['databases']['portal']['owner'] != 'portal_admin' or \
+       cluster['databases']['cms'] != {'name': 'ownerinc_cms', 'owner': 'cms_admin'}:
+        fail('invalid_inventory_database_cluster')
+    if value['resourceLifecycle'] != {
+        'preexistingVolumes': ['portalPostgres', 'portalUploads'],
+        'createdVolumes': ['cmsUploads'],
+    }:
+        fail('invalid_inventory_resource_lifecycle')
     trusted = value['trustedSourceInventoryIdentities']
     if not isinstance(trusted, list) or any(not isinstance(item, str) or not HEX_64.fullmatch(item) for item in trusted) or \
        trusted != sorted(set(trusted)):
@@ -220,8 +237,57 @@ def load(path):
     return validate(value)
 
 
+def portal_database_from_environment(path, expected_owner=PRODUCTION_ENVIRONMENT_OWNER, reader=None):
+    verify_environment_file(path, expected_owner)
+    try:
+        if reader is None:
+            with open(path, 'rb') as stream:
+                raw = stream.read(1024 * 1024 + 1)
+        else:
+            raw = reader(path)
+    except OSError:
+        fail('environment_unavailable')
+    if not isinstance(raw, bytes) or len(raw) > 1024 * 1024 or b'\0' in raw:
+        fail('invalid_environment_file')
+    values = {}
+    for line in raw.splitlines():
+        candidate = line.strip()
+        if not candidate or candidate.startswith(b'#'):
+            continue
+        if candidate.startswith(b'export '):
+            candidate = candidate[len(b'export '):].lstrip()
+        if b'=' not in candidate:
+            continue
+        key_bytes, value_bytes = candidate.split(b'=', 1)
+        try:
+            key = key_bytes.decode('ascii').strip()
+        except UnicodeDecodeError:
+            continue
+        if key not in ('POSTGRES_DB', 'CMS_PORTAL_DATABASE_NAME'):
+            continue
+        if key in values:
+            fail('duplicate_portal_database_configuration')
+        try:
+            database = value_bytes.decode('utf-8').strip()
+        except UnicodeDecodeError:
+            fail('invalid_portal_database_name')
+        if len(database) >= 2 and database[0] == database[-1] and database[0] in "'\"":
+            database = database[1:-1]
+        if not DATABASE_IDENTIFIER.fullmatch(database):
+            fail('invalid_portal_database_name')
+        values[key] = database
+    verify_environment_file(path, expected_owner)
+    if 'POSTGRES_DB' not in values:
+        fail('portal_database_configuration_missing')
+    if 'CMS_PORTAL_DATABASE_NAME' in values and values['CMS_PORTAL_DATABASE_NAME'] != values['POSTGRES_DB']:
+        fail('portal_database_configuration_mismatch')
+    return values['POSTGRES_DB']
+
+
 def production_inventory(root, runtime, releases, current, lock, daily_backup, production_backup, pre_restore,
-                         environment, compose_override, payload_override):
+                         environment, compose_override, payload_override, portal_database):
+    if not isinstance(portal_database, str) or not DATABASE_IDENTIFIER.fullmatch(portal_database):
+        fail('invalid_portal_database_name')
     project = 'ownerinc-portal-prod'
     volumes = {}
     for key, shape in MOUNT_SHAPE.items():
@@ -232,7 +298,7 @@ def production_inventory(root, runtime, releases, current, lock, daily_backup, p
                        for service, destination, required in shape['mounts']],
         }
     return validate({
-        'schemaVersion': 2,
+        'schemaVersion': 3,
         'project': project,
         'environmentFileOwner': dict(PRODUCTION_ENVIRONMENT_OWNER),
         'paths': {
@@ -243,6 +309,17 @@ def production_inventory(root, runtime, releases, current, lock, daily_backup, p
             'payloadOverride': payload_override,
         },
         'volumes': volumes,
+        'databaseCluster': {
+            'service': 'postgres', 'volume': 'portalPostgres',
+            'databases': {
+                'portal': {'name': portal_database, 'owner': 'portal_admin'},
+                'cms': {'name': 'ownerinc_cms', 'owner': 'cms_admin'},
+            },
+        },
+        'resourceLifecycle': {
+            'preexistingVolumes': ['portalPostgres', 'portalUploads'],
+            'createdVolumes': ['cmsUploads'],
+        },
         'trustedSourceInventoryIdentities': [],
     })
 
@@ -282,13 +359,14 @@ def main(argv):
         elif len(argv) == 14 and argv[1] == 'create-production':
             output = argv[2]
             paths = argv[3:]
-            value = production_inventory(*paths)
+            value = production_inventory(*paths, portal_database_from_environment(paths[8]))
             verify_environment_file(value['paths']['environmentFile'], value['environmentFileOwner'])
             create(output, value)
             print('protected production inventory created')
         elif len(argv) == 14 and argv[1] == 'verify-production':
             value = load(argv[2])
-            expected = production_inventory(*argv[3:])
+            paths = argv[3:]
+            expected = production_inventory(*paths, portal_database_from_environment(paths[8]))
             if canonical(value) != canonical(expected):
                 fail('production_inventory_mismatch')
             verify_environment_file(value['paths']['environmentFile'], value['environmentFileOwner'])

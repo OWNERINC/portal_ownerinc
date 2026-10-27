@@ -5,6 +5,8 @@ import test from 'node:test';
 import { guardEnvironment, ownedContainer, boundedCommand, qualify, PG16_IMAGE } from '../../scripts/integration/payload-legacy-security-pg16.mjs';
 
 const env = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', PAYLOAD_LEGACY_SECURITY_DISPOSABLE: '1' };
+const python = (process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'])
+  .find(command => spawnSync(command, ['--version'], { encoding: 'utf8' }).status === 0);
 
 test('legacy PG16 qualification refuses non-disposable, remote and non-hosted contexts before commands', async () => {
   guardEnvironment(env, 'linux');
@@ -108,6 +110,34 @@ test('qualification bridge emits the actual runtime producer without contacting 
   assert.equal((sql.match(/has_column_privilege\(o\.role_oid,o\.oid,o\.subid::smallint,/gu) || []).length, 2);
   assert.match(sql, /portal-legacy-security-observation-refused/u);
   assert.ok(sql.trim().endsWith('ROLLBACK;'));
+});
+
+test('native bridge caller builds only the current v4 shared-cluster binding and v2 receipt', async t => {
+  if (!python) return t.skip('Python 3 unavailable');
+  const caller = await readFile('scripts/integration/payload-legacy-security-pg16.mjs', 'utf8');
+  assert.match(caller, /python\('--check', JSON\.stringify\(\{ observation, profileObservation \}\)\)/u);
+  assert.match(caller, /payload-legacy-security-pg16-bridge\.py/u);
+  const source = String.raw`
+import importlib.util,json,posixpath,sys
+spec=importlib.util.spec_from_file_location('bridge_contract',sys.argv[1])
+bridge=importlib.util.module_from_spec(spec);spec.loader.exec_module(bridge)
+runtime=bridge.load_runtime()
+runtime.os.path=posixpath;runtime.STATE.os.path=posixpath;runtime.INVENTORY.os.path=posixpath
+observation={'database':{'systemIdentifier':'123456','databaseOid':'16384','databaseName':'portal'}}
+body,approval,record,inventory,authority=bridge.build_current_contract(runtime,observation)
+binding=body['installIntent']['binding'];creation=body['installIntent']['creation']
+runtime.STATE.validate_production_correspondence(binding,approval,record,inventory,authority)
+print(json.dumps({'bindingVersion':binding['bindingVersion'],'receiptVersion':creation['receiptVersion'],
+ 'algorithm':creation['fingerprintAlgorithm'],
+ 'sharedClusterMatches':runtime.STATE.canonical(binding['sharedCluster'])==runtime.STATE.canonical(inventory['databaseCluster'])},sort_keys=True))
+`;
+  const result = spawnSync(python, ['-I', '-S', '-B', '-c', source,
+    'scripts/integration/payload-legacy-security-pg16-bridge.py'], { encoding: 'utf8', timeout: 30_000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    algorithm: 'shared-cluster-container-mounts-v2', bindingVersion: 4,
+    receiptVersion: 2, sharedClusterMatches: true,
+  });
 });
 
 test('native isolated PG16 executes actual producer and validator with own-cluster cleanup', {

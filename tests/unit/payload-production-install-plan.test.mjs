@@ -88,7 +88,7 @@ l.load_authenticated=load;l.protected=read
 r=l.load_runtime_captured(captured);s=r.STATE;inv=r.INVENTORY
 document=inv.production_inventory(l.HOST_ROOT,l.RUNTIME,l.RELEASES,l.HOST_ROOT+'/current-release',l.LOCK,
  '/opt/ownerinc/backups/portal-ownerinc/daily',l.PRODUCTION_BACKUP,l.PRODUCTION_BACKUP+'/restore-protection',
- l.ENVIRONMENT,l.RUNTIME+'/compose.production.yaml',l.RUNTIME+'/compose.payload.production.yaml')
+  l.ENVIRONMENT,l.RUNTIME+'/compose.production.yaml',l.RUNTIME+'/compose.payload.production.yaml','portal')
 approval['hostBaseline']['inventoryIdentity']=inv.identity(document);bind()
 directory(l.RUNTIME);directory(l.RELEASES);directory(l.RUNTIME+'/payload-control-state',0o700)
 source=l.RELEASES+'/'+'2'*40
@@ -96,7 +96,7 @@ put(l.HOST_ROOT+'/current-release',(source+'\n').encode(),0o644,(1000,1000))
 put(source+'/.image-env',('API_IMAGE='+images['api']+'\nCRON_IMAGE='+images['cron']+'\n').encode(),0o644,(1000,1000))
 put(source+'/docker-compose.yml',b'compose',0o644,(1000,1000))
 put(l.RUNTIME+'/compose.production.yaml',b'compose',0o644,(1000,1000))
-put(l.ENVIRONMENT,b'PRIVATE=never-output\n',0o600,(1000,1000));put(l.LOCK,b'lock')
+put(l.ENVIRONMENT,b'PRIVATE=never-output\nPOSTGRES_DB=portal\nCMS_PORTAL_DATABASE_NAME=portal\n',0o600,(1000,1000));put(l.LOCK,b'lock')
 put(l.RUNTIME+'/payload-control-inventory.json',inv.canonical(document)+b'\n')
 key=b'K'*32;put(l.RUNTIME+'/payload-control.key',key)
 initial={'schemaVersion':2,'phase':'preauthority','cmsStatus':'cold','authority':{'mode':'legacy','epoch':1},
@@ -257,19 +257,19 @@ assert files[head][0]==s.canonical(history[-2])+b'\n'
 `);
 });
 
-test('production v3 correspondence uses authenticated context and plan retains four-service diagnostics (signed I/O doubles)', () => {
+test('production v4 shared-cluster correspondence uses authenticated context and created-resource diagnostics (signed I/O doubles)', () => {
   probe(String.raw`
 candidate=run()['candidate']
 def target(database,keys):
  return {'database':{'systemIdentifier':'123','databaseOid':'456','databaseName':database},
   'volumes':{k:{'name':k,'driver':'local','mountpoint':'/volumes/'+k,'fingerprint':'7'*64} for k in keys}}
 trust=run()['trust']
-binding={'bindingVersion':3,'authority':trust,'sourceCommit':approval['hostBaseline']['currentCommit'],
+binding={'bindingVersion':4,'authority':trust,'sourceCommit':approval['hostBaseline']['currentCommit'],
  'project':'ownerinc-portal-prod','candidate':candidate,'candidateRelease':l.RELEASES+'/'+record['commit'],
  'sourceRelease':source,'previousImages':approval['hostBaseline']['legacyImages'],
  'b0':{'directory':l.PRODUCTION_BACKUP+'/v3-b0','proofSha256':'9'*64},
  'inventoryIdentity':inv.identity(document),'lease':{'device':1,'inode':2},
- 'portalTarget':target('portal',('portalPostgres','portalUploads'))}
+ 'portalTarget':target('portal',('portalPostgres','portalUploads')),'sharedCluster':document['databaseCluster']}
 assert s.validate_production_correspondence(binding,approval,record,document,trust)==binding
 for mutate in (lambda b:b['authority'].update(recordSha256='0'*64),
  lambda b:b['authority'].update(policySha256='0'*64),lambda b:b['authority'].update(sourceApprovalSha256='0'*64),
@@ -301,7 +301,8 @@ binding['b0']['proofSha256']=p.sha(proof_raw)
 body.update(admission='closed',plannedReleaseImages=images,legacySourceProofSha256=p.sha(proof_raw),latestProofSha256=p.sha(proof_raw))
 body=append(body)
 body['installIntent']={'binding':binding,'stage':'reserved','cmsTarget':None,
- 'creation':{'receiptVersion':1,'fingerprintAlgorithm':'production-container-mounts-v1','nonce':'b'*64,'volumes':{},'containers':{}}}
+  'creation':{'receiptVersion':2,'fingerprintAlgorithm':'shared-cluster-container-mounts-v2','nonce':'b'*64,
+  'resourceLifecycle':{'preexisting':['postgres','portalPostgres','portalUploads'],'created':['cmsUploads']},'volumes':{},'containers':{}}}
 body=append(body)
 result=run();assert result['classification']=='pre_floor_install_pending'
 assert result['b0Status']=='integrity_verified'
@@ -325,12 +326,11 @@ assert 'production_creation_binding_unsupported' not in result['blockers']
 assert 'production_binding_context_mismatch' not in result['blockers']
 for stage in ('portal_grants_pending','portal_grants_verified','cms_resources_pending'):
  body['installIntent']['stage']=stage;body=append(body)
-cms=target('ownerinc_cms',('cmsPostgres','cmsUploads'))
+cms=target('ownerinc_cms',('cmsUploads',))
 body['installIntent']['creation']['volumes']=cms['volumes'];body=append(body)
-for i,service in enumerate(('cms-postgres','cms','api','cron')):
+for i,service in enumerate(('cms','api','cron')):
  body['installIntent']['creation']['containers'][service]={'id':str(i+1)*64,
- 'image':images[service] if service!='cms-postgres' else
- 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777',
+  'image':images[service],
  'fingerprint':'e'*64,'releasePath':binding['candidateRelease'],'creationState':'created'}
  body=append(body)
  assert ('creation_receipts_incomplete' in run()['blockers']) is (service!='cron')

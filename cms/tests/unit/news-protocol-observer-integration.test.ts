@@ -50,7 +50,7 @@ function report(overrides: Record<string, unknown> = {}) {
     observedCoverageVersion: 0, headSequence: '0', writeBarrier: 'open', ready: false, admissionActivated: false,
     releaseCertified: false, writeCoverageCertified: false, drainVerified: false,
     passwordPresenceCheck: 'not_performed_unprivileged',
-    clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check', physicalClusterIdentity: 'not_verified',
+    clusterSharedOwnershipCheck: 'bounded_current_database_ownership_helper', physicalClusterIdentity: 'not_verified',
     ...overrides,
   }
 }
@@ -122,15 +122,15 @@ function inspectedDockerContainer(targetLease: ReturnType<typeof lease>, passwor
     Config: {
       Image: targetLease.imageId,
       Labels: observerAuditDockerLabels(targetLease),
-      Env: ['POSTGRES_USER=cms_admin', 'POSTGRES_DB=postgres',
-        'POSTGRES_PASSWORD_FILE=/run/secrets/cms_admin_password'],
+      Env: ['POSTGRES_USER=portal_admin', 'POSTGRES_DB=postgres',
+        'POSTGRES_PASSWORD_FILE=/run/secrets/portal_admin_password'],
     },
     Mounts: [
       { Type: 'volume', Name: targetLease.volumeName,
         Source: `/var/lib/docker/volumes/${targetLease.volumeName}/_data`,
         Destination: '/var/lib/postgresql/data', RW: true },
       { Type: 'bind', Name: '', Source: dockerSource,
-        Destination: '/run/secrets/cms_admin_password', RW: false },
+        Destination: '/run/secrets/portal_admin_password', RW: false },
     ],
     HostConfig: { PortBindings: { '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: String(targetLease.port) }] } },
     NetworkSettings: { Networks: { bridge: { IPAddress: '172.19.0.2' } } },
@@ -179,7 +179,7 @@ test('Docker preflight refuses collisions, nonlocal endpoints, stale images and 
 
 test('Docker inspect accepts only the exact-case Windows Desktop bind-path representation', () => {
   const targetLease = lease()
-  const passwordFile = `C:\\Users\\Public\\private\\${targetLease.runId}\\postgres-admin-password`
+  const passwordFile = `C:\\Users\\Public\\private\\${targetLease.runId}\\postgres-cluster-admin-password`
   const inspection = inspectedDockerContainer(targetLease, passwordFile)
   const backend = validateObserverDockerContainer(targetLease, passwordFile, inspection, 'win32')
   assert.deepEqual(backend, { containerId: 'd'.repeat(64), backendIPv4: '172.19.0.2' })
@@ -273,7 +273,7 @@ test('write paths require the immutable PG16 probe identity before CREATE DATABA
     end: async () => {},
     query: async (sql: string) => {
       assert.match(sql, /pg_control_system\(\)/u)
-      return { rows: [{ role: 'cms_admin', database: 'postgres', server_address: '172.19.0.2/32',
+      return { rows: [{ role: 'portal_admin', database: 'postgres', server_address: '172.19.0.2/32',
         server_port: 5432, version_num: 160005, superuser: true, system_identifier: systemIdentifier }] }
     },
   }
@@ -293,19 +293,19 @@ test('write paths require the immutable PG16 probe identity before CREATE DATABA
   const malformedProbeClient = {
     connect: async () => {},
     end: async () => {},
-    query: async () => ({ rows: [{ role: 'cms_admin', database: 'postgres', server_address: '172.19.0.2/32',
+    query: async () => ({ rows: [{ role: 'portal_admin', database: 'postgres', server_address: '172.19.0.2/32',
       server_port: 5432, version_num: 160005, superuser: true, system_identifier: '12345x' }] }),
   }
   await assert.rejects(waitForPostgres(lease(), backend, 'fixture-only', () => malformedProbeClient),
     /observer_postgres_bootstrap_identity_mismatch/u)
 
-  const passwords = { cms_admin: 'fixture-only' }
+  const passwords = { portal_admin: 'fixture-only' }
   const queryLog = (identity: Record<string, unknown> = {}, observedSystemIdentifier = systemIdentifier) => {
     const queries: string[] = []
     const client = {
       query: async (sql: string) => {
         queries.push(sql)
-        if (sql.includes('current_user AS role')) return { rows: [{ role: 'cms_admin', session_role: 'cms_admin',
+        if (sql.includes('current_user AS role')) return { rows: [{ role: 'portal_admin', session_role: 'portal_admin',
           database: 'postgres', server_address: '172.19.0.2/32', server_port: 5432,
           version_num: 160005, superuser: true, ...identity }] }
         if (sql.includes('pg_control_system()')) {
@@ -374,7 +374,7 @@ test('real provisioning prefix preserves the immutable lease through Postgres pr
   const targetLease = lease()
   const leaseKeys = Object.keys(targetLease).sort()
   const leaseJSON = JSON.stringify(targetLease)
-  const passwordFile = `C:\\Users\\Public\\private\\${targetLease.runId}\\postgres-admin-password`
+  const passwordFile = `C:\\Users\\Public\\private\\${targetLease.runId}\\postgres-cluster-admin-password`
   const rawInspection = inspectedDockerContainer(targetLease, passwordFile)
   const eventOrder: string[] = ['initial-docker-inspection']
   const backend = validateObserverDockerContainer(targetLease, passwordFile, rawInspection, 'win32')
@@ -386,7 +386,7 @@ test('real provisioning prefix preserves the immutable lease through Postgres pr
     query: async (sql: string) => {
       assert.match(sql, /pg_control_system\(\)/u)
       eventOrder.push('postgres-system-identity-query')
-      return { rows: [{ role: 'cms_admin', database: 'postgres', server_address: '172.19.0.2/32',
+      return { rows: [{ role: 'portal_admin', database: 'postgres', server_address: '172.19.0.2/32',
         server_port: 5432, version_num: 160005, superuser: true, system_identifier: systemIdentifier }] }
     },
   }
@@ -394,7 +394,7 @@ test('real provisioning prefix preserves the immutable lease through Postgres pr
   const targetClient = {
     query: async (sql: string) => {
       targetQueries.push(sql)
-      if (sql.includes('current_user AS role')) return { rows: [{ role: 'cms_admin', session_role: 'cms_admin',
+      if (sql.includes('current_user AS role')) return { rows: [{ role: 'portal_admin', session_role: 'portal_admin',
         database: 'postgres', server_address: '172.19.0.2/32', server_port: 5432,
         version_num: 160005, superuser: true }] }
       if (sql.includes('pg_control_system()')) return { rows: [{ system_identifier: systemIdentifier }] }
@@ -404,7 +404,7 @@ test('real provisioning prefix preserves the immutable lease through Postgres pr
   }
 
   const identities = await verifyPostgresAndCreateOwnerCmsDatabase(targetLease, backend,
-    { cms_admin: 'fixture-only' }, passwordFile, {
+    { portal_admin: 'fixture-only' }, passwordFile, {
       createClient: options => {
         assert.match(options.connectionString, /\/postgres$/u)
         eventOrder.push('probe-client-created')

@@ -56,7 +56,7 @@ CMS_MIGRATIONS = [
     '20261006_181424_z_owner_news_native',
 ]
 LEGACY_ARTIFACTS = ['postgres.dump', 'uploads.tar.gz']
-PAYLOAD_ARTIFACTS = ['postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz']
+PAYLOAD_ARTIFACTS = ['postgres.dump', 'uploads.tar.gz', 'cms.dump', 'cms-uploads.tar.gz']
 INSTALL_STAGES = (
     'reserved', 'portal_grants_pending', 'portal_grants_verified',
     'cms_resources_pending', 'cms_resources_bound', 'cms_provision_pending', 'provisioned',
@@ -178,7 +178,7 @@ def validate_state_body(body):
     install = body.get('installIntent')
     if install is not None:
         names = {'binding', 'stage', 'cmsTarget'}
-        if isinstance(install, dict) and isinstance(install.get('binding'), dict) and install['binding'].get('bindingVersion') in (2, 3):
+        if isinstance(install, dict) and isinstance(install.get('binding'), dict) and install['binding'].get('bindingVersion') in (2, 3, 4):
             names.add('creation')
             if 'recovery' in install:
                 names.add('recovery')
@@ -216,9 +216,10 @@ def validate_state_body(body):
             if install['cmsTarget'] is not None:
                 fail('invalid_cold_state')
         else:
-            _validate_install_target(install['cmsTarget'], 'ownerinc_cms', {'cmsPostgres', 'cmsUploads'})
+            cms_volumes = {'cmsUploads'} if binding.get('bindingVersion') == 4 else {'cmsPostgres', 'cmsUploads'}
+            _validate_install_target(install['cmsTarget'], 'ownerinc_cms', cms_volumes)
             if 'creation' in install and (install['creation']['volumes'] != install['cmsTarget']['volumes'] or \
-               set(install['creation']['containers']) != ({'cms-postgres', 'cms', 'api', 'cron'} if binding.get('bindingVersion') == 3 else {'cms-postgres', 'cms'}) or \
+               set(install['creation']['containers']) != ({'cms', 'api', 'cron'} if binding.get('bindingVersion') == 4 else ({'cms-postgres', 'cms', 'api', 'cron'} if binding.get('bindingVersion') == 3 else {'cms-postgres', 'cms'})) or \
                install['creation']['containers']['cms']['image'] != binding['candidate']['images']['cms']):
                 fail('invalid_cold_state')
     elif body['cmsStatus'] == 'provisioned':
@@ -240,11 +241,16 @@ def validate_state_body(body):
             fail('invalid_restore_target')
         for database in ('portal', 'cms'):
             _validate_database_identity(intent['target'][database])
-        if intent['target']['portal']['databaseName'] != 'portal' or \
+        expected_portal_database = 'portal'
+        if install is not None and install['binding'].get('bindingVersion') == 4:
+            expected_portal_database = install['binding']['sharedCluster']['databases']['portal']['name']
+        if intent['target']['portal']['databaseName'] != expected_portal_database or \
            intent['target']['cms']['databaseName'] != 'ownerinc_cms':
             fail('invalid_restore_target')
         volumes = intent['target']['volumes']
-        _exact_keys(volumes, {'portalPostgres', 'portalUploads', 'cmsPostgres', 'cmsUploads'}, 'invalid_restore_volumes')
+        if set(volumes) not in ({'portalPostgres', 'portalUploads', 'cmsUploads'},
+                                {'portalPostgres', 'portalUploads', 'cmsPostgres', 'cmsUploads'}):
+            fail('invalid_restore_volumes')
         for value in volumes.values():
             _exact_keys(value, {'name', 'driver', 'mountpoint', 'fingerprint'}, 'invalid_restore_volumes')
             if not all(isinstance(value[k], str) and value[k] for k in ('name', 'driver', 'mountpoint')):
@@ -278,20 +284,38 @@ def validate_install_binding(binding):
              'b0', 'inventoryIdentity', 'lease', 'portalTarget'}
     versioned = isinstance(binding, dict) and 'bindingVersion' in binding
     version = binding.get('bindingVersion') if isinstance(binding, dict) else None
-    producer = version == 2
+    producer = version == 2 or version == 4 and isinstance(binding.get('project'), str) and \
+        binding['project'].startswith('payload-preauth-')
     if versioned:
         names.add('bindingVersion')
-    if version == 3:
+    if version in (3, 4):
         names |= {'authority', 'sourceCommit', 'project'}
+    if version == 4:
+        names.add('sharedCluster')
     _exact_keys(binding, names, 'invalid_cold_state')
     candidate = binding['candidate']
-    if versioned and (type(version) is not int or version not in (2, 3)):
+    if versioned and (type(version) is not int or version not in (2, 3, 4)):
         fail('invalid_cold_state')
-    if version == 3:
+    if version in (3, 4):
         _exact_keys(binding['authority'], {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
         if any(not isinstance(v, str) or not HEX_64.fullmatch(v) for v in binding['authority'].values()) or \
-           binding['project'] != 'ownerinc-portal-prod' or not isinstance(binding['sourceCommit'], str) or \
+           (binding['project'] != 'ownerinc-portal-prod' and not re.fullmatch(
+               r'payload-preauth-[0-9]+-[0-9]+-[0-9a-f]{10}-(source|target|lease)', binding['project'])) or \
+           not isinstance(binding['sourceCommit'], str) or \
            not re.fullmatch(r'[0-9a-f]{40}', binding['sourceCommit']):
+            fail('invalid_cold_state')
+    if version == 4:
+        shared = binding['sharedCluster']
+        if not isinstance(shared, dict) or set(shared) != {'service', 'volume', 'databases'} or \
+           shared.get('service') != 'postgres' or shared.get('volume') != 'portalPostgres' or \
+           not isinstance(shared.get('databases'), dict) or set(shared['databases']) != {'portal', 'cms'} or \
+           not isinstance(shared['databases']['portal'], dict) or \
+           set(shared['databases']['portal']) != {'name', 'owner'} or \
+           not isinstance(shared['databases']['portal']['name'], str) or \
+           not INVENTORY.DATABASE_IDENTIFIER.fullmatch(shared['databases']['portal']['name']) or \
+           shared['databases']['portal']['name'] == 'ownerinc_cms' or \
+           shared['databases']['portal']['owner'] != 'portal_admin' or \
+           shared['databases']['cms'] != {'name': 'ownerinc_cms', 'owner': 'cms_admin'}:
             fail('invalid_cold_state')
     validate_install_candidate(candidate, producer)
     _valid_images(binding['previousImages'], payload=False)
@@ -306,14 +330,14 @@ def validate_install_binding(binding):
         fail('invalid_cold_state')
     if producer and os.path.basename(binding['sourceRelease']) != candidate['sourceMaterialSha256'][:40]:
         fail('invalid_cold_state')
-    if version == 3 and os.path.basename(binding['sourceRelease']) != binding['sourceCommit']:
+    if version in (3, 4) and os.path.basename(binding['sourceRelease']) != binding['sourceCommit']:
         fail('invalid_cold_state')
     _exact_keys(binding['b0'], {'directory', 'proofSha256'}, 'invalid_cold_state')
     directory = binding['b0']['directory']
     if not isinstance(directory, str) or not os.path.isabs(directory) or os.path.normpath(directory) != directory:
         fail('invalid_cold_state')
-    if version == 3 and any('\0' in binding[name] for name in ('sourceRelease', 'candidateRelease')) or \
-       version == 3 and '\0' in directory:
+    if version in (3, 4) and any('\0' in binding[name] for name in ('sourceRelease', 'candidateRelease')) or \
+       version in (3, 4) and '\0' in directory:
         fail('invalid_cold_state')
     for value in (binding['inventoryIdentity'], binding['b0']['proofSha256']):
         if not isinstance(value, str) or not HEX_64.fullmatch(value):
@@ -321,7 +345,8 @@ def validate_install_binding(binding):
     _exact_keys(binding['lease'], {'device', 'inode'}, 'invalid_cold_state')
     if not _safe_int(binding['lease']['device']) or not _safe_int(binding['lease']['inode'], 1):
         fail('invalid_cold_state')
-    _validate_install_target(binding['portalTarget'], 'portal', {'portalPostgres', 'portalUploads'})
+    expected_portal_database = binding['sharedCluster']['databases']['portal']['name'] if version == 4 else 'portal'
+    _validate_install_target(binding['portalTarget'], expected_portal_database, {'portalPostgres', 'portalUploads'})
     return binding
 
 
@@ -344,7 +369,7 @@ def validate_production_correspondence(binding, approval, record, inventory, aut
     _exact_keys(authority, {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
     if any(not isinstance(value, str) or not HEX_64.fullmatch(value) for value in authority.values()):
         fail('invalid_cold_state')
-    if binding.get('bindingVersion') != 3 or binding['authority'] != authority or \
+    if binding.get('bindingVersion') != 4 or binding['authority'] != authority or \
        authority['policySha256'] != approval['admission']['policySha256'] or \
        authority['recordSha256'] != approval['admission']['recordSha256'] or \
        record['policySha256'] != authority['policySha256'] or \
@@ -352,7 +377,7 @@ def validate_production_correspondence(binding, approval, record, inventory, aut
        binding['candidate'] != production_candidate(record) or \
        binding['inventoryIdentity'] != INVENTORY.identity(inventory) or \
        binding['inventoryIdentity'] != approval['hostBaseline']['inventoryIdentity'] or \
-       binding['project'] != inventory['project'] or \
+        binding['project'] != inventory['project'] or binding['sharedCluster'] != inventory['databaseCluster'] or \
        binding['sourceCommit'] != approval['hostBaseline']['currentCommit'] or \
        binding['previousImages'] != approval['hostBaseline']['legacyImages'] or \
        binding['sourceRelease'] != os.path.join(inventory['paths']['releases'], binding['sourceCommit']) or \
@@ -399,7 +424,7 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None):
     first; a shape-valid JSON is not permission to install. Production admission
     qualification belongs to the outer deploy gate, not the recovery producer."""
     validate_install_binding(binding)
-    if binding.get('bindingVersion') in (2, 3):
+    if binding.get('bindingVersion') in (2, 3, 4):
         validate_install_creation(creation, binding)
         if creation['volumes'] or creation['containers']:
             fail('invalid_cold_state')
@@ -413,8 +438,8 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None):
     old = read_state(directory)[2]
     if old.get('installIntent') is not None:
         intent = assert_install_matches(old, binding)
-        if binding.get('bindingVersion') == 3 and any(intent['creation'][name] != creation[name]
-                for name in ('receiptVersion', 'fingerprintAlgorithm', 'nonce')):
+        if binding.get('bindingVersion') in (3, 4) and any(intent['creation'][name] != creation[name]
+                for name in (('receiptVersion', 'fingerprintAlgorithm', 'nonce', 'resourceLifecycle') if binding.get('bindingVersion') == 4 else ('receiptVersion', 'fingerprintAlgorithm', 'nonce'))):
             fail('restore_target_changed')
         return old
     if old['schemaVersion'] != 2 or old['cmsStatus'] != 'cold' or old['admission'] != 'closed' or \
@@ -435,7 +460,7 @@ def advance_install(directory, binding, stage, cms_target=None):
     if stage not in INSTALL_STAGES or stage in ('floor_commit_pending', 'floor_committed'):
         fail('invalid_cold_state')
     if stage == 'cms_resources_bound':
-        _validate_install_target(cms_target, 'ownerinc_cms', {'cmsPostgres', 'cmsUploads'})
+        _validate_install_target(cms_target, 'ownerinc_cms', {'cmsUploads'} if binding.get('bindingVersion') == 4 else {'cmsPostgres', 'cmsUploads'})
     elif cms_target is not None:
         fail('invalid_cold_state')
     if stage == intent['stage']:
@@ -512,19 +537,50 @@ def install_pending(body):
     return intent is not None and intent['stage'] != 'floor_committed'
 
 
+def production_install_creation(binding, nonce):
+    """Build the current shared-cluster creation receipt from a validated v4 binding."""
+    validate_install_binding(binding)
+    if binding.get('bindingVersion') != 4:
+        fail('invalid_cold_state')
+    value = {
+        'receiptVersion': 2,
+        'fingerprintAlgorithm': 'shared-cluster-container-mounts-v2',
+        'resourceLifecycle': {
+            'preexisting': ['postgres', 'portalPostgres', 'portalUploads'],
+            'created': ['cmsUploads'],
+        },
+        'nonce': nonce,
+        'volumes': {},
+        'containers': {},
+    }
+    value = parse_canonical(canonical(value) + b'\n', 'invalid_cold_state')
+    validate_install_creation(value, binding)
+    return value
+
+
 def validate_install_creation(value, binding=None):
-    production = binding is not None and binding.get('bindingVersion') == 3
+    version = binding.get('bindingVersion') if binding is not None else None
+    production = version in (3, 4)
     names = {'nonce', 'volumes', 'containers'}
     if production:
         names |= {'receiptVersion', 'fingerprintAlgorithm'}
+    if version == 4:
+        names.add('resourceLifecycle')
     _exact_keys(value, names, 'invalid_cold_state')
-    if production and (type(value['receiptVersion']) is not int or value['receiptVersion'] != 1 or
-                       value['fingerprintAlgorithm'] != 'production-container-mounts-v1'):
+    expected_receipt = 2 if version == 4 else 1
+    expected_algorithm = 'shared-cluster-container-mounts-v2' if version == 4 else 'production-container-mounts-v1'
+    if production and (type(value['receiptVersion']) is not int or value['receiptVersion'] != expected_receipt or
+                       value['fingerprintAlgorithm'] != expected_algorithm):
+        fail('invalid_cold_state')
+    if version == 4 and value['resourceLifecycle'] != {
+        'preexisting': ['postgres', 'portalPostgres', 'portalUploads'],
+        'created': ['cmsUploads'],
+    }:
         fail('invalid_cold_state')
     if not isinstance(value['nonce'], str) or not HEX_64.fullmatch(value['nonce']) or \
        not isinstance(value['volumes'], dict) or not isinstance(value['containers'], dict) or \
-       not set(value['volumes']) <= {'cmsPostgres', 'cmsUploads'} or \
-       not set(value['containers']) <= ({'cms-postgres', 'cms', 'api', 'cron'} if production else {'cms-postgres', 'cms'}):
+        not set(value['volumes']) <= ({'cmsUploads'} if version == 4 else {'cmsPostgres', 'cmsUploads'}) or \
+        not set(value['containers']) <= ({'cms', 'api', 'cron'} if version == 4 else ({'cms-postgres', 'cms', 'api', 'cron'} if production else {'cms-postgres', 'cms'})):
         fail('invalid_cold_state')
     for item in value['volumes'].values():
         _exact_keys(item, {'name', 'driver', 'mountpoint', 'fingerprint'}, 'invalid_cold_state')
@@ -609,7 +665,7 @@ def _validate_database_identity(value):
         fail('invalid_database_identity')
     if not isinstance(value['databaseOid'], str) or not re.fullmatch(r'[1-9][0-9]{0,9}', value['databaseOid']):
         fail('invalid_database_identity')
-    if value['databaseName'] not in ('portal', 'ownerinc_cms'):
+    if not isinstance(value['databaseName'], str) or not INVENTORY.DATABASE_IDENTIFIER.fullmatch(value['databaseName']):
         fail('invalid_database_identity')
 
 
@@ -800,8 +856,10 @@ def validate_state_transition(old, new):
             before_creation, after_creation = old_install['creation'], new_install['creation']
             if before_creation['nonce'] != after_creation['nonce']:
                 fail('restore_target_changed')
-            if old_install['binding'].get('bindingVersion') == 3 and any(before_creation[name] != after_creation[name]
-                    for name in ('receiptVersion', 'fingerprintAlgorithm')):
+            version = old_install['binding'].get('bindingVersion')
+            immutable_receipt_fields = ('receiptVersion', 'fingerprintAlgorithm', 'resourceLifecycle') if version == 4 else ('receiptVersion', 'fingerprintAlgorithm')
+            if version in (3, 4) and any(before_creation[name] != after_creation[name]
+                    for name in immutable_receipt_fields):
                 fail('restore_target_changed')
             for kind in ('volumes', 'containers'):
                 if any(after_creation[kind].get(name) != value for name, value in before_creation[kind].items()) or \
@@ -1034,7 +1092,7 @@ def validate_proof_body(body):
         _valid_images(body['targetImages'], payload=True)
     _exact_keys(body['source'], {'portal', 'cms'}, 'invalid_proof_source')
     _validate_identity(body['source']['portal'])
-    if body['source']['portal']['databaseName'] != 'portal':
+    if body['source']['portal']['databaseName'] == 'ownerinc_cms':
         fail('invalid_proof_source')
     if payload:
         _validate_identity(body['source']['cms'])

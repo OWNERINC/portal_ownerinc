@@ -437,9 +437,9 @@ validate_compose() {
     CMS_CONTROLLER_PASSWORD=check \
     CMS_MIGRATOR_PASSWORD=check \
     CMS_RUNTIME_PASSWORD=check \
-    CMS_ADMIN_DATABASE_URL=postgresql://cms_admin:check@cms-postgres:5432/ownerinc_cms \
-    CMS_MIGRATION_DATABASE_URL=postgresql://cms_migrator:check@cms-postgres:5432/ownerinc_cms \
-    CMS_RUNTIME_DATABASE_URL=postgresql://cms_runtime:check@cms-postgres:5432/ownerinc_cms \
+    CMS_OWNER_DATABASE_URL=postgresql://cms_admin:check@postgres:5432/ownerinc_cms \
+    CMS_MIGRATION_DATABASE_URL=postgresql://cms_migrator:check@postgres:5432/ownerinc_cms \
+    CMS_RUNTIME_DATABASE_URL=postgresql://cms_runtime:check@postgres:5432/ownerinc_cms \
     PAYLOAD_SECRET=check \
     PAYLOAD_TO_PORTAL_SECRET=check \
     PORTAL_TO_PAYLOAD_SECRET=check \
@@ -671,7 +671,7 @@ else
     atomic_text "$candidate_target" 0644 "CMS_IMAGE=$cms_image"
   fi
   authenticated_refresh || exit 2
-  if [[ $cms_env_state == empty || $cms_env_state == legacy-complete ]] && ! python3 "$source_private_helper" update "$environment"; then
+  if [[ $cms_env_state == empty || $cms_env_state == legacy-complete || $cms_env_state == pre-observer-complete ]] && ! python3 "$source_private_helper" update "$environment"; then
     echo 'Refusing preparation: private CMS environment could not be atomically written.' >&2
     echo "The pre-change receiver, guard and environment remain in $backup_dir for manual recovery." >&2
     exit 2

@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import test from 'node:test'
 import {
   assertPreauthorityNativeCatalogInventory,
+  cmsAdminFinalizerAuthoritySQL,
   formatPreauthorityCatalogFailureDiagnostic,
   formatPreauthorityNativeConstraintMismatchDiagnostic,
   getPreauthorityCatalogFailureDiagnostic,
@@ -20,7 +21,10 @@ import { NEWS_MUTATION_TABLES } from '../../src/publication/mutation-ledger'
 import {
   controlRolesNativePrivilegesVerificationSQL,
   controlRolesOwnershipVerificationSQL,
+  controlRolesPublicVerificationSQL,
   controlRolesVerificationSQL,
+  clusterRolesPublicVerificationSQL,
+  cmsAdminDatabaseRoleVerificationSQL,
 } from '../../scripts/provision-db'
 import { assertPreauthorityCatalogState } from '../../scripts/verify-preauthority-catalog'
 import { nativeChecksPg16 } from '../fixtures/native-checks-pg16'
@@ -185,7 +189,11 @@ function preconditionClient({ failedControlCheck, protocolPresent, roleFixture =
     query: async (sql, values) => {
       statements.push(sql)
       if (sql.includes('current_user AS role')) {
-        return { rows: [{ role: 'cms_admin', db: 'ownerinc_cms', superuser: true, read_only: 'on' }] }
+        return { rows: [{ role: 'cms_admin', session_role: 'cms_admin', db: 'ownerinc_cms', superuser: false, read_only: 'on' }] }
+      }
+      if (sql === cmsAdminFinalizerAuthoritySQL) return { rows: [{ safe: true }] }
+      if (sql === clusterRolesPublicVerificationSQL || sql === cmsAdminDatabaseRoleVerificationSQL) {
+        return { rows: [{ safe: true }] }
       }
       if (sql === 'SELECT name FROM public.payload_migrations ORDER BY name') {
         return { rows: fixtureMigrations.map(name => ({ name })) }
@@ -283,7 +291,7 @@ function preconditionClient({ failedControlCheck, protocolPresent, roleFixture =
         ].map(([name, type]) => ({ name, type })) }
       }
       if (sql.includes("a.attrelid='public.news_migration_items'")) return { rows: [{ run_id_type: 'varchar' }] }
-      if (sql === controlRolesVerificationSQL) {
+      if (sql === controlRolesPublicVerificationSQL) {
         return { rows: [{ safe: roleFixture === 'preauthority' || roleFixture === 'finalizer-installed' }] }
       }
       if (sql.includes('AS ledger_relations')) {
@@ -488,18 +496,18 @@ test('actual read-only preauthority verifier reports ownership, native-privilege
     },
     ...(['missing-control', 'missing-controller', 'insecure-control', 'insecure-controller'] as const).map(roleFixture => ({
       options: { roleFixture }, expectedReason: 'control_role_contract_mismatch',
-      expectedStage: 'protocol_control_roles' as const, expectedQuery: controlRolesVerificationSQL,
+      expectedStage: 'protocol_control_roles' as const, expectedQuery: controlRolesPublicVerificationSQL,
     })),
   ]
   for (const { options, expectedReason, expectedStage, expectedQuery } of cases) {
     const fixture = preconditionClient(options)
     let currentStage: PreauthorityCatalogDiagnosticStage = 'connection'
-    const error = await verifyPreauthorityCatalogReadOnly(fixture.client, stage => { currentStage = stage })
+    const error = await verifyPreauthorityCatalogReadOnly(fixture.client, 'portal', stage => { currentStage = stage })
       .then(() => null, value => value)
     assert.ok(error instanceof Error, 'the verifier must fail closed for this fixture')
     assert.ok(fixture.statements.some(sql => sql.includes(expectedQuery)), 'the real precondition stage was reached')
     if (options?.protocolPresent) {
-      assert.ok(fixture.statements.includes(controlRolesVerificationSQL),
+      assert.ok(fixture.statements.includes(controlRolesPublicVerificationSQL),
         'the canonical installed-protocol path uses the same baseline role contract before checking protocol inventory')
     }
     assert.deepEqual(getPreauthorityCatalogFailureDiagnostic(error, currentStage), {
@@ -508,7 +516,7 @@ test('actual read-only preauthority verifier reports ownership, native-privilege
     assert.equal(formatPreauthorityCatalogFailureDiagnostic(
       getPreauthorityCatalogFailureDiagnostic(error, currentStage),
     ), `PREAUTHORITY_CATALOG_DIAGNOSTIC stage=${expectedStage} reason=${expectedReason} sqlstate=none`)
-    assert.ok(!fixture.statements.some(sql => sql.includes('WHERE n.nspname NOT IN')),
+    assert.ok(!fixture.statements.some(sql => sql.includes('FROM pg_catalog.pg_namespace n LEFT JOIN pg_catalog.pg_class c')),
       'failed preconditions must stop before strict native-catalog traversal')
   }
 })
@@ -521,24 +529,24 @@ test('actual preauthority verifier accepts provisioned baseline control roles wi
 
   const fixture = preconditionClient({ roleFixture: 'preauthority' })
   let stage: PreauthorityCatalogDiagnosticStage = 'connection'
-  const result = await verifyPreauthorityCatalogReadOnly(fixture.client, value => { stage = value })
+  const result = await verifyPreauthorityCatalogReadOnly(fixture.client, 'portal', value => { stage = value })
   assert.equal(result.protocolStatus, 'absent')
   assert.equal(result.coverageApplicability, 'not-applicable')
   assert.equal(stage, 'native_types', 'a correctly provisioned preauthority database passes the shared role check and reaches native verification')
-  assert.ok(fixture.statements.includes(controlRolesVerificationSQL))
+  assert.ok(fixture.statements.includes(controlRolesPublicVerificationSQL))
   assert.ok(fixture.statements.some(sql => sql.includes('AS ledger_relations')),
     'the accepted fixture has an empty finalizer protocol inventory')
 
   for (const roleFixture of ['missing-control', 'missing-controller', 'insecure-control', 'insecure-controller'] as const) {
     const rejected = preconditionClient({ roleFixture })
     let failedStage: PreauthorityCatalogDiagnosticStage = 'connection'
-    const error = await verifyPreauthorityCatalogReadOnly(rejected.client, value => { failedStage = value })
+    const error = await verifyPreauthorityCatalogReadOnly(rejected.client, 'portal', value => { failedStage = value })
       .then(() => null, value => value)
     assert.ok(error instanceof Error)
     assert.deepEqual(getPreauthorityCatalogFailureDiagnostic(error, failedStage), {
       stage: 'protocol_control_roles', reason: 'control_role_contract_mismatch', sqlstate: null,
     }, `${roleFixture} must be rejected by the actual shared role contract`)
-    assert.ok(rejected.statements.includes(controlRolesVerificationSQL))
+    assert.ok(rejected.statements.includes(controlRolesPublicVerificationSQL))
     assert.ok(!rejected.statements.some(sql => sql.includes('AS ledger_relations')),
       'role drift must fail before protocol-state or native-catalog checks')
   }

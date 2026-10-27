@@ -17,7 +17,7 @@ failed() {
   set +e
   printf 'PAYLOAD_COORDINATOR_FAILURE step=%s status=%s\n' "$coordinator_step" "$status" >&2
   if [[ $destructive == true ]]; then
-    compose stop --timeout 120 nginx api cron cms cms-worker >/dev/null
+    compose stop --timeout 120 nginx api cron cms >/dev/null
     echo 'Payload restore incomplete; keep admission closed and reconcile the protection backup.' >&2
   else
     echo 'Payload operation failed; admission remains closed. Inspect writers and retained artifacts.' >&2
@@ -108,26 +108,31 @@ stop_writers() {
   step writers_inventory_after
   running=$(compose ps --status running --services)
   step writers_stopped_check
-  if grep -Eq '^(nginx|api|cron|cms|cms-worker)$' <<<"$running"; then return 1; fi
+  if grep -Eq '^(nginx|api|cron|cms)$' <<<"$running"; then return 1; fi
   guard quiescence-proof
 }
 
 capture() {
   local destination=$1
+  local portal_database
+  portal_database=$(guard portal-database-target '' capture_portal_database_target)
   step capture_directory
   mkdir -m 700 "$destination"
   step capture_portal_database
-  compose exec -T postgres sh -c 'pg_dump --format=custom --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' > "$destination/postgres.dump"
+  compose exec -T postgres sh -c 'pg_dump --format=custom --dbname="$1" --username="$POSTGRES_USER"' \
+    portal-database "$portal_database" > "$destination/postgres.dump"
   step capture_portal_storage
   compose run --rm --no-deps -T --entrypoint tar api -czf - -C /app/uploads . > "$destination/uploads.tar.gz"
   step capture_cms_database
-  compose exec -T cms-postgres sh -c 'pg_dump --format=custom --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' > "$destination/cms-postgres.dump"
+  # Run inside the shared PostgreSQL service as its existing cluster authority.
+  # Default pg_dump owner/ACL sections are required for an exact CMS restore.
+  compose exec -T postgres sh -c 'pg_dump --format=custom --dbname=ownerinc_cms --username="$POSTGRES_USER"' > "$destination/cms.dump"
   # Entire private volume: immutable files + staging + ambiguous promotions.
   step capture_cms_storage
   compose run --rm --no-deps -T --entrypoint tar cms -czf - -C /var/lib/ownerinc-cms/media . > "$destination/cms-uploads.tar.gz"
   step capture_release_metadata
   cp "$root/.image-env" "$destination/release.images"
-  printf 'payload-v1\n' > "$destination/backup.format"
+  printf 'payload-v2-shared-postgres\n' > "$destination/backup.format"
   guard backup-metadata "$destination/operations-proof.json"
   step capture_manifest
   write_payload_backup_manifest "$destination"
@@ -156,7 +161,7 @@ else
   [[ ${4:-} == --confirm && ${5:-} == RESTORE ]] || exit 2
   step restore_manifest
   verify_backup_manifest "$backup"
-  [[ $BACKUP_FORMAT == payload-v1 ]] || { echo 'Legacy backup cannot restore a Payload release' >&2; exit 2; }
+  [[ $BACKUP_FORMAT == payload-v2-shared-postgres ]] || { echo 'Legacy backup cannot restore a shared-cluster Payload release' >&2; exit 2; }
   step restore_portal_archive
   verify_storage_archive "$backup/uploads.tar.gz"
   step restore_cms_archive
@@ -175,13 +180,21 @@ else
   step restore_protection_portal_dump
   compose exec -T postgres pg_restore --list < "$protection/postgres.dump" >/dev/null 2>/dev/null
   step restore_protection_cms_dump
-  compose exec -T cms-postgres pg_restore --list < "$protection/cms-postgres.dump" >/dev/null 2>/dev/null
+  compose exec -T postgres pg_restore --list < "$protection/cms.dump" >/dev/null 2>/dev/null
   destructive=true
   # The guard confirms compatible schemas/application floor and safe restore
   # targets, including extra objects pg_restore --clean would otherwise retain.
   guard prepare-restore "$backup" guard_prepare_restore_portal
+  portal_database=$(guard portal-database-target '' restore_portal_target_binding)
+  step restore_portal_target_identity
+  compose exec -T postgres sh -ceu '
+    test "$(psql -XqAt -v ON_ERROR_STOP=1 --dbname="$1" --username="$POSTGRES_USER" \
+      --set=expected_database="$1" --set=expected_owner=portal_admin \
+      -c "SELECT current_database()=:'\''expected_database'\'' AND pg_catalog.pg_get_userbyid(datdba)=:'\''expected_owner'\'' FROM pg_catalog.pg_database WHERE datname=current_database()")" = t
+  ' portal-database "$portal_database"
   step restore_portal_database
-  compose exec -T postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/postgres.dump"
+  compose exec -T postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --dbname="$1" --username="$POSTGRES_USER"' \
+    portal-database "$portal_database" < "$backup/postgres.dump"
   # Portal pg_restore --no-privileges may remove runtime grants. Record and
   # verify this explicit intermediate floor, then reapply grants through the
   # normal migration/provision path before the next strict destructive check.
@@ -191,12 +204,18 @@ else
   step restore_portal_verify_migrations
   compose run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/verify-migrations.js
   guard prepare-restore "$backup" guard_prepare_restore_cms
-  # CMS ownership must remain cms_migrator so future DDL uses the same owner.
+  step restore_cms_cluster_roles
+  compose --profile cms-bootstrap run --rm --no-deps cms-cluster-bootstrap
+  # The guard has already rebound this target to the approved cluster. Recheck
+  # database and cluster-admin identity immediately before the destructive call.
   step restore_cms_database
-  # The reviewed archive contains the cms_control-owned SECURITY DEFINER
-  # functions and their narrow cms_controller ACLs. Restore ownership/ACLs as
-  # cms_admin; forcing cms_migrator would silently weaken the protocol contract.
-  compose exec -T cms-postgres sh -c 'pg_restore --single-transaction --clean --if-exists --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' < "$backup/cms-postgres.dump"
+  compose exec -T postgres sh -ceu 'test "$(psql -XqAt --dbname=ownerinc_cms --username="$POSTGRES_USER" -c "SELECT current_database() || chr(58) || current_user || chr(58) || (SELECT rolsuper::text FROM pg_roles WHERE rolname=current_user)")" = "ownerinc_cms:$POSTGRES_USER:true"'
+  compose exec -T postgres sh -c 'pg_restore --single-transaction --clean --if-exists --exit-on-error --dbname=ownerinc_cms --username="$POSTGRES_USER"' < "$backup/cms.dump"
+  # The archive may contain an older copy of the bounded ownership helper.
+  # Reconcile its owner/body/ACL immediately after restore before any limited
+  # CMS identity consumes it.
+  step restore_cms_cluster_guard
+  compose --profile cms-bootstrap run --rm --no-deps cms-cluster-bootstrap
   for service in api cms; do
     guard prepare-restore "$backup" "guard_prepare_restore_${service}_clear"
     artifact=uploads.tar.gz; storage=/app/uploads

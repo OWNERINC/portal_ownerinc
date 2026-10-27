@@ -21,8 +21,11 @@ class Model:
         self.backups = os.path.join(self.root,'backups'); os.mkdir(self.backups,0o700)
         self.source = os.path.join(self.releases,source_hash[:40]); os.mkdir(self.source,0o700)
         self.release = os.path.join(self.releases,'a' * 40); os.mkdir(self.release,0o700)
-        self.config = {'schemaVersion':2,'environmentFileOwner':{'uid':0,'gid':0},'project':project,
+        self.config = {'schemaVersion':3,'environmentFileOwner':{'uid':0,'gid':0},'project':project,
             'trustedSourceInventoryIdentities':[],
+            'databaseCluster':{'service':'postgres','volume':'portalPostgres','databases':{
+                'portal':{'name':'portal','owner':'portal_admin'},'cms':{'name':'ownerinc_cms','owner':'cms_admin'}}},
+            'resourceLifecycle':{'preexistingVolumes':['portalPostgres','portalUploads'],'createdVolumes':['cmsUploads']},
             'paths':{'root':self.root,'runtime':self.runtime,'releases':self.releases,
                      'currentRelease':os.path.join(self.root,'current-release'),
                      'lock':os.path.join(self.runtime,'deploy.lock'),
@@ -33,8 +36,7 @@ class Model:
                      'payloadOverride':os.path.join(self.runtime,'compose.payload.production.yaml')},'volumes':{}}
         definitions = {'portalPostgres':('postgres_data',[('postgres','/var/lib/postgresql/data',True)]),
                        'portalUploads':('uploads_data',[('api','/app/uploads',True),('cron','/app/uploads',True)]),
-                       'cmsPostgres':('cms_postgres_data',[('cms-postgres','/var/lib/postgresql/data',True)]),
-                       'cmsUploads':('cms_uploads_data',[('cms','/var/lib/ownerinc-cms/media',True),('cms-worker','/var/lib/ownerinc-cms/media',False)])}
+                        'cmsUploads':('cms_uploads_data',[('cms','/var/lib/ownerinc-cms/media',True)])}
         for key,(compose_key,mounts) in definitions.items():
             self.config['volumes'][key] = {'name':project + '_' + compose_key,'composeKey':compose_key,
                 'mounts':[{'service':s,'destination':d,'required':required} for s,d,required in mounts]}
@@ -44,8 +46,9 @@ class Model:
             os.chmod(file,0o600)
         self.write = write
         write(os.path.join(self.runtime,'payload-control-inventory.json'),S.canonical(self.config) + b'\n')
-        for key in ('lock','environmentFile','composeOverride','payloadOverride'):
+        for key in ('lock','composeOverride','payloadOverride'):
             write(self.config['paths'][key],b'# explicit synthetic command-observation fixture\n')
+        write(self.config['paths']['environmentFile'],b'POSTGRES_DB=portal\nCMS_PORTAL_DATABASE_NAME=portal\n')
         write(self.config['paths']['currentRelease'],(self.source + '\n').encode())
         write(os.path.join(self.source,'.image-env'),source_raw)
         write(os.path.join(self.release,'.image-env'),('API_IMAGE=' + images['api'] + '\nCRON_IMAGE=' + images['cron'] + '\nCMS_IMAGE=' + images['cms'] + '\nRELEASE_FORMAT=payload-v1\n').encode())
@@ -82,7 +85,7 @@ class Model:
             'Created':'2026-10-09T12:00:00Z','Config':{'Image':image,'Labels':{'com.docker.compose.project':project,'com.docker.compose.service':service,**labels}},
             'Mounts':mounts,'State':{'Status':state,'Health':{'Status':'healthy'}}}
     def state(self): return S.read_state(self.runtime)[2]
-    def psql(self,service,sql):
+    def psql(self,service,sql,database=None):
         if 'clientBackends' in sql: return {'clientBackends':0,'activeQueries':0,'openTransactions':0}
         if 'portalApiSessionPrivileges' in sql:
             return {'versions':S.PORTAL_MIGRATIONS,'authorityRows':1,'authority':{'mode':'legacy','epoch':1},
@@ -119,24 +122,26 @@ class Model:
             # The explicit start is never allowed before both creator receipts
             # are returned by the real signed journal, including on retry.
             recorded = self.state()['installIntent']['creation']['containers']
-            assert set(recorded) == {'cms-postgres','cms'}
-            assert args[2] == recorded['cms-postgres']['id']
+            raise AssertionError('shared PostgreSQL must never be started by the CMS initializer')
             next(c for c in self.containers.values() if c['Id'] == args[2])['State']['Status'] = 'running'
         elif args[:2] == ['docker','exec']:
-            output = b'private synthetic PostgreSQL archive bytes' if 'pg_dump' in args[-1] else b''
+            output = b'private synthetic PostgreSQL archive bytes' if any('pg_dump' in value for value in args) else b''
         elif args[:2] == ['docker','run']: output = self.tar_gzip
         elif 'compose' in args:
             if 'stop' in args:
                 for service in ('api','cron','cms','nginx'):
                     if service in self.containers: self.containers[service]['State']['Status'] = 'exited'
+            elif '--profile' in args and 'cms-bootstrap' in args and 'cms-cluster-bootstrap' in args:
+                self.roles = True
             elif 'up' in args and '--no-start' in args:
                 assert '--no-deps' in args and '--no-recreate' in args and '--no-build' in args
                 overlay = json.loads(open(os.path.join(self.runtime,'payload-initialize-compose.json'),encoding='utf-8').read())
                 self.create_container(args[-1],overlay['services'][args[-1]]['labels'])
             elif 'migrate' in args and args[-1] == 'migrate': self.granted = True
-            elif 'cms-provision' in args: self.roles = True
-            elif '--verify-control' in args or '--verify-migrator' in args or '--verify-runtime' in args:
-                if self.unsafe_roles or not self.roles: return SimpleNamespace(returncode=2,stdout='' if text else b'',stderr='' if text else b'')
+            elif 'cms-provision' in args and '--verify-cluster-roles' not in args: self.roles = True
+            elif '--verify-control' in args or '--verify-migrator' in args or '--verify-runtime' in args or '--verify-cluster-roles' in args:
+                if ('--verify-cluster-roles' in args and self.unsafe_roles) or not self.roles:
+                    return SimpleNamespace(returncode=2,stdout='' if text else b'',stderr='' if text else b'')
             elif args[-1] == 'cms-migrate': self.native = True
             elif args[-1] == 'cms-preauthority-verify':
                 assert self.native
@@ -162,8 +167,8 @@ class Model:
         stack.enter_context(patch.object(R.subprocess,'run',self.run))
         stack.enter_context(patch.object(R.subprocess,'Popen',lambda *_a,**_k:SimpleNamespace(stdout=io.BytesIO(self.tar_plain),wait=lambda:0,kill=lambda:None)))
         stack.enter_context(patch.object(R,'_psql_json',self.psql))
-        stack.enter_context(patch.object(R,'_database_identity',lambda service,database:portal if service == 'postgres' else cms))
-        stack.enter_context(patch.object(R,'_data_fingerprint',lambda _service:'1' * 64))
+        stack.enter_context(patch.object(R,'_database_identity',lambda service,database:portal if database == 'portal' else cms))
+        stack.enter_context(patch.object(R,'_data_fingerprint',lambda _service,*_args,**_kwargs:'1' * 64))
         return stack
     def initialize(self):
         runtime = R.Runtime('initialize-isolated',self.release,self.request)
@@ -207,11 +212,16 @@ def volume(key):
     return {'name':project + '_' + key,'driver':'local','mountpoint':os.path.join(root,'volumes',key),
             'fingerprint':hashlib.sha256(key.encode()).hexdigest()}
 portal_target = {'database':portal,'volumes':{key:volume(key) for key in ('portalPostgres','portalUploads')}}
-cms_target = {'database':cms,'volumes':{key:volume(key) for key in ('cmsPostgres','cmsUploads')}}
-binding = {'bindingVersion':2,'candidate':candidate,'candidateRelease':os.path.join(root,'releases','a' * 40),
+cms_target = {'database':cms,'volumes':{'cmsUploads':volume('cmsUploads')}}
+classic_cms_target = {'database':cms,'volumes':{key:volume(key) for key in ('cmsPostgres','cmsUploads')}}
+authority = {'sourceApprovalSha256':'e' * 64,'policySha256':'f' * 64,'recordSha256':'d' * 64}
+binding = {'bindingVersion':4,'candidate':candidate,'candidateRelease':os.path.join(root,'releases','a' * 40),
            'sourceRelease':os.path.join(root,'releases',source_hash[:40]),'previousImages':previous,
            'b0':{'directory':os.path.join(root,'backups','initial-b0'),'proofSha256':'e' * 64},
-           'inventoryIdentity':'f' * 64,'lease':{'device':1,'inode':2},'portalTarget':portal_target}
+           'inventoryIdentity':'f' * 64,'lease':{'device':1,'inode':2},'portalTarget':portal_target,
+           'authority':authority,'sourceCommit':source_hash[:40],'project':project,
+           'sharedCluster':{'service':'postgres','volume':'portalPostgres','databases':{
+             'portal':{'name':'portal','owner':'portal_admin'},'cms':{'name':'ownerinc_cms','owner':'cms_admin'}}}}
 proof = {'schemaVersion':1,'kind':'preauthority-legacy-source','phase':'preauthority','inventoryIdentity':'f' * 64,
          'authority':{'mode':'legacy','epoch':1},'protocol':{'status':'absent','coverage':'not-applicable'},
          'images':previous,'targetImages':images,'source':{'portal':portal,'cms':None},
@@ -219,7 +229,9 @@ proof = {'schemaVersion':1,'kind':'preauthority-legacy-source','phase':'preautho
          'dataFingerprints':{'portalDatabase':'1' * 64,'portalUploads':'2' * 64,'cmsDatabase':None,'cmsUploads':None},
          'artifacts':[{'name':name,'sha256':'3' * 64,'size':1} for name in S.LEGACY_ARTIFACTS],
          'createdAtUtc':'2026-10-09T12:00:00Z'}
-creation = {'nonce':'4' * 64,'volumes':{},'containers':{}}
+creation = {'receiptVersion':2,'fingerprintAlgorithm':'shared-cluster-container-mounts-v2',
+            'resourceLifecycle':{'preexisting':['postgres','portalPostgres','portalUploads'],'created':['cmsUploads']},
+            'nonce':'4' * 64,'volumes':{},'containers':{}}
 def fresh(label):
     directory = os.path.join(root,label); os.mkdir(directory,0o700); S.initialize(directory,'f' * 64)
     S.transition(directory,lambda b:b.update({'admission':'closed','plannedReleaseImages':images,
@@ -232,9 +244,10 @@ def provisioned(directory):
         if stage == 'floor_commit_pending': break
         if stage == 'cms_resources_bound':
             for name, value in cms_target['volumes'].items(): S.record_install_creation(directory,binding,'volumes',name,value)
-            for name in ('cms-postgres','cms'):
+            for name in ('cms','api','cron'):
                 S.record_install_creation(directory,binding,'containers',name,
-                    {'id':hashlib.sha256(name.encode()).hexdigest(),'image':images['cms'],'fingerprint':'5' * 64})
+                    {'id':hashlib.sha256(name.encode()).hexdigest(),'image':images[name], 'fingerprint':'5' * 64,
+                     'releasePath':binding['candidateRelease'],'creationState':'created'})
         S.advance_install(directory,binding,stage,cms_target if stage == 'cms_resources_bound' else None)
 ` + observationModel + `\nMODEL_SOURCE = ${JSON.stringify(observationModel)}\n` + body;
   // Large replay/guard programs exceed Windows argv limits; execute the same
@@ -310,10 +323,10 @@ test('initializer main attributes failures to the concrete phase and last signed
 from contextlib import redirect_stderr
 cases = [
     ('stop_writers','none',lambda args:'stop' in args),
-    ('b0_database_capture','none',lambda args:args[:2]==['docker','exec'] and 'pg_dump' in args[-1]),
+    ('b0_database_capture','none',lambda args:args[:2]==['docker','exec'] and any('pg_dump' in value for value in args)),
     ('b0_storage_capture','none',lambda args:args[:2]==['docker','run']),
     ('portal_grants_migrate','portal_grants_pending',lambda args:args[-1]=='migrate'),
-    ('container_create','cms_resources_pending',lambda args:'up' in args and '--no-start' in args and args[-1]=='cms-postgres'),
+    ('container_create','cms_resources_pending',lambda args:'up' in args and '--no-start' in args and args[-1]=='cms'),
     ('cms_provision','cms_provision_pending',lambda args:args[-1]=='cms-provision'),
     ('cms_control_bootstrap','cms_provision_pending',lambda args:args[-1]=='--bootstrap-control'),
     ('cms_migrate','cms_provision_pending',lambda args:args[-1]=='cms-migrate'),
@@ -336,7 +349,15 @@ for index,(phase,stage,fail_command) in enumerate(cases):
 test('explicit producer binding has no circular qualification fields and classic bindings remain strict', async t => {
   await fixture(t, String.raw`
 S.validate_install_binding(binding)
-classic = copy.deepcopy(binding); del classic['bindingVersion']
+configured = copy.deepcopy(binding)
+configured['sharedCluster']['databases']['portal']['name'] = 'portal_test'
+configured['portalTarget']['database']['databaseName'] = 'portal_test'
+S.validate_install_binding(configured)
+for mutate in [lambda b:b['sharedCluster']['databases']['portal'].update(name='portal'),
+               lambda b:b['portalTarget']['database'].update(databaseName='portal')]:
+    wrong=copy.deepcopy(configured);mutate(wrong);expect('invalid_cold_state',lambda:S.validate_install_binding(wrong))
+classic = copy.deepcopy(binding)
+for key in ('bindingVersion','authority','sourceCommit','project','sharedCluster'): del classic[key]
 classic['candidate'] = {'commit':'a' * 40,'runId':'123','runAttempt':'1','images':images,
                         'candidateSha256':'d' * 64,'reportSha256':'5' * 64,'qualificationSha256':'6' * 64,'bundleSha256':'7' * 64}
 S.validate_install_binding(classic)
@@ -348,6 +369,16 @@ root1 = fresh('producer'); reserve(root1)
 root2 = fresh('classic'); S.reserve_install(root2,classic,proof,'e' * 64)
 assert S.read_state(root1)[2]['installIntent']['creation'] == creation
 assert 'creation' not in S.read_state(root2)[2]['installIntent']
+`);
+});
+
+test('initializer rejects protected environment drift from the authenticated inventory before observations', async t => {
+  await fixture(t, String.raw`
+model=Model('environment-drift')
+model.write(model.config['paths']['environmentFile'],b'POSTGRES_DB=portal_test\nCMS_PORTAL_DATABASE_NAME=portal_test\n')
+with model.context():expect('portal_database_configuration_mismatch',model.initialize)
+assert model.commands==[]
+assert model.state()['installIntent'] is None and model.state()['admission']=='open'
 `);
 });
 
@@ -384,12 +415,13 @@ with model.context():
     assert state['authority'] == {'mode':'legacy','epoch':1}
     assert state['releaseImages'] == images and state['nativeCatalogFingerprint'] == '8' * 64
     assert open(model.config['paths']['currentRelease'],encoding='utf-8').read() == model.release + '\n'
-    assert all(c['State']['Status'] != 'running' for s,c in model.containers.items() if s not in ('postgres','cms-postgres'))
+    assert all(c['State']['Status'] != 'running' for s,c in model.containers.items() if s != 'postgres')
     intent = state['installIntent']; body,digest = R._parse_proof(intent['binding']['b0']['directory'],runtime.key,payload=False)
     assert body['protocol'] == {'status':'absent','coverage':'not-applicable'} and body['source']['cms'] is None
     assert digest == state['legacySourceProofSha256']
-    assert set(intent['creation']['volumes']) == {'cmsPostgres','cmsUploads'}
-    assert set(intent['creation']['containers']) == {'cms-postgres','cms'}
+    assert set(intent['creation']['volumes']) == {'cmsUploads'}
+    assert set(intent['creation']['containers']) == {'cms','api','cron'}
+    assert intent['creation']['resourceLifecycle'] == {'preexisting':['postgres','portalPostgres','portalUploads'],'created':['cmsUploads']}
     commands = model.commands
     capture = next(i for i,c in enumerate(commands) if any('pg_dump --format=custom' in arg for arg in c))
     grant = next(i for i,c in enumerate(commands) if 'run' in c and c[-1] == 'migrate')
@@ -398,7 +430,7 @@ with model.context():
     control = next(i for i,c in enumerate(commands) if c[-1] == '--bootstrap-control')
     migrate = next(i for i,c in enumerate(commands) if c[-1] == 'cms-migrate')
     assert capture < grant < create < provision < control < migrate
-    assert any(c[-1] == '--verify-runtime' for c in commands) and any(c[-1] == '--verify-control' for c in commands)
+    assert any(c[-1] == '--verify-runtime' for c in commands) and any(c[-1] == '--verify-cluster-roles' for c in commands)
     assert not any('qualification' in str(c) for c in commands)
     before = model.state()
     model.initialize()
@@ -456,14 +488,15 @@ with model.context():
 `);
 });
 
-test('unsafe role observations fail before pointer changes, retaining provision-phase intent and admission fence', async t => {
+test('cms_admin or observer drift in the complete six-role retry probe fails before pointer changes', async t => {
   await fixture(t, String.raw`
-model = Model('unsafe-roles'); model.unsafe_roles = True
-with model.context():
-    expect('native_catalog_verification_failed',model.initialize)
-state = model.state()
-assert state['admission'] == 'closed' and state['installIntent']['stage'] == 'cms_provision_pending'
-assert open(model.config['paths']['currentRelease'],encoding='utf-8').read() == model.source + '\n'
+for drift in ('cms_admin','cms_observer'):
+    model = Model('unsafe-' + drift); model.unsafe_roles = True
+    with model.context():
+        expect('native_catalog_verification_failed',model.initialize)
+    state = model.state()
+    assert state['admission'] == 'closed' and state['installIntent']['stage'] == 'cms_provision_pending'
+    assert open(model.config['paths']['currentRelease'],encoding='utf-8').read() == model.source + '\n'
 `);
 });
 
@@ -532,9 +565,9 @@ test('no protocol or News rows can be used to satisfy floorcommit and production
   await fixture(t, String.raw`
 for flag,reason in [('protocolFunctions','unsupported_protocol_present_or_mixed'),('newsRows','unexpected_preauthority_news_rows')]:
     model = Model('protocol-' + flag); base_psql = model.psql
-    def drift(service,sql):
-        value = base_psql(service,sql)
-        if service == 'cms-postgres' and 'protocolRelations' in sql: return {**value,flag:1}
+    def drift(service,sql,database=None):
+        value = base_psql(service,sql,database)
+        if service == 'postgres' and 'protocolRelations' in sql: return {**value,flag:1}
         return value
     model.psql = drift
     with model.context(): expect(reason,model.initialize)
@@ -553,12 +586,13 @@ with model.context():
 
 test('classic binding can use explicit floor path without being reinterpreted as a producer or losing its audit', async t => {
   await fixture(t, String.raw`
-classic = copy.deepcopy(binding); del classic['bindingVersion']
+classic = copy.deepcopy(binding)
+for key in ('bindingVersion','authority','sourceCommit','project','sharedCluster'): del classic[key]
 classic['candidate'] = {'commit':'a' * 40,'runId':'123','runAttempt':'1','images':images,
                         'candidateSha256':'d' * 64,'reportSha256':'5' * 64,'qualificationSha256':'6' * 64,'bundleSha256':'7' * 64}
 directory = fresh('old-binding-floor'); S.reserve_install(directory,classic,proof,'e' * 64)
 for stage in S.INSTALL_STAGES[1:]:
-    S.advance_install(directory,classic,stage,cms_target if stage == 'cms_resources_bound' else None)
+    S.advance_install(directory,classic,stage,classic_cms_target if stage == 'cms_resources_bound' else None)
 S.begin_install_floor(directory,classic,'8' * 64); S.commit_install_floor(directory,classic)
 terminal = S.read_state(directory)[2]
 assert terminal['installIntent']['binding'] == classic and 'creation' not in terminal['installIntent']
@@ -630,7 +664,7 @@ for stage in stages:
         model.initialize()  # Runtime owns lease and validates/replays before repairing.
         assert model.state()['installIntent']['stage'] == 'floor_committed'
         assert model.state()['admission'] == 'closed' and model.state()['workerHold'] is True
-for receipt in ('cmsPostgres','cmsUploads','cms-postgres','cms'):
+for receipt in ('cmsUploads','cms','api','cron'):
     model = Model('unheaded-receipt-' + receipt); actual_replace = S._atomic_replace; crashed = []
     def interrupt_receipt(path,raw,mode):
         if path.endswith('current.json'):
@@ -707,7 +741,7 @@ for negative,reason in [('source','preauthority_source_recovery_proof_mismatch')
                 if args[-1] == 'cms-preauthority-verify': value.stdout = '{"nativeCatalogFingerprint":"self-reported-only"}\n'
                 return value
             stack.enter_context(patch.object(R.subprocess,'run',invalid_catalog))
-        stack.enter_context(patch.object(S,'_atomic_replace',side_effect=AssertionError('prevalidation must finish before swap')))
+        stack.enter_context(patch.object(S,'_atomic_replace',side_effect=AssertionError('prevalidation must finish before swap: ' + negative)))
         runtime = R.Runtime('install-floor-commit',model.release,None)
         expect(reason,runtime.run)
         assert model.state() == before and open(pointer,'rb').read() == original_pointer
@@ -778,10 +812,7 @@ def finish_open(body):
     body['installIntent']['stage'] = 'floor_committed'
     body.update({'cmsStatus':'migrated','releaseImages':images,'plannedReleaseImages':None,'nativeCatalogFingerprint':'8' * 64,'admission':'open'})
 def change_binding_type(body):
-    classic = copy.deepcopy(binding); del classic['bindingVersion']
-    classic['candidate'] = {'commit':'a' * 40,'runId':'123','runAttempt':'1','images':images,
-        'candidateSha256':'d' * 64,'reportSha256':'5' * 64,'qualificationSha256':'6' * 64,'bundleSha256':'7' * 64}
-    body['installIntent']['binding'] = classic; del body['installIntent']['creation']
+    body['installIntent']['binding']['authority']['recordSha256'] = '9' * 64
 for args in [
     ('skip-floor','provisioned',skip_floor,'invalid_cold_state'),
     ('mutable-nonce','provisioned',lambda b:b['installIntent']['creation'].update({'nonce':'0' * 64}),'restore_target_changed'),
@@ -789,7 +820,7 @@ for args in [
     ('mutable-id','pending',lambda b:b['installIntent']['creation']['containers']['cms'].update({'id':'0' * 64}),'restore_target_changed'),
     ('pending-catalog','pending',lambda b:b['installIntent']['floor'].update({'nativeCatalogFingerprint':'0' * 64}),'planned_release_mismatch'),
     ('open-on-floor','pending',finish_open,'invalid_migrated_state'),
-    ('reinterpreted-binding','terminal',change_binding_type,'planned_release_mismatch'),
+    ('rebound-authority','terminal',change_binding_type,'planned_release_mismatch'),
     ('removed-terminal','terminal',lambda b:b.update({'installIntent':None}),'planned_release_mismatch'),
 ]: scenario(*args)
 `);
@@ -824,10 +855,10 @@ with model.context():
         R.Runtime('close-admission',model.release,None).run();model.write(model.config['paths']['admissionClosed'],b'')
         for service in ('api','cron','cms'):model.containers[service]['State'].update({'Status':'exited','Running':False})
         backup=os.path.join(model.backups,'postfloor-resume');os.mkdir(backup,0o700)
-        for name in ('postgres.dump','cms-postgres.dump'):model.write(os.path.join(backup,name),b'private synthetic PostgreSQL archive bytes')
+        for name in ('postgres.dump','cms.dump'):model.write(os.path.join(backup,name),b'private synthetic PostgreSQL archive bytes')
         for name in ('uploads.tar.gz','cms-uploads.tar.gz'):model.write(os.path.join(backup,name),model.tar_gzip)
         model.write(os.path.join(backup,'release.images'),open(os.path.join(model.release,'.image-env'),'rb').read())
-        model.write(os.path.join(backup,'backup.format'),b'payload-v1\n')
+        model.write(os.path.join(backup,'backup.format'),b'payload-v2-shared-postgres\n')
         R.Runtime('backup-metadata',model.release,os.path.join(backup,'operations-proof.json')).run()
         before=model.state();calls=[];real_run=model.run
         def writer_run(args,**kwargs):
@@ -853,12 +884,12 @@ model = Model('backup-restore-audit')
 with model.context():
     runtime = model.initialize(); audit = copy.deepcopy(model.state()['installIntent'])
     backup = os.path.join(model.backups,'20261009-postfloor'); os.mkdir(backup,0o700)
-    for name in ('postgres.dump','cms-postgres.dump'): model.write(os.path.join(backup,name),b'private synthetic PostgreSQL archive bytes')
+    for name in ('postgres.dump','cms.dump'): model.write(os.path.join(backup,name),b'private synthetic PostgreSQL archive bytes')
     for name in ('uploads.tar.gz','cms-uploads.tar.gz'): model.write(os.path.join(backup,name),model.tar_gzip)
     model.write(os.path.join(backup,'release.images'),open(os.path.join(model.release,'.image-env'),'rb').read())
-    model.write(os.path.join(backup,'backup.format'),b'payload-v1\n')
+    model.write(os.path.join(backup,'backup.format'),b'payload-v2-shared-postgres\n')
     runtime = R.Runtime('backup-metadata',model.release,os.path.join(backup,'operations-proof.json')); runtime.run()
-    manifest_names = ['postgres.dump','uploads.tar.gz','cms-postgres.dump','cms-uploads.tar.gz','release.images','operations-proof.json','backup.format']
+    manifest_names = ['postgres.dump','uploads.tar.gz','cms.dump','cms-uploads.tar.gz','release.images','operations-proof.json','backup.format']
     model.write(os.path.join(backup,'manifest.sha256'),''.join(R._file_hash(os.path.join(backup,name))['sha256'] + '  ' + name + '\n' for name in manifest_names).encode())
     assert model.state()['installIntent'] == audit and model.state()['latestProofSha256'] != audit['binding']['b0']['proofSha256']
     for service in ('api','cron','cms'): model.containers[service]['State']['Status'] = 'running'

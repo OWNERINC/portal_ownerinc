@@ -96,7 +96,7 @@ captured={r:store[p.preparation_target(r)][0] for r in p.PREPARATION_FILES}
 inv=l.load_authenticated(captured['ops/payload-control-inventory.py'],l.ROOT+'/ops/payload-control-inventory.py')
 expected=inv.production_inventory(l.HOST_ROOT,l.RUNTIME,l.RELEASES,l.HOST_ROOT+'/current-release',l.LOCK,
  '/opt/ownerinc/backups/portal-ownerinc/daily',l.PRODUCTION_BACKUP,l.PRODUCTION_BACKUP+'/restore-protection',
- l.ENVIRONMENT,l.RUNTIME+'/compose.production.yaml',l.RUNTIME+'/compose.payload.production.yaml')
+ l.ENVIRONMENT,l.RUNTIME+'/compose.production.yaml',l.RUNTIME+'/compose.payload.production.yaml','portal')
 baseline=approval['hostBaseline'];baseline['inventoryIdentity']=inv.identity(expected)
 release=l.RELEASES+'/'+baseline['currentCommit'];host={};reads=[]
 def put_host(name,data,owner=(1000,1000),mode=0o644):host[name]=(data,owner,mode)
@@ -105,7 +105,7 @@ put_host(release+'/.image-env',('API_IMAGE='+images['api']+'\nCRON_IMAGE='+image
 for filename,field in [(release+'/docker-compose.yml','releaseComposeSha256'),(l.RUNTIME+'/compose.production.yaml','runtimeComposeSha256')]:
  put_host(filename,b'approved-compose\n');baseline[field]=p.sha(b'approved-compose\n')
 environment_secret=b'COLLECTOR_MUST_NOT_READ_THIS_SECRET_VALUE'
-put_host(l.ENVIRONMENT,b'PRIVATE='+environment_secret+b'\n',mode=0o600)
+put_host(l.ENVIRONMENT,b'PRIVATE='+environment_secret+b'\nPOSTGRES_DB=portal\nCMS_PORTAL_DATABASE_NAME=portal\n',mode=0o600)
 put_host('/usr/local/libexec/ownerinc-portal-deploy',b'approved predecessor',(0,0),0o755)
 baseline['installedPredecessors']['commonReceiver']=p.sha(b'approved predecessor')
 def host_read(name,owner=(1000,1000),modes=(0o600,0o644),limit=2*1024*1024):
@@ -197,16 +197,16 @@ with patch.object(importlib.util,'spec_from_file_location',side_effect=Assertion
 `);
 });
 
-test('collector parent and observer-compatible inspection authenticate environment metadata without reading secret bytes', () => {
+test('collector and inspection authenticate the protected environment while binding the configured Portal database', () => {
   probe(hostModel + String.raw`
 install_state(initial)
 assert environment_secret in host[l.ENVIRONMENT][0]
 reads.clear();run_host(metadata_only=True)
-assert l.ENVIRONMENT not in reads
+assert l.ENVIRONMENT in reads
 reads.clear();runtime,document,body,observations=run_inspect(metadata_only=True)
-assert l.ENVIRONMENT not in reads and body==initial
-# Ordinary preparation/install defaults deliberately retain their established
-# content-read behavior; only the explicit collection mode is metadata-only.
+assert l.ENVIRONMENT in reads and body==initial
+# Both paths now read the protected file without sourcing it so POSTGRES_DB and
+# CMS_PORTAL_DATABASE_NAME are bound to the authenticated inventory identity.
 reads.clear();run_host();assert l.ENVIRONMENT in reads
 reads.clear();run_inspect();assert l.ENVIRONMENT in reads
 data,owner,mode=host[l.ENVIRONMENT]
@@ -508,14 +508,14 @@ try:
  inventory=m.load_authenticated(captured['ops/payload-control-inventory.py'],prep+'/ops/payload-control-inventory.py')
  expected=inventory.production_inventory(m.HOST_ROOT,runtime,m.RELEASES,m.HOST_ROOT+'/current-release',m.LOCK,
   daily,m.PRODUCTION_BACKUP,m.PRODUCTION_BACKUP+'/restore-protection',m.ENVIRONMENT,
-  runtime+'/compose.production.yaml',runtime+'/compose.payload.production.yaml')
+  runtime+'/compose.production.yaml',runtime+'/compose.payload.production.yaml','portal')
  inventory_identity=inventory.identity(expected)
  compose=b'fixture-compose\n';image_raw=('API_IMAGE='+images['api']+'\nCRON_IMAGE='+images['cron']+'\n').encode()
  write(m.HOST_ROOT+'/current-release',(release+'\n').encode(),0o600,(1000,1000))
  write(release+'/.image-env',image_raw,0o600,(1000,1000));write(release+'/docker-compose.yml',compose,0o644,(1000,1000))
  write(runtime+'/compose.production.yaml',compose,0o644,(1000,1000))
  private_marker=b'NATIVE_PRIVATE_MATERIAL_MUST_NOT_ESCAPE'
- write(m.ENVIRONMENT,b'PRIVATE='+private_marker+b'\n',0o600,(1000,1000));write(m.LOCK,b'lease-fixture\n',0o600)
+ write(m.ENVIRONMENT,b'PRIVATE='+private_marker+b'\nPOSTGRES_DB=portal\nCMS_PORTAL_DATABASE_NAME=portal\n',0o600,(1000,1000));write(m.LOCK,b'lease-fixture\n',0o600)
  write(runtime+'/payload-control-inventory.json',inventory.canonical(expected)+b'\n',0o600)
  key=b'private-key-material-32-bytes!!!';assert len(key)==32
  write(runtime+'/payload-control.key',key,0o600);state_dir=runtime+'/payload-control-state';mkdir(state_dir,0o700)
