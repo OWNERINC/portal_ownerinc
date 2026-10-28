@@ -833,15 +833,16 @@ test('Academy initial/repeated error focuses usable retry, then successful retry
   const h = await academyHarness();
   h.latest('group=initial').reject(new Error('network')); await drain();
   const first = h.button('Tentar novamente');
-  assert.equal(h.doc.activeElement, first);
+  assert.ok(h.doc.activeElement === first, 'the first error focuses its usable retry');
   first.click(); await drain();
   h.latest('group=initial').reject(new Error('network again')); await drain();
   const replacement = h.button('Tentar novamente');
-  assert.notEqual(replacement, first); assert.equal(h.doc.activeElement, replacement);
+  assert.ok(replacement !== first, 'a repeated error replaces the stale retry control');
+  assert.ok(h.doc.activeElement === replacement, 'the repeated error focuses its usable retry');
   assert.equal(replacement.disabled, false); assert.equal(replacement.hidden, false);
   replacement.click(); await drain();
   await h.resolve('group=initial', { data: [course()], total: 1 });
-  assert.equal(h.doc.activeElement, h.doc.getElementById('academy-filter-initial'));
+  assert.ok(h.doc.activeElement === h.doc.getElementById('academy-filter-initial'), 'successful retry returns focus to the usable filter');
   h.page.dispose();
 });
 

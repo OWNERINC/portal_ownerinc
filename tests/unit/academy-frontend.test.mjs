@@ -65,14 +65,14 @@ test('catalog restores the initiating filter focus after remount, but never stea
   await h.resolve('group=initial', { data: [course()], total: 41 });
   await h.resolve('group=role', { data: [course()], total: 1 });
   await h.resolve('/categories', ['Cultura']);
-  assert.equal(h.doc.activeElement, h.doc.querySelector('#academy-filter-initial'));
+  assert.ok(h.doc.activeElement === h.doc.querySelector('#academy-filter-initial'), 'the initiating filter receives focus after its request settles');
 
   const next = h.button('Próxima'); next.focus(); next.click(); await drain();
-  const other = h.doc.querySelector('#academy-filter-role'); other.focus();
+  const other = h.doc.querySelector('.sidebar-nav').querySelector('a'); other.focus();
   await h.resolve('group=initial', { data: [course()], total: 41 });
   await h.resolve('group=role', { data: [course()], total: 1 });
   await h.resolve('/categories', ['Cultura']);
-  assert.equal(h.doc.activeElement, other, 'focus moved by the user must not be stolen by the response');
+  assert.ok(h.doc.activeElement === other, 'focus moved by the user must not be stolen by the response');
   h.page.dispose();
 });
 test('catalog return metadata survives detail and Back/Forward within the shell', async () => {

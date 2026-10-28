@@ -56,6 +56,7 @@ export function catalogView({ root, page, focusPage = page, api, navigate, entry
     async function load() {
       if (!live() || loading) return;
       loading = true;
+      let focusTarget = null;
       cards.setAttribute('aria-busy', 'true'); select.disabled = true;
       pagination.replaceChildren();
       try {
@@ -77,15 +78,22 @@ export function catalogView({ root, page, focusPage = page, api, navigate, entry
         const focusWasNotMoved = pendingFocus?.group === group
           && (active === pendingFocus.source || active === document.body || !active);
         if (focusWasNotMoved) {
-          const target = pendingFocus.kind === 'select'
+          focusTarget = pendingFocus.kind === 'select'
             ? select
             : [...pagination.querySelectorAll('button')].find(control => control.textContent === pendingFocus.text);
-          (target || root.querySelector('h1'))?.focus();
+          focusTarget ||= root.querySelector('h1');
         }
         if (pendingFocus?.group === group) delete focusPage.academyCatalogFocus;
-        if (restoreFilterFocus && (document.activeElement === focusBeforeRender || document.activeElement === document.body)) select.focus();
+        if (restoreFilterFocus && (document.activeElement === focusBeforeRender || document.activeElement === document.body)) focusTarget = select;
       } catch (error) { if (live()) errorState(cards, error, load); }
-      finally { loading = false; if (live()) { cards.setAttribute('aria-busy', 'false'); select.disabled = false; } }
+      finally {
+        loading = false;
+        if (live()) {
+          cards.setAttribute('aria-busy', 'false');
+          select.disabled = false;
+          focusTarget?.focus();
+        }
+      }
     }
     load();
   }
