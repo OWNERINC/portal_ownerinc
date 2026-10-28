@@ -264,3 +264,49 @@ matriz completa conforme o [runbook](../operations/portal-contents-reader.md).
 Mantenha os casos não realizados como `NOT_EXECUTED`; não declare aceite completo
 enquanto o agregado não retornar PASS. Veja também o relatório detalhado
 [`task-4-report.md`](../../.superpowers/sdd/2026-10-20-portal-contents-reader/task-4-report.md).
+
+## Task 1 — gate de verificação reproduzível (2026-10-28)
+
+**Status: BLOCKED / PARTIAL.** O run Windows foi concluído, mas falhou; os dois
+testes Academy que falharam também falharam na reprodução serial direcionada. O
+run autoritativo Linux não iniciou: o Docker Desktop recusou criar até mesmo um
+container Node descartável por indisponibilidade de recursos (`resource
+temporarily unavailable`; a sondagem seguinte retornou `ttrpc: closed`). Nenhuma
+diferença dessas duas falhas Academy é classificada como ambiental sem prova.
+
+- Run ID: `a429be73-12bf-4093-841a-0f068d8219ec`; base `649d3298be885129112017d10ae5afeaaaa4e2ae`.
+- Windows 11 Pro x64, Node `v24.15.0`, npm `11.12.1`, 8 cores / 16 processadores
+  lógicos e 33.276.156 KiB de memória visível. O comando solicitado
+  `npm run verify`, com `PAYLOAD_TEST_EXTERNAL_PARENT=C:\Windows\Temp` e
+  `NODE_OPTIONS=--max-old-space-size=8192`, terminou em **431,455 s**, código 1:
+  **2.155 testes descobertos, 2.116 aprovados, 19 falharam, 20 skips**. Sintaxe e
+  typecheck offline do CMS passaram; a falha na suíte raiz impediu as etapas
+  posteriores do runner. O reporter marcou seis casos top-level nativos de
+  Linux/Docker/PostgreSQL como skip; seus subtestes descendentes compõem o total
+  20. Nomes e resultados estão no relatório local.
+- Reprodução focal serial dos 19 casos afetados: **17 aprovados, 2 falharam, 0
+  skips**, código 1, em **282,772 s**. Os dois persistentes são
+  `academy-frontend.test.mjs` / “catalog restores the initiating filter focus
+  after remount...” e `task-7-shell-mobile.test.mjs` / “Academy initial/repeated
+  error focuses usable retry...”; ambos terminam com `RangeError: Array buffer
+  allocation failed`. A memória livre observada após o run era 20.749.532 KiB;
+  isso não prova causa ambiental nem exclui limite do processo. Os outros 17 casos
+  passaram isoladamente, embora o run completo os tenha reportado com timeouts de
+  `bash.exe`, status de subprocesso ausente, traceback Python, código Windows
+  `3221225794` ou falha do parser Compose. Não foi alterado nem excluído teste.
+- `docker compose --env-file .env.example config --quiet` passou no host Windows
+  (código 0); o teste focal de parser do overlay Payload também passou. Isso não
+  substitui o run Linux. O check Compose final do runner raiz não foi alcançado.
+- Havia 15 containers não relacionados em execução antes da tentativa Linux; todos
+  permaneceram intocados. Não houve `compose up/down`, serviço, banco, browser,
+  deploy ou alteração de VPS. A imagem `node:24-bookworm` foi baixada, mas o daemon
+  falhou antes de iniciar qualquer container; nenhum `npm run verify` Linux foi
+  executado.
+- Nenhuma correção de código foi aplicada: a origem das duas falhas Academy não
+  está demonstrada e o gate Linux exigido continua pendente. O detalhamento
+  sanitizado e os comandos completos estão no relatório local
+  [`task-1-report.md`](../../.superpowers/sdd/2026-10-22-portal-conteudos-v1/task-1-report.md).
+
+O aceite da Task 1 permanece bloqueado até um `npm run verify` completo em Linux
+com Node 24 e investigação das duas falhas Academy sem reduzir assertions nem
+adicionar skips permanentes.
