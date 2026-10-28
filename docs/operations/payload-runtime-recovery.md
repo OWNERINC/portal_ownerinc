@@ -1,6 +1,74 @@
 # Runtime Payload e recuperação coordenada
 
-## P3 — inspeção de plano não é autorização de instalação
+## Gate B — PostgreSQL compartilhado
+
+O contrato produtivo atual usa exclusivamente o serviço `postgres` e o volume
+preexistente `postgres_data`. O nome do database Portal vem de `POSTGRES_DB`
+(default canônico produtivo `portal`), com owner
+`portal_admin`; o Payload usa `ownerinc_cms`, com owner não-superuser
+`cms_admin`. O overlay não define `cms-postgres`, `cms_postgres_data` ou worker.
+O único volume persistente novo do CMS é `cms_uploads_data`.
+
+O inventory protegido novo é `schemaVersion: 3`. Ele registra explicitamente a
+identidade do cluster compartilhado, os dois databases/owners e separa volumes
+preexistentes dos recursos criados. Inventories v2 não são reinterpretados. A
+binding produtiva shared-cluster é `bindingVersion: 4`; seus receipts usam
+`receiptVersion: 2` e `shared-cluster-container-mounts-v2`. Bindings/receipts
+v2/v3 históricos continuam validáveis apenas sob seus contratos originais. O
+nome Portal em `databaseCluster`, `sharedCluster`, `portalTarget`, proofs e
+restore targets deve coincidir; drift entre environment, inventory ou binding
+falha antes de observações ou mutações.
+
+`cms-cluster-bootstrap` é um one-shot perfilado. Só ele recebe a credencial do
+administrador do cluster. Ele é o único criador/reconciliador das seis roles CMS
+e cria ou reconcilia `ownerinc_cms` e
+`cms_admin`, `cms_control`, `cms_controller`, `cms_migrator`, `cms_runtime` e
+`cms_observer`, rotacionando os cinco segredos de login protegidos. Todas são
+`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+`CONNECTION LIMIT -1`, sem expiração e sem configuração persistente após
+`RESET ALL`; `cms_control` é `NOLOGIN`. `cms_admin` recebe somente memberships em
+`cms_control`, `cms_migrator` e `cms_runtime`, com `ADMIN FALSE, INHERIT FALSE,
+SET TRUE`; controller e observer não recebem membership. A credencial do cluster
+não é propagada a provisionador, controller, migrator, observer ou runtime.
+`cms-provision` e `--bootstrap-control` aplicam somente grants no database já
+criado. O Compose injeta `CMS_PORTAL_DATABASE_NAME: ${POSTGRES_DB:-portal}` apenas
+nos one-shots que verificam essa fronteira. O bootstrap valida o nome como
+identificador PostgreSQL simples, exige que o database exista e remove `CONNECT`
+das roles CMS e de `PUBLIC` nesse database configurado. Publicação permanece manual-only.
+Essa exclusividade é somente CMS: `api/db/provision.js` permanece o domínio
+separado que cria/reconcilia `portal_api` e `portal_cron`.
+
+No database CMS, o bootstrap instala e verifica o schema fechado
+`cms_cluster_guard` e sua única função `verify_cms_ownership_contract()`. O helper
+é owned pelo cluster admin, revoga `PUBLIC`, concede apenas `USAGE`/`EXECUTE` a
+`cms_admin` e `cms_observer` e usa `pg_shdepend` internamente para cobrir toda
+classe de objeto com ownership no database atual. A saída contém somente estado e
+contagens agregadas; não permite consultar dependências de Portal ou outros DBs.
+
+Backup coordenado drena `nginx`, `api`, `cron` e `cms`, sem parar `postgres`, e
+captura `postgres.dump` (o nome Portal autenticado no inventory) e `cms.dump`
+(`ownerinc_cms`) no mesmo cluster. O coordenador obtém o target por uma ação
+read-only do guard, nunca faz `source` do environment, e passa o identificador
+validado como argumento posicional a `pg_dump`, `psql` e `pg_restore`.
+O formato novo é `payload-v2-shared-postgres`. Restore valida database e role
+alvo imediatamente antes de cada mutação. Imediatamente antes do `pg_restore` do
+CMS, reexecuta `cms-cluster-bootstrap` para garantir que todas as roles citadas por
+owners/ACLs existam; o restore preserva owners e ACLs e depois reaplica/verifica os
+grants dirigidos. Como o archive pode conter uma versão anterior do helper bounded,
+o bootstrap é repetido imediatamente depois do `pg_restore`, antes de qualquer
+verificação limitada, para reconciliar corpo, owner e ACL exatos. As verificações
+também provam que nenhuma role CMS conecta ao database Portal configurado.
+Cleanup e recovery não removem nem param `postgres` ou `postgres_data`.
+
+Readiness do CMS verifica, além de catálogo e storage, exatamente
+`current_database() = ownerinc_cms` e `current_user = cms_runtime`. O endpoint
+de health continua sendo liveness pura, sem acesso ao banco ou storage.
+
+## Histórico — P3: inspeção de plano não é autorização de instalação
+
+As seções históricas abaixo documentam gates e fixtures anteriores. Quando
+mencionarem bindings v2/v3, `cms-postgres`, quatro volumes ou dois clusters,
+não descrevem o contrato operacional Gate B atual definido acima.
 
 ### B0-01a — envelope mínimo autenticado de contexto (TEST local/native; host pendente)
 
@@ -72,8 +140,149 @@ Esta fatia não persiste receipt ou observação, não cria approval, não captu
 não altera journal/state, policy/records, banco, roles, serviços, containers,
 redes, volumes, releases, pointers ou admission. Não fecha B0-01 produtivo, B0-02
 ou B0-03. `destructiveOperationAuthorized`, `installationExecuted`,
-`deploymentAuthorized` e `productionAuthorized` permanecem `false`;
-`release_not_preflighted` permanece obrigatório.
+`deploymentAuthorized` e `productionAuthorized` permanecem `false` nessa coleta.
+
+### Gate C — instalação privada recuperável (código portátil; host não executado)
+
+O protocolo produtivo novo é `payload-private-install-v2`: candidate e
+qualification schema 2 ligam commit/run/attempt, três image digests, IDs e hashes
+ZIP e de conteúdo dos três artifacts, approval binding digest, inventory,
+`production`, expiry e nonce. Schemas/contrato v1 continuam históricos e não são
+reinterpretados. O CI candidate-only agora exige `main`, publica/qualifica, possui
+`packages: write` somente no job que publica e nunca chama receiver ou instalação.
+O job final gera `payload-private-install-dispatch/install-dispatch.json`, revalidado
+contra candidate/qualification/report, com todos os dezenove inputs exatos do
+workflow de instalação (incluindo IDs, digests da plataforma e hashes de conteúdo).
+O summary e os outputs repetem esses valores não secretos; nenhum campo pode ser
+inferido ou misturado entre runs.
+
+Admission `production:payload-v2` persiste receipt e nonce privados e executa
+somente preflight autenticado. Apply usa `production:payload-apply-v2 RECEIPT NONCE`
+e o mesmo FD9 herdado. Um lock root privado cobre atomicamente reap de nonces
+expirados, quota agregada, reserva `O_EXCL` e receipt; subprocessos usam streaming
+bounded, process group e reap, sem shell ou stderr público. O journal mantém
+checkpoints para reservation/receipts,
+shared PostgreSQL/roles, `cmsUploads`, migrations, catálogo/grants,
+`private_started`, `private_ready`, B1 e floor. Em cada retomada um processo novo
+revalida source, approval/record, inventory, state, lease, B0 e recursos exatos;
+recurso sem creator receipt não é adotado. Readiness inicia somente CMS e confirma
+API/cron/nginx parados; B1 para CMS, captura os quatro stores, assina o binding e
+somente então permite floor/pointer. Ao final CMS volta privado, authority continua
+`legacy/1`, admission/rota ficam fechadas e o worker continua ausente.
+Somente uma autorização ainda válida pode criar a primeira `installIntent`; o
+julgamento é repetido contra o clock imediatamente antes da append de reservation,
+não apenas quando o request é lido. Se expirar nessa janela, nenhuma intent é
+gravada. O
+journal assina `authorizationFreshAtReservation: true`. Uma retomada do mesmo
+receipt/request pode atravessar a expiry depois dessa reserva, pois continua presa
+ao binding e checkpoints assinados. Sem intent, ou com qualquer diferença de
+artifacts, nonce, inventory, source, approval ou lease, a retomada é recusada.
+
+A checagem final recebe o `expiresAt`, não um booleano calculado pelo chamador:
+`reserve_install` relê e revalida state, proof e binding, prepara a transição e
+consulta o clock dentro da seção crítica imediatamente antes do primeiro write
+durável. O campo `authorizationFreshAtReservation` existe somente quando essa
+checagem interna permite a persistência.
+
+No apply produtivo, o receiver cria a única session/process group e o runtime
+filho a herda; não existe uma segunda `start_new_session` que o retire do alcance
+do kill externo. O deadline interno reserva margem estrita antes do deadline do
+receiver. Cleanup usa somente waits com timeout, TERM/KILL repetível e reap
+bounded. Se o kernel não permitir comprovar o reap dentro do prazo, o processo
+entra em fail-stop enquanto o FD9 ainda está retido: apply não continua e a lease
+não é liberada por unwinding normal.
+
+### Gate D: promoção local e explícita da rota editorial
+
+O Gate D implementado permanece desligado por padrão. `nginx/nginx.conf` inclui
+`/etc/nginx/editorial-route-state/active.conf`. O Compose monta **o diretório**
+`nginx/editorial-route-state/`, nunca um arquivo isolado: assim o namespace do
+mount observa os novos dentries/inodes publicados por rename. O estado base aponta
+para `baseline-inactive/include.conf`, materializado com hash no manifest versionado;
+`/editorial` e `/_next` retornam 404 e nenhum request alcança `cms:3001`. Os
+templates promovido e unavailable continuam versionados fora do state directory.
+Em produção o overlay monta o diretório privado inteiro
+`/var/lib/ownerinc/payload-route/` no mesmo destino do container.
+
+O diretório persistente pode começar vazio, mas o overlay não pode ser aplicado
+nesse estado. Sob a lease exclusiva FD9, o operador deve executar primeiro a ação
+`initialize` de `ops/payload-route-promotion.py`, informando runtime, template
+inactive da current release, template unavailable e correlation ID. A ação valida
+root `0700`, current release e hashes dos templates; materializa
+`baseline-inactive/{include.conf,receipt.json}` com receipt assinado pela chave do
+journal, faz todos os fsyncs e ativa o pointer exato `baseline-inactive`. Retry é
+idempotente somente quando pointer, include, assinatura e hash continuam exatos;
+baseline parcial ou adulterado é recusado. A ordem obrigatória é:
+
+1. criar/verificar o diretório privado vazio em modo `0700`;
+2. adquirir e manter a lease exclusiva no FD9;
+3. executar `initialize` e exigir exit 0 / `durability=committed`;
+4. somente então aplicar o overlay e validar/recarregar Nginx.
+
+O overlay reforça essa ordem com um start guard: exige `active.conf` não vazio e
+`nginx -t` bem-sucedido antes de executar o master. Assim um diretório vazio ou um
+pointer que não resolve nunca se torna um Nginx ativo. Esse guard não substitui a
+validação criptográfica feita por `initialize` sob FD9.
+
+`ops/payload-route-promotion.py` é um protocolo posterior e separado do Gate C.
+Uma promoção explícita relê o journal assinado, exige o install v4 de produção em
+`floor_committed`, preserva `authority=legacy/1`, `workerHold=true` e
+`routeReleased=false`, exige a mesma lease operacional em FD9 durante toda a
+observação/publicação, confere current release, receipt do container CMS, imagem
+por digest, container real `running/healthy` e resposta privada exata de
+`/editorial/ready`. Em Linux, FD9 deve já deter `flock(LOCK_EX|LOCK_NB)`: um probe
+separado recusa lease unlocked/shared e a reafirmação no próprio FD recusa lock de
+outro open description. Owner, path, dev/inode, nlink e modo `0600` são conferidos
+na entrada, antes/depois da observação e imediatamente antes/depois do swap; FD9
+permanece aberto. Replacement do pathname também fecha a operação.
+
+O template deve ser exatamente o da release candidate. A publicação cria uma
+generation privada, sela o diretório em modo `0500` e `include.conf`/`receipt.json`
+em `0400`, faz fsync dos dois arquivos e do diretório, renomeia a
+generation, faz fsync do parent e só então cria/fsynca um pointer Nginx temporário.
+Há um único swap atômico desse pointer para `active.conf`, seguido de fsync do
+parent. O receipt contém o hash do include e ambos são revalidados antes/depois da
+ativação; portanto não existe promoted ativo sem receipt correspondente completo.
+Falha antes do swap preserva o estado ativo anterior. Legibilidade do pointer não
+é prova de durabilidade. A publicação só retorna sucesso depois de comprovar o
+fsync do parent posterior ao swap. Qualquer erro/ambiguidade pós-swap sem esse fsync
+recusa o promoted e publica uma **nova** generation unavailable sob a mesma lease,
+com novo swap e fsync completo. Se nem a unavailable comprovar durabilidade, o
+resultado é fail-stop `durability_indeterminate`, nunca success ou
+`route_promoted`. O overlay apenas
+monta o diretório; não publica porta, inicia serviço, recarrega Nginx ou autoriza
+cutover.
+
+Na configuração promovida, `/editorial` redireciona a `/editorial/admin`;
+`/editorial/admin` e `/editorial/api` usam apenas o upstream CMS privado.
+`/editorial/ready`, `/editorial/health`, a bridge `/editorial/api/portal-news`,
+rotas internas e o image optimizer continuam 404. Uploads têm limites próprios,
+cross-site é recusado, headers internos conhecidos são apagados e somente
+`/_next/static/` é encaminhado. Erros 502/503/504 viram o 503 JSON controlado
+`editorial_unavailable`, sem fallback.
+
+O modo `recover` não tenta promover: sob a lease exclusiva ele sempre materializa,
+ativa e revalida uma generation completa do template fechado
+`editorial-route.unavailable.conf`, cujo hash é fixado pelo controlador. O contrato
+responde 503 e não faz proxy. Recovery só retorna sucesso com
+`durability=committed`; pointer legível após fsync falho permanece indeterminado.
+Recovery e promotion exigem que a generation autenticada `baseline-inactive`
+criada por `initialize` ainda exista intacta, mesmo quando o pointer ativo já
+aponta para uma generation posterior.
+Validação/reload Nginx continua operação separada e
+explicitamente aprovada; o Gate C nunca chama este protocolo.
+
+Os eventos são JSON fechado. O controlador registra commit, release lógico (o
+commit, nunca path), digest, readiness/motivo, authority mode/epoch e correlation
+ID. Readiness CMS registra apenas `ready`, `database_unavailable` ou
+`storage_unavailable` com request ID. O runtime classifica backup, restore, banco,
+storage e divergência; writer recusado registra `legacy_write_refused`. Secrets,
+cookies, tokens, credentials e paths privados não fazem parte desses schemas.
+
+O smoke local permitido é `npm run smoke:payload-route:static`. Ele retorna
+`status=implemented` e `routePromoted=false`. HTTPS/browser e Linux/Docker
+descartáveis continuam evidência pendente. Esta entrega não executou Docker, SSH,
+VPS, browser live, promoção, cutover ou Gate E.
 
 ### Restore B0 isolado com checkpoints assinados (native TEST confirmado; host pendente)
 
@@ -429,15 +638,15 @@ antes dos builds, com cap de seis minutos. Sem required-native, somente esse cas
 execução nativa continua pendente até CI demonstrar sucesso.
 
 O harness `scripts/integration/payload-fence-topology.mjs` exige runner Linux
-GitHub-hosted, IDs run/attempt e contexto Docker default/local. Cria nove containers
+GitHub-hosted, IDs run/attempt e contexto Docker default/local. Cria oito containers
 e três redes de nomes únicos `payload-fence-<run>-<attempt>-<nonce>-*`. Os nomes
 do contrato são apenas projeções lógicas dessas redes; nunca acessa o
 `ownerinc_proxy` real. Reutiliza pins existentes de PostgreSQL, Nginx e Node,
 cacheados pelo preparo de registry, com `--pull never`. Não compartilha clusters
 com migrations CI ou com a qualificação legacy-security.
 
-Portal Nginx conecta backend/proxy; API/cron conectam backend/egress; CMS e dois
-PG16 conectam backend. Proxy HTTPS, probe e serviço estrangeiro benigno usam
+Portal Nginx conecta backend/proxy; API/cron conectam backend/egress; CMS e um
+PG16 compartilhado conectam backend. Proxy HTTPS, probe e serviço estrangeiro benigno usam
 somente a rede proxy da fixture. API/CMS são **stubs**, não aplicações compiladas.
 Não há portas de host, binds, volumes persistentes ou credenciais reais. Tmpfs
 recebe config/PGDATA; `volumeKeys: []` não inventa correspondência de volumes de
@@ -452,7 +661,9 @@ corpo gerado **somente após falha do upstream conhecido**. Não aceita 502 gen�
 como prova de produção. O serviço estrangeiro preserva ID, configuração,
 StartedAt e resposta antes/depois.
 
-São dois clusters PG16 reais, databases `portal` e `ownerinc_cms`. Observam-se
+É um cluster PG16 real com os databases lógicos `portal` e `ownerinc_cms`. As
+duas observações usam o mesmo container e `system_identifier`, mas exigem OIDs
+de database distintos. Observam-se
 identidades, clients/queries/transações, prepared transactions, tipos de backend,
 subscriptions/slots/extensions e condições de visibilidade. Processos internos
 conhecidos de manutenção PG16 não são classificados como aplicações escritoras;
@@ -805,9 +1016,11 @@ fence de ingress/nginx observado e baseline autorizado de grants/roles continuam
 gates separados antes de rollback ou criação real. Não há executor de rollback,
 checkpoint novo, abertura de admission ou autorização de instalação neste passo.
 
-### Binding de produção v3 e receipts persistentes
+### Histórico — binding de produção v3 e receipts persistentes
 
-O state externo continua `schemaVersion: 2`. Bindings históricos sem versão e
+Esta seção registra o contrato anterior, substituído em produção por inventory
+v3, binding v4 e receipt v2 shared-cluster. O state externo então continuava
+`schemaVersion: 2`. Bindings históricos sem versão e
 isolados `bindingVersion: 2` mantêm suas formas, bytes canônicos, HMACs e algoritmo
 de receipts; leitura não adiciona defaults, converte ou regrava evidência.
 
@@ -856,9 +1069,11 @@ persistência são internas: não qualificam B0 nem fornecem rollback pre-floor.
 Recuperação B0 cercada e publicação autenticada de release são gates obrigatórios
 antes de conectar qualquer criação de recursos reais a uma interface de produção.
 
-## Diagnóstico do predicado de quiescência do initializer
+## Histórico — diagnóstico do predicado de quiescência do initializer v2/v3
 
-O report de `38473939196` atribui a falha da terceira fixture ao initializer em
+Esta seção preserva evidência de uma execução anterior ao shared-cluster; suas
+referências a `cms-postgres` não são instruções atuais. O report de `38473939196`
+atribui a falha da terceira fixture ao initializer em
 `phase=quiescence`, `installStage=none`, com `writers_not_quiescent`. As duas
 fixtures anteriores passaram seus checks iniciais; negativos e restores não
 foram alcançados. Isso **não identifica a causa histórica** nem qual serviço
@@ -1443,20 +1658,39 @@ Não executar deploy, comandos SSH, cutover ou alterações de serviços sem aut
 `docker-compose.payload.yml` é acrescentado à stack Portal. Sem esse arquivo,
 API/cron continuam independentes do CMS em autoridade `legacy`. A API recebe
 `CMS_INTERNAL_URL`; o CMS consulta o Portal por HTTP privado, nunca pelo PortalDB.
-`cms-postgres` usa PostgreSQL16, banco `ownerinc_cms`, sem porta publicada.
-Persistência: `cms_postgres_data` e `cms_uploads_data`, separadas dos volumes antigos.
+O PostgreSQL16 existente é somente o serviço `postgres`, sem porta publicada, com
+os databases `portal` e `ownerinc_cms` no mesmo cluster. Persistência usa os três
+volumes `postgres_data`, `uploads_data` e `cms_uploads_data`; não existe volume de
+database exclusivo do CMS.
 
-`cms-provision` recebe somente credencial administrativa e senhas de migrator/runtime;
-`cms-control-roles` é um serviço one-shot isolado por profile e recebe a credencial
-`cms_controller` junto das credenciais necessárias à verificação. CMS web/worker
-recebem somente `cms_runtime`. A preparação privada gera a senha distinta do
-controller. Os deploys verificam as roles com `--verify-control` e, somente se a
-verificação falhar, executam o bootstrap estrito antes da migration nativa; roles
-existentes nunca têm atributos/senhas alterados. Bootstrap rejeita ownership ou ACLs
-nativas inseguras, e a verificação de release continua obrigatória. Provisionamento
-revoga CREATE/PUBLIC e concede privilégios existentes/defaults. Startup verifica
-identidade/grants sem DDL. Migrations CLI terminam antes de web/worker. `push:false`
-e ausência de `prodMigrations` permanecem obrigatórios; nenhum autoRun no web.
+`cms-cluster-bootstrap` recebe, durante o one-shot, a URL do cluster admin e os
+cinco segredos das roles CMS. Ele é sempre executado antes de `cms-provision`,
+tanto no release manual/CI quanto no preview, e reconcilia atributos e passwords
+sem conceder `CREATEROLE` a `cms_admin`. `CMS_OBSERVER_PASSWORD` e a URL dedicada
+do observer são distintas das demais credenciais. `cms-provision` recebe somente a URL de
+owner e aplica grants de database/schema; `cms-control-roles` recebe somente owner
+e controller para grants/verificação. Migrator recebe somente sua URL, e CMS web
+somente `cms_runtime`. Nenhum deles recebe `POSTGRES_PASSWORD` ou a URL cluster-admin.
+Os deploys verificam os grants com `--verify-control` e, somente se necessário,
+executam `--bootstrap-control`, que não cria nem altera roles. Bootstrap recusa
+membership, elevação, ownership ou ACLs nativas inseguras, e a verificação de
+release continua obrigatória. Startup verifica identidade/grants sem DDL.
+Nas fronteiras de retry `provisioned`, `floor_commit_pending` e `floor_committed`,
+o initializer usa somente `--verify-cluster-roles`: uma consulta read-only a
+`pg_roles`, `pg_auth_members`, `pg_database` e `has_database_privilege` que exige
+o contrato integral das seis roles, as três memberships exatas de `cms_admin` e
+ausência de `CONNECT` ao Portal configurado, incluindo `cms_admin` e
+`cms_observer`. Não usa os antigos probes fragmentados como prova da fronteira.
+Estados históricos v2/v3 e receipts v4 continuam interpretados por seus contratos
+originais; nenhum formato persistido foi alterado.
+Migrations CLI terminam antes do web. `push:false` e ausência de `prodMigrations`
+permanecem obrigatórios; nenhum autoRun no web.
+O comando comum do serviço `cms-migrate` executa `provision-db.ts --grants` depois
+das migrations. Essa etapa normaliza grants atuais e default privileges do
+`cms_observer`, concede `SELECT` somente em `payload_migrations` e
+`owner_news_mutation_head` e verifica o resultado. Receiver, initializer, sequência
+manual e preview invocam esse mesmo serviço antes das verificações/finalização que
+dependem do observer.
 
 Imagem única `ownerinc-portal-cms@sha256:...` para todos os processos CMS. Dockerfile
 multi-stage Node24 preserva CLI, tsx, configs e migrations; executa como `node`.
@@ -1525,15 +1759,22 @@ RELEASE_FORMAT=payload-v1. Parser recusa duplicados, campos desconhecidos,
 referências mutáveis ou CMS parcial. Não carregar manifesto por source/eval.
 
 Conjunto legacy preservado: postgres.dump/uploads.tar.gz e manifest.sha256.
-Conjunto payload-v1:
+Conjunto produtivo atual `payload-v2-shared-postgres`:
 
 1. postgres.dump — PortalDB, autoridade e sessões;
 2. uploads.tar.gz — todos os uploads legados;
-3. cms-postgres.dump — conteúdo, jobs, versões, import/mutation ledgers;
+3. cms.dump — conteúdo, jobs, versões, import/mutation ledgers, owners e ACLs;
 4. cms-uploads.tar.gz — **todo** CMS_UPLOAD_DIR, inclusive `.owner-news-import/`,
    staging, promoções, órfãos e bytes com COMMIT desconhecido;
 5. release.images, operations-proof.json e backup.format — metadados verificados;
 6. manifest.sha256 — sete entradas exatas, incluindo todos os metadados acima.
+
+O backup drena todos os writers, mas mantém `postgres` ativo. `cms.dump` é criado
+dentro do serviço `postgres` pelo cluster admin existente, sem `--no-owner` ou
+`--no-privileges`. O restore revalida cluster, database e superuser imediatamente
+antes de `pg_restore`, também sem `--no-owner`, `--no-privileges` ou `--role`, e
+depois executa migrations, grants e verificadores. `payload-v1` com
+`cms-postgres.dump` é formato histórico e não pode ser restaurado pelo fluxo Gate B.
 
 Backup diário e pré-release usam o mesmo contrato. CMS não aplica expurgo automático
 enquanto política coordenada/ambiguidades estiver pendente; legacy mantém14dias.
@@ -1638,8 +1879,9 @@ foi executada no host.
   além de authority, migrations e catálogo CMS esperado, antes de reabrir admissão.
 - rollback-check limita a primeira instalação a rollback de aplicação, condicionado
   à prova do backup legado e ao Portal ainda em authority legacy/1; não restaura nem
-  apaga volumes/banco CMS, mantém CMS web/worker parados e nunca inicia o worker.
-  O container de banco CMS pode continuar executando, sem acesso público. Após a fase migrada, só aceita o
+  apaga o database `ownerinc_cms` nem `cms_uploads_data`, mantém CMS web parado e
+  nunca inicia worker. O PostgreSQL compartilhado permanece executando e não é
+  removido. Após a fase migrada, só aceita o
   mesmo floor CMS preauthority, sem fallback de dados para legacy.
 - verify-release verifica imagens/processos e o catálogo CMS nativo read-only;
   não prova a aceitação de browser/sessão v2 nem inicia job, import ou finalizer.
@@ -1656,13 +1898,14 @@ reais sob lock herdado, testa rejeições pré-destrutivas e compara dumps compl
 schemas/catálogos, sequências e árvores de arquivos após dois restores, preservando
 o anúncio legado pelo UUID exato da origem (e confirmando ausente o seed do alvo),
 authority `legacy/1`, protocolo ausente e worker parado.
-O setup CMS descartável também reproduz a sequência de produção: depois de
-`cms-provision`, executa o serviço perfilado `cms-control-roles` com uma senha
-`cms_controller` sintética e privada, sobrescrevendo o comando com `--bootstrap-control`
-antes de `cms-migrate`. Isso cria e verifica somente as roles baseline
-`cms_control`/`cms_controller` e seus grants mínimos; não instala o protocolo nem
-relaxa a checagem de roles. O `verify-release` continua exigindo esse contrato, então
-roles ausentes/inseguras falham antes da verificação do protocolo/catálogo.
+O setup CMS descartável também reproduz a sequência de produção: executa primeiro
+`cms-cluster-bootstrap`, que cria/reconcilia as seis roles CMS com segredos sintéticos
+e deixa `cms_admin NOCREATEROLE`; depois executa `cms-provision`,
+`--bootstrap-control` e `cms-migrate`; o `--grants` pós-migration normaliza o
+observer. O bootstrap de controle aplica e verifica
+somente grants mínimos; não cria roles nem instala o protocolo. O `verify-release`
+continua exigindo esse contrato, então roles ausentes/inseguras falham antes da
+verificação do protocolo/catálogo.
 Somente o overlay descartável define `CRON_BOOTSTRAP_ONLY=true`; o runner confere
 o ambiente efetivo do container cron, aguarda sua healthcheck real e repete snapshots
 com os writers parados. Para a identidade dessas comparações (não para os backups
@@ -1849,14 +2092,15 @@ O overlay Payload adiciona o CMS healthy como dependência do Nginx, portanto o
 admin não é exposto por mera aceitação TCP. DB indisponível, migration ausente,
 storage não gravável ou modo inválido mantêm readiness fechada.
 
-O formato coordenado permanece byte-compatível com `payload-v1`: `postgres.dump`,
-`uploads.tar.gz`, `cms-postgres.dump`, `cms-uploads.tar.gz`, `release.images`,
+O formato coordenado atual é `payload-v2-shared-postgres`: `postgres.dump`,
+`uploads.tar.gz`, `cms.dump`, `cms-uploads.tar.gz`, `release.images`,
 `operations-proof.json`, `backup.format` e `manifest.sha256`. A fixture manual usa
 as mesmas funções `verify_backup_manifest` e `verify_storage_archive`, restaura em
 cluster PostgreSQL independente e só então compara IDs/status/Version/SHA/bytes.
 Antes da primeira mutação no destino, a fixture captura e verifica um backup de
-proteção. O restore CMS preserva owners e ACLs autenticados do archive, em vez de
-forçar tudo para `cms_migrator`; depois reaplica grants runtime e audita por
+proteção. O restore CMS usa o cluster admin interno ao serviço `postgres` e
+preserva owners e ACLs autenticados do archive, sem `--no-owner`,
+`--no-privileges` ou `--role`; depois reaplica migrations/grants runtime e audita por
 `cms_observer` o catálogo, funções `SECURITY DEFINER`, triggers, ownership e ACLs.
 O restore operacional mantém o backup de proteção e writers parados em falha; foi
 removida uma chamada duplicada sem efeito a `prepare-restore` antes de `cms-migrate`,
@@ -1930,12 +2174,13 @@ substituição atômica do `production.runtime.conf` mantém bytes anteriores, u
 modo existentes (neste host, operador uid 1000 e modo 0600); a instalação não muda
 permissões de usuário. O check VPS reportado encontrou `PORTAL_PUBLIC_URL` ausente e
 nenhuma chave CMS: nesse primeiro bootstrap, `--apply` acrescenta a URL canônica junto
-com as nove chaves CMS na mesma substituição atômica, preservando todo o conteúdo
+com as dez chaves CMS na mesma substituição atômica, preservando todo o conteúdo
 original. A ausência só é permitida sem qualquer chave CMS; URL explicitamente vazia
 ou diferente e configuração CMS completa sem URL são recusadas, sem reparo implícito.
-Sem nenhuma das nove chaves CMS exigidas, gera senhas admin,
+Sem nenhuma das dez chaves CMS exigidas, gera senhas admin,
 migrator e runtime e `PAYLOAD_SECRET`/chaves de serviço com 32 bytes aleatórios
-distintos. URLs usam `cms-postgres:5432/ownerinc_cms` e os roles correspondentes.
+distintos. Também gera a senha distinta de `cms_controller`. URLs usam
+`postgres:5432/ownerinc_cms` e os roles correspondentes.
 Um conjunto existente completo e válido é preservado sem rotação; qualquer conjunto
 parcial, duplicado ou inválido é recusado, sem `source`/`eval` do arquivo e sem
 imprimir valores.
@@ -1957,8 +2202,8 @@ limitado ao receiver, guard e environment; não contém o novo código, overlay,
 journal, imagem ou dump. Não instala um wrapper production novo, não altera
 `authorized_keys` nem permissões/owner do override existente
 `runtime/compose.production.yaml`.
-O inventário protegido é root:root 0600, contém o projeto de produção e quatro
-volumes (`postgres_data`, `uploads_data`, `cms_postgres_data`, `cms_uploads_data`)
+O inventário protegido é root:root 0600, contém o projeto de produção e três
+volumes (`postgres_data`, `uploads_data`, `cms_uploads_data`)
 com seus labels Compose e mounts revisados, mais paths explícitos para release,
 lock, environment, overlays e raízes de backup. O diretório privado de proteção
 pré-restore fica separado da raiz diária.
@@ -1969,7 +2214,7 @@ O manifesto de candidato contém somente `CMS_IMAGE=` para o digest revisado
 O receiver comum acrescenta o override novo somente para release `payload-v1` em
 produção, depois do override normal, e falha se ele estiver ausente/for symlink.
 Legacy API/cron e staging continuam no conjunto anterior de arquivos Compose. O
-override mantém CMS/PostgreSQL/worker sem portas publicadas e somente na rede
+override mantém CMS e o PostgreSQL compartilhado sem portas publicadas e somente na rede
 `ownerinc-portal-backend` interna; Nginx permanece na topologia já configurada. Aplica
 limites de CPU/memória, `no-new-privileges` e logs locais limitados. Não muda
 autoridade, formato de backup, retenção ou agenda diária.

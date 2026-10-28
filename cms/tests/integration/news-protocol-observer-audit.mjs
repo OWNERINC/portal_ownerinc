@@ -385,7 +385,7 @@ export function assertObserverAuditReport(report) {
     || report.ready !== false || report.admissionActivated !== false || report.releaseCertified !== false
     || report.writeCoverageCertified !== false || report.drainVerified !== false
     || report.passwordPresenceCheck !== 'not_performed_unprivileged'
-    || report.clusterSharedOwnershipCheck !== 'performed_read_only_pg_shdepend_check'
+    || report.clusterSharedOwnershipCheck !== 'bounded_current_database_ownership_helper'
     || report.physicalClusterIdentity !== 'not_verified') fail('observer_audit_report_contract_failed')
   return report
 }
@@ -923,7 +923,7 @@ export function validateObserverDockerContainer(lease, passwordFile, inspected, 
   const expectedLabels = observerAuditDockerLabels(lease)
   const inspectedMounts = inspected?.Mounts || []
   const mounts = inspectedMounts.filter(mount => mount?.Destination === '/var/lib/postgresql/data')
-  const secretMounts = inspectedMounts.filter(mount => mount?.Destination === '/run/secrets/cms_admin_password')
+  const secretMounts = inspectedMounts.filter(mount => mount?.Destination === '/run/secrets/portal_admin_password')
   const bindings = inspected?.HostConfig?.PortBindings?.['5432/tcp']
   const environment = Array.isArray(inspected?.Config?.Env) ? inspected.Config.Env : []
   const networks = Object.entries(inspected?.NetworkSettings?.Networks || {})
@@ -976,16 +976,16 @@ async function createFreshCluster(lease, runDirectory, passwords, report) {
   dockerInspectVolume(lease)
 
   const envFile = path.join(runDirectory, 'postgres-init.env')
-  const passwordFile = path.join(runDirectory, 'postgres-admin-password')
+  const passwordFile = path.join(runDirectory, 'postgres-cluster-admin-password')
   if (/[\0\r\n,]/u.test(passwordFile)) fail('observer_private_bind_path_unsafe')
-  await writePrivateFile(passwordFile, `${passwords.cms_admin}\n`, runDirectory)
-  const contents = 'POSTGRES_USER=cms_admin\nPOSTGRES_DB=postgres\nPOSTGRES_PASSWORD_FILE=/run/secrets/cms_admin_password\n'
+  await writePrivateFile(passwordFile, `${passwords.portal_admin}\n`, runDirectory)
+  const contents = 'POSTGRES_USER=portal_admin\nPOSTGRES_DB=postgres\nPOSTGRES_PASSWORD_FILE=/run/secrets/portal_admin_password\n'
   await writePrivateFile(envFile, contents, runDirectory)
   try {
     docker(lease.dockerContext, ['create', '--name', lease.containerName, ...dockerLabelsArgs(lease), '--network', 'bridge',
       '--publish', `${lease.host}:${lease.port}:5432`, '--mount',
-      `type=volume,source=${lease.volumeName},target=/var/lib/postgresql/data`,
-      '--mount', `type=bind,source=${passwordFile},target=/run/secrets/cms_admin_password,readonly`,
+       `type=volume,source=${lease.volumeName},target=/var/lib/postgresql/data`,
+       '--mount', `type=bind,source=${passwordFile},target=/run/secrets/portal_admin_password,readonly`,
       '--env-file', envFile, '--memory', '1g', '--cpus', '1.5', '--pids-limit', '256', '--restart', 'no', lease.imageId])
   } finally { await unlink(envFile).catch(() => {}) }
   report.containerCreated = true
@@ -1004,7 +1004,7 @@ export async function waitForPostgres(lease, backend, password, createClient = o
   const deadline = Date.now() + 90000
   let connected = false
   while (Date.now() < deadline) {
-    const client = createClient({ connectionString: makeConnectionString('cms_admin', password, 'postgres', lease.port),
+    const client = createClient({ connectionString: makeConnectionString('portal_admin', password, 'postgres', lease.port),
       connectionTimeoutMillis: 3000, query_timeout: 8000 })
     try {
       await client.connect()
@@ -1016,7 +1016,7 @@ export async function waitForPostgres(lease, backend, password, createClient = o
         (pg_catalog.pg_control_system()).system_identifier::text AS system_identifier`)
       const row = identity.rows[0]
       const identifier = row?.system_identifier
-      if (row?.role !== 'cms_admin' || row?.database !== 'postgres' || row?.superuser !== true
+       if (row?.role !== 'portal_admin' || row?.database !== 'postgres' || row?.superuser !== true
         || String(row?.server_address || '').split('/')[0] !== backend.backendIPv4
         || Number(row?.server_port) !== 5432 || Math.floor(Number(row?.version_num) / 10000) !== 16
         || typeof identifier !== 'string' || !postgresSystemIdentifierPattern.test(identifier)) {
@@ -1036,11 +1036,13 @@ export async function waitForPostgres(lease, backend, password, createClient = o
 
 export async function createOwnerCmsDatabase(lease, passwords, verifiedBackend, inspectedBackend,
   clientRunner = withClient) {
-  await withVerifiedWriteClient(makeConnectionString('cms_admin', passwords.cms_admin, 'postgres', lease.port),
-    verifiedBackend, inspectedBackend, { role: 'cms_admin', database: 'postgres', superuser: true }, async client => {
+  await withVerifiedWriteClient(makeConnectionString('portal_admin', passwords.portal_admin, 'postgres', lease.port),
+    verifiedBackend, inspectedBackend, { role: 'portal_admin', database: 'postgres', superuser: true }, async client => {
     const exists = await client.query('SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1', [DATABASE])
     if (exists.rowCount !== 0) fail('observer_target_database_collision_refused')
-    await client.query(`CREATE DATABASE ${DATABASE} OWNER cms_admin TEMPLATE template0`)
+    const portal = await client.query("SELECT 1 FROM pg_catalog.pg_database WHERE datname='portal'")
+    if (portal.rowCount !== 0) fail('observer_portal_database_collision_refused')
+    await client.query('CREATE DATABASE portal OWNER portal_admin TEMPLATE template0')
   }, clientRunner)
 }
 
@@ -1052,7 +1054,7 @@ export async function verifyPostgresAndCreateOwnerCmsDatabase(lease, backend, pa
 } = {}) {
   const targetLease = validateObserverAuditLease(lease)
   const verifiedBackend = await stageResult('verify-new-postgres16-system-identity',
-    () => waitForPostgres(targetLease, backend, passwords.cms_admin, createClient))
+    () => waitForPostgres(targetLease, backend, passwords.portal_admin, createClient))
   const inspectedBackend = await stageResult('reconfirm-new-postgres16-docker-identity',
     () => assertAuthorizedDockerBackend(verifiedBackend, inspectContainer(targetLease, passwordFile)),
     value => ({ containerId: value.containerId, backendIPv4: value.backendIPv4 }))
@@ -1097,13 +1099,24 @@ function exactFinalizerOutput(result, expectedInstalled) {
 
 async function provisionNativeRolesAndMigrate(lease, passwords, verifiedBackend, passwordFile) {
   assertVerifiedBackendIdentity(verifiedBackend)
+  const clusterAdminURL = makeConnectionString('portal_admin', passwords.portal_admin, 'postgres', lease.port)
   const adminURL = makeConnectionString('cms_admin', passwords.cms_admin, DATABASE, lease.port)
   const migratorURL = makeConnectionString('cms_migrator', passwords.cms_migrator, DATABASE, lease.port)
   const script = ['--import', 'tsx', path.join(CMS, 'scripts/provision-db.ts')]
+  spawnCmsStage('bootstrap-cluster-roles', [...script, '--bootstrap-database'], 'bootstrap', {
+    CMS_DATABASE_URL: clusterAdminURL,
+    CMS_POSTGRES_PASSWORD: passwords.cms_admin,
+    CMS_MIGRATOR_PASSWORD: passwords.cms_migrator,
+    CMS_RUNTIME_PASSWORD: passwords.cms_runtime,
+    CMS_CONTROLLER_PASSWORD: passwords.cms_controller,
+    CMS_OBSERVER_PASSWORD: passwords.cms_observer,
+    CMS_PORTAL_DATABASE_NAME: 'portal',
+  })
   await assertWriteTargetIdentity(adminURL, lease, passwordFile, verifiedBackend,
-    { role: 'cms_admin', database: DATABASE, superuser: true })
+    { role: 'cms_admin', database: DATABASE, superuser: false })
   spawnCmsStage('provision-native-roles', [...script, '--provision'], 'provision', {
     CMS_DATABASE_URL: adminURL,
+    CMS_PORTAL_DATABASE_NAME: 'portal',
     CMS_MIGRATOR_PASSWORD: passwords.cms_migrator,
     CMS_RUNTIME_PASSWORD: passwords.cms_runtime,
     CMS_CONTROLLER_PASSWORD: passwords.cms_controller,
@@ -1116,7 +1129,7 @@ async function provisionNativeRolesAndMigrate(lease, passwords, verifiedBackend,
   const payloadSecrets = { PAYLOAD_SECRET: randomSecret(), PAYLOAD_TO_PORTAL_SECRET: randomSecret(),
     PORTAL_TO_PAYLOAD_SECRET: randomSecret() }
   await assertWriteTargetIdentity(adminURL, lease, passwordFile, verifiedBackend,
-    { role: 'cms_admin', database: DATABASE, superuser: true })
+    { role: 'cms_admin', database: DATABASE, superuser: false })
   spawnCmsStage('payload-migrate-six-native', ['node_modules/payload/bin.js', 'migrate'], 'migrate', {
     CMS_DATABASE_URL: migratorURL,
     CMS_UPLOAD_DIR: actualUploadDir,
@@ -1138,9 +1151,15 @@ async function provisionNativeRolesAndMigrate(lease, passwords, verifiedBackend,
     return { count: result.rows.length, sha256: buildCanonicalSnapshotDigest(result.rows) }
   })
 
-  const adminEnv = { CMS_DATABASE_URL: adminURL, CMS_CONTROLLER_PASSWORD: passwords.cms_controller }
+  spawnCmsStage('post-migration-runtime-and-observer-grants', [...script, '--grants'], 'migrate', {
+    CMS_DATABASE_URL: migratorURL,
+    CMS_PORTAL_DATABASE_NAME: 'portal',
+  })
+
+  const adminEnv = { CMS_DATABASE_URL: adminURL, CMS_CONTROLLER_PASSWORD: passwords.cms_controller,
+    CMS_PORTAL_DATABASE_NAME: 'portal' }
   await assertWriteTargetIdentity(adminURL, lease, passwordFile, verifiedBackend,
-    { role: 'cms_admin', database: DATABASE, superuser: true })
+    { role: 'cms_admin', database: DATABASE, superuser: false })
   spawnCmsStage('bootstrap-control-roles', [...script, '--bootstrap-control'], 'bootstrap', adminEnv)
   spawnCmsStage('verify-control-roles', [...script, '--verify-control'], 'bootstrap', adminEnv)
   return migrations
@@ -1158,19 +1177,19 @@ async function provisionObserverRole(lease, passwords, verifiedBackend, password
   const { buildNewsProtocolObserverProvisioningSQL } = await import(pathToFileURL(
     path.join(CMS, 'scripts/news-protocol-observer-contract.ts')).href)
   const adminURL = makeConnectionString('cms_admin', passwords.cms_admin, DATABASE, lease.port)
-  const sql = buildNewsProtocolObserverProvisioningSQL(passwords.cms_observer)
+  const sql = buildNewsProtocolObserverProvisioningSQL('portal')
   const inspectedBackend = inspectAuthorizedDockerBackend(lease, passwordFile, verifiedBackend)
   await withVerifiedWriteClient(adminURL, verifiedBackend, inspectedBackend,
-    { role: 'cms_admin', database: DATABASE, superuser: true }, async client => {
+    { role: 'cms_admin', database: DATABASE, superuser: false }, async client => {
     await client.query(sql)
   })
-  return { roleCreated: true, builder: 'buildNewsProtocolObserverProvisioningSQL' }
+  return { roleCreated: false, builder: 'buildNewsProtocolObserverProvisioningSQL' }
 }
 
 async function snapshotInstalledProtocol(lease, passwords, verifiedBackend) {
   return withClient(makeConnectionString('cms_admin', passwords.cms_admin, DATABASE, lease.port), async client => {
     await assertVerifiedPostgresBackendIdentity(client, { role: 'cms_admin', database: DATABASE,
-      backendIPv4: verifiedBackend.backendIPv4, superuser: true, verifiedBackend })
+      backendIPv4: verifiedBackend.backendIPv4, superuser: false, verifiedBackend })
     await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
     let transactionOpen = true
     try {
@@ -1302,18 +1321,25 @@ async function proveObserverCanReadOwnershipCatalog(lease, passwords, verifiedBa
       const tx = await client.query(`SELECT current_setting('transaction_read_only') AS read_only,
         current_setting('transaction_isolation') AS isolation`)
       if (tx.rows[0]?.read_only !== 'on' || tx.rows[0]?.isolation !== 'repeatable read') {
-        fail('observer_shdepend_probe_transaction_mismatch')
+        fail('observer_ownership_probe_transaction_mismatch')
       }
-      const result = await client.query(`SELECT has_table_privilege(current_user, 'pg_catalog.pg_shdepend', 'SELECT') AS can_select,
-        count(*) FILTER (WHERE d.refclassid='pg_catalog.pg_authid'::regclass
-          AND d.refobjid=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user) AND d.deptype='o')::text AS observer_owned_objects
-        FROM pg_catalog.pg_shdepend d`)
-      if (result.rows[0]?.can_select !== true || result.rows[0]?.observer_owned_objects !== '0') {
-        fail('observer_shdepend_visibility_contract_failed')
+      const result = await client.query(`WITH owned(owner) AS (
+        SELECT c.relowner FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+        UNION ALL SELECT p.proowner FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+        UNION ALL SELECT t.typowner FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace
+          WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+        UNION ALL SELECT n.nspowner FROM pg_catalog.pg_namespace n
+          WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+      ) SELECT count(*)::text AS observer_owned_objects FROM owned
+        WHERE owner=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user)`)
+      if (result.rows[0]?.observer_owned_objects !== '0') {
+        fail('observer_ownership_visibility_contract_failed')
       }
       await client.query('ROLLBACK')
       open = false
-      return { selectVisible: true, observerOwnedObjects: 0, readOnlyTransaction: true }
+      return { databaseLocalCatalogsReadable: true, observerOwnedObjects: 0, readOnlyTransaction: true }
     } catch (error) {
       if (open) await client.query('ROLLBACK').catch(() => {})
       throw error
@@ -1387,7 +1413,7 @@ function safeSqlstate(value) { return typeof value === 'string' && /^[0-9A-Z]{5}
 function passwordsForNewCluster() {
   const passwords = {}
   const used = new Set()
-  for (const role of ['cms_admin', 'cms_migrator', 'cms_runtime', 'cms_controller', 'cms_observer']) {
+  for (const role of ['portal_admin', 'cms_admin', 'cms_migrator', 'cms_runtime', 'cms_controller', 'cms_observer']) {
     let password
     do { password = randomSecret() } while (used.has(password))
     used.add(password)
@@ -1478,9 +1504,9 @@ async function executeLease(leasePath) {
     const finalizer = await stageResult('install-protocol-with-one-shot-finalizer', async () => {
       const adminURL = makeConnectionString('cms_admin', passwords.cms_admin, DATABASE, lease.port)
       await assertWriteTargetIdentity(adminURL, lease, passwordFile, verifiedBackend,
-        { role: 'cms_admin', database: DATABASE, superuser: true })
+        { role: 'cms_admin', database: DATABASE, superuser: false })
       const result = spawnCmsStage('finalize-protocol', ['--import', 'tsx', path.join(CMS, 'scripts/finalize-news-protocol.ts'),
-        '--finalize-protocol'], 'finalizer', { CMS_ADMIN_DATABASE_URL: adminURL })
+        '--finalize-protocol'], 'finalizer', { CMS_ADMIN_DATABASE_URL: adminURL, CMS_PORTAL_DATABASE_NAME: 'portal' })
       return exactFinalizerOutput(result, true)
     }, value => value)
     report.finalizer = finalizer
@@ -1502,7 +1528,7 @@ async function executeLease(leasePath) {
     const auditResult = await stageResult('run-read-only-observer-audit-cli', async () => {
       const observerURL = makeConnectionString('cms_observer', passwords.cms_observer, DATABASE, lease.port)
       const child = spawnCmsStage('observer-audit-cli', ['--import', 'tsx', path.join(CMS, 'scripts/verify-news-protocol.ts'),
-        '--audit-protocol'], 'observer', { CMS_OBSERVER_DATABASE_URL: observerURL })
+        '--audit-protocol'], 'observer', { CMS_OBSERVER_DATABASE_URL: observerURL, CMS_PORTAL_DATABASE_NAME: 'portal' })
       return expectedObserverAuditOutput(child)
     }, value => value)
     report.audit = auditResult

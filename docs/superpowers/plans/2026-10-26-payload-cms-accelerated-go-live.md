@@ -1,5 +1,10 @@
 # Payload CMS — plano do go-live acelerado sem migração inicial
 
+> **SUPERSEDED PARA EXECUÇÃO:** preservado como plano histórico. As referências
+> abaixo a uma janela de 30 minutos foram substituídas pela decisão vigente de
+> deadline absoluto de até **60 minutos** em
+> `docs/operations/owner-news-authority.md`; não devem ser usadas como gate atual.
+
 > **Execução:** implementar em três PRs sequenciais. Cada PR recebe CI verde,
 > revisão fresca e aceite antes da próxima. Não executar duas fatias mutáveis em
 > paralelo e não fazer mudanças produtivas durante os PRs 1 e 2. O PR 3 prepara o

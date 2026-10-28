@@ -64,7 +64,7 @@ function createAnnouncementsRouter({ backend = createNewsBackend({ pool }), auth
   }
   router.get('/', route('list', req => {
     const page = parseListQuery(req.query, { category: text(100), kind, cursor: text(1024, true) });
-    if (!page) return null;
+    if (!page || page.offset !== 0) return null;
     const filters = { ...(req.query.category === undefined ? {} : { category: req.query.category }), ...(req.query.kind === undefined ? {} : { kind: req.query.kind }) };
     try { return { ...page, ...filters, ...(req.query.cursor === undefined ? {} : { boundary: decodeNewsCursor(req.query.cursor, filters) }) }; }
     catch { return null; }

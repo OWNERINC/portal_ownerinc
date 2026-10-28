@@ -27,7 +27,7 @@ S = load('install_state', 'payload-control-state.py')
 R = load('install_runtime', 'payload-control-runtime.py')
 def expect(code, callback):
     try: callback()
-    except (S.StateError, R.ControlError) as error:
+    except (S.StateError, R.STATE.StateError, R.ControlError) as error:
         assert str(error) == code, (str(error), code)
     else: raise AssertionError('expected ' + code)
 images = {name: 'ghcr.io/ownerinc/ownerinc-portal-' + name + '@sha256:' + letter * 64
@@ -128,6 +128,78 @@ S.transition(root,restore)
 body=S.read_state(root)[2];assert body['restoreIntent'] and body['installIntent']['stage']=='floor_committed'
 expect('invalid_cold_state',lambda:S.record_install_creation(root,binding,'containers','cron',receipt))
 before=snapshot();restarted.read_state(root);assert snapshot()==before
+`);
+});
+
+test('production v4 private readiness and B1 checkpoints resume in fresh processes before floor commit', async t => {
+  await fixture(t, String.raw`
+candidate['authorization']={'environment':'production','approvalSha256':'a'*64,
+ 'inventoryIdentity':binding['inventoryIdentity'],'expiresAt':'1999999999','nonce':'b'*64}
+binding.update(bindingVersion=4,sourceCommit='b'*40,project='ownerinc-portal-prod',
+ authority={name:'a'*64 for name in ('sourceApprovalSha256','policySha256','recordSha256')},
+ sharedCluster={'service':'postgres','volume':'portalPostgres','databases':{
+  'portal':{'name':'portal','owner':'portal_admin'},'cms':{'name':'ownerinc_cms','owner':'cms_admin'}}})
+creation=S.production_install_creation(binding,'b'*64)
+expiring=fresh('production-expired-before-reserve');runtime=object.__new__(R.Runtime)
+runtime.runtime_dir=expiring;runtime.production_authorization_expires_at='1999999999'
+before=S.read_state(expiring)[2]
+assert R.production_authorization_allows_resume(candidate,None,1999999998)
+with patch.object(S.time,'time',return_value=1999999999):
+ expect('invalid_cold_state',lambda:runtime._reserve_install_intent(binding,proof,'5'*64,creation))
+assert S.read_state(expiring)[2]==before and S.read_state(expiring)[2]['installIntent'] is None
+fresh_root=fresh('production-fresh-at-reserve');runtime.runtime_dir=fresh_root
+with patch.object(S.time,'time',return_value=1999999998):
+ runtime._reserve_install_intent(binding,proof,'5'*64,creation)
+assert S.read_state(fresh_root)[2]['installIntent']['authorizationFreshAtReservation'] is True
+root=fresh('production-v4-private')
+expect('invalid_cold_state',lambda:S.reserve_install(root,binding,proof,'5'*64,creation))
+clock={'now':1999999998}
+def expire_after_validation(): clock['now']=1999999999
+before=S.read_state(root)[2];state_dir=os.path.join(root,'payload-control-state');names=set(os.listdir(state_dir))
+expect('invalid_cold_state',lambda:S.reserve_install(root,binding,proof,'5'*64,creation,
+ '1999999999',lambda:clock['now'],expire_after_validation))
+assert S.read_state(root)[2]==before and set(os.listdir(state_dir))==names
+clock['now']=1999999998
+S.reserve_install(root,binding,proof,'5'*64,creation,'1999999999',lambda:clock['now'])
+assert S.read_state(root)[2]['installIntent']['authorizationFreshAtReservation'] is True
+# Bound retry remains valid after expiry because no new persistence occurs.
+before=S.read_state(root)[2]
+S.reserve_install(root,binding,proof,'5'*64,creation,'1999999999',lambda:1999999999)
+assert S.read_state(root)[2]==before
+for stage in ('portal_grants_pending','portal_grants_verified','cms_resources_pending'):
+ S.advance_install(root,binding,stage)
+S.record_install_creation(root,binding,'volumes','cmsUploads',cms_target['volumes']['cmsUploads'])
+for i,service in enumerate(('cms','api','cron')):
+ S.record_install_creation(root,binding,'containers',service,{'id':str(i+1)*64,'image':images[service],
+  'fingerprint':'e'*64,'releasePath':binding['candidateRelease'],'creationState':'created'})
+S.advance_install(root,binding,'cms_resources_bound',{'database':cms,'volumes':{'cmsUploads':cms_target['volumes']['cmsUploads']}})
+for stage in ('cms_provision_pending','provisioned','private_started','private_ready'):
+ before=S.read_state(root)[2]
+ with patch.object(S,'_atomic_replace',side_effect=S.StateError('private_state_write_failed')):
+  expect('private_state_write_failed',lambda:S.advance_install(root,binding,stage))
+ expect('state_head_mismatch',lambda:S.read_state(root))
+ restarted=load('private_restart_'+stage,'payload-control-state.py')
+ recovered=restarted.read_state(root,repair_head=True)[2]
+ assert recovered['installIntent']['stage']==stage and recovered['authority']=={'mode':'legacy','epoch':1}
+ assert recovered['admission']=='closed' and recovered['workerHold'] is True
+ assert recovered['installIntent']['authorizationFreshAtReservation'] is True
+ assert R.production_authorization_allows_resume(candidate,recovered['installIntent'],2000000000)
+ assert not R.production_authorization_allows_resume(candidate,None,2000000000)
+ changed=copy.deepcopy(candidate);changed['authorization']['nonce']='c'*64
+ assert not R.production_authorization_allows_resume(changed,recovered['installIntent'],2000000000)
+ changed_binding=copy.deepcopy(binding);changed_binding['inventoryIdentity']='0'*64
+ expect('planned_release_mismatch',lambda:S.assert_install_matches(recovered,changed_binding))
+ changed_binding=copy.deepcopy(binding);changed_binding['sourceCommit']='c'*40
+ changed_binding['sourceRelease']=os.path.join(directory,'releases','c'*40)
+ expect('planned_release_mismatch',lambda:S.assert_install_matches(recovered,changed_binding))
+b1={'directory':os.path.join(directory,'backup','b1'),'proofSha256':'f'*64}
+S.advance_install(root,binding,'b1_committed',b1=b1)
+restarted=load('b1_restart','payload-control-state.py');body=restarted.read_state(root)[2]
+assert body['installIntent']['b1']==b1 and body['installIntent']['stage']=='b1_committed'
+S.begin_install_floor(root,binding,'d'*64);S.commit_install_floor(root,binding)
+body=S.read_state(root)[2]
+assert body['installIntent']['stage']=='floor_committed' and body['installIntent']['b1']==b1
+assert body['authority']=={'mode':'legacy','epoch':1} and body['admission']=='closed' and body['workerHold'] is True
 `);
 });
 
@@ -363,12 +435,20 @@ for stage in S.INSTALL_STAGES:
     runtime._install_upload_fingerprint = lambda:'8' * 64
     probes = []
     runtime._install_role_verification = lambda: probes.append('verified-readonly-roles')
+    quiescence = []
+    real_quiescence = R._assert_database_quiescent
+    expected_databases = [binding['portalTarget']['database']['databaseName']] * 2
+    if stage in ('cms_resources_bound','cms_provision_pending','provisioned','floor_commit_pending','floor_committed'):
+        expected_databases.append('ownerinc_cms')
+    if stage in ('provisioned','floor_commit_pending','floor_committed'):
+        expected_databases.append('ownerinc_cms')
     with ExitStack() as stack:
         for name, value in [('_verify_environment_file',lambda _config:None),
                             ('_inventory',lambda **_kwargs:runtime.inventory),
                             ('_release',release),('_parse_proof',lambda *_args,**_kwargs:(proof,'5' * 64)),
                             ('_check_container_shape',lambda *_args,**_kwargs:[]),
-                            ('_assert_database_quiescent',lambda _service:None),('_data_fingerprint',lambda _service:'7' * 64)]:
+                            ('_assert_database_quiescent',lambda service,database=None:quiescence.append((service,database))),
+                            ('_data_fingerprint',lambda _service:'7' * 64)]:
             stack.enter_context(patch.object(R,name,value))
         stack.enter_context(patch.object(R.os,'stat',lease_stat))
         stack.enter_context(patch.object(R.os,'lstat',fixture_lstat))
@@ -376,7 +456,10 @@ for stage in S.INSTALL_STAGES:
         for grants in [legacy,strict]:
             accepted = grants == legacy if stage == 'reserved' else True if stage == 'portal_grants_pending' else grants == strict
             with patch.object(R,'_psql_json',lambda *_args:{**base,**grants}):
-                if accepted: assert runtime.install_retry_check() == stage
+                if accepted:
+                    before = len(quiescence)
+                    assert runtime.install_retry_check() == stage
+                    assert quiescence[before:] == [('postgres',database) for database in expected_databases]
                 else:
                     expect('portal_legacy_session_grant_floor_mismatch' if stage == 'reserved' else
                            'portal_session_v2_grants_unprovisioned_or_mismatched',runtime.install_retry_check)
@@ -390,6 +473,28 @@ for stage in S.INSTALL_STAGES:
                     return fixture_lstat(selected,*args,**kwargs)
                 return observe
             safe_b0 = metadata(actual_b0,st_uid=0,st_mode=stat.S_IFDIR | 0o700)
+            if stage == 'provisioned':
+                def retry_sessions(active_database):
+                    observed = []
+                    def assert_quiescent(service,database=None):
+                        observed.append((service,database))
+                        count = 1 if database == active_database else 0
+                        value = {'clientBackends':count,'activeQueries':count,'openTransactions':count}
+                        with patch.object(R,'_psql_json',lambda *_args,**_kwargs:value):
+                            real_quiescence(service,database)
+                    with patch.object(R,'_assert_database_quiescent',assert_quiescent), \
+                         patch.object(runtime,'_install_role_verification',lambda:None):
+                        if active_database is None:
+                            assert runtime.install_retry_check() == stage
+                        else:
+                            expect('database_sessions_not_quiescent',runtime.install_retry_check)
+                    return observed
+                assert retry_sessions(None) == [('postgres',portal['databaseName']),('postgres',portal['databaseName']),
+                                                 ('postgres','ownerinc_cms'),('postgres','ownerinc_cms')]
+                assert retry_sessions(portal['databaseName']) == [('postgres',portal['databaseName'])]
+                assert retry_sessions('ownerinc_cms') == [('postgres',portal['databaseName']),
+                                                          ('postgres',portal['databaseName']),
+                                                          ('postgres','ownerinc_cms')]
             with patch.object(R.os,'name','posix'):
                 with patch.object(R.os,'lstat',b0_observation(safe_b0)):
                     assert runtime.install_retry_check() == stage
@@ -461,6 +566,36 @@ expect('invalid_cold_state',runtime.install_retry_check)
 `);
 });
 
+test('rollback quiescence independently fences the configured Portal database and ownerinc_cms', async t => {
+  await fixture(t, String.raw`
+runtime = R.Runtime.__new__(R.Runtime)
+runtime.state = {'installIntent':None,'restoreIntent':None,'cmsStatus':'migrated',
+                 'admission':'closed','releaseImages':images}
+runtime.release_path = binding['candidateRelease']
+runtime._current_release = lambda:binding['sourceRelease']
+runtime.inventory = {'document':{'databaseCluster':{'databases':{
+    'portal':{'name':'portal_test'},'cms':{'name':'ownerinc_cms'}}}}}
+def rollback_sessions(active_database):
+    observed = []
+    def psql(service,_sql,database=None):
+        observed.append((service,database))
+        count = 1 if database == active_database else 0
+        return {'clientBackends':count,'activeQueries':count,'openTransactions':count}
+    with patch.object(R,'_release',lambda *_args,**_kwargs:(images,True)), \
+         patch.object(R,'_verify_portal',lambda *_args,**_kwargs:None), \
+         patch.object(R,'_verify_cms',lambda *_args,**_kwargs:None), \
+         patch.object(R,'_psql_json',psql):
+        if active_database is None:
+            runtime.rollback_check()
+        else:
+            expect('database_sessions_not_quiescent',runtime.rollback_check)
+    return observed
+assert rollback_sessions(None) == [('postgres','portal_test'),('postgres','ownerinc_cms')]
+assert rollback_sessions('portal_test') == [('postgres','portal_test')]
+assert rollback_sessions('ownerinc_cms') == [('postgres','portal_test'),('postgres','ownerinc_cms')]
+`);
+});
+
 test('pending install/restore verification cannot clear intents, downgrade, commit a pointer or open admission', async t => {
   await fixture(t, String.raw`
 runtime = R.Runtime.__new__(R.Runtime)
@@ -527,22 +662,23 @@ test('receiver hard barrier is executable in synthetic extracted stanzas before 
   }
 });
 
-test('provisioned recheck invokes read-only role verifiers and live B0 storage uses only a read-only fixed-volume mount', async t => {
+test('provisioned recheck invokes the complete read-only six-role verifier and live B0 storage uses only a read-only fixed-volume mount', async t => {
   await fixture(t, String.raw`
 calls = []
 runtime = R.Runtime.__new__(R.Runtime); runtime.release_path = binding['candidateRelease']
 with patch.object(R,'_compose_args',lambda _release:['docker','compose']), \
      patch.object(R.subprocess,'run',lambda args,**_kwargs:calls.append(args) or SimpleNamespace(returncode=0)):
     runtime._install_role_verification()
-assert len(calls) == 2
-assert calls[0][-1] == '--verify-control' and calls[1][-1] == '--verify-migrator'
+assert len(calls) == 1
+assert calls[0][-1] == '--verify-cluster-roles' and 'cms-provision' in calls[0]
 assert all('--no-deps' in args and '--pull' in args and 'never' in args for args in calls)
-assert not any('--provision' in args or '--bootstrap-control' in args or '--grants' in args for args in calls)
+assert not any('--provision' in args or '--bootstrap-control' in args or '--grants' in args
+               or '--verify-control' in args or '--verify-migrator' in args for args in calls)
 with patch.object(R,'_compose_args',lambda _release:['docker','compose']), \
      patch.object(R.subprocess,'run',lambda *_args,**_kwargs:SimpleNamespace(returncode=2)):
     expect('native_catalog_verification_failed',runtime._install_role_verification)
 runtime.inventory = {'document':{'volumes':{'portalUploads':{'name':'isolated_portal_uploads'}}}}
-process = SimpleNamespace(stdout=object(),wait=lambda:0)
+process = SimpleNamespace(stdout=object(),wait=lambda timeout=None:0)
 with patch.object(R.subprocess,'Popen',lambda args,**_kwargs:calls.append(args) or process), \
      patch.object(R,'_tar_tree',lambda *_args,**_kwargs:'8' * 64):
     assert runtime._install_upload_fingerprint() == '8' * 64

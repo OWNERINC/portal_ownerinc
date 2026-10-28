@@ -33,7 +33,18 @@ function validInput(action, value) {
     case 'home': return keys(value, []);
     case 'preview': return keys(value, ['id', 'versionId', 'source']) && uuid(value.id) && uuid(value.versionId) && ['payload', 'legacy'].includes(value.source);
     case 'asset': return keys(value, ['id', 'preview', 'range']) && uuid(value.id) && typeof value.preview === 'boolean' && (value.range === null || text(value.range, 200));
-    case 'preflight': return keys(value, []);
+    case 'preflight': {
+      if (!keys(value, ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest'],
+        ['mode', 'epoch', 'requestId', 'deadline']) || !['legacy', 'frozen', 'payload_frozen'].includes(value.mode)
+        || !integer(value.epoch, 1) || typeof value.requestId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value.requestId)
+        || typeof value.deadline !== 'string' || !Number.isFinite(Date.parse(value.deadline))
+        || new Date(value.deadline).toISOString() !== value.deadline) return false;
+      const bound = value.mode !== 'legacy';
+      return ['manifestSha256', 'sealSha256'].every(name => bound === Object.hasOwn(value, name)
+          && (!bound || typeof value[name] === 'string' && /^[0-9a-f]{64}$/u.test(value[name])))
+        && ['releaseDigest', 'imageDigest'].every(name => bound === Object.hasOwn(value, name)
+          && (!bound || typeof value[name] === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value[name])));
+    }
     default: return false;
   }
 }
@@ -141,13 +152,47 @@ function readResult(action, json, input) {
     });
     assert(new Set(names).size === names.length);
   } else if (action === 'preflight') {
-    assert(keys(json, ['ready', 'publicationMode', 'authority', 'newsEmpty', 'mutation', 'counts']));
-    assert(json.ready === true && json.publicationMode === 'manual' && json.newsEmpty === true);
-    assert(keys(json.authority, ['mode', 'epoch']) && ['frozen', 'payload_frozen'].includes(json.authority.mode) && integer(json.authority.epoch, 1));
-    assert(keys(json.mutation, ['sequence', 'chainSha256', 'writeBarrier']) && decimal(json.mutation.sequence)
-      && json.mutation.sequence === '0' && json.mutation.chainSha256 === '0'.repeat(64) && json.mutation.writeBarrier === 'open');
+    assert(keys(json, ['ready', 'publicationMode', 'request', 'authority', 'activation', 'newsEmpty', 'mutation', 'counts', 'runtime', 'database', 'migration']));
+    assert(json.ready === true && json.publicationMode === 'manual' && typeof json.newsEmpty === 'boolean');
+    assert(keys(json.request, ['id', 'deadline']) && json.request.id === input.requestId && json.request.deadline === input.deadline);
+    assert(keys(json.authority, ['mode', 'epoch']) && json.authority.mode === input.mode
+      && json.authority.epoch === input.epoch && integer(json.authority.epoch, 1));
+    assert(keys(json.mutation, ['sequence', 'chainSha256', 'writeBarrier', 'barrierRunId', 'barrierEpoch', 'barrierReceiptSha256'])
+      && decimal(json.mutation.sequence) && /^[0-9a-f]{64}$/u.test(json.mutation.chainSha256)
+      && ['open', 'sealed'].includes(json.mutation.writeBarrier));
     assert(keys(json.counts, ['articles', 'media', 'homePublished', 'schedules'])
-      && Object.values(json.counts).every(value => integer(value, 0) && value === 0));
+      && Object.values(json.counts).every(value => integer(value, 0))
+      && json.newsEmpty === Object.values(json.counts).every(value => value === 0));
+    assert(keys(json.runtime, ['worker', 'schedules', 'autosave', 'versions'])
+      && Object.values(json.runtime).every(value => value === false));
+    assert(keys(json.database, ['migrations', 'catalog', 'grants', 'readiness'])
+      && Object.values(json.database).every(value => value === true));
+    assert(json.migration === null || (keys(json.migration, ['runId', 'manifestSha256', 'sealSha256', 'authorityEpoch', 'drainReceiptSha256'])
+      && uuid(json.migration.runId)
+      && /^[0-9a-f]{64}$/u.test(json.migration.manifestSha256) && /^[0-9a-f]{64}$/u.test(json.migration.sealSha256)
+      && integer(json.migration.authorityEpoch, 1) && /^[0-9a-f]{64}$/u.test(json.migration.drainReceiptSha256)));
+    if (input.mode !== 'legacy') {
+      assert(json.migration?.manifestSha256 === input.manifestSha256 && json.migration.sealSha256 === input.sealSha256
+        && json.mutation.writeBarrier === 'sealed'
+        && json.mutation.barrierRunId === json.migration.runId
+        && json.mutation.barrierEpoch === json.migration.authorityEpoch
+        && json.mutation.barrierReceiptSha256 === json.migration.drainReceiptSha256);
+      if (input.mode === 'frozen') {
+        assert(json.activation === null && json.authority.epoch === json.migration.authorityEpoch
+          && json.newsEmpty === true);
+      } else {
+        assert(keys(json.activation, ['manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest', 'requestId'])
+          && json.activation.manifestSha256 === input.manifestSha256 && json.activation.sealSha256 === input.sealSha256
+          && json.activation.releaseDigest === input.releaseDigest && json.activation.imageDigest === input.imageDigest
+          && typeof json.activation.requestId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/u.test(json.activation.requestId)
+          && json.migration.authorityEpoch < json.authority.epoch);
+      }
+    } else {
+      assert(json.activation === null && json.migration === null && json.newsEmpty === true && Object.values(json.counts).every(value => value === 0)
+        && json.mutation.sequence === '0' && json.mutation.chainSha256 === '0'.repeat(64)
+        && json.mutation.writeBarrier === 'open' && json.mutation.barrierRunId === null
+        && json.mutation.barrierEpoch === null && json.mutation.barrierReceiptSha256 === null);
+    }
   } else throw unavailable();
   return json;
 }

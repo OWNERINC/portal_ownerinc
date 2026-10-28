@@ -9,7 +9,8 @@ export type NewsInputs = {
   list: NewsQuery; detail: { id: string }; categories: { kind?: 'article' | 'edition'; withCounts: boolean }
   navigation: { id: string; category?: string }; home: Record<string, never>; preview: PreviewQuery
   asset: { id: string; preview: boolean; range: string | null }
-  preflight: Record<string, never>
+  preflight: { mode: 'legacy' | 'frozen' | 'payload_frozen'; epoch: number; requestId: string; deadline: string
+    manifestSha256?: string; sealSha256?: string; releaseDigest?: string; imageDigest?: string }
 }
 const fail = (status = 400): never => { throw new APIError(status === 400 ? 'invalid_request' : 'forbidden', status, undefined, true) }
 const PRIVATE_LIST_MAX = 101
@@ -60,7 +61,23 @@ export function readNewsInput<A extends NewsAction>(action: A, value: unknown): 
     case 'navigation': keys(input, ['id', 'category']); input.id = uuid(input.id); category(); break
     case 'categories': keys(input, ['kind', 'withCounts']); kind(); if (typeof input.withCounts !== 'boolean') fail(); break
     case 'home': keys(input, []); break
-    case 'preflight': keys(input, []); break
+    case 'preflight': {
+      keys(input, ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest'])
+      oneOf(input.mode, ['legacy', 'frozen', 'payload_frozen'])
+      if (!Number.isSafeInteger(input.epoch) || Number(input.epoch) < 1
+        || typeof input.requestId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/u.test(input.requestId)
+        || typeof input.deadline !== 'string' || !Number.isFinite(Date.parse(input.deadline))
+        || new Date(input.deadline).toISOString() !== input.deadline
+        || Date.parse(input.deadline) <= Date.now() || Date.parse(input.deadline) - Date.now() > 60 * 60 * 1000) fail()
+      const bound = input.mode !== 'legacy'
+      for (const name of ['manifestSha256', 'sealSha256'] as const) {
+        if (bound !== Object.hasOwn(input, name) || bound && (typeof input[name] !== 'string' || !/^[0-9a-f]{64}$/u.test(input[name]))) fail()
+      }
+      for (const name of ['releaseDigest', 'imageDigest'] as const) {
+        if (bound !== Object.hasOwn(input, name) || bound && (typeof input[name] !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(input[name]))) fail()
+      }
+      break
+    }
     case 'preview':
       keys(input, ['id', 'versionId', 'source']); input.id = uuid(input.id); input.versionId = uuid(input.versionId)
       oneOf(input.source, ['payload', 'legacy'])

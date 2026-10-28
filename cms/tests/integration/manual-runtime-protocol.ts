@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRequire } from 'node:module'
 import { buildNewsProtocolObserverProvisioningSQL, buildNewsProtocolObserverRoleProvisioningSQL } from '../../scripts/news-protocol-observer-contract.js'
+import { verifyCmsAdminDatabaseRoleContract } from '../../scripts/provision-db.js'
 import { runNewsProtocolAudit } from '../../scripts/verify-news-protocol.js'
 
 const action = process.env.PAYLOAD_MANUAL_RUNTIME_PROTOCOL_ACTION
@@ -9,6 +10,7 @@ const marker = process.env.PAYLOAD_MANUAL_RUNTIME_MARKER
 const adminURL = new URL(process.env.CMS_ADMIN_DATABASE_URL || 'http://invalid')
 const observerURL = new URL(process.env.CMS_OBSERVER_DATABASE_URL || 'http://invalid')
 const observerPassword = process.env.CMS_OBSERVER_PASSWORD || ''
+const portalDatabase = process.env.CMS_PORTAL_DATABASE_NAME || ''
 if (!/^[0-9a-f]{32}$/u.test(marker || '') || !['provision-observer', 'provision-observer-role', 'audit'].includes(action || '') ||
   !['127.0.0.1'].includes(adminURL.hostname) || adminURL.pathname !== '/ownerinc_cms' ||
   observerURL.hostname !== adminURL.hostname || observerURL.port !== adminURL.port ||
@@ -31,15 +33,17 @@ test(`manual runtime protocol ${action}`, async () => {
     }
     const require = createRequire(import.meta.url)
     const { Client } = require('pg') as { Client: new (options: object) => {
-      connect(): Promise<void>; query(sql: string): Promise<unknown>; end(): Promise<void>
+      connect(): Promise<void>; query(sql: string): Promise<{ rows: Record<string, unknown>[] }>; end(): Promise<void>
     } }
     const client = new Client({ connectionString: adminURL.href, connectionTimeoutMillis: 5000 })
     try {
       await client.connect()
+      stage = 'admin-contract'
+      await verifyCmsAdminDatabaseRoleContract(client)
       stage = 'provision'
       await client.query(action === 'provision-observer-role'
-        ? buildNewsProtocolObserverRoleProvisioningSQL(observerPassword)
-        : buildNewsProtocolObserverProvisioningSQL(observerPassword))
+        ? buildNewsProtocolObserverRoleProvisioningSQL(portalDatabase)
+        : buildNewsProtocolObserverProvisioningSQL(portalDatabase))
     } finally { await client.end() }
   } catch (error) {
     let sqlstate = 'none'

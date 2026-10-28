@@ -13,6 +13,22 @@ on:
         required: false
         type: boolean
         default: false
+      production_approval_sha256:
+        description: Exact protected production approval digest (required only for candidate publication)
+        required: false
+        type: string
+      production_inventory_identity:
+        description: Exact protected production inventory identity (required only for candidate publication)
+        required: false
+        type: string
+      request_expires_at:
+        description: Ten-digit UTC epoch expiry, no more than 24 hours ahead (candidate publication only)
+        required: false
+        type: string
+      request_nonce:
+        description: Unique 64-hex production request nonce (candidate publication only)
+        required: false
+        type: string
       manual_runtime_only:
         description: Run only the disposable Payload manual-runtime recovery proof; publish and deploy nothing
         required: false
@@ -24,7 +40,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   dispatch-input-contract:
@@ -46,6 +61,22 @@ jobs:
             echo 'Select only one manual CI mode.' >&2
             exit 1
           fi
+      - name: Require main and closed production binding for candidate publication
+        if: inputs.publish_candidate_only == true
+        env:
+          APPROVAL_SHA256: ${{ inputs.production_approval_sha256 }}
+          INVENTORY_IDENTITY: ${{ inputs.production_inventory_identity }}
+          EXPIRES_AT: ${{ inputs.request_expires_at }}
+          REQUEST_NONCE: ${{ inputs.request_nonce }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$APPROVAL_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$INVENTORY_IDENTITY" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPIRES_AT" =~ ^[1-9][0-9]{9}$ ]]
+          [[ "$REQUEST_NONCE" =~ ^[0-9a-f]{64}$ ]]
+          now=$(date +%s)
+          (( EXPIRES_AT > now && EXPIRES_AT <= now + 86400 ))
 
   payload-manual-runtime:
     needs: dispatch-input-contract
@@ -103,7 +134,7 @@ jobs:
 
   isolated-b0-recovery:
     needs: dispatch-input-contract
-    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 12
     permissions:
@@ -197,16 +228,11 @@ jobs:
 
   validate:
     needs: [dispatch-input-contract, isolated-b0-recovery]
-    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.manual_runtime_only == true) && (needs.isolated-b0-recovery.result == 'success' || (!(github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true) && needs.isolated-b0-recovery.result == 'skipped')) }}
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true && 150 || 90 }}
-    outputs:
-      api_image: ${{ steps.publish.outputs.api_image }}
-      cron_image: ${{ steps.publish.outputs.cron_image }}
-      cms_image: ${{ steps.publish_cms.outputs.cms_image }}
-      candidate_artifact_id: ${{ steps.upload_candidate.outputs.artifact-id }}
-      qualified_artifact_id: ${{ steps.upload_qualified.outputs.artifact-id }}
-      recovery_report_artifact_id: ${{ steps.upload_recovery_report.outputs.artifact-id }}
+    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.manual_runtime_only == true) && (needs.isolated-b0-recovery.result == 'success' || (!(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true) && needs.isolated-b0-recovery.result == 'skipped')) }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true && 150 || 90 }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         # Service pulls precede checkout/steps: use the byte-identical public cache.
@@ -302,7 +328,7 @@ jobs:
       - run: npm run bootstrap
       - run: npm run verify
       - name: Test preauthority CI setup with native Linux root
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         run: |
           set -euo pipefail
           sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs
@@ -315,14 +341,14 @@ jobs:
             PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \
             tests/unit/payload-preparation-authentication.test.mjs
       - name: Qualify legacy security observer with isolated PostgreSQL 16
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         timeout-minutes: 6
         env:
           PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY: "1"
           PAYLOAD_LEGACY_SECURITY_DISPOSABLE: "1"
         run: node --test tests/unit/payload-legacy-security-pg16.test.mjs
       - name: Qualify isolated Portal fence topology
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         timeout-minutes: 6
         env:
           PAYLOAD_REQUIRE_NATIVE_FENCE_TOPOLOGY: "1"
@@ -421,7 +447,7 @@ jobs:
           docker build --tag ownerinc-portal-cron:${GITHUB_SHA} --file cron/Dockerfile .
           docker build --tag ownerinc-portal-cms:${GITHUB_SHA} --file cms/Dockerfile .
       - name: Test editorial admin session v2 against disposable PostgreSQL and Firebase Auth
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         timeout-minutes: 15
         env:
           NODE_ENV: test
@@ -467,153 +493,232 @@ jobs:
         with:
           name: sbom-spdx
           path: '*.spdx.json'
-      - name: Authenticate to GHCR
+      - name: Save validated images for the isolated publisher
         if: >-
           (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
           github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
           (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
+          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
+        run: |
+          set -euo pipefail
+          images=(ownerinc-portal-cms:${GITHUB_SHA})
+          if [[ "${{ inputs.cms_image_only }}" != true ]]; then
+            images+=(ownerinc-portal-api:${GITHUB_SHA} ownerinc-portal-cron:${GITHUB_SHA})
+          fi
+          docker save --output validated-production-images.tar "${images[@]}"
+      - name: Transfer validated images to the isolated publisher
+        if: >-
+          (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
+          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
+          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: validated-production-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: validated-production-images.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-images:
+    name: Publish immutable images
+    needs: validate
+    if: >-
+      !cancelled() && needs.validate.result == 'success' &&
+      (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
+      (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api_image: ${{ steps.publish.outputs.api_image }}
+      cron_image: ${{ steps.publish.outputs.cron_image }}
+      cms_image: ${{ steps.publish.outputs.cms_image }}
+    steps:
+      - name: Download only the validated image bundle
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: validated-production-images-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Load exact validated images
+        run: |
+          set -euo pipefail
+          test -f validated-production-images.tar
+          docker load --input validated-production-images.tar
+          docker image inspect ownerinc-portal-cms:${GITHUB_SHA} >/dev/null
+          if [[ "${{ inputs.cms_image_only }}" != true ]]; then
+            docker image inspect ownerinc-portal-api:${GITHUB_SHA} ownerinc-portal-cron:${GITHUB_SHA} >/dev/null
+          fi
+      - name: Authenticate isolated publisher to GHCR
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish immutable images
+      - name: Push validated immutable digests only
         id: publish
-        if: >-
-          (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-          github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
         env:
           REGISTRY: ghcr.io/ownerinc
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          docker tag ownerinc-portal-api:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
-          docker tag ownerinc-portal-cron:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
-          docker push ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
-          docker push ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
-          api_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA})
-          cron_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA})
-          [[ "$api_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-api@sha256:[0-9a-f]{64}$ ]]
-          [[ "$cron_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cron@sha256:[0-9a-f]{64}$ ]]
-          printf '%s\n%s\n' "$api_image" "$cron_image" > image-digests.txt
-          echo "api_image=$api_image" >> "$GITHUB_OUTPUT"
-          echo "cron_image=$cron_image" >> "$GITHUB_OUTPUT"
-
-      - name: Publish CMS immutable image
-        id: publish_cms
-        if: >-
-          (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-          github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
-        env:
-          REGISTRY: ghcr.io/ownerinc
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          api_image= cron_image=
+          if [[ "${{ inputs.cms_image_only }}" != true ]]; then
+            for service in api cron; do
+              docker tag ownerinc-portal-${service}:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-${service}:${GITHUB_SHA}
+              docker push ${REGISTRY}/ownerinc-portal-${service}:${GITHUB_SHA}
+            done
+            api_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA})
+            cron_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA})
+            [[ "$api_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-api@sha256:[0-9a-f]{64}$ ]]
+            [[ "$cron_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cron@sha256:[0-9a-f]{64}$ ]]
+            printf '%s\n%s\n' "$api_image" "$cron_image" > image-digests.txt
+          fi
           docker tag ownerinc-portal-cms:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
           docker push ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
           cms_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA})
           [[ "$cms_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]]
           printf '%s\n' "$cms_image" > cms-image-digest.txt
           printf '%s\n' "$GITHUB_SHA" > cms-image-source.txt
+          echo "api_image=$api_image" >> "$GITHUB_OUTPUT"
+          echo "cron_image=$cron_image" >> "$GITHUB_OUTPUT"
           echo "cms_image=$cms_image" >> "$GITHUB_OUTPUT"
-      - name: Capture complete immutable release candidate manifest
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
-        env:
-          API_IMAGE: ${{ steps.publish.outputs.api_image }}
-          CRON_IMAGE: ${{ steps.publish.outputs.cron_image }}
-          CMS_IMAGE: ${{ steps.publish_cms.outputs.cms_image }}
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
-          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
-          [[ "$API_IMAGE" =~ ^ghcr\.io/ownerinc/ownerinc-portal-api@sha256:[0-9a-f]{64}$ ]]
-          [[ "$CRON_IMAGE" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cron@sha256:[0-9a-f]{64}$ ]]
-          [[ "$CMS_IMAGE" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]]
-          node <<'NODE'
-          const fs = require('node:fs');
-          const candidate = {
-            schemaVersion: 1,
-            commit: process.env.GITHUB_SHA,
-            runId: process.env.GITHUB_RUN_ID,
-            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-            images: { api: process.env.API_IMAGE, cron: process.env.CRON_IMAGE, cms: process.env.CMS_IMAGE },
-          };
-          fs.writeFileSync('candidate.json', `${JSON.stringify(candidate, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-          NODE
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: >-
-          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-          github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true
+      - name: Upload normal release digest evidence
+        if: inputs.cms_image_only != true && inputs.publish_candidate_only != true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-digests
           path: image-digests.txt
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: >-
-          (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-          github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
+      - name: Upload CMS digest evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cms-image-digest
           path: |
             cms-image-digest.txt
             cms-image-source.txt
+
+  qualify-payload-candidate:
+    name: Qualify Payload candidate
+    needs: [validate, publish-images]
+    if: >-
+      !cancelled() && needs.validate.result == 'success' && needs.publish-images.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      inputs.publish_candidate_only == true && inputs.cms_image_only != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 140
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      commit: ${{ steps.install_handoff.outputs.commit }}
+      run_id: ${{ steps.install_handoff.outputs.run_id }}
+      run_attempt: ${{ steps.install_handoff.outputs.run_attempt }}
+      api_image: ${{ steps.install_handoff.outputs.api_image }}
+      cron_image: ${{ steps.install_handoff.outputs.cron_image }}
+      cms_image: ${{ steps.install_handoff.outputs.cms_image }}
+      candidate_artifact_id: ${{ steps.install_handoff.outputs.candidate_artifact_id }}
+      candidate_artifact_digest: ${{ steps.install_handoff.outputs.candidate_artifact_digest }}
+      candidate_sha256: ${{ steps.install_handoff.outputs.candidate_sha256 }}
+      qualified_artifact_id: ${{ steps.install_handoff.outputs.qualified_artifact_id }}
+      qualified_artifact_digest: ${{ steps.install_handoff.outputs.qualified_artifact_digest }}
+      qualified_sha256: ${{ steps.install_handoff.outputs.qualified_sha256 }}
+      report_artifact_id: ${{ steps.install_handoff.outputs.report_artifact_id }}
+      report_artifact_digest: ${{ steps.install_handoff.outputs.report_artifact_digest }}
+      report_sha256: ${{ steps.install_handoff.outputs.report_sha256 }}
+      approval_sha256: ${{ steps.install_handoff.outputs.approval_sha256 }}
+      inventory_identity: ${{ steps.install_handoff.outputs.inventory_identity }}
+      expires_at: ${{ steps.install_handoff.outputs.expires_at }}
+      nonce: ${{ steps.install_handoff.outputs.nonce }}
+      install_dispatch_artifact_id: ${{ steps.upload_install_handoff.outputs.artifact-id }}
+      install_dispatch_artifact_digest: ${{ steps.upload_install_handoff.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            cron/package-lock.json
+            cms/package-lock.json
+      - run: npm run bootstrap
+      - name: Capture complete immutable release candidate manifest
+        env:
+          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
+          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
+          CMS_IMAGE: ${{ needs.publish-images.outputs.cms_image }}
+          PRODUCTION_APPROVAL_SHA256: ${{ inputs.production_approval_sha256 }}
+          PRODUCTION_INVENTORY_IDENTITY: ${{ inputs.production_inventory_identity }}
+          REQUEST_EXPIRES_AT: ${{ inputs.request_expires_at }}
+          REQUEST_NONCE: ${{ inputs.request_nonce }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          for value in "$API_IMAGE" "$CRON_IMAGE" "$CMS_IMAGE"; do
+            [[ "$value" =~ ^ghcr\.io/ownerinc/ownerinc-portal-(api|cron|cms)@sha256:[0-9a-f]{64}$ ]]
+          done
+          node <<'NODE'
+          const fs = require('node:fs');
+          const candidate = {
+            schemaVersion: 2, commit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            images: { api: process.env.API_IMAGE, cron: process.env.CRON_IMAGE, cms: process.env.CMS_IMAGE },
+            authorization: { environment: 'production', approvalSha256: process.env.PRODUCTION_APPROVAL_SHA256,
+              inventoryIdentity: process.env.PRODUCTION_INVENTORY_IDENTITY, expiresAt: process.env.REQUEST_EXPIRES_AT,
+              nonce: process.env.REQUEST_NONCE },
+          };
+          fs.writeFileSync('candidate.json', `${JSON.stringify(candidate, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+          NODE
       - name: Upload unqualified candidate image manifest
         id: upload_candidate
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: payload-release-candidate
           path: candidate.json
           if-no-files-found: error
           retention-days: 30
+      - name: Authenticate qualification pulls from GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull exact published candidate image digests for root-owned fixture
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         env:
-          API_IMAGE: ${{ steps.publish.outputs.api_image }}
-          CRON_IMAGE: ${{ steps.publish.outputs.cron_image }}
-          CMS_IMAGE: ${{ steps.publish_cms.outputs.cms_image }}
+          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
+          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
+          CMS_IMAGE: ${{ needs.publish-images.outputs.cms_image }}
         run: |
           set -euo pipefail
-          docker pull "$API_IMAGE"
-          docker pull "$CRON_IMAGE"
-          docker pull "$CMS_IMAGE"
-          # Credentialed pulls stay above this boundary. The root fixture uses
-          # its clean local context and exact images already cached in that daemon.
+          docker pull "$API_IMAGE" && docker pull "$CRON_IMAGE" && docker pull "$CMS_IMAGE"
           test "$(sudo env -i PATH="$PATH" HOME=/root docker context inspect --format '{{json .Endpoints.docker.Host}}')" = '"unix:///var/run/docker.sock"'
           sudo env -i PATH="$PATH" HOME=/root docker image inspect --format '{{.Id}}' \
             "$API_IMAGE" "$CRON_IMAGE" "$CMS_IMAGE" \
             postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 \
             nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
       - name: Run disposable four-store preauthority recovery on published digests
-        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         timeout-minutes: 120
         env:
-          API_IMAGE: ${{ steps.publish.outputs.api_image }}
-          CRON_IMAGE: ${{ steps.publish.outputs.cron_image }}
-          CMS_IMAGE: ${{ steps.publish_cms.outputs.cms_image }}
+          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
+          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
+          CMS_IMAGE: ${{ needs.publish-images.outputs.cms_image }}
           RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
           RECOVERY_PROGRESS: ${{ runner.temp }}/payload-preauthority-recovery-progress.json
         run: |
           set -euo pipefail
-          # Recovery rejects every nonempty DOCKER_* override. Do not forward
-          # the hosted transport config; child commands also use stripped envs.
           sudo env -i \
             PATH="$PATH" HOME=/root \
             API_IMAGE="$API_IMAGE" CRON_IMAGE="$CRON_IMAGE" CMS_IMAGE="$CMS_IMAGE" \
-            GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
-            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" RUNNER_TEMP="$RUNNER_TEMP" \
-            PAYLOAD_RECOVERY_REPORT="$RECOVERY_REPORT" \
-            PAYLOAD_RECOVERY_PROGRESS="$RECOVERY_PROGRESS" \
-            node scripts/test-payload-preauthority-recovery.mjs
+            GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            RUNNER_TEMP="$RUNNER_TEMP" PAYLOAD_RECOVERY_REPORT="$RECOVERY_REPORT" \
+            PAYLOAD_RECOVERY_PROGRESS="$RECOVERY_PROGRESS" node scripts/test-payload-preauthority-recovery.mjs
       - name: Upload redacted preauthority recovery report
         id: upload_recovery_report
-        if: ${{ always() && inputs.publish_candidate_only == true && inputs.cms_image_only != true }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: payload-preauthority-recovery-report
@@ -621,7 +726,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Upload nonqualifying recovery diagnostic progress
-        if: ${{ always() && inputs.publish_candidate_only == true && inputs.cms_image_only != true }}
+        if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -630,32 +735,44 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
       - name: Create recovery-qualified candidate manifest
-        if: success() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
         env:
-          API_IMAGE: ${{ steps.publish.outputs.api_image }}
-          CRON_IMAGE: ${{ steps.publish.outputs.cron_image }}
-          CMS_IMAGE: ${{ steps.publish_cms.outputs.cms_image }}
           RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
-        run: |
-          set -euo pipefail
-          node scripts/qualify-payload-candidate.mjs \
-            --candidate candidate.json --report "$RECOVERY_REPORT" \
-            --output qualified-candidate.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        run: node scripts/qualify-payload-candidate.mjs --candidate candidate.json --report "$RECOVERY_REPORT" --output qualified-candidate.json
+      - name: Upload recovery-qualified candidate manifest
         id: upload_qualified
-        if: success() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.publish_candidate_only == true && inputs.cms_image_only != true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: payload-recovery-qualified-candidate
           path: qualified-candidate.json
           if-no-files-found: error
           retention-days: 30
+      - name: Create exact qualified private-install handoff
+        id: install_handoff
+        env:
+          RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
+          INSTALL_DISPATCH_OUTPUT: install-dispatch.json
+          CANDIDATE_ARTIFACT_ID: ${{ steps.upload_candidate.outputs.artifact-id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ steps.upload_candidate.outputs.artifact-digest }}
+          QUALIFIED_ARTIFACT_ID: ${{ steps.upload_qualified.outputs.artifact-id }}
+          QUALIFIED_ARTIFACT_DIGEST: ${{ steps.upload_qualified.outputs.artifact-digest }}
+          REPORT_ARTIFACT_ID: ${{ steps.upload_recovery_report.outputs.artifact-id }}
+          REPORT_ARTIFACT_DIGEST: ${{ steps.upload_recovery_report.outputs.artifact-digest }}
+        run: node scripts/create-payload-install-dispatch.mjs
+      - name: Upload exact qualified private-install handoff
+        id: upload_install_handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: payload-private-install-dispatch
+          path: install-dispatch.json
+          if-no-files-found: error
+          retention-days: 30
 
   deploy-production:
     name: Deploy production
-    needs: validate
+    needs: [validate, publish-images]
     if: >-
       !cancelled() &&
-      needs.validate.result == 'success' &&
+      needs.validate.result == 'success' && needs.publish-images.result == 'success' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
       inputs.cms_image_only != true &&
@@ -672,8 +789,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Package the exact validated commit
         env:
-          API_IMAGE: ${{ needs.validate.outputs.api_image }}
-          CRON_IMAGE: ${{ needs.validate.outputs.cron_image }}
+          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
+          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
         run: |
           printf '%s\n%s\n' "$API_IMAGE" "$CRON_IMAGE" > .ci-images
           git archive --format=tar --add-virtual-file=".ci-commit:${GITHUB_SHA}" --output=portal-release.tar "${GITHUB_SHA}"

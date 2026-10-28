@@ -51,7 +51,7 @@ function fixture(t: TestContext, overrides: Record<string, unknown> = {}) {
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
     const url = String(input)
     state.portalPaths.push(url)
-    if (url.endsWith('/authority')) return Response.json({ mode: 'payload', epoch: 4 })
+    if (url.endsWith('/authority')) return Response.json({ mode: 'payload', epoch: 4, activationObserved: true })
     throw new Error('unexpected_portal_actor_check')
   })
   return { req, state }

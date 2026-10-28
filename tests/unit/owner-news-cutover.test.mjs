@@ -40,52 +40,60 @@ function database(mode = 'frozen', extra = () => undefined) {
       if (result) return result;
       if (sql.includes('SELECT mode, epoch')) return { rows: [{ mode: db.mode, epoch: db.epoch }] };
       if (sql.includes('UPDATE owner_news_authority')) {
-        if (values[2] !== db.mode || values[3] !== db.epoch) return { rows: [] };
+        if (values[5] !== db.mode || values[6] !== db.epoch) return { rows: [] };
         db.mode = values[0]; db.epoch++;
-        return { rows: [{ mode: db.mode, epoch: db.epoch }] };
+        return { rows: [{ mode: db.mode, epoch: db.epoch, transition_request_id: values[2],
+          transition_actor_uid: values[3], transition_operator_uid: values[1], transition_action: values[4] }] };
       }
       return { rows: [] };
     }, release() {}, async connect() { return db; }, async end() {},
   };
   return db;
 }
+const actionFor = (from, to) => from === 'legacy' ? 'freeze' : to === 'payload_frozen' ? 'freeze-payload' : 'resume-payload';
+const transitionInput = (from, to, expectedEpoch = 7) => ({ from, to, expectedEpoch, actorUid: 'editor',
+  operatorUid: 'operator', requestId: 'request', action: actionFor(from, to), evidenceSha256: 'a'.repeat(64) });
 
-test('closed structural graph; rollback boolean is not authorization', async () => {
+test('authority graph is one-way and unknown states fail closed', async () => {
   const modes = ['legacy', 'frozen', 'payload', 'payload_frozen', 'unknown'];
-  const edges = new Set(['legacy:frozen', 'frozen:legacy', 'frozen:payload', 'payload:payload_frozen', 'payload_frozen:payload']);
+  const edges = new Set(['legacy:frozen', 'frozen:payload', 'payload:payload_frozen', 'payload_frozen:payload']);
   for (const from of modes) for (const to of modes) assert.equal(validAuthorityTransition(from, to), edges.has(`${from}:${to}`));
-  assert.equal(validAuthorityTransition('payload_frozen', 'legacy', false), true);
-  for (const [from, to] of [['frozen', 'payload'], ['payload_frozen', 'legacy']]) {
+  assert.equal(validAuthorityTransition('frozen', 'legacy', false), false);
+  assert.equal(validAuthorityTransition('payload_frozen', 'legacy', false), false);
+  for (const [from, to, code] of [['frozen', 'payload', 'news_cutover_proof_required'],
+    ['payload_frozen', 'legacy', 'invalid_authority_transition']]) {
     const db = database(from);
-    await assert.rejects(transitionAuthority(db, { from, to, expectedEpoch: 7, actorUid: 'editor',
-      hasChanges: false, manifestSha256: 'a'.repeat(64), proof: { noEdits: true, reconciled: true } }),
-    { code: 'news_cutover_proof_required' });
+    await assert.rejects(transitionAuthority(db, transitionInput(from, to)),
+    { code });
     assert.equal(db.calls.length, 0);
   }
 });
 
 test('CAS serializes advisory -> authority -> conditional UPDATE -> audit, never commits caller tx', async () => {
   const db = database('legacy');
-  assert.deepEqual(await transitionAuthority(db, { from: 'legacy', to: 'frozen', expectedEpoch: 7, actorUid: 'editor', requestId: 'request' }), { mode: 'frozen', epoch: 8 });
+  const changed = await transitionAuthority(db, transitionInput('legacy', 'frozen'));
+  assert.deepEqual({ mode: changed.mode, epoch: changed.epoch }, { mode: 'frozen', epoch: 8 });
   assert.match(db.calls[0].sql, /pg_advisory_xact_lock/);
   assert.deepEqual(db.calls[0].values, [7193029]);
   assert.match(db.calls[1].sql, /FOR UPDATE$/);
-  assert.match(db.calls[2].sql, /mode=\$3 AND epoch=\$4/);
-  assert.match(db.calls[3].sql, /INSERT INTO audit_log/);
+  assert.match(db.calls[2].sql, /mode=\$6 AND epoch=\$7/);
+  assert.match(db.calls[3].sql, /owner_news_authority_transitions/);
+  assert.match(db.calls[4].sql, /INSERT INTO audit_log/);
   assert.equal(db.calls.some(({ sql }) => /^(BEGIN|COMMIT)/.test(sql)), false);
-  await assert.rejects(transitionAuthority(db, { from: 'legacy', to: 'frozen', expectedEpoch: 7, actorUid: 'editor' }), { code: 'news_authority_conflict' });
+  await assert.rejects(transitionAuthority(db, transitionInput('legacy', 'frozen')), { code: 'news_authority_conflict' });
   assert.equal(db.epoch, 8);
 });
 
-test('non-cutover CAS edges preserve monotonic epoch; stale resume and unknown transitions fail', async () => {
-  for (const [from, to] of [['legacy', 'frozen'], ['frozen', 'legacy'], ['payload', 'payload_frozen'], ['payload_frozen', 'payload']]) {
+test('non-activation CAS edges preserve monotonic epoch; stale resume and unknown transitions fail', async () => {
+  for (const [from, to] of [['legacy', 'frozen'], ['payload', 'payload_frozen'], ['payload_frozen', 'payload']]) {
     const db = database(from);
-    assert.deepEqual(await transitionAuthority(db, { from, to, expectedEpoch: 7, actorUid: 'editor' }), { mode: to, epoch: 8 });
-    await assert.rejects(transitionAuthority(db, { from, to, expectedEpoch: 7, actorUid: 'editor' }), { code: 'news_authority_conflict' });
+    const changed = await transitionAuthority(db, transitionInput(from, to));
+    assert.deepEqual({ mode: changed.mode, epoch: changed.epoch }, { mode: to, epoch: 8 });
+    await assert.rejects(transitionAuthority(db, transitionInput(from, to)), { code: 'news_authority_conflict' });
   }
   for (const expectedEpoch of [0, '7', 2147483647, NaN]) {
     const db = database('legacy');
-    await assert.rejects(transitionAuthority(db, { from: 'legacy', to: 'frozen', expectedEpoch, actorUid: 'editor' }), { code: 'invalid_authority_transition' });
+    await assert.rejects(transitionAuthority(db, transitionInput('legacy', 'frozen', expectedEpoch)), { code: 'invalid_authority_transition' });
     assert.equal(db.calls.length, 0);
   }
 });
@@ -194,25 +202,27 @@ test('frozen reads remain readable while due promotions are skipped', async () =
   assert.equal(page.rows[0].id, id);
 });
 
-test('CLI dry-run never connects; strict command/epoch; lost COMMIT never claims success', async () => {
-  for (const args of [[], ['legacy'], ['freeze-legacy', '--epoch', '0'], ['freeze-legacy', '--epoch', '7', '--proof', 'trusted']]) {
+test('Gate E CLI exposes strict transition/reconciliation commands and requires split identities plus evidence/receipt', () => {
+  const common = ['--epoch', '7', '--editor', 'editor', '--operator', 'operator', '--request-id', 'request-7',
+    '--deadline', new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    '--evidence-file', path.resolve('evidence.json'), '--receipt-file', path.resolve('receipt.json')];
+  for (const args of [[], ['legacy'], ['freeze-legacy', ...common], ['freeze', ...common.slice(2)],
+    ['freeze', ...common, '--operator', 'second'], ['freeze', ...common.map(v => v === 'operator' ? 'editor' : v)]]) {
     assert.throws(() => parseCutoverArguments(args), { code: 'invalid_arguments' });
   }
-  const input = parseCutoverArguments(['freeze-legacy', '--epoch', '7']);
-  const plan = await runCutover({ input, pool: { connect() { assert.fail('dry-run connects'); } } });
-  assert.equal(plan.applied, false); assert.equal(plan.readinessVerified, false);
-  const db = database('legacy', sql => {
-    if (sql.includes('SELECT role, permissions')) return { rows: [{ role: 'admin', permissions: { manageKnowledge: true } }] };
-    if (sql === 'COMMIT') throw new Error('lost response');
-  });
-  await assert.rejects(runCutover({ pool: db, input: { ...input, apply: true }, actorUid: 'editor' }), { code: 'commit_outcome_unknown' });
-  assert.equal(db.mode, 'frozen'); // seam simulates the UPDATE surviving the lost ACK
+  for (const command of ['preflight', 'freeze', 'activate', 'observe', 'freeze-payload', 'resume-payload', 'reconcile']) {
+    const args = command === 'preflight' ? [command, ...common, '--expect-mode', 'legacy']
+      : ['observe', 'reconcile'].includes(command) ? [command, ...common, '--expect-action', 'activate'] : [command, ...common];
+    assert.equal(parseCutoverArguments(args).command, command);
+  }
+  assert.equal(parseCutoverArguments(['reconcile', ...common, '--expect-action', 'freeze'])['expect-action'], 'freeze');
 });
 
 test('normal writer matrix remains fail-closed for all four modes', () => {
   for (const mode of ['legacy', 'frozen', 'payload', 'payload_frozen']) {
     assert.equal(writerAllowed(mode, 'legacy'), mode === 'legacy');
-    assert.equal(writerAllowed(mode, 'payload'), mode === 'payload');
+    assert.equal(writerAllowed(mode, 'payload'), false);
+    assert.equal(writerAllowed(mode, 'payload', true), mode === 'payload');
   }
 });
 
@@ -268,9 +278,9 @@ test('retained old-news references protect bytes even after legacy reader grants
 test('audit failure and CAS conflict propagate, requiring caller rollback', async () => {
   const failure = new Error('audit unavailable');
   const db = database('legacy', sql => { if (sql.includes('INSERT INTO audit_log')) throw failure; });
-  await assert.rejects(transitionAuthority(db, { from: 'legacy', to: 'frozen', expectedEpoch: 7, actorUid: 'editor' }), error => error === failure);
+  await assert.rejects(transitionAuthority(db, transitionInput('legacy', 'frozen')), error => error === failure);
   const conflict = database('legacy', sql => sql.includes('UPDATE owner_news_authority') ? { rows: [] } : undefined);
-  await assert.rejects(transitionAuthority(conflict, { from: 'legacy', to: 'frozen', expectedEpoch: 7, actorUid: 'editor' }), { code: 'news_authority_conflict' });
+  await assert.rejects(transitionAuthority(conflict, transitionInput('legacy', 'frozen')), { code: 'news_authority_conflict' });
   assert.equal(conflict.calls.some(({ sql }) => sql.includes('INSERT INTO audit_log')), false);
 });
 

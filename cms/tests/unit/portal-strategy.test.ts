@@ -103,6 +103,21 @@ test('pinned executeAuthStrategies plus REST boundary preserve 503 instead of an
   assert.equal(result.headers.get('x-ownerinc-auth-status'), null)
 })
 
+test('client-supplied internal auth markers never become trusted response authorization', async () => {
+  const boundary = withEditorialBoundary(async () => Response.json({ ok: true }), 'https://portal.example.test')
+  const result = await boundary(new Request('https://portal.example.test/editorial/api/portal-editors/me', {
+    headers: {
+      'x-ownerinc-auth-status': '200',
+      'x-ownerinc-auth-reason': 'trusted-by-client',
+      'x-portal-service-key': 'client-supplied',
+    },
+  }), undefined)
+  assert.equal(result.status, 200)
+  assert.deepEqual(await result.json(), { ok: true })
+  assert.equal(result.headers.get(AUTH_STATUS_HEADER), null)
+  assert.equal(result.headers.get(AUTH_REASON_HEADER), null)
+})
+
 test('REST boundary interprets appended failures from both Portal strategies and fails closed', async () => {
   const origin = 'https://portal.example.test'
   for (const [statuses, expected] of [
@@ -190,7 +205,7 @@ test('internal client rejects malformed actor/expiry, expired session, mismatche
   ] as const) await assert.rejects(createPortalClient(settings, async () => response(value)).resolvePortalEditor('a'), { status })
   await assert.rejects(createPortalClient(settings, async () => response({ actor })).checkPortalActor('b'), { status: 503 })
   await assert.rejects(createPortalClient(settings, async () => response({ mode: 'missing', epoch: 1 })).getAuthority(), { status: 503 })
-  assert.deepEqual(await createPortalClient(settings, async () => response({ mode: 'payload', epoch: 2 })).getAuthority(), { mode: 'payload', epoch: 2 })
+  assert.deepEqual(await createPortalClient(settings, async () => response({ mode: 'payload', epoch: 2, activationObserved: true })).getAuthority(), { mode: 'payload', epoch: 2, activationObserved: true })
 })
 
 test('timeout aborts dependency resolution after five seconds and never retries', async () => {

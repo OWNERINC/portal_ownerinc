@@ -19,7 +19,7 @@ test('Task7 real native PostgreSQL read bridge; only Portal actor/authority tran
   const savedFetch = globalThis.fetch
   globalThis.fetch = async (url, init) => {
     assert.equal(init?.redirect, 'error')
-    if (String(url).endsWith('/authority')) return Response.json({ mode: 'payload', epoch: 1 })
+    if (String(url).endsWith('/authority')) return Response.json({ mode: 'payload', epoch: 1, activationObserved: true })
     assert.equal(String(url), 'http://127.0.0.1:18087/api/internal/editorial/actor/check')
     return Response.json({ actor })
   }

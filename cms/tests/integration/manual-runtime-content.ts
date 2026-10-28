@@ -24,7 +24,9 @@ test(`manual-only persisted content ${mode}`, async () => {
   const originalFetch = globalThis.fetch
   let stage = 'config'
   globalThis.fetch = async url => {
-    if (String(url).endsWith('/authority')) return Response.json({ mode: 'payload', epoch: 1 })
+    if (String(url).endsWith('/authority')) return Response.json({ mode: 'payload', epoch: 1, activationObserved: true,
+      manifestSha256: 'a'.repeat(64), sealSha256: 'b'.repeat(64), releaseDigest: `sha256:${'c'.repeat(64)}`,
+      imageDigest: `sha256:${'d'.repeat(64)}`, activationRequestId: 'manual-runtime' })
     return Response.json({ actor: editor, expiresAt: new Date(Date.now() + 3_600_000).toISOString() })
   }
   const payload = new BasePayload()
@@ -44,8 +46,9 @@ test(`manual-only persisted content ${mode}`, async () => {
     if (mode === 'prepare') {
       stage = 'preflight'
       const preflight = await queryGoLivePreflight(await createLocalReq({}, payload), {
-        publicationMode: 'manual', getAuthority: async () => ({ mode: 'frozen', epoch: 1 }),
-      })
+        mode: 'legacy', epoch: 1, requestId: 'manual-runtime', deadline: new Date(Date.now() + 60_000).toISOString(),
+      }, { publicationMode: 'manual', getAuthority: async () => ({ mode: 'legacy', epoch: 1, activationObserved: false,
+        manifestSha256: null, sealSha256: null, releaseDigest: null, imageDigest: null, activationRequestId: null }) })
       assert.equal(preflight.newsEmpty, true); assert.equal(preflight.mutation.sequence, '0')
       stage = 'editor-projection'
       const projection = await payload.create({ collection: 'portal-editors', overrideAccess: true,

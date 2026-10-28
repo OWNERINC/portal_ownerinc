@@ -22,8 +22,8 @@ database or Firebase port assignments.
   current user and Local System. If it cannot establish those permissions, it
   fails before writing secrets. Treat the generated `compose.env` as a
   credential file: do not commit, upload, paste, or share it.
-- The target database and CMS Postgres remain unpublished. Only the generated
-  HTTP port and selected Auth Emulator port bind to `127.0.0.1`.
+- The shared PostgreSQL service remains unpublished. Only the generated HTTP
+  port and selected Auth Emulator port bind to `127.0.0.1`.
 
 ## Prepare
 
@@ -64,16 +64,20 @@ prints paths and a resource summary, never generated credentials. The
 ## What preparation creates
 
 - A private `compose.env` containing new random Portal database, CMS database,
-  Payload, bridge, worker, and dummy SMTP secrets. Portal's database is
-  `portal_test`; the independent CMS Postgres keeps the required
-  `ownerinc_cms` database. The admin/migrator/runtime role credentials and
-  connection URLs are distinct and generated for each run.
+  Payload, bridge, worker, and dummy SMTP secrets. The single shared `postgres`
+  service hosts the configured Portal database (`portal_test` in preview) and
+  the separate logical database `ownerinc_cms`. Their owners remain
+  `portal_admin` and `cms_admin`; the application, cron, controller, migrator,
+  runtime, and observer credentials and connection URLs are distinct and
+  generated for each run.
 - A per-run Compose override that assigns project-scoped volumes and the default
   network through a unique project name. API, CMS, Firebase Emulator (and the
   unused Cron service) get run-specific image tags instead of shared `latest`
-  tags. The preview override makes both PostgreSQL healthchecks require TCP on
-  `127.0.0.1` with their configured user/database, so the temporary
-  initialization-only Unix socket cannot mark either database healthy early.
+  tags. The merged stack has exactly three persistent volumes: shared
+  PostgreSQL data, Portal uploads, and CMS uploads. The preview override applies
+  one PostgreSQL healthcheck to `postgres`, requiring TCP on `127.0.0.1` with
+  `portal_admin` and `portal_test`, so the temporary initialization-only Unix
+  socket cannot mark the shared cluster healthy early.
 - A copy of the browser Firebase module using only a synthetic
   `demo-<run>` project ID and the selected loopback Auth port. It retains the
   module's `auth` export and pinned SDK imports. Nginx receives a private copy
@@ -125,13 +129,18 @@ sh '/absolute/path/to/the-run/launch.sh'
 ```
 
 Both scripts reference the run's `compose.env` and run `docker compose config
---quiet`, build the run-specific API/CMS/Auth images, then request only
-`nginx`, `cms`, and `firebase-auth`. Compose starts their normal dependencies:
-the isolated Portal and CMS Postgres services and their existing migration
-services. Those services migrate only their new per-run databases. The
-launchers do not request `cron`, `cms-worker`, `bootstrap-admin`, or the
-Firebase Emulator UI. The Auth Emulator is exposed only on the selected
-loopback port; Nginx is exposed only on the selected loopback HTTP port.
+--quiet`, build the run-specific API/CMS/Auth images, then execute the bounded
+database sequence against the same `postgres` cluster: cluster bootstrap,
+database-local provision, bounded control-role bootstrap, migrate plus final
+grant verification, and only then application start. In short, the lifecycle is
+**cluster bootstrap → provision → migrate/finalize → start**; the generated
+launcher keeps the control-role bootstrap between provision and migration as a
+required least-privilege precondition. It finally requests only `nginx`, `cms`,
+and `firebase-auth`; Compose starts their normal dependencies on the shared
+cluster and migrates only the new per-run databases. The launchers do not
+request `cron`, `cms-worker`, `bootstrap-admin`, or the Firebase Emulator UI.
+The Auth Emulator is exposed only on the selected loopback port; Nginx is
+exposed only on the selected loopback HTTP port.
 The launchers wait up to five minutes for Compose health/running readiness;
 this only establishes service readiness and does not authenticate a user.
 
@@ -255,6 +264,15 @@ reason to bypass the guard. Authenticated-admin acceptance waits for the
 separate Gate 3 change that legitimately decouples admin access from News
 activation. A browser screenshot or real sign-in is not evidence produced by
 preparation.
+
+The strongest local evidence available here is bounded: source-contract checks,
+exclusive generation of private artifacts, read-only merged Compose validation,
+the single PostgreSQL TCP healthcheck, successful completion of the reviewed
+bootstrap/provision/migrate-finalize chain, and service health. None of those
+proves production inventory correspondence, backup/restore recovery, durable
+host ownership, production credentials, authenticated administrator behavior,
+News activation, or deploy readiness. A local preview must not be cited as Gate
+B production acceptance.
 
 Images are built from the current checkout when the generated launcher is
 explicitly used; this preparation does not prove equivalence with a production

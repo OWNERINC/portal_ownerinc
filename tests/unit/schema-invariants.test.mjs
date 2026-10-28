@@ -5,7 +5,7 @@ import test from 'node:test';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql', '034_owner_news_editorial.sql', '035_owner_news_polls.sql', '036_payload_editorial_control.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql', '034_owner_news_editorial.sql', '035_owner_news_polls.sql', '036_payload_editorial_control.sql', '037_owner_news_cutover.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -15,8 +15,18 @@ test('migrations are numbered, ordered, and tracked by a ledger', async () => {
 
   const schema = await readFile('api/db/schema.sql', 'utf8');
   const ledger = [...schema.matchAll(/\('([0-9]{3}_[a-z0-9_]+)'\)/g)].map((match) => match[1]);
-  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state', '033_academy_learning', '034_owner_news_editorial', '035_owner_news_polls', '036_payload_editorial_control']) {
+  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state', '033_academy_learning', '034_owner_news_editorial', '035_owner_news_polls', '036_payload_editorial_control', '037_owner_news_cutover']) {
     assert.equal(ledger.includes(migration), false, `${migration} must run after the bootstrap schema`);
+  }
+
+  const expected = files.map(file => file.slice(0, -4));
+  const extractLedger = source => {
+    const block = /const expectedVersions = \[([\s\S]*?)\n\];/u.exec(source)?.[1] || '';
+    return [...block.matchAll(/'([0-9]{3}_[a-z0-9_]+)'/gu)].map(match => match[1]);
+  };
+  for (const filename of ['api/db/verify-migrations.js', 'scripts/test-migrations.mjs']) {
+    assert.deepEqual(extractLedger(await readFile(filename, 'utf8')), expected,
+      `${filename} must require the exact current migration ledger`);
   }
 });
 
@@ -32,6 +42,7 @@ test('editorial control migration, grants and both installation gates stay align
   assert.doesNotMatch(provision, /GRANT[^;]*cms_editor_sessions[^;]*TO portal_cron/);
   for (const source of [verification, integration]) {
     assert.match(source, /'036_payload_editorial_control'/);
+    assert.match(source, /'037_owner_news_cutover'/);
     assert.match(source, /cms_editor_sessions_expiry/);
     assert.match(source, /owner_news_authority/);
     assert.match(source, /has_table_privilege\('portal_api', \$1, \$2\)/);

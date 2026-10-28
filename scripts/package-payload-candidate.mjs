@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gzipSync, inflateRawSync } from 'node:zlib';
 import {
-  parseEvidenceJson, reject, sha256, validateQualifiedCandidate, validateRunIdentity,
+  parseEvidenceJson, reject, sha256, validateProductionAuthorization, validateQualifiedCandidate, validateRunIdentity,
 } from './lib/payload-candidate-qualification.mjs';
 
 export const CANDIDATE_REPOSITORY = 'OWNERINC/portal_ownerinc';
@@ -18,15 +18,32 @@ const artifactDefinitions = Object.freeze({
   qualified: { name: 'payload-recovery-qualified-candidate', file: 'qualified-candidate.json' },
   report: { name: 'payload-preauthority-recovery-report', file: 'payload-preauthority-recovery-report.json' },
 });
-const requiredSteps = Object.freeze([
+const requiredValidationSteps = Object.freeze([
   'Build production images',
   'Test editorial admin session v2 against disposable PostgreSQL and Firebase Auth',
   'Scan API image', 'Scan cron image', 'Scan CMS image',
   'Reject high or critical production dependency vulnerabilities', 'Generate SPDX SBOMs',
+]);
+const historicalRequiredSteps = Object.freeze([
+  ...requiredValidationSteps,
   'Publish immutable images', 'Publish CMS immutable image',
   'Run disposable four-store preauthority recovery on published digests',
   'Create recovery-qualified candidate manifest',
 ]);
+const historicalJobConclusions = Object.freeze({
+  validate: 'success',
+  'Deploy production': 'skipped',
+  'isolated-b0-recovery': 'success',
+});
+const productionJobConclusions = Object.freeze({
+  'dispatch-input-contract': 'success',
+  'payload-manual-runtime': 'skipped',
+  'isolated-b0-recovery': 'success',
+  validate: 'success',
+  'Publish immutable images': 'success',
+  'Qualify Payload candidate': 'success',
+  'Deploy production': 'skipped',
+});
 const reservedPaths = new Set(['.ci-commit', '.ci-images', '.image-env', '.ci-candidate.json', '.ci-qualification.json',
   '.ci-recovery-report.json', '.ci-provenance.json', 'package-receipt.json']);
 const numericId = value => typeof value === 'string' && /^[1-9][0-9]{0,19}$/u.test(value);
@@ -41,7 +58,17 @@ export function validatePackageRequest(request) {
       Object.values(request.artifactIds).some(value => !numericId(value)) || new Set(Object.values(request.artifactIds)).size !== 3) {
     reject('invalid_candidate_artifact_ids');
   }
-  if (Object.keys(request).some(key => !['repository', 'commit', 'runId', 'runAttempt', 'artifactIds'].includes(key))) {
+  const production = request.authorization !== undefined;
+  if (production) {
+    validateProductionAuthorization(request.authorization);
+    if (!request.artifactDigests || Object.keys(request.artifactDigests).sort().join(',') !== 'candidate,qualified,report' ||
+        Object.values(request.artifactDigests).some(value => !/^sha256:[0-9a-f]{64}$/u.test(value)) ||
+        !request.contentDigests || Object.keys(request.contentDigests).sort().join(',') !== 'candidate,qualified,report' ||
+        Object.values(request.contentDigests).some(value => !/^[0-9a-f]{64}$/u.test(value))) reject('invalid_candidate_artifact_digests');
+  }
+  const permitted = ['repository', 'commit', 'runId', 'runAttempt', 'artifactIds',
+    ...(production ? ['artifactDigests', 'contentDigests', 'authorization'] : [])];
+  if (Object.keys(request).some(key => !permitted.includes(key))) {
     reject('untrusted_package_inputs');
   }
 }
@@ -63,26 +90,35 @@ export function validateGithubRun(request, { repository, workflow, run, jobs }) 
       !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,240}$/u.test(run.head_branch) || run.head_branch.includes('..') ||
       run.status !== 'completed' || run.conclusion !== 'success') reject('github_run_not_qualified');
   if (!Array.isArray(jobs)) reject('invalid_github_jobs');
-  const validateJobs = jobs.filter(job => job.name === 'validate');
-  const deployJobs = jobs.filter(job => job.name === 'Deploy production');
-  const b0Jobs = jobs.filter(job => job.name === 'isolated-b0-recovery');
-  if (validateJobs.length !== 1 || deployJobs.length !== 1 || b0Jobs.length !== 1 || deployJobs[0].conclusion !== 'skipped' ||
-      jobs.some(job => !['validate', 'Deploy production', 'isolated-b0-recovery'].includes(job.name))) reject('unexpected_candidate_jobs');
-  const b0 = b0Jobs[0];
-  if (b0.status !== 'completed' || b0.conclusion !== 'success' || b0.head_sha !== request.commit ||
-      apiId(b0.run_id) !== request.runId || apiId(b0.run_attempt) !== request.runAttempt || !Array.isArray(b0.steps)) {
-    reject('github_candidate_gate_not_passed');
+  const production = request.authorization !== undefined;
+  const graph = production ? productionJobConclusions : historicalJobConclusions;
+  if (jobs.length !== Object.keys(graph).length || jobs.some(job => !(job?.name in graph))) reject('unexpected_candidate_jobs');
+  const selectedJobs = {};
+  for (const [name, conclusion] of Object.entries(graph)) {
+    const matches = jobs.filter(job => job.name === name);
+    if (matches.length !== 1) reject('unexpected_candidate_jobs');
+    const selected = matches[0];
+    if (selected.status !== 'completed' || selected.conclusion !== conclusion || selected.head_sha !== request.commit ||
+        apiId(selected.run_id) !== request.runId || apiId(selected.run_attempt) !== request.runAttempt) {
+      reject('github_candidate_gate_not_passed');
+    }
+    selectedJobs[name] = selected;
   }
+  const job = selectedJobs.validate;
+  const b0 = selectedJobs['isolated-b0-recovery'];
+  if (production) {
+    const dispatch = selectedJobs['dispatch-input-contract'];
+    if (run.head_branch !== 'main' || !Array.isArray(dispatch.steps) ||
+        !dispatch.steps.some(step => step.name === 'Require main and closed production binding for candidate publication' &&
+          step.status === 'completed' && step.conclusion === 'success')) reject('github_candidate_gate_not_passed');
+  }
+  if (!Array.isArray(b0.steps)) reject('github_candidate_gate_not_passed');
   for (const name of ['Checkout exact B0 candidate', 'Set up B0 Node', 'Prepare pinned isolated B0 images', 'Run required native isolated B0 recovery']) {
     const matches = b0.steps.filter(step => step.name === name);
     if (matches.length !== 1 || matches[0].status !== 'completed' || matches[0].conclusion !== 'success') reject('github_candidate_gate_not_passed');
   }
-  const job = validateJobs[0];
-  if (job.status !== 'completed' || job.conclusion !== 'success' || job.head_sha !== request.commit ||
-      apiId(job.run_id) !== request.runId || apiId(job.run_attempt) !== request.runAttempt || !Array.isArray(job.steps)) {
-    reject('github_validation_job_not_passed');
-  }
-  for (const name of requiredSteps) {
+  if (!Array.isArray(job.steps)) reject('github_validation_job_not_passed');
+  for (const name of (production ? requiredValidationSteps : historicalRequiredSteps)) {
     const steps = job.steps.filter(step => step.name === name);
     if (steps.length !== 1 || steps[0].status !== 'completed' || steps[0].conclusion !== 'success') {
       reject('github_candidate_gate_not_passed');
@@ -90,9 +126,33 @@ export function validateGithubRun(request, { repository, workflow, run, jobs }) 
   }
   const start = Date.parse(job.started_at); const end = Date.parse(job.completed_at);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) reject('invalid_github_attempt_window');
+  let trustEnd = end;
+  if (production) {
+    const publisher = selectedJobs['Publish immutable images'];
+    const qualifier = selectedJobs['Qualify Payload candidate'];
+    for (const [selected, required] of [[publisher, ['Push validated immutable digests only']],
+      [qualifier, ['Run disposable four-store preauthority recovery on published digests',
+        'Create recovery-qualified candidate manifest', 'Upload recovery-qualified candidate manifest',
+        'Create exact qualified private-install handoff', 'Upload exact qualified private-install handoff']]]) {
+      if (!Array.isArray(selected.steps)) reject('github_candidate_gate_not_passed');
+      for (const name of required) {
+        const steps = selected.steps.filter(step => step.name === name);
+        if (steps.length !== 1 || steps[0].status !== 'completed' || steps[0].conclusion !== 'success') {
+          reject('github_candidate_gate_not_passed');
+        }
+      }
+    }
+    const publishStart = Date.parse(publisher.started_at); const publishEnd = Date.parse(publisher.completed_at);
+    const qualifyStart = Date.parse(qualifier.started_at); const qualifyEnd = Date.parse(qualifier.completed_at);
+    if (![publishStart, publishEnd, qualifyStart, qualifyEnd].every(Number.isFinite) ||
+        publishStart < end || publishEnd < publishStart || qualifyStart < publishEnd || qualifyEnd < qualifyStart) {
+      reject('invalid_github_attempt_window');
+    }
+    trustEnd = qualifyEnd;
+  }
   const b0Start = Date.parse(b0.started_at); const b0End = Date.parse(b0.completed_at);
   if (!Number.isFinite(b0Start) || !Number.isFinite(b0End) || b0End < b0Start || b0End > start) reject('invalid_github_attempt_window');
-  return { repositoryId: repository.id, workflowId: workflow.id, start, end };
+  return { repositoryId: repository.id, workflowId: workflow.id, start, end: trustEnd };
 }
 
 export function validateGithubArtifact(request, role, artifact, trust) {
@@ -104,6 +164,7 @@ export function validateGithubArtifact(request, role, artifact, trust) {
       apiId(artifact.workflow_run?.id) !== request.runId || artifact.workflow_run.head_sha !== request.commit ||
       artifact.workflow_run.repository_id !== trust.repositoryId || artifact.workflow_run.head_repository_id !== trust.repositoryId ||
       !Number.isFinite(created) || created < trust.start || created > trust.end) reject('github_artifact_binding_mismatch');
+  if (request.artifactDigests && artifact.digest !== request.artifactDigests[role]) reject('github_artifact_binding_mismatch');
 }
 
 async function boundedBody(response, limit) {
@@ -184,7 +245,11 @@ export async function authenticatedGithubCandidate(request, { token, fetchImpl =
   }
   const candidate = parseEvidenceJson(evidence.candidateBytes);
   const expectedRun = { commit: request.commit, runId: request.runId, runAttempt: request.runAttempt };
-  const qualified = validateQualifiedCandidate({ ...evidence, expectedRun, expectedImages: candidate.images });
+  const qualified = validateQualifiedCandidate({ ...evidence, expectedRun, expectedImages: candidate.images,
+    ...(request.authorization ? { expectedAuthorization: request.authorization } : {}) });
+  if (request.contentDigests && (sha256(evidence.candidateBytes) !== request.contentDigests.candidate ||
+      sha256(evidence.qualifiedBytes) !== request.contentDigests.qualified ||
+      sha256(evidence.reportBytes) !== request.contentDigests.report)) reject('candidate_content_digest_mismatch');
   return { evidence, qualified, treeSha: commit.tree.sha, provenance: {
     schemaVersion: 1, kind: 'github-api-verified-candidate-package', deploymentAuthorized: false,
     repository: CANDIDATE_REPOSITORY, repositoryId: trust.repositoryId,
@@ -192,6 +257,7 @@ export async function authenticatedGithubCandidate(request, { token, fetchImpl =
     qualificationContract: qualified.qualificationContract, images: qualified.images,
     artifacts, candidateSha256: sha256(evidence.candidateBytes),
     qualifiedManifestSha256: sha256(evidence.qualifiedBytes), recoveryReportSha256: sha256(evidence.reportBytes),
+    ...(request.authorization ? { authorization: { ...request.authorization } } : {}),
     sourceTreeSha: commit.tree.sha,
   } };
 }
@@ -421,7 +487,9 @@ export async function packageCandidate(request, { checkout, output, token, fetch
 
 export async function main(args = process.argv.slice(2), env = process.env) {
   const values = {}; const flags = ['--repository', '--commit', '--run-id', '--run-attempt', '--candidate-artifact-id',
-    '--qualified-artifact-id', '--report-artifact-id', '--checkout', '--output'];
+    '--qualified-artifact-id', '--report-artifact-id', '--candidate-artifact-digest', '--qualified-artifact-digest',
+    '--report-artifact-digest', '--candidate-sha256', '--qualified-sha256', '--report-sha256', '--approval-sha256',
+    '--inventory-identity', '--expires-at', '--nonce', '--checkout', '--output'];
   for (let index = 0; index < args.length; index += 2) {
     if (!flags.includes(args[index]) || Object.hasOwn(values, args[index]) || !args[index + 1] || args[index + 1].startsWith('--')) reject('invalid_package_arguments');
     values[args[index]] = args[index + 1];
@@ -430,6 +498,10 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   return packageCandidate({ repository: values['--repository'] || CANDIDATE_REPOSITORY,
     commit: values['--commit'], runId: values['--run-id'], runAttempt: values['--run-attempt'],
     artifactIds: { candidate: values['--candidate-artifact-id'], qualified: values['--qualified-artifact-id'], report: values['--report-artifact-id'] },
+    artifactDigests: { candidate: values['--candidate-artifact-digest'], qualified: values['--qualified-artifact-digest'], report: values['--report-artifact-digest'] },
+    contentDigests: { candidate: values['--candidate-sha256'], qualified: values['--qualified-sha256'], report: values['--report-sha256'] },
+    authorization: { environment: 'production', approvalSha256: values['--approval-sha256'],
+      inventoryIdentity: values['--inventory-identity'], expiresAt: values['--expires-at'], nonce: values['--nonce'] },
   }, { checkout: values['--checkout'], output: values['--output'], token: env.GH_TOKEN || env.GITHUB_TOKEN });
 }
 

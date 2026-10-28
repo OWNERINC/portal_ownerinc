@@ -2,6 +2,7 @@
   "name": "ownerinc-portal",
   "private": true,
   "scripts": {
+    "smoke:payload-route:static": "node scripts/smoke-payload-route.mjs --static",
     "bootstrap": "npm --prefix api ci && npm --prefix cron ci && npm --prefix cms ci",
     "db:migrate": "node api/db/migrate.js",
     "db:provision": "node api/db/provision.js",

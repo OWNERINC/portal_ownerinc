@@ -99,12 +99,12 @@ export async function main(env = process.env) {
   const restoredPortalUploads = path.join(restored, 'portal-uploads'); await mkdir(restoredPortalUploads, { mode: 0o700 });
   const backup = path.join(directory, 'backup'); await mkdir(backup, { mode: 0o700 });
   const protection = path.join(directory, 'restore-protection'); await mkdir(protection, { mode: 0o700 });
-  const passwords = Object.fromEntries(['admin', 'migrator', 'runtime', 'controller', 'observer'].map(key => [key, randomBytes(32).toString('hex')]));
+  const passwords = Object.fromEntries(['cluster', 'admin', 'migrator', 'runtime', 'controller', 'observer'].map(key => [key, randomBytes(32).toString('hex')]));
   const postgresEnv = path.join(directory, 'postgres.env');
   // Build the key separately so the repository scanner does not mistake this
   // runtime-generated value for a committed POSTGRES_PASSWORD credential.
   const postgresPasswordKey = ['POSTGRES', 'PASSWORD'].join('_');
-  const postgresEnvContents = () => `POSTGRES_DB=ownerinc_cms\nPOSTGRES_USER=cms_admin\n${postgresPasswordKey}=${passwords.admin}\n`;
+  const postgresEnvContents = () => `POSTGRES_DB=portal_manual_runtime\nPOSTGRES_USER=portal_admin\n${postgresPasswordKey}=${passwords.cluster}\n`;
   await writeFile(postgresEnv, postgresEnvContents(), { mode: 0o600 });
   const secret = () => randomBytes(32).toString('hex');
   let created = false, targetCreated = false, completed = false, stage = manualRuntimeStages[0], portalServer;
@@ -136,13 +136,12 @@ export async function main(env = process.env) {
     port = Number(match[1]);
     let admin;
     for (let attempt = 0; attempt < 90; attempt++) {
-      try { admin = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms')); break } catch { await new Promise(resolve => setTimeout(resolve, 1000)); }
+      try { admin = await connect(url('portal_admin', passwords.cluster, 'portal_manual_runtime')); break } catch { await new Promise(resolve => setTimeout(resolve, 1000)); }
     }
     if (!admin) throw new Error('manual_runtime_database_readiness_timeout');
     try {
       const version = await admin.query("SELECT current_setting('server_version_num')::int AS version, current_database() AS database")
-      if (Math.floor(version.rows[0].version / 10000) !== 16 || version.rows[0].database !== 'ownerinc_cms') throw new Error('manual_runtime_database_identity_invalid')
-      await admin.query('CREATE DATABASE portal_manual_runtime OWNER cms_admin')
+      if (Math.floor(version.rows[0].version / 10000) !== 16 || version.rows[0].database !== 'portal_manual_runtime') throw new Error('manual_runtime_database_identity_invalid')
     } finally { await admin.end(); }
 
     const payloadToPortal = secret(), portalToPayload = secret();
@@ -168,21 +167,28 @@ export async function main(env = process.env) {
     await new Promise((resolve, reject) => { portalServer.once('error', reject); portalServer.listen(0, '127.0.0.1', resolve) })
     const portalPort = portalServer.address().port
     const common = { ...cleanEnvironment(), NODE_ENV: 'production', CMS_PUBLICATION_MODE: 'manual', NEXT_TELEMETRY_DISABLED: '1',
+      CMS_PORTAL_DATABASE_NAME: 'portal_manual_runtime',
       PAYLOAD_SECRET: secret(), PORTAL_PUBLIC_URL: 'https://portal.manual.invalid', PORTAL_INTERNAL_URL: `http://127.0.0.1:${portalPort}`,
       PAYLOAD_TO_PORTAL_SECRET: payloadToPortal, PORTAL_TO_PAYLOAD_SECRET: portalToPayload, PAYLOAD_MANUAL_RUNTIME_MARKER: marker };
     await command('npm', ['run', 'build'], { cwd: path.join(root, 'cms'),
       env: { ...cleanEnvironment(), CMS_BUILD_ONLY: 'true', NEXT_PHASE: 'phase-production-build', NEXT_TELEMETRY_DISABLED: '1' }, timeout: 600_000 });
     const provision = async selectedPort => {
-      const operation = { ...common, CMS_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms', selectedPort),
-        CMS_MIGRATOR_PASSWORD: passwords.migrator, CMS_RUNTIME_PASSWORD: passwords.runtime };
+      const operation = { ...common, CMS_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms', selectedPort) };
       await command(process.execPath, ['--import', 'tsx', 'scripts/provision-db.ts', '--provision'], { cwd: path.join(root, 'cms'), env: operation });
     };
+    const clusterBootstrap = async selectedPort => command(process.execPath,
+      ['--import', 'tsx', 'scripts/provision-db.ts', '--bootstrap-database'], { cwd: path.join(root, 'cms'),
+        env: { ...common, CMS_DATABASE_URL: url('portal_admin', passwords.cluster, 'postgres', selectedPort),
+          CMS_POSTGRES_PASSWORD: passwords.admin, CMS_CONTROLLER_PASSWORD: passwords.controller,
+          CMS_MIGRATOR_PASSWORD: passwords.migrator, CMS_RUNTIME_PASSWORD: passwords.runtime,
+          CMS_OBSERVER_PASSWORD: passwords.observer }, timeout: 120_000 });
     const controlRoles = async (mode, selectedPort) => command(process.execPath,
       ['--import', 'tsx', 'scripts/provision-db.ts', mode], { cwd: path.join(root, 'cms'),
         env: { ...common, CMS_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms', selectedPort),
           CMS_MIGRATOR_PASSWORD: passwords.migrator, CMS_RUNTIME_PASSWORD: passwords.runtime,
           CMS_CONTROLLER_PASSWORD: passwords.controller }, timeout: 120_000 });
     step('empty-database-provision');
+    await clusterBootstrap(port);
     await provision(port);
     await controlRoles('--bootstrap-control', port);
     const cmsEnv = (database, evidenceDirectory, selectedPort = port) => ({ ...common, CMS_DATABASE_URL: url('cms_runtime', passwords.runtime, database, selectedPort),
@@ -216,14 +222,19 @@ export async function main(env = process.env) {
     const migrate = async (database, selectedPort = port, evidenceDirectory = directory) => command(process.execPath,
       ['node_modules/payload/bin.js', 'migrate'], {
         cwd: path.join(root, 'cms'), env: { ...cmsEnv(database, evidenceDirectory, selectedPort),
-          CMS_DATABASE_URL: url('cms_migrator', passwords.migrator, database, selectedPort) }, timeout: 300_000 });
+         CMS_DATABASE_URL: url('cms_migrator', passwords.migrator, database, selectedPort) }, timeout: 300_000 });
+    const grants = async (selectedPort = port) => command(process.execPath,
+      ['--import', 'tsx', 'scripts/provision-db.ts', '--grants'], { cwd: path.join(root, 'cms'),
+        env: { ...common, CMS_DATABASE_URL: url('cms_migrator', passwords.migrator, 'ownerinc_cms', selectedPort) }, timeout: 120_000 });
     await migrate('ownerinc_cms');
+    await grants();
 
     step('protocol-finalizer');
     await command(process.execPath, ['--import', 'tsx', '--test', '--test-reporter=tap', '--test-force-exit',
       'tests/integration/manual-runtime-finalizer.ts'], {
       cwd: path.join(root, 'cms'), env: { ...cleanEnvironment(), PAYLOAD_MANUAL_RUNTIME_MARKER: marker,
-        CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms') },
+        CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms'),
+        CMS_PORTAL_DATABASE_NAME: 'portal_manual_runtime' },
       safeStderrPattern: /MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+/u });
     step('protocol-baseline');
     const qualify = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms'));
@@ -255,7 +266,7 @@ export async function main(env = process.env) {
         env: { ...cleanEnvironment(), PAYLOAD_MANUAL_RUNTIME_MARKER: marker, PAYLOAD_MANUAL_RUNTIME_PROTOCOL_ACTION: action,
           CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms', selectedPort),
           CMS_OBSERVER_DATABASE_URL: url('cms_observer', passwords.observer, 'ownerinc_cms', selectedPort),
-          CMS_OBSERVER_PASSWORD: passwords.observer },
+          CMS_OBSERVER_PASSWORD: passwords.observer, CMS_PORTAL_DATABASE_NAME: 'portal_manual_runtime' },
         safeStderrPattern: /MANUAL_RUNTIME_PROTOCOL_DIAGNOSTIC action=(?:provision-observer|provision-observer-role|audit) stage=(?:connect|provision|audit) sqlstate=(?:none|[0-9A-Z]{5})/u,
       });
     await protocolProof('provision-observer');
@@ -330,14 +341,14 @@ export async function main(env = process.env) {
     await stopCms();
 
     step('coordinated-backup');
-    const dump = async database => docker(['exec', '-i', container, 'pg_dump', '--format=custom', '--username=cms_admin', `--dbname=${database}`], { binary: true });
-    await writeFile(path.join(backup, 'cms-postgres.dump'), await dump('ownerinc_cms'));
+    const dump = async database => docker(['exec', '-i', container, 'pg_dump', '--format=custom', '--username=portal_admin', `--dbname=${database}`], { binary: true });
+    await writeFile(path.join(backup, 'cms.dump'), await dump('ownerinc_cms'));
     await writeFile(path.join(backup, 'postgres.dump'), await dump('portal_manual_runtime'));
     await command('tar', ['-czf', path.join(backup, 'cms-uploads.tar.gz'), '-C', path.join(directory, 'uploads'), '.']);
     await command('tar', ['-czf', path.join(backup, 'uploads.tar.gz'), '-C', portalUploads, '.']);
     await writeFile(path.join(backup, 'release.images'), `API_IMAGE=fixture.invalid/ownerinc-portal-api@sha256:${'a'.repeat(64)}\nCRON_IMAGE=fixture.invalid/ownerinc-portal-cron@sha256:${'b'.repeat(64)}\nCMS_IMAGE=fixture.invalid/ownerinc-portal-cms@sha256:${'c'.repeat(64)}\nRELEASE_FORMAT=payload-v1\n`);
     await writeFile(path.join(backup, 'operations-proof.json'), JSON.stringify({ schemaVersion: 1, fixture: 'manual-runtime', markerSha256: sha256(marker) }));
-    await writeFile(path.join(backup, 'backup.format'), 'payload-v1\n');
+    await writeFile(path.join(backup, 'backup.format'), 'payload-v2-shared-postgres\n');
     await command('bash', ['-c', '. "$1/scripts/release-manifest.sh"; write_payload_backup_manifest "$2"; verify_storage_archive "$2/uploads.tar.gz"; verify_storage_archive "$2/cms-uploads.tar.gz"', 'fixture', root, backup]);
 
     step('restore-target-start');
@@ -355,39 +366,43 @@ export async function main(env = process.env) {
     step('restore-target-readiness');
     let targetAdmin;
     for (let attempt = 0; attempt < 90; attempt++) {
-      try { targetAdmin = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms', targetPort)); break }
+      try { targetAdmin = await connect(url('portal_admin', passwords.cluster, 'portal_manual_runtime', targetPort)); break }
       catch { await new Promise(resolve => setTimeout(resolve, 1000)); }
     }
     if (!targetAdmin) throw new Error('manual_runtime_target_readiness_timeout');
-    try { await targetAdmin.query('CREATE DATABASE portal_manual_runtime OWNER cms_admin') } finally { await targetAdmin.end() }
+    await targetAdmin.end()
     step('restore-target-provision');
+    await clusterBootstrap(targetPort);
     await provision(targetPort);
     await migrate('ownerinc_cms', targetPort, restored);
+    await grants(targetPort);
     step('restore-target-control');
     await controlRoles('--bootstrap-control', targetPort);
     step('restore-target-observer');
     await protocolProof('provision-observer-role', targetPort);
     step('restore-protection-backup');
     const targetDump = async database => docker(['exec', '-i', targetContainer, 'pg_dump', '--format=custom',
-      '--username=cms_admin', `--dbname=${database}`], { binary: true });
-    await writeFile(path.join(protection, 'cms-postgres.dump'), await targetDump('ownerinc_cms'));
+      '--username=portal_admin', `--dbname=${database}`], { binary: true });
+    await writeFile(path.join(protection, 'cms.dump'), await targetDump('ownerinc_cms'));
     await writeFile(path.join(protection, 'postgres.dump'), await targetDump('portal_manual_runtime'));
     await command('tar', ['-czf', path.join(protection, 'cms-uploads.tar.gz'), '-C', path.join(restored, 'uploads'), '.']);
     await command('tar', ['-czf', path.join(protection, 'uploads.tar.gz'), '-C', restoredPortalUploads, '.']);
     await copyFile(path.join(backup, 'release.images'), path.join(protection, 'release.images'));
     await writeFile(path.join(protection, 'operations-proof.json'), JSON.stringify({ schemaVersion: 1,
       fixture: 'manual-runtime-restore-protection', markerSha256: sha256(marker) }));
-    await writeFile(path.join(protection, 'backup.format'), 'payload-v1\n');
+    await writeFile(path.join(protection, 'backup.format'), 'payload-v2-shared-postgres\n');
     await command('bash', ['-c', '. "$1/scripts/release-manifest.sh"; write_payload_backup_manifest "$2"; verify_storage_archive "$2/uploads.tar.gz"; verify_storage_archive "$2/cms-uploads.tar.gz"',
       'fixture', root, protection]);
-    await docker(['exec', '-i', targetContainer, 'pg_restore', '--list'], { input: await readFile(path.join(protection, 'cms-postgres.dump')) });
+    await docker(['exec', '-i', targetContainer, 'pg_restore', '--list'], { input: await readFile(path.join(protection, 'cms.dump')) });
     await docker(['exec', '-i', targetContainer, 'pg_restore', '--list'], { input: await readFile(path.join(protection, 'postgres.dump')) });
     step('restore-cms-database');
-    await docker(['exec', '-i', targetContainer, 'pg_restore', '--single-transaction', '--clean', '--if-exists',
-      '--username=cms_admin', '--dbname=ownerinc_cms'], { input: await readFile(path.join(backup, 'cms-postgres.dump')) });
+    await docker(['exec', '-i', targetContainer, 'pg_restore', '--single-transaction', '--clean', '--if-exists', '--exit-on-error',
+      '--username=portal_admin', '--dbname=ownerinc_cms'], { input: await readFile(path.join(backup, 'cms.dump')) });
     step('restore-portal-database');
     await docker(['exec', '-i', targetContainer, 'pg_restore', '--single-transaction', '--clean', '--if-exists', '--no-owner', '--no-privileges',
-      '--username=cms_admin', '--dbname=portal_manual_runtime'], { input: await readFile(path.join(backup, 'postgres.dump')) });
+      '--username=portal_admin', '--dbname=portal_manual_runtime'], { input: await readFile(path.join(backup, 'postgres.dump')) });
+    await migrate('ownerinc_cms', targetPort, restored);
+    await grants(targetPort);
     step('restore-runtime-verify');
     await command(process.execPath, ['--import', 'tsx', '--test', '--test-reporter=tap', '--test-force-exit',
       'tests/integration/manual-runtime-provision.ts'], { cwd: path.join(root, 'cms'),

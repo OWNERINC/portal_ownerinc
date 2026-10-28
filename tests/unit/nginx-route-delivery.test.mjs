@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -49,7 +50,14 @@ test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and ex
   const publicRoot = path.resolve('public');
   const staticRoot = path.join(tempDir, 'public');
   const api = createServer((req, res) => { res.end(`api:${req.url}`); });
-  const cms = createServer((req, res) => { res.end(`cms:${req.url}`); });
+  const cms = createServer((req, res) => {
+    if (req.url === '/editorial/admin/upstream-unavailable') {
+      res.statusCode = 503;
+      res.end('private upstream detail');
+      return;
+    }
+    res.end(`cms:${req.url}`);
+  });
   let nginx;
   let nginxOutput = '';
   t.after(async () => {
@@ -79,7 +87,9 @@ test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and ex
   }
   const hiddenFixture = '<!doctype html><title>Hidden fixture</title><p>route-recovery-secret</p>';
   await writeFile(path.join(staticRoot, '.route-recovery-hidden.html'), hiddenFixture);
+  const promotedRoute = await readFile('nginx/editorial-route.promoted.conf', 'utf8');
   const serverConfig = (await readFile('nginx/nginx.conf', 'utf8'))
+    .replace('include /etc/nginx/editorial-route-state/active.conf;', promotedRoute)
     .replace(/^    listen 80;$/m, `    listen 127.0.0.1:${listenPort};`)
     .replace('root /usr/share/nginx/html;', `root ${quoteNginx(staticRoot)};`)
     .replace('set $api_upstream http://api:3000;', `set $api_upstream http://127.0.0.1:${apiPort};`)
@@ -187,4 +197,54 @@ test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and ex
   assert.equal(cmsProxy.status, 200);
   assert.equal(await cmsProxy.text(), 'cms:/editorial/api/route-recovery-check.html');
   assertSecurityHeaders(cmsProxy, { csp: false });
+
+  const cmsUnavailable = await fetch(`${baseUrl}/editorial/admin/upstream-unavailable`);
+  assert.equal(cmsUnavailable.status, 503);
+  assert.deepEqual(await cmsUnavailable.json(), { error: 'editorial_unavailable' });
+  assert.equal(cmsUnavailable.headers.get('cache-control'), 'no-store');
+  assert.equal(cmsUnavailable.headers.get('retry-after'), '5');
+  assertSecurityHeaders(cmsUnavailable, { csp: false });
+});
+
+test('baseline Nginx mounts route state as a directory with a hash-bound inactive generation', async () => {
+  const [base, compose, inactive, baseline, pointer, receipt, promoted, unavailable, overlay] = await Promise.all([
+    readFile('nginx/nginx.conf', 'utf8'), readFile('docker-compose.yml', 'utf8'),
+    readFile('nginx/editorial-route.inactive.conf', 'utf8'),
+    readFile('nginx/editorial-route-state/baseline-inactive/include.conf', 'utf8'),
+    readFile('nginx/editorial-route-state/active.conf', 'utf8'),
+    readFile('nginx/editorial-route-state/baseline-inactive/manifest.json', 'utf8'),
+    readFile('nginx/editorial-route.promoted.conf', 'utf8'),
+    readFile('nginx/editorial-route.unavailable.conf', 'utf8'), readFile('ops/compose.payload.route-promoted.yaml', 'utf8'),
+  ]);
+  assert.match(base, /include \/etc\/nginx\/editorial-route-state\/active\.conf;/u);
+  assert.doesNotMatch(base, /return 308 \/editorial\/admin|location \^~ \/editorial\/ \{[\s\S]*proxy_pass \$cms_upstream/u);
+  assert.match(compose, /\.\/nginx\/editorial-route-state:\/etc\/nginx\/editorial-route-state:ro/u);
+  assert.doesNotMatch(compose, /editorial-route\.(?:inactive|promoted|unavailable)\.conf:\/etc\/nginx/u);
+  assert.equal(baseline, inactive);
+  assert.equal(pointer, 'include /etc/nginx/editorial-route-state/baseline-inactive/include.conf;\n');
+  const baselineReceipt = JSON.parse(receipt);
+  assert.equal(baselineReceipt.status, 'inactive-template');
+  assert.equal(baselineReceipt.routeConfigSha256, createHash('sha256').update(baseline).digest('hex'));
+  assert.match(inactive, /location = \/editorial \{ return 404; \}/u);
+  assert.doesNotMatch(inactive, /proxy_pass|return 308/u);
+  assert.match(overlay, /\/var\/lib\/ownerinc\/payload-route:\/etc\/nginx\/editorial-route-state:ro/u);
+  assert.doesNotMatch(overlay, /payload-route\/[^:]+:\/etc\/nginx/u);
+  assert.doesNotMatch(overlay, /ports:|cms:/u);
+  assert.match(overlay, /test -s \/etc\/nginx\/editorial-route-state\/active\.conf && nginx -t && exec nginx/u);
+  assert.match(promoted, /location = \/editorial[\s\S]*return 308 \/editorial\/admin/u);
+  assert.match(promoted, /location \^~ \/editorial\/[\s\S]*proxy_pass \$cms_upstream/u);
+  assert.match(promoted, /location \^~ \/_next\/static\/[\s\S]*proxy_pass \$cms_upstream/u);
+  assert.match(promoted, /location \^~ \/_next\/ \{ return 404; \}/u);
+  for (const path of ['/editorial/ready', '/editorial/health', '/editorial/internal', '/editorial/api/internal']) {
+    assert.ok(promoted.includes(`location = ${path} { return 404; }`));
+    assert.ok(promoted.includes(`location ^~ ${path}/ { return 404; }`));
+  }
+  assert.match(promoted, /location \^~ \/editorial\/api\/portal-news\/ \{ return 404; \}/u);
+  assert.match(promoted, /proxy_intercept_errors on;[\s\S]*error_page 502 503 504 = @editorial_unavailable/u);
+  assert.match(promoted, /location @editorial_unavailable[\s\S]*return 503 '\{"error":"editorial_unavailable"\}'/u);
+  assert.match(promoted, /proxy_set_header X-Portal-Service-Key "";/u);
+  assert.match(promoted, /proxy_set_header X-Ownerinc-Auth-Status "";/u);
+  assert.match(promoted, /if \(\$cross_site_request\) \{ return 403; \}/u);
+  assert.match(unavailable, /location \^~ \/editorial\/ \{ return 503; \}/u);
+  assert.doesNotMatch(unavailable, /proxy_pass|return 308/u);
 });

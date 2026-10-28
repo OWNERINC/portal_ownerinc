@@ -61,7 +61,8 @@ function fixture(commit = 'a'.repeat(40), treeSha = 'e'.repeat(40)) {
   const jobs = [{ name: 'validate', run_id: run.id, run_attempt: 2, head_sha: commit, status: 'completed', conclusion: 'success',
     started_at: '2026-10-09T10:00:00Z', completed_at: '2026-10-09T11:00:00Z',
     steps: steps.map(name => ({ name, status: 'completed', conclusion: 'success' })),
-  }, { name: 'Deploy production', status: 'completed', conclusion: 'skipped' }];
+  }, { name: 'Deploy production', run_id: run.id, run_attempt: 2, head_sha: commit,
+    status: 'completed', conclusion: 'skipped' }];
   jobs.push({ name: 'isolated-b0-recovery', run_id: run.id, run_attempt: 2, head_sha: commit, status: 'completed', conclusion: 'success',
     started_at: '2026-10-09T09:50:00Z', completed_at: '2026-10-09T09:59:00Z',
     steps: ['Checkout exact B0 candidate', 'Set up B0 Node', 'Prepare pinned isolated B0 images', 'Run required native isolated B0 recovery']

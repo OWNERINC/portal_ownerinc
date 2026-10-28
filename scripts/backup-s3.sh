@@ -10,7 +10,7 @@ command -v aws >/dev/null 2>&1 || { echo 'AWS CLI is required for S3 backup uplo
 [[ -d $backup_dir ]] || { echo "Backup directory not found: $backup_dir" >&2; exit 2; }
 [[ -f $backup_dir/manifest.sha256 ]] || { echo 'Backup manifest not found' >&2; exit 2; }
 
-if [[ -e $backup_dir/backup.format || -e $backup_dir/cms-postgres.dump || -e $backup_dir/cms-uploads.tar.gz || -e $backup_dir/operations-proof.json || -e $backup_dir/release.images ]]; then
+if [[ -e $backup_dir/backup.format || -e $backup_dir/cms.dump || -e $backup_dir/cms-uploads.tar.gz || -e $backup_dir/operations-proof.json || -e $backup_dir/release.images ]]; then
   . "$(dirname "$0")/release-manifest.sh"
   verify_backup_manifest "$backup_dir"
 fi

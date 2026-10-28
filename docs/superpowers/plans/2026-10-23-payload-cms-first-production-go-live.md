@@ -1,5 +1,10 @@
 # Payload CMS — primeiro go-live em produção
 
+> **SUPERSEDED PARA EXECUÇÃO:** preservado como histórico. O limite de 30 minutos
+> deste plano foi substituído pelo protocolo Gate E aprovado, com deadline absoluto
+> de até **60 minutos**, documentado em
+> `docs/operations/owner-news-authority.md`.
+
 > **Execução:** implementar este programa em PRs sequenciais, com um único
 > implementador por fatia, revisão fresca e aceite da sessão primária. Não executar
 > duas fatias mutáveis em paralelo. Cada PR deve manter produção fail-closed até o

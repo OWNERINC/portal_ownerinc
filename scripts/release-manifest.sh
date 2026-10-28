@@ -33,10 +33,10 @@ verify_backup_manifest() {
   local expected=(postgres.dump uploads.tar.gz) actual=()
   [[ -d $directory && ! -L $directory ]] || return 2
   if [[ -e $directory/backup.format ]]; then
-    [[ -f $directory/backup.format && ! -L $directory/backup.format && $(cat "$directory/backup.format") == payload-v1 ]] || return 2
-    format=payload-v1
-    expected=(postgres.dump uploads.tar.gz cms-postgres.dump cms-uploads.tar.gz release.images operations-proof.json backup.format)
-  elif [[ -e $directory/cms-postgres.dump || -e $directory/cms-uploads.tar.gz || -e $directory/operations-proof.json || -e $directory/release.images ]]; then
+    [[ -f $directory/backup.format && ! -L $directory/backup.format && $(cat "$directory/backup.format") == payload-v2-shared-postgres ]] || return 2
+    format=payload-v2-shared-postgres
+    expected=(postgres.dump uploads.tar.gz cms.dump cms-uploads.tar.gz release.images operations-proof.json backup.format)
+  elif [[ -e $directory/cms.dump || -e $directory/cms-uploads.tar.gz || -e $directory/operations-proof.json || -e $directory/release.images ]]; then
     echo 'Partial coordinated backup without format marker' >&2; return 2
   fi
   [[ -f $directory/manifest.sha256 && ! -L $directory/manifest.sha256 ]] || return 2
@@ -54,7 +54,7 @@ verify_backup_manifest() {
 write_payload_backup_manifest() {
   local directory=$1
   [[ -d $directory && ! -L $directory ]] || return 2
-  (cd "$directory" && sha256sum postgres.dump uploads.tar.gz cms-postgres.dump cms-uploads.tar.gz \
+  (cd "$directory" && sha256sum postgres.dump uploads.tar.gz cms.dump cms-uploads.tar.gz \
     release.images operations-proof.json backup.format > manifest.sha256)
   verify_backup_manifest "$directory"
 }

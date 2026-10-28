@@ -36,6 +36,7 @@ const expectedVersions = [
   '034_owner_news_editorial',
   '035_owner_news_polls',
   '036_payload_editorial_control',
+  '037_owner_news_cutover',
 ];
 
 async function verifyMigrations() {
@@ -443,7 +444,9 @@ async function verifyMigrations() {
         = ARRAY['token_hash','user_uid','expires_at','revoked_at','created_at']::text[] AS session_columns,
       (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
         FROM information_schema.columns WHERE table_schema='public' AND table_name='owner_news_authority')
-        = ARRAY['singleton','mode','epoch','manifest_sha256','changed_by','changed_at']::text[] AS authority_columns,
+        = ARRAY['singleton','mode','epoch','manifest_sha256','changed_by','changed_at','seal_sha256',
+          'release_digest','image_digest','activation_request_id','activation_observed_at','transition_request_id',
+          'transition_actor_uid','transition_operator_uid','transition_action']::text[] AS authority_columns,
       EXISTS (SELECT 1 FROM pg_constraint
         WHERE conrelid=to_regclass('public.cms_editor_sessions') AND contype='p'
           AND pg_get_constraintdef(oid)='PRIMARY KEY (token_hash)') AS session_identity,
@@ -461,10 +464,22 @@ async function verifyMigrations() {
       EXISTS (SELECT 1 FROM pg_constraint
         WHERE conrelid=to_regclass('public.owner_news_authority') AND contype='p'
           AND pg_get_constraintdef(oid)='PRIMARY KEY (singleton)') AS authority_identity,
-      (SELECT COUNT(*)=4 FROM pg_constraint
+      (SELECT COUNT(*)=9 FROM pg_constraint
         WHERE conrelid=to_regclass('public.owner_news_authority') AND contype='c' AND convalidated
           AND conname IN ('owner_news_authority_singleton_check','owner_news_authority_mode_check',
-            'owner_news_authority_epoch_check','owner_news_authority_manifest_sha256_check')) AS authority_constraints,
+            'owner_news_authority_epoch_check','owner_news_authority_manifest_sha256_check',
+            'owner_news_authority_seal_sha256_check','owner_news_authority_release_digest_check',
+            'owner_news_authority_image_digest_check','owner_news_authority_activation_request_check',
+            'owner_news_authority_transition_identity_check')) AS authority_constraints,
+      EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid=to_regclass('public.owner_news_authority') AND contype='c' AND NOT convalidated
+          AND conname='owner_news_authority_activation_state_check') AS authority_activation_staged,
+      (SELECT ARRAY_AGG(column_name::text ORDER BY ordinal_position)
+        FROM information_schema.columns WHERE table_schema='public' AND table_name='owner_news_authority_transitions')
+        = ARRAY['request_id','action','actor_uid','operator_uid','from_mode','to_mode','previous_epoch',
+          'resulting_epoch','evidence_sha256','committed_at']::text[] AS transition_columns,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.owner_news_authority_transitions')
+        AND contype='p' AND pg_get_constraintdef(oid)='PRIMARY KEY (request_id, action)') AS transition_identity,
       EXISTS (SELECT 1 FROM pg_constraint
         WHERE conrelid=to_regclass('public.owner_news_authority') AND contype='f' AND convalidated
           AND confrelid=to_regclass('public.users') AND confdeltype='n'
@@ -474,12 +489,13 @@ async function verifyMigrations() {
     if (!Object.values(editorialControl.rows[0]).every((value) => value === true)) {
       throw new Error('Editorial control schema/runtime checks are incomplete');
     }
-    for (const table of ['cms_editor_sessions', 'owner_news_authority']) {
+    for (const table of ['cms_editor_sessions', 'owner_news_authority', 'owner_news_authority_transitions']) {
       for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
         const { rows: [access] } = await pool.query(`SELECT
           has_table_privilege('portal_api', $1, $2) AS api_allowed,
           has_table_privilege('portal_cron', $1, $2) AS cron_allowed`, [`public.${table}`, privilege]);
-        const apiAllowed = (table === 'cms_editor_sessions' ? ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] : ['SELECT', 'UPDATE']).includes(privilege);
+        const apiAllowed = (table === 'cms_editor_sessions' ? ['SELECT', 'INSERT', 'UPDATE', 'DELETE']
+          : table === 'owner_news_authority' ? ['SELECT', 'UPDATE'] : ['SELECT', 'INSERT']).includes(privilege);
         const cronAllowed = table === 'owner_news_authority' && privilege === 'SELECT';
         if (access.api_allowed !== apiAllowed || access.cron_allowed !== cronAllowed) {
           throw new Error(`Unexpected editorial control runtime privilege: ${table} ${privilege}`);

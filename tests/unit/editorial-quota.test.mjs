@@ -74,7 +74,7 @@ test('real index isolates bounded authenticated bridge quotas from public IP tra
   assert.equal(verifications, 4, 'no authorization cache');
 
   const authority = () => h.request.get('/api/internal/editorial/authority').set('Authorization', `Bearer ${secret}`);
-  assert.deepEqual((await authority()).body, { mode: 'legacy', epoch: 1 });
+  assert.deepEqual((await authority()).body, { mode: 'legacy', epoch: 1, activationObserved: false });
   assert.equal((await authority()).status, 429);
   const actor = () => h.request.post('/api/internal/editorial/actor/check').set('Authorization', `Bearer ${secret}`).send({ uid: 'b' });
   assert.equal((await actor()).body.actor.uid, 'b');

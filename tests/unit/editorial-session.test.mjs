@@ -458,7 +458,7 @@ test('HTTP private endpoints require a dedicated service secret, return exact co
   assert.equal((await state.request.get('/api/internal/editorial/authority')).status, 401);
   state.authorityMode = 'legacy';
   const authority = await state.request.get('/api/internal/editorial/authority').set('Authorization', `Bearer ${env.PAYLOAD_TO_PORTAL_SECRET}`);
-  assert.deepEqual(authority.body, { mode: 'legacy', epoch: 1 });
+  assert.deepEqual(authority.body, { mode: 'legacy', epoch: 1, activationObserved: false });
   assert.equal((await state.internal('/session/revoke').send({ cookie })).status, 204);
   assert.equal((await state.internal('/session/resolve').send({ cookie })).status, 401);
   // Job actor authorization is independent of browser-session lifetime.

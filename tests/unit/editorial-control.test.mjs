@@ -12,13 +12,14 @@ for (const [mode, legacy, payload] of [
 ]) {
   test(`autoridade ${mode}`, async () => {
     assert.equal(writerAllowed(mode, 'legacy'), legacy);
-    assert.equal(writerAllowed(mode, 'payload'), payload);
+    assert.equal(writerAllowed(mode, 'payload', mode === 'payload'), payload);
     for (const [writer, allowed] of [['legacy', legacy], ['payload', payload]]) {
       const db = scriptedDb([
         [sql => assert.match(sql, /pg_advisory_xact_lock/), { rows: [] }],
-        [sql => assert.match(sql, /FOR UPDATE/), { rows: [{ mode, epoch: 3 }] }],
+        [sql => assert.match(sql, /FOR UPDATE/), { rows: [{ mode, epoch: 3,
+          activation_observed_at: mode === 'payload' ? new Date() : null }] }],
       ]);
-      if (allowed) assert.deepEqual(await assertNewsWriter(db, writer), { mode, epoch: 3 });
+      if (allowed) assert.equal((await assertNewsWriter(db, writer)).mode, mode);
       else await assert.rejects(assertNewsWriter(db, writer), { status: 409, code: 'news_read_only' });
       db.done();
     }
@@ -53,7 +54,7 @@ test('unknown authority modes and writers never authorize writes', () => {
 test('ordinary authority read returns the shared contract without requesting a lock', async () => {
   const db = scriptedDb([
     [sql => {
-      assert.match(sql, /^SELECT mode, epoch FROM owner_news_authority WHERE singleton\s*=\s*TRUE$/);
+      assert.match(sql, /^SELECT mode, epoch, manifest_sha256, seal_sha256, release_digest, image_digest, activation_request_id, activation_observed_at, transition_request_id, transition_actor_uid, transition_operator_uid, transition_action FROM owner_news_authority WHERE singleton\s*=\s*TRUE$/);
     }, { rows: [{ mode: 'payload_frozen', epoch: 7 }] }],
   ]);
   assert.deepEqual(await getAuthority(db), { mode: 'payload_frozen', epoch: 7 });

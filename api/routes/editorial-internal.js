@@ -43,7 +43,14 @@ function createEditorialInternalRouter({ db, firebaseAuth, env = process.env, qu
     catch (error) { next(error); }
   });
   router.get('/authority', limits.authority, async (req, res, next) => {
-    try { res.json(await getAuthority(db)); }
+    try {
+      const authority = await getAuthority(db);
+      res.json({ mode: authority.mode, epoch: authority.epoch,
+        activationObserved: authority.activation_observed_at instanceof Date || typeof authority.activation_observed_at === 'string',
+        manifestSha256: authority.manifest_sha256, sealSha256: authority.seal_sha256,
+        releaseDigest: authority.release_digest, imageDigest: authority.image_digest,
+        activationRequestId: authority.activation_request_id });
+    }
     catch { next(new EditorialSessionError(503, 'news_authority_unavailable')); }
   });
   // The service secret alone never authorizes a browser editor. Resolve the real

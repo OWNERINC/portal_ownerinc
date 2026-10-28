@@ -29,8 +29,8 @@ export const portalNewsEndpoints: Endpoint[] = newsActions.map(action => ({ path
     const request = record(await body(req))
     if (action === 'preflight') {
       keys(request, ['input'])
-      readNewsInput(action, request.input)
-      return Response.json(await queryGoLivePreflight(req), { headers })
+      const input = readNewsInput(action, request.input)
+      return Response.json(await queryGoLivePreflight(req, input), { headers })
     }
     keys(request, ['actor', 'input'])
     const actor = readNewsActor(request.actor)

@@ -136,7 +136,7 @@ test('operator capability is request-, transaction-, run-, bundle-, and actor-bo
 test('operator capability does not bypass native write authority while Portal is frozen', async t => {
   const state = await fixture(t)
   t.mock.method(globalThis, 'fetch', async (input: string) => input.endsWith('/authority')
-    ? Response.json({ mode: 'frozen', epoch: 2 })
+    ? Response.json({ mode: 'frozen', epoch: 2, activationObserved: false })
     : Response.json({ actor: { uid: state.identity.actorUid, email: 'operator@example.invalid', name: null, canManageNews: true } }))
   await withOperatorImportCapability(state.req, state.payload, state.bundle, state.artifact, state.identity, async () => {
     await activateOperatorImportCapability(state.req, state.req, state.payload, state.bundle, state.identity)

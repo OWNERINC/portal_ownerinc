@@ -37,7 +37,7 @@ test('recovery inputs are bound to a root-owned disposable Linux run and immutab
   assert.equal(candidateImagesValid({ ...images, cms: 'ghcr.io/other/ownerinc-portal-cms@sha256:' + 'c'.repeat(64) }), false);
 });
 
-test('fixture inventory uses isolated projects, explicit four-volume mounts, and explicit trust identity', () => {
+test('fixture inventory uses isolated projects, shared-cluster mounts, and explicit trust identity', () => {
   const runIdentity = { commit: 'd'.repeat(40), runId: '12345678901234567890', runAttempt: '987654321' };
   // Exercise the exact object passed by the recovery runner, not a helper-only shape.
   const names = createFixtureProjectNames(runIdentity);
@@ -54,23 +54,25 @@ test('fixture inventory uses isolated projects, explicit four-volume mounts, and
   assert.equal(source.document.trustedSourceInventoryIdentities.length, 0);
   assert.deepEqual(target.document.trustedSourceInventoryIdentities, [source.identity]);
   assert.notEqual(source.identity, target.identity);
-  assert.equal(source.document.schemaVersion, 2);
+  assert.equal(source.document.schemaVersion, 3);
   assert.deepEqual(source.document.environmentFileOwner, { uid: 0, gid: 0 });
-  assert.deepEqual(Object.keys(source.document.volumes).sort(), [
-    'cmsPostgres', 'cmsUploads', 'portalPostgres', 'portalUploads',
-  ]);
+  assert.deepEqual(Object.keys(source.document.volumes).sort(), ['cmsUploads', 'portalPostgres', 'portalUploads']);
   assert.equal(source.document.volumes.portalPostgres.name, `${names.source}_postgres_data`);
   assert.deepEqual(source.document.volumes.portalUploads.mounts.map(item => item.service), ['api', 'cron']);
-  assert.equal(source.document.volumes.cmsUploads.mounts.find(item => item.service === 'cms-worker').required, false);
+  assert.deepEqual(source.document.volumes.cmsUploads.mounts, [
+    { service: 'cms', destination: '/var/lib/ownerinc-cms/media', required: true },
+  ]);
+  assert.deepEqual(source.document.databaseCluster.databases,
+    { portal: { name: 'portal', owner: 'portal_admin' }, cms: { name: 'ownerinc_cms', owner: 'cms_admin' } });
   assert.throws(() => createInventory({ project: 'ownerinc-portal-prod', root }), /non_disposable_project/u);
   assert.throws(() => createFixtureProjectNames({ runId: 'not-a-run', runAttempt: '1' }), /invalid_run_identity/u);
 });
 
-test('real JS inventory-v2 producer is accepted by real Python protected-file loader and owner validator', async t => {
+test('real JS inventory-v3 producer is accepted by real Python protected-file loader and owner validator', async t => {
   const candidates = process.env.PYTHON ? [process.env.PYTHON] : process.platform === 'win32' ? ['python','python3'] : ['python3','python'];
   const python = candidates.find(command => spawnSync(command, ['--version'], { stdio: 'ignore' }).status === 0);
   if (!python) return t.skip('Python 3 unavailable; actual inventory consumer requires Python 3');
-  const temporary = await mkdtemp(path.join(os.tmpdir(), 'inventory-v2-producer-'));
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'inventory-v3-producer-'));
   const canonicalPath = spawnSync(python, ['-c', 'import os,sys; print(os.path.realpath(sys.argv[1]))', temporary],
     { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 30_000 });
   assert.equal(canonicalPath.status, 0, canonicalPath.stderr);
@@ -113,7 +115,7 @@ if simulated:
     I.os.lstat=lambda path:mapped(original_lstat(path))
     I.os.fstat=lambda fd:mapped(original_fstat(fd))
 loaded=I.load(file)
-assert loaded['schemaVersion']==2
+assert loaded['schemaVersion']==3
 assert loaded['environmentFileOwner']=={'uid':0,'gid':0}
 assert I.identity(loaded)==expected_hash
 I.verify_environment_file(environment,loaded['environmentFileOwner'])
@@ -154,7 +156,7 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
   const runner = await readFile('scripts/test-payload-preauthority-recovery.mjs', 'utf8');
   const overlay = await readFile('scripts/integration/payload-preauthority-fixture.compose.yml', 'utf8');
   const compose = await readFile('docker-compose.payload.yml', 'utf8');
-  const runbook = await readFile('docs/operations/owner-news-payload-migration.md', 'utf8');
+  const runbook = await readFile('docs/operations/payload-runtime-recovery.md', 'utf8');
   const provisionStart = runner.indexOf('async function provisionProject(runtime)');
   const provisionEnd = runner.indexOf('\nfunction syntheticUid', provisionStart);
   assert.ok(provisionStart >= 0 && provisionEnd > provisionStart);
@@ -176,14 +178,16 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
   const capture = initialize.indexOf('self._capture_initial_b0(');
   const grants = initialize.indexOf("'portal_grants_pending'");
   const portalMigrate = initialize.indexOf("'-T', 'migrate'");
-  const ordinaryProvision = initialize.indexOf("'cms-provision'");
-  const roleBootstrap = initialize.indexOf("'cms-control-roles'");
-  const migration = initialize.indexOf("'cms-migrate'");
+  const resources = initialize.indexOf('self._initialize_resources()');
+  const clusterBootstrap = controller.indexOf("self._initializer_compose(['--profile', 'cms-bootstrap'");
+  const ordinaryProvision = initialize.indexOf("self._initializer_compose(['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-provision']");
+  const roleBootstrap = initialize.indexOf("scripts/provision-db.ts', '--bootstrap-control']", ordinaryProvision);
+  const migration = initialize.indexOf("'cms-migrate']", roleBootstrap);
   assert.ok(capture >= 0 && grants > capture && portalMigrate > grants && ordinaryProvision > portalMigrate,
     'B0 capture/signing and signed pre-grant stage precede normal grants and all CMS provisioning writes');
-  assert.ok(ordinaryProvision >= 0 && roleBootstrap > ordinaryProvision && migration > roleBootstrap,
-    'ordinary CMS role setup, control-role bootstrap, then native migration must be ordered explicitly');
-  assert.ok(/--profile', 'cms-control-roles'/u.test(initialize.slice(roleBootstrap - 35, roleBootstrap + 35)),
+  assert.ok(resources >= 0 && clusterBootstrap >= 0 && ordinaryProvision > resources && roleBootstrap > ordinaryProvision && migration > roleBootstrap,
+    'cluster role bootstrap, ordinary grants, control grants, then native migration must be ordered explicitly');
+  assert.ok(/--profile', 'cms-control-roles'/u.test(initialize.slice(roleBootstrap - 220, roleBootstrap + 35)),
     'the one-shot role service is selected only for its targeted run');
   assert.ok(/scripts\/provision-db\.ts', '--bootstrap-control'/u.test(initialize),
     'the fixture explicitly selects the existing bootstrap command rather than default read-only verification');
@@ -209,8 +213,10 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
     'the reusable profiled service scopes the controller credential to role verification/bootstrap');
   assert.ok(/profiles: \[cms-control-roles\]/u.test(compose));
   assert.ok(/cms-control-roles:[\s\S]*?networks: \[backend\]/u.test(overlay));
-  assert.ok(runbook.includes('scripts/provision-db.ts --bootstrap-control` antes da migration\nnativa'),
-    'the fixture follows the existing documented pre-migration provisioning phase');
+  assert.ok(runbook.includes('`cms-cluster-bootstrap`, que cria/reconcilia as seis roles CMS'),
+    'the fixture follows the documented shared-cluster pre-migration provisioning phase');
+  assert.match(runbook, /api\/db\/provision\.js[\s\S]*portal_api[\s\S]*portal_cron/u,
+    'the active runbook keeps Portal role authority separate from the six CMS roles');
 });
 
 test('legacy announcement lookup is bound to a captured source document UUID', () => {

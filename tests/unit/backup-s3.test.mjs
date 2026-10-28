@@ -292,21 +292,28 @@ test('top-level backup and restore delegate payload-v1 to the coordinated valida
 });
 
 for (const failure of ['pg_dump', 'retention']) {
-  test(`failed restore protection backup (${failure}) restarts only previously running services before any restore`, async t => {
+  test(`failed restore protection backup (${failure}) preserves evidence and does not begin restore`, async t => {
     const f = await fixture(t); if (!f) return;
     await writeFile(path.join(f.root, 'running'), 'nginx\napi\npostgres\n');
     if (failure === 'retention') {
       await writeFile(path.join(f.root, 'bin/find'), '#!/usr/bin/env bash\nexit 43\n', { mode: 0o755 });
     }
     const result = f.run('restore', { BACKUP_UPLOAD_S3: 'true', FAKE_AWS_STATUS: '42', FAKE_DOCKER_FAIL: failure });
-    assert.equal(result.status, failure === 'retention' ? 43 : 42, result.output);
+    assert.equal(result.status, failure === 'retention' ? 1 : 42, result.output);
     assert.deepEqual(await f.calls('aws'), []);
     const commands = composeCommands(await f.calls('docker'), await f.shellRoot());
     assert.deepEqual(commands.map(args => args[0]), failure === 'retention'
-      ? ['ps', 'stop', 'exec', 'run', 'start'] : ['ps', 'stop', 'exec', 'start']);
-    assert.deepEqual(commands.at(-1), ['start', 'nginx', 'api']);
+      ? [] : ['ps', 'stop', 'exec', 'start']);
+    if (failure === 'pg_dump') assert.deepEqual(commands.at(-1), ['start', 'nginx', 'api']);
     assert.deepEqual(await f.running(), ['api', 'nginx', 'postgres']);
-    assert.deepEqual(await readdir(path.join(f.root, 'pre restore backups')), []);
+    const attempts = await readdir(path.join(f.root, 'pre restore backups'));
+    assert.equal(attempts.length, failure === 'pg_dump' ? 1 : 0);
+    if (failure === 'pg_dump') {
+      assert.match(attempts[0], /^\d{8}T\d{6}Z$/);
+      assert.match(result.stderr, new RegExp(`Backup attempt preserved: ${attempts[0]}`));
+    } else {
+      assert.match(result.stderr, /Backup retention preflight failed: cannot enumerate backup root/);
+    }
     await assertBackup(path.join(f.root, 'source backup'));
   });
 }

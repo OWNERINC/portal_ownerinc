@@ -7,6 +7,7 @@ import {
   type NewsProtocolAuditReport,
 } from './finalize-news-protocol'
 import { parseObserverDatabaseUrl } from './news-protocol-observer-contract'
+import { parsePortalDatabaseName } from './database-contract'
 
 const require = createRequire(import.meta.url)
 
@@ -15,6 +16,7 @@ export async function runNewsProtocolAudit(
   suppliedClient?: FinalizerClient,
 ): Promise<NewsProtocolAuditReport> {
   const url = parseObserverDatabaseUrl(env.CMS_OBSERVER_DATABASE_URL)
+  const portalDatabase = parsePortalDatabaseName(env.CMS_PORTAL_DATABASE_NAME)
   let client = suppliedClient
   if (!client) {
     const { Client } = require('pg') as { Client: new (options: object) => FinalizerClient }
@@ -24,7 +26,7 @@ export async function runNewsProtocolAudit(
   let report: NewsProtocolAuditReport | undefined
   try {
     await client.connect()
-    report = await auditNewsProtocolReadOnly(client)
+    report = await auditNewsProtocolReadOnly(client, portalDatabase)
   } catch (error) {
     primaryError = error
   }

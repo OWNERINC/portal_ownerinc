@@ -225,15 +225,21 @@ test('JSON transport uses fixed POST paths, exact actor/input, isolated headers 
 });
 
 test('private preflight uses the fixed service path and validates exact empty-state evidence', async () => {
-  const result = { ready: true, publicationMode: 'manual', authority: { mode: 'frozen', epoch: 9 }, newsEmpty: true,
-    mutation: { sequence: '0', chainSha256: '0'.repeat(64), writeBarrier: 'open' },
-    counts: { articles: 0, media: 0, homePublished: 0, schedules: 0 } };
+  const deadline = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const input = { mode: 'legacy', epoch: 9, requestId: 'request-9', deadline };
+  const result = { ready: true, publicationMode: 'manual', request: { id: 'request-9', deadline },
+    authority: { mode: 'legacy', epoch: 9 }, activation: null, newsEmpty: true,
+    mutation: { sequence: '0', chainSha256: '0'.repeat(64), writeBarrier: 'open',
+      barrierRunId: null, barrierEpoch: null, barrierReceiptSha256: null },
+    counts: { articles: 0, media: 0, homePublished: 0, schedules: 0 },
+    runtime: { worker: false, schedules: false, autosave: false, versions: false },
+    database: { migrations: true, catalog: true, grants: true, readiness: true }, migration: null };
   const client = clientFor(async (url, init) => {
     assert.equal(url, 'http://cms.invalid/editorial/api/portal-news/preflight');
-    assert.deepEqual(JSON.parse(init.body), { input: {} });
+    assert.deepEqual(JSON.parse(init.body), { input });
     return Response.json(result);
   });
-  assert.deepEqual(await client.preflight(), result);
+  assert.deepEqual(await client.preflight(input), result);
   await assert.rejects(client.query('preflight', {}, actor), /news_unavailable/);
   assert.equal(validPublicInput('preflight', {}), false);
   for (const malformed of [
@@ -247,7 +253,35 @@ test('private preflight uses the fixed service path and validates exact empty-st
     { ...result, mutation: { ...result.mutation, chainSha256: 'A'.repeat(64) } },
     { ...result, mutation: { ...result.mutation, writeBarrier: 'sealed' } },
     { ...result, counts: { ...result.counts, articles: -1 } },
-  ]) await assert.rejects(clientFor(async () => Response.json(malformed)).preflight(), /news_unavailable/);
+    { ...result, runtime: { ...result.runtime, worker: true } },
+    { ...result, database: { ...result.database, grants: false } },
+  ]) await assert.rejects(clientFor(async () => Response.json(malformed)).preflight(input), /news_unavailable/);
+});
+
+test('manifest-bound preflight preserves input and rejects missing, mismatch and nonempty first-cutover proof', async () => {
+  const deadline = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const manifest = 'a'.repeat(64), seal = 'b'.repeat(64), release = `sha256:${'c'.repeat(64)}`,
+    image = `sha256:${'d'.repeat(64)}`;
+  const input = { mode: 'frozen', epoch: 9, requestId: 'request-9', deadline,
+    manifestSha256: manifest, sealSha256: seal, releaseDigest: release, imageDigest: image };
+  const result = { ready: true, publicationMode: 'manual', request: { id: input.requestId, deadline },
+    authority: { mode: 'frozen', epoch: 9 }, activation: null, newsEmpty: true,
+    mutation: { sequence: '0', chainSha256: '0'.repeat(64), writeBarrier: 'sealed',
+      barrierRunId: id(91), barrierEpoch: 9, barrierReceiptSha256: 'e'.repeat(64) },
+    counts: { articles: 0, media: 0, homePublished: 0, schedules: 0 },
+    runtime: { worker: false, schedules: false, autosave: false, versions: false },
+    database: { migrations: true, catalog: true, grants: true, readiness: true },
+    migration: { runId: id(91), manifestSha256: manifest, sealSha256: seal,
+      authorityEpoch: 9, drainReceiptSha256: 'e'.repeat(64) } };
+  let body;
+  const client = clientFor(async (_url, init) => { body = JSON.parse(init.body); return Response.json(result); });
+  assert.deepEqual(await client.preflight(input), result);
+  assert.deepEqual(body, { input });
+  await assert.rejects(client.preflight({ ...input, manifestSha256: undefined }), /news_unavailable/);
+  await assert.rejects(clientFor(async () => Response.json({ ...result,
+    migration: { ...result.migration, manifestSha256: 'f'.repeat(64) } })).preflight(input), /news_unavailable/);
+  await assert.rejects(clientFor(async () => Response.json({ ...result, newsEmpty: false,
+    counts: { ...result.counts, articles: 1 } })).preflight(input), /news_unavailable/);
 });
 test('duplicate source identities are source failures: degrade first pages, restart continuations, and never become client 400', async () => {
   const duplicateLegacy = { ...dto(7), source: 'legacy', asset_scope: 'legacy' };
@@ -351,7 +385,8 @@ test('JSON, preflight and asset timeout actively cancel a stalled response body,
   let cancelled = 0;
   const stall = () => new ReadableStream({ cancel() { cancelled++; } });
   await assert.rejects(clientFor(async () => new Response(stall(), { headers: { 'content-type': 'application/json' } }), { timeoutMs: 15 }).query('home', {}, actor), /news_unavailable/);
-  await assert.rejects(clientFor(async () => new Response(stall(), { headers: { 'content-type': 'application/json' } }), { timeoutMs: 15 }).preflight(), /news_unavailable/);
+  await assert.rejects(clientFor(async () => new Response(stall(), { headers: { 'content-type': 'application/json' } }), { timeoutMs: 15 })
+    .preflight({ mode: 'legacy', epoch: 1, requestId: 'timeout', deadline: new Date(Date.now() + 60_000).toISOString() }), /news_unavailable/);
   const result = await clientFor(async () => new Response(stall(), { headers: { 'content-type': 'application/pdf', 'content-length': '4', 'content-disposition': 'inline; filename="x.pdf"' } }), { timeoutMs: 15 }).asset({ id: id(1), preview: false, range: null }, actor);
   await assert.rejects(result.body.getReader().read(), /news_unavailable/);
   assert.equal(cancelled, 3);
@@ -409,6 +444,7 @@ test('Express list emits an opaque next cursor, sends only its typed boundary up
   const cursor = first.headers['x-owner-news-next-cursor'];
   assert.deepEqual(decodeNewsCursor(cursor, {}), { source: 'payload', id: id(1), published_at: dto(1).published_at });
   const beforeInvalid = calls;
+  await api.get('/api/announcements?limit=1&offset=1').set('Authorization', 'Bearer reader').expect(400);
   const invalid = await api.get(`/api/announcements?limit=1&offset=1&cursor=${encodeURIComponent(cursor)}`).set('Authorization', 'Bearer reader').expect(400);
   assert.equal(invalid.body.reason, 'invalid_request');
   assert.equal(calls, beforeInvalid, 'cursor plus offset is rejected before either source');

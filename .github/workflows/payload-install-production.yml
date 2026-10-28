@@ -1,0 +1,128 @@
+name: Payload private production install
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit: { description: Exact candidate commit, required: true, type: string }
+      run_id: { description: Exact qualifying workflow run ID, required: true, type: string }
+      run_attempt: { description: Exact qualifying workflow run attempt, required: true, type: string }
+      api_image: { description: Exact API image digest reference, required: true, type: string }
+      cron_image: { description: Exact cron image digest reference, required: true, type: string }
+      cms_image: { description: Exact CMS image digest reference, required: true, type: string }
+      candidate_artifact_id: { description: Candidate artifact ID, required: true, type: string }
+      candidate_artifact_digest: { description: Candidate artifact ZIP sha256 digest, required: true, type: string }
+      candidate_sha256: { description: Candidate JSON sha256, required: true, type: string }
+      qualified_artifact_id: { description: Qualification artifact ID, required: true, type: string }
+      qualified_artifact_digest: { description: Qualification artifact ZIP sha256 digest, required: true, type: string }
+      qualified_sha256: { description: Qualification JSON sha256, required: true, type: string }
+      report_artifact_id: { description: Recovery report artifact ID, required: true, type: string }
+      report_artifact_digest: { description: Recovery report artifact ZIP sha256 digest, required: true, type: string }
+      report_sha256: { description: Recovery report JSON sha256, required: true, type: string }
+      approval_sha256: { description: Protected production approval sha256, required: true, type: string }
+      inventory_identity: { description: Protected production inventory identity, required: true, type: string }
+      expires_at: { description: Ten-digit UTC epoch expiry, required: true, type: string }
+      nonce: { description: Unique 64-hex request nonce, required: true, type: string }
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: portal-ownerinc-production
+  cancel-in-progress: false
+
+jobs:
+  install-private:
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Reject non-main or malformed request before network access
+        env:
+          COMMIT: ${{ inputs.commit }}
+          RUN_ID: ${{ inputs.run_id }}
+          RUN_ATTEMPT: ${{ inputs.run_attempt }}
+          API_IMAGE: ${{ inputs.api_image }}
+          CRON_IMAGE: ${{ inputs.cron_image }}
+          CMS_IMAGE: ${{ inputs.cms_image }}
+          CANDIDATE_ID: ${{ inputs.candidate_artifact_id }}
+          QUALIFIED_ID: ${{ inputs.qualified_artifact_id }}
+          REPORT_ID: ${{ inputs.report_artifact_id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ inputs.candidate_artifact_digest }}
+          QUALIFIED_ARTIFACT_DIGEST: ${{ inputs.qualified_artifact_digest }}
+          REPORT_ARTIFACT_DIGEST: ${{ inputs.report_artifact_digest }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+          QUALIFIED_SHA256: ${{ inputs.qualified_sha256 }}
+          REPORT_SHA256: ${{ inputs.report_sha256 }}
+          APPROVAL_SHA256: ${{ inputs.approval_sha256 }}
+          INVENTORY_IDENTITY: ${{ inputs.inventory_identity }}
+          EXPIRES_AT: ${{ inputs.expires_at }}
+          NONCE: ${{ inputs.nonce }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RUN_ID" =~ ^[1-9][0-9]{0,19}$ && "$RUN_ATTEMPT" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$API_IMAGE" =~ ^ghcr\.io/ownerinc/ownerinc-portal-api@sha256:[0-9a-f]{64}$ ]]
+          [[ "$CRON_IMAGE" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cron@sha256:[0-9a-f]{64}$ ]]
+          [[ "$CMS_IMAGE" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]]
+          for value in "$CANDIDATE_ID" "$QUALIFIED_ID" "$REPORT_ID"; do [[ "$value" =~ ^[1-9][0-9]{0,19}$ ]]; done
+          test "$CANDIDATE_ID" != "$QUALIFIED_ID" && test "$CANDIDATE_ID" != "$REPORT_ID" && test "$QUALIFIED_ID" != "$REPORT_ID"
+          for value in "$CANDIDATE_ARTIFACT_DIGEST" "$QUALIFIED_ARTIFACT_DIGEST" "$REPORT_ARTIFACT_DIGEST"; do [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]]; done
+          for value in "$CANDIDATE_SHA256" "$QUALIFIED_SHA256" "$REPORT_SHA256" "$APPROVAL_SHA256" "$INVENTORY_IDENTITY" "$NONCE"; do [[ "$value" =~ ^[0-9a-f]{64}$ ]]; done
+          [[ "$EXPIRES_AT" =~ ^[1-9][0-9]{9}$ ]]
+          now=$(date +%s); (( EXPIRES_AT > now && EXPIRES_AT <= now + 86400 ))
+      - name: Checkout exact authenticated candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - name: Reconstruct exact registered candidate bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ inputs.commit }}'
+          mkdir -m 700 "$RUNNER_TEMP/payload-package-parent"
+          node scripts/package-payload-candidate.mjs \
+            --repository OWNERINC/portal_ownerinc --commit '${{ inputs.commit }}' \
+            --run-id '${{ inputs.run_id }}' --run-attempt '${{ inputs.run_attempt }}' \
+            --candidate-artifact-id '${{ inputs.candidate_artifact_id }}' \
+            --qualified-artifact-id '${{ inputs.qualified_artifact_id }}' --report-artifact-id '${{ inputs.report_artifact_id }}' \
+            --candidate-artifact-digest '${{ inputs.candidate_artifact_digest }}' \
+            --qualified-artifact-digest '${{ inputs.qualified_artifact_digest }}' --report-artifact-digest '${{ inputs.report_artifact_digest }}' \
+            --candidate-sha256 '${{ inputs.candidate_sha256 }}' --qualified-sha256 '${{ inputs.qualified_sha256 }}' \
+            --report-sha256 '${{ inputs.report_sha256 }}' --approval-sha256 '${{ inputs.approval_sha256 }}' \
+            --inventory-identity '${{ inputs.inventory_identity }}' --expires-at '${{ inputs.expires_at }}' \
+            --nonce '${{ inputs.nonce }}' --checkout "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/payload-package-parent/package"
+      - name: Configure restricted non-root production SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PORTAL_VPS_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PORTAL_VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/portal_ownerinc_ci"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/portal_ownerinc_ci" "$HOME/.ssh/known_hosts"
+      - name: Admit, preflight, then resume private installation
+        id: install
+        env:
+          VPS_HOST: ${{ secrets.PORTAL_VPS_HOST }}
+          VPS_PORT: ${{ secrets.PORTAL_VPS_PORT }}
+          VPS_USER: ${{ secrets.PORTAL_VPS_USER }}
+        run: |
+          set -euo pipefail
+          [[ "$VPS_HOST" =~ ^[A-Za-z0-9.-]+$ && "$VPS_PORT" =~ ^[0-9]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          test "$VPS_USER" != root
+          request="production:payload-v2 ${{ inputs.commit }} ${{ inputs.run_id }} ${{ inputs.run_attempt }} ${{ inputs.api_image }} ${{ inputs.cron_image }} ${{ inputs.cms_image }} ${{ inputs.candidate_artifact_id }} ${{ inputs.qualified_artifact_id }} ${{ inputs.report_artifact_id }} ${{ inputs.candidate_artifact_digest }} ${{ inputs.qualified_artifact_digest }} ${{ inputs.report_artifact_digest }} ${{ inputs.candidate_sha256 }} ${{ inputs.qualified_sha256 }} ${{ inputs.report_sha256 }} ${{ inputs.approval_sha256 }} ${{ inputs.inventory_identity }} ${{ inputs.expires_at }} ${{ inputs.nonce }}"
+          ssh_args=(-i "$HOME/.ssh/portal_ownerinc_ci" -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          preflight=$(ssh "${ssh_args[@]}" "$VPS_USER@$VPS_HOST" "$request" < "$RUNNER_TEMP/payload-package-parent/package/payload-candidate.tar.gz")
+          receipt=$(PREFLIGHT="$preflight" node -e 'const v=JSON.parse(process.env.PREFLIGHT);if(v.status!=="preflighted-private"||!/^payload-[a-z0-9_]{8}$/.test(v.receiptId)||v.installationExecuted!==false||v.routeReleased!==false)process.exit(2);process.stdout.write(v.receiptId)')
+          result=$(ssh "${ssh_args[@]}" "$VPS_USER@$VPS_HOST" "production:payload-apply-v2 $receipt ${{ inputs.nonce }}" </dev/null)
+          RESULT="$result" node -e 'const v=JSON.parse(process.env.RESULT);if(v.status!=="installed-private"||v.authority!=="legacy"||v.routeReleased!==false||v.workerStarted!==false)process.exit(2)'
+          echo 'status=installed-private' >> "$GITHUB_OUTPUT"
+      - name: Report fail-closed private result
+        run: echo 'Payload result is installed-private; authority remains legacy and no route was released.'

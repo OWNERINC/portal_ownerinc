@@ -49,6 +49,7 @@ const expectedVersions = [
   '034_owner_news_editorial',
   '035_owner_news_polls',
   '036_payload_editorial_control',
+  '037_owner_news_cutover',
 ];
 
 async function verifyEditorialControl(db) {
@@ -68,7 +69,10 @@ async function verifyEditorialControl(db) {
     const initial = (await db.query('SELECT * FROM owner_news_authority')).rows;
     assert.equal(initial.length, 1);
     assert.deepEqual(initial[0], { singleton: true, mode: 'legacy', epoch: 1,
-      manifest_sha256: null, changed_by: null, changed_at: initial[0].changed_at });
+      manifest_sha256: null, changed_by: null, changed_at: initial[0].changed_at,
+      seal_sha256: null, release_digest: null, image_digest: null, activation_request_id: null,
+      activation_observed_at: null, transition_request_id: null, transition_actor_uid: null,
+      transition_operator_uid: null, transition_action: null });
     assert.ok(initial[0].changed_at instanceof Date);
     const index = await db.query(`SELECT pg_get_indexdef(indexrelid) AS definition FROM pg_index
       WHERE indexrelid='public.cms_editor_sessions_expiry'::regclass AND indisvalid`);
@@ -147,7 +151,13 @@ async function verifyEditorialControl(db) {
 
     for (const [mode, allowedWriter] of [['legacy', 'legacy'], ['frozen', null], ['payload', 'payload'], ['payload_frozen', null]]) {
       await getAuthority(db, { forUpdate: true });
-      await db.query('UPDATE owner_news_authority SET mode=$1,epoch=epoch+1,changed_by=$2,changed_at=NOW() WHERE singleton=TRUE', [mode, uid]);
+      await db.query(`UPDATE owner_news_authority SET mode=$1,epoch=epoch+1,changed_by=$2,changed_at=NOW(),
+        manifest_sha256=CASE WHEN $1='payload' THEN repeat('a',64) ELSE manifest_sha256 END,
+        seal_sha256=CASE WHEN $1='payload' THEN repeat('b',64) ELSE seal_sha256 END,
+        release_digest=CASE WHEN $1='payload' THEN 'sha256:'||repeat('c',64) ELSE release_digest END,
+        image_digest=CASE WHEN $1='payload' THEN 'sha256:'||repeat('d',64) ELSE image_digest END,
+        activation_request_id=CASE WHEN $1='payload' THEN 'migration-test' ELSE activation_request_id END,
+        activation_observed_at=CASE WHEN $1='payload' THEN NOW() ELSE NULL END WHERE singleton=TRUE`, [mode, uid]);
       for (const writer of ['legacy', 'payload']) {
         if (writer === allowedWriter) assert.equal((await assertNewsWriter(db, writer)).mode, mode);
         else await rejectsOperation(() => assertNewsWriter(db, writer), { status: 409, code: 'news_read_only' });
@@ -202,6 +212,33 @@ async function verifyEditorialControl(db) {
     console.log(`Editorial control ${process.env.MIGRATION_TEST_SETUP || 'migrated'}: constraints, sessions, cleanup, cascade, idempotence and runtime grants ok`);
   } finally {
     await db.query('ROLLBACK');
+  }
+}
+
+async function verifyCutoverUpgradeModes(db) {
+  const migration = await readFile(new URL('../api/db/migrations/037_owner_news_cutover.sql', import.meta.url), 'utf8');
+  for (const mode of ['legacy', 'frozen', 'payload', 'payload_frozen']) {
+    await db.query('BEGIN');
+    try {
+      await db.query('DROP TABLE IF EXISTS owner_news_authority_transitions');
+      for (const name of ['owner_news_authority_seal_sha256_check', 'owner_news_authority_release_digest_check',
+        'owner_news_authority_image_digest_check', 'owner_news_authority_activation_request_check',
+        'owner_news_authority_transition_identity_check', 'owner_news_authority_activation_state_check']) {
+        await db.query(`ALTER TABLE owner_news_authority DROP CONSTRAINT IF EXISTS ${name}`);
+      }
+      for (const column of ['seal_sha256', 'release_digest', 'image_digest', 'activation_request_id',
+        'activation_observed_at', 'transition_request_id', 'transition_actor_uid', 'transition_operator_uid', 'transition_action']) {
+        await db.query(`ALTER TABLE owner_news_authority DROP COLUMN IF EXISTS ${column}`);
+      }
+      await db.query('UPDATE owner_news_authority SET mode=$1,manifest_sha256=NULL', [mode]);
+      await db.query(migration);
+      await db.query(migration);
+      const { rows: [row] } = await db.query(`SELECT mode,
+        EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='owner_news_authority'::regclass
+          AND conname='owner_news_authority_activation_state_check' AND NOT convalidated) AS staged
+        FROM owner_news_authority`);
+      assert.deepEqual(row, { mode, staged: true });
+    } finally { await db.query('ROLLBACK'); }
   }
 }
 
@@ -269,6 +306,7 @@ try {
   // including on the second idempotent run.
   await verifyMigrations();
   await verifyEditorialControl(client);
+  await verifyCutoverUpgradeModes(client);
   if (legacyCourseId) {
     const legacy = await client.query(`SELECT title, url, active, delivery_mode, audience, learning_group,
       icon_key, instructor_name, updated_at IS NOT NULL AS has_updated_at FROM academy WHERE id = $1`, [legacyCourseId]);

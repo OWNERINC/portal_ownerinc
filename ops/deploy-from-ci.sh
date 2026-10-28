@@ -269,7 +269,6 @@ stop_services() {
   stop_container "$cron_container" false || status=1
   if [[ $cms_release == true || $cms_current == true ]]; then
     stop_container "$project-cms-1" false || status=1
-    stop_container "$project-cms-worker-1" false || status=1
   fi
   return "$status"
 }
@@ -527,7 +526,7 @@ compose_for "$release" run --rm --no-deps \
   -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false \
   migrate node db/verify-migrations.js
 if [[ $cms_release == true ]]; then
-  compose_for "$release" up -d --no-deps cms-postgres
+  compose_for "$release" --profile cms-bootstrap run --rm --no-deps cms-cluster-bootstrap
   compose_for "$release" run --rm cms-provision
   if ! compose_for "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles; then
     compose_for "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles \

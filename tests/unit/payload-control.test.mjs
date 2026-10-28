@@ -252,7 +252,7 @@ restore_state['restoreIntent'] = {
         'inventoryIdentity': '8' * 64,
         'portal': source,
         'cms': {'systemIdentifier': '123456', 'databaseOid': '16385', 'databaseName': 'ownerinc_cms'},
-        'volumes': {name: copy.deepcopy(volume_entry) for name in ('portalPostgres', 'portalUploads', 'cmsPostgres', 'cmsUploads')},
+        'volumes': {name: copy.deepcopy(volume_entry) for name in ('portalPostgres', 'portalUploads', 'cmsUploads')},
     },
     'releaseImages': payload_images,
 }
@@ -279,7 +279,7 @@ os.mkdir(restore_proof_dir, 0o700)
 payload_artifacts = []
 for name, data in [('postgres.dump', b'synthetic portal dump'),
                    ('uploads.tar.gz', b'synthetic portal tree'),
-                   ('cms-postgres.dump', b'synthetic CMS dump'),
+                    ('cms.dump', b'synthetic CMS dump'),
                    ('cms-uploads.tar.gz', b'synthetic CMS tree')]:
     with open(os.path.join(restore_proof_dir, name), 'wb') as stream:
         stream.write(data)
@@ -342,10 +342,10 @@ expect('portal_session_v2_grants_unprovisioned_or_mismatched',
 
 base_portal = {'versions': S.PORTAL_MIGRATIONS, 'authorityRows': 1,
                'authority': {'mode': 'legacy', 'epoch': 1}}
-R._psql_json = lambda service, sql: {**base_portal, **legacy_grants}
+R._psql_json = lambda service, sql, database=None: {**base_portal, **legacy_grants}
 R._portal_state('legacy')
 expect('portal_session_v2_grants_unprovisioned_or_mismatched', lambda: R._portal_state('strict'))
-R._psql_json = lambda service, sql: {**base_portal, **strict_grants}
+R._psql_json = lambda service, sql, database=None: {**base_portal, **strict_grants}
 R._portal_state('strict')
 
 # The Portal intermediate boundary accepts only the exact recovery floor, checks
@@ -388,10 +388,10 @@ finally:
     R.STATE.transition = old_transition
     R._data_fingerprint = old_data_fingerprint
 
-R._psql_json = lambda service, sql: {'clientBackends': 0, 'activeQueries': 0, 'openTransactions': 0}
-R._assert_database_quiescent('postgres')
-R._psql_json = lambda service, sql: {'clientBackends': 1, 'activeQueries': 0, 'openTransactions': 0}
-expect('database_sessions_not_quiescent', lambda: R._assert_database_quiescent('postgres'))
+R._psql_json = lambda service, sql, database=None: {'clientBackends': 0, 'activeQueries': 0, 'openTransactions': 0}
+R._assert_database_quiescent('postgres', 'portal')
+R._psql_json = lambda service, sql, database=None: {'clientBackends': 1, 'activeQueries': 0, 'openTransactions': 0}
+expect('database_sessions_not_quiescent', lambda: R._assert_database_quiescent('postgres', 'portal'))
 
 class Sink:
     def write(self, _value): pass
@@ -400,31 +400,31 @@ class FakeProcess:
     def __init__(self, records):
         self.stdin = Sink()
         self.stdout = io.BytesIO(records)
-    def wait(self): return 0
+    def wait(self,timeout=None): return 0
     def kill(self): raise AssertionError('valid fingerprint input was killed')
 def fingerprint_for(value, sequence_state):
     records = b''.join([
         json.dumps(['public.items', value], separators=(',', ':')).encode() + b'\n',
         json.dumps(['public.items_id_seq', sequence_state], separators=(',', ':')).encode() + b'\n',
     ])
-    R._psql_json = lambda service, sql: {
+    R._psql_json = lambda service, sql, database=None: {
         'tables': [{'schema': 'public', 'name': 'items'}],
         'sequences': [{'schema': 'public', 'name': 'items_id_seq'}],
         'unsupportedRelations': [],
     }
     R._container_id = lambda service: 'fixture-postgres'
     R.subprocess.Popen = lambda *args, **kwargs: FakeProcess(records)
-    return R._data_fingerprint('postgres')
+    return R._data_fingerprint('postgres', 'portal')
 assert fingerprint_for({'id': 1, 'title': 'first'}, {'last_value': 3, 'is_called': True}) != \
        fingerprint_for({'id': 1, 'title': 'changed'}, {'last_value': 3, 'is_called': True})
 assert fingerprint_for({'id': 1, 'title': 'first'}, {'last_value': 3, 'is_called': True}) != \
        fingerprint_for({'id': 1, 'title': 'first'}, {'last_value': 4, 'is_called': True})
-R._psql_json = lambda service, sql: {
+R._psql_json = lambda service, sql, database=None: {
     'tables': [{'schema': 'public', 'name': 'items'}],
     'sequences': [{'schema': 'public', 'name': 'items_id_seq'}],
     'unsupportedRelations': [{'schema': 'public', 'name': 'fixture_matview', 'kind': 'm'}],
 }
-expect('database_fingerprint_unsupported_relation', lambda: R._data_fingerprint('postgres'))
+expect('database_fingerprint_unsupported_relation', lambda: R._data_fingerprint('postgres', 'portal'))
 
 def tar_bytes(name, kind=tarfile.REGTYPE):
     output = io.BytesIO()

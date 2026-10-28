@@ -115,6 +115,7 @@ services:
     volumes:
       - ./public:/usr/share/nginx/html:ro
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/editorial-route-state:/etc/nginx/editorial-route-state:ro
     depends_on:
       api:
         condition: service_healthy

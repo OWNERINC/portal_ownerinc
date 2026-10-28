@@ -77,20 +77,28 @@ ativos.
 ### Auditoria do protocolo Owner News instalado (read-only)
 
 `npm --prefix cms run audit:news-protocol` executa
-`cms/scripts/verify-news-protocol.ts` com `--audit-protocol`. Requer exclusivamente
-`CMS_OBSERVER_DATABASE_URL`, apontada explicitamente como `cms_observer` para o
+`cms/scripts/verify-news-protocol.ts` com `--audit-protocol`. Requer as duas
+configurações explícitas `CMS_OBSERVER_DATABASE_URL`, apontada como `cms_observer` para o
 database `ownerinc_cms`. Não consulta `.env`, não usa `CMS_ADMIN_DATABASE_URL`,
 `CMS_RUNTIME_DATABASE_URL`, `CMS_DATABASE_URL` ou `DATABASE_URL` como fallback e
-não cria nem altera a role. O parser recusa query/fragmento na URL para impedir
+`CMS_PORTAL_DATABASE_NAME`, validada como identificador PostgreSQL simples. Não há
+default implícito no código; o Compose produtivo deriva `${POSTGRES_DB:-portal}` e
+o preview deriva `portal_test`. Database Portal ausente falha fechado. O audit não
+cria nem altera a role. O parser recusa query/fragmento na URL para impedir
 overrides de sessão.
 
-O usuário deve fornecer uma role já provisionada segundo o contrato
+O usuário deve fornecer a role `cms_observer` já criada por
+`cms-cluster-bootstrap`, único criador/reconciliador das seis roles CMS. Essa
+exclusividade não inclui roles Portal: `api/db/provision.js` continua criando e
+reconciliando separadamente `portal_api` e `portal_cron`. O contrato
 `buildNewsProtocolObserverProvisioningSQL` em
-`cms/scripts/news-protocol-observer-contract.ts`. Esse builder retorna SQL
-privilegiado, é somente um contrato para revisão/provisionamento explícito e não é
-importado pelo CLI. A role deve ser criada por procedimento separado e aprovado;
-uma role preexistente não é alterada automaticamente.
-O builder não altera ACLs públicas dos catálogos PostgreSQL.
+`cms/scripts/news-protocol-observer-contract.ts` não aceita senha nem cria/altera
+roles: valida atributos públicos e aplica somente grants locais revisados. Ele não
+é importado pelo CLI e não altera ACLs públicas dos catálogos PostgreSQL.
+No fluxo produtivo, o serviço comum `cms-migrate` chama `provision-db.ts --grants`
+depois das migrations: revoga grants/default privileges amplos e concede `SELECT`
+somente a `payload_migrations` e `owner_news_mutation_head`. Receiver, initializer,
+execução manual e preview usam esse mesmo caminho antes do finalizer/audit.
 
 O audit começa com `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`,
 aplica `SET LOCAL statement_timeout = '5s'` e fixa o `search_path` local como
@@ -115,21 +123,20 @@ sequência e barrier sem ler artigos, mídia, schedules, jobs, históricos ou ev
 do ledger.
 Sempre indica `ready=false`, `admissionActivated=false` e certificações de release,
 coverage e drain como falsas. `coverage_version=1` é somente valor observado, não
-certificação de cobertura, seal, destination reconciliation ou cutover. Antes da
-consulta de ownership, exige que `current_user` tenha `SELECT` efetivo em
-`pg_catalog.pg_shdepend`; se faltar acesso, falha sem fallback ou concessão de
-grants. Reutiliza as dependências de ownership PostgreSQL: `cms_observer`
-deve não possuir objeto algum em qualquer `dbid`; `cms_control`/`cms_controller`
-seguem o escopo canônico do finalizer (database atual e objetos compartilhados).
-O literal `pg_authid` é usado somente como OID de `refclassid`; o catálogo de
-autenticação e password presence não são lidos. O CLI sozinho verifica o nome do
+certificação de cobertura, seal, destination reconciliation ou cutover. Ownership
+é consultado pelo helper bounded `cms_cluster_guard.verify_cms_ownership_contract()`,
+instalado e verificado pelo cluster admin. O helper usa todas as dependências de
+ownership do database atual, independentemente da classe, e retorna somente
+contagens agregadas/allowlisted; `cms_observer` não pode possuir objetos locais. A
+sessão observer não lê `pg_authid`, hashes de senha ou `pg_shdepend` diretamente.
+O CLI sozinho verifica o nome do
 database, não a identidade física do cluster. No harness registrado no relatório
 da auditoria, essa identidade foi confirmada separadamente no fixture PostgreSQL 16;
 isso não estende a verificação de identidade a outros destinos.
 
 O finalizer one-shot é outro comando e tem fronteira mutável distinta:
 `node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
-requer `CMS_ADMIN_DATABASE_URL`; instala protocolo V2 em cold start, verifica V2
+requer `CMS_ADMIN_DATABASE_URL` e `CMS_PORTAL_DATABASE_NAME`; instala protocolo V2 em cold start, verifica V2
 sem DDL e, em V1, falha fechado com `protocol_upgrade_required` sem DDL. Um upgrade
 V1→V2 precisa da escolha explícita e separada
 `node --import tsx cms/scripts/finalize-news-protocol.ts --upgrade-protocol-v1-to-v2`.
@@ -204,16 +211,17 @@ mount único e porta publicada somente em `127.0.0.1`. Usa a imagem em cache por
 ID, `ownerinc_cms`, senhas hex aleatórias distintas e Node 24/dependências CMS
 já instaladas no host; não instala pacotes nem usa imagem CMS antiga, Next, API
 ou Firebase. Aplica apenas as seis
-migrations nativas existentes, valida a ledger, faz bootstrap/verify de
-`cms_controller`, executa o finalizer one-shot em `ownerinc_cms` recém-criado,
-e então provisiona `cms_observer` pelo builder revisado. Não aplica rollback de
+migrations nativas existentes, valida a ledger, executa o bootstrap exclusivo das
+seis roles, faz verify de `cms_controller`, executa o finalizer one-shot como
+`cms_admin` não-superuser em `ownerinc_cms` recém-criado e então aplica os grants
+locais de `cms_observer` pelo builder revisado. Não aplica rollback de
 fixture nem migration sintética.
-O segredo inicial de `cms_admin` fica em arquivo bind-mounted privado com
+O segredo inicial do cluster admin separado fica em arquivo bind-mounted privado com
 ACL/owner restritos; `Config.Env` do container contém apenas o caminho do arquivo,
 nunca o valor do segredo.
 
-O cenário comprova no cluster descartável e separado: leitura real de
-`pg_shdepend` pelo observer; auditoria read-only com snapshots de digest dos
+O cenário comprova no cluster descartável e separado: ownership local pelos
+catálogos públicos; auditoria read-only com snapshots de digest dos
 catálogos públicos (metadados apenas), migrations e head antes/depois; `SELECT
 ... LIMIT 0` negado com SQLSTATE `42501` para artigos, mídia, schedules, jobs e
 eventos do ledger; e ausência de `EXECUTE` em `owner_news_seal_run` sem invocar

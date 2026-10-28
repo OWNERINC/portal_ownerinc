@@ -6,9 +6,9 @@ x-cms-production-logs: &cms_production_logs
   options: {max-size: "10m", max-file: "3"}
 
 services:
-  cms-postgres:
-    cpus: 0.50
-    mem_limit: 768m
+  cms-cluster-bootstrap:
+    cpus: 0.25
+    mem_limit: 256m
     security_opt: ["no-new-privileges:true"]
     networks: [backend]
     logging: *cms_production_logs
@@ -46,14 +46,6 @@ services:
   cms:
     cpus: 1.00
     mem_limit: 1024m
-    security_opt: ["no-new-privileges:true"]
-    networks: [backend]
-    logging: *cms_production_logs
-
-  cms-worker:
-    profiles: [scheduled-publication]
-    cpus: 0.50
-    mem_limit: 512m
     security_opt: ["no-new-privileges:true"]
     networks: [backend]
     logging: *cms_production_logs

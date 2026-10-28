@@ -12,6 +12,7 @@ const WORK_ROOT = '/var/lib/ownerinc/payload-candidate/work';
 const REPOSITORY = 'OWNERINC/portal_ownerinc';
 const WORKFLOW = '.github/workflows/ci.yml';
 const CONTRACT = 'payload-preauthority-recovery-v1';
+const PRODUCTION_CONTRACT = 'payload-private-install-v2';
 const TOOL_FILES = Object.freeze(['ops/payload-candidate-verifier.py', 'scripts/register-payload-candidate-admission.mjs',
   'scripts/package-payload-candidate.mjs', 'scripts/lib/payload-candidate-qualification.mjs']);
 const ROLES = ['candidate', 'qualified', 'report'];
@@ -119,13 +120,15 @@ export function validateAdmissionPolicy(policy) {
 }
 
 export function validateAdmissionRecord(record) {
+  const production = record?.schemaVersion === 2;
   shape(record, ['schemaVersion', 'kind', 'environment', 'policySha256', 'repository', 'repositoryId', 'workflow',
     'workflowId', 'workflowSha256', 'commit', 'runId', 'runAttempt', 'images', 'artifacts', 'qualificationContract',
     'candidateSha256', 'qualifiedManifestSha256', 'recoveryReportSha256', 'sourceTreeSha', 'sourceArchiveSha256',
-    'archiveSha256', 'archiveBytes', 'deploymentAuthorized']);
-  if (record.schemaVersion !== 1 || record.kind !== 'payload-candidate-admission-record-v1' ||
+    'archiveSha256', 'archiveBytes', 'deploymentAuthorized', ...(production ? ['authorization'] : [])]);
+  if ((!production && record.schemaVersion !== 1) ||
+      record.kind !== (production ? 'payload-candidate-admission-record-v2' : 'payload-candidate-admission-record-v1') ||
       record.environment !== 'production' || record.repository !== REPOSITORY || record.workflow !== WORKFLOW ||
-      record.qualificationContract !== CONTRACT || record.deploymentAuthorized !== false ||
+      record.qualificationContract !== (production ? PRODUCTION_CONTRACT : CONTRACT) || record.deploymentAuthorized !== false ||
       !isId(record.repositoryId) || !isId(record.workflowId)) fail('invalid_admission_record');
   for (const key of ['policySha256', 'workflowSha256', 'candidateSha256', 'qualifiedManifestSha256', 'recoveryReportSha256',
     'sourceArchiveSha256', 'archiveSha256']) if (!isHash(record[key])) fail('invalid_admission_hash');
@@ -146,6 +149,12 @@ export function validateAdmissionRecord(record) {
     }
   }
   if (new Set(ROLES.map(role => record.artifacts[role].id)).size !== 3) fail('invalid_admission_artifacts');
+  if (production) {
+    shape(record.authorization, ['environment', 'approvalSha256', 'inventoryIdentity', 'expiresAt', 'nonce']);
+    if (record.authorization.environment !== 'production' || !isHash(record.authorization.approvalSha256) ||
+        !isHash(record.authorization.inventoryIdentity) || !isHash(record.authorization.nonce) ||
+        !matches(record.authorization.expiresAt, /^[1-9][0-9]{9}$/u)) fail('invalid_production_authorization');
+  }
   return record;
 }
 
@@ -173,8 +182,12 @@ export async function reconstructAdmission(policyRaw, request, {
       receipt.deploymentAuthorized !== false || receipt.commit !== request.commit ||
       receipt.runId !== request.runId || receipt.runAttempt !== request.runAttempt ||
       ROLES.some(role => receipt.artifacts?.[role]?.id !== request.artifactIds[role])) fail('admission_authenticated_binding_mismatch');
+  const production = receipt.authorization !== undefined;
+  if (production && JSON.stringify(receipt.authorization) !== JSON.stringify(request.authorization)) fail('admission_authenticated_binding_mismatch');
   const record = {
-    schemaVersion: 1, kind: 'payload-candidate-admission-record-v1', environment: 'production', policySha256: hash(policyRaw),
+    schemaVersion: production ? 2 : 1,
+    kind: production ? 'payload-candidate-admission-record-v2' : 'payload-candidate-admission-record-v1',
+    environment: 'production', policySha256: hash(policyRaw),
     repository: policy.repository, repositoryId: policy.repositoryId, workflow: policy.workflow, workflowId: policy.workflowId,
     workflowSha256: revision.workflowSha256, commit: receipt.commit, runId: receipt.runId, runAttempt: receipt.runAttempt,
     images: receipt.images, artifacts: Object.fromEntries(ROLES.map(role => [role,
@@ -183,6 +196,7 @@ export async function reconstructAdmission(policyRaw, request, {
     qualifiedManifestSha256: receipt.qualifiedManifestSha256, recoveryReportSha256: receipt.recoveryReportSha256,
     sourceTreeSha: receipt.sourceTreeSha, sourceArchiveSha256: receipt.sourceArchiveSha256,
     archiveSha256: receipt.archiveSha256, archiveBytes: receipt.archiveBytes, deploymentAuthorized: false,
+    ...(production ? { authorization: receipt.authorization } : {}),
   };
   return validateAdmissionRecord(record);
 }
@@ -324,7 +338,10 @@ async function persistRecord(record, recheck) {
 
 export async function main(args = process.argv.slice(2), env = process.env) {
   const flags = ['--environment', '--repository', '--commit', '--run-id', '--run-attempt',
-    '--candidate-artifact-id', '--qualified-artifact-id', '--report-artifact-id', '--archive'];
+    '--candidate-artifact-id', '--qualified-artifact-id', '--report-artifact-id',
+    '--candidate-artifact-digest', '--qualified-artifact-digest', '--report-artifact-digest',
+    '--candidate-sha256', '--qualified-sha256', '--report-sha256', '--approval-sha256',
+    '--inventory-identity', '--expires-at', '--nonce', '--archive'];
   const selected = {};
   for (let index = 0; index < args.length; index += 2) {
     if (!flags.includes(args[index]) || Object.hasOwn(selected, args[index]) || !args[index + 1] || args[index + 1].startsWith('--')) {
@@ -341,7 +358,11 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   const policy = validateAdmissionPolicy(parseAdmissionJson(policyRaw));
   await installedTools(policy);
   const request = { repository: REPOSITORY, commit: selected['--commit'], runId: selected['--run-id'], runAttempt: selected['--run-attempt'],
-    artifactIds: Object.fromEntries(ROLES.map(role => [role, selected[`--${role}-artifact-id`]])) };
+    artifactIds: Object.fromEntries(ROLES.map(role => [role, selected[`--${role}-artifact-id`]])),
+    artifactDigests: Object.fromEntries(ROLES.map(role => [role, selected[`--${role}-artifact-digest`]])),
+    contentDigests: { candidate: selected['--candidate-sha256'], qualified: selected['--qualified-sha256'], report: selected['--report-sha256'] },
+    authorization: { environment: 'production', approvalSha256: selected['--approval-sha256'],
+      inventoryIdentity: selected['--inventory-identity'], expiresAt: selected['--expires-at'], nonce: selected['--nonce'] } };
   // Every reachable non-builtin module is a fixed, hash-verified installed file.
   const packager = await import(pathToFileURL(`${TOOL_ROOT}/scripts/package-payload-candidate.mjs`).href);
   packager.validatePackageRequest(request);

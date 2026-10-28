@@ -434,7 +434,8 @@ export async function checkHttpsPreparationSources({ root, fileSystem = fs } = {
     || !baseCompose.includes('\n  firebase-auth:')
     || !baseCompose.includes('\n  nginx:')
     || !baseCompose.includes('postgres_data:/var/lib/postgresql/data')
-    || !payloadCompose.includes('cms-postgres:')
+    || payloadCompose.includes('cms-postgres:')
+    || !payloadCompose.includes('cms-cluster-bootstrap:')
     || !payloadCompose.includes('\n  cms-migrate:')
     || !payloadCompose.includes('\n  cms:')
     || !payloadCompose.includes('cms_uploads_data:/var/lib/ownerinc-cms/media')) {

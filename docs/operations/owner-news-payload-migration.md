@@ -77,81 +77,77 @@ No Windows, ausência de fsync de diretório retorna `directorySynced=false` e
 `assertDurablePromotion` bloqueia aplicação. Testes Windows de bytes/restart não
 são evidência de recuperação após perda de energia em Linux.
 
-## Bootstrap de roles de controle — fase 1 somente
+## Bootstrap de roles de controle — Gate B
 
-Depois do provisionamento CMS já existente (`--provision`) e antes da migration
-nativa, a preparação autorizada de roles usa a conexão
-`CMS_DATABASE_URL` apontada explicitamente para `ownerinc_cms` como `cms_admin`.
-`--bootstrap-control` exige que essa role seja superuser: `CREATE ROLE` precisa de
-`CREATEROLE` (ou superuser), mas os grants mínimos também precisam ser concedidos
-no banco e no schema `public`, atualmente de propriedade do migrator. A checagem
-superuser é intencional e evita presumir grant options que não foram verificadas.
+`cms-cluster-bootstrap` é o único criador e reconciliador das seis roles CMS. Ele
+usa a credencial separada do administrador do cluster e reconcilia exatamente:
+`cms_admin`, `cms_control`, `cms_controller`, `cms_migrator`, `cms_runtime` e
+`cms_observer`. As cinco roles de login recebem senhas protegidas e distintas;
+`cms_control` permanece `NOLOGIN`. Todas permanecem `NOSUPERUSER NOCREATEDB
+NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`, `CONNECTION LIMIT -1`, sem
+expiração e sem configuração persistente por role; cada reconciliação executa
+`RESET ALL`. Essa exclusividade é somente CMS: `api/db/provision.js` permanece o
+domínio separado que cria/reconcilia `portal_api` e `portal_cron`; o bootstrap CMS
+não cria nem altera essas roles Portal.
 
-Forneça `CMS_CONTROLLER_PASSWORD` apenas ao serviço one-shot de roles; a preparação
-privada de infraestrutura o gera distinto das demais credenciais. Para uma
-configuração completa criada pelo preparador anterior que ainda não contém essa
-chave, `--check` permanece somente leitura e `--apply` cria backup privado antes
-de acrescentar exclusivamente a nova senha, sem rotacionar as credenciais existentes.
-Se a role `cms_controller` já existir com outra senha, bootstrap/login falha fechado;
-não se altera senha existente automaticamente. O valor
-precisa passar as mesmas regras de tamanho/placeholder/caracteres do provisioner e
-ser distinto do runtime, migrator, senha PostgreSQL/admin e demais segredos/URLs de
-banco presentes no ambiente. O provisioner cria somente roles ausentes: `cms_control`
-NOLOGIN e `cms_controller` LOGIN, ambas sem poderes elevados, `NOINHERIT` e sem
-membership. Roles existentes nunca recebem `ALTER ROLE` ou rotação silenciosa; se
-atributos, password-presence ou memberships em qualquer direção não baterem, a
-transação falha e é revertida. Além disso, o bootstrap pré-finalizer recusa roles
-de controle que já possuam objetos ou privilégios efetivos em tabelas/sequences
-nativas; esse guard estrito não é reutilizado depois da instalação legítima.
-`controlRolesVerificationSQL` é read-only e reutilizável pelo finalizer futuro.
+`cms_admin` recebe somente memberships em `cms_control`, `cms_migrator` e
+`cms_runtime`, sempre com `ADMIN FALSE, INHERIT FALSE, SET TRUE`. Isso permite o
+`SET ROLE` necessário ao DDL e a transferência posterior de ownership sem dar
+autoridade para criar roles ou herdar privilégios no login. `cms_controller` e
+`cms_observer` não recebem memberships. Qualquer membership extra é removida pelo
+bootstrap e rejeitada pelas verificações.
 
-Grants da fase 1 ficam limitados a CONNECT no database; `cms_control` recebe USAGE
-e CREATE em `public`, e `cms_controller` recebe somente USAGE. `CREATE` em schema é
-pré-requisito do PostgreSQL para transferir ownership de uma função para
-`cms_control`; `ALTER FUNCTION ... OWNER` também exige que o ator seja o dono atual
-da função ou superuser (esta divisão designa o admin one-shot como ator; não se
-concede membership ao migrator/control). Nenhum CRUD em tabelas ou sequences é
-concedido por este bootstrap.
+O nome do database Portal é obrigatório em `CMS_PORTAL_DATABASE_NAME`, validado
+como identificador PostgreSQL simples e sem default dentro do código. O Compose
+produtivo o deriva de `${POSTGRES_DB:-portal}`; preview deriva `portal_test` de
+`POSTGRES_DB=portal_test`. Database ausente ou nome inválido falha antes da
+reconciliação. O bootstrap usa quoting de identificador e revoga `CONNECT` nesse
+database configurado de todas as roles CMS e de `PUBLIC`; as roles Portal continuam usando seus grants explícitos. No database
+`ownerinc_cms`, somente os grants necessários são reaplicados. `cms-provision` e
+`--bootstrap-control` não criam nem alteram roles: aplicam apenas grants locais.
+`--verify-control` confere o contrato local e faz o login probe do controller sem
+imprimir credenciais. `CMS_OBSERVER_PASSWORD` e `CMS_OBSERVER_DATABASE_URL` são
+obrigatórias nos ambientes que executam bootstrap/auditoria e permanecem fora do
+web runtime, migrator e provisionador comum.
 
-Com configuração privada já fornecida, as chamadas explícitas são
-`node --import tsx scripts/provision-db.ts --bootstrap-control` antes da migration
-nativa e `node --import tsx scripts/provision-db.ts --verify-control` para conferir
-identidade das roles em qualquer fase. Ambas exigem URL/identidade atuais de
-`cms_admin`, database `ownerinc_cms` e o mesmo `CMS_CONTROLLER_PASSWORD`; a
-verificação executa um controller login probe sem imprimir a credencial. CREATE
-ROLE é cluster-global no PostgreSQL; por isso o bootstrap não é embutido em
-migration Payload nem executado pelo migrator. Senhas e URLs não são impressas.
-Os fluxos de deploy CI e manual executam o `--verify-control` do serviço perfilado
-após `cms-provision` e antes de `cms-migrate`; somente quando a role contract query
-ou o login probe falha, repetem o serviço com `--bootstrap-control`. O provisioner
-continua criando apenas roles ausentes e validando todas antes do commit; role
-existente insegura, senha divergente, ownership ou ACL nativa fora do baseline
-interrompem o release sem relaxar a checagem.
-
-Handoff do bootstrap: `controlRolesVerificationSQL` verifica atributos explícitos,
-login esperado, password presence, zero membership nas duas direções, CONNECT e
-privilégios mínimos de schema. É phase-agnostic e não inspeciona ownership, ACLs
-de protocolo, funções ou readiness; portanto `--verify-control` **não** é
-verificação integral do protocolo. `controlRolesOwnershipVerificationSQL` e
-`controlRolesNativePrivilegesVerificationSQL` são guardas bootstrap-only: recusam
-ownership inicial e CRUD/sequences em objetos nativos antes de criar as roles.
-`controlRolesBootstrapSQL(password)` cria apenas roles ausentes e concede somente
-os grants de database/schema acima; não altera atributos/password de roles
-existentes. `run('--bootstrap-control')` e `run('--verify-control')` exigem admin
-superuser + alvo explícito. Não reutilizar os guards bootstrap-only depois que
-`cms_control` possuir funções de protocolo.
+O cluster bootstrap instala em `ownerinc_cms` o helper bounded
+`cms_cluster_guard.verify_cms_ownership_contract()`. Seu corpo `SECURITY DEFINER`,
+com owner cluster-admin e `search_path=pg_catalog`, enumera em `pg_shdepend` todas
+as dependências de ownership cujo `dbid` é o database atual, sem lista frágil de
+classes, além da linha de ownership do próprio database. Ele devolve somente
+contagens agregadas e o booleano allowlisted; não expõe OIDs, nomes, outros
+databases nem acesso genérico ao catálogo. Somente `cms_admin` e `cms_observer`
+recebem `USAGE` no schema dedicado e `EXECUTE` nessa função. O finalizer limitado
+chama o helper e não lê diretamente `pg_authid` ou `pg_shdepend`. Password presence
+é verificada apenas pelo cluster-bootstrap privilegiado; o finalizer valida os
+atributos integrais, database owner, as três memberships exatas e ausência de
+`CONNECT` ao Portal.
 
 ## Finalizer one-shot e auditoria instalada
 
 O finalizer admin one-shot **está implementado** em
 `cms/scripts/finalize-news-protocol.ts`. A chamada explícita
 `node --import tsx cms/scripts/finalize-news-protocol.ts --finalize-protocol`
-usa somente `CMS_ADMIN_DATABASE_URL`, validada para `cms_admin` e o database
-`ownerinc_cms`. É uma operação potencialmente mutável: sob transação e advisory
+usa `CMS_ADMIN_DATABASE_URL` e `CMS_PORTAL_DATABASE_NAME`, validadas para
+`cms_admin`, o database exato `ownerinc_cms` e o Portal configurado. Uma única SQL
+reutilizada por provision, grants, control, verificação e finalizer exige `LOGIN`,
+todos os seis atributos negativos, `CONNECTION LIMIT -1`, validade null/infinity,
+`rolconfig NULL` e ownership de `ownerinc_cms`; esses caminhos apenas observam a
+role e nunca a reconciliam. É uma operação potencialmente mutável: sob transação e advisory
 lock 7194030 instala ledger/functions/triggers/grants **e o RPC V2** se o
 protocolo estiver ausente; V2 exato é verificado sem DDL. A versão vem do
 inventário de catálogos (assinaturas, contagem, corpo canônico, owner,
 `SECURITY DEFINER`, `search_path` e ACL efetiva), nunca de `coverage_version`.
+O login `cms_admin` precisa permanecer não-superuser. O finalizer executa o DDL
+nativo com `SET LOCAL ROLE cms_migrator`, volta a `cms_admin` e transfere somente
+as funções aprovadas para `cms_control`; as memberships exatas são revalidadas
+antes de qualquer DDL.
+Depois de `npm run migrate`, o caminho comum `provision-db.ts --grants`, sob
+`cms_migrator`, revoga grants atuais e default privileges do observer sobre
+tables/sequences/functions, concede `SELECT` somente em `payload_migrations` e
+`owner_news_mutation_head` e executa a verificação efetiva. Receiver, initializer,
+sequência manual e preview alcançam esse caminho antes do finalizer/readiness;
+criação da role continua exclusiva do cluster bootstrap.
 
 O inventário V1 exato contém `owner_news_mutation_guard_stmt()`,
 `owner_news_mutation_capture_row()`,
@@ -220,12 +216,10 @@ O comando `npm --prefix cms run audit:news-protocol` é a auditoria **somente
 leitura** do protocolo instalado. Exige `CMS_OBSERVER_DATABASE_URL` explicitamente
 com role `cms_observer` e database `ownerinc_cms`; não usa fallback para URL admin,
 runtime, migrator ou `DATABASE_URL`, não carrega `.env` e não provisiona a role.
-O builder de SQL privilegiado para uma provisionação futura e explicitamente
-revisada está em `cms/scripts/news-protocol-observer-contract.ts`; o CLI de auditoria
-nunca o importa nem o executa. Provisionar a role e guardar sua senha é uma ação
-separada e o provisionamento persistente/compartilhado não foi feito nesta
-alteração. O harness de integração pode provisionar `cms_observer` somente dentro
-de uma fixture descartável, isolada e explicitamente autorizada.
+O builder em `cms/scripts/news-protocol-observer-contract.ts` pressupõe a role já
+criada pelo `cms-cluster-bootstrap`; ele valida seus atributos e aplica somente
+grants locais. Não aceita senha e não contém `CREATE ROLE` ou `ALTER ROLE`. O CLI
+de auditoria nunca provisiona a role.
 
 A auditoria inicia uma transação PostgreSQL `REPEATABLE READ READ ONLY`, limita
 `statement_timeout` local a cinco segundos, fixa `search_path` local para
@@ -243,13 +237,12 @@ informa sequência e write barrier, mas sempre mantém `ready=false`,
 `writeCoverageCertified=false` e `drainVerified=false`. Isso não certifica
 coverage, seal, admission, destino, writes ou liberação.
 
-Antes de ler ownership, a auditoria exige `SELECT` efetivo do `current_user` em
-`pg_catalog.pg_shdepend`; se indisponível, falha fechado sem conceder grants nem
-trocar para outra identidade. O contrato exige zero dependências `deptype='o'`
-para `cms_observer` em qualquer `dbid`; para `cms_control`/`cms_controller`, reusa
-sem ampliar o escopo canônico do finalizer (database atual e objetos compartilhados).
-`pg_authid` aparece somente como referência OID em `refclassid`; password presence
-e hashes não são lidos. O database indicado é conferido pelo nome `ownerinc_cms`,
+Ownership é verificado pelo helper agregado instalado pelo cluster bootstrap, que
+cobre toda classe registrada em `pg_shdepend` para o database atual sem revelar
+objetos ou outros databases. O contrato exige que `cms_observer` não possua
+objetos locais. `pg_authid`, hashes de senha e `pg_shdepend` não são lidos
+diretamente pela sessão observer. O
+database indicado é conferido pelo nome `ownerinc_cms`,
 mas identidade física de cluster não é afirmada. Sem executar uma integração
 separada e autorizada, nenhum estado remoto ou catalog foi observado.
 

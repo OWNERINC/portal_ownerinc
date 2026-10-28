@@ -5,7 +5,9 @@ export type VerifiedPortalActor = {
   name: string | null
   canManageNews: boolean
 }
-export type Authority = { mode: AuthorityMode; epoch: number }
+export type Authority = { mode: AuthorityMode; epoch: number; activationObserved: boolean
+  manifestSha256?: string | null; sealSha256?: string | null; releaseDigest?: string | null
+  imageDigest?: string | null; activationRequestId?: string | null }
 export type AssetScope = 'legacy' | 'owner-news' | 'owner-news-preview'
 export type Mark = 'bold' | 'italic' | 'underline' | 'code'
 export type Inline =

@@ -28,20 +28,22 @@ networks=[{'name':name,'id':identity,'driver':'bridge','internal':name=='ownerin
 host=[{'id':c['id'],'portalProject':True,'portalNameClaim':True,'portalVolumeConsumer':bool(c['volumeKeys'])} for c in containers]
 host.extend({'id':i*64,'portalProject':False,'portalNameClaim':False,'portalVolumeConsumer':False} for i in ('6','7'))
 snapshot={'host':host,'containers':containers,'networks':networks}
-database={'service':'postgres','containerId':'4'*64,'database':{'systemIdentifier':'123','databaseOid':'456','databaseName':'portal'},
+databases=[{'service':'postgres:'+name,'containerId':'4'*64,
+ 'database':{'systemIdentifier':'123','databaseOid':oid,'databaseName':name},
  'clients':0,'activeQueries':0,'openTransactions':0,'preparedTransactions':0,'backgroundWriters':0,'backgroundCoverageComplete':True}
+ for name,oid in (('portal','456'),('ownerinc_cms','457'))]
 closure={'kind':'portal-public-closure-profile-v1','context':copy.deepcopy(context),'origin':'https://portal.example.test',
  'observerSha256':'8'*64,'nonDockerCoverageVerified':True,
  'routes':[{'route':route,'status':503,'bodySha256':'9'*64} for route in r.FENCE_ROUTES]}
 external={'observerSha256':'8'*64,'independent':True,'nonce':context['nonce'],'started':110,'ended':140,
  'requests':[dict(item,origin=closure['origin'],method='GET',tlsVerified=True,redirected=False,transportError='none') for item in closure['routes']]}
 observation={'kind':'portal-fence-observation-v1','mode':'destructive','context':copy.deepcopy(context),'started':100,'ended':150,
- 'passes':[copy.deepcopy(snapshot),copy.deepcopy(snapshot)],'databases':[copy.deepcopy(database)],'external':external}
+ 'passes':[copy.deepcopy(snapshot),copy.deepcopy(snapshot)],'databases':copy.deepcopy(databases),'external':external}
 identity_fields=('id','service','imageId','image','receiptSha256','networks','volumeKeys')
 topology={'kind':'portal-fence-topology-v1','context':copy.deepcopy(context),
  'containers':[{k:copy.deepcopy(c[k]) for k in identity_fields} for c in containers],
  'networks':[{'name':n['name'],'id':n['id'],'relevantEndpointIds':[ep['id'] for ep in n['endpoints'] if ep['relevant']]} for n in networks],
- 'databases':[{k:copy.deepcopy(database[k]) for k in ('service','containerId','database')}]}
+ 'databases':[{k:copy.deepcopy(database[k]) for k in ('service','containerId','database')} for database in databases]}
 def check(value=observation,top=topology,public=closure,now=175):
  return r.check_portal_destructive_fence(value,context,top,public,now_monotonic=now)
 def rejected(callback):

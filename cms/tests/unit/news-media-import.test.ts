@@ -59,7 +59,7 @@ async function fixture(t: TestContext) {
   }
   t.mock.method(globalThis, 'fetch', async (input: string, init: RequestInit) => {
     const authority = input.endsWith('/authority'); calls.push(authority ? 'portal:authority' : 'portal:actor')
-    if (authority) return Response.json({ mode: state.mode, epoch: state.epoch })
+    if (authority) return Response.json({ mode: state.mode, epoch: state.epoch, activationObserved: state.mode === 'payload' })
     assert.equal(JSON.parse(init.body as string).uid, actor.uid)
     return state.denied ? Response.json({ reason: 'editorial_permission_denied' }, { status: 403 }) : Response.json({ actor })
   })

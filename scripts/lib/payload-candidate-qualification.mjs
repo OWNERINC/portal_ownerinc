@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 // Report schema 1 with the two independent restore comparisons and the injected
 // lease race. Changing this contract requires a new identifier, never a fallback.
 export const QUALIFICATION_CONTRACT = 'payload-preauthority-recovery-v1';
+export const PRODUCTION_QUALIFICATION_CONTRACT = 'payload-private-install-v2';
 export const RECOVERY_CHECKS = Object.freeze([
   'disposableSourceAndTargets', 'fixtureCronBootstrapOnly', 'quiescentSnapshotStable',
   'actualAdapterAndCoordinator', 'fourStoreBackupAndRestore',
@@ -92,6 +93,18 @@ export function validateCandidateImages(images) {
   }
 }
 
+export function validateProductionAuthorization(value) {
+  exactKeys(value, ['environment', 'approvalSha256', 'inventoryIdentity', 'expiresAt', 'nonce'],
+    'invalid_production_authorization');
+  if (value.environment !== 'production' ||
+      !['approvalSha256', 'inventoryIdentity', 'nonce'].every(key =>
+        typeof value[key] === 'string' && hashPattern.test(value[key])) ||
+      typeof value.expiresAt !== 'string' || !/^[1-9][0-9]{9}$/u.test(value.expiresAt)) {
+    reject('invalid_production_authorization');
+  }
+  return value;
+}
+
 function sameIdentity(value, expected) {
   validateRunIdentity(value);
   if (['commit', 'runId', 'runAttempt'].some(key => value[key] !== expected[key])) reject('candidate_run_binding_mismatch');
@@ -101,13 +114,23 @@ function sameImages(value, expected) {
   if (['api', 'cron', 'cms'].some(key => value[key] !== expected[key])) reject('candidate_image_binding_mismatch');
 }
 
-export function qualifyCandidate({ candidateBytes, reportBytes, expectedRun, expectedImages }) {
+export function qualifyCandidate({ candidateBytes, reportBytes, expectedRun, expectedImages, expectedAuthorization }) {
   validateRunIdentity(expectedRun); validateCandidateImages(expectedImages);
   const candidate = parseEvidenceJson(candidateBytes);
-  exactKeys(candidate, ['schemaVersion', 'commit', 'runId', 'runAttempt', 'images']);
-  if (candidate.schemaVersion !== 1) reject('unsupported_candidate_schema');
+  const production = candidate.schemaVersion === 2;
+  exactKeys(candidate, production
+    ? ['schemaVersion', 'commit', 'runId', 'runAttempt', 'images', 'authorization']
+    : ['schemaVersion', 'commit', 'runId', 'runAttempt', 'images']);
+  if (!production && candidate.schemaVersion !== 1) reject('unsupported_candidate_schema');
   sameIdentity({ commit: candidate.commit, runId: candidate.runId, runAttempt: candidate.runAttempt }, expectedRun);
   sameImages(candidate.images, expectedImages);
+  if (production) {
+    validateProductionAuthorization(candidate.authorization);
+    validateProductionAuthorization(expectedAuthorization);
+    if (Object.keys(expectedAuthorization).some(key => candidate.authorization[key] !== expectedAuthorization[key])) {
+      reject('candidate_authorization_binding_mismatch');
+    }
+  } else if (expectedAuthorization !== undefined) reject('candidate_authorization_binding_mismatch');
   const report = parseEvidenceJson(reportBytes);
   exactKeys(report, ['schemaVersion', 'status', 'run', 'images', 'sourceInventoryIdentity', 'targetInventoryIdentity',
     'negativeCases', 'checks', 'recoveryProgress', 'restoreAcceptanceProgress', 'evidence'], 'invalid_recovery_report_shape');
@@ -146,8 +169,10 @@ export function qualifyCandidate({ candidateBytes, reportBytes, expectedRun, exp
     reject('invalid_recovery_evidence');
   }
   return {
-    schemaVersion: 1, qualificationContract: QUALIFICATION_CONTRACT,
+    schemaVersion: production ? 2 : 1,
+    qualificationContract: production ? PRODUCTION_QUALIFICATION_CONTRACT : QUALIFICATION_CONTRACT,
     ...expectedRun, images: { ...expectedImages }, recoveryReportSha256: sha256(reportBytes),
+    ...(production ? { authorization: { ...expectedAuthorization } } : {}),
   };
 }
 
@@ -156,7 +181,13 @@ export function validateQualifiedCandidate({ qualifiedBytes, ...input }) {
   const qualified = parseEvidenceJson(qualifiedBytes);
   exactKeys(qualified, Object.keys(expected), 'invalid_qualified_candidate_shape');
   sameImages(qualified.images, expected.images);
-  for (const key of Object.keys(expected).filter(key => key !== 'images')) {
+  if (expected.authorization) {
+    validateProductionAuthorization(qualified.authorization);
+    if (Object.keys(expected.authorization).some(key => qualified.authorization[key] !== expected.authorization[key])) {
+      reject('qualified_candidate_binding_mismatch');
+    }
+  }
+  for (const key of Object.keys(expected).filter(key => !['images', 'authorization'].includes(key))) {
     if (qualified[key] !== expected[key]) reject('qualified_candidate_binding_mismatch');
   }
   return qualified;

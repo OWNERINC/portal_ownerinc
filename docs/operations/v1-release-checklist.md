@@ -1,5 +1,18 @@
 # V1 Release Checklist
 
+## Gate E — Payload Owner News
+
+- [x] Código, migration, CLI privado, guards, testes e workflow implementados.
+- [x] Autoridade one-way; não existe rollback para legacy.
+- [x] Activation exige preflight após freeze e aprovação posterior ao preflight inicial.
+- [x] Payload writer exige observação persistida em conexão nova.
+- [x] Evidence privada é produzida/assinada no host via FD 9; workflow não fabrica proof.
+- [x] Approval posterior refaz checkout de main e observações dentro de deadline absoluto.
+- [x] Migration 037 preserva upgrades nos quatro modos e deixa validação global staged explícita.
+- [ ] Evidência PostgreSQL/Linux real do protocolo e fault injection.
+- [ ] Aprovação dos Environments e janela de produção.
+- [ ] Cutover executado (fora do escopo desta entrega).
+
 Use esta lista para separar o que foi validado localmente do que exige
 homologação com serviços e infraestrutura reais. Marque cada item com data,
 responsável e evidência; não marque uma validação externa usando apenas

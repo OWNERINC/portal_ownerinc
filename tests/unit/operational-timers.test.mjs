@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,10 @@ import test from 'node:test';
 
 const sha = 'a'.repeat(40);
 const image = name => `ghcr.io/ownerinc/ownerinc-portal-${name}@sha256:${'b'.repeat(64)}`;
+const retainedDump = 'retained database fixture\n';
+const retainedUploads = 'retained uploads fixture\n';
+const retainedHash = value => createHash('sha256').update(value).digest('hex');
+const retainedManifest = `${retainedHash(retainedDump)}  postgres.dump\n${retainedHash(retainedUploads)}  uploads.tar.gz\n`;
 const read = file => readFile(new URL(`../../${file}`, import.meta.url), 'utf8');
 const cleanEnv = {
   ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}),
@@ -194,10 +199,17 @@ for (const releaseOverride of [false, true]) {
       await writeFile(path.join(f.release, 'compose.ownerinc-vps.yaml'), '# Release override.\n');
       override = `${f.shellRelease}/compose.ownerinc-vps.yaml`;
     }
-    const old = path.join(f.root, 'backups/daily/old');
-    const recent = path.join(f.root, 'backups/daily/recent');
+    const oldName = '20260101T000000Z';
+    const recentName = '20260102T000000Z';
+    const old = path.join(f.root, 'backups/daily', oldName);
+    const recent = path.join(f.root, 'backups/daily', recentName);
     const outside = path.join(f.root, 'backups/pre-release');
     for (const directory of [old, recent, outside]) await mkdir(directory);
+    for (const directory of [old, recent]) {
+      await writeFile(path.join(directory, 'postgres.dump'), retainedDump);
+      await writeFile(path.join(directory, 'uploads.tar.gz'), retainedUploads);
+      await writeFile(path.join(directory, 'manifest.sha256'), retainedManifest);
+    }
     const age = days => new Date(Date.now() - days * 86400000);
     await utimes(old, age(16), age(16));
     await utimes(recent, age(13), age(13));
@@ -214,10 +226,12 @@ for (const releaseOverride of [false, true]) {
     assert.deepEqual(actual[4], ['start', 'nginx', 'cron', 'api']);
     assert.deepEqual((await readFile(path.join(f.root, 'running'), 'utf8')).trim().split('\n').sort(), ['api', 'cron', 'nginx', 'postgres']);
     const entries = await readdir(path.join(f.root, 'backups/daily'));
-    assert.ok(!entries.includes('old'));
-    assert.ok(entries.includes('recent'));
+    assert.ok(!entries.includes(oldName));
+    assert.ok(entries.includes(recentName));
     assert.ok((await stat(outside)).isDirectory());
-    const destination = path.join(f.root, 'backups/daily', entries.find(name => /^\d{8}T\d{6}Z$/.test(name)));
+    const destinationName = entries.find(name => /^\d{8}T\d{6}Z$/.test(name) && name !== recentName);
+    assert.ok(destinationName, 'the new verified backup destination must be present');
+    const destination = path.join(f.root, 'backups/daily', destinationName);
     for (const [name, content] of [['postgres.dump', 'database fixture\n'], ['uploads.tar.gz', 'uploads fixture\n']]) {
       assert.equal(await readFile(path.join(destination, name), 'utf8'), content);
       if (process.platform !== 'win32') assert.equal((await stat(path.join(destination, name))).mode & 0o777, 0o600);
@@ -296,14 +310,20 @@ test('invalid image digest containing shell substitution fails without executing
   await assert.rejects(stat(path.join(f.root, 'executed')), { code: 'ENOENT' });
 });
 
-for (const [failure, status] of [['dump', 42], ['start', 43], ['retention', 44], ['corrupt', 1], ['incomplete-manifest', 1]]) {
+for (const [failure, status] of [['dump', 42], ['start', 43], ['retention', 1], ['corrupt', 1], ['incomplete-manifest', 1]]) {
   test(`backup failure (${failure}) stays nonzero and never announces verified success`, async t => {
     const f = await fixture(t); if (!f) return;
     if (failure === 'retention') await writeFile(path.join(f.root, 'bin/find'), '#!/bin/sh\nexit 44\n', { mode: 0o755 });
     const result = f.run('backup', { TEST_FAILURE: failure });
     assert.equal(result.status, status, result.output);
     assert.doesNotMatch(result.stdout, /Backup created|Local backup verified/);
-    assert.ok((await f.calls()).length > 0);
+    if (failure === 'retention') {
+      assert.deepEqual(await f.calls(), []);
+      assert.match(result.stderr, /Backup retention preflight failed: cannot enumerate backup root/);
+      assert.doesNotMatch(result.stderr, /status 44/);
+    } else {
+      assert.ok((await f.calls()).length > 0);
+    }
   });
 }
 

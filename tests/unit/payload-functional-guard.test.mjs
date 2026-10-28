@@ -153,7 +153,11 @@ test('self-reported hashes never authorize an altered template, writer command o
 });
 
 test('fixture TLS/emulator configuration retains actual route guards and uses unmodified SDK',async()=>{
-  const source=await readFile(path.join(root,'nginx/nginx.conf'),'utf8');
+  const [base,promoted]=await Promise.all([
+    readFile(path.join(root,'nginx/nginx.conf'),'utf8'),
+    readFile(path.join(root,'nginx/editorial-route.promoted.conf'),'utf8'),
+  ]);
+  const source=base.replace('include /etc/nginx/editorial-route-state/active.conf;',promoted);
   const firebase=firebaseConfigSource(fixtureIdentity(runId),'https://127.0.0.1:19443');
   assert.match(firebase,/initializeAuth\(app/);assert.match(firebase,/connectAuthEmulator\(auth, "https:\/\/127\.0\.0\.1:19443"/);
   assert.doesNotMatch(firebase,/prod|task9-uid|synthetic-browser-cookie|signOut\s*=/);
