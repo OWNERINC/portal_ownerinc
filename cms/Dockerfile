@@ -63,7 +63,7 @@ COPY cms/next.config.mjs cms/tsconfig.json cms/next-env.d.ts ./
 COPY --from=api-dependencies /app/api/package.json /app/api/package-lock.json /app/api/
 COPY --from=api-dependencies /app/api/node_modules /app/api/node_modules
 COPY api/cms/blocks.js api/cms/locks.js api/cms/permissions.js /app/api/cms/
-COPY api/owner-news/editorial.js api/owner-news/home.js api/owner-news/authority.js /app/api/owner-news/
+COPY api/owner-news/editorial.js api/owner-news/home.js api/owner-news/authority.js api/owner-news/cutover.js api/owner-news/payload-client.js api/owner-news/payload-dto.js /app/api/owner-news/
 COPY api/middleware/policy.js /app/api/middleware/
 COPY scripts/import-owner-news.mjs /app/scripts/
 COPY scripts/owner-news-payload/bundle.mjs scripts/owner-news-payload/contract.mjs scripts/owner-news-payload/files.mjs scripts/owner-news-payload/legacy-converter.mjs scripts/owner-news-payload/export.mjs scripts/owner-news-payload/cutover.mjs /app/scripts/owner-news-payload/

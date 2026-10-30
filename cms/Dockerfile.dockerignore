@@ -28,6 +28,9 @@
 !api/owner-news/editorial.js
 !api/owner-news/home.js
 !api/owner-news/authority.js
+!api/owner-news/cutover.js
+!api/owner-news/payload-client.js
+!api/owner-news/payload-dto.js
 !api/middleware/
 !api/middleware/policy.js
 !scripts/
