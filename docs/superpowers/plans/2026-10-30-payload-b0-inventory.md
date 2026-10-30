@@ -29,7 +29,7 @@
 - Consumes: `payload_control_inventory.production_inventory(...)`, `create(path, document)`, and `identity(document)`.
 - Produces: `_create_fixture_inventory(runtime, sandbox: pathlib.Path, runtime_root: pathlib.Path) -> str`, returning the exact 64-hex inventory identity used by state and binding.
 
-- [ ] **Step 1: Write the failing portable contract test**
+- [x] **Step 1: Write the failing portable contract test**
 
 Add a probe that supplies a recording fake `runtime.INVENTORY`, calls `_create_fixture_inventory`, and asserts:
 
@@ -43,7 +43,7 @@ assert production_args[-1] == 'portal'
 
 Also assert from the source that the helper call occurs before `runtime._data_fingerprint` and that `inventory_identity` is passed to both `S.initialize` and the binding.
 
-- [ ] **Step 2: Run the focused test and confirm the new contract fails**
+- [x] **Step 2: Run the focused test and confirm the new contract fails**
 
 Run:
 
@@ -53,7 +53,7 @@ node --test tests/unit/payload-install-recovery.test.mjs
 
 Expected: the new test fails because `_create_fixture_inventory` does not exist and the fixture still uses a synthetic digest.
 
-- [ ] **Step 3: Implement the minimal fixture change**
+- [x] **Step 3: Implement the minimal fixture change**
 
 Add `_create_fixture_inventory` with fixed fixture-owned paths:
 
@@ -61,7 +61,7 @@ Add `_create_fixture_inventory` with fixed fixture-owned paths:
 def _create_fixture_inventory(runtime, sandbox, runtime_root):
     inventory = runtime.INVENTORY.production_inventory(
         str(sandbox), str(runtime_root), str(sandbox / 'releases'),
-        str(sandbox / 'current-release'), str(runtime_root / 'lease'),
+        str(sandbox / 'current-release'), str(runtime_root / 'deploy.lock'),
         str(sandbox / 'backups' / 'daily'), str(sandbox / 'backups' / 'production'),
         str(sandbox / 'backups' / 'production' / 'restore-protection'),
         str(sandbox / 'production.runtime.conf'),
@@ -73,11 +73,11 @@ def _create_fixture_inventory(runtime, sandbox, runtime_root):
 
 Change the native fixture to create `sandbox` with `mkdtemp`, create `root = sandbox / 'runtime'`, call the helper immediately after authenticated closure loading, and replace both synthetic inventory identities with the returned identity. Successful cleanup removes `sandbox`, not only `root`.
 
-- [ ] **Step 4: Document the native fixture invariant**
+- [x] **Step 4: Document the native fixture invariant**
 
 Update the native provisioner qualification section in `docs/operations/deployment.md` to state that the disposable B0 fixture creates a protected schema-v3 inventory through the real helper before baseline fingerprinting, and uses one identity for runtime lookup, state, and binding.
 
-- [ ] **Step 5: Run focused verification**
+- [x] **Step 5: Run focused verification**
 
 Run:
 
@@ -89,7 +89,7 @@ git diff --check
 
 Expected: all portable tests pass; only explicitly gated native Linux tests may skip locally; diff check passes.
 
-- [ ] **Step 6: Run repository verification**
+- [x] **Step 6: Run repository verification**
 
 Run:
 
@@ -99,7 +99,7 @@ npm run verify
 
 Expected: PASS. If the existing OpenChamber Windows sandbox still denies `mkdtemp` under `C:\Users`, record the exact environmental failures and rely on the required Linux CI for acceptance; do not weaken tests.
 
-- [ ] **Step 7: Commit implementation**
+- [x] **Step 7: Commit implementation**
 
 ```bash
 git add ops/payload-install-recovery-isolated.py tests/unit/payload-install-recovery.test.mjs docs/operations/deployment.md

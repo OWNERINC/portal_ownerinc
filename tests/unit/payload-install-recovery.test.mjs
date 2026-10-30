@@ -490,6 +490,48 @@ assert R._volume_receipt(raw_volume)==expected_volume
 `);
 });
 
+test('native fixture creates one protected inventory identity before baseline fingerprinting', async () => {
+  await probe(String.raw`
+import types
+sandbox=root/'sandbox';runtime_root=sandbox/'runtime';runtime_root.mkdir(parents=True)
+calls=[]
+class Inventory:
+ @staticmethod
+ def production_inventory(*args):
+  calls.append(('production',args));return {'document':'fixture'}
+ @staticmethod
+ def create(path,document):calls.append(('create',path,document))
+ @staticmethod
+ def identity(document):calls.append(('identity',document));return 'a'*64
+runtime=types.SimpleNamespace(INVENTORY=Inventory)
+identity=E._create_fixture_inventory(runtime,sandbox,runtime_root)
+assert identity=='a'*64
+production=[item for item in calls if item[0]=='production'][0][1]
+assert production[:2]==(str(sandbox),str(runtime_root))
+assert production[-1]=='portal'
+assert [item for item in calls if item[0]=='create']==[('create',str(runtime_root/'payload-control-inventory.json'),{'document':'fixture'})]
+assert calls[-1]==('identity',{'document':'fixture'})
+`);
+  const source = await readFile(path.resolve('ops/payload-install-recovery-isolated.py'), 'utf8');
+  const create = source.indexOf('inventory_identity = _create_fixture_inventory(runtime, sandbox, root)');
+  const fingerprint = source.indexOf("runtime._data_fingerprint('postgres', isolated_query=sql)");
+  assert.ok(create > 0 && fingerprint > create, 'inventory must exist before baseline fingerprinting');
+  assert.match(source, /S\.initialize\(str\(root\), inventory_identity\)/u);
+  assert.match(source, /'inventoryIdentity': inventory_identity/u);
+});
+
+test('native fixture fences exact owned volume consumers without inspecting unrelated containers', async () => {
+  await probe(String.raw`
+identifier='a'*64;calls=[]
+def docker(*args):calls.append(args);return (identifier+'\n').encode()
+assert E._owned_volume_consumers(docker,'payload-b0-recovery-fixture','portalPostgres')=={identifier}
+assert calls==[('ps','--all','--no-trunc','--filter','volume=payload-b0-recovery-fixture-portalPostgres','--format','{{.ID}}')]
+refused(lambda:E._owned_volume_consumers(docker,'payload-b0-recovery-fixture','foreign'))
+refused(lambda:E._owned_volume_consumers(lambda *args:b'not-an-id\n','payload-b0-recovery-fixture','portalUploads'))
+refused(lambda:E._owned_volume_consumers(lambda *args:(identifier+'\n'+identifier+'\n').encode(),'payload-b0-recovery-fixture','cmsEvidence'))
+`);
+});
+
 test('native guard rejects before commands and does not accept target flags', async () => {
   let calls = 0;
   await assert.rejects(qualify({ env: {}, platform: 'linux', command: async () => { calls++; } }));

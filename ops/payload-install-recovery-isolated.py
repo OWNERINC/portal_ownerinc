@@ -812,6 +812,29 @@ class Executor:
                 'readinessPending': True, 'productionAuthorized': False, 'applicationRollbackExecuted': False}
 
 
+def _create_fixture_inventory(runtime, sandbox, runtime_root):
+    inventory = runtime.INVENTORY.production_inventory(
+        str(sandbox), str(runtime_root), str(sandbox / 'releases'),
+        str(sandbox / 'current-release'), str(runtime_root / 'deploy.lock'),
+        str(sandbox / 'backups' / 'daily'), str(sandbox / 'backups' / 'production'),
+        str(sandbox / 'backups' / 'production' / 'restore-protection'),
+        str(sandbox / 'production.runtime.conf'),
+        str(runtime_root / 'compose.production.yaml'),
+        str(runtime_root / 'compose.payload.production.yaml'), 'portal')
+    runtime.INVENTORY.create(str(runtime_root / 'payload-control-inventory.json'), inventory)
+    return runtime.INVENTORY.identity(inventory)
+
+
+def _owned_volume_consumers(docker, prefix, key):
+    require(key in ('portalPostgres', 'portalUploads', 'cmsEvidence'))
+    raw = docker('ps', '--all', '--no-trunc', '--filter', 'volume=' + prefix + '-' + key,
+                 '--format', '{{.ID}}')
+    values = raw.decode('ascii').splitlines()
+    require(len(values) <= 2 and len(values) == len(set(values)) and
+            all(re.fullmatch('[a-f0-9]{64}', value) for value in values))
+    return set(values)
+
+
 def native_qualification():
     # This is an isolated resource creator, not a production request dispatcher.
     require(sys.platform == 'linux' and os.geteuid() == 0)
@@ -823,8 +846,10 @@ def native_qualification():
     started = time.monotonic()
     nonce = secrets.token_hex(12)
     prefix = 'payload-b0-recovery-' + nonce
-    root = Path(tempfile.mkdtemp(prefix=prefix + '-', dir='/var/tmp'))
-    os.chmod(root, 0o700)
+    sandbox = Path(tempfile.mkdtemp(prefix=prefix + '-', dir='/var/tmp'))
+    os.chmod(sandbox, 0o700)
+    root = sandbox / 'runtime'
+    root.mkdir(mode=0o700)
     created = []
     volume_receipts = {}
     db_id = None
@@ -952,6 +977,7 @@ def native_qualification():
             (root / name).write_bytes(raw)
             os.chmod(root / name, 0o600)
         runtime = load_helpers(root, closure)
+        inventory_identity = _create_fixture_inventory(runtime, sandbox, root)
         S = runtime.STATE
         db_source = Path(__file__).resolve().parent.parent / 'api' / 'db'
         schema_source = (db_source / 'schema.sql').read_bytes()
@@ -1027,7 +1053,7 @@ def native_qualification():
         baseline = {'database': db_fingerprint, 'schema': schema, 'roles': roles, 'uploads': upload_expectation['treeSha256'],
                     'dataFingerprint': runtime._data_fingerprint('postgres', isolated_query=sql),
                     'uploadsFingerprint': runtime._tar_tree(io.BytesIO(raw_uploads), compressed=True)}
-        S.initialize(str(root), digest(prefix.encode()))
+        S.initialize(str(root), inventory_identity)
         key = private_bytes(root / 'payload-control.key', 32)
         (root / 'lease').touch(mode=0o600)
         with open(root / 'lease', 'rb') as lease:
@@ -1041,7 +1067,7 @@ def native_qualification():
             binding = {'bindingVersion': 2, 'candidate': {'schemaVersion': 1, 'purpose': 'isolated-recovery-producer', 'commit': 'a' * 40,
                        'runId': '1', 'runAttempt': '1', 'images': images, 'candidateSha256': digest(prefix.encode()), 'sourceMaterialSha256': material},
                        'candidateRelease': str(root / 'releases' / ('a' * 40)), 'sourceRelease': str(root / 'releases' / material[:40]),
-                       'previousImages': previous, 'inventoryIdentity': digest(prefix.encode()), 'lease': {'device': info.st_dev, 'inode': info.st_ino},
+                       'previousImages': previous, 'inventoryIdentity': inventory_identity, 'lease': {'device': info.st_dev, 'inode': info.st_ino},
                        'portalTarget': {'database': identity, 'volumes': {k: volume_receipts[k] for k in ('portalPostgres', 'portalUploads')}},
                        'b0': {'directory': str(root / 'b0'), 'proofSha256': ''}}
             artifacts = {'postgres.dump': dump('--format=custom'), 'uploads.tar.gz': raw_uploads}
@@ -1083,15 +1109,12 @@ def native_qualification():
                     require(volume('cmsEvidence') == profile['evidenceVolume'])
                     require(set(docker('volume', 'ls', '-q', '--filter', 'label=io.ownerinc.b0-recovery=' + nonce).decode().splitlines()) == {prefix + '-' + name for name in volume_receipts})
                     require(docker('ps', '--all', '--no-trunc', '--filter', 'label=io.ownerinc.b0-recovery=' + nonce, '--format', '{{.ID}}').decode().strip() == db_id)
-                    # Read only IDs and whether a mount consumes these exact
-                    # owned volumes, not another project's environment/topology.
-                    all_ids = docker('ps', '--all', '--no-trunc', '--format', '{{.ID}}').decode().splitlines()
-                    require(len(all_ids) <= 512 and all(re.fullmatch('[a-f0-9]{64}', value) for value in all_ids))
-                    expression = '{{.Id}} {{range .Mounts}}{{if or ' + ' '.join('(eq .Name "' + prefix + '-' + name + '")' for name in ('portalPostgres', 'portalUploads', 'cmsEvidence')) + '}}owned{{end}}{{end}}'
-                    if all_ids:
-                        for line in docker('inspect', '--format', expression, *all_ids).decode().splitlines():
-                            parts = line.split()
-                            require(len(parts) == 1 or (len(parts) == 2 and parts[0] == db_id and parts[1] == 'owned'))
+                    # Query only consumers of the three random, fixture-owned
+                    # volume names. Never inspect unrelated containers or expose
+                    # their bind mount paths; no helper exists at a boundary.
+                    require(_owned_volume_consumers(docker, prefix, 'portalPostgres') == {db_id})
+                    require(not _owned_volume_consumers(docker, prefix, 'portalUploads'))
+                    require(not _owned_volume_consumers(docker, prefix, 'cmsEvidence'))
                     require(sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();").strip() == b'0')
                     require(sql("SELECT count(*) FROM pg_prepared_xacts;").strip() == b'0')
                     require(sql("SELECT current_setting('server_version_num')::int BETWEEN 160000 AND 169999 AND current_setting('shared_preload_libraries')='' AND NOT pg_is_in_recovery() AND NOT EXISTS(SELECT 1 FROM pg_subscription) AND NOT EXISTS(SELECT 1 FROM pg_replication_slots) AND NOT EXISTS(SELECT 1 FROM pg_extension WHERE extname NOT IN ('plpgsql','pgcrypto')) AND NOT EXISTS(SELECT 1 FROM pg_stat_activity WHERE backend_type NOT IN ('client backend','autovacuum launcher','autovacuum worker','background writer','checkpointer','walwriter','archiver','logical replication launcher'));").strip() == b't')
@@ -1251,7 +1274,7 @@ def native_qualification():
             except Exception:
                 print('isolated_b0_schema_report_unavailable', file=sys.stderr)
         if primary_failure is None and cleanup_ok:
-            shutil.rmtree(root)
+            shutil.rmtree(sandbox)
         # Failed journal/B0/source closure stays private until hosted-runner
         # teardown; never publish its key, request, dump or filesystem path.
     if primary_failure or not cleanup_ok:
