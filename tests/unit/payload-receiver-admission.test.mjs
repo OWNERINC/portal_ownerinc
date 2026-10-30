@@ -143,14 +143,16 @@ with tempfile.TemporaryDirectory() as root:
  m.protected_directory=lambda *a,**k:None
  m.RECEIVER_UID=os.getuid();m.RECEIVER_GID=os.getgid();m.MAX_RECEIPTS=2;m.MAX_INCOMING_BYTES=20;m.MAX_RECEIPT_BYTES=10
  expired=os.path.join(m.NONCES,'e'*64)
- with open(expired,'wb') as stream:stream.write(b'1000000000\\n');stream.flush();os.fsync(stream.fileno())
+ descriptor=os.open(expired,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+ with os.fdopen(descriptor,'wb') as stream:stream.write(b'1000000000\\n');stream.flush();os.fsync(stream.fileno())
  start=multiprocessing.Event();results=multiprocessing.Queue()
  def worker(index):
   selected={'expires-at':str(int(m.time.time())+100),'nonce':format(index+1,'064x')}
   start.wait()
   try:
    with m.reserve_admission(selected) as receipt:
-    with open(os.path.join(receipt,'reserved.bin'),'wb') as output:output.write(b'x'*10);output.flush();os.fsync(output.fileno())
+    descriptor=os.open(os.path.join(receipt,'reserved.bin'),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    with os.fdopen(descriptor,'wb') as output:output.write(b'x'*10);output.flush();os.fsync(output.fileno())
     m.time.sleep(.1)
    results.put('ok')
   except m.ReceiverError as error:results.put(str(error))

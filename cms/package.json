@@ -33,6 +33,7 @@
   },
   "overrides": {
     "esbuild": "0.28.2",
+    "graphql-scalars": "2.0.1",
     "tsx": "$tsx",
     "@payloadcms/next@3.90.2": {
       "sass": "1.105.1"

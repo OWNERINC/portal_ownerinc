@@ -144,13 +144,17 @@ test('retention preflight refuses an expired backup without deletion permission 
   const candidate = await f.createValidBackup('20260102T000000Z');
   await f.createValidBackup('20260103T000000Z');
   await chmod(candidate, 0o555);
-  const result = f.run();
-  assert.notEqual(result.status, 0, result.output);
-  assert.match(result.stderr, /retention preflight failed/i);
-  assert.equal(await f.dockerCalls(), '');
-  const entries = await readdir(path.join(f.root, 'backups'));
-  assert.ok(entries.includes(path.basename(firstCandidate)), 'no candidate may be removed before all candidates validate');
-  assert.ok(entries.includes('20260102T000000Z'));
+  try {
+    const result = f.run();
+    assert.notEqual(result.status, 0, result.output);
+    assert.match(result.stderr, /retention preflight failed/i);
+    assert.equal(await f.dockerCalls(), '');
+    const entries = await readdir(path.join(f.root, 'backups'));
+    assert.ok(entries.includes(path.basename(firstCandidate)), 'no candidate may be removed before all candidates validate');
+    assert.ok(entries.includes('20260102T000000Z'));
+  } finally {
+    await chmod(candidate, 0o755);
+  }
 });
 
 for (const kind of ['partial directory', 'regular file', 'symlink']) {
