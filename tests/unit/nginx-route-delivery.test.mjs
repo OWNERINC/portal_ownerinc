@@ -207,8 +207,8 @@ test('Nginx delivers direct routes, JavaScript MIME/cache, safe redirects and ex
 });
 
 test('baseline Nginx mounts route state as a directory with a hash-bound inactive generation', async () => {
-  const [base, compose, inactive, baseline, pointer, receipt, promoted, unavailable, overlay] = await Promise.all([
-    readFile('nginx/nginx.conf', 'utf8'), readFile('docker-compose.yml', 'utf8'),
+  const [base, compose, ci, inactive, baseline, pointer, receipt, promoted, unavailable, overlay] = await Promise.all([
+    readFile('nginx/nginx.conf', 'utf8'), readFile('docker-compose.yml', 'utf8'), readFile('.github/workflows/ci.yml', 'utf8'),
     readFile('nginx/editorial-route.inactive.conf', 'utf8'),
     readFile('nginx/editorial-route-state/baseline-inactive/include.conf', 'utf8'),
     readFile('nginx/editorial-route-state/active.conf', 'utf8'),
@@ -220,6 +220,8 @@ test('baseline Nginx mounts route state as a directory with a hash-bound inactiv
   assert.doesNotMatch(base, /return 308 \/editorial\/admin|location \^~ \/editorial\/ \{[\s\S]*proxy_pass \$cms_upstream/u);
   assert.match(compose, /\.\/nginx\/editorial-route-state:\/etc\/nginx\/editorial-route-state:ro/u);
   assert.doesNotMatch(compose, /editorial-route\.(?:inactive|promoted|unavailable)\.conf:\/etc\/nginx/u);
+  assert.match(ci, /source=\$\{PWD\}\/nginx\/editorial-route-state,target=\/etc\/nginx\/editorial-route-state,readonly/u);
+  assert.match(ci, /curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-connrefused/u);
   assert.equal(baseline, inactive);
   assert.equal(pointer, 'include /etc/nginx/editorial-route-state/baseline-inactive/include.conf;\n');
   const baselineReceipt = JSON.parse(receipt);
