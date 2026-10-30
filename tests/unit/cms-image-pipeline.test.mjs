@@ -467,6 +467,8 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
     'the final image invokes the Payload CLI needed by migrations');
   assert.match(runtimePackaging, /payloadCli, 'info'/,
     'the Payload CLI smoke runs without connecting to a database');
+  assert.match(runtimePackaging, /import\(new URL\('scripts\/owner-news-payload\/cutover\.mjs', root\)\)/,
+    'the final image smoke imports the cutover entrypoint and therefore verifies its complete allowlisted closure');
   assert.match(compose, /npm run migrate/,
     'the migration service continues to invoke the Payload migration script through npm');
   assert.equal(packageJson.dependencies.tsx, '4.23.15');
