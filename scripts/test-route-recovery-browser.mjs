@@ -117,7 +117,9 @@ async function sweepNginxStatic(baseOrigin) {
 }
 
 function newGuardLedger(role, solidesLinked) {
-  return { role, solidesLinked, events: [], failures: [], pageErrors: [], expectedDenials: [] };
+  return {
+    role, solidesLinked, events: [], failures: [], pageErrors: [], consoleMessages: [], requestFailures: [], expectedDenials: [],
+  };
 }
 
 function recordFailure(ledger, kind, details) {
@@ -191,6 +193,8 @@ async function visibleFixtureDiagnostics(page, selector, text, ledger) {
       .slice(-30),
     guardFailures: ledger.failures.slice(-20),
     pageErrors: ledger.pageErrors.slice(-10).map(error => ({ message: error.message })),
+    consoleMessages: ledger.consoleMessages.slice(-20),
+    requestFailures: ledger.requestFailures.slice(-20),
     realModuleResponses: ledger.events.filter(event => event.kind === 'static-module-response').slice(-10),
   };
 }
@@ -292,10 +296,14 @@ async function createRoleContext(browser, baseOrigin, { role = 'admin', solidesL
   context.setDefaultTimeout(timeoutMs);
   context.on('page', page => {
     page.on('pageerror', error => ledger.pageErrors.push({ message: error.message, stack: error.stack }));
+    page.on('console', message => ledger.consoleMessages.push({ type: message.type(), text: message.text().slice(0, 500) }));
+    page.on('requestfailed', request => ledger.requestFailures.push({
+      method: request.method(), url: request.url(), error: request.failure()?.errorText || 'unknown',
+    }));
   });
   context.on('response', response => {
     const url = new URL(response.url());
-    if (url.origin !== baseOrigin || url.pathname !== '/js/owner-news/asset-path.mjs') return;
+    if (url.origin !== baseOrigin || !/\.(?:m?js)$/u.test(url.pathname)) return;
     const contentType = response.headers()['content-type'] || '';
     const details = { path: url.pathname, status: response.status(), contentType };
     ledger.events.push({ kind: 'static-module-response', ...details });
