@@ -220,7 +220,9 @@ test('baseline Nginx mounts route state as a directory with a hash-bound inactiv
   assert.doesNotMatch(base, /return 308 \/editorial\/admin|location \^~ \/editorial\/ \{[\s\S]*proxy_pass \$cms_upstream/u);
   assert.match(compose, /\.\/nginx\/editorial-route-state:\/etc\/nginx\/editorial-route-state:ro/u);
   assert.doesNotMatch(compose, /editorial-route\.(?:inactive|promoted|unavailable)\.conf:\/etc\/nginx/u);
-  assert.match(ci, /source=\$\{PWD\}\/nginx\/editorial-route-state,target=\/etc\/nginx\/editorial-route-state,readonly/u);
+  assert.match(ci, /install -D -m 0444 nginx\/editorial-route\.promoted\.conf "\$route_state\/browser-promoted\/include\.conf"/u);
+  assert.match(ci, /include \/etc\/nginx\/editorial-route-state\/browser-promoted\/include\.conf;/u);
+  assert.match(ci, /source=\$\{route_state\},target=\/etc\/nginx\/editorial-route-state,readonly/u);
   assert.match(ci, /curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-connrefused/u);
   assert.equal(baseline, inactive);
   assert.equal(pointer, 'include /etc/nginx/editorial-route-state/baseline-inactive/include.conf;\n');
