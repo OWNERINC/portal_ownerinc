@@ -22,9 +22,6 @@ services:
       - "127.0.0.1:${HTTP_PORT:?}:80"
     networks: [backend]
 
-  cms-postgres:
-    networks: [backend]
-
   cms-provision:
     networks: [backend]
 
@@ -38,7 +35,4 @@ services:
     networks: [backend]
 
   cms:
-    networks: [backend]
-
-  cms-worker:
     networks: [backend]

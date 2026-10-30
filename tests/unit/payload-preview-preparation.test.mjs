@@ -165,6 +165,16 @@ test('offline check validates current source contracts without invoking Docker',
   })
 })
 
+test('preview runbook documents the Gate B shared-cluster topology without reviving the retired second Postgres', async () => {
+  const documentation = await fs.readFile(path.join(repoRoot, 'docs', 'operations', 'payload-preview.md'), 'utf8')
+  assert.match(documentation, /single shared `postgres`\s+service hosts the configured Portal database \(`portal_test` in preview\) and[\s\S]*`ownerinc_cms`/u)
+  assert.match(documentation, /exactly three persistent volumes: shared[\s\S]*PostgreSQL data, Portal uploads, and CMS uploads/u)
+  assert.match(documentation, /one PostgreSQL healthcheck to `postgres`[\s\S]*`portal_admin` and `portal_test`/u)
+  assert.match(documentation, /cluster bootstrap → provision → migrate\/finalize → start/u)
+  assert.match(documentation, /local preview must not be cited as Gate[\s\S]*B production acceptance/u)
+  assert.doesNotMatch(documentation, /cms-postgres|cms_postgres_data|both PostgreSQL|independent CMS Postgres|Portal and CMS Postgres services/u)
+})
+
 test('prepare creates isolated private artifacts without starting services or printing secrets', async t => {
   const tempRoot = await makeTempRoot()
   t.after(() => fs.rm(tempRoot, { recursive: true, force: true }))
@@ -197,9 +207,10 @@ test('prepare creates isolated private artifacts without starting services or pr
   assert.equal(env.FIREBASE_PROJECT_ID, result.projectId)
   assert.equal(env.FIREBASE_AUTH_EMULATOR_HOST, 'firebase-auth:9099')
   assert.equal(env.PORTAL_PUBLIC_URL, 'http://127.0.0.1:18080')
-  assert.ok(env.CMS_ADMIN_DATABASE_URL === `postgresql://cms_admin:${env.CMS_POSTGRES_PASSWORD}@cms-postgres:5432/ownerinc_cms`, 'CMS admin URL has its expected isolated role')
-  assert.ok(env.CMS_MIGRATION_DATABASE_URL === `postgresql://cms_migrator:${env.CMS_MIGRATOR_PASSWORD}@cms-postgres:5432/ownerinc_cms`, 'CMS migration URL has its expected isolated role')
-  assert.ok(env.CMS_RUNTIME_DATABASE_URL === `postgresql://cms_runtime:${env.CMS_RUNTIME_PASSWORD}@cms-postgres:5432/ownerinc_cms`, 'CMS runtime URL has its expected isolated role')
+  assert.ok(env.CMS_OWNER_DATABASE_URL === `postgresql://cms_admin:${env.CMS_POSTGRES_PASSWORD}@postgres:5432/ownerinc_cms`, 'CMS owner URL has its expected isolated role')
+  assert.ok(env.CMS_MIGRATION_DATABASE_URL === `postgresql://cms_migrator:${env.CMS_MIGRATOR_PASSWORD}@postgres:5432/ownerinc_cms`, 'CMS migration URL has its expected isolated role')
+  assert.ok(env.CMS_RUNTIME_DATABASE_URL === `postgresql://cms_runtime:${env.CMS_RUNTIME_PASSWORD}@postgres:5432/ownerinc_cms`, 'CMS runtime URL has its expected isolated role')
+  assert.ok(env.CMS_OBSERVER_DATABASE_URL === `postgresql://cms_observer:${env.CMS_OBSERVER_PASSWORD}@postgres:5432/ownerinc_cms`, 'CMS observer URL has its expected isolated role')
   assert.ok(env.API_DATABASE_URL === `postgresql://portal_api:${env.PORTAL_API_DB_PASSWORD}@postgres:5432/portal_test`, 'Portal API URL has its expected isolated role')
   assert.ok(env.CRON_DATABASE_URL === `postgresql://portal_cron:${env.PORTAL_CRON_DB_PASSWORD}@postgres:5432/portal_test`, 'Portal cron URL has its expected isolated role')
   assert.equal(env.SMTP_ADDRESS, '127.0.0.1')
@@ -209,7 +220,8 @@ test('prepare creates isolated private artifacts without starting services or pr
 
   const secretNames = [
     'POSTGRES_PASSWORD', 'PORTAL_API_DB_PASSWORD', 'PORTAL_CRON_DB_PASSWORD', 'CMS_POSTGRES_PASSWORD',
-    'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD', 'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET',
+    'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD', 'CMS_OBSERVER_PASSWORD',
+    'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET',
     'PORTAL_TO_PAYLOAD_SECRET', 'BULK_IMPORT_WORKER_SECRET', 'SMTP_PASSWORD',
   ]
   const secrets = secretNames.map(name => env[name])
@@ -235,7 +247,7 @@ test('prepare creates isolated private artifacts without starting services or pr
 
   const override = await fs.readFile(path.join(runDirectory, 'compose.preview.yml'), 'utf8')
   assert(override.includes('pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-portal_admin} -d ${POSTGRES_DB:-portal}'))
-  assert.match(override, /pg_isready -h 127\.0\.0\.1 -U cms_admin -d ownerinc_cms/u)
+  assert.doesNotMatch(override, /cms-postgres|cms_postgres_data/u)
   assert.match(override, /127\.0\.0\.1:\$\{AUTH_PORT:\?Set AUTH_PORT\}:9099/u)
   assert.match(override, /127\.0\.0\.1:\$\{HTTP_PORT:\?Set HTTP_PORT\}:80/u)
   assert.match(override, /PREVIEW_RUN_DIR[^\n]*firebase-config\.js/u)
@@ -255,8 +267,9 @@ test('prepare creates isolated private artifacts without starting services or pr
   assert(powershellLauncher.includes(result.envFile.replace(/\\/gu, '/')))
   assert(powershellLauncher.includes(unicodeCheckout.replace(/\\/gu, '/')), 'checkout path is preserved as Unicode')
   assert(powershellLauncher.includes(runDirectory.replace(/\\/gu, '/')), 'run path is preserved as Unicode')
-  assert.match(shellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
+  assert.match(shellLauncher, /config --quiet[\s\S]*build api cms firebase-auth[\s\S]*cms-bootstrap run --rm cms-cluster-bootstrap[\s\S]*run --rm --no-deps cms-provision[\s\S]*--bootstrap-control[\s\S]*run --rm --no-deps cms-migrate[\s\S]*up -d --wait --wait-timeout 300 nginx cms firebase-auth/u)
   assert.match(powershellLauncher, /\$configArguments = @\('compose'\) \+ \$compose \+ @\('config', '--quiet'\)[\s\S]*\$buildArguments = @\('compose'\)[\s\S]*'build', 'api', 'cms', 'firebase-auth'[\s\S]*\$upArguments = @\('compose'\)[\s\S]*'up', '-d', '--wait', '--wait-timeout', '300'/u)
+  assert.match(powershellLauncher, /\$bootstrapArguments[\s\S]*cms-cluster-bootstrap[\s\S]*\$provisionArguments[\s\S]*cms-provision[\s\S]*\$controlArguments[\s\S]*--bootstrap-control[\s\S]*\$migrationArguments[\s\S]*cms-migrate[\s\S]*\$upArguments/u)
   assert.match(shellLauncher, /--format '\{\{\.Endpoints\.docker\.Host\}\}'/u)
   assert(powershellLauncher.includes("'--format', '{{.Endpoints.docker.Host}}'"))
   assert.doesNotMatch(shellLauncher, /index \.Endpoints|\.Endpoints "docker"/u)
@@ -366,7 +379,7 @@ test('Docker Compose merges preview TCP database healthchecks and CMS migration 
   assert(recoveryLaunchers.powershell.includes(result.envFile.replace(/\\/gu, '/')))
   assert(recoveryLaunchers.powershell.includes(result.projectName))
   const configResult = spawnSync('docker', [
-    'compose', '--profile', 'local',
+    'compose', '--profile', 'local', '--profile', 'cms-bootstrap', '--profile', 'cms-control-roles',
     '--project-directory', repoRoot,
     '--env-file', result.envFile,
     '--project-name', result.projectName,
@@ -390,11 +403,15 @@ test('Docker Compose merges preview TCP database healthchecks and CMS migration 
   assert.deepEqual(config.services.postgres.healthcheck.test, [
     'CMD-SHELL', 'pg_isready -h 127.0.0.1 -U portal_admin -d portal_test',
   ])
-  assert.equal(config.services['cms-postgres'].environment.POSTGRES_USER, 'cms_admin')
-  assert.equal(config.services['cms-postgres'].environment.POSTGRES_DB, 'ownerinc_cms')
-  assert.deepEqual(config.services['cms-postgres'].healthcheck.test, [
-    'CMD-SHELL', 'pg_isready -h 127.0.0.1 -U cms_admin -d ownerinc_cms',
-  ])
+  assert.equal(config.services['cms-postgres'], undefined)
+  assert.match(config.services['cms-cluster-bootstrap'].environment.CMS_DATABASE_URL,
+    /^postgresql:\/\/portal_admin:.*@postgres:5432\/postgres$/u)
+  for (const service of ['cms-cluster-bootstrap', 'cms-provision', 'cms-control-roles', 'cms-migrate', 'cms-preauthority-verify']) {
+    assert.equal(config.services[service].environment.CMS_PORTAL_DATABASE_NAME, 'portal_test',
+      `${service} must verify the preview Portal database rather than production portal`)
+  }
+  assert.equal(config.services['cms-provision'].environment.CMS_MIGRATOR_PASSWORD, undefined)
+  assert.equal(config.services['cms-provision'].environment.CMS_RUNTIME_PASSWORD, undefined)
   assert.equal(config.services.cms.environment.NODE_ENV, 'development')
   assert.equal(config.services['cms-migrate'].environment.NODE_ENV, 'development')
   assert.equal(Object.hasOwn(config.services['cms-provision'].environment, 'NODE_ENV'), false,
@@ -449,7 +466,8 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   const captured = (await fs.readFile(captureFile, 'utf8')).replace(/^\uFEFF/u, '')
   const calls = captured.split(/\r?\n/u).filter(Boolean).map(call => call.split(unitSeparator))
   const composeCalls = calls.filter(([first]) => first === 'compose')
-  assert.equal(composeCalls.length, 4, 'mock observes version, config, build, and up only')
+  assert.equal(composeCalls.length, 8,
+    'mock observes version, config, build, cluster bootstrap, provision, control grants, migration, and up')
   for (const args of composeCalls.slice(1)) {
     assert.equal(args[args.indexOf('--project-directory') + 1], unicodeCheckout.replace(/\\/gu, '/'))
     assert.equal(args[args.indexOf('--env-file') + 1], path.join(runDirectory, 'compose.env').replace(/\\/gu, '/'))
@@ -457,6 +475,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     assert(args.includes(path.join(unicodeCheckout, 'docker-compose.payload.yml').replace(/\\/gu, '/')))
     assert(args.includes(path.join(runDirectory, 'compose.preview.yml').replace(/\\/gu, '/')))
   }
+  assert.deepEqual(composeCalls.slice(3).map(args => args.slice(args.indexOf(path.join(runDirectory, 'compose.preview.yml').replace(/\\/gu, '/')) + 1)), [
+    ['--profile', 'cms-bootstrap', 'run', '--rm', 'cms-cluster-bootstrap'],
+    ['run', '--rm', '--no-deps', 'cms-provision'],
+    ['--profile', 'cms-control-roles', 'run', '--rm', '--no-deps', 'cms-control-roles', 'node', '--import', 'tsx', 'scripts/provision-db.ts', '--bootstrap-control'],
+    ['run', '--rm', '--no-deps', 'cms-migrate'],
+    ['up', '-d', '--wait', '--wait-timeout', '300', 'nginx', 'cms', 'firebase-auth'],
+  ])
   assert(calls.every(args => args[0] !== 'compose' || args[1] !== 'down'), 'mock never receives a stop command')
 })
 

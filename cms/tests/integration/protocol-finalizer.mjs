@@ -669,7 +669,7 @@ function makeConnectionString(user, password, database, port) {
 function syntheticEnvironment(extra = {}) {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     ['path', 'systemroot', 'windir', 'temp', 'tmp', 'userprofile', 'appdata', 'localappdata', 'comspec', 'pathext'].includes(key.toLowerCase())))
-  return { ...inherited, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', ...extra }
+  return { ...inherited, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CMS_PORTAL_DATABASE_NAME: 'portal', ...extra }
 }
 
 function redact(output, secrets) {
@@ -1150,8 +1150,8 @@ function generateUniqueSecret(used = new Set()) {
 
 function generatePasswords() {
   const used = new Set()
-  return Object.fromEntries(['cms_admin', 'cms_migrator', 'cms_runtime', 'cms_controller', 'cms_observer',
-    'protocol_probe'].map(role => [role, generateUniqueSecret(used)]))
+  return Object.fromEntries(['portal_admin', 'cms_admin', 'cms_migrator', 'cms_runtime', 'cms_controller', 'cms_observer']
+    .map(role => [role, generateUniqueSecret(used)]))
 }
 
 function dockerLabels(lease) {
@@ -1183,20 +1183,20 @@ async function createCluster(lease, secretsPath, passwords, report) {
   report.volumeCreated = true
   assertCreatedVolumeIdentity(lease)
   const envFile = path.join(secretsPath, 'postgres-init.env')
-  const passwordFile = path.join(secretsPath, 'postgres-admin-password')
+  const passwordFile = path.join(secretsPath, 'postgres-cluster-admin-password')
   if (/[\0\r\n,]/u.test(passwordFile)) fail('lease_private_bind_path_unsafe')
-  await writePrivateFile(passwordFile, `${passwords.cms_admin}\n`, secretsPath)
+  await writePrivateFile(passwordFile, `${passwords.portal_admin}\n`, secretsPath)
   const postgresEnvironment = {
-    POSTGRES_USER: 'cms_admin',
+    POSTGRES_USER: 'portal_admin',
     POSTGRES_DB: 'postgres',
-    POSTGRES_PASSWORD_FILE: '/run/secrets/cms_admin_password',
+    POSTGRES_PASSWORD_FILE: '/run/secrets/portal_admin_password',
   }
   const postgresEnvironmentText = Object.entries(postgresEnvironment)
     .map(([key, value]) => `${key}=${value}`).join('\n') + '\n'
   await writePrivateFile(envFile, postgresEnvironmentText, secretsPath)
   docker(['create', '--name', lease.containerName, ...dockerLabels(lease), '--network', 'bridge',
     '--publish', `${lease.host}:${lease.port}:5432`, '--mount', `type=volume,source=${lease.volumeName},target=/var/lib/postgresql/data`,
-    '--mount', `type=bind,source=${passwordFile},target=/run/secrets/cms_admin_password,readonly`,
+    '--mount', `type=bind,source=${passwordFile},target=/run/secrets/portal_admin_password,readonly`,
     '--env-file', envFile, '--memory', '1g', '--cpus', '1.5', '--pids-limit', '256', '--restart', 'no', lease.imageId])
   report.containerCreated = true
   docker(['start', lease.containerName])
@@ -1207,18 +1207,19 @@ async function createCluster(lease, secretsPath, passwords, report) {
   if (inspected?.Config?.Labels?.[FIXTURE_LABEL] !== 'true' ||
       inspected?.Config?.Labels?.['ownerinc.protocol-finalizer.run-id'] !== lease.runId ||
       inspected?.Config?.Labels?.['ownerinc.protocol-finalizer.scenario'] !== lease.scenario ||
-      !environment.includes('POSTGRES_PASSWORD_FILE=/run/secrets/cms_admin_password') ||
+      !environment.includes('POSTGRES_PASSWORD_FILE=/run/secrets/portal_admin_password') ||
       environment.some(value => value.startsWith('POSTGRES_PASSWORD='))) fail('lease_created_container_identity_mismatch')
   report.containerIdSha256 = sha256(backend.containerId)
   report.backendAddressSha256 = sha256(backend.backendIPv4)
   report.secretBindValidated = matchesDockerBindMountPath(
-    inspected?.Mounts?.find(mount => mount?.Destination === '/run/secrets/cms_admin_password')?.Source,
+    inspected?.Mounts?.find(mount => mount?.Destination === '/run/secrets/portal_admin_password')?.Source,
     passwordFile)
   if (!report.secretBindValidated) fail('lease_created_secret_mount_mismatch')
   return { ...backend, passwordFile }
 }
 
 async function provisionAndMigrate(lease, passwords, logs) {
+  const clusterAdminURL = makeConnectionString('portal_admin', passwords.portal_admin, 'postgres', lease.port)
   const adminURL = makeConnectionString('cms_admin', passwords.cms_admin, DB, lease.port)
   const migratorURL = makeConnectionString('cms_migrator', passwords.cms_migrator, DB, lease.port)
   const base = syntheticEnvironment()
@@ -1228,6 +1229,32 @@ async function provisionAndMigrate(lease, passwords, logs) {
     CMS_RUNTIME_PASSWORD: passwords.cms_runtime, CMS_CONTROLLER_PASSWORD: passwords.cms_controller }
   const provisionScript = path.join(CMS, 'scripts/provision-db.ts')
   const nodeArgs = ['--import', 'tsx', provisionScript]
+  logs.push(await runCli('bootstrap-cluster-roles', process.execPath, [...nodeArgs, '--bootstrap-database'], {
+    ...base, CMS_DATABASE_URL: clusterAdminURL, CMS_POSTGRES_PASSWORD: passwords.cms_admin,
+    CMS_MIGRATOR_PASSWORD: passwords.cms_migrator, CMS_RUNTIME_PASSWORD: passwords.cms_runtime,
+    CMS_CONTROLLER_PASSWORD: passwords.cms_controller, CMS_OBSERVER_PASSWORD: passwords.cms_observer,
+  }, CMS, secrets))
+  const clusterAdmin = await connectTarget(lease, passwords, 'portal_admin')
+  try {
+    await clusterAdmin.query("ALTER ROLE cms_observer CONNECTION LIMIT 3 VALID UNTIL '2027-01-01' SET statement_timeout='9s'")
+  } finally { await clusterAdmin.end() }
+  logs.push(await runCli('bootstrap-cluster-roles-reconciles-role-state-drift', process.execPath,
+    [...nodeArgs, '--bootstrap-database'], {
+      ...base, CMS_DATABASE_URL: clusterAdminURL, CMS_POSTGRES_PASSWORD: passwords.cms_admin,
+      CMS_MIGRATOR_PASSWORD: passwords.cms_migrator, CMS_RUNTIME_PASSWORD: passwords.cms_runtime,
+      CMS_CONTROLLER_PASSWORD: passwords.cms_controller, CMS_OBSERVER_PASSWORD: passwords.cms_observer,
+    }, CMS, secrets))
+  const roleVerifier = await connectTarget(lease, passwords, 'portal_admin')
+  try {
+    const state = await roleVerifier.query(`SELECT count(*)=6 AND bool_and(rolconnlimit=-1
+      AND (rolvaliduntil IS NULL OR rolvaliduntil='infinity'::timestamptz) AND rolconfig IS NULL) AS safe
+      FROM pg_catalog.pg_roles WHERE rolname=ANY(
+        ARRAY['cms_admin','cms_control','cms_controller','cms_migrator','cms_runtime','cms_observer']::name[])`)
+    const helper = await roleVerifier.query('SELECT safe, unexpected_ownership_count FROM cms_cluster_guard.verify_cms_ownership_contract()')
+    if (state.rows[0]?.safe !== true || helper.rows[0]?.safe !== true
+        || String(helper.rows[0]?.unexpected_ownership_count) !== '0') fail('cluster_role_state_or_ownership_helper_reconciliation_failed')
+    logs.push({ label: 'six-cms-role-state-and-bounded-ownership-helper-reconciled', status: 0 })
+  } finally { await roleVerifier.end() }
   await assertTargetPhysicalIdentity(lease, passwords)
   logs.push(await runCli('provision-native-roles', process.execPath, [...nodeArgs, '--provision'], adminEnv, CMS, secrets))
   await assertTargetPhysicalIdentity(lease, passwords)
@@ -1257,6 +1284,9 @@ async function provisionAndMigrate(lease, passwords, logs) {
       migrationCount: rows.rows.length, migrationLedgerSha256, runCount: 0 })
   } finally { await migrator.end() }
 
+  await assertTargetPhysicalIdentity(lease, passwords)
+  logs.push(await runCli('post-migration-runtime-and-observer-grants', process.execPath, [...nodeArgs, '--grants'],
+    { ...base, CMS_DATABASE_URL: migratorURL }, CMS, secrets))
   await assertTargetPhysicalIdentity(lease, passwords)
   logs.push(await runCli('bootstrap-control', process.execPath, [...nodeArgs, '--bootstrap-control'], adminEnv, CMS, secrets))
   await assertTargetPhysicalIdentity(lease, passwords)
@@ -1594,24 +1624,14 @@ async function provisionObserverAndProbeRoles(target, passwords, logs) {
     const client = new Client({ connectionString: process.env.CMS_ADMIN_DATABASE_URL, connectionTimeoutMillis: 5000 })
     await client.connect()
     try {
-      const observerPassword = process.env.CMS_OBSERVER_PASSWORD
-      const probePassword = process.env.PROTOCOL_PROBE_PASSWORD
-      if (!/^[a-f0-9]{72}$/.test(observerPassword || '') || !/^[a-f0-9]{72}$/.test(probePassword || '')) {
-        throw new Error('fixture_role_secret_invalid')
-      }
-      await client.query(buildNewsProtocolObserverProvisioningSQL(observerPassword))
-      await client.query("CREATE ROLE protocol_probe LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD '" + probePassword + "'")
-      await client.query('GRANT CONNECT ON DATABASE ownerinc_cms TO protocol_probe')
-      await client.query('GRANT USAGE ON SCHEMA public TO protocol_probe')
+      await client.query(buildNewsProtocolObserverProvisioningSQL('portal'))
     } finally { await client.end() }
   `
   await assertTargetPhysicalIdentity(target, passwords)
   await runCli('provision-read-only-observer-and-unrelated-probe', process.execPath,
     ['--import', 'tsx', '--input-type=module', '-e', provision],
-    syntheticEnvironment({ CMS_ADMIN_DATABASE_URL: adminURL, CMS_OBSERVER_PASSWORD: passwords.cms_observer,
-      PROTOCOL_PROBE_PASSWORD: passwords.protocol_probe }), CMS, [passwords.cms_admin, passwords.cms_observer,
-      passwords.protocol_probe])
-  logs.push({ label: 'observer-and-unrelated-role-created', status: 0 })
+    syntheticEnvironment({ CMS_ADMIN_DATABASE_URL: adminURL }), CMS, [passwords.cms_admin])
+  logs.push({ label: 'observer-database-grants-configured', status: 0 })
 }
 
 async function runObserverAudit(target, passwords, expectedVersion, logs) {
@@ -1623,7 +1643,7 @@ async function runObserverAudit(target, passwords, expectedVersion, logs) {
   await assertTargetPhysicalIdentity(target, passwords)
   const result = await runCli(`observer-read-only-v${expectedVersion}`, process.execPath,
     ['--import', 'tsx', path.join(CMS, 'scripts/verify-news-protocol.ts'), '--audit-protocol'],
-    syntheticEnvironment({ CMS_OBSERVER_DATABASE_URL: observerURL }), CMS, [passwords.cms_observer])
+    syntheticEnvironment({ CMS_OBSERVER_DATABASE_URL: observerURL, CMS_PORTAL_DATABASE_NAME: 'portal' }), CMS, [passwords.cms_observer])
   const audit = lastJsonLine(result[PRIVATE_CLI_OUTPUT], 'observer_audit_output_invalid')
   if (audit?.status !== 'PASS' || audit?.installed !== true || audit?.catalogValid !== true
     || audit?.observedProtocolVersion !== expectedVersion || audit?.observedCoverageVersion !== 0
@@ -1904,7 +1924,7 @@ async function proveBootstrapRpc(target, passwords, logs) {
   }
 
   const denied = {}
-  for (const role of ['cms_runtime', 'cms_observer', 'protocol_probe']) {
+  for (const role of ['cms_runtime', 'cms_observer', 'cms_migrator']) {
     await expectRpcFailure(target, passwords, role, { ...input, runId: randomUUID(), manifest: randomBytes(32).toString('hex') },
       '42501')
     denied[role] = true
@@ -2152,6 +2172,26 @@ async function execute(rawLease, leasePath, expectedScenario) {
       report.coldInstall = { exactV2: true, nativeMigrationStateUnchanged: true,
         protocolSnapshot: installed.summary, nativeBefore: compactNativeEvidence(nativeBefore),
         nativeAfter: compactNativeEvidence(nativeAfter), readinessDisabled: true }
+
+      stage = 'reject-ownership-in-nonlegacy-object-class'
+      const clusterAdmin = await connectTarget(boundTarget, passwords, 'portal_admin')
+      try {
+        await clusterAdmin.query('CREATE PUBLICATION ownerinc_fixture_ownership_drift FOR TABLE public.payload_migrations')
+        await clusterAdmin.query('GRANT CREATE ON DATABASE ownerinc_cms TO cms_controller')
+        await clusterAdmin.query('ALTER PUBLICATION ownerinc_fixture_ownership_drift OWNER TO cms_controller')
+        await clusterAdmin.query('REVOKE CREATE ON DATABASE ownerinc_cms FROM cms_controller')
+        const helper = await clusterAdmin.query('SELECT safe, unexpected_ownership_count FROM cms_cluster_guard.verify_cms_ownership_contract()')
+        if (helper.rows[0]?.safe !== false || String(helper.rows[0]?.unexpected_ownership_count) !== '1') {
+          fail('publication_ownership_drift_not_reported')
+        }
+        await expectFinalizerFailure('publication-owner-finalizer-rejected', boundTarget, passwords,
+          '--finalize-protocol', 'unexpected_control_owned_objects')
+      } finally {
+        await clusterAdmin.query('REVOKE CREATE ON DATABASE ownerinc_cms FROM cms_controller').catch(() => {})
+        await clusterAdmin.query('DROP PUBLICATION IF EXISTS ownerinc_fixture_ownership_drift').catch(() => {})
+        await clusterAdmin.end()
+      }
+      logs.push({ label: 'nonlegacy-pg-publication-owner-rejected-by-bounded-helper', status: 0 })
 
       stage = 'provision-observer-and-negative-role-fixtures'
       await provisionObserverAndProbeRoles(boundTarget, passwords, logs)

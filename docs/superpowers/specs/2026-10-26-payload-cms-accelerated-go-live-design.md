@@ -1,9 +1,15 @@
 # Payload CMS — go-live acelerado sem migração inicial
 
 **Data:** 26 de outubro de 2026
-**Status:** aprovado para planejamento
+**Status:** superseded para execução operacional
 **Escopo:** Portal Ownerinc e Owner News; sem Ownerinc Brain, n8n ou
 `ownerinc-novo-agente/`
+
+> **Nota de precedência (27 de outubro de 2026):** este documento permanece como
+> histórico do draft acelerado. Seus limites de 30 minutos não regem o Gate E
+> atual. O plano aprovado vigente admite deadline absoluto de até **60 minutos**, conforme
+> `docs/operations/owner-news-authority.md`. O restante do texto histórico não foi
+> reescrito retroativamente.
 
 ## 1. Objetivo
 

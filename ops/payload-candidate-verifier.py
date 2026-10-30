@@ -15,6 +15,7 @@ REGISTRY = '/var/lib/ownerinc/payload-candidate/records'
 REPOSITORY = 'OWNERINC/portal_ownerinc'
 WORKFLOW = '.github/workflows/ci.yml'
 CONTRACT = 'payload-preauthority-recovery-v1'
+PRODUCTION_CONTRACT = 'payload-private-install-v2'
 TOOL_FILES = (
     'ops/payload-candidate-verifier.py',
     'scripts/register-payload-candidate-admission.mjs',
@@ -135,7 +136,9 @@ def validate_images(images):
 
 
 def validate_request(request):
-    shape(request, ('commit', 'runId', 'runAttempt', 'images', 'artifactIds'))
+    production = 'authorization' in request
+    shape(request, ('commit', 'runId', 'runAttempt', 'images', 'artifactIds') +
+          (('artifactDigests', 'contentDigests', 'authorization') if production else ()))
     if (not matches(request['commit'], r'[0-9a-f]{40}')
             or not identifier(request['runId']) or not identifier(request['runAttempt'])):
         fail('invalid_admission_identity')
@@ -144,6 +147,21 @@ def validate_request(request):
     if (not all(identifier(value) for value in request['artifactIds'].values())
             or len(set(request['artifactIds'].values())) != 3):
         fail('invalid_admission_artifacts')
+    if production:
+        shape(request['artifactDigests'], ROLES)
+        shape(request['contentDigests'], ROLES)
+        if (not all(matches(value, r'sha256:[0-9a-f]{64}') for value in request['artifactDigests'].values())
+                or not all(hash64(value) for value in request['contentDigests'].values())):
+            fail('invalid_admission_artifacts')
+        validate_authorization(request['authorization'])
+
+
+def validate_authorization(value):
+    shape(value, ('environment', 'approvalSha256', 'inventoryIdentity', 'expiresAt', 'nonce'))
+    if (value['environment'] != 'production' or not hash64(value['approvalSha256'])
+            or not hash64(value['inventoryIdentity']) or not hash64(value['nonce'])
+            or not matches(value['expiresAt'], r'[1-9][0-9]{9}')):
+        fail('invalid_production_authorization')
 
 
 RECORD_FIELDS = (
@@ -156,13 +174,14 @@ RECORD_FIELDS = (
 
 
 def validate_record(record):
-    shape(record, RECORD_FIELDS)
-    if type(record['schemaVersion']) is not int or record['schemaVersion'] != 1:
+    production = record.get('schemaVersion') == 2 if isinstance(record, dict) else False
+    shape(record, RECORD_FIELDS + (('authorization',) if production else ()))
+    if type(record['schemaVersion']) is not int or record['schemaVersion'] not in (1, 2):
         fail('unsupported_admission_record')
-    if (record['kind'] != 'payload-candidate-admission-record-v1'
+    if (record['kind'] != ('payload-candidate-admission-record-v2' if production else 'payload-candidate-admission-record-v1')
             or record['environment'] != 'production' or record['repository'] != REPOSITORY
             or record['workflow'] != WORKFLOW or record['deploymentAuthorized'] is not False
-            or record['qualificationContract'] != CONTRACT
+            or record['qualificationContract'] != (PRODUCTION_CONTRACT if production else CONTRACT)
             or not identifier(record['repositoryId']) or not identifier(record['workflowId'])):
         fail('invalid_admission_record')
     for field in ('policySha256', 'workflowSha256', 'candidateSha256', 'qualifiedManifestSha256',
@@ -180,7 +199,10 @@ def validate_record(record):
             fail('invalid_admission_artifacts')
         ids[role] = artifact['id']
     validate_request({key: record[key] for key in ('commit', 'runId', 'runAttempt', 'images')}
-                     | {'artifactIds': ids})
+                      | {'artifactIds': ids} | ({'artifactDigests': {role: record['artifacts'][role]['digest'] for role in ROLES},
+                          'contentDigests': {'candidate': record['candidateSha256'], 'qualified': record['qualifiedManifestSha256'],
+                                             'report': record['recoveryReportSha256']},
+                          'authorization': record['authorization']} if production else {}))
     return record
 
 
@@ -198,12 +220,18 @@ def verify_record_binding(policy_raw, record, request, archive_hash, archive_siz
             or record['workflowSha256'] != revision['workflowSha256']):
         fail('admission_policy_binding_mismatch')
     if (any(record[key] != request[key] for key in ('commit', 'runId', 'runAttempt', 'images'))
-            or any(record['artifacts'][role]['id'] != request['artifactIds'][role] for role in ROLES)):
+            or any(record['artifacts'][role]['id'] != request['artifactIds'][role] for role in ROLES)
+            or ('authorization' in request and (record.get('authorization') != request['authorization']
+                or any(record['artifacts'][role]['digest'] != request['artifactDigests'][role] for role in ROLES)
+                or record['candidateSha256'] != request['contentDigests']['candidate']
+                or record['qualifiedManifestSha256'] != request['contentDigests']['qualified']
+                or record['recoveryReportSha256'] != request['contentDigests']['report']))):
         fail('admission_candidate_binding_mismatch')
     if record['archiveSha256'] != archive_hash or record['archiveBytes'] != archive_size:
         fail('admission_archive_binding_mismatch')
     # All returned strings are validated identifiers/hashes, not paths/private evidence.
-    return {key: record[key] for key in RECORD_FIELDS if key not in ('kind', 'schemaVersion')}
+    return {key: record[key] for key in RECORD_FIELDS + (('authorization',) if record['schemaVersion'] == 2 else ())
+            if key not in ('kind', 'schemaVersion')}
 
 
 def check_file_metadata(info, modes):
@@ -315,16 +343,24 @@ def main(args=None):
     parser = RedactedParser(add_help=False, allow_abbrev=False)
     parser.add_argument('action', choices=('verify',))
     for flag in ('archive', 'commit', 'run-id', 'run-attempt', 'api-image', 'cron-image', 'cms-image',
-                 'candidate-artifact-id', 'qualified-artifact-id', 'report-artifact-id'):
+                 'candidate-artifact-id', 'qualified-artifact-id', 'report-artifact-id',
+                 'candidate-artifact-digest', 'qualified-artifact-digest', 'report-artifact-digest',
+                 'candidate-sha256', 'qualified-sha256', 'report-sha256', 'approval-sha256',
+                 'inventory-identity', 'expires-at', 'nonce'):
         parser.add_argument('--' + flag, required=True)
     selected = sys.argv[1:] if args is None else args
     flags = selected[1::2]
-    if len(selected) != 21 or len(flags) != len(set(flags)):
+    if len(selected) != 43 or len(flags) != len(set(flags)):
         fail('invalid_admission_arguments')
     values = parser.parse_args(selected)
     request = {'commit': values.commit, 'runId': values.run_id, 'runAttempt': values.run_attempt,
-               'images': {role: getattr(values, role + '_image') for role in SERVICES},
-               'artifactIds': {role: getattr(values, role + '_artifact_id') for role in ROLES}}
+                'images': {role: getattr(values, role + '_image') for role in SERVICES},
+                'artifactIds': {role: getattr(values, role + '_artifact_id') for role in ROLES},
+                'artifactDigests': {role: getattr(values, role + '_artifact_digest') for role in ROLES},
+                'contentDigests': {role: getattr(values, role + '_sha256') for role in ROLES},
+                'authorization': {'environment': 'production', 'approvalSha256': values.approval_sha256,
+                                  'inventoryIdentity': values.inventory_identity, 'expiresAt': values.expires_at,
+                                  'nonce': values.nonce}}
     print(json.dumps(verify_candidate(values.archive, request), sort_keys=True, separators=(',', ':')))
 
 

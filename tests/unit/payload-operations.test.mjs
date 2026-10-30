@@ -9,6 +9,8 @@ import { createFixtureCommandFailure } from '../../scripts/integration/payload-p
 import { createRecoveryFailureReportFields } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
 
 const image = name => `ghcr.io/ownerinc/ownerinc-portal-${name}@sha256:${'b'.repeat(64)}`;
+const python = (process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'])
+  .find(command => spawnSync(command, ['--version'], { encoding: 'utf8' }).status === 0);
 const legacy = `API_IMAGE=${image('api')}\nCRON_IMAGE=${image('cron')}\n`;
 const payload = `${legacy}CMS_IMAGE=${image('cms')}\nRELEASE_FORMAT=payload-v1\n`;
 const fakeDocker = `#!/usr/bin/env bash
@@ -36,9 +38,9 @@ case $cmd in
     if [[ \${FAIL_CLEANUP_STOP:-false} == true && -f "$FIXTURE/restores" ]]; then
       printf 'unsafe_required_owner\\nprivate-cleanup-output\\n' >&2; exit 46
     fi
-    printf 'postgres\\ncms-postgres\\n' > "$FIXTURE/running";;
+    printf 'postgres\\n' > "$FIXTURE/running";;
   start) printf 'private missing cms-migrate dependency\\n' >&2; exit 1;;
- up) printf 'postgres\\ncms-postgres\\nnginx\\napi\\ncms\\n' > "$FIXTURE/running";;
+  up) printf 'postgres\\nnginx\\napi\\ncms\\n' > "$FIXTURE/running";;
  exec|run)
     if [[ $cmd == run && " $* " == *' migrate '* ]]; then
       printf 'migrate\\n' >> "$FIXTURE/migration.attempts"
@@ -46,6 +48,11 @@ case $cmd in
     fi
    if grep -Eq '^(nginx|api|cron|cms|cms-worker)$' "$FIXTURE/running"; then exit 91; fi
    if [[ \${FAIL_DUMP:-false} == true ]]; then exit 92; fi
+    if [[ "$*" == *expected_owner=portal_admin* ]]; then printf 't\n'; exit 0; fi
+    if [[ "$*" == *current_database* ]]; then
+      if [[ "$*" == *ownerinc_cms* ]]; then printf 'ownerinc_cms:portal_admin:true\n'; else printf 'portal:portal_admin\n'; fi
+      exit 0
+    fi
     if [[ "$*" == *'pg_restore --list'* ]]; then
       [[ \${FAIL_RESTORE_LIST:-false} != true ]] || exit 47
       cat >/dev/null
@@ -70,6 +77,7 @@ if [[ \${FAIL_GUARD:-} == "$1" ]]; then
   exit "\${FAIL_GUARD_EXIT:-42}"
 fi
 case $1 in
+  portal-database-target) printf 'portal_test\\n';;
   observe-writers) printf 'synthetic signed-ticket double\\n';;
   resume-writers|resume-readiness-writers)
     [[ $3 == 'synthetic signed-ticket double' ]] || exit 94
@@ -114,7 +122,7 @@ async function fixture(t) {
   // This is a declared sequence double, NOT HTTP evidence. Real smoke/HTTP is
   // exercised separately in smoke-origin.test.mjs without replacing the script.
   await writeFile(path.join(root, 'release/scripts/smoke.sh'), '#!/bin/sh\nprintf "smoke\\n" >> "$FIXTURE/smoke.calls"\nif [ "${FAIL_SMOKE:-false}" = true ]; then exit 37; fi\n');
-  await writeFile(path.join(root, 'running'), 'postgres\ncms-postgres\nnginx\napi\ncron\ncms\n');
+  await writeFile(path.join(root, 'running'), 'postgres\nnginx\napi\ncron\ncms\n');
   await writeFile(path.join(root, 'admission'), 'open\n');
   await writeFile(path.join(root, 'timeline'), '');
   await writeFile(path.join(root, 'bin/docker'), fakeDocker, { mode: 0o755 });
@@ -160,7 +168,7 @@ test('coordinated backup stops live Portal/CMS writers while the worker stays he
   const [name] = await readdir(path.join(f.root, 'backups'));
   const backup = path.join(f.root, 'backups', name);
   const files = await readdir(backup);
-  for (const file of ['postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz', 'operations-proof.json', 'release.images', 'backup.format', 'manifest.sha256']) assert.ok(files.includes(file));
+  for (const file of ['postgres.dump', 'uploads.tar.gz', 'cms.dump', 'cms-uploads.tar.gz', 'operations-proof.json', 'release.images', 'backup.format', 'manifest.sha256']) assert.ok(files.includes(file));
   const calls = await readFile(path.join(f.root, 'calls'), 'utf8');
   assert.match(calls, /stop --timeout 120 nginx api cron cms/);
   assert.doesNotMatch(calls, /(?:start|up)[^\n]*cms-worker/);
@@ -168,8 +176,12 @@ test('coordinated backup stops live Portal/CMS writers while the worker stays he
   assert.match(calls, /--entrypoint tar api -czf - -C \/app\/uploads \./);
   assert.match(calls, /--entrypoint tar api -czf - -C \/app\/uploads \./);
   assert.equal((await readFile(path.join(backup, 'manifest.sha256'), 'utf8')).trim().split('\n').length, 7);
+  const cmsDump = calls.split('\n').find(line => line.includes('pg_dump') && line.includes('ownerinc_cms'));
+  assert.ok(cmsDump);
+  assert.match(cmsDump, /--username="\$POSTGRES_USER"/u);
+  assert.doesNotMatch(cmsDump, /--no-owner|--no-privileges|cms_admin/u);
   assert.deepEqual((await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n'),
-    ['release-preflight', 'observe-writers', 'close-admission', 'quiescence-proof', 'backup-metadata', 'resume-writers', 'verify-release', 'open-admission']);
+    ['release-preflight', 'observe-writers', 'close-admission', 'quiescence-proof', 'portal-database-target', 'backup-metadata', 'resume-writers', 'verify-release', 'open-admission']);
   assert.doesNotMatch(calls, /compose[^\n]* start /u, 'Compose start would traverse the absent one-shot dependency in this regression');
   for (const digit of ['1', '2', '3', '4']) assert.ok(calls.includes(`start ${digit.repeat(64)}`));
   assert.equal((await readFile(path.join(f.root, 'lock.calls'), 'utf8')).trim(), 'lock');
@@ -177,7 +189,7 @@ test('coordinated backup stops live Portal/CMS writers while the worker stays he
 
 test('backup preflight rejects an already-running CMS worker before capture', async t => {
   const f = await fixture(t);
-  await writeFile(path.join(f.root, 'running'), 'postgres\ncms-postgres\ncms-worker\n');
+  await writeFile(path.join(f.root, 'running'), 'postgres\ncms-worker\n');
   const r = f.run('bash release/scripts/backup.sh "$PWD/release"');
   assert.notEqual(r.status, 0);
   assert.match(await readFile(path.join(f.root, 'guard.calls'), 'utf8'), /^release-preflight\n/u);
@@ -192,7 +204,7 @@ test('actual coordinated capture retains its proof and primary resume reason wit
     assert.equal(result.status, 42);
     const diagnostic = createCommandDiagnostic({ substep: 'payload_coordinator_backup', status: result.status,
       stderr: result.stderr, coordinatorCommandContext: 'payload-coordinator:backup' });
-    assert.equal(diagnostic.coordinatorStep, 'resume_writers');
+    assert.equal(diagnostic.coordinatorStep, 'resume_writers', result.stderr);
     assert.equal(diagnostic.controlErrorIdentifier, stderr === 'writer_start_command_failed' ? stderr : null);
     assert.doesNotMatch(JSON.stringify(diagnostic), /private-unknown/u);
     assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'closed');
@@ -251,7 +263,7 @@ test('corrupt/partial coordinated set and legacy restore into CMS are rejected b
   const f = await fixture(t);
   assert.equal(f.run('bash release/scripts/backup.sh "$PWD/release"').status, 0);
   const [name] = await readdir(path.join(f.root, 'backups'));
-  await writeFile(path.join(f.root, 'backups', name, 'cms-postgres.dump'), 'corrupt');
+  await writeFile(path.join(f.root, 'backups', name, 'cms.dump'), 'corrupt');
   let r = f.run(`. release/scripts/release-manifest.sh; verify_backup_manifest "backups/${name}"`);
   assert.notEqual(r.status, 0);
   await writeFile(path.join(f.root, 'release/.image-env'), legacy);
@@ -282,10 +294,30 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.ok(calls.indexOf('pg_dump') < calls.indexOf('pg_restore'));
   const firstDestructiveRestore = calls.indexOf('pg_restore --single-transaction');
   assert.ok(calls.indexOf('exec -T postgres pg_restore --list') < firstDestructiveRestore);
-  assert.ok(calls.indexOf('exec -T cms-postgres pg_restore --list') < firstDestructiveRestore);
-  const cmsRestore = calls.split('\n').find(line => line.includes('exec -T cms-postgres') && line.includes('pg_restore'));
+  assert.ok(calls.indexOf('exec -T postgres pg_restore --list') < firstDestructiveRestore);
+  const cmsRestore = calls.split('\n').find(line => line.includes('exec -T postgres') && line.includes('pg_restore') && line.includes('--dbname=ownerinc_cms'));
   assert.ok(cmsRestore);
-  assert.doesNotMatch(cmsRestore, /--no-owner|--no-privileges|--role=/u, 'CMS restore must preserve reviewed ownership and ACLs');
+  assert.match(cmsRestore, /--exit-on-error[\s\S]*--username="\$POSTGRES_USER"/u,
+    'CMS restore uses cluster authority and preserves archived owners and ACLs');
+  assert.doesNotMatch(cmsRestore, /--no-owner|--no-privileges|--role(?:=|\s)/u);
+  const portalRestore = calls.split('\n').find(line => line.includes('pg_restore --single-transaction') && line.includes('portal_test'));
+  assert.ok(portalRestore, 'Portal restore uses the authenticated non-default database target');
+  assert.doesNotMatch(calls, /--dbname=portal(?:\s|$)/u);
+  const cmsIdentity = calls.split('\n').find(line => line.includes('ownerinc_cms') && line.includes('rolsuper::text'));
+  assert.ok(cmsIdentity && calls.indexOf(cmsIdentity) < calls.indexOf(cmsRestore));
+  const cmsRoleBootstrap = calls.split('\n').find(line => line.includes('--profile cms-bootstrap')
+    && line.includes('cms-cluster-bootstrap'));
+  assert.ok(cmsRoleBootstrap, 'roles referenced by archived owners/ACLs are reconciled before CMS restore');
+  assert.ok(calls.indexOf(cmsRoleBootstrap) < calls.indexOf(cmsIdentity));
+  assert.ok(calls.indexOf(cmsRoleBootstrap) < calls.indexOf(cmsRestore));
+  const callLines = calls.split('\n');
+  const cmsRestoreLine = callLines.indexOf(cmsRestore);
+  const postRestoreBootstrapLine = callLines.findIndex((line, index) => index > cmsRestoreLine
+    && line.includes('--profile cms-bootstrap') && line.includes('cms-cluster-bootstrap'));
+  const cmsMigrateLine = callLines.findIndex((line, index) => index > postRestoreBootstrapLine && line.endsWith('cms-migrate'));
+  assert.ok(postRestoreBootstrapLine > cmsRestoreLine,
+    'the bounded ownership helper is reconciled after archive restore');
+  assert.ok(cmsMigrateLine > postRestoreBootstrapLine);
   assert.match(calls, /run --rm --no-deps cms-control-roles/u);
   assert.match(calls, /--entrypoint tar cms -xzf - -C \/var\/lib\/ownerinc-cms\/media/);
   assert.match(calls, /--entrypoint tar api -xzf - -C \/app\/uploads/);
@@ -293,8 +325,8 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.match(calls, /--entrypoint tar api -xzf - -C \/app\/uploads/);
   const guardCalls = (await readFile(path.join(f.root, 'guard.calls'), 'utf8')).trim().split('\n');
   assert.deepEqual(guardCalls, [
-    'restore-preflight', 'observe-writers', 'close-admission', 'quiescence-proof', 'backup-metadata', 'prepare-restore',
-    'portal-restore-intermediate', 'prepare-restore', 'prepare-restore', 'prepare-restore',
+    'restore-preflight', 'observe-writers', 'close-admission', 'quiescence-proof', 'portal-database-target', 'backup-metadata', 'prepare-restore',
+    'portal-database-target', 'portal-restore-intermediate', 'prepare-restore', 'prepare-restore', 'prepare-restore',
     'prepare-restore', 'prepare-restore', 'prepare-restore',
     'verify-restored', 'resume-readiness-writers', 'resume-writers', 'verify-release', 'open-admission',
   ]);
@@ -352,7 +384,7 @@ test('Portal grant restoration failure stops before CMS destruction and keeps wr
   assert.equal((await readFile(path.join(f.root, 'restores'), 'utf8')).trim().split('\n').length, 1,
     'only the Portal restore may have run before grant restoration succeeds');
   const calls = await readFile(path.join(f.root, 'calls'), 'utf8');
-  assert.doesNotMatch(calls, /exec -T cms-postgres sh -c pg_restore/u);
+  assert.doesNotMatch(calls, /pg_restore[^\n]*--dbname=ownerinc_cms/u);
   assert.doesNotMatch(calls, /restore-files|tar.*-xzf -/u);
   assert.doesNotMatch(await readFile(path.join(f.root, 'running'), 'utf8'), /^(nginx|api|cron|cms|cms-worker)$/m);
   assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'closed');
@@ -386,7 +418,7 @@ set -euo pipefail
 [[ $# == 4 && -z $4 ]] || exit 97
 printf '%s:%s\\n' "$2" "$#" >> "$FIXTURE/adapter.argv"
 `, { mode: 0o755 });
-  await writeFile(path.join(f.root, 'running'), 'postgres\ncms-postgres\n');
+  await writeFile(path.join(f.root, 'running'), 'postgres\n');
   const invoke = (script, action) => f.run(`: > "$PORTAL_OPERATION_LOCK"
 exec 9<>"$PORTAL_OPERATION_LOCK"
 export PORTAL_OPERATION_LOCK_HELD="$PORTAL_OPERATION_LOCK" COMPOSE_PROJECT_NAME=fixture
@@ -407,6 +439,34 @@ bash "$PWD/${script}" ${action} "$PWD/release" ''`);
     assert.equal(result.stderr, 'Invalid Payload control invocation.\n');
   }
   assert.equal(await readFile(path.join(f.root, 'adapter.argv'), 'utf8'), 'close-admission:4\nquiescence-proof:4\n');
+});
+
+test('real runtime admits portal database target, reaches its handler, and rejects unknown operations before setup', t => {
+  if (!python) return t.skip('Python 3 unavailable');
+  const source = String.raw`
+import contextlib,importlib.util,io,sys
+from unittest.mock import patch
+spec=importlib.util.spec_from_file_location('operations_runtime',sys.argv[1])
+runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
+inventory={'identity':'a'*64,'document':{'paths':{'admissionClosed':'/runtime/admission-closed'}}}
+state={'inventoryIdentity':inventory['identity']}
+with patch.object(runtime,'_inventory',return_value=inventory), \
+     patch.object(runtime,'_lock_and_state',return_value=('/runtime','/root')), \
+     patch.object(runtime.STATE,'read_state',return_value=(b'key','/runtime/state',state,'b'*64)), \
+     patch.object(runtime,'_verify_environment_file',return_value='portal_test'):
+ out=io.StringIO()
+ with contextlib.redirect_stdout(out):
+  instance=runtime.Runtime('portal-database-target','/release','')
+  instance.run()
+ assert out.getvalue()=='portal_test\n'
+with patch.object(runtime,'_inventory',side_effect=AssertionError('setup reached')):
+ try:runtime.Runtime('unknown-operation','/release','')
+ except runtime.ControlError as error:assert str(error)=='unsupported_operation'
+ else:raise AssertionError('unknown operation accepted')
+`;
+  const result = spawnSync(python, ['-I', '-S', '-B', '-c', source,
+    path.resolve('ops/payload-control-runtime.py')], { encoding: 'utf8', timeout: 30_000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test('coordinator classifies early explicit exits and isolates known guard errors from unknown private output', async t => {

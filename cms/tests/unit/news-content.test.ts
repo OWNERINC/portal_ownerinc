@@ -404,7 +404,7 @@ test('native configs protect CRUD/history, retain every block, keep manual draft
     assert.equal(await access!({ req: editorReq }), true)
     assert.equal(await access!({ req: { ...editorReq, user: { ...editorReq.user!, portalUid: 'forged' } } }), false)
   }
-  const areaAccess = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode: 'payload', epoch: 1 }) }))
+  const areaAccess = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode: 'payload', epoch: 1, activationObserved: true }) }))
   const media = createNewsMedia({ uploadDir: 'C:/synthetic-private-media' }, undefined, areaAccess.canRead)
   for (const [operation, access] of Object.entries(media.access!)) {
     assert.equal(await access!({ req }), false)

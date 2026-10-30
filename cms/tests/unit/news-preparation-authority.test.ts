@@ -28,7 +28,7 @@ function fixture(t: TestContext) {
   t.mock.method(globalThis, 'fetch', async (input: string, init: RequestInit) => {
     assert.ok(state.calls.length >= 2, 'lock precedes Portal calls')
     const authority = input.endsWith('/authority'); state.calls.push(authority ? 'authority' : 'actor')
-    if (authority) return Response.json({ mode: state.mode, epoch: state.epoch })
+    if (authority) return Response.json({ mode: state.mode, epoch: state.epoch, activationObserved: state.mode === 'payload' })
     assert.equal(JSON.parse(init.body as string).uid, actor.uid)
     return state.denied ? Response.json({ reason: 'editorial_permission_denied' }, { status: 403 }) : Response.json({ actor })
   })
@@ -40,7 +40,7 @@ test('private bound scope uses real durable reader and rechecks each write; expi
   await withPreparationAuthority(req, identity, async same => {
     assert.equal(same, req)
     req.context = { ...legacyNewsImportContext }
-    assert.deepEqual(await assertCmsWriteAuthority(req), { mode: 'frozen', epoch: 2 })
+    assert.deepEqual(await assertCmsWriteAuthority(req), { mode: 'frozen', epoch: 2, activationObserved: false })
     const stagedBinding = await assertPreparationIdentity(req)
     assert.deepEqual(stagedBinding, identity)
     assert.equal(Object.isFrozen(stagedBinding), true)
@@ -89,7 +89,7 @@ test('scope immutable binding, tx/actor replacement and failed callback cannot e
   const failure = new Error('caller failed')
   await assert.rejects(withPreparationAuthority(req, supplied, async () => {
     supplied.expectedEpoch = 99
-    assert.deepEqual(await assertCmsWriteAuthority(req), { mode: 'frozen', epoch: 2 })
+    assert.deepEqual(await assertCmsWriteAuthority(req), { mode: 'frozen', epoch: 2, activationObserved: false })
     state.epoch = 3
     await assert.rejects(assertCmsWriteAuthority(req), /cms_authority_read_only/)
     state.epoch = 2
@@ -108,7 +108,7 @@ test('scope immutable binding, tx/actor replacement and failed callback cannot e
 
 test('bootstrap actor guard does not mint a content capability or tolerate a lost transaction', async t => {
   const { req, state } = fixture(t)
-  assert.deepEqual(await assertFrozenPreparationActor(req, 2), { authority: { mode: 'frozen', epoch: 2 }, actorUid: actor.uid })
+  assert.deepEqual(await assertFrozenPreparationActor(req, 2), { authority: { mode: 'frozen', epoch: 2, activationObserved: false }, actorUid: actor.uid })
   req.context = { ...legacyNewsImportContext }
   await assert.rejects(assertCmsWriteAuthority(req), /migration_preparation_context_required/)
   await assert.rejects(withPreparationAuthority(req, identity, async () => { req.transactionID = 'missing' }), /cms_transaction_required/)

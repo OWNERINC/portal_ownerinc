@@ -100,8 +100,8 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
       return { status: response.status, headers, body };
     } catch { await cancel(); throw unavailable(); }
   }
-  async function preflight(options) {
-    const { response, controller, clean } = await request('preflight', {}, undefined, options);
+  async function preflight(input = {}, options) {
+    const { response, controller, clean } = await request('preflight', input, undefined, options);
     let reader;
     const abortRead = () => { if (reader) void reader.cancel().catch(() => {}); };
     try {
@@ -116,7 +116,7 @@ function createPayloadNewsClient({ baseURL, secret, fetchImpl = globalThis.fetch
         bytes += value.byteLength; if (bytes > max || controller.signal.aborted) throw unavailable(); chunks.push(Buffer.from(value));
       }
       if (controller.signal.aborted) throw unavailable();
-      return readResult('preflight', JSON.parse(Buffer.concat(chunks).toString('utf8')), {});
+      return readResult('preflight', JSON.parse(Buffer.concat(chunks).toString('utf8')), input);
     } catch { controller.abort(); await reader?.cancel().catch(() => {}); await response.body?.cancel().catch(() => {}); throw unavailable(); }
     finally { controller.signal.removeEventListener('abort', abortRead); reader?.releaseLock(); clean(); }
   }

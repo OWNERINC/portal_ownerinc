@@ -302,7 +302,10 @@ test('exact service POST allowlist is separate from login and refuses browser/cr
   assert.equal(readNewsActor({ ...actor, uid: 'original-usuário', name: 'a'.repeat(201) }).uid, 'original-usuário')
   assert.throws(() => readNewsInput('list', { limit: 102, offset: 0 }))
   assert.deepEqual(readNewsInput('list', { limit: 1, offset: 0, scan: fullScan }).scan, fullScan)
-  assert.deepEqual(readNewsInput('preflight', {}), {})
+  const preflight = { mode: 'legacy' as const, epoch: 1, requestId: 'request-1',
+    deadline: new Date(Date.now() + 60_000).toISOString() }
+  assert.deepEqual(readNewsInput('preflight', preflight), preflight)
+  assert.throws(() => readNewsInput('preflight', {}))
   assert.throws(() => readNewsInput('preflight', { actor: 'forbidden' }))
   for (const scan of [true, false, 0, 1, 'true', null, {}, { maxRawRows: 1 }, { maxRawRows: 0, maxBatches: 1 },
     { maxRawRows: 1, maxBatches: 0 }, { maxRawRows: 101001, maxBatches: 1 }, { maxRawRows: 1, maxBatches: 1001 },

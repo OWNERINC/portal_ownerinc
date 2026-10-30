@@ -110,9 +110,20 @@ export function assertCmsSchemaCatalog(row: unknown): void {
   }
 }
 
+export function assertCmsRuntimeIdentity(row: unknown): void {
+  if (!row || typeof row !== 'object') throw new Error('cms_readiness_database_identity_mismatch')
+  const identity = row as Record<string, unknown>
+  if (identity.database_name !== 'ownerinc_cms' || identity.role_name !== 'cms_runtime') {
+    throw new Error('cms_readiness_database_identity_mismatch')
+  }
+}
+
 export async function assertCmsDatabaseReady(payload: Payload): Promise<void> {
   await withCmsTransaction(payload, undefined, async req => {
     const db = await requireCmsTransaction(payload, req)
+    const identity = await db.execute(sql`SELECT current_database() AS database_name, current_user AS role_name`)
+    if (identity.rows.length !== 1) throw new Error('cms_readiness_database_identity_mismatch')
+    assertCmsRuntimeIdentity(identity.rows[0])
     const result = await db.execute(sql`SELECT
       to_regclass('public.payload_migrations')::text AS payload_migrations,
       to_regclass('public.portal_editors')::text AS portal_editors,

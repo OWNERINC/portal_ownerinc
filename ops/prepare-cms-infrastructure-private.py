@@ -13,18 +13,22 @@ from urllib.parse import unquote, urlsplit
 
 REQUIRED = {
     'CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
-    'CMS_ADMIN_DATABASE_URL', 'CMS_MIGRATION_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
+    'CMS_OBSERVER_PASSWORD', 'CMS_OWNER_DATABASE_URL', 'CMS_MIGRATION_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
+    'CMS_OBSERVER_DATABASE_URL',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET',
 }
-LEGACY_REQUIRED = REQUIRED - {'CMS_CONTROLLER_PASSWORD'}
+PRE_OBSERVER_REQUIRED = REQUIRED - {'CMS_OBSERVER_PASSWORD', 'CMS_OBSERVER_DATABASE_URL'}
+LEGACY_REQUIRED = PRE_OBSERVER_REQUIRED - {'CMS_CONTROLLER_PASSWORD'}
 SECRET_KEYS = {
     'CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
+    'CMS_OBSERVER_PASSWORD',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET',
 }
 URL_USERS = {
-    'CMS_ADMIN_DATABASE_URL': ('cms_admin', 'CMS_POSTGRES_PASSWORD'),
+    'CMS_OWNER_DATABASE_URL': ('cms_admin', 'CMS_POSTGRES_PASSWORD'),
     'CMS_MIGRATION_DATABASE_URL': ('cms_migrator', 'CMS_MIGRATOR_PASSWORD'),
     'CMS_RUNTIME_DATABASE_URL': ('cms_runtime', 'CMS_RUNTIME_PASSWORD'),
+    'CMS_OBSERVER_DATABASE_URL': ('cms_observer', 'CMS_OBSERVER_PASSWORD'),
 }
 CANONICAL_PORTAL_URL = 'https://portal.ownerinc.com.br'
 INVENTORY_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'payload-control-inventory.py')
@@ -114,10 +118,10 @@ def validate_values(values):
     present = REQUIRED.intersection(values)
     if not present:
         return 'empty'
-    if present not in (REQUIRED, LEGACY_REQUIRED):
+    if present not in (REQUIRED, PRE_OBSERVER_REQUIRED, LEGACY_REQUIRED):
         fail('partial_cms_credential_set')
-    legacy = present == LEGACY_REQUIRED
-    checked_secrets = SECRET_KEYS - {'CMS_CONTROLLER_PASSWORD'} if legacy else SECRET_KEYS
+    legacy = present in (PRE_OBSERVER_REQUIRED, LEGACY_REQUIRED)
+    checked_secrets = SECRET_KEYS.intersection(present)
     for key in checked_secrets:
         value = values[key]
         if len(value) < 32 or not re.fullmatch(r'[A-Za-z0-9_-]+', value):
@@ -127,11 +131,13 @@ def validate_values(values):
     if len({values[key] for key in checked_secrets}) != len(checked_secrets):
         fail('cms_credentials_not_distinct')
     for key, (username, password_key) in URL_USERS.items():
+        if key not in values:
+            continue
         try:
             parsed = urlsplit(values[key])
             valid = (
                 parsed.scheme in ('postgres', 'postgresql')
-                and parsed.hostname == 'cms-postgres'
+                and parsed.hostname == 'postgres'
                 and parsed.port == 5432
                 and parsed.path == '/ownerinc_cms'
                 and parsed.username == username
@@ -143,7 +149,9 @@ def validate_values(values):
             valid = False
         if not valid:
             fail('invalid_cms_database_url')
-    return 'legacy-complete' if legacy else 'complete'
+    if present == LEGACY_REQUIRED:
+        return 'legacy-complete'
+    return 'pre-observer-complete' if present == PRE_OBSERVER_REQUIRED else 'complete'
 
 
 def inspect(path):
@@ -154,20 +162,29 @@ def inspect(path):
 def update(path):
     raw, before, values = read_environment(path)
     state = validate_values(values)
-    if state not in ('empty', 'legacy-complete'):
+    if state not in ('empty', 'legacy-complete', 'pre-observer-complete'):
         fail('configuration_changed_during_preparation')
 
-    if state == 'legacy-complete':
-        generated = {'CMS_CONTROLLER_PASSWORD': secrets.token_hex(32)}
-        if generated['CMS_CONTROLLER_PASSWORD'] in {values[key] for key in SECRET_KEYS - {'CMS_CONTROLLER_PASSWORD'}}:
+    if state in ('legacy-complete', 'pre-observer-complete'):
+        generated = {'CMS_OBSERVER_PASSWORD': secrets.token_hex(32)}
+        if state == 'legacy-complete':
+            generated['CMS_CONTROLLER_PASSWORD'] = secrets.token_hex(32)
+        if any(value in {values[key] for key in SECRET_KEYS.intersection(values)} for value in generated.values()) \
+           or len(set(generated.values())) != len(generated):
             fail('credential_generation_failed')
-        entries = generated
+        entries = {
+            **generated,
+            'CMS_OBSERVER_DATABASE_URL': (
+                f"postgresql://cms_observer:{generated['CMS_OBSERVER_PASSWORD']}@postgres:5432/ownerinc_cms"
+            ),
+        }
     else:
         generated = {
             'CMS_POSTGRES_PASSWORD': secrets.token_hex(32),
             'CMS_CONTROLLER_PASSWORD': secrets.token_hex(32),
             'CMS_MIGRATOR_PASSWORD': secrets.token_hex(32),
             'CMS_RUNTIME_PASSWORD': secrets.token_hex(32),
+            'CMS_OBSERVER_PASSWORD': secrets.token_hex(32),
             'PAYLOAD_SECRET': secrets.token_hex(32),
             'PAYLOAD_TO_PORTAL_SECRET': secrets.token_hex(32),
             'PORTAL_TO_PAYLOAD_SECRET': secrets.token_hex(32),
@@ -176,14 +193,17 @@ def update(path):
             fail('credential_generation_failed')
         entries = {
             **generated,
-            'CMS_ADMIN_DATABASE_URL': (
-                f"postgresql://cms_admin:{generated['CMS_POSTGRES_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
+            'CMS_OWNER_DATABASE_URL': (
+                f"postgresql://cms_admin:{generated['CMS_POSTGRES_PASSWORD']}@postgres:5432/ownerinc_cms"
             ),
             'CMS_MIGRATION_DATABASE_URL': (
-                f"postgresql://cms_migrator:{generated['CMS_MIGRATOR_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
+                f"postgresql://cms_migrator:{generated['CMS_MIGRATOR_PASSWORD']}@postgres:5432/ownerinc_cms"
             ),
             'CMS_RUNTIME_DATABASE_URL': (
-                f"postgresql://cms_runtime:{generated['CMS_RUNTIME_PASSWORD']}@cms-postgres:5432/ownerinc_cms"
+                f"postgresql://cms_runtime:{generated['CMS_RUNTIME_PASSWORD']}@postgres:5432/ownerinc_cms"
+            ),
+            'CMS_OBSERVER_DATABASE_URL': (
+                f"postgresql://cms_observer:{generated['CMS_OBSERVER_PASSWORD']}@postgres:5432/ownerinc_cms"
             ),
         }
     if 'PORTAL_PUBLIC_URL' not in values:

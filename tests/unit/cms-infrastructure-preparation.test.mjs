@@ -28,14 +28,16 @@ function validCmsConfiguration({ includePublicUrl = true } = {}) {
     CMS_CONTROLLER_PASSWORD: 'g'.repeat(64),
     CMS_MIGRATOR_PASSWORD: 'b'.repeat(64),
     CMS_RUNTIME_PASSWORD: 'c'.repeat(64),
+    CMS_OBSERVER_PASSWORD: 'h'.repeat(64),
     PAYLOAD_SECRET: 'd'.repeat(64),
     PAYLOAD_TO_PORTAL_SECRET: 'e'.repeat(64),
     PORTAL_TO_PAYLOAD_SECRET: 'f'.repeat(64),
   };
   Object.assign(values, {
-    CMS_ADMIN_DATABASE_URL: `postgresql://cms_admin:${values.CMS_POSTGRES_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
-    CMS_MIGRATION_DATABASE_URL: `postgresql://cms_migrator:${values.CMS_MIGRATOR_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
-    CMS_RUNTIME_DATABASE_URL: `postgresql://cms_runtime:${values.CMS_RUNTIME_PASSWORD}@cms-postgres:5432/ownerinc_cms`,
+    CMS_OWNER_DATABASE_URL: `postgresql://cms_admin:${values.CMS_POSTGRES_PASSWORD}@postgres:5432/ownerinc_cms`,
+    CMS_MIGRATION_DATABASE_URL: `postgresql://cms_migrator:${values.CMS_MIGRATOR_PASSWORD}@postgres:5432/ownerinc_cms`,
+    CMS_RUNTIME_DATABASE_URL: `postgresql://cms_runtime:${values.CMS_RUNTIME_PASSWORD}@postgres:5432/ownerinc_cms`,
+    CMS_OBSERVER_DATABASE_URL: `postgresql://cms_observer:${values.CMS_OBSERVER_PASSWORD}@postgres:5432/ownerinc_cms`,
   });
   const publicUrl = includePublicUrl ? 'PORTAL_PUBLIC_URL=https://portal.ownerinc.com.br\n' : '';
   return `${publicUrl}${Object.entries(values).map(([key, value]) => `${key === 'CMS_POSTGRES_PASSWORD' ? 'export ' : ''}${key}=${value}`).join('\n')}\n`;
@@ -68,6 +70,7 @@ async function fixture(t, { failReceiverHelperInstall = false, tamperReceiverHel
   await writeFile(path.join(paths.runtime, 'compose.production.yaml'), 'services: {}\n');
   await writeFile(path.join(paths.secrets, 'production.runtime.conf'), [
     '# existing production configuration (must stay byte-for-byte intact)',
+    'POSTGRES_DB=portal',
     'PRESERVED_OPERATOR_VALUE=literal-$(touch-never-run-this)',
     '',
   ].join('\n'));
@@ -120,6 +123,8 @@ async function fixture(t, { failReceiverHelperInstall = false, tamperReceiverHel
     ['/usr/local/libexec', bashPath(paths.libexec)],
     ['/etc/sudoers.d', bashPath(paths.sudoers)],
     ['/var/lib/ownerinc/payload-candidate/incoming', bashPath(path.join(root, 'incoming'))],
+    ['/var/lib/ownerinc/payload-candidate/nonces', bashPath(path.join(root, 'nonces'))],
+    ['/var/lib/ownerinc/payload-candidate/locks', bashPath(path.join(root, 'locks'))],
     ['[[ -x /usr/bin/sudo && -x /usr/sbin/visudo ]]', 'true'],
     ['/usr/sbin/visudo', 'visudo'],
     ['chown 0:0 "$sudoers_temporary"', ':'],
@@ -168,7 +173,7 @@ async function fixture(t, { failReceiverHelperInstall = false, tamperReceiverHel
   // Privilege-path ownership is exercised separately with actual Python and
   // synthetic stat observations. This transport fixture may run on Windows.
   installer = installer.replace(/receiver_privilege_paths\(\) \{[\s\S]*?^\}/mu,
-    'receiver_privilege_paths() { [[ $1 != create ]] || mkdir -p -m 0700 -- "$receiver_incoming"; }');
+    'receiver_privilege_paths() { [[ $1 != create ]] || mkdir -p -m 0700 -- "$receiver_incoming" "$receiver_nonces" "$receiver_locks"; }');
   await writeFile(path.join(paths.bundle, 'ops', 'prepare-cms-infrastructure.sh'), installer);
 
   const dockerLog = path.join(root, 'docker.calls');
@@ -277,6 +282,7 @@ m.HOST_ROOT=${JSON.stringify(f.paths.app)};m.RUNTIME=${JSON.stringify(f.paths.ru
 m.RELEASES=os.path.join(m.HOST_ROOT,'releases');m.LOCK=os.path.join(m.RUNTIME,'deploy.lock')
 m.ENVIRONMENT=${JSON.stringify(path.join(f.paths.secrets, 'production.runtime.conf'))}
 m.PRODUCTION_BACKUP=${JSON.stringify(f.paths.backups)}
+m.host_read=lambda filename,*_args:pathlib.Path(filename).read_bytes()
 captured={'ops/payload-control-inventory.py':pathlib.Path(${JSON.stringify(path.join(f.paths.bundle, 'ops/payload-control-inventory-test.py'))}).read_bytes()}
 inv=m.load_authenticated(captured['ops/payload-control-inventory.py'],'captured-inventory.py')
 # Fixture substitutes the daily-backup constant consistently in this one fixed operation.
@@ -288,7 +294,7 @@ original_create=inv.create
 inv.create=lambda filename,value:original_create(os.path.normpath(filename),value)
 expected=inventory(m.HOST_ROOT,m.RUNTIME,m.RELEASES,m.HOST_ROOT+'/current-release',m.LOCK,
  '',m.PRODUCTION_BACKUP,m.PRODUCTION_BACKUP+'/restore-protection',m.ENVIRONMENT,
- m.RUNTIME+'/compose.production.yaml',m.RUNTIME+'/compose.payload.production.yaml')
+  m.RUNTIME+'/compose.production.yaml',m.RUNTIME+'/compose.payload.production.yaml','portal')
 approval={'hostBaseline':{'currentCommit':${JSON.stringify(commit)},'inventoryIdentity':inv.identity(expected),
  'installedPredecessors':{'commonReceiver':${JSON.stringify(previousReceiverHash)},'receiverHelper':None,
  'productionWrapper':${JSON.stringify(createHash('sha256').update(previousProductionReceiver).digest('hex'))},
@@ -392,7 +398,7 @@ test('reviewed predecessor helper upgrades with a retained private copy, without
   const source = await readFile('ops/payload-receiver-admission.py', 'utf8');
   const previous = source.replace("INCOMING = '/var/lib/ownerinc/payload-candidate/incoming'",
     "INCOMING = '/opt/ownerinc/apps/portal-ownerinc-real/incoming'");
-  assert.equal(createHash('sha256').update(previous).digest('hex'), 'ffe1c2ed3fb086e156401063cdeaf9c6575a49e3458b202928df7f6794587bf8');
+  assert.equal(createHash('sha256').update(previous).digest('hex'), '7a5da50bbb36a6d0f95c66898e0c4e12bc0ba319fd7dd8d4ccbd4aac8c3ea2db');
   const helper = path.join(f.paths.libexec, 'payload-receiver-admission.py');
   await writeFile(helper, previous);
   const result = f.run(['--apply']);
@@ -516,18 +522,18 @@ test('apply atomically prepares private credentials and reviewed files without a
   assert.equal(values.PORTAL_PUBLIC_URL, 'https://portal.ownerinc.com.br');
   assert.equal(environment.split(/\r?\n/u).filter(line => line.startsWith('PORTAL_PUBLIC_URL=')).length, 1);
   const required = ['CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
-    'CMS_ADMIN_DATABASE_URL', 'CMS_MIGRATION_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
+    'CMS_OWNER_DATABASE_URL', 'CMS_MIGRATION_DATABASE_URL', 'CMS_RUNTIME_DATABASE_URL',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET'];
   for (const key of required) assert.ok(values[key], `missing ${key}`);
   const secrets = ['CMS_POSTGRES_PASSWORD', 'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD',
     'PAYLOAD_SECRET', 'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET'].map(key => values[key]);
   assert.equal(new Set(secrets).size, secrets.length, 'all generated credentials must be distinct');
   for (const secret of secrets) assert.match(secret, /^[A-Za-z0-9_-]{32,}$/u);
-  for (const [key, user] of [['CMS_ADMIN_DATABASE_URL', 'cms_admin'], ['CMS_MIGRATION_DATABASE_URL', 'cms_migrator'],
+  for (const [key, user] of [['CMS_OWNER_DATABASE_URL', 'cms_admin'], ['CMS_MIGRATION_DATABASE_URL', 'cms_migrator'],
     ['CMS_RUNTIME_DATABASE_URL', 'cms_runtime']]) {
     const url = new URL(values[key]);
     assert.equal(url.protocol, 'postgresql:');
-    assert.equal(url.hostname, 'cms-postgres');
+    assert.equal(url.hostname, 'postgres');
     assert.equal(url.port, '5432');
     assert.equal(url.pathname, '/ownerinc_cms');
     assert.equal(url.username, user);
@@ -575,11 +581,13 @@ test('apply atomically prepares private credentials and reviewed files without a
     }
   }
   assert.equal(inventory.project, 'ownerinc-portal-prod');
-  assert.equal(inventory.schemaVersion, 2);
+  assert.equal(inventory.schemaVersion, 3);
   assert.deepEqual(inventory.environmentFileOwner, process.platform === 'win32'
     ? { uid: 1000, gid: 1000 } : { uid: process.getuid(), gid: process.getgid() });
   assert.deepEqual(inventory.paths.backupRoots.map(bashPath).sort(), [bashPath(f.paths.backups), bashPath(f.paths.dailyBackups)].sort());
-  assert.deepEqual(Object.keys(inventory.volumes).sort(), ['cmsPostgres', 'cmsUploads', 'portalPostgres', 'portalUploads']);
+  assert.deepEqual(Object.keys(inventory.volumes).sort(), ['cmsUploads', 'portalPostgres', 'portalUploads']);
+  assert.deepEqual(inventory.databaseCluster.databases,
+    { portal: { name: 'portal', owner: 'portal_admin' }, cms: { name: 'ownerinc_cms', owner: 'cms_admin' } });
   if (process.platform !== 'win32') {
     assert.equal(await stat(path.join(f.paths.backups, 'restore-protection')).then(info => info.mode & 0o777), 0o700);
   }
@@ -642,11 +650,13 @@ test('an existing complete CMS credential set is preserved without secret rotati
   assert.equal(await readFile(path.join(f.paths.backups, backups[0], 'production.runtime.conf'), 'utf8'), original);
 });
 
-test('apply upgrades the prior complete private CMS configuration by adding only a distinct controller credential', async t => {
+test('apply upgrades the pre-observer CMS configuration by adding only observer credentials', async t => {
   const f = await fixture(t);
   if (f.skip) return t.skip(f.skip);
   const envPath = path.join(f.paths.secrets, 'production.runtime.conf');
-  const prior = validCmsConfiguration().replace(/^CMS_CONTROLLER_PASSWORD=.*\n/mu, '');
+  const prior = `POSTGRES_DB=portal\n${validCmsConfiguration()
+    .replace(/^CMS_OBSERVER_PASSWORD=.*\n/mu, '')
+    .replace(/^CMS_OBSERVER_DATABASE_URL=.*\n/mu, '')}`;
   await writeFile(envPath, prior, { mode: 0o600 });
 
   const check = f.run(['--check']);
@@ -660,10 +670,13 @@ test('apply upgrades the prior complete private CMS configuration by adding only
   const updated = await readFile(envPath, 'utf8');
   assert.ok(updated.startsWith(prior), 'the prior complete configuration remains byte-for-byte intact');
   const added = updated.slice(prior.length).trimEnd().split(/\r?\n/u);
-  assert.equal(added.length, 1);
-  assert.match(added[0], /^CMS_CONTROLLER_PASSWORD=[A-Za-z0-9_-]{64}$/u);
-  assert.ok(!added[0].endsWith('a'.repeat(64)) && !added[0].endsWith('b'.repeat(64))
-    && !added[0].endsWith('c'.repeat(64)));
+  assert.equal(added.length, 2, `unexpected observer migration keys: ${added.map(line => line.split('=', 1)[0]).join(',')}`);
+  assert.match(added[0], /^CMS_OBSERVER_PASSWORD=[A-Za-z0-9_-]{64}$/u);
+  assert.match(added[1], /^CMS_OBSERVER_DATABASE_URL=postgresql:\/\/cms_observer:[A-Za-z0-9_-]{64}@postgres:5432\/ownerinc_cms$/u);
+  const observerPassword = added[0].split('=', 2)[1];
+  assert.ok(!observerPassword.endsWith('a'.repeat(64)) && !observerPassword.endsWith('b'.repeat(64))
+    && !observerPassword.endsWith('c'.repeat(64)));
+  assert.ok(added[1].includes(`:${observerPassword}@`));
   const backupNames = (await readdir(f.paths.backups)).filter(name => name.startsWith('cms-infrastructure-preparation-'));
   assert.equal(backupNames.length, 1, 'the old private file is retained in the approved backup before migration');
   assert.equal(await readFile(path.join(f.paths.backups, backupNames[0], 'production.runtime.conf'), 'utf8'), prior);
@@ -795,9 +808,9 @@ test('production overlay and receiver wiring preserve the legacy path and stay p
   assert.match(receiver, /Payload releases[\s\S]*append this after the regular production override/);
   assert.match(receiver, /--file "\$selected_override"[\s\S]*payload_production_overlay/);
   assert.match(receiver, /payload_production_overlay=\(\)/);
-  assert.match(productionOverlay, /cms-postgres:[\s\S]*networks: \[backend\]/);
+  assert.match(productionOverlay, /cms-cluster-bootstrap:[\s\S]*networks: \[backend\]/);
   assert.match(productionOverlay, /cms:[\s\S]*networks: \[backend\]/);
-  assert.match(productionOverlay, /cms-worker:[\s\S]*networks: \[backend\]/);
+  assert.doesNotMatch(productionOverlay, /cms-worker|scheduled-publication/);
   assert.match(productionOverlay, /no-new-privileges:true/);
   assert.match(productionOverlay, /driver: local/);
   assert.match(productionOverlay, /max-size: "10m"/);

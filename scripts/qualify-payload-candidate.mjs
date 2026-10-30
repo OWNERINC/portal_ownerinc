@@ -14,6 +14,10 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     candidateBytes: await readFile(args[1]), reportBytes: await readFile(args[3]),
     expectedRun: { commit: env.GITHUB_SHA, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT },
     expectedImages: { api: env.API_IMAGE, cron: env.CRON_IMAGE, cms: env.CMS_IMAGE },
+    ...(env.PRODUCTION_APPROVAL_SHA256 || env.PRODUCTION_INVENTORY_IDENTITY || env.REQUEST_EXPIRES_AT || env.REQUEST_NONCE
+      ? { expectedAuthorization: { environment: 'production', approvalSha256: env.PRODUCTION_APPROVAL_SHA256,
+          inventoryIdentity: env.PRODUCTION_INVENTORY_IDENTITY, expiresAt: env.REQUEST_EXPIRES_AT, nonce: env.REQUEST_NONCE } }
+      : {}),
   });
   await writeFile(args[5], `${JSON.stringify(qualified, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   return qualified;

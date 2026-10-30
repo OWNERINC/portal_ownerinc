@@ -7,58 +7,51 @@ import {
 import {
   buildNewsProtocolObserverProvisioningSQL,
   buildNewsProtocolObserverRoleProvisioningSQL,
-  newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
   newsProtocolObserverPrivilegesVerificationSQL,
   newsProtocolObserverRoleVerificationSQL,
+  observerRelationProvisioningSQL,
   parseObserverDatabaseUrl,
 } from '../../scripts/news-protocol-observer-contract'
 import { runNewsProtocolAudit } from '../../scripts/verify-news-protocol'
 
-test('observer provisioning creates only a least-privileged cms_observer without shared catalog ACL changes', () => {
-  const password = `observer-secret-${'x'.repeat(24)}-end`
-  const sql = buildNewsProtocolObserverProvisioningSQL(password)
+test('observer provisioning configures only database-local grants for the precreated role', () => {
+  const sql = buildNewsProtocolObserverProvisioningSQL('portal_test')
 
-  assert.match(sql, /^BEGIN;\nCREATE ROLE cms_observer LOGIN/u)
-  assert.match(sql, /CREATE ROLE cms_observer LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS/u)
+  assert.match(sql, /^BEGIN;\nDO \$ownerinc_observer_contract\$/u)
+  assert.doesNotMatch(sql, /CREATE ROLE|ALTER ROLE|PASSWORD/u)
+  assert.match(sql, /cms_observer_role_contract_mismatch/u)
   assert.match(sql, /GRANT CONNECT ON DATABASE ownerinc_cms TO cms_observer/u)
+  assert.match(sql, /REVOKE CONNECT ON DATABASE "portal_test" FROM cms_observer/u)
+  assert.doesNotMatch(sql, /ON DATABASE portal\b/u)
   assert.match(sql, /GRANT USAGE ON SCHEMA public TO cms_observer/u)
-  assert.match(sql, /GRANT SELECT ON TABLE public\.payload_migrations, public\.owner_news_mutation_head TO cms_observer/u)
+  assert.match(sql, /GRANT SELECT ON TABLE public\.payload_migrations TO cms_observer/u)
+  assert.match(sql, /GRANT SELECT ON TABLE public\.owner_news_mutation_head TO cms_observer/u)
   assert.match(sql, /COMMIT;\n$/u)
-  assert.doesNotMatch(sql, /\bALTER ROLE\b|\bSET ROLE\b|\bGRANT\s+cms_/iu)
+  assert.match(sql, /SET LOCAL ROLE cms_migrator/u)
+  assert.doesNotMatch(sql, /\bALTER ROLE\b|\bGRANT\s+cms_/iu)
   assert.doesNotMatch(sql, /\bREVOKE\b[\s\S]*\bpg_catalog\.pg_settings\b/iu)
   assert.doesNotMatch(sql, /\bGRANT\s+(?:INSERT|UPDATE|DELETE|TRUNCATE)\s+ON\b/iu)
   assert.doesNotMatch(sql, /news_articles|news_media|news_schedules|news_mutation_events|owner_news_seal_run/u)
   assert.doesNotMatch(sql, /CMS_(?:ADMIN|RUNTIME)_DATABASE_URL/u)
-  assert.ok(sql.includes(password))
 })
 
 test('pre-restore observer role provisioning omits relation grants restored from the archive', () => {
-  const sql = buildNewsProtocolObserverRoleProvisioningSQL(`observer-secret-${'x'.repeat(24)}-end`)
-  assert.match(sql, /CREATE ROLE cms_observer LOGIN/u)
+  const sql = buildNewsProtocolObserverRoleProvisioningSQL('portal_test')
+  assert.doesNotMatch(sql, /CREATE ROLE|ALTER ROLE|PASSWORD/u)
   assert.match(sql, /GRANT CONNECT ON DATABASE ownerinc_cms/u)
   assert.match(sql, /GRANT USAGE ON SCHEMA public/u)
   assert.doesNotMatch(sql, /GRANT SELECT ON TABLE/u)
 })
 
-test('observer provisioning safely SQL-quotes punctuation in the caller-supplied password', () => {
-  const password = `O'Reilly; DROP ROLE cms_observer; --${'x'.repeat(32)}`
-  const sql = buildNewsProtocolObserverProvisioningSQL(password)
-  assert.ok(sql.includes(`PASSWORD 'O''Reilly; DROP ROLE cms_observer; --${'x'.repeat(32)}'`))
-  assert.equal(sql.includes(`PASSWORD '${password}'`), false)
-})
-
-test('observer SQL checks role membership and ownership dependencies without reading pg_authid', () => {
+test('observer SQL checks role membership and database-local ownership without pg_authid or pg_shdepend', () => {
   assert.match(newsProtocolObserverRoleVerificationSQL, /rolcanlogin/u)
   for (const attribute of ['rolsuper', 'rolcreatedb', 'rolcreaterole', 'rolinherit', 'rolreplication', 'rolbypassrls']) {
     assert.match(newsProtocolObserverRoleVerificationSQL, new RegExp(`NOT r\\.${attribute}`, 'u'))
   }
   assert.match(newsProtocolObserverRoleVerificationSQL, /pg_auth_members[\s\S]*m\.roleid=r\.oid OR m\.member=r\.oid/u)
-  assert.match(newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
-    /has_table_privilege\(current_user, 'pg_catalog\.pg_shdepend', 'SELECT'\) AS safe/u)
-  assert.match(newsProtocolObserverRoleVerificationSQL,
-    /FROM pg_catalog\.pg_shdepend d[\s\S]*d\.refclassid='pg_catalog\.pg_authid'::regclass[\s\S]*d\.refobjid=r\.oid AND d\.deptype='o'/u)
+  assert.match(newsProtocolObserverRoleVerificationSQL, /cms_cluster_guard\.verify_cms_ownership_contract/u)
   assert.doesNotMatch(newsProtocolObserverRoleVerificationSQL,
-    /(?:FROM|JOIN)\s+pg_catalog\.pg_authid\b/iu)
+    /pg_authid|pg_shdepend/iu)
   for (const relation of ['payload_migrations', 'owner_news_mutation_head']) {
     assert.ok(newsProtocolObserverPrivilegesVerificationSQL.includes(`'${relation}'`))
   }
@@ -76,6 +69,25 @@ test('observer SQL checks role membership and ownership dependencies without rea
   assert.match(newsProtocolObserverPrivilegesVerificationSQL, /owner_news_seal_run/u)
   assert.doesNotMatch(newsProtocolObserverPrivilegesVerificationSQL,
     /pg_authid|pg_shdepend|SECURITY\s+DEFINER/u)
+})
+
+test('post-migration observer provisioning is bounded, normalizing, and has no role authority', () => {
+  const sql = observerRelationProvisioningSQL('portal_test')
+  assert.doesNotMatch(sql, /CREATE ROLE|ALTER ROLE|PASSWORD/u)
+  assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM cms_observer/u)
+  assert.match(sql, /REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM cms_observer/u)
+  assert.match(sql, /ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator[\s\S]*REVOKE ALL ON TABLES FROM cms_observer/u)
+  assert.match(sql, /GRANT SELECT ON TABLE public\.payload_migrations TO cms_observer/u)
+  assert.match(sql, /to_regclass\('public\.owner_news_mutation_head'\)[\s\S]*GRANT SELECT ON TABLE public\.owner_news_mutation_head/u)
+  assert.doesNotMatch(sql, /GRANT (?:CREATE|TEMPORARY|INSERT|UPDATE|DELETE|TRUNCATE)/u)
+  assert.match(sql, /datname='portal_test'/u)
+  assert.match(sql, /has_database_privilege\('cms_observer','portal_test','CONNECT'\)/u)
+})
+
+test('observer provisioning rejects absent or unsafe Portal database identifiers before SQL construction', () => {
+  for (const invalid of [undefined, '', 'portal-test', 'Portal', 'portal;DROP DATABASE ownerinc_cms', 'a'.repeat(64)]) {
+    assert.throws(() => buildNewsProtocolObserverProvisioningSQL(invalid as string), /Invalid CMS Portal database name/u)
+  }
 })
 
 test('persistent-DML audit exempts only UPDATE on the canonical pg_settings view', () => {
@@ -119,54 +131,6 @@ test('persistent-DML audit exempts only UPDATE on the canonical pg_settings view
       new RegExp(`OR has_table_privilege\\('cms_observer',r\\.oid,'${privilege}'\\)`, 'u'))
   }
 })
-
-for (const [objectClass, dbid] of [
-  ['pg_publication', 16384],
-  ['pg_statistic_ext', 0],
-  ['pg_ts_dict', 91731],
-  ['pg_event_trigger', 16384],
-] as const) {
-  test(`mock cms_observer ownership dependency for ${objectClass} (dbid=${dbid}) fails and rolls the audit back`, async () => {
-    const roleOid = 41001
-    const roleRows = [{ rolname: 'cms_observer', oid: roleOid }]
-    const ownershipDependencies = [{ classid: objectClass, refclassid: 'pg_authid', refobjid: roleOid,
-      deptype: 'o', dbid }]
-    const hasOwnedDependency = ownershipDependencies.some(dependency => dependency.refclassid === 'pg_authid'
-      && dependency.deptype === 'o' && roleRows.some(role => role.oid === dependency.refobjid))
-    const statements: string[] = []
-    const client: FinalizerClient = {
-      connect: async () => {},
-      end: async () => {},
-      query: async sql => {
-        statements.push(sql)
-        if (sql === newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL) return { rows: [{ safe: true }] }
-        if (sql === newsProtocolObserverRoleVerificationSQL) return { rows: [{ safe: !hasOwnedDependency }] }
-        if (sql.startsWith("SELECT current_setting('transaction_read_only') AS read_only")) {
-          return { rows: [{ read_only: 'on', isolation: 'repeatable read',
-            search_path: 'pg_catalog, public', bounded_timeout: true }] }
-        }
-        if (sql.includes('current_user AS role')) {
-          return { rows: [{ role: 'cms_observer', session_role: 'cms_observer',
-            db: 'ownerinc_cms', superuser: false, read_only: 'on' }] }
-        }
-        return { rows: [] }
-      },
-    }
-
-    const error = await runNewsProtocolAudit({
-      CMS_OBSERVER_DATABASE_URL: 'postgres://cms_observer:test-only-secret@127.0.0.1/ownerinc_cms',
-    }, client).catch(value => value)
-
-    assert.equal(hasOwnedDependency, true)
-    assert.equal(getFinalizerFailureDiagnostic(error)?.reason, 'observer_role_contract_mismatch')
-    assert.match(newsProtocolObserverRoleVerificationSQL,
-      /NOT EXISTS \(\s*SELECT 1 FROM pg_catalog\.pg_shdepend d\s+WHERE d\.refclassid='pg_catalog\.pg_authid'::regclass\s+AND d\.refobjid=r\.oid AND d\.deptype='o'\s*\)/u)
-    assert.doesNotMatch(newsProtocolObserverRoleVerificationSQL, /\bd\.classid\s*=/u)
-    assert.doesNotMatch(newsProtocolObserverRoleVerificationSQL, /\bd\.dbid\s*=/u)
-    assert.equal(statements.at(-1), 'ROLLBACK')
-    assert.equal(statements.includes('COMMIT'), false)
-  })
-}
 
 test('observer URL parser requires explicit cms_observer credentials and the exact CMS database', () => {
   const accepted = parseObserverDatabaseUrl('postgresql://cms_observer:only-for-test@127.0.0.1:5432/ownerinc_cms')

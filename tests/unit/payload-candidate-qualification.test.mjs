@@ -4,10 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
-  QUALIFICATION_CONTRACT, RECOVERY_CHECKS, RECOVERY_NEGATIVES, parseEvidenceJson,
+  PRODUCTION_QUALIFICATION_CONTRACT, QUALIFICATION_CONTRACT, RECOVERY_CHECKS, RECOVERY_NEGATIVES, parseEvidenceJson,
   qualifyCandidate, sha256, validateQualifiedCandidate,
 } from '../../scripts/lib/payload-candidate-qualification.mjs';
 import { main } from '../../scripts/qualify-payload-candidate.mjs';
+import { createPayloadInstallDispatch } from '../../scripts/create-payload-install-dispatch.mjs';
 
 const bytes = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 function fixture() {
@@ -33,6 +34,51 @@ function fixture() {
   return { expectedRun, expectedImages, candidate, report,
     input: () => ({ expectedRun, expectedImages, candidateBytes: bytes(candidate), reportBytes: bytes(report) }) };
 }
+
+test('production candidate v2 binds approval, inventory, expiry and anti-replay nonce without reinterpreting v1', () => {
+  const f = fixture();
+  const authorization = { environment: 'production', approvalSha256: 'd'.repeat(64),
+    inventoryIdentity: 'e'.repeat(64), expiresAt: '1999999999', nonce: 'f'.repeat(64) };
+  f.candidate = { schemaVersion: 2, ...f.expectedRun, images: f.expectedImages, authorization };
+  const input = { ...f.input(), candidateBytes: bytes(f.candidate), expectedAuthorization: authorization };
+  const qualified = qualifyCandidate(input);
+  assert.equal(qualified.schemaVersion, 2);
+  assert.equal(qualified.qualificationContract, PRODUCTION_QUALIFICATION_CONTRACT);
+  assert.deepEqual(qualified.authorization, authorization);
+  for (const mutate of [value => { value.nonce = '0'.repeat(64); }, value => { value.environment = 'staging'; },
+    value => { value.expiresAt = '0999999999'; }, value => { value.approvalSha256 = 'A'.repeat(64); }]) {
+    const changed = structuredClone(authorization); mutate(changed);
+    assert.throws(() => qualifyCandidate({ ...input, expectedAuthorization: changed }));
+  }
+});
+
+test('qualified install handoff binds exact platform artifact digests and content bytes without secrets', () => {
+  const f = fixture();
+  const authorization = { environment: 'production', approvalSha256: 'd'.repeat(64),
+    inventoryIdentity: 'e'.repeat(64), expiresAt: '1999999999', nonce: 'f'.repeat(64) };
+  f.candidate = { schemaVersion: 2, ...f.expectedRun, images: f.expectedImages, authorization };
+  const candidateBytes = bytes(f.candidate); const reportBytes = bytes(f.report);
+  const qualifiedBytes = bytes(qualifyCandidate({ ...f.input(), candidateBytes, reportBytes, expectedAuthorization: authorization }));
+  const artifactIds = { candidate: '111', qualified: '112', report: '113' };
+  const artifactDigests = { candidate: `sha256:${'1'.repeat(64)}`, qualified: `sha256:${'2'.repeat(64)}`,
+    report: `sha256:${'3'.repeat(64)}` };
+  const handoff = createPayloadInstallDispatch({ candidateBytes, qualifiedBytes, reportBytes, artifactIds, artifactDigests });
+  assert.equal(handoff.kind, 'payload-private-install-dispatch-v1');
+  assert.deepEqual(handoff.inputs, {
+    commit: f.expectedRun.commit, run_id: f.expectedRun.runId, run_attempt: f.expectedRun.runAttempt,
+    api_image: f.expectedImages.api, cron_image: f.expectedImages.cron, cms_image: f.expectedImages.cms,
+    candidate_artifact_id: '111', candidate_artifact_digest: artifactDigests.candidate, candidate_sha256: sha256(candidateBytes),
+    qualified_artifact_id: '112', qualified_artifact_digest: artifactDigests.qualified, qualified_sha256: sha256(qualifiedBytes),
+    report_artifact_id: '113', report_artifact_digest: artifactDigests.report, report_sha256: sha256(reportBytes),
+    approval_sha256: authorization.approvalSha256, inventory_identity: authorization.inventoryIdentity,
+    expires_at: authorization.expiresAt, nonce: authorization.nonce,
+  });
+  const changed = Buffer.from(qualifiedBytes); changed[changed.length - 2] ^= 1;
+  assert.throws(() => createPayloadInstallDispatch({ candidateBytes, qualifiedBytes: changed, reportBytes,
+    artifactIds, artifactDigests }));
+  assert.throws(() => createPayloadInstallDispatch({ candidateBytes, qualifiedBytes, reportBytes,
+    artifactIds: { ...artifactIds, report: artifactIds.candidate }, artifactDigests }));
+});
 
 test('qualification binds exact report bytes and the explicit contract without mutating evidence', () => {
   const f = fixture(); const before = JSON.stringify(f.report);

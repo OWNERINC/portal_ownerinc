@@ -16,7 +16,7 @@ temporary=tempfile.TemporaryDirectory(prefix='payload-b0-',dir=sys.argv[2]);root
 directory=os.path.join(root,'backups','b0');os.makedirs(directory)
 inventory=r.INVENTORY.production_inventory(root,os.path.join(root,'runtime'),os.path.join(root,'releases'),
  os.path.join(root,'current-release'),os.path.join(root,'runtime','deploy.lock'),os.path.join(root,'daily'),os.path.join(root,'backups'),
- os.path.join(root,'protection'),os.path.join(root,'env'),os.path.join(root,'compose'),os.path.join(root,'payload'))
+ os.path.join(root,'protection'),os.path.join(root,'env'),os.path.join(root,'compose'),os.path.join(root,'payload'),'portal')
 images={name:'ghcr.io/ownerinc/ownerinc-portal-'+name+'@sha256:'+'a'*64 for name in ('api','cron','cms')}
 portal={'systemIdentifier':'123','databaseOid':'456','databaseName':'portal'}
 binding={'bindingVersion':3,'authority':{k:'a'*64 for k in ('sourceApprovalSha256','policySha256','recordSha256')},

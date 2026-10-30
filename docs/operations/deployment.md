@@ -77,26 +77,31 @@ Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se nec
 
 ## Fluxo de release
 
-### Receiver Payload: admissão somente (sem instalação)
+### Receiver Payload v2: admissão, preflight e instalação privada separada
 
 O receiver possui uma rota explícita de admissão, anterior à inspeção do runtime
 e ao atalho `already_current`. O comando SSH é **uma única string**, com campos
 posicionais separados por exatamente um espaço ASCII, nesta ordem:
 
 ```text
-production:payload-v1 COMMIT RUN_ID RUN_ATTEMPT API_IMAGE CRON_IMAGE CMS_IMAGE CANDIDATE_ARTIFACT_ID QUALIFIED_ARTIFACT_ID REPORT_ARTIFACT_ID
+production:payload-v2 COMMIT RUN_ID RUN_ATTEMPT API_IMAGE CRON_IMAGE CMS_IMAGE CANDIDATE_ARTIFACT_ID QUALIFIED_ARTIFACT_ID REPORT_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST QUALIFIED_ARTIFACT_DIGEST REPORT_ARTIFACT_DIGEST CANDIDATE_SHA256 QUALIFIED_SHA256 REPORT_SHA256 APPROVAL_SHA256 INVENTORY_IDENTITY EXPIRES_AT NONCE
 ```
 
 Exemplo de transporte (não executado nesta implementação):
 
 ```sh
-ssh "$VPS_USER@$VPS_HOST" "production:payload-v1 $COMMIT $RUN_ID $RUN_ATTEMPT $API_IMAGE $CRON_IMAGE $CMS_IMAGE $CANDIDATE_ARTIFACT_ID $QUALIFIED_ARTIFACT_ID $REPORT_ARTIFACT_ID" < candidate.tar.gz
+ssh "$VPS_USER@$VPS_HOST" "production:payload-v2 ...campos exatos..." < candidate.tar.gz
 ```
 
 `COMMIT` contém 40 hexadecimais minúsculos; IDs e tentativa são decimais positivos
 de até 20 dígitos, sem zeros iniciais; os três IDs de artefatos são distintos.
 Cada imagem é a referência completa `ghcr.io/ownerinc/ownerinc-portal-SERVICE@sha256:`
 seguida de 64 hexadecimais minúsculos, com SERVICE `api`, `cron`, `cms`, nessa ordem.
+Os digests ZIP usam `sha256:<64 hex>`; hashes de conteúdo, approval, inventário e
+nonce usam 64 hex. `EXPIRES_AT` é epoch UTC de dez dígitos, futuro e no máximo 24
+horas adiante. `APPROVAL_SHA256` é o hash canônico do approval protegido sem o
+campo circular `admission`; policy, record e archive continuam ligados por hashes
+independentes no próprio approval.
 Não são aceitos flags adicionais, whitespace alternativo, campos extras, staging
 Payload, paths de política/ferramentas ou permissões indicadas pelo solicitante.
 `production:SHA`, `staging:SHA` e a normalização SHA-only do wrapper de produção
@@ -134,8 +139,8 @@ dele impede o resultado “already prepared”. Se já existente, uma cópia pri
 continua sem iniciar serviços nem abrir admissão. Isso não instala política,
 registro ou verifier de candidatos e não constitui execução real na VPS.
 
-Payload exige UID/EUID 0 e o diretório previamente provisionado
-`/var/lib/ownerinc/payload-candidate/incoming` root:root `0700`, com **toda** a
+Payload exige UID/EUID 0 e os diretórios previamente provisionados
+`/var/lib/ownerinc/payload-candidate/{incoming,nonces,locks}` root:root `0700`, com **toda** a
 cadeia até `/` root:root, sem links, bits especiais ou escrita por grupo/outros.
 O helper não corrige permissões/ownership automaticamente. Cada tentativa válida
 na sintaxe cria exclusivamente `incoming/payload-<aleatório>/`, `0700`, e um
@@ -153,10 +158,32 @@ diretórios, rejeita links, especiais, escapes, nomes/metadata duplicados e `.im
 recebido. Limites adicionais: 128 MiB descomprimidos e 20.000 membros. Commit e as
 três imagens devem coincidir exatamente com os seletores autenticados, inclusive
 na conferência dos arquivos extraídos. Nenhum conteúdo recebido é executado ou
-sourced. **Mesmo PASS termina com exit 2 `release_not_preflighted`**; a função
-`install_receiver_preflight()` existente permanece incondicionalmente fechada.
-Não há pulls, inspeção Docker, mudanças em serviços/bancos/volumes/pointers,
-instalação, recuperação ou ativação neste bloco.
+sourced. Um lock root privado dedicado serializa reap de nonces expirados, cálculo
+da quota agregada, reserva `O_EXCL` do nonce e criação do receipt. O lock permanece
+durante a materialização; antes de criar o receipt, o cálculo reserva o pior caso
+limitado e garante que concorrência não ultrapasse 256 MiB/128 receipts. Arquivos e
+diretórios são sincronizados antes de liberar a operação. A admissão chama somente
+`--check-install-plan` no launcher autenticado. Seus subprocessos drenam stdout
+incrementalmente até o cap, descartam stderr, não usam shell e matam/reaproveitam o
+grupo de processos em overflow ou timeout. O preflight reafirma approval, policy,
+record, archive/tree, expiry, inventário, source, state e lease. Não faz pull,
+migration, create/start, pointer, route ou authority transition. PASS retorna
+`preflighted-private`; falha preserva receipt/evidência sem instalação parcial.
+
+A instalação é uma segunda chamada fixa sem stdin:
+`production:payload-apply-v2 RECEIPT_ID NONCE`. Ela exige receipt preflighted e
+chama `--apply-install`. Retomadas reautenticam tudo e o journal: admission fecha,
+B0 é capturado, binding/receipts são reservados, roles e `ownerinc_cms` usam o
+PostgreSQL compartilhado, `cmsUploads` é criado, migrations/catálogo/grants são
+verificados, CMS sobe sozinho para readiness privada, B1 é capturado e floor e
+pointer são commitados. API/cron/nginx candidatos não iniciam; worker, rota e
+authority permanecem fechados em `legacy/1`.
+Uma autorização dentro da validade é obrigatória para gravar a primeira
+`installIntent`. Essa reserva assina `authorizationFreshAtReservation: true` junto
+ao binding completo. Depois disso, o mesmo receipt/request pode retomar após a
+expiração, mas somente se candidate, artifacts, nonce, approval, inventory, source,
+lease e journal continuarem idênticos. Expiração nunca permite criar uma intent
+nova ou trocar qualquer binding.
 
 Diagnósticos expõem apenas o basename gerado do recibo e códigos fechados, nunca
 request bruto, conteúdo de política/registro ou stderr do verificador. Negativas
@@ -164,9 +191,10 @@ do verificador aparecem como `candidate_admission_denied`. Recibos Payload,
 inclusive parciais, ficam preservados; PASS também preserva `admission.json` e a
 árvore privada. Falha do helper legacy preserva apenas seu archive limitado,
 enquanto a limpeza existente remove a staging parcial. Não se removem releases
-existentes nem registros assinados. Não há garbage collection automática: o
+existentes nem registros assinados. Somente markers de nonce expirados são
+recolhidos sob o lock; não há garbage collection automática de receipts. O
 operador deve revisar e arquivar recibos com acesso restrito e monitorar espaço;
-limite por tentativa não é uma quota agregada. Falhas de sintaxe/root/ancestrais
+a quota agregada recusa novas admissões, mas não executa garbage collection. Falhas de sintaxe/root/ancestrais
 antes da criação não geram recibo.
 
 Testes de transporte usam doubles explicitamente identificados; bindings
@@ -174,20 +202,26 @@ criptográficos usam a suíte existente `payload-candidate-admission`. A evidên
 local Windows não comprova permissões/FDs Linux, instalação no host ou deploy.
 O teste de identidade nativa Linux/root permanece pendente quando skipped.
 
-**Extensão Payload em preparação local:** o caminho legacy de duas imagens/dois
-artefatos abaixo permanece compatível. Releases `payload-v1` acrescentam CMS_IMAGE
-e exigem backup coordenado PortalDB/CMSDB/uploads/CMSmedia+staging, lease operacional
-e adapter durável de autoridade/ledger. Sem adapter integrado, operações CMS são
-recusadas. Ver [runtime e recuperação Payload](payload-runtime-recovery.md).
-Arquivos versionados não comprovam receiver/forced-command instalado; instalação,
-deploy e cutover dependem de nova autorização operacional explícita.
+**Compatibilidade histórica:** o caminho legacy de duas imagens continua separado;
+não é instrução para admissão Payload atual. O contrato produtivo corrente é
+`production:payload-v2`, com candidate/qualification schema 2 e authorization
+protegida. Ver [runtime e recuperação Payload](payload-runtime-recovery.md).
+O workflow separado `payload-install-production.yml` aceita dispatch somente em
+`main`, usa Environment `production`, concurrency compartilhada e SSH não-root
+para o sudo target fixo. Não recebe credenciais de banco e só aceita
+`installed-private`. **Não há host/receiver live autorizado**: sem secrets e
+aprovação do Environment o workflow é inexequível. Arquivos versionados não
+comprovam instalação; abertura de rota, deploy live e cutover exigem autorização
+operacional futura explícita.
 
 O job `validate` agora também constrói `ownerinc-portal-cms` pelo contexto raiz e
 `cms/Dockerfile`. A validação de empacotamento do runtime já incluída no Dockerfile
 é executada durante o build; o CI aplica ao CMS o mesmo scan Trivy bloqueante de
-`HIGH,CRITICAL` usado para API/cron. Em publicação autorizada na `main`, o CI envia
-a imagem com tag do commit para GHCR e expõe o digest validado em
-`needs.validate.outputs.cms_image`. O artefato separado `cms-image-digest` contém
+`HIGH,CRITICAL` usado para API/cron. Em publicação autorizada, `validate` permanece
+read-only e transfere somente imagens já testadas para o job mínimo
+`publish-images`. Apenas esse job recebe `packages: write`; ele envia a imagem com
+tag do commit para GHCR e expõe o digest validado em
+`needs.publish-images.outputs.cms_image`. O artefato separado `cms-image-digest` contém
 `cms-image-digest.txt` (referência completa `ghcr.io/ownerinc/ownerinc-portal-cms@sha256:…`)
 e `cms-image-source.txt` (SHA do commit de origem).
 
@@ -206,31 +240,77 @@ permanece: push para `main` ou dispatch na `main` com a opção omitida/desativa
 Pull requests e refs que não sejam branches não publicam imagens.
 
 No modo normal, espera-se que o job `isolated-b0-recovery` seja ignorado. Por
-isso, `Deploy production` usa deliberadamente `!cancelled()` e a exigência direta
-de `needs.validate.result == 'success'`, evitando que a propagação implícita do
-ancestral ignorado impeça o deploy depois de uma validação bem-sucedida.
+isso, `Deploy production` usa deliberadamente `!cancelled()` e exige tanto
+`needs.validate.result == 'success'` quanto `needs.publish-images.result ==
+'success'`, evitando deploy sem os digests produzidos pelo job mínimo.
 Validação com falha ou cancelada e os modos especiais `cms_image_only` e
 `publish_candidate_only` continuam inelegíveis para produção.
 
 #### Candidato completo com aceite da sessão editorial API v2
 
 Para validar o contrato API v2 e publicar, sem implantar, um conjunto candidato
-com API, cron e CMS do mesmo commit, dispare `workflow_dispatch` em um branch:
+com API, cron e CMS do mesmo commit, dispare `workflow_dispatch` **somente em
+`main`**, fornecendo a autorização protegida completa:
 
 ```sh
-gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref feat/payload-cms-final -f publish_candidate_only=true
+gh workflow run ci.yml --repo OWNERINC/portal_ownerinc --ref main \
+  -f publish_candidate_only=true \
+  -f production_approval_sha256="$APPROVAL_SHA256" \
+  -f production_inventory_identity="$INVENTORY_IDENTITY" \
+  -f request_expires_at="$EXPIRES_AT" \
+  -f request_nonce="$NONCE"
 ```
 
 `publish_candidate_only` é booleano e começa desativado. Ele é mutuamente
 exclusivo com `cms_image_only`; se ambos forem verdadeiros, o workflow falha
-antes do checkout, build ou publicação. Ambos os modos manuais exigem um ref de
-branch. O caminho de candidato constrói as imagens de produção, executa o teste
+antes do checkout, build ou publicação. `publish_candidate_only` exige exatamente
+`refs/heads/main`; branches de feature são recusados. O caminho de candidato constrói as imagens de produção, executa o teste
 da sessão antes de qualquer push ao GHCR, mantém os três scans Trivy bloqueantes,
 o audit de dependências e a geração de SBOMs, e só então publica API, cron e CMS.
 O artefato separado `payload-release-candidate` contém `candidate.json` com
-`schemaVersion: 1`, o SHA validado do commit, `runId`, `runAttempt` e as três
+`schemaVersion: 2`, o SHA validado do commit, `runId`, `runAttempt`, as três
 referências imutáveis `ghcr.io/ownerinc/ownerinc-portal-{api,cron,cms}@sha256:…`
-obtidas dos pushes daquele run. Não misture digests de execuções diferentes.
+obtidas dos pushes daquele run e `authorization` exata (`environment: production`,
+approval digest, inventory identity, expiry e nonce). Não misture digests ou
+autorizações de execuções diferentes.
+
+Ao terminar a qualificação, o job publica o artefato read-only
+`payload-private-install-dispatch`, contendo somente `install-dispatch.json`. O
+mesmo documento aparece integralmente no job summary e cada campo de `inputs` é
+também um output do job. Ele contém **todos e somente** os inputs do workflow
+separado `payload-install-production.yml`:
+
+- `commit`, `run_id` e `run_attempt`;
+- `api_image`, `cron_image` e `cms_image`, sempre referências por digest;
+- ID, `artifact-digest` fornecido pela plataforma e SHA-256 do conteúdo para
+  `candidate`, `qualified` e `report`;
+- `approval_sha256`, `inventory_identity`, `expires_at` e `nonce`.
+
+O contrato corrente não possui outro request token: o nonce é o token de request
+fechado pelo schema 2. Não invente, derive, renove ou substitua nenhum valor. O
+gerador revalida candidate, qualification e report antes de emitir o handoff e
+não lê nem grava secrets.
+
+Baixe o handoff pelo ID do run e verifique cada classe de valor antes de copiar o
+comando completo exibido no summary:
+
+```sh
+gh run download "$RUN_ID" --repo OWNERINC/portal_ownerinc \
+  --name payload-private-install-dispatch --dir ./payload-install-handoff
+jq -e '.schemaVersion == 1 and .kind == "payload-private-install-dispatch-v1" and
+  .qualificationContract == "payload-private-install-v2"' \
+  ./payload-install-handoff/install-dispatch.json
+```
+
+Confira `commit/run_id/run_attempt` contra o run aberto no Actions; compare as
+três imagens com `candidate.json`; para cada artifact ID consulte a API Actions e
+compare seu campo `digest` com o `*_artifact_digest`; baixe os três artifacts e
+execute `sha256sum` no JSON extraído para comparar `candidate_sha256`,
+`qualified_sha256` e `report_sha256`. Finalmente compare approval, inventory,
+expiry e nonce com a autorização protegida originalmente fornecida ao dispatch.
+Qualquer ausência ou diferença invalida o handoff; nunca complete um campo por
+inferência. Só então copie, sem edição, os dezenove `-f nome=valor` do summary para
+o workflow de instalação separado. O artefato e o summary não instalam nada.
 
 O teste usa a imagem API recém-construída, PostgreSQL 16 e o Dockerfile
 versionado do Firebase Auth Emulator em um projeto Compose e bancos descartáveis
@@ -273,7 +353,7 @@ release Payload `payload-v1`.
 1. Execute `npm run verify` e `npm run security`.
 2. Exporte os dois digests aprovados pelo CI e execute `bash deploy.sh` somente após revisar host e revisão.
 3. O servidor cria `releases/<commit>-<timestamp>`, valida o manifesto recebido e baixa somente as imagens por digest.
-4. Antes de trocar uma release existente, `scripts/backup.sh` interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
+4. Antes de trocar uma release existente, `scripts/backup.sh` valida toda a retenção, interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias.
 5. O serviço one-shot `migrate` aplica schema/grants e registra quantas migrations foram aplicadas; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `011_cron_alert_state` e `012_autocard_media_crop`, os privilégios mínimos do cron e o contrato não nulo do crop, antes dos smoke tests.
 6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Dados não sofrem rollback automático.
 
@@ -300,7 +380,27 @@ COMPOSE_ENV_FILE=/opt/ownerinc/secrets/portal-ownerinc/production.runtime.conf \
 BACKUP_DIR=/opt/ownerinc-portal/shared/backups RETENTION_DAYS=14 bash scripts/backup.sh "$PWD"
 ```
 
-Cada diretório UTC contém `postgres.dump`, `uploads.tar.gz` e hashes SHA-256. Copie backups periodicamente para outro host e teste restaurações fora de produção.
+Cada diretório UTC contém `postgres.dump`, `uploads.tar.gz` e hashes SHA-256. Para
+a retenção legacy, um backup válido é exclusivamente um diretório regular filho
+direto de `BACKUP_DIR`, sem symlink, com nome UTC `AAAAMMDDTHHMMSSZ` que represente
+uma data real. Ele deve conter `postgres.dump`, `uploads.tar.gz` e
+`manifest.sha256` como arquivos regulares não-link. O manifesto tem exatamente
+duas entradas SHA-256 estritas, uma para cada artefato, sem paths, opções, nomes
+duplicados ou linhas extras; `sha256sum --check --strict` deve validar ambos.
+Somente depois dessa validação o diretório participa da escolha do backup mais
+novo ou da retenção. Antes de consultar o Compose, parar serviços ou gerar dumps,
+o script enumera o root sem seguir links e recusa arquivos, links, tipos especiais,
+diretórios parciais/inesperados, artefatos ausentes/corrompidos e candidatos
+expirados sem permissões seguras de remoção. Uma dessas recusas não remove nem
+altera a entrada; o operador deve inspecioná-la.
+
+Depois de validar todos os candidatos, a retenção remove somente backups válidos
+expirados, um por vez, e falha explicitamente se algum mudou ou não pôde ser
+removido. O backup válido mais novo que já existia no início da tentativa é sempre
+preservado, mesmo expirado. Uma corrida de filesystem ainda pode fazer a remoção
+real falhar; nesse caso o status é não zero e não deve ser tratado como retenção
+completa. Copie backups periodicamente para outro host e teste restaurações fora
+de produção.
 
 Para enviar a cópia verificada a um bucket S3-compatible, configure `S3_BUCKET`,
 `S3_PREFIX`, `AWS_ENDPOINT_URL` quando necessário e execute com
@@ -333,6 +433,12 @@ S3_BUCKET=ownerinc-portal-backups S3_PREFIX=portal-ownerinc \
 bash scripts/backup-s3.sh "/opt/ownerinc-portal/shared/backups/AAAAMMDDTHHMMSSZ"
 ```
 
+Falha durante uma nova tentativa local também não apaga seu diretório parcial.
+O diagnóstico informa somente o basename UTC seguro (`Backup attempt preserved:
+AAAAMMDDTHHMMSSZ`), sem revelar o root. Revise e arquive ou remova essa evidência
+manualmente; enquanto permanecer como diretório sem manifesto válido, o próximo
+preflight falhará antes de acessar o Compose.
+
 ## Agendas systemd do Portal em produção
 
 Os arquivos em `ops/` entregam as agendas, **não as instalam nem as habilitam**.
@@ -364,8 +470,9 @@ Docker/Compose e systemd no host. Não altera o receptor, o cron ou o proxy.
   usa `source`/`eval`: o helper extrai e valida os digests API/cron.
 - Destino exclusivo: `/opt/ownerinc/backups/portal-ownerinc/daily`, modo `0700`;
   umask `0077`, arquivos novos `0600`. Retenção existente de **14 dias**
-  (`find -mtime +14`, em dias completos) somente dentro desse destino. Backups
-  pré-release não entram nessa limpeza. O helper pausa brevemente apenas nginx,
+  (idade `mtime`, em dias completos) somente dentro desse destino, com o mesmo
+  preflight fechado e preservação do backup válido mais novo descritos acima.
+  Backups pré-release não entram nessa limpeza. O helper pausa brevemente apenas nginx,
   cron e API que estavam ativos e tenta reiniciá-los; `LEAVE_STOPPED=false` é
   imposto mesmo se o ambiente herdar outro valor.
 - `BACKUP_UPLOAD_S3=false` é explícito e não sobrescrevível nessa agenda.
@@ -494,9 +601,11 @@ herde `BACKUP_UPLOAD_S3=true`. Esse backup deixa os serviços parados para a
 restauração; indisponibilidade de S3 não deve interromper essa transição. Envie
 a cópia de proteção separadamente se necessário.
 
-Falhas na criação ou retenção do backup de proteção acionam sua limpeza e a
-tentativa de reiniciar somente os serviços antes ativos, sem iniciar a
-restauração. Os traps de erro também cobrem falhas dentro das funções Compose.
+Falhas na criação do backup de proteção preservam o diretório parcial como
+evidência e tentam reiniciar somente os serviços antes ativos, sem iniciar a
+restauração. Falhas no preflight de retenção ocorrem antes de consultar ou parar
+serviços e também não iniciam a restauração. Os traps de erro também cobrem
+falhas dentro das funções Compose.
 Depois que a restauração começa, uma falha aciona a parada de Nginx, API e cron:
 inspecione os dados ou restaure o backup de proteção antes de reiniciar. Se o
 próprio Docker falhar na parada ou no reinício, confira o estado dos serviços
@@ -735,9 +844,10 @@ de fsync/retomada **não simula power loss nem prova durabilidade de hardware**.
 Não há Docker, serviços, contas ou sudoers novos. Este gate não qualifica o
 launcher/sudo/SSH real da VPS, nem substitui registro autenticado e recovery.
 
-Para `production:payload-v1 <commit> <run-id> <run-attempt> <api-image>
-<cron-image> <cms-image> <candidate-artifact-id> <qualified-artifact-id>
-<report-artifact-id>`, o wrapper de produção passa **uma única string**, sem
+Para o contrato corrente `production:payload-v2 <commit> <run-id> <run-attempt>
+<api-image> <cron-image> <cms-image> <três artifact IDs> <três ZIP digests>
+<três content hashes> <approval digest> <inventory identity> <expiry> <nonce>`,
+o wrapper de produção passa **uma única string**, sem
 interpretação, para `/usr/bin/sudo -n --
 /usr/local/libexec/ownerinc-payload-receive`. Argumentos adicionais do wrapper
 são recusados. SHA isolado e `production:<sha>` continuam delegando ao receptor
@@ -1188,3 +1298,18 @@ release, puxar imagem, criar recurso, mudar pointer ou reparar journal. Ambos os
 denials finais `release_not_preflighted` continuam incondicionais. Native
 preparation end-to-end, recuperação de instalação e aceite de host permanecem
 gates separados; uma classificação não substitui esses gates.
+### Rota editorial Payload (Gate D)
+
+A instalação privada não publica `/editorial`: o Compose base monta o diretório
+de state materializado com a generation inativa. Produção monta o diretório host
+privado inteiro, não `active.conf` ou outro arquivo individual; file bind isolado
+pode fixar inode antigo e é proibido. A política promovida requer o protocolo em
+`payload-runtime-recovery.md`, com generations imutáveis contendo include+receipt
+assinado e um único swap atômico do pointer `active.conf`, seguido de
+validação/reload operacional separado. Não copie manualmente templates ou pointers
+nem use o overlay sem o receipt correspondente. Recovery sempre ativa generation
+unavailable completa; nunca faça fallback para proxy não verificado ou legado.
+Antes da primeira aplicação do overlay, a ação `initialize` deve terminar com
+baseline assinado e durabilidade comprovada sob FD9. O start guard do overlay exige
+`active.conf` e `nginx -t`; diretório vazio não inicia Nginx. Falha do fsync do
+parent pós-swap nunca é convertida em sucesso por leitura posterior do pointer.

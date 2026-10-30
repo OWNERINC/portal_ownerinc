@@ -4,14 +4,16 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import nativeSchema from '../src/migrations/20261006_181424_z_owner_news_native.json' with { type: 'json' }
 import {
-  controlRolesVerificationSQL,
   controlRolesPublicVerificationSQL,
+  clusterRolesPublicVerificationSQL,
+  cmsAdminDatabaseRoleVerificationSQL,
   controlRolesOwnershipVerificationSQL,
   controlRolesNativePrivilegesVerificationSQL,
   runtimeProtocolFunctionsVerifySQL,
   runtimeProtocolPrivilegesVerifySQL,
   grantsSQL,
 } from './provision-db'
+import { parsePortalDatabaseName } from './database-contract'
 import { NEWS_MUTATION_LEDGER_STATEMENTS, NEWS_MUTATION_TABLES, type NewsMutationLedgerOperation } from '../src/publication/mutation-ledger'
 import { buildNewsMutationTriggersDDL } from '../src/publication/mutation-triggers'
 import {
@@ -20,10 +22,14 @@ import {
   NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS,
 } from '../src/publication/bootstrap-run'
 import {
-  newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL,
   newsProtocolObserverPrivilegesVerificationSQL,
   newsProtocolObserverRoleVerificationSQL,
+  observerRelationProvisioningSQL,
 } from './news-protocol-observer-contract'
+
+/** Historical export retained for test/import compatibility. The finalizer now
+ * consumes the same canonical cms_admin SQL as every database-local entrypoint. */
+export const cmsAdminFinalizerAuthoritySQL = cmsAdminDatabaseRoleVerificationSQL
 
 const require = createRequire(import.meta.url)
 const MIGRATIONS = [
@@ -323,7 +329,7 @@ export function formatFinalizerFailureDiagnostic(diagnostic: FinalizerFailureDia
   // catalog or a driver-supplied field. Never retain SQL/message/detail from pg.
   const operation = phase === 'protocol-ledger-ddl'
     ? NEWS_MUTATION_LEDGER_STATEMENTS.find(statement => statement.operation === diagnostic.operation)?.operation : undefined
-  const ledgerDetail = operation ? ` operation=${operation} ddl_source=mutation-ledger expected_owner=cms_admin` : ''
+  const ledgerDetail = operation ? ` operation=${operation} ddl_source=mutation-ledger expected_owner=cms_migrator` : ''
   return `CMS news protocol diagnostic: phase=${phase} reason=${reason} sqlstate=${sqlstate}${ledgerDetail}${detail}`
 }
 
@@ -1598,7 +1604,7 @@ function parseCanonicalTriggerMetadata(key: string, definition: string): Canonic
   return { relation, name, functionName, eventMask, postgresDefinition }
 }
 
-async function checkPreconditions(client: FinalizerClient,
+async function checkPreconditions(client: FinalizerClient, portalDatabase: string,
   setPhase: (phase: FinalizerDiagnosticPhase) => void = () => {},
   readOnlyDiagnosis = false,
   collectedFailures?: { phase: FinalizerDiagnosticPhase; reason: string }[],
@@ -1615,20 +1621,23 @@ async function checkPreconditions(client: FinalizerClient,
     current_database() AS db, r.rolsuper AS superuser, current_setting('transaction_read_only') AS read_only
     FROM pg_roles r WHERE r.rolname=current_user`)
   const who = identity.rows[0]
+  const clusterRoles = await client.query(clusterRolesPublicVerificationSQL, [portalDatabase])
+  requireGuard(clusterRoles.rows[0]?.safe === true, observerAudit ? 'observer_role_contract_mismatch' : 'unsafe_admin_target')
   if (observerAudit) {
     requireGuard(who?.role === 'cms_observer' && who.session_role === 'cms_observer'
       && who.db === 'ownerinc_cms' && who.superuser === false && who.read_only === 'on', 'unsafe_observer_target')
     enter('precondition-observer-role')
-    const ownershipCatalog = await client.query(newsProtocolObserverOwnershipCatalogPrivilegeVerificationSQL)
-    requireGuard(ownershipCatalog.rows[0]?.safe === true, 'observer_role_contract_mismatch')
-    const observerRole = await client.query(newsProtocolObserverRoleVerificationSQL)
+    const observerRole = await client.query(newsProtocolObserverRoleVerificationSQL, [portalDatabase])
     requireGuard(observerRole.rows[0]?.safe === true, 'observer_role_contract_mismatch')
     enter('precondition-observer-privileges')
     const observerPrivileges = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
     requireGuard(observerPrivileges.rows[0]?.safe === true, 'observer_privilege_contract_mismatch')
   } else {
-    requireGuard(who?.role === 'cms_admin' && who.db === 'ownerinc_cms' && who.superuser === true
+    requireGuard(who?.role === 'cms_admin' && who.session_role === 'cms_admin'
+      && who.db === 'ownerinc_cms' && who.superuser === false
       && who.read_only === (readOnlyDiagnosis ? 'on' : 'off'), 'unsafe_admin_target')
+    const adminContract = await client.query(cmsAdminDatabaseRoleVerificationSQL)
+    requireGuard(adminContract.rows[0]?.safe === true, 'unsafe_admin_target')
   }
 
   enter('precondition-migrations')
@@ -1758,7 +1767,7 @@ async function checkPreconditions(client: FinalizerClient,
   requireGuard(item.rows[0]?.run_id_type === 'varchar', 'native_item_run_id_type_mismatch')
 
   enter('precondition-control-roles')
-  const roles = await client.query(observerAudit ? controlRolesPublicVerificationSQL : controlRolesVerificationSQL)
+  const roles = await client.query(controlRolesPublicVerificationSQL)
   requireGuard(roles.rows[0]?.safe === true, 'control_role_contract_mismatch')
   enter('precondition-protocol-inventory')
   const state = await client.query(`SELECT
@@ -1821,11 +1830,11 @@ async function checkPreconditions(client: FinalizerClient,
  * server-enforced read-only transaction. This diagnostic intentionally skips
  * deep validation of a complete install; auditNewsProtocolReadOnly reuses that
  * installed-state verifier under the dedicated observer identity. */
-export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerClient): Promise<readonly FinalizerFailureDiagnostic[]> {
+export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerClient, portalDatabase: string): Promise<readonly FinalizerFailureDiagnostic[]> {
   let phase: FinalizerDiagnosticPhase = 'precondition-identity'
   const findings: { phase: FinalizerDiagnosticPhase; reason: string }[] = []
   try {
-    await checkPreconditions(client, next => { phase = next }, true, findings)
+    await checkPreconditions(client, portalDatabase, next => { phase = next }, true, findings)
     if (!findings.length) return []
     const first = findings[0]!
     const error = new Error(`news_protocol_finalizer:${first.reason}`)
@@ -1851,6 +1860,7 @@ export async function diagnoseFinalizerPreconditionsReadOnly(client: FinalizerCl
  */
 export async function verifyPreauthorityCatalogReadOnly(
   client: FinalizerClient,
+  portalDatabase: string,
   setStage: (stage: PreauthorityCatalogDiagnosticStage) => void = () => {},
 ): Promise<{
   protocolStatus: 'absent'
@@ -1859,7 +1869,7 @@ export async function verifyPreauthorityCatalogReadOnly(
   migrationFingerprint: string
   nativeCatalogFingerprint: string
 }> {
-  const state = await checkPreconditions(client, phase => {
+  const state = await checkPreconditions(client, portalDatabase, phase => {
     setStage(preauthorityCatalogStageByFinalizerPhase[phase] || 'protocol_inventory')
   }, true)
   setStage('protocol_state')
@@ -2036,7 +2046,7 @@ async function verifyInstalled(client: FinalizerClient,
   const restored = await client.query(`SELECT current_user AS role, current_database() AS db,
     r.rolsuper AS superuser FROM pg_roles r WHERE r.rolname=current_user`)
   const expectedConnectionRole = options.observerAudit ? 'cms_observer' : 'cms_admin'
-  const expectedSuperuser = options.observerAudit ? false : true
+  const expectedSuperuser = false
   if (restored.rows[0]?.role !== expectedConnectionRole || restored.rows[0]?.db !== 'ownerinc_cms'
     || restored.rows[0]?.superuser !== expectedSuperuser) {
     fail(options.observerAudit ? 'unsafe_observer_target' : 'admin_role_restore_failed')
@@ -2157,27 +2167,10 @@ async function verifyInstalled(client: FinalizerClient,
   if (options.protocolVersion === 2 && (!a.controller_bootstrap || a.runtime_bootstrap || a.public_bootstrap
     || options.observerAudit && a.observer_bootstrap)) fail('protocol_acl_mismatch')
 
-  const ownership = await client.query(`SELECT
-      (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-        WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-        AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
-        AND (d.classid <> 'pg_proc'::regclass OR d.objid <> ALL(${approvedProtocolOidArray}))) AS unexpected_control_objects,
-     (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-      WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-        AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control'
-        AND d.classid='pg_proc'::regclass AND d.objid = ANY(${approvedProtocolOidArray})) AS approved_control_objects,
-     (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-      WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-        AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_owned_objects,
-     (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-      WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_control') AS control_shared_owned_objects,
-       (SELECT count(*) FROM pg_shdepend d JOIN pg_roles r ON r.oid=d.refobjid
-         WHERE d.dbid=0 AND d.refclassid='pg_authid'::regclass AND d.deptype='o' AND r.rolname='cms_controller') AS controller_shared_owned_objects`)
+  const ownership = await client.query(controlRolesOwnershipVerificationSQL)
   const owned = ownership.rows[0]
-  if (Number(owned?.unexpected_control_objects) !== 0
-    || Number(owned?.approved_control_objects) !== (options.protocolVersion === 2 ? V2_PROTOCOL_SIGNATURES.length : V1_PROTOCOL_SIGNATURES.length)
-    || Number(owned?.controller_owned_objects) !== 0 || Number(owned?.control_shared_owned_objects) !== 0
-    || Number(owned?.controller_shared_owned_objects) !== 0) {
+  if (owned?.safe !== true || Number(owned?.unexpected_ownership_count) !== 0
+    || Number(owned?.approved_control_function_count) !== (options.protocolVersion === 2 ? V2_PROTOCOL_SIGNATURES.length : V1_PROTOCOL_SIGNATURES.length)) {
     fail(options.observerAudit ? 'observer_visible_ownership_mismatch' : 'unexpected_control_owned_objects')
   }
 }
@@ -2198,7 +2191,7 @@ export type NewsProtocolAuditReport = {
   writeCoverageCertified: false
   drainVerified: false
   passwordPresenceCheck: 'not_performed_unprivileged'
-  clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check'
+  clusterSharedOwnershipCheck: 'bounded_current_database_ownership_helper'
   physicalClusterIdentity: 'not_verified'
 }
 
@@ -2208,7 +2201,7 @@ export type NewsProtocolAuditReport = {
  * server-enforced read-only snapshot before reading catalog state. It does not
  * install, repair, lock, activate, seal, or certify release/coverage.
  */
-export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promise<NewsProtocolAuditReport> {
+export async function auditNewsProtocolReadOnly(client: FinalizerClient, portalDatabase: string): Promise<NewsProtocolAuditReport> {
   let phase: FinalizerDiagnosticPhase = 'audit-transaction-begin'
   let transactionOpen = false
   try {
@@ -2228,7 +2221,7 @@ export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promis
       fail('audit_transaction_contract_mismatch')
     }
 
-    const protocolState = await checkPreconditions(client, next => { phase = next }, true, undefined, true)
+    const protocolState = await checkPreconditions(client, portalDatabase, next => { phase = next }, true, undefined, true)
     if (protocolState !== 'v1' && protocolState !== 'v2') fail('protocol_not_installed')
 
     const head = await client.query(`SELECT sequence::text AS sequence, coverage_version, write_barrier
@@ -2248,7 +2241,7 @@ export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promis
       writeBarrier: row.write_barrier as NewsProtocolAuditReport['writeBarrier'],
       ready: false, admissionActivated: false, releaseCertified: false, writeCoverageCertified: false, drainVerified: false,
       passwordPresenceCheck: 'not_performed_unprivileged',
-      clusterSharedOwnershipCheck: 'performed_read_only_pg_shdepend_check',
+      clusterSharedOwnershipCheck: 'bounded_current_database_ownership_helper',
       physicalClusterIdentity: 'not_verified',
     }
   } catch (error) {
@@ -2262,7 +2255,21 @@ export async function auditNewsProtocolReadOnly(client: FinalizerClient): Promis
 
 type ProtocolFinalizerOperation = 'finalize' | 'upgrade-v1-to-v2'
 
-async function runProtocolFinalizerOperation(client: FinalizerClient, operation: ProtocolFinalizerOperation):
+function migrationOwnedProtocolDDL(sql: string): string {
+  return sql.replace(/^ALTER FUNCTION public\.[^;]+ OWNER TO cms_control;\s*$/gmu, '')
+}
+
+function protocolOwnershipTransferSQL(version: 1 | 2): string {
+  return `
+ALTER FUNCTION public.owner_news_mutation_guard_stmt() OWNER TO cms_control;
+ALTER FUNCTION public.owner_news_mutation_capture_row() OWNER TO cms_control;
+ALTER FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) OWNER TO cms_control;
+ALTER FUNCTION public.owner_news_migration_item_binding_guard() OWNER TO cms_control;
+${version === 2 ? `ALTER FUNCTION ${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE} OWNER TO cms_control;` : ''}
+`
+}
+
+async function runProtocolFinalizerOperation(client: FinalizerClient, operation: ProtocolFinalizerOperation, portalDatabase: string):
 Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
   let phase: FinalizerDiagnosticPhase = 'transaction-begin'
   let ledgerOperation: NewsMutationLedgerOperation | undefined
@@ -2274,7 +2281,7 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
     await client.query('SET LOCAL search_path = pg_catalog, public')
     phase = 'transaction-lock'
     await client.query(`SELECT pg_catalog.pg_advisory_xact_lock(${LOCK_ID})`)
-    const protocolState = await checkPreconditions(client, next => { phase = next })
+    const protocolState = await checkPreconditions(client, portalDatabase, next => { phase = next })
     if (protocolState === null || protocolState === 'partial') fail('partial_protocol_installation_manual_recovery_required')
 
     if (operation === 'finalize' && protocolState === 'v1') {
@@ -2285,6 +2292,7 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
     }
 
     if (operation === 'finalize' && protocolState === 'empty') {
+      await client.query('SET LOCAL ROLE cms_migrator')
       phase = 'protocol-ledger-ddl'
       for (const statement of NEWS_MUTATION_LEDGER_STATEMENTS) {
         ledgerOperation = statement.operation
@@ -2292,17 +2300,30 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
       }
       ledgerOperation = undefined
       phase = 'protocol-trigger-ddl'
-      await client.query(buildNewsMutationTriggersDDL())
+      await client.query(migrationOwnedProtocolDDL(buildNewsMutationTriggersDDL()))
       phase = 'protocol-binding-ddl'
-      await client.query(NEWS_MIGRATION_ITEM_BINDING_DDL)
+      await client.query(migrationOwnedProtocolDDL(NEWS_MIGRATION_ITEM_BINDING_DDL))
       phase = 'protocol-grants'
       await client.query(grantsSQL)
       phase = 'protocol-bootstrap-ddl'
-      await client.query(buildNewsMigrationBootstrapRunDDL())
+      await client.query(migrationOwnedProtocolDDL(buildNewsMigrationBootstrapRunDDL()))
+      phase = 'protocol-grants'
+      await client.query(observerRelationProvisioningSQL(portalDatabase))
+      await client.query('RESET ROLE')
+      await client.query(protocolOwnershipTransferSQL(2))
+      const observer = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
+      if (observer.rows[0]?.safe !== true) fail('observer_privilege_contract_mismatch')
       await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
     } else if (operation === 'upgrade-v1-to-v2' && protocolState === 'v1') {
       phase = 'protocol-bootstrap-ddl'
-      await client.query(buildNewsMigrationBootstrapRunDDL())
+      await client.query('SET LOCAL ROLE cms_migrator')
+      await client.query(migrationOwnedProtocolDDL(buildNewsMigrationBootstrapRunDDL()))
+      phase = 'protocol-grants'
+      await client.query(observerRelationProvisioningSQL(portalDatabase))
+      await client.query('RESET ROLE')
+      await client.query(`ALTER FUNCTION ${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE} OWNER TO cms_control`)
+      const observer = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
+      if (observer.rows[0]?.safe !== true) fail('observer_privilege_contract_mismatch')
       await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
     }
     phase = 'transaction-commit'
@@ -2318,12 +2339,12 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
   }
 }
 
-export async function finalizeNewsProtocol(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
-  return runProtocolFinalizerOperation(client, 'finalize')
+export async function finalizeNewsProtocol(client: FinalizerClient, portalDatabase: string): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runProtocolFinalizerOperation(client, 'finalize', portalDatabase)
 }
 
-export async function upgradeNewsProtocolV1ToV2(client: FinalizerClient): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
-  return runProtocolFinalizerOperation(client, 'upgrade-v1-to-v2')
+export async function upgradeNewsProtocolV1ToV2(client: FinalizerClient, portalDatabase: string): Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
+  return runProtocolFinalizerOperation(client, 'upgrade-v1-to-v2', portalDatabase)
 }
 
 export type ProtocolFinalizerCommand = 'finalize' | 'upgrade-v1-to-v2'
@@ -2351,13 +2372,14 @@ async function runAdminProtocolOperation(operation: ProtocolFinalizerOperation,
   let result: { installed: boolean; ready: false; coverageVersion: 0 } | undefined
   try {
     try { url = new URL(raw || '') } catch { fail('admin_database_url_required') }
+    const portalDatabase = parsePortalDatabaseName(env.CMS_PORTAL_DATABASE_NAME)
     if (!['postgres:', 'postgresql:'].includes(url!.protocol) || url!.pathname !== '/ownerinc_cms'
       || decodeURIComponent(url!.username) !== 'cms_admin' || !url!.password) fail('unsafe_admin_database_url')
     const { Client } = require('pg') as { Client: new (options: object) => FinalizerClient }
     client = suppliedClient ?? new Client({ connectionString: url!.href, connectionTimeoutMillis: 5000 })
     phase = 'admin-connect'
     await client.connect()
-    result = await runProtocolFinalizerOperation(client, operation)
+    result = await runProtocolFinalizerOperation(client, operation, portalDatabase)
   } catch (error) {
     recordFinalizerFailure(error, phase)
     operationFailed = true

@@ -9,6 +9,7 @@ import {
   type PreauthorityCatalogDiagnosticStage,
 } from './finalize-news-protocol'
 import { NEWS_MUTATION_TABLES } from '../src/publication/mutation-ledger'
+import { parsePortalDatabaseName } from './database-contract'
 
 const require = createRequire(import.meta.url)
 const { Client } = require('pg') as { Client: new (options: { connectionString: string }) => FinalizerClient }
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   let stage: PreauthorityCatalogDiagnosticStage = 'connection'
   try {
     const url = process.env.CMS_ADMIN_DATABASE_URL
+    const portalDatabase = parsePortalDatabaseName(process.env.CMS_PORTAL_DATABASE_NAME)
     if (!url || process.env.CMS_DATABASE_URL || process.env.DATABASE_URL) fail()
     client = new Client({ connectionString: url as string })
     await client.connect()
@@ -34,7 +36,7 @@ async function main(): Promise<void> {
     await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
     await client.query("SET LOCAL statement_timeout = '10min'")
     await client.query("SET LOCAL search_path = pg_catalog, public")
-    const native = await verifyPreauthorityCatalogReadOnly(client, value => { stage = value })
+    const native = await verifyPreauthorityCatalogReadOnly(client, portalDatabase, value => { stage = value })
     stage = 'news_rows'
     if (NEWS_MUTATION_TABLES.length !== 39) fail()
     const counts = await client.query(`SELECT COALESCE(SUM(row_count), 0)::text AS row_count FROM (

@@ -13,24 +13,27 @@ r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r);s=r.STATE;inv
 os.path=posixpath
 root='/opt/portal'
 inventory=inv.production_inventory(root,root+'/runtime',root+'/releases',root+'/current-release',root+'/runtime/deploy.lock',
- '/backups/daily','/backups/production','/backups/protection','/etc/portal/env',root+'/runtime/compose',root+'/runtime/payload')
+ '/backups/daily','/backups/production','/backups/protection','/etc/portal/env',root+'/runtime/compose',root+'/runtime/payload','portal')
 images={k:'ghcr.io/ownerinc/ownerinc-portal-'+k+'@sha256:'+'a'*64 for k in ('api','cron','cms')}
 authority={k:'a'*64 for k in ('sourceApprovalSha256','policySha256','recordSha256')}
 record={'commit':'a'*40,'runId':'1','runAttempt':'1','images':images,'candidateSha256':'b'*64,
  'recoveryReportSha256':'c'*64,'qualifiedManifestSha256':'d'*64,'archiveSha256':'e'*64,'policySha256':'a'*64}
 database={'systemIdentifier':'123','databaseOid':'456','databaseName':'portal'}
-binding={'bindingVersion':3,'authority':dict(authority),'sourceCommit':'b'*40,'project':'ownerinc-portal-prod',
+binding={'bindingVersion':4,'authority':dict(authority),'sourceCommit':'b'*40,'project':'ownerinc-portal-prod',
  'candidate':s.production_candidate(record),'candidateRelease':root+'/releases/'+'a'*40,
  'sourceRelease':root+'/releases/'+'b'*40,'previousImages':{k:images[k] for k in ('api','cron')},
  'b0':{'directory':'/backups/production/b0','proofSha256':'f'*64},'inventoryIdentity':inv.identity(inventory),
- 'lease':{'device':1,'inode':2},'portalTarget':{'database':database,'volumes':{k:{'name':k,'driver':'local',
+  'lease':{'device':1,'inode':2},'sharedCluster':copy.deepcopy(inventory['databaseCluster']),
+  'portalTarget':{'database':database,'volumes':{k:{'name':k,'driver':'local',
  'mountpoint':'/volumes/'+k,'fingerprint':'0'*64} for k in ('portalPostgres','portalUploads')}}}
 approval={'hostBaseline':{'currentCommit':'b'*40,'legacyImages':binding['previousImages'],'inventoryIdentity':inv.identity(inventory)},
  'admission':{'policySha256':'a'*64,'recordSha256':'a'*64,'archiveSha256':'e'*64}}
 body={'schemaVersion':2,'phase':'preauthority','cmsStatus':'cold','authority':{'mode':'legacy','epoch':1},
  'workerHold':True,'admission':'closed','sequence':1,'previousStateSha256':'1'*64,'restoreIntent':None,
- 'installIntent':{'binding':binding,'stage':'reserved','cmsTarget':None,
- 'creation':{'receiptVersion':1,'fingerprintAlgorithm':'production-container-mounts-v1','nonce':'2'*64,'volumes':{},'containers':{}}},
+  'installIntent':{'binding':binding,'stage':'reserved','cmsTarget':None,'authorizationFreshAtReservation':True,
+  'creation':{'receiptVersion':2,'fingerprintAlgorithm':'shared-cluster-container-mounts-v2',
+   'resourceLifecycle':{'preexisting':['postgres','portalPostgres','portalUploads'],'created':['cmsUploads']},
+   'nonce':'2'*64,'volumes':{},'containers':{}}},
  'latestProofSha256':'f'*64,'legacySourceProofSha256':'f'*64,'releaseImages':None,'plannedReleaseImages':images,
  'rollbackTargetImages':None,'nativeCatalogFingerprint':None,'inventoryIdentity':inv.identity(inventory)}
 rows=[]
@@ -92,7 +95,7 @@ assert "statement_timeout = '20s'" in lower and "lock_timeout = '2s'" in lower
 assert lower.count('limit 20001')==2 and 'bytes+count*2+1024<=4194304' in lower
 assert lower.index('budget as materialized')<lower.index('jsonb_agg')
 assert 'accepted as materialized' in lower and "'portal-legacy-security-observation-refused'" in lower
-assert "current_database()='portal'" in lower and "::integer/10000=16" in lower
+assert "current_database()='portal'" not in lower and "::integer/10000=16" in lower
 for text in ('rolpassword','pg_authid','setconfig','rolconfig','dblink','postgres_fdw','pg_get_functiondef'):
  assert text not in lower,text
 for text in ('admin_option','inherit_option','set_option','pg_default_acl','aclexplode','acldefault',
@@ -119,6 +122,11 @@ with patch.object(r,'_psql_json',side_effect=AssertionError('SQL execution forbi
  assert check(s.canonical(observation))==result
 assert observation==original
 assert result['observationSha256']==hashlib.sha256(s.canonical(r.validate_portal_legacy_security_observation(observation))).hexdigest()
+configured=copy.deepcopy(observation);configured['database']['databaseName']='portal_test'
+for row in configured['records']:
+ if row['kind'] in ('object','acl','effective') and row.get('objectType')=='database':row['name']='portal_test'
+assert r.validate_portal_legacy_security_observation(configured,'portal_test')['database']['databaseName']=='portal_test'
+rejected(lambda:r.validate_portal_legacy_security_observation(configured,'portal'))
 for key in ('credentialVerified','clusterRoleMutationAuthorized','rollbackAuthorized','installationExecuted','deploymentAuthorized'):
  assert result[key] is False
 assert 'legacy_capability_profile_unapproved' in check(expected=None)['blockers']

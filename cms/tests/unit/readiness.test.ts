@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { assertCmsRuntimeCatalog, assertCmsSchemaCatalog, assertCmsStorageReady } from '../../src/config/readiness.js'
+import { assertCmsRuntimeCatalog, assertCmsRuntimeIdentity, assertCmsSchemaCatalog, assertCmsStorageReady } from '../../src/config/readiness.js'
 import { migrations } from '../../src/migrations/index.js'
 import { NEWS_MUTATION_TABLES } from '../../src/publication/mutation-ledger.js'
 import { buildNewsMutationTriggersDDL, expectedNewsMutationTriggerFunctionBodies } from '../../src/publication/mutation-triggers.js'
@@ -51,6 +51,12 @@ test('readiness rejects every partial schema catalog', () => {
   assert.doesNotThrow(() => assertCmsSchemaCatalog(complete))
   for (const name of Object.keys(complete)) assert.throws(() => assertCmsSchemaCatalog({ ...complete, [name]: null }), /cms_readiness_schema_incomplete/)
   assert.throws(() => assertCmsSchemaCatalog({ ...complete, extra: 'unsafe' }), /cms_readiness_schema_incomplete/)
+})
+
+test('readiness binds the runtime to the exact shared-cluster database and least-privilege role', () => {
+  assert.doesNotThrow(() => assertCmsRuntimeIdentity({ database_name: 'ownerinc_cms', role_name: 'cms_runtime' }))
+  assert.throws(() => assertCmsRuntimeIdentity({ database_name: 'portal', role_name: 'cms_runtime' }), /identity_mismatch/)
+  assert.throws(() => assertCmsRuntimeIdentity({ database_name: 'ownerinc_cms', role_name: 'cms_admin' }), /identity_mismatch/)
 })
 
 test('readiness requires exact migrations, essential columns and canonical enabled mutation triggers', () => {

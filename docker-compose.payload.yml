@@ -23,30 +23,31 @@ services:
       PAYLOAD_TO_PORTAL_SECRET: ${PAYLOAD_TO_PORTAL_SECRET:?Set PAYLOAD_TO_PORTAL_SECRET}
       PORTAL_TO_PAYLOAD_SECRET: ${PORTAL_TO_PAYLOAD_SECRET:?Set PORTAL_TO_PAYLOAD_SECRET}
 
-  cms-postgres:
-    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+  cms-cluster-bootstrap:
+    <<: *cms-image
+    profiles: [cms-bootstrap]
+    command: [node, --import, tsx, scripts/provision-db.ts, --bootstrap-database]
     environment:
-      POSTGRES_DB: ownerinc_cms
-      POSTGRES_USER: cms_admin
-      POSTGRES_PASSWORD: ${CMS_POSTGRES_PASSWORD:?Set CMS_POSTGRES_PASSWORD}
-    volumes:
-      - cms_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U cms_admin -d ownerinc_cms']
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    restart: unless-stopped
+      CMS_DATABASE_URL: postgresql://${POSTGRES_USER:-portal_admin}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/postgres
+      CMS_PORTAL_DATABASE_NAME: ${POSTGRES_DB:-portal}
+      CMS_POSTGRES_PASSWORD: ${CMS_POSTGRES_PASSWORD:?Set CMS_POSTGRES_PASSWORD}
+      CMS_CONTROLLER_PASSWORD: ${CMS_CONTROLLER_PASSWORD:?Set CMS_CONTROLLER_PASSWORD}
+      CMS_MIGRATOR_PASSWORD: ${CMS_MIGRATOR_PASSWORD:?Set CMS_MIGRATOR_PASSWORD}
+      CMS_RUNTIME_PASSWORD: ${CMS_RUNTIME_PASSWORD:?Set CMS_RUNTIME_PASSWORD}
+      CMS_OBSERVER_PASSWORD: ${CMS_OBSERVER_PASSWORD:?Set CMS_OBSERVER_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   cms-provision:
     <<: *cms-image
     environment:
-      CMS_DATABASE_URL: ${CMS_ADMIN_DATABASE_URL:?Set CMS_ADMIN_DATABASE_URL}
-      CMS_MIGRATOR_PASSWORD: ${CMS_MIGRATOR_PASSWORD:?Set CMS_MIGRATOR_PASSWORD}
-      CMS_RUNTIME_PASSWORD: ${CMS_RUNTIME_PASSWORD:?Set CMS_RUNTIME_PASSWORD}
+      CMS_DATABASE_URL: ${CMS_OWNER_DATABASE_URL:?Set CMS_OWNER_DATABASE_URL}
+      CMS_PORTAL_DATABASE_NAME: ${POSTGRES_DB:-portal}
     command: [node, --import, tsx, scripts/provision-db.ts, --provision]
     depends_on:
-      cms-postgres:
+      postgres:
         condition: service_healthy
     restart: 'no'
 
@@ -56,13 +57,12 @@ services:
     <<: *cms-image
     profiles: [cms-control-roles]
     environment:
-      CMS_DATABASE_URL: ${CMS_ADMIN_DATABASE_URL:?Set CMS_ADMIN_DATABASE_URL}
+      CMS_DATABASE_URL: ${CMS_OWNER_DATABASE_URL:?Set CMS_OWNER_DATABASE_URL}
+      CMS_PORTAL_DATABASE_NAME: ${POSTGRES_DB:-portal}
       CMS_CONTROLLER_PASSWORD: ${CMS_CONTROLLER_PASSWORD:?Set CMS_CONTROLLER_PASSWORD}
-      CMS_MIGRATOR_PASSWORD: ${CMS_MIGRATOR_PASSWORD:?Set CMS_MIGRATOR_PASSWORD}
-      CMS_RUNTIME_PASSWORD: ${CMS_RUNTIME_PASSWORD:?Set CMS_RUNTIME_PASSWORD}
     command: [node, --import, tsx, scripts/provision-db.ts, --verify-control]
     depends_on:
-      cms-postgres:
+      postgres:
         condition: service_healthy
     restart: 'no'
 
@@ -71,6 +71,7 @@ services:
     environment:
       <<: *cms-environment
       CMS_DATABASE_URL: ${CMS_MIGRATION_DATABASE_URL:?Set CMS_MIGRATION_DATABASE_URL}
+      CMS_PORTAL_DATABASE_NAME: ${POSTGRES_DB:-portal}
     command: [sh, -ec, 'node --import tsx scripts/provision-db.ts --verify-migrator && npm run migrate && node --import tsx scripts/provision-db.ts --grants']
     depends_on:
       cms-provision:
@@ -82,7 +83,8 @@ services:
   cms-preauthority-verify:
     <<: *cms-image
     environment:
-      CMS_ADMIN_DATABASE_URL: ${CMS_ADMIN_DATABASE_URL:?Set CMS_ADMIN_DATABASE_URL}
+      CMS_ADMIN_DATABASE_URL: ${CMS_OWNER_DATABASE_URL:?Set CMS_OWNER_DATABASE_URL}
+      CMS_PORTAL_DATABASE_NAME: ${POSTGRES_DB:-portal}
     command: [node, --import, tsx, scripts/verify-preauthority-catalog.ts]
     restart: 'no'
 
@@ -104,28 +106,10 @@ services:
     stop_grace_period: 60s
     restart: unless-stopped
 
-  cms-worker:
-    <<: *cms-image
-    profiles: [scheduled-publication]
-    environment: *cms-environment
-    command: [sh, -ec, 'node --import tsx scripts/provision-db.ts --verify-runtime && exec node node_modules/payload/bin.js jobs:run --cron "* * * * *" --queue owner-news']
-    volumes:
-      - cms_uploads_data:/var/lib/ownerinc-cms/media
-    depends_on:
-      cms-migrate:
-        condition: service_completed_successfully
-      api:
-        condition: service_healthy
-    deploy:
-      replicas: 1
-    stop_grace_period: 120s
-    restart: unless-stopped
-
   nginx:
     depends_on:
       cms:
         condition: service_healthy
 
 volumes:
-  cms_postgres_data:
   cms_uploads_data:

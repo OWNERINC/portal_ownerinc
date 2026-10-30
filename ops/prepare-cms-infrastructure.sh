@@ -44,6 +44,8 @@ receiver_root_target=/usr/local/libexec/ownerinc-payload-receive
 production_receiver_target=/usr/local/libexec/ownerinc-portal-deploy-production
 receiver_sudoers_target=/etc/sudoers.d/ownerinc-payload-receive
 receiver_incoming=/var/lib/ownerinc/payload-candidate/incoming
+receiver_nonces=/var/lib/ownerinc/payload-candidate/nonces
+receiver_locks=/var/lib/ownerinc/payload-candidate/locks
 receiver_sudoers='deploy ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/ownerinc-payload-receive'
 guard_target="$runtime/payload-operations-guard"
 control_target="$runtime/payload-control"
@@ -142,11 +144,11 @@ fi
 /bin/bash -n "$source_production_receiver"
 
 receiver_privilege_paths() {
-  /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -S - "$1" "$receiver_incoming" \
+  /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -S - "$1" "$receiver_incoming" "$receiver_nonces" "$receiver_locks" \
     "$receiver_root_target" "$production_receiver_target" "$receiver_sudoers_target" \
     "$source_receiver_root" "$source_production_receiver" <<'PY'
 import os, stat, sys
-mode, incoming, *files = sys.argv[1:]
+mode, incoming, nonces, locks, *files = sys.argv[1:]
 def reject():
     raise SystemExit('Refusing preparation: unsafe receiver privilege path.')
 def directory(path, create=False):
@@ -165,9 +167,11 @@ def directory(path, create=False):
             value = os.lstat(current)
         if not stat.S_ISDIR(value.st_mode) or (value.st_uid, value.st_gid) != (0, 0) or stat.S_IMODE(value.st_mode) & 0o7022:
             reject()
-        if current == incoming and stat.S_IMODE(value.st_mode) != 0o700:
+        if current in (incoming, nonces, locks) and stat.S_IMODE(value.st_mode) != 0o700:
             reject()
 directory(incoming, create=True)
+directory(nonces, create=True)
+directory(locks, create=True)
 for filename in files:
     directory(os.path.dirname(filename))
     try:
@@ -437,9 +441,9 @@ validate_compose() {
     CMS_CONTROLLER_PASSWORD=check \
     CMS_MIGRATOR_PASSWORD=check \
     CMS_RUNTIME_PASSWORD=check \
-    CMS_ADMIN_DATABASE_URL=postgresql://cms_admin:check@cms-postgres:5432/ownerinc_cms \
-    CMS_MIGRATION_DATABASE_URL=postgresql://cms_migrator:check@cms-postgres:5432/ownerinc_cms \
-    CMS_RUNTIME_DATABASE_URL=postgresql://cms_runtime:check@cms-postgres:5432/ownerinc_cms \
+    CMS_OWNER_DATABASE_URL=postgresql://cms_admin:check@postgres:5432/ownerinc_cms \
+    CMS_MIGRATION_DATABASE_URL=postgresql://cms_migrator:check@postgres:5432/ownerinc_cms \
+    CMS_RUNTIME_DATABASE_URL=postgresql://cms_runtime:check@postgres:5432/ownerinc_cms \
     PAYLOAD_SECRET=check \
     PAYLOAD_TO_PORTAL_SECRET=check \
     PORTAL_TO_PAYLOAD_SECRET=check \
@@ -502,7 +506,7 @@ payload_overlay_is_known && candidate_is_known && control_files_known && \
   exit 2
 }
 
-expected_helper=ffe1c2ed3fb086e156401063cdeaf9c6575a49e3458b202928df7f6794587bf8
+expected_helper=7a5da50bbb36a6d0f95c66898e0c4e12bc0ba319fd7dd8d4ccbd4aac8c3ea2db
 expected_wrapper=b1be89c891468052aea9de917e75214c7331c9ff72a4cb3e790aae9b4007d1b6
 if [[ $authenticated == true ]]; then
   expected_helper=${approved_fields[4]}; expected_wrapper=${approved_fields[5]}
@@ -532,6 +536,8 @@ file_installed "$receiver_root_target" "$source_receiver_root" 755 || needs_chan
 file_installed "$production_receiver_target" "$source_production_receiver" 755 || needs_change=true
 { [[ -f $receiver_sudoers_target ]] && root_owned_mode "$receiver_sudoers_target" 440; } || needs_change=true
 [[ -d $receiver_incoming ]] || needs_change=true
+[[ -d $receiver_nonces ]] || needs_change=true
+[[ -d $receiver_locks ]] || needs_change=true
 file_installed "$receiver_helper_target" "$source_receiver_helper" 755 || needs_change=true
 file_installed "$receiver_target" "$source_receiver" 755 || needs_change=true
 file_installed "$guard_target" "$source_guard" 755 || needs_change=true
@@ -671,7 +677,7 @@ else
     atomic_text "$candidate_target" 0644 "CMS_IMAGE=$cms_image"
   fi
   authenticated_refresh || exit 2
-  if [[ $cms_env_state == empty || $cms_env_state == legacy-complete ]] && ! python3 "$source_private_helper" update "$environment"; then
+  if [[ $cms_env_state == empty || $cms_env_state == legacy-complete || $cms_env_state == pre-observer-complete ]] && ! python3 "$source_private_helper" update "$environment"; then
     echo 'Refusing preparation: private CMS environment could not be atomically written.' >&2
     echo "The pre-change receiver, guard and environment remain in $backup_dir for manual recovery." >&2
     exit 2

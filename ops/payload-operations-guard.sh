@@ -15,7 +15,7 @@ closed="$PORTAL_OPERATION_LOCK.admission-closed"
    -f $runtime/payload-control-state.py && ! -L $runtime/payload-control-state.py ]] || { echo 'Durable Payload control adapter not integrated' >&2; exit 2; }
 # No environment/credential files are sourced; control receives only paths/action.
 case $action in
-  release-preflight|restore-preflight|rollback-check|prepare-restore|portal-restore-intermediate|verify-restored|verify-release|backup-metadata|install-retry-check|install-receiver-preflight|initialize-isolated|install-floor-commit|observe-writers|resume-writers|resume-readiness-writers)
+  release-preflight|restore-preflight|rollback-check|prepare-restore|portal-restore-intermediate|verify-restored|verify-release|backup-metadata|install-retry-check|install-receiver-preflight|initialize-isolated|install-floor-commit|observe-writers|resume-writers|resume-readiness-writers|portal-database-target)
     "$control" "$action" "$release" "$evidence" ;;
   close-admission)
     if [[ -e $closed || -L $closed ]]; then
@@ -41,7 +41,7 @@ case $action in
     # one-shots. This fast running-process check is an additional barrier.
     running=$(docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" --format '{{.Label "com.docker.compose.service"}}')
     while IFS= read -r service; do
-      case $service in ''|postgres|cms-postgres) ;; *) echo 'A project writer is still running; no drain proof' >&2; exit 1;; esac
+      case $service in ''|postgres) ;; *) echo 'A project writer is still running; no drain proof' >&2; exit 1;; esac
     done <<< "$running"
     # Preacthority adapter proves the supported writer/container and DB-session
     # quiescence boundary only. It does not run a finalizer or certify a seal.

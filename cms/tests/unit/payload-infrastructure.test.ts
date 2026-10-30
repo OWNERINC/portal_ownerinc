@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -6,13 +8,23 @@ import { NextRequest } from 'next/server'
 import type { Payload } from 'payload'
 import { proxy, editorialPolicy, isNativeNewsRestoreRequest } from '../../src/proxy'
 import {
-  buildProtocolRuntimeGrantsSQL, controlRolesBootstrapSQL, controlRolesNativePrivilegesVerificationSQL,
+  buildProtocolRuntimeGrantsSQL, clusterRolesBootstrapSQL, clusterRolesVerificationSQL,
+  clusterRolesPublicVerificationSQL, cmsAdminDatabaseRoleVerificationSQL,
+  clusterOwnershipHelperSQL, clusterOwnershipHelperVerificationSQL, CMS_ROLE_NAMES,
+  controlRolesBootstrapSQL, controlRolesNativePrivilegesVerificationSQL, controlRolesPublicVerificationSQL,
   controlRolePasswordPresenceSQL, controlRolesOwnershipVerificationSQL, controlRolesVerificationSQL,
   grantsSQL, provisioningSQL, run,
+  parsePortalDatabaseName,
   getBootstrapControlFailureDiagnostic, formatBootstrapControlFailureDiagnostic,
   runtimeProtocolFunctionsVerifySQL, runtimeProtocolPrivilegesVerifySQL,
 } from '../../scripts/provision-db'
 import { privateStorageDir } from '../../src/media/storage'
+import {
+  newsProtocolObserverPostMigrationVerificationSQL,
+  observerRelationProvisioningSQL,
+} from '../../scripts/news-protocol-observer-contract'
+
+const PORTAL_ENV = { CMS_PORTAL_DATABASE_NAME: 'portal' }
 
 test('nonce is fresh, replaces attacker headers and matches request and response CSP for RSC', () => {
   const request = () => new NextRequest('https://portal.example/editorial/admin', { headers: {
@@ -55,25 +67,184 @@ test('native article and home restore endpoints are unavailable before Payload d
   assert.equal(isNativeNewsRestoreRequest('/editorial/api/news-media/versions/id', 'POST'), false)
 })
 
-test('provisioning quotes passwords, rejects placeholder/control values and separates roles', () => {
-  const password = "synthetic-only-'" + 'x'.repeat(32)
-  const sql = provisioningSQL(password, 'y'.repeat(40))
-  assert.ok(sql.includes("synthetic-only-''"))
-  assert.match(sql, /ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator/)
+test('ordinary provisioning applies database/schema grants without role authority or secrets', () => {
+  const sql = provisioningSQL()
+  assert.match(sql, /GRANT USAGE, CREATE ON SCHEMA public TO cms_migrator/)
   assert.match(sql, /REVOKE CREATE ON SCHEMA public FROM cms_runtime/)
-  for (const value of ['', 'placeholder-' + 'x'.repeat(32), 'x'.repeat(32) + '\n', 'x'.repeat(32) + '\\']) {
-    assert.throws(() => provisioningSQL(value, 'y'.repeat(40)))
-  }
-  assert.throws(() => provisioningSQL('y'.repeat(40), 'y'.repeat(40)))
+  assert.doesNotMatch(sql, /CREATE ROLE|ALTER ROLE|PASSWORD|CREATEROLE/u)
 })
 
-test('control-role bootstrap creates only the bounded roles and exports reusable role/readiness verifiers', () => {
+test('the common post-migration grants path normalizes and verifies observer access', async () => {
+  const statements: string[] = []
+  const client = { async connect() {}, async end() {}, async query(sql: string) {
+    statements.push(sql)
+    if (sql.includes('SELECT current_user AS name')) return { rows: [{
+      name: 'cms_migrator', database: 'ownerinc_cms', rolsuper: false, rolcreatedb: false, rolcreaterole: false,
+      rolinherit: false, rolreplication: false, rolbypassrls: false, connection_limit_safe: true, expiry_safe: true,
+      settings_safe: true, ddl: true, create_schema: false, temporary: false, member: false,
+    }] }
+    if (sql === newsProtocolObserverPostMigrationVerificationSQL || sql === cmsAdminDatabaseRoleVerificationSQL
+        || sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: true }] }
+    return { rows: [] }
+  } }
+  await run('--grants', { CMS_DATABASE_URL: 'postgresql://cms_migrator@cms.invalid/ownerinc_cms',
+    CMS_PORTAL_DATABASE_NAME: 'portal_test' }, client)
+  const grantsIndex = statements.indexOf(grantsSQL)
+  const observerIndex = statements.indexOf(observerRelationProvisioningSQL('portal_test'))
+  const verifyIndex = statements.indexOf(newsProtocolObserverPostMigrationVerificationSQL)
+  assert.ok(grantsIndex > statements.indexOf('BEGIN'))
+  assert.ok(observerIndex > grantsIndex && verifyIndex > observerIndex)
+  assert.equal(statements.at(-1), 'COMMIT')
+})
+
+test('cluster bootstrap reconciles all bounded roles without ever elevating cms_admin', () => {
+  const passwords = {
+    admin: "synthetic-admin-'" + 'a'.repeat(32), controller: 'c'.repeat(40),
+    migrator: 'm'.repeat(40), runtime: 'r'.repeat(40), observer: 'o'.repeat(40),
+  }
+  const sql = clusterRolesBootstrapSQL(passwords)
+  for (const role of ['cms_admin', 'cms_control', 'cms_controller', 'cms_migrator', 'cms_runtime', 'cms_observer']) {
+    assert.match(sql, new RegExp(`CREATE ROLE ${role} `, 'u'))
+    assert.match(sql, new RegExp(`ALTER ROLE ${role} WITH `, 'u'))
+  }
+  assert.ok(sql.includes("synthetic-admin-''"))
+  assert.doesNotMatch(sql, /(?:^|\s)CREATEROLE(?:\s|;)/mu)
+  assert.match(sql, /ALTER ROLE cms_admin WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT/)
+  assert.match(clusterRolesVerificationSQL, /count\(\*\)=6/)
+  assert.match(clusterRolesVerificationSQL, /NOT rolcreaterole/)
+  assert.match(clusterRolesVerificationSQL, /pg_auth_members/)
+  assert.deepEqual([...CMS_ROLE_NAMES], ['cms_admin', 'cms_control', 'cms_controller', 'cms_migrator', 'cms_runtime', 'cms_observer'])
+  assert.match(sql, /ALTER ROLE cms_admin[\s\S]*CONNECTION LIMIT -1 VALID UNTIL 'infinity'/u)
+  for (const role of CMS_ROLE_NAMES) assert.match(sql, new RegExp(`ALTER ROLE ${role} RESET ALL`, 'u'))
+  assert.match(clusterRolesVerificationSQL, /rolconnlimit=-1/)
+  assert.match(clusterRolesVerificationSQL, /rolvaliduntil IS NULL OR rolvaliduntil='infinity'::timestamptz/)
+  assert.match(clusterRolesVerificationSQL, /rolconfig IS NULL/)
+  assert.match(clusterRolesVerificationSQL, /EXISTS \(SELECT 1 FROM pg_catalog\.pg_database WHERE datname=\$1\)/u)
+  assert.match(clusterRolesPublicVerificationSQL, /'cms_admin'::name[\s\S]*'cms_observer'::name/u)
+  assert.match(clusterRolesPublicVerificationSQL, /has_database_privilege\(role_name,\$1,'CONNECT'\)/u)
+})
+
+test('Portal database configuration is explicit, injection-safe, and absent databases fail before role mutation', async () => {
+  assert.equal(parsePortalDatabaseName('portal_test'), 'portal_test')
+  for (const invalid of [undefined, '', 'portal-test', 'Portal', 'portal; DROP DATABASE ownerinc_cms', 'a'.repeat(64)]) {
+    assert.throws(() => parsePortalDatabaseName(invalid), /Invalid CMS Portal database name/u)
+  }
+  let connected = false
+  await assert.rejects(run('--bootstrap-database', {
+    CMS_DATABASE_URL: `postgresql://portal_admin:${'p'.repeat(40)}@db.invalid:5432/postgres`,
+    CMS_POSTGRES_PASSWORD: 'a'.repeat(40), CMS_CONTROLLER_PASSWORD: 'c'.repeat(40),
+    CMS_MIGRATOR_PASSWORD: 'm'.repeat(40), CMS_RUNTIME_PASSWORD: 'r'.repeat(40),
+    CMS_OBSERVER_PASSWORD: 'o'.repeat(40), CMS_PORTAL_DATABASE_NAME: 'portal;DROP DATABASE ownerinc_cms',
+  }, { async connect() { connected = true }, async end() {}, async query() { return { rows: [] } } }),
+  /Invalid CMS Portal database name/u)
+  assert.equal(connected, false)
+
+  const statements: string[] = []
+  await assert.rejects(run('--bootstrap-database', {
+    CMS_DATABASE_URL: `postgresql://portal_admin:${'p'.repeat(40)}@db.invalid:5432/postgres`,
+    CMS_POSTGRES_PASSWORD: 'a'.repeat(40), CMS_CONTROLLER_PASSWORD: 'c'.repeat(40),
+    CMS_MIGRATOR_PASSWORD: 'm'.repeat(40), CMS_RUNTIME_PASSWORD: 'r'.repeat(40),
+    CMS_OBSERVER_PASSWORD: 'o'.repeat(40), CMS_PORTAL_DATABASE_NAME: 'missing_portal',
+  }, { async connect() {}, async end() {}, async query(sql: string) {
+    statements.push(sql)
+    if (sql.includes('current_user AS name')) return { rows: [{ name: 'portal_admin', database: 'postgres', rolsuper: true }] }
+    if (sql.includes('SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1)')) return { rows: [{ present: false }] }
+    return { rows: [] }
+  } }), /Configured Portal database does not exist/u)
+  assert.equal(statements.some(sql => /CREATE ROLE|ALTER ROLE|REVOKE CONNECT ON DATABASE/u.test(sql)), false)
+})
+
+test('every cms_admin role-attribute drift fails the canonical database-local entrypoint contract', async () => {
+  const categories = ['NOLOGIN', 'SUPERUSER', 'CREATEDB', 'CREATEROLE', 'INHERIT', 'REPLICATION', 'BYPASSRLS',
+    'CONNECTION LIMIT', 'VALID UNTIL', 'rolconfig', 'database owner']
+  for (const category of categories) {
+    const statements: string[] = []
+    const client = { async connect() {}, async end() {}, async query(sql: string) {
+      statements.push(sql)
+      if (sql.includes('current_user AS name')) return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms' }] }
+      if (sql === cmsAdminDatabaseRoleVerificationSQL) return { rows: [{ safe: false }] }
+      return { rows: [] }
+    } }
+    await assert.rejects(run('--provision', {
+      CMS_DATABASE_URL: 'postgresql://cms_admin:test@db.invalid/ownerinc_cms', CMS_PORTAL_DATABASE_NAME: 'portal',
+    }, client), /Unsafe CMS admin role contract/u, category)
+    assert.equal(statements.includes(provisioningSQL()), false, category)
+  }
+  for (const expected of ['rolcanlogin', 'NOT role.rolsuper', 'NOT role.rolcreatedb', 'NOT role.rolcreaterole',
+    'NOT role.rolinherit', 'NOT role.rolreplication', 'NOT role.rolbypassrls', 'role.rolconnlimit=-1',
+    "role.rolvaliduntil='infinity'::timestamptz", 'role.rolconfig IS NULL', "current_database()='ownerinc_cms'",
+    "pg_get_userbyid(database.datdba)='cms_admin'"]) assert.ok(cmsAdminDatabaseRoleVerificationSQL.includes(expected), expected)
+})
+
+test('manual protocol entrypoint verifies the canonical cms_admin contract before observer DDL', () => {
+  const source = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../integration/manual-runtime-protocol.ts'), 'utf8')
+  const verification = source.indexOf('await verifyCmsAdminDatabaseRoleContract(client)')
+  const roleProvisioning = source.lastIndexOf('buildNewsProtocolObserverRoleProvisioningSQL(portalDatabase)')
+  const observerProvisioning = source.lastIndexOf('buildNewsProtocolObserverProvisioningSQL(portalDatabase)')
+  assert.ok(verification >= 0)
+  assert.ok(roleProvisioning > verification)
+  assert.ok(observerProvisioning > verification)
+  assert.ok(source.indexOf("stage = 'admin-contract'") < verification)
+  assert.ok(source.indexOf("stage = 'provision'") > verification)
+})
+
+test('read-only retry verifier covers all six CMS roles and rejects cms_admin or observer drift without mutation', async () => {
+  for (const drift of ['cms_admin', 'cms_observer']) {
+    const statements: string[] = []
+    const client = { async connect() {}, async end() {}, async query(sql: string) {
+      statements.push(sql)
+      if (sql === 'SELECT current_user AS name, current_database() AS database') {
+        return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms' }] }
+      }
+      if (sql === cmsAdminDatabaseRoleVerificationSQL) return { rows: [{ safe: drift !== 'cms_admin' }] }
+      if (sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: drift !== 'cms_observer' }] }
+      return { rows: [] }
+    } }
+    await assert.rejects(run('--verify-cluster-roles', {
+      CMS_DATABASE_URL: 'postgresql://cms_admin:test@db.invalid/ownerinc_cms', CMS_PORTAL_DATABASE_NAME: 'portal_test',
+    }, client), /Unsafe CMS (?:admin role|cluster role) contract/u)
+    assert.equal(statements.some(sql => /\b(?:BEGIN|COMMIT|CREATE|ALTER|GRANT|REVOKE)\b/u.test(sql)), false, drift)
+  }
+  for (const role of CMS_ROLE_NAMES) assert.ok(clusterRolesPublicVerificationSQL.includes(`'${role}'::name`), role)
+})
+
+test('cluster bootstrap retries and intermediate failures can never leave cms_admin with CREATEROLE', async () => {
+  const env = {
+    CMS_DATABASE_URL: `postgresql://portal_admin:${'p'.repeat(40)}@db.invalid:5432/postgres`,
+    CMS_POSTGRES_PASSWORD: 'a'.repeat(40), CMS_CONTROLLER_PASSWORD: 'c'.repeat(40),
+    CMS_MIGRATOR_PASSWORD: 'm'.repeat(40), CMS_RUNTIME_PASSWORD: 'r'.repeat(40),
+    CMS_OBSERVER_PASSWORD: 'o'.repeat(40), CMS_PORTAL_DATABASE_NAME: 'portal_test',
+  }
+  const responses = (sql: string) => {
+    if (sql.includes('current_user AS name')) return { rows: [{ name: 'portal_admin', database: 'postgres', rolsuper: true }] }
+    if (sql === clusterRolesVerificationSQL) return { rows: [{ safe: true }] }
+    if (sql.includes('SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1)')) return { rows: [{ present: true }] }
+    if (sql === clusterOwnershipHelperVerificationSQL) return { rows: [{ safe: true }] }
+    if (sql.includes('FROM pg_database')) return { rows: [{ owner: 'cms_admin' }] }
+    return { rows: [] }
+  }
+  for (let failAt = 1; failAt <= 7; failAt += 1) {
+    const queries: string[] = []
+    let queryNumber = 0
+    const client = { async connect() {}, async end() {}, async query(sql: string) {
+      queries.push(sql); queryNumber += 1
+      if (queryNumber === failAt) throw new Error('synthetic cluster bootstrap interruption')
+      return responses(sql)
+    } }
+    await assert.rejects(run('--bootstrap-database', env, client), /synthetic cluster bootstrap interruption/)
+    assert.equal(queries.some(sql => /(?:^|\s)CREATEROLE(?:\s|;)/mu.test(sql)), false)
+    const bootstrapAttempted = queries.some(sql => sql.includes('DO $ownerinc_cms_roles$'))
+    assert.equal(!bootstrapAttempted || queries.some(sql => /ALTER ROLE cms_admin[\s\S]*NOCREATEROLE/u.test(sql)), true)
+  }
+  await assert.rejects(run('--bootstrap-database', { ...env, CMS_RUNTIME_PASSWORD: 'p'.repeat(40) },
+    { async connect() { throw new Error('must reject before connect') }, async end() {}, async query() { return { rows: [] } } }),
+  /distinct from other configured secrets/)
+})
+
+test('control bootstrap grants only bounded access and exports reusable role/readiness verifiers', () => {
   const password = "synthetic-controller-'" + 'x'.repeat(32)
   const sql = controlRolesBootstrapSQL(password)
-  assert.match(sql, /CREATE ROLE cms_control NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS/)
-  assert.match(sql, /CREATE ROLE cms_controller LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD/)
-  assert.ok(sql.includes("synthetic-controller-''"))
-  assert.doesNotMatch(sql, /ALTER\s+ROLE|GRANT\s+cms_control\s+TO|GRANT\s+cms_controller\s+TO/i)
+  assert.doesNotMatch(sql, /CREATE\s+ROLE|ALTER\s+ROLE|PASSWORD|GRANT\s+cms_control\s+TO|GRANT\s+cms_controller\s+TO/i)
   assert.match(sql, /GRANT CONNECT ON DATABASE ownerinc_cms TO cms_control, cms_controller/)
   assert.match(sql, /GRANT USAGE, CREATE ON SCHEMA public TO cms_control/)
   assert.match(sql, /GRANT USAGE ON SCHEMA public TO cms_controller/)
@@ -90,13 +261,24 @@ test('control-role bootstrap creates only the bounded roles and exports reusable
   assert.doesNotMatch(controlRolesVerificationSQL, /(?:r|a)\.rolpassword\s*,|(?:r|a)\.rolpassword\s+AS\s+rolpassword/u)
   assert.match(controlRolePasswordPresenceSQL(), /a\.rolpassword IS NOT NULL AS has_password/)
   assert.match(controlRolePasswordPresenceSQL(), /a\.oid IS NOT NULL AS auth_row_exists/)
-  assert.match(controlRolesOwnershipVerificationSQL, /pg_shdepend/)
+  assert.match(controlRolesOwnershipVerificationSQL, /cms_cluster_guard\.verify_cms_ownership_contract/u)
+  assert.doesNotMatch(controlRolesOwnershipVerificationSQL, /pg_shdepend|pg_authid/u)
+  assert.match(clusterOwnershipHelperSQL, /FROM pg_catalog\.pg_shdepend dependency/u)
+  assert.match(clusterOwnershipHelperSQL, /dependency\.dbid=current_db\.oid/u)
+  assert.match(clusterOwnershipHelperSQL, /dependency\.classid='pg_catalog\.pg_database'::regclass/u)
+  assert.match(clusterOwnershipHelperSQL, /COALESCE\(rolname='cms_control'/u)
+  assert.doesNotMatch(clusterOwnershipHelperSQL, /pg_catalog\.coalesce/u)
+  assert.doesNotMatch(clusterOwnershipHelperSQL, /pg_class c|pg_proc p|pg_type t|pg_namespace n/u)
+  assert.match(clusterOwnershipHelperSQL, /RETURNS TABLE\(safe boolean, unexpected_ownership_count bigint, approved_control_function_count bigint\)/u)
+  assert.match(clusterOwnershipHelperVerificationSQL, /count\(\*\)=1/u)
+  assert.match(clusterOwnershipHelperVerificationSQL, /NOT pg_catalog\.has_function_privilege\('cms_runtime'/u)
   assert.match(controlRolesNativePrivilegesVerificationSQL, /has_table_privilege/)
-  assert.throws(() => controlRolesBootstrapSQL('placeholder-' + 'x'.repeat(32)), /Invalid CMS controller password/)
+  assert.match(controlRolesPublicVerificationSQL, /NOT rolcreaterole/)
+  assert.throws(() => controlRolesBootstrapSQL('placeholder-' + 'x'.repeat(32)), /Invalid CMS role password/)
 })
 
 test('control-role password presence contract consumes auth-catalog booleans and rejects missing rows', async () => {
-  const env = { CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
+  const env = { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
     CMS_CONTROLLER_PASSWORD: 'synthetic-controller-secret-' + 'x'.repeat(32),
     CMS_MIGRATOR_PASSWORD: 'synthetic-migrator-secret-' + 'y'.repeat(32),
     CMS_RUNTIME_PASSWORD: 'synthetic-runtime-secret-' + 'z'.repeat(32) }
@@ -129,9 +311,10 @@ test('control-role password presence contract consumes auth-catalog booleans and
       row.hasPassword === (row.roleName === 'cms_controller'))
     const client = { async connect() {}, async end() {}, async verifyControllerPassword() {}, async query(sql: string) {
       if (sql.includes('current_user AS name, current_database() AS database, r.rolsuper')) {
-        return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: true }] }
+        return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: false, rolcreaterole: false }] }
       }
-      if (sql === controlRolesVerificationSQL) { verifierCalled = true; return { rows: [{ safe }] } }
+      if (sql === cmsAdminDatabaseRoleVerificationSQL || sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: true }] }
+      if (sql === controlRolesPublicVerificationSQL) { verifierCalled = true; return { rows: [{ safe }] } }
       return { rows: [] }
     } }
     const execution = run('--verify-control', env, client)
@@ -143,39 +326,40 @@ test('control-role password presence contract consumes auth-catalog booleans and
 
 test('control-role bootstrap fails closed on secret reuse, wrong authority, or role drift', async () => {
   const password = 'synthetic-controller-secret-' + 'x'.repeat(32)
-  const env = { CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
+  const env = { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
     CMS_CONTROLLER_PASSWORD: password, CMS_MIGRATOR_PASSWORD: 'synthetic-migrator-secret-' + 'y'.repeat(32),
     CMS_RUNTIME_PASSWORD: 'synthetic-runtime-secret-' + 'z'.repeat(32), CMS_POSTGRES_PASSWORD: 'synthetic-postgres-secret-' + 'a'.repeat(32) }
-  for (const [scenario, accepted] of [['ready', true], ['unsafe-role', false], ['owns-object', false], ['native-acl', false], ['not-superuser', false]] as const) {
+  for (const [scenario, accepted] of [['ready', true], ['unsafe-role', false], ['native-acl', false], ['superuser', false]] as const) {
     let ended = false
     const queries: string[] = []
     const client = { async connect() {}, async end() { ended = true }, async verifyControllerPassword() {}, async query(sql: string) {
       queries.push(sql)
       if (sql.includes('current_user AS name, current_database() AS database, r.rolsuper')) {
-        return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: scenario !== 'not-superuser' }] }
+        return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: scenario === 'superuser', rolcreaterole: false }] }
       }
-      if (sql.includes('WITH expected(role_name')) return { rows: [{ safe: scenario !== 'unsafe-role' }] }
-      if (sql.includes('pg_shdepend')) return { rows: [{ safe: scenario !== 'owns-object' }] }
+      if (sql === cmsAdminDatabaseRoleVerificationSQL) return { rows: [{ safe: scenario !== 'superuser' }] }
+      if (sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: scenario !== 'unsafe-role' }] }
+      if (sql === controlRolesPublicVerificationSQL) return { rows: [{ safe: scenario !== 'unsafe-role' }] }
       if (sql.includes('has_table_privilege')) return { rows: [{ safe: scenario !== 'native-acl' }] }
       return { rows: [] }
     } }
     const execution = run('--bootstrap-control', env, client)
-    if (accepted) await execution; else await assert.rejects(execution, /Unsafe CMS|requires the cms_admin superuser/)
+    if (accepted) await execution; else await assert.rejects(execution, /Unsafe CMS|requires the non-superuser cms_admin/)
     assert.equal(ended, true)
     if (scenario === 'ready') {
-      const createRoles = queries.findIndex(sql => sql.includes('CREATE ROLE cms_control') && sql.includes('CREATE ROLE cms_controller'))
       const grantDatabaseSchema = queries.findIndex(sql => sql.includes('GRANT CONNECT ON DATABASE ownerinc_cms TO cms_control, cms_controller'))
-      assert.ok(createRoles >= 0)
-      assert.ok(grantDatabaseSchema > createRoles)
+      assert.ok(grantDatabaseSchema >= 0)
+      assert.equal(queries.some(sql => /CREATE ROLE|ALTER ROLE/u.test(sql)), false)
+      assert.equal(queries.some(sql => sql.includes('pg_shdepend')), false)
       assert.ok(queries.includes('COMMIT'))
-    } else assert.ok(queries.includes('ROLLBACK') || scenario === 'not-superuser')
+    } else assert.ok(queries.includes('ROLLBACK') || scenario === 'superuser' || scenario === 'unsafe-role')
   }
   await assert.rejects(run('--bootstrap-control', { ...env, CMS_CONTROLLER_PASSWORD: env.CMS_RUNTIME_PASSWORD },
     { async connect() { throw new Error('should not connect') }, async end() {}, async query() { return { rows: [] } } }), /distinct from other configured secrets/)
 })
 
 test('bootstrap diagnostics identify the exact role-contract rollback phase without exposing guard errors', async () => {
-  const env = { CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
+  const env = { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
     CMS_CONTROLLER_PASSWORD: 'synthetic-controller-secret-' + 'x'.repeat(32),
     CMS_MIGRATOR_PASSWORD: 'synthetic-migrator-secret-' + 'y'.repeat(32),
     CMS_RUNTIME_PASSWORD: 'synthetic-runtime-secret-' + 'z'.repeat(32) }
@@ -184,10 +368,11 @@ test('bootstrap diagnostics identify the exact role-contract rollback phase with
   const client = { async connect() {}, async end() { ended = true }, async verifyControllerPassword() {}, async query(sql: string) {
     queries.push(sql)
     if (sql.includes('current_user AS name, current_database() AS database, r.rolsuper')) {
-      return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: true }] }
+      return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: false, rolcreaterole: false }] }
     }
     if (sql.includes("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cms_controller')")) return { rows: [{ present: false }] }
-    if (sql.includes('WITH expected(role_name')) return { rows: [{ safe: false }] }
+    if (sql === cmsAdminDatabaseRoleVerificationSQL || sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: true }] }
+    if (sql === controlRolesPublicVerificationSQL) return { rows: [{ safe: false }] }
     return { rows: [] }
   } }
 
@@ -206,14 +391,15 @@ test('bootstrap diagnostics identify the exact role-contract rollback phase with
 })
 
 test('bootstrap diagnostics preserve a valid PostgreSQL SQLSTATE but discard malicious error text/code', async () => {
-  const env = { CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
+  const env = { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
     CMS_CONTROLLER_PASSWORD: 'synthetic-controller-secret-' + 'x'.repeat(32),
     CMS_MIGRATOR_PASSWORD: 'synthetic-migrator-secret-' + 'y'.repeat(32),
     CMS_RUNTIME_PASSWORD: 'synthetic-runtime-secret-' + 'z'.repeat(32) }
   const identityQuery = 'SELECT current_user AS name, current_database() AS database, r.rolsuper'
   const validPgError = Object.assign(new Error('database password=must-not-appear'), { code: '40P01' })
   const baseClient = (failure: unknown) => ({ async connect() {}, async end() {}, async verifyControllerPassword() {}, async query(sql: string) {
-    if (sql.includes(identityQuery)) return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: true }] }
+    if (sql.includes(identityQuery)) return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: false, rolcreaterole: false }] }
+    if (sql === cmsAdminDatabaseRoleVerificationSQL || sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: true }] }
     if (sql === 'SELECT pg_advisory_xact_lock(7194031)') throw failure
     return { rows: [{ present: false }] }
   } })
@@ -244,15 +430,16 @@ test('bootstrap diagnostics preserve a valid PostgreSQL SQLSTATE but discard mal
 })
 
 test('non-bootstrap control verification does not acquire bootstrap diagnostic output', async () => {
-  const env = { CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
+  const env = { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
     CMS_CONTROLLER_PASSWORD: 'synthetic-controller-secret-' + 'x'.repeat(32),
     CMS_MIGRATOR_PASSWORD: 'synthetic-migrator-secret-' + 'y'.repeat(32),
     CMS_RUNTIME_PASSWORD: 'synthetic-runtime-secret-' + 'z'.repeat(32) }
   const client = { async connect() {}, async end() {}, async verifyControllerPassword() { throw new Error('synthetic verify failure') }, async query(sql: string) {
     if (sql.includes('current_user AS name, current_database() AS database, r.rolsuper')) {
-      return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: true }] }
+      return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: false, rolcreaterole: false }] }
     }
-    if (sql.includes('WITH expected(role_name')) return { rows: [{ safe: true }] }
+    if (sql === cmsAdminDatabaseRoleVerificationSQL || sql === clusterRolesPublicVerificationSQL
+        || sql === controlRolesPublicVerificationSQL) return { rows: [{ safe: true }] }
     return { rows: [] }
   } }
   let failure: unknown
@@ -262,7 +449,7 @@ test('non-bootstrap control verification does not acquire bootstrap diagnostic o
 })
 
 test('control verification is phase-agnostic for approved finalizer ownership but still rejects role drift', async () => {
-  const env = { CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
+  const env = { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_admin:admin-secret@db.invalid:5432/ownerinc_cms',
     CMS_CONTROLLER_PASSWORD: 'synthetic-controller-secret-' + 'x'.repeat(32),
     CMS_MIGRATOR_PASSWORD: 'synthetic-migrator-secret-' + 'y'.repeat(32),
     CMS_RUNTIME_PASSWORD: 'synthetic-runtime-secret-' + 'z'.repeat(32) }
@@ -271,9 +458,10 @@ test('control verification is phase-agnostic for approved finalizer ownership bu
     const client = { async connect() {}, async end() {}, async verifyControllerPassword() {}, async query(sql: string) {
       queries.push(sql)
       if (sql.includes('current_user AS name, current_database() AS database, r.rolsuper')) {
-        return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: true }] }
+        return { rows: [{ name: 'cms_admin', database: 'ownerinc_cms', rolsuper: false, rolcreaterole: false }] }
       }
-      if (sql.includes('WITH expected(role_name')) return { rows: [{ safe }] }
+      if (sql === cmsAdminDatabaseRoleVerificationSQL || sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: true }] }
+      if (sql === controlRolesPublicVerificationSQL) return { rows: [{ safe }] }
       throw new Error('verify-control issued an unexpected query')
     } }
     const execution = run('--verify-control', env, client)
@@ -304,13 +492,15 @@ test('runtime grants restore native privileges then narrow optional protocol tab
 })
 
 test('runtime preflight fails closed on excessive roles, ownership or missing grants and closes connections', async () => {
-  const role = { name: 'cms_runtime', database: 'ownerinc_cms', rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false,
-    rolbypassrls: false, ddl: false, create_schema: false, temporary: false, member: false }
+  const role = { name: 'cms_runtime', database: 'ownerinc_cms', rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolinherit: false, rolreplication: false,
+    rolbypassrls: false, connection_limit_safe: true, expiry_safe: true, settings_safe: true, ddl: false, create_schema: false, temporary: false, member: false }
   const grants = { content: true, jobs: true, migration_write: false, owns_objects: false }
   for (const [roleChange, grantChange, protocolSafe, functionsSafe, passes] of [
     [{}, {}, true, true, true], [{ name: 'cms_admin' }, {}, true, true, false], [{ member: true }, {}, true, true, false],
     [{ ddl: true }, {}, true, true, false], [{ create_schema: true }, {}, true, true, false], [{ temporary: true }, {}, true, true, false],
     [{ rolsuper: true }, {}, true, true, false], [{}, { owns_objects: true }, true, true, false],
+    [{ connection_limit_safe: false }, {}, true, true, false], [{ expiry_safe: false }, {}, true, true, false],
+    [{ settings_safe: false }, {}, true, true, false],
     [{}, { migration_write: true }, true, true, false], [{}, { jobs: false }, true, true, false], [{}, { content: false }, true, true, false],
     [{}, {}, false, true, false], [{}, {}, true, false, false],
   ] as const) {

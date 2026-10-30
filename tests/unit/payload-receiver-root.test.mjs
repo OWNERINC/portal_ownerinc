@@ -8,7 +8,7 @@ import test from 'node:test';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const bashPath = value => value.replaceAll('\\', '/').replace(/^([A-Za-z]):/u, (_, drive) => `/${drive.toLowerCase()}`);
-const request = `production:payload-v1 ${'a'.repeat(40)} 1 1 ${['api', 'cron', 'cms'].map(s => `ghcr.io/ownerinc/ownerinc-portal-${s}@sha256:${'b'.repeat(64)}`).join(' ')} 11 12 13`;
+const request = `production:payload-v2 ${'a'.repeat(40)} 1 1 ${['api', 'cron', 'cms'].map(s => `ghcr.io/ownerinc/ownerinc-portal-${s}@sha256:${'b'.repeat(64)}`).join(' ')} 11 12 13 ${[4, 5, 6].map(n => `sha256:${String(n).repeat(64)}`).join(' ')} ${[7, 8, 9].map(n => String(n).repeat(64)).join(' ')} ${'a'.repeat(64)} ${'b'.repeat(64)} 1999999999 ${'c'.repeat(64)}`;
 
 test('actual production wrapper uses only fixed sudo for Payload; legacy SHA delegation remains unprivileged (transport doubles)', async t => {
   const root = await mkdtemp(path.join(process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : os.tmpdir(), 'receiver-wrapper-'));
@@ -82,6 +82,8 @@ import os,posixpath,stat,sys,types
 from unittest.mock import patch
 code=${JSON.stringify(code)}
 incoming='/var/lib/ownerinc/payload-candidate/incoming'
+nonces='/var/lib/ownerinc/payload-candidate/nonces'
+locks='/var/lib/ownerinc/payload-candidate/locks'
 files=['/usr/local/libexec/root','/usr/local/libexec/wrapper','/etc/sudoers.d/rule','/bundle/root','/bundle/wrapper']
 base={p:types.SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0,st_nlink=1) for p in ['/', '/var','/var/lib','/usr','/usr/local','/usr/local/libexec','/etc','/etc/sudoers.d','/bundle']}
 for p in files[-2:]:base[p]=types.SimpleNamespace(st_mode=stat.S_IFREG|0o755,st_uid=0,st_gid=0,st_nlink=1)
@@ -93,12 +95,12 @@ def run(mode,override=None):
     def mkdir(p,mode):
         effects.append(('mkdir',p));tree[p]=types.SimpleNamespace(st_mode=stat.S_IFDIR|mode,st_uid=0,st_gid=0,st_nlink=1)
     def chown(p,*_):effects.append(('chown',p))
-    with patch.object(os,'path',posixpath),patch.object(os,'lstat',lstat),patch.object(os,'mkdir',mkdir),patch.object(os,'chown',chown,create=True),patch.object(sys,'argv',['-',mode,incoming,*files]):
+    with patch.object(os,'path',posixpath),patch.object(os,'lstat',lstat),patch.object(os,'mkdir',mkdir),patch.object(os,'chown',chown,create=True),patch.object(sys,'argv',['-',mode,incoming,nonces,locks,*files]):
         try:exec(code,{});ok=True
         except SystemExit:ok=False
     return ok,effects
 assert run('check')==(True,[])
-ok,effects=run('create');assert ok and len(effects)==6
+ok,effects=run('create');assert ok and len(effects)==10
 for mode,uid,gid in [(stat.S_IFLNK|0o777,0,0),(stat.S_IFDIR|0o777,0,0),(stat.S_IFDIR|0o700,1000,1000),(stat.S_IFDIR|0o700,0,1000)]:
     bad=types.SimpleNamespace(st_mode=mode,st_uid=uid,st_gid=gid,st_nlink=1)
     for action in ['check','create']:

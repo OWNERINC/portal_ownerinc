@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Installed as /usr/local/sbin/payload-gate-e-guard. It is the only runner-facing
+# Gate E entrypoint and never prints or exports the host signing key.
+set -Eeuo pipefail
+umask 077
+[[ $# == 13 ]] || { echo 'Invalid Gate E invocation.' >&2; exit 2; }
+runtime=$2
+[[ $runtime == /var/lib/ownerinc/payload-control ]] || { echo 'Invalid Gate E runtime.' >&2; exit 2; }
+key=$runtime/payload-control.key
+helper=/usr/local/lib/ownerinc/payload-gate-e-guard.py
+[[ -f $key && ! -L $key && -f $helper && ! -L $helper ]] || { echo 'Gate E host material unavailable.' >&2; exit 2; }
+read -r mode links owner < <(/usr/bin/stat -c '%a %h %u' -- "$key")
+uid=$(/usr/bin/id -u)
+[[ $mode == 600 && $links == 1 && ( $owner == 0 || $owner == "$uid" ) ]] || { echo 'Unsafe Gate E host material.' >&2; exit 2; }
+exec 9<"$key"
+exec /usr/bin/python3 "$helper" "$@"

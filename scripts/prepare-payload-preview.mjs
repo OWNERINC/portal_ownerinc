@@ -97,9 +97,9 @@ export function validateComposeSource(base, payload) {
     || !base.includes('postgres_data:/var/lib/postgresql/data')
     || !base.includes('uploads_data:/app/uploads')
     || !base.includes('profiles: ["local"]')
-    || !payload.includes('cms-postgres:')
-    || !payload.includes('POSTGRES_DB: ownerinc_cms')
-    || !payload.includes('cms_postgres_data:/var/lib/postgresql/data')
+    || payload.includes('cms-postgres:')
+    || payload.includes('cms_postgres_data')
+    || !payload.includes('cms-cluster-bootstrap:')
     || !payload.includes('cms_uploads_data:/var/lib/ownerinc-cms/media')) {
     fail('compose_source_contract_changed')
   }
@@ -121,7 +121,7 @@ export function validateComposeSource(base, payload) {
     }
   }
   if (!baseServices.has('postgres') || !baseServices.has('nginx') || !baseServices.has('firebase-auth')
-    || !payloadServices.has('cms-postgres') || !payloadServices.has('cms')) fail('compose_source_contract_changed')
+    || payloadServices.has('cms-postgres') || !payloadServices.has('cms-cluster-bootstrap') || !payloadServices.has('cms')) fail('compose_source_contract_changed')
 }
 
 async function readSources(root, fileSystem) {
@@ -165,7 +165,7 @@ function databaseURL(username, password, database) {
 }
 
 function cmsDatabaseURL(username, password) {
-  return `postgresql://${username}:${encodeURIComponent(password)}@cms-postgres:5432/ownerinc_cms`
+  return `postgresql://${username}:${encodeURIComponent(password)}@postgres:5432/ownerinc_cms`
 }
 
 function makeEnvironment({ projectName, runId, projectId, runDirectory, httpPort, authPort }) {
@@ -175,6 +175,7 @@ function makeEnvironment({ projectName, runId, projectId, runDirectory, httpPort
   const cmsAdminPassword = randomSecret()
   const cmsMigratorPassword = randomSecret()
   const cmsRuntimePassword = randomSecret()
+  const cmsObserverPassword = randomSecret()
   const env = {
     COMPOSE_PROJECT_NAME: projectName,
     POSTGRES_DB: 'portal_test',
@@ -232,10 +233,12 @@ function makeEnvironment({ projectName, runId, projectId, runDirectory, httpPort
     PORTAL_TO_PAYLOAD_SECRET: randomSecret(),
     CMS_POSTGRES_PASSWORD: cmsAdminPassword,
     CMS_CONTROLLER_PASSWORD: randomSecret(),
-    CMS_ADMIN_DATABASE_URL: cmsDatabaseURL('cms_admin', cmsAdminPassword),
+    CMS_OWNER_DATABASE_URL: cmsDatabaseURL('cms_admin', cmsAdminPassword),
     CMS_MIGRATOR_PASSWORD: cmsMigratorPassword,
     CMS_RUNTIME_PASSWORD: cmsRuntimePassword,
+    CMS_OBSERVER_PASSWORD: cmsObserverPassword,
     CMS_MIGRATION_DATABASE_URL: cmsDatabaseURL('cms_migrator', cmsMigratorPassword),
+    CMS_OBSERVER_DATABASE_URL: cmsDatabaseURL('cms_observer', cmsObserverPassword),
     AUTH_PORT: String(authPort),
     PREVIEW_RUN_DIR: path.resolve(runDirectory).replace(/\\/gu, '/'),
   }
@@ -317,8 +320,8 @@ export async function preparePreview({
     resourceNames: {
       portalDatabase: 'portal_test',
       cmsDatabase: 'ownerinc_cms',
-      databaseServices: ['postgres', 'cms-postgres'],
-      projectScopedVolumes: ['postgres_data', 'uploads_data', 'cms_postgres_data', 'cms_uploads_data']
+      databaseServices: ['postgres'],
+      projectScopedVolumes: ['postgres_data', 'uploads_data', 'cms_uploads_data']
         .map(name => `${projectName}_${name}`),
       projectNetwork: `${projectName}_default`,
       uniqueImageTags: [env.API_IMAGE, env.CMS_IMAGE, env.PREVIEW_FIREBASE_IMAGE],

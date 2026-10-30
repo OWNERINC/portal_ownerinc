@@ -86,7 +86,7 @@ async function harness() {
   })
   const newsArea = createNewsAreaAccess(() => ({ getAuthority: async () => {
     state.authorityChecks++
-    return { mode: 'payload', epoch: 1 }
+    return { mode: 'payload', epoch: 1, activationObserved: true }
   } }))
   // Use the production News collection/global policies in this native HTTP harness,
   // with only the authority transport replaced by a deterministic request fixture.

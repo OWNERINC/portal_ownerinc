@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Manual archive path. CI uses ops/deploy-from-ci.sh; both share manifest/backup
-# and mandatory authority guard contracts. This script never changes authority.
+# Historical live/manual archive path. Gate C private installation MUST use the
+# fixed receiver -> authenticated preflight -> apply path instead. This script
+# is deliberately not a fallback for payload-v2 receipts because it starts
+# Nginx and opens admission near the end of the legacy flow.
 set -Eeuo pipefail
 umask 077
 root=${1:?}; release=${2:?}; release_id=${3:?}
@@ -45,7 +47,7 @@ rollback() {
   local status=$?
   trap - ERR INT TERM
   set +e
-  compose "$release" stop --timeout 120 nginx api cron cms cms-worker
+  compose "$release" stop --timeout 120 nginx api cron cms
   if [[ ! -e $PORTAL_OPERATION_LOCK.admission-closed && ! -L $PORTAL_OPERATION_LOCK.admission-closed ]]; then
     guard close-admission || {
       echo 'Unable to establish Payload admission fence; writers remain stopped.' >&2
@@ -82,8 +84,9 @@ fi
 guard quiescence-proof
 compose "$release" run --rm migrate
 compose "$release" run --rm --no-deps -e RUN_MIGRATIONS=false -e MIGRATION_ONLY=false migrate node db/verify-migrations.js
-compose "$release" up -d --no-deps cms-postgres
-compose "$release" run --rm cms-provision
+compose "$release" up -d --no-deps postgres
+compose "$release" --profile cms-bootstrap run --rm --no-deps cms-cluster-bootstrap
+compose "$release" run --rm --no-deps cms-provision
 if ! compose "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles; then
   compose "$release" --profile cms-control-roles run --rm --no-deps cms-control-roles \
     node --import tsx scripts/provision-db.ts --bootstrap-control

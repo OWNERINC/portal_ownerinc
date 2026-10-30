@@ -74,8 +74,18 @@ export function createPortalClient(
     async getAuthority(): Promise<Authority> {
       const value = await request('/authority') as Partial<Authority> | null
       if (!value || !['legacy', 'frozen', 'payload', 'payload_frozen'].includes(value.mode || '') ||
-        !Number.isSafeInteger(value.epoch) || value.epoch! < 1) throw new PortalAuthError(503)
-      return { mode: value.mode!, epoch: value.epoch! }
+        !Number.isSafeInteger(value.epoch) || value.epoch! < 1 || typeof value.activationObserved !== 'boolean') throw new PortalAuthError(503)
+      const names = ['manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest', 'activationRequestId'] as const
+      const supplied = names.filter(name => Object.hasOwn(value, name))
+      if (supplied.length !== 0 && supplied.length !== names.length || supplied.length && (
+        !(value.manifestSha256 === null || typeof value.manifestSha256 === 'string' && /^[0-9a-f]{64}$/u.test(value.manifestSha256)) ||
+        !(value.sealSha256 === null || typeof value.sealSha256 === 'string' && /^[0-9a-f]{64}$/u.test(value.sealSha256)) ||
+        !(value.releaseDigest === null || typeof value.releaseDigest === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value.releaseDigest)) ||
+        !(value.imageDigest === null || typeof value.imageDigest === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value.imageDigest)) ||
+        !(value.activationRequestId === null || typeof value.activationRequestId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/u.test(value.activationRequestId)))) throw new PortalAuthError(503)
+      return { mode: value.mode!, epoch: value.epoch!, activationObserved: value.activationObserved,
+        ...(supplied.length ? { manifestSha256: value.manifestSha256!, sealSha256: value.sealSha256!,
+          releaseDigest: value.releaseDigest!, imageDigest: value.imageDigest!, activationRequestId: value.activationRequestId! } : {}) }
     },
   }
 }

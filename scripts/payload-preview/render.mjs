@@ -16,8 +16,9 @@ export const composeEnvironmentKeys = [
   'MAX_PENDING_REGISTRATIONS_PER_HOUR', 'NOTIFICATION_RETENTION_DAYS', 'AUDIT_RETENTION_DAYS', 'PENDING_REGISTRATION_RETENTION_DAYS',
   'UPLOAD_DIR', 'AUTOCARD_MEDIA_ORPHAN_DAYS', 'CMS_ASSET_ORPHAN_RETENTION_DAYS', 'BULK_IMPORT_API_URL',
   'CRON_BOOTSTRAP_ONLY', 'CMS_IMAGE', 'CMS_RUNTIME_DATABASE_URL', 'PAYLOAD_SECRET', 'PORTAL_PUBLIC_URL',
-  'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET', 'CMS_POSTGRES_PASSWORD', 'CMS_ADMIN_DATABASE_URL',
-   'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD', 'CMS_MIGRATION_DATABASE_URL', 'PREVIEW_FIREBASE_IMAGE',
+  'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET', 'CMS_POSTGRES_PASSWORD', 'CMS_OWNER_DATABASE_URL',
+   'CMS_CONTROLLER_PASSWORD', 'CMS_MIGRATOR_PASSWORD', 'CMS_RUNTIME_PASSWORD', 'CMS_OBSERVER_PASSWORD',
+   'CMS_MIGRATION_DATABASE_URL', 'CMS_OBSERVER_DATABASE_URL', 'PREVIEW_FIREBASE_IMAGE',
   'AUTH_PORT', 'PREVIEW_RUN_DIR',
 ]
 
@@ -107,9 +108,6 @@ services:
   postgres:
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \${POSTGRES_USER:-portal_admin} -d \${POSTGRES_DB:-portal}"]
-  cms-postgres:
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U cms_admin -d ownerinc_cms"]
   firebase-auth:
     image: \${PREVIEW_FIREBASE_IMAGE:?Set PREVIEW_FIREBASE_IMAGE}
     command:
@@ -255,6 +253,10 @@ ${unsetShell}${localComposeGuardShell()}
 compose() { docker compose ${shellArgs} "$@"; }
 compose config --quiet
 compose build api cms firebase-auth
+compose --profile cms-bootstrap run --rm cms-cluster-bootstrap
+compose run --rm --no-deps cms-provision
+compose --profile cms-control-roles run --rm --no-deps cms-control-roles node --import tsx scripts/provision-db.ts --bootstrap-control
+compose run --rm --no-deps cms-migrate
 compose up -d --wait --wait-timeout 300 nginx cms firebase-auth
 `
 
@@ -266,6 +268,18 @@ Invoke-PreviewDockerCommand -DockerArguments $configArguments
 if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
 $buildArguments = @('compose') + $compose + @('build', 'api', 'cms', 'firebase-auth')
 Invoke-PreviewDockerCommand -DockerArguments $buildArguments
+if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
+$bootstrapArguments = @('compose') + $compose + @('--profile', 'cms-bootstrap', 'run', '--rm', 'cms-cluster-bootstrap')
+Invoke-PreviewDockerCommand -DockerArguments $bootstrapArguments
+if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
+$provisionArguments = @('compose') + $compose + @('run', '--rm', '--no-deps', 'cms-provision')
+Invoke-PreviewDockerCommand -DockerArguments $provisionArguments
+if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
+$controlArguments = @('compose') + $compose + @('--profile', 'cms-control-roles', 'run', '--rm', '--no-deps', 'cms-control-roles', 'node', '--import', 'tsx', 'scripts/provision-db.ts', '--bootstrap-control')
+Invoke-PreviewDockerCommand -DockerArguments $controlArguments
+if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
+$migrationArguments = @('compose') + $compose + @('run', '--rm', '--no-deps', 'cms-migrate')
+Invoke-PreviewDockerCommand -DockerArguments $migrationArguments
 if ($script:PreviewDockerExitCode -ne 0) { exit $script:PreviewDockerExitCode }
 $upArguments = @('compose') + $compose + @('up', '-d', '--wait', '--wait-timeout', '300', 'nginx', 'cms', 'firebase-auth')
 Invoke-PreviewDockerCommand -DockerArguments $upArguments

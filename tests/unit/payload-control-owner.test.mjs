@@ -42,18 +42,39 @@ args = [root, runtime, os.path.join(root, 'releases'), os.path.join(root, 'curre
         os.path.join(runtime, 'deploy.lock'), os.path.join(fixture, 'daily'),
         os.path.join(fixture, 'production'), os.path.join(fixture, 'protection'), environment,
         os.path.join(runtime, 'compose.yaml'), os.path.join(runtime, 'payload.yaml')]
+os.makedirs(os.path.dirname(environment), exist_ok=True)
+with open(environment, 'wb') as stream:
+    stream.write(b'POSTGRES_DB=portal\nCMS_PORTAL_DATABASE_NAME=portal\n')
 ` + source, path.resolve('.'), fixture], {
     encoding: 'utf8', timeout: 20000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
-test('inventory v2 fixes approved environment owners and rejects legacy/unknown/ambiguous contracts', async t => {
+test('inventory v3 fixes approved environment owners and rejects legacy/unknown/ambiguous contracts', async t => {
   await runPython(t, String.raw`
-document = I.production_inventory(*args)
-assert document['schemaVersion'] == 2
+document = I.production_inventory(*args, 'portal')
+assert document['schemaVersion'] == 3
 assert document['environmentFileOwner'] == {'uid': 1000, 'gid': 1000}
 I.validate(document)
+configured = I.production_inventory(*args, 'portal_test')
+assert configured['databaseCluster']['databases']['portal'] == {'name':'portal_test','owner':'portal_admin'}
+assert I.identity(configured) != I.identity(document)
+for database in ['', 'Portal', 'portal-test', '1portal', 'ownerinc_cms', 'a' * 64]:
+    expect('invalid_portal_database_name' if database != 'ownerinc_cms' else 'invalid_inventory_database_cluster',
+           lambda database=database: I.production_inventory(*args, database))
+with open(environment, 'wb') as stream:
+    stream.write(b'POSTGRES_DB=portal_test\nCMS_PORTAL_DATABASE_NAME=portal_test\n')
+with patch.object(I, 'verify_environment_file', lambda *_args: None):
+    assert I.portal_database_from_environment(environment) == 'portal_test'
+    with open(environment, 'wb') as stream:
+        stream.write(b'POSTGRES_DB=portal_test\nCMS_PORTAL_DATABASE_NAME=portal\n')
+    expect('portal_database_configuration_mismatch', lambda: I.portal_database_from_environment(environment))
+    with open(environment, 'wb') as stream: stream.write(b'CMS_PORTAL_DATABASE_NAME=portal_test\n')
+    expect('portal_database_configuration_missing', lambda: I.portal_database_from_environment(environment))
+    with open(environment, 'wb') as stream:
+        stream.write(b'POSTGRES_DB=portal;DROP DATABASE x\nCMS_PORTAL_DATABASE_NAME=portal;DROP DATABASE x\n')
+    expect('invalid_portal_database_name', lambda: I.portal_database_from_environment(environment))
 fixture_doc = copy.deepcopy(document)
 fixture_doc['project'] = 'payload-preauth-owner-source'
 for entry in fixture_doc['volumes'].values():
@@ -73,7 +94,7 @@ expect('invalid_environment_file_owner', lambda: I.validate(bad))
 bad = copy.deepcopy(fixture_doc)
 bad['environmentFileOwner'] = {'uid': 1000, 'gid': 1000}
 expect('invalid_environment_file_owner', lambda: I.validate(bad))
-for version in [1, True, 3, '2']:
+for version in [1, 2, True, 4, '3']:
     bad = copy.deepcopy(document)
     bad['schemaVersion'] = version
     expect('unsupported_inventory_version', lambda: I.validate(bad))
@@ -131,7 +152,7 @@ with patch.object(I.os, 'name', 'posix'), patch.object(I.os, 'lstat', lstat), \
 
 test('runtime and private preparer reject unsafe environment before state/database/file effects', async t => {
   await runPython(t, String.raw`
-document = I.production_inventory(*args)
+document = I.production_inventory(*args, 'portal')
 effects = []
 directory = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0, st_nlink=1)
 for mode, uid, gid, links, reason in [
@@ -165,7 +186,7 @@ assert P.PRODUCTION_ENVIRONMENT_OWNER == {'uid': 1000, 'gid': 1000}
 
 test('Compose consumes the approved 1000 environment without relaxing root checks on other files', async t => {
   await runPython(t, String.raw`
-document = I.production_inventory(*args)
+document = I.production_inventory(*args, 'portal')
 directory = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0, st_nlink=1)
 file_info = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1000, st_gid=1000, st_nlink=1)
 checks = []
@@ -189,7 +210,7 @@ assert (args[-1], {'owner_root': True}) in checks
 
 test('inventory parser rejects duplicate JSON, noncanonical transport and unsafe file ancestry', async t => {
   await runPython(t, String.raw`
-document = I.production_inventory(*args)
+document = I.production_inventory(*args, 'portal')
 inventory_path = os.path.join(fixture, 'inventory.json')
 for raw, reason in [(b'{"schemaVersion":2,"schemaVersion":2}\n', 'duplicate_inventory_field'),
                     (json.dumps(document, indent=2).encode() + b'\n', 'noncanonical_inventory'),
@@ -254,7 +275,7 @@ test('Linux root fixture preserves a real 1000:1000 environment and root private
   }
   await runPython(t, String.raw`
 os.makedirs(runtime, mode=0o700)
-os.makedirs(os.path.dirname(environment), mode=0o755)
+os.makedirs(os.path.dirname(environment), mode=0o755, exist_ok=True)
 original = b'# private fixture\nPORTAL_PUBLIC_URL=https://portal.ownerinc.com.br\n'
 with open(environment, 'wb') as stream: stream.write(original)
 os.chmod(environment, 0o600)
@@ -264,7 +285,7 @@ with open(environment, 'rb') as stream: updated = stream.read()
 assert updated.startswith(original)
 approved = I.verify_environment_file(environment, {'uid': 1000, 'gid': 1000})
 assert (approved.st_uid, approved.st_gid, stat.S_IMODE(approved.st_mode)) == (1000, 1000, 0o600)
-document = I.production_inventory(*args)
+document = I.production_inventory(*args, 'portal')
 I.create(os.path.join(runtime, 'payload-control-inventory.json'), document)
 R.STATE.initialize(runtime, I.identity(document))
 R.STATE.read_state(runtime)
