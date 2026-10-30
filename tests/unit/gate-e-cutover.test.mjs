@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile, writeFile, chmod, mkdir, rm, symlink } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -51,6 +51,22 @@ test('private receipt read is same-FD canonical mode-0600 and no-follow; durable
   const output = path.join(root, 'output.json'); await writePrivateCanonical(output, signEnvelope(evidence, key));
   const first = await readFile(output); await assert.rejects(writePrivateCanonical(output, { replaced: true }));
   assert.deepEqual(await readFile(output), first);
+});
+
+test('cutover key reader consumes a real inherited Linux FD9', { skip: process.platform !== 'linux' }, async t => {
+  const root = await fsTemp(); t.after(() => rm(root, { recursive: true, force: true }));
+  const keyFile = path.join(root, 'cutover.key');
+  await writeFile(keyFile, key, { mode: 0o600 });
+  const descriptor = openSync(keyFile, 'r');
+  t.after(() => closeSync(descriptor));
+  const script = `const { readKey } = require('./api/owner-news/cutover');\n`
+    + `readKey().then(value => process.stdout.write(value.toString('hex'))).catch(error => { console.error(error.code); process.exit(1); });`;
+  const result = spawnSync(process.execPath, ['-e', script], {
+    cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, OWNER_NEWS_CUTOVER_KEY_FD: '9' },
+    stdio: ['ignore', 'pipe', 'pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', descriptor],
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.stdout, key.toString('hex'));
 });
 
 async function fsTemp() {

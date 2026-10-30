@@ -391,7 +391,7 @@ AS $ownerinc_cms_ownership$
       ))
   ), classified AS (
     SELECT *,
-      pg_catalog.coalesce(rolname='cms_control'
+      COALESCE(rolname='cms_control'
         AND dbid=(SELECT oid FROM current_db)
         AND classid='pg_catalog.pg_proc'::regclass
         AND objid=ANY(ARRAY[

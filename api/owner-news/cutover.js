@@ -1,5 +1,5 @@
 const { createHmac, createHash, randomBytes, timingSafeEqual } = require('node:crypto');
-const { constants } = require('node:fs');
+const { constants, readFile: readFileDescriptor } = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { AuthorityError, getAuthority, transitionAuthority } = require('./authority');
@@ -118,7 +118,9 @@ async function readKey(key) {
   const descriptor = Number(process.env.OWNER_NEWS_CUTOVER_KEY_FD || '9');
   if (!Number.isInteger(descriptor) || descriptor < 3) fail('cutover_configuration_invalid', 503);
   try {
-    const raw = await fs.readFile(descriptor);
+    const raw = await new Promise((resolve, reject) => {
+      readFileDescriptor(descriptor, (error, value) => error ? reject(error) : resolve(value));
+    });
     if (raw.length < 32 || raw.length > 128) fail('cutover_configuration_invalid', 503);
     return raw;
   } catch { fail('cutover_configuration_invalid', 503); }

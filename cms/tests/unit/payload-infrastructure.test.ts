@@ -266,6 +266,8 @@ test('control bootstrap grants only bounded access and exports reusable role/rea
   assert.match(clusterOwnershipHelperSQL, /FROM pg_catalog\.pg_shdepend dependency/u)
   assert.match(clusterOwnershipHelperSQL, /dependency\.dbid=current_db\.oid/u)
   assert.match(clusterOwnershipHelperSQL, /dependency\.classid='pg_catalog\.pg_database'::regclass/u)
+  assert.match(clusterOwnershipHelperSQL, /COALESCE\(rolname='cms_control'/u)
+  assert.doesNotMatch(clusterOwnershipHelperSQL, /pg_catalog\.coalesce/u)
   assert.doesNotMatch(clusterOwnershipHelperSQL, /pg_class c|pg_proc p|pg_type t|pg_namespace n/u)
   assert.match(clusterOwnershipHelperSQL, /RETURNS TABLE\(safe boolean, unexpected_ownership_count bigint, approved_control_function_count bigint\)/u)
   assert.match(clusterOwnershipHelperVerificationSQL, /count\(\*\)=1/u)

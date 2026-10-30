@@ -119,6 +119,8 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     'the opt-in CMS-only dispatch must be a default-false boolean input');
   assert.match(build, /docker build --tag ownerinc-portal-cms:\$\{GITHUB_SHA\} --file cms\/Dockerfile \./,
     'CMS Dockerfile must be built with the repository-root context');
+  assert.match(workflow, /Test CMS ownership helper against PostgreSQL 16[\s\S]*run: cd cms && node --import tsx tests\/integration\/ownership-helper-pg16\.mjs/,
+    'the PostgreSQL 16 helper proof must resolve the CMS-local tsx installation');
   assert.doesNotMatch(build, /--build-arg|CMS_BUILD_ONLY|secrets\./,
     'production CMS image build must not receive build-time secrets or the synthetic CI build flag');
   assert.match(dockerfile, /RUN node --import tsx scripts\/check-runtime-packaging\.mjs/,
@@ -194,9 +196,16 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   assert.match(candidateUpload, /path: candidate\.json/);
   assert.match(candidateUpload, /retention-days: 30/);
   assert.match(recoveryPull, /docker pull "\$API_IMAGE"[\s\S]*docker pull "\$CRON_IMAGE"[\s\S]*docker pull "\$CMS_IMAGE"/);
+  assert.match(recoveryPull, /docker pull postgres:16-alpine@sha256:[0-9a-f]{64}[\s\S]*docker pull nginx:alpine@sha256:[0-9a-f]{64}/,
+    'the clean qualification runner must prepare every image inspected by the root-owned fixture');
   assert.match(recovery, /sudo env[\s\S]*API_IMAGE="\$API_IMAGE"[\s\S]*node scripts\/test-payload-preauthority-recovery\.mjs/);
   assert.match(recoveryReport, /always\(\)[\s\S]*payload-preauthority-recovery-report[\s\S]*retention-days: 30/);
   assert.match(qualifiedManifest, /node scripts\/qualify-payload-candidate\.mjs[\s\S]*--candidate candidate\.json --report "\$RECOVERY_REPORT"[\s\S]*--output qualified-candidate\.json/);
+  for (const binding of ['API_IMAGE', 'CRON_IMAGE', 'CMS_IMAGE', 'PRODUCTION_APPROVAL_SHA256',
+    'PRODUCTION_INVENTORY_IDENTITY', 'REQUEST_EXPIRES_AT', 'REQUEST_NONCE']) {
+    assert.match(qualifiedManifest, new RegExp(`^          ${binding}:`, 'mu'),
+      `the executable qualifier must receive its required ${binding} binding`);
+  }
   assert.doesNotMatch(qualifiedManifest, /node <<|JSON\.parse|const expectedChecks/u,
     'the workflow must invoke the executable, adversarially tested qualifier rather than duplicating it inline');
   const qualifiedUpload = containingStep(workflow, 'name: payload-recovery-qualified-candidate');
@@ -469,6 +478,8 @@ test('CMS image pins Node and rebuilds the matching upstream esbuild source with
     'the Payload CLI smoke runs without connecting to a database');
   assert.match(runtimePackaging, /import\(new URL\('scripts\/owner-news-payload\/cutover\.mjs', root\)\)/,
     'the final image smoke imports the cutover entrypoint and therefore verifies its complete allowlisted closure');
+  assert.match(runtimePackaging, /import\(new URL\('cms\/scripts\/provision-db\.ts', root\)\)/,
+    'the final image smoke imports the provisioning entrypoint used by every CMS Compose startup mode');
   assert.match(compose, /npm run migrate/,
     'the migration service continues to invoke the Payload migration script through npm');
   assert.equal(packageJson.dependencies.tsx, '4.23.15');

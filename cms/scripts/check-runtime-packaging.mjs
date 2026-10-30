@@ -87,9 +87,11 @@ export async function checkRuntimePackaging() {
     const exporter = await import(new URL('scripts/owner-news-payload/export.mjs', root));
     const cutover = await import(new URL('scripts/owner-news-payload/cutover.mjs', root));
     const consumer = await import(new URL('cms/src/migration/bundle.ts', root));
+    const provisioner = await import(new URL('cms/scripts/provision-db.ts', root));
     const legacy = await import(new URL('scripts/import-owner-news.mjs', root));
     for (const fn of [producer.loadBundle, producer.validateBundle, producer.validateRevisionFile,
-      exporter.exportNewsBundle, cutover.parseCutoverArguments, consumer.validateImportBundleParts]) assert.equal(typeof fn, 'function');
+      exporter.exportNewsBundle, cutover.parseCutoverArguments, consumer.validateImportBundleParts,
+      provisioner.run, provisioner.parsePortalDatabaseName]) assert.equal(typeof fn, 'function');
     // Exercises the API-anchored sharp require used by the actual legacy validator.
     await legacy.validateMedia({ buffer: png, mime: 'image/png' }, 'image');
     assert.equal(producer.snapshotHash({}), '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a');
