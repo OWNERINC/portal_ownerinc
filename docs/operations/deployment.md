@@ -343,6 +343,15 @@ sucesso da integração e dos três scans, as três referências do artefato e o
 `deploy-production` ignorado. Publicação candidata não significa instalação,
 ativação CMS, troca de autoridade ou autorização de restore em produção.
 
+O gate obrigatório `isolated-b0-recovery` cria sua própria fixture root-only e,
+antes do fingerprint inicial, materializa `payload-control-inventory.json` schema
+v3 pelo helper real. A identidade calculada desse documento é a única usada pela
+resolução do banco, pelo estado e pelo binding assinado; não existe cache ou
+fallback produtivo. O fence consulta consumidores somente pelos três nomes
+aleatórios de volumes pertencentes à fixture; não enumera containers alheios nem
+lê seus mounts ou paths. A prova final continua explicitamente descartável, sem
+autorização produtiva ou qualificação da aplicação.
+
 Essa publicação **não ativa nem implanta o Payload CMS em produção**: não altera o
 artefato legacy `image-digests`, o arquivo `.ci-images` de duas linhas, o manifesto
 da VPS, Compose, banco ou autoridade CMS. Até que adapter/receiver, backup e
