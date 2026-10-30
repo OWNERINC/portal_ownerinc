@@ -142,12 +142,13 @@ test('CMS Dockerfile uses an explicit root-context packaging closure, not a broa
   assert.match(dockerfile, /WORKDIR \/app\/api/);
   assert.match(dockerfile, /COPY scripts\/owner-news-payload\/bundle\.mjs[^\n]* \/app\/scripts\/owner-news-payload\//);
   assert.match(dockerfile, /COPY api\/owner-news\/editorial\.js api\/owner-news\/home\.js api\/owner-news\/authority\.js api\/owner-news\/cutover\.js api\/owner-news\/payload-client\.js api\/owner-news\/payload-dto\.js \/app\/api\/owner-news\//);
+  assert.match(dockerfile, /COPY api\/route-utils\.js \/app\/api\//);
   assert.match(dockerfile, /COPY api\/package\.json api\/package-lock\.json/);
   assert.match(dockerfile, /RUN npm ci --omit=dev/);
   assert.match(dockerfile, /RUN node --import tsx scripts\/check-runtime-packaging\.mjs/);
   assert.doesNotMatch(dockerfile, /^\s*COPY\s+\.\s+/m);
   assert.doesNotMatch(ignore, /!\.env|!.*state\.json|!.*compose\.env/);
-  for (const required of ['!cms/src/**', '!cms/scripts/import-owner-news.ts', '!api/package-lock.json',
+  for (const required of ['!cms/src/**', '!cms/scripts/import-owner-news.ts', '!api/package-lock.json', '!api/route-utils.js',
     '!api/cms/blocks.js', '!api/owner-news/authority.js', '!api/owner-news/cutover.js',
     '!api/owner-news/payload-client.js', '!api/owner-news/payload-dto.js', '!scripts/import-owner-news.mjs',
     '!scripts/owner-news-payload/bundle.mjs', '!scripts/owner-news-payload/files.mjs']) assert.ok(ignore.includes(required), required);

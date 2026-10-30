@@ -20,6 +20,7 @@
 !api/
 !api/package.json
 !api/package-lock.json
+!api/route-utils.js
 !api/cms/
 !api/cms/blocks.js
 !api/cms/locks.js
