@@ -328,9 +328,10 @@ function envFileContents({ project, port, credentials }) {
     `CMS_CONTROLLER_PASSWORD=${credentials.cmsController}`,
     `CMS_MIGRATOR_PASSWORD=${credentials.cmsMigrator}`,
     `CMS_RUNTIME_PASSWORD=${credentials.cmsRuntime}`,
-    `CMS_OWNER_DATABASE_URL=postgresql://cms_admin:${credentials.cmsAdmin}@cms-postgres:5432/ownerinc_cms`,
-    `CMS_MIGRATION_DATABASE_URL=postgresql://cms_migrator:${credentials.cmsMigrator}@cms-postgres:5432/ownerinc_cms`,
-    `CMS_RUNTIME_DATABASE_URL=postgresql://cms_runtime:${credentials.cmsRuntime}@cms-postgres:5432/ownerinc_cms`,
+    `CMS_OBSERVER_PASSWORD=${credentials.cmsObserver}`,
+    `CMS_OWNER_DATABASE_URL=postgresql://cms_admin:${credentials.cmsAdmin}@postgres:5432/ownerinc_cms`,
+    `CMS_MIGRATION_DATABASE_URL=postgresql://cms_migrator:${credentials.cmsMigrator}@postgres:5432/ownerinc_cms`,
+    `CMS_RUNTIME_DATABASE_URL=postgresql://cms_runtime:${credentials.cmsRuntime}@postgres:5432/ownerinc_cms`,
     `PAYLOAD_SECRET=${credentials.payloadSecret}`,
     `PAYLOAD_TO_PORTAL_SECRET=${credentials.payloadToPortal}`,
     `PORTAL_TO_PAYLOAD_SECRET=${credentials.portalToPayload}`,
@@ -401,7 +402,8 @@ async function createRuntime(project, root, sourceInventoryIdentity = null, sour
   const secret = () => randomBytes(48).toString('base64url');
   Object.assign(credentials, {
     portalAdmin: secret(), portalApi: secret(), portalCron: secret(), cmsAdmin: secret(),
-    cmsController: secret(), cmsMigrator: secret(), cmsRuntime: secret(), payloadSecret: secret(), payloadToPortal: secret(),
+    cmsController: secret(), cmsMigrator: secret(), cmsRuntime: secret(), cmsObserver: secret(),
+    payloadSecret: secret(), payloadToPortal: secret(),
     portalToPayload: secret(), smtpPassword: secret(), workerSecret: secret(),
   });
   await writeRootFile(document.paths.environmentFile, envFileContents({ project, port, credentials }));

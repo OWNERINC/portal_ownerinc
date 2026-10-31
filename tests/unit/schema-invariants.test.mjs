@@ -28,6 +28,11 @@ test('migrations are numbered, ordered, and tracked by a ledger', async () => {
     assert.deepEqual(extractLedger(await readFile(filename, 'utf8')), expected,
       `${filename} must require the exact current migration ledger`);
   }
+  const payloadState = await readFile('ops/payload-control-state.py', 'utf8');
+  const payloadLedgerBlock = /PORTAL_MIGRATIONS = \[([\s\S]*?)\n\]/u.exec(payloadState)?.[1] || '';
+  const payloadLedger = [...payloadLedgerBlock.matchAll(/'([0-9]{3}_[a-z0-9_]+)'/gu)].map(match => match[1]);
+  assert.deepEqual(payloadLedger, expected,
+    'Payload recovery must require the exact current Portal migration ledger');
 });
 
 test('editorial control migration, grants and both installation gates stay aligned', async () => {

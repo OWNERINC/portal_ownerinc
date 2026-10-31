@@ -3435,9 +3435,11 @@ class Runtime:
                 self._creation_boundary()
                 self._initializer_phase('container_create')
                 # `compose create` has no --no-deps flag. `up --no-start`
-                # provides create-only semantics with dependency isolation;
-                # do not drop --no-deps and accidentally create unbound services.
-                self._initializer_compose(['up', '--no-start', '--no-recreate', '--no-build', '--no-deps', '--pull', 'never', service], creation=True)
+                # provides create-only semantics with dependency isolation. A
+                # shared-cluster install must replace the stopped legacy API/cron
+                # containers so the candidate bytes and reservation label become
+                # receiptable; only an unrecorded service reaches this branch.
+                self._initializer_compose(['up', '--no-start', '--force-recreate', '--no-build', '--no-deps', '--pull', 'never', service], creation=True)
                 self._initializer_phase('container_receipt')
                 self.state = STATE.record_install_creation(self.runtime_dir, binding, 'containers', service, self._creation_container(service))
         self._initializer_phase('resources_boundary')

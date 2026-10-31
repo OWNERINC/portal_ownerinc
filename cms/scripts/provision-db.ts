@@ -510,11 +510,12 @@ export function provisioningSQL(): string {
   return `
 REVOKE ALL ON DATABASE ownerinc_cms FROM PUBLIC;
 REVOKE ALL ON DATABASE ownerinc_cms FROM cms_runtime;
-GRANT CONNECT ON DATABASE ownerinc_cms TO cms_migrator, cms_runtime;
+GRANT CONNECT ON DATABASE ownerinc_cms TO cms_migrator, cms_runtime, cms_observer;
+REVOKE CREATE, TEMPORARY ON DATABASE ownerinc_cms FROM cms_observer;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO cms_migrator;
-GRANT USAGE ON SCHEMA public TO cms_runtime;
-REVOKE CREATE ON SCHEMA public FROM cms_runtime;
+GRANT USAGE ON SCHEMA public TO cms_runtime, cms_observer;
+REVOKE CREATE ON SCHEMA public FROM cms_runtime, cms_observer;
 `
 }
 

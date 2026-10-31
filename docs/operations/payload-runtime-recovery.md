@@ -19,6 +19,15 @@ nome Portal em `databaseCluster`, `sharedCluster`, `portalTarget`, proofs e
 restore targets deve coincidir; drift entre environment, inventory ou binding
 falha antes de observações ou mutações.
 
+Na criação v4, API e cron legados já estão parados e cercados depois do B0. Para
+cada serviço ainda sem receipt, o initializer usa `up --no-start
+--force-recreate --no-build --no-deps --pull never` sob a lease e com o overlay
+de reserva autenticado. Isso troca somente o container inativo esperado pelos
+bytes/labels candidatos, sem iniciar writer nem dependência; serviços já
+receipted nunca entram nesse ramo. `--no-recreate` é proibido nessa etapa porque
+preservaria o container legado sem label e tornaria impossível autenticar o
+receipt de criação.
+
 `cms-cluster-bootstrap` é um one-shot perfilado. Só ele recebe a credencial do
 administrador do cluster. Ele é o único criador/reconciliador das seis roles CMS
 e cria ou reconcilia `ownerinc_cms` e
