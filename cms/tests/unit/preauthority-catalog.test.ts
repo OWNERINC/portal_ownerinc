@@ -57,6 +57,7 @@ test('empty user namespace rows fail at native_relations instead of disappearing
       connect: async () => {}, end: async () => {},
       query: async sql => {
         assert.match(sql, /FROM pg_catalog\.pg_namespace n LEFT JOIN pg_catalog\.pg_class c/u)
+        assert.match(sql, /n\.nspname NOT IN \('pg_catalog','information_schema','cms_cluster_guard'\)/u)
         return { rows: [...preauthorityExpectedNativeCatalogInventory().relations, { schema, name: null, kind: null }] }
       },
     }
