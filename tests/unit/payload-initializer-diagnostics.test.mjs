@@ -118,11 +118,11 @@ test('create-only initializer argv is accepted by the real Compose parser withou
   const version = spawnSync('docker', ['compose', 'version', '--short'], { encoding: 'utf8', timeout: 30000 });
   if (version.error || version.status !== 0) return t.skip('Docker Compose CLI unavailable; no service or daemon is required for this parser test');
   const runtime = await readFile('ops/payload-control-runtime.py', 'utf8');
-  const argv = ['up', '--no-start', '--no-recreate', '--no-build', '--no-deps', '--pull', 'never'];
+  const argv = ['up', '--no-start', '--force-recreate', '--no-build', '--no-deps', '--pull', 'never'];
   assert.ok(runtime.includes(`self._initializer_compose([${argv.map(value => `'${value}'`).join(', ')}, service], creation=True)`));
   const help = spawnSync('docker', ['compose', ...argv, '--help'], { encoding: 'utf8', timeout: 30000 });
   assert.equal(help.status, 0, help.stderr);
-  for (const flag of ['--no-start', '--no-recreate', '--no-deps', '--no-build']) assert.ok(help.stdout.includes(flag));
+  for (const flag of ['--no-start', '--force-recreate', '--no-deps', '--no-build']) assert.ok(help.stdout.includes(flag));
   assert.doesNotMatch(runtime, /\['create', '--no-build', '--no-deps'/u);
 });
 

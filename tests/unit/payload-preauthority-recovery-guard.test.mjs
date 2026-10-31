@@ -207,12 +207,22 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
 
   assert.ok(/CMS_CONTROLLER_PASSWORD=\$\{credentials\.cmsController\}/u.test(runner),
     'the synthetic controller credential is placed in the private fixture environment');
-  assert.ok(/CMS_OWNER_DATABASE_URL=postgresql:\/\/cms_admin:\$\{credentials\.cmsAdmin\}@cms-postgres:5432\/ownerinc_cms/u.test(runner),
+  assert.ok(/CMS_OBSERVER_PASSWORD=\$\{credentials\.cmsObserver\}/u.test(runner),
+    'the synthetic observer credential satisfies the cluster bootstrap contract');
+  assert.ok(/CMS_OWNER_DATABASE_URL=postgresql:\/\/cms_admin:\$\{credentials\.cmsAdmin\}@postgres:5432\/ownerinc_cms/u.test(runner),
     'the synthetic owner URL satisfies the current Compose interpolation contract');
+  assert.ok(/CMS_MIGRATION_DATABASE_URL=postgresql:\/\/cms_migrator:\$\{credentials\.cmsMigrator\}@postgres:5432\/ownerinc_cms/u.test(runner),
+    'the synthetic migrator URL targets the shared PostgreSQL service');
+  assert.ok(/CMS_RUNTIME_DATABASE_URL=postgresql:\/\/cms_runtime:\$\{credentials\.cmsRuntime\}@postgres:5432\/ownerinc_cms/u.test(runner),
+    'the synthetic runtime URL targets the shared PostgreSQL service');
   assert.doesNotMatch(runner, /CMS_ADMIN_DATABASE_URL=/u,
     'the fixture must not emit the retired owner URL name');
+  assert.doesNotMatch(runner, /@cms-postgres:5432\/ownerinc_cms/u,
+    'the shared-cluster fixture must not target the retired isolated CMS database service');
   assert.ok(/cmsController: secret\(\)/u.test(runner),
     'the controller credential is synthetic and generated for each fixture');
+  assert.ok(/cmsObserver: secret\(\)/u.test(runner),
+    'the observer credential is synthetic and generated for each fixture');
   assert.ok(/cms-control-roles:[\s\S]*?CMS_CONTROLLER_PASSWORD:[\s\S]*?--verify-control/u.test(compose),
     'the reusable profiled service scopes the controller credential to role verification/bootstrap');
   assert.ok(/profiles: \[cms-control-roles\]/u.test(compose));

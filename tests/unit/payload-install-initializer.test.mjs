@@ -134,7 +134,7 @@ class Model:
             elif '--profile' in args and 'cms-bootstrap' in args and 'cms-cluster-bootstrap' in args:
                 self.roles = True
             elif 'up' in args and '--no-start' in args:
-                assert '--no-deps' in args and '--no-recreate' in args and '--no-build' in args
+                assert '--no-deps' in args and '--force-recreate' in args and '--no-recreate' not in args and '--no-build' in args
                 overlay = json.loads(open(os.path.join(self.runtime,'payload-initialize-compose.json'),encoding='utf-8').read())
                 self.create_container(args[-1],overlay['services'][args[-1]]['labels'])
             elif 'migrate' in args and args[-1] == 'migrate': self.granted = True

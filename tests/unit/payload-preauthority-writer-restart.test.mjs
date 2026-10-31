@@ -249,7 +249,8 @@ test('actual Compose service model gates CMS and shared-cluster initializer rece
   assert.match(cms,/cms-migrate:\n\s+condition: service_completed_successfully/u);
   const runtime = await readFile('ops/payload-control-runtime.py','utf8');
   const create = runtime.slice(runtime.indexOf('def _initialize_resources'),runtime.indexOf('def _initial_floor_observations'));
-  assert.match(create,/\['up', '--no-start', '--no-recreate', '--no-build', '--no-deps', '--pull', 'never', service\]/u);
+  assert.match(create,/\['up', '--no-start', '--force-recreate', '--no-build', '--no-deps', '--pull', 'never', service\]/u);
+  assert.doesNotMatch(create,/\['up', '--no-start', '--no-recreate'/u);
   assert.match(create,/\(\('cms', 'api', 'cron'\) if shared else \('cms-postgres', 'cms'\)\)/u);
   assert.doesNotMatch(compose,/\n  cms-postgres:|cms_postgres_data|\n  cms-worker:/u);
   assert.match(runtime,/\['run', '--rm', '--no-deps', '--pull', 'never', '-T', 'cms-migrate'\]/u);

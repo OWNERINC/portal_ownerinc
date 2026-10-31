@@ -70,7 +70,10 @@ test('native article and home restore endpoints are unavailable before Payload d
 test('ordinary provisioning applies database/schema grants without role authority or secrets', () => {
   const sql = provisioningSQL()
   assert.match(sql, /GRANT USAGE, CREATE ON SCHEMA public TO cms_migrator/)
-  assert.match(sql, /REVOKE CREATE ON SCHEMA public FROM cms_runtime/)
+  assert.match(sql, /GRANT CONNECT ON DATABASE ownerinc_cms TO cms_migrator, cms_runtime, cms_observer/)
+  assert.match(sql, /REVOKE CREATE, TEMPORARY ON DATABASE ownerinc_cms FROM cms_observer/)
+  assert.match(sql, /GRANT USAGE ON SCHEMA public TO cms_runtime, cms_observer/)
+  assert.match(sql, /REVOKE CREATE ON SCHEMA public FROM cms_runtime, cms_observer/)
   assert.doesNotMatch(sql, /CREATE ROLE|ALTER ROLE|PASSWORD|CREATEROLE/u)
 })
 

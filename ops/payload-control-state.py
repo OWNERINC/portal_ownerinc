@@ -46,7 +46,7 @@ PORTAL_MIGRATIONS = [
     '028_firebase_cleanup_queue', '029_autocard_media_safety',
     '030_dho_job_title_catalog', '031_contract_invariants', '032_user_import_identity',
     '033_academy_learning', '034_owner_news_editorial', '035_owner_news_polls',
-    '036_payload_editorial_control',
+    '036_payload_editorial_control', '037_owner_news_cutover',
 ]
 CMS_MIGRATIONS = [
     '20261002_181423_owner_news_initial',
