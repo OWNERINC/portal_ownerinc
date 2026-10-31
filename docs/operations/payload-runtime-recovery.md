@@ -2017,6 +2017,11 @@ de ownership separado descrito acima. A exclusão não usa prefixo: schemas vazi
 lookalike ou quaisquer outros namespaces de usuário continuam materializados pelo
 `LEFT JOIN` e recusados pela allowlist nativa.
 
+Depois das migrations, `cms_admin` recebe somente `SELECT` nas 39 relações da
+allowlist canônica de mutação de News, além do ledger já permitido. Essa superfície
+fechada permite ao verifier read-only provar que todas estão vazias sem `SET ROLE`,
+sem grants em `ALL TABLES`, sem default privileges e sem qualquer DML.
+
 A revisão seguinte identificou um bypass nos filtros de schema: `_` em SQL `LIKE`
 é wildcard, portanto `NOT LIKE 'pg_toast%'` / `NOT LIKE 'pg_temp_%'` escondia schemas
 legais como `pgxtoast_hidden` e `pgxtempyhidden`. As quatro consultas nativas de

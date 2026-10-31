@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE } from '../src/publication/bootstrap-run'
+import { NEWS_MUTATION_TABLES } from '../src/publication/mutation-ledger'
 import { parsePortalDatabaseName, quotePostgresIdentifier } from './database-contract'
 import {
   newsProtocolObserverPostMigrationVerificationSQL,
@@ -519,6 +520,16 @@ REVOKE CREATE ON SCHEMA public FROM cms_runtime, cms_observer;
 `
 }
 
+const adminPreauthorityTables = NEWS_MUTATION_TABLES
+  .map(name => `public.${quotePostgresIdentifier(name)}`).join(', ')
+
+/** Exact read surface used by the preauthority empty-catalog verifier. It is
+ * deliberately not an ALL TABLES grant and carries no mutation privilege. */
+export const adminPreauthorityInspectionSQL = `
+REVOKE ALL PRIVILEGES ON TABLE ${adminPreauthorityTables} FROM cms_admin;
+GRANT SELECT ON TABLE ${adminPreauthorityTables} TO cms_admin;
+`
+
 /** Canonical runtime protocol policy. Keep aligned with
  * mutation-triggers.ts::buildNewsMutationTriggersDDL: ledger head/events are
  * SELECT-only; migration runs receive only the ordinary progress-column UPDATE
@@ -651,6 +662,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cms_runti
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO cms_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO cms_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO cms_runtime;
+${adminPreauthorityInspectionSQL}
 DO $owner_news_native_ledger$
 BEGIN
   IF to_regclass('public.payload_migrations') IS NOT NULL THEN
