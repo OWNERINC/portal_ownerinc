@@ -9,6 +9,7 @@ import type { Payload } from 'payload'
 import { proxy, editorialPolicy, isNativeNewsRestoreRequest } from '../../src/proxy'
 import {
   buildProtocolRuntimeGrantsSQL, clusterRolesBootstrapSQL, clusterRolesVerificationSQL,
+  adminPreauthorityInspectionSQL,
   clusterRolesPublicVerificationSQL, cmsAdminDatabaseRoleVerificationSQL,
   clusterOwnershipHelperSQL, clusterOwnershipHelperVerificationSQL, CMS_ROLE_NAMES,
   controlRolesBootstrapSQL, controlRolesNativePrivilegesVerificationSQL, controlRolesPublicVerificationSQL,
@@ -23,6 +24,7 @@ import {
   newsProtocolObserverPostMigrationVerificationSQL,
   observerRelationProvisioningSQL,
 } from '../../scripts/news-protocol-observer-contract'
+import { NEWS_MUTATION_TABLES } from '../../src/publication/mutation-ledger'
 
 const PORTAL_ENV = { CMS_PORTAL_DATABASE_NAME: 'portal' }
 
@@ -84,6 +86,19 @@ test('post-migration grants expose only the native ledger to the exact admin ver
     /GRANT (?:INSERT|UPDATE|DELETE|ALL(?: PRIVILEGES)?) ON TABLE public\.payload_migrations TO cms_admin/u)
   assert.doesNotMatch(grantsSQL,
     /GRANT (?:SELECT|INSERT|UPDATE|DELETE|ALL(?: PRIVILEGES)?) ON ALL TABLES IN SCHEMA public TO cms_admin/u)
+})
+
+test('admin preauthority inspection is SELECT-only on the exact News mutation inventory', () => {
+  const tables = adminPreauthorityInspectionSQL.match(/public\."[^"]+"/gu) || []
+  const expected = NEWS_MUTATION_TABLES.map(name => `public."${name}"`)
+  assert.deepEqual(tables, [...expected, ...expected])
+  assert.equal(new Set(tables).size, NEWS_MUTATION_TABLES.length)
+  assert.match(adminPreauthorityInspectionSQL, /^\nREVOKE ALL PRIVILEGES ON TABLE /u)
+  assert.match(adminPreauthorityInspectionSQL, / FROM cms_admin;\nGRANT SELECT ON TABLE /u)
+  assert.match(adminPreauthorityInspectionSQL, / TO cms_admin;\n$/u)
+  assert.doesNotMatch(adminPreauthorityInspectionSQL,
+    /GRANT (?:INSERT|UPDATE|DELETE|TRUNCATE|REFERENCES|TRIGGER|ALL(?: PRIVILEGES)?)/u)
+  assert.doesNotMatch(adminPreauthorityInspectionSQL, /ALL TABLES IN SCHEMA/u)
 })
 
 test('the common post-migration grants path normalizes and verifies observer access', async () => {
