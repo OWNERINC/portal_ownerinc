@@ -2011,6 +2011,12 @@ Isso não executou conexão/autenticação, provisão de roles, Docker nem resto
 O relatório Linux ainda não contém catálogo bruto para comparar; aceite PG16.14,
 recuperação dos quatro stores e revisão independente do patch continuam pendentes.
 
+O inventário de relações nativas cobre o schema editorial `public` e exclui pelo
+nome exato o schema interno `cms_cluster_guard`, instalado e verificado pelo gate
+de ownership separado descrito acima. A exclusão não usa prefixo: schemas vazios
+lookalike ou quaisquer outros namespaces de usuário continuam materializados pelo
+`LEFT JOIN` e recusados pela allowlist nativa.
+
 A revisão seguinte identificou um bypass nos filtros de schema: `_` em SQL `LIKE`
 é wildcard, portanto `NOT LIKE 'pg_toast%'` / `NOT LIKE 'pg_temp_%'` escondia schemas
 legais como `pgxtoast_hidden` e `pgxtempyhidden`. As quatro consultas nativas de
