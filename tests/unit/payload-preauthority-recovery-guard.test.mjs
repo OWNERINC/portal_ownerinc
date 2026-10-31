@@ -207,6 +207,10 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
 
   assert.ok(/CMS_CONTROLLER_PASSWORD=\$\{credentials\.cmsController\}/u.test(runner),
     'the synthetic controller credential is placed in the private fixture environment');
+  assert.ok(/CMS_OWNER_DATABASE_URL=postgresql:\/\/cms_admin:\$\{credentials\.cmsAdmin\}@cms-postgres:5432\/ownerinc_cms/u.test(runner),
+    'the synthetic owner URL satisfies the current Compose interpolation contract');
+  assert.doesNotMatch(runner, /CMS_ADMIN_DATABASE_URL=/u,
+    'the fixture must not emit the retired owner URL name');
   assert.ok(/cmsController: secret\(\)/u.test(runner),
     'the controller credential is synthetic and generated for each fixture');
   assert.ok(/cms-control-roles:[\s\S]*?CMS_CONTROLLER_PASSWORD:[\s\S]*?--verify-control/u.test(compose),

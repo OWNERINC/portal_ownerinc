@@ -328,7 +328,7 @@ function envFileContents({ project, port, credentials }) {
     `CMS_CONTROLLER_PASSWORD=${credentials.cmsController}`,
     `CMS_MIGRATOR_PASSWORD=${credentials.cmsMigrator}`,
     `CMS_RUNTIME_PASSWORD=${credentials.cmsRuntime}`,
-    `CMS_ADMIN_DATABASE_URL=postgresql://cms_admin:${credentials.cmsAdmin}@cms-postgres:5432/ownerinc_cms`,
+    `CMS_OWNER_DATABASE_URL=postgresql://cms_admin:${credentials.cmsAdmin}@cms-postgres:5432/ownerinc_cms`,
     `CMS_MIGRATION_DATABASE_URL=postgresql://cms_migrator:${credentials.cmsMigrator}@cms-postgres:5432/ownerinc_cms`,
     `CMS_RUNTIME_DATABASE_URL=postgresql://cms_runtime:${credentials.cmsRuntime}@cms-postgres:5432/ownerinc_cms`,
     `PAYLOAD_SECRET=${credentials.payloadSecret}`,
