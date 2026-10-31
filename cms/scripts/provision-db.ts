@@ -655,7 +655,7 @@ DO $owner_news_native_ledger$
 BEGIN
   IF to_regclass('public.payload_migrations') IS NOT NULL THEN
     REVOKE ALL PRIVILEGES ON TABLE public.payload_migrations FROM cms_runtime;
-    GRANT SELECT ON TABLE public.payload_migrations TO cms_runtime;
+    GRANT SELECT ON TABLE public.payload_migrations TO cms_admin, cms_runtime;
   END IF;
 END;
 $owner_news_native_ledger$;

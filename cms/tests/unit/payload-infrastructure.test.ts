@@ -77,6 +77,15 @@ test('ordinary provisioning applies database/schema grants without role authorit
   assert.doesNotMatch(sql, /CREATE ROLE|ALTER ROLE|PASSWORD|CREATEROLE/u)
 })
 
+test('post-migration grants expose only the native ledger to the exact admin verifier', () => {
+  assert.match(grantsSQL,
+    /GRANT SELECT ON TABLE public\.payload_migrations TO cms_admin, cms_runtime/u)
+  assert.doesNotMatch(grantsSQL,
+    /GRANT (?:INSERT|UPDATE|DELETE|ALL(?: PRIVILEGES)?) ON TABLE public\.payload_migrations TO cms_admin/u)
+  assert.doesNotMatch(grantsSQL,
+    /GRANT (?:SELECT|INSERT|UPDATE|DELETE|ALL(?: PRIVILEGES)?) ON ALL TABLES IN SCHEMA public TO cms_admin/u)
+})
+
 test('the common post-migration grants path normalizes and verifies observer access', async () => {
   const statements: string[] = []
   const client = { async connect() {}, async end() {}, async query(sql: string) {
