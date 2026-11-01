@@ -277,6 +277,35 @@ test('shared-v4 recovery uses the shared postgres service with least-privilege C
   assert.doesNotMatch(runner, /CREATE SCHEMA fixture_unexpected_schema/u);
 });
 
+test('worker hold checks project labels without querying an intentionally absent Compose service', async () => {
+  const runner = await readFile('scripts/test-payload-preauthority-recovery.mjs', 'utf8');
+  const start = runner.indexOf('function assertWorkerHeld(runtime)');
+  const end = runner.indexOf('\nasync function runRecovery()', start);
+  assert.ok(start >= 0 && end > start);
+  const body = runner.slice(start, end);
+  assert.doesNotMatch(body, /composeCall\([^\n]*cms-worker/u,
+    'docker compose rejects ps requests for cms-worker because shared-v4 intentionally omits that service');
+
+  const calls = [];
+  const build = output => new Function('setSubstep', 'text', 'run', 'assert',
+    `${body}; return assertWorkerHeld;`)(
+    value => calls.push(['substep', value]),
+    value => String(value),
+    (command, args) => { calls.push([command, args]); return output; },
+    assert,
+  );
+  build('')({ project: 'fixture-project' });
+  assert.deepEqual(calls[0], ['substep', 'assert_worker_held']);
+  assert.deepEqual(calls[1], ['docker', ['ps', '--all', '--filter',
+    'label=com.docker.compose.project=fixture-project',
+    '--filter', 'label=com.docker.compose.service=cms-worker', '--format', '{{.State}}']]);
+  build('created\nexited\n')({ project: 'fixture-project' });
+  for (const state of ['running', 'paused', 'restarting', 'removing', 'dead', 'unknown']) {
+    assert.throws(() => build(`${state}\n`)({ project: 'fixture-project' }),
+      /CMS worker must remain absent/u, `${state} must fail closed`);
+  }
+});
+
 test('legacy announcement lookup is bound to a captured source document UUID', () => {
   const sourceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const targetSeedId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';

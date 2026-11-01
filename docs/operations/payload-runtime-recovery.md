@@ -1263,8 +1263,14 @@ do fixture, não pela criação/adoção de um objeto durante recovery.
   quatro IDs completos distintos/chaves exatas, observação canônica de até
   **512 bytes**, validação de **todos** antes do primeiro start e inspeção dos
   mesmos IDs/estados depois. Resume não cria, recria, puxa, relabela ou adota.
-  `cms-worker` permanece held. Nginx não tem healthcheck: exigir running identity
-  mais readiness HTTP, nunca aguardar healthcheck inexistente via `awaitService`.
+  `cms-worker` permanece held. Como shared-v4 omite esse serviço do modelo Compose,
+  a prova consulta todos os containers do projeto pelos labels canônicos
+  `com.docker.compose.project` e `com.docker.compose.service`, inclusive containers
+  rogue/stale; ela nunca executa `compose ps cms-worker`, que falharia por serviço
+  inexistente. Somente ausência, `created` ou `exited` satisfazem o hold; `running`,
+  `paused`, `restarting`, `removing`, `dead` ou qualquer estado desconhecido falham
+  fechados. Nginx não tem healthcheck: exigir running identity mais readiness HTTP,
+  nunca aguardar healthcheck inexistente via `awaitService`.
 - No bloco 2, o conversion probe está no escopo explicitamente, limitado à
   inclusão de Nginx no conjunto exigido parado. Não mudar DDL, rejeição CLI,
   cleanup/equality, lease ou política de worker. Seu prerequisite Linux continua
