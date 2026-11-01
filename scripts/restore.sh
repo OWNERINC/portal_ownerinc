@@ -13,7 +13,7 @@ if [[ -f $root/scripts/release-manifest.sh && -f $root/.image-env ]]; then
   . "$root/scripts/release-manifest.sh"
   load_release_manifest "$root/.image-env"
   if [[ $RELEASE_FORMAT == payload-v1 ]]; then
-    exec bash "$root/scripts/payload-operations.sh" restore "$root" "$backup" --confirm RESTORE
+    SMOKE_EDITORIAL_MODE=redirect exec bash "$root/scripts/payload-operations.sh" restore "$root" "$backup" --confirm RESTORE
   fi
 fi
 if [[ -e $backup/backup.format || -e $backup/cms.dump || -e $backup/cms-uploads.tar.gz || -e $backup/operations-proof.json || -e $backup/release.images ]] || { [[ -f $root/.image-env ]] && grep -Eq '^(CMS_IMAGE|RELEASE_FORMAT)=payload-v2-shared-postgres|^CMS_IMAGE=' "$root/.image-env"; }; then
@@ -84,11 +84,11 @@ compose run --rm --no-deps \
   migrate node db/verify-migrations.js
 restart
 if [[ -n ${RESTORE_BASE_URL:-} ]]; then
-  BASE_URL=$RESTORE_BASE_URL bash "$(dirname "$0")/smoke.sh"
+  SMOKE_EDITORIAL_MODE=redirect BASE_URL=$RESTORE_BASE_URL bash "$(dirname "$0")/smoke.sh"
 else
   published=$(compose port nginx 80 | tail -n 1)
   [[ -n $published ]] || { echo "Restore smoke requires RESTORE_BASE_URL when the proxy has no published port." >&2; exit 1; }
-  BASE_URL="http://$published" bash "$(dirname "$0")/smoke.sh"
+  SMOKE_EDITORIAL_MODE=redirect BASE_URL="http://$published" bash "$(dirname "$0")/smoke.sh"
 fi
 trap - ERR INT TERM
 echo "Restore completed and smoke check passed."

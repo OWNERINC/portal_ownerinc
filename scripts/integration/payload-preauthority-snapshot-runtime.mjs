@@ -60,7 +60,7 @@ export function recoveryFixtureEnvironment(project, runtime, hostPath) {
     COMPOSE_OVERRIDE: runtime.inventory.document.paths.composeOverride,
     BACKUP_DIR: runtime.inventory.document.paths.backupRoots[0],
     PRE_RESTORE_BACKUP_DIR: runtime.inventory.document.paths.preRestoreBackupRoot,
-    RESTORE_BASE_URL: runtime.baseUrl, SMOKE_ATTEMPTS: '8' };
+    RESTORE_BASE_URL: runtime.baseUrl, SMOKE_ATTEMPTS: '8', SMOKE_EDITORIAL_MODE: 'closed' };
 }
 
 export function conversionProbeCommandInput(runtime, { commit, python }) {

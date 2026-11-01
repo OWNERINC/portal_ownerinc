@@ -96,7 +96,7 @@ CRON_BOOTSTRAP_ONLY=true compose "$release" up -d --no-deps api cms cron
 guard verify-release
 compose "$release" up -d --no-deps nginx
 published=$(compose "$release" port nginx 80 | tail -n 1)
-BASE_URL="${RELEASE_BASE_URL:-http://$published}" bash "$release/scripts/smoke.sh"
+SMOKE_EDITORIAL_MODE=redirect BASE_URL="${RELEASE_BASE_URL:-http://$published}" bash "$release/scripts/smoke.sh"
 guard verify-release
 CRON_BOOTSTRAP_ONLY=false compose "$release" up -d --no-deps --force-recreate cron
 guard verify-release

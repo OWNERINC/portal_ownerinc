@@ -8,6 +8,11 @@ base_url=${base_url%/}
 authority=${base_url#*://}
 origin=${base_url%%://*}://${authority%%/*}
 attempts=${SMOKE_ATTEMPTS:-30}
+editorial_mode=${SMOKE_EDITORIAL_MODE:-redirect}
+case $editorial_mode in
+  redirect|closed) ;;
+  *) printf '%s\n' 'Invalid SMOKE_EDITORIAL_MODE.' >&2; exit 2 ;;
+esac
 temporary_dir=$(mktemp -d)
 trap 'rm -rf "$temporary_dir"' EXIT
 
@@ -96,17 +101,31 @@ fetch_javascript() {
   smoke_result "${smoke_check:-route_module}" ok none "$status"
 }
 
-check_relative_editorial_redirect() {
-  local status location smoke_check=editorial_redirect
+check_editorial_route() {
+  local status location location_count expected_status expected_location smoke_check=editorial_redirect
   status=$(curl --silent --show-error --max-time 5 --output /dev/null \
     --dump-header "$temporary_dir/redirect.headers" --write-out '%{http_code}' \
     "$base_url/editorial" 2>/dev/null) || { local code=$?; smoke_transport_failure "$code" "$status"; return 1; }
+  location_count=$(awk 'tolower($1) == "location:" { count++ } END { print count + 0 }' \
+    "$temporary_dir/redirect.headers")
   location=$(awk 'tolower($1) == "location:" { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); value = $0 } END { print value }' \
     "$temporary_dir/redirect.headers")
-  [[ $status == 308 && $location == /editorial/admin ]] || {
-    local reason=redirect; [[ $status == 308 ]] || reason=http_status
-    smoke_result editorial_redirect fail "$reason" "$status"; return 1;
+  case $editorial_mode in
+    redirect) expected_status=308; expected_location=/editorial/admin ;;
+    closed) expected_status=404; expected_location= ;;
+  esac
+  [[ $status == "$expected_status" ]] || {
+    smoke_result editorial_redirect fail http_status "$status"; return 1;
   }
+  if [[ $editorial_mode == redirect ]]; then
+    [[ $location_count == 1 && $location == "$expected_location" ]] || {
+      smoke_result editorial_redirect fail redirect "$status"; return 1;
+    }
+  else
+    [[ $location_count == 0 && -z $location ]] || {
+      smoke_result editorial_redirect fail redirect "$status"; return 1;
+    }
+  fi
 }
 
 resolve_module() {
@@ -228,7 +247,7 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
     && [[ $canonical == *'<script src="./js/sidebar.js"></script>'* ]] \
     && [[ $legacy == *'url=../autocard.html'* ]] \
     && [[ $legacy == *'href="../autocard.html"'* ]] \
-    && check_relative_editorial_redirect \
+    && check_editorial_route \
     && check_route_module_graph; then
     printf '{"check":"smoke","status":"ok","attempt":%d}\n' "$attempt"
     exit 0
