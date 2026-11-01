@@ -123,7 +123,7 @@ done
 [[ $(docker inspect --format '{{.Config.Image}}' "$cron_container") == "$CRON_IMAGE" ]] || { echo "New cron image digest mismatch." >&2; false; }
 docker compose --profile notifications --project-directory "$release" up -d --no-deps nginx
 published=$(docker compose --profile notifications --project-directory "$release" port nginx 80 | tail -n 1)
-BASE_URL="http://$published" bash "$release/scripts/smoke.sh"
+SMOKE_EDITORIAL_MODE=redirect BASE_URL="http://$published" bash "$release/scripts/smoke.sh"
 if ! CRON_BOOTSTRAP_ONLY=false docker compose --profile notifications --project-directory "$release" up -d --force-recreate --no-deps cron; then
   echo "New cron could not be started after the release became current." >&2
   false

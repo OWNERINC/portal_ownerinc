@@ -252,6 +252,21 @@ test('native ownership handshake proves live members, early parent exit and surv
   }
 });
 
+test('every production smoke caller pins the editorial redirect profile against ambient overrides',async()=>{
+  const callers=await Promise.all([
+    'ops/deploy-from-ci.sh','scripts/release.sh','scripts/restore.sh',
+    'scripts/payload-release.sh','scripts/payload-operations.sh',
+  ].map(async file=>[file,await readFile(file,'utf8')]));
+  const expected=new Map([
+    ['ops/deploy-from-ci.sh',1],['scripts/release.sh',1],['scripts/restore.sh',2],
+    ['scripts/payload-release.sh',1],['scripts/payload-operations.sh',1],
+  ]);
+  for(const [file,source] of callers){
+    const invocations=source.match(/^\s*SMOKE_EDITORIAL_MODE=redirect BASE_URL=.*smoke\.sh/mgu)??[];
+    assert.equal(invocations.length,expected.get(file),`${file} must bind every production smoke invocation to redirect`);
+  }
+});
+
 test('real smoke checks route HTML and the delivered local module graph, health, readiness and Origin', async t => {
   const bash = process.platform === 'win32'
     ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git/bin/bash.exe') : 'bash';
@@ -535,6 +550,7 @@ test('real smoke checks route HTML and the delivered local module graph, health,
     const input=JSON.parse(process.argv[1]);
     const attempts=input.attempts || '1';
     const environment={...recoveryFixtureEnvironment(input.runtime.project,input.runtime,process.env.PATH),SMOKE_ATTEMPTS:attempts};
+    if(input.editorialMode!==undefined)environment.SMOKE_EDITORIAL_MODE=input.editorialMode;
     const evidence=[],effects=[],observed=[];let commands=0,transportCorrect=false;
     try {
       await runFixtureSmokePreflight(input.runtime,{
@@ -601,6 +617,15 @@ test('real smoke checks route HTML and the delivered local module graph, health,
       assert.equal(result.commands,0);assert.deepEqual(result.effects,[]);
     }
     assert.equal(requests.length,start,'no HTTP traffic or full smoke before refusal');
+  });
+
+  await t.test('fixture wrapper refuses a non-closed editorial mode before proxy verification or HTTP',async()=>{
+    const start=requests.length;
+    const result=await gate('initial',input=>{input.editorialMode='redirect';});
+    assert.equal(result.ok,false);
+    assert.equal(result.failure.failureCode,'fixture_smoke_environment_invalid');
+    assert.equal(result.commands,0);assert.deepEqual(result.observed,[]);assert.deepEqual(result.effects,[]);
+    assert.equal(requests.length,start);
   });
 
   await t.test('dead assigned endpoint refuses before any full smoke or destructive callback',async()=>{

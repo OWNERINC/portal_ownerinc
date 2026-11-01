@@ -33,6 +33,11 @@ An unset variable therefore preserves all production behavior. Any other value
 fails before the retry loop and before an HTTP request. Neither mode follows
 redirects or reads the response body.
 
+Every committed production deploy, release, and restore caller explicitly sets
+`SMOKE_EDITORIAL_MODE=redirect`, so an inherited ambient value cannot select the
+fixture profile. The fixture command wrapper separately requires the exact
+`closed` value before proxy verification or HTTP traffic.
+
 `recoveryFixtureEnvironment()` is the only producer that sets
 `SMOKE_EDITORIAL_MODE=closed`. The preauthority command wrapper continues to
 pass a stripped, explicit environment to the real smoke script; no caller can

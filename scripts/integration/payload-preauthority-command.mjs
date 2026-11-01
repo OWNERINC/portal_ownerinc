@@ -56,6 +56,9 @@ export async function runFixtureSmokePreflight(runtime, {
   if (environment?.RESTORE_BASE_URL !== runtime?.baseUrl) {
     throw new FixtureFailure('fixture_smoke_endpoint_invalid', { substep: 'fixture_full_smoke' });
   }
+  if (environment?.SMOKE_EDITORIAL_MODE !== 'closed') {
+    throw new FixtureFailure('fixture_smoke_environment_invalid', { substep: 'fixture_full_smoke' });
+  }
   if (typeof runtime?.fixtureNginxIdentity !== 'string' || !/^[a-f0-9]{64}$/u.test(runtime.fixtureNginxIdentity)) {
     throw new FixtureFailure('fixture_nginx_identity_invalid', { substep: 'fixture_full_smoke' });
   }

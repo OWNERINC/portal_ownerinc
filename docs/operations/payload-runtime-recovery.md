@@ -2128,6 +2128,10 @@ exatamente `404` e não pode emitir header `Location`. Valores diferentes de
 `redirect|closed` falham antes da primeira requisição. O perfil preauthority não
 pula o check editorial: ele prova positivamente que a rota continua fechada,
 enquanto o smoke padrão continua rejeitando `404`.
+Todos os callers versionados de deploy, release e restore fixam explicitamente
+`SMOKE_EDITORIAL_MODE=redirect`, impedindo que um valor ambiente herdado escolha
+o perfil da fixture. O wrapper preauthority, em sentido inverso, exige `closed`
+antes de inspecionar o proxy ou iniciar tráfego HTTP.
 
 O formato coordenado atual é `payload-v2-shared-postgres`: `postgres.dump`,
 `uploads.tar.gz`, `cms.dump`, `cms-uploads.tar.gz`, `release.images`,

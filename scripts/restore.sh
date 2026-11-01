@@ -84,11 +84,11 @@ compose run --rm --no-deps \
   migrate node db/verify-migrations.js
 restart
 if [[ -n ${RESTORE_BASE_URL:-} ]]; then
-  BASE_URL=$RESTORE_BASE_URL bash "$(dirname "$0")/smoke.sh"
+  SMOKE_EDITORIAL_MODE=redirect BASE_URL=$RESTORE_BASE_URL bash "$(dirname "$0")/smoke.sh"
 else
   published=$(compose port nginx 80 | tail -n 1)
   [[ -n $published ]] || { echo "Restore smoke requires RESTORE_BASE_URL when the proxy has no published port." >&2; exit 1; }
-  BASE_URL="http://$published" bash "$(dirname "$0")/smoke.sh"
+  SMOKE_EDITORIAL_MODE=redirect BASE_URL="http://$published" bash "$(dirname "$0")/smoke.sh"
 fi
 trap - ERR INT TERM
 echo "Restore completed and smoke check passed."

@@ -604,7 +604,7 @@ if [[ $ready != true ]]; then
   false
 fi
 
-BASE_URL=$public_url bash "$release/scripts/smoke.sh"
+SMOKE_EDITORIAL_MODE=redirect BASE_URL=$public_url bash "$release/scripts/smoke.sh"
 
 expected_public_hash=$(sha256sum "$release/public/index.html" | awk '{print $1}')
 mounted_public_hash=$(docker exec "$web_container" \

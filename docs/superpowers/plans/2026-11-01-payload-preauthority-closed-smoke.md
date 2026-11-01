@@ -15,6 +15,7 @@
 - `closed` requires exactly `404` and no `Location` header.
 - Invalid modes fail before the retry loop and before any HTTP request.
 - Only `recoveryFixtureEnvironment()` sets `SMOKE_EDITORIAL_MODE=closed`.
+- Every versioned production deploy, release, and restore caller explicitly binds `SMOKE_EDITORIAL_MODE=redirect`; the fixture wrapper rejects any value other than `closed` before proxy or HTTP work.
 - Keep the finite public diagnostic identifier `editorial_redirect`; never publish URLs, header values, bodies, or raw stderr.
 - Do not activate CMS, publish routes, install protocol, enable workers/scheduling, deploy, restore production, transition authority, or cut over.
 - Preserve Node 18 compatibility and LF endings for `scripts/smoke.sh`.
