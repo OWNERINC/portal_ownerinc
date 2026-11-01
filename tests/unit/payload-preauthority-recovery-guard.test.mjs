@@ -239,6 +239,44 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
     'the production CMS healthcheck remains fail-closed on full readiness');
 });
 
+test('shared-v4 recovery uses the shared postgres service with least-privilege CMS roles and current backup name', async () => {
+  const [runner, conversionProbe, provisioning] = await Promise.all([
+    readFile('scripts/test-payload-preauthority-recovery.mjs', 'utf8'),
+    readFile('scripts/integration/payload-logical-snapshot-conversion-probe.mjs', 'utf8'),
+    readFile('cms/scripts/provision-db.ts', 'utf8'),
+  ]);
+  assert.doesNotMatch(runner, /cms-postgres|cms-postgres\.dump/u,
+    'the shared-v4 recovery runner must not address the retired CMS service or dump name');
+  assert.doesNotMatch(conversionProbe, /cms-postgres/u,
+    'the shared-v4 conversion probe must capture CMS through the shared postgres service');
+
+  const seed = runner.slice(runner.indexOf('async function seedProject(runtime)'), runner.indexOf('\nfunction databaseDump'));
+  assert.match(seed, /runSeedStatement\('postgres', 'ownerinc_cms', 'cms_runtime', 'seed_cms_portal_editor'/u);
+  assert.match(seed, /runSeedStatement\('postgres', 'ownerinc_cms', 'cms_runtime', 'seed_cms_payload_preference'/u);
+  assert.doesNotMatch(seed, /'ownerinc_cms', 'cms_admin'/u,
+    'fixture CMS DML must not borrow the SELECT-only observer role');
+
+  const snapshot = runner.slice(runner.indexOf('function snapshot(runtime'), runner.indexOf('\nfunction compareSnapshots'));
+  assert.match(snapshot, /logicalDatabaseSnapshot\(runtime, 'postgres', 'ownerinc_cms', 'cms_admin', cmsRuntimeLogicalSnapshotScript\)/u);
+  assert.match(snapshot, /databaseDump\(runtime, 'postgres', 'ownerinc_cms', 'cms_admin', 'cms_runtime'\)/u);
+  assert.match(snapshot, /databaseSchemaDump\(runtime, 'postgres', 'ownerinc_cms', 'cms_admin', 'cms_runtime'\)/u);
+  assert.match(provisioning, /GRANT cms_runtime TO cms_admin WITH ADMIN FALSE, INHERIT FALSE, SET TRUE/u,
+    'the authenticated admin snapshot session may assume only the existing bounded runtime membership');
+  assert.match(provisioning, /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cms_runtime/u);
+  assert.match(provisioning, /GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO cms_runtime/u);
+
+  const catalogNegative = runner.slice(runner.indexOf('async function targetCatalogNegative'), runner.indexOf('\nasync function targetContentRace'));
+  assert.match(catalogNegative, /\['exec', '-T', 'postgres', 'psql'[\s\S]*?'--username=cms_migrator'/u);
+  assert.doesNotMatch(catalogNegative, /--username=cms_admin/u,
+    'negative fixture DDL must use the migrator rather than the observer');
+
+  assert.match(runner, /const files = \['postgres\.dump', 'uploads\.tar\.gz', 'cms\.dump', 'cms-uploads\.tar\.gz'/u);
+  assert.match(runner, /function cmsMigrationNames[\s\S]*?\['exec', '-T', 'postgres', 'psql'[\s\S]*?'--username=cms_admin'/u);
+  assert.match(conversionProbe, /database\('postgres', 'ownerinc_cms', 'cms_admin', prefix, 'cms', cmsRuntimeLogicalSnapshotScript\)/u);
+  assert.match(runner, /'CREATE TABLE public\.fixture_unexpected_schema\(id bigint\)'/u);
+  assert.doesNotMatch(runner, /CREATE SCHEMA fixture_unexpected_schema/u);
+});
+
 test('legacy announcement lookup is bound to a captured source document UUID', () => {
   const sourceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const targetSeedId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';

@@ -3,7 +3,7 @@ import { fstatSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FixtureFailure, runFixtureCommand, persistPrivateCommandEvidence } from './payload-preauthority-command.mjs';
-import { logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './payload-logical-snapshot.mjs';
+import { cmsRuntimeLogicalSnapshotScript, logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './payload-logical-snapshot.mjs';
 import { assertRecoverySnapshots } from './payload-preauthority-snapshot.mjs';
 import { CONVERSION_PROBE_SUCCESS, encodeConversionProbeFailure, conversionProbeReasons, conversionCliLaunchReason } from './payload-logical-snapshot-probe-protocol.mjs';
 import { assertRecoveryFixtureConfiguration } from './payload-preauthority-snapshot-runtime.mjs';
@@ -143,11 +143,11 @@ async function main() {
     const compose = (args, options, failureReason) => run('docker', ['compose', ...configuration.composeArgs, ...args], options, failureReason);
     const sql = statement => compose(['exec', '-T', 'postgres', 'psql', '-XAtq', '-v', 'ON_ERROR_STOP=1',
       '-v', 'VERBOSITY=sqlstate', '--dbname=portal', '--username=portal_admin'], { input: statement, sqlCommandContext: true }, 'psql_failed');
-    const database = (service, db, user, prefix, component) => {
+    const database = (service, db, user, prefix, component, snapshotScript = logicalSnapshotScript) => {
       step = prefix === 'reject' ? 'conversion_reject_sql' : `conversion_${prefix}_${component}_sql`;
       const capture = compose(['exec', '-T', service, 'psql', '-XAtq', '-v', 'ON_ERROR_STOP=1',
         '-v', 'VERBOSITY=sqlstate', `--dbname=${db}`, `--username=${user}`], {
-        input: logicalSnapshotScript, maxBuffer: LOGICAL_SNAPSHOT_MAX_BYTES, sqlCommandContext: true,
+        input: snapshotScript, maxBuffer: LOGICAL_SNAPSHOT_MAX_BYTES, sqlCommandContext: true,
       }, 'psql_failed');
       step = prefix === 'reject' ? 'conversion_reject_cli' : `conversion_${prefix}_${component}_cli`;
       const result = run(process.execPath, ['--import',
@@ -180,7 +180,7 @@ print(module._tar_tree(sys.stdin.buffer,compressed=False))`;
     const snapshot = () => {
       const prefix = step.startsWith('conversion_baseline') ? 'baseline' : 'compare';
       const portal = database('postgres', 'portal', 'portal_admin', prefix, 'portal');
-      const cms = database('cms-postgres', 'ownerinc_cms', 'cms_admin', prefix, 'cms');
+      const cms = database('postgres', 'ownerinc_cms', 'cms_admin', prefix, 'cms', cmsRuntimeLogicalSnapshotScript);
       return { portalDatabase: portal.data, portalSchema: portal.schema, cmsDatabase: cms.data, cmsSchema: cms.schema,
         portalUploads: storage('api', '/app/uploads', prefix, 'portal'), cmsUploads: storage('cms', '/var/lib/ownerinc-cms/media', prefix, 'cms') };
     };
