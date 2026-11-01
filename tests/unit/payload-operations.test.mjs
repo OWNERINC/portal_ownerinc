@@ -121,7 +121,7 @@ async function fixture(t) {
   await writeFile(path.join(root, 'release/docker-compose.payload.yml'), '# synthetic\n');
   // This is a declared sequence double, NOT HTTP evidence. Real smoke/HTTP is
   // exercised separately in smoke-origin.test.mjs without replacing the script.
-  await writeFile(path.join(root, 'release/scripts/smoke.sh'), '#!/bin/sh\nprintf "smoke\\n" >> "$FIXTURE/smoke.calls"\nif [ "${FAIL_SMOKE:-false}" = true ]; then exit 37; fi\n');
+  await writeFile(path.join(root, 'release/scripts/smoke.sh'), '#!/bin/sh\nprintf "smoke:%s\\n" "${SMOKE_EDITORIAL_MODE:-unset}" >> "$FIXTURE/smoke.calls"\nif [ "${FAIL_SMOKE:-false}" = true ]; then exit 37; fi\n');
   await writeFile(path.join(root, 'running'), 'postgres\nnginx\napi\ncron\ncms\n');
   await writeFile(path.join(root, 'admission'), 'open\n');
   await writeFile(path.join(root, 'timeline'), '');
@@ -337,7 +337,12 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.doesNotMatch(calls, /compose[^\n]*(?: start | up )/u);
   assert.ok(at('guard:verify-release') < at('guard:open-admission'));
   assert.equal((await readFile(path.join(f.root, 'admission'), 'utf8')).trim(), 'open');
-  assert.equal((await readFile(path.join(f.root, 'smoke.calls'), 'utf8')).trim(), 'smoke');
+  assert.equal((await readFile(path.join(f.root, 'smoke.calls'), 'utf8')).trim(), 'smoke:redirect');
+  await mkdir(path.join(f.root,'protection-closed'));
+  const fixtureRestore=f.run(`SMOKE_EDITORIAL_MODE=closed PRE_RESTORE_BACKUP_DIR="$PWD/protection-closed" RESTORE_BASE_URL=http://fixture.invalid bash release/scripts/payload-operations.sh restore "$PWD/release" "$PWD/backups/${name}" --confirm RESTORE`);
+  assert.equal(fixtureRestore.status,0,fixtureRestore.stderr);
+  assert.equal((await readFile(path.join(f.root,'smoke.calls'),'utf8')).trim(),'smoke:redirect\nsmoke:closed',
+    'the shared coordinator preserves the explicit disposable-fixture profile');
 });
 
 test('unreadable protection dump stops before destructive restore', async t => {

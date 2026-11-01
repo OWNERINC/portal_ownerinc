@@ -252,19 +252,28 @@ test('native ownership handshake proves live members, early parent exit and surv
   }
 });
 
-test('every production smoke caller pins the editorial redirect profile against ambient overrides',async()=>{
+test('every production smoke entrypoint pins redirect while the shared fixture coordinator preserves its explicit profile',async()=>{
   const callers=await Promise.all([
     'ops/deploy-from-ci.sh','scripts/release.sh','scripts/restore.sh',
     'scripts/payload-release.sh','scripts/payload-operations.sh',
   ].map(async file=>[file,await readFile(file,'utf8')]));
   const expected=new Map([
     ['ops/deploy-from-ci.sh',1],['scripts/release.sh',1],['scripts/restore.sh',2],
-    ['scripts/payload-release.sh',1],['scripts/payload-operations.sh',1],
+    ['scripts/payload-release.sh',1],
   ]);
   for(const [file,source] of callers){
+    if(file==='scripts/payload-operations.sh'){
+      assert.match(source,/^\s*BASE_URL=\$RESTORE_BASE_URL bash "\$root\/scripts\/smoke\.sh"/mu);
+      assert.doesNotMatch(source,/SMOKE_EDITORIAL_MODE=.*smoke\.sh/u,
+        'the shared coordinator must preserve the explicit fixture mode');
+      continue;
+    }
     const invocations=source.match(/^\s*SMOKE_EDITORIAL_MODE=redirect BASE_URL=.*smoke\.sh/mgu)??[];
     assert.equal(invocations.length,expected.get(file),`${file} must bind every production smoke invocation to redirect`);
   }
+  assert.match(callers.find(([file])=>file==='scripts/restore.sh')[1],
+    /SMOKE_EDITORIAL_MODE=redirect exec bash "\$root\/scripts\/payload-operations\.sh" restore/u,
+    'the production Payload restore dispatch pins redirect before entering the shared coordinator');
 });
 
 test('real smoke checks route HTML and the delivered local module graph, health, readiness and Origin', async t => {

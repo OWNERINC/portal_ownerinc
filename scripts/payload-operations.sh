@@ -241,7 +241,7 @@ else
   guard resume-readiness-writers "$writer_ticket" restore_start_readiness
   step restore_smoke
   : "${RESTORE_BASE_URL:?Set RESTORE_BASE_URL for the isolated target}"
-  SMOKE_EDITORIAL_MODE=redirect BASE_URL=$RESTORE_BASE_URL bash "$root/scripts/smoke.sh"
+  BASE_URL=$RESTORE_BASE_URL bash "$root/scripts/smoke.sh"
   resume
   guard verify-release
   guard open-admission
