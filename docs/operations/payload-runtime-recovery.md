@@ -2148,6 +2148,11 @@ do ledger de migrations usa o `cms_admin` restrito a `SELECT`; e as negativas DD
 usam `cms_migrator` somente dentro de `public`, onde essa role possui `CREATE`.
 O runner e o probe de conversão não aceitam o serviço legado
 `cms-postgres` nem o nome legado `cms-postgres.dump`; o manifest usa `cms.dump`.
+O fingerprint CMS assinado pelo adapter operacional segue a mesma fronteira:
+autentica como `cms_admin`, faz `SET LOCAL ROLE cms_runtime` somente dentro de
+`BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` e encerra com `ROLLBACK`. O
+fingerprint Portal continua autenticado diretamente como `portal_admin`, sem
+troca de role.
 Antes da primeira mutação no destino, a fixture captura e verifica um backup de
 proteção. O restore CMS usa o cluster admin interno ao serviço `postgres` e
 preserva owners e ACLs autenticados do archive, sem `--no-owner`,

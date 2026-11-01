@@ -1557,7 +1557,16 @@ SELECT json_build_object(
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         assert process.stdin is not None and process.stdout is not None
-        process.stdin.write(sql.encode('ascii'))
+        # cms_admin is deliberately NOINHERIT and has only bounded direct
+        # inspection grants. Authenticate as that owner, then assume its
+        # existing SET-only cms_runtime membership inside a read-only
+        # transaction so the complete data/sequence fingerprint is visible
+        # without granting cms_admin direct mutation privileges.
+        session_sql = sql
+        if database == 'ownerinc_cms':
+            session_sql = ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\n'
+                           'SET LOCAL ROLE cms_runtime;\n' + sql + 'ROLLBACK;\n')
+        process.stdin.write(session_sql.encode('ascii'))
         process.stdin.close()
         fingerprint = _data_fingerprint_rows(relations, process.stdout)
         status = process.wait(timeout=RUNTIME_CHILD_WAIT_SECONDS)
