@@ -426,6 +426,43 @@ R._psql_json = lambda service, sql, database=None: {
 }
 expect('database_fingerprint_unsupported_relation', lambda: R._data_fingerprint('postgres', 'portal'))
 
+class CapturingSink:
+    def __init__(self): self.data = b''
+    def write(self, value): self.data += value
+    def close(self): pass
+class CapturingProcess(FakeProcess):
+    def __init__(self, records):
+        super().__init__(records)
+        self.stdin = CapturingSink()
+def fingerprint_session(database):
+    records = b''.join([
+        json.dumps(['public.items', {'id': 1}], separators=(',', ':')).encode() + b'\n',
+        json.dumps(['public.items_id_seq', {'last_value': 1, 'is_called': True}], separators=(',', ':')).encode() + b'\n',
+    ])
+    R._psql_json = lambda service, sql, database=None: {
+        'tables': [{'schema': 'public', 'name': 'items'}],
+        'sequences': [{'schema': 'public', 'name': 'items_id_seq'}],
+        'unsupportedRelations': [],
+    }
+    R._container_id = lambda service: 'fixture-postgres'
+    observed = {}
+    def launch(command, **kwargs):
+        observed['command'] = command
+        observed['process'] = CapturingProcess(records)
+        return observed['process']
+    R.subprocess.Popen = launch
+    R._data_fingerprint('postgres', database)
+    return observed
+cms_fingerprint = fingerprint_session('ownerinc_cms')
+assert cms_fingerprint['command'][-1] == 'cms_admin'
+assert cms_fingerprint['process'].stdin.data.startswith(
+    b'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL ROLE cms_runtime;\n')
+assert cms_fingerprint['process'].stdin.data.endswith(b'ROLLBACK;\n')
+assert cms_fingerprint['process'].stdin.data.count(b'SET LOCAL ROLE cms_runtime;') == 1
+portal_fingerprint = fingerprint_session('portal')
+assert portal_fingerprint['command'][-1] == 'portal_admin'
+assert b'SET LOCAL ROLE' not in portal_fingerprint['process'].stdin.data
+
 def tar_bytes(name, kind=tarfile.REGTYPE):
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode='w') as archive:
