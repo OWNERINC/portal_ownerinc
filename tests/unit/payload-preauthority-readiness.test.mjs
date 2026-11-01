@@ -80,6 +80,10 @@ test('CMS readiness diagnostics read only allowlisted Docker fields and HTTP sta
   assert.match(recoveryRunner, /const status=String\(response\.status\);await response\.body\?\.cancel\(\)/u);
   assert.match(recoveryRunner, /process\.stdout\.write\(status\)/u);
   assert.match(recoveryRunner, /recoveryProgress\[runtime\.role\]\.initialCmsHealthPassed = true/u);
+  assert.match(recoveryRunner, /function assertPreauthorityCmsReadinessClosed\(runtime\)/u);
+  assert.match(recoveryRunner, /if \(status !== '503'\) throw new FixtureFailure\('cms_preauthority_readiness_not_closed'/u);
+  assert.equal((recoveryRunner.match(/assertPreauthorityCmsReadinessClosed\(runtime\);/gu) || []).length, 3,
+    'initial preparation, writer restart and every full smoke prove readiness remains closed');
   assert.match(recoveryRunner, /quiescentSnapshotComparison = 'passed'/u);
   assert.match(recoveryRunner, /quiescentSnapshotComparison = 'failed'/u);
   assert.match(recoveryRunner, /setStage\(`restart_writers_\$\{runtime\.role\}`, 'restart_writers', runtime\.role\)/u);

@@ -2112,6 +2112,14 @@ O overlay Payload adiciona o CMS healthy como dependência do Nginx, portanto o
 admin não é exposto por mera aceitação TCP. DB indisponível, migration ausente,
 storage não gravável ou modo inválido mantêm readiness fechada.
 
+Na fixture descartável **preauthority**, o protocolo nativo deve permanecer ausente,
+logo `/editorial/ready` deve responder exatamente `503`. Somente o healthcheck do
+overlay de recuperação usa `/editorial/health`, permitindo snapshot/restore do
+processo sintético sem afrouxar o Compose produtivo. O runner cancela o body sem
+lê-lo e prova o `503` após a preparação inicial, após cada restart dos writers e
+antes de cada full smoke; qualquer outro status falha fechado antes de seed,
+snapshot, restore aceito ou aceite final.
+
 O formato coordenado atual é `payload-v2-shared-postgres`: `postgres.dump`,
 `uploads.tar.gz`, `cms.dump`, `cms-uploads.tar.gz`, `release.images`,
 `operations-proof.json`, `backup.format` e `manifest.sha256`. A fixture manual usa
