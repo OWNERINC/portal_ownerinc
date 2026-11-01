@@ -163,7 +163,7 @@ test('the actual conversion assertStopped body refuses nginx and worker (and eve
   for(const service of ['api','cron','cms','nginx','cms-worker']){
     const queries=[];
     const assertStopped=new Function('compose','FixtureFailure','step',`${body};return assertStopped;`)(args=>{
-      queries.push(args);return Buffer.from(`postgres\ncms-postgres\n${service}\n`);
+      queries.push(args);return Buffer.from(`postgres\n${service}\n`);
     },FixtureFailure,'conversion_baseline');
     const h=harness({assertStopped});
     await assert.rejects(verifyLinuxConversionPrerequisite(h.operations),{code:'logical_snapshot_conversion_writers_active'});
@@ -202,7 +202,9 @@ test('actual recovery runner wires direct Linux conversion prerequisite under le
   assert.match(probeCode, /compose\(\['exec', '-T', 'postgres', 'psql'/u);
   assert.match(probeCode, /CREATE CONVERSION public\."\$\{name\}" FOR 'UTF8' TO 'LATIN1' FROM pg_catalog\.utf8_to_iso8859_1/u);
   assert.match(probeCode, /SELECT count\(\*\)::text FROM pg_conversion/u);
-  assert.match(probeCode, /input: logicalSnapshotScript/u);
+  assert.match(probeCode, /database\('postgres', 'ownerinc_cms', 'cms_admin', prefix, 'cms', cmsRuntimeLogicalSnapshotScript\)/u);
+  assert.match(probeCode, /input: snapshotScript/u);
+  assert.doesNotMatch(probeCode, /cms-postgres/u);
   assert.match(probeCode, /payload-logical-snapshot-cli\.mjs/u);
   assert.match(probeCode, /logicalSnapshotCommandContext: 'logical-snapshot-cli'/u);
   assert.match(section, /conversionProbeCommandContext: CONVERSION_PROBE_CONTEXT/u);

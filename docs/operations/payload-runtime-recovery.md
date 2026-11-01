@@ -2140,6 +2140,14 @@ O formato coordenado atual é `payload-v2-shared-postgres`: `postgres.dump`,
 `operations-proof.json`, `backup.format` e `manifest.sha256`. A fixture manual usa
 as mesmas funções `verify_backup_manifest` e `verify_storage_archive`, restaura em
 cluster PostgreSQL independente e só então compara IDs/status/Version/SHA/bytes.
+Na qualificação preauthority shared-v4, toda conexão CMS usa o serviço Compose
+`postgres`: seeds DML usam `cms_runtime`; snapshots lógicos/privados autenticam
+como `cms_admin` e fazem `SET LOCAL ROLE cms_runtime` numa transação read-only (ou
+`pg_dump --role=cms_runtime`) para cobrir todas as tabelas e sequences; a leitura
+do ledger de migrations usa o `cms_admin` restrito a `SELECT`; e as negativas DDL
+usam `cms_migrator` somente dentro de `public`, onde essa role possui `CREATE`.
+O runner e o probe de conversão não aceitam o serviço legado
+`cms-postgres` nem o nome legado `cms-postgres.dump`; o manifest usa `cms.dump`.
 Antes da primeira mutação no destino, a fixture captura e verifica um backup de
 proteção. O restore CMS usa o cluster admin interno ao serviço `postgres` e
 preserva owners e ACLs autenticados do archive, sem `--no-owner`,

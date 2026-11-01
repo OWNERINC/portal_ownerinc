@@ -183,7 +183,8 @@ export const logicalSnapshotSettings = `SET LOCAL search_path=pg_catalog; SET LO
 SET LOCAL lc_numeric='C'; SET LOCAL lc_monetary='C'; SET LOCAL lc_time='C';
 SET LOCAL datestyle='ISO, YMD'; SET LOCAL intervalstyle='postgres'; SET LOCAL extra_float_digits=3;
 SET LOCAL bytea_output='hex'; SET LOCAL statement_timeout='120s';`;
-export const logicalSnapshotScript = `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+const buildLogicalSnapshotScript = role => `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+${role ? `SET LOCAL ROLE ${role};\n` : ''}
 ${logicalSnapshotSettings}
 ${Object.entries(schemaSnapshotQueries).map(([name, query]) => `${section(name, query)};`).join('\n')}
 ${dataStatementsSQL}
@@ -191,6 +192,11 @@ ${dataStatementsSQL}
 SELECT '{"kind":"complete","version":1}' AS record;
 ROLLBACK;
 `;
+export const logicalSnapshotScript = buildLogicalSnapshotScript(null);
+// cms_admin is NOINHERIT and can SET only its bounded memberships. Snapshot
+// sessions authenticate as cms_admin, then assume the ordinary runtime reader
+// inside the read-only transaction so complete table/sequence data is visible.
+export const cmsRuntimeLogicalSnapshotScript = buildLogicalSnapshotScript('cms_runtime');
 
 const fail = code => { throw new Error(code); };
 const canonical = value => {

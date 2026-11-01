@@ -7,7 +7,7 @@ import {
   assertRecoveryCondition, assertRecoverySnapshots, createPrivateSnapshotEvidence,
   holdFailedRecoveryFixtures, postRestoreFixtureHoldScript,
 } from './integration/payload-preauthority-snapshot.mjs';
-import { logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './integration/payload-logical-snapshot.mjs';
+import { cmsRuntimeLogicalSnapshotScript, logicalSnapshotScript, LOGICAL_SNAPSHOT_MAX_BYTES } from './integration/payload-logical-snapshot.mjs';
 import { CONVERSION_PROBE_CONTEXT } from './integration/payload-logical-snapshot-probe-protocol.mjs';
 import { recoveryPayloadRelease, recoveryComposeArgs, recoveryFixtureEnvironment,
   conversionProbeCommandInput, writerRestartCommandInput, awaitFixtureProxyAvailability } from './integration/payload-preauthority-snapshot-runtime.mjs';
@@ -768,9 +768,9 @@ async function seedProject(runtime) {
     `INSERT INTO public.cms_revisions(id,document_id,version,status,blocks,editorial,created_by) VALUES('${legacyRevisionId}','${legacyDocumentId}',1,'published','[{"type":"paragraph","text":"${marker} legacy recovery body"}]'::jsonb,'{"version":1,"kind":"article","summary":"synthetic legacy recovery fixture","author":"fixture","source_label":"fixture","source_date":null}'::jsonb,'${uid}')`);
   runSeedStatement('postgres', 'portal', 'portal_admin', 'seed_portal_publish_legacy_revision',
     `UPDATE public.cms_documents SET published_revision_id='${legacyRevisionId}',published_at=NOW() WHERE id='${legacyDocumentId}'`);
-  runSeedStatement('cms-postgres', 'ownerinc_cms', 'cms_admin', 'seed_cms_portal_editor',
+  runSeedStatement('postgres', 'ownerinc_cms', 'cms_runtime', 'seed_cms_portal_editor',
     `INSERT INTO public.portal_editors(id,portal_uid,email,display_name) VALUES('${randomUUID()}','${uid}','${email}','${marker}')`);
-  runSeedStatement('cms-postgres', 'ownerinc_cms', 'cms_admin', 'seed_cms_payload_preference',
+  runSeedStatement('postgres', 'ownerinc_cms', 'cms_runtime', 'seed_cms_payload_preference',
     `INSERT INTO public.payload_preferences(id,key,value) VALUES('${randomUUID()}','fixture-${safeToken(runtime.project)}','{"marker":"${marker}"}'::jsonb)`);
   setSubstep('seed_portal_upload');
   composeWithLease(runtime, ['exec', '-T', 'api', 'sh', '-ceu', 'printf %s "$1" > /app/uploads/preauthority-fixture.txt',
@@ -782,23 +782,25 @@ async function seedProject(runtime) {
   await assertQuiescentSnapshotStable(runtime);
 }
 
-function databaseDump(runtime, service, database, user) {
+function databaseDump(runtime, service, database, user, role = null) {
+  const roleOption = role === null ? '' : role === 'cms_runtime' ? ' --role=cms_runtime' : assert.fail('unsupported snapshot role');
   const dump = composeCall(runtime, ['exec', '-T', service, 'sh', '-ceu',
-    `pg_dump --data-only --column-inserts --no-owner --no-privileges --dbname="${database}" --username="${user}"`]);
+    `pg_dump --data-only --column-inserts --no-owner --no-privileges${roleOption} --dbname="${database}" --username="${user}"`]);
   return normalizePgDumpForSnapshot(dump);
 }
 
-function databaseSchemaDump(runtime, service, database, user) {
+function databaseSchemaDump(runtime, service, database, user, role = null) {
+  const roleOption = role === null ? '' : role === 'cms_runtime' ? ' --role=cms_runtime' : assert.fail('unsupported snapshot role');
   const dump = composeCall(runtime, ['exec', '-T', service, 'sh', '-ceu',
-    `pg_dump --schema-only --no-owner --no-privileges --dbname="${database}" --username="${user}"`]);
+    `pg_dump --schema-only --no-owner --no-privileges${roleOption} --dbname="${database}" --username="${user}"`]);
   return normalizePgDumpForSnapshot(dump);
 }
 
-function logicalDatabaseSnapshot(runtime, service, database, user) {
+function logicalDatabaseSnapshot(runtime, service, database, user, snapshotScript = logicalSnapshotScript) {
   const capture = composeCall(runtime, ['exec', '-T', service, 'psql', '-XAtq', '-v', 'ON_ERROR_STOP=1',
     '-v', 'VERBOSITY=sqlstate',
     `--dbname=${database}`, `--username=${user}`], {
-    input: logicalSnapshotScript, maxBuffer: LOGICAL_SNAPSHOT_MAX_BYTES,
+    input: snapshotScript, maxBuffer: LOGICAL_SNAPSHOT_MAX_BYTES,
     failureCode: 'logical_snapshot_capture_failed', preservePrivateErrorEvidence: true, sqlCommandContext: true,
   });
   const result = run(process.execPath, ['--import',
@@ -837,15 +839,15 @@ function snapshot(runtime, evidenceLabel = null) {
   setSubstep('snapshot_portal_logical_database');
   const portal = logicalDatabaseSnapshot(runtime, 'postgres', 'portal', 'portal_admin');
   setSubstep('snapshot_cms_logical_database');
-  const cms = logicalDatabaseSnapshot(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin');
+  const cms = logicalDatabaseSnapshot(runtime, 'postgres', 'ownerinc_cms', 'cms_admin', cmsRuntimeLogicalSnapshotScript);
   const portalDatabase = portal.data; const portalSchema = portal.schema;
   const cmsDatabase = cms.data; const cmsSchema = cms.schema;
   if (evidenceLabel) {
     setSubstep('snapshot_private_dump_evidence');
     capture('portalDatabase', databaseDump(runtime, 'postgres', 'portal', 'portal_admin'));
-    capture('cmsDatabase', databaseDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin'));
+    capture('cmsDatabase', databaseDump(runtime, 'postgres', 'ownerinc_cms', 'cms_admin', 'cms_runtime'));
     capture('portalSchema', databaseSchemaDump(runtime, 'postgres', 'portal', 'portal_admin'));
-    capture('cmsSchema', databaseSchemaDump(runtime, 'cms-postgres', 'ownerinc_cms', 'cms_admin'));
+    capture('cmsSchema', databaseSchemaDump(runtime, 'postgres', 'ownerinc_cms', 'cms_admin', 'cms_runtime'));
   }
   setSubstep('snapshot_portal_uploads');
   const portalUploads = storageFingerprint(runtime, 'api', '/app/uploads', bytes => capture('portalUploads', bytes));
@@ -964,7 +966,7 @@ async function newestBackup(runtime) {
 }
 
 async function refreshManifest(directory) {
-  const files = ['postgres.dump', 'uploads.tar.gz', 'cms-postgres.dump', 'cms-uploads.tar.gz',
+  const files = ['postgres.dump', 'uploads.tar.gz', 'cms.dump', 'cms-uploads.tar.gz',
     'release.images', 'operations-proof.json', 'backup.format'];
   const entries = [];
   for (const name of files) {
@@ -1100,8 +1102,8 @@ function sortKeys(value) {
 async function targetCatalogNegative(runtime, backup, label, sql, cleanupSql) {
   setStage(`negative_${label}`, undefined, runtime.role);
   const evidenceStart = privateCommandEvidence.length;
-  const ddl = statement => composeWithLease(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
-    '--dbname=ownerinc_cms', '--username=cms_admin'], { input: `${statement}\n`, preservePrivateErrorEvidence: true });
+  const ddl = statement => composeWithLease(runtime, ['exec', '-T', 'postgres', 'psql', '-Xq', '-v', 'ON_ERROR_STOP=1',
+    '--dbname=ownerinc_cms', '--username=cms_migrator'], { input: `${statement}\n`, preservePrivateErrorEvidence: true });
   await runCatalogNegative(label, {
     setSubstep, snapshot: () => snapshot(runtime),
     inject: () => ddl(sql), cleanup: () => ddl(cleanupSql),
@@ -1191,7 +1193,7 @@ function legacyAnnouncement(runtime, documentId) {
 }
 
 function cmsMigrationNames(runtime) {
-  return text(composeCall(runtime, ['exec', '-T', 'cms-postgres', 'psql', '-XqAt', '-v', 'ON_ERROR_STOP=1',
+  return text(composeCall(runtime, ['exec', '-T', 'postgres', 'psql', '-XqAt', '-v', 'ON_ERROR_STOP=1',
     '--dbname=ownerinc_cms', '--username=cms_admin', '-c', 'SELECT string_agg(name, \'|\' ORDER BY name) FROM payload_migrations']));
 }
 
@@ -1268,7 +1270,7 @@ async function runRecovery() {
   setStage('offline_rejection_matrix');
   await createNegativeCopies(target, targetBackup);
   await targetCatalogNegative(target, targetBackup, 'unexpected_schema',
-    'CREATE SCHEMA fixture_unexpected_schema', 'DROP SCHEMA fixture_unexpected_schema');
+    'CREATE TABLE public.fixture_unexpected_schema(id bigint)', 'DROP TABLE public.fixture_unexpected_schema');
   await targetCatalogNegative(target, targetBackup, 'weak_native_constraint',
     `ALTER TABLE public.news_migration_runs DROP CONSTRAINT news_migration_runs_manifest_sha256_check; ALTER TABLE public.news_migration_runs ADD CONSTRAINT news_migration_runs_manifest_sha256_check CHECK (manifest_sha256 IS NOT NULL)`,
     `ALTER TABLE public.news_migration_runs DROP CONSTRAINT news_migration_runs_manifest_sha256_check; ALTER TABLE public.news_migration_runs ADD CONSTRAINT news_migration_runs_manifest_sha256_check CHECK (manifest_sha256 ~ '^[0-9a-f]{64}$')`);

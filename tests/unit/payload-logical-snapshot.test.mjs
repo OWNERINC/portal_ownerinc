@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createCommandDiagnostic } from '../../scripts/integration/payload-preauthority-diagnostics.mjs';
 import { createFixtureCommandFailure } from '../../scripts/integration/payload-preauthority-command.mjs';
 import { createRecoveryFailureReportFields } from '../../scripts/integration/payload-preauthority-recovery-flow.mjs';
-import { dataStatementsSQL, fingerprintLogicalSnapshot, logicalSnapshotScript,
+import { cmsRuntimeLogicalSnapshotScript, dataStatementsSQL, fingerprintLogicalSnapshot, logicalSnapshotScript,
   LOGICAL_SNAPSHOT_MAX_BYTES, LOGICAL_SNAPSHOT_MAX_ROWS, schemaSnapshotQueries,
 } from '../../scripts/integration/payload-logical-snapshot.mjs';
 
@@ -26,6 +26,15 @@ const records = () => [
   { kind: 'complete', version: 1 },
 ];
 const snapshot = input => fingerprintLogicalSnapshot(encode(input), value => value);
+
+test('CMS complete snapshot assumes the bounded runtime reader only inside its read-only transaction', () => {
+  assert.match(cmsRuntimeLogicalSnapshotScript,
+    /^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL ROLE cms_runtime;/u);
+  assert.equal((cmsRuntimeLogicalSnapshotScript.match(/SET LOCAL ROLE cms_runtime;/gu) || []).length, 1);
+  assert.doesNotMatch(logicalSnapshotScript, /SET (?:LOCAL )?ROLE/u,
+    'Portal snapshots retain their authenticated portal_admin identity');
+  assert.ok(cmsRuntimeLogicalSnapshotScript.endsWith('ROLLBACK;\n'));
+});
 
 test('independent table multiset includes duplicate rows, exact PG numeric text and operational tables', () => {
   const original = records();
