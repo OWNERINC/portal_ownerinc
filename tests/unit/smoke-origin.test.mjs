@@ -337,11 +337,11 @@ test('real smoke checks route HTML and the delivered local module graph, health,
   await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const run = async ({baseUrl=origin,attempts='1',onSpawn}={}) => {
-    const result=await ownedTestProcess(bash,['scripts/smoke.sh'],{
-      env: { ...process.env, BASE_URL: `${baseUrl}/`, SMOKE_ATTEMPTS: attempts },
-      onSpawn,ledger:ownership,
-    });
+  const run = async ({baseUrl=origin,attempts='1',editorialMode,onSpawn}={}) => {
+    const env={...process.env,BASE_URL:`${baseUrl}/`,SMOKE_ATTEMPTS:attempts};
+    delete env.SMOKE_EDITORIAL_MODE;
+    if(editorialMode!==undefined)env.SMOKE_EDITORIAL_MODE=editorialMode;
+    const result=await ownedTestProcess(bash,['scripts/smoke.sh'],{env,onSpawn,ledger:ownership});
     return {code:result.code,signal:result.signal,output:result.stdout+result.stderr,ownership:result.proof};
   };
 
@@ -375,6 +375,38 @@ test('real smoke checks route HTML and the delivered local module graph, health,
         {check:'same_origin',reason:'http_status',httpStatus:null});
       assert.equal(origins.at(-1), origin);
     } finally { rejectOrigin = false; }
+  });
+
+  await t.test('closed editorial mode accepts only an unpublished route with no Location header',async()=>{
+    overrides.set('/editorial',{status:404});
+    try{
+      const accepted=await run({editorialMode:'closed'});
+      assert.equal(accepted.code,0,accepted.output);
+    }finally{overrides.clear();}
+  });
+
+  await t.test('closed editorial mode rejects the published redirect',async()=>{
+    const rejected=await run({editorialMode:'closed'});
+    assert.equal(rejected.code,1,rejected.output);
+    assert.deepEqual(extractSmokeFailure(rejected.output,{smokeCommandContext:FIXTURE_SMOKE_CONTEXT,substep:'fixture_full_smoke',status:rejected.code}),
+      {check:'editorial_redirect',reason:'http_status',httpStatus:308});
+  });
+
+  await t.test('closed editorial mode rejects a Location header even when status is 404',async()=>{
+    overrides.set('/editorial',{status:404,headers:{Location:'/editorial/admin'}});
+    try{
+      const rejected=await run({editorialMode:'closed'});
+      assert.equal(rejected.code,1,rejected.output);
+      assert.deepEqual(extractSmokeFailure(rejected.output,{smokeCommandContext:FIXTURE_SMOKE_CONTEXT,substep:'fixture_full_smoke',status:rejected.code}),
+        {check:'editorial_redirect',reason:'redirect',httpStatus:404});
+    }finally{overrides.clear();}
+  });
+
+  await t.test('invalid editorial mode refuses before any HTTP request',async()=>{
+    const start=requests.length;
+    const rejected=await run({editorialMode:'invalid'});
+    assert.notEqual(rejected.code,0,rejected.output);
+    assert.equal(requests.length,start);
   });
 
   const failures = [
@@ -421,6 +453,8 @@ test('real smoke checks route HTML and the delivered local module graph, health,
       body: files.get('/js/owner-news/asset-path.mjs'),
       headers: { 'Content-Length': Buffer.byteLength(files.get('/js/owner-news/asset-path.mjs')) + 20, Connection: 'close' },
     }],
+    ['unpublished editorial route in default mode', '/editorial', { status: 404 }],
+    ['editorial redirect without Location', '/editorial', { status: 308 }],
     ['absolute editorial redirect', '/editorial', { status: 308, headers: { Location: `${origin}/editorial/admin` } }],
   ];
   for (const [name, url, response] of failures) {
@@ -438,7 +472,7 @@ test('real smoke checks route HTML and the delivered local module graph, health,
         const transport=name.startsWith('incomplete');
         const reason=transport?'transport':response.status>=400 || check==='missing_html'?'http_status'
           :check==='editorial_redirect'?'redirect':javascript?'module':'content';
-        const httpStatus=javascript?response.status??200:check==='missing_html'?response.status??200:check==='editorial_redirect'?308:null;
+        const httpStatus=javascript?response.status??200:check==='missing_html'?response.status??200:check==='editorial_redirect'?response.status??308:null;
         assert.deepEqual(extractSmokeFailure(rejected.output,{smokeCommandContext:FIXTURE_SMOKE_CONTEXT,substep:'fixture_full_smoke',status:rejected.code}),
           {check,reason,httpStatus},'metadata must come from the existing actual call result; no resource/body/URL is published');
       } finally { overrides.clear(); }
@@ -511,6 +545,7 @@ test('real smoke checks route HTML and the delivered local module graph, health,
           transportCorrect=command==='bash' && args.length===1 && args[0]===path.join(input.runtime.payloadRelease,'scripts','smoke.sh')
             && options.cwd===input.runtime.payloadRelease && options.env.BASE_URL===environment.RESTORE_BASE_URL
             && options.env.BASE_URL===input.runtime.baseUrl && options.env.SMOKE_ATTEMPTS===attempts
+            && options.env.SMOKE_EDITORIAL_MODE==='closed'
             && options.timeout===15*60_000 && options.preservePrivateErrorEvidence===true;
           // Test-only lower wrapper deadline, never a production timeout edit.
           return runFixtureCommand(input.bash,args,{...options,...(input.commandTimeout?{timeout:input.commandTimeout}:{}),privateCommandEvidence:evidence});
@@ -539,16 +574,19 @@ test('real smoke checks route HTML and the delivered local module graph, health,
   };
 
   await t.test('actual producer → command wrapper → release smoke fully checks HTTP before initial seed and both positive restore callbacks',async()=>{
-    for(const phase of ['initial','first','second']){
-      const start=requests.length;
-      const result=await gate(phase);
-      assert.equal(result.ok,true,JSON.stringify(result));
-      assert.equal(result.transportCorrect,true);assert.equal(result.commands,1);
-      assert.deepEqual(result.observed,[identity,identity],'verify the saved identity before and after full smoke, never adopt a new one');
-      assert.deepEqual(result.effects,phase==='initial'?['seed']:['target_before','pg_restore','storage_clear']);
-      const actual=requests.slice(start);
-      for(const url of ['/api/health','/api/ready','/autocard.html','/__route_recovery_missing__.html','/editorial','/js/router.js','/js/owner-news/asset-path.mjs'])assert.ok(actual.includes(url),url);
-    }
+    overrides.set('/editorial',{status:404});
+    try{
+      for(const phase of ['initial','first','second']){
+        const start=requests.length;
+        const result=await gate(phase);
+        assert.equal(result.ok,true,JSON.stringify(result));
+        assert.equal(result.transportCorrect,true);assert.equal(result.commands,1);
+        assert.deepEqual(result.observed,[identity,identity],'verify the saved identity before and after full smoke, never adopt a new one');
+        assert.deepEqual(result.effects,phase==='initial'?['seed']:['target_before','pg_restore','storage_clear']);
+        const actual=requests.slice(start);
+        for(const url of ['/api/health','/api/ready','/autocard.html','/__route_recovery_missing__.html','/editorial','/js/router.js','/js/owner-news/asset-path.mjs'])assert.ok(actual.includes(url),url);
+      }
+    }finally{overrides.clear();}
   });
 
   await t.test('missing proxy ID, swapped identity or wrong bound port refuses before smoke/target snapshot/destructive callback',async()=>{

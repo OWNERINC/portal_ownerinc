@@ -28,6 +28,8 @@ test('actual inventory/release/Compose/environment/JSON producers round-trip thr
   assert.equal(configuration.composeArgs[17], produced.payloadRelease);
   assert.equal(configuration.composeArgs[5], `${produced.payloadRelease}/.image-env`);
   assert.equal(produced.environment.COMPOSE_PROJECT_NAME, produced.project);
+  assert.equal(produced.environment.SMOKE_ATTEMPTS, '8');
+  assert.equal(produced.environment.SMOKE_EDITORIAL_MODE, 'closed');
   assert.equal(Object.hasOwn(produced.environment, 'GITHUB_SHA'), false, 'the binding does not rely on ambient GITHUB_SHA');
   // No full conversion context on this successful validation-only command:
   // configuration acceptance is NOT evidence of a conversion/engine PASS.
