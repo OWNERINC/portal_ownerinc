@@ -201,6 +201,7 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
   assert.match(observations, /'--verify-runtime'/u);
   assert.match(observations, /_verify_cms\(self\.release_path, catalog=True\)/u);
   assert.ok(setup.indexOf("await awaitService(runtime, 'cms')") > setup.indexOf('await initializePreauthority'));
+  assert.ok(setup.indexOf('assertPreauthorityCmsReadinessClosed(runtime)') > setup.indexOf("await awaitService(runtime, 'cms')"));
   assert.ok(setup.indexOf('await seedProject(runtime)') > setup.indexOf("await awaitService(runtime, 'cms')"));
   assert.doesNotMatch(setup, /GRANT SELECT|persist_current_release_marker/u,
     'setup no longer substitutes an ad-hoc grant or direct pointer write for the signed ops transaction');
@@ -231,6 +232,11 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
     'the fixture follows the documented shared-cluster pre-migration provisioning phase');
   assert.match(runbook, /api\/db\/provision\.js[\s\S]*portal_api[\s\S]*portal_cron/u,
     'the active runbook keeps Portal role authority separate from the six CMS roles');
+  assert.match(overlay, /cms:\n\s+networks: \[backend\][\s\S]*?healthcheck:[\s\S]*?\/editorial\/health/u);
+  assert.doesNotMatch(overlay, /healthcheck:[\s\S]*?\/editorial\/ready/u,
+    'the disposable fixture must not claim production readiness while the protocol is absent');
+  assert.match(compose, /cms:[\s\S]*?healthcheck:[\s\S]*?\/editorial\/ready/u,
+    'the production CMS healthcheck remains fail-closed on full readiness');
 });
 
 test('legacy announcement lookup is bound to a captured source document UUID', () => {

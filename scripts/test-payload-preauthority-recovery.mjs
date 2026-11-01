@@ -640,6 +640,19 @@ function composeWithLease(runtime, actionArgs, options = {}) {
   ], { ...options, release: runtime.payloadRelease });
 }
 
+function assertPreauthorityCmsReadinessClosed(runtime) {
+  const substep = 'preauthority_cms_readiness_closed';
+  setSubstep(substep);
+  const probe = `fetch("http://127.0.0.1:3001${CMS_READINESS_ROUTE}",{signal:AbortSignal.timeout(3000)})` +
+    '.then(async response=>{const status=String(response.status);await response.body?.cancel().catch(()=>{});process.stdout.write(status)})' +
+    '.catch(()=>process.stdout.write("unavailable"))';
+  const status = text(composeWithLease(runtime, ['exec', '-T', 'cms', 'node', '-e', probe], {
+    substep, preservePrivateErrorEvidence: true,
+  }));
+  if (status !== '503') throw new FixtureFailure('cms_preauthority_readiness_not_closed', { substep });
+  setSubstep(null);
+}
+
 function observeFixtureWriters(runtime) {
   setSubstep('snapshot_observe_writer_identities');
   const observed = JSON.parse(withLease(runtime, runtime.project, process.execPath, [
@@ -673,6 +686,8 @@ async function awaitFixtureProxy(runtime, identity) {
 
 async function assertFixtureFullSmoke(runtime, afterSmoke = () => undefined) {
   setSubstep('fixture_full_smoke');
+  assertPreauthorityCmsReadinessClosed(runtime);
+  setSubstep('fixture_full_smoke');
   return runFixtureSmokePreflight(runtime, {
     environment: fixtureEnv(runtime.project, runtime, runtime.payloadRelease),
     verifyProxy: awaitFixtureProxy,
@@ -705,6 +720,7 @@ async function provisionProject(runtime) {
   await awaitService(runtime, 'api');
   await awaitService(runtime, 'cron');
   await awaitService(runtime, 'cms');
+  assertPreauthorityCmsReadinessClosed(runtime);
   recoveryProgress[runtime.role].initialCmsHealthPassed = true;
   // Creation belongs to fixture preparation, NEVER to a resume operation.
   setSubstep('fixture_nginx_prepare');
@@ -909,6 +925,7 @@ async function assertQuiescentSnapshotStable(runtime) {
         writerRestartMode: 'restart', timeout: 600_000, preservePrivateErrorEvidence: true,
       });
       for (const service of writers.filter(service => service !== 'nginx')) await awaitService(runtime, service);
+      assertPreauthorityCmsReadinessClosed(runtime);
       await awaitFixtureProxy(runtime, observedWriters.nginx);
       recoveryProgress[runtime.role].writersRestartedHealthy = true;
     },

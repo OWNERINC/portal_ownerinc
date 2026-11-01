@@ -36,3 +36,9 @@ services:
 
   cms:
     networks: [backend]
+    # The preauthority floor deliberately has no native mutation protocol yet,
+    # so production readiness must remain closed. This disposable recovery
+    # fixture needs only process liveness while it snapshots/restores the four
+    # stores; the runner separately proves /editorial/ready still returns 503.
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:3001/editorial/health",{signal:AbortSignal.timeout(3000)}).then(async r=>{await r.body?.cancel().catch(()=>{});process.exit(r.status===200?0:1)}).catch(()=>process.exit(1))']
