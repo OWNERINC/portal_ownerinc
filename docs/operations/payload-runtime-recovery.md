@@ -2120,6 +2120,15 @@ lê-lo e prova o `503` após a preparação inicial, após cada restart dos writ
 antes de cada full smoke; qualquer outro status falha fechado antes de seed,
 snapshot, restore aceito ou aceite final.
 
+O full smoke mantém dois perfis editoriais estritos. Sem configuração explícita,
+o perfil produtivo `redirect` exige status `308`, um único header `Location` e o
+valor relativo exato `/editorial/admin`. Somente `recoveryFixtureEnvironment()`
+define `SMOKE_EDITORIAL_MODE=closed`; nesse perfil, `/editorial` deve responder
+exatamente `404` e não pode emitir header `Location`. Valores diferentes de
+`redirect|closed` falham antes da primeira requisição. O perfil preauthority não
+pula o check editorial: ele prova positivamente que a rota continua fechada,
+enquanto o smoke padrão continua rejeitando `404`.
+
 O formato coordenado atual é `payload-v2-shared-postgres`: `postgres.dump`,
 `uploads.tar.gz`, `cms.dump`, `cms-uploads.tar.gz`, `release.images`,
 `operations-proof.json`, `backup.format` e `manifest.sha256`. A fixture manual usa
