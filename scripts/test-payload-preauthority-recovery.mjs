@@ -1198,11 +1198,16 @@ function cmsMigrationNames(runtime) {
 }
 
 function assertWorkerHeld(runtime) {
-  const ids = text(composeCall(runtime, ['ps', '-q', 'cms-worker']));
-  assert.equal(ids, '', 'CMS worker must remain absent after recovery');
+  setSubstep('assert_worker_held');
+  // shared-v4 intentionally omits cms-worker from the Compose model, so asking
+  // `compose ps` for that service fails instead of proving absence. Inspect all
+  // project containers by their canonical Compose labels, including rogue or
+  // stale containers not present in the current model.
   const listed = text(run('docker', ['ps', '--all', '--filter', `label=com.docker.compose.project=${runtime.project}`,
     '--filter', 'label=com.docker.compose.service=cms-worker', '--format', '{{.State}}']));
-  assert.equal(listed.split(/\r?\n/).filter(Boolean).some(value => value === 'running'), false);
+  const states = listed.split(/\r?\n/).filter(Boolean);
+  assert.equal(states.every(value => value === 'created' || value === 'exited'), true,
+    'CMS worker must remain absent after recovery');
 }
 
 async function runRecovery() {
