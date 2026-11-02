@@ -189,8 +189,8 @@ else
   step restore_portal_target_identity
   compose exec -T postgres sh -ceu '
     test "$(psql -XqAt -v ON_ERROR_STOP=1 --dbname="$1" --username="$POSTGRES_USER" \
-      --set=expected_database="$1" --set=expected_owner=portal_admin \
-      -c "SELECT current_database()=:'\''expected_database'\'' AND pg_catalog.pg_get_userbyid(datdba)=:'\''expected_owner'\'' FROM pg_catalog.pg_database WHERE datname=current_database()")" = t
+      -c "SELECT current_database() || chr(58) || pg_catalog.pg_get_userbyid(datdba) || chr(58) || current_user FROM pg_catalog.pg_database WHERE datname=current_database()")" \
+      = "$1:portal_admin:$POSTGRES_USER"
   ' portal-database "$portal_database"
   step restore_portal_database
   compose exec -T postgres sh -c 'pg_restore --single-transaction --clean --if-exists --no-owner --no-privileges --dbname="$1" --username="$POSTGRES_USER"' \

@@ -41,14 +41,19 @@ case $cmd in
     printf 'postgres\\n' > "$FIXTURE/running";;
   start) printf 'private missing cms-migrate dependency\\n' >&2; exit 1;;
   up) printf 'postgres\\nnginx\\napi\\ncms\\n' > "$FIXTURE/running";;
- exec|run)
+  exec|run)
     if [[ $cmd == run && " $* " == *' migrate '* ]]; then
       printf 'migrate\\n' >> "$FIXTURE/migration.attempts"
       [[ \${FAIL_GRANT_RESTORE:-false} != true ]] || exit 44
     fi
    if grep -Eq '^(nginx|api|cron|cms|cms-worker)$' "$FIXTURE/running"; then exit 91; fi
    if [[ \${FAIL_DUMP:-false} == true ]]; then exit 92; fi
-    if [[ "$*" == *expected_owner=portal_admin* ]]; then printf 't\n'; exit 0; fi
+    if [[ "$*" == *'pg_get_userbyid(datdba)'* ]]; then
+      while [[ $1 != sh ]]; do shift; done
+      shift
+      POSTGRES_USER=portal_admin sh "$@"
+      exit $?
+    fi
     if [[ "$*" == *current_database* ]]; then
       if [[ "$*" == *ownerinc_cms* ]]; then printf 'ownerinc_cms:portal_admin:true\n'; else printf 'portal:portal_admin\n'; fi
       exit 0
@@ -112,7 +117,7 @@ async function fixture(t) {
       ? source
         .replace('PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nexport PATH\n', '')
         .replace('env -i PATH="$PATH" HOME="${HOME:-/root}" docker compose',
-          'env -i PATH="$PATH" HOME="${HOME:-/root}" FAIL_DUMP="${FAIL_DUMP:-false}" FAIL_RESTORE="${FAIL_RESTORE:-false}" FAIL_RESTORE_LIST="${FAIL_RESTORE_LIST:-false}" FAIL_GRANT_RESTORE="${FAIL_GRANT_RESTORE:-false}" FAIL_CLEANUP_STOP="${FAIL_CLEANUP_STOP:-false}" docker compose')
+          'env -i PATH="$PATH" HOME="${HOME:-/root}" FAIL_DUMP="${FAIL_DUMP:-false}" FAIL_RESTORE="${FAIL_RESTORE:-false}" FAIL_RESTORE_LIST="${FAIL_RESTORE_LIST:-false}" FAIL_GRANT_RESTORE="${FAIL_GRANT_RESTORE:-false}" FAIL_CLEANUP_STOP="${FAIL_CLEANUP_STOP:-false}" PORTAL_IDENTITY_OUTPUT="${PORTAL_IDENTITY_OUTPUT:-}" FAIL_PORTAL_IDENTITY_QUERY="${FAIL_PORTAL_IDENTITY_QUERY:-false}" docker compose')
       : source;
     if (file === 'payload-operations.sh') assert.notEqual(fixtureSource, source, 'production PATH pin must remain explicit');
     await writeFile(path.join(root, 'release/scripts', file), fixtureSource);
@@ -127,6 +132,10 @@ async function fixture(t) {
   await writeFile(path.join(root, 'timeline'), '');
   await writeFile(path.join(root, 'bin/docker'), fakeDocker, { mode: 0o755 });
   await writeFile(path.join(root, 'bin/flock'), '#!/bin/sh\nprintf "lock\\n" >> "$FIXTURE/lock.calls"\n', { mode: 0o755 });
+  await writeFile(path.join(root, 'bin/psql'), `#!/bin/sh
+[ "\${FAIL_PORTAL_IDENTITY_QUERY:-false}" != true ] || exit 41
+printf '%s\\n' "\${PORTAL_IDENTITY_OUTPUT:-portal_test:portal_admin:portal_admin}"
+`, { mode: 0o755 });
   // Archive listing only; this stub never extracts data or invokes system tar.
   await writeFile(path.join(root, 'bin/tar'), '#!/bin/sh\ncase "$2" in -tzf) printf "./\\n./.owner-news-import/receipt.json\\n";; -tvzf) printf "drwx------ fixture\\n-rw------- fixture\\n";; *) exit 95;; esac\n', { mode: 0o755 });
   await writeFile(path.join(root, 'guard'), fakeGuard, { mode: 0o755 });
@@ -302,6 +311,11 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.doesNotMatch(cmsRestore, /--no-owner|--no-privileges|--role(?:=|\s)/u);
   const portalRestore = calls.split('\n').find(line => line.includes('pg_restore --single-transaction') && line.includes('portal_test'));
   assert.ok(portalRestore, 'Portal restore uses the authenticated non-default database target');
+  const portalIdentity = calls.split('\n').find(line => line.includes('pg_get_userbyid(datdba)'));
+  assert.ok(portalIdentity && calls.indexOf(portalIdentity) < calls.indexOf(portalRestore));
+  assert.match(portalIdentity, /current_database\(\).*pg_get_userbyid\(datdba\).*current_user/u);
+  assert.doesNotMatch(portalIdentity, /expected_database|expected_owner/u,
+    'the immediate identity check must not depend on psql variable interpolation inside -c');
   assert.doesNotMatch(calls, /--dbname=portal(?:\s|$)/u);
   const cmsIdentity = calls.split('\n').find(line => line.includes('ownerinc_cms') && line.includes('rolsuper::text'));
   assert.ok(cmsIdentity && calls.indexOf(cmsIdentity) < calls.indexOf(cmsRestore));
@@ -343,6 +357,25 @@ test('coordinated restore protects first, restores both DBs/files and verifies b
   assert.equal(fixtureRestore.status,0,fixtureRestore.stderr);
   assert.equal((await readFile(path.join(f.root,'smoke.calls'),'utf8')).trim(),'smoke:redirect\nsmoke:closed',
     'the shared coordinator preserves the explicit disposable-fixture profile');
+});
+
+test('Portal target identity executes the real shell comparison and blocks every mismatch before pg_restore', async t => {
+  for (const [name, extra] of [
+    ['database', { PORTAL_IDENTITY_OUTPUT: 'other:portal_admin:portal_admin' }],
+    ['owner', { PORTAL_IDENTITY_OUTPUT: 'portal_test:other:portal_admin' }],
+    ['current user', { PORTAL_IDENTITY_OUTPUT: 'portal_test:portal_admin:other' }],
+    ['query failure', { FAIL_PORTAL_IDENTITY_QUERY: 'true' }],
+  ]) {
+    const f = await fixture(t);
+    const backup = f.run('bash release/scripts/backup.sh "$PWD/release"');
+    assert.equal(backup.status, 0, `${name}: ${backup.stderr}`);
+    const [backupName] = await readdir(path.join(f.root, 'backups'));
+    const restore = f.run(`PRE_RESTORE_BACKUP_DIR="$PWD/protection" RESTORE_BASE_URL=http://fixture.invalid bash release/scripts/payload-operations.sh restore "$PWD/release" "$PWD/backups/${backupName}" --confirm RESTORE`, extra);
+    assert.notEqual(restore.status, 0, `${name} must fail closed`);
+    const calls = await readFile(path.join(f.root, 'calls'), 'utf8');
+    assert.doesNotMatch(calls, /pg_restore --single-transaction/u, `${name} reached destructive restore`);
+    assert.match(restore.stderr, /PAYLOAD_COORDINATOR_FAILURE step=restore_portal_target_identity status=/u);
+  }
 });
 
 test('unreadable protection dump stops before destructive restore', async t => {
