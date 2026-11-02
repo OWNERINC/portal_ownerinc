@@ -18,6 +18,20 @@ const cleanEnv = {
   PATH: process.env.PATH, LC_ALL: 'C',
 };
 
+test('monitor receipts are opt-in, fixed-target, post-lock and only verified after existing artifact checks', async () => {
+  const source = await read('ops/backup-from-timer.sh');
+  assert.match(source, /monitor=\/opt\/ownerinc\/lib\/portal-monitor\/ops\/portal-operational-observe\.py/);
+  assert.match(source, /\[\[ -e \/etc\/ownerinc\/portal-monitor\.json \]\]/);
+  assert.doesNotMatch(source, /PORTAL_MONITOR_(?:COMMAND|PATH|EXECUTABLE)/);
+  assert.ok(source.indexOf('monitor_receipt backup-start') > source.indexOf('flock -w'));
+  const successes = [...source.matchAll(/monitor_receipt backup-verified/g)].map(match => match.index);
+  assert.equal(successes.length, 2);
+  assert.ok(successes[0] > source.indexOf('verify_backup_manifest "$destination"'));
+  assert.ok(successes[1] > source.indexOf('sha256sum --check --strict manifest.sha256'));
+  assert.match(source, /trap monitor_exit EXIT/);
+  assert.match(source, /monitor_receipt backup-failed/);
+});
+
 // None of these stubs can forward a request to Docker, AWS, Certbot or a service.
 const fakeDocker = `#!/usr/bin/env bash
 set -euo pipefail

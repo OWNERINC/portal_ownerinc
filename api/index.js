@@ -13,6 +13,12 @@ configureTrustProxy(app);
 app.disable('x-powered-by');
 app.use(requestContext);
 app.use(safeResponses);
+// Observation is a separate exact read-only capability, before user auth and
+// body parsers. Its token is never passed to editorial/browser middleware.
+app.use('/api/operational', require('./routes/operational').createOperationalRouter({ pool }));
+const { signals: operationalSignals } = require('./operational/signals');
+require('./owner-news/authority').setLegacyWriteObserver(() => operationalSignals.record('legacy_refusals', 'degraded'));
+app.use(operationalSignals.middleware);
 app.use(cors(allowedOrigins(process.env)));
 // Session boundaries own their 16 KiB parser, before the legacy CMS's larger parser.
 // Optional bridge configuration is checked on requests, never during Portal startup.

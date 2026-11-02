@@ -4,6 +4,13 @@ import { createHash } from 'node:crypto'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import type { Payload, PayloadRequest } from 'payload'
 import { queryGoLivePreflight } from '../../src/publication/go-live-preflight.js'
+import { editorialConfig } from '../helpers/editorial-config'
+import { assertEditorialProfile } from '../../src/config/editorial-profile'
+import { createRequire } from 'node:module'
+const { readResult, validInput } = createRequire(import.meta.url)('../../../api/owner-news/payload-dto.js')
+
+const heldConfig = await editorialConfig()
+const activeConfig = await editorialConfig('editorial-v1')
 
 const zero = '0'.repeat(64)
 const deadline = () => new Date(Date.now() + 30 * 60 * 1000).toISOString()
@@ -36,9 +43,11 @@ function fixture() {
     if (sql.includes('FROM news_migration_runs')) return { rows: state.missingSealed ? [] : state.sealed.map(row => ({ ...row })) }
     return { rows: [] }
   }
-  const payload = { db: { sessions: { live: { db: { execute } } } } } as unknown as Payload
+  const payload = { config: heldConfig, db: { sessions: { live: { db: { execute } } } } } as unknown as Payload
   const req = { payload, transactionID: 'live', context: {} } as unknown as PayloadRequest
-  const run = () => queryGoLivePreflight(req, { mode: 'legacy', epoch: 7, requestId: 'request-7', deadline: deadline() }, {
+  const run = (profile?: ReturnType<typeof assertEditorialProfile>) => queryGoLivePreflight(req, {
+    mode: 'legacy', epoch: 7, requestId: 'request-7', deadline: deadline(),
+    ...(profile ? { preflightVersion: 2 as const, expectedEditorialProfile: { id: profile.id, sha256: profile.sha256 } } : {}) }, {
     publicationMode: state.publicationMode, getAuthority: async () => state.authority })
   const runManifest = (manifest = 'a'.repeat(64)) => {
     const sealed = state.sealed[0]
@@ -58,7 +67,7 @@ function fixture() {
       imageDigest: `sha256:${'e'.repeat(64)}` }, {
       publicationMode: state.publicationMode, getAuthority: async () => state.authority })
   }
-  const runResume = (overrides: { authority?: Record<string, unknown>; head?: Record<string, unknown> } = {}) => {
+  const runResume = (overrides: { authority?: Record<string, unknown>; head?: Record<string, unknown>; profile?: ReturnType<typeof assertEditorialProfile> } = {}) => {
     const sealed = state.sealed[0], manifestSha256 = String(sealed.manifest_sha256)
     const sealMaterial = { runId: sealed.id, manifestSha256, authorityEpoch: sealed.authority_epoch,
       drainReceiptSha256: sealed.drain_receipt_sha256, reconciliationSequence: sealed.reconciliation_sequence,
@@ -74,10 +83,11 @@ function fixture() {
       ...overrides.head }
     state.counts.articles = '2'
     return queryGoLivePreflight(req, { mode: 'payload_frozen', epoch: 10, requestId: 'resume-10', deadline: deadline(),
-      manifestSha256, sealSha256, releaseDigest, imageDigest }, {
+      manifestSha256, sealSha256, releaseDigest, imageDigest,
+      ...(overrides.profile ? { preflightVersion: 2 as const, expectedEditorialProfile: { id: overrides.profile.id, sha256: overrides.profile.sha256 } } : {}) }, {
       publicationMode: state.publicationMode, getAuthority: async () => state.authority })
   }
-  return { state, run, runManifest, runResume }
+  return { payload, state, run, runManifest, runResume }
 }
 
 test('empty manual legacy state returns only exact safe activation evidence', async () => {
@@ -178,4 +188,40 @@ test('count parser rejects malformed and unsafe database values', async () => {
     state.counts.articles = value
     await assert.rejects(run(), /go_live_preflight_unavailable/)
   }
+})
+
+test('v2 binds the actual sanitized profile; v1 and initial cutover cannot accept editorial', async () => {
+  const f = fixture(), active = assertEditorialProfile(activeConfig), held = assertEditorialProfile(heldConfig)
+  const initial = await f.run(held)
+  assert.equal(initial.preflightVersion, 2); assert.equal(initial.newsEmpty, true)
+  assert.deepEqual(initial.runtime, { worker: false, schedules: false, autosave: false, versions: false })
+  assert.deepEqual(readResult('preflight', initial, { mode: 'legacy', epoch: 7, requestId: initial.request.id,
+    deadline: initial.request.deadline, preflightVersion: 2, expectedEditorialProfile: { id: held.id, sha256: held.sha256 } }), initial)
+  assert.equal((await f.runResume({ profile: held })).editorialProfile?.sha256, held.sha256)
+  f.payload.config = activeConfig
+  await assert.rejects(f.run(active), /go_live_preflight_unavailable/)
+  await assert.rejects(f.run(), /go_live_preflight_unavailable/)
+  await assert.rejects(f.runManifest(), /go_live_preflight_unavailable/)
+  await assert.rejects(f.runResume(), /go_live_preflight_unavailable/)
+  await assert.rejects(f.runResume({ profile: held }), /go_live_preflight_unavailable/)
+  await assert.rejects(f.runResume({ profile: { ...active, sha256: zero } }), /go_live_preflight_unavailable/)
+  const result = await f.runResume({ profile: active })
+  assert.equal(result.preflightVersion, 2)
+  assert.deepEqual(result.editorialProfile, active)
+  assert.deepEqual(result.runtime, { worker: false, schedules: false, autosave: true, versions: true })
+  const input = { mode: 'payload_frozen', epoch: 10, requestId: result.request.id, deadline: result.request.deadline,
+    manifestSha256: result.activation!.manifestSha256, sealSha256: result.activation!.sealSha256,
+    releaseDigest: result.activation!.releaseDigest, imageDigest: result.activation!.imageDigest,
+    preflightVersion: 2, expectedEditorialProfile: { id: active.id, sha256: active.sha256 } }
+  assert.equal(validInput('preflight', input), true)
+  assert.deepEqual(readResult('preflight', result, input), result, 'Portal consumes the exact CMS canonical descriptor/hash')
+  for (const changed of [
+    { ...result, runtime: { ...result.runtime, autosave: false } },
+    { ...result, editorialProfile: { ...active, descriptor: { ...active.descriptor, extra: true } } },
+    { ...result, editorialProfile: { ...active, sha256: zero } },
+  ]) assert.throws(() => readResult('preflight', changed, input), /news_unavailable/)
+  const { preflightVersion, expectedEditorialProfile, ...v1 } = input
+  assert.throws(() => readResult('preflight', result, v1), /news_unavailable/)
+  for (const changed of [{ ...input, preflightVersion: 1 }, { ...input, mode: 'legacy' },
+    { ...input, expectedEditorialProfile: { ...input.expectedEditorialProfile, extra: true } }]) assert.equal(validInput('preflight', changed), false)
 })

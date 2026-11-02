@@ -1,4 +1,5 @@
-const nodemailer = require('nodemailer');
+const net = require('node:net');
+const tls = require('node:tls');
 
 let transport;
 
@@ -76,14 +77,44 @@ function classifySmtpResult(result, recipient = null) {
   return hasRejected && result.rejected.length ? 'permanent' : 'unknown';
 }
 
-function getMailTransport(env = process.env) {
-  transport ||= nodemailer.createTransport({
+function getMailTransport(env = process.env, createTransport = options => require('nodemailer').createTransport(options)) {
+  if (transport) return transport;
+  const sockets = new Set();
+  const secure = Number(env.SMTP_PORT) === 465;
+  const options = {
     host: env.SMTP_ADDRESS,
     port: Number(env.SMTP_PORT),
-    secure: Number(env.SMTP_PORT) === 465,
+    secure,
     auth: { user: env.SMTP_USERNAME, pass: env.SMTP_PASSWORD },
     tls: { rejectUnauthorized: true },
-  });
+    connectionTimeout: 5000, greetingTimeout: 5000, socketTimeout: 10000,
+    // Own the underlying socket so the overall alert deadline can destroy it,
+    // including a stalled DATA response or a subsequently STARTTLS-wrapped socket.
+    getSocket(_options, callback) {
+      const address = { host: env.SMTP_ADDRESS, port: Number(env.SMTP_PORT) };
+      const socket = secure ? tls.connect({ ...address, servername: env.SMTP_ADDRESS, rejectUnauthorized: true }) : net.connect(address);
+      sockets.add(socket);
+      let finished = false;
+      const done = (error) => {
+        if (finished) return; finished = true;
+        if (error) socket.destroy();
+        callback(error || null, error ? undefined : { connection: socket, secured: secure });
+      };
+      socket.once('error', done);
+      socket.once(secure ? 'secureConnect' : 'connect', () => done());
+      socket.once('close', () => sockets.delete(socket));
+      socket.setTimeout(5000, () => { const error = new Error('smtp_timeout'); error.code = 'ETIMEDOUT'; done(error); socket.destroy(); });
+    },
+  };
+  transport = createTransport(options);
+  const current = transport;
+  const close = current.close.bind(current);
+  current.close = () => {
+    for (const socket of sockets) socket.destroy();
+    sockets.clear();
+    close();
+    if (transport === current) transport = undefined;
+  };
   return transport;
 }
 

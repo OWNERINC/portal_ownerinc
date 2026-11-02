@@ -71,6 +71,67 @@ test('real index starts without optional CMS env and confines bridge unavailabil
   assert.equal((await h.request.get('/api/reminders/deliveries?limit=20').set('Authorization', MANAGER)).status, 200);
 });
 
+test('real index authenticates the optional operational mount before observation, Portal auth or body parsing', async t => {
+  const token = 'synthetic-monitor-token-'.repeat(3);
+  const unconfigured = await createDependencyHarness(t);
+  const h = await createDependencyHarness(t, { operationalEnv: { OPERATIONAL_MONITOR_TOKEN: token } });
+  const endpoint = '/api/operational/observe';
+  const noDependencies = harness => {
+    assert.equal(harness.state.observations, 0, 'denied requests must not invoke observation');
+    assert.equal(harness.state.connections, 0, 'denied requests must not acquire a DB client');
+    assert.deepEqual(harness.state.sql, [], 'denied requests must not query the DB');
+    assert.deepEqual(harness.state.verifiedTokens, [], 'monitor tokens must not enter Firebase auth');
+    assert.deepEqual(harness.state.writes, [], 'denied requests must not write files');
+  };
+  assert.equal((await unconfigured.request.get('/api/health')).status, 200,
+    'missing optional monitor configuration must not prevent startup');
+  // Editorial-only snapshots have no operational import. Prove the capability
+  // remains absent there, without loading a missing module or fabricating a mount.
+  if (!h.operationalMounted) {
+    for (const harness of [unconfigured, h]) {
+      assert.equal((await harness.request.get(endpoint)).status, 404);
+      assert.equal((await harness.request.get(endpoint).set('Authorization', `Bearer ${token}`)).status, 404);
+      noDependencies(harness);
+    }
+    return;
+  }
+  for (const harness of [unconfigured, h]) {
+    const authorizations = harness === unconfigured ? [undefined, `Bearer ${token}`] : [undefined, 'Bearer wrong', MANAGER];
+    for (const authorization of authorizations) {
+      const request = harness.request.get(endpoint);
+      if (authorization) request.set('Authorization', authorization);
+      const response = await request;
+      assert.equal(response.status, 401, response.text);
+      assert.deepEqual(response.body, { reason: 'unauthorized', requestId: response.headers['x-request-id'] });
+      assert.equal(response.headers['cache-control'], 'no-store');
+      assert.match(response.headers['x-request-id'], UUID);
+      assert.ok(!response.text.includes(token));
+      noDependencies(harness);
+    }
+  }
+  for (const [method, url, headers, body] of [
+    ['get', `${endpoint}/`, {}], ['get', `${endpoint}?token=${token}`, {}],
+    ['get', '/api/operational/other', {}], ['head', endpoint, {}],
+    ['get', endpoint, { Origin: 'https://portal.example.test' }],
+    ['get', endpoint, { Cookie: 'monitor=synthetic-cookie' }],
+    ['post', endpoint, { 'Content-Type': 'application/json' }, '{invalid-json'],
+  ]) {
+    const request = h.request[method](url).set('Authorization', `Bearer ${token}`).set(headers);
+    if (body) request.send(body);
+    const response = await request;
+    assert.equal(response.status, 404, `${method} ${url}: ${response.text}`);
+    noDependencies(h);
+  }
+  const allowed = await h.request.get(endpoint).set('Authorization', `Bearer ${token}`);
+  assert.equal(allowed.status, 200, allowed.text);
+  assert.deepEqual(allowed.body, { fixture: 'operational-observation' }, 'the real mount reaches the explicit observation double');
+  assert.equal(allowed.headers['cache-control'], 'no-store');
+  assert.equal(h.state.observations, 1);
+  assert.equal(h.state.connections, 0);
+  assert.deepEqual(h.state.sql, []);
+  assert.deepEqual(h.state.verifiedTokens, []);
+});
+
 test('real index mounts v2 admin entry with authenticated availability and safe unavailable session operations', async t => {
   const h = await createDependencyHarness(t);
   const anonymous = await h.request.get('/api/cms/v2/session/availability');

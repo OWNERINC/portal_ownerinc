@@ -218,6 +218,7 @@ function makeEnvironment({ projectName, runId, projectId, runDirectory, httpPort
     PORTAL_PUBLIC_URL: `http://127.0.0.1:${httpPort}`,
     MAX_PENDING_REGISTRATIONS_PER_HOUR: '100',
     OPERATIONAL_ALERT_EMAIL: '',
+    OPERATIONAL_MONITOR_TOKEN: '',
     TZ: 'America/Sao_Paulo',
     NOTIFICATION_RETENTION_DAYS: '730',
     AUDIT_RETENTION_DAYS: '1825',

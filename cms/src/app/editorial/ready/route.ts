@@ -3,6 +3,7 @@ import { getPayload } from 'payload'
 import { readCmsEnvironment } from '../../../config/environment'
 import { assertCmsDatabaseReady, assertCmsStorageReady } from '../../../config/readiness'
 import { randomUUID } from 'node:crypto'
+import { assertEditorialProfile } from '../../../config/editorial-profile'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +20,7 @@ export async function GET(request: Request): Promise<Response> {
   const requestId = requestID(request)
   try {
     const payload = await getPayload({ config })
+    const profile = assertEditorialProfile(payload.config)
     await payload.find({
       collection: 'portal-editors',
       limit: 1,
@@ -37,7 +39,8 @@ export async function GET(request: Request): Promise<Response> {
       return Response.json({ status: 'unavailable' }, { status: 503, headers: { 'X-Request-Id': requestId, 'Cache-Control': 'no-store' } })
     }
     readinessLog(requestId, 'ready', 'ready')
-    return Response.json({ status: 'ready' }, { headers: { 'X-Request-Id': requestId, 'Cache-Control': 'no-store' } })
+    return Response.json({ status: 'ready' }, { headers: { 'X-Request-Id': requestId, 'Cache-Control': 'no-store',
+      'X-CMS-Editorial-Profile': profile.id, 'X-CMS-Editorial-Profile-SHA256': profile.sha256 } })
   } catch {
     readinessLog(requestId, 'unavailable', 'database_unavailable')
     return Response.json({ status: 'unavailable' }, { status: 503, headers: { 'X-Request-Id': requestId, 'Cache-Control': 'no-store' } })

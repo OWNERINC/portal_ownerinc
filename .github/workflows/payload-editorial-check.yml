@@ -1,0 +1,138 @@
+name: Payload editorial browser qualification
+
+on:
+  pull_request:
+    paths:
+      - 'cms/**'
+      - 'api/**'
+      - 'public/**'
+      - 'nginx/**'
+      - 'firebase-emulator/**'
+      - '.dockerignore'
+      - 'scripts/import-owner-news.mjs'
+      - 'scripts/owner-news-payload/**'
+      - 'scripts/payload-preview/**'
+      - 'scripts/prepare-ci-registry-pulls.mjs'
+      - 'scripts/test-payload-integration.mjs'
+      - 'scripts/integration/payload-functional-*.mjs'
+      - 'scripts/integration/payload-editorial-ci.mjs'
+      - 'tests/unit/payload-functional-*.test.mjs'
+      - 'tests/unit/payload-editorial-workflow.test.mjs'
+      - '.github/workflows/payload-editorial-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  editorial-browser:
+    name: Editorial browser — four cases only
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact qualification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            cms/package-lock.json
+      - name: Bind deadline to this workflow run attempt
+        timeout-minutes: 1
+        env:
+          PAYLOAD_EDITORIAL_RUN_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          const { appendFile } = await import('node:fs/promises');
+          const { GITHUB_REPOSITORY: repository, GITHUB_RUN_ID: run, GITHUB_RUN_ATTEMPT: attempt } = process.env;
+          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '') ||
+              !/^[1-9][0-9]*$/.test(run || '') || !/^[1-9][0-9]*$/.test(attempt || '') ||
+              !process.env.PAYLOAD_EDITORIAL_RUN_TOKEN) throw new Error('editorial_ci_run_identity_required');
+          const response = await fetch(`https://api.github.com/repos/${repository}/actions/runs/${run}/attempts/${attempt}`, {
+            headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${process.env.PAYLOAD_EDITORIAL_RUN_TOKEN}` },
+            redirect: 'error', signal: AbortSignal.timeout(15000),
+          });
+          if (!response.ok) throw new Error('editorial_ci_run_lookup_failed');
+          const metadata = await response.json();
+          if (String(metadata.id) !== run || String(metadata.run_attempt) !== attempt ||
+              metadata.repository?.full_name !== repository) throw new Error('editorial_ci_run_identity_mismatch');
+          const started = Date.parse(metadata.run_started_at);
+          if (typeof metadata.run_started_at !== 'string' || !Number.isSafeInteger(started) || started > Date.now()) {
+            throw new Error('editorial_ci_run_start_invalid');
+          }
+          // Run start is no later than job start: includes queue/setup and time
+          // before this step. Only the numeric deadline survives this token step.
+          await appendFile(process.env.GITHUB_ENV, `PAYLOAD_EDITORIAL_CI_DEADLINE_MS=${started + 35 * 60000}\n`);
+          NODE
+      - name: Install locked host dependencies and test CI contracts
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          npm --prefix api ci
+          npm --prefix cms ci
+          node --test tests/unit/payload-editorial-workflow.test.mjs
+      - name: Prepare isolated CI registry auth and pull pinned bases
+        timeout-minutes: 8
+        run: node scripts/prepare-ci-registry-pulls.mjs
+      - name: Build immutable local qualification images
+        timeout-minutes: 14
+        env:
+          BUILDX_BUILDER: default
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "${DOCKER_HOST:-}"
+          test -z "${DOCKER_CONTEXT:-}"
+          test "$(docker context show)" = default
+          docker buildx inspect default | grep --extended-regexp '^Driver:[[:space:]]+docker$'
+          docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --iidfile "$RUNNER_TEMP/editorial-api.id" --file api/Dockerfile api
+          docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --iidfile "$RUNNER_TEMP/editorial-cms.id" --file cms/Dockerfile .
+          docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --iidfile "$RUNNER_TEMP/editorial-emulator.id" --file firebase-emulator/Dockerfile firebase-emulator
+          for role in api cms emulator; do
+            image=$(cat "$RUNNER_TEMP/editorial-$role.id")
+            [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
+            printf 'PAYLOAD_FUNCTIONAL_%s_IMAGE=%s\n' "${role^^}" "$image" >> "$GITHUB_ENV"
+          done
+          # Read-only import smoke, before any fixture services. The editorial
+          # bootstrap requires the canonical finalizer in the real CMS image.
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint /usr/local/bin/node "$(cat "$RUNNER_TEMP/editorial-cms.id")" --import tsx \
+            -e 'import("./scripts/finalize-news-protocol.ts").then(m=>{if(typeof m.runFinalizer!=="function")throw new Error("editorial_finalizer_package_missing")})'
+      - name: Install external pinned Chromium tooling
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          umask 077
+          tools="$RUNNER_TEMP/payload-editorial-tools"
+          mkdir -m 0700 "$tools"
+          npm install --prefix "$tools" --no-save --package-lock=false playwright@1.62.1
+          export PLAYWRIGHT_BROWSERS_PATH="$tools/browsers"
+          node "$tools/node_modules/playwright/cli.js" install --with-deps chromium
+          module="$tools/node_modules/playwright/index.mjs"
+          browser=$(node --input-type=module -e 'import {pathToFileURL} from "node:url"; const {chromium}=await import(pathToFileURL(process.argv[1])); process.stdout.write(chromium.executablePath())' "$module")
+          test -f "$browser" && test -x "$browser"
+          printf 'PAYLOAD_FUNCTIONAL_PLAYWRIGHT_MODULE=%s\n' "$module" >> "$GITHUB_ENV"
+          printf 'PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE=%s\n' "$browser" >> "$GITHUB_ENV"
+      - name: Execute fresh leased editorial browser qualification
+        # Same ceiling as the whole job: this step cannot preempt the earlier
+        # run-derived deadline. The wrapper still bounds its child to 8m + 6m.
+        timeout-minutes: 35
+        run: node scripts/integration/payload-editorial-ci.mjs
+      # The runner stops only its bound services/listener. Private evidence and
+      # volumes remain on this ephemeral hosted VM until disposal; never upload
+      # leases, reports, cookies, dumps or credentials. No global Docker cleanup.

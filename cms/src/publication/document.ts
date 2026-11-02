@@ -17,15 +17,15 @@ export async function currentDocument(req: PayloadRequest, target: PublicationTa
   if (!doc?.id) throw new APIError('news_document_not_found', 404, undefined, true)
   return doc
 }
-export async function latestRevision(req: PayloadRequest, target: PublicationTarget, id: string) {
+export async function latestRevision(req: PayloadRequest, target: PublicationTarget, id: string, overrideAccess = true) {
   await requireCmsTransaction(req.payload, req)
   const where: Where = target === 'news-articles'
     ? { and: [{ parent: { equals: id } }, { latest: { equals: true } }] } : { latest: { equals: true } }
-  const options = { req, where, depth: 0, overrideAccess: true, limit: 1, sort: '-updatedAt' }
+  const options = { req, where, depth: 0, overrideAccess, limit: 1, sort: '-updatedAt' }
   const result = target === 'news-articles'
     ? await req.payload.findVersions({ collection: target, ...options })
     : await req.payload.findGlobalVersions({ slug: target, ...options })
-  return result.docs[0]
+  return result.docs[0] as (typeof result.docs)[number] & { autosave?: boolean } | undefined
 }
 export async function setGeneration(req: PayloadRequest, target: PublicationTarget, id: string, generation: number) {
   const db = await requireCmsTransaction(req.payload, req)

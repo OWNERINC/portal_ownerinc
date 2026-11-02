@@ -5,6 +5,72 @@ Esta matriz não declara piloto aceito. Task9 tem bloqueio histórico de navega�
 correção e revisão ainda precisam ser integradas. A preparação e a suíte portátil
 real Task15 estão **incompletas**, não apenas aguardando execução.
 
+## Checkpoint do pacote editorial frio — 02/11/2026
+
+Implementação autorizada no worktree `fix/portal-final-acceptance`, ainda sem
+commit. O prompt posterior autorizou este recorte apesar da espera histórica no
+plano `2026-11-02-manual-editorial-profile.md`; isso não concede admissão produtiva.
+
+| Verificação desta rodada | Resultado observado | Limite |
+|---|---|---|
+| `npm run test:cms` | **PASS offline:** 507 testes, 496 pass, 11 skipped, 0 fail | 8 skips por PGlite opcional ausente, 2 de fsync/durabilidade Windows, 1 de symlink Windows; nada disso é PASS nativo |
+| `npm run typecheck:cms` | **PASS**, exit 0 | Não inicia serviços |
+| Build Next com `CMS_BUILD_ONLY=true`, `NEXT_PHASE=phase-production-build`, `NEXT_TELEMETRY_DISABLED=1` | **PASS**, exit 0 | Um warning já existente de tracing de filesystem em `cms/src/migration/staging.ts:125` |
+| Contratos Portal/runner delimitados abaixo | **PASS offline:** 106 pass, 0 fail/skip | Inclui a nova seleção de fase, template exato e materialização do lease; nenhum stack real |
+| Operações Payload pinadas em `editorial-native.test.ts` | Incluídas no PASS CMS | Operações/hooks reais, banco/transação/Portal explicitamente doubles |
+| `editorial-runtime.ts`, pelo `manual_runtime_only` existente | **NÃO EXECUTADO**, implementado e typechecked | PostgreSQL, HTTP, rollback real e reinício sem DDL aguardam CI autorizado |
+| Quatro casos HTTPS/browser `EDITORIAL-*` | **NÃO EXECUTADO**, implementados | Portal/Firebase/CMS/Nginx/browser reais e lease editorial novo ainda precisam executar |
+| Root `npm run verify`, integração e revisão independente | **PENDENTE da thread principal** | Fora do recorte delegado |
+
+Na conferência final, a branch havia avançado por trabalho paralelo e
+`cms/scripts/finalize-news-protocol.ts` recebeu extração para
+`cms/src/database/catalog-verification.ts`, fora da autoria deste pacote. Os
+resultados acima registram as execuções delimitadas desta sessão, não uma
+certificação do checkout integrado em mutação. A thread principal deve repetir
+os checks integrados após estabilizar as alterações concorrentes.
+
+Comando dos 106 contratos executados:
+
+```text
+node --test tests/unit/payload-manual-runtime.test.mjs tests/unit/payload-functional-matrix.test.mjs tests/unit/payload-functional-guard.test.mjs tests/unit/payload-functional-runtime.test.mjs tests/unit/payload-functional-isolation.test.mjs tests/unit/owner-news-payload-api.test.mjs
+```
+
+A suíte completa acima passou após corrigir um ciclo de imports encontrado pela
+própria execução. Assertions de configuração agora preservam um registro leve das
+identidades/ordem dos hooks e endpoints criados pelas factories; alterações na
+configuração sanitizada são recusadas. O teste v2 consome o descritor/hash real
+do CMS pelo DTO Portal, cobrindo incompatibilidades de profile, runtime e campos.
+
+Implementado: held default, editorial autosave 1.500 ms, Versions com sessão News
+estrita revogável, checkpoints explícitos, restore artigo/Home para novo draft,
+preservação do live base e audit atômico, receipt independente pós-COMMIT, preview
+409 quando o head é autosave, readiness headers e preflight v2 opt-in. Os testes
+offline cobrem scope forjado, acesso revogado/expirado, lock de outro editor,
+autoridade congelada, parent errado, source/head conflitante, coalescing,
+normalização precoce de status e COMMIT engolido pelo adapter.
+
+**Descobertas para a thread principal:** o Local API `restoreVersion` de Payload
+3.90.2 perde `draft`; a operação pública recebe-o desde a entrada. O lock lookup
+do update global omite `req`; a facade por chamada liga somente esse lookup à
+transação. Autosaves coalescem: checkpoint explícito é necessário. A fixture
+preauthority original omite protocolo exigido por readiness; o novo lease
+editorial tem bootstrap separado e autoridade sintética declarada. Esse setup
+não comprova ativação/observação operacional ou recovery.
+
+Instruções e interfaces exatas estão no
+[runbook editorial](../operations/payload-owner-news.md#pacote-editorial-frio--02112026).
+O ciclo físico held→editorial→held→editorial, atomicidade PostgreSQL, upload bytes
+retidos, revogação browser e reconciliação de ACK continuam sem prova executada.
+Os quatro novos casos não completam os 44 cenários anteriores da matriz.
+Passar somente a fase editorial deve manter `INCOMPLETE`/exit 2.
+
+**Produção permanece bloqueada:** cutover v1 continua held; publicação é manual;
+scheduling/worker ficam off. Admissão exige recovery active/frozen qualificado e
+integração operacional autenticada separada. Este checkpoint não conclui
+OWN-24/31 nem declara o pacote frio integralmente qualificado. As etapas do plano
+que incluem prova nativa/browser permanecem desmarcadas; somente o contrato v2
+offline está concluído.
+
 ## Consolidação para o PR — 07/10/2026
 
 - **PASS offline:** `npm run verify` concluído com 1.271 testes Portal e 314 CMS

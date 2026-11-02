@@ -612,11 +612,34 @@ status não zero não comprova recuperação dos serviços. Não remover o lock 
 dois **timers**; isso não interrompe um serviço já em andamento. Não parar
 cegamente um backup que pode estar com os serviços pausados.
 
-O alerta SMTP do cron é independente desses timers. O destino autorizado
+O alerta SMTP já existente em `cron/health.js` é independente desses timers. O destino autorizado
 `gabriel.garcia@ownerinc.com.br` só entra no worker após recriação controlada do
-cron pela operação; estes arquivos não fazem essa ativação nem adicionam envio
-de email para falhas systemd. Não afirmar que ciclos futuros ou alertas de timer
-foram validados pela simples instalação.
+cron pela operação; as unidades de backup/TLS acima não fazem essa ativação nem
+instalam o runner de email do OWN34. Não afirmar que ciclos futuros ou alertas
+de timer foram validados pela simples instalação dessas unidades.
+
+### Monitor operacional OWN34 — configuração opcional, instalação pendente
+
+O Compose base encaminha `OPERATIONAL_MONITOR_TOKEN` exclusivamente para
+`api.environment`, com `${OPERATIONAL_MONITOR_TOKEN:-}`. A declaração em
+`.env.example` é vazia: a API permanece funcional sem o token, e o endpoint
+`GET /api/operational/observe` responde 401. O token não é repassado a cron,
+CMS, PostgreSQL, migrations, bootstrap ou builds de imagem/frontend.
+
+Para a futura ativação autorizada, provisionar privadamente um segredo novo,
+distinto das credenciais de browser, CMS e controle, com 32–128 caracteres de
+`[A-Za-z0-9_-]`, no ambiente protegido usado pelo Compose. O mesmo valor deve
+constar no arquivo separado `/etc/ownerinc/portal-monitor-mail.env`, root:root
+0600, lido pelo systemd para o runner dedicado do host. Esse arquivo reúne também
+o origin HTTPS aprovado, o destinatário autorizado e as variáveis do transporte
+SMTP já existente, conforme o [runbook de monitoramento operacional](operational-monitoring.md#ambiente-do-runner-e-api).
+
+Este wiring declarativo não instala nem ativa o monitor. Permanecem pendentes
+o provisionamento da identidade Linux `portal-monitor` sem privilégios, arquivos
+e ancestrais protegidos, instalação e qualificação das unidades/timer, sandbox,
+locks, timeouts e encaminhamento HTTPS. A ativação exige aceite operacional
+separado, incluindo próximo disparo e recebimento humano do alerta; checks locais
+de configuração não qualificam execução ou entrega em produção.
 
 ## Restauração
 

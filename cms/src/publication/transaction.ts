@@ -29,7 +29,13 @@ export async function withCmsTransaction<T>(payload: Payload, incoming: PayloadR
     await lockCmsReferences(payload, incoming)
     return work(incoming)
   }
-  const req = await createLocalReq({ req: incoming ? { ...incoming, context: { ...incoming.context } } : {} }, payload)
+  // Payload REST attaches own fields to a Web Request. Its inherited headers,
+  // URL, method and cancellation signal do not survive object spread. Preserve
+  // that request context explicitly; do not clone/reconsume its already-read body
+  // or bind Web Request methods to a plain object. Rebind the loader to this tx.
+  const req = await createLocalReq({ req: incoming ? { ...incoming, headers: incoming.headers,
+    url: incoming.url, method: incoming.method, signal: incoming.signal,
+    context: { ...incoming.context }, payloadDataLoader: undefined } : {} }, payload)
   const id = await payload.db.beginTransaction()
   if (!id) throw new APIError('cms_transaction_required', 503, undefined, true)
   req.transactionID = id

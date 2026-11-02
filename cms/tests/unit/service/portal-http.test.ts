@@ -17,6 +17,7 @@ import { withEditorialBoundary } from '../../../src/auth/rest-boundary'
 const origin = 'https://portal.example.test'
 const environment = {
   publicationMode: 'manual' as const,
+  editorialProfile: 'held-v1' as const,
   portalPublicURL: origin, portalInternalURL: 'http://portal-api:3000',
   payloadToPortalSecret: 'fixture-payload-to-portal-'.repeat(2),
   portalToPayloadSecret: 'fixture-portal-to-payload-'.repeat(2),
@@ -163,7 +164,7 @@ test('native HTTP authenticates /me, scopes reads by account, denies writes and 
   assert.equal(result.user.portalUid, 'a')
   assert.equal(result.token, undefined)
   assert.equal(result.exp, Date.parse('2030-01-01T00:00:00.000Z') / 1000)
-  assert.equal(me.headers.get('cache-control'), 'no-store')
+  assert.equal(me.headers.get('cache-control'), 'private,no-store')
   await call('/portal-editors/me', 'GET', 'opaque-session-b')
   const other = docs.find(doc => doc.portalUid === 'b')!
   const own = docs.find(doc => doc.portalUid === 'a')!

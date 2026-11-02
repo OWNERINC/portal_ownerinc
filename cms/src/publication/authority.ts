@@ -5,6 +5,7 @@ import { readCmsEnvironment } from '../config/environment'
 import { isLegacyNewsImport } from '../news/validation'
 import { lockCmsReferences, requireCmsTransaction } from './transaction'
 import { workerActor } from './internal'
+import { assertCurrentNewsSession } from '../auth/news-history-access'
 import { assertPreparationRun, type PreparationRunIdentity } from '../migration/preparation-run'
 
 type PreparationCapability = { identity: Readonly<PreparationRunIdentity>; session: unknown; actorUid: string }
@@ -86,6 +87,9 @@ export async function assertCmsWriteAuthority(req: PayloadRequest) {
     }
   }
   assertInteractiveSession()
+  if (!requestingWorker && !preparationImport && req.payload.config?.custom?.editorialProfile?.profileId === 'editorial-v1') {
+    await assertCurrentNewsSession(req)
+  }
   const client = createPortalClient(readCmsEnvironment(process.env))
   const authority = await client.getAuthority()
   if (preparation ? authority.mode !== 'frozen' || authority.epoch !== preparation.identity.expectedEpoch

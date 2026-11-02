@@ -23,7 +23,7 @@ test('manual runtime plan is ordered, manual-only and includes independent resto
     'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
     'empty-database-provision', 'protocol-finalizer', 'protocol-baseline', 'protocol-qualification',
     'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
-    'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-start',
+    'runtime-restart', 'persistence-verification', 'editorial-profile-cycle', 'coordinated-backup', 'restore-target-start',
     'restore-target-readiness', 'restore-target-provision', 'restore-target-control', 'restore-target-observer',
     'restore-protection-backup', 'restore-cms-database', 'restore-portal-database', 'restore-runtime-verify',
     'restore-control-verify', 'restore-protocol-audit', 'restore-storage',
@@ -36,6 +36,15 @@ test('manual runtime plan is ordered, manual-only and includes independent resto
   assert.match(fixture, /save\.json\(\)\)\.doc\?\._status !== 'draft'/u);
   assert.match(contentProof, /assert\.equal\(version\.docs\[0\]\.version\._status, 'draft'\)/u);
   assert.match(contentProof, /assert\.equal\(evidence\.versionStatus, 'draft'\)/u);
+});
+
+test('editorial runner uses the same compiled image/database and explicit persisted/API proof without DDL in its cycle', async () => {
+  const source = await readFile('scripts/integration/payload-manual-runtime.mjs', 'utf8');
+  const cycle = source.slice(source.indexOf("step('editorial-profile-cycle')"), source.indexOf("step('coordinated-backup')"));
+  assert.match(cycle, /editorial-runtime\.ts/u);
+  assert.match(cycle, /\['editorial-v1', 'exercise'\], \['held-v1', 'retained-held'\], \['editorial-v1', 'retained-editorial'\]/u);
+  assert.doesNotMatch(cycle, /migrate\(|grants\(|build'|ALTER |CREATE /u);
+  assert.match(source, /activationObserved: true/u);
 });
 
 test('manual runtime rejects a host with any IPv4 or IPv6 default egress route', async () => {

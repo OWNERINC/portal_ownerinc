@@ -19,7 +19,7 @@ export function collectMediaIds(content: NewsContent): Set<string> {
   return new Set(content.flatMap(block => 'asset_id' in block && typeof block.asset_id === 'string' ? [uuid(block.asset_id)] : []))
 }
 
-export async function assertMediaReferences(payload: Payload, content: NewsContent, req: PayloadRequest) {
+export async function assertMediaReferences(payload: Payload, content: NewsContent, req: PayloadRequest, draft = false) {
   return withCmsTransaction(payload, req, async req => {
     const media = []
     for (const id of collectMediaIds(content)) {
@@ -31,7 +31,7 @@ export async function assertMediaReferences(payload: Payload, content: NewsConte
       const handle = await openStoredMedia(payload, asset)
       await handle.close()
     }
-    try { validateNewsMediaShapes(content, media) }
+    try { validateNewsMediaShapes(content, media, draft) }
     catch (error) {
       if (error instanceof APIError && error.status === 400) throw new InvalidMediaReferenceError()
       throw error

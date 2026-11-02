@@ -5,11 +5,13 @@ import { buildConfig } from 'payload'
 import { pt } from '@payloadcms/translations/languages/pt'
 
 import { createPortalEditors } from './collections/PortalEditors'
-import { NewsArticles } from './collections/NewsArticles'
+import { createNewsArticles } from './collections/NewsArticles'
 import { createNewsMedia } from './collections/NewsMedia'
-import { NewsHome } from './globals/NewsHome'
+import { createNewsHome } from './globals/NewsHome'
 import { newsEditor } from './news/editor'
-import { readCmsConfigEnvironment } from './config/environment'
+import { readCmsConfigEnvironment, type CmsEnvironment } from './config/environment'
+import { editorialProfileDescriptor, assertEditorialProfile } from './config/editorial-profile'
+import { newsRestoreDraftEndpoints } from './endpoints/news-restore-draft'
 import { isLegacyNewsImport } from './news/validation'
 import { NewsSchedules } from './collections/NewsSchedules'
 import { NewsAudit } from './collections/NewsAudit'
@@ -24,13 +26,15 @@ import { portalPollEndpoints } from './endpoints/portal-polls'
 import { scopePayloadLockAccess } from './auth/native-admin-access'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
-const environment = readCmsConfigEnvironment(process.env)
-const PortalEditors = createPortalEditors(environment)
-const manualPublication = environment.publicationMode === 'manual'
 
 // Only the separate trusted import process passes the server-only capability.
 // Each call creates a new adapter config; a running runtime adapter is never toggled.
-export const createCmsConfig = (importContext?: unknown) => buildConfig({
+const defaultEnvironment = readCmsConfigEnvironment(process.env)
+export const createCmsConfig = (importContext?: unknown, environment: CmsEnvironment = defaultEnvironment) => {
+const PortalEditors = createPortalEditors(environment)
+const manualPublication = environment.publicationMode === 'manual'
+return buildConfig({
+  custom: { editorialProfile: editorialProfileDescriptor(environment.editorialProfile) },
   admin: {
     avatar: 'default',
     user: PortalEditors.slug,
@@ -51,10 +55,10 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   routes: { admin: '/editorial/admin', api: '/editorial/api' },
   serverURL: environment.portalPublicURL,
-  collections: [PortalEditors, NewsArticles, createNewsMedia(environment, importContext),
+  collections: [PortalEditors, createNewsArticles(environment.editorialProfile), createNewsMedia(environment, importContext),
     ...(manualPublication ? [] : [NewsSchedules]), NewsAudit, LegacyNewsRevisions, NewsMigrationRuns, NewsMigrationItems],
-  globals: [NewsHome],
-  endpoints: [savedPreviewEndpoint, ...(manualPublication ? [] : newsScheduleEndpoints), ...portalNewsEndpoints, ...portalPollEndpoints],
+  globals: [createNewsHome(environment.editorialProfile)],
+  endpoints: [savedPreviewEndpoint, ...newsRestoreDraftEndpoints.map(endpoint => ({ ...endpoint })), ...(manualPublication ? [] : newsScheduleEndpoints), ...portalNewsEndpoints, ...portalPollEndpoints],
   i18n: { supportedLanguages: { pt }, fallbackLanguage: 'pt' },
   editor: newsEditor,
   secret: environment.payloadSecret,
@@ -78,9 +82,10 @@ export const createCmsConfig = (importContext?: unknown) => buildConfig({
   },
   telemetry: false,
   upload: { limits: { fileSize: 50 * 1024 * 1024 }, abortOnLimit: true, useTempFiles: false },
-  onInit: payload => scopePayloadLockAccess(payload),
+  onInit: payload => { assertEditorialProfile(payload.config); scopePayloadLockAccess(payload) },
   // No Payload image transformer: even unadjusted WebP is re-encoded when sharp is
   // configured. The media validator uses sharp directly and stores ORIGINAL bytes.
 })
+}
 
 export default createCmsConfig()

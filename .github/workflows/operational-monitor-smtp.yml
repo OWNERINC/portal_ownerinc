@@ -1,0 +1,53 @@
+name: OWN34 isolated operational monitoring
+on:
+  pull_request:
+    paths:
+      - 'cron/**'
+      - 'api/operational/**'
+      - 'api/routes/operational.js'
+      - 'api/index.js'
+      - 'api/cms/reader.js'
+      - 'api/owner-news/authority.js'
+      - 'api/routes/cms.js'
+      - 'api/routes/owner-news-admin.js'
+      - 'ops/portal-operational-observe.py'
+      - 'ops/ownerinc-portal-*monitor*'
+      - 'ops/ownerinc-portal-observe.service'
+      - 'ops/backup-from-timer.sh'
+      - 'tests/unit/operational-*'
+      - 'tests/unit/cron-mail-transport.test.mjs'
+      - 'tests/fixtures/operational-monitor-smtp.mjs'
+      - '.github/workflows/operational-monitor-smtp.yml'
+permissions:
+  contents: read
+jobs:
+  own34:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Prepare locked existing transport dependency
+        run: npm --prefix cron ci --omit=dev --omit=optional
+      - name: Offline monitor and API contracts
+        run: >-
+          node --test tests/unit/operational-monitor.test.mjs
+          tests/unit/operational-monitor-state.test.mjs tests/unit/operational-routes.test.mjs
+          tests/unit/cron-mail-transport.test.mjs
+      - name: Native protected host evidence fixtures (no services)
+        run: |
+          sudo -n env -i PATH="$PATH" HOME=/root node --test tests/unit/operational-observer.test.mjs
+          bash -n ops/backup-from-timer.sh
+          systemd-analyze verify ops/ownerinc-portal-observe.service ops/ownerinc-portal-monitor.service ops/ownerinc-portal-monitor.timer
+      - name: Disposable SMTP and TLS transport fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          certs=$(mktemp -d "$RUNNER_TEMP/own34-certificate.XXXXXX")
+          trap 'rm -rf -- "$certs"' EXIT
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=fixture.example.test -keyout "$certs/key.pem" -out "$certs/cert.pem" >/dev/null 2>&1
+          env -i PATH="$PATH" HOME="$HOME" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted OWN34_SMTP_FIXTURE=1 OWN34_FIXTURE_CERT_DIR="$certs" node tests/fixtures/operational-monitor-smtp.mjs

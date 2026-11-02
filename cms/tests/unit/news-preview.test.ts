@@ -28,7 +28,7 @@ test('native preview rejects body decoded after disposal', async () => {
   } })) as unknown as typeof fetch), { name: 'AbortError' })
 })
 test('saved revision endpoint reads actual latest Versions without mutating, and missing revision is 409', async () => {
-  let hasVersion = true
+  let hasVersion = true, autosave = false
   const access = createNewsAreaAccess(() => ({ getAuthority: async () => ({ mode: 'payload_frozen', epoch: 1, activationObserved: false }) }))
   const req = { transactionID: 'live', user: { collection: 'portal-editors', portalUid: 'editor', portalActor: { uid: 'editor', canManageNews: true } },
     searchParams: new URLSearchParams({ target: 'article', documentId }) } as unknown as PayloadRequest
@@ -37,13 +37,19 @@ test('saved revision endpoint reads actual latest Versions without mutating, and
     async findVersions(options: any) {
       assert.deepEqual(options.where, { and: [{ parent: { equals: documentId } }, { latest: { equals: true } }] })
       assert.equal(options.req, req)
-      return { docs: hasVersion ? [{ id: versionId, version: { title: 'Saved', category: '', editorial: null, body: [] }, updatedAt: '2026-10-01T12:00:00.000Z' }] : [] }
+      return { docs: hasVersion ? [{ id: versionId, autosave, version: { title: 'Saved', category: '', editorial: null, body: [] }, updatedAt: '2026-10-01T12:00:00.000Z' }] : [] }
     },
     async find() { return { docs: [] } },
   } as unknown as PayloadRequest['payload']
   const endpoint = createSavedPreviewEndpoint(access.canRead)
   const response = await endpoint.handler(req)
   assert.equal(response.status, 200); assert.equal((await response.json()).versionId, versionId)
+  autosave = true
+  const unstable = await endpoint.handler(req)
+  assert.equal(unstable.status, 409)
+  assert.deepEqual(await unstable.json(), { error: 'news_saved_checkpoint_required' })
+  await assert.rejects(savedPreview(documentId, new AbortController().signal,
+    (async () => Response.json({ error: 'news_saved_checkpoint_required' }, { status: 409 })) as typeof fetch), /Salve uma revisão do rascunho/)
   hasVersion = false
   assert.equal((await endpoint.handler(req)).status, 409)
 })

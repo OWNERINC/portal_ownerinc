@@ -6,6 +6,7 @@ import { readCmsEnvironment } from '../config/environment'
 import { createPortalClient } from '../auth/portal-client'
 import { readNewsMutationHead } from './mutation-ledger'
 import { requireCmsTransaction, withCmsTransaction } from './transaction'
+import { assertEditorialProfile, type EditorialProfile } from '../config/editorial-profile'
 
 const ZERO_CHAIN = '0'.repeat(64)
 const fail = (reason = 'go_live_preflight_unavailable'): never => {
@@ -23,7 +24,9 @@ export type GoLivePreflight = {
   mutation: { sequence: string; chainSha256: string; writeBarrier: 'open' | 'sealed'; barrierRunId: string | null
     barrierEpoch: number | null; barrierReceiptSha256: string | null }
   counts: { articles: number; media: number; homePublished: number; schedules: number }
-  runtime: { worker: false; schedules: false; autosave: false; versions: false }
+  runtime: { worker: false; schedules: false; autosave: boolean; versions: boolean }
+  preflightVersion?: 2
+  editorialProfile?: ReturnType<typeof assertEditorialProfile>
   database: { migrations: true; catalog: true; grants: true; readiness: true }
   migration: null | { runId: string; manifestSha256: string; sealSha256: string; authorityEpoch: number
     drainReceiptSha256: string }
@@ -37,6 +40,7 @@ type Dependencies = {
 export type GoLivePreflightInput = {
   mode: 'legacy' | 'frozen' | 'payload_frozen'; epoch: number; requestId: string; deadline: string
   manifestSha256?: string; sealSha256?: string; releaseDigest?: string; imageDigest?: string
+  preflightVersion?: 2; expectedEditorialProfile?: { id: EditorialProfile; sha256: string }
 }
 
 function count(value: unknown): number {
@@ -64,7 +68,12 @@ function authority(value: unknown): Authority {
 
 function preflightInput(value: GoLivePreflightInput): GoLivePreflightInput {
   const names = Object.keys(value || {})
-  const allowed = ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest']
+  const allowed = ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest', 'preflightVersion', 'expectedEditorialProfile']
+  if (Object.hasOwn(value || {}, 'preflightVersion') || Object.hasOwn(value || {}, 'expectedEditorialProfile')) {
+    const profile = value.expectedEditorialProfile
+    if (value.preflightVersion !== 2 || !profile || Object.keys(profile).length !== 2 ||
+      !['held-v1', 'editorial-v1'].includes(profile.id) || !/^[0-9a-f]{64}$/u.test(profile.sha256)) fail()
+  }
   const bound = value?.mode !== 'legacy'
   if (!value || names.some(name => !allowed.includes(name)) || !['legacy', 'frozen', 'payload_frozen'].includes(value.mode)
     || !Number.isSafeInteger(value.epoch) || value.epoch < 1 || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value.requestId || '')
@@ -88,6 +97,11 @@ export async function queryGoLivePreflight(req: PayloadRequest, rawInput: GoLive
     const environment = dependencies.publicationMode === undefined ? readCmsEnvironment(process.env) : null
     const publicationMode = dependencies.publicationMode ?? environment!.publicationMode
     if (publicationMode !== 'manual') fail()
+    const profile = assertEditorialProfile(req.payload.config)
+    const editorial = profile.id === 'editorial-v1'
+    if (input.preflightVersion === 2 ? input.expectedEditorialProfile?.id !== profile.id || input.expectedEditorialProfile?.sha256 !== profile.sha256
+      : editorial) fail()
+    if (input.mode !== 'payload_frozen' && editorial) fail()
     const getAuthority = dependencies.getAuthority ?? createPortalClient(environment!).getAuthority
 
     return await withCmsTransaction(req.payload, req, async transactionReq => {
@@ -187,7 +201,8 @@ export async function queryGoLivePreflight(req: PayloadRequest, rawInput: GoLive
         mutation: { sequence: mutation.sequence, chainSha256: mutation.chainSha256, writeBarrier,
           barrierRunId: mutation.barrierRunId, barrierEpoch: mutation.barrierEpoch,
           barrierReceiptSha256: mutation.barrierReceiptSha256 }, counts,
-        runtime: { worker: false, schedules: false, autosave: false, versions: false },
+        runtime: { worker: false, schedules: false, autosave: editorial, versions: editorial },
+        ...(input.preflightVersion === 2 ? { preflightVersion: 2 as const, editorialProfile: profile } : {}),
         database: { migrations: true, catalog: true, grants: true, readiness: true }, migration }
     })
   } catch (error) {

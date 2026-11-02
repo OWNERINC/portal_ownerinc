@@ -36,11 +36,12 @@ export function assertContainerBinding(identity, role, observed, imageId) {
   assertContainerNetwork(identity,observed);
 }
 
-export function assertPhysicalTargets(identity, portal, cms) {
+export function assertPhysicalTargets(identity, portal, cms, phase = 'preauthority') {
+  if (!['preauthority','editorial'].includes(phase)) fail('functional_phase_invalid');
   const check = (value, database, role) => value?.database === database && value?.role === role &&
     /^[0-9]{10,20}$/.test(value?.systemIdentifier || '') && typeof value?.serverAddress === 'string' &&
     /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value.serverAddress) && value?.serverPort === 5432 && value?.empty === true;
-  if (!check(portal,identity.portalDatabase,'portal_admin') || !check(cms,identity.cmsDatabase,'cms_admin') ||
+  if (!check(portal,identity.portalDatabase,'portal_admin') || !check(cms,identity.cmsDatabase,phase === 'editorial' ? 'cms_cluster' : 'cms_admin') ||
     portal.systemIdentifier === cms.systemIdentifier || portal.serverAddress === cms.serverAddress) fail('functional_physical_targets_not_independent');
 }
 
@@ -76,11 +77,12 @@ export function composeClient(lease) {
     '--env-file','/dev/null','--project-name',lease.identity.project,'--file',`${lease.directory}/compose.json`,...args],options);
 }
 
-export function fixtureSQL(compose, identity) {
+export function fixtureSQL(compose, identity, phase = 'preauthority') {
+  if (!['preauthority','editorial'].includes(phase)) fail('functional_phase_invalid');
   return async (store,sql,variables = {}) => {
     if (!['portal','cms'].includes(store)) fail('functional_store_invalid');
     const args = ['exec','-T',store + '-db','sh','-ec','export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -h "$HOSTNAME" "$@"','sh',
-      '-X','-qAt','-v','ON_ERROR_STOP=1','-U',store + '_admin',
+      '-X','-qAt','-v','ON_ERROR_STOP=1','-U',store === 'cms' && phase === 'editorial' ? 'cms_cluster' : store + '_admin',
       '-d',store === 'portal' ? identity.portalDatabase : identity.cmsDatabase];
     for (const [key,value] of Object.entries(variables)) {
       if (!['uid','email','name','hash','role','permissions'].includes(key) || typeof value !== 'string' || value.includes('\0')) fail('functional_sql_binding_invalid');

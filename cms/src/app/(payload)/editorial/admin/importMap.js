@@ -14,6 +14,8 @@ import { LinkFeatureClient as LinkFeatureClient_e70f5e05f09f93e00b997edb1ef0c864
 import { FlatListsFeatureClient as FlatListsFeatureClient_a92748ea4cf0faed3d7498e239e2a1b4 } from '../../../../news/FlatLists.client'
 import { FixedToolbarFeatureClient as FixedToolbarFeatureClient_e70f5e05f09f93e00b997edb1ef0c864 } from '@payloadcms/richtext-lexical/client'
 import { SavedPreview as SavedPreview_d06cf693d6cc4e05f0931ed87efc74dd } from '../../../../admin/SavedPreview'
+import { SaveDraftCheckpoint } from '../../../../admin/SaveDraftCheckpoint'
+import { NewsVersionView } from '../../../../admin/NewsVersionView'
 import { ScheduleRevision as ScheduleRevision_bc9b5d2ff4dd53b92853be609fa1cd32 } from '../../../../admin/ScheduleRevision'
 import { LegacyHistory as LegacyHistory_b9524fd9ef11400b74290e9e00eccbf3 } from '../../../../admin/LegacyHistory'
 import { CreateArticleView as CreateArticleView_17756cddd938e4258b1deafd868bbe85 } from '../../../../news/CreateArticleView'
@@ -29,6 +31,8 @@ import { AdminHome as AdminHome_74f164e5a7e149c6ba48f1c8e3b2f211 } from '../../.
 
 /** @type import('payload').ImportMap */
 export const importMap = {
+  "/admin/SaveDraftCheckpoint#SaveDraftCheckpoint": SaveDraftCheckpoint,
+  "/admin/NewsVersionView#NewsVersionView": NewsVersionView,
   "/admin/EditorialMetadata#EditorialMetadata": EditorialMetadata_cac42aee677803d4b04868b872516a25,
   "@payloadcms/richtext-lexical/rsc#RscEntryLexicalCell": RscEntryLexicalCell_44fe37237e0ebf4470c9990d8cb7b07e,
   "@payloadcms/richtext-lexical/rsc#RscEntryLexicalField": RscEntryLexicalField_44fe37237e0ebf4470c9990d8cb7b07e,

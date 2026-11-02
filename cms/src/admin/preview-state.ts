@@ -6,7 +6,10 @@ export async function savedPreview(documentId: string, signal: AbortSignal, requ
   if (!uuid(documentId)) throw new Error('Salve o documento antes de abrir a prévia.')
   const response = await request(`/editorial/api/saved-preview?target=article&documentId=${encodeURIComponent(documentId)}`,
     { credentials: 'same-origin', cache: 'no-store', signal })
-  if (response.status === 409) throw new Error(previewConflictMessage)
+  if (response.status === 409) {
+    const problem = await response.json().catch(() => null)
+    throw new Error(problem?.error === 'news_saved_checkpoint_required' ? 'Salve uma revisão do rascunho antes de conferir a prévia.' : previewConflictMessage)
+  }
   if (!response.ok) throw new Error('Não foi possível consultar a revisão salva. Confira sua permissão editorial.')
   const revision = await response.json()
   if (signal.aborted) throw new DOMException('Consulta cancelada.', 'AbortError')

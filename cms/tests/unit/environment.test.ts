@@ -30,6 +30,7 @@ test('normaliza URLs e storage sem alterar os segredos', () => {
   })
   assert.deepEqual(result, {
     publicationMode: 'manual',
+    editorialProfile: 'held-v1',
     databaseURL: env.CMS_DATABASE_URL,
     payloadSecret: env.PAYLOAD_SECRET,
     portalPublicURL: 'https://portal.example.test',

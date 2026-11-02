@@ -19,7 +19,7 @@ export const manualRuntimeStages = Object.freeze([
   'preflight', 'source-network-create', 'source-volume-create', 'source-database-start',
   'empty-database-provision', 'protocol-finalizer', 'protocol-baseline', 'protocol-qualification',
   'private-readiness', 'editor-authorization', 'manual-publication', 'schedule-absence',
-  'runtime-restart', 'persistence-verification', 'coordinated-backup', 'restore-target-start',
+  'runtime-restart', 'persistence-verification', 'editorial-profile-cycle', 'coordinated-backup', 'restore-target-start',
   'restore-target-readiness', 'restore-target-provision', 'restore-target-control', 'restore-target-observer',
   'restore-protection-backup', 'restore-cms-database', 'restore-portal-database', 'restore-runtime-verify',
   'restore-control-verify', 'restore-protocol-audit', 'restore-storage',
@@ -154,7 +154,9 @@ export async function main(env = process.env) {
         if (request.headers.authorization !== `Bearer ${payloadToPortal}`) { response.writeHead(403).end(); return }
         let body = {}; try { body = bytes.length ? JSON.parse(bytes.toString('utf8')) : {} } catch { response.writeHead(400).end(); return }
         response.setHeader('Content-Type', 'application/json')
-        if (request.url === '/api/internal/editorial/authority') response.end(JSON.stringify({ mode: 'payload', epoch: 1 }))
+        if (request.url === '/api/internal/editorial/authority') response.end(JSON.stringify({ mode: 'payload', epoch: 1,
+          activationObserved: true, manifestSha256: 'a'.repeat(64), sealSha256: 'b'.repeat(64),
+          releaseDigest: `sha256:${'c'.repeat(64)}`, imageDigest: `sha256:${'d'.repeat(64)}`, activationRequestId: 'manual-runtime' }))
         else if (request.url === '/api/internal/editorial/actor/check' && [editor.uid, deniedEditor.uid].includes(body.uid)) {
           response.end(JSON.stringify({ actor: body.uid === editor.uid ? editor : deniedEditor }))
         } else if (request.url === '/api/internal/editorial/session/resolve' && [`editor-${marker}`, `reader-${marker}`].includes(body.cookie)) {
@@ -191,7 +193,8 @@ export async function main(env = process.env) {
     await clusterBootstrap(port);
     await provision(port);
     await controlRoles('--bootstrap-control', port);
-    const cmsEnv = (database, evidenceDirectory, selectedPort = port) => ({ ...common, CMS_DATABASE_URL: url('cms_runtime', passwords.runtime, database, selectedPort),
+    const cmsEnv = (database, evidenceDirectory, selectedPort = port, profile = 'held-v1') => ({ ...common, CMS_EDITORIAL_PROFILE: profile,
+      CMS_DATABASE_URL: url('cms_runtime', passwords.runtime, database, selectedPort),
       CMS_UPLOAD_DIR: path.join(evidenceDirectory, 'uploads'), PAYLOAD_MANUAL_RUNTIME_EVIDENCE: evidenceDirectory });
     const stopCms = async () => {
       if (!cmsChild || cmsChild.exitCode !== null) { cmsChild = undefined; return }
@@ -200,12 +203,12 @@ export async function main(env = process.env) {
       if (cmsChild.exitCode === null) cmsChild.kill('SIGKILL');
       cmsChild = undefined;
     };
-    const startCms = async (database = 'ownerinc_cms', evidenceDirectory = directory, selectedPort = port) => {
+    const startCms = async (database = 'ownerinc_cms', evidenceDirectory = directory, selectedPort = port, profile = 'held-v1') => {
       const reservation = net.createServer();
       await new Promise((resolve, reject) => { reservation.once('error', reject); reservation.listen(0, '127.0.0.1', resolve) });
       const httpPort = reservation.address().port; await new Promise(resolve => reservation.close(resolve));
       cmsChild = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(httpPort)], {
-        cwd: path.join(root, 'cms'), env: cmsEnv(database, evidenceDirectory, selectedPort), stdio: ['ignore', 'ignore', 'ignore'],
+        cwd: path.join(root, 'cms'), env: cmsEnv(database, evidenceDirectory, selectedPort, profile), stdio: ['ignore', 'ignore', 'ignore'],
       });
       let lastStatus = 0;
       for (let attempt = 0; attempt < 180; attempt++) {
@@ -338,6 +341,18 @@ export async function main(env = process.env) {
     }
     step('persistence-verification'); await proof('verify', 'ownerinc_cms', directory);
     await protocolProof('audit');
+    step('editorial-profile-cycle');
+    const editorialProof = (action, profile) => command(process.execPath,
+      ['--import', 'tsx', '--test', '--test-reporter=tap', '--test-force-exit', 'tests/integration/editorial-runtime.ts'], {
+        cwd: path.join(root, 'cms'), env: { ...cmsEnv('ownerinc_cms', directory, port, profile),
+          PAYLOAD_EDITORIAL_RUNTIME_ACTION: action, PAYLOAD_EDITORIAL_RUNTIME_ORIGIN: cmsOrigin }, timeout: 240_000,
+      });
+    await editorialProof('baseline', 'held-v1');
+    // Same compiled image, DB, storage and migration history; no DDL inside this cycle.
+    for (const [profile, action] of [['editorial-v1', 'exercise'], ['held-v1', 'retained-held'], ['editorial-v1', 'retained-editorial']]) {
+      await stopCms(); cmsOrigin = await startCms('ownerinc_cms', directory, port, profile);
+      await editorialProof(action, profile);
+    }
     await stopCms();
 
     step('coordinated-backup');
@@ -435,7 +450,7 @@ export async function main(env = process.env) {
     await docker(['volume', 'rm', volume]); await docker(['volume', 'rm', targetVolume]); await docker(['network', 'rm', network]);
     if (env.PAYLOAD_MANUAL_RUNTIME_RETAIN_EVIDENCE !== '1') await rm(directory, { recursive: true, force: true });
     completed = true;
-    process.stdout.write('payload-manual-runtime: PASS; disposable manual publication, restart, backup and independent restore verified\n');
+    process.stdout.write('payload-manual-runtime: PASS; disposable manual publication, editorial native/profile cycle, restart, backup and independent restore verified; Portal transport doubled\n');
     return 0;
   } catch (error) {
     await rm(postgresEnv, { force: true }).catch(() => {});

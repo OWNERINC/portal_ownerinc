@@ -1,6 +1,10 @@
 const { lockCmsAssets } = require('../cms/locks');
 
 const AUTHORITY_MODES = new Set(['legacy', 'frozen', 'payload', 'payload_frozen']);
+const legacyWriteObservations = new WeakMap();
+let refusedLegacyWrite = () => {};
+function setLegacyWriteObserver(observer) { refusedLegacyWrite = typeof observer === 'function' ? observer : () => {}; }
+function takeLegacyWriteObservation(db) { const value = legacyWriteObservations.get(db) || null; legacyWriteObservations.delete(db); return value; }
 
 class AuthorityError extends Error {
   constructor(status, code) {
@@ -35,11 +39,14 @@ async function assertNewsWriter(db, writer) {
   const authority = await getAuthority(db, { forUpdate: true });
   if (!writerAllowed(authority.mode, writer, authority.activation_observed_at instanceof Date
     || typeof authority.activation_observed_at === 'string')) {
+    if (writer === 'legacy') { try { refusedLegacyWrite(); } catch { /* Observations cannot change the guard. */ } }
     console.error(JSON.stringify({ service: 'api', event: 'legacy_write_refused', reason: 'news_read_only',
       authorityMode: authority.mode, authorityEpoch: authority.epoch,
       writer: ['legacy', 'payload'].includes(writer) ? writer : 'unknown', requestId: 'unassigned' }));
     throw new AuthorityError(409, 'news_read_only');
   }
+  if (writer === 'legacy') legacyWriteObservations.set(db, { version: 1, contentType: 'announcement',
+    authorityMode: authority.mode, authorityEpoch: authority.epoch });
   return authority;
 }
 
@@ -101,4 +108,5 @@ async function transitionAuthority(db, { from, to, expectedEpoch, actorUid, oper
   return rows[0];
 }
 
-module.exports = { AuthorityError, writerAllowed, getAuthority, assertNewsWriter, validAuthorityTransition, transitionAuthority };
+module.exports = { AuthorityError, writerAllowed, getAuthority, assertNewsWriter, validAuthorityTransition, transitionAuthority,
+  setLegacyWriteObserver, takeLegacyWriteObservation };

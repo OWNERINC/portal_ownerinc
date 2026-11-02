@@ -1,6 +1,7 @@
 // Dedicated fresh fixture only. No base Compose, recovery adapter or authority writer.
 import { createHash, randomBytes, randomUUID, X509Certificate, createPrivateKey, createPublicKey } from 'node:crypto';
 import { lstat, readFile, realpath, open, readdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -107,6 +108,9 @@ export function firebaseConfigSource(identity, origin) {
 
 export function nginxConfigSource(source, firebaseSource) {
   if (typeof firebaseSource !== 'string' || !source.includes('listen 80;') || !source.includes('http://api:3000') || !source.includes('http://cms:3001')) fail('functional_nginx_contract_changed');
+  // Materialize the approved active route into this private fixture, never switch production ingress.
+  source = source.replace('include /etc/nginx/editorial-route-state/active.conf;',
+    readFileSync(path.join(root, 'nginx/editorial-route.promoted.conf'), 'utf8'));
   // Reuse all production route/CSP/Origin boundaries. TLS and emulator transport are fixture-only.
   return source.replace('listen 80;', 'listen 443 ssl;\n    ssl_certificate /fixture/cert.pem;\n    ssl_certificate_key /fixture/key.pem;')
     .replace('location = /editorial/ready { return 404; }', 'location = /editorial/ready { proxy_pass $cms_upstream; }')
@@ -119,13 +123,15 @@ export function nginxConfigSource(source, firebaseSource) {
 }
 
 export function buildCompose(identity, config, directory, secrets) {
+  const editorial = config.phase === 'editorial';
   const origin = `https://127.0.0.1:${config.httpsPort}`;
   const labels = role => ({ 'ownerinc.functional.run': identity.runId, 'ownerinc.functional.role': role });
   const databaseURL = (role, password, service, database) => `postgresql://${role}:${password}@${service}:5432/${database}`;
   const service = (role, image, extra) => ({ image, container_name: identity.containers[role], labels: labels(role), restart: 'no', networks: ['fixture'], ...extra,
     ...(!['portal-db','cms-db','nginx'].includes(role) ? {environment:{...disabledProviderEnvironment,...extra.environment}} : {}) });
-  const healthcheck = db => ({ test: ['CMD-SHELL', `pg_isready -U ${db === 'portal-db' ? 'portal_admin' : 'cms_admin'} -d ${db === 'portal-db' ? identity.portalDatabase : identity.cmsDatabase}`], interval: '2s', timeout: '3s', retries: 45 });
-  const cmsEnv = { NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1',
+  const healthcheck = db => ({ test: ['CMD-SHELL', `pg_isready -U ${db === 'portal-db' ? 'portal_admin' : editorial ? 'cms_cluster' : 'cms_admin'} -d ${db === 'portal-db' ? identity.portalDatabase : identity.cmsDatabase}`], interval: '2s', timeout: '3s', retries: 45 });
+  const cmsEnv = { NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1', CMS_PUBLICATION_MODE: 'manual',
+    CMS_EDITORIAL_PROFILE: editorial ? 'editorial-v1' : 'held-v1',
     CMS_DATABASE_URL: databaseURL('cms_runtime', secrets.cmsRuntime, 'cms-db', identity.cmsDatabase),
     PAYLOAD_SECRET: secrets.payload, PORTAL_PUBLIC_URL: origin, PORTAL_INTERNAL_URL: 'http://api:3000',
     PAYLOAD_TO_PORTAL_SECRET: secrets.toPortal, PORTAL_TO_PAYLOAD_SECRET: secrets.toPayload, CMS_UPLOAD_DIR: '/var/lib/ownerinc-cms/media' };
@@ -134,7 +140,7 @@ export function buildCompose(identity, config, directory, secrets) {
   const services = {
     'portal-db': service('portal-db', postgresImage, { environment: { POSTGRES_USER: 'portal_admin', POSTGRES_DB: identity.portalDatabase, POSTGRES_PASSWORD: secrets.portalAdmin },
       volumes: ['portal-db:/var/lib/postgresql/data'], healthcheck: healthcheck('portal-db') }),
-    'cms-db': service('cms-db', postgresImage, { environment: { POSTGRES_USER: 'cms_admin', POSTGRES_DB: identity.cmsDatabase, POSTGRES_PASSWORD: secrets.cmsAdmin },
+    'cms-db': service('cms-db', postgresImage, { environment: { POSTGRES_USER: editorial ? 'cms_cluster' : 'cms_admin', POSTGRES_DB: identity.cmsDatabase, POSTGRES_PASSWORD: editorial ? secrets.cmsCluster : secrets.cmsAdmin },
       volumes: ['cms-db:/var/lib/postgresql/data'], healthcheck: healthcheck('cms-db') }),
     emulator: service('emulator', config.emulatorImage, { command: ['firebase','emulators:start','--only','auth','--project',identity.firebaseProject] }),
     'portal-migrate': service('portal-migrate', config.apiImage, { environment: { ...portalSecrets, NODE_ENV: 'test', RUN_MIGRATIONS: 'true', MIGRATION_ONLY: 'true' }, command: ['true'] }),
@@ -157,6 +163,20 @@ export function buildCompose(identity, config, directory, secrets) {
       `${path.join(directory,'cert.pem').replaceAll('\\','/')}:/fixture/cert.pem:ro`,
       `${path.join(directory,'key.pem').replaceAll('\\','/')}:/fixture/key.pem:ro` ] }),
   };
+  if (editorial) {
+    const fixtureScript = `${path.join(root, 'cms/tests/integration/functional-editorial-bootstrap.ts').replaceAll('\\', '/')}:/app/cms/tests/integration/functional-editorial-bootstrap.ts:ro`;
+    services['cms-provision'].environment = { ...disabledProviderEnvironment,
+      CMS_DATABASE_URL: databaseURL('cms_cluster', secrets.cmsCluster, 'cms-db', 'postgres'),
+      CMS_POSTGRES_PASSWORD: secrets.cmsAdmin, CMS_MIGRATOR_PASSWORD: secrets.cmsMigrator, CMS_RUNTIME_PASSWORD: secrets.cmsRuntime,
+      CMS_CONTROLLER_PASSWORD: secrets.cmsController, CMS_OBSERVER_PASSWORD: secrets.cmsObserver,
+      CMS_PORTAL_DATABASE_NAME: 'postgres', PAYLOAD_FUNCTIONAL_RUN_ID: identity.runId };
+    services['cms-provision'].command = ['node', '--import', 'tsx', 'tests/integration/functional-editorial-bootstrap.ts', 'provision'];
+    services['cms-provision'].volumes = [fixtureScript];
+    Object.assign(services['cms-migrate'].environment, { CMS_ADMIN_DATABASE_URL: databaseURL('cms_admin', secrets.cmsAdmin, 'cms-db', identity.cmsDatabase),
+      CMS_PORTAL_DATABASE_NAME: 'postgres', PAYLOAD_FUNCTIONAL_RUN_ID: identity.runId });
+    services['cms-migrate'].command = ['sh', '-ec', 'node --import tsx scripts/provision-db.ts --verify-migrator && npm run migrate && node --import tsx scripts/provision-db.ts --grants && node --import tsx tests/integration/functional-editorial-bootstrap.ts protocol'];
+    services['cms-migrate'].volumes = [fixtureScript];
+  }
   return { name: identity.project, services, networks: { fixture: { name: `${identity.project}-network`, driver:'bridge',internal:true,labels: labels('network') } },
     volumes: Object.fromEntries(volumeRoles.map(role => [role, { name: identity.volumes[role], labels: labels(role) }])) };
 }
@@ -172,7 +192,10 @@ export function validateComposeContract(observed,identity,config,directory) {
       cmsAdmin:services['cms-db'].environment.POSTGRES_PASSWORD,cmsMigrator:services['cms-provision'].environment.CMS_MIGRATOR_PASSWORD,
       cmsRuntime:services['cms-provision'].environment.CMS_RUNTIME_PASSWORD,payload:services.cms.environment.PAYLOAD_SECRET,
       toPortal:services.cms.environment.PAYLOAD_TO_PORTAL_SECRET,toPayload:services.cms.environment.PORTAL_TO_PAYLOAD_SECRET,
-      bulk:services.api.environment.BULK_IMPORT_WORKER_SECRET};
+      bulk:services.api.environment.BULK_IMPORT_WORKER_SECRET,
+      ...(config.phase === 'editorial' ? { cmsAdmin: services['cms-provision'].environment.CMS_POSTGRES_PASSWORD,
+        cmsCluster: services['cms-db'].environment.POSTGRES_PASSWORD, cmsController: services['cms-provision'].environment.CMS_CONTROLLER_PASSWORD,
+        cmsObserver: services['cms-provision'].environment.CMS_OBSERVER_PASSWORD } : {})};
     if(Object.values(secrets).some(value=>typeof value!=='string' || !/^[0-9a-f]{64}$/.test(value)) ||
       new Set(Object.values(secrets)).size!==Object.keys(secrets).length ||
       JSON.stringify(observed)!==JSON.stringify(buildCompose(identity,config,directory,secrets))) fail('functional_compose_contract_invalid');
@@ -195,7 +218,8 @@ export async function checkoutBinding() {
   const ownedSources = (await readdir(path.join(root,'scripts/integration'))).filter(name => name.startsWith('payload-functional-'));
   const cases = (await readdir(path.join(root,'cms/tests/integration'))).filter(name => name.startsWith('functional-'));
   for (const filename of [...ownedSources.map(name => path.join(root,'scripts/integration',name)), ...cases.map(name => path.join(root,'cms/tests/integration',name)),
-    path.join(root,'scripts/test-payload-integration.mjs'), path.join(root,'cms/tests/support/integration-config.mjs'), path.join(root,'nginx/nginx.conf')]) {
+    path.join(root,'scripts/test-payload-integration.mjs'), path.join(root,'cms/tests/support/integration-config.mjs'), path.join(root,'nginx/nginx.conf'),
+    path.join(root,'nginx/editorial-route.promoted.conf')]) {
     tree.push([path.relative(root,filename).replaceAll('\\','/'), hash(await readFile(filename))]);
   }
   return { commit, diffHash: hash(diff), sourceHash: hash(JSON.stringify(tree)) };
@@ -213,7 +237,8 @@ export async function prepareFunctionalLease(env) {
   if (playwrightRoot.startsWith(path.resolve(root) + path.sep)) fail('functional_isolated_playwright_required');
   const identity = fixtureIdentity(randomUUID()), security = createSecurityContext();
   const directory = await createSecureDirectory(parent, identity.project, security);
-  const secrets = Object.fromEntries(['portalAdmin','portalRuntime','portalCron','cmsAdmin','cmsMigrator','cmsRuntime','payload','toPortal','toPayload','bulk'].map(name => [name,randomBytes(32).toString('hex')]));
+  const secrets = Object.fromEntries(['portalAdmin','portalRuntime','portalCron','cmsAdmin','cmsMigrator','cmsRuntime','payload','toPortal','toPayload','bulk',
+    ...(config.phase === 'editorial' ? ['cmsCluster','cmsController','cmsObserver'] : [])].map(name => [name,randomBytes(32).toString('hex')]));
   const firebaseSource = firebaseConfigSource(identity, `https://127.0.0.1:${config.httpsPort}`);
   const files = { 'cert.pem': cert.toString('utf8'), 'key.pem': key.toString('utf8'),
     'nginx.conf': nginxConfigSource(await readFile(path.join(root,'nginx/nginx.conf'),'utf8'), firebaseSource),
@@ -221,7 +246,7 @@ export async function prepareFunctionalLease(env) {
     'compose.json': JSON.stringify(buildCompose(identity,config,directory,secrets),null,2) };
   const fileHashes = {};
   for (const [name,body] of Object.entries(files)) { await writeSecureFile(path.join(directory,name),body,security); fileHashes[name] = hash(body); }
-  const lease = { schemaVersion: 1, phase: 'preauthority', identity, config, binding, tls, fileHashes,toolHashes,
+  const lease = { schemaVersion: 1, phase: config.phase || 'preauthority', identity, config, binding, tls, fileHashes,toolHashes,
     preparedAt: new Date().toISOString(), nonce: randomBytes(32).toString('hex') };
   await writeSecureFile(path.join(directory,'lease.json'),JSON.stringify(lease,null,2),security);
   return path.join(directory,'lease.json');
@@ -245,7 +270,10 @@ export async function materializeFunctionalRuntime(lease,forwarder,readArtifact=
     cmsAdmin:services['cms-db'].environment.POSTGRES_PASSWORD,cmsMigrator:services['cms-provision'].environment.CMS_MIGRATOR_PASSWORD,
     cmsRuntime:services['cms-provision'].environment.CMS_RUNTIME_PASSWORD,payload:services.cms.environment.PAYLOAD_SECRET,
     toPortal:services.cms.environment.PAYLOAD_TO_PORTAL_SECRET,toPayload:services.cms.environment.PORTAL_TO_PAYLOAD_SECRET,
-    bulk:services.api.environment.BULK_IMPORT_WORKER_SECRET};
+    bulk:services.api.environment.BULK_IMPORT_WORKER_SECRET,
+    ...(lease.config.phase === 'editorial' ? { cmsAdmin: services['cms-provision'].environment.CMS_POSTGRES_PASSWORD,
+      cmsCluster: services['cms-db'].environment.POSTGRES_PASSWORD, cmsController: services['cms-provision'].environment.CMS_CONTROLLER_PASSWORD,
+      cmsObserver: services['cms-provision'].environment.CMS_OBSERVER_PASSWORD } : {})};
   const cert=await readArtifact(path.join(lease.directory,'cert.pem'));
   const key=await readArtifact(path.join(lease.directory,'key.pem'));
   if(hash(cert)!==lease.tls.certificateHash || hash(key)!==lease.tls.keyHash) fail('functional_tls_identity_invalid');
@@ -276,7 +304,7 @@ export async function readFunctionalLease(filename, env) {
   try { lease = JSON.parse((await regularFile(filename,{ privateFile: true })).toString('utf8')); }
   catch { fail('functional_lease_invalid'); }
   if (JSON.stringify(Object.keys(lease).sort()) !== JSON.stringify(['schemaVersion','phase','identity','config','binding','tls','fileHashes','toolHashes','preparedAt','nonce'].sort()) ||
-    lease.schemaVersion !== 1 || lease.phase !== 'preauthority' || !/^[0-9a-f]{64}$/.test(lease.nonce)) fail('functional_lease_invalid');
+    lease.schemaVersion !== 1 || lease.phase !== (lease.config?.phase || 'preauthority') || !['preauthority','editorial'].includes(lease.phase) || !/^[0-9a-f]{64}$/.test(lease.nonce)) fail('functional_lease_invalid');
   const identity = fixtureIdentity(lease.identity?.runId);
   if (JSON.stringify(identity) !== JSON.stringify(lease.identity) || path.basename(directory) !== identity.project) fail('functional_lease_identity_mismatch');
   const settings = { NODE_ENV: 'test', MIGRATION_TEST_DISPOSABLE: 'true', GITHUB_SHA: lease.config?.commit,
@@ -285,6 +313,7 @@ export async function readFunctionalLease(filename, env) {
     PAYLOAD_FUNCTIONAL_HTTPS_PORT: String(lease.config?.httpsPort), PAYLOAD_FUNCTIONAL_CERTIFICATE: lease.config?.certificate,
     PAYLOAD_FUNCTIONAL_PRIVATE_KEY: lease.config?.privateKey, PAYLOAD_FUNCTIONAL_PLAYWRIGHT_MODULE: lease.config?.playwrightModule };
   if (lease.config?.browserExecutable !== null) settings.PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE = lease.config?.browserExecutable;
+  if (lease.phase === 'editorial') settings.PAYLOAD_FUNCTIONAL_PHASE = 'editorial';
   for(const [key,value] of Object.entries(env)) {
     if(key.startsWith('PAYLOAD_FUNCTIONAL_') && settings[key]!==value) fail('functional_execution_environment_override');
   }

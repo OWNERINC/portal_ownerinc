@@ -115,6 +115,15 @@ container loopback `127.0.0.1:1` (no SMTP service is started) and uses
 synthetic `.invalid` identities. Sólides is explicitly off. No cron or Payload
 worker is started by the generated launchers.
 
+Operational monitoring stays disabled in preview: `compose.env` explicitly sets
+both `OPERATIONAL_ALERT_EMAIL=` and `OPERATIONAL_MONITOR_TOKEN=`. Preparation
+neither inherits a host monitor credential nor generates a new one. The POSIX
+`unset` list and PowerShell `Remove-Item Env:` loop clear inherited monitor tokens
+before invoking Compose, so a parent-shell value cannot override the blank file
+entry. The API remains functional; its observation endpoint stays closed (401).
+The Compose interpolation allowlist admits this exact variable only; unknown
+keys still fail closed, and no monitor-token CLI option or runner is added.
+
 ## Launch later, only when authorized
 
 Preparation itself does not launch services. Review its output, confirm both

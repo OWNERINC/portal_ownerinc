@@ -10,11 +10,56 @@ const records=item=>item.requiredChecks.map(check=>({check,passed:true}));
 
 test('declared inventory has unique IDs, typed phases, explicit preconditions and evidence',()=>{
   assert.equal(new Set(functionalCases.map(item=>item.scenarioId)).size,functionalCases.length);
-  assert.equal(functionalCases.filter(item=>item.implemented).length,8);
+  assert.equal(functionalCases.filter(item=>item.implemented && item.phase==='preauthority').length,8);
+  assert.equal(functionalCases.filter(item=>item.implemented && item.phase==='editorial').length,4);
   for(const item of functionalCases) {
     assert.ok(item.preconditions.length);assert.ok(item.expected.length);assert.ok(item.evidence.length);
     if(item.implemented) assert.ok(item.requiredChecks.length>1);
     else assert.ok(item.dependency);
+  }
+});
+
+test('passing only the bounded editorial phase retains all other cases as INCOMPLETE',async()=>{
+  const report=newFunctionalReport('editorial-offline-report-contract');
+  for(const item of functionalCases.filter(item=>item.phase==='editorial')) await runFunctionalCase(report,item.scenarioId,async()=>records(item));
+  assert.equal(finishFunctionalReport(report),2);
+  assert.equal(report.status,'INCOMPLETE');assert.equal(report.acceptanceComplete,false);assert.equal(report.preauthorityComplete,false);
+  assert.equal(report.productionValidated,false);
+  assert.equal(report.editorialPhaseComplete,false,'case assertions alone do not prove execution layers or cleanup');
+  assert.equal(report.cases.filter(item=>item.status==='PASS').length,4);
+  assert.equal(report.cases.filter(item=>item.status==='INCOMPLETE').length,44);
+});
+
+test('editorial phase completion requires validated observations, real layers and both successful cleanup receipts',async()=>{
+  const complete=async()=>{
+    const report=newFunctionalReport('synthetic-editorial-completion-contract');
+    assert.equal(report.editorialPhaseComplete,false);
+    report.scope='editorial-real-https-isolated-fixture';
+    report.layers={portalApi:'REAL',firebase:'REAL',cms:'REAL',nginx:'REAL',browser:'REAL'};
+    report.cleanup='owned_services_stopped_volumes_and_evidence_retained';
+    report.transportCleanup='owned_listener_and_sockets_closed';
+    for(const item of functionalCases.filter(item=>item.phase==='editorial')) await runFunctionalCase(report,item.scenarioId,async()=>records(item));
+    return report;
+  };
+  const report=await complete();
+  assert.equal(finishFunctionalReport(report),2);
+  assert.equal(report.editorialPhaseComplete,true);
+  assert.equal(report.acceptanceComplete,false);assert.equal(report.productionValidated,false);
+  assert.equal(report.cases.filter(item=>item.status==='INCOMPLETE').length,44);
+  for(const mutate of [
+    value=>{value.cleanup='not_started';},
+    value=>{value.cleanup='owned_stop_failed_preserved';},
+    value=>{value.transportCleanup='owned_listener_stop_failed';},
+    value=>{value.layers.browser='NOT_EXECUTED';},
+    value=>{value.failure={stage:'runner_interrupted',reason:'functional_execution_interrupted'};},
+    value=>{value.scope='preauthority-real-https-first-slice';},
+    value=>{value.cases.find(item=>item.phase==='editorial').status='INCOMPLETE';},
+    value=>{value.cases.find(item=>item.phase==='editorial').observations.pop();},
+  ]) {
+    const invalid=await complete();invalid.editorialPhaseComplete=true;mutate(invalid);
+    finishFunctionalReport(invalid);
+    assert.equal(invalid.editorialPhaseComplete,false,'a stale or forged completion flag must be cleared');
+    assert.equal(invalid.acceptanceComplete,false);
   }
 });
 

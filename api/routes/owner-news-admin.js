@@ -2,7 +2,8 @@ const express = require('express');
 const pool = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
-const { validBody, withAudit } = require('../route-utils');
+const { validBody } = require('../route-utils');
+const { withOperationalAudit: withAudit } = require('../operational/audit');
 const { HomeError, normalizeHome, validVersion, getHomeAdmin, saveHomeDraft, publishHome } = require('../owner-news/home');
 const { getAuthority, AuthorityError } = require('../owner-news/authority');
 

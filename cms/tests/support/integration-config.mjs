@@ -21,7 +21,7 @@ export const functionalFallbacks = Object.freeze([
   'CMS_MIGRATION_DATABASE_URL', 'CMS_OBSERVER_DATABASE_URL', 'OWNER_NEWS_CONTROL_DATABASE_URL',
   'FIREBASE_PROJECT_ID', 'FIREBASE_AUTH_EMULATOR_HOST', 'GOOGLE_APPLICATION_CREDENTIALS',
   'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY', 'PORTAL_PUBLIC_URL', 'PORTAL_INTERNAL_URL',
-  'CMS_INTERNAL_URL', 'CMS_UPLOAD_DIR', 'UPLOAD_DIR', 'PAYLOAD_SECRET',
+  'CMS_INTERNAL_URL', 'CMS_UPLOAD_DIR', 'UPLOAD_DIR', 'PAYLOAD_SECRET', 'CMS_EDITORIAL_PROFILE', 'CMS_PUBLICATION_MODE',
   'PAYLOAD_TO_PORTAL_SECRET', 'PORTAL_TO_PAYLOAD_SECRET', 'COMPOSE_FILE', 'COMPOSE_PROJECT_NAME',
   'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
   'NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'BASH_ENV', 'PYTHONPATH',
@@ -39,11 +39,12 @@ export function readFunctionalConfig(env, root = repositoryRoot) {
   const permitted = new Set(['PAYLOAD_FUNCTIONAL_PRIVATE_PARENT', 'PAYLOAD_FUNCTIONAL_API_IMAGE',
     'PAYLOAD_FUNCTIONAL_CMS_IMAGE', 'PAYLOAD_FUNCTIONAL_EMULATOR_IMAGE',
     'PAYLOAD_FUNCTIONAL_HTTPS_PORT', 'PAYLOAD_FUNCTIONAL_CERTIFICATE', 'PAYLOAD_FUNCTIONAL_PRIVATE_KEY',
-    'PAYLOAD_FUNCTIONAL_PLAYWRIGHT_MODULE', 'PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE']);
+    'PAYLOAD_FUNCTIONAL_PLAYWRIGHT_MODULE', 'PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE', 'PAYLOAD_FUNCTIONAL_PHASE']);
   if (Object.keys(env).some(key => key.startsWith('PAYLOAD_FUNCTIONAL_') && !permitted.has(key))) {
     reject('functional_unknown_setting');
   }
   if (!/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) reject('functional_source_revision_required');
+  if (env.PAYLOAD_FUNCTIONAL_PHASE !== undefined && env.PAYLOAD_FUNCTIONAL_PHASE !== 'editorial') reject('functional_phase_invalid');
   const image = key => {
     const value = env[key];
     if (typeof value !== 'string' || !/^(?:sha256:|ghcr\.io\/ownerinc\/ownerinc-portal-(?:api|cms|firebase-emulator)@sha256:)[0-9a-f]{64}$/.test(value)) {
@@ -67,6 +68,7 @@ export function readFunctionalConfig(env, root = repositoryRoot) {
     return privatePath(value,root,'functional_file');
   };
   return Object.freeze({ commit: env.GITHUB_SHA, apiImage, cmsImage, emulatorImage,
+    ...(env.PAYLOAD_FUNCTIONAL_PHASE === 'editorial' ? { phase: 'editorial' } : {}),
     privateParent, httpsPort: Number(portText), certificate: file('PAYLOAD_FUNCTIONAL_CERTIFICATE'),
     privateKey: file('PAYLOAD_FUNCTIONAL_PRIVATE_KEY'), playwrightModule: file('PAYLOAD_FUNCTIONAL_PLAYWRIGHT_MODULE'),
     browserExecutable: env.PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE === undefined ? null : file('PAYLOAD_FUNCTIONAL_BROWSER_EXECUTABLE') });

@@ -1,0 +1,29 @@
+[Unit]
+Description=Portal operational incident email delivery
+Wants=ownerinc-portal-observe.service
+After=ownerinc-portal-observe.service network.target
+
+[Service]
+Type=oneshot
+User=portal-monitor
+Group=portal-monitor
+UMask=0077
+EnvironmentFile=/etc/ownerinc/portal-monitor-mail.env
+ExecStart=/usr/bin/flock --nonblock --no-fork /var/lib/ownerinc-portal-monitor/delivery/cycle.lock /usr/bin/node /opt/ownerinc/lib/portal-monitor/cron/operational-monitor.js --locked
+TimeoutStartSec=37s
+TimeoutStopSec=1s
+KillMode=control-group
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/ownerinc-portal-monitor/delivery
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock /opt/ownerinc/apps/portal-ownerinc-real/runtime /opt/ownerinc/secrets /opt/ownerinc/lib/portal-monitor/verifier

@@ -1,9 +1,11 @@
 import path from 'node:path'
+import { readEditorialProfile, type EditorialProfile } from './editorial-profile'
 
 type Environment = Record<string, string | undefined>
 
 export type CmsEnvironment = {
   publicationMode: 'manual'
+  editorialProfile: EditorialProfile
   databaseURL: string
   payloadSecret: string
   portalPublicURL: string
@@ -73,6 +75,7 @@ export function readCmsEnvironment(env: Environment): CmsEnvironment {
 
   return {
     publicationMode,
+    editorialProfile: readEditorialProfile(env.CMS_EDITORIAL_PROFILE),
     databaseURL: database.href,
     payloadSecret,
     portalPublicURL,

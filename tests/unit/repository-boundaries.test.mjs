@@ -1,12 +1,36 @@
 import { execFile } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
+const require = createRequire(import.meta.url);
+
+async function assertOperationalAuthentication() {
+  // Exercise the actual exported handler rather than treating a factory name as
+  // proof of authentication. The real-index HTTP mount is covered separately.
+  const { createOperationalHandler } = require('../../api/routes/operational.js');
+  const token = 'synthetic-boundary-monitor-token-'.repeat(2);
+  let observations = 0;
+  for (const env of [{}, { OPERATIONAL_MONITOR_TOKEN: token }]) {
+    const handler = createOperationalHandler({ env, observeImpl: async () => { observations++; return { fixture: true }; } });
+    for (const authorization of [undefined, 'Bearer wrong', `Bearer ${token}`]) {
+      const req = { method: 'GET', originalUrl: '/api/operational/observe', headers: {} };
+      if (authorization) req.headers.authorization = authorization;
+      const res = { statusCode: 200, set() {}, status(value) { this.statusCode = value; return this; },
+        json(value) { this.body = value; return this; } };
+      await handler(req, res);
+      const authenticated = env.OPERATIONAL_MONITOR_TOKEN === token && authorization === `Bearer ${token}`;
+      assert.equal(res.statusCode, authenticated ? 200 : 401);
+      assert.deepEqual(res.body, authenticated ? { fixture: true } : { reason: 'unauthorized' });
+      assert.equal(observations, authenticated ? 1 : 0, 'authentication must precede the observation dependency');
+    }
+  }
+}
 
 test('database is not exposed by Docker Compose', async () => {
   const compose = await readFile('docker-compose.yml', 'utf8');
@@ -29,6 +53,13 @@ test('every API resource route requires authentication', async () => {
       if (file === 'auth.js' && (route[1].includes("'/password-reset'")
         || route[1].includes("'/register'") || route[1].includes("'/registration-password'"))) {
         assert.match(route[1], /(?:resetLimit|registrationLimit|registrationPasswordLimit)/, 'public auth route must remain rate limited');
+        continue;
+      }
+      if (file === 'operational.js' && /^router\.get\('\/observe',\s*createOperationalHandler\(options\)\);$/u.test(route[0])) {
+        const index = await readFile('api/index.js', 'utf8');
+        assert.match(index, /app\.use\('\/api\/operational', require\('\.\/routes\/operational'\)\.createOperationalRouter\(\{ pool \}\)\);/u,
+          'the dedicated token capability must be mounted at its exact namespace');
+        await assertOperationalAuthentication();
         continue;
       }
       if (file === 'editorial-internal.js') {

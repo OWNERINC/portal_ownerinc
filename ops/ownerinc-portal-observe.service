@@ -1,0 +1,30 @@
+[Unit]
+Description=Read-only Portal operational observations
+
+[Service]
+Type=oneshot
+User=root
+Group=portal-monitor
+UMask=0027
+ExecStart=/usr/bin/python3 -I -S -B /opt/ownerinc/lib/portal-monitor/ops/portal-operational-observe.py collect
+TimeoutStartSec=10s
+TimeoutStopSec=1s
+KillMode=control-group
+MemoryMax=256M
+LimitFSIZE=1M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadWritePaths=/var/lib/ownerinc-portal-monitor/observations
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN
+Environment=PYTHONDONTWRITEBYTECODE=1

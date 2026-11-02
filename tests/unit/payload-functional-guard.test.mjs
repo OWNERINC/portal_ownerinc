@@ -52,6 +52,16 @@ test('no secrets, inherited Node options or Docker overrides reach a child',()=>
   assert.deepEqual(env,{PATH:'tool-path',HOME:'private-home'});
 });
 
+test('editorial phase requires an exact opt-in and cannot select arbitrary authority/profiles',()=>{
+  assert.equal(readFunctionalConfig(environment()).phase,undefined);
+  assert.equal(readFunctionalConfig({...environment(),PAYLOAD_FUNCTIONAL_PHASE:'editorial'}).phase,'editorial');
+  for(const phase of ['', 'preauthority', 'editorial-v1', ' editorial', 'payload', 'production']) {
+    assert.throws(()=>readFunctionalConfig({...environment(),PAYLOAD_FUNCTIONAL_PHASE:phase}),{code:'functional_phase_invalid'});
+  }
+  assert.throws(()=>readFunctionalConfig({...environment(),PAYLOAD_FUNCTIONAL_PHASE:'editorial',CMS_EDITORIAL_PROFILE:'editorial-v1'}),
+    {code:'functional_external_override_refused'});
+});
+
 test('browser tool must match the actual existing isolated Playwright package/version contract',()=>{
   const modulePath=path.resolve(tmpdir(),'isolated-tool','node_modules','playwright','index.mjs');
   const manifest={name:'playwright',version:'1.62.1'};
@@ -150,6 +160,41 @@ test('self-reported hashes never authorize an altered template, writer command o
     const observed=build();mutate(observed);
     assert.throws(()=>validateComposeContract(observed,identity,config,config.privateParent),{code:'functional_compose_contract_invalid'});
   }
+});
+
+test('editorial template isolates bootstrap credentials and permits only its bound fixture script',()=>{
+  const identity=fixtureIdentity(runId),config=readFunctionalConfig({...environment(),PAYLOAD_FUNCTIONAL_PHASE:'editorial'});
+  const keys=['portalAdmin','portalRuntime','portalCron','cmsAdmin','cmsMigrator','cmsRuntime','payload','toPortal','toPayload','bulk','cmsCluster','cmsController','cmsObserver'];
+  const secret=Object.fromEntries(keys.map((key,index)=>[key,index.toString(16).repeat(64)]));
+  const build=()=>buildCompose(identity,config,config.privateParent,secret),compose=build();
+  validateComposeContract(compose,identity,config,config.privateParent);
+  assert.equal(compose.services['cms-db'].environment.POSTGRES_USER,'cms_cluster');
+  assert.equal(compose.services.cms.environment.CMS_EDITORIAL_PROFILE,'editorial-v1');
+  assert.equal(compose.services.cms.environment.CMS_PUBLICATION_MODE,'manual');
+  assert.equal(compose.networks.fixture.internal,true);
+  for(const role of ['cms-provision','cms-migrate']) {
+    assert.equal(compose.services[role].volumes.length,1);
+    assert.match(compose.services[role].volumes[0],/\/cms\/tests\/integration\/functional-editorial-bootstrap\.ts:\/app\/cms\/tests\/integration\/functional-editorial-bootstrap\.ts:ro$/u);
+    assert.equal(compose.services[role].environment.PAYLOAD_FUNCTIONAL_RUN_ID,runId);
+  }
+  for(const role of ['cms','api','nginx','emulator']) {
+    const env=JSON.stringify(compose.services[role].environment);
+    for(const key of ['cmsCluster','cmsController','cmsObserver','cmsAdmin','cmsMigrator']) assert.equal(env?.includes(secret[key])||false,false,`${role}/${key}`);
+  }
+  for(const mutate of [value=>{value.services['cms-provision'].environment.CMS_DATABASE_URL='postgresql://outside.invalid/postgres';},
+    value=>{value.services['cms-migrate'].volumes[0]=value.services['cms-migrate'].volumes[0].replace(':ro',':rw');},
+    value=>{value.services.cms.environment.CMS_EDITORIAL_PROFILE='held-v1';},
+    value=>{value.services.cms.environment.CMS_ADMIN_DATABASE_URL=value.services['cms-migrate'].environment.CMS_ADMIN_DATABASE_URL;},
+    value=>{value.services['cms-provision'].environment.PAYLOAD_FUNCTIONAL_RUN_ID='another-run';}]) {
+    const observed=build();mutate(observed);
+    assert.throws(()=>validateComposeContract(observed,identity,config,config.privateParent),{code:'functional_compose_contract_invalid'});
+  }
+  assert.throws(()=>validateComposeContract(compose,identity,{...config,phase:undefined},config.privateParent),{code:'functional_compose_contract_invalid'});
+  const portal={database:identity.portalDatabase,role:'portal_admin',systemIdentifier:'1234567890123456789',serverAddress:'172.28.0.2',serverPort:5432,empty:true};
+  const cms={...portal,database:'ownerinc_cms',role:'cms_cluster',systemIdentifier:'1234567890123456790',serverAddress:'172.28.0.3'};
+  assertPhysicalTargets(identity,portal,cms,'editorial');
+  assert.throws(()=>assertPhysicalTargets(identity,portal,cms),{code:'functional_physical_targets_not_independent'});
+  assert.throws(()=>assertPhysicalTargets(identity,portal,{...cms,empty:false},'editorial'),{code:'functional_physical_targets_not_independent'});
 });
 
 test('fixture TLS/emulator configuration retains actual route guards and uses unmodified SDK',async()=>{

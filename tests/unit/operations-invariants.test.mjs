@@ -69,6 +69,27 @@ test('API and cron require shared Resend SMTP configuration', async () => {
   assert.match(verify, /\['scripts', 'ops'\]/);
 });
 
+test('optional monitor token is confined to the API runtime environment', async () => {
+  const overlays = ['docker-compose.payload.yml', 'ops/compose.production.yaml',
+    'ops/compose.payload.production.yaml', 'ops/compose.payload.route-promoted.yaml'];
+  const [compose, example, ...overlaySources] = await Promise.all([
+    read('docker-compose.yml'), read('.env.example'), ...overlays.map(read),
+  ]);
+  const api = compose.match(/\n  api:\n([\s\S]*?)(?=\n  nginx:)/)?.[1] || '';
+  const environment = api.match(/^    environment:\n([\s\S]*?)(?=^    \S)/mu)?.[1] || '';
+  assert.match(environment, /^      OPERATIONAL_MONITOR_TOKEN: \$\{OPERATIONAL_MONITOR_TOKEN:-\}$/mu,
+    'the API token is optional, with no usable default secret');
+  assert.equal((environment.match(/^      OPERATIONAL_MONITOR_TOKEN:/gmu) || []).length, 1);
+  assert.doesNotMatch(compose.replace(environment, ''), /OPERATIONAL_MONITOR_TOKEN/u,
+    'the token must not enter other services or build configuration');
+  assert.deepEqual(example.match(/^OPERATIONAL_MONITOR_TOKEN=.*$/gmu), ['OPERATIONAL_MONITOR_TOKEN='],
+    'the example must have exactly one blank token declaration');
+  for (const [index, source] of overlaySources.entries()) {
+    assert.doesNotMatch(source, /OPERATIONAL_MONITOR_TOKEN|env_file:/u,
+      `${overlays[index]} must not spread the API-only token through CMS/cron or a shared environment file`);
+  }
+});
+
 test('API and cron lock Nodemailer to the approved safe policy', async () => {
   const expectedRange = '^10.2.1';
   const expectedResolvedVersion = '10.2.1';

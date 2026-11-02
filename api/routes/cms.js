@@ -9,7 +9,7 @@ const {
   CmsRouteError, resolveDraftRevisionId, unscheduleRevisionState, withdrawalState,
 } = require('../cms/revisions');
 const {
-  forbidden, invalid, oneOf, parseListQuery, text, uuid, validBody, withAudit,
+  forbidden, invalid, oneOf, parseListQuery, text, uuid, validBody,
 } = require('../route-utils');
 
 const router = express.Router();
@@ -65,6 +65,8 @@ function publishBody(value) {
   return value === undefined
     || validBody(value, { revision_id: (revisionId) => revisionId === undefined || uuid(revisionId) });
 }
+
+const { withOperationalAudit: withAudit } = require('../operational/audit');
 
 async function lockCmsMutation(db) {
   await db.query('SELECT pg_advisory_xact_lock($1)', [CMS_ASSET_RETENTION_LOCK]);

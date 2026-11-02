@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import { APIError } from 'payload'
 import type { NewsQuery, PreviewQuery, VerifiedPortalActor } from '../contracts/news'
 import { keys, oneOf, record, uuid } from '../news/primitives'
+import type { GoLivePreflightInput } from '../publication/go-live-preflight'
 
 export const newsActions = ['list', 'detail', 'categories', 'navigation', 'home', 'preview', 'asset', 'preflight'] as const
 export type NewsAction = typeof newsActions[number]
@@ -9,8 +10,7 @@ export type NewsInputs = {
   list: NewsQuery; detail: { id: string }; categories: { kind?: 'article' | 'edition'; withCounts: boolean }
   navigation: { id: string; category?: string }; home: Record<string, never>; preview: PreviewQuery
   asset: { id: string; preview: boolean; range: string | null }
-  preflight: { mode: 'legacy' | 'frozen' | 'payload_frozen'; epoch: number; requestId: string; deadline: string
-    manifestSha256?: string; sealSha256?: string; releaseDigest?: string; imageDigest?: string }
+  preflight: GoLivePreflightInput
 }
 const fail = (status = 400): never => { throw new APIError(status === 400 ? 'invalid_request' : 'forbidden', status, undefined, true) }
 const PRIVATE_LIST_MAX = 101
@@ -62,7 +62,14 @@ export function readNewsInput<A extends NewsAction>(action: A, value: unknown): 
     case 'categories': keys(input, ['kind', 'withCounts']); kind(); if (typeof input.withCounts !== 'boolean') fail(); break
     case 'home': keys(input, []); break
     case 'preflight': {
-      keys(input, ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest'])
+      keys(input, ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest', 'preflightVersion', 'expectedEditorialProfile'])
+      if (Object.hasOwn(input, 'preflightVersion') || Object.hasOwn(input, 'expectedEditorialProfile')) {
+        if (input.preflightVersion !== 2) fail()
+        const profile = record(input.expectedEditorialProfile)
+        keys(profile, ['id', 'sha256'])
+        oneOf(profile.id, ['held-v1', 'editorial-v1'])
+        if (typeof profile.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(profile.sha256)) fail()
+      }
       oneOf(input.mode, ['legacy', 'frozen', 'payload_frozen'])
       if (!Number.isSafeInteger(input.epoch) || Number(input.epoch) < 1
         || typeof input.requestId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/u.test(input.requestId)

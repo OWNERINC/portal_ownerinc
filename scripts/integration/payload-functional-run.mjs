@@ -9,6 +9,7 @@ import { runBrowserContracts, runSessionContracts } from '../../cms/tests/integr
 import { assertFixtureNetwork,assertContainerNetwork,assertResolvedContainerEnvironment,assertResolvedFixtureConfig } from './payload-functional-isolation.mjs';
 import { reserveFunctionalForwarder,functionalNginxVerifier } from './payload-functional-forwarder.mjs';
 import { assertFunctionalHTTPSReadiness } from './payload-functional-readiness.mjs';
+import { runEditorialContracts } from '../../cms/tests/integration/functional-editorial.mjs';
 
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -84,6 +85,7 @@ async function persistReport(lease,report) {
 export async function executeFunctionalLease(filename,env) {
   const lease=await readFunctionalLease(filename,env);
   const report=newFunctionalReport(lease.identity.runId);
+  if (lease.phase === 'editorial') report.scope='editorial-real-https-isolated-fixture';
   report.source={...lease.binding}; report.startedAt=new Date().toISOString();
   let compose,docker,images,forwarder,runtimeLease,created=false,interrupted=false,stage='loopback_listener_reservation';
   const onSignal=()=>{interrupted=true;void forwarder?.stop();};
@@ -103,10 +105,10 @@ export async function executeFunctionalLease(filename,env) {
     await compose(['up','--detach','--no-build','--pull','never','portal-db','cms-db','emulator'],{timeout:120000});
     await waitDatabase(compose,'portal-db');await waitDatabase(compose,'cms-db');
     await verifyBindings(lease,docker,images,['portal-db','cms-db','emulator'],isolation);
-    const sql=fixtureSQL(compose,lease.identity);
+    const sql=fixtureSQL(compose,lease.identity,lease.phase);
     stage='physical_targets_before_ddl';
     const portal=await inspectPhysicalTarget(sql,'portal'),cms=await inspectPhysicalTarget(sql,'cms');
-    assertPhysicalTargets(lease.identity,portal,cms);
+    assertPhysicalTargets(lease.identity,portal,cms,lease.phase);
     // Bind both SQL observations to the inspected container network address.
     for(const [role,target] of [['portal-db',portal],['cms-db',cms]]) {
       const observed=JSON.parse(await docker(['inspect',lease.identity.containers[role]]))[0];
@@ -138,6 +140,11 @@ export async function executeFunctionalLease(filename,env) {
     report.layers={portalApi:'REAL',firebase:'NOT_EXECUTED',cms:'REAL',nginx:'REAL',browser:'NOT_EXECUTED'};
     await forwarder.recheck();stage='synthetic_identity_setup';const accounts=await createSyntheticAccounts(client,lease.identity,sql);
     report.layers.firebase='REAL';
+    if (lease.phase === 'editorial') {
+      await forwarder.recheck(); stage='editorial_browser_contracts';
+      await runEditorialContracts({lease,report,client,accounts,sql,origin});
+      report.layers.browser='REAL';
+    } else {
     await forwarder.recheck();stage='http_session_contracts';await runSessionContracts({report,client,accounts,sql,origin});
     await forwarder.recheck();stage='real_browser_contracts';await runBrowserContracts({lease,report,client,accounts,sql,origin});
     report.layers.browser='REAL';
@@ -152,6 +159,7 @@ export async function executeFunctionalLease(filename,env) {
       return [{check:'news_rows_versions_jobs_unchanged',passed:true},{check:'authority_legacy_epoch_one',passed:true},
         {check:'independent_fresh_physical_targets',passed:true},{check:'protocol_worker_import_absent',passed:true}];
     });
+    }
   } catch {
     report.failure={stage,reason:'functional_execution_failed'};
     // Setup failure is not an executed scenario; pending cases stay INCOMPLETE.

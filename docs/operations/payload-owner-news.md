@@ -11,6 +11,131 @@ integrado ou autorização de produção. Resultados por cenário ficam na
 O PASS observado antes desta atualização não valida o novo RPC V2 nem substitui
 as duas fixtures novas descritas abaixo.
 
+## Pacote editorial frio — 02/11/2026
+
+Implementação local de `held-v1`/`editorial-v1`, com publicação manual. **A
+qualificação PostgreSQL/API/browser desta alteração ainda não foi executada.**
+Os resultados offline e as pendências estão no
+[checkpoint de aceite](../reviews/2026-10-02-payload-owner-news-acceptance.md#checkpoint-do-pacote-editorial-frio--02112026).
+
+### Perfil carregado e evidência
+
+`CMS_EDITORIAL_PROFILE` ausente seleciona `held-v1`; somente os valores exatos
+`held-v1` e `editorial-v1` são aceitos. `CMS_PUBLICATION_MODE=manual` continua
+obrigatório. O build-only usa held e compila os componentes de ambos os perfis.
+Factories independentes preservam a configuração da instância já carregada.
+
+| Capacidade | held-v1 | editorial-v1 |
+|---|---|---|
+| Draft explícito/publicação manual | Disponíveis sob os guards existentes | Idem |
+| Autosave | Negado, inclusive pela API | 1.500 ms, sempre draft |
+| Versions nativas | Negadas ao editor | Sessão News estrita revalidada |
+| Restauração | Negada | Novo checkpoint draft; publicação preservada |
+| Retenção de versões | Ilimitada | Ilimitada |
+| Schedules, tasks, auto-run e worker | Desligados | Desligados |
+
+O descritor fechado identifica Payload `3.90.2`, políticas, intervalos e limites.
+O hash é SHA-256 de `ownerinc.cms.editorial-profile.v1` + newline +
+`canonicalJSON(descriptor)`, preservando o algoritmo existente. Hashes calculados:
+
+- `held-v1`: `c926b53aa5f103c98e651c703ae3d91abd204e9bb0c949aaa20ef66c46f352fe`
+- `editorial-v1`: `1f6459f5c34644387bc5d2c777a719d03d2e131e06dddd93ad0c900abd84bd1c`
+
+`assertEditorialProfile` compara o descritor à configuração sanitizada: versões,
+retention, hooks registrados pelo servidor (identidade e ordem), access callbacks,
+UI, endpoints e jobs. Divergência falha fechado. Readiness mantém seu JSON e emite
+`X-CMS-Editorial-Profile` e `X-CMS-Editorial-Profile-SHA256` somente após sucesso.
+Esses headers/hashes são evidência de configuração, **não autorização operacional**.
+
+O preflight privado sem discriminator permanece **v1, somente held**. V2 exige
+`preflightVersion:2` e `expectedEditorialProfile:{id,sha256}` e devolve
+`editorialProfile:{id,sha256,descriptor}`. `legacy`/`frozen` inicial continuam held;
+`payload_frozen` compara o perfil exato esperado e preserva os checks existentes
+de activation/seal/barrier. Os booleans runtime refletem capacidades configuradas,
+sem conceder escrita sob autoridade congelada. O consumer `api/owner-news/cutover.js`
+continua solicitando v1; integração de promoção/resume pertence à thread principal.
+
+### Histórico, checkpoints e restauração
+
+Versions requer identidade `portal-editors`, UID projetado correspondente, cookie
+News estrito atual, permissão atual e perfil editorial. Leitura é permitida em
+`payload` observado ou `payload_frozen` com activation binding válido. Escrita exige
+`payload` observado. Um admin genérico de outra área não ganha histórico News;
+falha de dependência permanece indisponível. A UI revalida em foco, visibility,
+pageshow/BFCache e periodicamente, removendo o conteúdo enquanto revalida ou nega.
+
+A lista/navigation de Versions continua nativa. O detalhe usa a extensão pública
+`admin.components.views.edit.version.Component` e oferece comparação e
+“Restaurar como novo rascunho”. “Salvar revisão do rascunho” usa a API pública do
+formulário para gravar `draft:true,autosave:false`. Prévia GET permanece read-only;
+última revisão autosave responde 409 `news_saved_checkpoint_required`, pois
+autosaves consecutivos podem coalescer no mesmo ID.
+
+- `GET /editorial/api/news-restore-draft`: query exata `target`, `documentId`,
+  `sourceVersionId`; devolve conteúdo de comparação, tokens e `canRestore`.
+- `POST` no mesmo path: JSON exato com esses três campos mais
+  `sourceRevisionToken` e `expectedHeadToken`. `target` é `news-articles` ou
+  `news-home`; `documentId` é UUID do artigo ou literal `news-home`. Não aceita
+  conteúdo, actor, status, provenance ou override do cliente.
+- Respostas são `private,no-store`. Token cobre conteúdo e flags da revisão,
+  incluindo autosave coalescido. Source/head antigo recebe 409. Sucesso devolve
+  novo `versionId`, `savedAt` e `_status:'draft'`; retry antigo não cria outra cópia.
+
+A transação toma o reference lock 7194030, revalida a sessão após espera, resolve
+parent, toma o row lock e confere tokens, lock editorial e mídia. Artigo usa a
+operação pública `restoreVersionOperation` já com `draft:true`: o wrapper Local
+API pinado perde esse argumento. Home usa a operação pública de update normal com
+`draft:true,autosave:false,overrideAccess:false,overrideLock:false`; seu lookup
+nativo de lock recebe `req` por facade por chamada. Restore global nativo continua
+negado. Escopo privado Symbol/WeakSet acompanha as cópias de request e é revogado
+em `finally`; JSON e `overrideAccess` não fabricam esse escopo.
+
+O live base determina IDs, timestamps, generation e lineage. Proveniência usa o
+action existente `draft_saved`, novo `versionId` e details allowlisted:
+`saveKind`, `sourceVersionId`, `sourceRevisionToken`, `sourceStatus`, `snapshotHash`.
+Falha de audit/media aborta a operação. Quando o serviço possui a transação,
+confirma checkpoint/audit em nova leitura após COMMIT; promessa resolvida pelo
+adapter não basta. ACK perdido exige reconciliar histórico/proveniência na UI.
+Mídia referenciada por versões retidas continua protegida, sem ganhar grant público.
+
+### Execução de qualificação pendente
+
+Não há nova migration de aplicação; `push:false` e schema físico existente são
+preservados. O runner manual existente agora executa `editorial-runtime.ts` no
+ciclo **held → editorial → held → editorial**, no mesmo build/banco/storage e sem
+DDL entre reinícios. Compara catálogo/migrations, linhas/versões/audits, bytes de
+upload, live rows e respostas reader; exercita media/audit rollback e competição
+entre restores. O transporte Portal deste runner é explicitamente um double.
+
+Em CI autorizado, reutilizar `manual_runtime_only=true`, que chama:
+
+```bash
+PAYLOAD_MANUAL_RUNTIME_DISPOSABLE=1 node scripts/integration/payload-manual-runtime.mjs
+```
+
+Para browser, preparar **lease novo** com os parâmetros HTTPS/imagens imutáveis/
+Playwright já exigidos pelo runner e `PAYLOAD_FUNCTIONAL_PHASE=editorial`:
+
+```bash
+PAYLOAD_FUNCTIONAL_PHASE=editorial node scripts/test-payload-integration.mjs --prepare-lease
+node scripts/test-payload-integration.mjs --execute --lease "$LEASE_PATH"
+```
+
+A fase editorial verifica clusters vazios independentes antes de DDL, monta somente
+o bootstrap fixture read-only em provision/migrate, instala o protocolo canônico
+e semeia baseline/autoridade **sintéticos, exclusivos da fixture**. Usa Portal,
+Firebase Emulator, Nginx, CMS e browser reais; não prova Gate E produtivo. Os quatro
+casos `EDITORIAL-*` cobrem autosave/checkpoint/publicação, artigo/Home restore,
+head conflitante/ACK perdido e revogação. A matriz tem 48 casos; passar somente
+essa fase mantém os outros 44 `INCOMPLETE`, exit 2. A fase preauthority original
+continua separada; sua ausência de protocolo conflita com readiness atual e requer
+resolução própria antes de alegar aceite dessa fatia.
+
+Admissão editorial em produção requer recovery active/frozen separadamente
+qualificado e binding operacional autenticado de estado/targets/release/imagem,
+hashes from/to, catálogo, epoch, activation e observation. Nenhuma evidência
+offline, flag de ambiente ou fixture substitui essa integração.
+
 ### Estado atual do PR 1 de leitura dual
 
 O PR 1 está limitado a contratos de leitura e frontend. Ele separa leitura de
@@ -341,7 +466,9 @@ barreira aberta e tabelas editoriais vazias. Em seguida prova readiness de banco
 schema e escrita/fsync/remoção no volume, nega um usuário sem permissão, cria mídia,
 salva draft, publica manualmente e confirma que schedules/UI/jobs estão ausentes.
 Depois reinicia o PostgreSQL e uma nova instância Payload, compara IDs, Version,
-status e SHA-256 dos bytes, gera um conjunto `payload-v1`, chama os validadores
+status e SHA-256 dos bytes. A extensão editorial de 02/11/2026 adiciona, antes do
+backup, o ciclo de perfis descrito acima; essa extensão ainda aguarda execução.
+Depois gera um conjunto `payload-v1`, chama os validadores
 canônicos de manifesto/archive e restaura bancos e mídia em um segundo cluster.
 
 Falha nunca vira aceite: containers próprios são parados e evidência privada é
@@ -360,7 +487,7 @@ somente essa prova em `ubuntu-latest`. Dependências e a imagem pinada são obti
 antes do isolamento; durante a fixture, as rotas default IPv4/IPv6 são removidas e
 restauradas por trap. Esse dispatch não publica imagens e não executa deploy.
 
-Evidência de aceite da Task 7: o run CI
+Evidência histórica de aceite da Task 7 (não cobre a extensão editorial): o run CI
 [`40396685569`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/40396685569)
 concluiu a fixture com `PASS` no commit `b4dd8d1`. Foram provados publicação manual
 via HTTP, autenticação e negativa 403 para ator válido sem permissão, ausência de

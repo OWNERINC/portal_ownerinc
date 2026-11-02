@@ -103,10 +103,12 @@ export function validateNewsPublication(document: unknown): void {
 }
 
 /** Pure metadata-shape check, NOT proof of asset existence, bytes, or storage access (Task 5). */
-export function validateNewsMediaShapes(blocks: unknown, media: unknown): void {
+export function validateNewsMediaShapes(blocks: unknown, media: unknown, draft = false): void {
   if (!Array.isArray(media)) invalid('invalid_media_reference')
   const byID = new Map(media.map(value => { const shape = record(value); return [uuid(shape.id), shape] }))
-  for (const block of normalizeNewsContent(blocks)) {
+  // Draft input is already the bounded draft projection, including unfinished captions.
+  if (draft && !Array.isArray(blocks)) invalid('invalid_media_reference')
+  for (const block of draft ? (blocks as unknown[]).map(value => record(value)) : normalizeNewsContent(blocks)) {
     if (!('asset_id' in block) || typeof block.asset_id !== 'string') continue
     const shape = byID.get(block.asset_id)
     const allowed = block.type === 'pdf' ? ['application/pdf'] : block.type === 'video' ? videoMimes : imageMimes
@@ -152,6 +154,7 @@ export const validateNewsPublicationMedia: CollectionBeforeChangeHook = async ({
   await requireCmsTransaction(req.payload, req)
   const full = effectiveNewsDocument(data, originalDoc)
   if (full._status === 'published') await assertMediaReferences(req.payload, normalizeNewsContent(full.body), req)
+  else await assertMediaReferences(req.payload, normalizeNewsDraftReferences(full.body), req, true)
   return data
 }
 

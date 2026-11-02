@@ -30,10 +30,10 @@ async function loadSource(relative, dependencies) {
   return module.exports;
 }
 
-export async function createDependencyHarness(t, { publicQuota, editorial } = {}) {
+export async function createDependencyHarness(t, { publicQuota, editorial, operationalEnv = {} } = {}) {
   const state = {
     sql: [], verifiedTokens: [], files: new Map(), writes: [], opens: [], assets: new Map(),
-    references: [], connections: 0, releases: 0, incoming: [],
+    references: [], connections: 0, releases: 0, incoming: [], observations: 0,
   };
   const pool = {
     async query(sql, params = []) {
@@ -130,6 +130,20 @@ export async function createDependencyHarness(t, { publicQuota, editorial } = {}
   const bulkProbe = express.Router();
   bulkProbe.post('/__dependency-parser-probe', (req, res) => res.json({ titleLength: req.body.title.length }));
   for (const [, name] of indexSource.matchAll(/require\('(\.\/routes\/[^']+)'\)/g)) {
+    if (name === './routes/operational') {
+      // Keep the actual factory, exact-path checks and token authentication. Only
+      // observation is doubled; load it only when this index imports the module.
+      const operational = await loadSource('routes/operational.js', new Map([
+        ['../operational/observe', { async observe({ pool: selectedPool }) {
+          state.observations++;
+          assert.equal(selectedPool, pool, 'the real index must pass its pool to observation');
+          return { fixture: 'operational-observation' };
+        } }],
+      ]));
+      actualRoutes.set(name, { ...operational,
+        createOperationalRouter: options => operational.createOperationalRouter({ ...options, env: operationalEnv }),
+      });
+    }
     indexDependencies.set(name, actualRoutes.get(name) || (name === './routes/user-imports'
       ? { router: bulkProbe, internalRouter: express.Router() } : express.Router()));
   }
@@ -141,5 +155,6 @@ export async function createDependencyHarness(t, { publicQuota, editorial } = {}
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
-  return { app, state, server, port: address.port, request: supertest(`http://127.0.0.1:${address.port}`) };
+  return { app, state, server, port: address.port, request: supertest(`http://127.0.0.1:${address.port}`),
+    operationalMounted: actualRoutes.has('./routes/operational') };
 }

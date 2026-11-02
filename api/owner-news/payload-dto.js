@@ -2,6 +2,7 @@ const { uuid } = require('../route-utils');
 const { validateBlocks } = require('../cms/blocks');
 const { normalizeEditorial } = require('./editorial');
 const { normalizeHome } = require('./home');
+const { createHash } = require('node:crypto');
 const MiB = 1024 * 1024;
 const PRIVATE_LIST_MAX = 101;
 const unavailable = () => Object.assign(new Error('news_unavailable'), { status: 503, code: 'news_unavailable' });
@@ -18,6 +19,24 @@ const boundary = value => keys(value, ['published_at', 'source', 'id']) && date(
 const scanBudget = value => keys(value, ['maxRawRows', 'maxBatches'])
   && integer(value.maxRawRows, 1, 101000) && integer(value.maxBatches, 1, 1000);
 function assert(value) { if (!value) throw unavailable(); }
+// Wire contract only. This does not authorize profile promotion or alter v1 cutover.
+function canonicalJSON(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJSON).join(',')}]`;
+  if (record(value)) return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b, 'en')).map(([key, v]) => `${JSON.stringify(key)}:${canonicalJSON(v)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+function validEditorialProfile(profile, expected) {
+  if (!keys(profile, ['id', 'sha256', 'descriptor']) || profile.id !== expected?.id || profile.sha256 !== expected.sha256) return false;
+  const active = profile.id === 'editorial-v1';
+  if (!active && profile.id !== 'held-v1') return false;
+  const descriptor = { descriptorVersion: 1, profileId: profile.id, publicationMode: 'manual', payloadVersion: '3.90.2',
+    articles: { drafts: true, autosave: active ? 1500 : false, maxPerDoc: 0 }, home: { drafts: true, autosave: active ? 1500 : false, max: 0 },
+    history: active ? 'current-news-editor-v1' : 'deny', articleRestore: active ? 'native-new-draft-v1' : 'deny',
+    homeRestore: active ? 'update-global-new-draft-v1' : 'deny', schedulePublish: false, scheduleEndpoints: false, worker: false,
+    publicationTasks: [], autoRun: [] };
+  return canonicalJSON(profile.descriptor) === canonicalJSON(descriptor) && profile.sha256 === createHash('sha256')
+    .update(`ownerinc.cms.editorial-profile.v1\n${canonicalJSON(descriptor)}`).digest('hex');
+}
 function validActor(value) {
   return keys(value, ['uid', 'email', 'name', 'canManageNews']) && typeof value.uid === 'string' && value.uid.length > 0 && value.uid.length <= 128
     && typeof value.email === 'string' && value.email.length > 0 && value.email.length <= 320 && (value.name === null || typeof value.name === 'string') && typeof value.canManageNews === 'boolean';
@@ -34,12 +53,17 @@ function validInput(action, value) {
     case 'preview': return keys(value, ['id', 'versionId', 'source']) && uuid(value.id) && uuid(value.versionId) && ['payload', 'legacy'].includes(value.source);
     case 'asset': return keys(value, ['id', 'preview', 'range']) && uuid(value.id) && typeof value.preview === 'boolean' && (value.range === null || text(value.range, 200));
     case 'preflight': {
-      if (!keys(value, ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest'],
+      if (!keys(value, ['mode', 'epoch', 'requestId', 'deadline', 'manifestSha256', 'sealSha256', 'releaseDigest', 'imageDigest', 'preflightVersion', 'expectedEditorialProfile'],
         ['mode', 'epoch', 'requestId', 'deadline']) || !['legacy', 'frozen', 'payload_frozen'].includes(value.mode)
         || !integer(value.epoch, 1) || typeof value.requestId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value.requestId)
         || typeof value.deadline !== 'string' || !Number.isFinite(Date.parse(value.deadline))
         || new Date(value.deadline).toISOString() !== value.deadline) return false;
       const bound = value.mode !== 'legacy';
+      if (Object.hasOwn(value, 'preflightVersion') || Object.hasOwn(value, 'expectedEditorialProfile')) {
+        const profile = value.expectedEditorialProfile;
+        if (value.preflightVersion !== 2 || !keys(profile, ['id', 'sha256']) || !['held-v1', 'editorial-v1'].includes(profile.id) ||
+          typeof profile.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(profile.sha256) || value.mode !== 'payload_frozen' && profile.id !== 'held-v1') return false;
+      }
       return ['manifestSha256', 'sealSha256'].every(name => bound === Object.hasOwn(value, name)
           && (!bound || typeof value[name] === 'string' && /^[0-9a-f]{64}$/u.test(value[name])))
         && ['releaseDigest', 'imageDigest'].every(name => bound === Object.hasOwn(value, name)
@@ -152,7 +176,12 @@ function readResult(action, json, input) {
     });
     assert(new Set(names).size === names.length);
   } else if (action === 'preflight') {
-    assert(keys(json, ['ready', 'publicationMode', 'request', 'authority', 'activation', 'newsEmpty', 'mutation', 'counts', 'runtime', 'database', 'migration']));
+    const v2 = input.preflightVersion === 2;
+    assert(keys(json, ['ready', 'publicationMode', 'request', 'authority', 'activation', 'newsEmpty', 'mutation', 'counts', 'runtime', 'database', 'migration',
+      ...(v2 ? ['preflightVersion', 'editorialProfile'] : [])]));
+    if (v2) assert(json.preflightVersion === 2 && validEditorialProfile(json.editorialProfile, input.expectedEditorialProfile));
+    const editorial = v2 && json.editorialProfile.id === 'editorial-v1';
+    assert(!editorial || input.mode === 'payload_frozen');
     assert(json.ready === true && json.publicationMode === 'manual' && typeof json.newsEmpty === 'boolean');
     assert(keys(json.request, ['id', 'deadline']) && json.request.id === input.requestId && json.request.deadline === input.deadline);
     assert(keys(json.authority, ['mode', 'epoch']) && json.authority.mode === input.mode
@@ -164,7 +193,7 @@ function readResult(action, json, input) {
       && Object.values(json.counts).every(value => integer(value, 0))
       && json.newsEmpty === Object.values(json.counts).every(value => value === 0));
     assert(keys(json.runtime, ['worker', 'schedules', 'autosave', 'versions'])
-      && Object.values(json.runtime).every(value => value === false));
+      && json.runtime.worker === false && json.runtime.schedules === false && json.runtime.autosave === editorial && json.runtime.versions === editorial);
     assert(keys(json.database, ['migrations', 'catalog', 'grants', 'readiness'])
       && Object.values(json.database).every(value => value === true));
     assert(json.migration === null || (keys(json.migration, ['runId', 'manifestSha256', 'sealSha256', 'authorityEpoch', 'drainReceiptSha256'])

@@ -4,7 +4,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { getMailTransport } = require('../../cron/mailTransport');
+const { getMailTransport: actualGetMailTransport } = require('../../cron/mailTransport');
+// Offline configuration double; real Nodemailer/socket delivery is a separate CI gate.
+const getMailTransport = env => actualGetMailTransport(env, options => ({ options,
+  close() {}, sendMail() { throw new Error('offline_transport_not_stubbed'); } }));
 const { sendEmail } = require('../../cron/sendEmail');
 const { sendOperationalAlert } = require('../../cron/sendOperationalAlert');
 
@@ -27,6 +30,9 @@ test('shared transport uses Resend SMTP with implicit TLS and certificate verifi
   assert.equal(transport.options.auth.user, 'resend');
   assert.equal(transport.options.auth.pass, env.SMTP_PASSWORD);
   assert.equal(transport.options.tls.rejectUnauthorized, true);
+  assert.equal(transport.options.connectionTimeout, 5000);
+  assert.equal(transport.options.greetingTimeout, 5000);
+  assert.equal(transport.options.socketTimeout, 10000);
   assert.strictEqual(getMailTransport({ ...env, SMTP_ADDRESS: 'different.example.com' }), transport);
 });
 
@@ -35,7 +41,7 @@ test('reminders and operational alerts send through the shared transport', async
   const messages = [];
   transport.sendMail = async (message) => {
     messages.push(message);
-    return { accepted: [message.to], rejected: [] };
+    return { accepted: [message.to], rejected: [], response: '250 accepted' };
   };
 
   await sendEmail({ to: 'user@example.com', subject: 'Reminder', text: 'Reminder text' }, env);
@@ -48,7 +54,7 @@ test('reminders and operational alerts send through the shared transport', async
   assert.doesNotMatch(JSON.stringify(messages), /unit-test-password/);
 });
 
-test('operational alert failures return false and log only a bounded error', async () => {
+test('operational alert failures return false and log only finite metadata', async () => {
   const transport = getMailTransport(env);
   transport.sendMail = async () => {
     throw new Error('x'.repeat(400));
@@ -68,7 +74,10 @@ test('operational alert failures return false and log only a bounded error', asy
   const payload = JSON.parse(errors[0][0]);
   assert.equal(payload.service, 'cron');
   assert.equal(payload.event, 'operational_alert_failed');
-  assert.equal(payload.error.length, 300);
+  assert.equal(payload.error, undefined);
+  assert.equal(payload.reason, 'smtp_failed');
+  assert.equal(payload.status, 'unknown');
+  assert.doesNotMatch(JSON.stringify(payload), /xxx|unit-test-password/);
 });
 
 test('cron source and dependency manifest contain no SendGrid setup', async () => {

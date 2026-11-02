@@ -2,13 +2,14 @@ import { APIError, type CollectionBeforeOperationHook, type CollectionBeforeChan
   type GlobalBeforeOperationHook, type GlobalBeforeChangeHook, type GlobalAfterChangeHook, type PayloadRequest } from 'payload'
 import { assertCmsWriteAuthority } from './authority'
 import { lockPublicationDocument, requireCmsTransaction, type PublicationTarget } from './transaction'
-import { currentDocument, latestRevision, type NewsSnapshot } from './document'
+import { currentDocument, latestRevision, snapshotDocument, snapshotHash, type NewsSnapshot } from './document'
+import { assertRestoreScope, restoreScope } from './restore-draft'
 import { appendNewsAudit, publicationActor, type AuditAction } from './audit'
 import { cancelPendingSchedules } from './schedule'
 import { isLegacyNewsImport } from '../news/validation'
 
 const operationState = Symbol('news-publication-operation')
-type State = { target: PublicationTarget; id: string; base: NewsSnapshot; draft: boolean; creating: boolean; action?: AuditAction }
+type State = { target: PublicationTarget; id: string; base: NewsSnapshot; draft: boolean; creating: boolean; autosave?: boolean; action?: AuditAction }
 const state = (req: PayloadRequest): State => {
   const value = Object.getOwnPropertyDescriptor(req.context, operationState)?.value
   if (!value) throw new APIError('news_publication_protocol_required', 503, undefined, true)
@@ -25,7 +26,9 @@ async function begin(req: PayloadRequest, target: PublicationTarget, id: string,
 }
 export const beforeArticlePublication: CollectionBeforeOperationHook = async ({ args, operation, req }) => {
   if (!['create', 'update', 'restoreVersion'].includes(operation)) return
-  await begin(req, 'news-articles', operation !== 'create' && 'id' in args ? String(args.id) : '', Boolean('draft' in args && args.draft), operation === 'create')
+  const restore = operation === 'restoreVersion' ? await assertRestoreScope(req) : undefined
+  await begin(req, 'news-articles', restore?.documentId || (operation !== 'create' && 'id' in args ? String(args.id) : ''), Boolean('draft' in args && args.draft), operation === 'create')
+  state(req).autosave = 'autosave' in args && args.autosave === true
 }
 export const refuseArticleVersionRestore: CollectionBeforeOperationHook = ({ operation }) => {
   if (operation === 'restoreVersion') throw new APIError('news_version_restore_unavailable', 403, undefined, true)
@@ -42,12 +45,20 @@ export const beforeHomePublication: GlobalBeforeOperationHook = async ({ args, o
     data: { eyebrow: '', headline: '', summary: '', _status: 'draft', publicationGeneration: 0,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } })
   req.context = { ...req.context, newsPublicationProtocol: true }
-  Object.defineProperty(req.context, operationState, { value: { target: 'news-home', id: 'news-home', base, draft: Boolean(args.draft), creating }, configurable: true, enumerable: true })
+  Object.defineProperty(req.context, operationState, { value: { target: 'news-home', id: 'news-home', base, draft: Boolean(args.draft), creating, autosave: args.autosave === true }, configurable: true, enumerable: true })
 }
 function prepare(req: PayloadRequest, data: NewsSnapshot, originalDoc: NewsSnapshot = {}) {
   const current = state(req)
+  const restore = restoreScope(req)
+  if (restore) {
+    // Explicit values defeat native merging from the historical docWithLocales.
+    for (const field of ['createdAt', 'publishedAt', 'publicationGeneration', 'legacyDocumentId', 'legacySourceId', 'legacyRevisionId', 'importedAt']) {
+      data[field] = current.base[field] ?? null
+    }
+    data.id = current.base.id
+  }
   data._status ??= originalDoc._status || 'draft'
-  if (current.draft && data._status !== 'published') data._status = 'draft'
+  if (current.draft) data._status = 'draft'
   const publishing = data._status === 'published'
   const withdrawing = data._status === 'draft' && !current.draft && !current.creating
   current.action = publishing ? 'published' : withdrawing ? 'unpublished' : 'draft_saved'
@@ -67,8 +78,18 @@ async function finish(req: PayloadRequest, doc: NewsSnapshot) {
   if (current.action === 'unpublished') await cancelPendingSchedules(req, current.target, id, 'withdrawn')
   const revision = await latestRevision(req, current.target, id)
   if (!revision || !current.action) throw new APIError('news_audit_version_required', 503, undefined, true)
+  const restore = restoreScope(req)
+  if (restore) {
+    await assertRestoreScope(req)
+    if (revision.id === restore.sourceVersionId || revision.version._status !== 'draft' || revision.autosave === true) {
+      throw new APIError('news_restore_conflict', 409, undefined, true)
+    }
+  }
   await appendNewsAudit(req, { action: current.action, documentId: id, versionId: revision.id,
-    actorUid: publicationActor(req), details: { target: current.target, generation } })
+    actorUid: publicationActor(req), details: { target: current.target, generation,
+      ...(current.action === 'draft_saved' ? { saveKind: restore ? 'restore' : current.autosave ? 'autosave' : 'manual',
+        snapshotHash: snapshotHash(snapshotDocument(current.target, revision.version)) } : {}),
+      ...(restore ? { sourceVersionId: restore.sourceVersionId, sourceRevisionToken: restore.sourceRevisionToken, sourceStatus: restore.sourceStatus } : {}) } })
   return doc
 }
 export const afterArticlePublication: CollectionAfterChangeHook = ({ req, doc }) => finish(req, doc)

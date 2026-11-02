@@ -89,6 +89,193 @@ A revisão B0 permanece `ship`. Os skips Linux/root e PGlite são limitações
 declaradas; CI nativo ainda é obrigatório. Esse PASS não se estende aos arquivos
 concorrentes nem estabelece instalação ou restore produtivos.
 
+O pacote foi publicado como commit `4ec9e06`,
+[PR #82](https://github.com/OWNERINC/portal_ownerinc/pull/82). Qualificações CI
+iniciadas: B0 administrativo `41535912423`, rotação de policy `41535912000` e
+validação geral `41535912007`.
+
+- Validação geral `41535912007`: **PASS**, incluindo Nginx/Chromium, build CMS,
+  PostgreSQL/migrations/Owner News/Academy, builds, scans, audit e SBOMs. Deploy,
+  publicação de imagens/candidato e runtime manual não executados nesse evento.
+- Rotação Linux/root `41535912000`: **PASS**.
+- B0 administrativo `41535912423`: **130 PASS / 1 FAIL / zero SKIP**. A nova
+  jornada administrativa B0 passou; a fixture histórica de receipt não relocava
+  `LOCK_ROOT`, e falhou procurando o path produtivo. O gate completo permanece
+  reprovado até a repetição verde.
+
+A correção delimitada da fixture reloca incoming, nonces e locks para o mesmo
+diretório privado descartável, usa validade relativa ao relógio real e conserva
+os guards de ownership, ancestry, flock e fsync. Cobre receipt positivo, replay,
+preflight incompleto, troca de inode com bytes idênticos e ancestry insegura.
+Somente os dois subprocessos privilegiados são doubles. Na execução Windows:
+**14 PASS / zero FAIL / três SKIP**; o corpo Python nativo foi compilado, não
+executado. A correção recebeu revisão independente **ship**.
+
+Essa repetição terminou com **2.108 PASS / um FAIL / 33 SKIP** na raiz. A falha
+foi no subprocesso Bash do teste `authenticated preparer uses fixed context
+protocol...`, em `cms-infrastructure-preparation.test.mjs:335`: status `null`,
+após cerca de 74 segundos para o caso que inclui subprocesso com limite de 60 s.
+É compatível com timeout, mas o assert não registrou `error`/`signal` do processo.
+Esse teste não foi alterado pela correção de receipt. Sua repetição isolada passou
+em **84,6 s**. Isso não transforma a repetição integral em PASS; o CMS dessa
+repetição não foi alcançado.
+
+A correção foi publicada isoladamente em
+`86b61eab5784b411b7993f089aaa3c2db53e6df5`, preservando byte a byte o diff
+editorial/catálogo previamente staged. Resultados desse commit:
+
+- [B0 Linux/root `41541000716`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/41541000716):
+  **PASS**, incluindo a fixture nativa de receipt/nonce/ancestry corrigida.
+- [Rotação Linux/root `41541000703`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/41541000703):
+  **PASS**.
+- [Validação geral `41541000655`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/41541000655):
+  **PASS** no mesmo commit, com verify, Nginx/Chromium, build CMS, migrations e
+  integração PostgreSQL, builds/scans/audit/SBOMs. Publicação e deploy foram
+  explicitamente skipped; manual-runtime também não foi executado nesse run.
+
+Esses gates exercitam a cadeia administrativa em fixtures descartáveis. Docker,
+PostgreSQL e readiness dobrados nessa suíte não demonstram instalação privada ou
+restore produtivo. Nenhuma rotação administrativa foi aplicada.
+
+### Pacote editorial e extração do catálogo — em revisão
+
+O perfil editorial frio foi entregue pelo implementador com **496 PASS / 11
+SKIP / zero FAIL** no CMS, **106 PASS / zero FAIL** em API/runners delimitados,
+typecheck e build-only aprovados. A extração dos leitores/comparadores de catálogo
+reportou **196 PASS / zero FAIL / zero SKIP** focados e preservação dos 54 exports
+do finalizer. São resultados dos implementadores, não qualificação nativa.
+
+Foi criado um segundo snapshot estável, árvore
+`01958ca8e49de2ecd7f677cfe60cbfa83c7bb2b5`, com os 52 arquivos editoriais e quatro
+arquivos de extração/plano. A revisão fresca editorial e a revisão da extração
+são independentes. O verify integral desse snapshot terminou **PASS**: **2.116
+PASS / zero FAIL / 33 SKIP** na raiz e **523 PASS / zero FAIL / 11 SKIP** no CMS,
+além de sintaxe, typecheck, scanner e Compose. A extração recebeu revisão **ship**,
+limitada aos leitores/comparadores e wrappers preservados.
+
+A revisão editorial retornou **fix-first**: dois P1 (headers/cookie perdidos ao
+abrir uma transação a partir de Web Request e controles draft/autosave ambíguos
+descartados pelo parser nativo) e dois P2 (cache privado sobrescrito pela boundary
+REST e restauração habilitada na UI sob lock estrangeiro). A primeira correção
+reportou **45 PASS** focados e **528 PASS / 11 SKIP** no CMS, sem falhas. O snapshot
+estável de 63 arquivos, árvore `f3e337d07c85e50f7a4daf9a23575f56fe2e3a31`, passou
+no verify integral: **2.172 PASS / 33 SKIP** na raiz e **528 PASS / 11 SKIP** no
+CMS, zero falhas, incluindo sintaxe, typecheck, scanner e Compose. O snapshot
+exclui o novo verificador de catálogo ainda em andamento e precede as duas
+correções adicionais de parsing abaixo.
+
+A revisão de retorno confirmou headers/contexto, cache privado e lock read-only,
+mas manteve **fix-first** por dois P1: aliases root-bracket como `[draft]` escapam
+da validação raw, e slugs percent-encoded divergem do path canônico resolvido pelo
+adapter Next. Ambos podem perder draft intent antes da seleção de publicação.
+As correções foram entregues e receberam revisão de retorno **ship**. O adapter
+usa o mesmo path canônico do Payload Next 3.90.2; hooks de operações News conhecidas
+validam os controles raw independentemente de pathname/método. As regressões
+incluem 519 casos negativos offline e 60 controles positivos; a fonte da suíte
+nativa contém 204 requests negativos, ainda não executados em CI.
+
+O verificador completo de catálogo runtime também foi entregue, em cinco arquivos
+unstaged separados da extração aprovada. Sua revisão retornou **fix-first** por um
+P1: ACLs efetivas de tabelas/colunas/sequences de `cms_control` e `cms_controller`
+não eram observadas pelo novo runtime, embora já verificadas pelo finalizer.
+Isso poderia aceitar tanto INSERT ausente no ledger quanto UPDATE direto indevido
+no head. A extração/reutilização desses checks SELECT-only foi autorizada, com
+regressões para direitos ausentes e excedentes sem elevar o runtime. O revisor
+executou independentemente 106 testes de catálogo, todos PASS; a lacuna não era
+exercitada por esses testes. O primário
+repetiu conjuntamente 11 suítes editoriais/catálogo/finalizer/observer/preauthority:
+**331 PASS / zero FAIL / zero SKIP**. São testes offline com doubles explícitos;
+não comprovam a execução SQL sob os privilégios do PostgreSQL nativo.
+
+A correção de ACL foi entregue e está em revisão de retorno: runtime e finalizer
+compartilham comparadores SELECT-only com inventário completo, privilégios nulos
+no native-absent e direitos estreitos no V2. O primário repetiu sete suítes com
+cache TSX desativado: **318 PASS / zero FAIL / zero SKIP**, incluindo as duas
+regressões P1. O implementador reportou 324 PASS em sua seleção de suítes. Essa
+extensão permanece fora do pacote editorial/monitor congelado abaixo.
+
+A suíte de navegador editorial implementa quatro cenários e mantém o resultado
+global `INCOMPLETE`/2 quando os demais continuam pendentes. CI próprio de navegador
+está conectado com validação estrita dos quatro cenários, 44 demais `INCOMPLETE`,
+`acceptanceComplete:false` e `productionValidated:false`. O primário integrou o
+campo persistido `editorialPhaseComplete` e o finalizer na allowlist da imagem;
+**77 testes focados PASS**. A correção de orçamento global recebeu revisão **ship**:
+deadline derivado de `run_started_at` do run/attempt autenticado, mais 35 minutos;
+reserva mínima de 15 minutos antes da execução (8 execução, 6 cleanup, 1 margem).
+O primário repetiu quatro suítes: **81 PASS / zero FAIL / zero SKIP**.
+O runtime nativo será executado pelo dispatch
+`manual_runtime_only`. Nenhuma jornada nativa/browser foi declarada PASS.
+
+Recuperação pré-floor e monitoramento OWN-34 seguem em implementação, fora desse
+snapshot. Lifecycle completo, ativação vazia e recuperação active/frozen ainda
+exigem integração e qualificação. A janela absoluta do Gate E de até 60 minutos
+permanece distinta da janela de início de migrations B0; planejamento posterior
+não autoriza prolongar o cutover apenas porque uma operação começou.
+
+### Recuperação pré-floor e monitoramento — checkpoints sob revisão
+
+O executor pré-floor foi entregue como checkpoint **NOT SHIP**. O implementador
+reportou **93 PASS / zero FAIL / nove skips nativos** nas cinco suítes focadas e
+**10 PASS / zero FAIL / dois skips Linux** na fixture ampliada, além de sintaxe
+Python e diff check. A revisão independente do código retornou **fix-first**:
+dois P1 (consumidores estrangeiros via bind mount/namespace não detectados e
+publications ausentes da classificação pré-restore) e um P2 (token Firebase
+expirado sem refresh autenticado para retomada). O primário conferiu os caminhos
+e autorizou as correções delimitadas com regressões antes de efeitos destrutivos.
+A implementação da qualificação continua para cobrir
+a cadeia ADMIN completa em processos/leases frescos, imagens reais da aplicação
+anterior e transporte OpenSSH forced-command do witness. A execução PostgreSQL e
+storage nativa permanece exclusiva ao CI e ainda não foi realizada. O executor
+destrutivo produtivo exige aprovação autenticada específica do incidente.
+
+O núcleo do monitoramento foi entregue com collector, units, runner não
+privilegiado, incident/outbox durável, SMTP e observação API. Testes focados do
+implementador: **102 PASS / zero FAIL / quatro skips Linux**. Foi congelado um
+snapshot independente dos 29 arquivos, árvore
+`4d02428606010c950e782ad9a000d6ce687130f1`, para revisão fresca e verify integral.
+O verify terminou com **2.121 PASS / 17 FAIL / 35 SKIP** na raiz: 16 falhas no
+harness que ainda não carregava `createOperationalRouter`, e uma no reconhecimento
+da autenticação dedicada pelo teste de boundaries. A correção de três arquivos
+de teste usa o router real e exercita a autenticação antes das dependências;
+o primário repetiu **21 testes, todos PASS, zero skips**. Esse ajuste do harness
+recebeu revisão independente **ship**.
+
+A revisão do núcleo também retornou **fix-first**: incidente e recuperação podem
+desaparecer durante outbox pendente; relógio anterior à leitura pode classificar
+backup concorrente como inválido; reason em array passa por coerção; alternância
+de motivos ruins pode impedir o limiar de incidente. As quatro correções foram
+entregues: FIFO durável com overflow explícito, relógio pós-leitura, reason
+primitiva e contagem contínua de amostras ruins independente da assinatura.
+O primário repetiu sete suites: **109 PASS / quatro skips Linux / zero FAIL**.
+O snapshot corrigido de 32 arquivos, árvore
+`e8164cca003d29535d34f4c66d110262cf2061cb`, recebeu revisão de retorno **ship**.
+O verify integral terminou **2.145 PASS / um FAIL / 35 SKIP** na raiz. As 17
+falhas anteriores de integração foram resolvidas; o subprocesso Bash do preparer
+retornou `status=null` na etapa apply, compatível com seu timeout de 60 segundos.
+A repetição isolada passou em **35,6 s**. Isso não converte o verify integral em
+PASS; o CMS não foi alcançado nessa repetição.
+
+O wiring opcional foi entregue separadamente em quatro arquivos: token vazio por
+default, exclusivo ao ambiente da API, e documentação do provisionamento protegido
+do runner systemd. Revisão **ship**; primário repetiu **25 PASS / zero FAIL / zero
+SKIP**. O implementador também validou Compose base/overlays, sintaxe e LF. Ainda
+não houve instalação ou ativação no host.
+
+O primeiro snapshot integrado dos 101 arquivos revisados, árvore
+`b3e7590c567a3258640c3db9614aec596709a04a`, terminou com **2.205 PASS / nove FAIL /
+35 SKIP** na raiz. As nove falhas pertencem ao preparador de preview: sua
+allowlist de interpolação ainda não incluía o novo token opcional do Compose.
+A correção delimitada inclui o nome exato na allowlist e mantém o token vazio no
+ambiente gerado, com limpeza da variável herdada nos launchers. O preparer Bash
+que havia atingido timeout passou nessa execução; o CMS não foi alcançado por
+causa das nove falhas. A correção dos quatro arquivos de preview recebeu revisão
+independente **ship**; o primário repetiu preparation, HTTPS e operations:
+**53 PASS / zero FAIL / zero SKIP**, incluindo limpeza POSIX/PowerShell e Compose
+config read-only. Novo verify integral é obrigatório após a correção.
+A integração de observação CMS, adapters de lifecycle/recovery/rota, instalação,
+SMTP nativo e entrega/ownership reais continuam pendentes. `contract_missing` e
+`unsupported_contract` não são convertidos em saúde ou aceite operacional.
+
 ### Remediação posterior de qs
 
 O lock da API foi atualizado de `qs@6.16.0` para `6.16.2`, mantendo o manifest e

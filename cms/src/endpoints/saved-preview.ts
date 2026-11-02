@@ -17,11 +17,12 @@ export function createSavedPreviewEndpoint(readNewsArea: NewsAreaReadGate = canR
       }
       const revision = await withCmsTransaction(req.payload, req, request => latestRevision(request, 'news-articles', documentId))
       if (!revision) throw new APIError('news_saved_revision_required', 409, undefined, true)
+      if (revision.autosave === true) throw new APIError('news_saved_checkpoint_required', 409, undefined, true)
       return Response.json({ versionId: revision.id, savedAt: revision.updatedAt },
         { headers: { 'Cache-Control': 'private,no-store' } })
     } catch (error) {
       const status = error instanceof APIError || error instanceof PortalAuthError ? error.status : 503
-      return Response.json({ error: status === 409 ? 'news_saved_revision_required' : status === 400 ? 'invalid_saved_preview' :
+      return Response.json({ error: status === 409 ? (error instanceof Error && error.message === 'news_saved_checkpoint_required' ? error.message : 'news_saved_revision_required') : status === 400 ? 'invalid_saved_preview' :
         status === 403 ? 'editorial_permission_denied' : 'editorial_unavailable' },
       { status, headers: { 'Cache-Control': 'private,no-store' } })
     }

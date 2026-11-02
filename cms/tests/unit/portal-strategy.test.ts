@@ -99,7 +99,7 @@ test('pinned executeAuthStrategies plus REST boundary preserve 503 instead of an
   }), undefined)
   assert.equal(result.status, 503)
   assert.deepEqual(await result.json(), { error: 'editorial_unavailable' })
-  assert.equal(result.headers.get('Cache-Control'), 'no-store')
+  assert.equal(result.headers.get('Cache-Control'), 'private,no-store')
   assert.equal(result.headers.get('x-ownerinc-auth-status'), null)
 })
 

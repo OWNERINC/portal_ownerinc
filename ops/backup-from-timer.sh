@@ -18,6 +18,22 @@ require_file() {
   [[ -f $1 && -r $1 ]] && canonical_path "$1" || refuse "missing or unsafe $2."
 }
 
+# Opt-in only when the fixed protected monitor installation exists. No new
+# executable/path override: fixtures and older deployments retain their contract.
+monitor=/opt/ownerinc/lib/portal-monitor/ops/portal-operational-observe.py
+monitor_started=false
+monitor_finished=false
+monitor_receipt() {
+  /usr/bin/python3 -I -S -B "$monitor" "$@"
+}
+monitor_exit() {
+  local status=$?
+  if [[ $monitor_started == true && $monitor_finished == false ]]; then
+    monitor_receipt backup-failed || { echo 'Backup monitoring receipt unavailable.' >&2; ((status != 0)) || status=1; }
+  fi
+  exit "$status"
+}
+
 (($# == 0)) || refuse 'no positional arguments are accepted.'
 [[ $lock_wait =~ ^[1-9][0-9]{0,2}$ ]] && ((lock_wait <= 900)) || refuse 'lock wait must be 1..900 seconds.'
 for command in bash docker flock realpath sha256sum; do
@@ -37,6 +53,12 @@ exec 9>>"$lock"
 if ! flock -w "$lock_wait" 9; then
   echo "Unable to acquire deploy lock within ${lock_wait}s; no daily backup started." >&2
   exit 75
+fi
+if [[ -e /etc/ownerinc/portal-monitor.json ]]; then
+  require_file "$monitor" 'operational monitor receipt writer'
+  monitor_receipt backup-start || { echo 'Backup monitoring receipt unavailable.' >&2; exit 1; }
+  monitor_started=true
+  trap monitor_exit EXIT
 fi
 
 require_file "$root/current-release" 'current-release file'
@@ -95,6 +117,7 @@ if [[ -e $destination/backup.format ]]; then
   require_file "$release/scripts/release-manifest.sh" 'versioned backup verifier'
   . "$release/scripts/release-manifest.sh"
   verify_backup_manifest "$destination" || { echo 'Coordinated backup verification failed.' >&2; exit 1; }
+  if [[ $monitor_started == true ]]; then monitor_receipt backup-verified "$name" || exit 1; monitor_finished=true; fi
   printf 'Local backup verified: %s (S3 disabled; coordinated retention requires operator policy)\n' "$destination"
   exit 0
 fi
@@ -111,4 +134,5 @@ if ((${#hashes[@]} != 2)) ||
   echo 'Daily backup manifest verification failed; preserve the files for inspection.' >&2
   exit 1
 fi
+if [[ $monitor_started == true ]]; then monitor_receipt backup-verified "$name" || exit 1; monitor_finished=true; fi
 printf 'Local backup verified: %s (S3 disabled; retention 14 days)\n' "$destination"

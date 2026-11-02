@@ -96,7 +96,7 @@ async function validatePublishedBlocks(db, value) {
   return (await validatePublishedBlocksBatch(db, [value]))[0];
 }
 
-async function promoteDocument(db, document, now) {
+async function promoteDocument(db, document, now, observation) {
   if (document.published_revision_id) {
     await db.query(
       "UPDATE cms_revisions SET status = 'archived' WHERE id = $1 AND status = 'published'",
@@ -117,11 +117,11 @@ async function promoteDocument(db, document, now) {
   await db.query(
     `INSERT INTO audit_log (actor_uid, action, target_type, target_id, details)
      VALUES (NULL, 'cms.document.promote', 'cms_document', $1, $2::jsonb)`,
-    [document.id, JSON.stringify({ revisionId: document.scheduled_revision_id })],
+    [document.id, JSON.stringify({ revisionId: document.scheduled_revision_id, ...(observation ? { operationalNews: observation } : {}) })],
   );
 }
 
-async function retireInvalidScheduled(db, document, reason) {
+async function retireInvalidScheduled(db, document, reason, observation) {
   await db.query(
     "UPDATE cms_revisions SET status = 'archived' WHERE id = $1 AND status = 'scheduled'",
     [document.scheduled_revision_id],
@@ -135,7 +135,7 @@ async function retireInvalidScheduled(db, document, reason) {
   await db.query(
     `INSERT INTO audit_log (actor_uid, action, target_type, target_id, details)
      VALUES (NULL, 'cms.document.schedule_invalid', 'cms_document', $1, $2::jsonb)`,
-    [document.id, JSON.stringify({ revisionId: document.scheduled_revision_id, reason })],
+    [document.id, JSON.stringify({ revisionId: document.scheduled_revision_id, reason, ...(observation ? { operationalNews: observation } : {}) })],
   );
 }
 
@@ -143,10 +143,12 @@ async function promoteDueScheduled(db, now = new Date(), contentType = null, sou
   await lockCmsAssets(db);
   const values = [now];
   const conditions = ["scheduled.status = 'scheduled'", 'd.scheduled_at <= $1'];
+  let newsObservation = null;
   // Cron has SELECT-only authority privileges. The shared advisory lock fences
   // mode transitions; no authority row UPDATE lock or extra privilege is needed.
   if (!contentType || contentType === 'announcement') {
     const authority = await getAuthority(db);
+    newsObservation = { version: 1, contentType: 'announcement', authorityMode: authority.mode, authorityEpoch: authority.epoch };
     if (!writerAllowed(authority.mode, 'legacy')) {
       if (contentType === 'announcement') return 0;
       // Exclude before validation too: an invalid frozen agenda must not retire.
@@ -178,9 +180,10 @@ async function promoteDueScheduled(db, now = new Date(), contentType = null, sou
       && !validateNewsRevision(document.scheduled_blocks, document.scheduled_editorial ?? null, { publishing: true })) {
       validation.reason = 'invalid_editorial';
     }
-    if (validation.reason) await retireInvalidScheduled(db, document, validation.reason);
+    const observation = document.content_type === 'announcement' ? newsObservation : null;
+    if (validation.reason) await retireInvalidScheduled(db, document, validation.reason, observation);
     else {
-      await promoteDocument(db, document, now);
+      await promoteDocument(db, document, now, observation);
       promoted += 1;
     }
   }
@@ -522,6 +525,22 @@ async function listPublishedAnnouncementCategories(pool, { kind, withCounts = fa
   throw new Error('announcement_scan_limit');
 }
 
+// The observer supplies a bounded READ ONLY transaction. Do not route this
+// through stablePublishedAnnouncements: that path promotes schedules/locks rows.
+async function samplePublishedAnnouncementsReadOnly(db) {
+  const { rows } = await db.query(`SELECT
+    CASE WHEN octet_length(r.blocks::text) <= 65536 THEN r.blocks ELSE NULL END AS blocks,
+    CASE WHEN octet_length(r.editorial::text) <= 16384 THEN r.editorial ELSE NULL END AS editorial,
+    COALESCE(octet_length(r.blocks::text) > 65536 OR octet_length(r.editorial::text) > 16384, FALSE) AS oversized
+    FROM cms_documents d JOIN cms_revisions r ON r.id=d.published_revision_id AND r.status='published'
+    WHERE d.content_type='announcement'
+    ORDER BY date_trunc('milliseconds',d.published_at) DESC NULLS LAST,d.id LIMIT 3`);
+  const validation = await validatePublishedBlocksBatch(db, rows.map(row => row.blocks));
+  // Serialized length bounds the wire/decoder, unlike compressed TOAST size.
+  return { sampled: rows.length, limited: rows.some(row => row.oversized === true), valid: rows.every((row, index) => row.oversized === false
+    && validation[index].reason === null && Boolean(validateNewsRevision(row.blocks, row.editorial ?? null, { publishing: true }))) };
+}
+
 async function listPublishedAnnouncements(pool, limit, offset, category, kind, boundary = null, { exactTotal = true, scan = null } = {}) {
   if (scan !== null && (typeof scan !== 'object' || Array.isArray(scan) || Object.keys(scan).length !== 2
     || !Number.isSafeInteger(scan.maxRawRows) || scan.maxRawRows < 1 || scan.maxRawRows > ANNOUNCEMENT_MAX_RAW_ROWS
@@ -588,6 +607,7 @@ module.exports = {
   isPublicCmsRow,
   listPublishedAnnouncementCategories,
   listPublishedAnnouncements,
+  samplePublishedAnnouncementsReadOnly,
   publishedBodyText,
   promoteDueScheduled,
   promoteDueScheduledForPool,

@@ -70,8 +70,8 @@ test('readiness requires exact migrations, essential columns and canonical enabl
   const columnNames = {
     payload_migrations: ['id', 'name', 'batch'], portal_editors: ['id', 'portal_uid', 'email'],
     news_articles: ['id', 'title', 'category', 'publication_generation', '_status'],
-    _news_articles_v: ['id', 'parent_id', 'version__status'], news_media: ['id', 'sha256', 'filename'],
-    news_home: ['id', 'publication_generation', '_status'], _news_home_v: ['id', 'latest', 'version__status'],
+    _news_articles_v: ['id', 'parent_id', 'version__status', 'autosave', 'latest'], news_media: ['id', 'sha256', 'filename'],
+    news_home: ['id', 'publication_generation', '_status'], _news_home_v: ['id', 'latest', 'version__status', 'autosave'],
     news_schedules: ['id', 'target', 'scheduled_at', 'state'],
     owner_news_mutation_head: ['singleton', 'sequence', 'chain_sha256', 'coverage_version', 'write_barrier'],
     owner_news_mutation_events: ['sequence', 'event_sha256'],

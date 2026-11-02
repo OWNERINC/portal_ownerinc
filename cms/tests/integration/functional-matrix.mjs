@@ -8,6 +8,10 @@ const requiredChecks = Object.freeze({
   'AUTH-02-portal':['portal_delete_ack_before_observed_signed_out','firebase_signed_out','revoked_database_row_cookie_denied'],
   'AUTH-expiry-permission':['permission_reloaded_from_real_database','expired_unrevoked_cookie_denied','revoke_confirmed','revoked_unexpired_cookie_denied'],
   'OPS-preauthority-integrity':['news_rows_versions_jobs_unchanged','authority_legacy_epoch_one','independent_fresh_physical_targets','protocol_worker_import_absent'],
+  'EDITORIAL-drafts':['ui_created_native_document','autosave_private_live_reader_unchanged','explicit_checkpoint_native_version','manual_publication_reader_changes'],
+  'EDITORIAL-restore':['native_versions_navigation','restore_new_draft_live_unchanged','home_restore_live_unchanged','native_unsafe_restore_denied'],
+  'EDITORIAL-conflict':['stale_head_refused','lost_ack_reconciled_from_audit','single_committed_restore'],
+  'EDITORIAL-revocation':['fresh_permission_denial','display_cleared_on_renewal','revoked_cookie_history_denied'],
 });
 const preauthority = (scenarioId, profile, preconditions, expected, evidence) => Object.freeze({
   scenarioId, phase: 'preauthority', profile, preconditions, expected, evidence,
@@ -72,7 +76,14 @@ export const functionalCases = Object.freeze([
   preauthority('AUTH-expiry-permission', 'benefits-admin', ['only owned synthetic profile/session rows are changed'],
     ['current grants reloaded', 'expired unrevoked session denied', 'revoked unexpired session denied'], ['SQL flags', 'GET statuses']),
   preauthority('OPS-preauthority-integrity', 'fixture-owner', ['all previous preauthority cases finished'],
-    ['legacy/1 unchanged', 'News store digest unchanged', 'no worker/import/protocol activity'], ['physical cluster bindings', 'News row digests', 'authority before/after']),
+     ['legacy/1 unchanged', 'News store digest unchanged', 'no worker/import/protocol activity'], ['physical cluster bindings', 'News row digests', 'authority before/after']),
+  ...['EDITORIAL-drafts','EDITORIAL-restore','EDITORIAL-conflict','EDITORIAL-revocation'].map(scenarioId => Object.freeze({
+    scenarioId, phase: 'editorial', profile: 'editorial-v1', implemented: true,
+    preconditions: ['explicit editorial lease', 'fresh physically bound isolated databases', 'canonical protocol and fixture-only empty baseline', 'synthetic fixture-only observed authority'],
+    expected: ['private versions with manual publication', 'current real Portal session authorization'],
+    evidence: ['real HTTPS browser gestures and API responses', 'independent live/version/audit SQL and reader response'],
+    requiredChecks: Object.freeze(requiredChecks[scenarioId]),
+  })),
   ...['NEWS-01','NEWS-02','NEWS-03','NEWS-04','NEWS-05','NEWS-06','NEWS-07','NEWS-08','NEWS-09','NEWS-10','NEWS-11',
     'PUB-01','PUB-02','PUB-03','PUB-04','PUB-05','PUB-06','PUB-07','PUB-08','PUB-09','PUB-10'].map(id => deferred(id, 'gate4_verified_native_writer_and_durable_authority_admission')),
   ...['CMS-03','CMS-04','CMS-06','SEC-01','SEC-02','SEC-03','SEC-04','UX-01','AUTH-02-delete-failure',
@@ -81,13 +92,14 @@ export const functionalCases = Object.freeze([
 
 export function newFunctionalReport(runId) {
   return { schemaVersion: 1, runId, scope: 'preauthority-real-https-first-slice',
-    status: 'INCOMPLETE', acceptanceComplete: false, productionValidated: false,
+    status: 'INCOMPLETE', acceptanceComplete: false, productionValidated: false, editorialPhaseComplete: false,
     layers: { portalApi: 'NOT_EXECUTED', firebase: 'NOT_EXECUTED', cms: 'NOT_EXECUTED', nginx: 'NOT_EXECUTED', browser: 'NOT_EXECUTED' },
     cases: functionalCases.map(item => ({ ...item, status: 'INCOMPLETE', reason: item.implemented ? 'not_executed' : item.dependency,
       observations: [], startedAt: null, finishedAt: null })), cleanup: 'not_started' };
 }
 
 export function finishFunctionalReport(report) {
+  report.editorialPhaseComplete = false;
   if (!Array.isArray(report.cases) || report.cases.length !== functionalCases.length ||
     report.cases.some((item,index) => item.scenarioId !== functionalCases[index].scenarioId ||
       item.phase !== functionalCases[index].phase || item.implemented !== functionalCases[index].implemented ||
@@ -102,6 +114,12 @@ export function finishFunctionalReport(report) {
   report.acceptanceComplete = report.cases.every(item => item.implemented && item.status === 'PASS');
   report.status = report.cases.some(item => item.status === 'FAIL') ? 'FAIL' : report.acceptanceComplete ? 'PASS' : 'INCOMPLETE';
   report.preauthorityComplete = report.cases.filter(item => item.phase === 'preauthority').every(item => item.status === 'PASS');
+  report.editorialPhaseComplete = report.scope === 'editorial-real-https-isolated-fixture' &&
+    report.status !== 'FAIL' && !report.failure &&
+    report.cleanup === 'owned_services_stopped_volumes_and_evidence_retained' &&
+    report.transportCleanup === 'owned_listener_and_sockets_closed' &&
+    ['portalApi','firebase','cms','nginx','browser'].every(layer => report.layers?.[layer] === 'REAL') &&
+    report.cases.filter(item => item.phase === 'editorial').every(item => item.status === 'PASS');
   return report.status === 'FAIL' ? 1 : report.status === 'PASS' ? 0 : 2;
 }
 

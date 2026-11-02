@@ -157,6 +157,8 @@ test('CLI exposes help, source-only check and an explicit absolute-directory int
   assert.throws(() => parseCommandLine(['prepare', '--directory', 'relative', '--http-port', '80']))
   assert.throws(() => parseCommandLine(['prepare', '--directory', absoluteRunPath, '--http-port', '18080', '--auth-port', '18080']))
   assert.throws(() => parseCommandLine(['prepare', '--directory', absoluteRunPath, '--http-port', '18080', '--http-port', '18081', '--auth-port', '19099']))
+  assert.throws(() => parseCommandLine(['prepare', '--directory', absoluteRunPath, '--http-port', '18080', '--auth-port', '19099', '--operational-monitor-token', 'not-accepted']),
+    error => error.code === 'usage')
 })
 
 test('offline check validates current source contracts without invoking Docker', async () => {
@@ -183,15 +185,24 @@ test('prepare creates isolated private artifacts without starting services or pr
   await fs.mkdir(runParent)
   const runDirectory = path.join(runParent, 'ownerinc-payload-preview Criação 漢字 $ test-run')
   const probed = []
-  const result = await preparePreview({
-    root: unicodeCheckout,
-    directory: runDirectory,
-    httpPort: 18080,
-    authPort: 19099,
-    securityContext,
-    probePort: async port => probed.push(port),
-    runIdFactory: () => '012345abcdef',
-  })
+  const monitorCanary = 'inherited-host-monitor-token-canary-'.repeat(2)
+  const previousMonitorToken = process.env.OPERATIONAL_MONITOR_TOKEN
+  let result
+  try {
+    process.env.OPERATIONAL_MONITOR_TOKEN = monitorCanary
+    result = await preparePreview({
+      root: unicodeCheckout,
+      directory: runDirectory,
+      httpPort: 18080,
+      authPort: 19099,
+      securityContext,
+      probePort: async port => probed.push(port),
+      runIdFactory: () => '012345abcdef',
+    })
+  } finally {
+    if (previousMonitorToken === undefined) delete process.env.OPERATIONAL_MONITOR_TOKEN
+    else process.env.OPERATIONAL_MONITOR_TOKEN = previousMonitorToken
+  }
 
   assert.deepEqual(probed, [18080, 19099])
   assert.equal(result.runDirectory, runDirectory)
@@ -201,6 +212,10 @@ test('prepare creates isolated private artifacts without starting services or pr
 
   const envText = await fs.readFile(result.envFile, 'utf8')
   const env = parseGeneratedEnv(envText)
+  assert.deepEqual(Object.keys(env).sort(), [...composeEnvironmentKeys].sort(), 'every allowlisted variable has an explicit preview value')
+  assert.equal(env.OPERATIONAL_ALERT_EMAIL, '')
+  assert.equal(env.OPERATIONAL_MONITOR_TOKEN, '', 'preview must neither inherit nor generate a monitor credential')
+  assert(!envText.includes(monitorCanary), 'host monitor credentials never enter generated artifacts')
   assert.equal(env.PREVIEW_RUN_DIR, runDirectory.replace(/\\/gu, '/'))
   assert.ok(/^PREVIEW_RUN_DIR=".*\$\$ test-run"$/mu.test(envText), 'Compose env path escapes literal dollar signs')
   assert.equal(env.POSTGRES_DB, 'portal_test')
@@ -263,6 +278,17 @@ test('prepare creates isolated private artifacts without starting services or pr
   assert.deepEqual([...powershellBytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'Windows PowerShell launcher is UTF-8 with BOM')
   const powershellLauncher = powershellBytes.toString('utf8')
   assert.equal((powershellLauncher.match(/\uFEFF/gu) || []).length, 1, 'launcher has exactly one UTF-8 BOM')
+  const unsetShell = shellLauncher.match(/^unset [^\n]+$/mu)?.[0]
+  assert.match(unsetShell, /\bOPERATIONAL_MONITOR_TOKEN\b/u)
+  assert.match(powershellLauncher, /^\$environmentNames = @\([^\n]*'OPERATIONAL_MONITOR_TOKEN'[^\n]*\)\nforeach \(\$name in \$environmentNames\) \{ Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue \}/mu)
+  const bash = process.platform === 'win32'
+    ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git/bin/bash.exe') : 'bash'
+  const cleared = spawnSync(bash, ['-c', `${unsetShell}\nif [ "\${OPERATIONAL_MONITOR_TOKEN+x}" = x ]; then exit 91; fi`], {
+    encoding: 'utf8', timeout: 10_000, env: { ...process.env, OPERATIONAL_MONITOR_TOKEN: monitorCanary },
+  })
+  assert.equal(cleared.error, undefined)
+  assert.equal(cleared.status, 0, 'the generated POSIX unset clears the inherited monitor credential')
+  assert(!shellLauncher.includes(monitorCanary) && !powershellLauncher.includes(monitorCanary))
   assert(shellLauncher.includes(result.envFile.replace(/\\/gu, '/')))
   assert(powershellLauncher.includes(result.envFile.replace(/\\/gu, '/')))
   assert(powershellLauncher.includes(unicodeCheckout.replace(/\\/gu, '/')), 'checkout path is preserved as Unicode')
@@ -331,11 +357,12 @@ test('prepare creates isolated private artifacts without starting services or pr
 })
 
 test('Docker Compose merges preview TCP database healthchecks and CMS migration development mode', async t => {
-  const environment = { ...process.env }
+  const environment = { ...process.env, OPERATIONAL_MONITOR_TOKEN: 'inherited-host-monitor-token-canary-'.repeat(2) }
   for (const key of [
     ...composeEnvironmentKeys, 'COMPOSE_FILE', 'COMPOSE_PROFILES', 'COMPOSE_ENV_FILES',
     'COMPOSE_DISABLE_ENV_FILE', 'DOCKER_HOST', 'DOCKER_CONTEXT',
   ]) delete environment[key]
+  assert.equal(environment.OPERATIONAL_MONITOR_TOKEN, undefined, 'the launcher allowlist clears a parent monitor token before Compose interpolation')
 
   const version = spawnSync('docker', ['compose', 'version', '--short'], {
     encoding: 'utf8', windowsHide: true, timeout: 10_000, env: environment,
@@ -398,6 +425,7 @@ test('Docker Compose merges preview TCP database healthchecks and CMS migration 
   } catch {
     assert.fail('read-only Compose config returned non-JSON output')
   }
+  assert.equal(config.services.api.environment.OPERATIONAL_MONITOR_TOKEN, '', 'the actual merged API environment keeps monitoring disabled')
   assert.equal(config.services.postgres.environment.POSTGRES_USER, 'portal_admin')
   assert.equal(config.services.postgres.environment.POSTGRES_DB, 'portal_test')
   assert.deepEqual(config.services.postgres.healthcheck.test, [
@@ -443,8 +471,10 @@ test('Windows PowerShell 5.1 parses Unicode launcher paths without invoking Dock
   const captureFile = path.join(tempRoot, 'mock-docker-arguments.txt')
   const unitSeparator = String.fromCharCode(31)
   const runner = `
+$env:OPERATIONAL_MONITOR_TOKEN = 'inherited-host-monitor-token-canary'
 $global:dockerCalls = New-Object 'System.Collections.Generic.List[string]'
 function docker {
+  if (Test-Path Env:OPERATIONAL_MONITOR_TOKEN) { throw 'Inherited monitor token reached Docker' }
   $parts = @($args | ForEach-Object { [string]$_ })
   [void]$global:dockerCalls.Add(($parts -join [char]31))
   $global:LASTEXITCODE = 0
@@ -722,9 +752,14 @@ test('path guards reject repository output, symlink ancestors, and missing/relat
   )
 })
 
-test('source-contract drift fails closed instead of rewriting unexpected content', () => {
+test('source-contract drift fails closed instead of rewriting unexpected content', async () => {
   assert.throws(() => renderFirebaseConfig('const firebaseConfig = {};', 'demo-012345abcdef', 19099), error => error.code === 'firebase_config_contract_changed')
   assert.throws(() => renderNginxConfig('connect-src self;', 19099), error => error.code === 'nginx_csp_contract_changed')
   assert.throws(() => validateComposeSource('services: {}', 'services: {}'), error => error.code === 'compose_source_contract_changed')
+  const [base, payload] = await Promise.all(['docker-compose.yml', 'docker-compose.payload.yml']
+    .map(file => fs.readFile(path.join(repoRoot, file), 'utf8')))
+  const unknown = '\nx-unreviewed: ${OPERATIONAL_MONITOR_TOKEN_EXTRA:-}\n'
+  assert.throws(() => validateComposeSource(`${base}${unknown}`, payload), error => error.code === 'compose_env_contract_changed')
+  assert.throws(() => validateComposeSource(base, `${payload}${unknown}`), error => error.code === 'compose_env_contract_changed')
   assert.match(renderComposeOverride(), /ports: !override/u)
 })
