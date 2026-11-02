@@ -70,5 +70,7 @@ test('candidate qualification emits every exact installer input as outputs, summ
   assert.match(qualifier, /name: payload-private-install-dispatch[\s\S]*path: install-dispatch\.json[\s\S]*if-no-files-found: error/u);
   assert.match(generator, /GITHUB_STEP_SUMMARY[\s\S]*never infer a value[\s\S]*payload-install-production\.yml/u);
   assert.match(generator, /validateQualifiedCandidate/u);
+  assert.match(generator, /`sha256:\$\{artifactDigests\[role\]\}`/u,
+    'raw upload-artifact outputs must be normalized to the GitHub API digest form');
   assert.doesNotMatch(generator, /secrets\.|PORTAL_VPS_|SSH_PRIVATE_KEY|GITHUB_TOKEN/u);
 });
