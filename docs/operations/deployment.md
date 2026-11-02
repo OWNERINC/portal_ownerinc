@@ -815,11 +815,240 @@ e reprodutibilidade do pacote continuam exigindo evidência própria. O pin anti
 do preparer permanece intacto: este provisionamento não aprova source de preparação
 nem abre `release_not_preflighted`.
 
+##### Rotação administrativa single-use, somente da policy
+
+O perfil explícito `--profile policy-rotation` substitui atomicamente somente
+`/etc/ownerinc/payload-candidate/production-policy.json`. Exige trust já instalado,
+`records` vazio e `trust-snapshots` existente, ambos root:root `0700`, sob ancestry
+protegida. Não é retry do bootstrap. Os perfis original e `preparation` continuam
+com publicação no-replace e suas próprias regras de retomada.
+
+**Autenticar o novo programa administrativo e seu Python independentemente antes
+de executar.** Ele não integra os quatro admission `TOOL_FILES`, mas integra a
+closure de preparação. A preparação histórica do candidato final
+`a7b7f35792ca5c7b3f5db82094f406b56912ba70` (run `41379393576`, attempt `1`) deve
+conservar seus bytes originais, inclusive o provisioner antigo. Não montar o
+bundle daquela aprovação de preparação a partir do HEAD com a rotação nova:
+mudar `source` altera o binding da aprovação do candidato; mudar somente
+`admission` não. O CI histórico desse candidato não qualifica código administrativo
+posterior. Os quatro admission tools e o workflow permanecem byte-for-byte.
+
+Depois da autenticação externa do programa e da aprovação:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /root/approved/provision-payload-candidate-trust.py \
+  --profile policy-rotation --check \
+  --approval /root/approved/rotation.json \
+  --approval-sha256 "$INDEPENDENT_APPROVAL_SHA256" \
+  --bundle /root/approved/rotation-bundle
+```
+
+`--apply` substitui somente `--check`, após estabelecer a janela administrativa
+cooperativa descrita abaixo. O envelope exige Linux, UID/EUID/GID/EGID zero,
+Python `-I -S -B`, PATH/locale exatos e nenhuma outra variável de ambiente. Na
+operação elegível, o Python em execução e `/usr/bin/python3` devem resolver para
+o executável canônico autenticado pela policy instalada. Não há overrides de
+destino. `--check` fresco não escreve, cria, renomeia ou fsynca nada; sucesso
+não reserva o ID nem gera autorização reutilizável para apply.
+
+Contrato fechado de `rotation.json`, autenticado pelos **bytes integrais** contra
+o digest independente, com as restrições de strict JSON/protected read acima:
+
+- `schemaVersion`: inteiro `1`; `kind`: `ownerinc-payload-policy-rotation-approval-v1`;
+  `environment`: `production`.
+- `repository`: `OWNERINC/portal_ownerinc`; `repositoryId`: string `1308080511`;
+  `workflow`: `.github/workflows/ci.yml`; `workflowId`: string `317709204`.
+- `rotationId`: 64 hex minúsculos, emitido independentemente para uso único.
+- `issuedAt`, `expiresAt`: segundos Unix inteiros, sem boolean/string/float;
+  `0 < expiresAt - issuedAt <= 3600`. Exige `issuedAt <= now < expiresAt`
+  inicialmente e novamente imediatamente antes da tentativa de replace.
+- `fromPolicySha256`, `toPolicySha256`: digests raw distintos, 64 hex minúsculos.
+- `candidate`: exatamente `commit` (40 hex minúsculos), `runId`, `runAttempt`
+  (strings decimais positivas, sem zero inicial, até 20 dígitos),
+  `approvalSha256`, `inventoryIdentity` (64 hex minúsculos).
+- `targetRevision`: exatamente `commit`, igual ao de `candidate`, e
+  `workflowSha256` (64 hex minúsculos).
+
+`candidate.approvalSha256` é o binding da aprovação de preparação existente,
+não o hash externo de `rotation.json`. Esses campos são contexto administrativo
+de auditoria, não comprovação independente do CI ou inventory vivo. Não renovam
+autorização do candidato nem restringem a policy a um único run.
+
+O bundle contém **somente** `production-policy.json`, root:root `0600`, regular,
+um link e ancestry protegida. Seu hash raw deve ser `toPolicySha256`; o da policy
+ativa deve ser `fromPolicySha256`. Ambas seguem o schema fechado e IDs oficiais.
+Todos os campos, exceto `approvedRevisions`, devem ser semanticamente idênticos;
+a lista nova deve ser exatamente `[targetRevision]`, e esse commit ainda não pode
+estar na lista anterior. Reescrita de formatação, expansão da lista e mudança de
+toolchain são recusadas. Confere os quatro arquivos admission e **todos os quatro
+executáveis**, incluindo `gitRemoteHttps`, seus hashes e metadata protegida.
+
+###### Exclusão cooperativa e envelope do registrar
+
+O perfil abre o diretório **existente**
+`/var/lib/ownerinc/payload-candidate/records` com
+`O_RDONLY | O_DIRECTORY | O_NOFOLLOW`, exige root:root `0700`, valida a identidade
+FD/path e adquire `flock(LOCK_EX | LOCK_NB)`. Retém essa lease até as verificações
+finais. Lock da policy substituível, deploy lock e incoming lock não coordenam
+esse registro. Qualquer entrada em `records` — inclusive dotfile, pending, link
+ou subdiretório — impede rotação; a checagem é repetida antes e depois do replace
+e na saída final. Registros nunca são apagados/adotados pela rotação.
+
+**O registrar permanece inalterado e não adquire essa lease sozinho.** Todos os
+lançamentos administrativos devem usar o mesmo diretório e manter a lease durante
+toda a invocação Node, adquirida antes de iniciar Node. Antes do apply, estabelecer
+uma janela administrativa exclusiva e drenar invocações anteriores sem envelope.
+Diretório vazio, ausência de wrappers ou listagem de processos não comprovam esse
+pré-requisito. Sem evidência dessa janela, o apply remoto fica operacionalmente
+bloqueado. Um escritor root direto e sem envelope pode ignorar flock; os testes
+nativos demonstram essa limitação explicitamente.
+
+Exemplo de envelope administrativo a revisar/autenticar separadamente como
+`/root/approved/registrar-with-directory-lease.py` (não é instalado por este perfil).
+O provisioner importado abaixo também deve ter sido autenticado independentemente.
+O token já provisionado em `/root/approved/github-token` deve ser root:root `0600`,
+um link e ancestry protegida; não é passado em argv nem impresso:
+
+```python
+import importlib.util
+import os
+import subprocess
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    'trust_admin', '/root/approved/provision-payload-candidate-trust.py')
+p = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(p)
+p.require(sys.platform == 'linux' and
+          (os.getuid(), os.geteuid(), os.getgid(), os.getegid()) == (0, 0, 0, 0),
+          'root_linux_required')
+p.require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode,
+          'isolated_python_required')
+p.require(dict(os.environ) == {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'},
+          'clean_environment_required')
+with p.RotationLease() as lease:
+    policy = p.rotation_policy(p.read_protected(p.POLICY_PATH, 0o600, p.MAX_JSON))
+    p.verify_rotation_closure(policy)
+    token = p.read_protected('/root/approved/github-token', 0o600, 4096).decode('ascii').strip()
+    p.require(bool(token) and not any(c.isspace() for c in token), 'invalid_token')
+    lease.verify()
+    child = subprocess.Popen(
+        [policy['toolchain']['executables']['node']['path'],
+         p.TOOL_ROOT + '/scripts/register-payload-candidate-admission.mjs', *sys.argv[1:]],
+        env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C', 'GH_TOKEN': token},
+        pass_fds=(lease.fd,))
+    status = child.wait()
+    lease.verify()
+sys.exit(status)
+```
+
+O parent mantém sua referência durante `wait`; o FD herdado mantém a lease até
+o child fechar sua referência mesmo se o parent for interrompido. O contexto fecha
+somente sua referência, sem `LOCK_UN`. Revalida metadata e identidade FD/path no
+retorno, inclusive em erro. O envelope não exige registry vazio porque o registrar
+publica registros. Isto não acrescenta enforcement ao registrar chamado diretamente.
+Invocação com os valores **já aprovados** para registro (esta seção não os emite):
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+  /usr/bin/python3 -I -S -B /root/approved/registrar-with-directory-lease.py \
+  --environment production --repository OWNERINC/portal_ownerinc \
+  --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+  --candidate-artifact-id "$CANDIDATE_ARTIFACT_ID" \
+  --qualified-artifact-id "$QUALIFIED_ARTIFACT_ID" --report-artifact-id "$REPORT_ARTIFACT_ID" \
+  --candidate-artifact-digest "$CANDIDATE_ARTIFACT_DIGEST" \
+  --qualified-artifact-digest "$QUALIFIED_ARTIFACT_DIGEST" --report-artifact-digest "$REPORT_ARTIFACT_DIGEST" \
+  --candidate-sha256 "$CANDIDATE_SHA256" --qualified-sha256 "$QUALIFIED_SHA256" --report-sha256 "$REPORT_SHA256" \
+  --approval-sha256 "$CANDIDATE_APPROVAL_SHA256" --inventory-identity "$INVENTORY_IDENTITY" \
+  --expires-at "$EXPIRES_AT" --nonce "$NONCE" --archive "$ARCHIVE"
+```
+
+###### Reserva, evidência e falhas
+
+Manter um registro externo de IDs emitidos **e tentados**, marcando a tentativa
+antes de iniciar apply. A reserva exclusiva é
+`trust-snapshots/policy-rotation-<rotationId>/`, root:root `0700`; seu parent é
+fsyncado imediatamente após mkdir. Qualquer pathname já existente consome o ID,
+inclusive symlink, diretório vazio ou evidência parcial/insegura. Mudar expiry,
+aprovação ou digest não permite reutilizá-lo. Falha incerta ao reservar também é
+operacionalmente gasta: um crash antes do fsync do parent pode perder a entrada,
+e filesystem sozinho não distingue isso de um ID nunca tentado. A evidência
+externa deve impedir reuso mesmo quando o diretório não aparece.
+
+Arquivos root:root `0600`, regulares e single-link dentro da reserva:
+
+| Arquivo | Binding |
+| --- | --- |
+| `approval.json` | Bytes integrais da aprovação autenticada |
+| `policy.before.json` | Bytes integrais da policy antiga autenticada |
+| `policy.after.json` | Bytes integrais da policy nova autenticada |
+| `manifest.json` | `schemaVersion: 1`, `kind: ownerinc-payload-policy-rotation-prestate-v1`, `rotationId`, `approvalSha256`, `fromPolicySha256`, `toPolicySha256` |
+| `completion.json` | `schemaVersion: 1`, `kind: ownerinc-payload-policy-rotation-completion-v1`, `rotationId`, `manifestSha256`, `activePolicySha256` |
+
+Os dois documentos de evidência têm somente essas chaves. Todos os hashes ligam
+bytes raw armazenados, não JSON reconstruído, e a identidade liga também o basename
+da reserva. O manifesto é publicado depois dos três arquivos referenciados, com
+fsync de arquivos/diretórios antes do replace. Um temporário exclusivo `0600` no
+mesmo diretório da policy é escrito, fsyncado e conferido. Entradas, closure,
+prestate, policy antiga, lease, diretórios, registry e freshness são revalidados.
+O programa marca `swap-attempted` **antes** da chamada de replace atômico; não
+trunca/escreve a policy em lugar nem a remove primeiro. Depois fsynca o parent,
+reconfere target/closure/registry/lease, publica e verifica completion durável e
+repete os checks finais. Temporários `.rotation-pending-*` e evidência de falha
+ficam retidos. Arquivos inesperados não são adotados como evidência válida.
+
+Falhas retornam exit `2`. Antes de `swap-attempted`, o report informa
+`replacementAttempted: false`: **esta invocação** não tentou replace, mas pode ter
+escrito evidência privada. A partir dessa fronteira, toda falha — inclusive na
+própria syscall, fsync, completion ou finalização da lease — retorna
+`rotation_reconciliation_required`, `replacementAttempted: true`. Nunca deduzir
+preservação da policy antiga de um exit não-zero. Não existe rollback, limpeza,
+resume ou reconciliação automática de fsync por reaplicar o mesmo ID.
+
+Códigos incluem `rotation_lock_busy`, `rotation_id_consumed`,
+`rotation_approval_not_current`, `rotation_policy_mismatch`,
+`rotation_delta_not_allowed`, `rotation_closure_mismatch`,
+`rotation_registry_not_empty`, `rotation_context_changed`,
+`rotation_preswap_io_failed`, `rotation_reconciliation_required`,
+`rotation_evidence_conflict`, `rotation_evidence_unsafe`; guards estritos/protected
+filesystem anteriores continuam disponíveis antes da tentativa de swap.
+
+`--check` de ID consumido primeiro autentica bytes/schema da aprovação e então
+inspeciona **antes** de gates de freshness, bundle, source ativa ou closure.
+Aceita para observação aprovação expirada e bundle ausente; não escreve, fsynca,
+repara ou retoma. Sempre exit `2`, com JSON fechado de chaves `schemaVersion: 1`,
+`kind: ownerinc-payload-policy-rotation-check-v1`, `status: consumed`, `code`,
+`rotationId`, `eligible: false`, `approvalFresh`, `snapshotState`, `activePolicy`,
+`observedPolicySha256`, `mutated: false`, `deploymentAuthorized: false`.
+`snapshotState` é `partial`, `prestate-valid`, `completion-recorded`, `conflict`
+ou `unsafe`; completion inválido/inseguro não é ignorado. Independentemente,
+`activePolicy` é `from`, `to`, `other` ou `unknown`; digest só é emitido após
+leitura protegida estável, caso contrário null. `completion-recorded` é evidência
+histórica, não elegibilidade atual nem uma nova confirmação de durabilidade.
+
+Reconciliar administrativamente a evidência após interrupção. Se a policy antiga
+permanece, outra operação exige aprovação independente e ID novos. Se target está
+ativo, não repetir rotação; durabilidade/completion pendentes exigem reconciliação
+separada. Sucesso informa `networkUsed: false`, `githubAuthenticated: false`,
+`bundleCodeExecuted: false`, `ciProvenanceChecked: false`, `liveInventoryChecked: false`,
+`liveRuntimeChecked: false`, `candidateAuthorizationRenewed: false`,
+`deploymentAuthorized: false`: não consulta
+rede/GitHub, não executa bundle, não verifica baseline vivo nem autoriza deploy,
+private install, restore ou cutover. Testes locais não disparam apply remoto.
+
 ##### Qualificação nativa isolada do provisioner
 
 O gate candidate-only existente `Test preauthority CI setup with native Linux root`
 também executa a suíte de trust em modo obrigatório, sem mudar o nome autenticado
-do step ou os budgets de recovery. Invocação equivalente no runner Linux descartável:
+do step ou os budgets de recovery. Esse step só roda em dispatch candidate-only
+na `main`. Para qualificar código administrativo novo antes do merge, o workflow
+separado `.github/workflows/payload-policy-rotation-check.yml` roda a mesma suíte
+obrigatória em PRs relevantes e em dispatch explícito de teste. Tem somente
+permissão de leitura, checkout sem credenciais persistidas, actions pinadas e
+fixtures descartáveis no runner; não usa secrets nem executa publicação, acesso
+à VPS ou deploy. O `ci.yml` qualificado permanece byte-for-byte.
+Invocação equivalente no runner Linux descartável:
 
 ```sh
 NODE_BIN="$(readlink -f -- "$(command -v node)")"
@@ -855,6 +1084,25 @@ As demais provas portáveis da suíte continuam identificadas como doubles. Suce
 de fsync/retomada **não simula power loss nem prova durabilidade de hardware**.
 Não há Docker, serviços, contas ou sudoers novos. Este gate não qualifica o
 launcher/sudo/SSH real da VPS, nem substitui registro autenticado e recovery.
+
+A mesma suíte/entrypoint também descobre os casos `native-rotation-lease-proof`,
+`native-rotation-atomic-proof` e `native-rotation-fault-proof`. Os dois primeiros
+usam flock real entre processos, child Node inerte com FD herdado, troca de path,
+escritor root sem envelope (limitação cooperativa), leitores concorrentes vendo
+somente bytes completos antigos/novos, replace real, metadata root e observação
+da ordem de fsync. O último identifica explicitamente as falhas de I/O **injetadas**
+sobre o filesystem nativo e verifica retenção e classificação pré/pós-swap.
+Não executam registro real nem qualificação de power loss. Sem Linux/root esses
+casos pulam somente quando a flag obrigatória está ausente; com
+`PAYLOAD_REQUIRE_NATIVE_TRUST=1` falham em vez de ocultar a falta de qualificação.
+Casos portáteis identificam doubles de ownership, lease, interpreter e syscalls
+Windows. Para executar regressões focadas:
+
+```sh
+node --test tests/unit/payload-candidate-trust-provisioning.test.mjs \
+  tests/unit/payload-candidate-admission.test.mjs \
+  tests/unit/payload-preparation-authentication.test.mjs tests/unit/cms-image-pipeline.test.mjs
+```
 
 Para o contrato corrente `production:payload-v2 <commit> <run-id> <run-attempt>
 <api-image> <cron-image> <cms-image> <três artifact IDs> <três ZIP digests>

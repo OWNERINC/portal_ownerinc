@@ -465,8 +465,10 @@ p.sys.platform='linux'
 for name in ['getuid','geteuid','getgid','getegid']:setattr(p.os,name,lambda:0)
 def forbidden(*_):raise AssertionError('input read before environment guard')
 p.load_inputs=forbidden
+p.rotation_approval=forbidden
 p.os.environ.clear();p.os.environ.update({'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','NODE_OPTIONS':'--require=untrusted'})
 denied(lambda:p.main(['--check','--approval','/root/approval','--approval-sha256','a'*64,'--bundle','/root/bundle']))
+denied(lambda:p.main(['--profile','policy-rotation','--check','--approval','/root/approval','--approval-sha256','a'*64,'--bundle','/root/bundle']))
 `);
   assert.equal(result.status, 0, result.stderr);
   const source = await readFile(modulePath, 'utf8');
@@ -513,4 +515,691 @@ with patch.object(p.os,'path',posixpath),patch.object(p.os,'lstat',lstat),patch.
     assert tree['/opt/ownerinc'].st_mode==stat.S_IFDIR|0o777
 `);
   assert.equal(result.status, 0, result.stderr);
+});
+
+const rotationApproval = {
+  schemaVersion: 1, kind: 'ownerinc-payload-policy-rotation-approval-v1', environment: 'production',
+  repository: 'OWNERINC/portal_ownerinc', repositoryId: '1308080511',
+  workflow: '.github/workflows/ci.yml', workflowId: '317709204', rotationId: '1'.repeat(64),
+  issuedAt: 1000, expiresAt: 4600, fromPolicySha256: '2'.repeat(64), toPolicySha256: '3'.repeat(64),
+  candidate: { commit: '4'.repeat(40), runId: '41379393576', runAttempt: '1',
+    approvalSha256: '5'.repeat(64), inventoryIdentity: '6'.repeat(64) },
+  targetRevision: { commit: '4'.repeat(40), workflowSha256: '7'.repeat(64) },
+};
+
+test('rotation approval is closed, strictly typed, officially scoped and limited to a one-hour window', () => {
+  const mutations = [
+    a => { a.extra = 1; }, a => { delete a.rotationId; }, a => { a.schemaVersion = true; },
+    a => { a.kind = 'ownerinc-payload-trust-provisioning-v1'; }, a => { a.environment = 'staging'; },
+    a => { a.repository = 'elsewhere/repo'; }, a => { a.repositoryId = '123'; },
+    a => { a.workflow = 'ci.yml'; }, a => { a.workflowId = '456'; },
+    a => { a.rotationId = 'A'.repeat(64); }, a => { a.rotationId += '\n'; },
+    a => { a.issuedAt = true; }, a => { a.expiresAt = false; }, a => { a.issuedAt = '1000'; },
+    a => { a.expiresAt = '4600'; }, a => { a.issuedAt = 1000.5; }, a => { a.expiresAt = 4600.5; },
+    a => { a.expiresAt = a.issuedAt; }, a => { a.expiresAt = a.issuedAt - 1; },
+    a => { a.expiresAt = a.issuedAt + 3601; }, a => { a.fromPolicySha256 = a.toPolicySha256; },
+    a => { a.fromPolicySha256 = 'bad'; }, a => { a.toPolicySha256 = 'F'.repeat(64); },
+    a => { a.candidate.extra = 1; }, a => { delete a.candidate.inventoryIdentity; },
+    a => { a.candidate.commit = 'main'; }, a => { a.candidate.commit = 'a'.repeat(40); },
+    a => { a.candidate.runId = '01'; }, a => { a.candidate.runId = '1'.repeat(21); },
+    a => { a.candidate.runId = 123; }, a => { a.candidate.runAttempt = '0'; },
+    a => { a.candidate.runAttempt = '1\n'; }, a => { a.candidate.approvalSha256 = null; },
+    a => { a.candidate.inventoryIdentity = 'bad'; }, a => { a.targetRevision.extra = 1; },
+    a => { delete a.targetRevision.workflowSha256; }, a => { a.targetRevision.workflowSha256 = 'bad'; },
+  ];
+  const corpus = [rotationApproval, ...mutations.map(mutate => {
+    const value = structuredClone(rotationApproval); mutate(value); return value;
+  })];
+  const result = probe(String.raw`
+import json,sys
+results=[]
+for value in json.load(sys.stdin):
+    try:p.validate_rotation_approval(value);results.append(True)
+    except p.ProvisionError:results.append(False)
+try:p.validate_rotation_approval(p.strict_json(b'{"schemaVersion":1,"schemaVersion":1}'))
+except p.ProvisionError as error:assert str(error)=='duplicate_field'
+else:raise AssertionError('duplicate accepted')
+print(json.dumps(results))
+`, JSON.stringify(corpus));
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [true, ...mutations.map(() => false)]);
+});
+
+const rotationFixture = String.raw`
+from unittest.mock import patch
+import contextlib,io,time
+def setup_rotation(label,native=False):
+    inputs=setup(label);policy=inputs[3]
+    policy['repositoryId']='1308080511';policy['workflowId']='317709204'
+    if native:
+        filename=os.path.realpath('/usr/bin/python3')
+        policy['toolchain']['executables']['python']={'path':filename,'sha256':p.sha(p.read_protected(filename,0o755,p.MAX_BINARY))}
+    before=(json.dumps(policy,indent=2)+'\n').encode()
+    write(inputs[2]+'/production-policy.json',before,0o600)
+    bootstrap=(json.dumps({'schemaVersion':1,'kind':'ownerinc-payload-trust-provisioning-v1',
+        'policySha256':p.sha(before),'toolchain':policy['toolchain']})+'\n').encode()
+    write(inputs[0],bootstrap,0o600)
+    # Seed an already installed closure. Bootstrap behavior is covered above;
+    # rotation must not execute bundle data or re-provision any of these files.
+    for relative in (*p.TOOL_FILES,'bin/git-remote-https'):
+        write(p.TOOL_ROOT+'/'+relative,pathlib.Path(inputs[2]+'/'+relative).read_bytes(),
+            0o755 if relative.endswith('.py') or relative.startswith('bin/') else 0o644)
+    write(p.POLICY_PATH,before,0o600)
+    for name in ('records','work','incoming','trust-snapshots'):os.makedirs(p.STATE_ROOT+'/'+name,mode=0o700)
+    target=copy.deepcopy(policy);target['approvedRevisions']=[{'commit':'4'*40,'workflowSha256':'7'*64}]
+    after=(json.dumps(target,indent=4)+'\n').encode();bundle=os.path.dirname(inputs[2])+'/rotation-bundle'
+    write(bundle+'/production-policy.json',after,0o600)
+    now=int(time.time())
+    approval={'schemaVersion':1,'kind':'ownerinc-payload-policy-rotation-approval-v1','environment':'production',
+        'repository':'OWNERINC/portal_ownerinc','repositoryId':'1308080511','workflow':'.github/workflows/ci.yml','workflowId':'317709204',
+        'rotationId':'1'*64,'issuedAt':now-10,'expiresAt':now+3590,'fromPolicySha256':p.sha(before),'toPolicySha256':p.sha(after),
+        'candidate':{'commit':'4'*40,'runId':'41379393576','runAttempt':'1','approvalSha256':'5'*64,'inventoryIdentity':'6'*64},
+        'targetRevision':copy.deepcopy(target['approvedRevisions'][0])}
+    item={'approval':approval,'before':before,'after':after,'path':os.path.dirname(inputs[0])+'/rotation.json','bundle':bundle,
+        'snapshot':p.STATE_ROOT+'/trust-snapshots/policy-rotation-'+approval['rotationId'],'oldPolicy':policy,'newPolicy':target}
+    save_rotation(item)
+    return item
+def save_rotation(item):
+    raw=(json.dumps(item['approval'],indent=2)+'\n').encode();write(item['path'],raw,0o600)
+    item['raw']=raw;item['args']=(item['path'],p.sha(raw),item['bundle'])
+def rotate(item,mode='apply'):return p.provision_policy_rotation(mode,*item['args'])
+def rotation_denied(fn,code,attempted=False):
+    try:fn()
+    except p.RotationError as error:
+        assert str(error)==code,(str(error),code,error.report)
+        assert error.report['replacementAttempted'] is attempted,error.report
+        assert error.report['deploymentAuthorized'] is False
+        return error.report
+    raise AssertionError('unexpected rotation success')
+def readonly(fn):
+    mutations=[];real_open=os.open
+    def forbidden(*args,**kwargs):mutations.append(args);raise AssertionError('read-only action tried mutation')
+    def checked_open(filename,flags,*args,**kwargs):
+        if flags & (os.O_CREAT|os.O_TRUNC|os.O_WRONLY|os.O_RDWR|os.O_APPEND):forbidden(filename,flags)
+        return real_open(filename,flags,*args,**kwargs)
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(os,'open',checked_open))
+        for name in ('mkdir','fsync','fchmod','chmod','rename','replace','unlink','rmdir'):
+            stack.enter_context(patch.object(os,name,forbidden))
+        for name in ('publish','rotation_stage','sync_directory'):
+            stack.enter_context(patch.object(p,name,forbidden))
+        try:return fn()
+        finally:assert mutations==[],mutations
+def seed_prestate(item,complete=False):
+    os.mkdir(item['snapshot'],0o700)
+    manifest={'schemaVersion':1,'kind':'ownerinc-payload-policy-rotation-prestate-v1','rotationId':item['approval']['rotationId'],
+        'approvalSha256':p.sha(item['raw']),'fromPolicySha256':p.sha(item['before']),'toPolicySha256':p.sha(item['after'])}
+    # Deliberately noncanonical bytes: completion must hash this raw representation.
+    raw=(json.dumps(manifest,indent=3)+' \n').encode()
+    for name,data in [('approval.json',item['raw']),('policy.before.json',item['before']),('policy.after.json',item['after']),('manifest.json',raw)]:
+        write(item['snapshot']+'/'+name,data,0o600)
+    if complete:
+        completion={'schemaVersion':1,'kind':'ownerinc-payload-policy-rotation-completion-v1','rotationId':item['approval']['rotationId'],
+            'manifestSha256':p.sha(raw),'activePolicySha256':p.sha(item['after'])}
+        write(item['snapshot']+'/completion.json',(json.dumps(completion)+'\n').encode(),0o600)
+    return raw
+`;
+
+const rotationDoubles = String.raw`
+# Portable suite: ownership/POSIX doubles inherited from filesystem above.
+# Lease and interpreter identity are explicit doubles, NOT native lock proof.
+class LeaseDouble:
+    def __enter__(self):
+        self.path=p.STATE_ROOT+'/records';self.token=p.rotation_directory_identity(self.path,private=True)
+        self.empty_at_exit=False;return self
+    def verify(self,empty=False):
+        p.require(self.token==p.rotation_directory_identity(self.path,private=True),'rotation_context_changed')
+        if empty:p.require(not os.listdir(self.path),'rotation_registry_not_empty')
+    def __exit__(self,*_):self.verify(empty=self.empty_at_exit)
+p.RotationLease=LeaseDouble
+p.verify_rotation_interpreter=lambda policy:None
+`;
+
+test('fresh rotation check is mutation-free; expiry, policy deltas, bundle, closure and all registry entries fail closed (ownership/lease doubles)', () => {
+  const result = probe(filesystem + rotationFixture + rotationDoubles + String.raw`
+try:
+    item=setup_rotation('fresh');before=inventory();report=readonly(lambda:rotate(item,'check'))
+    assert report['eligible'] and not report['mutated'] and not report['deploymentAuthorized']
+    assert not report['ciProvenanceChecked'] and not report['liveRuntimeChecked'] and not report['candidateAuthorizationRenewed']
+    assert all(report[key] is False for key in ('networkUsed','githubAuthenticated','bundleCodeExecuted','liveInventoryChecked'))
+    assert inventory()==before and not os.path.lexists(item['snapshot'])
+    readonly(lambda:rotation_denied(lambda:p.provision_policy_rotation('check',item['path'],'0'*64,item['bundle']),'approval_digest_mismatch'))
+    for label,now in [('future',item['approval']['issuedAt']-1),('expired',item['approval']['expiresAt'])]:
+        with patch.object(p.time,'time',return_value=now):
+            readonly(lambda:rotation_denied(lambda:rotate(item,'check'),'rotation_approval_not_current'))
+    with patch.object(p.time,'time',return_value=item['approval']['issuedAt']):assert readonly(lambda:rotate(item,'check'))['eligible']
+    for label,mutate,code in [
+        ('extra-revision',lambda v:v['approvedRevisions'].append({'commit':'8'*40,'workflowSha256':'9'*64}),'rotation_delta_not_allowed'),
+        ('wrong-target-workflow',lambda v:v['approvedRevisions'][0].update(workflowSha256='8'*64),'rotation_delta_not_allowed'),
+        ('tool-file-change',lambda v:v['toolchain']['files'].update({p.TOOL_FILES[0]:'9'*64}),'rotation_delta_not_allowed'),
+        ('tool-executable-change',lambda v:v['toolchain']['executables']['gitRemoteHttps'].update(sha256='9'*64),'rotation_delta_not_allowed'),
+        ('wrong-repository-id',lambda v:v.update(repositoryId='123'),'rotation_policy_mismatch'),
+        ('wrong-workflow-id',lambda v:v.update(workflowId='456'),'rotation_policy_mismatch'),
+        ('bytes-only',lambda v:v.update(approvedRevisions=copy.deepcopy(item['oldPolicy']['approvedRevisions'])),'rotation_delta_not_allowed')]:
+        item=setup_rotation(label);value=copy.deepcopy(item['newPolicy']);mutate(value)
+        after=json.dumps(value).encode();write(item['bundle']+'/production-policy.json',after,0o600)
+        item['approval']['toPolicySha256']=p.sha(after);save_rotation(item);before=inventory()
+        readonly(lambda:rotation_denied(lambda:rotate(item),code));assert inventory()==before
+        assert not os.path.lexists(item['snapshot'])
+    item=setup_rotation('already-approved')
+    old=copy.deepcopy(item['oldPolicy']);old['approvedRevisions'].append(item['approval']['targetRevision'])
+    raw=json.dumps(old).encode();write(p.POLICY_PATH,raw,0o600);item['approval']['fromPolicySha256']=p.sha(raw);save_rotation(item)
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_delta_not_allowed'))
+    item=setup_rotation('extra-bundle');write(item['bundle']+'/.extra',b'x',0o600)
+    readonly(lambda:rotation_denied(lambda:rotate(item),'unexpected_bundle_entry'))
+    item=setup_rotation('source-drift');write(p.POLICY_PATH,item['before']+b' ',0o600)
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_policy_mismatch'))
+    for relative in p.TOOL_FILES:
+        item=setup_rotation('file-'+str(p.TOOL_FILES.index(relative)))
+        write(p.TOOL_ROOT+'/'+relative,b'drift',0o755 if relative.endswith('.py') else 0o644)
+        readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_closure_mismatch'))
+    for role in ('node','git','python','gitRemoteHttps'):
+        item=setup_rotation('executable-'+role);write(item['oldPolicy']['toolchain']['executables'][role]['path'],b'drift',0o755)
+        readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_closure_mismatch'))
+    for name in ('record.json','.pending','.hidden','directory'):
+        item=setup_rotation('registry-'+name.replace('.','-'));filename=p.STATE_ROOT+'/records/'+name
+        if name=='directory':os.mkdir(filename,0o700)
+        else:write(filename,b'do-not-delete',0o600)
+        readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_registry_not_empty'))
+        assert os.path.lexists(filename) and not os.path.lexists(item['snapshot'])
+    for name in ('records','trust-snapshots'):
+        item=setup_rotation('missing-'+name);os.rmdir(p.STATE_ROOT+'/'+name)
+        readonly(lambda:rotation_denied(lambda:rotate(item),'missing_directory'))
+        assert not os.path.lexists(p.STATE_ROOT+'/'+name)
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('consumed checks classify snapshot and active policy independently, before freshness/bundle/closure gates, with zero mutation (ownership/lease doubles)', () => {
+  const result = probe(filesystem + rotationFixture + rotationDoubles + String.raw`
+try:
+    keys={'schemaVersion','kind','status','code','rotationId','eligible','approvalFresh','snapshotState','activePolicy',
+        'observedPolicySha256','mutated','deploymentAuthorized'}
+    for state in ('partial','prestate-valid','completion-recorded','conflict','unsafe'):
+        for active in ('from','to','other','unknown'):
+            item=setup_rotation(state+'-'+active)
+            if state=='partial':os.mkdir(item['snapshot'],0o700)
+            elif state=='unsafe':write(item['snapshot'],b'not-a-directory',0o600)
+            else:
+                seed_prestate(item,state=='completion-recorded')
+                if state=='conflict':write(item['snapshot']+'/manifest.json',b'{}',0o600)
+            if active=='to':write(p.POLICY_PATH,item['after'],0o600)
+            if active=='other':write(p.POLICY_PATH,b'not-json-but-protected',0o600)
+            if active=='unknown':os.unlink(p.POLICY_PATH)
+            shutil.rmtree(item['bundle']);os.unlink(p.TOOL_ROOT+'/'+p.TOOL_FILES[0])
+            write(p.STATE_ROOT+'/records/.unwrapped-writer',b'preserved',0o600)
+            before=inventory()
+            with patch.object(p.time,'time',return_value=item['approval']['expiresAt']), \
+                 patch.object(p,'verify_rotation_closure',side_effect=AssertionError('consumed check read closure')), \
+                 patch.object(p,'rotation_inputs',side_effect=AssertionError('consumed check loaded bundle')):
+                report=readonly(lambda:rotate(item,'check'))
+            assert set(report)==keys and report['schemaVersion']==1
+            assert report['kind']=='ownerinc-payload-policy-rotation-check-v1' and report['status']=='consumed'
+            assert report['snapshotState']==state and report['activePolicy']==active,report
+            assert report['approvalFresh'] is False and report['eligible'] is False and report['mutated'] is False
+            assert report['deploymentAuthorized'] is False
+            expected={'unsafe':'rotation_evidence_unsafe','conflict':'rotation_evidence_conflict'}.get(state,'rotation_id_consumed')
+            assert report['code']==expected
+            observed=None if active=='unknown' else p.sha(pathlib.Path(p.POLICY_PATH).read_bytes())
+            assert report['observedPolicySha256']==observed and inventory()==before
+            readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    # CLI must return exit 2 for the observational JSON, even with missing bundle
+    # and policy. Root/environment here are explicitly process doubles.
+    with patch.object(p.sys,'platform','linux'),patch.dict(os.environ,{'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'},clear=True),contextlib.ExitStack() as stack:
+        for name in ('getuid','geteuid','getgid','getegid'):stack.enter_context(patch.object(os,name,return_value=0,create=True))
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status=readonly(lambda:p.main(['--profile','policy-rotation','--check','--approval',item['path'],
+                '--approval-sha256',item['args'][1],'--bundle',item['bundle']]))
+        assert status==2 and json.loads(output.getvalue())['status']=='consumed'
+    readonly(lambda:rotation_denied(lambda:p.provision_policy_rotation('check',item['path'],'0'*64,item['bundle']),'approval_digest_mismatch'))
+    item['approval']['extra']=True;save_rotation(item)
+    readonly(lambda:rotation_denied(lambda:rotate(item,'check'),'invalid_shape'))
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('consumed evidence rejects raw cross-binding conflicts and invalid completion instead of ignoring them (ownership/lease doubles)', () => {
+  const result = probe(filesystem + rotationFixture + rotationDoubles + String.raw`
+try:
+    cases=[('approval.json',lambda raw:raw+b' '),('policy.before.json',lambda raw:raw+b' '),('policy.after.json',lambda raw:raw+b' '),
+        ('manifest.json',lambda raw:raw.replace(b'"schemaVersion": 1',b'"schemaVersion": true')),
+        ('manifest.json',lambda raw:raw.replace(b'"rotationId": "'+b'1'*64+b'"',b'"rotationId": "'+b'9'*64+b'"')),
+        ('manifest.json',lambda raw:raw.replace(b'"approvalSha256": "',b'"approvalSha256": "0')),
+        ('manifest.json',lambda raw:raw.replace(b'"fromPolicySha256": "',b'"fromPolicySha256": "0')),
+        ('manifest.json',lambda raw:raw.replace(b'"toPolicySha256": "',b'"toPolicySha256": "0')),
+        ('completion.json',lambda raw:raw+b'junk'),
+        ('completion.json',lambda raw:raw.replace(b'"schemaVersion": 1',b'"schemaVersion": true')),
+        ('completion.json',lambda raw:raw.replace(b'"manifestSha256": "',b'"manifestSha256": "0')),
+        ('completion.json',lambda raw:raw.replace(b'"activePolicySha256": "',b'"activePolicySha256": "0')),
+        ('completion.json',lambda raw:raw.replace(b'"rotationId": "',b'"rotationId": "0'))]
+    for index,(name,mutate) in enumerate(cases):
+        item=setup_rotation('binding-'+str(index));seed_prestate(item,True)
+        filename=item['snapshot']+'/'+name;write(filename,mutate(pathlib.Path(filename).read_bytes()),0o600)
+        report=readonly(lambda:rotate(item,'check'));assert report['snapshotState']=='conflict',(name,report)
+        assert report['activePolicy']=='from'
+    item=setup_rotation('raw-manifest');seed_prestate(item,True)
+    manifest=item['snapshot']+'/manifest.json';raw=pathlib.Path(manifest).read_bytes()
+    write(manifest,json.dumps(json.loads(raw)).encode(),0o600)
+    assert readonly(lambda:rotate(item,'check'))['snapshotState']=='conflict','must hash raw manifest, not reconstructed JSON'
+    for name in ('approval.json','policy.before.json','policy.after.json','manifest.json'):
+        item=setup_rotation('missing-'+name);seed_prestate(item,True);os.unlink(item['snapshot']+'/'+name)
+        assert readonly(lambda:rotate(item,'check'))['snapshotState']=='conflict'
+    item=setup_rotation('unexpected');seed_prestate(item);write(item['snapshot']+'/.rotation-pending-retained',b'partial',0o600)
+    assert readonly(lambda:rotate(item,'check'))['snapshotState']=='conflict'
+    item=setup_rotation('unsafe-completion');seed_prestate(item);os.mkdir(item['snapshot']+'/completion.json',0o700)
+    assert readonly(lambda:rotate(item,'check'))['snapshotState']=='unsafe'
+    item=setup_rotation('single-use');seed_prestate(item)
+    item['approval']['issuedAt']+=10;item['approval']['expiresAt']+=10;save_rotation(item)
+    assert readonly(lambda:rotate(item,'check'))['snapshotState']=='conflict'
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    # Partial evidence still has to obey bindings already observable on its own.
+    for side in ('before','after'):
+        item=setup_rotation('partial-conflict-'+side);os.mkdir(item['snapshot'],0o700)
+        policy=copy.deepcopy(item['oldPolicy'] if side=='before' else item['newPolicy'])
+        policy['approvedRevisions']=[item['approval']['targetRevision']] if side=='before' else item['oldPolicy']['approvedRevisions']
+        raw=json.dumps(policy).encode();item['approval']['fromPolicySha256' if side=='before' else 'toPolicySha256']=p.sha(raw)
+        save_rotation(item);write(item['snapshot']+'/policy.'+side+'.json',raw,0o600)
+        assert readonly(lambda:rotate(item,'check'))['snapshotState']=='conflict'
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('rotation apply atomically replaces only policy, retains exact evidence, and cannot resume or reaffirm a consumed ID (ownership/lease doubles)', () => {
+  const result = probe(filesystem + rotationFixture + rotationDoubles + String.raw`
+try:
+    item=setup_rotation('success');before=inventory();inode=os.stat(p.POLICY_PATH).st_ino
+    report=rotate(item)
+    assert report['status']=='completed' and report['activePolicySha256']==p.sha(item['after']) and not report['deploymentAuthorized']
+    assert not report['ciProvenanceChecked'] and not report['liveRuntimeChecked'] and not report['candidateAuthorizationRenewed']
+    assert all(report[key] is False for key in ('networkUsed','githubAuthenticated','bundleCodeExecuted','liveInventoryChecked'))
+    assert pathlib.Path(p.POLICY_PATH).read_bytes()==item['after'] and os.stat(p.POLICY_PATH).st_ino!=inode
+    assert set(os.listdir(item['snapshot']))=={'approval.json','policy.before.json','policy.after.json','manifest.json','completion.json'}
+    for name,data in [('approval.json',item['raw']),('policy.before.json',item['before']),('policy.after.json',item['after'])]:
+        assert pathlib.Path(item['snapshot']+'/'+name).read_bytes()==data
+    manifest=pathlib.Path(item['snapshot']+'/manifest.json').read_bytes();completion=json.loads(pathlib.Path(item['snapshot']+'/completion.json').read_bytes())
+    assert completion['manifestSha256']==p.sha(manifest) and completion['activePolicySha256']==p.sha(item['after'])
+    policy_relative=str(pathlib.Path(p.POLICY_PATH).relative_to(root))
+    for name,raw in before.items():
+        if name!=policy_relative:assert inventory()[name]==raw,name
+    assert readonly(lambda:rotate(item,'check'))['snapshotState']=='completion-recorded'
+    assert readonly(lambda:rotate(item,'check'))['activePolicy']=='to'
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    item['approval']['issuedAt']+=60;item['approval']['expiresAt']+=60;save_rotation(item)
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    assert readonly(lambda:rotate(item,'check'))['snapshotState']=='conflict'
+    assert list(pathlib.Path(root).rglob('__pycache__'))==[]
+    item=setup_rotation('reservation-race');mkdir=os.mkdir;collisions=[]
+    def raced(name,*args,**kwargs):
+        if name==item['snapshot']:
+            mkdir(name,0o700);collisions.append(name)
+        return mkdir(name,*args,**kwargs)
+    with patch.object(os,'mkdir',raced):rotation_denied(lambda:rotate(item),'rotation_id_consumed')
+    assert collisions==[item['snapshot']] and os.listdir(item['snapshot'])==[]
+    assert pathlib.Path(p.POLICY_PATH).read_bytes()==item['before']
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    item=setup_rotation('report-output-fault')
+    # Only process identity/environment and stdout are doubled; apply still does
+    # real filesystem writes. Losing stdout after replacement is not a preswap failure.
+    with patch.object(p.sys,'platform','linux'),patch.dict(os.environ,{'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'},clear=True),contextlib.ExitStack() as stack:
+        for name in ('getuid','geteuid','getgid','getegid'):stack.enter_context(patch.object(os,name,return_value=0,create=True))
+        with patch('builtins.print',side_effect=OSError('injected stdout failure')):
+            report=rotation_denied(lambda:p.main(['--profile','policy-rotation','--apply','--approval',item['path'],
+                '--approval-sha256',item['args'][1],'--bundle',item['bundle']]),'rotation_reconciliation_required',True)
+        assert report['cause']=='report_output_failed' and pathlib.Path(p.POLICY_PATH).read_bytes()==item['after']
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('injected rotation failures retain single-use evidence across reservation, each publication, staging, swap, completion and final lease boundaries (ownership/lease doubles)', () => {
+  const result = probe(filesystem + rotationFixture + rotationDoubles + String.raw`
+try:
+    cases=[('mkdir-before','mkdir',False,False),('mkdir-after','mkdir',True,False),
+        ('reservation-fsync','reservation-sync',False,False),('staging-fsync','staging-fsync',False,False),
+        ('preswap-read','preswap',False,False),('replace-before','replace',False,True),('replace-after','replace',True,True),
+        ('policy-parent-fsync','policy-sync',False,True),('postverify','closure-3',False,True),
+        ('final-check','closure-4',False,True),('lease-finalization','lease-exit',False,True)]
+    for name in ('approval.json','policy.before.json','policy.after.json','manifest.json','completion.json'):
+        for after in (False,True):cases.append((name+('-after' if after else '-before'),'publish-'+name,after,name=='completion.json'))
+    for label,point,after,attempted in cases:
+        item=setup_rotation(label);hit=[];counts={};originals={name:getattr(p,name) for name in
+            ('rotation_publish_evidence','rotation_stage','rotation_inputs','replace_rotation_policy','sync_directory','verify_rotation_closure')}
+        def fail():hit.append(point);raise OSError('injected syscall/publication failure, NOT power-loss evidence')
+        def around(fn,args):
+            if not after:fail()
+            result=fn(*args);fail();return result
+        with contextlib.ExitStack() as stack:
+            if point=='mkdir':
+                real=os.mkdir
+                def mkdir(name,*args,**kwargs):
+                    if name==item['snapshot']:
+                        if not after:fail()
+                        real(name,*args,**kwargs);fail()
+                    return real(name,*args,**kwargs)
+                stack.enter_context(patch.object(os,'mkdir',mkdir))
+            elif point in ('reservation-sync','policy-sync'):
+                def sync(name):
+                    if name==(p.STATE_ROOT+'/trust-snapshots' if point=='reservation-sync' else os.path.dirname(p.POLICY_PATH)):fail()
+                    return originals['sync_directory'](name)
+                stack.enter_context(patch.object(p,'sync_directory',sync))
+            elif point.startswith('publish-'):
+                def publish(name,raw):
+                    if os.path.basename(name)==point[len('publish-'):]:return around(originals['rotation_publish_evidence'],(name,raw))
+                    return originals['rotation_publish_evidence'](name,raw)
+                stack.enter_context(patch.object(p,'rotation_publish_evidence',publish))
+            elif point=='staging-fsync':
+                def stage(parent,raw):
+                    if parent==os.path.dirname(p.POLICY_PATH):
+                        with patch.object(os,'fsync',side_effect=lambda fd:fail()):return originals['rotation_stage'](parent,raw)
+                    return originals['rotation_stage'](parent,raw)
+                stack.enter_context(patch.object(p,'rotation_stage',stage))
+            elif point=='preswap':
+                def inputs(*args):
+                    counts['inputs']=counts.get('inputs',0)+1
+                    if counts['inputs']==2:fail()
+                    return originals['rotation_inputs'](*args)
+                stack.enter_context(patch.object(p,'rotation_inputs',inputs))
+            elif point=='replace':stack.enter_context(patch.object(p,'replace_rotation_policy',side_effect=lambda name:around(originals['replace_rotation_policy'],(name,))))
+            elif point.startswith('closure-'):
+                def closure(policy):
+                    counts['closure']=counts.get('closure',0)+1
+                    if counts['closure']==int(point[-1]):fail()
+                    return originals['verify_rotation_closure'](policy)
+                stack.enter_context(patch.object(p,'verify_rotation_closure',closure))
+            elif point=='lease-exit':stack.enter_context(patch.object(LeaseDouble,'__exit__',side_effect=lambda *_:fail()))
+            stack.enter_context(patch.object(p,'publish',side_effect=AssertionError('rotation used resumable publish')))
+            stack.enter_context(patch.object(p,'snapshot_prestate',side_effect=AssertionError('rotation used UUID prestate')))
+            stack.enter_context(patch.object(os,'unlink',side_effect=AssertionError('rotation cleaned retained evidence')))
+            report=rotation_denied(lambda:rotate(item),'rotation_reconciliation_required' if attempted else 'rotation_preswap_io_failed',attempted)
+        assert hit==[point],(label,hit,report)
+        swapped=attempted and not (point=='replace' and not after)
+        assert pathlib.Path(p.POLICY_PATH).read_bytes()==(item['after'] if swapped else item['before']),label
+        assert report['phase']==('swap-attempted' if attempted else ('reservation-attempted' if point in ('mkdir','reservation-sync') else 'reserved'))
+        if os.path.lexists(item['snapshot']):
+            before=inventory();readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'));assert inventory()==before
+            observed=readonly(lambda:rotate(item,'check'))
+            assert observed['activePolicy']==('to' if swapped else 'from'),(label,observed)
+            if point in ('staging-fsync','preswap') or (point=='replace' and not after):
+                assert list(pathlib.Path(os.path.dirname(p.POLICY_PATH)).glob('.rotation-pending-*')),label
+        else:assert label=='mkdir-before','uncertain attempted IDs also need the external issuance/attempt ledger'
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('preswap reauthentication and final rechecks reject input, tool, evidence, registry, policy and clock drift (ownership/lease doubles; injected drift)', () => {
+  const result = probe(filesystem + rotationFixture + rotationDoubles + String.raw`
+try:
+    for point,code in [('approval','approval_digest_mismatch'),('bundle','rotation_policy_mismatch'),
+        ('policy','rotation_policy_mismatch'),('tool','rotation_closure_mismatch'),('https','rotation_closure_mismatch'),
+        ('evidence','rotation_evidence_conflict'),('registry','rotation_registry_not_empty'),('clock','rotation_approval_not_current')]:
+        item=setup_rotation('drift-'+point);stage=p.rotation_stage;clock=p.time.time;hit=[]
+        def changed(parent,raw):
+            temporary=stage(parent,raw)
+            if parent==os.path.dirname(p.POLICY_PATH):
+                hit.append(point)
+                if point=='approval':write(item['path'],item['raw']+b' ',0o600)
+                if point=='bundle':write(item['bundle']+'/production-policy.json',item['after']+b' ',0o600)
+                if point=='policy':write(p.POLICY_PATH,item['before']+b' ',0o600)
+                if point=='tool':write(p.TOOL_ROOT+'/'+p.TOOL_FILES[0],b'drift',0o755)
+                if point=='https':write(item['oldPolicy']['toolchain']['executables']['gitRemoteHttps']['path'],b'drift',0o755)
+                if point=='evidence':write(item['snapshot']+'/approval.json',item['raw']+b' ',0o600)
+                if point=='registry':write(p.STATE_ROOT+'/records/.pending',b'preserved',0o600)
+                if point=='clock':p.time.time=lambda:item['approval']['expiresAt']
+            return temporary
+        try:
+            with patch.object(p,'rotation_stage',changed):rotation_denied(lambda:rotate(item),code)
+        finally:p.time.time=clock
+        assert hit==[point] and os.path.isdir(item['snapshot'])
+        assert pathlib.Path(p.POLICY_PATH).read_bytes()==item['before']+(b' ' if point=='policy' else b'')
+    # Time can cross expiry DURING closure hashing, after rotation_inputs passed.
+    item=setup_rotation('last-freshness');verify=p.verify_rotation_closure;clock=p.time.time;calls=[]
+    def expire(policy):
+        verify(policy);calls.append(1)
+        if len(calls)==2:p.time.time=lambda:item['approval']['expiresAt']
+    try:
+        with patch.object(p,'verify_rotation_closure',expire):rotation_denied(lambda:rotate(item),'rotation_approval_not_current')
+    finally:p.time.time=clock
+    assert len(calls)==2 and pathlib.Path(p.POLICY_PATH).read_bytes()==item['before']
+    for point in ('policy','registry','tool','snapshot'):
+        item=setup_rotation('final-'+point);publish=p.rotation_publish_evidence
+        def changed(name,raw):
+            publish(name,raw)
+            if name.endswith('/completion.json'):
+                if point=='policy':write(p.POLICY_PATH,item['before'],0o600)
+                if point=='registry':write(p.STATE_ROOT+'/records/.late',b'preserved',0o600)
+                if point=='tool':write(p.TOOL_ROOT+'/'+p.TOOL_FILES[0],b'late-drift',0o755)
+                if point=='snapshot':write(item['snapshot']+'/policy.before.json',b'late-drift',0o600)
+        with patch.object(p,'rotation_publish_evidence',changed):rotation_denied(lambda:rotate(item),'rotation_reconciliation_required',True)
+        assert os.path.isfile(item['snapshot']+'/completion.json'),'historical receipt cannot override final failure'
+finally:shutil.rmtree(root)
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+const nativeRotationOptions = {
+  skip: process.env.PAYLOAD_REQUIRE_NATIVE_TRUST !== '1' && (process.platform !== 'linux' || process.getuid?.() !== 0),
+};
+function nativeRotationFixture() {
+  assert.equal(process.platform, 'linux', 'required native rotation qualification cannot skip a non-Linux host');
+  for (const method of ['getuid', 'geteuid', 'getgid', 'getegid']) assert.equal(process[method](), 0);
+  const fixture = filesystem
+    .replace(/^root=tempfile\.mkdtemp\(.+$/mu, "root=tempfile.mkdtemp(prefix='trust-rotation-',dir='/root')")
+    .replace(/original_metadata=p\.file_metadata[\s\S]*?(?=def write\()/u, '');
+  assert.doesNotMatch(fixture, /p\.(?:file_metadata|directory_metadata|identity|canonical_path|directories|sync_directory|rename_noreplace)\s*=|os\.(?:fsync|open|fchmod)\s*=/u);
+  return fixture + rotationFixture;
+}
+
+test('native rotation directory flock excludes independent contenders and survives cooperative Node-child lifetime; unwrapped writer is explicitly NOT excluded', nativeRotationOptions, t => {
+  const result = probe(nativeRotationFixture() + String.raw`
+import subprocess,sys,fcntl
+child=None
+try:
+    item=setup_rotation('lease',native=True);records=p.STATE_ROOT+'/records'
+    contender="""import os,sys,fcntl
+fd=os.open(sys.argv[1],os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+try:
+    try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:print('busy')
+    else:print('acquired')
+finally:os.close(fd)
+"""
+    def contend(expected):
+        result=subprocess.run([sys.executable,'-I','-S','-B','-c',contender,records],capture_output=True,text=True,check=True,timeout=5)
+        assert result.stdout.strip()==expected,result.stdout
+    contend('acquired')
+    with p.RotationLease() as lease:
+        lease.verify(empty=True);contend('busy')
+        readonly(lambda:rotation_denied(lambda:rotate(item,'check'),'rotation_lock_busy'))
+        # Actual Node child, inert fixture (not the production registrar). The
+        # parent and child both hold the SAME open-file description, before Node
+        # starts. Closing the parent must not unlock the child's reference.
+        script="""const fs=require('node:fs');const fd=Number(process.argv[1]);
+const a=fs.fstatSync(fd,{bigint:true}),b=fs.lstatSync(process.argv[2],{bigint:true});
+if(a.ino!==b.ino||a.dev!==b.dev)process.exit(3);
+process.stdout.write('held\\n');process.stdin.once('data',()=>process.exit(0));process.stdin.resume();"""
+        child=subprocess.Popen([` + JSON.stringify(process.execPath) + String.raw`,'-e',script,str(lease.fd),records],
+            pass_fds=(lease.fd,),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        assert child.stdout.readline().strip()=='held'
+        contend('busy')
+    contend('busy')
+    output,error=child.communicate('release',timeout=5);assert child.returncode==0,error;child=None
+    contend('acquired')
+    # A direct, unwrapped root writer ignores advisory flock. This is a positive
+    # demonstration of the limitation, never claimed as enforcement.
+    with p.RotationLease() as lease:
+        subprocess.run([sys.executable,'-I','-S','-B','-c',
+            "import os,sys;fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.write(fd,b'unwrapped');os.close(fd)",
+            records+'/.unwrapped'],check=True,timeout=5)
+        denied(lambda:lease.verify(empty=True),'rotation_registry_not_empty')
+        assert pathlib.Path(records+'/.unwrapped').read_bytes()==b'unwrapped'
+    os.unlink(records+'/.unwrapped')
+    def replace_lease_path():
+        with p.RotationLease() as lease:
+            os.rename(records,records+'.retained');os.mkdir(records,0o700)
+            denied(lambda:lease.verify(),'rotation_context_changed')
+    denied(replace_lease_path,'rotation_context_changed')
+    assert os.path.isdir(records+'.retained')
+    os.rmdir(records);os.rename(records+'.retained',records);contend('acquired')
+    os.chmod(records,0o755);denied(lambda:p.RotationLease().__enter__(),'unsafe_directory');os.chmod(records,0o700)
+    os.symlink(item['path'],records+'/.linked')
+    with p.RotationLease() as lease:denied(lambda:lease.verify(empty=True),'rotation_registry_not_empty')
+    print(json.dumps({'kind':'native-rotation-lease-proof','checks':['independent-flock','node-child-lifetime',
+        'unwrapped-writer-not-excluded','descriptor-path-drift','private-directory','all-registry-entries']}))
+finally:
+    if child is not None:child.kill();child.communicate(timeout=5)
+    shutil.rmtree(root)
+`, undefined, true);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(result.stdout), { kind: 'native-rotation-lease-proof', checks: ['independent-flock',
+    'node-child-lifetime', 'unwrapped-writer-not-excluded', 'descriptor-path-drift', 'private-directory', 'all-registry-entries'] });
+  t.diagnostic(result.stdout.trim());
+});
+
+test('native rotation CLI performs real atomic replacement under concurrent readers with root metadata, ordered fsync and read-only consumed inspection', nativeRotationOptions, t => {
+  const result = probe(nativeRotationFixture() + String.raw`
+import subprocess,sys
+reader=None
+try:
+    item=setup_rotation('atomic',native=True);inode=os.stat(p.POLICY_PATH).st_ino;events=[]
+    originals={name:getattr(p,name) for name in ('file_metadata','directory_metadata','read_protected','rotation_stage',
+        'rotation_publish_evidence','replace_rotation_policy','sync_directory','RotationLease')}
+    cli=['--profile','policy-rotation','--check','--approval',item['path'],'--approval-sha256',item['args'][1],'--bundle',item['bundle']]
+    before=inventory();output=io.StringIO()
+    with contextlib.redirect_stdout(output):assert readonly(lambda:p.main(cli))==0
+    assert json.loads(output.getvalue())['eligible'] is True and inventory()==before
+    reader_code="""import hashlib,json,select,sys
+filename,old,new=sys.argv[1:];counts={old:0,new:0}
+def sample():
+    with open(filename,'rb') as stream:raw=stream.read()
+    digest=hashlib.sha256(raw).hexdigest()
+    assert digest in counts,'partial/missing/unexpected policy observed'
+    counts[digest]+=1
+sample();print('ready',flush=True)
+while not select.select([sys.stdin],[],[],0)[0]:sample()
+sys.stdin.read(1);sample();print(json.dumps(counts),flush=True)
+"""
+    reader=subprocess.Popen([sys.executable,'-I','-S','-B','-c',reader_code,p.POLICY_PATH,p.sha(item['before']),p.sha(item['after'])],
+        stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    assert reader.stdout.readline().strip()=='ready'
+    def observe(frame,event,arg):
+        if event=='call' and frame.f_code is p.rotation_publish_evidence.__code__:
+            events.append(('publish',os.path.basename(frame.f_locals['filename'])))
+        if event=='call' and frame.f_code is p.replace_rotation_policy.__code__:
+            assert frame.f_back.f_locals['phase']=='swap-attempted'
+            assert set(os.listdir(item['snapshot']))=={'approval.json','policy.before.json','policy.after.json','manifest.json'}
+            assert p.read_protected(p.POLICY_PATH,0o600,p.MAX_JSON)==item['before']
+            events.append(('replace',p.POLICY_PATH))
+        if event=='c_return' and arg is os.mkdir and frame.f_code is p.provision_policy_rotation.__code__:
+            events.append(('reserve',frame.f_locals['snapshot']))
+        if event=='c_return' and arg is os.fsync:
+            fd=frame.f_locals.get('fd',frame.f_locals.get('descriptor'))
+            assert fd is not None,frame.f_code.co_name
+            events.append(('fsync',os.readlink('/proc/self/fd/'+str(fd))))
+        if event=='call' and frame.f_code is p.verify_rotation_closure.__code__:events.append(('closure','verify'))
+    cli[2]='--apply';output=io.StringIO();sys.setprofile(observe)
+    try:
+        with contextlib.redirect_stdout(output):assert p.main(cli)==0
+    finally:sys.setprofile(None)
+    result,error=reader.communicate('x',timeout=5);assert reader.returncode==0,error;reader=None
+    counts=json.loads(result);assert counts[p.sha(item['before'])]>=1 and counts[p.sha(item['after'])]>=1,counts
+    report=json.loads(output.getvalue());assert report['status']=='completed' and not report['deploymentAuthorized']
+    swap=events.index(('replace',p.POLICY_PATH));completion=events.index(('publish','completion.json'))
+    reserve=events.index(('reserve',item['snapshot']));parent_sync=events.index(('fsync',p.STATE_ROOT+'/trust-snapshots'))
+    assert reserve<parent_sync<events.index(('publish','approval.json'))<events.index(('publish','manifest.json'))<swap
+    policy_sync=events.index(('fsync',os.path.dirname(p.POLICY_PATH)));assert swap<policy_sync<completion
+    assert sum(event==('closure','verify') for event in events[:swap])==2
+    assert sum(event==('closure','verify') for event in events[swap:completion])==1
+    assert sum(event==('closure','verify') for event in events[completion:])==1
+    assert any(event=='fsync' and name.startswith(os.path.dirname(p.POLICY_PATH)+'/.rotation-pending-') for event,name in events[:swap])
+    assert any(event=='fsync' and name==item['snapshot'] for event,name in events[completion:])
+    assert os.stat(p.POLICY_PATH).st_ino!=inode and p.read_protected(p.POLICY_PATH,0o600,p.MAX_JSON)==item['after']
+    for name in [p.POLICY_PATH,*[item['snapshot']+'/'+name for name in os.listdir(item['snapshot'])]]:
+        info=os.lstat(name);assert (info.st_uid,info.st_gid,info.st_nlink,stat.S_IMODE(info.st_mode))==(0,0,1,0o600)
+    snapshot=os.lstat(item['snapshot']);assert (snapshot.st_uid,snapshot.st_gid,stat.S_IMODE(snapshot.st_mode))==(0,0,0o700)
+    assert all(getattr(p,name) is original for name,original in originals.items())
+    shutil.rmtree(item['bundle']);os.unlink(p.TOOL_ROOT+'/'+p.TOOL_FILES[0]);cli[2]='--check';output=io.StringIO()
+    before=inventory()
+    with contextlib.redirect_stdout(output):assert readonly(lambda:p.main(cli))==2
+    observed=json.loads(output.getvalue());assert observed['snapshotState']=='completion-recorded' and observed['activePolicy']=='to'
+    assert inventory()==before
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    print(json.dumps({'kind':'native-rotation-atomic-proof','checks':['clean-cli','concurrent-readers-old-or-new',
+        'reservation-parent-fsync','evidence-before-swap','staged-file-fsync','policy-parent-fsync','completion-fsync',
+        'final-closure-check','root-metadata','consumed-read-only','no-resume']}))
+finally:
+    if reader is not None:reader.kill();reader.communicate(timeout=5)
+    shutil.rmtree(root)
+`, undefined, true);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(result.stdout), { kind: 'native-rotation-atomic-proof', checks: ['clean-cli',
+    'concurrent-readers-old-or-new', 'reservation-parent-fsync', 'evidence-before-swap', 'staged-file-fsync',
+    'policy-parent-fsync', 'completion-fsync', 'final-closure-check', 'root-metadata', 'consumed-read-only', 'no-resume'] });
+  t.diagnostic(result.stdout.trim());
+});
+
+test('native rotation protected evidence rejects unsafe links/owners; injected I/O failures retain pre/post-swap evidence without retry', nativeRotationOptions, t => {
+  const result = probe(nativeRotationFixture() + String.raw`
+try:
+    for point in ('reservation-fsync','staged-fsync','replace-before','policy-parent-fsync','completion-fsync','lease-path-after-swap'):
+        item=setup_rotation(point,native=True);sync=p.sync_directory;replace=p.replace_rotation_policy;stage=p.rotation_stage;hit=[]
+        def fail():hit.append(point);raise OSError('injected fault; not actual power loss')
+        with contextlib.ExitStack() as stack:
+            if point in ('reservation-fsync','policy-parent-fsync','completion-fsync'):
+                def interrupted(name):
+                    if (point=='reservation-fsync' and name==p.STATE_ROOT+'/trust-snapshots') or \
+                       (point=='policy-parent-fsync' and name==os.path.dirname(p.POLICY_PATH)) or \
+                       (point=='completion-fsync' and name==item['snapshot'] and os.path.exists(name+'/completion.json')):fail()
+                    return sync(name)
+                stack.enter_context(patch.object(p,'sync_directory',interrupted))
+            elif point=='staged-fsync':
+                def interrupted(parent,raw):
+                    if parent==os.path.dirname(p.POLICY_PATH):
+                        with patch.object(os,'fsync',side_effect=lambda fd:fail()):return stage(parent,raw)
+                    return stage(parent,raw)
+                stack.enter_context(patch.object(p,'rotation_stage',interrupted))
+            elif point=='replace-before':stack.enter_context(patch.object(p,'replace_rotation_policy',side_effect=lambda name:fail()))
+            elif point=='lease-path-after-swap':
+                def interrupted(name):
+                    replace(name);hit.append(point)
+                    os.rename(p.STATE_ROOT+'/records',p.STATE_ROOT+'/records.retained');os.mkdir(p.STATE_ROOT+'/records',0o700)
+                stack.enter_context(patch.object(p,'replace_rotation_policy',interrupted))
+            attempted=point not in ('reservation-fsync','staged-fsync')
+            rotation_denied(lambda:rotate(item),'rotation_reconciliation_required' if attempted else 'rotation_preswap_io_failed',attempted)
+        assert hit==[point],hit
+        active='to' if point in ('policy-parent-fsync','completion-fsync','lease-path-after-swap') else 'from'
+        assert pathlib.Path(p.POLICY_PATH).read_bytes()==item['after' if active=='to' else 'before']
+        assert os.path.isdir(item['snapshot'])
+        before=inventory();readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'));assert inventory()==before
+        observed=readonly(lambda:rotate(item,'check'));assert observed['activePolicy']==active
+        expected='partial' if point=='reservation-fsync' else ('completion-recorded' if point=='completion-fsync' else 'prestate-valid')
+        assert observed['snapshotState']==expected,(point,observed)
+    for unsafe in ('symlink','hardlink','owner','group','mode'):
+        item=setup_rotation('unsafe-'+unsafe,native=True);seed_prestate(item,True);filename=item['snapshot']+'/completion.json'
+        if unsafe=='symlink':os.unlink(filename);os.symlink(item['path'],filename)
+        if unsafe=='hardlink':os.link(filename,filename+'.linked')
+        if unsafe=='owner':os.chown(filename,65534,0)
+        if unsafe=='group':os.chown(filename,0,65534)
+        if unsafe=='mode':os.chmod(filename,0o644)
+        observed=readonly(lambda:rotate(item,'check'));assert observed['snapshotState']=='unsafe' and observed['activePolicy']=='from'
+        readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    item=setup_rotation('unsafe-active',native=True);seed_prestate(item);os.link(p.POLICY_PATH,p.POLICY_PATH+'.linked')
+    observed=readonly(lambda:rotate(item,'check'));assert observed['activePolicy']=='unknown' and observed['observedPolicySha256'] is None
+    item=setup_rotation('symlink-reservation',native=True);os.symlink(item['bundle'],item['snapshot'])
+    readonly(lambda:rotation_denied(lambda:rotate(item),'rotation_id_consumed'))
+    assert readonly(lambda:rotate(item,'check'))['snapshotState']=='unsafe'
+    print(json.dumps({'kind':'native-rotation-fault-proof','faults':'injected-not-power-loss',
+        'checks':['reservation-fsync','staged-fsync','replace-attempt-boundary','policy-parent-fsync','completion-fsync',
+            'lease-after-swap','evidence-retained','no-reconciliation-on-retry','unsafe-completion','unsafe-active','symlink-consumed']}))
+finally:shutil.rmtree(root)
+`, undefined, true);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(result.stdout), { kind: 'native-rotation-fault-proof', faults: 'injected-not-power-loss',
+    checks: ['reservation-fsync', 'staged-fsync', 'replace-attempt-boundary', 'policy-parent-fsync', 'completion-fsync',
+      'lease-after-swap', 'evidence-retained', 'no-reconciliation-on-retry', 'unsafe-completion', 'unsafe-active', 'symlink-consumed'] });
+  t.diagnostic(result.stdout.trim());
 });

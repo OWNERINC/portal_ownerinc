@@ -1,0 +1,43 @@
+name: Payload policy rotation checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/payload-policy-rotation-check.yml'
+      - 'ops/provision-payload-candidate-trust.py'
+      - 'ops/payload-candidate-verifier.py'
+      - 'scripts/register-payload-candidate-admission.mjs'
+      - 'scripts/package-payload-candidate.mjs'
+      - 'scripts/lib/payload-candidate-qualification.mjs'
+      - 'tests/unit/payload-candidate-trust-provisioning.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: payload-policy-rotation-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-policy-rotation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up test Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Qualify trust and policy rotation in disposable root fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_BIN="$(readlink -f -- "$(command -v node)")"
+          test -f "$NODE_BIN" && test -x "$NODE_BIN"
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
+            tests/unit/payload-candidate-trust-provisioning.test.mjs
