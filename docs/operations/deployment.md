@@ -283,7 +283,10 @@ separado `payload-install-production.yml`:
 - `commit`, `run_id` e `run_attempt`;
 - `api_image`, `cron_image` e `cms_image`, sempre referências por digest;
 - ID, `artifact-digest` fornecido pela plataforma e SHA-256 do conteúdo para
-  `candidate`, `qualified` e `report`;
+  `candidate`, `qualified` e `report`. A action de upload fornece o digest como
+  64 hex minúsculos; o gerador aceita somente esse formato real e adiciona
+  `sha256:` no handoff para corresponder exatamente ao campo `digest` da API de
+  Artifacts e ao contrato do installer;
 - `approval_sha256`, `inventory_identity`, `expires_at` e `nonce`.
 
 O contrato corrente não possui outro request token: o nonce é o token de request

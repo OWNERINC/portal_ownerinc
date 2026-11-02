@@ -6,7 +6,10 @@ import {
 } from './lib/payload-candidate-qualification.mjs';
 
 const idPattern = /^[1-9][0-9]{0,19}$/u;
-const artifactDigestPattern = /^sha256:[0-9a-f]{64}$/u;
+// actions/upload-artifact emits a bare lowercase SHA-256 hex value, while the
+// GitHub Artifacts API and the installer contract expose the same digest with
+// the `sha256:` algorithm prefix.
+const artifactDigestPattern = /^[0-9a-f]{64}$/u;
 const imagePatterns = Object.freeze({
   api: /^ghcr\.io\/ownerinc\/ownerinc-portal-api@sha256:[0-9a-f]{64}$/u,
   cron: /^ghcr\.io\/ownerinc\/ownerinc-portal-cron@sha256:[0-9a-f]{64}$/u,
@@ -32,6 +35,7 @@ export function createPayloadInstallDispatch({ candidateBytes, qualifiedBytes, r
       Object.keys(artifactDigests).sort().join(',') !== roles.slice().sort().join(',') ||
       roles.some(role => !idPattern.test(artifactIds[role] || '') || !artifactDigestPattern.test(artifactDigests[role] || '')) ||
       new Set(Object.values(artifactIds)).size !== roles.length) deny();
+  const canonicalArtifactDigests = Object.fromEntries(roles.map(role => [role, `sha256:${artifactDigests[role]}`]));
   const inputs = {
     commit: candidate.commit,
     run_id: candidate.runId,
@@ -40,13 +44,13 @@ export function createPayloadInstallDispatch({ candidateBytes, qualifiedBytes, r
     cron_image: candidate.images.cron,
     cms_image: candidate.images.cms,
     candidate_artifact_id: artifactIds.candidate,
-    candidate_artifact_digest: artifactDigests.candidate,
+    candidate_artifact_digest: canonicalArtifactDigests.candidate,
     candidate_sha256: sha256(candidateBytes),
     qualified_artifact_id: artifactIds.qualified,
-    qualified_artifact_digest: artifactDigests.qualified,
+    qualified_artifact_digest: canonicalArtifactDigests.qualified,
     qualified_sha256: sha256(qualifiedBytes),
     report_artifact_id: artifactIds.report,
-    report_artifact_digest: artifactDigests.report,
+    report_artifact_digest: canonicalArtifactDigests.report,
     report_sha256: sha256(reportBytes),
     approval_sha256: candidate.authorization.approvalSha256,
     inventory_identity: candidate.authorization.inventoryIdentity,

@@ -60,16 +60,15 @@ test('qualified install handoff binds exact platform artifact digests and conten
   const candidateBytes = bytes(f.candidate); const reportBytes = bytes(f.report);
   const qualifiedBytes = bytes(qualifyCandidate({ ...f.input(), candidateBytes, reportBytes, expectedAuthorization: authorization }));
   const artifactIds = { candidate: '111', qualified: '112', report: '113' };
-  const artifactDigests = { candidate: `sha256:${'1'.repeat(64)}`, qualified: `sha256:${'2'.repeat(64)}`,
-    report: `sha256:${'3'.repeat(64)}` };
+  const artifactDigests = { candidate: '1'.repeat(64), qualified: '2'.repeat(64), report: '3'.repeat(64) };
   const handoff = createPayloadInstallDispatch({ candidateBytes, qualifiedBytes, reportBytes, artifactIds, artifactDigests });
   assert.equal(handoff.kind, 'payload-private-install-dispatch-v1');
   assert.deepEqual(handoff.inputs, {
     commit: f.expectedRun.commit, run_id: f.expectedRun.runId, run_attempt: f.expectedRun.runAttempt,
     api_image: f.expectedImages.api, cron_image: f.expectedImages.cron, cms_image: f.expectedImages.cms,
-    candidate_artifact_id: '111', candidate_artifact_digest: artifactDigests.candidate, candidate_sha256: sha256(candidateBytes),
-    qualified_artifact_id: '112', qualified_artifact_digest: artifactDigests.qualified, qualified_sha256: sha256(qualifiedBytes),
-    report_artifact_id: '113', report_artifact_digest: artifactDigests.report, report_sha256: sha256(reportBytes),
+    candidate_artifact_id: '111', candidate_artifact_digest: `sha256:${artifactDigests.candidate}`, candidate_sha256: sha256(candidateBytes),
+    qualified_artifact_id: '112', qualified_artifact_digest: `sha256:${artifactDigests.qualified}`, qualified_sha256: sha256(qualifiedBytes),
+    report_artifact_id: '113', report_artifact_digest: `sha256:${artifactDigests.report}`, report_sha256: sha256(reportBytes),
     approval_sha256: authorization.approvalSha256, inventory_identity: authorization.inventoryIdentity,
     expires_at: authorization.expiresAt, nonce: authorization.nonce,
   });
@@ -78,6 +77,10 @@ test('qualified install handoff binds exact platform artifact digests and conten
     artifactIds, artifactDigests }));
   assert.throws(() => createPayloadInstallDispatch({ candidateBytes, qualifiedBytes, reportBytes,
     artifactIds: { ...artifactIds, report: artifactIds.candidate }, artifactDigests }));
+  for (const invalid of [`sha256:${'1'.repeat(64)}`, 'A'.repeat(64), '1'.repeat(63), '1'.repeat(65)]) {
+    assert.throws(() => createPayloadInstallDispatch({ candidateBytes, qualifiedBytes, reportBytes, artifactIds,
+      artifactDigests: { ...artifactDigests, candidate: invalid } }));
+  }
 });
 
 test('qualification binds exact report bytes and the explicit contract without mutating evidence', () => {
