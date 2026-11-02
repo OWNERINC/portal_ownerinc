@@ -367,18 +367,49 @@ test('actual legacy receiver denial stanza cannot reach already-current recovery
   assert.match(result.stderr, /retained incoming receipt: receipt/u);
 });
 
-test('Linux root native receipt identity and ancestry (verifier subprocess only is doubled)', { skip: process.platform !== 'linux' || process.getuid?.() !== 0 }, () => {
+test('Linux root native receipt identity, reservation and ancestry (privileged subprocesses doubled)', { skip: process.platform !== 'linux' || process.getuid?.() !== 0 }, () => {
   const result = probe(fixture + `
 import types
 with tempfile.TemporaryDirectory(dir='/root') as root:
-    m.INCOMING=root
+    # Relocate every receiver store; retain real ownership, locking and fsync guards.
+    m.INCOMING=os.path.join(root,'incoming')
+    m.NONCES=os.path.join(root,'nonces')
+    m.LOCK_ROOT=os.path.join(root,'locks')
+    m.QUOTA_LOCK=os.path.join(m.LOCK_ROOT,'incoming.lock')
+    for directory in (m.INCOMING,m.NONCES,m.LOCK_ROOT):os.mkdir(directory,0o700)
+    os.umask(0o077)
+    expires=str(int(m.time.time())+300)
+    request=request.replace('1999999999',expires)
+    calls=[]
+    valid_plan=True
     raw=bundle()
     def verifier(command,*args,**kwargs):
-        return types.SimpleNamespace(returncode=0,stdout=b'{"deploymentAuthorized":false}\\n')
+        calls.append(command)
+        assert command[0]==m.PYTHON
+        if m.VERIFIER in command:
+            return types.SimpleNamespace(returncode=0,stdout=b'{"deploymentAuthorized":false}\\n')
+        assert command[:6]==[m.PYTHON,'-I','-S','-B',m.PREFLIGHT,'--check-install-plan']
+        return types.SimpleNamespace(returncode=0,stdout=(b'{"installationExecuted":false,"deploymentAuthorized":false}\\n'
+            if valid_plan else b'{"deploymentAuthorized":false}\\n'))
     m.bounded_subprocess=verifier
+    m.payload_request(request,io.BytesIO(raw))
+    receipts=list(pathlib.Path(m.INCOMING).iterdir())
+    assert len(receipts)==1 and len(calls)==2
+    receipt=receipts[0]
+    assert (receipt/'candidate.tar.gz').read_bytes()==raw
+    assert (receipt/'release'/'.ci-commit').read_text()==commit+'\\n'
+    assert m.read_private_file(str(receipt/'preflight.json'),4096)==b'{"installationExecuted":false,"deploymentAuthorized":false}\\n'
+    assert m.read_private_file(os.path.join(m.NONCES,'c'*64),32)==(expires+'\\n').encode()
+    assert pathlib.Path(m.QUOTA_LOCK).stat().st_mode & 0o777==0o600
     try:m.payload_request(request,io.BytesIO(raw))
-    except m.ReceiverError as error:assert str(error)=='release_not_preflighted'
-    else:raise AssertionError('install allowed')
+    except m.ReceiverError as error:assert str(error)=='request_replayed'
+    else:raise AssertionError('nonce replay allowed')
+    assert len(list(pathlib.Path(m.INCOMING).iterdir()))==1 and len(calls)==2
+    valid_plan=False
+    try:m.payload_request(request[:-64]+'d'*64,io.BytesIO(raw))
+    except m.ReceiverError as error:assert str(error)=='candidate_preflight_denied'
+    else:raise AssertionError('incomplete preflight allowed')
+    assert len(list(pathlib.Path(m.INCOMING).iterdir()))==2 and len(calls)==4
     archive=os.path.join(root,'replacement-test')
     with open(archive,'x+b') as stream:
         os.chmod(archive,0o600);stream.write(raw);stream.flush()
@@ -388,7 +419,14 @@ with tempfile.TemporaryDirectory(dir='/root') as root:
             os.chmod(replacement,0o600);os.replace(replacement,archive)
             return types.SimpleNamespace(returncode=0,stdout=b'{}')
         m.bounded_subprocess=replace
-        denied(lambda:m.verify_receipt(archive,stream,raw,m.parse_request(request)))
+        try:m.verify_receipt(archive,stream,raw,m.parse_request(request))
+        except m.ReceiverError as error:assert str(error)=='receipt_identity_changed'
+        else:raise AssertionError('same-byte replacement accepted')
+    os.chmod(m.LOCK_ROOT,0o777)
+    try:
+        with m.incoming_lock():raise AssertionError('unsafe lock ancestry accepted')
+    except m.ReceiverError as error:assert str(error)=='unsafe_receipt_ancestry'
+    finally:os.chmod(m.LOCK_ROOT,0o700)
     os.chmod(root,0o777)
     denied(lambda:m.protected_directory(root,private=True))
     os.chmod(root,0o700)
